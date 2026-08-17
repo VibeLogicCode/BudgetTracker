@@ -159,7 +159,7 @@ Two paths, pick one:
   works — the app's data lives inside this folder):
   ```bash
   cd /volume2/docker        # or /volume1/docker — wherever you cloned/uploaded it
-  git clone https://github.com/vibelogiccode/BudgetTracker.git
+  git clone https://github.com/VibeLogicCode/BudgetTracker.git
   cd BudgetTracker
   sudo bash install/install-synology.sh
   ```
