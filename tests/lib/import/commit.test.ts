@@ -2,8 +2,9 @@ import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../helpers/db';
+import { upsertAccountCardPerson } from '@/lib/import/card-people';
 import { commitImport, listImportHistory } from '@/lib/import/commit';
-import { computeRowHashes } from '@/lib/import/dedup';
+import { computeRowHashes, DEDUP_HASH_VERSION } from '@/lib/import/dedup';
 import { parseCsv } from '@/lib/import/parse';
 import { getBuiltinPreset } from '@/lib/import/presets';
 import { resetImportHooks } from '@/lib/import/hooks';
@@ -192,5 +193,206 @@ describe('commitImport', () => {
     const second = commitImport({ accountId, profileId: null, filename: 'td-again.csv', importedBy: userId, rows: [{ ...hashed[0], externalId: '' }], errors: [] });
     expect(second.rowsDuplicate).toBe(1);
     expect(second.rowsAdded).toBe(0);
+  });
+
+  it('mapping omitted entirely leaves attributionSummary null, same as cardCol: null', () => {
+    current = createSeededTestDb();
+    const userId = insertTestUser(current.db);
+    const accountId = insertTestAccount(current.db, { ownerUserId: userId });
+    const { hashed, errors } = tdRows(accountId);
+    const result = commitImport({ accountId, profileId: null, filename: 'td.csv', importedBy: userId, rows: hashed, errors });
+    expect(result.attributionSummary).toBeNull();
+  });
+});
+
+// v1.6.0 per-card attribution (spec 2026-08-22, MUST-3.3/3.4/SHOULD-3.6). fixtures/amex-two-card.csv
+// is the real Amex Canada column layout (Card Member at index 3, Account # suffix at index 4)
+// with two cardholders (ALEX MORGAN / -1001, SAM RIVERA / -1002), one card value
+// present but never assigned (X UNKNOWN / -9999) and one row with no card value at all — the
+// two distinct ways MUST-3.3 requires a fallback to the account owner.
+function amexTwoCardRows(accountId: number, cardCol: number | null) {
+  const mapping = { ...getBuiltinPreset('Amex Canada'), cardCol };
+  const parsed = parseCsv(fixture('amex-two-card.csv'), mapping);
+  return { mapping, hashed: computeRowHashes(accountId, parsed.rows), errors: parsed.errors };
+}
+
+describe('commitImport — per-card attribution (MUST-3.3)', () => {
+  it('attributes each row to the card map entry matching Account # (index 4), falling back to the owner for an unmapped value and a blank one', () => {
+    current = createSeededTestDb();
+    const alex = insertTestUser(current.db, { name: 'Alex', username: 'alex' });
+    const sam = insertTestUser(current.db, { name: 'Sam', username: 'sam' });
+    const owner = insertTestUser(current.db, { name: 'Account Owner', username: 'owner' });
+    const accountId = insertTestAccount(current.db, { name: 'Amex Joint', type: 'credit', ownerUserId: owner });
+    upsertAccountCardPerson({ accountId, cardValue: '-1001', userId: alex });
+    upsertAccountCardPerson({ accountId, cardValue: '-1002', userId: sam });
+
+    const { mapping, hashed, errors } = amexTwoCardRows(accountId, 4);
+    const result = commitImport({ accountId, profileId: null, filename: 'amex.csv', importedBy: owner, mapping, rows: hashed, errors });
+
+    expect(result.rowsAdded).toBe(7);
+    const attributions = (current.sqlite.prepare('select attributed_user_id as a from transactions order by id').all() as { a: number }[]).map((r) => r.a);
+    expect(attributions).toEqual([alex, sam, alex, sam, alex, owner, owner]);
+  });
+
+  it('is keyed agnostically: the same file mapped on Card Member (index 3, names) instead of Account # attributes identically', () => {
+    current = createSeededTestDb();
+    const alex = insertTestUser(current.db, { name: 'Alex', username: 'alex' });
+    const sam = insertTestUser(current.db, { name: 'Sam', username: 'sam' });
+    const owner = insertTestUser(current.db, { name: 'Account Owner', username: 'owner' });
+    const accountId = insertTestAccount(current.db, { name: 'Amex Joint', type: 'credit', ownerUserId: owner });
+    upsertAccountCardPerson({ accountId, cardValue: 'ALEX MORGAN', userId: alex });
+    upsertAccountCardPerson({ accountId, cardValue: 'SAM RIVERA', userId: sam });
+
+    const { mapping, hashed, errors } = amexTwoCardRows(accountId, 3);
+    const result = commitImport({ accountId, profileId: null, filename: 'amex.csv', importedBy: owner, mapping, rows: hashed, errors });
+
+    const attributions = (current.sqlite.prepare('select attributed_user_id as a from transactions order by id').all() as { a: number }[]).map((r) => r.a);
+    expect(attributions).toEqual([alex, sam, alex, sam, alex, owner, owner]);
+    void result;
+  });
+
+  it('cardCol: null is byte-identical to today: every row goes to the account owner regardless of any card map', () => {
+    current = createSeededTestDb();
+    const alex = insertTestUser(current.db, { name: 'Alex', username: 'alex' });
+    const owner = insertTestUser(current.db, { name: 'Account Owner', username: 'owner' });
+    const accountId = insertTestAccount(current.db, { name: 'Amex Joint', type: 'credit', ownerUserId: owner });
+    // A card map exists, but cardCol: null must mean it is never consulted.
+    upsertAccountCardPerson({ accountId, cardValue: '-1001', userId: alex });
+
+    const { mapping, hashed, errors } = amexTwoCardRows(accountId, null);
+    const result = commitImport({ accountId, profileId: null, filename: 'amex.csv', importedBy: owner, mapping, rows: hashed, errors });
+
+    const attributions = (current.sqlite.prepare('select distinct attributed_user_id as a from transactions').all() as { a: number }[]).map((r) => r.a);
+    expect(attributions).toEqual([owner]);
+    expect(result.attributionSummary).toBeNull();
+  });
+
+  it('falls back to the owner when cardCol points past a row shorter than that index', () => {
+    current = createSeededTestDb();
+    const owner = insertTestUser(current.db, { name: 'Account Owner', username: 'owner' });
+    const accountId = insertTestAccount(current.db, { ownerUserId: owner });
+    // TD Chequing/Debit rows only ever have 4 cells (date, desc, debit, credit) — index 10
+    // is out of range on every single row, which is the "index beyond the row's cell
+    // count" branch of MUST-3.3, distinct from an in-range but empty/blank value.
+    const mapping = { ...getBuiltinPreset('TD Chequing/Debit'), cardCol: 10 };
+    const parsed = parseCsv(fixture('td-chequing.csv'), mapping);
+    const hashed = computeRowHashes(accountId, parsed.rows);
+
+    const result = commitImport({ accountId, profileId: null, filename: 'td.csv', importedBy: owner, mapping, rows: hashed, errors: parsed.errors });
+
+    expect(result.rowsAdded).toBe(9);
+    const attributions = (current.sqlite.prepare('select distinct attributed_user_id as a from transactions').all() as { a: number }[]).map((r) => r.a);
+    expect(attributions).toEqual([owner]);
+  });
+
+  it('loads the account card map once per commit, not once per row', async () => {
+    current = createSeededTestDb();
+    const alex = insertTestUser(current.db, { name: 'Alex', username: 'alex' });
+    const owner = insertTestUser(current.db, { name: 'Account Owner', username: 'owner' });
+    const accountId = insertTestAccount(current.db, { name: 'Amex Joint', type: 'credit', ownerUserId: owner });
+    upsertAccountCardPerson({ accountId, cardValue: '-1001', userId: alex });
+
+    const cardPeople = await import('@/lib/import/card-people');
+    const { vi } = await import('vitest');
+    const spy = vi.spyOn(cardPeople, 'listAccountCardPeople');
+
+    const { mapping, hashed, errors } = amexTwoCardRows(accountId, 4);
+    commitImport({ accountId, profileId: null, filename: 'amex.csv', importedBy: owner, mapping, rows: hashed, errors });
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+});
+
+describe('commitImport — the dedup hash never changes with cardCol (MUST-3.4, frozen dedup.ts)', () => {
+  it('DEDUP_HASH_VERSION is still 1 — a bump here would mean dedup.ts changed, which is a stop-and-ask', () => {
+    expect(DEDUP_HASH_VERSION).toBe(1);
+  });
+
+  it('the same file hashes identically whether cardCol is null or set', () => {
+    current = createSeededTestDb();
+    const accountId = insertTestAccount(current.db);
+    const withoutCardCol = amexTwoCardRows(accountId, null);
+    const withCardCol = amexTwoCardRows(accountId, 4);
+
+    expect(withCardCol.hashed.map((r) => r.dedupHash)).toEqual(withoutCardCol.hashed.map((r) => r.dedupHash));
+    expect(withCardCol.hashed.every((r) => r.hashVersion === DEDUP_HASH_VERSION)).toBe(true);
+  });
+
+  it('behaviourally: committing the same file a second time under a cardCol mapping still recognizes every row as a duplicate', () => {
+    current = createSeededTestDb();
+    const alex = insertTestUser(current.db, { name: 'Alex', username: 'alex' });
+    const owner = insertTestUser(current.db, { name: 'Account Owner', username: 'owner' });
+    const accountId = insertTestAccount(current.db, { name: 'Amex Joint', type: 'credit', ownerUserId: owner });
+    upsertAccountCardPerson({ accountId, cardValue: '-1001', userId: alex });
+
+    const first = amexTwoCardRows(accountId, null);
+    const firstResult = commitImport({ accountId, profileId: null, filename: 'a.csv', importedBy: owner, mapping: first.mapping, rows: first.hashed, errors: first.errors });
+    expect(firstResult.rowsAdded).toBe(7);
+
+    // Same underlying file, re-parsed under a mapping that NOW has cardCol set. If the
+    // dedup hash inputs had drifted with cardCol, this would insert 7 new rows instead of
+    // recognizing 7 duplicates — silently doubling a household's history is exactly what
+    // MUST-3.4 exists to prevent.
+    const second = amexTwoCardRows(accountId, 4);
+    const secondResult = commitImport({ accountId, profileId: null, filename: 'a-again.csv', importedBy: owner, mapping: second.mapping, rows: second.hashed, errors: second.errors });
+
+    expect(secondResult.rowsAdded).toBe(0);
+    expect(secondResult.rowsDuplicate).toBe(7);
+    const total = current.sqlite.prepare('select count(*) as c from transactions').get() as { c: number };
+    expect(total.c).toBe(7);
+  });
+});
+
+describe('commitImport — attribution split in the result message (SHOULD-3.6)', () => {
+  it('reports counts per person by name, with the owner-fallback bucket last and labelled "(no card match)"', () => {
+    current = createSeededTestDb();
+    const alex = insertTestUser(current.db, { name: 'Alex', username: 'alex' });
+    const sam = insertTestUser(current.db, { name: 'Sam', username: 'sam' });
+    const owner = insertTestUser(current.db, { name: 'Account Owner', username: 'owner' });
+    const accountId = insertTestAccount(current.db, { name: 'Amex Joint', type: 'credit', ownerUserId: owner });
+    upsertAccountCardPerson({ accountId, cardValue: '-1001', userId: alex });
+    upsertAccountCardPerson({ accountId, cardValue: '-1002', userId: sam });
+
+    const { mapping, hashed, errors } = amexTwoCardRows(accountId, 4);
+    const result = commitImport({ accountId, profileId: null, filename: 'amex.csv', importedBy: owner, mapping, rows: hashed, errors });
+
+    expect(result.attributionSummary).toBe('3 rows to Alex, 2 rows to Sam, 2 rows to the account owner (no card match)');
+  });
+
+  it('says "unattributed" instead of "the account owner" for a joint account with no owner', () => {
+    current = createSeededTestDb();
+    const alex = insertTestUser(current.db, { name: 'Alex', username: 'alex' });
+    const accountId = insertTestAccount(current.db, { name: 'Amex Joint', type: 'credit', ownerUserId: null });
+    const importer = insertTestUser(current.db, { name: 'Importer', username: 'importer' });
+    upsertAccountCardPerson({ accountId, cardValue: '-1001', userId: alex });
+
+    const { mapping, hashed, errors } = amexTwoCardRows(accountId, 4);
+    const result = commitImport({ accountId, profileId: null, filename: 'amex.csv', importedBy: importer, mapping, rows: hashed, errors });
+
+    expect(result.attributionSummary).toBe('3 rows to Alex, 4 rows to unattributed (no card match)');
+  });
+
+  it('omits the fallback clause entirely when every row matched the card map', () => {
+    current = createSeededTestDb();
+    const alex = insertTestUser(current.db, { name: 'Alex', username: 'alex' });
+    const sam = insertTestUser(current.db, { name: 'Sam', username: 'sam' });
+    const owner = insertTestUser(current.db, { name: 'Account Owner', username: 'owner' });
+    const accountId = insertTestAccount(current.db, { name: 'Amex Joint', type: 'credit', ownerUserId: owner });
+    upsertAccountCardPerson({ accountId, cardValue: '-1001', userId: alex });
+    upsertAccountCardPerson({ accountId, cardValue: '-1002', userId: sam });
+
+    const mapping = { ...getBuiltinPreset('Amex Canada'), cardCol: 4 };
+    const parsed = parseCsv(fixture('amex-two-card.csv'), mapping);
+    // The fixture's first 5 rows are the mapped Alex/Sam rows; rows 5-6 are the
+    // two owner-fallback rows (unmapped suffix, then blank) — sliced off here so this test
+    // exercises the "zero fallback rows" branch cleanly, on its own from the mixed case
+    // already covered above.
+    const onlyMappedRows = parsed.rows.slice(0, 5);
+    const hashed = computeRowHashes(accountId, onlyMappedRows);
+
+    const result = commitImport({ accountId, profileId: null, filename: 'amex.csv', importedBy: owner, mapping, rows: hashed, errors: [] });
+
+    expect(result.attributionSummary).toBe('3 rows to Alex, 2 rows to Sam');
   });
 });

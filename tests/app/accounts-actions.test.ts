@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { createSeededTestDb, insertTestUser, type TestDb } from '../helpers/db';
+import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
 
 let currentUser = { id: 1, name: 'Admin', username: 'admin', role: 'admin' as const };
 let requestHeaders = new Headers({ origin: 'http://nas.local:3000', host: 'nas.local:3000' });
@@ -21,8 +21,12 @@ import {
   renameAccountAction,
   setAccountActiveAction,
   setAccountOwnerAction,
+  setAccountProfileAction,
 } from '@/app/(app)/settings/accounts/actions';
 import { getAccount, listAccounts } from '@/lib/accounts';
+import { revalidatePath } from 'next/cache';
+import { getProfileByName, setProfileActive } from '@/lib/import/presets';
+import { PROFILE_RENDERING_ROUTES } from '@/app/(app)/settings/managers/revalidation-routes';
 
 let current: TestDb | null = null;
 
@@ -202,5 +206,92 @@ describe('setAccountActiveAction (archive only — there is no delete)', () => {
 
     expect((await setAccountActiveAction({}, formData({ accountId: String(id), active: '0' }))).error).toBe('Cross-origin request rejected');
     expect(getAccount(id)!.isActive).toBe(true);
+  });
+});
+
+describe('setAccountProfileAction (spec 2026-08-22 v1.6.0, MUST-5.1: pin a mapping without running an import)', () => {
+  it('pins an account to an active, readable profile', async () => {
+    setup();
+    const builtin = getProfileByName('TD Chequing/Debit')!;
+    await createAccountAction({}, formData({ name: 'Joint Chequing', institution: 'TD', type: 'chequing', owner: '' }));
+    const id = listAccounts()[0].id;
+
+    const result = await setAccountProfileAction({}, formData({ accountId: String(id), profile: String(builtin.id) }));
+
+    expect(result.error).toBeUndefined();
+    expect(getAccount(id)!.importProfileId).toBe(builtin.id);
+  });
+
+  it('clears an existing pin back to none', async () => {
+    const { db } = setup();
+    const builtin = getProfileByName('TD Visa')!;
+    const id = insertTestAccount(db, { name: 'Joint Visa', type: 'credit', importProfileId: builtin.id });
+
+    const result = await setAccountProfileAction({}, formData({ accountId: String(id), profile: '' }));
+
+    expect(result.error).toBeUndefined();
+    expect(result.message).toMatch(/cleared/i);
+    expect(getAccount(id)!.importProfileId).toBeNull();
+  });
+
+  it('refuses a profile that has been deactivated, the same active+readable filter the import picker applies', async () => {
+    const { db } = setup();
+    const builtin = getProfileByName('Scotiabank Chequing/Debit')!;
+    setProfileActive(builtin.id, false);
+    const id = insertTestAccount(db, { name: 'Joint Chequing' });
+
+    const result = await setAccountProfileAction({}, formData({ accountId: String(id), profile: String(builtin.id) }));
+
+    expect(result.error).toMatch(/not available/i);
+    expect(getAccount(id)!.importProfileId).toBeNull();
+  });
+
+  it('refuses an unknown profile id', async () => {
+    const { db } = setup();
+    const id = insertTestAccount(db, { name: 'Joint Chequing' });
+
+    const result = await setAccountProfileAction({}, formData({ accountId: String(id), profile: '999999' }));
+
+    expect(result.error).toMatch(/not available/i);
+    expect(getAccount(id)!.importProfileId).toBeNull();
+  });
+
+  it('refuses an unknown account', async () => {
+    setup();
+    const builtin = getProfileByName('TD Visa')!;
+    const result = await setAccountProfileAction({}, formData({ accountId: '4242', profile: String(builtin.id) }));
+    expect(result.error).toMatch(/no longer exists/i);
+  });
+
+  it('refuses a malformed profile field instead of writing an unusable value', async () => {
+    const { db } = setup();
+    const id = insertTestAccount(db, { name: 'Joint Chequing' });
+    const result = await setAccountProfileAction({}, formData({ accountId: String(id), profile: 'not-a-number' }));
+    expect(result.error).toBeTruthy();
+    expect(getAccount(id)!.importProfileId).toBeNull();
+  });
+
+  it('rejects a cross-origin request', async () => {
+    const { db } = setup();
+    const builtin = getProfileByName('TD Visa')!;
+    const id = insertTestAccount(db, { name: 'Joint Chequing' });
+    requestHeaders = new Headers({ origin: 'http://evil.example', host: 'nas.local:3000' });
+
+    const result = await setAccountProfileAction({}, formData({ accountId: String(id), profile: String(builtin.id) }));
+
+    expect(result.error).toBe('Cross-origin request rejected');
+    expect(getAccount(id)!.importProfileId).toBeNull();
+  });
+
+  it('revalidates every route that renders a profile list, including /settings/accounts itself', async () => {
+    const { db } = setup();
+    const builtin = getProfileByName('TD Visa')!;
+    const id = insertTestAccount(db, { name: 'Joint Chequing' });
+    vi.mocked(revalidatePath).mockClear();
+
+    await setAccountProfileAction({}, formData({ accountId: String(id), profile: String(builtin.id) }));
+
+    const calls = vi.mocked(revalidatePath).mock.calls.map((call) => call[0]);
+    for (const route of PROFILE_RENDERING_ROUTES) expect(calls).toContain(route);
   });
 });

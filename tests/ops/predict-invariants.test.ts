@@ -48,12 +48,45 @@ describe('MUST-2.1 and AC10: only history.ts touches the database', () => {
 });
 
 describe('MUST-1.4 and AC4: no migration, no schema change', () => {
-  it('the newest migration is still 0007 and the journal has no eighth entry', () => {
-    const files = fs.readdirSync(path.join(root, 'drizzle')).filter((name) => name.endsWith('.sql')).sort();
-    expect(files[files.length - 1]).toBe('0007_loans.sql');
-    const journal = fs.readFileSync(path.join(root, 'drizzle/meta/_journal.json'), 'utf8');
-    expect(journal).toContain('"idx": 7');
-    expect(journal).not.toContain('"idx": 8');
+  // This used to pin the exact newest migration filename ("still 0007"), which was only ever
+  // a proxy for "the predictive-targets feature itself adds no migration" -- it was never a
+  // promise that no OTHER, unrelated feature could ever add one again. v1.6.0's migration 0008
+  // (drizzle/0008_import_attribution.sql, per-card attribution) broke that literal pin without
+  // touching anything predictive, which is exactly what the real invariant below still allows.
+  // Comment lines are stripped first because every hand-authored migration's boilerplate
+  // header warns about diffing against an empty "baseline" -- a false hit on the DDL-neutral
+  // English word, not the predictive feature's category baselines.
+  it('no migration file\'s DDL names a predictive schema object', () => {
+    const files = fs.readdirSync(path.join(root, 'drizzle')).filter((name) => name.endsWith('.sql'));
+    for (const file of files) {
+      const ddl = fs
+        .readFileSync(path.join(root, 'drizzle', file), 'utf8')
+        .split('\n')
+        .filter((line) => !line.trim().startsWith('--'))
+        .join('\n');
+      for (const banned of ['predict', 'suggestion', 'projection', 'baseline']) {
+        expect({ file, banned, present: new RegExp(banned, 'i').test(ddl) }).toEqual({
+          file,
+          banned,
+          present: false,
+        });
+      }
+    }
+  });
+
+  it('the journal names no predictive migration tag', () => {
+    const journal = JSON.parse(fs.readFileSync(path.join(root, 'drizzle/meta/_journal.json'), 'utf8')) as {
+      entries: { tag: string }[];
+    };
+    for (const entry of journal.entries) {
+      for (const banned of ['predict', 'suggestion', 'projection', 'baseline']) {
+        expect({ tag: entry.tag, banned, present: new RegExp(banned, 'i').test(entry.tag) }).toEqual({
+          tag: entry.tag,
+          banned,
+          present: false,
+        });
+      }
+    }
   });
 
   it('src/db/schema.ts names no predictive object', () => {

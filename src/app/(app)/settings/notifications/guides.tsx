@@ -70,7 +70,7 @@ export function TelegramGuide() {
         </li>
         <li>
           BotFather then asks for a username. It has to be unused and it has to end in the word <code>bot</code> — for example{' '}
-          <code>home_budget_bot</code>. If it says the name is taken, try another one.
+          <code>morgan_home_budget_bot</code>. If it says the name is taken, try another one.
         </li>
         <li>
           BotFather replies with a message containing your token. It looks like this:{' '}

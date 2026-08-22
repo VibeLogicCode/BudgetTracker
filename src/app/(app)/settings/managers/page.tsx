@@ -10,12 +10,14 @@ export const dynamic = 'force-dynamic';
 export default async function ManagersPage() {
   await requireAdmin();
   const profiles = listProfiles();
-  // Read path for the delete confirm step: the confirm text
-  // must say what a delete will do BEFORE the admin commits to it, so these counts come from
-  // getProfileUsage() here, not from whatever deleteProfile() last returned.
+  // Read path for both the delete confirm step and the v1.6.0 deactivate confirm step: the
+  // confirm text must say what an action will do BEFORE the admin commits to it, so these
+  // counts come from getProfileUsage() here, not from whatever the mutation last returned.
+  // Computed for every profile, including built-ins -- deactivation (MUST-4.3), unlike
+  // deletion, is allowed on a built-in and needs the same honest pinned-account count.
   const profileUsage: Record<number, ProfileUsage> = {};
   for (const profile of profiles) {
-    if (!profile.isBuiltin) profileUsage[profile.id] = getProfileUsage(profile.id);
+    profileUsage[profile.id] = getProfileUsage(profile.id);
   }
   return (
     <ManagersClient

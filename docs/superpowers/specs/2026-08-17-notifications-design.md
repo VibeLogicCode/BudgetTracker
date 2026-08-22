@@ -898,7 +898,7 @@ Last 20 `notification_outbox` rows for the current user (admins get a household-
 > 2. In the search box at the top, type **BotFather** and open the account called **@BotFather**. It has a blue checkmark.
 > 3. Press **Start**, then send the message `/newbot`.
 > 4. BotFather asks for a name. Type anything you like — for example `Home Budget`. This is just the name that shows up on the messages.
-> 5. BotFather then asks for a username. It has to be unused and it has to end in the word `bot` — for example `home_budget_bot`. If it says the name is taken, try another one.
+> 5. BotFather then asks for a username. It has to be unused and it has to end in the word `bot` — for example `morgan_home_budget_bot`. If it says the name is taken, try another one.
 > 6. BotFather replies with a message containing your token. It looks like this:
 >    `123456789:AAHk3f-EXAMPLE-tokenxxxxxxxxxxxxxxxxxx`
 > 7. Copy that whole line — every character, including the numbers before the colon — and paste it into **Bot token** on this page. Then press **Save**.

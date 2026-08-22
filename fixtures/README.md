@@ -17,6 +17,7 @@ then overwrite the file here. The parser tests will immediately tell you whether
 | `amex.csv` | Amex Canada (quoted multi-line fields) |
 | `td-chequing-win1252.csv` | encoding fallback — generated, not hand-edited (see below) |
 | `mint-like-edge-cases.csv` | row-level error handling |
+| `amex-two-card.csv` | per-card attribution (v1.6.0): same 17-column Amex Canada layout, two cardholders (`Card Member` names and `Account #` suffixes both present so either can key `cardCol`), plus an unmapped card value and a blank one to exercise the owner-fallback path |
 
 `td-chequing-win1252.csv` holds windows-1252 bytes and must be regenerated rather than edited
 in a UTF-8 editor:

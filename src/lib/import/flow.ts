@@ -19,6 +19,8 @@ export interface CommitFlowResult {
   rowsDuplicate: number;
   rowsError: number;
   needsReview: number;
+  /** SHOULD-3.6, passed straight through from CommitResult — see its doc comment. */
+  attributionSummary: string | null;
   engine: EngineResult;
   /** true when runEngine threw after the rows were already committed (review-review finding 2). */
   engineFailed: boolean;
@@ -71,6 +73,11 @@ export function commitStagedImport(input: {
     importedBy: input.userId,
     rows: hashed,
     errors: parsed.errors,
+    // MUST-3.3: this is what actually turns per-card attribution on for the real import
+    // path (the wizard and the main import screen both call commitStagedImport, never
+    // commitImport directly) — without passing it through, mapping.cardCol would parse,
+    // save and round-trip correctly everywhere but never be consulted at commit time.
+    mapping: input.mapping,
   });
 
   // Spec section 5 step 5: transfer detection + categorizer run after the insert.
@@ -122,6 +129,7 @@ export function commitStagedImport(input: {
     rowsDuplicate: committed.rowsDuplicate,
     rowsError: committed.rowsError,
     needsReview,
+    attributionSummary: committed.attributionSummary,
     engine,
     engineFailed,
     loanLinksCreated,

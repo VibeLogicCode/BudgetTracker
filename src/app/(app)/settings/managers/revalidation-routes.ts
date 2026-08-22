@@ -31,3 +31,28 @@ export const CATEGORY_RENDERING_ROUTES = [
   '/dashboard',
   '/review',
 ] as const;
+
+/**
+ * Every route that renders the import-profile list (spec 2026-08-22 v1.6.0, MUST-4.4),
+ * whether the filtered picker offered at import time or the unfiltered admin-facing list on
+ * the managers page:
+ *   - /settings/managers  -- this page; every profile, active or not, with the
+ *                            activate/deactivate toggle.
+ *   - /import              -- the main import picker, filtered to active + readable.
+ *   - /import/wizard       -- the "add a bank" wizard; it saves into the same
+ *                            import_profiles table (its own name-uniqueness check reads every
+ *                            row, active or not) and is where a later task may offer existing
+ *                            profiles as a starting point.
+ *   - /settings/accounts   -- shows which profile an account is pinned to (Task 5).
+ * Activating or deactivating a profile must revalidate every one of these or Next's client
+ * router cache can keep serving a stale picker for up to ~30s -- the exact class of bug
+ * CATEGORY_RENDERING_ROUTES above exists to prevent, one feature later. This constant lives in
+ * its own module for the same reason CATEGORY_RENDERING_ROUTES does (see its doc comment
+ * above): actions.ts starts with 'use server', which may export only async functions.
+ */
+export const PROFILE_RENDERING_ROUTES = [
+  '/settings/managers',
+  '/import',
+  '/import/wizard',
+  '/settings/accounts',
+] as const;

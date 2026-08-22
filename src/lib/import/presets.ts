@@ -42,6 +42,10 @@ export const BUILTIN_PRESETS: Record<BuiltinPresetName, BuiltinPreset> = {
       signConvention: 'negative_is_spend',
       encoding: 'auto',
       skipRules: null,
+      // None of the four built-ins name a cardholder column — each is a single-person
+      // account layout as shipped. cardCol (v1.6.0) is set on a per-account fork instead,
+      // the same copy-on-write path any other mapping edit already takes.
+      cardCol: null,
     },
   },
   // The two TD presets shipped with byte-identical mappings originally, which read as a
@@ -65,6 +69,7 @@ export const BUILTIN_PRESETS: Record<BuiltinPresetName, BuiltinPreset> = {
       signConvention: 'negative_is_spend',
       encoding: 'auto',
       skipRules: null,
+      cardCol: null,
     },
   },
   'Scotiabank Chequing/Debit': {
@@ -83,6 +88,7 @@ export const BUILTIN_PRESETS: Record<BuiltinPresetName, BuiltinPreset> = {
       signConvention: 'negative_is_spend',
       encoding: 'auto',
       skipRules: null,
+      cardCol: null,
     },
   },
   'Amex Canada': {
@@ -106,6 +112,12 @@ export const BUILTIN_PRESETS: Record<BuiltinPresetName, BuiltinPreset> = {
       signConvention: 'positive_is_spend',
       encoding: 'auto',
       skipRules: null,
+      // The real Amex Canada export has both a Card Member name column (index 3) and an
+      // Account # suffix column (index 4) that could serve as cardCol (spec 2026-08-22) —
+      // deliberately left null here anyway: this is the shared preset, and per-card
+      // attribution is account-specific (which suffix belongs to which household member),
+      // so it is set on the per-account fork, not baked into the shared built-in.
+      cardCol: null,
     },
   },
 };
@@ -133,6 +145,14 @@ export interface ProfileRecord {
    */
   mapping: ImportMapping | null;
   mappingError: string | null;
+  /**
+   * v1.6.0 (spec 2026-08-22, `import_profiles.is_active`, migration 0008, default true).
+   * A profile hidden this way stays fully in place -- still listed here, still deletable
+   * (or not, per the built-in rule below), still referenced by any account or import row
+   * that already pointed at it. Only the import picker (MUST-4.1) reads this to decide what
+   * to offer; the managers page always shows every profile regardless of it.
+   */
+  isActive: boolean;
 }
 
 /**
@@ -145,7 +165,14 @@ export function hasReadableMapping(profile: ProfileRecord): profile is ProfileRe
   return profile.mapping !== null;
 }
 
-function toRecord(row: { id: number; name: string; institution: string; isBuiltin: boolean; mapping: string }): ProfileRecord {
+function toRecord(row: {
+  id: number;
+  name: string;
+  institution: string;
+  isBuiltin: boolean;
+  mapping: string;
+  isActive: boolean;
+}): ProfileRecord {
   try {
     return {
       id: row.id,
@@ -154,6 +181,7 @@ function toRecord(row: { id: number; name: string; institution: string; isBuilti
       isBuiltin: row.isBuiltin,
       mapping: parseImportMapping(row.mapping),
       mappingError: null,
+      isActive: row.isActive,
     };
   } catch (error) {
     return {
@@ -163,6 +191,7 @@ function toRecord(row: { id: number; name: string; institution: string; isBuilti
       isBuiltin: row.isBuiltin,
       mapping: null,
       mappingError: error instanceof Error ? error.message : 'This mapping could not be read.',
+      isActive: row.isActive,
     };
   }
 }
@@ -207,6 +236,26 @@ export function updateProfileMapping(profileId: number, mapping: ImportMapping):
     .set({ mapping: serializeImportMapping(mapping) })
     .where(eq(importProfiles.id, profileId))
     .run();
+}
+
+/**
+ * Deactivation (spec 2026-08-22 v1.6.0, MUST-4.2/MUST-4.3). Hides a profile from the import
+ * picker without deleting it. Unlike updateProfileMapping/deleteProfile above, this deliberately
+ * carries NO built-in guard -- a built-in is the entire reason this flag exists: it cannot be
+ * deleted (the refusal above is unchanged), so for a household that does not bank with, say,
+ * Scotia, deactivation is the ONLY way to get the shared Scotiabank preset off the picker.
+ *
+ * Nothing that references this profile is touched here: accounts.importProfileId (an account's
+ * pin) and imports.profileId (past import history) both stay exactly as they were. A pinned
+ * account's mapping simply goes dormant while its profile is inactive -- the picker (which
+ * filters on isActive, see hasReadableMapping's callers) treats that account as unpinned -- and
+ * resumes working with no further action the moment the profile is reactivated. This is the
+ * opposite of deleteProfile's reference-clearing: deactivation must stay fully reversible.
+ */
+export function setProfileActive(profileId: number, isActive: boolean): void {
+  const existing = getProfile(profileId);
+  if (!existing) throw new Error(`No import profile ${profileId}`);
+  getDb().update(importProfiles).set({ isActive }).where(eq(importProfiles.id, profileId)).run();
 }
 
 export interface ProfileUsage {
@@ -309,5 +358,19 @@ export function forkProfileIfBuiltin(input: { profileId: number; accountName: st
 }
 
 export function setAccountProfile(accountId: number, profileId: number): void {
+  getDb().update(accounts).set({ importProfileId: profileId }).where(eq(accounts.id, accountId)).run();
+}
+
+/**
+ * Manual set-or-clear for Settings → Accounts (spec 2026-08-22 v1.6.0, MUST-5.1). Distinct
+ * from setAccountProfile above, which is flow.ts's AUTOMATIC remember-after-commit write and
+ * only ever receives a real profile id -- that call and its behaviour are unchanged by this
+ * task. This one is reachable without running an import at all, and `profileId: null` CLEARS
+ * the pin, which setAccountProfile has no way to express. Whether the chosen profile is one an
+ * admin should actually be allowed to pin (active + readable) is the caller's job, the same
+ * layering setAccountOwnerAction already uses for validating a chosen owner id in
+ * src/app/(app)/settings/accounts/actions.ts.
+ */
+export function setAccountPinnedProfile(accountId: number, profileId: number | null): void {
   getDb().update(accounts).set({ importProfileId: profileId }).where(eq(accounts.id, accountId)).run();
 }

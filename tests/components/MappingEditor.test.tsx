@@ -141,3 +141,87 @@ describe('MappingEditor — date format detection surfaces where the format is c
     expect((screen.getByRole('button', { name: /use dd\/mm\/yyyy/i }) as HTMLButtonElement).disabled).toBe(true);
   });
 });
+
+describe('MappingEditor — cardholder column (MUST-2.3, spec 2026-08-22 v1.6.0)', () => {
+  it('shows blank when the mapping has no cardCol', () => {
+    render(<MappingEditor mapping={BASE_MAPPING} onChange={vi.fn()} />);
+    const input = screen.getByRole('spinbutton', { name: /cardholder column/i }) as HTMLInputElement;
+    expect(input.value).toBe('');
+  });
+
+  it('shows the existing column index when the mapping already has a cardCol', () => {
+    render(<MappingEditor mapping={{ ...BASE_MAPPING, cardCol: 4 }} onChange={vi.fn()} />);
+    const input = screen.getByRole('spinbutton', { name: /cardholder column/i }) as HTMLInputElement;
+    expect(input.value).toBe('4');
+  });
+
+  it('setting a column number calls onChange with cardCol set, leaving every other field untouched', () => {
+    const onChange = vi.fn();
+    render(<MappingEditor mapping={BASE_MAPPING} onChange={onChange} />);
+    const input = screen.getByRole('spinbutton', { name: /cardholder column/i }) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '3' } });
+    expect(onChange).toHaveBeenCalledWith({ ...BASE_MAPPING, cardCol: 3 });
+  });
+
+  it('clearing the field back to blank calls onChange with cardCol: null ("none")', () => {
+    const onChange = vi.fn();
+    render(<MappingEditor mapping={{ ...BASE_MAPPING, cardCol: 3 }} onChange={onChange} />);
+    const input = screen.getByRole('spinbutton', { name: /cardholder column/i }) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '' } });
+    expect(onChange).toHaveBeenCalledWith({ ...BASE_MAPPING, cardCol: null });
+  });
+});
+
+// Task 6, Carry 1: controller ruling — the numeric input above stays exactly as-is for every
+// caller that does not pass `cardColumnOptions` (the wizard, the managers mapping editor).
+// Only a caller that HAS real parsed headers (the preview screen) passes it, and gets a true
+// select of column index + header name instead. Assertions target onChange's call
+// arguments, never the <select>'s own DOM .value — a controlled/defaultValue select whose
+// value matches no <option> falls back natively to the first option, which can look correct
+// even against broken code (the lesson carried from Task 5's ledger entry).
+describe('MappingEditor — cardholder column picker with real headers (Task 6 Carry 1)', () => {
+  const COLUMN_OPTIONS = [
+    { index: 0, label: 'Date' },
+    { index: 1, label: 'Description' },
+    { index: 2, label: 'Debit' },
+    { index: 3, label: 'Credit' },
+    { index: 4, label: 'Card Member' },
+  ];
+
+  it('renders a select of index + label instead of the plain number input when cardColumnOptions is passed', () => {
+    render(<MappingEditor mapping={BASE_MAPPING} onChange={vi.fn()} cardColumnOptions={COLUMN_OPTIONS} />);
+    expect(screen.queryByRole('spinbutton', { name: /cardholder column/i })).toBeNull();
+    const select = screen.getByRole('combobox', { name: /cardholder column/i }) as HTMLSelectElement;
+    const optionLabels = Array.from(select.options).map((o) => o.textContent);
+    expect(optionLabels).toEqual([
+      'None — one person for the whole file',
+      '0: Date',
+      '1: Description',
+      '2: Debit',
+      '3: Credit',
+      '4: Card Member',
+    ]);
+  });
+
+  it('choosing a column calls onChange with that index as cardCol, leaving every other field untouched', () => {
+    const onChange = vi.fn();
+    render(<MappingEditor mapping={BASE_MAPPING} onChange={onChange} cardColumnOptions={COLUMN_OPTIONS} />);
+    const select = screen.getByRole('combobox', { name: /cardholder column/i }) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: '4' } });
+    expect(onChange).toHaveBeenCalledWith({ ...BASE_MAPPING, cardCol: 4 });
+  });
+
+  it('choosing "None" calls onChange with cardCol: null', () => {
+    const onChange = vi.fn();
+    render(<MappingEditor mapping={{ ...BASE_MAPPING, cardCol: 4 }} onChange={onChange} cardColumnOptions={COLUMN_OPTIONS} />);
+    const select = screen.getByRole('combobox', { name: /cardholder column/i }) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: '' } });
+    expect(onChange).toHaveBeenCalledWith({ ...BASE_MAPPING, cardCol: null });
+  });
+
+  it('falls back to the plain numeric input when cardColumnOptions is an empty array', () => {
+    render(<MappingEditor mapping={BASE_MAPPING} onChange={vi.fn()} cardColumnOptions={[]} />);
+    expect(screen.getByRole('spinbutton', { name: /cardholder column/i })).toBeTruthy();
+    expect(screen.queryByRole('combobox', { name: /cardholder column/i })).toBeNull();
+  });
+});

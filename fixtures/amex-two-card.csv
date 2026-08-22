@@ -1,0 +1,8 @@
+Date,Date Processed,Description,Card Member,Account #,Amount,Flexible,Foreign Spend Amount,Commission,Exchange Rate,Additional Information,Merchant,Address,City / Province,Postal Code,Country,Reference
+02 Mar 2026,03 Mar 2026,CAFE DEPOT MONTREAL,ALEX MORGAN,-1001,18.75,,,,,,,,,,,
+03 Mar 2026,03 Mar 2026,INDIGO BOOKS TORONTO,SAM RIVERA,-1002,44.20,,,,,,,,,,,
+04 Mar 2026,04 Mar 2026,LCBO TORONTO,ALEX MORGAN,-1001,32.10,,,,,,,,,,,
+05 Mar 2026,05 Mar 2026,SHOPPERS DRUG MART,SAM RIVERA,-1002,12.50,,,,,,,,,,,
+06 Mar 2026,06 Mar 2026,LCBO OTTAWA,ALEX MORGAN,-1001,9.99,,,,,,,,,,,
+07 Mar 2026,07 Mar 2026,UNKNOWN CARD PURCHASE,X UNKNOWN,-9999,5.00,,,,,,,,,,,
+08 Mar 2026,08 Mar 2026,NO CARD VALUE PURCHASE,,,7.00,,,,,,,,,,,

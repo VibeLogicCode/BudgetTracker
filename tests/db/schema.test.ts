@@ -18,10 +18,10 @@ afterEach(() => {
 });
 
 const EXPECTED_TABLES = [
-  'accounts', 'bayes_category_totals', 'bayes_tokens', 'budgets', 'categories',
-  'goal_contributions', 'goals', 'import_profiles', 'imports', 'loan_matcher_rules',
-  'loan_payments', 'login_attempts', 'merchant_rules', 'notification_outbox',
-  'notification_prefs', 'notification_smtp', 'notification_targets',
+  'account_card_people', 'accounts', 'bayes_category_totals', 'bayes_tokens', 'budgets',
+  'categories', 'goal_contributions', 'goals', 'import_profiles', 'imports',
+  'loan_matcher_rules', 'loan_payments', 'login_attempts', 'merchant_rules',
+  'notification_outbox', 'notification_prefs', 'notification_smtp', 'notification_targets',
   'notification_user_settings', 'sessions', 'settings', 'simplefin_account_links',
   'simplefin_connections', 'totp_recovery_codes', 'transaction_imports', 'transactions',
   'users', 'warranty_item_types', 'warranty_items', 'warranty_receipts', 'warranty_search',
@@ -64,6 +64,7 @@ const EXPECTED_INDEXES = [
   'loan_payments_item_idx',
   'loan_payments_txn_idx',
   'loan_payments_txn_item_uq',
+  'account_card_people_uq',
 ];
 
 describe('database schema', () => {

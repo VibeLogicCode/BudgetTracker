@@ -16,6 +16,7 @@ export function MappingEditor({
   onChange,
   dateFormatDetection,
   busy,
+  cardColumnOptions,
 }: {
   mapping: ImportMapping;
   onChange: (next: ImportMapping) => void;
@@ -37,6 +38,17 @@ export function MappingEditor({
    * wizard, which only ever updates local state) can skip it.
    */
   busy?: boolean;
+  /**
+   * Real column headers (or "Column N" placeholders) from the file the caller already
+   * parsed — spec 2026-08-22, v1.6.0 Task 6, Carry 1. Controller ruling: the plain numeric
+   * "Cardholder column" input below has no way to know the file's real columns (this
+   * component carries no such prop otherwise), so it stays exactly as Task 2 shipped it for
+   * every caller that omits this prop (the new-bank wizard, the managers mapping editor).
+   * ONLY the preview screen has real parsed rows/headers to offer, so only it passes this,
+   * and gets a true `<select>` of index + header name instead. An empty array behaves
+   * exactly like omitting the prop.
+   */
+  cardColumnOptions?: { index: number; label: string }[];
 }) {
   const set = <K extends keyof ImportMapping>(key: K, value: ImportMapping[K]) => onChange({ ...mapping, [key]: value });
   const numberOrNull = (value: string) => (value.trim() === '' ? null : Number(value));
@@ -233,6 +245,34 @@ export function MappingEditor({
           <option value="utf-8">UTF-8</option>
           <option value="windows-1252">windows-1252</option>
         </select>
+      </Field>
+      <Field
+        label="Cardholder column (optional)"
+        hint="For a joint statement with a per-row cardholder name or account-suffix column, e.g. Amex's Card Member or Account #. Leave blank for a single-person account."
+      >
+        {cardColumnOptions && cardColumnOptions.length > 0 ? (
+          <select
+            value={mapping.cardCol ?? ''}
+            onChange={(e) => set('cardCol', numberOrNull(e.target.value))}
+            className={selectClass}
+          >
+            <option value="">None — one person for the whole file</option>
+            {cardColumnOptions.map((col) => (
+              <option key={col.index} value={col.index}>
+                {col.index}: {col.label}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <input
+            type="number"
+            min={0}
+            placeholder="None"
+            value={mapping.cardCol ?? ''}
+            onChange={(e) => set('cardCol', numberOrNull(e.target.value))}
+            className={inputClass}
+          />
+        )}
       </Field>
     </div>
   );

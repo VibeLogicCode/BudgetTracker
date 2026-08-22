@@ -23,6 +23,7 @@ import {
   deleteRuleAction,
   renameCategoryAction,
   saveProfileMappingAction,
+  setProfileActiveAction,
   updateRuleAction,
   type ManagerState,
 } from './actions';
@@ -49,6 +50,17 @@ function describeProfileUsage(usage: ProfileUsage): string {
   return parts.length > 0 ? `${parts.join(' and ')}.` : 'Nothing currently references it.';
 }
 
+/**
+ * The deactivate confirm step's wording (spec 2026-08-22 v1.6.0, MUST-4.3). Unlike
+ * describeProfileUsage above, this only ever mentions ACCOUNTS -- past imports referencing the
+ * profile are unaffected by deactivation (import history never changes), so bringing them up
+ * here would be a false alarm. Deliberately says the pin is treated as unpinned, not cleared:
+ * nothing is deleted, and reactivating resumes it immediately.
+ */
+function describeDeactivationImpact(usage: ProfileUsage): string {
+  return `${usage.accounts} account${usage.accounts === 1 ? '' : 's'} pinned to it will be treated as unpinned until it is reactivated. Nothing is deleted — reactivating resumes the pin immediately.`;
+}
+
 export function ManagersClient({
   categories,
   rules,
@@ -71,8 +83,10 @@ export function ManagersClient({
   const [deleteState, removeRule] = useActionState(deleteRuleAction, initial);
   const [profileState, saveProfile] = useActionState(saveProfileMappingAction, initial);
   const [deleteProfileState, removeProfile] = useActionState(deleteProfileAction, initial);
+  const [activeState, setProfileActive] = useActionState(setProfileActiveAction, initial);
   const [editing, setEditing] = useState<{ id: number; mapping: ImportMapping } | null>(null);
   const [deletingProfileId, setDeletingProfileId] = useState<number | null>(null);
+  const [deactivatingProfileId, setDeactivatingProfileId] = useState<number | null>(null);
 
   const parents = categories.filter((c) => c.parentId === null);
   const label = (id: number | null) => {
@@ -90,7 +104,8 @@ export function ManagersClient({
     ruleState.message ??
     deleteState.message ??
     profileState.message ??
-    deleteProfileState.message;
+    deleteProfileState.message ??
+    activeState.message;
   const error =
     createState.error ??
     renameState.error ??
@@ -98,7 +113,8 @@ export function ManagersClient({
     ruleState.error ??
     deleteState.error ??
     profileState.error ??
-    deleteProfileState.error;
+    deleteProfileState.error ??
+    activeState.error;
 
   return (
     <div className="flex flex-col gap-6">
@@ -269,7 +285,8 @@ export function ManagersClient({
                 <span>
                   <span className="font-medium text-ink">{profile.name}</span>{' '}
                   <span className="text-xs text-subtle">{profile.institution}{profile.isBuiltin ? ' · built-in' : ''}</span>{' '}
-                  {profile.mapping === null ? <span className="badge badge--red">unreadable mapping</span> : null}
+                  {profile.mapping === null ? <span className="badge badge--red">unreadable mapping</span> : null}{' '}
+                  {profile.isActive ? null : <span className="badge badge--muted">inactive</span>}
                 </span>
                 <div className="flex items-center gap-2">
                   {profile.mapping === null ? null : (
@@ -280,6 +297,33 @@ export function ManagersClient({
                     >
                       {editing?.id === profile.id ? 'close' : 'edit mapping'}
                     </button>
+                  )}
+                  {profile.isActive ? (
+                    usage.accounts > 0 ? (
+                      // Deactivating a profile accounts are pinned to needs the confirm step
+                      // below first (MUST-4.3) -- this is a plain button, not a form submit.
+                      <button
+                        type="button"
+                        onClick={() => setDeactivatingProfileId(profile.id)}
+                        className="btn btn--ghost btn--sm text-xs"
+                      >
+                        deactivate
+                      </button>
+                    ) : (
+                      <form action={setProfileActive}>
+                        <input type="hidden" name="profileId" value={profile.id} />
+                        <input type="hidden" name="isActive" value="0" />
+                        <SubmitButton variant="ghost" size="sm" className="text-xs">deactivate</SubmitButton>
+                      </form>
+                    )
+                  ) : (
+                    // Reactivating is always safe and reversible -- no confirm needed, unlike
+                    // deactivating a profile with pinned accounts.
+                    <form action={setProfileActive}>
+                      <input type="hidden" name="profileId" value={profile.id} />
+                      <input type="hidden" name="isActive" value="1" />
+                      <SubmitButton variant="ghost" size="sm" className="text-xs">activate</SubmitButton>
+                    </form>
                   )}
                   {profile.isBuiltin ? null : (
                     <button
@@ -297,6 +341,22 @@ export function ManagersClient({
                   Its stored column layout could not be read ({profile.mappingError}), so it cannot be shown or edited. Delete it
                   and set up the bank again to replace it.
                 </p>
+              ) : null}
+              {deactivatingProfileId === profile.id && profile.isActive ? (
+                <div className="mt-3 flex flex-col gap-3 rounded-md border border-line p-3">
+                  <p className="text-sm text-ink">
+                    Deactivate <strong className="font-semibold">{profile.name}</strong>? It will come off the import picker.{' '}
+                    {describeDeactivationImpact(usage)}
+                  </p>
+                  <form action={setProfileActive} className="flex gap-2">
+                    <input type="hidden" name="profileId" value={profile.id} />
+                    <input type="hidden" name="isActive" value="0" />
+                    <SubmitButton size="sm">Deactivate anyway</SubmitButton>
+                    <button type="button" onClick={() => setDeactivatingProfileId(null)} className="btn btn--secondary btn--sm">
+                      Cancel
+                    </button>
+                  </form>
+                </div>
               ) : null}
               {deletingProfileId === profile.id ? (
                 <div className="mt-3 flex flex-col gap-3 rounded-md border border-negative-soft p-3">

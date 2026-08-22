@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../helpers/db';
 import { nowIso } from '@/lib/clock';
+import { parseImportMapping, serializeImportMapping } from '@/lib/import/mapping';
 import {
   createProfile,
   deleteProfile,
@@ -9,9 +10,12 @@ import {
   getProfile,
   getProfileByName,
   getProfileUsage,
+  hasReadableMapping,
   listProfiles,
   mappingsEqual,
+  setAccountPinnedProfile,
   setAccountProfile,
+  setProfileActive,
   updateProfileMapping,
 } from '@/lib/import/presets';
 
@@ -116,6 +120,79 @@ describe('mappingsEqual', () => {
   });
 });
 
+describe('cardCol upgrade compatibility (MUST-2.2, spec 2026-08-22 v1.6.0)', () => {
+  /**
+   * The real risk this guards against: on upgrade, every built-in's stored mapping JSON
+   * literally has no `cardCol` key (it predates the field). If mappingsEqual or
+   * forkProfileIfBuiltin treated "key absent" and "key present with value null" as
+   * different, then the very first preview screen a user opens after upgrading — which
+   * round-trips the mapping through the schema before calling forkProfileIfBuiltin — would
+   * fork a duplicate profile for every account, every time, forever. Both sides must pass
+   * through the same schema and land on the same default.
+   */
+  function legacyTdVisaJson(): string {
+    // Verbatim pre-1.6.0 shape: no cardCol key. Field values match presets.ts's TD Visa entry.
+    return JSON.stringify({
+      hasHeader: false,
+      headerRows: 0,
+      dateCol: 0,
+      dateFormat: 'MM/DD/YYYY',
+      descCols: [1],
+      amountMode: 'debit_credit',
+      amountCol: null,
+      debitCol: 2,
+      creditCol: 3,
+      signConvention: 'negative_is_spend',
+      encoding: 'auto',
+      skipRules: null,
+    });
+  }
+
+  it('mappingsEqual treats a legacy mapping missing the cardCol key as equal to the same mapping with cardCol: null', () => {
+    const legacy = parseImportMapping(legacyTdVisaJson());
+    const explicit = { ...legacy, cardCol: null };
+    expect(mappingsEqual(legacy, explicit)).toBe(true);
+  });
+
+  it('a legacy mapping round-tripped through serialize/parse is still equal to itself', () => {
+    const legacy = parseImportMapping(legacyTdVisaJson());
+    const roundTripped = parseImportMapping(serializeImportMapping(legacy));
+    expect(mappingsEqual(legacy, roundTripped)).toBe(true);
+    expect(roundTripped.cardCol).toBeNull();
+  });
+
+  it('forkProfileIfBuiltin does not fork a built-in whose DB row predates cardCol when the mapping comes back unchanged', () => {
+    current = createSeededTestDb();
+    const builtin = getProfileByName('TD Visa')!;
+    // Overwrite the seeded row with the literal legacy JSON shape (no cardCol key), simulating
+    // an install that has never been touched since before v1.6.0.
+    current.sqlite.prepare('update import_profiles set mapping = ? where id = ?').run(legacyTdVisaJson(), builtin.id);
+
+    const reread = getProfile(builtin.id)!;
+    expect(reread.mapping?.cardCol).toBeNull();
+
+    // Simulate the real call path: the preview screen round-trips the mapping it read back
+    // through the schema (e.g. via JSON.stringify(mapping) in a hidden form field, then
+    // parseImportMapping on submit) before ever calling forkProfileIfBuiltin.
+    const roundTripped = parseImportMapping(serializeImportMapping(reread.mapping!));
+    const id = forkProfileIfBuiltin({ profileId: builtin.id, accountName: 'Joint Visa', mapping: roundTripped });
+
+    expect(id).toBe(builtin.id);
+    expect(listProfiles()).toHaveLength(4); // no spurious fork created
+  });
+
+  it('forkProfileIfBuiltin still forks correctly when cardCol itself is the actual, intentional change', () => {
+    current = createSeededTestDb();
+    const builtin = getProfileByName('TD Visa')!;
+    const edited = { ...builtin.mapping!, cardCol: 4 };
+    const forkedId = forkProfileIfBuiltin({ profileId: builtin.id, accountName: 'Joint Visa', mapping: edited });
+
+    expect(forkedId).not.toBe(builtin.id);
+    expect(getProfile(forkedId)?.mapping?.cardCol).toBe(4);
+    expect(getProfile(builtin.id)?.mapping?.cardCol).toBeNull(); // built-in untouched
+  });
+});
+
 describe('setAccountProfile', () => {
   it('remembers the profile on the account', () => {
     current = createSeededTestDb();
@@ -126,6 +203,49 @@ describe('setAccountProfile', () => {
       import_profile_id: number;
     };
     expect(row.import_profile_id).toBe(builtin.id);
+  });
+});
+
+describe('setAccountPinnedProfile (spec 2026-08-22 v1.6.0, MUST-5.1: set or clear a pin without importing)', () => {
+  it('pins an account to a profile, the same column setAccountProfile writes', () => {
+    current = createSeededTestDb();
+    const accountId = insertTestAccount(current.db, { name: 'Joint Chequing', type: 'chequing' });
+    const builtin = getProfileByName('TD Chequing/Debit')!;
+
+    setAccountPinnedProfile(accountId, builtin.id);
+
+    const row = current.sqlite.prepare('select import_profile_id from accounts where id = ?').get(accountId) as {
+      import_profile_id: number | null;
+    };
+    expect(row.import_profile_id).toBe(builtin.id);
+  });
+
+  it('clears an existing pin back to null, which setAccountProfile has no way to express', () => {
+    current = createSeededTestDb();
+    const builtin = getProfileByName('TD Visa')!;
+    const accountId = insertTestAccount(current.db, { name: 'Joint Visa', type: 'credit', importProfileId: builtin.id });
+
+    setAccountPinnedProfile(accountId, null);
+
+    const row = current.sqlite.prepare('select import_profile_id from accounts where id = ?').get(accountId) as {
+      import_profile_id: number | null;
+    };
+    expect(row.import_profile_id).toBeNull();
+  });
+
+  it('does not disturb the pinned profile when it does not match the account being pinned', () => {
+    current = createSeededTestDb();
+    const chequing = getProfileByName('TD Chequing/Debit')!;
+    const visa = getProfileByName('TD Visa')!;
+    const account1 = insertTestAccount(current.db, { name: 'Account 1', importProfileId: chequing.id });
+    const account2 = insertTestAccount(current.db, { name: 'Account 2', importProfileId: visa.id });
+
+    setAccountPinnedProfile(account1, null);
+
+    const row2 = current.sqlite.prepare('select import_profile_id from accounts where id = ?').get(account2) as {
+      import_profile_id: number | null;
+    };
+    expect(row2.import_profile_id).toBe(visa.id);
   });
 });
 
@@ -283,6 +403,82 @@ describe('a profile row whose stored mapping does not parse (settings/managers 5
       import_profile_id: number | null;
     };
     expect(row.import_profile_id).toBeNull();
+  });
+});
+
+describe('isActive / setProfileActive (spec 2026-08-22 v1.6.0, MUST-4.1-4.3: mapping deactivation)', () => {
+  it('defaults every profile, built-in and custom, to active', () => {
+    current = createSeededTestDb();
+    const id = createProfile({
+      name: 'Tangerine Chequing',
+      institution: 'Tangerine',
+      mapping: getBuiltinPreset('Scotiabank Chequing/Debit'),
+    });
+    expect(listProfiles().every((p) => p.isActive)).toBe(true);
+    expect(getProfile(id)?.isActive).toBe(true);
+  });
+
+  it('deactivates a BUILT-IN profile -- this is the entire point: a built-in cannot be deleted, so deactivation is the only way off the picker (MUST-4.2)', () => {
+    current = createSeededTestDb();
+    const builtin = getProfileByName('Scotiabank Chequing/Debit')!;
+    setProfileActive(builtin.id, false);
+    expect(getProfile(builtin.id)?.isActive).toBe(false);
+    // still present, still built-in, still deletable-refusal unchanged -- just hidden.
+    expect(getProfile(builtin.id)?.isBuiltin).toBe(true);
+    expect(listProfiles()).toHaveLength(4);
+  });
+
+  it('reactivates a deactivated profile', () => {
+    current = createSeededTestDb();
+    const builtin = getProfileByName('TD Visa')!;
+    setProfileActive(builtin.id, false);
+    setProfileActive(builtin.id, true);
+    expect(getProfile(builtin.id)?.isActive).toBe(true);
+  });
+
+  it('throws for an unknown profile id instead of silently no-op-ing', () => {
+    current = createSeededTestDb();
+    expect(() => setProfileActive(999999, false)).toThrowError(/no import profile/i);
+  });
+
+  it('leaves an account pinned to the profile UNTOUCHED in the database -- deactivation is reversible, not destructive (MUST-4.3)', () => {
+    current = createSeededTestDb();
+    const builtin = getProfileByName('Scotiabank Chequing/Debit')!;
+    const accountId = insertTestAccount(current.db, { name: 'Joint Chequing', importProfileId: builtin.id });
+
+    setProfileActive(builtin.id, false);
+
+    const row = current.sqlite.prepare('select import_profile_id from accounts where id = ?').get(accountId) as {
+      import_profile_id: number | null;
+    };
+    // Nothing nulled -- contrast with deleteProfile, which clears this same column.
+    expect(row.import_profile_id).toBe(builtin.id);
+  });
+
+  it('the import picker filter (hasReadableMapping AND isActive) excludes a deactivated profile while listProfiles() (the managers page) still returns it -- proves both conditions combine the way page.tsx applies them', () => {
+    current = createSeededTestDb();
+    const scotia = getProfileByName('Scotiabank Chequing/Debit')!;
+    setProfileActive(scotia.id, false);
+
+    const managersView = listProfiles();
+    expect(managersView.find((p) => p.id === scotia.id)).toBeDefined();
+
+    const pickerView = listProfiles().filter(hasReadableMapping).filter((p) => p.isActive);
+    expect(pickerView.find((p) => p.id === scotia.id)).toBeUndefined();
+    expect(pickerView).toHaveLength(3); // the other three built-ins remain
+  });
+
+  it('reactivating restores the pinned account to the picker with no further action needed (MUST-4.3, other direction)', () => {
+    current = createSeededTestDb();
+    const scotia = getProfileByName('Scotiabank Chequing/Debit')!;
+    insertTestAccount(current.db, { name: 'Joint Chequing', importProfileId: scotia.id });
+
+    setProfileActive(scotia.id, false);
+    expect(listProfiles().filter(hasReadableMapping).filter((p) => p.isActive).find((p) => p.id === scotia.id)).toBeUndefined();
+
+    setProfileActive(scotia.id, true);
+    const pickerView = listProfiles().filter(hasReadableMapping).filter((p) => p.isActive);
+    expect(pickerView.find((p) => p.id === scotia.id)).toBeDefined();
   });
 });
 

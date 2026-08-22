@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useActionState, useState } from 'react';
 import { MappingEditor } from '@/components/MappingEditor';
 import { SubmitButton } from '@/components/SubmitButton';
 import { ImportIcon } from '@/components/icons';
@@ -12,11 +12,145 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { TableWrap } from '@/components/ui/Table';
 import { Field, selectClass } from '@/components/ui/form';
 import type { ImportMapping } from '@/lib/import/mapping';
-import type { PreviewResult } from '@/lib/import/preview';
+import type { CardValueSummary, PreviewResult } from '@/lib/import/preview';
 import type { ImportHistoryRow } from '@/lib/import/commit';
+import { setCardPersonAction, type CardPersonState } from './actions';
 
 interface AccountOption { id: number; name: string; importProfileId: number | null }
 interface ProfileOption { id: number; name: string; isBuiltin: boolean; mapping: ImportMapping }
+interface PersonOption { id: number; name: string }
+
+const CARD_PERSON_INITIAL: CardPersonState = {};
+
+/**
+ * One card value's assignment row (spec 2026-08-22 v1.6.0, MUST-6.1/MUST-6.2). Its own
+ * useActionState so each row's save is independent -- there can be several of these per
+ * preview, and each one submits and reports on its own.
+ *
+ * The person <select> is UNCONTROLLED (`defaultValue`, not `value`) on purpose, the same
+ * idiom src/app/(app)/settings/accounts/accounts-manager.tsx already uses for its owner and
+ * mapping selects: the actually-submitted value lives in the DOM via plain form semantics,
+ * not React state, so a stale re-render can never silently disagree with what a click on
+ * Save would send.
+ *
+ * `options` is `people` (active users) PLUS the currently assigned person when they are not
+ * already in that list -- an assignment can point at a since-deactivated user
+ * (src/lib/import/card-people.ts, MUST-3.1: "remains valid and resolvable for display"), and
+ * without this the <select>'s `defaultValue` would match no <option>, which the browser
+ * resolves by silently selecting the FIRST option ("Account owner (default)") -- exactly the
+ * native-fallback trap the Task 5 ledger entry warns about, here it would make a real
+ * assignment look unassigned.
+ */
+function CardValueRow({
+  accountId,
+  cardValue,
+  rowCount,
+  assignedUserId,
+  assignedUserName,
+  people,
+  onSaved,
+}: {
+  accountId: number;
+  cardValue: string;
+  rowCount: number;
+  assignedUserId: number | null;
+  assignedUserName: string | null;
+  people: PersonOption[];
+  /**
+   * F1 fix (post-1.6.0 review follow-up): called with the row's new (userId, userName) the
+   * instant a save succeeds, so the parent can patch its own `preview.cardValues` state.
+   * Patching locally was chosen over re-running `rePreview(mapping)` -- the round trip would
+   * re-read and re-parse the whole staged file just to refresh a value this component already
+   * knows, and the person a save just wrote is never anything this row didn't already have on
+   * screen (it came from one of `options`, below). Not called on error, so a failed save
+   * leaves the row exactly as it was.
+   */
+  onSaved: (cardValue: string, userId: number | null, userName: string | null) => void;
+}) {
+  // Wraps the server action instead of passing it to useActionState directly: the action's
+  // own return value only ever carries a message/error, never the person that was actually
+  // submitted, but that's exactly what's needed to patch local state without a second
+  // request. Reading the FormData the form itself just built keeps this honest about what was
+  // really sent, the same discipline every other assertion in this file already applies to
+  // `.value` vs. actual submitted data.
+  async function saveAndNotify(prevState: CardPersonState, formData: FormData): Promise<CardPersonState> {
+    const result = await setCardPersonAction(prevState, formData);
+    if (!result.error) {
+      const raw = formData.get('person');
+      const newUserId = raw === null || raw === '' ? null : Number(raw);
+      // A re-save of the SAME assignee (id unchanged) keeps their existing name rather than
+      // re-deriving it -- the only source for a name is `people` (active users), which would
+      // wrongly overwrite a since-deactivated assignee's real name with `undefined` if they
+      // aren't in that list.
+      const newUserName =
+        newUserId === null
+          ? null
+          : newUserId === assignedUserId
+            ? assignedUserName
+            : people.find((p) => p.id === newUserId)?.name ?? null;
+      onSaved(cardValue, newUserId, newUserName);
+    }
+    return result;
+  }
+
+  const [state, save] = useActionState(saveAndNotify, CARD_PERSON_INITIAL);
+  const options: PersonOption[] =
+    assignedUserId !== null && !people.some((p) => p.id === assignedUserId)
+      ? [...people, { id: assignedUserId, name: `${assignedUserName ?? 'Former user'} (inactive)` }]
+      : people;
+
+  return (
+    <li className="flex flex-wrap items-center gap-3 rounded-md border border-line bg-surface px-3 py-2">
+      <span className="font-mono text-sm text-ink">{cardValue}</span>
+      <span className="text-xs text-muted">
+        {rowCount} row{rowCount === 1 ? '' : 's'}
+      </span>
+      {assignedUserId === null ? (
+        <span className="text-xs text-muted">Unassigned — falls back to the account owner at import.</span>
+      ) : null}
+      <form action={save} className="ml-auto flex items-center gap-2">
+        <input type="hidden" name="accountId" value={accountId} />
+        <input type="hidden" name="cardValue" value={cardValue} />
+        <select
+          name="person"
+          defaultValue={assignedUserId === null ? '' : String(assignedUserId)}
+          aria-label={`Person for ${cardValue}`}
+          className={selectClass}
+        >
+          <option value="">Account owner (default)</option>
+          {options.map((person) => (
+            <option key={person.id} value={person.id}>
+              {person.name}
+            </option>
+          ))}
+        </select>
+        <button type="submit" className="btn btn--secondary btn--sm">
+          Save
+        </button>
+      </form>
+      {state.message ? <span className="text-xs font-medium text-positive-soft-fg">{state.message}</span> : null}
+      {state.error ? (
+        <span className="text-xs font-medium text-negative-soft-fg" role="alert">
+          {state.error}
+        </span>
+      ) : null}
+    </li>
+  );
+}
+
+/**
+ * The pin (`account.importProfileId`) only preselects when that profile is actually one of
+ * the offered options (spec 2026-08-22 v1.6.0, MUST-5.2). `profiles` here is already filtered
+ * to active + readable (page.tsx, Task 4's MUST-4.1) -- a profile an account is pinned to can
+ * have since been deactivated or gone unreadable, in which case its id is real but absent from
+ * `profiles`. Honoring it anyway would preselect a value with no matching <option>. When the
+ * pin is not offered, this falls back to exactly what an unpinned account already does:
+ * `profiles[0]?.id ?? 0`.
+ */
+function resolveOfferedProfileId(pinnedProfileId: number | null | undefined, profiles: ProfileOption[]): number {
+  if (pinnedProfileId != null && profiles.some((p) => p.id === pinnedProfileId)) return pinnedProfileId;
+  return profiles[0]?.id ?? 0;
+}
 
 /** Import really is a three-step sequence, so the numbers carry information here. */
 function StepMark({ n, state = 'todo' }: { n: number; state?: 'todo' | 'active' }) {
@@ -49,20 +183,43 @@ export function ImportClient({
   profiles,
   history,
   simplefinManaged,
+  people = [],
 }: {
   accounts: AccountOption[];
   profiles: ProfileOption[];
   history: ImportHistoryRow[];
   simplefinManaged: string[];
+  /**
+   * Active users, offered on each card value's person select (MUST-6.1). Optional and
+   * defaulted to `[]` so every test/caller that predates this feature (there is no cardCol on
+   * their mapping, so the section never renders) does not need to pass it.
+   */
+  people?: PersonOption[];
 }) {
   const [accountId, setAccountId] = useState<number>(accounts[0]?.id ?? 0);
-  const [profileId, setProfileId] = useState<number>(accounts[0]?.importProfileId ?? profiles[0]?.id ?? 0);
+  const [profileId, setProfileId] = useState<number>(resolveOfferedProfileId(accounts[0]?.importProfileId, profiles));
   const [mapping, setMapping] = useState<ImportMapping | null>(profiles[0]?.mapping ?? null);
   const [preview, setPreview] = useState<PreviewResult | null>(null);
   const [summary, setSummary] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [historyRows, setHistoryRows] = useState<ImportHistoryRow[]>(history);
+
+  // F1 fix: patches the ONE row that was just saved inside `preview.cardValues`, leaving
+  // everything else (including the rest of `preview`, e.g. `rows`/`errors`) untouched. This is
+  // the only place `cardValues` is written outside of a fresh preview response, so a sibling
+  // row's own assignment can never be disturbed by this update.
+  function applyCardAssignment(cardValue: string, userId: number | null, userName: string | null) {
+    setPreview((prev) => {
+      if (!prev || !prev.cardValues) return prev;
+      return {
+        ...prev,
+        cardValues: prev.cardValues.map((cv) =>
+          cv.value === cardValue ? { ...cv, assignedUserId: userId, assignedUserName: userName } : cv,
+        ),
+      };
+    });
+  }
 
   /**
    * The Preview button is guarded by SubmitButton's useFormStatus, not by `busy`.
@@ -143,10 +300,14 @@ export function ImportClient({
       const base = body.engineFailed
         ? `${body.rowsAdded} imported, categorization failed — rows are in the review queue.`
         : `${body.rowsAdded} added, ${body.rowsDuplicate} duplicates skipped, ${body.rowsError} errors, ${body.needsReview} need review.`;
+      // Carry 2 (spec 2026-08-22 v1.6.0, Task 6): SHOULD-3.6's per-card attribution split,
+      // already flowing through CommitFlowResult.attributionSummary (Task 3) -- null
+      // whenever there is nothing card-specific to report, so nothing is appended then.
+      const withAttribution = body.attributionSummary ? `${base} ${body.attributionSummary}.` : base;
       // NEW-5 fix-round: applyLoanMatchers is internally guarded (MUST-13.5) the same way
       // runEngine is caught above, so a matcher failure never fails the import either — it
       // just needs the same honest note engineFailed already gets.
-      setSummary(body.loanMatchFailed ? `${base} Loan payment matching failed for these rows.` : base);
+      setSummary(body.loanMatchFailed ? `${withAttribution} Loan payment matching failed for these rows.` : withAttribution);
     } finally {
       setBusy(false);
     }
@@ -244,6 +405,35 @@ export function ImportClient({
             </div>
           </CardBody>
         </Card>
+      ) : profiles.length === 0 ? (
+        // F2 (post-1.6.0 review follow-up): every mapping deactivated, or a fresh DB where
+        // the built-in presets never got seeded, leaves this empty even though accounts exist.
+        // Same shape as the zero-accounts branch above: a disabled file input plus a plain,
+        // non-submitting Preview button, so there is nothing here that can post profileId=0
+        // and surface the raw zod validation string to an admin.
+        <Card>
+          <CardHeader
+            title={<StepTitle n={1} state="active">No import mappings are turned on</StepTitle>}
+            description={
+              <>
+                Every mapping has been deactivated, or none has been set up yet, so there is nothing here to preview a
+                file against.{' '}
+                <a className="font-medium text-accent-text underline underline-offset-2" href="/settings/managers">
+                  Reactivate a mapping in Settings → Managers
+                </a>
+                , then come back here.
+              </>
+            }
+          />
+          <CardBody>
+            <div className="flex flex-wrap items-center gap-3">
+              <input type="file" accept=".csv,text/csv" disabled aria-label="Upload a CSV" className={fileInputClass} />
+              <button type="button" disabled className="btn btn--primary">
+                Preview
+              </button>
+            </div>
+          </CardBody>
+        </Card>
       ) : (
         <Card>
           <CardHeader
@@ -261,9 +451,10 @@ export function ImportClient({
                     // Switching accounts switches banks: the previous account's
                     // remembered profile, its column mapping and any preview built
                     // from it all belong to the file that is no longer selected.
-                    // Fall back to the first profile when this account has never
-                    // been imported into, rather than silently keeping the old one.
-                    const remembered = accounts.find((a) => a.id === id)?.importProfileId ?? profiles[0]?.id ?? 0;
+                    // Fall back to the first offered profile when this account has never
+                    // been imported into (or its pin is no longer offered — MUST-5.2), rather
+                    // than silently keeping the old one.
+                    const remembered = resolveOfferedProfileId(accounts.find((a) => a.id === id)?.importProfileId, profiles);
                     setProfileId(remembered);
                     setMapping(profiles.find((p) => p.id === remembered)?.mapping ?? null);
                     setPreview(null);
@@ -324,7 +515,37 @@ export function ImportClient({
               onChange={(next) => void rePreview(next)}
               dateFormatDetection={preview.dateFormatDetection}
               busy={busy}
+              cardColumnOptions={preview.columnOptions}
             />
+
+            {mapping.cardCol !== null && preview.cardValues ? (
+              <div className="rounded-lg border border-line bg-surface-2/50 p-4">
+                <h3 className="text-sm font-semibold text-ink">Cardholder assignments</h3>
+                <p className="mt-1 text-sm text-muted">
+                  Assign each value found in the cardholder column to a person. Anything left as &ldquo;Account owner (default)&rdquo; —
+                  including a row where that column is blank — is attributed to the account owner automatically; nothing here blocks the
+                  import.
+                </p>
+                {preview.cardValues.length === 0 ? (
+                  <p className="mt-2 text-sm text-muted">No cardholder values were found in that column.</p>
+                ) : (
+                  <ul className="mt-3 flex flex-col gap-2">
+                    {preview.cardValues.map((cv: CardValueSummary) => (
+                      <CardValueRow
+                        key={cv.value}
+                        accountId={accountId}
+                        cardValue={cv.value}
+                        rowCount={cv.rowCount}
+                        assignedUserId={cv.assignedUserId}
+                        assignedUserName={cv.assignedUserName}
+                        people={people}
+                        onSaved={applyCardAssignment}
+                      />
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ) : null}
 
             <TableWrap className="max-h-96 overflow-y-auto">
               <thead>

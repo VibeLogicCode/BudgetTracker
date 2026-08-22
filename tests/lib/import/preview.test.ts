@@ -10,6 +10,7 @@ import { commitImport } from '@/lib/import/commit';
 import { computeRowHashes } from '@/lib/import/dedup';
 import { parseCsv } from '@/lib/import/parse';
 import { upsertRuleFromCorrection } from '@/lib/categorize/rules';
+import { upsertAccountCardPerson } from '@/lib/import/card-people';
 import type { ImportMapping } from '@/lib/import/mapping';
 
 const fixture = (name: string) => fs.readFileSync(path.join(process.cwd(), 'fixtures', name));
@@ -197,6 +198,110 @@ describe('buildPreview', () => {
       expect(preview.errorCount).toBe(2);
       expect(preview.dateFormatDetection.status).toBe('unique');
       expect(preview.dateFormatDetection.detected).toBe('MM/DD/YYYY');
+    });
+  });
+
+  // Spec 2026-08-22, v1.6.0, Task 6 Carry 1: the preview is the only caller with real parsed
+  // rows/headers, so it (and only it) gets a true column picker instead of MappingEditor's
+  // plain numeric cardCol input. Always present, independent of mapping.cardCol's current
+  // value -- it is exactly what lets someone SET cardCol for the first time.
+  describe('columnOptions (Task 6 Carry 1 — the preview column picker)', () => {
+    it('labels every column "Column N" for a headerless mapping', () => {
+      const { accountId, stagingId } = setup();
+      const preview = buildPreview({ stagingId, filename: 'td.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Chequing/Debit') });
+      // td-chequing.csv's real rows carry a 5th (running-balance) column the mapping never
+      // references by index -- columnOptions reports every column actually in the file, not
+      // just the ones a bank preset happens to use.
+      expect(preview.columnOptions).toEqual([
+        { index: 0, label: 'Column 0' },
+        { index: 1, label: 'Column 1' },
+        { index: 2, label: 'Column 2' },
+        { index: 3, label: 'Column 3' },
+        { index: 4, label: 'Column 4' },
+      ]);
+    });
+
+    it('labels every column with its real header text when the mapping has a header row', () => {
+      const { accountId, stagingId } = setup('amex.csv');
+      const preview = buildPreview({ stagingId, filename: 'amex.csv', accountId, profileId: null, mapping: getBuiltinPreset('Amex Canada') });
+      expect(preview.columnOptions).toHaveLength(17);
+      expect(preview.columnOptions[0]).toEqual({ index: 0, label: 'Date' });
+      expect(preview.columnOptions[3]).toEqual({ index: 3, label: 'Card Member' });
+      expect(preview.columnOptions[4]).toEqual({ index: 4, label: 'Account #' });
+    });
+
+    it('is present even when the mapping has no cardCol at all', () => {
+      const { accountId, stagingId } = setup();
+      const preview = buildPreview({ stagingId, filename: 'td.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Chequing/Debit') });
+      expect(preview.mapping.cardCol).toBeNull();
+      expect(preview.columnOptions.length).toBe(5);
+    });
+  });
+
+  // MUST-6.1's byte-identical guarantee: a mapping with no cardholder column must produce a
+  // PreviewResult indistinguishable from before this feature existed.
+  describe('cardValues (MUST-6.1) and the cardCol-null byte-identical guarantee', () => {
+    it('is entirely absent from PreviewResult when mapping.cardCol is null -- not present as null, not present at all', () => {
+      const { accountId, stagingId } = setup();
+      const preview = buildPreview({ stagingId, filename: 'td.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Chequing/Debit') });
+      expect('cardValues' in preview).toBe(false);
+    });
+
+    it('leaves every pre-existing field exactly as it was when cardCol is null', () => {
+      const { accountId, stagingId } = setup();
+      const preview = buildPreview({ stagingId, filename: 'td.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Chequing/Debit') });
+      expect(preview).toMatchObject({
+        stagingId,
+        filename: 'td.csv',
+        accountId,
+        encoding: 'utf-8',
+        totalRows: 9,
+        duplicateCount: 0,
+        errorCount: 0,
+        skipped: 0,
+        truncated: false,
+      });
+      expect(preview.rows).toHaveLength(9);
+    });
+
+    it('lists the distinct normalized card values with row counts, excluding blank cells, when cardCol is set', () => {
+      current = createSeededTestDb();
+      const accountId = insertTestAccount(current.db);
+      const stagingId = writeStagedFile(fixture('amex-two-card.csv'));
+      const mapping: ImportMapping = { ...getBuiltinPreset('Amex Canada'), cardCol: 4 };
+
+      const preview = buildPreview({ stagingId, filename: 'amex.csv', accountId, profileId: null, mapping });
+
+      expect(preview.cardValues).toEqual([
+        { value: '-1001', rowCount: 3, assignedUserId: null, assignedUserName: null },
+        { value: '-1002', rowCount: 2, assignedUserId: null, assignedUserName: null },
+        { value: '-9999', rowCount: 1, assignedUserId: null, assignedUserName: null },
+      ]);
+    });
+
+    it('shows the current account_card_people assignment for a value that already has one', () => {
+      current = createSeededTestDb();
+      const accountId = insertTestAccount(current.db);
+      const alexId = insertTestUser(current.db, { name: 'Alex' });
+      upsertAccountCardPerson({ accountId, cardValue: '-1001', userId: alexId });
+      const stagingId = writeStagedFile(fixture('amex-two-card.csv'));
+      const mapping: ImportMapping = { ...getBuiltinPreset('Amex Canada'), cardCol: 4 };
+
+      const preview = buildPreview({ stagingId, filename: 'amex.csv', accountId, profileId: null, mapping });
+
+      expect(preview.cardValues!.find((v) => v.value === '-1001')).toMatchObject({
+        rowCount: 3,
+        assignedUserId: alexId,
+        assignedUserName: 'Alex',
+      });
+      expect(preview.cardValues!.find((v) => v.value === '-1002')).toMatchObject({ assignedUserId: null, assignedUserName: null });
+    });
+
+    it("reports no card values at all when cardCol points past every row's cell count", () => {
+      const { accountId, stagingId } = setup(); // td-chequing.csv, 4 columns
+      const mapping: ImportMapping = { ...getBuiltinPreset('TD Chequing/Debit'), cardCol: 50 };
+      const preview = buildPreview({ stagingId, filename: 'td.csv', accountId, profileId: null, mapping });
+      expect(preview.cardValues).toEqual([]);
     });
   });
 });

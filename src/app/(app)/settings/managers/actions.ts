@@ -8,9 +8,16 @@ import { requireAdmin } from '@/lib/auth/session';
 import { archiveCategory, createCategory, renameCategory } from '@/lib/categories';
 import { deleteRule, listRules, upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { deleteRenameRule, upsertRenameRule } from '@/lib/categorize/engine';
-import { createProfile, deleteProfile, getProfile, updateProfileMapping } from '@/lib/import/presets';
+import {
+  createProfile,
+  deleteProfile,
+  getProfile,
+  getProfileUsage,
+  setProfileActive,
+  updateProfileMapping,
+} from '@/lib/import/presets';
 import { importMappingSchema } from '@/lib/import/mapping';
-import { CATEGORY_RENDERING_ROUTES } from './revalidation-routes';
+import { CATEGORY_RENDERING_ROUTES, PROFILE_RENDERING_ROUTES } from './revalidation-routes';
 
 export interface ManagerState {
   error?: string;
@@ -27,6 +34,11 @@ const CROSS_ORIGIN_ERROR = 'Cross-origin request rejected';
  */
 function revalidateCategoryRoutes(): void {
   for (const route of CATEGORY_RENDERING_ROUTES) revalidatePath(route);
+}
+
+/** Same idiom as revalidateCategoryRoutes above, for the routes that render a profile list. */
+function revalidateProfileRoutes(): void {
+  for (const route of PROFILE_RENDERING_ROUTES) revalidatePath(route);
 }
 
 export async function createCategoryAction(_prev: ManagerState, formData: FormData): Promise<ManagerState> {
@@ -195,4 +207,38 @@ export async function deleteProfileAction(_prev: ManagerState, formData: FormDat
     );
   }
   return { message: parts.length > 0 ? `Profile deleted; ${parts.join(' and ')}.` : 'Profile deleted.' };
+}
+
+/**
+ * Admin-only. Deactivation/reactivation share this one action (spec 2026-08-22 v1.6.0,
+ * MUST-4.1-4.4). Unlike deleteProfileAction above, this NEVER refuses a built-in -- hiding an
+ * unused shared bank preset from the picker is the entire reason is_active exists. It also
+ * never clears accounts.importProfileId or imports.profileId the way deleteProfileAction does:
+ * getProfileUsage() is called here purely as a READ, to report an honest pinned-account count
+ * in the confirmation message, never to justify touching those rows. Deactivation must stay
+ * fully reversible, which is exactly what makes it safe to allow on a built-in in the first
+ * place.
+ */
+export async function setProfileActiveAction(_prev: ManagerState, formData: FormData): Promise<ManagerState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  await requireAdmin();
+  const profileId = Number(formData.get('profileId'));
+  const isActive = formData.get('isActive') === '1';
+  if (!Number.isInteger(profileId) || profileId <= 0) return { error: 'Invalid request.' };
+  const profile = getProfile(profileId);
+  if (!profile) return { error: 'Unknown profile.' };
+
+  setProfileActive(profileId, isActive);
+  revalidateProfileRoutes();
+
+  if (isActive) {
+    return { message: `"${profile.name}" reactivated. Any account pinned to it uses it again immediately.` };
+  }
+  const usage = getProfileUsage(profileId);
+  const pinnedNote =
+    usage.accounts > 0
+      ? ` ${usage.accounts} account${usage.accounts === 1 ? '' : 's'} pinned to it will be treated as unpinned until it is reactivated.`
+      : '';
+  return { message: `"${profile.name}" deactivated and off the import picker.${pinnedNote}` };
 }

@@ -27,6 +27,19 @@ export interface ImportMapping {
   encoding: EncodingChoice;
   /** Rows whose joined raw text contains any of these strings are silently skipped. */
   skipRules: { containsAny: string[] } | null;
+  /**
+   * 0-based column index holding a per-row cardholder key (a name like "Card Member", or an
+   * account-suffix column like "Account #"), for statements covering more than one person.
+   * null means "this file has no such column" — the whole import attributes to the account
+   * owner, today's behaviour. Added in v1.6.0 (spec 2026-08-22): every mapping JSON stored by
+   * v1.5.1 and earlier lacks this key entirely, so it MUST default to null for absent input
+   * rather than being required — see the schema's `.nullable().default(null)` below and the
+   * back-compat test in mapping.test.ts. A required field here would flip every pre-existing
+   * profile (including all four built-in bank presets) to "unreadable mapping"
+   * (src/lib/import/presets.ts's ProfileRecord/hasReadableMapping guard, shipped in v1.5.1
+   * specifically to survive a bad mapping row) on every existing install's very next boot.
+   */
+  cardCol: number | null;
 }
 
 const baseSchema = z.object({
@@ -42,6 +55,10 @@ const baseSchema = z.object({
   signConvention: z.enum(['negative_is_spend', 'positive_is_spend']),
   encoding: z.enum(['auto', 'utf-8', 'windows-1252']),
   skipRules: z.object({ containsAny: z.array(z.string().min(1)) }).nullable(),
+  // See the ImportMapping.cardCol doc comment above: absent input (every mapping stored by
+  // v1.5.1 or earlier) MUST still parse, defaulting to null, not fail as a missing required
+  // field.
+  cardCol: z.number().int().min(0).max(200).nullable().default(null),
 });
 
 export const importMappingSchema = baseSchema.superRefine((value, ctx) => {
@@ -63,4 +80,16 @@ export function parseImportMapping(value: unknown): ImportMapping {
 
 export function serializeImportMapping(mapping: ImportMapping): string {
   return JSON.stringify(importMappingSchema.parse(mapping));
+}
+
+/**
+ * The single normalization rule for `account_card_people.card_value` (spec 2026-08-22,
+ * v1.6.0 Task 3 onward): trim, collapse internal whitespace runs to one space, uppercase.
+ * Every reader and writer of that column must go through this — a value read off a row via
+ * `mapping.cardCol` (e.g. "ALEX MORGAN", " -1001 ") and a value an admin types into the
+ * card->person assignment UI both need to normalize identically, or the same card silently
+ * fails to match its own assignment.
+ */
+export function normalizeCardValue(raw: string): string {
+  return raw.trim().replace(/\s+/g, ' ').toUpperCase();
 }

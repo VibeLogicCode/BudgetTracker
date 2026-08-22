@@ -1,9 +1,10 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { createSeededTestDb, categoryIdByName, insertTestUser, type TestDb } from '../helpers/db';
+import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
 import { exportProfilesPack, exportRulesPack, importProfilesPack, importRulesPack, previewRulesPackImport } from '@/lib/packs';
 import { listRules, upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { createCategory, listCategories } from '@/lib/categories';
 import { createProfile, getBuiltinPreset, getProfileByName, listProfiles } from '@/lib/import/presets';
+import { upsertAccountCardPerson } from '@/lib/import/card-people';
 import { buildContext, categorizeTransaction } from '@/lib/categorize/engine';
 import { normalizeMerchant } from '@/lib/categorize/normalize';
 
@@ -148,5 +149,51 @@ describe('profiles pack round trip onto a fresh database', () => {
     expect(tangerine.mapping!.dateFormat).toBe('YYYY-MM-DD');
     expect(getProfileByName('TD Visa')?.isBuiltin).toBe(true);
     expect(getProfileByName('TD Visa (2)')?.isBuiltin).toBe(false);
+  });
+});
+
+describe('profiles pack export carries cardCol but NEVER card assignments (MUST-3.2)', () => {
+  it('exports cardCol as plain file-layout knowledge while excluding the account-specific card->person map entirely', () => {
+    current = createSeededTestDb();
+    const alex = insertTestUser(current.db, { name: 'Alex', username: 'alex' });
+    const accountId = insertTestAccount(current.db, { name: 'Amex Joint' });
+
+    // A real household's per-account fork: cardCol set to the Account # suffix column,
+    // plus a genuine assignment row in account_card_people — the exact shape a real
+    // export would try to leak from if the "whole mapping travels" convenience ever
+    // widened into "whole account travels".
+    const profileId = createProfile({
+      name: 'Amex Canada (Amex Joint)',
+      institution: 'American Express Canada',
+      mapping: { ...getBuiltinPreset('Amex Canada'), cardCol: 4 },
+    });
+    upsertAccountCardPerson({ accountId, cardValue: '-1001', userId: alex });
+
+    const pack = exportProfilesPack({ profileIds: [profileId] });
+    const serialized = JSON.stringify(pack);
+
+    expect(pack.profiles).toHaveLength(1);
+    expect(pack.profiles[0].mapping.cardCol).toBe(4);
+    // Structural guarantee: a pack profile is name/institution/mapping ONLY — no room for
+    // an accountId, a userId, or an assignment list to have been bolted on.
+    expect(Object.keys(pack.profiles[0]).sort()).toEqual(['institution', 'mapping', 'name']);
+
+    // The only "card"-shaped thing in the whole pack is the column-index fact, not a value.
+    expect(serialized).toContain('"cardCol":4');
+    expect(serialized).not.toContain('cardValue');
+    expect(serialized).not.toContain('card_value');
+    expect(serialized).not.toContain('userId');
+    expect(serialized).not.toContain('user_id');
+    expect(serialized).not.toContain('accountCardPeople');
+    expect(serialized).not.toContain('account_card_people');
+    // And no trace of the actual personal facts assigned above: the card suffix or the
+    // person's name.
+    expect(serialized).not.toContain('-1001');
+    expect(serialized).not.toContain('Alex');
+
+    // Confirm the assignment genuinely exists in the DB (so the absence above is because
+    // exportProfilesPack never queries it, not because nothing was ever written).
+    const assignmentCount = current.sqlite.prepare('select count(*) as c from account_card_people where account_id = ?').get(accountId) as { c: number };
+    expect(assignmentCount.c).toBe(1);
   });
 });

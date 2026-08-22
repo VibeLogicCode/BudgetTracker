@@ -3,10 +3,11 @@ import { getDb } from '@/db/client';
 import { categories } from '@/db/schema';
 import { normalizeMerchant } from '@/lib/categorize/normalize';
 import { buildContext, categorizeTransaction } from '@/lib/categorize/engine';
+import { listAccountCardPeople } from './card-people';
 import { detectDateFormat, type DateFormatDetection } from './detect-date-format';
-import { computeRowHashes, findExistingByHashes } from './dedup';
-import type { ImportMapping } from './mapping';
-import { parseCsv, type CandidateRow, type ParseResult, type RowError } from './parse';
+import { computeRowHashes, findExistingByHashes, type HashedRow } from './dedup';
+import { normalizeCardValue, type ImportMapping } from './mapping';
+import { parseCsv, previewRawRows, type CandidateRow, type ParseResult, type RowError } from './parse';
 import { readStagedFile } from './staging';
 import type { DetectedEncoding } from './decode';
 
@@ -27,6 +28,21 @@ export interface PreviewRow {
   predictedCategoryName: string | null;
   predictedSource: 'rule' | 'bayes' | 'none';
   isTransfer: boolean;
+}
+
+export interface ColumnOption {
+  index: number;
+  /** Header text when mapping.hasHeader is true; a plain "Column N" placeholder otherwise. */
+  label: string;
+}
+
+export interface CardValueSummary {
+  /** Already normalizeCardValue()'d. */
+  value: string;
+  rowCount: number;
+  /** This account's current account_card_people assignment for `value`, if any. */
+  assignedUserId: number | null;
+  assignedUserName: string | null;
 }
 
 export interface PreviewResult {
@@ -51,6 +67,26 @@ export interface PreviewResult {
    * ambiguous so the mapping UI can ask.
    */
   dateFormatDetection: DateFormatDetection;
+  /**
+   * Every column in the file's first row, labeled with its header text when mapping.hasHeader
+   * is true (else a plain "Column N" placeholder) — powers the preview screen's cardholder
+   * column picker (spec 2026-08-22, v1.6.0 Task 6, Carry 1). Always present, independent of
+   * mapping.cardCol's current value, because it is exactly what lets someone SET cardCol for
+   * the first time; it carries no card-value or person data of its own, so it is not part of
+   * MUST-6.1's byte-identical guarantee below.
+   */
+  columnOptions: ColumnOption[];
+  /**
+   * MUST-6.1 (v1.6.0). Present only when mapping.cardCol is non-null: every distinct
+   * normalizeCardValue() found among the file's valid (non-error) rows, with how many rows
+   * carry it and this account's current account_card_people assignment for it, if any. A
+   * blank cell or a cardCol beyond a row's own cell count never produces an entry — there is
+   * nothing to assign there, since commit.ts's resolveAttribution always falls back to the
+   * account owner for exactly those two cases. Absent entirely (not merely undefined) when
+   * cardCol is null, so a mapping with no cardholder column produces a PreviewResult with no
+   * trace of this feature — proved in preview.test.ts with `'cardValues' in preview`.
+   */
+  cardValues?: CardValueSummary[];
 }
 
 export function buildPreview(input: {
@@ -102,7 +138,7 @@ export function buildPreview(input: {
     }
   }
 
-  return {
+  const result: PreviewResult = {
     stagingId: input.stagingId,
     filename: input.filename,
     accountId: input.accountId,
@@ -117,7 +153,61 @@ export function buildPreview(input: {
     skipped: parsed.skipped,
     truncated: hashed.length > PREVIEW_ROW_LIMIT,
     dateFormatDetection: detectDateFormat(rawDateColumn(parsed, input.mapping.dateCol)),
+    columnOptions: buildColumnOptions(buf, input.mapping),
   };
+
+  if (input.mapping.cardCol !== null) {
+    result.cardValues = buildCardValueSummaries(input.accountId, input.mapping.cardCol, hashed);
+  }
+
+  return result;
+}
+
+/**
+ * Task 6 Carry 1: real column labels for the preview's cardholder-column picker. Reads the
+ * file's own first physical row again (cheap relative to the MAX_FILE_BYTES/MAX_ROWS caps
+ * already enforced by the parseCsv call above, which this can never exceed since it reads
+ * the same already-validated buffer) rather than reusing `parsed`, because parseCsv already
+ * discards header rows (`dataRows = allRows.slice(skipCount)`) — exactly the row whose text
+ * this needs when mapping.hasHeader is true.
+ */
+function buildColumnOptions(buf: Buffer, mapping: ImportMapping): ColumnOption[] {
+  const firstRow = previewRawRows(buf, mapping.encoding, 1).rows[0] ?? [];
+  return firstRow.map((cell, index) => ({
+    index,
+    label: mapping.hasHeader && cell.trim().length > 0 ? cell.trim() : `Column ${index}`,
+  }));
+}
+
+/**
+ * MUST-6.1: distinct normalizeCardValue()'d values across every valid (non-error) row —
+ * the same row set commit.ts's resolveAttribution walks — each with a row count and this
+ * account's current assignment, if any. Counts every hashed row, including rows that would
+ * dedup as duplicates at commit time: the point is to show the file's real distribution so
+ * an admin can assign people BEFORE committing, not just what would be newly inserted.
+ */
+function buildCardValueSummaries(accountId: number, cardCol: number, rows: HashedRow[]): CardValueSummary[] {
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    const raw = row.cells[cardCol];
+    if (raw === undefined) continue;
+    const value = normalizeCardValue(raw);
+    if (value.length === 0) continue;
+    counts.set(value, (counts.get(value) ?? 0) + 1);
+  }
+
+  const assignments = new Map(listAccountCardPeople(accountId).map((row) => [row.cardValue, row]));
+  return [...counts.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([value, rowCount]) => {
+      const assignment = assignments.get(value);
+      return {
+        value,
+        rowCount,
+        assignedUserId: assignment?.userId ?? null,
+        assignedUserName: assignment?.userName ?? null,
+      };
+    });
 }
 
 /**

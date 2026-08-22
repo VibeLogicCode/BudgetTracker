@@ -22,7 +22,10 @@ run time to read a receipt.
 > behind it.
 
 - **CSV import from Canadian banks** — column-mapping wizard with built-in profiles, validated
-  against real TD and Amex exports; any other bank works through the same wizard.
+  against real TD and Amex exports; any other bank works through the same wizard. A joint
+  card's statement can name a cardholder column so each row attributes to the right person
+  instead of whoever owns the account, and any mapping, built-in included, can be deactivated
+  without deleting it once you stop using that bank.
 - **Learning categorizer** — accept or correct a guess and it remembers the merchant next time.
 - **Household and per-person budgets** — set a monthly limit per category at the household level
   or for one person; it carries forward until you change it.
@@ -148,10 +151,13 @@ after an admin uses **Reset password**. Two-factor authentication stays optional
 1. **Settings → Users**, add the rest of the household.
 2. **Settings → Bank accounts**, add one account per bank account you import from (name,
    institution, type, and whether it is joint or belongs to one person). The first-run wizard
-   offers this too. Accounts are deactivated, never deleted.
+   offers this too. Accounts are deactivated, never deleted. The page also shows which import
+   mapping the account is pinned to, and lets you set or clear it directly.
 3. **Import**, pick an account, upload a CSV, check the preview, adjust the column
    mapping if the bank's layout differs, then commit. Editing a built-in profile automatically
-   saves a private copy for that account; the shared preset is never modified.
+   saves a private copy for that account; the shared preset is never modified. If the mapping
+   names a cardholder column, the preview lists each card number found in the file so you can
+   assign it to a person before committing; an unassigned card falls back to the account owner.
 4. **Review**, accept or fix the app's guesses. Every confirmation teaches it: it creates a rule
    for that merchant and updates the classifier.
 5. **Budgets**, set monthly limits per category, at household level and per person. A limit you

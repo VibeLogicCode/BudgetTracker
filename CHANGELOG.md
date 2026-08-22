@@ -21,6 +21,43 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.6.0] - 2026-08-22
+
+### Added
+
+- **A joint card statement now attributes each row to the right person.** Before this
+  release, every row from a shared account statement landed on whoever owned the account, so
+  one person's budgets and reports quietly absorbed a partner's spending too. A mapping can
+  now name the column that carries the cardholder (the card member's name or the card's own
+  suffix both work), and on the import preview screen you assign each card number to a person
+  once. From then on every row lands on the right person automatically. A card the mapping
+  does not recognize, or one that was never assigned, falls back to the account owner exactly
+  like before, and the message after committing an import tells you the split, for example
+  "8 rows to Alex, 5 rows to Sam, 2 rows to the account owner (no card match)," so a
+  wrong assignment is obvious right away.
+- **Any import mapping, including a built-in bank preset, can now be deactivated.** The
+  built-in presets still cannot be deleted, but there was no way to get a bank you do not use
+  off the import picker at all. Settings -> Managers can now deactivate any mapping and
+  reactivate it later. An account already pinned to a deactivated mapping keeps that pin. It
+  just goes dormant until the mapping is turned back on, and everything resumes without you
+  touching the account again, as long as you don't import into that account under a different
+  mapping while the original is still deactivated. Do that, and the mapping you actually used
+  becomes the new pin. Reactivating the original will not bring the old pin back; you would
+  need to set it again yourself under Settings -> Accounts.
+- **Settings -> Accounts now shows and sets each account's pinned import mapping.** The pin
+  already existed, Budget Tracker has remembered the mapping you last used successfully for
+  an account since it was first added, but nothing on screen showed what it was, and the only
+  way to change it was to run a full import. The Accounts page now shows the pinned mapping by
+  name, or "none," and lets you set or clear it directly.
+
+### Fixed
+
+- **An account pinned to a mapping that had since become unavailable left the import screen
+  with no mapping actually selected.** The dropdown looked normal, but the pin it was silently
+  keying off no longer matched anything offered, so an import could go out under the wrong
+  mapping with no visible sign of it. The screen now treats that case exactly like an
+  unpinned account and picks a real mapping to start from.
+
 ## [1.5.1] - 2026-08-22
 
 ### Fixed

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { sql } from 'drizzle-orm';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../../helpers/db';
+import { upsertAccountCardPerson } from '@/lib/import/card-people';
 import { commitImport, previewUndoImport, undoImport } from '@/lib/import/commit';
 import { computeRowHashes } from '@/lib/import/dedup';
 import { parseCsv } from '@/lib/import/parse';
@@ -207,5 +208,69 @@ describe('Bayes reversal through the real wiring', () => {
     const after = current!.sqlite.prepare('select count(*) as c from bayes_tokens').get() as { c: number };
     expect(after.c).toBe(0);
     expect(getVocabSize()).toBe(0);
+  });
+});
+
+// MUST-3.5, spec 2026-08-22: undo keys off transaction_imports / imports.id, which per-card
+// attribution never touches — this proves it directly rather than assuming it, on a real
+// per-card import (two cardholders plus an owner-fallback row).
+describe('undoImport after a per-card import (MUST-3.5)', () => {
+  it('deletes every row a per-card commit created, regardless of which person each row was attributed to', () => {
+    current = createSeededTestDb();
+    const alex = insertTestUser(current.db, { name: 'Alex', username: 'alex' });
+    const sam = insertTestUser(current.db, { name: 'Sam', username: 'sam' });
+    const owner = insertTestUser(current.db, { name: 'Account Owner', username: 'owner' });
+    const accountId = insertTestAccount(current.db, { name: 'Amex Joint', type: 'credit', ownerUserId: owner });
+    upsertAccountCardPerson({ accountId, cardValue: '-1001', userId: alex });
+    upsertAccountCardPerson({ accountId, cardValue: '-1002', userId: sam });
+
+    const mapping = { ...getBuiltinPreset('Amex Canada'), cardCol: 4 };
+    const parsed = parseCsv(fixture('amex-two-card.csv'), mapping);
+    const hashed = computeRowHashes(accountId, parsed.rows);
+    const result = commitImport({ accountId, profileId: null, filename: 'amex.csv', importedBy: owner, mapping, rows: hashed, errors: parsed.errors });
+    expect(result.rowsAdded).toBe(7);
+
+    expect(previewUndoImport(result.importId)).toEqual({ importId: result.importId, willDelete: 7, willKeep: 0 });
+    expect(undoImport(result.importId)).toEqual({ deleted: 7, kept: 0, loanLinksReversed: 0 });
+
+    expect((current.sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c).toBe(0);
+    expect((current.sqlite.prepare('select count(*) as c from imports').get() as { c: number }).c).toBe(0);
+    expect((current.sqlite.prepare('select count(*) as c from transaction_imports').get() as { c: number }).c).toBe(0);
+    // The card->person map itself is an account fact, not import history — undo must
+    // leave it completely alone so the next statement still attributes correctly.
+    expect((current.sqlite.prepare('select count(*) as c from account_card_people where account_id = ?').get(accountId) as { c: number }).c).toBe(2);
+  });
+
+  it('a partial-overlap undo keeps the surviving rows AND their original per-person attribution intact', () => {
+    current = createSeededTestDb();
+    const alex = insertTestUser(current.db, { name: 'Alex', username: 'alex' });
+    const sam = insertTestUser(current.db, { name: 'Sam', username: 'sam' });
+    const owner = insertTestUser(current.db, { name: 'Account Owner', username: 'owner' });
+    const accountId = insertTestAccount(current.db, { name: 'Amex Joint', type: 'credit', ownerUserId: owner });
+    upsertAccountCardPerson({ accountId, cardValue: '-1001', userId: alex });
+    upsertAccountCardPerson({ accountId, cardValue: '-1002', userId: sam });
+
+    const mapping = { ...getBuiltinPreset('Amex Canada'), cardCol: 4 };
+    const parsed = parseCsv(fixture('amex-two-card.csv'), mapping);
+    const hashed = computeRowHashes(accountId, parsed.rows);
+    // Fixture rows by index: 0 alex, 1 sam, 2 alex, 3 sam, 4 alex,
+    // 5 owner-fallback (unmapped suffix), 6 owner-fallback (blank). Rows 3 and 4 are the
+    // overlap between the two commits below.
+    const first = commitImport({ accountId, profileId: null, filename: 'part1.csv', importedBy: owner, mapping, rows: hashed.slice(0, 5), errors: [] });
+    commitImport({ accountId, profileId: null, filename: 'part2.csv', importedBy: owner, mapping, rows: hashed.slice(3), errors: [] });
+
+    expect(previewUndoImport(first.importId)).toEqual({ importId: first.importId, willDelete: 3, willKeep: 2 });
+    expect(undoImport(first.importId)).toEqual({ deleted: 3, kept: 2, loanLinksReversed: 0 });
+
+    const remaining = current.sqlite
+      .prepare('select raw_description as d, attributed_user_id as a from transactions order by id')
+      .all() as { d: string; a: number }[];
+    expect(remaining.map((r) => r.a)).toEqual([sam, alex, owner, owner]);
+    expect(remaining.map((r) => r.d)).toEqual([
+      'SHOPPERS DRUG MART',
+      'LCBO OTTAWA',
+      'UNKNOWN CARD PURCHASE',
+      'NO CARD VALUE PURCHASE',
+    ]);
   });
 });

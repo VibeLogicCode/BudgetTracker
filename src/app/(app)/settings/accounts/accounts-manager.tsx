@@ -15,6 +15,7 @@ import {
   renameAccountAction,
   setAccountActiveAction,
   setAccountOwnerAction,
+  setAccountProfileAction,
   type AccountsFormState,
 } from './actions';
 
@@ -26,6 +27,15 @@ export interface AccountRow {
   ownerUserId: number | null;
   isActive: boolean;
   isSimplefinManaged: boolean;
+  /**
+   * v1.6.0 (spec 2026-08-22, MUST-5.1). importProfileName is resolved by page.tsx from the
+   * FULL profile list, not the filtered `profiles` prop below -- a pin can point at a profile
+   * that has since been deactivated or gone unreadable (Task 4's "dormant pin"), and it still
+   * has to show its real name here, not "none". Only the SELECT below is limited to what
+   * `profiles` offers.
+   */
+  importProfileId: number | null;
+  importProfileName: string | null;
 }
 
 export interface PersonRow {
@@ -34,19 +44,35 @@ export interface PersonRow {
   isActive: boolean;
 }
 
+/** Active + readable only -- the same two conditions the import picker applies (Task 4,
+ *  MUST-4.1) -- so the select here can never offer a mapping the import screen would refuse. */
+export interface ProfileOption {
+  id: number;
+  name: string;
+}
+
 const initialState: AccountsFormState = {};
 
 const rowInput = 'field-control w-auto px-2 py-1 text-xs';
 const rowButton = 'btn btn--secondary btn--sm';
 
-export function AccountsManager({ accounts, people }: { accounts: AccountRow[]; people: PersonRow[] }) {
+export function AccountsManager({
+  accounts,
+  people,
+  profiles,
+}: {
+  accounts: AccountRow[];
+  people: PersonRow[];
+  profiles: ProfileOption[];
+}) {
   const [createState, create] = useActionState(createAccountAction, initialState);
   const [renameState, rename] = useActionState(renameAccountAction, initialState);
   const [ownerState, setOwner] = useActionState(setAccountOwnerAction, initialState);
   const [activeState, setActive] = useActionState(setAccountActiveAction, initialState);
+  const [profileState, setProfile] = useActionState(setAccountProfileAction, initialState);
 
-  const rowError = renameState.error ?? ownerState.error ?? activeState.error;
-  const rowMessage = renameState.message ?? ownerState.message ?? activeState.message;
+  const rowError = renameState.error ?? ownerState.error ?? activeState.error ?? profileState.error;
+  const rowMessage = renameState.message ?? ownerState.message ?? activeState.message ?? profileState.message;
 
   return (
     <div className="flex flex-col gap-6">
@@ -105,6 +131,7 @@ export function AccountsManager({ accounts, people }: { accounts: AccountRow[]; 
                 <th scope="col">Institution</th>
                 <th scope="col">Type</th>
                 <th scope="col">Owner</th>
+                <th scope="col">Mapping</th>
                 <th scope="col">Source</th>
                 <th scope="col">Status</th>
                 <th scope="col">Actions</th>
@@ -118,6 +145,9 @@ export function AccountsManager({ accounts, people }: { accounts: AccountRow[]; 
                   <td className="text-muted capitalize">{account.type}</td>
                   <td className="text-muted">
                     {account.ownerUserId === null ? 'Joint' : (people.find((p) => p.id === account.ownerUserId)?.name ?? 'Joint')}
+                  </td>
+                  <td className="text-muted">
+                    {account.isSimplefinManaged ? '—' : account.importProfileName ?? 'none'}
                   </td>
                   <td>
                     <span className={account.isSimplefinManaged ? 'badge badge--blue' : 'badge badge--slate'}>
@@ -157,6 +187,35 @@ export function AccountsManager({ accounts, people }: { accounts: AccountRow[]; 
                           Set owner
                         </button>
                       </form>
+                      {account.isSimplefinManaged ? null : (
+                        <form action={setProfile} className="flex gap-1">
+                          <input type="hidden" name="accountId" value={account.id} />
+                          <select
+                            name="profile"
+                            // The pin only preselects when it is actually one of the offered
+                            // (active+readable) profiles below -- the same MUST-5.2 rule
+                            // import-client.tsx's preselect follows, so this select is never
+                            // asked to land on a value with no matching <option>.
+                            defaultValue={
+                              account.importProfileId !== null && profiles.some((p) => p.id === account.importProfileId)
+                                ? String(account.importProfileId)
+                                : ''
+                            }
+                            aria-label={`Mapping for ${account.name}`}
+                            className={rowInput}
+                          >
+                            <option value="">None</option>
+                            {profiles.map((profile) => (
+                              <option key={profile.id} value={profile.id}>
+                                {profile.name}
+                              </option>
+                            ))}
+                          </select>
+                          <button type="submit" className={rowButton}>
+                            Set mapping
+                          </button>
+                        </form>
+                      )}
                       <form action={setActive}>
                         <input type="hidden" name="accountId" value={account.id} />
                         <input type="hidden" name="active" value={account.isActive ? '0' : '1'} />

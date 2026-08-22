@@ -20,9 +20,11 @@ vi.mock('next/cache', () => ({
   revalidatePath: vi.fn(),
 }));
 
-import { saveWizardProfileAction } from '@/app/(app)/import/actions';
+import { saveWizardProfileAction, setCardPersonAction } from '@/app/(app)/import/actions';
 import { getBuiltinPreset, getProfileByName, listProfiles } from '@/lib/import/presets';
 import { writeStagedFile, stagedFilePath } from '@/lib/import/staging';
+import { insertTestAccount, insertTestUser } from '../helpers/db';
+import { listAccountCardPeople } from '@/lib/import/card-people';
 
 let current: TestDb | null = null;
 let tempDir: string;
@@ -109,5 +111,93 @@ describe('saveWizardProfileAction (new-bank wizard)', () => {
     expect(result.error).toBeTruthy();
     expect(listProfiles()).toHaveLength(before);
     expect(getProfileByName('Broken Bank')).toBeNull();
+  });
+});
+
+describe('setCardPersonAction (MUST-6.1: saves an account_card_people assignment immediately, independent of any import)', () => {
+  it('assigns a card value to a person', async () => {
+    const accountId = insertTestAccount(current!.db);
+    const alexId = insertTestUser(current!.db, { name: 'Alex' });
+
+    const result = await setCardPersonAction({}, formData({ accountId: String(accountId), cardValue: '-1001', person: String(alexId) }));
+
+    expect(result.error).toBeUndefined();
+    expect(result.message).toMatch(/saved/i);
+    expect(listAccountCardPeople(accountId)).toMatchObject([{ cardValue: '-1001', userId: alexId, userName: 'Alex' }]);
+  });
+
+  it('normalizes the card value the same way the reader will (trim, collapse spaces, uppercase)', async () => {
+    const accountId = insertTestAccount(current!.db);
+    const alexId = insertTestUser(current!.db, { name: 'Alex' });
+
+    await setCardPersonAction({}, formData({ accountId: String(accountId), cardValue: '  alex  morgan ', person: String(alexId) }));
+
+    expect(listAccountCardPeople(accountId).map((r) => r.cardValue)).toEqual(['ALEX MORGAN']);
+  });
+
+  it('re-assigning the same value to a different person updates the row instead of adding a second one', async () => {
+    const accountId = insertTestAccount(current!.db);
+    const alexId = insertTestUser(current!.db, { name: 'Alex' });
+    const samId = insertTestUser(current!.db, { name: 'Sam' });
+    await setCardPersonAction({}, formData({ accountId: String(accountId), cardValue: '-1001', person: String(alexId) }));
+
+    const result = await setCardPersonAction({}, formData({ accountId: String(accountId), cardValue: '-1001', person: String(samId) }));
+
+    expect(result.error).toBeUndefined();
+    expect(listAccountCardPeople(accountId)).toHaveLength(1);
+    expect(listAccountCardPeople(accountId)[0]).toMatchObject({ userId: samId });
+  });
+
+  it('clearing back to "" (account owner) deletes the assignment rather than erroring', async () => {
+    const accountId = insertTestAccount(current!.db);
+    const alexId = insertTestUser(current!.db, { name: 'Alex' });
+    await setCardPersonAction({}, formData({ accountId: String(accountId), cardValue: '-1001', person: String(alexId) }));
+
+    const result = await setCardPersonAction({}, formData({ accountId: String(accountId), cardValue: '-1001', person: '' }));
+
+    expect(result.error).toBeUndefined();
+    expect(result.message).toMatch(/fall back to the account owner/i);
+    expect(listAccountCardPeople(accountId)).toHaveLength(0);
+  });
+
+  it('permits assigning to a person who has since been deactivated (MUST-3.1: still valid and resolvable)', async () => {
+    const accountId = insertTestAccount(current!.db);
+    const retiredId = insertTestUser(current!.db, { name: 'Retired Member', isActive: false });
+
+    const result = await setCardPersonAction({}, formData({ accountId: String(accountId), cardValue: '-1001', person: String(retiredId) }));
+
+    expect(result.error).toBeUndefined();
+    expect(listAccountCardPeople(accountId)).toMatchObject([{ userId: retiredId, userName: 'Retired Member', userIsActive: false }]);
+  });
+
+  it('refuses a person id that does not exist, without writing anything', async () => {
+    const accountId = insertTestAccount(current!.db);
+    const result = await setCardPersonAction({}, formData({ accountId: String(accountId), cardValue: '-1001', person: '999999' }));
+    expect(result.error).toMatch(/no longer exists/i);
+    expect(listAccountCardPeople(accountId)).toHaveLength(0);
+  });
+
+  it('refuses an account id that does not exist', async () => {
+    const alexId = insertTestUser(current!.db, { name: 'Alex' });
+    const result = await setCardPersonAction({}, formData({ accountId: '999999', cardValue: '-1001', person: String(alexId) }));
+    expect(result.error).toMatch(/no longer exists/i);
+  });
+
+  it('refuses a malformed person field instead of writing an unusable value', async () => {
+    const accountId = insertTestAccount(current!.db);
+    const result = await setCardPersonAction({}, formData({ accountId: String(accountId), cardValue: '-1001', person: 'not-a-number' }));
+    expect(result.error).toBeTruthy();
+    expect(listAccountCardPeople(accountId)).toHaveLength(0);
+  });
+
+  it('rejects a cross-origin request before writing anything', async () => {
+    const accountId = insertTestAccount(current!.db);
+    const alexId = insertTestUser(current!.db, { name: 'Alex' });
+    requestHeaders = new Headers({ origin: 'http://evil.example', host: 'nas.local:3000' });
+
+    const result = await setCardPersonAction({}, formData({ accountId: String(accountId), cardValue: '-1001', person: String(alexId) }));
+
+    expect(result.error).toBe('Cross-origin request rejected');
+    expect(listAccountCardPeople(accountId)).toHaveLength(0);
   });
 });

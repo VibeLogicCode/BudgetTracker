@@ -3,8 +3,10 @@ import { getDb } from '@/db/client';
 import { accounts, imports, transactionImports, transactions, users } from '@/db/schema';
 import { nowIso } from '@/lib/clock';
 import { reverseLoanLinksForTransactions } from '@/lib/loans';
+import { listAccountCardPeople } from './card-people';
 import { findExistingByHashes, type HashedRow } from './dedup';
 import { getImportHooks } from './hooks';
+import { normalizeCardValue, type ImportMapping } from './mapping';
 import type { RowError } from './parse';
 
 export type CommitRow = HashedRow & { externalId?: string | null };
@@ -49,6 +51,13 @@ export interface CommitInput {
   rows: CommitRow[];
   errors: RowError[];
   at?: Date;
+  /**
+   * Spec 2026-08-22, v1.6.0, MUST-3.3. Optional because the SimpleFIN sync path
+   * (src/lib/simplefin/sync.ts) has no CSV mapping at all and its rows carry no `cells` —
+   * omitting it (or passing one whose `cardCol` is null, which every CSV mapping was before
+   * v1.6.0) is exactly today's behaviour: every row attributes to `account.ownerUserId`.
+   */
+  mapping?: ImportMapping | null;
 }
 
 export interface CommitResult {
@@ -58,6 +67,14 @@ export interface CommitResult {
   rowsError: number;
   insertedTransactionIds: number[];
   duplicateTransactionIds: number[];
+  /**
+   * SHOULD-3.6. Human-readable attribution split for the rows this call actually inserted,
+   * e.g. "8 rows to Alex, 5 rows to Sam, 2 rows to the account owner (no card
+   * match)" — null whenever there is nothing card-specific to report: `mapping.cardCol` is
+   * null/absent, or nothing was inserted (an all-duplicate commit has no NEW attribution to
+   * announce; the pre-existing rows keep whatever they already had).
+   */
+  attributionSummary: string | null;
 }
 
 export function commitImport(input: CommitInput): CommitResult {
@@ -72,6 +89,46 @@ export function commitImport(input: CommitInput): CommitResult {
     .where(eq(accounts.id, input.accountId))
     .get();
   if (!account) throw new Error(`No account ${input.accountId}`);
+  // Captured into its own const, rather than referencing `account.ownerUserId` directly
+  // inside resolveAttribution below: TS does not carry the `if (!account) throw` narrowing
+  // above across a nested function boundary, so the closure would otherwise see `account`
+  // as possibly undefined again.
+  const ownerUserId = account.ownerUserId ?? null;
+
+  // MUST-3.3: loaded ONCE per commit, never per row. null when the mapping has no cardCol
+  // (or no mapping was passed at all, e.g. SimpleFIN) -- in which case cardMap stays null
+  // too and resolveAttribution below never consults account_card_people, which is what
+  // keeps this byte-identical to pre-v1.6.0 behaviour for every account that has no
+  // cardholder column.
+  const cardCol = input.mapping?.cardCol ?? null;
+  const cardMap =
+    cardCol !== null
+      ? new Map(listAccountCardPeople(input.accountId).map((row) => [row.cardValue, { userId: row.userId, userName: row.userName }]))
+      : null;
+
+  // Tallies for the SHOULD-3.6 attribution-split summary, kept only for rows this call
+  // actually INSERTS -- a duplicate row already has whatever attribution it got the first
+  // time it was committed, so it has nothing new to report here.
+  const matchedTally = new Map<string, number>();
+  let fallbackCount = 0;
+
+  /**
+   * MUST-3.3's fallback chain, in order: no cardCol/no map -> owner; index beyond this row's
+   * cells, or the cell normalizes to empty -> owner; normalized value not in the map ->
+   * owner; otherwise the mapped person. `matchedName` is non-null only on the last case, so
+   * the caller can tally "matched a real person" separately from every flavour of fallback.
+   */
+  function resolveAttribution(cells: string[]): { userId: number | null; matchedName: string | null } {
+    const fallback = { userId: ownerUserId, matchedName: null };
+    if (cardCol === null || cardMap === null) return fallback;
+    const raw = cells[cardCol];
+    if (raw === undefined) return fallback;
+    const value = normalizeCardValue(raw);
+    if (value.length === 0) return fallback;
+    const match = cardMap.get(value);
+    if (!match) return fallback;
+    return { userId: match.userId, matchedName: match.userName };
+  }
 
   const existing = findExistingByHashes(
     input.accountId,
@@ -137,12 +194,19 @@ export function commitImport(input: CommitInput): CommitResult {
 
       assertInsertable(row);
 
+      const attribution = resolveAttribution(row.cells);
+      if (attribution.matchedName !== null) {
+        matchedTally.set(attribution.matchedName, (matchedTally.get(attribution.matchedName) ?? 0) + 1);
+      } else if (cardCol !== null) {
+        fallbackCount += 1;
+      }
+
       const inserted = tx
         .insert(transactions)
         .values({
           accountId: input.accountId,
           importId: importRow.id,
-          attributedUserId: account.ownerUserId ?? null,
+          attributedUserId: attribution.userId,
           date: row.date,
           rawDescription: row.rawDescription,
           normalizedMerchant: normalizeMerchant(row.rawDescription),
@@ -174,6 +238,22 @@ export function commitImport(input: CommitInput): CommitResult {
       .where(eq(imports.id, importRow.id))
       .run();
 
+    // SHOULD-3.6. Biggest matched bucket first (ties broken by name), the owner-fallback
+    // bucket always last regardless of its size -- matching the spec's own example order --
+    // and omitted altogether when nothing fell back. null (not "0 rows...") whenever there
+    // is genuinely nothing new to report: no cardCol, or an all-duplicate commit.
+    let attributionSummary: string | null = null;
+    if (cardCol !== null && insertedTransactionIds.length > 0) {
+      const parts: string[] = [...matchedTally.entries()]
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .map(([name, count]) => `${count} ${count === 1 ? 'row' : 'rows'} to ${name}`);
+      if (fallbackCount > 0) {
+        const label = ownerUserId !== null ? 'the account owner' : 'unattributed';
+        parts.push(`${fallbackCount} ${fallbackCount === 1 ? 'row' : 'rows'} to ${label} (no card match)`);
+      }
+      attributionSummary = parts.length > 0 ? parts.join(', ') : null;
+    }
+
     return {
       importId: importRow.id,
       rowsAdded: insertedTransactionIds.length,
@@ -181,6 +261,7 @@ export function commitImport(input: CommitInput): CommitResult {
       rowsError: input.errors.length,
       insertedTransactionIds,
       duplicateTransactionIds,
+      attributionSummary,
     };
   });
 }

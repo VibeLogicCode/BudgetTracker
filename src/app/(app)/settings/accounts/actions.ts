@@ -7,6 +7,8 @@ import { isSameOrigin } from '@/lib/auth/csrf';
 import { requireAdmin } from '@/lib/auth/session';
 import { createAccount, getAccount, renameAccount, setAccountActive, setAccountOwner } from '@/lib/accounts';
 import { findUserById } from '@/lib/auth/users';
+import { hasReadableMapping, listProfiles, setAccountPinnedProfile } from '@/lib/import/presets';
+import { PROFILE_RENDERING_ROUTES } from '@/app/(app)/settings/managers/revalidation-routes';
 
 export interface AccountsFormState {
   error?: string;
@@ -26,6 +28,24 @@ function ownerIdOf(value: string): number | null {
 function ownerError(ownerUserId: number | null): string | null {
   if (ownerUserId === null) return null;
   return findUserById(ownerUserId) ? null : 'That person no longer exists.';
+}
+
+/** '' = no pin (spec 2026-08-22 v1.6.0, MUST-5.1: the select can clear the pin, not just set it). */
+const profileField = z.string().refine((value) => value === '' || /^\d+$/.test(value), 'Pick a mapping, or None.');
+
+function profileIdOf(value: string): number | null {
+  return value === '' ? null : Number(value);
+}
+
+/**
+ * Loops PROFILE_RENDERING_ROUTES (src/app/(app)/settings/managers/revalidation-routes.ts) --
+ * the SAME list managers/actions.ts's setProfileActiveAction loops (MUST-4.4) -- rather than
+ * a fresh array here, per that module's doc comment: a route added there without a matching
+ * revalidatePath call is caught by tests/app/managers-actions.test.ts, so a second, divergent
+ * copy of the list in this file would defeat that guard.
+ */
+function revalidateProfileRoutes(): void {
+  for (const route of PROFILE_RENDERING_ROUTES) revalidatePath(route);
 }
 
 const createSchema = z.object({
@@ -130,4 +150,37 @@ export async function setAccountActiveAction(_prev: AccountsFormState, formData:
         ? 'Account reactivated.'
         : 'Account deactivated. Its transactions and history stay exactly where they are.',
   };
+}
+
+/**
+ * Set-or-clear the mapping an account is pinned to, without running an import (spec
+ * 2026-08-22 v1.6.0, MUST-5.1). Complements setAccountProfile in src/lib/import/presets.ts,
+ * which only ever WRITES a pin, automatically, right after a successful commit
+ * (src/lib/import/flow.ts) -- that remembering behaviour is untouched by this action. The
+ * select on screen only ever offers active+readable profiles (the same two conditions
+ * import/page.tsx's picker applies, MUST-4.1), and this re-checks that server-side rather than
+ * trusting the submitted value, the same way setAccountOwnerAction above re-checks that a
+ * chosen owner id still exists.
+ */
+export async function setAccountProfileAction(_prev: AccountsFormState, formData: FormData): Promise<AccountsFormState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  await requireAdmin();
+  const parsed = z
+    .object({ accountId: z.coerce.number().int().positive(), profile: profileField })
+    .safeParse({ accountId: formData.get('accountId'), profile: String(formData.get('profile') ?? '') });
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Invalid request.' };
+  if (!getAccount(parsed.data.accountId)) return { error: 'That account no longer exists.' };
+
+  const profileId = profileIdOf(parsed.data.profile);
+  if (profileId !== null) {
+    const offered = listProfiles().filter(hasReadableMapping).filter((p) => p.isActive);
+    if (!offered.some((p) => p.id === profileId)) {
+      return { error: 'That mapping is not available to pin — it may have been deactivated.' };
+    }
+  }
+
+  setAccountPinnedProfile(parsed.data.accountId, profileId);
+  revalidateProfileRoutes();
+  return { message: profileId === null ? 'Mapping pin cleared.' : 'Mapping pin set.' };
 }

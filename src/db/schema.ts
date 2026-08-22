@@ -55,6 +55,14 @@ export const importProfiles = sqliteTable(
     isBuiltin: integer('is_builtin', { mode: 'boolean' }).notNull().default(false),
     mapping: text('mapping').notNull(),
     createdAt: text('created_at').notNull(),
+    /**
+     * v1.6.0, added by drizzle/0008_import_attribution.sql. Declared last because ALTER
+     * TABLE ADD COLUMN appends physically -- same convention as users.mustChangePassword
+     * and warrantyItems.typeId, so the mirror stays readable against
+     * `pragma table_info(import_profiles)`. Hides a profile (built-in or custom) from the
+     * import picker without deleting it; the managers page still lists it for reactivation.
+     */
+    isActive: integer('is_active', { mode: 'boolean' }).notNull().default(true),
   },
   (t) => [uniqueIndex('import_profiles_name_uq').on(t.name)],
 );
@@ -88,6 +96,38 @@ export const imports = sqliteTable(
     createdAt: text('created_at').notNull(),
   },
   (t) => [index('imports_account_idx').on(t.accountId, t.createdAt)],
+);
+
+/**
+ * Per-card attribution map (spec 2026-08-22, v1.6.0). Mirrors drizzle/0008_import_attribution.sql.
+ * Maps a normalized card/cardholder value -- read from an optional mapping column the
+ * import mapping schema may name (Task 2's `cardCol`) -- to the person a joint statement's
+ * rows attributed to that value belong to. Created EMPTY by the migration; nothing writes
+ * to it before Task 3.
+ *
+ * No onDelete on either foreign key (NO ACTION, matching the existing convention for direct
+ * references to accounts/users -- accounts.ownerUserId, accounts.importProfileId and
+ * imports.importedBy all carry none either): this project never hard-deletes a user or an
+ * account, both are soft-deleted through their own is_active flag, so no app code path can
+ * orphan a row here today. A future hard-delete of either would need to clear referencing
+ * account_card_people rows first, the same way deleteProfile() in
+ * src/lib/import/presets.ts already clears accounts/imports before deleting an
+ * import_profiles row, rather than relying on a cascade that does not exist.
+ */
+export const accountCardPeople = sqliteTable(
+  'account_card_people',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    accountId: integer('account_id')
+      .notNull()
+      .references(() => accounts.id),
+    cardValue: text('card_value').notNull(),
+    userId: integer('user_id')
+      .notNull()
+      .references(() => users.id),
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => [uniqueIndex('account_card_people_uq').on(t.accountId, t.cardValue)],
 );
 
 export const transactions = sqliteTable(

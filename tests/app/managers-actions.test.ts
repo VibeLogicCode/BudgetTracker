@@ -25,8 +25,9 @@ import {
   deleteProfileAction,
   deleteRuleAction,
   renameCategoryAction,
+  setProfileActiveAction,
 } from '@/app/(app)/settings/managers/actions';
-import { CATEGORY_RENDERING_ROUTES } from '@/app/(app)/settings/managers/revalidation-routes';
+import { CATEGORY_RENDERING_ROUTES, PROFILE_RENDERING_ROUTES } from '@/app/(app)/settings/managers/revalidation-routes';
 import { createProfile, getBuiltinPreset, getProfile, getProfileByName, listProfiles } from '@/lib/import/presets';
 
 let current: TestDb | null = null;
@@ -148,6 +149,77 @@ describe('deleteProfileAction (a mapping could not previously be deleted by anyo
     vi.mocked(requireAdmin).mockRejectedValueOnce(new Error('not admin'));
     await expect(deleteProfileAction({}, formData({ profileId: String(id) }))).rejects.toThrow(/not admin/);
     expect(getProfile(id)).not.toBeNull();
+  });
+});
+
+describe('setProfileActiveAction (spec 2026-08-22 v1.6.0, MUST-4.1-4.4: mapping deactivation)', () => {
+  it('deactivates a BUILT-IN profile -- deleteProfileAction refuses built-ins, this must not (MUST-4.2)', async () => {
+    setup();
+    const builtin = getProfileByName('Scotiabank Chequing/Debit')!;
+    const result = await setProfileActiveAction({}, formData({ profileId: String(builtin.id), isActive: '0' }));
+    expect(result.error).toBeUndefined();
+    expect(getProfile(builtin.id)?.isActive).toBe(false);
+    expect(getProfile(builtin.id)?.isBuiltin).toBe(true);
+  });
+
+  it('reactivates a deactivated profile', async () => {
+    setup();
+    const builtin = getProfileByName('TD Visa')!;
+    await setProfileActiveAction({}, formData({ profileId: String(builtin.id), isActive: '0' }));
+    const result = await setProfileActiveAction({}, formData({ profileId: String(builtin.id), isActive: '1' }));
+    expect(result.error).toBeUndefined();
+    expect(getProfile(builtin.id)?.isActive).toBe(true);
+  });
+
+  it('warns with the REAL pinned-account count in the deactivate message (MUST-4.3), and leaves the pin in the database', async () => {
+    const { db } = setup();
+    const builtin = getProfileByName('Scotiabank Chequing/Debit')!;
+    const accountId = insertTestAccount(db, { name: 'Joint Chequing', importProfileId: builtin.id });
+    insertTestAccount(db, { name: 'Solo Chequing', importProfileId: builtin.id });
+
+    const result = await setProfileActiveAction({}, formData({ profileId: String(builtin.id), isActive: '0' }));
+
+    expect(result.message).toMatch(/2 account/i);
+    const row = current!.sqlite.prepare('select import_profile_id from accounts where id = ?').get(accountId) as {
+      import_profile_id: number | null;
+    };
+    expect(row.import_profile_id).toBe(builtin.id); // nothing nulled, unlike deleteProfileAction
+  });
+
+  it('says nothing about accounts when none are pinned', async () => {
+    setup();
+    const builtin = getProfileByName('TD Chequing/Debit')!;
+    const result = await setProfileActiveAction({}, formData({ profileId: String(builtin.id), isActive: '0' }));
+    expect(result.message).not.toMatch(/account/i);
+  });
+
+  it('rejects an invalid profileId', async () => {
+    setup();
+    const result = await setProfileActiveAction({}, formData({ profileId: 'nope', isActive: '0' }));
+    expect(result.error).toBeTruthy();
+  });
+
+  it('errors for an unknown profile instead of silently no-op-ing', async () => {
+    setup();
+    const result = await setProfileActiveAction({}, formData({ profileId: '999999', isActive: '0' }));
+    expect(result.error).toBeTruthy();
+  });
+
+  it('refuses a non-admin caller', async () => {
+    setup();
+    const builtin = getProfileByName('TD Visa')!;
+    vi.mocked(requireAdmin).mockRejectedValueOnce(new Error('not admin'));
+    await expect(setProfileActiveAction({}, formData({ profileId: String(builtin.id), isActive: '0' }))).rejects.toThrow(/not admin/);
+    expect(getProfile(builtin.id)?.isActive).toBe(true);
+  });
+
+  it('revalidates every route that renders a profile list', async () => {
+    setup();
+    const builtin = getProfileByName('TD Visa')!;
+    vi.mocked(revalidatePath).mockClear();
+    await setProfileActiveAction({}, formData({ profileId: String(builtin.id), isActive: '0' }));
+    const calls = vi.mocked(revalidatePath).mock.calls.map((call) => call[0]);
+    for (const route of PROFILE_RENDERING_ROUTES) expect(calls).toContain(route);
   });
 });
 
