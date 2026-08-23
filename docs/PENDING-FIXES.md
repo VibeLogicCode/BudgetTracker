@@ -243,6 +243,41 @@ months. That caps the work AND arguably improves the diagnostic, since a discrep
 years ago that the owner has already decided to live with should probably stop being reported. It
 needs a ruling on the window, so it was not chosen unilaterally.
 
+## 5b. TypeScript 7 — retested 2026-08-23, still blocked, now by TWO things
+
+Standing owner ruling: revisit when Next.js supports it. Retested during v1.8.0 and reverted the
+same session. `typescript` stays pinned at `^5.9.3`. `src/types/css.d.ts` and the `baseUrl`
+removal remain committed, so the eventual switch is still just a version bump.
+
+Tested: `typescript@7.0.2` against the pinned `next@15.5.23`.
+
+**Blocker 1 — the recorded one, still present.** `npx next build` fails immediately:
+
+```
+⨯ Failed to load next.config.ts
+[TypeError: Cannot read properties of undefined (reading 'fileExists')]
+```
+
+Next 15's config loader reaches for a TypeScript JS API surface the Go compiler does not provide.
+Unchanged from the previous attempt.
+
+**Blocker 2 — new, and it is ours, not Next's.** `tests/ops/use-server-exports.test.ts` parses
+`'use server'` files with the TypeScript compiler API — `ts.Node`, `ts.SyntaxKind`,
+`ts.createSourceFile`, `ts.canHaveModifiers`, `ts.isArrowFunction` and more. Under TS 7 every one
+of those resolves against `typescript/lib/version`, which exports none of them, so `tsc --noEmit`
+reports around 15 errors in that one file. This did not show up in the earlier attempt because
+that guard was added later, in v1.5.1, to catch the managers-page 500.
+
+That test is load-bearing and must not be weakened to unblock a compiler upgrade. Rewriting it
+without the compiler API means regex-matching exports, which is exactly the weaker check the AST
+version was chosen over. The realistic options are to keep a TS 5.x install available to that one
+test while `tsc` runs 7, or to wait until the API it needs is available.
+
+**Next 16.3.2 is now published**, and is the likely unblock for blocker 1. It was deliberately NOT
+tried here: a Next major upgrade is its own release with its own breaking-change surface, not a
+45-minute dependency bump, and this item was time-boxed. Note that blocker 2 is independent of
+Next entirely — a Next 16 upgrade would not clear it on its own.
+
 ## 6. v1.5.0 image size anomaly — investigated 2026-08-23, main cause still open
 
 Time-boxed investigation done in v1.8.0. **The leading hypothesis was confirmed as real and then
