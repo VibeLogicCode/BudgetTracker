@@ -160,3 +160,56 @@ ran and found no paper". Both currently return `{file}`, and they must not share
 paper found is a benign per-photo outcome and saying "scanning is unavailable" there would be
 actively misleading. About 30 minutes. Deliberately left out of v1.8.0 as scope beyond the F5 fix
 itself.
+
+## 6. v1.5.0 image size anomaly — investigated 2026-08-23, main cause still open
+
+Time-boxed investigation done in v1.8.0. **The leading hypothesis was confirmed as real and then
+measured as far too small to matter, so the recommendation is now NOT to act on it.** Recorded in
+full so nobody re-runs this.
+
+**The anomaly.** From the GHCR registry API in compressed bytes: 1.4.0 amd64 377.6 / arm64
+186.1 MB, 1.5.0 amd64 613.8 / arm64 230.5 MB. So +236.2 MB amd64 against a predicted +91 MB, and
+the two arches diverging sharply for identical source on top of a pre-existing 2x baseline gap.
+
+**Hypothesis: every image carries both Linux architectures' `onnxruntime-node` prebuilds.**
+CONFIRMED — the `Dockerfile` says so itself at lines 21-23, stripping only `darwin` and `win32`
+and leaving both Linux binaries in both images because dropping the non-target one "needs
+TARGETARCH plumbing".
+
+**Measured, and it does not explain the anomaly.** Actual uncompressed sizes under
+`node_modules/onnxruntime-node/bin/napi-v6/`:
+
+- `linux/x64` — 36.7 MB (`libonnxruntime.so.1` 36.3 + binding 0.4)
+- `linux/arm64` — 19.5 MB (`libonnxruntime.so.1` 19.1 + binding 0.4)
+
+So the amd64 image wastes 19.5 MB and the arm64 image wastes 36.7 MB, uncompressed — roughly 6 MB
+and 12 MB once layer-compressed. **That is the wrong direction to explain anything**: the arm64
+image carries nearly twice as much dead weight as amd64 while being less than half the size. The
+Dockerfile comment's "20 to 37 MB" was an uncompressed figure and overstates the real payoff.
+
+**Recommendation reversed: leave the strip alone.** The original comment's judgment — not worth a
+new failure mode — now has numbers behind it. And the strip would not be free to do safely:
+`scripts/check-ocr-assets.mjs` currently requires only that `bin/napi-v6` exists and forbids
+`darwin`/`win32`. It does NOT assert the target Linux binary is present, so a wrong `TARGETARCH`
+mapping (Docker says `amd64`, onnxruntime's directory says `x64`) would pass `docker build` and
+fail at runtime. Doing this properly means making that assertion arch-aware off `process.arch`
+first. Not worth ~6 MB.
+
+**What the real cause probably is: the measurement.** 613.8 MB compressed is not plausible for
+this image. Accountable content, all uncompressed: onnxruntime after stripping ~75 MB,
+`tesseract.js-core` 29.2, `pdfjs-dist` 35.6, `@img` ~25, `better-sqlite3` 11.7, `vendor/` 15.0,
+`public/scanner/` 8.6, plus the Next standalone output and the `node:22-bookworm-slim` base. That
+totals somewhere near 450 MB uncompressed, which compresses to roughly what the **arm64** number
+already says. The amd64 figure looks like a manifest-walk artifact — buildx attaches provenance
+and SBOM attestation manifests to a multi-arch index, and a naive walk can attribute those blobs
+to one platform.
+
+**So the next step is not an optimization, it is a re-measurement**: resolve each platform's
+manifest by digest from the index and sum only that manifest's own layers, explicitly skipping
+any attestation manifest (`vnd.docker.reference.type=attestation-manifest`). If the corrected
+amd64 figure lands near arm64's, there is no anomaly and this item closes with nothing to fix.
+
+**Do not read local `node_modules` sizes as image sizes.** A `npm ci` on this Windows machine
+installs `@img/sharp-win32-x64` (18.3 MB) and `@img/sharp-wasm32` (8.6 MB); a Linux image build
+installs the Linux platform packages instead. The `@img` figure above is an estimate, not a
+measurement of the image.
