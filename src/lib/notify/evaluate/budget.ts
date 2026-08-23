@@ -1,6 +1,6 @@
 import { and, gte, lte, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
-import { budgets, transactions } from '@/db/schema';
+import { budgetRollover, budgets, transactions } from '@/db/schema';
 import { budgetProgress, type BudgetRow } from '@/lib/budgets';
 import { currentMonth, monthEnd, monthStart } from '@/lib/dates';
 import { getUserSettings, isEventEnabled, notifiableUsers } from '@/lib/notify/config';
@@ -35,6 +35,54 @@ function flatten(rows: BudgetRow[], acc: BudgetRow[] = []): BudgetRow[] {
   return acc;
 }
 
+/**
+ * Everything the alertable state (src/lib/budgets.ts effectiveBudget -> buildRow ->
+ * BudgetRow.limitCents/pct/spentCents, which fireFor reads verbatim) actually depends on,
+ * folded into one comparable string:
+ *
+ *   - transactions, scoped to `month`: count + max(id) catch an inserted/deleted row;
+ *     max(updated_at) catches a RE-CATEGORISATION of an existing row (same count, same max
+ *     id, spentCents still moves because it's keyed by category).
+ *   - budgets, whole table, unscoped: count + max(id) catch a NEW (scope, user, category,
+ *     month) row -- e.g. "set a budget mid-month" firing the same tick rather than waiting
+ *     for the next transaction. sum(amount_cents) is the extra piece (review fix,
+ *     2026-08-22): budgets has no updated_at column, so an in-place UPDATE to an
+ *     ALREADY-EXISTING row -- a changed amount, or a clear to NULL -- moves neither count
+ *     nor max(id); it DOES move the sum whenever the new value differs from the old one, in
+ *     either direction, including a clear (coalesce(sum(...), 0) below means a row's NULL
+ *     contributes 0 to the running total rather than the whole aggregate going NULL, which
+ *     is what a bare sum() would return once every row happened to be NULL, or the table
+ *     were empty).
+ *   - budget_rollover, whole table, unscoped: count + max(id). A row's existence IS
+ *     rollover being on for that (scope, user, category) (see the table's doc comment in
+ *     src/db/schema.ts) and setRollover only ever inserts or deletes a whole row, never
+ *     edits one in place, so count alone already catches a toggle in EITHER direction --
+ *     enabling raises it, disabling lowers it. This is the fix for the reviewer's defect:
+ *     rollover changes effectiveBudget()'s carry, and therefore limitCents, without
+ *     touching transactions or budgets at all, so it needed its own line here.
+ *   - participants: a user who just enabled the event or moved their threshold is
+ *     evaluated on the very next tick.
+ *
+ * KNOWN REMAINING GAP, accepted rather than fixed here: sum(amount_cents) is not injective.
+ * Two edits landing in the SAME tick whose deltas exactly cancel (row A's amount drops by
+ * $5 while row B's rises by $5, nothing else in the table changing) would leave count,
+ * max(id) AND sum all unchanged, and so stay invisible until some other transaction/
+ * budget/rollover write moves the fingerprint. Closing that would need a per-row
+ * updated_at column (a migration -- out of scope for this fix) or a per-row hash (not a
+ * cheap aggregate). Judged astronomically unlikely relative to the bug fixed here: it
+ * requires two DIFFERENT budget rows edited in the exact same evaluation tick to values
+ * whose sum happens to net to zero change.
+ *
+ * A second, separate, PRE-EXISTING and also-not-fixed-here gap: the transactions component
+ * above is scoped to the CURRENT month only, but effectiveBudget()'s rollover carry walk
+ * (categorySpendWithRollupSeries) can read up to 24 PRIOR months of transactions. A
+ * backdated transaction inserted into a prior month, after the fact, would change that
+ * month's rolled-up spend -- and therefore the CURRENT month's carry -- without moving
+ * count/max(id)/max(updated_at) for the current month's window. Out of scope here: the task
+ * this fix belongs to explicitly keeps the transactions component unchanged, and a
+ * whole-table-unscoped version of it (matching the budgets/rollover shape) would widen how
+ * often EVERY household re-evaluates on EVERY tick, not just rollover users.
+ */
 function fingerprint(month: string, participants: Participant[]): string {
   // One query, served by the existing transactions(date) index.
   const row = getDb()
@@ -47,20 +95,20 @@ function fingerprint(month: string, participants: Participant[]): string {
     .where(and(gte(transactions.date, monthStart(month)), lte(transactions.date, monthEnd(month))))
     .get();
 
-  // The budgets table has no updated_at column (schema.ts), so, unlike transactions above,
-  // an in-place amount UPDATE to an already-existing (scope, user, category, month) row is
-  // not distinguishable from no change here; count(*) + max(id) does catch a NEW budget row
-  // (an insert), which is the case that matters for "set a budget mid-month" firing on the
-  // same tick rather than waiting for the next transaction.
   const budgetRow = getDb()
-    .select({ n: sql<number>`count(*)`, maxId: sql<number>`coalesce(max(${budgets.id}), 0)` })
+    .select({
+      n: sql<number>`count(*)`,
+      maxId: sql<number>`coalesce(max(${budgets.id}), 0)`,
+      sumAmt: sql<number>`coalesce(sum(${budgets.amountCents}), 0)`,
+    })
     .from(budgets)
     .get();
 
-  // max(updated_at) is in the fingerprint so that RE-CATEGORISING an existing transaction
-  // (which changes neither the count nor the max id) still triggers re-evaluation. The
-  // participant/threshold part is in it so a user who has just enabled the event or moved
-  // their threshold is evaluated on the very next tick.
+  const rolloverRow = getDb()
+    .select({ n: sql<number>`count(*)`, maxId: sql<number>`coalesce(max(${budgetRollover.id}), 0)` })
+    .from(budgetRollover)
+    .get();
+
   const people = participants
     .slice()
     .sort((a, b) => a.userId - b.userId)
@@ -68,7 +116,8 @@ function fingerprint(month: string, participants: Participant[]): string {
     .join(',');
   return (
     `${month}|${row?.n ?? 0}|${row?.maxId ?? 0}|${row?.maxUpdated ?? ''}` +
-    `|${budgetRow?.n ?? 0}|${budgetRow?.maxId ?? 0}|${people}`
+    `|${budgetRow?.n ?? 0}|${budgetRow?.maxId ?? 0}|${budgetRow?.sumAmt ?? 0}` +
+    `|${rolloverRow?.n ?? 0}|${rolloverRow?.maxId ?? 0}|${people}`
   );
 }
 

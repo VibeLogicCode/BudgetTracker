@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { categoryIdByName, createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../../helpers/db';
-import { effectiveBudget, setRollover, upsertBudget } from '@/lib/budgets';
+import { clearBudget, effectiveBudget, setRollover, upsertBudget } from '@/lib/budgets';
 import { DEFAULT_USER_SETTINGS, saveEmailTarget, saveSmtp, saveUserSettings, setPref } from '@/lib/notify/config';
 import { resetOutboxPumpForTests } from '@/lib/notify/outbox';
 import { resetNotifySenderForTests, setNotifySenderForTests } from '@/lib/notify/send';
@@ -275,6 +275,152 @@ describe('DEFECT regression: clearing a split must not suppress a budget alert',
     setTransactionSplits({ txnId, parts: [], userId: creatorId });
     expect(evaluateBudgets({ now: NOW, tz: TZ })).toBe(2);
     expect(keys().sort()).toEqual([`budget:h:${groceries}:2026-08:100`, `budget:h:${groceries}:2026-08:80`].sort());
+  });
+});
+
+/**
+ * DEFECT regression (adversarial review, 2026-08-22): fingerprint() hashed only
+ * transactions(count, max id, max updated_at), budgets(count, max id) and participant
+ * settings. Since rollover shipped, the limit evaluateBudgets alerts against is a function
+ * of budget_rollover TOO (src/lib/budgets.ts effectiveBudget/buildRow), but the fingerprint
+ * never read that table -- toggling rollover changed the alertable state without changing
+ * the fingerprint, so the skip guard returned 0 without recomputing. A second, related gap:
+ * budgets has no updated_at column, so an in-place UPDATE to an EXISTING month's row (a
+ * changed amount, or a clear to NULL) moved neither count(*) nor max(id) either.
+ *
+ * Reproduction numbers are the reviewer's, verified end to end, with NO manual
+ * resetBudgetFingerprintForTests() call between the "before" and "after" evaluateBudgets()
+ * calls in any of these tests -- that absence is the entire point.
+ */
+describe('DEFECT regression: fingerprint must react to budget_rollover and in-place budget edits', () => {
+  it("the reviewer's exact sequence: disabling rollover reveals an alert the very next evaluation", () => {
+    emailUser();
+    const groceries = categoryIdByName(t.db, 'Groceries');
+    setRollover({ scope: 'household', userId: null, categoryId: groceries, enabled: true, startMonth: '2026-07' });
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-07', amountCents: 150000 }); // $1500 July, no July spend
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-08', amountCents: 50000 }); // $500 August base
+    expect(effectiveBudget('household', null, groceries, '2026-08')).toEqual({
+      baseCents: 50000,
+      carryCents: 150000,
+      effectiveCents: 200000,
+    });
+
+    // $1200 is 60% of the $2000 effective limit -- under the 80% threshold. Silent, and this
+    // seeds the fingerprint cache with the rollover-ON state.
+    spend(groceries, 120000);
+    expect(evaluateBudgets({ now: NOW, tz: TZ })).toBe(0);
+    expect(keys()).toEqual([]);
+
+    // The ONLY change: budget_rollover loses its one row. No transaction or budget row is
+    // touched. The effective limit collapses to the $500 base, so the SAME $1200 is now
+    // 240% -- past both the 80% threshold and the 100% exceeded line.
+    setRollover({ scope: 'household', userId: null, categoryId: groceries, enabled: false, startMonth: '2026-07' });
+    expect(effectiveBudget('household', null, groceries, '2026-08')).toEqual({
+      baseCents: 50000,
+      carryCents: 0,
+      effectiveCents: 50000,
+    });
+    expect(evaluateBudgets({ now: NOW, tz: TZ })).toBe(2);
+    expect(keys().sort()).toEqual([`budget:h:${groceries}:2026-08:100`, `budget:h:${groceries}:2026-08:80`].sort());
+  });
+
+  it('enabling rollover on an over-budget category moves the fingerprint on the very next evaluation', () => {
+    emailUser();
+    const groceries = categoryIdByName(t.db, 'Groceries');
+    // July's budget is planted up front but has ZERO effect until rollover is turned on --
+    // rolloverStartMonth() reads null while rollover is off, so effectiveBudget() short-
+    // circuits straight to the base regardless of what July's row says. This keeps the
+    // later setRollover() call the ONLY budget_rollover/budgets/transactions change in the
+    // whole test, so the isolation is real, not incidental.
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-07', amountCents: 150000 }); // $1500 July, no July spend
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-08', amountCents: 50000 }); // $500 August base
+    spend(groceries, 75000); // $750 = 150% of the $500 base alone
+    expect(evaluateBudgets({ now: NOW, tz: TZ })).toBe(2);
+    expect(keys().sort()).toEqual([`budget:h:${groceries}:2026-08:100`, `budget:h:${groceries}:2026-08:80`].sort());
+
+    // Enabling rollover raises the effective limit to $2000 ($500 base + $1500 carry) --
+    // $750 is now only 37.5%, fully covered. Confirmed independently via effectiveBudget()
+    // so this isn't the only evidence the underlying state changed.
+    setRollover({ scope: 'household', userId: null, categoryId: groceries, enabled: true, startMonth: '2026-07' });
+    expect(effectiveBudget('household', null, groceries, '2026-08')).toEqual({
+      baseCents: 50000,
+      carryCents: 150000,
+      effectiveCents: 200000,
+    });
+
+    // NOTE on what this assertion can and cannot prove: rollover's carry is never negative
+    // (ruling 4), so ENABLING it can only raise the effective limit, which can only suppress
+    // or maintain an alert, never manufacture a new one -- and enqueue() is a dedup ratchet,
+    // so a key that already fired can never "unfire" and be observed doing so. That makes a
+    // correct recompute and a stale skip BOTH read as "0 fired, same two keys" here; this
+    // assertion pins that enabling doesn't throw and doesn't duplicate. The DISCRIMINATING
+    // half of this defect -- proving the fingerprint actually moved rather than coincidentally
+    // producing the same answer -- is the disable-direction test above and the in-place-edit
+    // /clear tests below, all of which move pct UPWARD into never-before-fired territory.
+    expect(evaluateBudgets({ now: NOW, tz: TZ })).toBe(0);
+    expect(keys().sort()).toEqual([`budget:h:${groceries}:2026-08:100`, `budget:h:${groceries}:2026-08:80`].sort());
+  });
+
+  it("an in-place edit to an existing month's budget amount is picked up on the next evaluation", () => {
+    emailUser();
+    const groceries = categoryIdByName(t.db, 'Groceries');
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-08', amountCents: 100000 }); // $1000
+    spend(groceries, 50000); // $500 = 50% -- under threshold
+    expect(evaluateBudgets({ now: NOW, tz: TZ })).toBe(0);
+    expect(keys()).toEqual([]);
+
+    // Same (scope, user, category, month) row as above -- upsertBudget's UPDATE branch, not
+    // an insert (src/lib/budgets.ts). count(*) and max(id) on budgets are UNCHANGED by this;
+    // only sum(amount_cents) moves ($1000 -> $600).
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-08', amountCents: 60000 }); // $600
+    // $500 / $600 = 83.3%, newly over the 80% threshold, with no new transaction and no
+    // manual resetBudgetFingerprintForTests() call.
+    expect(evaluateBudgets({ now: NOW, tz: TZ })).toBe(1);
+    expect(keys()).toEqual([`budget:h:${groceries}:2026-08:80`]);
+  });
+
+  it('clearing an existing budget (amount set to NULL) is picked up, proven by what re-setting it afterward fires', () => {
+    emailUser();
+    const groceries = categoryIdByName(t.db, 'Groceries');
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-08', amountCents: 100000 }); // $1000
+    spend(groceries, 90000); // $900 = 90% -- fires the threshold only (under the 100% exceeded line)
+    expect(evaluateBudgets({ now: NOW, tz: TZ })).toBe(1);
+    expect(keys()).toEqual([`budget:h:${groceries}:2026-08:80`]);
+
+    // Clear it: same row, amount_cents -> NULL (src/lib/budgets.ts clearBudget). limitCents
+    // becomes null so nothing CAN fire for this category until a real limit exists again --
+    // silent either way (same reasoning as the rollover-enable test above: clearing can only
+    // ever remove an alert, never create one), so this step alone is not the discriminating
+    // half of this test.
+    clearBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-08' });
+    expect(evaluateBudgets({ now: NOW, tz: TZ })).toBe(0);
+
+    // Re-set it to a LOWER number, still the SAME row (amount_cents NULL -> $400). count(*)
+    // and max(id) on budgets are unchanged across this entire test; only sum(amount_cents)
+    // ever moves. $900 / $400 = 225%, crossing the 100% exceeded line for the first time --
+    // the 80% threshold already fired above and stays deduped. THIS is the step that proves
+    // the clear was actually picked up: if it had been missed, the fingerprint here would be
+    // identical to the one before the clear (same count/max id throughout), and this would
+    // wrongly stay silent instead of firing.
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-08', amountCents: 40000 }); // $400
+    expect(evaluateBudgets({ now: NOW, tz: TZ })).toBe(1);
+    expect(keys().sort()).toEqual([`budget:h:${groceries}:2026-08:100`, `budget:h:${groceries}:2026-08:80`].sort());
+  });
+
+  it('still dedups correctly: two identical evaluations back to back return 0 the second time, even with rollover populated', () => {
+    emailUser();
+    const groceries = categoryIdByName(t.db, 'Groceries');
+    setRollover({ scope: 'household', userId: null, categoryId: groceries, enabled: true, startMonth: '2026-07' });
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-07', amountCents: 150000 }); // $1500 July, no July spend
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-08', amountCents: 50000 }); // $500 August base
+    spend(groceries, 220000); // $2200 vs the $2000 effective limit -- fires both
+    expect(evaluateBudgets({ now: NOW, tz: TZ })).toBe(2);
+
+    // Nothing at all changes between these two calls: this is the regression that matters
+    // most after widening the fingerprint -- it must not defeat the cache and start
+    // re-alerting every tick.
+    expect(evaluateBudgets({ now: NOW, tz: TZ })).toBe(0);
+    expect(keys()).toHaveLength(2);
   });
 });
 
