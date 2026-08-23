@@ -8,7 +8,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { Notice } from '@/components/ui/Notice';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { TableWrap } from '@/components/ui/Table';
-import { Field, inputClass, labelClass, selectClass } from '@/components/ui/form';
+import { Field, hintClass, inputClass, labelClass, selectClass } from '@/components/ui/form';
 import { SettingsIcon } from '@/components/icons';
 import { todayIso } from '@/lib/dates';
 import { formatCents } from '@/lib/money';
@@ -34,13 +34,28 @@ export interface AccountRow {
   importProfileId: number | null;
   importProfileName: string | null;
   /**
-   * v1.7.0 Task 6 (spec 2026-08-22): the newest row from account_balance_snapshots at or
-   * before today, resolved by page.tsx via latestSnapshots() -- null means no snapshot exists
-   * yet for this account (SimpleFIN has not synced a balance, and nobody has entered one by
-   * hand). SIGNED exactly as recorded: a credit card's balance stays negative here.
+   * v1.7.0 Task 6 (spec 2026-08-22), resolved by page.tsx via latestSnapshots(). Since v1.8.0
+   * (Task 4) that function no longer returns the raw stored snapshot -- it resolves through
+   * balanceAsOf (src/lib/balance.ts), so this figure already includes movement (transactions
+   * posted after the snapshot). null means no snapshot exists yet for this account (SimpleFIN
+   * has not synced a balance, and nobody has entered one by hand). SIGNED exactly as resolved:
+   * a credit card's balance stays negative here.
    */
   latestBalanceCents: number | null;
+  /** The ANCHOR date -- the snapshot this balance is based on -- not "today", even though
+   *  latestBalanceCents itself is current as of today. */
   latestBalanceDate: string | null;
+  /**
+   * Movement folded into latestBalanceCents since latestBalanceDate. 0 means the anchor
+   * snapshot IS the balance for today, so "as of <that date>" is a truthful label; non-zero
+   * means the figure is current and the date is only its provenance, which the two must not
+   * be rendered as if they were the same thing. Defect fix, v1.8.0 review: routing this
+   * column through balanceAsOf made the figure current while the date stayed the anchor's,
+   * and the cell went on reading "<current figure> as of <old date>" -- a today number
+   * wearing a July label, which is exactly what ruling R7 exists to prevent. null whenever
+   * latestBalanceCents is null.
+   */
+  latestBalanceMovedCents: number | null;
 }
 
 export interface PersonRow {
@@ -177,7 +192,9 @@ export function AccountsManager({
                     <td className="text-muted">
                       {account.latestBalanceCents === null
                         ? 'no balance yet'
-                        : `${formatCents(account.latestBalanceCents)} as of ${account.latestBalanceDate}`}
+                        : account.latestBalanceMovedCents === 0
+                          ? `${formatCents(account.latestBalanceCents)} as of ${account.latestBalanceDate}`
+                          : `${formatCents(account.latestBalanceCents)} now · from a balance recorded ${account.latestBalanceDate}`}
                     </td>
                     <td>
                       <span className={account.isSimplefinManaged ? 'badge badge--blue' : 'badge badge--slate'}>
@@ -263,15 +280,26 @@ export function AccountsManager({
                               submit, not a fourth button or a second form. Balance always
                               opens BLANK regardless of the account's latest snapshot -- typing
                               nothing here must leave that snapshot alone, which only works if
-                              blank is the starting value, not the current balance echoed back. */}
+                              blank is the starting value, not the current balance echoed back.
+                              v1.8.0 ruling R9: a credit account asks for the amount OWED (a
+                              positive figure) and updateAccountAction negates it on write --
+                              chequing/cash keep the plain "Balance" label and store the sign
+                              exactly as typed, including negative for an overdrawn account. */}
                           <div className="flex flex-col gap-1">
-                            <span className={labelClass}>Balance</span>
+                            <span className={labelClass}>{account.type === 'credit' ? 'Amount currently owed' : 'Balance'}</span>
                             <input
                               name="balance"
                               placeholder="e.g. 1234.56"
-                              aria-label={`Balance for ${account.name}`}
+                              aria-label={
+                                account.type === 'credit'
+                                  ? `Amount currently owed on ${account.name}`
+                                  : `Balance for ${account.name}`
+                              }
                               className={`w-28 ${rowInput}`}
                             />
+                            {account.type === 'credit' ? (
+                              <span className={hintClass}>What you owe on this card right now. We store it as a negative balance.</span>
+                            ) : null}
                           </div>
                           <div className="flex flex-col gap-1">
                             <span className={labelClass}>Balance date</span>

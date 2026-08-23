@@ -3,11 +3,12 @@ import { getDb } from '@/db/client';
 import { accounts, imports, transactionImports, transactions, users } from '@/db/schema';
 import { nowIso } from '@/lib/clock';
 import { reverseLoanLinksForTransactions } from '@/lib/loans';
+import { recordBalanceSnapshot } from '@/lib/networth';
 import { listAccountCardPeople } from './card-people';
 import { findExistingByHashes, type HashedRow } from './dedup';
 import { getImportHooks } from './hooks';
 import { normalizeCardValue, type ImportMapping } from './mapping';
-import type { RowError } from './parse';
+import { closingBalancesByDate, type ParseResult, type RowError } from './parse';
 
 export type CommitRow = HashedRow & { externalId?: string | null };
 
@@ -58,6 +59,16 @@ export interface CommitInput {
    * v1.6.0) is exactly today's behaviour: every row attributes to `account.ownerUserId`.
    */
   mapping?: ImportMapping | null;
+  /**
+   * v1.8.0 (spec 2026-08-23, Task 3). Which physical row of a same-date group is that date's
+   * chronologically LAST (closing) row — see closingBalancesByDate's doc comment. Optional
+   * for the same reason `mapping` above is: the SimpleFIN sync path (src/lib/simplefin/sync.ts)
+   * has no CSV file to detect a direction from, and every hand-built CommitRow outside the
+   * real CSV path stamps balanceCents: null on every row, which makes closingBalancesByDate
+   * return an empty map regardless of dateOrder — so 'oldest_first' is a safe, inert default
+   * for every caller that omits this.
+   */
+  dateOrder?: ParseResult['dateOrder'];
 }
 
 export interface CommitResult {
@@ -231,6 +242,20 @@ export function commitImport(input: CommitInput): CommitResult {
       if (providerId) existingByExternalId.set(providerId, inserted.id);
       else existing.set(row.dedupHash, inserted.id);
       link(inserted.id);
+    }
+
+    // v1.8.0 (spec 2026-08-23, Task 3): one 'csv' balance snapshot per statement date, read
+    // straight off the bank's own running-balance column (rulings R4/R5 live entirely inside
+    // closingBalancesByDate). Runs over input.rows -- EVERY row this call was handed, not just
+    // insertedTransactionIds -- so a duplicate-only re-import of an overlapping statement still
+    // re-asserts that statement's balances: the bank's stated balance for a day is true whether
+    // or not this call is the first time that day's transactions were seen, and
+    // recordBalanceSnapshot's upsert on (accountId, date) makes a repeat write harmless. Called
+    // from inside this same db.transaction the way reverseLoanLinksForTransactions is in
+    // undoImport below -- getDb() inside recordBalanceSnapshot resolves to the same underlying
+    // connection, so this is still atomic with the transaction rows above it.
+    for (const [date, balanceCents] of closingBalancesByDate(input.rows, input.dateOrder ?? 'oldest_first')) {
+      recordBalanceSnapshot({ accountId: input.accountId, date, balanceCents, source: 'csv' });
     }
 
     tx.update(imports)

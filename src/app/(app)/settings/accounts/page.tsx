@@ -43,6 +43,9 @@ export default async function AccountsPage() {
       importProfileName: account.importProfileId === null ? null : profileNameById.get(account.importProfileId) ?? null,
       latestBalanceCents: balance?.balanceCents ?? null,
       latestBalanceDate: balance?.date ?? null,
+      // Lets the cell tell "this IS the balance on that date" from "this is today's balance,
+      // and that date is only where it was anchored" -- see AccountRow.latestBalanceMovedCents.
+      latestBalanceMovedCents: balance?.movedSinceCents ?? null,
     };
   });
   const people = listUsers().map((user) => ({ id: user.id, name: user.name, isActive: user.isActive }));

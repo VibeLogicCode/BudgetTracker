@@ -46,6 +46,12 @@ export const BUILTIN_PRESETS: Record<BuiltinPresetName, BuiltinPreset> = {
       // account layout as shipped. cardCol (v1.6.0) is set on a per-account fork instead,
       // the same copy-on-write path any other mapping edit already takes.
       cardCol: null,
+      // Real export (fixture-validated 2026-08-16, same file as the dateFormat note above):
+      // a fifth column carrying the account's running balance after each row. This is the
+      // ONE built-in preset that ships v1.8.0's balanceCol pre-mapped — the owner's real TD
+      // Chequing/Debit statement is the file that motivated the whole feature (spec
+      // 2026-08-23 Task 3).
+      balanceCol: 4,
     },
   },
   // The two TD presets shipped with byte-identical mappings originally, which read as a
@@ -70,6 +76,11 @@ export const BUILTIN_PRESETS: Record<BuiltinPresetName, BuiltinPreset> = {
       encoding: 'auto',
       skipRules: null,
       cardCol: null,
+      // The real TD Visa export (unlike its Chequing/Debit sibling above) has no running-
+      // balance column at all -- a credit card's own running balance is not the same figure
+      // a statement's own balance snapshot would want anyway (it omits pending authorizations
+      // some issuers include), so this stays unmapped rather than guessed at.
+      balanceCol: null,
     },
   },
   'Scotiabank Chequing/Debit': {
@@ -89,6 +100,9 @@ export const BUILTIN_PRESETS: Record<BuiltinPresetName, BuiltinPreset> = {
       encoding: 'auto',
       skipRules: null,
       cardCol: null,
+      // No fixture-validated Scotiabank export has been seen with a running-balance column --
+      // left unmapped like every other non-TD-Chequing preset (spec 2026-08-23 Task 3).
+      balanceCol: null,
     },
   },
   'Amex Canada': {
@@ -118,6 +132,11 @@ export const BUILTIN_PRESETS: Record<BuiltinPresetName, BuiltinPreset> = {
       // attribution is account-specific (which suffix belongs to which household member),
       // so it is set on the per-account fork, not baked into the shared built-in.
       cardCol: null,
+      // Amex Canada's real export has no running-balance column -- a statement balance for a
+      // credit card is the amount OWED, not a "money in the account" figure the way a
+      // chequing running balance is, and Amex's own CSV never states it per row. Left
+      // unmapped (spec 2026-08-23 Task 3), same as TD Visa above.
+      balanceCol: null,
     },
   },
 };

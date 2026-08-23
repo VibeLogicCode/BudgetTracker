@@ -35,6 +35,10 @@ function account(over: Partial<AccountRow> = {}): AccountRow {
     // v1.7.0 Task 6 (spec 2026-08-22): null means no balance snapshot exists yet.
     latestBalanceCents: null,
     latestBalanceDate: null,
+    // v1.8.0: 0 means nothing moved since the anchor, so the anchor date is a truthful "as of"
+    // label. Every fixture below that overrides only the cents/date pair inherits this and
+    // therefore keeps the pre-v1.8.0 wording, which is correct for those cases.
+    latestBalanceMovedCents: 0,
     ...over,
   };
 }
@@ -228,6 +232,23 @@ describe('AccountsManager — latest balance display and manual entry (spec 2026
       />,
     );
     expect(screen.getByText('-$450.00 as of 2026-08-15')).toBeTruthy();
+  });
+
+  it('does NOT label a balance that includes movement with its anchor date', () => {
+    // v1.8.0 review defect. latestSnapshots resolves through balanceAsOf, so the figure is
+    // current while the date stays the ANCHOR's. Rendering "<current figure> as of <old date>"
+    // is a today number wearing a July label -- exactly what ruling R7 exists to prevent. When
+    // movement is non-zero the date must read as provenance, not as the balance's own date.
+    render(
+      <AccountsManager
+        accounts={[account({ latestBalanceCents: 97500, latestBalanceDate: '2026-08-01', latestBalanceMovedCents: -2500 })]}
+        people={PEOPLE}
+        profiles={PROFILES}
+        today="2026-08-15"
+      />,
+    );
+    expect(screen.queryByText('$975.00 as of 2026-08-01')).toBeNull();
+    expect(screen.getByText('$975.00 now · from a balance recorded 2026-08-01')).toBeTruthy();
   });
 
   it('the editor has no separate button or second form: Balance and Balance date are two fields inside the same Update account editor', () => {

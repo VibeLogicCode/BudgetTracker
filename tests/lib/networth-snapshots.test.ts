@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { createSeededTestDb, insertTestAccount, type TestDb } from '../helpers/db';
+import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
 import { latestSnapshots, recordBalanceSnapshot } from '@/lib/networth';
 
 let current: TestDb | null = null;
@@ -69,7 +69,11 @@ describe('recordBalanceSnapshot (spec 2026-08-22 v1.7.0 Task 6)', () => {
       .prepare('select balance_cents from account_balance_snapshots where account_id = ?')
       .get(accountId) as { balance_cents: number };
     expect(row.balance_cents).toBe(-45000);
-    expect(latestSnapshots('2026-08-15')).toEqual([{ accountId, date: '2026-08-15', balanceCents: -45000 }]);
+    // movedSinceCents 0 throughout this suite: none of these fixtures seed a transaction after
+    // the anchor, so every balance here IS its snapshot's own stored figure.
+    expect(latestSnapshots('2026-08-15')).toEqual([
+      { accountId, date: '2026-08-15', balanceCents: -45000, movedSinceCents: 0 },
+    ]);
   });
 
   it('rejects a non-ISO date and writes nothing', () => {
@@ -103,7 +107,9 @@ describe('latestSnapshots (spec 2026-08-22 v1.7.0 Task 6)', () => {
     recordBalanceSnapshot({ accountId, date: '2026-08-10', balanceCents: 110000, source: 'simplefin' });
     recordBalanceSnapshot({ accountId, date: '2026-08-20', balanceCents: 999999, source: 'simplefin' }); // after "today" below
 
-    expect(latestSnapshots('2026-08-15')).toEqual([{ accountId, date: '2026-08-10', balanceCents: 110000 }]);
+    expect(latestSnapshots('2026-08-15')).toEqual([
+      { accountId, date: '2026-08-10', balanceCents: 110000, movedSinceCents: 0 },
+    ]);
   });
 
   it('returns exactly the snapshot dated today when one exists', () => {
@@ -111,7 +117,9 @@ describe('latestSnapshots (spec 2026-08-22 v1.7.0 Task 6)', () => {
     const accountId = insertTestAccount(current.db);
     recordBalanceSnapshot({ accountId, date: '2026-08-15', balanceCents: 55555, source: 'manual' });
 
-    expect(latestSnapshots('2026-08-15')).toEqual([{ accountId, date: '2026-08-15', balanceCents: 55555 }]);
+    expect(latestSnapshots('2026-08-15')).toEqual([
+      { accountId, date: '2026-08-15', balanceCents: 55555, movedSinceCents: 0 },
+    ]);
   });
 
   it('omits accounts with no snapshot while still returning accounts that have one', () => {
@@ -120,7 +128,31 @@ describe('latestSnapshots (spec 2026-08-22 v1.7.0 Task 6)', () => {
     insertTestAccount(current.db, { name: 'No Balance' });
     recordBalanceSnapshot({ accountId: withSnapshot, date: '2026-08-15', balanceCents: 42000, source: 'simplefin' });
 
-    expect(latestSnapshots('2026-08-15')).toEqual([{ accountId: withSnapshot, date: '2026-08-15', balanceCents: 42000 }]);
+    expect(latestSnapshots('2026-08-15')).toEqual([
+      { accountId: withSnapshot, date: '2026-08-15', balanceCents: 42000, movedSinceCents: 0 },
+    ]);
+  });
+
+  it('reports non-zero movedSinceCents when transactions posted after the anchor', () => {
+    // v1.8.0 review defect. latestSnapshots now resolves through balanceAsOf, so balanceCents
+    // is current while `date` stays the ANCHOR date. Without movedSinceCents the accounts page
+    // had no way to tell those apart and rendered "<today's figure> as of <old date>" -- a
+    // today number wearing an anchor-date label, which is what ruling R7 exists to prevent.
+    current = createSeededTestDb();
+    const accountId = insertTestAccount(current.db);
+    const userId = insertTestUser(current.db);
+    recordBalanceSnapshot({ accountId, date: '2026-08-01', balanceCents: 100000, source: 'csv' });
+    current.sqlite
+      .prepare(
+        `insert into transactions
+           (account_id, date, raw_description, normalized_merchant, amount_cents, created_by, created_at, updated_at)
+         values (?, '2026-08-10', 'GROCERY STORE', 'GROCERY STORE', -2500, ?, ?, ?)`,
+      )
+      .run(accountId, userId, '2026-08-10T00:00:00.000Z', '2026-08-10T00:00:00.000Z');
+
+    expect(latestSnapshots('2026-08-15')).toEqual([
+      { accountId, date: '2026-08-01', balanceCents: 97500, movedSinceCents: -2500 },
+    ]);
   });
 
   it('returns one row per account even across many days of history', () => {

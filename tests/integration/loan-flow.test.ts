@@ -28,7 +28,10 @@ afterEach(() => {
 });
 
 function row(over: { rawDescription: string; amountCents: number; date: string }): CandidateRow {
-  return { rowIndex: 0, rawDate: over.date, date: over.date, rawDescription: over.rawDescription, amountCents: over.amountCents, cells: [] };
+  // balanceCents: null -- these are hand-built loan-flow fixtures, not real CSV rows with a
+  // mapped balance column (v1.8.0 added the field to CandidateRow; it is not this suite's
+  // concern).
+  return { rowIndex: 0, rawDate: over.date, date: over.date, rawDescription: over.rawDescription, amountCents: over.amountCents, balanceCents: null, cells: [] };
 }
 
 /** Commits a batch of rows and runs the SAME two post-commit steps commitStagedImport's real

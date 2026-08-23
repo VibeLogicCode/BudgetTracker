@@ -94,6 +94,28 @@ describe('cardCol back-compat (MUST-2.1, spec 2026-08-22 v1.6.0)', () => {
   });
 });
 
+describe('balanceCol back-compat (Task 3, spec 2026-08-23 v1.8.0)', () => {
+  it('defaults balanceCol to null for a mapping stored before v1.8.0', () => {
+    const stored = JSON.parse(serializeImportMapping(BUILTIN_PRESETS['TD Chequing/Debit'].mapping)) as Record<string, unknown>;
+    delete stored.balanceCol;
+    expect(parseImportMapping(stored).balanceCol).toBeNull();
+  });
+
+  it('carries balanceCol through a serialize/parse round trip', () => {
+    const mapping = { ...BUILTIN_PRESETS['TD Chequing/Debit'].mapping, balanceCol: 4 };
+    expect(parseImportMapping(serializeImportMapping(mapping)).balanceCol).toBe(4);
+  });
+
+  it('ships the TD Chequing/Debit preset with the balance column mapped', () => {
+    expect(BUILTIN_PRESETS['TD Chequing/Debit'].mapping.balanceCol).toBe(4);
+  });
+
+  it('rejects an out-of-range balanceCol the same way every other column index field is bounded', () => {
+    const broken = { ...getBuiltinPreset('TD Chequing/Debit'), balanceCol: 500 };
+    expect(() => parseImportMapping(broken)).toThrow();
+  });
+});
+
 describe('normalizeCardValue (MUST-2.4)', () => {
   it('trims, collapses internal whitespace runs to one space, and uppercases', () => {
     expect(normalizeCardValue('  alex   morgan ')).toBe('ALEX MORGAN');

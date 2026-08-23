@@ -40,6 +40,22 @@ export interface ImportMapping {
    * specifically to survive a bad mapping row) on every existing install's very next boot.
    */
   cardCol: number | null;
+  /**
+   * 0-based column index holding a per-row RUNNING BALANCE — the account's balance
+   * immediately after that row's own transaction, as the bank itself states it (e.g. TD
+   * Chequing/Debit's real export carries one at index 4). null means "this file has no such
+   * column" — no balance is read for any row, and no balance snapshot is written from this
+   * import at all, today's behaviour for every mapping before v1.8.0. Added in v1.8.0 (spec
+   * 2026-08-23): every mapping JSON stored by v1.7.0 and earlier lacks this key entirely, so
+   * it MUST default to null for absent input rather than being required — see the schema's
+   * `.nullable().default(null)` below and the back-compat test in mapping.test.ts. This is the
+   * exact same precedent cardCol set in v1.6.0 (see its doc comment above): a required field
+   * here would flip every pre-existing profile (including all four built-in bank presets) to
+   * "unreadable mapping" (src/lib/import/presets.ts's ProfileRecord/hasReadableMapping guard,
+   * shipped in v1.5.1 specifically to survive a bad mapping row) on every existing install's
+   * very next boot.
+   */
+  balanceCol: number | null;
 }
 
 const baseSchema = z.object({
@@ -59,6 +75,10 @@ const baseSchema = z.object({
   // v1.5.1 or earlier) MUST still parse, defaulting to null, not fail as a missing required
   // field.
   cardCol: z.number().int().min(0).max(200).nullable().default(null),
+  // See the ImportMapping.balanceCol doc comment above: absent input (every mapping stored by
+  // v1.7.0 or earlier) MUST still parse, defaulting to null, not fail as a missing required
+  // field — same back-compat shape as cardCol immediately above.
+  balanceCol: z.number().int().min(0).max(200).nullable().default(null),
 });
 
 export const importMappingSchema = baseSchema.superRefine((value, ctx) => {

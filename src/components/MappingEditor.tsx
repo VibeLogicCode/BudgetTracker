@@ -274,6 +274,19 @@ export function MappingEditor({
           />
         )}
       </Field>
+      <Field
+        label="Balance column (optional)"
+        hint="If your statement has a running balance, map it here and your account balance updates on every import."
+      >
+        <input
+          type="number"
+          min={0}
+          placeholder="None"
+          value={mapping.balanceCol ?? ''}
+          onChange={(e) => set('balanceCol', numberOrNull(e.target.value))}
+          className={inputClass}
+        />
+      </Field>
     </div>
   );
 }

@@ -155,6 +155,10 @@ export async function runSync(input: { userId: number; fetcher?: Fetcher; now?: 
         date,
         rawDescription: description,
         amountCents,
+        // SimpleFIN has no CSV balanceCol concept at all -- its own balance snapshot is
+        // written separately below (source: 'simplefin', off remote.balance), independent of
+        // this per-transaction field, which v1.8.0's CandidateRow adds for the CSV path only.
+        balanceCents: null,
         cells: [],
         occurrenceIndex: 0,
         // SimpleFIN rows dedup on external_id, not on the CSV hash.

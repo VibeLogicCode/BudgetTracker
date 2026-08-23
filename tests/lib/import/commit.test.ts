@@ -8,6 +8,7 @@ import { computeRowHashes, DEDUP_HASH_VERSION } from '@/lib/import/dedup';
 import { parseCsv } from '@/lib/import/parse';
 import { getBuiltinPreset } from '@/lib/import/presets';
 import { resetImportHooks } from '@/lib/import/hooks';
+import { recordBalanceSnapshot } from '@/lib/networth';
 
 const fixture = (name: string) => fs.readFileSync(path.join(process.cwd(), 'fixtures', name));
 
@@ -394,5 +395,127 @@ describe('commitImport — attribution split in the result message (SHOULD-3.6)'
     const result = commitImport({ accountId, profileId: null, filename: 'amex.csv', importedBy: owner, mapping, rows: hashed, errors: [] });
 
     expect(result.attributionSummary).toBe('3 rows to Alex, 2 rows to Sam');
+  });
+});
+
+// v1.8.0 (spec 2026-08-23 Task 3): td-chequing.csv is the real 5-column TD export (date,
+// description, debit, credit, balance) and the TD Chequing/Debit preset now ships with
+// balanceCol: 4 mapped, so parsing it for these tests needs no mapping override. The fixture's
+// 9 rows span 7 unique dates -- two dates (2026-03-05, 2026-03-07) each carry two rows, the
+// same-date-group shape rulings R4/R5 exist for.
+describe('commitImport — csv balance snapshots (Task 3, spec 2026-08-23 v1.8.0)', () => {
+  function tdParsed() {
+    return parseCsv(fixture('td-chequing.csv'), getBuiltinPreset('TD Chequing/Debit'));
+  }
+
+  function snapshotsFor(accountId: number): { date: string; balance_cents: number; source: string }[] {
+    return current!.sqlite
+      .prepare('select date, balance_cents, source from account_balance_snapshots where account_id = ? order by date')
+      .all(accountId) as { date: string; balance_cents: number; source: string }[];
+  }
+
+  it('records one csv snapshot per statement date on import', () => {
+    current = createSeededTestDb();
+    const userId = insertTestUser(current.db);
+    const accountId = insertTestAccount(current.db);
+    const parsed = tdParsed();
+    const hashed = computeRowHashes(accountId, parsed.rows);
+
+    commitImport({ accountId, profileId: null, filename: 'td.csv', importedBy: userId, rows: hashed, errors: parsed.errors, dateOrder: parsed.dateOrder });
+
+    // Same-date groups (2026-03-05, 2026-03-07) resolve to the LAST row of the group in file
+    // order (ruling R4, this file being oldest-first per ruling R5) -- 386218 and 360248, not
+    // the earlier rows' 436218 / 360733.
+    expect(snapshotsFor(accountId)).toEqual([
+      { date: '2026-03-02', balance_cents: 243122, source: 'csv' },
+      { date: '2026-03-03', balance_cents: 230282, source: 'csv' },
+      { date: '2026-03-04', balance_cents: 444849, source: 'csv' },
+      { date: '2026-03-05', balance_cents: 386218, source: 'csv' },
+      { date: '2026-03-06', balance_cents: 361218, source: 'csv' },
+      { date: '2026-03-07', balance_cents: 360248, source: 'csv' },
+      { date: '2026-03-09', balance_cents: 359153, source: 'csv' },
+    ]);
+  });
+
+  it('re-importing the same file leaves one snapshot per date, not duplicates', () => {
+    current = createSeededTestDb();
+    const userId = insertTestUser(current.db);
+    const accountId = insertTestAccount(current.db);
+    const parsed = tdParsed();
+    const hashed = computeRowHashes(accountId, parsed.rows);
+
+    commitImport({ accountId, profileId: null, filename: 'a.csv', importedBy: userId, rows: hashed, errors: parsed.errors, dateOrder: parsed.dateOrder });
+    // Second call re-asserts the SAME 9 rows -- every one a duplicate this time.
+    const second = commitImport({ accountId, profileId: null, filename: 'b.csv', importedBy: userId, rows: hashed, errors: parsed.errors, dateOrder: parsed.dateOrder });
+
+    expect(second.rowsAdded).toBe(0);
+    expect(second.rowsDuplicate).toBe(9);
+    // Upsert on (account_id, date), not a second insert -- still exactly 7 rows, one per date.
+    expect(snapshotsFor(accountId)).toHaveLength(7);
+  });
+
+  it('records the snapshot for a date whose transactions were all duplicates', () => {
+    current = createSeededTestDb();
+    const userId = insertTestUser(current.db);
+    const accountId = insertTestAccount(current.db);
+    const parsed = tdParsed();
+    const hashed = computeRowHashes(accountId, parsed.rows);
+    const firstRowOnly = hashed.slice(0, 1); // 2026-03-02 only
+
+    commitImport({ accountId, profileId: null, filename: 'a.csv', importedBy: userId, rows: firstRowOnly, errors: [], dateOrder: 'oldest_first' });
+    // Clear the snapshot the FIRST commit wrote, so the second commit below -- whose one row
+    // is entirely a duplicate (rowsAdded: 0) -- is the only thing that could have restored it.
+    current.sqlite.prepare('delete from account_balance_snapshots where account_id = ?').run(accountId);
+
+    const second = commitImport({ accountId, profileId: null, filename: 'b.csv', importedBy: userId, rows: firstRowOnly, errors: [], dateOrder: 'oldest_first' });
+    expect(second.rowsAdded).toBe(0);
+    expect(second.rowsDuplicate).toBe(1);
+
+    // The bank's stated balance for 2026-03-02 is true whether or not this call is the first
+    // time that date's transactions were seen -- an all-duplicate commit still records it.
+    expect(snapshotsFor(accountId)).toEqual([{ date: '2026-03-02', balance_cents: 243122, source: 'csv' }]);
+  });
+
+  it('records nothing when the mapping has no balance column', () => {
+    current = createSeededTestDb();
+    const userId = insertTestUser(current.db);
+    const accountId = insertTestAccount(current.db);
+    const mapping = { ...getBuiltinPreset('TD Chequing/Debit'), balanceCol: null };
+    const parsed = parseCsv(fixture('td-chequing.csv'), mapping);
+    const hashed = computeRowHashes(accountId, parsed.rows);
+
+    commitImport({ accountId, profileId: null, filename: 'td.csv', importedBy: userId, rows: hashed, errors: parsed.errors, dateOrder: parsed.dateOrder });
+
+    expect(snapshotsFor(accountId)).toEqual([]);
+  });
+
+  it('overwrites a manual snapshot for the same date with the statement figure (ruling R3)', () => {
+    current = createSeededTestDb();
+    const userId = insertTestUser(current.db);
+    const accountId = insertTestAccount(current.db);
+    // A hand-typed guess already sits on 2026-03-02, deliberately far from the real figure.
+    recordBalanceSnapshot({ accountId, date: '2026-03-02', balanceCents: 1, source: 'manual' });
+
+    const parsed = tdParsed();
+    const hashed = computeRowHashes(accountId, parsed.rows);
+    commitImport({ accountId, profileId: null, filename: 'td.csv', importedBy: userId, rows: hashed, errors: parsed.errors, dateOrder: parsed.dateOrder });
+
+    const row = current.sqlite
+      .prepare('select balance_cents, source from account_balance_snapshots where account_id = ? and date = ?')
+      .get(accountId, '2026-03-02') as { balance_cents: number; source: string };
+    expect(row).toEqual({ balance_cents: 243122, source: 'csv' });
+  });
+
+  it('does not touch balance snapshots on an unrelated account', () => {
+    current = createSeededTestDb();
+    const userId = insertTestUser(current.db);
+    const accountId = insertTestAccount(current.db, { name: 'A' });
+    const otherAccountId = insertTestAccount(current.db, { name: 'B' });
+    const parsed = tdParsed();
+    const hashed = computeRowHashes(accountId, parsed.rows);
+
+    commitImport({ accountId, profileId: null, filename: 'td.csv', importedBy: userId, rows: hashed, errors: parsed.errors, dateOrder: parsed.dateOrder });
+
+    expect(snapshotsFor(otherAccountId)).toEqual([]);
   });
 });

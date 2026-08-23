@@ -78,6 +78,10 @@ export function commitStagedImport(input: {
     // commitImport directly) — without passing it through, mapping.cardCol would parse,
     // save and round-trip correctly everywhere but never be consulted at commit time.
     mapping: input.mapping,
+    // v1.8.0 Task 3: the real file's detected direction, so closingBalancesByDate picks the
+    // correct physical row of a same-date group. Only this real CSV path (and SimpleFIN,
+    // which has no file to detect direction from and omits this) ever has one to pass.
+    dateOrder: parsed.dateOrder,
   });
 
   // Spec section 5 step 5: transfer detection + categorizer run after the insert.

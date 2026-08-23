@@ -1,32 +1,51 @@
-import { and, asc, eq, inArray, lte, sql } from 'drizzle-orm';
+import { and, inArray, lte, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { accountBalanceSnapshots } from '@/db/schema';
 import { getAccount, listAccounts } from '@/lib/accounts';
+import { balancesAsOf } from '@/lib/balance';
 import { nowIso } from '@/lib/clock';
 import { addMonths, daysBetweenIso, isIsoDate, monthEnd, monthOf, monthRange, todayIso } from '@/lib/dates';
 import { debtOverTime } from '@/lib/loans';
 import { STALE_SNAPSHOT_DAYS } from '@/lib/networth-constants';
 
 /**
- * Balance snapshot capture and net worth (spec 2026-08-22, v1.7.0, Task 6). This file owns
- * `account_balance_snapshots` (drizzle/0009_finish_line.sql, created empty by that migration --
- * this is the first writer). Task 7 adds `netWorthOverTime`/`NetWorthPoint` to this same file,
- * reading through `latestSnapshots` below; that is why the file is not named
- * "balance-snapshots.ts" even though that is all it contains for now.
+ * Balance snapshot capture and net worth (spec 2026-08-22, v1.7.0, Task 6; routing rewritten
+ * 2026-08-23, v1.8.0, Task 4). This file owns `account_balance_snapshots` --
+ * `recordBalanceSnapshot` below is its only writer -- but no longer reads the table directly
+ * for either `latestSnapshots` or `netWorthOverTime`. Both now resolve through `balancesAsOf`
+ * (src/lib/balance.ts) instead, so a balance shown anywhere in the app includes movement
+ * (transactions posted after the snapshot) rather than a figure that can only get staler
+ * between imports and syncs. See src/lib/balance.ts's own docblock for ruling R1 (why that
+ * resolver's transaction sum carries no is_transfer filter, no splits join and no category
+ * filter -- reusing a spend-aggregate helper there would be wrong in a way that looks entirely
+ * plausible) and ruling R2 (why it always anchors on the NEWEST snapshot at or before the
+ * requested date, never the oldest).
  *
- * Ruling 6 (net worth = signed snapshot balances, assets +, credit cards - as the source
- * reports them): nothing in this file normalizes a sign. A SimpleFIN credit card balance
- * arrives negative (see src/lib/simplefin/sync.ts's updateLinkBalance call, which hands this
- * module the same signed amountToCents() result it stores on the link) and a manual entry
- * carries whatever sign the person typed (src/app/(app)/settings/accounts/actions.ts's
- * parseAmountToCents), so both sources land here identically shaped.
+ * Ruling 6 (v1.7.0, unchanged): net worth is signed snapshot balances, assets +, credit cards -
+ * as the source reports them, and nothing in THIS file normalizes a sign. A SimpleFIN credit
+ * card balance arrives negative (see src/lib/simplefin/sync.ts's updateLinkBalance call, which
+ * hands this module the same signed amountToCents() result it stores on the link); a manual
+ * entry carries whatever sign recordBalanceSnapshot's caller passed in. Ruling R9 (v1.8.0)
+ * negates a credit account's "amount currently owed" input to that same negative convention
+ * BEFORE it ever reaches recordBalanceSnapshot -- in
+ * src/app/(app)/settings/accounts/actions.ts's updateAccountAction, deliberately NOT here --
+ * so this file's own rule keeps meaning exactly what it says: every balanceCents value crossing
+ * this file's boundary, in or out, is already in final, signed form.
  */
 
 export interface RecordSnapshotInput {
   accountId: number;
   date: string;
   balanceCents: number;
-  source: 'simplefin' | 'manual';
+  /**
+   * 'csv' added in v1.8.0 (spec 2026-08-23, Task 3/migration 0010): a balance read out of a
+   * statement's own running-balance column (src/lib/import/mapping.ts's balanceCol), written
+   * once per statement date by the import commit path. Source authority for the same
+   * (accountId, date), highest first, per ruling R3: 'simplefin', 'csv', 'manual' — the
+   * bank's own figure always outranks a typed one, which is the entire reason 'csv' is its
+   * own value rather than being written as 'manual'.
+   */
+  source: 'simplefin' | 'manual' | 'csv';
 }
 
 /**
@@ -66,42 +85,58 @@ export function recordBalanceSnapshot(input: RecordSnapshotInput): void {
 
 export interface LatestSnapshot {
   accountId: number;
+  /** The ANCHOR date: the date of the snapshot `balanceCents` is based on, NOT the date
+   *  `balanceCents` is true for. Those differ whenever `movedSinceCents` is non-zero. */
   date: string;
   balanceCents: number;
+  /**
+   * How much of `balanceCents` came from transactions posted AFTER `date`. 0 means the stored
+   * snapshot is the balance as at `date` and nothing has moved since, so a caller may honestly
+   * render "<balance> as of <date>"; non-zero means the balance is current and `date` is only
+   * its provenance. Exposed because omitting it is what let the accounts page render a
+   * today figure under an anchor date once this function started resolving through
+   * `balancesAsOf` (v1.8.0 review defect).
+   */
+  movedSinceCents: number;
 }
 
 /**
- * The newest snapshot per account dated on or before `today`, one row per account. An account
- * with no snapshot at or before that date is OMITTED entirely, not zero-filled -- Task 7's
- * `accountsMissing` count is what surfaces that absence to the UI, and a silent 0 here would
- * be indistinguishable from a genuinely empty account.
+ * The newest snapshot per account dated on or before `today`, one row per account -- RESOLVED
+ * through `balancesAsOf` (v1.8.0, Task 4) rather than read off `account_balance_snapshots`
+ * directly, so `balanceCents` includes movement (transactions posted after the snapshot)
+ * instead of the raw stored figure. `date` stays the ANCHOR date -- the date of the snapshot
+ * this balance is based on -- and is deliberately NOT rewritten to `today` just because the
+ * number itself is now current: the anchor date is what lets a caller judge staleness (see
+ * STALE_SNAPSHOT_DAYS below), and that signal would be destroyed by overwriting it.
  *
- * (accountId, date) is unique, so grouping for max(date) per account and joining back to the
- * balance identifies exactly one row per account with no tie to break -- same grouped-subquery
- * shape as partitionByAssociation in src/lib/import/commit.ts.
+ * An account with no snapshot at or before that date is OMITTED entirely, not zero-filled --
+ * Task 7's `accountsMissing` count is what surfaces that absence to the UI, and a silent 0 here
+ * would be indistinguishable from a genuinely empty account.
+ *
+ * Every account, active or not, is offered to `balancesAsOf` as a candidate (the pre-v1.8.0
+ * version of this function never joined to `accounts.is_active` either, reading
+ * `account_balance_snapshots` on its own with no notion of an account's active status -- this
+ * preserves that exactly). An account with no qualifying snapshot simply is not in the result,
+ * at no extra query cost: `balancesAsOf` is two batched queries no matter how many candidate
+ * ids are passed in.
  */
 export function latestSnapshots(today: string): LatestSnapshot[] {
-  const db = getDb();
-  const latest = db
-    .select({
-      accountId: accountBalanceSnapshots.accountId,
-      maxDate: sql<string>`max(${accountBalanceSnapshots.date})`.as('max_date'),
-    })
-    .from(accountBalanceSnapshots)
-    .where(lte(accountBalanceSnapshots.date, today))
-    .groupBy(accountBalanceSnapshots.accountId)
-    .as('latest');
+  const accountIds = listAccounts({ includeInactive: true }).map((account) => account.id);
+  if (accountIds.length === 0) return [];
 
-  return db
-    .select({
-      accountId: accountBalanceSnapshots.accountId,
-      date: accountBalanceSnapshots.date,
-      balanceCents: accountBalanceSnapshots.balanceCents,
-    })
-    .from(accountBalanceSnapshots)
-    .innerJoin(latest, and(eq(latest.accountId, accountBalanceSnapshots.accountId), eq(latest.maxDate, accountBalanceSnapshots.date)))
-    .orderBy(accountBalanceSnapshots.accountId)
-    .all();
+  const resolved = balancesAsOf({ accountIds, date: today });
+  return accountIds
+    .filter((accountId) => resolved.has(accountId))
+    .sort((a, b) => a - b)
+    .map((accountId) => {
+      const balance = resolved.get(accountId)!;
+      return {
+        accountId,
+        date: balance.anchorDate,
+        balanceCents: balance.balanceCents,
+        movedSinceCents: balance.movedSinceCents,
+      };
+    });
 }
 
 // ---------------------------------------------------------------- net worth over time
@@ -149,24 +184,35 @@ export { STALE_SNAPSHOT_DAYS };
  * Algorithm, per month END date, for every ACTIVE account (listAccounts()'s default -- an
  * inactive account is excluded from this computation entirely: it never contributes a balance,
  * never counts toward accountsMissing or accountsStale, and never anchors the series' start
- * date either): the latest snapshot dated on or before that date carries forward. No such
- * snapshot -> the account contributes 0 and counts in that month's accountsMissing. A snapshot
- * that DOES exist but is more than STALE_SNAPSHOT_DAYS older than this month's end date still
- * carries forward at full value -- this function never discards a balance for being old -- but
- * counts in accountsStale instead of silently passing as current. The stale check only runs on
- * the branch where a snapshot was found, so an account is counted in exactly one of
- * accountsMissing/accountsStale, never both. A carried balance > 0 is an asset; < 0 is debt (its
- * absolute value); debtOverTime's owed figure for the month is added on top of the debts side (a
- * month debtOverTime could not reconstruct, MUST-15.7's null case, folds in as 0 rather than
- * forcing debtsCents to carry a null NetWorthPoint's contract does not allow). Months before the
- * first snapshot of any (active) account are omitted entirely -- never fabricate net worth
- * history predating every account's first recorded balance. No snapshot anywhere (or no active
- * account at all) returns [].
+ * date either): resolve the account through `balancesAsOf` (v1.8.0, Task 4; src/lib/balance.ts)
+ * rather than reading `account_balance_snapshots` directly -- see that module's docblock for
+ * ruling R1 (why its transaction sum carries no is_transfer filter, no splits join and no
+ * category filter) and ruling R2 (why it always anchors on the newest snapshot at or before the
+ * date, never the oldest). No snapshot at or before that date -> the account contributes 0 and
+ * counts in that month's accountsMissing. A snapshot that DOES exist but whose OWN anchor date
+ * (`ResolvedBalance.anchorDate`, not `today` and not this month's `end`) is more than
+ * STALE_SNAPSHOT_DAYS older than this month's end date still carries forward at full value --
+ * this function never discards a balance for being old -- but counts in accountsStale instead
+ * of silently passing as current. The stale check only runs on the branch where a snapshot was
+ * found, so an account is counted in exactly one of accountsMissing/accountsStale, never both.
+ * A carried balance > 0 is an asset; < 0 is debt (its absolute value); debtOverTime's owed
+ * figure for the month is added on top of the debts side (a month debtOverTime could not
+ * reconstruct, MUST-15.7's null case, folds in as 0 rather than forcing debtsCents to carry a
+ * null NetWorthPoint's contract does not allow). Months before the first snapshot of any
+ * (active) account are omitted entirely -- never fabricate net worth history predating every
+ * account's first recorded balance. No snapshot anywhere (or no active account at all)
+ * returns [].
  *
- * ONE query fetches every relevant snapshot, oldest first per account; a forward-only cursor
- * per account then walks the ascending month axis (monthRange/addMonths, the same windowing
- * idiom cashflowTrend and debtOverTime both use) with no query inside the loop. debtOverTime is
- * the one other query this function makes.
+ * Performance note (v1.8.0): this now calls `balancesAsOf` once per month in the requested
+ * window -- two batched queries per call, never one query per account -- rather than the single
+ * up-front snapshot query plus in-memory forward cursor the pre-v1.8.0 version used. The trade
+ * is deliberate: ruling R1's dangerous transaction sum has exactly ONE implementation in the
+ * whole app (src/lib/balance.ts), guarded by both tests/lib/balance.test.ts and the source-level
+ * grep in tests/ops/balance-invariants.test.ts, and a second, independent copy of that sum here
+ * would need its own fixtures and its own guard to be trusted the same way -- see that file's
+ * docblock. At this app's scale (a household's handful of accounts, a window of months rather
+ * than years of daily granularity) O(months) query pairs is not a real cost. debtOverTime is
+ * the one other query this function makes, and only once, not per month.
  */
 export function netWorthOverTime(months: number, opts: { endMonth?: string; today?: string } = {}): NetWorthPoint[] {
   const today = opts.today ?? todayIso();
@@ -177,36 +223,26 @@ export function netWorthOverTime(months: number, opts: { endMonth?: string; toda
   const activeAccountIds = listAccounts().map((account) => account.id);
   if (activeAccountIds.length === 0) return [];
 
-  const snapshots = getDb()
-    .select({
-      accountId: accountBalanceSnapshots.accountId,
-      date: accountBalanceSnapshots.date,
-      balanceCents: accountBalanceSnapshots.balanceCents,
-    })
+  // Only bound to decide whether ANY active account has a snapshot at all inside the window --
+  // see the `end < firstDate` skip below. balancesAsOf (called per month, further down) is what
+  // actually resolves each point's balance; this is a single cheap MIN aggregate, not a second
+  // copy of that resolution logic.
+  const firstDateRow = getDb()
+    .select({ firstDate: sql<string | null>`min(${accountBalanceSnapshots.date})`.as('first_date') })
     .from(accountBalanceSnapshots)
     .where(and(inArray(accountBalanceSnapshots.accountId, activeAccountIds), lte(accountBalanceSnapshots.date, windowEndDate)))
-    .orderBy(asc(accountBalanceSnapshots.accountId), asc(accountBalanceSnapshots.date))
-    .all();
-  if (snapshots.length === 0) return [];
-
-  // Rows arrive account-major, date-minor (the ORDER BY above), so each per-account bucket is
-  // already ascending by date -- no re-sort needed for the forward-cursor walk below.
-  let firstDate = snapshots[0].date;
-  const byAccount = new Map<number, { date: string; balanceCents: number }[]>();
-  for (const row of snapshots) {
-    if (row.date < firstDate) firstDate = row.date;
-    const bucket = byAccount.get(row.accountId);
-    if (bucket) bucket.push(row);
-    else byAccount.set(row.accountId, [row]);
-  }
+    .get();
+  const firstDate = firstDateRow?.firstDate ?? null;
+  if (firstDate === null) return [];
 
   const debtByMonth = new Map(debtOverTime(months, { endMonth, today }).map((point) => [point.month, point.owedCents]));
 
-  const cursor = new Map<number, number>();
   const points: NetWorthPoint[] = [];
   for (const month of keys) {
     const end = monthEnd(month);
     if (end < firstDate) continue; // before every account's first snapshot -- never fabricated
+
+    const resolved = balancesAsOf({ accountIds: activeAccountIds, date: end });
 
     let assetsCents = 0;
     let debtsCents = 0;
@@ -214,19 +250,14 @@ export function netWorthOverTime(months: number, opts: { endMonth?: string; toda
     let accountsStale = 0;
 
     for (const accountId of activeAccountIds) {
-      const bucket = byAccount.get(accountId) ?? [];
-      let idx = cursor.get(accountId) ?? 0;
-      while (idx < bucket.length && bucket[idx].date <= end) idx += 1;
-      cursor.set(accountId, idx);
-
-      if (idx === 0) {
+      const balance = resolved.get(accountId);
+      if (!balance) {
         accountsMissing += 1;
         continue;
       }
-      const snapshot = bucket[idx - 1];
-      if (daysBetweenIso(snapshot.date, end) > STALE_SNAPSHOT_DAYS) accountsStale += 1;
-      if (snapshot.balanceCents > 0) assetsCents += snapshot.balanceCents;
-      else if (snapshot.balanceCents < 0) debtsCents += -snapshot.balanceCents;
+      if (daysBetweenIso(balance.anchorDate, end) > STALE_SNAPSHOT_DAYS) accountsStale += 1;
+      if (balance.balanceCents > 0) assetsCents += balance.balanceCents;
+      else if (balance.balanceCents < 0) debtsCents += -balance.balanceCents;
     }
 
     debtsCents += debtByMonth.get(month) ?? 0;

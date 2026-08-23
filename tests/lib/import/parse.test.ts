@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { ImportLimitError, MAX_ROWS, parseCsv, previewRawRows } from '@/lib/import/parse';
+import { closingBalancesByDate, ImportLimitError, MAX_ROWS, parseCsv, previewRawRows, type CandidateRow } from '@/lib/import/parse';
 import { getBuiltinPreset } from '@/lib/import/presets';
 import type { ImportMapping } from '@/lib/import/mapping';
 
@@ -200,6 +200,142 @@ describe('limits', () => {
     const line = '2026-03-02,COFFEE,4.85,,0.00';
     const csv = Buffer.from(Array.from({ length: MAX_ROWS }, () => line).join('\n'), 'utf8');
     expect(parseCsv(csv, getBuiltinPreset('TD Chequing/Debit')).rows).toHaveLength(MAX_ROWS);
+  });
+});
+
+describe('balanceCol (Task 3, spec 2026-08-23 v1.8.0)', () => {
+  const TD = { ...getBuiltinPreset('TD Chequing/Debit'), balanceCol: 4 };
+
+  it('reads the balance column into balanceCents', () => {
+    expect(parseCsv(Buffer.from('2026-07-25,COFFEE SHOP,4.50,,1000.00\n'), TD).rows[0].balanceCents).toBe(100000);
+  });
+
+  it('leaves balanceCents null and still imports the row when the balance cell is junk (ruling R6)', () => {
+    const result = parseCsv(Buffer.from('2026-07-25,COFFEE SHOP,4.50,,n/a\n'), TD);
+    expect(result.rows).toHaveLength(1); // ruling R6: an unparseable balance is not a row error
+    expect(result.errors).toHaveLength(0);
+    expect(result.rows[0].balanceCents).toBeNull();
+  });
+
+  it('leaves balanceCents null when the mapping has no balance column', () => {
+    const noBalance = { ...TD, balanceCol: null };
+    expect(parseCsv(Buffer.from('2026-07-25,COFFEE SHOP,4.50,,1000.00\n'), noBalance).rows[0].balanceCents).toBeNull();
+  });
+
+  it('parses a negative balance for an overdrawn chequing account', () => {
+    expect(parseCsv(Buffer.from('2026-07-25,FEE,4.50,,-120.75\n'), TD).rows[0].balanceCents).toBe(-12075);
+  });
+
+  it('parses a negative balance for a credit card owing money, via the same amount-cell parser as debit/credit columns', () => {
+    // Reuses parseAmountToCents, the same helper amountCol/debitCol/creditCol already go
+    // through -- accounting-parenthesis and $ prefixed forms must behave identically here.
+    expect(parseCsv(Buffer.from('2026-07-25,GROCERY,45.00,,($245.10)\n'), TD).rows[0].balanceCents).toBe(-24510);
+  });
+
+  it('parses a balance with a thousands separator', () => {
+    expect(parseCsv(Buffer.from('2026-07-25,PAYCHEQUE,,2000.00,"12,345.67"\n'), TD).rows[0].balanceCents).toBe(1234567);
+  });
+
+  it('detects an oldest-first file', () => {
+    const csv = '2026-07-01,A,1.00,,900.00\n2026-07-20,B,1.00,,899.00\n';
+    expect(parseCsv(Buffer.from(csv), TD).dateOrder).toBe('oldest_first');
+  });
+
+  it('detects a newest-first file', () => {
+    const csv = '2026-07-20,B,1.00,,899.00\n2026-07-01,A,1.00,,900.00\n';
+    expect(parseCsv(Buffer.from(csv), TD).dateOrder).toBe('newest_first');
+  });
+
+  it('treats a single-date file as oldest-first (ruling R5), even with several rows', () => {
+    const csv = '2026-07-20,A,1.00,,900.00\n2026-07-20,B,1.00,,899.00\n2026-07-20,C,1.00,,898.00\n';
+    expect(parseCsv(Buffer.from(csv), TD).dateOrder).toBe('oldest_first');
+  });
+
+  it('treats a file with zero or one parsed row as oldest-first', () => {
+    expect(parseCsv(Buffer.from('2026-07-20,A,1.00,,900.00\n'), TD).dateOrder).toBe('oldest_first');
+    expect(parseCsv(Buffer.from(''), TD).dateOrder).toBe('oldest_first');
+  });
+
+  it('reads the real TD Chequing fixture balance column, including the two same-date rows', () => {
+    // fixtures/td-chequing.csv is the real 5-column export (date, description, debit, credit,
+    // balance); rows 6 and 7 (0-based) share 2026-03-07 with two different balances, exactly
+    // the shape ruling R4 exists for.
+    const { rows } = parseCsv(fixture('td-chequing.csv'), TD);
+    expect(rows[0].balanceCents).toBe(243122);
+    expect(rows[6]).toMatchObject({ date: '2026-03-07', balanceCents: 360733 });
+    expect(rows[7]).toMatchObject({ date: '2026-03-07', balanceCents: 360248 });
+  });
+});
+
+describe('closingBalancesByDate (rulings R4 + R5)', () => {
+  it('takes the LAST row of a date group as that date closing balance, oldest-first', () => {
+    const rows = [
+      { rowIndex: 0, date: '2026-07-27', balanceCents: 50000 },
+      { rowIndex: 1, date: '2026-07-27', balanceCents: 40000 },
+      { rowIndex: 2, date: '2026-07-27', balanceCents: 30000 },
+    ] as unknown as CandidateRow[];
+    expect(closingBalancesByDate(rows, 'oldest_first').get('2026-07-27')).toBe(30000);
+  });
+
+  it('takes the FIRST row of a date group when the file is newest-first', () => {
+    const rows = [
+      { rowIndex: 0, date: '2026-07-27', balanceCents: 30000 },
+      { rowIndex: 1, date: '2026-07-27', balanceCents: 40000 },
+      { rowIndex: 2, date: '2026-07-27', balanceCents: 50000 },
+    ] as unknown as CandidateRow[];
+    // NOTE on this expected value -- see this task's final report for the full derivation:
+    // the spec's own Task 3 Step 2 snippet asserts 50000 here, which contradicts ruling R5
+    // ("newest-first means the FIRST row [in file order] carries the closing balance") applied
+    // to this exact fixture. File-order row 0 (balanceCents: 30000) IS that first row, so
+    // 30000 is what R5 names -- 50000 is file-order row 2, the LAST row, which is the
+    // OLDEST-FIRST rule. The spec's own reference closingBalancesByDate algorithm (Step 5:
+    // reverse the array for newest_first, then a plain left-to-right "last write wins" loop)
+    // also computes 30000 for this input, confirming the algorithm is right and only the
+    // test's literal expected value was wrong. Corrected here rather than copied verbatim.
+    expect(closingBalancesByDate(rows, 'newest_first').get('2026-07-27')).toBe(30000);
+  });
+
+  it('takes the last row in FILE ORDER for a mixed multi-date oldest-first file, per date', () => {
+    const rows = [
+      { rowIndex: 0, date: '2026-07-01', balanceCents: 100000 },
+      { rowIndex: 1, date: '2026-07-02', balanceCents: 90000 },
+      { rowIndex: 2, date: '2026-07-02', balanceCents: 80000 },
+      { rowIndex: 3, date: '2026-07-03', balanceCents: 70000 },
+    ] as unknown as CandidateRow[];
+    const result = closingBalancesByDate(rows, 'oldest_first');
+    expect(result.get('2026-07-01')).toBe(100000);
+    expect(result.get('2026-07-02')).toBe(80000);
+    expect(result.get('2026-07-03')).toBe(70000);
+  });
+
+  it('ignores rows with a null balance when picking the closing balance', () => {
+    const rows = [
+      { rowIndex: 0, date: '2026-07-27', balanceCents: 30000 },
+      { rowIndex: 1, date: '2026-07-27', balanceCents: null },
+    ] as unknown as CandidateRow[];
+    expect(closingBalancesByDate(rows, 'oldest_first').get('2026-07-27')).toBe(30000);
+  });
+
+  it('falls back to the nearest parseable row when the one R4 would otherwise have picked is null', () => {
+    // Oldest-first: R4 names the LAST row of the group (rowIndex 2) as the closing balance,
+    // but ruling R6 says that row still imports as a transaction with balanceCents: null. It
+    // must not poison the day's snapshot with a missing value -- the last row that DID parse
+    // (rowIndex 1, 45000) wins instead, not rowIndex 0's 50000 and not "no entry at all".
+    const rows = [
+      { rowIndex: 0, date: '2026-07-27', balanceCents: 50000 },
+      { rowIndex: 1, date: '2026-07-27', balanceCents: 45000 },
+      { rowIndex: 2, date: '2026-07-27', balanceCents: null },
+    ] as unknown as CandidateRow[];
+    expect(closingBalancesByDate(rows, 'oldest_first').get('2026-07-27')).toBe(45000);
+  });
+
+  it('returns no entry for a date whose every balance is null', () => {
+    const rows = [{ rowIndex: 0, date: '2026-07-27', balanceCents: null }] as unknown as CandidateRow[];
+    expect(closingBalancesByDate(rows, 'oldest_first').has('2026-07-27')).toBe(false);
+  });
+
+  it('returns an empty map for an empty row list', () => {
+    expect(closingBalancesByDate([], 'oldest_first').size).toBe(0);
   });
 });
 

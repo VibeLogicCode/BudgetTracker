@@ -314,17 +314,17 @@ describe('updateAccountAction — manual balance entry (spec 2026-08-22 v1.7.0 T
     expect(snapshotRows()).toEqual([{ account_id: id, date: '2026-08-20', balance_cents: 123456, source: 'manual' }]);
   });
 
-  it('accepts a negative balance for a credit card without flipping its sign', async () => {
+  it('ruling R9 (v1.8.0): a credit account\'s balance input is the amount OWED and is negated on write', async () => {
     const { db } = setup();
     const id = insertTestAccount(db, { name: 'Visa', type: 'credit' });
 
     const result = await updateAccountAction(
       {},
-      formData({ accountId: String(id), name: 'Visa', owner: '', profile: '', balance: '-450.00', asOfDate: '2026-08-20' }),
+      formData({ accountId: String(id), name: 'Visa', owner: '', profile: '', balance: '500.00', asOfDate: '2026-08-20' }),
     );
 
     expect(result.error).toBeUndefined();
-    expect(snapshotRows()).toEqual([{ account_id: id, date: '2026-08-20', balance_cents: -45000, source: 'manual' }]);
+    expect(snapshotRows()).toEqual([{ account_id: id, date: '2026-08-20', balance_cents: -50000, source: 'manual' }]);
   });
 
   it('a second save for the same as-of date replaces that day\'s balance rather than adding a row', async () => {
@@ -397,5 +397,61 @@ describe('updateAccountAction — manual balance entry (spec 2026-08-22 v1.7.0 T
       ),
     ).rejects.toThrow(/not admin/);
     expect(snapshotRows()).toEqual([]);
+  });
+});
+
+describe('updateAccountAction — ruling R9: credit balances are entered as money owed (spec 2026-08-23 v1.8.0 Task 4)', () => {
+  function snapshotRows() {
+    return current!.sqlite
+      .prepare('select account_id, date, balance_cents, source from account_balance_snapshots')
+      .all() as { account_id: number; date: string; balance_cents: number; source: string }[];
+  }
+
+  it('negates a credit input so a card owing $500 stores -50000, never +50000', async () => {
+    const { db } = setup();
+    const id = insertTestAccount(db, { name: 'Visa', type: 'credit' });
+
+    await updateAccountAction(
+      {},
+      formData({ accountId: String(id), name: 'Visa', owner: '', profile: '', balance: '500.00', asOfDate: '2026-08-20' }),
+    );
+
+    expect(snapshotRows()).toEqual([{ account_id: id, date: '2026-08-20', balance_cents: -50000, source: 'manual' }]);
+  });
+
+  it('keeps the typed sign for a chequing account -- a $1500.00 input stores +150000, not negated', async () => {
+    const { db } = setup();
+    const id = insertTestAccount(db, { name: 'Joint Chequing', type: 'chequing' });
+
+    await updateAccountAction(
+      {},
+      formData({ accountId: String(id), name: 'Joint Chequing', owner: '', profile: '', balance: '1500.00', asOfDate: '2026-08-20' }),
+    );
+
+    expect(snapshotRows()).toEqual([{ account_id: id, date: '2026-08-20', balance_cents: 150000, source: 'manual' }]);
+  });
+
+  it('still allows a negative chequing balance for an overdrawn account, untouched', async () => {
+    const { db } = setup();
+    const id = insertTestAccount(db, { name: 'Joint Chequing', type: 'chequing' });
+
+    await updateAccountAction(
+      {},
+      formData({ accountId: String(id), name: 'Joint Chequing', owner: '', profile: '', balance: '-200.00', asOfDate: '2026-08-20' }),
+    );
+
+    expect(snapshotRows()).toEqual([{ account_id: id, date: '2026-08-20', balance_cents: -20000, source: 'manual' }]);
+  });
+
+  it('keeps the typed sign for a cash account too -- R9 only singles out credit', async () => {
+    const { db } = setup();
+    const id = insertTestAccount(db, { name: 'Grocery Cash', type: 'cash' });
+
+    await updateAccountAction(
+      {},
+      formData({ accountId: String(id), name: 'Grocery Cash', owner: '', profile: '', balance: '75.00', asOfDate: '2026-08-20' }),
+    );
+
+    expect(snapshotRows()).toEqual([{ account_id: id, date: '2026-08-20', balance_cents: 7500, source: 'manual' }]);
   });
 });

@@ -154,6 +154,12 @@ const updateAccountSchema = z.object({
  * optional amount/date pair. Both balance and its date are validated BEFORE any write below,
  * so an unparseable balance rejects the whole submit (including the name/owner/mapping the
  * admin may also have changed) rather than silently applying part of it.
+ *
+ * v1.8.0 ruling R9 (spec 2026-08-23): for a `type === 'credit'` account, the form's `balance`
+ * field means "amount currently owed" (see accounts-manager.tsx's label switch) and is negated
+ * on write, so typing 500.00 stores -50000. chequing/cash accounts are untouched by this --
+ * they keep "Balance" and store the sign exactly as typed. See the comment at the write site
+ * below for why the negation lives here and not in src/lib/networth.ts.
  */
 export async function updateAccountAction(_prev: AccountsFormState, formData: FormData): Promise<AccountsFormState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
@@ -199,7 +205,18 @@ export async function updateAccountAction(_prev: AccountsFormState, formData: Fo
   // person they were already attributed to, which is why nothing is rewritten here.
   if (!managedBySimplefin) setAccountPinnedProfile(parsed.data.accountId, profileId);
   if (balanceCents !== null && asOfDate !== null) {
-    recordBalanceSnapshot({ accountId: parsed.data.accountId, date: asOfDate, balanceCents, source: 'manual' });
+    // Ruling R9 (spec 2026-08-23, v1.8.0): the form asks a credit account's owner "how much do
+    // you owe" -- a POSITIVE figure by the field's own label -- and this is the one place that
+    // flips it to the negative balance net worth needs (a card owing $500 stores -50000, never
+    // +50000). Accepting the raw typed sign here is exactly how a $500 debt would become a $500
+    // asset and move net worth by $1,000 in the wrong direction. chequing/cash accounts keep the
+    // sign exactly as typed -- an overdrawn chequing account is still legitimately negative, and
+    // the person types it that way on purpose. The negation happens HERE, in the action, and
+    // deliberately not inside recordBalanceSnapshot/src/lib/networth.ts: that file's own docblock
+    // states nothing in the lib layer normalizes a sign, and moving the negation there would make
+    // that no longer true.
+    const signedBalanceCents = account.type === 'credit' ? -balanceCents : balanceCents;
+    recordBalanceSnapshot({ accountId: parsed.data.accountId, date: asOfDate, balanceCents: signedBalanceCents, source: 'manual' });
   }
 
   revalidateProfileRoutes();

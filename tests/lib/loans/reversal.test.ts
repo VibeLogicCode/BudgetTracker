@@ -38,6 +38,8 @@ describe('MUST-13.14 / MUST-13.15: import undo', () => {
       date: over.date ?? '2026-08-01',
       rawDescription: over.rawDescription,
       amountCents: over.amountCents,
+      // Hand-built loan fixture, not a real CSV row with a mapped balance column (v1.8.0).
+      balanceCents: null,
       cells: [],
     };
   }
@@ -183,6 +185,7 @@ describe('F2: reverse paths never fabricate a balance out of NULL', () => {
       date: '2026-08-01',
       rawDescription: 'HONDA FIN SVC',
       amountCents: -45_000,
+      balanceCents: null,
       cells: [],
     };
     const hashed = computeRowHashes(ctx.accountId, [row]);
@@ -226,6 +229,7 @@ describe('NEW-1 fix-round: reversal clamps at zero instead of crashing past it',
       date: '2026-08-01',
       rawDescription: 'HONDA FIN DISBURSEMENT',
       amountCents: 60_000,
+      balanceCents: null,
       cells: [],
     };
     // A rule never auto-links a positive transaction (F1 ruling) -- assign it manually, the
@@ -241,6 +245,7 @@ describe('NEW-1 fix-round: reversal clamps at zero instead of crashing past it',
       date: '2026-08-02',
       rawDescription: 'HONDA FIN PAYMENT',
       amountCents: -70_000,
+      balanceCents: null,
       cells: [],
     };
     const paymentHashed = computeRowHashes(ctx.accountId, [paymentRow]);
