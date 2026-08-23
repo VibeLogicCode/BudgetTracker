@@ -7,6 +7,7 @@ import { reviewQueueCount } from '@/lib/categorize/engine';
 import { currentMonth, monthEnd, monthLabel, monthStart, todayIso } from '@/lib/dates';
 import { listGoals } from '@/lib/goals';
 import { listLoans } from '@/lib/loans';
+import { netWorthOverTime } from '@/lib/networth';
 import { cashflowTrend, topMerchants } from '@/lib/reports';
 import { expiringSoonItems } from '@/lib/warranty/search';
 import { formatCents } from '@/lib/money';
@@ -54,6 +55,12 @@ export default async function DashboardPage({
   // call listLoans() again just to re-derive the sum LoansCard's own props already carry.
   const loans = listLoans(today);
   const totalOwedCents = loans.reduce((sum, loan) => sum + (loan.currentBalanceCents ?? 0), 0);
+
+  // Net worth (Task 7) is a whole-household figure -- accounts, credit cards and loans have no
+  // per-person attribution the way a transaction does, so unlike the tiles below it this one
+  // does not change with the person switcher (the same reasoning LoansCard's totalOwedCents
+  // already follows). Only the latest point is needed here; the trend lives on Reports.
+  const netWorthLatest = netWorthOverTime(1, { today }).at(0) ?? null;
 
   // The trend already covers this month, so the headline income/net figures come
   // out of it rather than costing a second query.
@@ -141,6 +148,16 @@ export default async function DashboardPage({
           tone={netCents < 0 ? 'negative' : 'positive'}
           hint={netCents < 0 ? 'Spending outran income' : 'Kept, after everything went out'}
         />
+        {/* Task 7: self-hiding, in the manner of LoansCard -- rendered unconditionally, absent
+            when there is no balance on file yet to compute it from. */}
+        {netWorthLatest === null ? null : (
+          <StatTile
+            label="Net worth"
+            value={formatCents(netWorthLatest.netCents, { showSign: true })}
+            tone={netWorthLatest.netCents < 0 ? 'negative' : 'positive'}
+            hint="Assets minus debts and loans, across every tracked account"
+          />
+        )}
       </div>
 
       <ExpiringSoonCard items={expiring} today={today} />

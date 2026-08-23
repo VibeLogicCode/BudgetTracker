@@ -2,6 +2,7 @@
 
 import { CategoryBarChart } from '@/components/charts/CategoryBarChart';
 import { DebtTrendChart } from '@/components/charts/DebtTrendChart';
+import { NetWorthChart } from '@/components/charts/NetWorthChart';
 import { LoanIcon, ReportsIcon, TrendDownIcon, TrendFlatIcon, TrendUpIcon } from '@/components/icons';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -13,6 +14,7 @@ import { DateRangePicker } from '@/components/ui/DateRangePicker';
 import { rangeParams, type ResolvedRange } from '@/lib/date-range';
 import type { DebtPoint } from '@/lib/loans';
 import { formatCents } from '@/lib/money';
+import type { NetWorthPoint } from '@/lib/networth';
 import type { BaselineRow } from '@/lib/predict/suggest';
 import type { CategoryBreakdownRow, CategoryMonthTrend, PersonSplitRow } from '@/lib/reports';
 
@@ -26,6 +28,7 @@ export function ReportsClient({
   split,
   debt,
   hasLoans,
+  netWorth,
   baselines,
   baselineMonthsUsed,
 }: {
@@ -38,6 +41,7 @@ export function ReportsClient({
   split: PersonSplitRow[];
   debt: DebtPoint[];
   hasLoans: boolean;
+  netWorth: NetWorthPoint[];
   baselines: BaselineRow[];
   baselineMonthsUsed: number;
 }) {
@@ -199,6 +203,26 @@ export function ReportsClient({
         )}
       </Card>
 
+      <Card>
+        <CardHeader title="Net worth" description="Assets minus debts and loans, carried forward from the balances you have on file." />
+        {netWorth.length === 0 ? (
+          <EmptyState icon={ReportsIcon} title="No balances recorded yet">
+            Record a balance for at least one account in Settings and Accounts to see net worth here.
+          </EmptyState>
+        ) : (
+          <CardBody className="flex flex-col gap-3">
+            <NetWorthChart data={netWorth} />
+            {/* Honesty over a tidy chart: the line only ever reflects the accounts that have a
+                recorded balance, and this says so whenever one does not, using the most recent
+                month's count -- an older gap that has since been filled is no longer true today,
+                so it does not linger here once every account has caught up. */}
+            {netWorth[netWorth.length - 1].accountsMissing > 0 ? (
+              <p className="text-sm text-muted">{missingAccountsNote(netWorth[netWorth.length - 1].accountsMissing)}</p>
+            ) : null}
+          </CardBody>
+        )}
+      </Card>
+
       {!hasLoans ? null : (
         <Card>
           <CardHeader title="Debt over time" description="Total owed across every loan with a balance." />
@@ -231,4 +255,12 @@ export function ReportsClient({
 function formatOrDash(cents: number): React.ReactNode {
   if (cents === 0) return <span className="text-subtle">—</span>;
   return <Money cents={cents} plain />;
+}
+
+/** The Net worth card's honesty note (see the comment above its call site). Singular/plural
+ *  agreement matters for one account -- "1 accounts have" reads as broken, not just informal. */
+function missingAccountsNote(count: number): string {
+  return count === 1
+    ? '1 account has no balance yet. Update it in Settings and Accounts.'
+    : `${count} accounts have no balance yet. Update them in Settings and Accounts.`;
 }

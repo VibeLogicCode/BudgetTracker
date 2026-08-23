@@ -2,6 +2,7 @@ import { requireUser } from '@/lib/auth/session';
 import { listUsers } from '@/lib/auth/users';
 import { listCategories } from '@/lib/categories';
 import { debtOverTime, listLoans } from '@/lib/loans';
+import { netWorthOverTime } from '@/lib/networth';
 import { categoryBreakdown, categoryMonthOverMonth, personSpendSplit } from '@/lib/reports';
 import { monthOf, todayIso } from '@/lib/dates';
 import { resolveRange } from '@/lib/date-range';
@@ -74,6 +75,10 @@ export default async function ReportsPage({
       split={personSpendSplit({ from, to })}
       debt={debtOverTime(24)}
       hasLoans={listLoans().some((loan) => loan.currentBalanceCents !== null)}
+      // Same fixed trailing-24-month window as the Debt over time card above, deliberately
+      // independent of the date-range picker at the top of the page (a net worth trend, like a
+      // debt trend, is a "how did we get here" widget, not a "for this custom range" one).
+      netWorth={netWorthOverTime(24, { today })}
       baselines={baselines}
       baselineMonthsUsed={baseline.months.length}
     />
