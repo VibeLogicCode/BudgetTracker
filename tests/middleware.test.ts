@@ -39,6 +39,16 @@ describe('middleware', () => {
     expect(response.headers.get('location')).toBeNull();
   });
 
+  it('serves the PWA manifest and icons unauthenticated, so the app is installable from /login', () => {
+    // A browser fetches these to decide whether the app can be installed, and it does so
+    // from whatever page it is on. Gated, they answered with a redirect to /login and the
+    // browser got HTML where it expected a manifest, so no install option appeared at all.
+    for (const path of ['/manifest.webmanifest', '/icons/icon-192.png', '/icons/apple-touch-icon.png']) {
+      const response = middleware(requestFor(path));
+      expect(response.headers.get('location')).toBeNull();
+    }
+  });
+
   it('does not treat a path that merely starts with a public prefix as public', () => {
     // /loginfoo must NOT match the /login prefix — only /login and /login/* do.
     const response = middleware(requestFor('/loginfoo'));

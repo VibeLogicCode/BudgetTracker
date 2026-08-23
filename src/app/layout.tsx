@@ -6,6 +6,18 @@ import './globals.css';
 export const metadata: Metadata = {
   title: 'Budget Tracker',
   description: 'Self-hosted household budget tracker',
+  // src/app/manifest.ts compiles to this exact route (Next's metadata-route convention).
+  manifest: '/manifest.webmanifest',
+  // Installability only (owner ruling 9) — no service worker, no offline mode, no
+  // install-prompt UI. iOS reads `icons.apple` for its home-screen icon rather than the
+  // manifest's icons array, so it is pointed at the same generated file separately here.
+  appleWebApp: {
+    title: 'Budget Tracker',
+    statusBarStyle: 'default',
+  },
+  icons: {
+    apple: '/icons/apple-touch-icon.png',
+  },
 };
 
 /** Both themes are real, so the browser chrome should track whichever is on. */

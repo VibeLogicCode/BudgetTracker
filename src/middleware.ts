@@ -18,7 +18,14 @@ import { securityHeaders } from '@/lib/auth/security-headers';
 // first-time visitor. The prefix-matching rule below only exempts the exact root path
 // here (pathname.startsWith('//') never matches a real path), so this does not also
 // exempt every other route the way adding, say, '/api' as a bare prefix would.
-const PUBLIC_PREFIXES = ['/', '/login', '/setup', '/_next', '/favicon.ico'];
+// '/manifest.webmanifest' and '/icons' are public for the same reason '/favicon.ico' is:
+// a browser fetches them to decide whether the app is installable, and it does that from
+// whatever page it is on -- including /login, before anyone has a session. Gated, they
+// answered with a 307 to /login, so the browser received login HTML where it expected the
+// manifest and offered no install option at all (v1.7.0 Task 17). Neither carries anything
+// private: the manifest holds the app name, colours and icon paths, and /icons holds four
+// generated PNGs. '/icons' is a directory prefix, so it exempts those files and nothing else.
+const PUBLIC_PREFIXES = ['/', '/login', '/setup', '/_next', '/favicon.ico', '/manifest.webmanifest', '/icons'];
 
 function isApiPath(pathname: string): boolean {
   return pathname === '/api' || pathname.startsWith('/api/');
