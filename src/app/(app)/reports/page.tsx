@@ -16,7 +16,8 @@ import { resolveRange } from '@/lib/date-range';
 import { readEnv } from '@/lib/env';
 import { suggestionsFor } from '@/lib/predict/history';
 import type { BaselineRow } from '@/lib/predict/suggest';
-import { ReportsClient } from './reports-client';
+import { taxYearReport, taxYears } from '@/lib/tax';
+import { ReportsClient, type TaxYearDisplayRow } from './reports-client';
 
 export const dynamic = 'force-dynamic';
 
@@ -69,10 +70,9 @@ export default async function ReportsPage({
   // MUST-14.7 and F19: TOP-LEVEL categories only. categorySeries mirrors budgetProgress, so it
   // also produces a row for each child; listing Food beside Groceries, whose medians overlap by
   // construction, would read as double counting on a card that has no indentation to explain it.
+  const allCategories = listCategories({ includeArchived: true });
   const topLevelNames = new Map(
-    listCategories({ includeArchived: true })
-      .filter((category) => category.parentId === null)
-      .map((category) => [category.id, category.name] as const),
+    allCategories.filter((category) => category.parentId === null).map((category) => [category.id, category.name] as const),
   );
   const baselines: BaselineRow[] = [];
   for (const [categoryId, result] of baseline.byCategory) {
@@ -82,6 +82,26 @@ export default async function ReportsPage({
     baselines.push({ categoryId, categoryName, suggestion: result.suggestion });
   }
   baselines.sort((a, b) => b.suggestion.medianCents - a.suggestion.medianCents);
+
+  // Task 15b (v1.7.0): the tax-year report card. taxYears() lists every year that has at least
+  // one non-transfer transaction, independent of whether any category is currently flagged
+  // tax-relevant (see its doc comment in src/lib/tax.ts) -- a household with plenty of data but
+  // no flagged category yet still gets a normal year picker; it is taxYearReport's own empty
+  // result, not an empty year list, that tells the card to show its "nothing marked
+  // tax-relevant" empty state. The requested year is only honored when it is both a plain
+  // four-digit number and one of the years taxYears() actually returned; anything else
+  // (missing, malformed, or simply a year with no data) falls back to the newest year so the
+  // <select>, the table and the Download CSV link can never desync from each other.
+  const taxYearOptions = taxYears();
+  const taxYearRaw = one('taxYear');
+  const requestedTaxYear = taxYearRaw && /^\d{4}$/.test(taxYearRaw) ? Number(taxYearRaw) : null;
+  const selectedTaxYear =
+    requestedTaxYear !== null && taxYearOptions.includes(requestedTaxYear) ? requestedTaxYear : (taxYearOptions[0] ?? null);
+  const categoryParentById = new Map(allCategories.map((category) => [category.id, category.parentId] as const));
+  const taxRows: TaxYearDisplayRow[] =
+    selectedTaxYear === null
+      ? []
+      : taxYearReport(selectedTaxYear).map((row) => ({ ...row, parentId: categoryParentById.get(row.categoryId) ?? null }));
 
   return (
     <ReportsClient
@@ -104,6 +124,9 @@ export default async function ReportsPage({
       yoy={categoryYearOverYear({ month: yoyMonth, attributedUserId: person })}
       yoyMonth={yoyMonth}
       cashflow={cashflowTrend(cashflowMonths, { endMonth: monthOf(to), attributedUserId: person })}
+      taxYears={taxYearOptions}
+      taxYear={selectedTaxYear}
+      taxRows={taxRows}
     />
   );
 }

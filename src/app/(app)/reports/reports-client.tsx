@@ -27,6 +27,15 @@ import {
   type TopMerchantRow,
   type YoYRow,
 } from '@/lib/reports';
+import type { TaxYearRow } from '@/lib/tax';
+
+/** Task 15b (v1.7.0): one taxYearReport() row, plus its place in the category tree. tax.ts's
+ *  TaxYearRow does not carry parentId -- a tax-year row does not otherwise need it -- so the
+ *  page attaches it before handing rows to this card, which needs it to indent a flagged child
+ *  under its flagged parent and disclose the overlap (see orderTaxRows below). */
+export interface TaxYearDisplayRow extends TaxYearRow {
+  parentId: number | null;
+}
 
 export function ReportsClient({
   range,
@@ -45,6 +54,9 @@ export function ReportsClient({
   yoy,
   yoyMonth,
   cashflow,
+  taxYears,
+  taxYear,
+  taxRows,
 }: {
   range: ResolvedRange;
   today: string;
@@ -66,11 +78,25 @@ export function ReportsClient({
   yoyMonth: string;
   /** Task 14: cashflowTrend() over the range's whole-month span, capped at 24. */
   cashflow: MonthTrendRow[];
+  /** Task 15b: years with at least one non-transfer transaction, newest first (taxYears() in
+   *  src/lib/tax.ts) -- populates the year select independently of whether anything is flagged. */
+  taxYears: number[];
+  /** The resolved selected year, or null when taxYears is empty (no data at all yet). */
+  taxYear: number | null;
+  /** taxYearReport(taxYear), each row's parentId attached by the page. Empty whenever nothing
+   *  is flagged for this year, which is what drives the card's empty state below. */
+  taxRows: TaxYearDisplayRow[];
 }) {
   const exportHref = `/api/reports/export?${new URLSearchParams({
     ...rangeParams(range),
     ...(person ? { person } : {}),
   }).toString()}`;
+
+  // Task 15b: ordered once for both the table and the grand total below, so the two can never
+  // disagree about which rows overlap.
+  const taxOrdered = orderTaxRows(taxRows);
+  const taxGrandTotalCents = taxGrandTotal(taxOrdered);
+  const taxHasOverlap = taxOrdered.some((entry) => entry.nested);
 
   return (
     <div className="flex flex-col gap-6">
@@ -101,6 +127,17 @@ export function ReportsClient({
             <Field label="Compare month" hint="Feeds the year-over-year card below.">
               <input type="month" name="yoyMonth" defaultValue={yoyMonth} max={monthOf(today)} className={inputClass} />
             </Field>
+            {taxYears.length > 0 ? (
+              <Field label="Tax year" hint="Feeds the tax year card below.">
+                <select name="taxYear" defaultValue={taxYear ?? ''} className={selectClass}>
+                  {taxYears.map((year) => (
+                    <option key={year} value={year}>
+                      {year}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            ) : null}
             <button type="submit" className="btn btn--primary">Apply</button>
           </form>
         </CardBody>
@@ -323,6 +360,76 @@ export function ReportsClient({
         )}
       </Card>
 
+      <Card>
+        <CardHeader
+          title="Tax year"
+          description="Net spend in every tax-relevant category, by person, for one calendar year."
+          action={
+            taxYear !== null ? (
+              <a href={`/api/reports/tax-export?year=${taxYear}`} className="btn btn--secondary">
+                Download CSV
+              </a>
+            ) : null
+          }
+        />
+        {taxRows.length === 0 ? (
+          <EmptyState icon={ReportsIcon} title="Nothing marked tax-relevant yet">
+            Mark categories as tax relevant in Settings and Managers to see them here.
+          </EmptyState>
+        ) : (
+          <>
+            <TableWrap bare>
+              <thead>
+                <tr>
+                  <th scope="col">Category</th>
+                  <th scope="col">Person</th>
+                  <th scope="col" className="text-right">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {taxOrdered.flatMap(({ row, nested }) =>
+                  row.byUser.map((personRow) => (
+                    <tr key={`${row.categoryId}-${personRow.userId ?? 'unattributed'}`}>
+                      <td
+                        style={{ paddingLeft: nested ? '36px' : '16px' }}
+                        className={nested ? 'text-muted' : 'font-medium text-ink'}
+                      >
+                        {row.categoryName}
+                      </td>
+                      <td className="text-muted">{personRow.label}</td>
+                      <AmountCell>
+                        <Money cents={personRow.cents} plain />
+                      </AmountCell>
+                    </tr>
+                  )),
+                )}
+                <tr>
+                  <td colSpan={2} className="font-semibold text-ink">
+                    Total
+                  </td>
+                  <AmountCell className="font-semibold">
+                    <Money cents={taxGrandTotalCents} plain />
+                  </AmountCell>
+                </tr>
+              </tbody>
+            </TableWrap>
+            {/* Task 15b: a flagged parent's row already folds in every child's spend (flagged or
+                not, per src/lib/tax.ts's module doc comment). When a child is ALSO separately
+                flagged it gets its own row too, indented directly above -- and this note is the
+                one place that overlap is spelled out, so nobody reads this table and adds every
+                row together. */}
+            {taxHasOverlap ? (
+              <CardBody className="pt-3">
+                <p className="text-sm text-muted">
+                  An indented category's amount is already included in its parent's total above it, so adding both
+                  would count it twice.
+                </p>
+              </CardBody>
+            ) : null}
+          </>
+        )}
+      </Card>
+
       {!hasLoans ? null : (
         <Card>
           <CardHeader title="Debt over time" description="Total owed across every loan with a balance." />
@@ -392,4 +499,40 @@ function missingAccountsNote(count: number): string {
   return count === 1
     ? '1 account has no balance yet. Update it in Settings and Accounts.'
     : `${count} accounts have no balance yet. Update them in Settings and Accounts.`;
+}
+
+/**
+ * Task 15b: pairs each taxYearReport() row with whether it is a flagged child nested under a
+ * flagged parent that is ALSO present in this year's rows -- the one case where two rows on
+ * this card overlap (src/lib/tax.ts's module doc comment: a flagged parent's row always folds
+ * in every child's spend, flagged or not, so a separately-flagged child's own row duplicates
+ * part of its parent's total by design).
+ *
+ * A nested row is placed directly after its parent regardless of where taxYearReport's own
+ * totalCents-descending sort put it -- the whole point of nesting is that the two rows read
+ * together, adjacent, not wherever their totals happened to rank. A child whose parent is not
+ * separately flagged (so the parent never appears as its own row here) has nothing to overlap
+ * with and stays at the top level, in taxYearReport's original order.
+ */
+function orderTaxRows(rows: TaxYearDisplayRow[]): { row: TaxYearDisplayRow; nested: boolean }[] {
+  const presentIds = new Set(rows.map((row) => row.categoryId));
+  const nestedIds = new Set(
+    rows.filter((row) => row.parentId !== null && presentIds.has(row.parentId)).map((row) => row.categoryId),
+  );
+  const ordered: { row: TaxYearDisplayRow; nested: boolean }[] = [];
+  for (const row of rows) {
+    if (nestedIds.has(row.categoryId)) continue;
+    ordered.push({ row, nested: false });
+    for (const child of rows) {
+      if (nestedIds.has(child.categoryId) && child.parentId === row.categoryId) ordered.push({ row: child, nested: true });
+    }
+  }
+  return ordered;
+}
+
+/** The card's own total. A nested row's spend already counts inside the parent row placed
+ *  directly above it, so only the non-nested rows are added -- summing every row's totalCents
+ *  unconditionally would double the exact overlap this card exists to disclose. */
+function taxGrandTotal(ordered: { row: TaxYearDisplayRow; nested: boolean }[]): number {
+  return ordered.filter((entry) => !entry.nested).reduce((sum, entry) => sum + entry.row.totalCents, 0);
 }
