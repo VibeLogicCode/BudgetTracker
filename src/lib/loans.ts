@@ -660,6 +660,19 @@ export interface PayoffProjection {
  * after the balance had already reached zero and so applied nothing further). A projection of
  * when the BALANCE reaches zero has to be paced by the number that actually moves the balance.
  *
+ * DIRECTION RULE (fix-round, F-payoff): applied_cents alone is not enough, because it is stored
+ * UNSIGNED IN BOTH DIRECTIONS. A payment (a negative transaction) decrements the balance, but a
+ * disbursement or upward adjustment (a positive transaction, linked via assignTransactionToLoan)
+ * INCREMENTS it, and BOTH write a positive applied_cents (see link()'s docblock far above). A
+ * plain sum(applied_cents) therefore counts money drawn AGAINST the loan as though it had been
+ * paid off it -- one linked disbursement can make a barely-paid loan look nearly paid off. The
+ * query below joins `transactions` and counts a loan_payments row only when
+ * transactions.amount_cents < 0, the SAME "re-derive direction from the linked transaction's own
+ * immutable sign, never from applied_cents itself" rule applyLoanMatchers's own
+ * `if (txn.amountCents >= 0) continue` guard, unassignTransactionFromLoan and debtOverTime all
+ * already follow. Do not simplify this join away: a bare sum(applied_cents) is exactly the
+ * defect this comment exists to keep from coming back.
+ *
  * The window is the six FULL calendar months immediately before today's month -- the same
  * "completed months only, never the one still in progress" convention
  * notify/evaluate/monthly.ts's comparePredicted already uses for its own six-month lookback --
@@ -668,6 +681,15 @@ export interface PayoffProjection {
  * skip over: a loan paid once in six months must project at one sixth of that payment's size,
  * not at the full amount, or a household that pays twice a year would be told its loan behaves
  * like one paid every month.
+ *
+ * ABSURD-PACE BOUND (fix-round, F-payoff): a projection more than 1200 months (100 years) out
+ * returns null instead of a month. A pace of a few cents against a large balance divides out to
+ * a payoff centuries away; isMonthKey (src/lib/dates.ts) requires EXACTLY a 4-digit year, so a
+ * year that far out fails it and monthLabel silently hands back the raw "YYYYYYYYY-MM" storage
+ * key instead of a formatted month. "We cannot meaningfully project this" is the honest call at
+ * that point, and a garbled year is not, so null wins over displaying one. 1200 is not a new
+ * number invented for this fix -- it is the same "a century of months" cap nextPayment() above
+ * already uses for the same reason (a loan that started decades ago must not spin).
  *
  * Clock-free (v1.4.0 rule): `today` arrives as a parameter; nothing here reads the clock.
  */
@@ -689,9 +711,11 @@ export function payoffProjection(itemId: number, today: string): PayoffProjectio
       total: sql<number>`sum(${loanPayments.appliedCents})`,
     })
     .from(loanPayments)
+    .innerJoin(transactions, eq(transactions.id, loanPayments.txnId))
     .where(
       and(
         eq(loanPayments.itemId, itemId),
+        sql`${transactions.amountCents} < 0`,
         sql`substr(${loanPayments.createdAt}, 1, 7) >= ${months[0]}`,
         sql`substr(${loanPayments.createdAt}, 1, 7) <= ${months[months.length - 1]}`,
       ),
@@ -706,6 +730,8 @@ export function payoffProjection(itemId: number, today: string): PayoffProjectio
   if (monthlyAppliedCents === 0) return null;
 
   const monthsNeeded = Math.ceil(balanceCents / monthlyAppliedCents);
+  // See ABSURD-PACE BOUND above: beyond a century out, null is the honest answer.
+  if (monthsNeeded > 1200) return null;
   return { monthlyAppliedCents, projectedPayoffMonth: addMonths(thisMonth, monthsNeeded) };
 }
 
