@@ -1,10 +1,21 @@
 import cron, { type ScheduledTask } from 'node-cron';
 import { runNightlyJob } from '@/lib/backup';
 import { readEnv } from '@/lib/env';
-import { hasAnyEnabledTarget } from '@/lib/notify/config';
+import { adminUserIds, hasAnyEnabledTarget } from '@/lib/notify/config';
 import { runScheduledEvaluation } from '@/lib/notify/evaluate';
 import { countPendingOutbox, expireStalePending, pumpOutbox } from '@/lib/notify/outbox';
-import { raiseBackupFailed } from '@/lib/notify/raise';
+import { raiseBackupFailed, raiseSyncFailed } from '@/lib/notify/raise';
+import { getSetting } from '@/lib/settings';
+import {
+  AUTO_SYNC_INTERVALS,
+  SETTING_AUTO_SYNC,
+  SETTING_AUTO_SYNC_USER_ID,
+  getConnection,
+  isAutoSyncDue,
+  isAutoSyncInterval,
+  remainingRequestsToday,
+} from '@/lib/simplefin/connection';
+import { runSync } from '@/lib/simplefin/sync';
 import { dueForCheck, runUpdateCheck } from '@/lib/update/check';
 import { isUpdateCheckEnabled, readUpdateState } from '@/lib/update/state';
 import { sweepPendingReceipts } from '@/lib/warranty/ocr/queue';
@@ -24,6 +35,8 @@ let ticking = false;
 let bootExpiryDone = false;
 /** MUST-5.4: runUpdateTick's own single-flight guard, reset by stopScheduler(). */
 let updateTicking = false;
+/** Task 8: runSimplefinTick's own single-flight guard, reset by stopScheduler(). */
+let simplefinTicking = false;
 
 function runOcrSweep(): void {
   try {
@@ -97,6 +110,57 @@ export function runUpdateTick(now: Date = new Date()): void {
     });
 }
 
+/**
+ * Task 8 (v1.7.0, design ruling 7): a SEPARATE function with its OWN independent gate,
+ * deliberately not folded into runUpdateTick or runNotifyTick, for the same reason MUST-5.1
+ * separates the update tick from the notify tick: a household that wants auto-sync but has
+ * no notification channel configured must still get synced, and a household with
+ * notifications on but auto-sync off must never make a single SimpleFIN request or spend any
+ * of its daily budget.
+ */
+export function runSimplefinTick(now: Date = new Date()): void {
+  // The dormancy gate is the tick's first statement, same shape as isUpdateCheckEnabled():
+  // one indexed settings read. isAutoSyncInterval is the SAME guard the Connections page's
+  // <select> and the server action's zod schema use, so a stored value none of the three
+  // recognise -- including plain absence -- can only ever mean "off" everywhere at once.
+  const stored = getSetting(SETTING_AUTO_SYNC);
+  if (stored === null || !isAutoSyncInterval(stored)) return;
+
+  const connection = getConnection();
+  if (!connection || !connection.enabled) return;
+
+  // An exhausted daily request budget is expected backpressure, not a failure (design ruling
+  // 7): this returns silently, same as the two checks above, and never reaches
+  // raiseSyncFailed below.
+  if (remainingRequestsToday(now) === 0) return;
+
+  if (!isAutoSyncDue(connection.lastSyncAt, AUTO_SYNC_INTERVALS[stored].dueAfterHours, now)) return;
+
+  if (simplefinTicking) return;
+  simplefinTicking = true;
+  void runAutoSimplefinSync(now)
+    .catch((error) => raiseSyncFailed({ error, at: now }))
+    .finally(() => {
+      simplefinTicking = false;
+    });
+}
+
+/**
+ * The stored user id is re-validated as an ACTIVE ADMIN at read time, never trusted from
+ * whenever the setting was saved: a promotion can be undone and a user can be deactivated,
+ * and neither currently clears simplefin_auto_sync_user_id. An invalid id never reaches
+ * runSync -- it throws instead, which runSimplefinTick's catch turns into exactly the same
+ * sync_failed alert a real sync failure would raise, naming the actual problem.
+ */
+async function runAutoSimplefinSync(now: Date): Promise<void> {
+  const raw = getSetting(SETTING_AUTO_SYNC_USER_ID);
+  const userId = raw === null ? Number.NaN : Number.parseInt(raw, 10);
+  if (!Number.isFinite(userId) || !adminUserIds().includes(userId)) {
+    throw new Error('The automatic sync user is no longer an active admin. Re-save automatic sync in Settings → Connections.');
+  }
+  await runSync({ userId, now });
+}
+
 /** Idempotent: safe to call more than once per process (e.g. hot-reload in dev). */
 export function startScheduler(): void {
   if (task) return;
@@ -108,6 +172,7 @@ export function startScheduler(): void {
     () => {
       runUpdateTick();
       runNotifyTick();
+      runSimplefinTick();
     },
     { timezone: tz },
   );
@@ -122,6 +187,9 @@ export function startScheduler(): void {
   // next cron tick. The update check goes first, ahead of the notification tick.
   runUpdateTick();
   runNotifyTick();
+  // Task 8: same reasoning as the two ticks above -- a container that was off catches up on
+  // a due auto-sync immediately at boot rather than waiting up to five minutes.
+  runSimplefinTick();
 }
 
 export function stopScheduler(): void {
@@ -133,6 +201,7 @@ export function stopScheduler(): void {
   notifyTask = null;
   bootExpiryDone = false;
   updateTicking = false;
+  simplefinTicking = false;
 }
 
 /**

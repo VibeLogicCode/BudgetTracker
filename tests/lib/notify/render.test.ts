@@ -161,6 +161,51 @@ describe('§10.1: the operational events', () => {
   });
 });
 
+describe('Task 8 (v1.7.0): sync_failed', () => {
+  it('points at Settings → Connections and states the date and the error', () => {
+    const { subject, body } = renderEvent({
+      event: 'sync_failed',
+      dateIso: '2026-08-22',
+      error: 'The SimpleFIN bridge returned HTTP 500.',
+    });
+    expect(subject).toBe('SimpleFIN sync failed');
+    expect(body).toContain('2026-08-22');
+    expect(body).toContain('The SimpleFIN bridge returned HTTP 500.');
+    expect(body).toContain('Check Settings → Connections.');
+  });
+
+  it('never uses an em dash', () => {
+    const { subject, body } = renderEvent({ event: 'sync_failed', dateIso: '2026-08-22', error: 'boom' });
+    expect(subject).not.toContain('—');
+    expect(body).not.toContain('—');
+  });
+
+  /**
+   * SECURITY (Task 8, non-negotiable): the SimpleFIN access URL is a bearer credential and
+   * must never reach a subject or a body. renderEvent's sync_failed case has exactly two
+   * dynamic inputs (dateIso and error) and no third field a URL could ride in on, so this
+   * pins that the subject is a fixed string that never varies with the error's content, and
+   * that the body contains only what error.message actually said, verbatim, with nothing
+   * else appended around it that could carry more than intended.
+   */
+  it('SECURITY: an access-URL-shaped error message reaches the body only, never the subject, and the subject never varies', () => {
+    const FAKE_ACCESS_URL = 'https://fake-user:fake-pass@fake-bridge.example.test/simplefin';
+    const { subject, body } = renderEvent({
+      event: 'sync_failed',
+      dateIso: '2026-08-22',
+      error: `The bridge rejected the request for ${FAKE_ACCESS_URL}.`,
+    });
+    expect(subject).toBe('SimpleFIN sync failed');
+    expect(subject).not.toContain(FAKE_ACCESS_URL);
+    expect(subject).not.toContain('fake-pass');
+    expect(body).toContain(FAKE_ACCESS_URL);
+
+    const clean = renderEvent({ event: 'sync_failed', dateIso: '2026-08-22', error: 'A generic failure.' });
+    expect(clean.subject).toBe(subject);
+    expect(clean.body).not.toContain(FAKE_ACCESS_URL);
+  });
+});
+
 describe('§10.2: the weekly digest', () => {
   const full = {
     event: 'weekly_digest',
@@ -311,6 +356,7 @@ const SAMPLES_BY_EVENT: Record<string, RenderInput[]> = {
     { event: 'suggested_budget_refresh', month: '2026-08', household: [{ name: 'C', nowCents: 2, wasCents: 1 }], personal: [], changedCount: 1 },
     { event: 'suggested_budget_refresh', month: '2026-08', household: [{ name: 'C', nowCents: 2, wasCents: null }], personal: [], changedCount: 1 },
   ],
+  sync_failed: [{ event: 'sync_failed', dateIso: '2026-08-22', error: 'The SimpleFIN bridge returned HTTP 500.' }],
 };
 
 describe('MUST-10.4: no notification body contains a link', () => {

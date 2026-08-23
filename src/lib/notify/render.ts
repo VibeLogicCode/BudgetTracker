@@ -153,7 +153,12 @@ export type RenderInput =
       household: readonly RefreshLine[];
       personal: readonly RefreshLine[];
       changedCount: number;
-    };
+    }
+  // Task 8 (v1.7.0): exactly two dynamic fields on purpose. SECURITY: `error` must be
+  // error.message ONLY (see raise.ts's raiseSyncFailed) -- the SimpleFIN access URL is a
+  // bearer credential and this event id must never carry a third field a URL could ride in
+  // on, such as the connection row or the request that failed.
+  | { event: 'sync_failed'; dateIso: string; error: string };
 
 function money(cents: number): string {
   return formatCents(cents, { currency: true });
@@ -444,5 +449,19 @@ export function renderEvent(input: RenderInput): { subject: string; body: string
         body: blocks.join('\n\n'),
       };
     }
+    case 'sync_failed':
+      // SECURITY: the subject is a fixed string that never varies with input.error, and the
+      // body carries input.error verbatim with no other dynamic field mixed in. Whatever
+      // reaches input.error is entirely raiseSyncFailed's responsibility to keep clean (it
+      // passes error.message and nothing else) -- this renderer adds no additional risk of
+      // its own by never echoing anything else.
+      return {
+        subject: 'SimpleFIN sync failed',
+        body: [
+          `The automatic SimpleFIN sync on ${input.dateIso} did not complete.`,
+          input.error,
+          'Check Settings → Connections.',
+        ].join('\n\n'),
+      };
   }
 }

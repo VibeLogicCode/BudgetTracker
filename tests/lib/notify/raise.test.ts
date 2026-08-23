@@ -3,7 +3,7 @@ import { createTestDb, insertTestUser, type TestDb } from '../../helpers/db';
 import { saveEmailTarget, saveSmtp } from '@/lib/notify/config';
 import { resetOutboxPumpForTests } from '@/lib/notify/outbox';
 import { resetNotifySenderForTests, setNotifySenderForTests } from '@/lib/notify/send';
-import { RESTORE_NOTIFY_MAX_AGE_MS, raiseBackupFailed, raiseNewSignin, raiseRestoreOutcome } from '@/lib/notify/raise';
+import { RESTORE_NOTIFY_MAX_AGE_MS, raiseBackupFailed, raiseNewSignin, raiseRestoreOutcome, raiseSyncFailed } from '@/lib/notify/raise';
 
 const readRestoreState = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/backup/restore', async (importOriginal) => ({
@@ -95,6 +95,62 @@ describe('MUST-6.19 / MUST-14.1: raiseBackupFailed', () => {
   it('never throws', () => {
     t.sqlite.close();
     expect(() => raiseBackupFailed({ error: new Error('x'), at: new Date() })).not.toThrow();
+  });
+});
+
+describe('MUST-6.19 / Task 8 (v1.7.0): raiseSyncFailed', () => {
+  it('enqueues one row per active admin, keyed on the calendar day', () => {
+    const admin = emailUser('admin');
+    const member = emailUser('member');
+    // vitest.config.ts pins TZ to America/Toronto (EDT, UTC-4 in August): 06:00Z is 02:00
+    // local on the same calendar day the dedup key below asserts.
+    raiseSyncFailed({ error: new Error('The SimpleFIN bridge returned HTTP 500.'), at: new Date('2026-08-17T06:00:00Z') });
+    expect(rows().map((r) => r.user_id)).toEqual([admin]);
+    expect(rows()[0]?.dedup_key).toBe('sync-failed:2026-08-17');
+    expect(rows()[0]?.subject).toBe('SimpleFIN sync failed');
+    expect(rows()[0]?.body).toContain('The SimpleFIN bridge returned HTTP 500.');
+    expect(member).toBeGreaterThan(0);
+  });
+
+  it('fires at most once per calendar day', () => {
+    emailUser('admin');
+    raiseSyncFailed({ error: new Error('a'), at: new Date('2026-08-17T06:00:00Z') });
+    raiseSyncFailed({ error: new Error('b'), at: new Date('2026-08-17T07:00:00Z') });
+    expect(rows()).toHaveLength(1);
+  });
+
+  it('falls back to a fixed sentence when the error carries no message', () => {
+    emailUser('admin');
+    raiseSyncFailed({ error: new Error(''), at: new Date('2026-08-17T06:00:00Z') });
+    expect(rows()[0]?.body).toContain('The SimpleFIN sync failed without an error message.');
+  });
+
+  it('never throws', () => {
+    t.sqlite.close();
+    expect(() => raiseSyncFailed({ error: new Error('x'), at: new Date() })).not.toThrow();
+  });
+
+  /**
+   * SECURITY (non-negotiable, Task 8): the SimpleFIN access URL is a bearer credential. This
+   * proves raiseSyncFailed extracts ONLY error.message -- never .stack, never a re-serialised
+   * copy of the whole error object -- by attaching an obviously-fake access URL to a field
+   * OTHER than .message and asserting it reaches neither the subject nor the body of the
+   * enqueued row.
+   */
+  it('SECURITY: the access URL never reaches the subject or body, even when it rides on error.stack', () => {
+    const admin = emailUser('admin');
+    const FAKE_ACCESS_URL = 'https://fake-user:fake-pass@fake-bridge.example.test/simplefin';
+    const boom = new Error('The SimpleFIN bridge returned HTTP 500.');
+    boom.stack = `Error: The SimpleFIN bridge returned HTTP 500.\n    at fetchAccounts (${FAKE_ACCESS_URL}:1:1)`;
+
+    raiseSyncFailed({ error: boom, at: new Date('2026-08-17T06:00:00Z') });
+
+    expect(rows().map((r) => r.user_id)).toEqual([admin]);
+    expect(rows()[0]?.subject).not.toContain(FAKE_ACCESS_URL);
+    expect(rows()[0]?.subject).not.toContain('fake-pass');
+    expect(rows()[0]?.body).not.toContain(FAKE_ACCESS_URL);
+    expect(rows()[0]?.body).not.toContain('fake-pass');
+    expect(rows()[0]?.body).toContain('The SimpleFIN bridge returned HTTP 500.');
   });
 });
 

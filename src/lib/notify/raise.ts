@@ -5,7 +5,7 @@ import { readEnv } from '@/lib/env';
 import { readRestoreState } from '@/lib/backup/restore';
 import { todayIso } from '@/lib/dates';
 import { adminUserIds } from '@/lib/notify/config';
-import { backupFailedKey, newSigninKey, restoreOutcomeKey } from '@/lib/notify/events';
+import { backupFailedKey, newSigninKey, restoreOutcomeKey, syncFailedKey } from '@/lib/notify/events';
 import { enqueue, kickOutbox } from '@/lib/notify/outbox';
 import { renderEvent } from '@/lib/notify/render';
 
@@ -28,9 +28,9 @@ import { renderEvent } from '@/lib/notify/render';
  */
 export const RESTORE_NOTIFY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
-function messageOf(error: unknown): string {
+function messageOf(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message.length > 0) return error.message;
-  return 'The backup job failed without an error message.';
+  return fallback;
 }
 
 export function raiseNewSignin(input: {
@@ -95,7 +95,7 @@ export function raiseBackupFailed(input: { error: unknown; at: Date }): void {
     const { subject, body } = renderEvent({
       event: 'backup_failed',
       dateIso,
-      error: messageOf(input.error),
+      error: messageOf(input.error, 'The backup job failed without an error message.'),
     });
     let queued = 0;
     for (const userId of adminUserIds()) {
@@ -152,5 +152,48 @@ export function raiseRestoreOutcome(now: Date = new Date()): void {
     if (queued > 0) kickOutbox(now);
   } catch (error) {
     console.error('[notify] restore outcome raise failed', error);
+  }
+}
+
+/**
+ * Task 8 (v1.7.0): raised from src/lib/scheduler.ts's runSimplefinTick, either when runSync
+ * itself throws/rejects, or when the stored auto-sync user id no longer resolves to an active
+ * admin (in which case the scheduler never calls runSync at all -- see the message it builds
+ * for that case).
+ *
+ * SECURITY, non-negotiable: the SimpleFIN access URL is a bearer credential for the user's
+ * bank data and must never appear in a notification or a log line. This raiser reads ONLY
+ * error.message off the thrown value via messageOf() below -- never .stack, never a
+ * re-serialised copy of the whole error or of the connection it was acting on -- so whatever
+ * SimplefinError/Error message the sync layer produced (which by construction, see
+ * simplefin/client.ts and simplefin/connection.ts, never embeds the access URL) is the only
+ * dynamic text that can reach the subject or body.
+ *
+ * MUST-4.3: audience 'admin', so this fans out to active admins only, same as
+ * raiseBackupFailed above.
+ */
+export function raiseSyncFailed(input: { error: unknown; at: Date }): void {
+  try {
+    const { tz } = readEnv();
+    const dateIso = todayIso(input.at, tz);
+    const { subject, body } = renderEvent({
+      event: 'sync_failed',
+      dateIso,
+      error: messageOf(input.error, 'The SimpleFIN sync failed without an error message.'),
+    });
+    let queued = 0;
+    for (const userId of adminUserIds()) {
+      queued += enqueue({
+        userId,
+        eventId: 'sync_failed',
+        dedupKey: syncFailedKey(dateIso),
+        subject,
+        body,
+        at: input.at,
+      }).inserted.length;
+    }
+    if (queued > 0) kickOutbox(input.at);
+  } catch (error) {
+    console.error('[notify] sync failure raise failed', error);
   }
 }

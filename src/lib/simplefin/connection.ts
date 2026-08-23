@@ -11,6 +11,49 @@ export const DAILY_REQUEST_LIMIT = 20;
 export const OVERLAP_DAYS = 5;
 export const MAX_WINDOW_DAYS = 90;
 
+/**
+ * Auto-sync cadence (design ruling 7, v1.7.0). The scheduler only ever wakes on the coarse
+ * 5-minute notify tick (NOTIFY_TICK_CRON in scheduler.ts), not a precise per-interval timer,
+ * so `dueAfterHours` sits BELOW each nominal interval on purpose: a threshold set exactly at
+ * the interval would push the effective cadence a few minutes later every single cycle, since
+ * the tick can never catch a sync at the exact instant it becomes due. The slack keeps the
+ * average cadence honest instead of drifting later forever.
+ *
+ * This ONE constant drives three call sites that must never disagree: the scheduler's
+ * due-check (runSimplefinTick in scheduler.ts), the Connections page's <select>, and the
+ * server action's zod schema. All three read it (directly, or via a value derived from it)
+ * from here rather than each declaring their own copy.
+ */
+export const AUTO_SYNC_INTERVALS = {
+  '6h': { label: 'Every 6 hours', dueAfterHours: 5.5 },
+  '12h': { label: 'Every 12 hours', dueAfterHours: 11 },
+  daily: { label: 'Once a day', dueAfterHours: 20 },
+  weekly: { label: 'Once a week', dueAfterHours: 160 },
+} as const;
+
+export type AutoSyncInterval = keyof typeof AUTO_SYNC_INTERVALS;
+
+export function isAutoSyncInterval(value: string): value is AutoSyncInterval {
+  return Object.prototype.hasOwnProperty.call(AUTO_SYNC_INTERVALS, value);
+}
+
+/**
+ * Settings-table keys (absence = off, same discipline as src/lib/update/state.ts). Owned
+ * entirely by the auto-sync feature: no other module writes these two keys.
+ */
+export const SETTING_AUTO_SYNC = 'simplefin_auto_sync';
+export const SETTING_AUTO_SYNC_USER_ID = 'simplefin_auto_sync_user_id';
+
+/**
+ * Pure due-check: a connection that has never synced is always due; otherwise strictly more
+ * than `dueAfterHours` must have elapsed since the last successful sync.
+ */
+export function isAutoSyncDue(lastSyncAt: string | null, dueAfterHours: number, now: Date = new Date()): boolean {
+  if (lastSyncAt === null) return true;
+  const elapsedMs = now.getTime() - new Date(lastSyncAt).getTime();
+  return elapsedMs > dueAfterHours * 60 * 60 * 1000;
+}
+
 export interface ConnectionRecord {
   id: number;
   claimedAt: string;

@@ -165,6 +165,14 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     trigger: 'daily_slot',
     defaultEnabled: false,
   },
+  {
+    id: 'sync_failed',
+    label: 'A SimpleFIN sync failed',
+    blurb: 'The unattended sync could not finish and needs a look.',
+    audience: 'admin',
+    trigger: 'immediate',
+    defaultEnabled: true,
+  },
 ];
 
 export function eventDef(id: string): NotificationEventDef | undefined {
@@ -287,4 +295,13 @@ export function predictedVsActualKey(month: string): string {
 /** Once per current month, ever. Same pruning argument as predictedVsActualKey. */
 export function suggestedBudgetRefreshKey(month: string): string {
   return `suggest:${month}`;
+}
+
+/**
+ * Once per calendar day, max (Task 8 / design ruling 7). The scheduler only ever raises this
+ * against "today", so a row the 400-day sweep prunes belongs to a date that will never be
+ * visited again — same pruning argument as backupFailedKey.
+ */
+export function syncFailedKey(dateIso: string): string {
+  return `sync-failed:${dateIso}`;
 }

@@ -1,6 +1,14 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
-import { isSimplefinManaged, linkAccount, listLinks, saveClaimedConnection } from '@/lib/simplefin/connection';
+import {
+  SETTING_AUTO_SYNC,
+  SETTING_AUTO_SYNC_USER_ID,
+  isSimplefinManaged,
+  linkAccount,
+  listLinks,
+  saveClaimedConnection,
+} from '@/lib/simplefin/connection';
+import { getSetting } from '@/lib/settings';
 
 let currentUser = { id: 1, name: 'Admin', username: 'admin', role: 'admin' as const };
 let requestHeaders = new Headers({ origin: 'http://nas.local:3000', host: 'nas.local:3000' });
@@ -17,7 +25,7 @@ vi.mock('next/cache', () => ({
   revalidatePath: vi.fn(),
 }));
 
-import { forgetConnectionAction } from '@/app/(app)/settings/connections/actions';
+import { forgetConnectionAction, setSimplefinAutoSyncAction } from '@/app/(app)/settings/connections/actions';
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -90,5 +98,58 @@ describe('forgetConnectionAction', () => {
 
     expect(result.message).toMatch(/Connection removed/i);
     expect(result.message).not.toMatch(/CSV import/i);
+  });
+});
+
+describe('setSimplefinAutoSyncAction (Task 8)', () => {
+  it('writes both settings keys, using the acting admin id, when an interval is chosen', async () => {
+    setup();
+
+    const result = await setSimplefinAutoSyncAction('daily');
+
+    expect(result.error).toBeUndefined();
+    expect(getSetting(SETTING_AUTO_SYNC)).toBe('daily');
+    expect(getSetting(SETTING_AUTO_SYNC_USER_ID)).toBe(String(currentUser.id));
+  });
+
+  it('accepts every one of the four interval keys', async () => {
+    setup();
+    for (const key of ['6h', '12h', 'daily', 'weekly']) {
+      const result = await setSimplefinAutoSyncAction(key);
+      expect(result.error).toBeUndefined();
+      expect(getSetting(SETTING_AUTO_SYNC)).toBe(key);
+    }
+  });
+
+  it('deletes both settings keys when set to off', async () => {
+    setup();
+    await setSimplefinAutoSyncAction('daily');
+    expect(getSetting(SETTING_AUTO_SYNC)).not.toBeNull();
+
+    const result = await setSimplefinAutoSyncAction('off');
+
+    expect(result.error).toBeUndefined();
+    expect(getSetting(SETTING_AUTO_SYNC)).toBeNull();
+    expect(getSetting(SETTING_AUTO_SYNC_USER_ID)).toBeNull();
+  });
+
+  it('rejects a value outside the constant, and writes nothing', async () => {
+    setup();
+
+    const result = await setSimplefinAutoSyncAction('every-lunar-cycle');
+
+    expect(result.error).toBeTruthy();
+    expect(getSetting(SETTING_AUTO_SYNC)).toBeNull();
+    expect(getSetting(SETTING_AUTO_SYNC_USER_ID)).toBeNull();
+  });
+
+  it('rejects a cross-origin request and writes nothing (same guard style as forgetConnectionAction)', async () => {
+    setup();
+    requestHeaders = new Headers({ origin: 'http://evil.example', host: 'nas.local:3000' });
+
+    const result = await setSimplefinAutoSyncAction('daily');
+
+    expect(result.error).toBe('Cross-origin request rejected');
+    expect(getSetting(SETTING_AUTO_SYNC)).toBeNull();
   });
 });

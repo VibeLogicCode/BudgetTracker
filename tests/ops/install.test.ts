@@ -760,8 +760,23 @@ describe('the app makes no network call unless SimpleFIN is configured', () => {
     expect(clientComponentHits.length).toBeGreaterThan(0);
   });
 
-  it('the scheduler never triggers a sync', () => {
+  it('the scheduler only ever syncs through the explicit, opt-in auto-sync gate (Task 8, design ruling 7)', () => {
+    // Superseded assertion (pre-v1.7.0): this used to assert scheduler.ts never mentioned
+    // SimpleFIN at all -- sync was 100% manual, full stop. The owner's v1.7.0 design ruling 7
+    // deliberately adds a user-selectable auto-sync cadence (off by default: absence of the
+    // simplefin_auto_sync setting means off, the same discipline as every other gate in this
+    // file). The invariant this describe block actually cares about -- "no network call
+    // unless SimpleFIN is configured" -- still holds: runSimplefinTick calls runSync(), which
+    // reaches the network ONLY through simplefin/client.ts, the one allowed fetch() call site
+    // proven by the sibling test above, and only after the settings-table opt-in gate passes.
+    // The full behavioral proof (off by default, an invalid stored value also means off,
+    // budget/connection checks, single-flight) lives in tests/lib/scheduler-simplefin.test.ts;
+    // this stays a structural guard that the sync call site cannot quietly become unconditional.
     const scheduler = read('src/lib/scheduler.ts');
-    expect(scheduler).not.toMatch(/simplefin|runSync/i);
+    const runSyncCallSites = scheduler.match(/\brunSync\(/g) ?? [];
+    expect(runSyncCallSites).toHaveLength(1);
+    expect(scheduler).toMatch(/async function runAutoSimplefinSync[\s\S]*?\brunSync\(/);
+    expect(scheduler).toContain('getSetting(SETTING_AUTO_SYNC)');
+    expect(scheduler).toMatch(/if \(stored === null \|\| !isAutoSyncInterval\(stored\)\) return;/);
   });
 });

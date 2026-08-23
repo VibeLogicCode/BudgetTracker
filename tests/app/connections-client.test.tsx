@@ -2,9 +2,16 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, cleanup, fireEvent, waitFor } from '@testing-library/react';
 import { ConnectionsClient } from '@/app/(app)/settings/connections/connections-client';
+// Importing the real constant here is safe: this file runs under Vitest's Node test runner,
+// never bundled for a browser, unlike connections-client.tsx itself (see the note there on
+// why it takes autoSyncOptions as a plain-string prop instead of importing this constant).
+import { AUTO_SYNC_INTERVALS } from '@/lib/simplefin/connection';
+
+const AUTO_SYNC_OPTIONS = Object.entries(AUTO_SYNC_INTERVALS).map(([value, cfg]) => ({ value, label: cfg.label }));
 
 vi.mock('@/app/(app)/settings/connections/actions', () => ({
   forgetConnectionAction: vi.fn(async () => ({ message: 'Connection removed. Bridge Chequing reverts to CSV import.' })),
+  setSimplefinAutoSyncAction: vi.fn(async () => ({ message: 'Automatic sync is on: once a day.' })),
 }));
 
 afterEach(() => {
@@ -145,5 +152,86 @@ describe('ConnectionsClient — a bridge error with zero accounts is a FAILED sy
     fireEvent.click(getByText('Sync now'));
 
     expect(await findByText(/loan payment matching failed/i)).toBeTruthy();
+  });
+});
+
+describe('ConnectionsClient — Task 8: Automatic sync select', () => {
+  it('renders Off plus every interval from AUTO_SYNC_INTERVALS, defaulting to the current value', () => {
+    const { getByLabelText } = render(
+      <ConnectionsClient
+        connection={CONNECTION}
+        links={[]}
+        accounts={[]}
+        remainingRequests={20}
+        dailyLimit={20}
+        autoSync="daily"
+        autoSyncOptions={AUTO_SYNC_OPTIONS}
+      />,
+    );
+    const select = getByLabelText('Automatic sync') as HTMLSelectElement;
+    expect(select.value).toBe('daily');
+    expect(Array.from(select.options).map((o) => o.value)).toEqual(['off', '6h', '12h', 'daily', 'weekly']);
+    expect(Array.from(select.options).map((o) => o.textContent)).toEqual([
+      'Off',
+      'Every 6 hours',
+      'Every 12 hours',
+      'Once a day',
+      'Once a week',
+    ]);
+  });
+
+  it('defaults to Off when no auto-sync is configured', () => {
+    const { getByLabelText } = render(
+      <ConnectionsClient connection={CONNECTION} links={[]} accounts={[]} remainingRequests={20} dailyLimit={20} />,
+    );
+    expect((getByLabelText('Automatic sync') as HTMLSelectElement).value).toBe('off');
+  });
+
+  it('shows the required copy about running on the server and notifying on failure', () => {
+    const { getByText } = render(
+      <ConnectionsClient connection={CONNECTION} links={[]} accounts={[]} remainingRequests={20} dailyLimit={20} />,
+    );
+    expect(getByText('Runs on the server while the app is up. If a sync fails you will be notified.')).toBeTruthy();
+  });
+
+  it('calls setSimplefinAutoSyncAction with the newly chosen value and reloads on success', async () => {
+    const action = vi.mocked((await import('@/app/(app)/settings/connections/actions')).setSimplefinAutoSyncAction);
+    action.mockClear();
+    const reloadSpy = vi.fn();
+    vi.stubGlobal('location', { ...window.location, reload: reloadSpy });
+
+    const { getByLabelText } = render(
+      <ConnectionsClient
+        connection={CONNECTION}
+        links={[]}
+        accounts={[]}
+        remainingRequests={20}
+        dailyLimit={20}
+        autoSyncOptions={AUTO_SYNC_OPTIONS}
+      />,
+    );
+    fireEvent.change(getByLabelText('Automatic sync'), { target: { value: 'weekly' } });
+
+    await waitFor(() => expect(action).toHaveBeenCalledWith('weekly'));
+    await waitFor(() => expect(reloadSpy).toHaveBeenCalled());
+  });
+
+  it('surfaces an error from the action instead of reloading', async () => {
+    const action = vi.mocked((await import('@/app/(app)/settings/connections/actions')).setSimplefinAutoSyncAction);
+    action.mockResolvedValueOnce({ error: 'That is not a valid automatic sync interval.' });
+
+    const { getByLabelText, findByText } = render(
+      <ConnectionsClient
+        connection={CONNECTION}
+        links={[]}
+        accounts={[]}
+        remainingRequests={20}
+        dailyLimit={20}
+        autoSyncOptions={AUTO_SYNC_OPTIONS}
+      />,
+    );
+    fireEvent.change(getByLabelText('Automatic sync'), { target: { value: 'weekly' } });
+
+    expect(await findByText('That is not a valid automatic sync interval.')).toBeTruthy();
   });
 });

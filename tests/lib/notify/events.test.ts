@@ -21,6 +21,7 @@ import {
   staleImportKey,
   subscriptionCreepKey,
   suggestedBudgetRefreshKey,
+  syncFailedKey,
   unusualTransactionKey,
   updateAvailableKey,
   weeklyDigestKey,
@@ -37,11 +38,11 @@ describe('MUST-2.1: events.ts is pure and client-safe', () => {
   });
 });
 
-describe('the fifteen registered events', () => {
-  it('has exactly fifteen entries with unique, well-formed ids', () => {
-    expect(NOTIFICATION_EVENTS).toHaveLength(15);
+describe('the sixteen registered events', () => {
+  it('has exactly sixteen entries with unique, well-formed ids', () => {
+    expect(NOTIFICATION_EVENTS).toHaveLength(16);
     const ids = NOTIFICATION_EVENTS.map((e) => e.id);
-    expect(new Set(ids).size).toBe(15);
+    expect(new Set(ids).size).toBe(16);
     for (const id of ids) expect(id).toMatch(/^[a-z][a-z0-9_]*$/);
   });
 
@@ -64,6 +65,7 @@ describe('the fifteen registered events', () => {
       ['duplicate_charge', 'all', 'tick', true],
       ['predicted_vs_actual', 'all', 'daily_slot', false],
       ['suggested_budget_refresh', 'all', 'daily_slot', false],
+      ['sync_failed', 'admin', 'immediate', true],
     ]);
   });
 
@@ -78,6 +80,7 @@ describe('the fifteen registered events', () => {
       'new_signin',
       'restore_outcome',
       'subscription_creep',
+      'sync_failed',
       'unusual_transaction',
       'update_available',
     ]);
@@ -103,7 +106,7 @@ describe('lookup helpers', () => {
     expect(eventsFor('member').map((e) => e.id)).not.toContain('backup_failed');
     expect(eventsFor('member').map((e) => e.id)).not.toContain('restore_outcome');
     expect(eventsFor('member')).toHaveLength(12);
-    expect(eventsFor('admin')).toHaveLength(15);
+    expect(eventsFor('admin')).toHaveLength(16);
   });
 
   it('exposes the two channels', () => {
@@ -148,7 +151,7 @@ describe('MUST-3.11: the exact dedup key strings', () => {
 
 describe('MUST-6.1: the update_available registry entry', () => {
   it('brings the registry to fifteen and is admin-audience, default-on, tick-triggered', () => {
-    expect(NOTIFICATION_EVENTS).toHaveLength(15);
+    expect(NOTIFICATION_EVENTS.length).toBeGreaterThanOrEqual(15);
     const entry = eventDef('update_available');
     expect(entry).toEqual({
       id: 'update_available',
@@ -168,6 +171,36 @@ describe('MUST-6.1: the update_available registry entry', () => {
   it('MUST-6.3: the dedup key is per version and only ever goes up', () => {
     expect(updateAvailableKey('1.4.0')).toBe('update:1.4.0');
     expect(updateAvailableKey('1.4.0')).not.toBe(updateAvailableKey('1.5.0'));
+  });
+});
+
+describe('Task 8 (v1.7.0): the sync_failed registry entry', () => {
+  it('brings the registry to sixteen and is admin-audience, default-on, immediate-triggered', () => {
+    expect(NOTIFICATION_EVENTS).toHaveLength(16);
+    const entry = eventDef('sync_failed');
+    expect(entry).toEqual({
+      id: 'sync_failed',
+      label: 'A SimpleFIN sync failed',
+      blurb: 'The unattended sync could not finish and needs a look.',
+      audience: 'admin',
+      trigger: 'immediate',
+      defaultEnabled: true,
+    });
+  });
+
+  it('MUST-4.3: eventsFor(member) excludes it', () => {
+    expect(eventsFor('member').some((e) => e.id === 'sync_failed')).toBe(false);
+    expect(eventsFor('admin').some((e) => e.id === 'sync_failed')).toBe(true);
+  });
+
+  it('keys once per calendar day and never repeats the user or channel', () => {
+    expect(syncFailedKey('2026-08-22')).toBe('sync-failed:2026-08-22');
+    expect(syncFailedKey('2026-08-22')).not.toBe(syncFailedKey('2026-08-23'));
+    expect(syncFailedKey('2026-08-22')).not.toMatch(/telegram|email|user/);
+  });
+
+  it('never collides with backup_failed, which uses the same day-keyed shape', () => {
+    expect(syncFailedKey('2026-08-17')).not.toBe(backupFailedKey('2026-08-17'));
   });
 });
 

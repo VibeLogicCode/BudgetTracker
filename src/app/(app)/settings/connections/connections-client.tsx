@@ -8,7 +8,7 @@ import { Notice } from '@/components/ui/Notice';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Field, selectClass, textareaClass } from '@/components/ui/form';
 import type { AccountLink, ConnectionRecord } from '@/lib/simplefin/connection';
-import { forgetConnectionAction } from './actions';
+import { forgetConnectionAction, setSimplefinAutoSyncAction } from './actions';
 
 interface RemoteAccount {
   id: string;
@@ -23,12 +23,33 @@ export function ConnectionsClient({
   accounts,
   remainingRequests,
   dailyLimit,
+  autoSync = null,
+  autoSyncOptions = [],
 }: {
   connection: ConnectionRecord | null;
   links: AccountLink[];
   accounts: { id: number; name: string }[];
   remainingRequests: number;
   dailyLimit: number;
+  /**
+   * The raw stored key ('6h' | '12h' | 'daily' | 'weekly'), or null for off. Deliberately a
+   * plain string rather than the branded AutoSyncInterval type: this component never imports
+   * @/lib/simplefin/connection as a VALUE (see autoSyncOptions below), so it has no reason to
+   * import that module's type either -- the server action re-validates whatever string this
+   * component sends back.
+   */
+  autoSync?: string | null;
+  /**
+   * Computed server-side FROM AUTO_SYNC_INTERVALS (see page.tsx) and handed down as plain
+   * data. This component must NOT import AUTO_SYNC_INTERVALS itself: connection.ts pulls in
+   * @/db/client (better-sqlite3), and a 'use client' file importing a VALUE from it would
+   * drag that whole server-only module graph into the browser bundle and break the build --
+   * the same Ruling P4 constraint documented in src/lib/notify/events.ts. The existing
+   * `import type { AccountLink, ConnectionRecord }` above is safe because type-only imports
+   * are erased entirely; AUTO_SYNC_INTERVALS is a runtime value, so it cannot travel the same
+   * way.
+   */
+  autoSyncOptions?: { value: string; label: string }[];
 }) {
   const [setupToken, setSetupToken] = useState('');
   const [remote, setRemote] = useState<RemoteAccount[] | null>(null);
@@ -108,6 +129,21 @@ export function ConnectionsClient({
     const loanNote = result.loanMatchFailed ? ' Loan payment matching failed for these rows.' : '';
     setNotice(`${perAccount || 'Nothing to import.'} — ${result.remainingRequests} of ${dailyLimit} requests left today.${engineNote}${loanNote}`);
   }
+
+  async function setAutoSync(value: string) {
+    setBusy(true);
+    setError(null);
+    const result = await setSimplefinAutoSyncAction(value);
+    setBusy(false);
+    if (result.error) {
+      setError(result.error);
+      return;
+    }
+    setNotice(result.message ?? null);
+    window.location.reload();
+  }
+
+  const autoSyncLabel = autoSyncOptions.find((option) => option.value === autoSync)?.label ?? autoSync ?? '';
 
   return (
     <div className="flex flex-col gap-6">
@@ -206,9 +242,30 @@ export function ConnectionsClient({
                   Forget connection
                 </button>
               </div>
+              <Field
+                label="Automatic sync"
+                htmlFor="auto-sync-select"
+                hint="Runs on the server while the app is up. If a sync fails you will be notified."
+              >
+                <select
+                  id="auto-sync-select"
+                  defaultValue={autoSync ?? 'off'}
+                  disabled={busy}
+                  onChange={(e) => void setAutoSync(e.target.value)}
+                  className={`${selectClass} w-auto`}
+                >
+                  <option value="off">Off</option>
+                  {autoSyncOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
               <p className="text-xs text-subtle">
-                Syncing is manual. Nothing runs on a timer. Each sync asks for everything since the last one plus five days of overlap, so a
-                late-posting transaction is never missed.
+                {autoSync
+                  ? `Automatic sync is on: ${autoSyncLabel.toLowerCase()}. Each sync asks for everything since the last one plus five days of overlap, so a late-posting transaction is never missed.`
+                  : 'Syncing is manual unless you turn on automatic sync above. Each sync asks for everything since the last one plus five days of overlap, so a late-posting transaction is never missed.'}
               </p>
             </CardBody>
           </Card>
