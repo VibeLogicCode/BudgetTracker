@@ -3,8 +3,15 @@ import { listUsers } from '@/lib/auth/users';
 import { listCategories } from '@/lib/categories';
 import { debtOverTime, listLoans } from '@/lib/loans';
 import { netWorthOverTime } from '@/lib/networth';
-import { categoryBreakdown, categoryMonthOverMonth, personSpendSplit } from '@/lib/reports';
-import { monthOf, todayIso } from '@/lib/dates';
+import {
+  cashflowTrend,
+  categoryBreakdown,
+  categoryMonthOverMonth,
+  categoryYearOverYear,
+  personSpendSplit,
+  topMerchants,
+} from '@/lib/reports';
+import { isMonthKey, monthOf, monthsBetween, todayIso } from '@/lib/dates';
 import { resolveRange } from '@/lib/date-range';
 import { readEnv } from '@/lib/env';
 import { suggestionsFor } from '@/lib/predict/history';
@@ -39,6 +46,18 @@ export default async function ReportsPage({
   const to = range.to;
   const personRaw = one('person');
   const person = personRaw === 'unattributed' ? 'unattributed' : personRaw && /^\d+$/.test(personRaw) ? Number(personRaw) : null;
+
+  // Task 13 (v1.7.0): the year-over-year card's own month picker, independent of the range
+  // above -- "this month" is always exactly one month, never a range. It lives in the same
+  // filter form as range/person (below) so Apply carries all three at once and no card's scope
+  // resets when another one changes.
+  const yoyRaw = one('yoyMonth');
+  const yoyMonth = yoyRaw && isMonthKey(yoyRaw) ? yoyRaw : monthOf(today);
+
+  // Task 14 (v1.7.0): cashflowTrend is monthly, so the picked date range becomes a whole-month
+  // span for it, capped at 24 -- the same cap Debt over time and Net worth already use below --
+  // rather than inventing a day-granular series that does not exist.
+  const cashflowMonths = Math.min(24, monthsBetween(monthOf(from), monthOf(to)) + 1);
 
   // MUST-14.8: this card's window is the last 6 FULL calendar months, always, whatever the
   // picker says. MUST-16.5: one query, not one per category.
@@ -81,6 +100,10 @@ export default async function ReportsPage({
       netWorth={netWorthOverTime(24, { today })}
       baselines={baselines}
       baselineMonthsUsed={baseline.months.length}
+      merchants={topMerchants({ from, to, limit: 15, attributedUserId: person })}
+      yoy={categoryYearOverYear({ month: yoyMonth, attributedUserId: person })}
+      yoyMonth={yoyMonth}
+      cashflow={cashflowTrend(cashflowMonths, { endMonth: monthOf(to), attributedUserId: person })}
     />
   );
 }

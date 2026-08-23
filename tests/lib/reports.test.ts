@@ -7,9 +7,11 @@ import {
   categoryBreakdown,
   categoryMonthOverMonth,
   personSpendSplit,
+  savingsRate,
   toCsv,
   topMerchants,
   transactionsCsv,
+  type MonthTrendRow,
 } from '@/lib/reports';
 import { nowIso } from '@/lib/clock';
 import { setTransactionSplits } from '@/lib/splits';
@@ -259,6 +261,154 @@ describe('topMerchants', () => {
     const rows = topMerchants({ ...MARCH, limit: 1 });
     expect(rows).toHaveLength(1);
     expect(rows[0].normalizedMerchant).toBe('B');
+  });
+});
+
+describe('topMerchants — split-aware income filter and sum (v1.7.0 review fix)', () => {
+  // DEFECT regression (adversarial review, 2026-08-22): topMerchants joined `categories` on
+  // the PARENT's own transactions.categoryId and summed transactions.amountCents directly --
+  // neither is split-aware. A split never updates the parent's own category_id (splits.ts
+  // ruling 1/2), so a charge filed under an income category and then corrected by a split
+  // had its whole amount silently excluded forever, and even a same-category split's income
+  // parts (if any) were never separated from its expense parts. The fix keeps grouping by
+  // merchant (identity does not change) but joins categories on EFFECTIVE_CATEGORY and sums
+  // EFFECTIVE_AMOUNT, so each split PART decides its own inclusion.
+
+  it('a charge filed under an income category before splitting is no longer dropped -- it appears with the summed EXPENSE total', () => {
+    const { db, add } = setup();
+    const salary = categoryIdByName(db, 'Salary'); // isIncome = true
+    const groceries = categoryIdByName(db, 'Groceries');
+    const gas = categoryIdByName(db, 'Gas');
+    // Filed (wrongly, before splitting) under Salary -- exactly the mistake splitting exists
+    // to correct. The parent's own category_id never changes once split, so a reader keying
+    // its income test off transactions.categoryId sees "Salary" forever.
+    const id = add({ categoryId: salary, amountCents: -10000, merchant: 'COSTCO' });
+    setTransactionSplits({
+      txnId: id,
+      parts: [
+        { categoryId: groceries, amountCents: -6000 },
+        { categoryId: gas, amountCents: -4000 },
+      ],
+      userId: 1,
+    });
+
+    const rows = topMerchants({ ...MARCH, limit: 5 });
+    const costco = rows.find((r) => r.normalizedMerchant === 'COSTCO');
+    expect(costco).toBeDefined();
+    expect(costco).toMatchObject({ spentCents: 10000, count: 1 });
+  });
+
+  it('a 3-part split reports a count of 1 charge at that merchant, never 3 (the join-multiplies-rows trap)', () => {
+    const { db, add } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const coffee = categoryIdByName(db, 'Coffee');
+    const restaurants = categoryIdByName(db, 'Restaurants');
+    const id = add({ categoryId: groceries, amountCents: -9000, merchant: 'COSTCO' });
+    setTransactionSplits({
+      txnId: id,
+      parts: [
+        { categoryId: groceries, amountCents: -5000 },
+        { categoryId: coffee, amountCents: -3000 },
+        { categoryId: restaurants, amountCents: -1000 },
+      ],
+      userId: 1,
+    });
+
+    const rows = topMerchants({ ...MARCH, limit: 5 });
+    const costco = rows.find((r) => r.normalizedMerchant === 'COSTCO')!;
+    expect(costco.count).toBe(1);
+    expect(costco.spentCents).toBe(9000);
+  });
+
+  it('a split with one income part and two expense parts counts only the expense total', () => {
+    const { db, add } = setup();
+    const salary = categoryIdByName(db, 'Salary');
+    const groceries = categoryIdByName(db, 'Groceries');
+    const gas = categoryIdByName(db, 'Gas');
+    const id = add({ categoryId: groceries, amountCents: -10000, merchant: 'COSTCO' });
+    setTransactionSplits({
+      txnId: id,
+      parts: [
+        { categoryId: salary, amountCents: -2000 },
+        { categoryId: groceries, amountCents: -5000 },
+        { categoryId: gas, amountCents: -3000 },
+      ],
+      userId: 1,
+    });
+
+    const rows = topMerchants({ ...MARCH, limit: 5 });
+    const costco = rows.find((r) => r.normalizedMerchant === 'COSTCO')!;
+    // Only the two expense parts ($50 + $30) -- the $20 income part is excluded WITHOUT
+    // taking the expense parts down with it.
+    expect(costco.spentCents).toBe(8000);
+    expect(costco.count).toBe(1);
+  });
+
+  it("an unsplit transaction's row is unchanged, including its count", () => {
+    const { db, add } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    add({ categoryId: groceries, amountCents: -4500, merchant: 'METRO' });
+
+    const rows = topMerchants({ ...MARCH, limit: 5 });
+    expect(rows.find((r) => r.normalizedMerchant === 'METRO')).toMatchObject({ spentCents: 4500, count: 1 });
+  });
+
+  it('still groups by merchant, not by merchant+category -- a split across categories stays ONE row', () => {
+    const { db, add } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const coffee = categoryIdByName(db, 'Coffee');
+    const id = add({ categoryId: groceries, amountCents: -8000, merchant: 'COSTCO' });
+    setTransactionSplits({
+      txnId: id,
+      parts: [
+        { categoryId: groceries, amountCents: -5000 },
+        { categoryId: coffee, amountCents: -3000 },
+      ],
+      userId: 1,
+    });
+
+    const rows = topMerchants({ ...MARCH, limit: 10 });
+    expect(rows.filter((r) => r.normalizedMerchant === 'COSTCO')).toHaveLength(1);
+  });
+});
+
+describe('savingsRate (v1.7.0 Task 14)', () => {
+  it('sums income, spend and net across the rows and rounds net/income to a whole percent', () => {
+    const rows: MonthTrendRow[] = [
+      { month: '2026-01', incomeCents: 500000, spendCents: 300000, netCents: 200000 },
+      { month: '2026-02', incomeCents: 500000, spendCents: 450000, netCents: 50000 },
+    ];
+    expect(savingsRate(rows)).toEqual({ incomeCents: 1000000, spendCents: 750000, netCents: 250000, pct: 25 });
+  });
+
+  it('rounds to the nearest whole percent rather than truncating', () => {
+    // 100000 / 300000 = 33.33...%, must round to 33, not truncate to 33 by luck of the draw --
+    // covered separately below with a case that would fail under truncation vs rounding.
+    const rows: MonthTrendRow[] = [{ month: '2026-01', incomeCents: 300000, spendCents: 200000, netCents: 100000 }];
+    expect(savingsRate(rows).pct).toBe(33);
+  });
+
+  it('a negative net (spent more than earned) reports a negative percentage, never clamped to zero', () => {
+    const rows: MonthTrendRow[] = [{ month: '2026-01', incomeCents: 100000, spendCents: 150000, netCents: -50000 }];
+    expect(savingsRate(rows).pct).toBe(-50);
+  });
+
+  it('is null, never a division-by-zero artifact, when there is no income', () => {
+    const rows: MonthTrendRow[] = [{ month: '2026-01', incomeCents: 0, spendCents: 20000, netCents: -20000 }];
+    const rate = savingsRate(rows);
+    expect(rate.pct).toBeNull();
+    expect(rate.incomeCents).toBe(0);
+    expect(rate.spendCents).toBe(20000);
+    expect(rate.netCents).toBe(-20000);
+  });
+
+  it('is null when income sums negative too, not just at exactly zero', () => {
+    const rows: MonthTrendRow[] = [{ month: '2026-01', incomeCents: -5000, spendCents: 1000, netCents: -6000 }];
+    expect(savingsRate(rows).pct).toBeNull();
+  });
+
+  it('an empty series is all zeros with no income to divide by', () => {
+    expect(savingsRate([])).toEqual({ incomeCents: 0, spendCents: 0, netCents: 0, pct: null });
   });
 });
 

@@ -1,5 +1,6 @@
 'use client';
 
+import { CashflowChart } from '@/components/charts/CashflowChart';
 import { CategoryBarChart } from '@/components/charts/CategoryBarChart';
 import { DebtTrendChart } from '@/components/charts/DebtTrendChart';
 import { NetWorthChart } from '@/components/charts/NetWorthChart';
@@ -9,14 +10,23 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { Money } from '@/components/ui/Money';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { AmountCell, TableWrap } from '@/components/ui/Table';
-import { Field, selectClass } from '@/components/ui/form';
+import { Field, inputClass, selectClass } from '@/components/ui/form';
 import { DateRangePicker } from '@/components/ui/DateRangePicker';
 import { rangeParams, type ResolvedRange } from '@/lib/date-range';
+import { monthLabel, monthOf } from '@/lib/dates';
 import type { DebtPoint } from '@/lib/loans';
 import { formatCents } from '@/lib/money';
 import type { NetWorthPoint } from '@/lib/networth';
 import type { BaselineRow } from '@/lib/predict/suggest';
-import type { CategoryBreakdownRow, CategoryMonthTrend, PersonSplitRow } from '@/lib/reports';
+import {
+  savingsRate,
+  type CategoryBreakdownRow,
+  type CategoryMonthTrend,
+  type MonthTrendRow,
+  type PersonSplitRow,
+  type TopMerchantRow,
+  type YoYRow,
+} from '@/lib/reports';
 
 export function ReportsClient({
   range,
@@ -31,6 +41,10 @@ export function ReportsClient({
   netWorth,
   baselines,
   baselineMonthsUsed,
+  merchants,
+  yoy,
+  yoyMonth,
+  cashflow,
 }: {
   range: ResolvedRange;
   today: string;
@@ -44,6 +58,14 @@ export function ReportsClient({
   netWorth: NetWorthPoint[];
   baselines: BaselineRow[];
   baselineMonthsUsed: number;
+  /** Task 12: the largest net charges over the range/person scope above, limit 15. */
+  merchants: TopMerchantRow[];
+  /** Task 13: this month vs last month vs the same month last year, rolled up and person-scoped. */
+  yoy: YoYRow[];
+  /** The month the Task 13 card is comparing, echoed back so the picker keeps its value. */
+  yoyMonth: string;
+  /** Task 14: cashflowTrend() over the range's whole-month span, capped at 24. */
+  cashflow: MonthTrendRow[];
 }) {
   const exportHref = `/api/reports/export?${new URLSearchParams({
     ...rangeParams(range),
@@ -75,6 +97,9 @@ export function ReportsClient({
                   <option key={p.id} value={p.id}>{p.name}</option>
                 ))}
               </select>
+            </Field>
+            <Field label="Compare month" hint="Feeds the year-over-year card below.">
+              <input type="month" name="yoyMonth" defaultValue={yoyMonth} max={monthOf(today)} className={inputClass} />
             </Field>
             <button type="submit" className="btn btn--primary">Apply</button>
           </form>
@@ -151,6 +176,18 @@ export function ReportsClient({
       </Card>
 
       <Card>
+        <CardHeader title="Cash flow and savings rate" description="Income and spend by month over the range above." />
+        {cashflow.length === 0 ? (
+          <EmptyState icon={ReportsIcon} title="Nothing to show for this range" />
+        ) : (
+          <CardBody className="flex flex-col gap-3">
+            <CashflowChart data={cashflow} />
+            <p className="text-sm text-muted">{cashflowSummary(cashflow)}</p>
+          </CardBody>
+        )}
+      </Card>
+
+      <Card>
         <CardHeader title="Month over month" description="The same categories, month by month." />
         {monthOverMonth.rows.length === 0 ? (
           <EmptyState icon={ReportsIcon} title="No months to compare yet" />
@@ -185,6 +222,39 @@ export function ReportsClient({
       </Card>
 
       <Card>
+        <CardHeader
+          title="This month against last year"
+          description={`${monthLabel(yoyMonth)} compared with last month and the same month last year.`}
+        />
+        {yoy.length === 0 ? (
+          <EmptyState icon={ReportsIcon} title="Nothing to compare yet" />
+        ) : (
+          <TableWrap bare>
+            <thead>
+              <tr>
+                <th scope="col">Category</th>
+                <th scope="col" className="text-right">This month</th>
+                <th scope="col" className="text-right">Last month</th>
+                <th scope="col" className="text-right">Last year</th>
+                <th scope="col">Change</th>
+              </tr>
+            </thead>
+            <tbody>
+              {yoy.map((row) => (
+                <tr key={row.categoryId}>
+                  <td className="whitespace-nowrap font-medium text-ink">{row.categoryName}</td>
+                  <td className="text-right">{formatOrDash(row.thisMonthCents)}</td>
+                  <td className="text-right text-muted">{formatOrDash(row.lastMonthCents)}</td>
+                  <td className="text-right text-muted">{formatOrDash(row.lastYearCents)}</td>
+                  <td>{yoyChange(row.thisMonthCents, row.lastYearCents)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </TableWrap>
+        )}
+      </Card>
+
+      <Card>
         <CardHeader title="Who spent it" description="Split by the person each transaction is attributed to." />
         {split.length === 0 ? (
           <EmptyState icon={ReportsIcon} title="Nothing to split yet" />
@@ -200,6 +270,36 @@ export function ReportsClient({
               </li>
             ))}
           </ul>
+        )}
+      </Card>
+
+      <Card>
+        <CardHeader title="Top merchants" description="The largest net charges over the range above." />
+        {merchants.length === 0 ? (
+          <EmptyState icon={ReportsIcon} title="No merchant charges in this range">
+            Widen the dates, or import the statements that cover them.
+          </EmptyState>
+        ) : (
+          <TableWrap bare>
+            <thead>
+              <tr>
+                <th scope="col">Merchant</th>
+                <th scope="col" className="text-right">Charges</th>
+                <th scope="col" className="text-right">Net spent</th>
+              </tr>
+            </thead>
+            <tbody>
+              {merchants.map((row) => (
+                <tr key={row.normalizedMerchant}>
+                  <td className="whitespace-nowrap font-medium text-ink">{row.normalizedMerchant}</td>
+                  <td className="text-right text-muted">{row.count}</td>
+                  <AmountCell>
+                    <Money cents={row.spentCents} plain />
+                  </AmountCell>
+                </tr>
+              ))}
+            </tbody>
+          </TableWrap>
         )}
       </Card>
 
@@ -255,6 +355,35 @@ export function ReportsClient({
 function formatOrDash(cents: number): React.ReactNode {
   if (cents === 0) return <span className="text-subtle">—</span>;
   return <Money cents={cents} plain />;
+}
+
+/** Task 14: the Cash flow and savings rate card's one-line summary. All the arithmetic
+ *  (including the division-by-zero guard) lives in savingsRate() (src/lib/reports.ts), so it
+ *  has exactly one implementation and one place it is unit tested; this only formats it. */
+function cashflowSummary(rows: MonthTrendRow[]): string {
+  const rate = savingsRate(rows);
+  if (rate.pct === null) return 'No income recorded in this range.';
+  return `Income ${formatCents(rate.incomeCents)} · Spent ${formatCents(rate.spendCents)} · Saved ${formatCents(rate.netCents)} (${rate.pct}%)`;
+}
+
+/** Task 13: the YoY card's delta indicator. A category with nothing spent in the reference
+ *  month has no percentage change to report, so this says so in words rather than dividing by
+ *  zero -- the same guard savingsRate() applies for the card above. */
+function yoyChange(thisMonthCents: number, lastYearCents: number): React.ReactNode {
+  if (lastYearCents === 0) {
+    if (thisMonthCents === 0) return <span className="text-subtle">—</span>;
+    return <span className="text-xs text-muted">No spend this month last year</span>;
+  }
+  const pct = Math.round(((thisMonthCents - lastYearCents) / lastYearCents) * 100);
+  const direction = pct > 0 ? 'rising' : pct < 0 ? 'falling' : 'flat';
+  return (
+    <span className="flex items-center gap-1.5 text-xs text-muted">
+      {direction === 'rising' ? <TrendUpIcon className="h-4 w-4" /> : null}
+      {direction === 'falling' ? <TrendDownIcon className="h-4 w-4" /> : null}
+      {direction === 'flat' ? <TrendFlatIcon className="h-4 w-4" /> : null}
+      {direction === 'flat' ? 'Flat vs last year' : `${pct > 0 ? '+' : ''}${pct}% vs last year`}
+    </span>
+  );
 }
 
 /** The Net worth card's honesty note (see the comment above its call site). Singular/plural

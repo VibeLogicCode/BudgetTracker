@@ -139,6 +139,30 @@ export function cashflowTrend(months: number, opts: { endMonth?: string; attribu
   });
 }
 
+export interface SavingsRate {
+  incomeCents: number;
+  spendCents: number;
+  netCents: number;
+  /** null whenever there is no positive income to divide by (Task 14: never a division-by-zero
+   *  artifact) -- the caller shows a plain "no income" sentence instead of a percentage. */
+  pct: number | null;
+}
+
+/**
+ * Task 14 (spec 2026-08-22, v1.7.0): aggregates a cashflowTrend() series into the one summary
+ * line the Reports "Cash flow and savings rate" card shows -- total income, total spend, total
+ * saved (net), and the savings-rate percentage (net over income, rounded to a whole percent).
+ * pct is null whenever incomeCents is not strictly positive, so the UI never divides by zero
+ * or renders a nonsensical percentage for a range with no income.
+ */
+export function savingsRate(rows: MonthTrendRow[]): SavingsRate {
+  const incomeCents = rows.reduce((sum, row) => sum + row.incomeCents, 0);
+  const spendCents = rows.reduce((sum, row) => sum + row.spendCents, 0);
+  const netCents = rows.reduce((sum, row) => sum + row.netCents, 0);
+  const pct = incomeCents > 0 ? Math.round((netCents / incomeCents) * 100) : null;
+  return { incomeCents, spendCents, netCents, pct };
+}
+
 export interface CategoryMonthTrend {
   categoryId: number;
   categoryName: string;
@@ -199,6 +223,96 @@ export function categoryMonthOverMonth(input: {
   return { months, rows: input.limit ? sorted.slice(0, input.limit) : sorted };
 }
 
+export interface YoYRow {
+  categoryId: number;
+  categoryName: string;
+  thisMonthCents: number;
+  lastMonthCents: number;
+  lastYearCents: number;
+}
+
+/**
+ * Task 13 (spec 2026-08-22, v1.7.0): one month against the month before it and the same month
+ * a year earlier, for the Reports "This month against last year" card.
+ *
+ * ONE query, not three: the three month keys are not contiguous (lastYear sits 11 months
+ * before lastMonth), so this scans the full span from the earliest to the latest of the three
+ * -- the same shape categoryMonthOverMonth already uses for a contiguous window, grouped by
+ * (month, EFFECTIVE_CATEGORY) -- and keeps only the three month buckets that matter in JS. That
+ * is still one grouped aggregate hitting transactions_date_idx once, never one round trip per
+ * month key.
+ *
+ * Split-aware (Task 3's pattern): LEFT JOIN transaction_splits and group by EFFECTIVE_CATEGORY/
+ * EFFECTIVE_AMOUNT so a split transaction is counted once, at its parts' own categories, never
+ * at the parent's own lump category/amount.
+ */
+export function categoryYearOverYear(input: { month: string; attributedUserId?: PersonScope }): YoYRow[] {
+  const thisMonth = input.month;
+  const lastMonth = addMonths(thisMonth, -1);
+  const lastYear = addMonths(thisMonth, -12);
+
+  const rows = getDb()
+    .select({
+      month: sql<string>`substr(${transactions.date}, 1, 7)`,
+      categoryId: EFFECTIVE_CATEGORY,
+      total: sql<number>`sum(${EFFECTIVE_AMOUNT})`,
+    })
+    .from(transactions)
+    .leftJoin(transactionSplits, eq(transactionSplits.txnId, transactions.id))
+    .leftJoin(categories, eq(categories.id, EFFECTIVE_CATEGORY))
+    .where(
+      and(
+        ...rangeClauses({ from: monthStart(lastYear), to: monthEnd(thisMonth) }, input.attributedUserId),
+        eq(categories.isIncome, false),
+      ),
+    )
+    .groupBy(sql`substr(${transactions.date}, 1, 7)`, EFFECTIVE_CATEGORY)
+    .all();
+
+  const all = listCategories({ includeArchived: true });
+  const byId = new Map(all.map((row) => [row.id, row]));
+
+  // Cells keyed by the transaction's OWN category (pre-rollup), matching only the three month
+  // keys this card cares about -- every other month the range query happened to scan is
+  // dropped here, in JS, rather than fetched again.
+  interface Cell {
+    thisMonthCents: number;
+    lastMonthCents: number;
+    lastYearCents: number;
+  }
+  const cellsByCategory = new Map<number, Cell>();
+  for (const row of rows) {
+    if (row.categoryId === null) continue;
+    if (row.month !== thisMonth && row.month !== lastMonth && row.month !== lastYear) continue;
+    const cell = cellsByCategory.get(row.categoryId) ?? { thisMonthCents: 0, lastMonthCents: 0, lastYearCents: 0 };
+    const spent = netSpentCents(row.total ?? 0);
+    if (row.month === thisMonth) cell.thisMonthCents += spent;
+    else if (row.month === lastMonth) cell.lastMonthCents += spent;
+    else cell.lastYearCents += spent;
+    cellsByCategory.set(row.categoryId, cell);
+  }
+
+  // Rollup to parent level (categoryBreakdown({ rollup: true })'s rule): each child's three
+  // cells fold into ITS OWN parent, never into a shared bucket.
+  const rolled = new Map<number, Cell>();
+  for (const [categoryId, cell] of cellsByCategory) {
+    const target = byId.get(categoryId)?.parentId ?? categoryId;
+    const existing = rolled.get(target) ?? { thisMonthCents: 0, lastMonthCents: 0, lastYearCents: 0 };
+    existing.thisMonthCents += cell.thisMonthCents;
+    existing.lastMonthCents += cell.lastMonthCents;
+    existing.lastYearCents += cell.lastYearCents;
+    rolled.set(target, existing);
+  }
+
+  const result: YoYRow[] = [];
+  for (const [categoryId, cell] of rolled) {
+    // A row with nothing to show in any of the three months is noise, not a comparison.
+    if (cell.thisMonthCents === 0 && cell.lastMonthCents === 0 && cell.lastYearCents === 0) continue;
+    result.push({ categoryId, categoryName: byId.get(categoryId)?.name ?? 'Unknown', ...cell });
+  }
+  return result.sort((a, b) => b.thisMonthCents - a.thisMonthCents);
+}
+
 export interface PersonSplitRow {
   userId: number | null;
   label: string;
@@ -240,14 +354,32 @@ export interface TopMerchantRow {
 }
 
 export function topMerchants(input: DateRange & { limit?: number; attributedUserId?: PersonScope }): TopMerchantRow[] {
+  // Split-aware (v1.7.0 review fix, 2026-08-22): merchant IDENTITY still groups by the
+  // parent's own normalizedMerchant -- a split never changes who charged the card, so the
+  // GROUPING here was always correct. What was wrong was the income FILTER and the SUM: this
+  // used to join `categories` on the parent's own transactions.categoryId, which a split
+  // never updates (splits.ts ruling 1/2), so the whole transaction's include/exclude decision
+  // was made on a stale category. A charge filed under an income category and later corrected
+  // by a split -- exactly the case splitting exists for -- had its entire amount silently
+  // excluded forever. Both the join and the summed amount now key off
+  // EFFECTIVE_CATEGORY/EFFECTIVE_AMOUNT (src/lib/splits.ts) via a LEFT JOIN onto
+  // transaction_splits, so each split PART decides its own inclusion and contributes its own
+  // amount, while every part still lands in the parent's merchant bucket.
+  //
+  // count(distinct transactions.id), NOT count(*): the transaction_splits join multiplies
+  // rows per split part (an N-part split yields N joined rows for one charge), so count(*)
+  // would report a 3-part split as 3 charges at that merchant. Counting distinct transaction
+  // ids keeps "Charges" meaning the number of card charges, not the number of category parts
+  // summed across all of them.
   const rows = getDb()
     .select({
       normalizedMerchant: transactions.normalizedMerchant,
-      total: sql<number>`sum(${transactions.amountCents})`,
-      count: sql<number>`count(*)`,
+      total: sql<number>`sum(${EFFECTIVE_AMOUNT})`,
+      count: sql<number>`count(distinct ${transactions.id})`,
     })
     .from(transactions)
-    .leftJoin(categories, eq(categories.id, transactions.categoryId))
+    .leftJoin(transactionSplits, eq(transactionSplits.txnId, transactions.id))
+    .leftJoin(categories, eq(categories.id, EFFECTIVE_CATEGORY))
     .where(and(...rangeClauses(input, input.attributedUserId), sql`coalesce(${categories.isIncome}, 0) = 0`))
     .groupBy(transactions.normalizedMerchant)
     .all();
