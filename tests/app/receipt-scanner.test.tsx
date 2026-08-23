@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { SCANNER_AUTO_ACCEPT_MS } from '@/lib/warranty/ocr/onnx/constants';
-import { ReceiptUploader } from '@/components/warranty/ReceiptUploader';
+import { ReceiptUploader, SCANNER_PREPARING_MESSAGE, SCANNER_UNAVAILABLE_MESSAGE } from '@/components/warranty/ReceiptUploader';
 import * as scanModule from '@/lib/scanner/scan';
 
 const CORRECTED = new File(['corrected-bytes'], 'receipt.jpg', { type: 'image/jpeg' });
@@ -159,6 +159,52 @@ describe('MUST-8.15: an upload is never blocked by the scanner', () => {
     await screen.findByText('receipt.jpg');
     expect(screen.queryByRole('alert')).toBeNull();
     expect((fetchMock.mock.calls[0][1].body as FormData).getAll('file')[0]).toBe(original);
+  });
+
+  it('surfaces the scanner-unavailable message before falling back to the plain upload', async () => {
+    // Same MUST-8.15 scenario as above, but with the stage upload held open so the
+    // transient notice can be observed before upload()'s own setNotice(READING_MESSAGE)
+    // overwrites it -- proving the message exists at all, not just that it flashes by.
+    const original = new File(['jpeg'], 'receipt.jpg', { type: 'image/jpeg' });
+    vi.spyOn(scanModule, 'scanReceiptFile').mockRejectedValue(new Error('wasm refused to compile'));
+    let resolveFetch!: (value: Response) => void;
+    const fetchMock = vi.fn().mockReturnValue(
+      new Promise<Response>((resolve) => {
+        resolveFetch = resolve;
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const { container } = render(<ReceiptUploader onStagedChange={vi.fn()} />);
+    pick(container, [original]);
+
+    expect(await screen.findByText(SCANNER_UNAVAILABLE_MESSAGE)).toBeTruthy();
+
+    resolveFetch(stageResponse());
+    await screen.findByText('receipt.jpg');
+    expect((fetchMock.mock.calls[0][1].body as FormData).getAll('file')[0]).toBe(original);
+  });
+});
+
+describe('F5 (v1.8.0): scanner progress text', () => {
+  it('shows a message about the first-use download while the scan is in flight', async () => {
+    // Not a spinner (v1.8.0 spec, Task 7): loadScanner() itself now guards against a double
+    // injection; this is the separate, purely cosmetic half -- telling the household member
+    // why a photo pick can pause for several seconds the first time.
+    let resolveScan!: (value: { file: File }) => void;
+    vi.spyOn(scanModule, 'scanReceiptFile').mockReturnValue(
+      new Promise((resolve) => {
+        resolveScan = resolve;
+      }),
+    );
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stageResponse()));
+    const original = new File(['jpeg'], 'receipt.jpg', { type: 'image/jpeg' });
+    const { container } = render(<ReceiptUploader onStagedChange={vi.fn()} />);
+    pick(container, [original]);
+
+    expect(await screen.findByText(SCANNER_PREPARING_MESSAGE)).toBeTruthy();
+
+    resolveScan({ file: original });
+    await screen.findByText('receipt.jpg');
   });
 });
 

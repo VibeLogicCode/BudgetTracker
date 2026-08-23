@@ -83,23 +83,60 @@ interface ScannerWindow extends Window {
 
 let cached: Promise<{ cv: CvLike; scanner: JscanifyLike }> | null = null;
 
+/**
+ * F5 fix (v1.8.0). One promise per src, module-level, so a SCANNER_LOAD_TIMEOUT_MS timeout
+ * followed by a retry attaches to the still-in-flight injection instead of appending a second
+ * <script> and standing up a second Emscripten runtime with its own ~9 MB wasm heap. A timeout
+ * only loses loadScanner's Promise.race; it cancels nothing, so the first load() call is still
+ * out there, still going to call onload eventually. A genuine onerror is different -- the
+ * script definitively will never arrive -- so that case DELETES the entry, and the next call
+ * gets a real, fresh `<script>` rather than attaching to a load that has already failed for
+ * good. That is the whole reason this is a Map keyed by src and not a single flag: a timeout
+ * and an onerror both end a loadScanner() call, but only one of them ends the underlying
+ * network request too.
+ */
+const injections = new Map<string, Promise<void>>();
+
 function injectScript(src: string): Promise<void> {
-  return new Promise((resolve, reject) => {
+  const existing = injections.get(src);
+  if (existing !== undefined) return existing;
+  const promise = new Promise<void>((resolve, reject) => {
     const element = document.createElement('script');
     element.src = src;
     element.async = true;
     element.onload = () => resolve();
-    element.onerror = () => reject(new Error(`could not load ${src}`));
+    element.onerror = () => {
+      injections.delete(src);
+      reject(new Error(`could not load ${src}`));
+    };
     document.head.appendChild(element);
   });
+  injections.set(src, promise);
+  return promise;
 }
 
 async function load(): Promise<{ cv: CvLike; scanner: JscanifyLike }> {
   const scope = window as ScannerWindow;
-  // Set BEFORE injecting the glue: it resolves its .wasm relative to this hook, and without
-  // it the fetch goes to the page's own path and 404s.
-  scope.Module = { locateFile: (file: string) => `/scanner/${file}` };
-  await injectScript('/scanner/opencv.js');
+  // Short-circuit the opencv.js injection entirely when window.cv already exists -- e.g. an
+  // earlier load() orphaned by a SCANNER_LOAD_TIMEOUT_MS timeout (see the `injections`
+  // docblock above) went on to finish setting it in the background. Re-running this block in
+  // that case would inject a second <script> and re-execute the opencv.js bundle: the exact
+  // double-Emscripten-runtime bug this fix removes. The `cv.then(...)` gate a few lines below
+  // still runs either way, so a `cv` picked up here is still confirmed runtime-ready before
+  // use, same as a freshly injected one.
+  if (scope.cv === undefined) {
+    // Only set the locateFile hook before the FIRST injection. Re-assigning it while an
+    // earlier instance is still initialising can break that instance's own .wasm resolution:
+    // the glue code reads this hook once, while parsing, not on every lookup -- so a second,
+    // equivalent-looking object handed to a still-compiling instance can point its fetch at
+    // the wrong moment rather than just being redundant.
+    if (!injections.has('/scanner/opencv.js')) {
+      scope.Module = { locateFile: (file: string) => `/scanner/${file}` };
+    }
+    // Set BEFORE injecting the glue: it resolves its .wasm relative to this hook, and without
+    // it the fetch goes to the page's own path and 404s.
+    await injectScript('/scanner/opencv.js');
+  }
   const cv = scope.cv;
   if (cv === undefined) throw new Error('opencv.js loaded without defining cv');
   // NOT `typeof cv.onRuntimeInitialized === 'undefined'`: Emscripten leaves that property
@@ -134,6 +171,12 @@ export function loadScanner(): Promise<{ cv: CvLike; scanner: JscanifyLike }> {
   ]).catch((error: unknown) => {
     // A failed load must not poison every later pick with a cached rejection: the next pick
     // gets a fresh attempt, and MUST-8.15 means a failure costs nothing but a plain upload.
+    // This clears UNCONDITIONALLY on both a timeout and a genuine onerror -- that is correct
+    // at this level regardless of which one happened, because this variable only controls
+    // whether the NEXT loadScanner() call starts a fresh race or returns this settled one. It
+    // is the separate `injections` map above (module-scope, per src) that treats the two
+    // differently: it keeps a timed-out injection's entry (there is still a live attempt to
+    // attach to) and deletes an errored one (there is not).
     cached = null;
     throw error;
   });

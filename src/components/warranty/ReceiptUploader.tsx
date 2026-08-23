@@ -33,6 +33,26 @@ export const POLL_GIVE_UP_MS = 180_000;
 export const POLL_GIVE_UP_MESSAGE = 'Still processing — save now and re-run OCR from the item page.';
 export const READING_MESSAGE =
   "Reading receipt… you can fill this in and save now; suggestions will appear when it's done.";
+/**
+ * F5 follow-up (v1.8.0 spec, Task 7 Step 5). Shown for the whole `scanning` window, not just
+ * the loadScanner() portion of it: this component only ever sees scanReceiptFile() as one
+ * opaque call (loadScanner() is an internal step of it, in src/lib/scanner/scan.ts), so there
+ * is no signal in here to distinguish "downloading the ~9 MB runtime" from "already warm,
+ * just finding the paper in this photo." On a cold first use loadScanner() dominates that
+ * window (a network fetch vs. milliseconds of contour-finding on an already-capped image), so
+ * the copy is accurate for the case it matters most for; on a warm pick the whole window is
+ * short enough that the exact wording on screen for that instant is not worth a second state.
+ */
+export const SCANNER_PREPARING_MESSAGE = 'Preparing the scanner — first use downloads about 9 MB.';
+/**
+ * MUST-8.15's fallback (an upload is never blocked by the scanner) already ran before this
+ * text existed -- scanReceiptFile() swallows every failure and hands back the original file
+ * with no visible error. This is purely the "surface it" half: say why, once, rather than
+ * leaving the pick silently skip straight to a plain upload. It fires from decide()'s own
+ * catch, which today is a belt-and-braces path (scanReceiptFile is documented never to
+ * reject) rather than one a real scan failure reaches -- see that catch's own comment.
+ */
+export const SCANNER_UNAVAILABLE_MESSAGE = 'Scanning is unavailable, uploading the original photo instead.';
 
 interface StageResponse {
   staged?: { stagingId: string; originalFilename: string; mime: string; sizeBytes: number; sha256: string }[];
@@ -208,7 +228,10 @@ export function ReceiptUploader({
       result = await scanReceiptFile(original);
     } catch {
       // scanReceiptFile is documented never to reject, and this is the belt for that brace:
-      // an upload is never blocked by the scanner.
+      // an upload is never blocked by the scanner. MUST-8.15 already guaranteed the fallback;
+      // this notice is the F5 follow-up (v1.8.0) that surfaces WHY one is happening instead
+      // of silently handing the pick straight to upload().
+      setNotice(SCANNER_UNAVAILABLE_MESSAGE);
       return original;
     } finally {
       setScanning(false);
@@ -288,7 +311,7 @@ export function ReceiptUploader({
 
       {scanning ? (
         <p className="text-sm text-muted" role="status">
-          Finding the receipt…
+          {SCANNER_PREPARING_MESSAGE}
         </p>
       ) : null}
       {pending !== null ? (
