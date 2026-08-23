@@ -65,7 +65,7 @@ export default async function TransactionsPage({
       // category was later archived can still render its real name on the per-row select
       // and keep it as the initial selection instead of silently falling back to
       // "Uncategorized". See TransactionsClient's activeCategories split.
-      categories={listCategories({ includeArchived: true }).map((c) => ({ id: c.id, name: c.name, parentId: c.parentId, isArchived: c.isArchived }))}
+      categories={listCategories({ includeArchived: true })}
       people={listUsers().map((u) => ({ id: u.id, name: u.name }))}
       today={today}
       range={range}

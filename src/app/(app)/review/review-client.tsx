@@ -9,6 +9,8 @@ import { Money } from '@/components/ui/Money';
 import { Notice } from '@/components/ui/Notice';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { selectClass } from '@/components/ui/form';
+import type { CategoryRecord } from '@/lib/categories';
+import { categoryOptions } from '@/lib/category-order';
 import type { TransactionRow } from '@/lib/transactions';
 import { acceptGuessAction, applyToAllMatchingAction, fixCategoryAction, markTransferAction, type ReviewState } from './actions';
 
@@ -24,19 +26,18 @@ export function ReviewClient({
 }: {
   total: number;
   rows: (TransactionRow & { matchingCount: number })[];
-  categories: { id: number; name: string; parentId: number | null }[];
+  categories: CategoryRecord[];
 }) {
   const [acceptState, accept] = useActionState(acceptGuessAction, initial);
   const [fixState, fix] = useActionState(fixCategoryAction, initial);
   const [allState, applyAll] = useActionState(applyToAllMatchingAction, initial);
   const [transferState, markTransfer] = useActionState(markTransferAction, initial);
 
-  const label = (id: number) => {
-    const category = categories.find((c) => c.id === id);
-    if (!category) return 'Uncategorized';
-    const parent = category.parentId ? categories.find((c) => c.id === category.parentId) : undefined;
-    return parent ? `${parent.name} › ${category.name}` : category.name;
-  };
+  // Task 6 (v1.8.0): computed once and reused by both selects below, so a child category
+  // always renders directly after its own parent instead of wherever raw creation order put
+  // it. categoryOptions() (src/lib/category-order.ts) is a type-only consumer of
+  // CategoryRecord -- it never reaches @/db/client, so it stays safe for this 'use client' file.
+  const options = categoryOptions(categories);
 
   const notice = acceptState.message ?? fixState.message ?? allState.message ?? transferState.message;
   const error = acceptState.error ?? fixState.error ?? allState.error ?? transferState.error;
@@ -101,8 +102,8 @@ export function ReviewClient({
                   className={pickerClass}
                 >
                   <option value="">Choose a category…</option>
-                  {categories.map((c) => (
-                    <option key={c.id} value={c.id}>{label(c.id)}</option>
+                  {options.map((opt) => (
+                    <option key={opt.id} value={opt.id}>{'\u00A0\u00A0'.repeat(opt.depth) + opt.label}</option>
                   ))}
                 </select>
                 <button type="submit" className="btn btn--secondary btn--sm">Set</button>
@@ -117,8 +118,8 @@ export function ReviewClient({
                     className={pickerClass}
                   >
                     <option value="">Choose a category…</option>
-                    {categories.map((c) => (
-                      <option key={c.id} value={c.id}>{label(c.id)}</option>
+                    {options.map((opt) => (
+                      <option key={opt.id} value={opt.id}>{'\u00A0\u00A0'.repeat(opt.depth) + opt.label}</option>
                     ))}
                   </select>
                   <button type="submit" className="btn btn--secondary btn--sm">

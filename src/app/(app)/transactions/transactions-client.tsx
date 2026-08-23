@@ -13,6 +13,7 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { AmountCell, TableWrap } from '@/components/ui/Table';
 import { Field, inputClass, labelClass, selectClass } from '@/components/ui/form';
 import { DateRangePicker } from '@/components/ui/DateRangePicker';
+import { categoryOptions, type CategoryLike } from '@/lib/category-order';
 import { type ResolvedRange } from '@/lib/date-range';
 import type { LoanLink } from '@/lib/loans';
 import { formatCents, parseAmountToCents, sumCents } from '@/lib/money';
@@ -63,7 +64,7 @@ export function TransactionsClient({
 }: {
   page: TransactionPage;
   accounts: Option[];
-  categories: Option[];
+  categories: CategoryLike[];
   people: Option[];
   today: string;
   range?: ResolvedRange | null;
@@ -101,13 +102,19 @@ export function TransactionsClient({
     return parent ? `${parent.name} › ${category.name}` : category.name;
   };
 
-  // Filters, bulk actions and new entries must only ever assign a live category.
-  // The per-row select below intentionally uses the full `categories` list instead
-  // (including archived) so a row already carrying an archived category still
-  // renders its real name and keeps it selected rather than silently falling back
-  // to "Uncategorized" the moment that category is archived (see finding: archived-
-  // category silent-clear hazard).
-  const activeCategories = categories.filter((c) => !c.isArchived);
+  // Filters, bulk actions and new entries must only ever assign a live category, and
+  // categoryOptions() excludes archived categories itself -- so all five category selects in
+  // this file now share one ordering helper (Task 6, v1.8.0) rather than each mapping the flat
+  // creation-order list on its own. That sharing IS the fix: the original report was that one
+  // screen showed `Kids, Fees, Fees > Bank Fees, Kids > Education`, and a per-call-site loop is
+  // exactly how a future new category reintroduces that on one select only.
+  //
+  // The per-row select below additionally appends the ARCHIVED categories, flat and disabled,
+  // after the grouped live ones. That coverage is deliberate: a row already carrying a category
+  // that was archived after the fact must still have a real <option> for it, or the browser's
+  // initial selection cannot match, the select falls back to "Uncategorized", and an untouched
+  // "save" click clears (and untrains) a legitimate historical categorization.
+  const groupedCategories = categoryOptions(categories);
 
   const toggle = (id: number) => setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   // v1.7.0 bulk-guard fix: Categorize and Mark transfer both silently skip a split
@@ -239,8 +246,12 @@ export function TransactionsClient({
                       className={`${selectClass} w-44`}
                     >
                       <option value="">Choose a category</option>
-                      {activeCategories.map((c) => (
-                        <option key={c.id} value={c.id}>{label(c.id)}</option>
+                      {/* Task 6: children grouped directly under their parent via categoryOptions,
+                          instead of the flat creation-order list every category select used to
+                          show. categoryOptions() already excludes archived categories, matching
+                          this select's own live-category-only rule. */}
+                      {categoryOptions(categories).map((opt) => (
+                        <option key={opt.id} value={opt.id}>{'\u00A0\u00A0'.repeat(opt.depth) + opt.label}</option>
                       ))}
                     </select>
                     <input
@@ -306,8 +317,8 @@ export function TransactionsClient({
               <select name="category" className={selectClass}>
                 <option value="">All</option>
                 <option value="uncategorized">Uncategorized</option>
-                {activeCategories.map((c) => (
-                  <option key={c.id} value={c.id}>{label(c.id)}</option>
+                {groupedCategories.map((opt) => (
+                  <option key={opt.id} value={opt.id}>{'\u00A0\u00A0'.repeat(opt.depth) + opt.label}</option>
                 ))}
               </select>
             </Field>
@@ -355,8 +366,8 @@ export function TransactionsClient({
           <form action={bulkCatAction} className="flex flex-wrap items-center gap-2">
             <input type="hidden" name="ids" value={selected.join(',')} />
             <select name="categoryId" aria-label="Category for the selected transactions" className={selectClass}>
-              {activeCategories.map((c) => (
-                <option key={c.id} value={c.id}>{label(c.id)}</option>
+              {groupedCategories.map((opt) => (
+                <option key={opt.id} value={opt.id}>{'\u00A0\u00A0'.repeat(opt.depth) + opt.label}</option>
               ))}
             </select>
             <label className="flex items-center gap-2 text-sm text-accent-soft-fg">
@@ -439,13 +450,6 @@ export function TransactionsClient({
                   ) : (
                     <form action={rowAction} className="flex items-center gap-1.5">
                       <input type="hidden" name="transactionId" value={row.id} />
-                      {/* Full (archived-inclusive) category list here, on purpose: if this row's
-                          category was archived after the fact, it must still appear as a real
-                          <option> so the browser's initial selection matches it. Otherwise the
-                          select silently falls back to "Uncategorized" and an untouched "save"
-                          click would clear (and untrain) a legitimate historical categorization.
-                          Archived options are disabled so they can't be freshly assigned to a
-                          different row. */}
                       <select
                         name="categoryId"
                         defaultValue={row.categoryId ?? ''}
@@ -453,11 +457,24 @@ export function TransactionsClient({
                         className={rowControl}
                       >
                         <option value="">Uncategorized</option>
-                        {categories.map((c) => (
-                          <option key={c.id} value={c.id} disabled={c.isArchived}>
-                            {label(c.id)}{c.isArchived ? ' (archived)' : ''}
-                          </option>
+                        {/* Task 6: live categories grouped under their parent via categoryOptions
+                            (it excludes archived ones itself). Archived categories are appended
+                            below, flat and disabled, rather than run through the same grouping --
+                            full (archived-inclusive) COVERAGE stays on purpose: if this row's own
+                            category was archived after the fact, it must still appear as a real
+                            <option> so the browser's initial selection matches it. Otherwise the
+                            select silently falls back to "Uncategorized" and an untouched "save"
+                            click would clear (and untrain) a legitimate historical categorization. */}
+                        {categoryOptions(categories).map((opt) => (
+                          <option key={opt.id} value={opt.id}>{'\u00A0\u00A0'.repeat(opt.depth) + opt.label}</option>
                         ))}
+                        {categories
+                          .filter((c) => c.isArchived)
+                          .map((c) => (
+                            <option key={c.id} value={c.id} disabled>
+                              {label(c.id)} (archived)
+                            </option>
+                          ))}
                       </select>
                       <button type="submit" className="btn btn--ghost btn--sm px-2 text-xs">Save</button>
                     </form>
@@ -591,8 +608,8 @@ export function TransactionsClient({
               <Field label="Category">
                 <select name="categoryId" className={selectClass}>
                   <option value="">Leave to the categorizer</option>
-                  {activeCategories.map((c) => (
-                    <option key={c.id} value={c.id}>{label(c.id)}</option>
+                  {groupedCategories.map((opt) => (
+                    <option key={opt.id} value={opt.id}>{'\u00A0\u00A0'.repeat(opt.depth) + opt.label}</option>
                   ))}
                 </select>
               </Field>

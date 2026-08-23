@@ -13,7 +13,7 @@ export default async function ReviewPage() {
     <ReviewClient
       total={reviewQueueCount()}
       rows={rows.map((row) => ({ ...row, matchingCount: countMatchingMerchant(row.normalizedMerchant) }))}
-      categories={listCategories().map((c) => ({ id: c.id, name: c.name, parentId: c.parentId }))}
+      categories={listCategories()}
     />
   );
 }

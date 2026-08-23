@@ -187,6 +187,7 @@ export default async function DashboardPage({
         budgetedRemainingCents={spendPlan.budgetedRemainingCents}
         billsDueCents={spendPlan.billsDueCents}
         hasBudgetedLimits={householdTotals.budgetedLimitCents > 0}
+        monthEndDate={monthEnd(month)}
       />
 
       <Card>

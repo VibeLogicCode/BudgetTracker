@@ -50,7 +50,7 @@ describe('TransactionsClient — archived-category silent-clear hazard', () => {
       <TransactionsClient
         page={pageWithRow()}
         accounts={[{ id: 1, name: 'Joint Chequing' }]}
-        categories={[{ id: 42, name: 'Old Category', parentId: null, isArchived: true }]}
+        categories={[{ id: 42, name: 'Old Category', parentId: null, isArchived: true, sortOrder: 0 }]}
         people={[]}
         today="2026-03-02"
       />,
@@ -72,7 +72,7 @@ describe('TransactionsClient — archived-category silent-clear hazard', () => {
       <TransactionsClient
         page={pageWithRow()}
         accounts={[{ id: 1, name: 'Joint Chequing' }]}
-        categories={[{ id: 42, name: 'Old Category', parentId: null, isArchived: true }]}
+        categories={[{ id: 42, name: 'Old Category', parentId: null, isArchived: true, sortOrder: 0 }]}
         people={[]}
         today="2026-03-02"
       />,
@@ -92,8 +92,8 @@ describe('TransactionsClient — archived-category silent-clear hazard', () => {
         page={pageWithRow()}
         accounts={[{ id: 1, name: 'Joint Chequing' }]}
         categories={[
-          { id: 42, name: 'Old Category', parentId: null, isArchived: true },
-          { id: 7, name: 'Coffee', parentId: null, isArchived: false },
+          { id: 42, name: 'Old Category', parentId: null, isArchived: true, sortOrder: 0 },
+          { id: 7, name: 'Coffee', parentId: null, isArchived: false, sortOrder: 1 },
         ]}
         people={[]}
         today="2026-03-02"
@@ -222,8 +222,8 @@ describe('MUST-14.8 / MUST-14.9: the row control', () => {
 
 describe('Split editor (v1.7.0 Task 4)', () => {
   const categories = [
-    { id: 42, name: 'Old Category', parentId: null, isArchived: false },
-    { id: 7, name: 'Coffee', parentId: null, isArchived: false },
+    { id: 42, name: 'Old Category', parentId: null, isArchived: false, sortOrder: 0 },
+    { id: 7, name: 'Coffee', parentId: null, isArchived: false, sortOrder: 1 },
   ];
 
   const splitRows: SplitRow[] = [

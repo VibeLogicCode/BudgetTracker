@@ -42,10 +42,58 @@ task with its own review, as recommended.
 see, five of them in the interaction between splits and code that already existed. If splits are
 extended, review the interaction surface rather than the new code.
 
-## 2. Category selects do not group children with their parents
+## 2. Category selects do not group children with their parents — SHIPPED in v1.8.0
 
-Still not started. Unchanged in substance from when it was reported, except that the fix now has
-a fourth call site.
+Fixed 2026-08-23. `src/lib/category-order.ts` exports `categoryOptions()`, which flattens the
+tree parent-then-children and is now the single source of select ordering. Kept below because two
+things about the shipped fix differ from this write-up, and one new defect was found next door.
+
+**The call-site count in this file was wrong.** It said four (review's two selects, the
+transactions client, the managers client). `transactions-client.tsx` alone turned out to have
+FIVE category-`<option>` blocks — filter bar, bulk-categorize toolbar, manual-entry form, split
+editor, and the per-row select. All five are converted, plus review's two. Counting them by
+reading the file rather than trusting this note is what caught it; the first pass converted only
+the two that had been named, which briefly left one screen with two grouped selects and three
+flat ones — worse than uniformly flat, since inconsistency inside one screen reads as a bug
+rather than as a limitation.
+
+**The helper lives in its own module, not in `src/lib/categories.ts` as this file suggested.**
+`categories.ts` imports `@/db/client`, and every select call site is a `'use client'` file, so
+exporting the helper from there would have pulled better-sqlite3 into the browser bundle and
+broken `next build` while `tsc` and the whole suite stayed green — the exact v1.7.0 release
+blocker. `category-order.ts` imports only the TYPE, which erases at compile time, and
+`tests/ops/client-bundle.test.ts` enforces it.
+
+It takes `CategoryLike = Pick<CategoryRecord, 'id'|'name'|'parentId'|'sortOrder'|'isArchived'>`
+rather than the full record, so existing test fixtures that only ever set four of the nine fields
+did not all have to grow five more.
+
+**The archived-category interaction.** `categoryOptions()` excludes archived categories, which
+collides with the per-row select's deliberate rule that an archived category must still render
+(disabled, suffixed) so a row already carrying one keeps it selected instead of silently falling
+back to "Uncategorized" and having an untouched Save clear a legitimate historical
+categorization. Resolved by grouping the live options and appending the archived ones flat and
+disabled after them.
+
+**Indentation is ` `, written as an escape sequence, never as a raw byte.** `<option>`
+collapses ordinary spaces, so the indent has to be a non-breaking space — but a raw U+00A0 in
+source is invisible and the next person to normalize whitespace silently removes the indentation.
+Both the implementer and the reviewer emitted raw bytes here by accident before catching it, so
+if a select ever loses its indent, check the bytes first.
+
+## 2a. Settings → Categories admin table has the same ordering defect
+
+Found 2026-08-23 while converting the selects, not fixed, small.
+
+`src/app/(app)/settings/managers/managers-client.tsx:168` renders the categories admin table from
+raw `(sortOrder, id)` order and fakes nesting with a `paddingLeft` on each row. So it indents
+rows that are not actually adjacent to their parent — the same underlying defect as the selects
+had, in a table rather than a `<select>`.
+
+It was listed as a call site in the original report, but it is not a select and `categoryOptions`
+returns option data, so it was left alone rather than half-converted. The fix is the same helper:
+drive the row order from `categoryOptions()` and take the indent from `opt.depth` instead of
+computing it from `parentId`. Maybe 15 minutes.
 
 **Reported** with a screenshot of the review screen's category select: the list ran
 `... Kids, Fees, Fees > Bank Fees, Fees > Interest, Kids > Education`, so `Kids` and

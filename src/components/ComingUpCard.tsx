@@ -13,12 +13,17 @@ import { Card, CardBody, CardFooter, CardHeader } from '@/components/ui/Card';
  * scoped to the END OF THIS MONTH -- the number that actually answers "is what's left in my
  * budget enough to cover what the rest of this month still owes." They usually land close
  * together, but they are not required to match.
+ *
+ * Task 1 (spec 2026-08-23, v1.8.0, ruling R8): the two windows are staying different, so the
+ * fix is naming them rather than reconciling them. The footer now says "before <month end>"
+ * so it reads as its own, narrower window instead of contradicting the header's 30-day total.
  */
 export function ComingUpCard({
   bills,
   budgetedRemainingCents,
   billsDueCents,
   hasBudgetedLimits,
+  monthEndDate,
 }: {
   /** Already filtered by the caller to a fixed lookahead window (the next 30 days). */
   bills: UpcomingBill[];
@@ -26,6 +31,9 @@ export function ComingUpCard({
   /** Bills due on or before the end of the current month (safeToSpend's own window). */
   billsDueCents: number;
   hasBudgetedLimits: boolean;
+  /** ISO YYYY-MM-DD, the same month end safeToSpend scoped billsDueCents to. Display only --
+   *  this component formats it, it does not derive a month end client-side. */
+  monthEndDate: string;
 }) {
   if (bills.length === 0 && !hasBudgetedLimits) return null;
 
@@ -33,6 +41,14 @@ export function ComingUpCard({
   const budgetPhrase = hasBudgetedLimits
     ? `Budgets have ${formatCents(budgetedRemainingCents)} left this month`
     : 'No category limits set yet';
+  const cutoff = new Date(`${monthEndDate}T00:00:00`).toLocaleDateString('en-CA', {
+    month: 'short',
+    day: 'numeric',
+  });
+  const billsPhrase =
+    billsDueCents === 0
+      ? `nothing more due before ${cutoff}`
+      : `${formatCents(billsDueCents)} of that falls before ${cutoff}`;
 
   return (
     <Card>
@@ -70,7 +86,7 @@ export function ComingUpCard({
         </ul>
       )}
       <CardFooter>
-        {budgetPhrase}, and {formatCents(billsDueCents)} of bills are still to come.
+        {budgetPhrase}, and {billsPhrase}.
       </CardFooter>
     </Card>
   );
