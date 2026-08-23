@@ -42,6 +42,15 @@ export const categories = sqliteTable(
     isIncome: integer('is_income', { mode: 'boolean' }).notNull().default(false),
     isArchived: integer('is_archived', { mode: 'boolean' }).notNull().default(false),
     sortOrder: integer('sort_order').notNull().default(0),
+    /**
+     * v1.7.0, added by drizzle/0009_finish_line.sql. Declared last because ALTER TABLE ADD
+     * COLUMN appends physically -- same convention as users.mustChangePassword,
+     * importProfiles.isActive and warrantyItems.typeId, so the mirror stays readable against
+     * `pragma table_info(categories)`. Marks a category (parent or child) as relevant for
+     * the tax-year report (Task 15); a flagged PARENT rolls its children's spend into the
+     * report even when the children themselves are unflagged.
+     */
+    taxRelevant: integer('tax_relevant', { mode: 'boolean' }).notNull().default(false),
   },
   (t) => [index('categories_parent_idx').on(t.parentId)],
 );
@@ -201,6 +210,41 @@ export const transactionImports = sqliteTable(
   ],
 );
 
+/**
+ * Transaction splits (spec 2026-08-22, v1.7.0, Task 1). Mirrors
+ * drizzle/0009_finish_line.sql. Lets one transaction's amount be divided across more than
+ * one category; a split's parts always sum exactly to the parent's amountCents, and
+ * ownership/attribution stays whole-transaction (a split carries only category, amount and
+ * note). transactions.amountCents is immutable after insert (see the comment on that
+ * column), so a split ADDS rows here rather than ever rewriting the parent.
+ *
+ * NOT represented here; SQL only:
+ *   - CHECK (amount_cents <> 0)
+ *
+ * The sum-of-parts == parent amountCents invariant is enforced in the app layer
+ * (src/lib/splits.ts, the single writer), not by a CHECK: SQLite cannot express a
+ * cross-row sum constraint.
+ */
+export const transactionSplits = sqliteTable(
+  'transaction_splits',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    txnId: integer('txn_id')
+      .notNull()
+      .references(() => transactions.id, { onDelete: 'cascade' }),
+    categoryId: integer('category_id')
+      .notNull()
+      .references(() => categories.id),
+    amountCents: integer('amount_cents').notNull(),
+    note: text('note'),
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => [
+    index('transaction_splits_txn_idx').on(t.txnId),
+    index('transaction_splits_category_idx').on(t.categoryId),
+  ],
+);
+
 export const merchantRules = sqliteTable(
   'merchant_rules',
   {
@@ -253,6 +297,38 @@ export const budgets = sqliteTable(
   (t) => [index('budgets_lookup_idx').on(t.categoryId, t.effectiveMonth)],
   // budgets_scope_user_category_month_uq is an expression index; see drizzle/0000_init.sql
 );
+
+/**
+ * Rollover preference per (scope, user, category) (spec 2026-08-22, v1.7.0, Task 1).
+ * Mirrors drizzle/0009_finish_line.sql. A row's EXISTENCE means rollover is ON for that
+ * category; DELETING the row turns it off again -- the same absence-is-off pattern the
+ * settings table already uses for feature toggles elsewhere in this app. There is
+ * deliberately no `enabled` column here: existence already carries the on/off meaning, so a
+ * second flag could only ever drift out of sync with it, for no cheaper a read than checking
+ * whether the row exists.
+ *
+ * NOT represented here; SQL only:
+ *   - CHECK (scope IN ('household','personal'))
+ *   - CHECK ((scope = 'personal') = (user_id IS NOT NULL)) -- a household row must carry a
+ *     NULL user_id and a personal row must carry a non-NULL one; the two can never mismatch.
+ *   - the coalesce(user_id, -1) EXPRESSION inside budget_rollover_uq, the same
+ *     expression-unique trick loan_matcher_rules_uq (0007) uses on account_id, which is what
+ *     makes "the same household rollover rule twice" impossible: a plain uniqueIndex() on
+ *     (scope, userId, categoryId) would let two NULL-user_id rows through, so it is
+ *     deliberately NOT declared below -- a weaker index with the same name is worse than
+ *     none, because a future drizzle-kit push could use it to replace the real one.
+ */
+export const budgetRollover = sqliteTable('budget_rollover', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  scope: text('scope', { enum: ['household', 'personal'] }).notNull(),
+  userId: integer('user_id').references(() => users.id),
+  categoryId: integer('category_id')
+    .notNull()
+    .references(() => categories.id),
+  startMonth: text('start_month').notNull(),
+  createdAt: text('created_at').notNull(),
+});
+// budget_rollover_uq is an expression index; see drizzle/0009_finish_line.sql
 
 export const goals = sqliteTable('goals', {
   id: integer('id').primaryKey({ autoIncrement: true }),
@@ -343,6 +419,31 @@ export const simplefinAccountLinks = sqliteTable(
     createdAt: text('created_at').notNull(),
   },
   (t) => [index('simplefin_links_account_idx').on(t.accountId)],
+);
+
+/**
+ * Balance snapshots for net worth history (spec 2026-08-22, v1.7.0, Task 1). Mirrors
+ * drizzle/0009_finish_line.sql. One row per account per day; a later write for the same day
+ * REPLACES the balance rather than adding a second row -- the upsert-on-(accountId, date)
+ * behaviour lives in the app layer (src/lib/networth.ts), not in SQL, so this table carries
+ * no ON CONFLICT clause of its own.
+ *
+ * NOT represented here; SQL only:
+ *   - CHECK (source IN ('simplefin','manual'))
+ */
+export const accountBalanceSnapshots = sqliteTable(
+  'account_balance_snapshots',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    accountId: integer('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    date: text('date').notNull(),
+    balanceCents: integer('balance_cents').notNull(),
+    source: text('source', { enum: ['simplefin', 'manual'] }).notNull(),
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => [uniqueIndex('account_balance_snapshots_uq').on(t.accountId, t.date)],
 );
 
 export const totpRecoveryCodes = sqliteTable(

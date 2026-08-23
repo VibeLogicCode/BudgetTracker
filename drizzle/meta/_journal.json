@@ -64,6 +64,13 @@
       "when": 1755907200000,
       "tag": "0008_import_attribution",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1755993600000,
+      "tag": "0009_finish_line",
+      "breakpoints": true
     }
   ]
 }
