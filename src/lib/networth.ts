@@ -3,7 +3,7 @@ import { getDb } from '@/db/client';
 import { accountBalanceSnapshots } from '@/db/schema';
 import { getAccount, listAccounts } from '@/lib/accounts';
 import { nowIso } from '@/lib/clock';
-import { addMonths, isIsoDate, monthEnd, monthOf, monthRange, todayIso } from '@/lib/dates';
+import { addMonths, daysBetweenIso, isIsoDate, monthEnd, monthOf, monthRange, todayIso } from '@/lib/dates';
 import { debtOverTime } from '@/lib/loans';
 
 /**
@@ -110,8 +110,32 @@ export interface NetWorthPoint {
   assetsCents: number;
   debtsCents: number;
   netCents: number;
+  /** Active accounts with NO snapshot at or before this month's end -- the balance is entirely
+   *  absent, not merely old. Mutually exclusive with accountsStale: an account with zero
+   *  snapshots has nothing to evaluate for staleness, so it is counted here or there, never
+   *  both. */
   accountsMissing: number;
+  /**
+   * Adversarial-review fix (2026-08-23): active accounts whose carried-forward snapshot DOES
+   * exist (accountsMissing did not flag it) but is more than STALE_SNAPSHOT_DAYS older than this
+   * month's end date. The reviewer's reproduction: a single 2025-10 snapshot read as fully
+   * current -- accountsMissing: 0 -- every month through 2026-08, because accountsMissing only
+   * ever checked "does a snapshot exist", never "is it still trustworthy". The balance still
+   * carries forward into assetsCents/debtsCents at full value here; this field is disclosure
+   * only, not exclusion -- see netWorthHint below and reports-client.tsx's accountsNote for
+   * where that disclosure surfaces.
+   */
+  accountsStale: number;
 }
+
+/**
+ * Adversarial-review fix (2026-08-23): the threshold for "too old to trust", not merely "not
+ * from this exact month". An account that syncs automatically or gets a manual update once a
+ * month should always have a snapshot inside 31 days; 45 leaves slack for exactly one missed
+ * cycle (a skipped sync, a forgotten manual entry) without concealing a gap that has gone on
+ * longer than that.
+ */
+export const STALE_SNAPSHOT_DAYS = 45;
 
 /**
  * Task 7. Net worth over time: ruling 6's "signed snapshot balances (assets +, credit cards -
@@ -125,15 +149,20 @@ export interface NetWorthPoint {
  *
  * Algorithm, per month END date, for every ACTIVE account (listAccounts()'s default -- an
  * inactive account is excluded from this computation entirely: it never contributes a balance,
- * never counts toward accountsMissing, and never anchors the series' start date either): the
- * latest snapshot dated on or before that date carries forward. No such snapshot -> the account
- * contributes 0 and counts in that month's accountsMissing. A carried balance > 0 is an asset;
- * < 0 is debt (its absolute value); debtOverTime's owed figure for the month is added on top of
- * the debts side (a month debtOverTime could not reconstruct, MUST-15.7's null case, folds in
- * as 0 rather than forcing debtsCents to carry a null NetWorthPoint's contract does not allow).
- * Months before the first snapshot of any (active) account are omitted entirely -- never
- * fabricate net worth history predating every account's first recorded balance. No snapshot
- * anywhere (or no active account at all) returns [].
+ * never counts toward accountsMissing or accountsStale, and never anchors the series' start
+ * date either): the latest snapshot dated on or before that date carries forward. No such
+ * snapshot -> the account contributes 0 and counts in that month's accountsMissing. A snapshot
+ * that DOES exist but is more than STALE_SNAPSHOT_DAYS older than this month's end date still
+ * carries forward at full value -- this function never discards a balance for being old -- but
+ * counts in accountsStale instead of silently passing as current. The stale check only runs on
+ * the branch where a snapshot was found, so an account is counted in exactly one of
+ * accountsMissing/accountsStale, never both. A carried balance > 0 is an asset; < 0 is debt (its
+ * absolute value); debtOverTime's owed figure for the month is added on top of the debts side (a
+ * month debtOverTime could not reconstruct, MUST-15.7's null case, folds in as 0 rather than
+ * forcing debtsCents to carry a null NetWorthPoint's contract does not allow). Months before the
+ * first snapshot of any (active) account are omitted entirely -- never fabricate net worth
+ * history predating every account's first recorded balance. No snapshot anywhere (or no active
+ * account at all) returns [].
  *
  * ONE query fetches every relevant snapshot, oldest first per account; a forward-only cursor
  * per account then walks the ascending month axis (monthRange/addMonths, the same windowing
@@ -183,6 +212,7 @@ export function netWorthOverTime(months: number, opts: { endMonth?: string; toda
     let assetsCents = 0;
     let debtsCents = 0;
     let accountsMissing = 0;
+    let accountsStale = 0;
 
     for (const accountId of activeAccountIds) {
       const bucket = byAccount.get(accountId) ?? [];
@@ -194,14 +224,43 @@ export function netWorthOverTime(months: number, opts: { endMonth?: string; toda
         accountsMissing += 1;
         continue;
       }
-      const balanceCents = bucket[idx - 1].balanceCents;
-      if (balanceCents > 0) assetsCents += balanceCents;
-      else if (balanceCents < 0) debtsCents += -balanceCents;
+      const snapshot = bucket[idx - 1];
+      if (daysBetweenIso(snapshot.date, end) > STALE_SNAPSHOT_DAYS) accountsStale += 1;
+      if (snapshot.balanceCents > 0) assetsCents += snapshot.balanceCents;
+      else if (snapshot.balanceCents < 0) debtsCents += -snapshot.balanceCents;
     }
 
     debtsCents += debtByMonth.get(month) ?? 0;
-    points.push({ month, assetsCents, debtsCents, netCents: assetsCents - debtsCents, accountsMissing });
+    points.push({ month, assetsCents, debtsCents, netCents: assetsCents - debtsCents, accountsMissing, accountsStale });
   }
 
   return points;
+}
+
+/**
+ * Adversarial-review fix (2026-08-23), Defect 2: the dashboard's Net worth StatTile carried the
+ * fixed hint "Assets minus debts and loans, across every tracked account" no matter what
+ * accountsMissing/accountsStale said, so it kept claiming completeness on days the Reports "Net
+ * worth" card (reports-client.tsx's accountsNote) was disclosing a gap or a stale balance for
+ * the exact same figure. This is the dashboard tile's half of that fix: it is the ONLY input to
+ * the tile's hint prop, so the two surfaces can no longer disagree about whether the figure is
+ * current.
+ *
+ * Deliberately short (a stat tile hint is one line, not the Reports card's fuller note with its
+ * "Update ... in Settings and Accounts" call to action) and deliberately silent on which
+ * accounts, exactly -- that detail lives on Reports. The only obligations here: never say
+ * "every tracked account" while either count is non-zero, and read correctly at N=1.
+ */
+export function netWorthHint(point: Pick<NetWorthPoint, 'accountsMissing' | 'accountsStale'>): string {
+  const { accountsMissing, accountsStale } = point;
+  if (accountsMissing === 0 && accountsStale === 0) {
+    return 'Assets minus debts and loans, across every tracked account';
+  }
+  if (accountsMissing > 0 && accountsStale > 0) {
+    return 'Some accounts have no balance or an outdated one';
+  }
+  if (accountsMissing > 0) {
+    return accountsMissing === 1 ? '1 account has no balance yet' : `${accountsMissing} accounts have no balance yet`;
+  }
+  return accountsStale === 1 ? '1 account has an outdated balance' : `${accountsStale} accounts have outdated balances`;
 }

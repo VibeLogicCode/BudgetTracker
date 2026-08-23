@@ -4,6 +4,7 @@ import { render, cleanup, within } from '@testing-library/react';
 import { ReportsClient, type TaxYearDisplayRow } from '@/app/(app)/reports/reports-client';
 import { UNATTRIBUTED_LABEL } from '@/lib/reports';
 import type { ResolvedRange } from '@/lib/date-range';
+import type { NetWorthPoint } from '@/lib/networth';
 
 /**
  * Task 15b (spec 2026-08-22, v1.7.0): the Reports page's "Tax year" card. No reports page/client
@@ -15,7 +16,20 @@ import type { ResolvedRange } from '@/lib/date-range';
  * <option>Household/unattributed</option> carries the exact same text as UNATTRIBUTED_LABEL,
  * and is present on every render regardless of the fixtures below, so an unscoped getByText
  * would be ambiguous.
+ *
+ * Adversarial-review fix (2026-08-23): the "ReportsClient — Net worth card" describe block below
+ * renders NetWorthChart (recharts) with non-empty data for the first time in this file -- every
+ * fixture above passes netWorth: []. recharts' ResponsiveContainer requires ResizeObserver to
+ * mount, which jsdom does not provide; the stub right below is a test-environment shim, not a
+ * production concern (real browsers all have ResizeObserver).
  */
+
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+(globalThis as unknown as { ResizeObserver: typeof ResizeObserverStub }).ResizeObserver = ResizeObserverStub;
 
 afterEach(() => cleanup());
 
@@ -215,5 +229,112 @@ describe('ReportsClient — Tax year card', () => {
       expect(totalRow?.textContent).toContain('$80.00');
       expect(card.textContent).not.toContain('$130.00');
     });
+  });
+});
+
+/**
+ * Adversarial-review fix (2026-08-23), Defect 2: this card's honesty note used to cover only
+ * accountsMissing (an account with NO balance on file at all). src/lib/networth.ts now also
+ * reports accountsStale (a balance that exists but is more than STALE_SNAPSHOT_DAYS old --
+ * see that file), and this card must disclose that too, in the same voice, without the two
+ * counts turning the note into a form letter when both fire at once.
+ */
+describe('ReportsClient — Net worth card', () => {
+  const STALE_SNAPSHOT_DAYS = 45; // src/lib/networth.ts's exported constant, mirrored here to
+  // keep this test file's import list unchanged; a drift in the real constant would show up as
+  // a mismatched note string below, which is exactly the regression this guards against.
+
+  function netWorthCard(container: HTMLElement): HTMLElement {
+    const heading = Array.from(container.querySelectorAll('h2')).find((h) => h.textContent === 'Net worth');
+    if (!heading) throw new Error('Net worth card heading not found');
+    const card = heading.closest('section');
+    if (!card) throw new Error('Net worth card section not found');
+    return card as HTMLElement;
+  }
+
+  function netWorthPoint(over: Partial<NetWorthPoint> = {}): NetWorthPoint {
+    return {
+      month: '2026-06',
+      assetsCents: 100_000,
+      debtsCents: 0,
+      netCents: 100_000,
+      accountsMissing: 0,
+      accountsStale: 0,
+      ...over,
+    };
+  }
+
+  it('shows no honesty note when the latest point has nothing missing or stale', () => {
+    const { container } = render(<ReportsClient {...baseProps()} netWorth={[netWorthPoint()]} />);
+    const card = within(netWorthCard(container));
+    expect(card.queryByText(/no balance/)).toBeNull();
+    expect(card.queryByText(/reported a balance/)).toBeNull();
+  });
+
+  it('discloses one missing account, singular', () => {
+    const { container } = render(<ReportsClient {...baseProps()} netWorth={[netWorthPoint({ accountsMissing: 1 })]} />);
+    const card = within(netWorthCard(container));
+    expect(card.getByText('1 account has no balance yet. Update it in Settings and Accounts.')).toBeTruthy();
+  });
+
+  it('discloses several missing accounts, plural', () => {
+    const { container } = render(<ReportsClient {...baseProps()} netWorth={[netWorthPoint({ accountsMissing: 3 })]} />);
+    const card = within(netWorthCard(container));
+    expect(card.getByText('3 accounts have no balance yet. Update them in Settings and Accounts.')).toBeTruthy();
+  });
+
+  it('discloses one stale account, singular', () => {
+    const { container } = render(<ReportsClient {...baseProps()} netWorth={[netWorthPoint({ accountsStale: 1 })]} />);
+    const card = within(netWorthCard(container));
+    expect(
+      card.getByText(`1 account has not reported a balance in over ${STALE_SNAPSHOT_DAYS} days. Update it in Settings and Accounts.`),
+    ).toBeTruthy();
+  });
+
+  it('discloses several stale accounts, plural', () => {
+    const { container } = render(<ReportsClient {...baseProps()} netWorth={[netWorthPoint({ accountsStale: 2 })]} />);
+    const card = within(netWorthCard(container));
+    expect(
+      card.getByText(`2 accounts have not reported a balance in over ${STALE_SNAPSHOT_DAYS} days. Update them in Settings and Accounts.`),
+    ).toBeTruthy();
+  });
+
+  it('discloses missing AND stale together in one note, each correctly pluralized, when both are non-zero', () => {
+    const { container } = render(
+      <ReportsClient {...baseProps()} netWorth={[netWorthPoint({ accountsMissing: 2, accountsStale: 3 })]} />,
+    );
+    const card = within(netWorthCard(container));
+    expect(
+      card.getByText(
+        `2 accounts have no balance yet, and 3 accounts have not reported a balance in over ${STALE_SNAPSHOT_DAYS} days. Update them in Settings and Accounts.`,
+      ),
+    ).toBeTruthy();
+  });
+
+  it('reads correctly when exactly one account is missing and exactly one (a different one) is stale', () => {
+    const { container } = render(
+      <ReportsClient {...baseProps()} netWorth={[netWorthPoint({ accountsMissing: 1, accountsStale: 1 })]} />,
+    );
+    const card = within(netWorthCard(container));
+    expect(
+      card.getByText(
+        `1 account has no balance yet, and 1 account has not reported a balance in over ${STALE_SNAPSHOT_DAYS} days. Update them in Settings and Accounts.`,
+      ),
+    ).toBeTruthy();
+  });
+
+  it("uses only the LATEST point's counts -- an earlier gap that has since been filled does not linger", () => {
+    const { container } = render(
+      <ReportsClient
+        {...baseProps()}
+        netWorth={[
+          netWorthPoint({ month: '2026-05', accountsMissing: 5, accountsStale: 5 }),
+          netWorthPoint({ month: '2026-06', accountsMissing: 0, accountsStale: 0 }),
+        ]}
+      />,
+    );
+    const card = within(netWorthCard(container));
+    expect(card.queryByText(/no balance/)).toBeNull();
+    expect(card.queryByText(/reported a balance/)).toBeNull();
   });
 });

@@ -16,7 +16,7 @@ import { rangeParams, type ResolvedRange } from '@/lib/date-range';
 import { monthLabel, monthOf } from '@/lib/dates';
 import type { DebtPoint } from '@/lib/loans';
 import { formatCents } from '@/lib/money';
-import type { NetWorthPoint } from '@/lib/networth';
+import { STALE_SNAPSHOT_DAYS, type NetWorthPoint } from '@/lib/networth';
 import type { BaselineRow } from '@/lib/predict/suggest';
 import {
   savingsRate,
@@ -97,6 +97,11 @@ export function ReportsClient({
   const taxOrdered = orderTaxRows(taxRows);
   const taxGrandTotalCents = taxGrandTotal(taxOrdered);
   const taxHasOverlap = taxOrdered.some((entry) => entry.nested);
+
+  // The Net worth card's honesty note reads the latest point's two counts once, here, so the
+  // condition deciding whether to render the note and the values passed into its text can never
+  // drift apart (same reasoning as taxOrdered/taxGrandTotalCents above).
+  const netWorthLatestPoint = netWorth.length > 0 ? netWorth[netWorth.length - 1] : null;
 
   return (
     <div className="flex flex-col gap-6">
@@ -350,11 +355,14 @@ export function ReportsClient({
           <CardBody className="flex flex-col gap-3">
             <NetWorthChart data={netWorth} />
             {/* Honesty over a tidy chart: the line only ever reflects the accounts that have a
-                recorded balance, and this says so whenever one does not, using the most recent
-                month's count -- an older gap that has since been filled is no longer true today,
-                so it does not linger here once every account has caught up. */}
-            {netWorth[netWorth.length - 1].accountsMissing > 0 ? (
-              <p className="text-sm text-muted">{missingAccountsNote(netWorth[netWorth.length - 1].accountsMissing)}</p>
+                recorded balance AND treats it as still current, and this says so whenever
+                either is untrue, using the most recent month's counts -- an older gap that has
+                since been filled, or a stale balance that has since been refreshed, is no
+                longer true today, so it does not linger here once every account has caught up. */}
+            {netWorthLatestPoint && (netWorthLatestPoint.accountsMissing > 0 || netWorthLatestPoint.accountsStale > 0) ? (
+              <p className="text-sm text-muted">
+                {accountsNote(netWorthLatestPoint.accountsMissing, netWorthLatestPoint.accountsStale)}
+              </p>
             ) : null}
           </CardBody>
         )}
@@ -493,12 +501,29 @@ function yoyChange(thisMonthCents: number, lastYearCents: number): React.ReactNo
   );
 }
 
-/** The Net worth card's honesty note (see the comment above its call site). Singular/plural
- *  agreement matters for one account -- "1 accounts have" reads as broken, not just informal. */
-function missingAccountsNote(count: number): string {
-  return count === 1
-    ? '1 account has no balance yet. Update it in Settings and Accounts.'
-    : `${count} accounts have no balance yet. Update them in Settings and Accounts.`;
+/**
+ * The Net worth card's honesty note (see the comment above its call site). Adversarial-review
+ * fix (2026-08-23): extended from missing-only to also cover accountsStale (a snapshot that
+ * exists but is more than STALE_SNAPSHOT_DAYS old -- src/lib/networth.ts). The two counts are
+ * independent -- either, both, or neither can be non-zero -- so every branch below has its own
+ * test in tests/app/reports-client.test.tsx. Singular/plural agreement matters at exactly 1 --
+ * "1 accounts have" reads as broken, not just informal -- for BOTH counts independently, since a
+ * household can have exactly one of each kind at once.
+ */
+function accountsNote(accountsMissing: number, accountsStale: number): string {
+  const missingPhrase = accountsMissing === 1 ? '1 account has no balance yet' : `${accountsMissing} accounts have no balance yet`;
+  const stalePhrase =
+    accountsStale === 1
+      ? `1 account has not reported a balance in over ${STALE_SNAPSHOT_DAYS} days`
+      : `${accountsStale} accounts have not reported a balance in over ${STALE_SNAPSHOT_DAYS} days`;
+
+  if (accountsMissing > 0 && accountsStale > 0) {
+    return `${missingPhrase}, and ${stalePhrase}. Update them in Settings and Accounts.`;
+  }
+  if (accountsMissing > 0) {
+    return `${missingPhrase}. Update ${accountsMissing === 1 ? 'it' : 'them'} in Settings and Accounts.`;
+  }
+  return `${stalePhrase}. Update ${accountsStale === 1 ? 'it' : 'them'} in Settings and Accounts.`;
 }
 
 /**

@@ -8,7 +8,7 @@ import { reviewQueueCount } from '@/lib/categorize/engine';
 import { currentMonth, monthEnd, monthLabel, monthStart, todayIso } from '@/lib/dates';
 import { listGoals } from '@/lib/goals';
 import { listLoans } from '@/lib/loans';
-import { netWorthOverTime } from '@/lib/networth';
+import { netWorthHint, netWorthOverTime } from '@/lib/networth';
 import { cashflowTrend, topMerchants } from '@/lib/reports';
 import { expiringSoonItems } from '@/lib/warranty/search';
 import { formatCents } from '@/lib/money';
@@ -159,13 +159,18 @@ export default async function DashboardPage({
           hint={netCents < 0 ? 'Spending outran income' : 'Kept, after everything went out'}
         />
         {/* Task 7: self-hiding, in the manner of LoansCard -- rendered unconditionally, absent
-            when there is no balance on file yet to compute it from. */}
+            when there is no balance on file yet to compute it from. Adversarial-review fix
+            (2026-08-23): the hint used to be this fixed string regardless of
+            accountsMissing/accountsStale, so it kept claiming "every tracked account" on days
+            the Reports Net worth card was disclosing the opposite for the same figure --
+            netWorthHint is the one place that wording is decided now, so the two surfaces
+            cannot disagree. */}
         {netWorthLatest === null ? null : (
           <StatTile
             label="Net worth"
             value={formatCents(netWorthLatest.netCents, { showSign: true })}
             tone={netWorthLatest.netCents < 0 ? 'negative' : 'positive'}
-            hint="Assets minus debts and loans, across every tracked account"
+            hint={netWorthHint(netWorthLatest)}
           />
         )}
       </div>
