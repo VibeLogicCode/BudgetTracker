@@ -23,6 +23,7 @@ import {
   deleteRuleAction,
   renameCategoryAction,
   saveProfileMappingAction,
+  setCategoryTaxRelevantAction,
   setProfileActiveAction,
   updateRuleAction,
   type ManagerState,
@@ -79,6 +80,7 @@ export function ManagersClient({
   const [createState, createCategory] = useActionState(createCategoryAction, initial);
   const [renameState, renameCategory] = useActionState(renameCategoryAction, initial);
   const [archiveState, archiveCategory] = useActionState(archiveCategoryAction, initial);
+  const [taxState, saveCategoryTax] = useActionState(setCategoryTaxRelevantAction, initial);
   const [ruleState, saveRule] = useActionState(updateRuleAction, initial);
   const [deleteState, removeRule] = useActionState(deleteRuleAction, initial);
   const [profileState, saveProfile] = useActionState(saveProfileMappingAction, initial);
@@ -101,6 +103,7 @@ export function ManagersClient({
     createState.message ??
     renameState.message ??
     archiveState.message ??
+    taxState.message ??
     ruleState.message ??
     deleteState.message ??
     profileState.message ??
@@ -110,6 +113,7 @@ export function ManagersClient({
     createState.error ??
     renameState.error ??
     archiveState.error ??
+    taxState.error ??
     ruleState.error ??
     deleteState.error ??
     profileState.error ??
@@ -153,6 +157,10 @@ export function ManagersClient({
               <th scope="col">Name</th>
               <th scope="col">Kind</th>
               <th scope="col">State</th>
+              <th scope="col">
+                Tax
+                <span className="block font-normal text-xs text-muted">Shows in the tax year report</span>
+              </th>
               <th scope="col" />
             </tr>
           </thead>
@@ -177,6 +185,18 @@ export function ManagersClient({
                   </span>
                 </td>
                 <td>{category.isArchived ? <span className="badge badge--muted">archived</span> : null}</td>
+                <td>
+                  <form action={saveCategoryTax} className="flex items-center gap-1.5">
+                    <input type="hidden" name="categoryId" value={category.id} />
+                    <input
+                      type="checkbox"
+                      name="taxRelevant"
+                      defaultChecked={category.taxRelevant}
+                      aria-label={`Mark ${category.name} tax-relevant`}
+                    />
+                    <button type="submit" className="btn btn--ghost btn--sm px-2 text-xs">save</button>
+                  </form>
+                </td>
                 <td className="text-right">
                   <form action={archiveCategory}>
                     <input type="hidden" name="categoryId" value={category.id} />

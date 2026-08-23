@@ -4,14 +4,17 @@ import { render, cleanup, fireEvent, screen } from '@testing-library/react';
 import { ManagersClient } from '@/app/(app)/settings/managers/managers-client';
 import { getBuiltinPreset } from '@/lib/import/presets';
 import type { ProfileRecord, ProfileUsage } from '@/lib/import/presets';
+import type { CategoryRecord } from '@/lib/categories';
 
 // Server actions aren't under test here -- only the UI the v1.6.0 deactivation feature adds
 // (spec 2026-08-22, MUST-4.1: an inactive badge and an activate/deactivate toggle on every
-// profile, built-in or not, plus a warn-first confirm step when accounts are pinned, MUST-4.3).
+// profile, built-in or not, plus a warn-first confirm step when accounts are pinned, MUST-4.3)
+// and the v1.7.0 Task 15a Tax checkbox.
 vi.mock('@/app/(app)/settings/managers/actions', () => ({
   createCategoryAction: vi.fn(async () => ({})),
   renameCategoryAction: vi.fn(async () => ({})),
   archiveCategoryAction: vi.fn(async () => ({})),
+  setCategoryTaxRelevantAction: vi.fn(async () => ({})),
   updateRuleAction: vi.fn(async () => ({})),
   deleteRuleAction: vi.fn(async () => ({})),
   saveProfileMappingAction: vi.fn(async () => ({})),
@@ -35,14 +38,31 @@ function profile(over: Partial<ProfileRecord> = {}): ProfileRecord {
   };
 }
 
-function baseProps(overrides: { profiles?: ProfileRecord[]; profileUsage?: Record<number, ProfileUsage> } = {}) {
+function baseProps(
+  overrides: { profiles?: ProfileRecord[]; profileUsage?: Record<number, ProfileUsage>; categories?: CategoryRecord[] } = {},
+) {
   return {
-    categories: [],
+    categories: overrides.categories ?? [],
     rules: [],
     profiles: overrides.profiles ?? [profile()],
     profileUsage: overrides.profileUsage ?? {},
     rulesPackRows: [],
     profilePackRows: [],
+  };
+}
+
+function category(over: Partial<CategoryRecord> = {}): CategoryRecord {
+  return {
+    id: 1,
+    name: 'Groceries',
+    parentId: null,
+    icon: null,
+    color: null,
+    isIncome: false,
+    isArchived: false,
+    sortOrder: 0,
+    taxRelevant: false,
+    ...over,
   };
 }
 
@@ -128,5 +148,55 @@ describe('ManagersClient — profile deactivation (spec 2026-08-22 v1.6.0, MUST-
     fireEvent.click(screen.getByRole('button', { name: /cancel/i }));
     expect(screen.queryByRole('button', { name: /deactivate anyway/i })).toBeNull();
     expect(setProfileActiveAction).not.toHaveBeenCalled();
+  });
+});
+
+// v1.7.0, Task 15a (spec 2026-08-22): each category row gains a Tax checkbox that reports to
+// the tax year report (src/lib/tax.ts).
+describe('ManagersClient — Tax checkbox', () => {
+  it('renders a Tax column header with a hint about the tax year report', () => {
+    render(<ManagersClient {...baseProps({ categories: [category()] })} />);
+    expect(screen.getByRole('columnheader', { name: /tax/i })).toBeTruthy();
+    expect(screen.getByText(/tax year report/i)).toBeTruthy();
+  });
+
+  it('checks the box for a tax-relevant category and leaves an unflagged one unchecked', () => {
+    render(
+      <ManagersClient
+        {...baseProps({
+          categories: [
+            category({ id: 1, name: 'Medical', taxRelevant: true }),
+            category({ id: 2, name: 'Coffee', taxRelevant: false }),
+          ],
+        })}
+      />,
+    );
+    expect((screen.getByRole('checkbox', { name: /medical/i }) as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByRole('checkbox', { name: /coffee/i }) as HTMLInputElement).checked).toBe(false);
+  });
+
+  it('submitting a row\'s Tax form calls setCategoryTaxRelevantAction with that category\'s id', async () => {
+    const { setCategoryTaxRelevantAction } = await import('@/app/(app)/settings/managers/actions');
+    render(<ManagersClient {...baseProps({ categories: [category({ id: 9, name: 'Medical', taxRelevant: false })] })} />);
+    const checkbox = screen.getByRole('checkbox', { name: /medical/i });
+    const form = checkbox.closest('form')!;
+    expect((form.querySelector('[name="categoryId"]') as HTMLInputElement).value).toBe('9');
+    fireEvent.submit(form);
+    expect(setCategoryTaxRelevantAction).toHaveBeenCalled();
+  });
+
+  it('each category row has its own independent Tax form', () => {
+    render(
+      <ManagersClient
+        {...baseProps({
+          categories: [category({ id: 1, name: 'Medical' }), category({ id: 2, name: 'Coffee' })],
+        })}
+      />,
+    );
+    const medicalForm = screen.getByRole('checkbox', { name: /medical/i }).closest('form')!;
+    const coffeeForm = screen.getByRole('checkbox', { name: /coffee/i }).closest('form')!;
+    expect(medicalForm).not.toBe(coffeeForm);
+    expect((medicalForm.querySelector('[name="categoryId"]') as HTMLInputElement).value).toBe('1');
+    expect((coffeeForm.querySelector('[name="categoryId"]') as HTMLInputElement).value).toBe('2');
   });
 });

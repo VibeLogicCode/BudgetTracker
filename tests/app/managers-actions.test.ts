@@ -25,6 +25,7 @@ import {
   deleteProfileAction,
   deleteRuleAction,
   renameCategoryAction,
+  setCategoryTaxRelevantAction,
   setProfileActiveAction,
 } from '@/app/(app)/settings/managers/actions';
 import { CATEGORY_RENDERING_ROUTES, PROFILE_RENDERING_ROUTES } from '@/app/(app)/settings/managers/revalidation-routes';
@@ -257,6 +258,67 @@ describe('category mutations revalidate every route that renders categories (fin
     vi.mocked(revalidatePath).mockClear();
     const result = await archiveCategoryAction({}, formData({ categoryId: String(coffee), archived: '1' }));
     expect(result.message).toBeTruthy();
+    const calls = vi.mocked(revalidatePath).mock.calls.map((call) => call[0]);
+    for (const route of CATEGORY_RENDERING_ROUTES) expect(calls).toContain(route);
+  });
+});
+
+// v1.7.0, Task 15a (spec 2026-08-22): the categories manager's Tax checkbox.
+describe('setCategoryTaxRelevantAction', () => {
+  it('flags a category tax-relevant and persists it', async () => {
+    const { db } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const result = await setCategoryTaxRelevantAction({}, formData({ categoryId: String(coffee), taxRelevant: 'on' }));
+    expect(result.error).toBeUndefined();
+    expect(result.message).toBeTruthy();
+    const row = current!.sqlite.prepare('select tax_relevant from categories where id = ?').get(coffee) as {
+      tax_relevant: number;
+    };
+    expect(row.tax_relevant).toBe(1);
+  });
+
+  it('unflags a category when the checkbox field is absent (an unchecked checkbox submits nothing)', async () => {
+    const { db } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    await setCategoryTaxRelevantAction({}, formData({ categoryId: String(coffee), taxRelevant: 'on' }));
+    const result = await setCategoryTaxRelevantAction({}, formData({ categoryId: String(coffee) }));
+    expect(result.error).toBeUndefined();
+    const row = current!.sqlite.prepare('select tax_relevant from categories where id = ?').get(coffee) as {
+      tax_relevant: number;
+    };
+    expect(row.tax_relevant).toBe(0);
+  });
+
+  it('rejects an unknown category id instead of silently no-op-ing', async () => {
+    setup();
+    const result = await setCategoryTaxRelevantAction({}, formData({ categoryId: '999999', taxRelevant: 'on' }));
+    expect(result.error).toBeTruthy();
+  });
+
+  it('rejects an invalid categoryId', async () => {
+    setup();
+    const result = await setCategoryTaxRelevantAction({}, formData({ categoryId: 'nope', taxRelevant: 'on' }));
+    expect(result.error).toBeTruthy();
+  });
+
+  it('refuses a non-admin caller', async () => {
+    const { db } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    vi.mocked(requireAdmin).mockRejectedValueOnce(new Error('not admin'));
+    await expect(
+      setCategoryTaxRelevantAction({}, formData({ categoryId: String(coffee), taxRelevant: 'on' })),
+    ).rejects.toThrow(/not admin/);
+    const row = current!.sqlite.prepare('select tax_relevant from categories where id = ?').get(coffee) as {
+      tax_relevant: number;
+    };
+    expect(row.tax_relevant).toBe(0);
+  });
+
+  it('revalidates every route that renders categories', async () => {
+    const { db } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    vi.mocked(revalidatePath).mockClear();
+    await setCategoryTaxRelevantAction({}, formData({ categoryId: String(coffee), taxRelevant: 'on' }));
     const calls = vi.mocked(revalidatePath).mock.calls.map((call) => call[0]);
     for (const route of CATEGORY_RENDERING_ROUTES) expect(calls).toContain(route);
   });

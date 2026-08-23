@@ -11,6 +11,11 @@ export interface CategoryRecord {
   isIncome: boolean;
   isArchived: boolean;
   sortOrder: number;
+  /** v1.7.0, Task 15 (spec 2026-08-22): marks a category relevant for the tax-year report
+   *  (src/lib/tax.ts). Toggled from the categories manager's Tax checkbox via
+   *  setCategoryTaxRelevant below. A flagged PARENT rolls in every child's spend even when
+   *  the child itself is unflagged; see taxYearReport's doc comment for the full rule. */
+  taxRelevant: boolean;
 }
 
 export interface CategoryNode extends CategoryRecord {
@@ -82,4 +87,11 @@ export function renameCategory(id: number, name: string): void {
 /** Archive only — transactions, rules and budgets reference categories forever. */
 export function archiveCategory(id: number, archived: boolean): void {
   getDb().update(categories).set({ isArchived: archived }).where(eq(categories.id, id)).run();
+}
+
+/** v1.7.0, Task 15a (spec 2026-08-22): the categories manager's Tax checkbox writes here via
+ *  setCategoryTaxRelevantAction. See the doc comment on CategoryRecord.taxRelevant above and
+ *  taxYearReport (src/lib/tax.ts) for what flagging a parent versus a child means. */
+export function setCategoryTaxRelevant(id: number, taxRelevant: boolean): void {
+  getDb().update(categories).set({ taxRelevant }).where(eq(categories.id, id)).run();
 }

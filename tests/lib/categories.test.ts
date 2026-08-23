@@ -1,6 +1,15 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { createSeededTestDb, categoryIdByName, type TestDb } from '../helpers/db';
-import { archiveCategory, categoryLabel, categoryTree, categoryWithDescendants, createCategory, listCategories, renameCategory } from '@/lib/categories';
+import {
+  archiveCategory,
+  categoryLabel,
+  categoryTree,
+  categoryWithDescendants,
+  createCategory,
+  listCategories,
+  renameCategory,
+  setCategoryTaxRelevant,
+} from '@/lib/categories';
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -61,5 +70,37 @@ describe('categories', () => {
     current = createSeededTestDb();
     const groceries = categoryIdByName(current.db, 'Groceries');
     expect(() => createCategory({ name: 'Too Deep', parentId: groceries })).toThrowError(/two levels/i);
+  });
+});
+
+// v1.7.0, Task 15a (spec 2026-08-22): the tax-relevant flag consumed by src/lib/tax.ts and
+// toggled from the categories manager's Tax checkbox.
+describe('taxRelevant flag', () => {
+  it('defaults to false and is exposed on CategoryRecord', () => {
+    current = createSeededTestDb();
+    const coffee = categoryIdByName(current.db, 'Coffee');
+    expect(listCategories().find((c) => c.id === coffee)?.taxRelevant).toBe(false);
+  });
+
+  it('setCategoryTaxRelevant toggles the flag on and back off', () => {
+    current = createSeededTestDb();
+    const coffee = categoryIdByName(current.db, 'Coffee');
+    setCategoryTaxRelevant(coffee, true);
+    expect(listCategories().find((c) => c.id === coffee)?.taxRelevant).toBe(true);
+    setCategoryTaxRelevant(coffee, false);
+    expect(listCategories().find((c) => c.id === coffee)?.taxRelevant).toBe(false);
+  });
+
+  it('is carried on both parent and child nodes in categoryTree', () => {
+    current = createSeededTestDb();
+    const food = categoryIdByName(current.db, 'Food');
+    const groceries = categoryIdByName(current.db, 'Groceries');
+    setCategoryTaxRelevant(food, true);
+    setCategoryTaxRelevant(groceries, true);
+
+    const foodNode = categoryTree().find((c) => c.id === food)!;
+    expect(foodNode.taxRelevant).toBe(true);
+    expect(foodNode.children.find((c) => c.id === groceries)?.taxRelevant).toBe(true);
+    expect(foodNode.children.find((c) => c.name === 'Coffee')?.taxRelevant).toBe(false);
   });
 });

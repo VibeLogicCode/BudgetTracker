@@ -5,7 +5,7 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { isSameOrigin } from '@/lib/auth/csrf';
 import { requireAdmin } from '@/lib/auth/session';
-import { archiveCategory, createCategory, renameCategory } from '@/lib/categories';
+import { archiveCategory, createCategory, listCategories, renameCategory, setCategoryTaxRelevant } from '@/lib/categories';
 import { deleteRule, listRules, upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { deleteRenameRule, upsertRenameRule } from '@/lib/categorize/engine';
 import {
@@ -81,6 +81,30 @@ export async function archiveCategoryAction(_prev: ManagerState, formData: FormD
   archiveCategory(id, archived);
   revalidateCategoryRoutes();
   return { message: archived ? 'Category archived.' : 'Category restored.' };
+}
+
+/**
+ * Admin-only. The categories manager's Tax checkbox (spec 2026-08-22, v1.7.0, Task 15a) --
+ * marks a category relevant for the tax-year report (src/lib/tax.ts). A plain HTML checkbox
+ * submits its field only when checked, so an unchecked box simply leaves `taxRelevant` absent
+ * from the form data; there is no hidden fallback field to keep in sync the way
+ * archiveCategoryAction's toggle button needs one, because here the checkbox itself already
+ * carries the admin's intended next state.
+ */
+export async function setCategoryTaxRelevantAction(_prev: ManagerState, formData: FormData): Promise<ManagerState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  await requireAdmin();
+  const parsed = z.object({ categoryId: z.coerce.number().int().positive() }).safeParse({ categoryId: formData.get('categoryId') });
+  if (!parsed.success) return { error: 'Invalid request.' };
+
+  const target = listCategories({ includeArchived: true }).find((category) => category.id === parsed.data.categoryId);
+  if (!target) return { error: 'That category no longer exists.' };
+
+  const taxRelevant = formData.get('taxRelevant') === 'on';
+  setCategoryTaxRelevant(parsed.data.categoryId, taxRelevant);
+  revalidateCategoryRoutes();
+  return { message: taxRelevant ? 'Category marked tax-relevant.' : 'Category no longer marked tax-relevant.' };
 }
 
 export async function updateRuleAction(_prev: ManagerState, formData: FormData): Promise<ManagerState> {
