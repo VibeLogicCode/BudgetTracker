@@ -4,7 +4,7 @@ import { categories, transactions, transactionSplits, users } from '@/db/schema'
 import { listCategories } from '@/lib/categories';
 import { addMonths, monthEnd, monthOf, monthRange, monthStart } from '@/lib/dates';
 import { netSpentCents } from '@/lib/money';
-import { EFFECTIVE_AMOUNT, EFFECTIVE_CATEGORY } from '@/lib/splits';
+import { EFFECTIVE_AMOUNT, EFFECTIVE_CATEGORY, splitsForTransactions } from '@/lib/splits';
 import { listTransactions, type TransactionFilter } from '@/lib/transactions';
 
 export interface DateRange {
@@ -306,25 +306,61 @@ export function toCsv<T extends Record<string, unknown>>(rows: T[], columns: Csv
 export function transactionsCsv(filter: TransactionFilter): string {
   const all = listCategories({ includeArchived: true });
   const byId = new Map(all.map((row) => [row.id, row]));
+  // Shared by the unsplit and per-part rows below so a part's category renders with exactly
+  // the same "Parent > Child" formatting the unsplit path has always used.
+  const categoryPath = (categoryId: number | null): string => {
+    const category = categoryId === null ? null : byId.get(categoryId);
+    if (!category) return 'Uncategorized';
+    const parent = category.parentId ? byId.get(category.parentId) : undefined;
+    return parent ? `${parent.name} > ${category.name}` : category.name;
+  };
+
   const page = listTransactions({ ...filter, page: 1, pageSize: 200 });
   const rows: Record<string, unknown>[] = [];
 
   for (let pageNumber = 1; pageNumber <= page.pageCount; pageNumber += 1) {
     const chunk = pageNumber === 1 ? page : listTransactions({ ...filter, page: pageNumber, pageSize: 200 });
+    // Split-aware (spec 2026-08-22, v1.7.0, Task 4): one batched lookup per page of up to
+    // 200 transactions, not a query per row.
+    const splitsByTxn = splitsForTransactions(chunk.rows.map((row) => row.id));
+
     for (const row of chunk.rows) {
-      const category = row.categoryId === null ? null : byId.get(row.categoryId);
-      const parent = category?.parentId ? byId.get(category.parentId) : undefined;
-      rows.push({
-        Date: row.date,
-        Account: row.accountName,
-        Description: row.rawDescription,
-        Merchant: row.normalizedMerchant,
-        Amount: (row.amountCents / 100).toFixed(2),
-        Category: category ? (parent ? `${parent.name} > ${category.name}` : category.name) : 'Uncategorized',
-        Person: row.attributedUserName ?? UNATTRIBUTED_LABEL,
-        Transfer: row.isTransfer ? 'yes' : 'no',
-        Source: row.source,
-        Notes: row.notes ?? '',
+      const parts = splitsByTxn.get(row.id) ?? [];
+
+      if (parts.length === 0) {
+        // Unchanged from the pre-split format -- byte-identical for every transaction that
+        // was never split (tests/lib/reports.test.ts asserts this against a fixture).
+        rows.push({
+          Date: row.date,
+          Account: row.accountName,
+          Description: row.rawDescription,
+          Merchant: row.normalizedMerchant,
+          Amount: (row.amountCents / 100).toFixed(2),
+          Category: categoryPath(row.categoryId),
+          Person: row.attributedUserName ?? UNATTRIBUTED_LABEL,
+          Transfer: row.isTransfer ? 'yes' : 'no',
+          Source: row.source,
+          Notes: row.notes ?? '',
+        });
+        continue;
+      }
+
+      // One row per part: amount, category and note are the part's own. Date, account,
+      // merchant, person, transfer and source stay the parent's -- attribution and every
+      // other parent-level fact are whole-transaction (design ruling 1, spec 2026-08-22).
+      parts.forEach((part, index) => {
+        rows.push({
+          Date: row.date,
+          Account: row.accountName,
+          Description: `${row.rawDescription} (split ${index + 1}/${parts.length})`,
+          Merchant: row.normalizedMerchant,
+          Amount: (part.amountCents / 100).toFixed(2),
+          Category: categoryPath(part.categoryId),
+          Person: row.attributedUserName ?? UNATTRIBUTED_LABEL,
+          Transfer: row.isTransfer ? 'yes' : 'no',
+          Source: row.source,
+          Notes: part.note ?? '',
+        });
       });
     }
   }

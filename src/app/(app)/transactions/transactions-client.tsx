@@ -15,13 +15,16 @@ import { Field, inputClass, labelClass, selectClass } from '@/components/ui/form
 import { DateRangePicker } from '@/components/ui/DateRangePicker';
 import { type ResolvedRange } from '@/lib/date-range';
 import type { LoanLink } from '@/lib/loans';
-import type { TransactionPage } from '@/lib/transactions';
+import { formatCents, parseAmountToCents, sumCents } from '@/lib/money';
+import type { SplitRow } from '@/lib/splits';
+import type { TransactionPage, TransactionRow } from '@/lib/transactions';
 import {
   assignToLoanAction,
   bulkCategorizeAction,
   bulkTransferAction,
   manualEntryAction,
   renameTransactionAction,
+  saveSplitsAction,
   setAttributionAction,
   setCategoryAction,
   unassignFromLoanAction,
@@ -30,6 +33,17 @@ import {
 
 interface Option { id: number; name: string; parentId?: number | null; isArchived?: boolean }
 interface LoanOption { id: number; name: string }
+
+/** Draft state for one row of the split editor. Amounts are kept as the raw dollar text the
+ *  person is typing (parsed with parseAmountToCents only at remainder/submit time) so a
+ *  half-typed value like "12." never gets silently rewritten under someone's cursor. */
+interface SplitPartDraft {
+  categoryId: string;
+  amount: string;
+  note: string;
+}
+
+const blankSplitPart = (): SplitPartDraft => ({ categoryId: '', amount: '', note: '' });
 
 const initial: ActionState = {};
 
@@ -45,6 +59,7 @@ export function TransactionsClient({
   range = null,
   loanOptions = [],
   loanLinks = {},
+  splits = {},
 }: {
   page: TransactionPage;
   accounts: Option[];
@@ -55,9 +70,13 @@ export function TransactionsClient({
   /** v1.3.1: loans with a balance still owed. Empty for a household with none (MUST-14.9). */
   loanOptions?: LoanOption[];
   loanLinks?: Record<number, LoanLink[]>;
+  /** v1.7.0 Task 4: existing splits for the rows on this page, keyed by transaction id. A
+   *  row absent from this map (or mapped to an empty array) has never been split. */
+  splits?: Record<number, SplitRow[]>;
 }) {
   const [selected, setSelected] = useState<number[]>([]);
   const [renaming, setRenaming] = useState<{ id: number; current: string; merchant: string } | null>(null);
+  const [splitting, setSplitting] = useState<{ id: number; amountCents: number; parts: SplitPartDraft[] } | null>(null);
   const [manualState, manualAction] = useActionState(manualEntryAction, initial);
   const [rowState, rowAction] = useActionState(setCategoryAction, initial);
   const [attrState, attrAction] = useActionState(setAttributionAction, initial);
@@ -72,6 +91,7 @@ export function TransactionsClient({
     (_prev: ActionState, formData: FormData) => unassignFromLoanAction(formData),
     initial,
   );
+  const [splitState, splitAction] = useActionState(saveSplitsAction, initial);
 
   const label = (id: number | null) => {
     if (id === null) return 'Uncategorized';
@@ -92,10 +112,59 @@ export function TransactionsClient({
   const toggle = (id: number) => setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   const notice =
     manualState.message ?? rowState.message ?? attrState.message ?? bulkCatState.message ?? bulkTfrState.message ??
-    renameState.message ?? assignState.message ?? unassignState.message;
+    renameState.message ?? assignState.message ?? unassignState.message ?? splitState.message;
   const error =
     manualState.error ?? rowState.error ?? attrState.error ?? bulkCatState.error ?? bulkTfrState.error ??
-    renameState.error ?? assignState.error ?? unassignState.error;
+    renameState.error ?? assignState.error ?? unassignState.error ?? splitState.error;
+
+  // Opens this row's split editor, prefilled from its existing parts (or two blank parts for
+  // a fresh split) -- the same "one editor, one nullable slot of state" shape `renaming` uses,
+  // so opening a different row's editor always replaces whichever one was already open.
+  const openSplitEditor = (row: TransactionRow) => {
+    const existing = splits[row.id] ?? [];
+    setSplitting({
+      id: row.id,
+      amountCents: row.amountCents,
+      parts:
+        existing.length > 0
+          ? existing.map((part) => ({
+              categoryId: String(part.categoryId),
+              amount: (Math.abs(part.amountCents) / 100).toFixed(2),
+              note: part.note ?? '',
+            }))
+          : [blankSplitPart(), blankSplitPart()],
+    });
+  };
+
+  const updateSplitPart = (index: number, patch: Partial<SplitPartDraft>) => {
+    setSplitting((prev) => (prev ? { ...prev, parts: prev.parts.map((part, i) => (i === index ? { ...part, ...patch } : part)) } : prev));
+  };
+  const addSplitPart = () => {
+    setSplitting((prev) => (prev ? { ...prev, parts: [...prev.parts, blankSplitPart()] } : prev));
+  };
+  const removeSplitPart = (index: number) => {
+    setSplitting((prev) => (prev ? { ...prev, parts: prev.parts.filter((_, i) => i !== index) } : prev));
+  };
+
+  // Amounts are always typed as a plain positive dollar figure -- the parent's own sign is
+  // applied here rather than asked of the person, so splitting a $50 expense means typing
+  // "30.00" and "20.00", never "-30.00". parseAmountToCents (not hand-rolled parsing) does the
+  // actual decimal-to-cents conversion; an unparsable/blank amount counts as 0 toward the
+  // remainder rather than blocking every other keystroke with an error.
+  const splitSign = splitting !== null && splitting.amountCents < 0 ? -1 : 1;
+  const draftPartCents = (part: SplitPartDraft): number => {
+    const parsed = parseAmountToCents(part.amount);
+    return parsed === null ? 0 : Math.abs(parsed) * splitSign;
+  };
+  // A blank row added by "Add a part" and never given a category is dropped rather than
+  // submitted (and left out of the remainder math below) -- it was never really a part.
+  const activeSplitParts = splitting ? splitting.parts.filter((part) => part.categoryId !== '') : [];
+  const splitPartsPayload = activeSplitParts.map((part) => ({
+    categoryId: Number(part.categoryId),
+    amountCents: draftPartCents(part),
+    note: part.note.trim() === '' ? null : part.note.trim(),
+  }));
+  const splitRemainderCents = splitting ? splitting.amountCents - sumCents(activeSplitParts.map(draftPartCents)) : 0;
 
   return (
     <div className="flex flex-col gap-6">
@@ -133,6 +202,83 @@ export function TransactionsClient({
                   Cancel
                 </button>
               </div>
+            </form>
+          </CardBody>
+        </Card>
+      ) : null}
+
+      {splitting ? (
+        <Card as="div">
+          <CardHeader
+            title="Split this transaction"
+            description="Divide this transaction across more than one category. The parts must add up to the full amount."
+          />
+          <CardBody className="flex flex-col gap-4">
+            <form action={splitAction} onSubmit={() => setSplitting(null)} className="flex flex-col gap-4">
+              <input type="hidden" name="txnId" value={splitting.id} />
+              <input type="hidden" name="parts" value={JSON.stringify(splitPartsPayload)} />
+              <div className="flex flex-col gap-2">
+                <div className="flex flex-wrap gap-2 text-xs font-medium text-muted">
+                  <span className="w-44">Category</span>
+                  <span className="w-24">Amount</span>
+                  <span className="flex-1">Note</span>
+                </div>
+                {splitting.parts.map((part, index) => (
+                  <div key={index} className="flex flex-wrap items-center gap-2">
+                    <select
+                      value={part.categoryId}
+                      onChange={(e) => updateSplitPart(index, { categoryId: e.target.value })}
+                      aria-label={`Category for part ${index + 1}`}
+                      className={`${selectClass} w-44`}
+                    >
+                      <option value="">Choose a category</option>
+                      {activeCategories.map((c) => (
+                        <option key={c.id} value={c.id}>{label(c.id)}</option>
+                      ))}
+                    </select>
+                    <input
+                      value={part.amount}
+                      onChange={(e) => updateSplitPart(index, { amount: e.target.value })}
+                      placeholder="0.00"
+                      inputMode="decimal"
+                      aria-label={`Amount for part ${index + 1}`}
+                      className={`${inputClass} w-24`}
+                    />
+                    <input
+                      value={part.note}
+                      onChange={(e) => updateSplitPart(index, { note: e.target.value })}
+                      placeholder="Note (optional)"
+                      aria-label={`Note for part ${index + 1}`}
+                      className={`${inputClass} flex-1 min-w-[10rem]`}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeSplitPart(index)}
+                      disabled={splitting.parts.length <= 2}
+                      className="btn btn--ghost btn--sm px-2 text-xs"
+                    >
+                      Remove part
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <button type="button" onClick={addSplitPart} className="btn btn--secondary btn--sm">
+                  Add a part
+                </button>
+                <span className="text-sm text-muted">Remaining to assign: {formatCents(splitRemainderCents)}</span>
+              </div>
+              <div className="flex gap-2">
+                <SubmitButton disabled={splitRemainderCents !== 0}>Save split</SubmitButton>
+                <button type="button" onClick={() => setSplitting(null)} className="btn btn--secondary">
+                  Cancel
+                </button>
+              </div>
+            </form>
+            <form action={splitAction} onSubmit={() => setSplitting(null)}>
+              <input type="hidden" name="txnId" value={splitting.id} />
+              <input type="hidden" name="parts" value="[]" />
+              <SubmitButton variant="secondary">Remove split</SubmitButton>
             </form>
           </CardBody>
         </Card>
@@ -271,30 +417,38 @@ export function TransactionsClient({
                   <Money cents={row.amountCents} />
                 </AmountCell>
                 <td>
-                  <form action={rowAction} className="flex items-center gap-1.5">
-                    <input type="hidden" name="transactionId" value={row.id} />
-                    {/* Full (archived-inclusive) category list here, on purpose: if this row's
-                        category was archived after the fact, it must still appear as a real
-                        <option> so the browser's initial selection matches it. Otherwise the
-                        select silently falls back to "Uncategorized" and an untouched "save"
-                        click would clear (and untrain) a legitimate historical categorization.
-                        Archived options are disabled so they can't be freshly assigned to a
-                        different row. */}
-                    <select
-                      name="categoryId"
-                      defaultValue={row.categoryId ?? ''}
-                      aria-label={`Category for transaction ${row.id}`}
-                      className={rowControl}
-                    >
-                      <option value="">Uncategorized</option>
-                      {categories.map((c) => (
-                        <option key={c.id} value={c.id} disabled={c.isArchived}>
-                          {label(c.id)}{c.isArchived ? ' (archived)' : ''}
-                        </option>
-                      ))}
-                    </select>
-                    <button type="submit" className="btn btn--ghost btn--sm px-2 text-xs">Save</button>
-                  </form>
+                  {/* v1.7.0 Task 4: a split transaction no longer has ONE category to select
+                      -- its money is divided across its parts' own categories -- so the
+                      row's category cell shows a badge instead of the recategorize form.
+                      Editing what those parts ARE happens through "Split…" below. */}
+                  {(splits[row.id] ?? []).length > 0 ? (
+                    <span className="badge badge--blue">{`Split · ${(splits[row.id] ?? []).length} parts`}</span>
+                  ) : (
+                    <form action={rowAction} className="flex items-center gap-1.5">
+                      <input type="hidden" name="transactionId" value={row.id} />
+                      {/* Full (archived-inclusive) category list here, on purpose: if this row's
+                          category was archived after the fact, it must still appear as a real
+                          <option> so the browser's initial selection matches it. Otherwise the
+                          select silently falls back to "Uncategorized" and an untouched "save"
+                          click would clear (and untrain) a legitimate historical categorization.
+                          Archived options are disabled so they can't be freshly assigned to a
+                          different row. */}
+                      <select
+                        name="categoryId"
+                        defaultValue={row.categoryId ?? ''}
+                        aria-label={`Category for transaction ${row.id}`}
+                        className={rowControl}
+                      >
+                        <option value="">Uncategorized</option>
+                        {categories.map((c) => (
+                          <option key={c.id} value={c.id} disabled={c.isArchived}>
+                            {label(c.id)}{c.isArchived ? ' (archived)' : ''}
+                          </option>
+                        ))}
+                      </select>
+                      <button type="submit" className="btn btn--ghost btn--sm px-2 text-xs">Save</button>
+                    </form>
+                  )}
                 </td>
                 <td>
                   <form action={attrAction} className="flex items-center gap-1.5">
@@ -318,9 +472,19 @@ export function TransactionsClient({
                       MUST-11.3: the URL carries ONLY the id. The add page derives the date,
                       the abs() price and the vendor from the transaction row server-side. */}
                   {row.isTransfer ? null : (
-                    <Link href={`/warranties/new?transactionId=${row.id}`} className="btn btn--ghost btn--sm text-xs text-accent-text">
-                      Create warranty
-                    </Link>
+                    <>
+                      <Link href={`/warranties/new?transactionId=${row.id}`} className="btn btn--ghost btn--sm text-xs text-accent-text">
+                        Create warranty
+                      </Link>{' '}
+                      <button
+                        type="button"
+                        onClick={() => openSplitEditor(row)}
+                        aria-label={`Split transaction ${row.id}`}
+                        className="btn btn--ghost btn--sm text-xs text-accent-text"
+                      >
+                        Split…
+                      </button>
+                    </>
                   )}
                   {/* MUST-14.8: a transfer never carries a loan control, and neither does a
                       page that was given no loans. The established precedent for a per-row

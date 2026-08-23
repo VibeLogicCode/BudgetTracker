@@ -3,6 +3,7 @@ import { listAccounts } from '@/lib/accounts';
 import { listCategories } from '@/lib/categories';
 import { listUsers } from '@/lib/auth/users';
 import { loanLinksForTransactions, listLoans } from '@/lib/loans';
+import { splitsForTransactions } from '@/lib/splits';
 import { listTransactions, type TransactionFilter } from '@/lib/transactions';
 import { todayIso } from '@/lib/dates';
 import { resolveRange, type ResolvedRange } from '@/lib/date-range';
@@ -74,6 +75,7 @@ export default async function TransactionsPage({
         .filter((loan) => loan.currentBalanceCents !== null)
         .map((loan) => ({ id: loan.itemId, name: loan.name }))}
       loanLinks={Object.fromEntries(loanLinksForTransactions(page.rows.map((row) => row.id)))}
+      splits={Object.fromEntries(splitsForTransactions(page.rows.map((row) => row.id)))}
     />
   );
 }

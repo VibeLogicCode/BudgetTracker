@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, cleanup, screen } from '@testing-library/react';
+import { render, cleanup, screen, fireEvent } from '@testing-library/react';
 import { TransactionsClient } from '@/app/(app)/transactions/transactions-client';
 import type { TransactionPage, TransactionRow } from '@/lib/transactions';
+import type { SplitRow } from '@/lib/splits';
 
 vi.mock('@/app/(app)/transactions/actions', () => ({
   manualEntryAction: vi.fn(async () => ({})),
@@ -13,6 +14,7 @@ vi.mock('@/app/(app)/transactions/actions', () => ({
   renameTransactionAction: vi.fn(async () => ({})),
   assignToLoanAction: vi.fn(async () => ({})),
   unassignFromLoanAction: vi.fn(async () => ({})),
+  saveSplitsAction: vi.fn(async () => ({})),
 }));
 
 afterEach(() => cleanup());
@@ -215,5 +217,129 @@ describe('MUST-14.8 / MUST-14.9: the row control', () => {
     render(<TransactionsClient {...transferOnlyProps} loanOptions={[{ id: 7, name: 'Civic' }]} loanLinks={{}} />);
     expect(screen.queryByText('Assign to loan…')).toBeNull();
     expect(screen.queryByText('Unassign')).toBeNull();
+  });
+});
+
+describe('Split editor (v1.7.0 Task 4)', () => {
+  const categories = [
+    { id: 42, name: 'Old Category', parentId: null, isArchived: false },
+    { id: 7, name: 'Coffee', parentId: null, isArchived: false },
+  ];
+
+  const splitRows: SplitRow[] = [
+    { id: 501, txnId: 1, categoryId: 42, amountCents: -300, note: 'half' },
+    { id: 502, txnId: 1, categoryId: 7, amountCents: -200, note: null },
+  ];
+
+  function twoRowPage(): TransactionPage {
+    const a = pageWithRow({ id: 1, amountCents: -500 }).rows[0];
+    const b = pageWithRow({ id: 2, amountCents: -700 }).rows[0];
+    return { total: 2, page: 1, pageSize: 50, pageCount: 1, rows: [a, b] };
+  }
+
+  it('shows a "Split · N parts" badge instead of the category select for a split row', () => {
+    const { container } = render(
+      <TransactionsClient
+        page={pageWithRow({ id: 1 })}
+        accounts={[{ id: 1, name: 'Joint Chequing' }]}
+        categories={categories}
+        people={[]}
+        today="2026-03-02"
+        splits={{ 1: splitRows }}
+      />,
+    );
+    expect(screen.getByText('Split · 2 parts')).toBeTruthy();
+    expect(container.querySelector('tbody select[name="categoryId"]')).toBeNull();
+  });
+
+  it('a row with no split still shows the ordinary category select, not a badge', () => {
+    const { container } = render(
+      <TransactionsClient
+        page={pageWithRow({ id: 1 })}
+        accounts={[{ id: 1, name: 'Joint Chequing' }]}
+        categories={categories}
+        people={[]}
+        today="2026-03-02"
+        splits={{}}
+      />,
+    );
+    expect(screen.queryByText(/Split ·/)).toBeNull();
+    expect(container.querySelector('tbody select[name="categoryId"]')).toBeTruthy();
+  });
+
+  it('opens the editor prefilled from the existing split parts', () => {
+    render(
+      <TransactionsClient
+        page={pageWithRow({ id: 1, amountCents: -500 })}
+        accounts={[{ id: 1, name: 'Joint Chequing' }]}
+        categories={categories}
+        people={[]}
+        today="2026-03-02"
+        splits={{ 1: splitRows }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Split transaction 1' }));
+
+    const categorySelects = screen.getAllByLabelText(/Category for part/) as HTMLSelectElement[];
+    expect(categorySelects.map((s) => s.value)).toEqual(['42', '7']);
+
+    const amountInputs = screen.getAllByLabelText(/Amount for part/) as HTMLInputElement[];
+    expect(amountInputs.map((i) => i.value)).toEqual(['3.00', '2.00']);
+
+    const noteInputs = screen.getAllByLabelText(/Note for part/) as HTMLInputElement[];
+    expect(noteInputs.map((i) => i.value)).toEqual(['half', '']);
+  });
+
+  it('disables Save until the remainder is exactly zero, then enables it', () => {
+    render(
+      <TransactionsClient
+        page={pageWithRow({ id: 1, amountCents: -5000 })}
+        accounts={[{ id: 1, name: 'Joint Chequing' }]}
+        categories={categories}
+        people={[]}
+        today="2026-03-02"
+        splits={{}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Split transaction 1' }));
+
+    const saveButton = screen.getByRole('button', { name: 'Save split' }) as HTMLButtonElement;
+    expect(saveButton.disabled).toBe(true);
+
+    const categorySelects = screen.getAllByLabelText(/Category for part/) as HTMLSelectElement[];
+    const amountInputs = screen.getAllByLabelText(/Amount for part/) as HTMLInputElement[];
+
+    fireEvent.change(categorySelects[0], { target: { value: '42' } });
+    fireEvent.change(amountInputs[0], { target: { value: '30.00' } });
+    expect(saveButton.disabled).toBe(true);
+
+    fireEvent.change(categorySelects[1], { target: { value: '7' } });
+    fireEvent.change(amountInputs[1], { target: { value: '20.00' } });
+    expect(saveButton.disabled).toBe(false);
+  });
+
+  it('only one row editor is open at a time', () => {
+    const { container } = render(
+      <TransactionsClient
+        page={twoRowPage()}
+        accounts={[{ id: 1, name: 'Joint Chequing' }]}
+        categories={categories}
+        people={[]}
+        today="2026-03-02"
+        splits={{}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Split transaction 1' }));
+    expect(screen.getAllByText('Split this transaction')).toHaveLength(1);
+    expect((container.querySelector('input[name="txnId"]') as HTMLInputElement).value).toBe('1');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Split transaction 2' }));
+    expect(screen.getAllByText('Split this transaction')).toHaveLength(1);
+    const txnIdInputs = Array.from(container.querySelectorAll('input[name="txnId"]')) as HTMLInputElement[];
+    expect(txnIdInputs.length).toBeGreaterThan(0);
+    expect(txnIdInputs.every((input) => input.value === '2')).toBe(true);
   });
 });

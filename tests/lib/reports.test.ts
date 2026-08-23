@@ -12,6 +12,7 @@ import {
   transactionsCsv,
 } from '@/lib/reports';
 import { nowIso } from '@/lib/clock';
+import { setTransactionSplits } from '@/lib/splits';
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -357,5 +358,71 @@ describe('csv export', () => {
     expect(lines[1]).toContain('Uncategorized');
     expect(lines[2]).toContain('Alice');
     expect(lines[2]).toContain('-123.45');
+  });
+});
+
+describe('transactionsCsv — splits (v1.7.0 Task 4)', () => {
+  it('an unsplit row stays byte-identical to the pre-split format', () => {
+    const { db, alice, add } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    add({ categoryId: groceries, amountCents: -12345, attributedUserId: alice, merchant: 'LOBLAWS', date: '2026-03-05' });
+
+    const csv = transactionsCsv({ from: '2026-03-01', to: '2026-03-31' });
+    expect(csv).toBe(
+      'Date,Account,Description,Merchant,Amount,Category,Person,Transfer,Source,Notes\r\n' +
+        '2026-03-05,Joint Chequing,LOBLAWS,LOBLAWS,-123.45,Food > Groceries,Alice,no,manual,\r\n',
+    );
+  });
+
+  it('a 3-part split emits one row per part, each with its own amount, category and a description suffix', () => {
+    const { db, add } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const coffee = categoryIdByName(db, 'Coffee');
+    const gas = categoryIdByName(db, 'Gas');
+    const id = add({ categoryId: groceries, amountCents: -10000, merchant: 'COSTCO', date: '2026-03-05' });
+    setTransactionSplits({
+      txnId: id,
+      userId: 1,
+      parts: [
+        { categoryId: groceries, amountCents: -5000 },
+        { categoryId: coffee, amountCents: -3000, note: 'birthday cake' },
+        { categoryId: gas, amountCents: -2000 },
+      ],
+    });
+
+    const csv = transactionsCsv({ from: '2026-03-01', to: '2026-03-31' });
+    const lines = csv.trim().split('\r\n');
+    expect(lines).toHaveLength(4); // header + 3 parts, never the parent's own lump row
+    expect(lines[1]).toBe(
+      '2026-03-05,Joint Chequing,COSTCO (split 1/3),COSTCO,-50.00,Food > Groceries,Household/unattributed,no,manual,',
+    );
+    expect(lines[2]).toBe(
+      '2026-03-05,Joint Chequing,COSTCO (split 2/3),COSTCO,-30.00,Food > Coffee,Household/unattributed,no,manual,birthday cake',
+    );
+    expect(lines[3]).toBe(
+      '2026-03-05,Joint Chequing,COSTCO (split 3/3),COSTCO,-20.00,Transport > Gas,Household/unattributed,no,manual,',
+    );
+  });
+
+  it('neutralises a formula-triggering leading = in a split part note, same as any other note', () => {
+    const { db, add } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const coffee = categoryIdByName(db, 'Coffee');
+    const id = add({ categoryId: groceries, amountCents: -10000, merchant: 'COSTCO', date: '2026-03-05' });
+    setTransactionSplits({
+      txnId: id,
+      userId: 1,
+      parts: [
+        { categoryId: groceries, amountCents: -6000, note: '=SUM(1)' },
+        { categoryId: coffee, amountCents: -4000 },
+      ],
+    });
+
+    const csv = transactionsCsv({ from: '2026-03-01', to: '2026-03-31' });
+    const lines = csv.trim().split('\r\n');
+    expect(lines[1]).toContain(`'=SUM(1)`);
+    expect(lines[1]).not.toContain(',=SUM(1)');
+    // The guard didn't accidentally eat the rest of the row.
+    expect(lines[1]).toContain('-60.00');
   });
 });

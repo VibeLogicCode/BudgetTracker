@@ -8,6 +8,7 @@ import { requireUser } from '@/lib/auth/session';
 import { getOrCreateCashAccount } from '@/lib/accounts';
 import { assignTransactionToLoan, loanLinksForTransactions, unassignTransactionFromLoan } from '@/lib/loans';
 import { formatCents, parseAmountToCents } from '@/lib/money';
+import { setTransactionSplits } from '@/lib/splits';
 import { getWarrantyItem } from '@/lib/warranty/items';
 import { isIsoDate } from '@/lib/dates';
 import {
@@ -328,4 +329,63 @@ export async function unassignFromLoanAction(formData: FormData): Promise<Action
     return { message: `Unassigned. The balance has gone back down by ${formatCents(appliedCents)}.` };
   }
   return { message: `Unassigned. The balance has gone back up by ${formatCents(appliedCents)}.` };
+}
+
+const splitPartSchema = z.object({
+  categoryId: z.number().int().positive(),
+  amountCents: z.number().int(),
+  note: z.string().nullable().optional(),
+});
+const splitPartsSchema = z.array(splitPartSchema);
+
+/**
+ * setTransactionSplits (src/lib/splits.ts) owns every business rule for a split -- part
+ * count, sign, sum-to-parent, archived categories, transfers -- so this action validates
+ * only the JSON shape and who may act, then hands whatever comes through to the library and
+ * returns its own error message verbatim. A generic "Could not save" here would hide exactly
+ * the information (the sum mismatch and its size, which category is archived, that a
+ * transfer cannot be split) a person needs in order to fix the form.
+ *
+ * Who may act: any signed-in member, the same as every other action in this file. The spec
+ * originally asked for "admin OR the account's owner", and that was withdrawn on review: a
+ * member can already recategorize, rename and reattribute a transaction on someone else's
+ * account through the actions above, so restricting only splits would add household friction
+ * ("why can you not split the charge on my card?") while protecting nothing a member cannot
+ * already change. If transaction editing is ever scoped per account, it has to be scoped for
+ * all of these together, not for splits alone.
+ */
+export async function saveSplitsAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  const user = await requireUser();
+  const txnIdParsed = z.coerce.number().int().positive().safeParse(formData.get('txnId'));
+  if (!txnIdParsed.success) return { error: 'Invalid request.' };
+
+  const row = getTransaction(txnIdParsed.data);
+  if (!row) return { error: 'That transaction no longer exists.' };
+
+  let rawParts: unknown;
+  try {
+    rawParts = JSON.parse(String(formData.get('parts') ?? '[]'));
+  } catch {
+    return { error: 'Could not read the split parts.' };
+  }
+
+  const partsParsed = splitPartsSchema.safeParse(rawParts);
+  if (!partsParsed.success) return { error: 'Invalid split parts.' };
+  const parts = partsParsed.data.map((part) => ({
+    categoryId: part.categoryId,
+    amountCents: part.amountCents,
+    note: part.note ?? null,
+  }));
+
+  try {
+    setTransactionSplits({ txnId: txnIdParsed.data, parts, userId: user.id });
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : 'Could not save the split.' };
+  }
+
+  revalidatePath('/transactions');
+  revalidatePath('/review');
+  return { message: parts.length === 0 ? 'Split removed.' : 'Split saved.' };
 }
