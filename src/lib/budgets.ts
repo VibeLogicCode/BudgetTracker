@@ -1,9 +1,9 @@
-import { and, eq, gte, isNull, lte, sql } from 'drizzle-orm';
+import { and, asc, eq, gte, isNull, lte, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
-import { budgets, transactions, transactionSplits } from '@/db/schema';
+import { budgetRollover, budgets, transactions, transactionSplits } from '@/db/schema';
 import { listCategories, type CategoryRecord } from '@/lib/categories';
 import { nowIso } from '@/lib/clock';
-import { addMonths, isMonthKey, monthEnd, monthStart } from '@/lib/dates';
+import { addMonths, isMonthKey, monthEnd, monthRange, monthStart } from '@/lib/dates';
 import { netSpentCents, pctOf } from '@/lib/money';
 import { EFFECTIVE_AMOUNT, EFFECTIVE_CATEGORY } from '@/lib/splits';
 
@@ -15,7 +15,18 @@ export interface BudgetRow {
   parentId: number | null;
   isIncome: boolean;
   isArchived: boolean;
+  /**
+   * The EFFECTIVE limit -- base + carried rollover (spec 2026-08-22, v1.7.0, Task 10). Every
+   * existing consumer (progress bars, budgetTotals, the dashboard, notification evaluators)
+   * reads this field and needs no further changes to pick up rollover.
+   */
   limitCents: number | null;
+  /** The resolved limit BEFORE any rollover carry. Equal to limitCents whenever rollover is
+   *  off, or on but carrying nothing yet. */
+  baseLimitCents: number | null;
+  /** Positive-only leftover carried in from prior months (ruling 4: overspend never carries
+   *  a debt forward). Zero when rollover is off. */
+  carryCents: number;
   spentCents: number;
   remainingCents: number | null;
   pct: number | null;
@@ -143,6 +154,235 @@ export function categorySpend(
 }
 
 /**
+ * The rollup rule, in exactly one place (spec 2026-08-22, v1.7.0, Task 10): a category's own
+ * spend plus every id in `childIds` -- archived children included, because callers pass the
+ * archived-inclusive list, never the render-only one, so an archived child's spend is never
+ * silently dropped. buildRow and categorySpendWithRollup both fold through this, so the rule
+ * can only drift by editing this one function.
+ */
+function foldRollup(categoryId: number, childIds: number[], spendByCategory: Map<number, number>): number {
+  return childIds.reduce((sum, id) => sum + (spendByCategory.get(id) ?? 0), spendByCategory.get(categoryId) ?? 0);
+}
+
+/**
+ * `categoryId`'s spend for `month`, INCLUDING every child's (archived included) -- the same
+ * rollup rule `budgetProgress`/`buildRow` renders, via foldRollup above. One query for the
+ * month's category spend (categorySpend) plus one for the category tree (listCategories).
+ *
+ * effectiveBudget's multi-month carry walk does NOT call this once per month -- see
+ * categorySpendWithRollupSeries below for the batched form that keeps a 24-month look-back to
+ * a small, constant number of queries.
+ */
+export function categorySpendWithRollup(month: string, scope: BudgetScope, userId: number | null, categoryId: number): number {
+  assertMonth(month);
+  const spendByCategory = categorySpend(month, { scope, attributedUserId: scope === 'personal' ? userId : undefined });
+  const childIds = listCategories({ includeArchived: true })
+    .filter((category) => category.parentId === categoryId)
+    .map((category) => category.id);
+  return foldRollup(categoryId, childIds, spendByCategory);
+}
+
+/**
+ * Same rule as categorySpendWithRollup/foldRollup, batched over many months in ONE query
+ * instead of one call per month. Without this, effectiveBudget's up-to-24-month lookback
+ * would be a query per category per month. Same batch-then-fold-over-the-month-axis shape as
+ * debtOverTime in src/lib/loans.ts: two queries (the category tree, and the transactions
+ * grouped by month), then a fold over the requested month keys -- no per-month query.
+ */
+function categorySpendWithRollupSeries(
+  scope: BudgetScope,
+  userId: number | null,
+  categoryId: number,
+  months: string[],
+): Map<string, number> {
+  const result = new Map<string, number>();
+  if (months.length === 0) return result;
+  for (const m of months) result.set(m, 0);
+
+  const childIds = listCategories({ includeArchived: true })
+    .filter((category) => category.parentId === categoryId)
+    .map((category) => category.id);
+  const includedIds = new Set([categoryId, ...childIds]);
+
+  const clauses = [
+    gte(transactions.date, monthStart(months[0] as string)),
+    lte(transactions.date, monthEnd(months[months.length - 1] as string)),
+    eq(transactions.isTransfer, false),
+    sql`${EFFECTIVE_CATEGORY} is not null`,
+  ];
+  if (scope === 'personal' && userId !== null) clauses.push(eq(transactions.attributedUserId, userId));
+
+  const rows = getDb()
+    .select({
+      month: sql<string>`substr(${transactions.date}, 1, 7)`,
+      categoryId: EFFECTIVE_CATEGORY,
+      total: sql<number>`sum(${EFFECTIVE_AMOUNT})`,
+    })
+    .from(transactions)
+    .leftJoin(transactionSplits, eq(transactionSplits.txnId, transactions.id))
+    .where(and(...clauses))
+    .groupBy(sql`substr(${transactions.date}, 1, 7)`, EFFECTIVE_CATEGORY)
+    .all();
+
+  for (const row of rows) {
+    if (row.categoryId === null || !includedIds.has(row.categoryId)) continue;
+    result.set(row.month, (result.get(row.month) ?? 0) + netSpentCents(row.total ?? 0));
+  }
+  return result;
+}
+
+function rolloverCondition(scope: BudgetScope, userId: number | null, categoryId: number) {
+  return scope === 'personal'
+    ? and(eq(budgetRollover.scope, 'personal'), eq(budgetRollover.userId, userId as number), eq(budgetRollover.categoryId, categoryId))
+    : and(eq(budgetRollover.scope, 'household'), isNull(budgetRollover.userId), eq(budgetRollover.categoryId, categoryId));
+}
+
+/**
+ * A row's EXISTENCE means rollover is ON for this (scope, user, category); deleting it turns
+ * rollover off again (src/db/schema.ts's doc comment on budgetRollover -- no `enabled` column
+ * to drift out of sync with). Re-enabling an already-on rollover is a no-op that leaves the
+ * original startMonth untouched: silently moving when the carry began would be a worse
+ * surprise than doing nothing.
+ */
+export function setRollover(input: {
+  scope: BudgetScope;
+  userId: number | null;
+  categoryId: number;
+  enabled: boolean;
+  startMonth: string;
+}): void {
+  assertMonth(input.startMonth);
+  if (input.scope === 'personal' && input.userId === null) throw new Error('Personal rollover requires a user');
+  if (input.scope === 'household' && input.userId !== null) throw new Error('Household rollover must not have a user');
+
+  const db = getDb();
+  const existing = db
+    .select({ id: budgetRollover.id })
+    .from(budgetRollover)
+    .where(rolloverCondition(input.scope, input.userId, input.categoryId))
+    .get();
+
+  if (!input.enabled) {
+    if (existing) db.delete(budgetRollover).where(eq(budgetRollover.id, existing.id)).run();
+    return;
+  }
+  if (existing) return; // already on -- leave its startMonth exactly as it was
+
+  db.insert(budgetRollover)
+    .values({
+      scope: input.scope,
+      userId: input.userId,
+      categoryId: input.categoryId,
+      startMonth: input.startMonth,
+      createdAt: nowIso(),
+    })
+    .run();
+}
+
+/** Null means rollover is off for this (scope, user, category). */
+export function rolloverStartMonth(scope: BudgetScope, userId: number | null, categoryId: number): string | null {
+  const row = getDb()
+    .select({ startMonth: budgetRollover.startMonth })
+    .from(budgetRollover)
+    .where(rolloverCondition(scope, userId, categoryId))
+    .get();
+  return row ? row.startMonth : null;
+}
+
+/**
+ * resolveBudget's own "newest row at or before" rule (see its doc comment above), batched
+ * over many months in ONE query -- same reasoning as categorySpendWithRollupSeries above.
+ */
+function resolveBudgetSeries(
+  scope: BudgetScope,
+  userId: number | null,
+  categoryId: number,
+  months: string[],
+): Map<string, number | null> {
+  const result = new Map<string, number | null>();
+  if (months.length === 0) return result;
+
+  const rows = getDb()
+    .select({ effectiveMonth: budgets.effectiveMonth, amountCents: budgets.amountCents })
+    .from(budgets)
+    .where(
+      and(
+        scopeCondition(scope, userId),
+        eq(budgets.categoryId, categoryId),
+        lte(budgets.effectiveMonth, months[months.length - 1] as string),
+      ),
+    )
+    .orderBy(asc(budgets.effectiveMonth))
+    .all();
+
+  let idx = 0;
+  let current: number | null = null;
+  for (const m of months) {
+    while (idx < rows.length && rows[idx].effectiveMonth <= m) {
+      current = rows[idx].amountCents;
+      idx += 1;
+    }
+    result.set(m, current);
+  }
+  return result;
+}
+
+/**
+ * Base limit + carried leftover for `month` (spec 2026-08-22, v1.7.0, Task 10). Pure over db
+ * reads and the `month` argument -- no clock access.
+ *
+ * No rollover row, or `month` at or before the row's startMonth: carryCents is 0 and
+ * effectiveCents is exactly baseCents, so a category with rollover off (or not yet at its
+ * start month) is indistinguishable from before this feature existed -- every existing
+ * consumer of limitCents keeps seeing the same number it always did.
+ *
+ * Otherwise, walk every month from max(startMonth, month-24) to month-1 inclusive:
+ *   carry = max(0, carry + resolveBudget(m) - spentRollup(m))
+ * A month with no resolved base contributes 0 (never null) to that sum. The max(0, ...) is
+ * applied EVERY month, not once at the end -- ruling 4 (positive leftovers only; overspend
+ * never creates a carried debt) -- so one very bad month can zero out the carry, but can
+ * never push a later month's effective limit below its own base. 24 months is a hard cap on
+ * the look-back regardless of how much earlier startMonth is.
+ *
+ * PERFORMANCE: the walk reads the whole window's base values and the whole window's
+ * rolled-up spend in one query each (resolveBudgetSeries / categorySpendWithRollupSeries), so
+ * this function costs a small, constant number of queries no matter how many months it
+ * walks -- never a query per month.
+ */
+export function effectiveBudget(
+  scope: BudgetScope,
+  userId: number | null,
+  categoryId: number,
+  month: string,
+): { baseCents: number | null; carryCents: number; effectiveCents: number | null } {
+  assertMonth(month);
+  if (scope === 'personal' && userId === null) throw new Error('Personal effective budget requires a user');
+
+  const baseCents = resolveBudget(scope, userId, categoryId, month);
+  const startMonth = rolloverStartMonth(scope, userId, categoryId);
+
+  if (startMonth === null || month <= startMonth) {
+    return { baseCents, carryCents: 0, effectiveCents: baseCents };
+  }
+
+  const lookbackFloor = addMonths(month, -24);
+  const windowStart = startMonth > lookbackFloor ? startMonth : lookbackFloor;
+  const months = monthRange(windowStart, addMonths(month, -1));
+
+  const baseByMonth = resolveBudgetSeries(scope, userId, categoryId, months);
+  const spentByMonth = categorySpendWithRollupSeries(scope, userId, categoryId, months);
+
+  let carry = 0;
+  for (const m of months) {
+    const base = baseByMonth.get(m) ?? 0;
+    const spent = spentByMonth.get(m) ?? 0;
+    carry = Math.max(0, carry + base - spent);
+  }
+
+  return { baseCents, carryCents: carry, effectiveCents: baseCents === null ? null : baseCents + carry };
+}
+
+/**
  * `pctOf` (money.ts) returns null for a zero limit, which is correct for "no limit"
  * but wrong for a real, explicit $0 limit: a $0 budget with any spend against it is
  * not "no data", it's maximally over. money.ts is not touched — this local branch
@@ -166,24 +406,30 @@ function buildRow(
   const childRows = renderChildren.map((child) =>
     buildRow(child, spendByCategory, scope, userId, month, [], []),
   );
-  const ownSpend = spendByCategory.get(category.id) ?? 0;
   // Rollup rule: a parent counts its own transactions plus ALL children's — including
   // an archived child's, which is never rendered as its own row (rollupChildren is
-  // archived-inclusive; renderChildren, used only for display, is not).
-  const childrenSpend = rollupChildren.reduce((sum, child) => sum + (spendByCategory.get(child.id) ?? 0), 0);
-  const spentCents = ownSpend + childrenSpend;
-  const limitCents = resolveBudget(scope, userId, category.id, month);
+  // archived-inclusive; renderChildren, used only for display, is not). foldRollup is the
+  // ONE place this rule lives; categorySpendWithRollup (used by effectiveBudget's carry walk)
+  // shares it too, so the two can never silently drift apart (Task 10).
+  const spentCents = foldRollup(
+    category.id,
+    rollupChildren.map((child) => child.id),
+    spendByCategory,
+  );
+  const { baseCents, carryCents, effectiveCents } = effectiveBudget(scope, userId, category.id, month);
   return {
     categoryId: category.id,
     categoryName: category.name,
     parentId: category.parentId,
     isIncome: category.isIncome,
     isArchived: category.isArchived,
-    limitCents,
+    limitCents: effectiveCents,
+    baseLimitCents: baseCents,
+    carryCents,
     spentCents,
-    remainingCents: limitCents === null ? null : limitCents - spentCents,
-    pct: computePct(limitCents, spentCents),
-    overBudget: limitCents !== null && spentCents > limitCents,
+    remainingCents: effectiveCents === null ? null : effectiveCents - spentCents,
+    pct: computePct(effectiveCents, spentCents),
+    overBudget: effectiveCents !== null && spentCents > effectiveCents,
     children: childRows,
   };
 }

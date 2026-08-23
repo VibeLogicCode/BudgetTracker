@@ -23,6 +23,10 @@ function makeRow(overrides: Partial<BudgetRow> = {}): BudgetRow {
     isIncome: false,
     isArchived: false,
     limitCents: 20000,
+    // v1.7.0 rollover: limitCents is the EFFECTIVE limit, base plus any carry. A row with no
+    // rollover has base equal to limit and no carry, which is what this default represents.
+    baseLimitCents: 20000,
+    carryCents: 0,
     spentCents: 5000,
     remainingCents: 15000,
     pct: 25,
