@@ -158,7 +158,22 @@ export type RenderInput =
   // error.message ONLY (see raise.ts's raiseSyncFailed) -- the SimpleFIN access URL is a
   // bearer credential and this event id must never carry a third field a URL could ride in
   // on, such as the connection row or the request that failed.
-  | { event: 'sync_failed'; dateIso: string; error: string };
+  | { event: 'sync_failed'; dateIso: string; error: string }
+  // Task 16 (v1.7.0): the monthly household digest. `month` is the month that JUST ENDED
+  // (the evaluator's job, not this renderer's, to pick it), and every figure here is already
+  // resolved by the evaluator from existing report/budget helpers -- cashflowTrend for
+  // income/spend/net, budgetTotals(budgetProgress(month)) for the budgeted pair, topMerchants
+  // for the merchant lines. This renderer does no aggregation of its own.
+  | {
+      event: 'monthly_digest';
+      month: string;
+      incomeCents: number;
+      spendCents: number;
+      netCents: number;
+      budgetedLimitCents: number;
+      budgetedSpentCents: number;
+      topMerchants: readonly DigestLine[];
+    };
 
 function money(cents: number): string {
   return formatCents(cents, { currency: true });
@@ -243,6 +258,36 @@ function renderDigest(input: Extract<RenderInput, { event: 'weekly_digest' }>): 
   if (input.reviewCount > 0) parts.push(`${input.reviewCount} transactions still need review.`);
   if (input.overBudget.length > 0) {
     parts.push(`Over budget this month: ${input.overBudget.map((n) => truncateText(n, NAME_MAX)).join(', ')}.`);
+  }
+  return parts.join('\n').trimEnd();
+}
+
+/**
+ * Task 16 (v1.7.0): the monthly digest, sharing the weekly digest's plain-text table style
+ * (the same padded() helper) rather than inventing a second one. Unlike the weekly digest,
+ * there is no "nothing to report" branch: the household's income/spend/net for a real closed
+ * calendar month is never truly empty in the way an arbitrary trailing week can be, and a
+ * missing budgeted total already renders its own honest sentence below.
+ */
+function renderMonthlyDigest(input: Extract<RenderInput, { event: 'monthly_digest' }>): string {
+  const parts: string[] = [
+    `Income: ${money(input.incomeCents)}`,
+    `Spent: ${money(input.spendCents)}`,
+    `Net: ${money(input.netCents)}`,
+  ];
+  if (input.topMerchants.length > 0) {
+    parts.push('', 'Top merchants', ...padded(input.topMerchants));
+  }
+  parts.push('');
+  if (input.budgetedLimitCents > 0) {
+    const remainingCents = input.budgetedLimitCents - input.budgetedSpentCents;
+    parts.push(
+      remainingCents >= 0
+        ? `Budgets: ${money(input.budgetedSpentCents)} of ${money(input.budgetedLimitCents)} spent, ${money(remainingCents)} left.`
+        : `Budgets: ${money(input.budgetedSpentCents)} of ${money(input.budgetedLimitCents)} spent, ${money(-remainingCents)} over.`,
+    );
+  } else {
+    parts.push('No budgets were set this month.');
   }
   return parts.join('\n').trimEnd();
 }
@@ -463,5 +508,7 @@ export function renderEvent(input: RenderInput): { subject: string; body: string
           'Check Settings → Connections.',
         ].join('\n\n'),
       };
+    case 'monthly_digest':
+      return { subject: `Monthly summary for ${monthLabel(input.month)}`, body: renderMonthlyDigest(input) };
   }
 }

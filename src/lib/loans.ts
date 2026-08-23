@@ -4,6 +4,7 @@ import { loanMatcherRules, loanPayments, transactions, users, warrantyItemTypes,
 import { nowIso } from '@/lib/clock';
 import { addDaysIso, addMonths, addMonthsClamped, monthEnd, monthOf, monthRange, todayIso } from '@/lib/dates';
 import type { RateVerdict } from '@/lib/notify/ratelimit';
+import { meanCents } from '@/lib/predict/stats';
 import type { BillingCycle } from '@/lib/warranty/constants';
 
 /**
@@ -638,6 +639,76 @@ function nextPayment(input: {
   return null;
 }
 
+/** The shape payoffProjection() returns below; also embedded (optionally) in LoanSummary. */
+export interface PayoffProjection {
+  monthlyAppliedCents: number;
+  projectedPayoffMonth: string;
+}
+
+/**
+ * Task 16 (v1.7.0): a payoff projection, DISPLAY ONLY -- like payoffFraction and
+ * nextPaymentDate above it, this never writes to the database and is never read back into any
+ * balance-affecting code in this file. It deliberately never touches interest_rate_bps: that
+ * column is display only (MUST-13.1, guarded by tests/ops/loan-invariants.test.ts's whole-file
+ * regex scan, and re-guarded function-scoped by tests/lib/loan-payoff.test.ts). A projection
+ * built only from what the household has actually paid needs no rate at all.
+ *
+ * The pace is read from loan_payments.applied_cents, never amount_cents: applied_cents is the
+ * piece of a linked transaction that actually moved current_balance_cents (see link()'s
+ * docblock far above), while amount_cents is the size of the transaction itself and can be
+ * larger than what the loan absorbed (a payment that also covered a fee, or one that landed
+ * after the balance had already reached zero and so applied nothing further). A projection of
+ * when the BALANCE reaches zero has to be paced by the number that actually moves the balance.
+ *
+ * The window is the six FULL calendar months immediately before today's month -- the same
+ * "completed months only, never the one still in progress" convention
+ * notify/evaluate/monthly.ts's comparePredicted already uses for its own six-month lookback --
+ * so running this on the 2nd of the month is never skewed low by a mostly-empty in-progress
+ * month. A month with no payment posted counts as a ZERO in the mean, not as a data point to
+ * skip over: a loan paid once in six months must project at one sixth of that payment's size,
+ * not at the full amount, or a household that pays twice a year would be told its loan behaves
+ * like one paid every month.
+ *
+ * Clock-free (v1.4.0 rule): `today` arrives as a parameter; nothing here reads the clock.
+ */
+export function payoffProjection(itemId: number, today: string): PayoffProjection | null {
+  const item = getDb()
+    .select({ balanceCents: warrantyItems.currentBalanceCents })
+    .from(warrantyItems)
+    .where(eq(warrantyItems.id, itemId))
+    .get();
+  const balanceCents = item?.balanceCents ?? null;
+  if (balanceCents === null || balanceCents === 0) return null;
+
+  const thisMonth = monthOf(today);
+  const months = monthRange(addMonths(thisMonth, -6), addMonths(thisMonth, -1));
+
+  const rows = getDb()
+    .select({
+      month: sql<string>`substr(${loanPayments.createdAt}, 1, 7)`,
+      total: sql<number>`sum(${loanPayments.appliedCents})`,
+    })
+    .from(loanPayments)
+    .where(
+      and(
+        eq(loanPayments.itemId, itemId),
+        sql`substr(${loanPayments.createdAt}, 1, 7) >= ${months[0]}`,
+        sql`substr(${loanPayments.createdAt}, 1, 7) <= ${months[months.length - 1]}`,
+      ),
+    )
+    .groupBy(sql`substr(${loanPayments.createdAt}, 1, 7)`)
+    .all();
+
+  const byMonth = new Map(rows.map((row) => [row.month, row.total ?? 0]));
+  // meanCents (predict/stats.ts) rounds half away from zero and is what "a month with no
+  // payment counts as zero" means in practice: months.map fills every one of the 6 slots.
+  const monthlyAppliedCents = meanCents(months.map((month) => byMonth.get(month) ?? 0)) ?? 0;
+  if (monthlyAppliedCents === 0) return null;
+
+  const monthsNeeded = Math.ceil(balanceCents / monthlyAppliedCents);
+  return { monthlyAppliedCents, projectedPayoffMonth: addMonths(thisMonth, monthsNeeded) };
+}
+
 export interface LoanSummary {
   itemId: number;
   name: string;
@@ -656,6 +727,9 @@ export interface LoanSummary {
   nextPaymentDate: string | null;
   lastPaymentAt: string | null;
   paymentCount: number;
+  /** Task 16 (v1.7.0): from payoffProjection() above, DISPLAY ONLY. Optional so pre-existing
+   *  LoanSummary fixtures/tests need no changes; absent and null both mean "nothing to show". */
+  payoffProjection?: PayoffProjection | null;
 }
 
 export function listLoans(today: string = todayIso()): LoanSummary[] {
@@ -695,6 +769,9 @@ export function listLoans(today: string = todayIso()): LoanSummary[] {
       expiryDate: row.expiryDate,
       today,
     }),
+    // Task 16 (v1.7.0): attached here, rather than as a new LoansCard prop, so the card stays
+    // a pure presentational component fed by listLoans()'s existing `today` parameter.
+    payoffProjection: payoffProjection(row.itemId, today),
   }));
 }
 

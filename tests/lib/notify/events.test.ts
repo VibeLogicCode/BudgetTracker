@@ -15,6 +15,7 @@ import {
   eventsFor,
   isChannel,
   isNotificationEventId,
+  monthlyDigestKey,
   newSigninKey,
   predictedVsActualKey,
   restoreOutcomeKey,
@@ -38,11 +39,11 @@ describe('MUST-2.1: events.ts is pure and client-safe', () => {
   });
 });
 
-describe('the sixteen registered events', () => {
-  it('has exactly sixteen entries with unique, well-formed ids', () => {
-    expect(NOTIFICATION_EVENTS).toHaveLength(16);
+describe('the seventeen registered events', () => {
+  it('has exactly seventeen entries with unique, well-formed ids', () => {
+    expect(NOTIFICATION_EVENTS).toHaveLength(17);
     const ids = NOTIFICATION_EVENTS.map((e) => e.id);
-    expect(new Set(ids).size).toBe(16);
+    expect(new Set(ids).size).toBe(17);
     for (const id of ids) expect(id).toMatch(/^[a-z][a-z0-9_]*$/);
   });
 
@@ -66,6 +67,7 @@ describe('the sixteen registered events', () => {
       ['predicted_vs_actual', 'all', 'daily_slot', false],
       ['suggested_budget_refresh', 'all', 'daily_slot', false],
       ['sync_failed', 'admin', 'immediate', true],
+      ['monthly_digest', 'all', 'daily_slot', false],
     ]);
   });
 
@@ -105,8 +107,8 @@ describe('lookup helpers', () => {
   it('MUST-4.3: eventsFor("member") excludes both admin events', () => {
     expect(eventsFor('member').map((e) => e.id)).not.toContain('backup_failed');
     expect(eventsFor('member').map((e) => e.id)).not.toContain('restore_outcome');
-    expect(eventsFor('member')).toHaveLength(12);
-    expect(eventsFor('admin')).toHaveLength(16);
+    expect(eventsFor('member')).toHaveLength(13);
+    expect(eventsFor('admin')).toHaveLength(17);
   });
 
   it('exposes the two channels', () => {
@@ -176,7 +178,10 @@ describe('MUST-6.1: the update_available registry entry', () => {
 
 describe('Task 8 (v1.7.0): the sync_failed registry entry', () => {
   it('brings the registry to sixteen and is admin-audience, default-on, immediate-triggered', () => {
-    expect(NOTIFICATION_EVENTS).toHaveLength(16);
+    // >= rather than an exact count, matching the MUST-6.1 block's own precedent above: this
+    // test asserts what sync_failed's OWN addition brought the registry to, not a live total
+    // that every later addition (monthly_digest, here) would otherwise have to keep in sync.
+    expect(NOTIFICATION_EVENTS.length).toBeGreaterThanOrEqual(16);
     const entry = eventDef('sync_failed');
     expect(entry).toEqual({
       id: 'sync_failed',
@@ -228,5 +233,36 @@ describe('spec section 9: the six predictive dedup keys', () => {
     for (const key of [budgetPaceKey('personal', 7, '2026-08'), unusualTransactionKey(1), predictedVsActualKey('2026-07')]) {
       expect(key).not.toMatch(/telegram|email|user/);
     }
+  });
+});
+
+describe('Task 16 (v1.7.0): the monthly_digest registry entry', () => {
+  it('brings the registry to seventeen and is all-audience, default-off, daily_slot-triggered', () => {
+    expect(NOTIFICATION_EVENTS).toHaveLength(17);
+    const entry = eventDef('monthly_digest');
+    expect(entry).toEqual({
+      id: 'monthly_digest',
+      label: 'Monthly household summary',
+      blurb: 'Income, spending and budgets for the month that just ended.',
+      audience: 'all',
+      trigger: 'daily_slot',
+      defaultEnabled: false,
+    });
+  });
+
+  it('MUST-4.3: audience "all" means both member and admin see it', () => {
+    expect(eventsFor('member').some((e) => e.id === 'monthly_digest')).toBe(true);
+    expect(eventsFor('admin').some((e) => e.id === 'monthly_digest')).toBe(true);
+  });
+
+  it('keys once per reported month, ever, and never repeats the user or channel', () => {
+    expect(monthlyDigestKey('2026-07')).toBe('monthly-digest:2026-07');
+    expect(monthlyDigestKey('2026-07')).not.toBe(monthlyDigestKey('2026-08'));
+    expect(monthlyDigestKey('2026-07')).not.toMatch(/telegram|email|user/);
+  });
+
+  it('never collides with weeklyDigestKey, which uses a similarly-named prefix', () => {
+    expect(monthlyDigestKey('2026-07')).not.toBe(weeklyDigestKey('2026-07-01'));
+    expect(monthlyDigestKey('2026-07-01')).not.toBe(weeklyDigestKey('2026-07-01'));
   });
 });

@@ -258,6 +258,63 @@ describe('§10.2: the weekly digest', () => {
   });
 });
 
+describe('Task 16 (v1.7.0): the monthly digest', () => {
+  const full = {
+    event: 'monthly_digest',
+    month: '2026-07',
+    incomeCents: 500000,
+    spendCents: 320000,
+    netCents: 180000,
+    budgetedLimitCents: 200000,
+    budgetedSpentCents: 150000,
+    topMerchants: [
+      { name: 'LOBLAWS', cents: 21055 },
+      { name: 'PETRO-CANADA', cents: 12100 },
+    ],
+  } as const;
+
+  it('renders the subject with the month label, no em dash', () => {
+    const { subject } = renderEvent(full);
+    expect(subject).toBe('Monthly summary for July 2026');
+    expect(subject).not.toContain('—');
+  });
+
+  it('renders income, spend, net, top merchants and a budgets line under limit', () => {
+    const { body } = renderEvent(full);
+    expect(body).toContain('Income: $5,000.00');
+    expect(body).toContain('Spent: $3,200.00');
+    expect(body).toContain('Net: $1,800.00');
+    expect(body).toContain('Top merchants');
+    expect(body).toContain('LOBLAWS');
+    expect(body).toContain('$210.55');
+    expect(body).toContain('Budgets: $1,500.00 of $2,000.00 spent, $500.00 left.');
+  });
+
+  it('says "over" instead of "left" once spend passes the budgeted limit', () => {
+    const { body } = renderEvent({ ...full, budgetedLimitCents: 100000, budgetedSpentCents: 150000 });
+    expect(body).toContain('Budgets: $1,500.00 of $1,000.00 spent, $500.00 over.');
+    expect(body).not.toContain('left.');
+  });
+
+  it('says nothing was budgeted when no category resolved a limit that month', () => {
+    const { body } = renderEvent({ ...full, budgetedLimitCents: 0, budgetedSpentCents: 0 });
+    expect(body).toContain('No budgets were set this month.');
+  });
+
+  it('omits the top-merchants block entirely when there were none', () => {
+    const { body } = renderEvent({ ...full, topMerchants: [] });
+    expect(body).not.toContain('Top merchants');
+  });
+
+  it('never uses an em dash or an arrow character, in the subject or the body', () => {
+    const { subject, body } = renderEvent(full);
+    expect(subject).not.toContain('—');
+    expect(subject).not.toContain('→');
+    expect(body).not.toContain('—');
+    expect(body).not.toContain('→');
+  });
+});
+
 describe('MUST-10.3: untrusted values are plain and truncated', () => {
   it('renders markup literally', () => {
     const { subject, body } = renderEvent({
@@ -357,6 +414,18 @@ const SAMPLES_BY_EVENT: Record<string, RenderInput[]> = {
     { event: 'suggested_budget_refresh', month: '2026-08', household: [{ name: 'C', nowCents: 2, wasCents: null }], personal: [], changedCount: 1 },
   ],
   sync_failed: [{ event: 'sync_failed', dateIso: '2026-08-22', error: 'The SimpleFIN bridge returned HTTP 500.' }],
+  monthly_digest: [
+    {
+      event: 'monthly_digest',
+      month: '2026-07',
+      incomeCents: 0,
+      spendCents: 0,
+      netCents: 0,
+      budgetedLimitCents: 0,
+      budgetedSpentCents: 0,
+      topMerchants: [],
+    },
+  ],
 };
 
 describe('MUST-10.4: no notification body contains a link', () => {

@@ -173,6 +173,14 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     trigger: 'immediate',
     defaultEnabled: true,
   },
+  {
+    id: 'monthly_digest',
+    label: 'Monthly household summary',
+    blurb: 'Income, spending and budgets for the month that just ended.',
+    audience: 'all',
+    trigger: 'daily_slot',
+    defaultEnabled: false,
+  },
 ];
 
 export function eventDef(id: string): NotificationEventDef | undefined {
@@ -304,4 +312,16 @@ export function suggestedBudgetRefreshKey(month: string): string {
  */
 export function syncFailedKey(dateIso: string): string {
   return `sync-failed:${dateIso}`;
+}
+
+/**
+ * Once per reported month, ever (Task 16, v1.7.0). The evaluator only ever visits the month it
+ * just closed, so a row the 400-day sweep prunes belongs to a month that will never be
+ * evaluated again -- same pruning argument as predictedVsActualKey. A dedicated `monthly-`
+ * prefix (rather than reusing weeklyDigestKey's `digest:` one) keeps the two dedup keys
+ * visually and lexically distinct even though a YYYY-MM month key and a YYYY-MM-DD slot date
+ * could never collide on length alone.
+ */
+export function monthlyDigestKey(month: string): string {
+  return `monthly-digest:${month}`;
 }

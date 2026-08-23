@@ -80,6 +80,11 @@ function keys(): string[] {
   );
 }
 
+/** monthly_digest is default-off (Task 16, v1.7.0): every test that wants it must opt in. */
+function enableMonthlyDigest(userId: number): void {
+  setPref(userId, 'monthly_digest', 'email', true);
+}
+
 describe('MUST-9.26 and MUST-9.31: the three-day window', () => {
   it('fires on day 1, 2 and 3 and not on day 4', () => {
     const userId = optedInUser();
@@ -253,5 +258,82 @@ describe('MUST-9.30: the eight-line cap picks the largest absolute deltas', () =
 
     const lineCount = (body.match(/ expected, /g) ?? []).length;
     expect(lineCount).toBe(8);
+  });
+});
+
+/**
+ * Design ruling 10 (v1.7.0): the monthly household digest shares the existing three-day
+ * window and monthly dedup machinery with the two reports above, reporting the month that
+ * JUST ENDED (July, when evaluated in early August), and is off by default like every other
+ * digest-shaped event in this registry.
+ */
+describe('Task 16 (v1.7.0): the monthly digest', () => {
+  it('fires once in the first-3-days window, keyed and labelled on the month that just ended', () => {
+    const userId = optedInUser();
+    enableMonthlyDigest(userId);
+    setPref(userId, 'predicted_vs_actual', 'email', false);
+    setPref(userId, 'suggested_budget_refresh', 'email', false);
+    seedHistory();
+
+    expect(evaluateMonthBoundary({ userId, now: new Date('2026-08-01T09:00:00Z'), tz: TZ })).toBe(1);
+    expect(keys()).toEqual(['monthly-digest:2026-07']);
+    const row = t.sqlite.prepare('select subject, body from notification_outbox limit 1').get() as {
+      subject: string;
+      body: string;
+    };
+    expect(row.subject).toBe('Monthly summary for July 2026');
+    expect(row.body).toContain('$713.40'); // July's spend, from seedHistory()
+  });
+
+  it('does not fire outside the window (day 4)', () => {
+    const userId = optedInUser();
+    enableMonthlyDigest(userId);
+    setPref(userId, 'predicted_vs_actual', 'email', false);
+    setPref(userId, 'suggested_budget_refresh', 'email', false);
+    seedHistory();
+
+    expect(evaluateMonthBoundary({ userId, now: new Date('2026-08-04T09:00:00Z'), tz: TZ })).toBe(0);
+    expect(keys()).toEqual([]);
+  });
+
+  it('is off by default: a household that never opted in gets nothing, even with real spend and an email channel', () => {
+    const userId = optedInUser(); // opts the OTHER two events in, deliberately not this one
+    setPref(userId, 'predicted_vs_actual', 'email', false);
+    setPref(userId, 'suggested_budget_refresh', 'email', false);
+    seedHistory();
+
+    expect(evaluateMonthBoundary({ userId, now: new Date('2026-08-01T09:00:00Z'), tz: TZ })).toBe(0);
+    expect(keys()).toEqual([]);
+  });
+
+  it('a second evaluation in the same window enqueues nothing more (dedup)', () => {
+    const userId = optedInUser();
+    enableMonthlyDigest(userId);
+    setPref(userId, 'predicted_vs_actual', 'email', false);
+    setPref(userId, 'suggested_budget_refresh', 'email', false);
+    seedHistory();
+
+    expect(evaluateMonthBoundary({ userId, now: new Date('2026-08-01T09:00:00Z'), tz: TZ })).toBe(1);
+    expect(evaluateMonthBoundary({ userId, now: new Date('2026-08-02T09:00:00Z'), tz: TZ })).toBe(0);
+    expect(evaluateMonthBoundary({ userId, now: new Date('2026-08-03T09:00:00Z'), tz: TZ })).toBe(0);
+    expect(keys()).toEqual(['monthly-digest:2026-07']);
+  });
+
+  it('renders with no em dash and no arrow character', () => {
+    const userId = optedInUser();
+    enableMonthlyDigest(userId);
+    setPref(userId, 'predicted_vs_actual', 'email', false);
+    setPref(userId, 'suggested_budget_refresh', 'email', false);
+    seedHistory();
+
+    evaluateMonthBoundary({ userId, now: new Date('2026-08-01T09:00:00Z'), tz: TZ });
+    const row = t.sqlite.prepare('select subject, body from notification_outbox limit 1').get() as {
+      subject: string;
+      body: string;
+    };
+    expect(row.subject).not.toContain('—');
+    expect(row.subject).not.toContain('→');
+    expect(row.body).not.toContain('—');
+    expect(row.body).not.toContain('→');
   });
 });

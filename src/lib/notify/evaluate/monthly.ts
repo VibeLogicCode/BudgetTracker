@@ -1,11 +1,11 @@
-import { budgetProgress, resolveBudget } from '@/lib/budgets';
+import { budgetProgress, budgetTotals, resolveBudget } from '@/lib/budgets';
 import { listCategories } from '@/lib/categories';
-import { addMonths, currentMonth, todayIso } from '@/lib/dates';
+import { addMonths, currentMonth, monthEnd, monthStart, todayIso } from '@/lib/dates';
 import { isEventEnabled } from '@/lib/notify/config';
-import { CHANNELS, predictedVsActualKey, suggestedBudgetRefreshKey } from '@/lib/notify/events';
+import { CHANNELS, monthlyDigestKey, predictedVsActualKey, suggestedBudgetRefreshKey } from '@/lib/notify/events';
 import { flattenBudgetRows } from '@/lib/notify/evaluate/pace';
 import { enqueue } from '@/lib/notify/outbox';
-import { renderEvent, type PredictedLine, type RefreshLine } from '@/lib/notify/render';
+import { renderEvent, type DigestLine, type PredictedLine, type RefreshLine } from '@/lib/notify/render';
 import {
   MONTH_REPORT_DAY_MAX,
   MONTH_REPORT_MAX_LINES,
@@ -13,6 +13,9 @@ import {
   SUGGEST_REFRESH_MIN_DELTA_PCT,
 } from '@/lib/predict/constants';
 import { suggestionsFor } from '@/lib/predict/history';
+import { cashflowTrend, topMerchants } from '@/lib/reports';
+
+const MONTHLY_DIGEST_TOP_MERCHANTS = 5;
 
 /**
  * The two month-boundary reports. Both run on the user's daily slot and both need no
@@ -150,6 +153,51 @@ function fireSuggestedRefresh(input: { userId: number; month: string; now: Date 
 }
 
 /**
+ * Design ruling 10 (v1.7.0): the monthly household digest, sharing this same first-3-days
+ * window and reporting the month that JUST ENDED, same as firePredictedVsActual above --
+ * `endedMonth` is computed once in evaluateMonthBoundary and passed to both.
+ *
+ * Composed ENTIRELY from existing report/budget helpers (Task 16): cashflowTrend for the
+ * closed month's income/spend/net, budgetTotals(budgetProgress(month)) for the budgeted pair
+ * (limitCents there is already the rollover-EFFECTIVE limit as of commit 3538d91, which is
+ * exactly the number the Budgets page shows), and topMerchants for the merchant lines. No new
+ * aggregate query is written here.
+ */
+function fireMonthlyDigest(input: { userId: number; endedMonth: string; now: Date }): number {
+  if (!CHANNELS.some((channel) => isEventEnabled(input.userId, 'monthly_digest', channel))) return 0;
+
+  // cashflowTrend(1, {endMonth}) always returns exactly one row, for endedMonth itself.
+  const [trend] = cashflowTrend(1, { endMonth: input.endedMonth });
+  const totals = budgetTotals(budgetProgress(input.endedMonth));
+  const topMerchantLines: DigestLine[] = topMerchants({
+    from: monthStart(input.endedMonth),
+    to: monthEnd(input.endedMonth),
+    limit: MONTHLY_DIGEST_TOP_MERCHANTS,
+  }).map((row) => ({ name: row.normalizedMerchant, cents: row.spentCents }));
+
+  const { subject, body } = renderEvent({
+    event: 'monthly_digest',
+    month: input.endedMonth,
+    incomeCents: trend.incomeCents,
+    spendCents: trend.spendCents,
+    netCents: trend.netCents,
+    budgetedLimitCents: totals.budgetedLimitCents,
+    budgetedSpentCents: totals.budgetedSpentCents,
+    topMerchants: topMerchantLines,
+  });
+
+  const result = enqueue({
+    userId: input.userId,
+    eventId: 'monthly_digest',
+    dedupKey: monthlyDigestKey(input.endedMonth),
+    subject,
+    body,
+    at: input.now,
+  });
+  return result.inserted.length > 0 ? 1 : 0;
+}
+
+/**
  * MUST-9.26 and MUST-9.31: the three-day window exists so a container switched off on the 1st
  * still delivers on the 2nd or 3rd, on top of the daily slot's own 12-hour catch-up. Each
  * event's monthly key makes the second and third day a no-op.
@@ -159,8 +207,10 @@ export function evaluateMonthBoundary(input: { userId: number; now: Date; tz: st
   if (Number(today.slice(8, 10)) > MONTH_REPORT_DAY_MAX) return 0;
 
   const target = currentMonth(input.now, input.tz);
+  const endedMonth = addMonths(target, -1);
   let fired = 0;
-  fired += firePredictedVsActual({ userId: input.userId, month: addMonths(target, -1), now: input.now });
+  fired += firePredictedVsActual({ userId: input.userId, month: endedMonth, now: input.now });
   fired += fireSuggestedRefresh({ userId: input.userId, month: target, now: input.now });
+  fired += fireMonthlyDigest({ userId: input.userId, endedMonth, now: input.now });
   return fired;
 }
