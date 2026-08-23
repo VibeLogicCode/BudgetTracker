@@ -278,6 +278,95 @@ tried here: a Next major upgrade is its own release with its own breaking-change
 45-minute dependency bump, and this item was time-boxed. Note that blocker 2 is independent of
 Next entirely — a Next 16 upgrade would not clear it on its own.
 
+## 5c. Dependency advisories — triaged 2026-08-23, two fixed in 1.8.1, three wait for Next 16
+
+`npm audit` reported 12 (6 moderate, 6 high) during the v1.8.0 image build. Triaged rather than
+blanket-fixed, because EVERY suggested fix is a semver major — `npm audit fix --force` here means
+migrating the ORM, the framework, the scheduler and the OCR runtime simultaneously and calling it
+a security patch.
+
+**Fixed in 1.8.1:**
+- `drizzle-orm` 0.44.7 -> 0.45.2 (HIGH, SQL injection via improperly escaped SQL identifiers).
+  The only advisory touching the data layer, so it was taken seriously — but note it was very
+  likely NOT reachable here, and the reason is worth keeping: the flaw is in IDENTIFIER escaping
+  (table/column names), and this codebase has no `sql.identifier()` and no `sql.raw()` anywhere.
+  Every `sql` template interpolation is either a schema column defined in code
+  (`${categories.name}`) or a parameterised value (`${floorIso}`). Upgraded anyway, because
+  "unreachable today" is a property of current code, not of the dependency.
+- `node-cron` 3.0.3 -> 4.6.0, clearing the `uuid` moderate (bounds check when a caller supplies
+  its own buffer — node-cron never does).
+
+**Waiting on Next 16 (see 5d), which fixes all three together:**
+- `next` (HIGH, via postcss + sharp)
+- `postcss` (HIGH, XSS and path traversal via attacker-controlled `sourceMappingURL`) — BUILD
+  TIME only. postcss runs during `next build` and is not in the runtime image.
+- `sharp` (HIGH, inherited libvips CVE-2026-33327/33328/35590/35591) — the one with a real
+  runtime path, since sharp processes uploaded receipt photos. Mitigated by the uploader being a
+  household member, not the public.
+
+**DELIBERATELY NOT FIXED — the suggested fix is a DOWNGRADE:**
+- `onnxruntime-node` (HIGH, via `adm-zip`: a crafted ZIP triggers a 4 GB allocation).
+  `npm audit` names 1.21.1 as the fix while 1.27.0 is installed — six minor versions BACKWARD on
+  the OCR runtime. That happens when every newer release still bundles the flagged `adm-zip`.
+  The extraction path does not run in this app at all: OCR models are pre-vendored into
+  `vendor/ocr-models/` at build time and nothing unzips at runtime. Re-check when onnxruntime-node
+  ships a version that both fixes `adm-zip` and is newer than what is installed.
+
+**Also unreachable, left alone:** `esbuild` / `@esbuild-kit/*` (MODERATE — the flaw is esbuild's
+DEV SERVER accepting cross-origin requests; it arrives via `drizzle-kit` and no dev server runs
+here).
+
+## 5d. Next.js 16 — its own release, and it pays for itself three ways
+
+Next 16.3.2 is published; this project is pinned `^15.0.0` (15.5.23 installed). Deliberately NOT
+folded into 1.8.1. Planned as its own MINOR release (1.9.0, not a patch) so the version number
+itself signals "behaviour may have moved, look at this one after installing".
+
+**Why it earns its own release rather than riding along.** This is the one upgrade where this
+repo's test suite is structurally weakest, and there is a scar to prove it: in v1.5.0 a `const`
+exported from a `'use server'` file passed 3,000 tests and then 500'd in production, because
+`next dev` and `next start` do not enforce what the standalone server does — only
+`node .next/standalone/server.js` does. A Next MAJOR changes exactly that class of thing
+(rendering, routing, server-action semantics), and 3,700 tests against mocked boundaries cannot
+see it. `tests/ops/use-server-exports.test.ts` exists because of that incident.
+
+**So the acceptance bar for 1.9.0 is higher than a green suite:** build the image, run the
+standalone server, and load the real pages in a browser — at minimum dashboard, transactions,
+review, settings/accounts, and one server action round-trip.
+
+**Three payoffs:** clears the `next`/`postcss`/`sharp` advisories in 5c above; removes TypeScript
+7's `next.config.ts` loader blocker in 5b; and gets off a framework major that will only get more
+expensive to leave.
+
+**DECIDED IN ADVANCE — the middleware/proxy runtime change, and the comment that must change with
+it.** Renaming `src/middleware.ts` to `src/proxy.ts` is not just a rename: `proxy` runs on the
+**Node runtime, not Edge, and that is not configurable**. Next 16 keeps `middleware` working for
+anyone who needs Edge, but it is deprecated, so the rename is the forward path and this project
+should take it.
+
+The consequence that matters is a COMMENT, not code. `src/middleware.ts` currently says
+"Middleware runs on the Edge runtime and MUST NOT import better-sqlite3". On Node that reason
+becomes FALSE while the design it justifies is still right. A false reason is worse than no
+comment: the next session reads it, notices the app is on Node, concludes the restriction is
+obsolete, and adds a database call to a function that runs on EVERY request.
+
+So: keep the middleware DB-free, and rewrite the justification to the real one — it is on the
+hot path for every request, and per-request latency is the constraint. The Edge runtime was
+never the reason to want it cheap, only the reason it was impossible to make it expensive.
+
+Same applies to the sibling note in `src/instrumentation.ts` / `src/instrumentation-node.ts`,
+which both explain themselves in terms of "Next's Edge-runtime compiler pass never has to resolve
+better-sqlite3/node-cron". Re-read those two against whatever runtime they actually end up on
+rather than assuming the rename left them true.
+
+**Verification specific to this change** (beyond the general bar above): confirm an
+unauthenticated request still redirects to /login, that the public prefixes list still lets
+`/`, `/login`, `/setup` and the static paths through, and that the header the middleware sets for
+the root layout to read still arrives — `src/app/layout.tsx` and
+`src/components/theme/theme-script.tsx` both depend on it, and `tests/middleware.test.ts` plus
+`tests/components/theme-script.test.tsx` will need their imports repointed. Eight files reference
+middleware today; the rename is mechanical but the runtime move is not.
+
 ## 6. v1.5.0 image size anomaly — investigated 2026-08-23, main cause still open
 
 Time-boxed investigation done in v1.8.0. **The leading hypothesis was confirmed as real and then

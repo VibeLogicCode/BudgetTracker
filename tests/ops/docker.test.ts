@@ -218,13 +218,39 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.8.0 release', () => {
+  it('MUST-7.1: the 1.8.1 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.8.0');
+    expect(pkg.version).toBe('1.8.1');
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toMatch(/^## \[1\.8\.1\] - 2026-08-23$/m);
+    // An empty Unreleased section is left in place for the next session.
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.8.1]'));
+    const patch = changelog.slice(changelog.indexOf('## [1.8.1]'), changelog.indexOf('## [1.8.0]'));
+    // A toolchain-only release must SAY it changes nothing about the running app. A changelog
+    // entry that let a reader think their install gained a feature would be worse than none.
+    expect(patch).toMatch(/### Changed/);
+    expect(patch).toMatch(/TypeScript 6\.0\.3/);
+    expect(patch).toMatch(/nothing about the running app changes/i);
+    // The devDependency and the note must move together -- a claim about 6.0.3 with the pin
+    // still on 5.x is exactly the two-places-one-bump bug MUST-7.1 exists to catch.
+    const pkgFull = JSON.parse(read('package.json')) as {
+      dependencies: Record<string, string>;
+      devDependencies: Record<string, string>;
+    };
+    expect(pkgFull.devDependencies.typescript).toMatch(/^\^?6\./);
+    // Same discipline for the two advisory bumps this release claims: a Security note naming
+    // versions the manifest does not actually pin is the two-places-one-bump bug wearing a
+    // security label, which is worse than the plain kind because it reads as reassurance.
+    expect(patch).toMatch(/### Security/);
+    expect(pkgFull.dependencies['drizzle-orm']).toMatch(/^\^?0\.45\./);
+    expect(pkgFull.dependencies['node-cron']).toMatch(/^\^?4\./);
+  });
+
+  it('MUST-7.1: the 1.8.0 release is still recorded intact (append-only discipline)', () => {
+    const pkg = JSON.parse(read('package.json')) as { version: string };
+    expect(pkg.version).not.toBe('1.8.0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.8\.0\] - 2026-08-23$/m);
-    // An empty Unreleased section is left in place for the next session.
-    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.8.0]'));
     const section = changelog.slice(changelog.indexOf('## [1.8.0]'), changelog.indexOf('## [1.7.0]'));
     // The release's own headline claims. One per feature, so a section that quietly loses one
     // of them fails here rather than shipping a changelog that undersells or overstates.

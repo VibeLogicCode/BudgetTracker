@@ -21,6 +21,28 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.8.1] - 2026-08-23
+
+### Changed
+
+- Moved the build's type checker to TypeScript 6.0.3. Nothing about the running app changes —
+  the type checker only inspects the code, it does not produce what ships — but it is the
+  required stepping stone to TypeScript 7, whose speed gains this project will take once its
+  ecosystem is ready. TypeScript 7.0 deliberately ships without a programmatic API until 7.1,
+  which several tools here and in Next.js still depend on, so 6.0.3 is where this sits until
+  then.
+
+### Security
+
+- Updated the database library and the scheduler to versions without published advisories
+  (`drizzle-orm` 0.45.2, `node-cron` 4.6.0), taking the project from twelve open advisories to
+  nine. Nothing about how the app behaves changes. The database one was the only advisory that
+  touched how your data is queried; it was almost certainly not reachable here, since it
+  concerns table and column names and this app never builds those from anything you type, but
+  it is fixed rather than argued about. Of the nine that remain, five only affect the machine
+  that builds the app and never reach a running install, and the rest are fixed by the Next.js
+  upgrade in the next release.
+
 ## [1.8.0] - 2026-08-23
 
 ### Added
