@@ -32,6 +32,9 @@ function account(over: Partial<AccountRow> = {}): AccountRow {
     isSimplefinManaged: false,
     importProfileId: null,
     importProfileName: null,
+    // v1.7.0 Task 6 (spec 2026-08-22): null means no balance snapshot exists yet.
+    latestBalanceCents: null,
+    latestBalanceDate: null,
     ...over,
   };
 }
@@ -196,5 +199,76 @@ describe('AccountsManager — one Update account editor (spec 2026-08-22 v1.7.0,
     expect(screen.getByLabelText(/Name for Joint Chequing/i)).toBeTruthy();
     expect(screen.getByLabelText(/Owner of Joint Chequing/i)).toBeTruthy();
     expect(screen.queryByLabelText(/Mapping for Joint Chequing/i)).toBeNull();
+  });
+});
+
+describe('AccountsManager — latest balance display and manual entry (spec 2026-08-22 v1.7.0 Task 6)', () => {
+  it('shows "no balance yet" for an account with no balance snapshot', () => {
+    render(<AccountsManager accounts={[account()]} people={PEOPLE} profiles={PROFILES} />);
+    expect(screen.getByText('no balance yet')).toBeTruthy();
+  });
+
+  it('shows the latest balance and its as-of date for an account that has one', () => {
+    render(
+      <AccountsManager
+        accounts={[account({ latestBalanceCents: 123456, latestBalanceDate: '2026-08-15' })]}
+        people={PEOPLE}
+        profiles={PROFILES}
+      />,
+    );
+    expect(screen.getByText('$1,234.56 as of 2026-08-15')).toBeTruthy();
+  });
+
+  it('shows a negative balance for a credit card without flipping its sign', () => {
+    render(
+      <AccountsManager
+        accounts={[account({ latestBalanceCents: -45000, latestBalanceDate: '2026-08-15' })]}
+        people={PEOPLE}
+        profiles={PROFILES}
+      />,
+    );
+    expect(screen.getByText('-$450.00 as of 2026-08-15')).toBeTruthy();
+  });
+
+  it('the editor has no separate button or second form: Balance and Balance date are two fields inside the same Update account editor', () => {
+    render(<AccountsManager accounts={[account()]} people={PEOPLE} profiles={PROFILES} today="2026-08-22" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Update account' }));
+
+    const balanceInput = screen.getByLabelText(/Balance for Joint Chequing/i);
+    const dateInput = screen.getByLabelText(/Balance date for Joint Chequing/i);
+    expect(balanceInput.closest('form')).toBe(dateInput.closest('form'));
+    expect(balanceInput.closest('form')).toBe(screen.getByLabelText(/Name for Joint Chequing/i).closest('form'));
+    expect(screen.queryAllByRole('button', { name: /save balance/i })).toHaveLength(0);
+  });
+
+  it('opening the editor always starts Balance blank and defaults Balance date to today, regardless of the latest snapshot', () => {
+    render(
+      <AccountsManager
+        accounts={[account({ latestBalanceCents: 999999, latestBalanceDate: '2020-01-01' })]}
+        people={PEOPLE}
+        profiles={PROFILES}
+        today="2026-08-22"
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Update account' }));
+
+    expect((screen.getByLabelText(/Balance for Joint Chequing/i) as HTMLInputElement).value).toBe('');
+    expect((screen.getByLabelText(/Balance date for Joint Chequing/i) as HTMLInputElement).value).toBe('2026-08-22');
+  });
+
+  it('submits balance and asOfDate together with the rest of the form', async () => {
+    const { updateAccountAction } = await import('@/app/(app)/settings/accounts/actions');
+    render(<AccountsManager accounts={[account({ id: 42 })]} people={PEOPLE} profiles={PROFILES} today="2026-08-22" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Update account' }));
+
+    const balanceInput = screen.getByLabelText(/Balance for Joint Chequing/i) as HTMLInputElement;
+    fireEvent.change(balanceInput, { target: { value: '500.00' } });
+
+    const form = balanceInput.closest('form')!;
+    fireEvent.submit(form);
+
+    expect(updateAccountAction).toHaveBeenCalled();
+    expect((form.querySelector('[name="balance"]') as HTMLInputElement).value).toBe('500.00');
+    expect((form.querySelector('[name="asOfDate"]') as HTMLInputElement).value).toBe('2026-08-22');
   });
 });

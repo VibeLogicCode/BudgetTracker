@@ -7,7 +7,10 @@ import { isSameOrigin } from '@/lib/auth/csrf';
 import { requireAdmin } from '@/lib/auth/session';
 import { createAccount, getAccount, renameAccount, setAccountActive, setAccountOwner } from '@/lib/accounts';
 import { findUserById } from '@/lib/auth/users';
+import { isIsoDate } from '@/lib/dates';
 import { hasReadableMapping, listProfiles, setAccountPinnedProfile } from '@/lib/import/presets';
+import { parseAmountToCents } from '@/lib/money';
+import { recordBalanceSnapshot } from '@/lib/networth';
 import { isSimplefinManaged } from '@/lib/simplefin/connection';
 import { PROFILE_RENDERING_ROUTES } from '@/app/(app)/settings/managers/revalidation-routes';
 
@@ -141,6 +144,16 @@ const updateAccountSchema = z.object({
  *   (accounts-manager.tsx omitted it outright). Now that mapping shares a submit with name and
  *   owner, that omission has to be enforced here instead: a SimpleFIN-managed account's pin is
  *   left exactly as it was, no matter what the combined form happened to send.
+ *
+ * v1.7.0 Task 6 (spec 2026-08-22) rides the same submit: `balance` (dollars, sign allowed) and
+ * `asOfDate` are two MORE fields on this one form, not a fourth button or a second form --
+ * that is the entire point of the Task 1b refactor above. `balance` blank means "leave alone"
+ * and is deliberately NOT part of updateAccountSchema: unlike ownerField/profileField, whose ''
+ * selects a real state (Joint, None), a blank balance selects no operation at all, so it is
+ * read and validated by hand, the same way goals/actions.ts's addContributionAction handles its
+ * optional amount/date pair. Both balance and its date are validated BEFORE any write below,
+ * so an unparseable balance rejects the whole submit (including the name/owner/mapping the
+ * admin may also have changed) rather than silently applying part of it.
  */
 export async function updateAccountAction(_prev: AccountsFormState, formData: FormData): Promise<AccountsFormState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
@@ -170,11 +183,24 @@ export async function updateAccountAction(_prev: AccountsFormState, formData: Fo
     }
   }
 
+  const rawBalance = String(formData.get('balance') ?? '').trim();
+  let balanceCents: number | null = null;
+  let asOfDate: string | null = null;
+  if (rawBalance !== '') {
+    balanceCents = parseAmountToCents(rawBalance);
+    if (balanceCents === null) return { error: 'Enter a valid balance, like 1234.56 or -1234.56, or leave it blank.' };
+    asOfDate = String(formData.get('asOfDate') ?? '').trim();
+    if (!isIsoDate(asOfDate)) return { error: 'Balance date must be YYYY-MM-DD.' };
+  }
+
   renameAccount(parsed.data.accountId, parsed.data.name);
   setAccountOwner(parsed.data.accountId, ownerUserId);
   // Attribution of NEW transactions follows the owner; existing rows keep the
   // person they were already attributed to, which is why nothing is rewritten here.
   if (!managedBySimplefin) setAccountPinnedProfile(parsed.data.accountId, profileId);
+  if (balanceCents !== null && asOfDate !== null) {
+    recordBalanceSnapshot({ accountId: parsed.data.accountId, date: asOfDate, balanceCents, source: 'manual' });
+  }
 
   revalidateProfileRoutes();
   return { message: `${parsed.data.name} updated.` };

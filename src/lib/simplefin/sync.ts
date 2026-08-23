@@ -6,6 +6,7 @@ import { commitImport, type CommitRow } from '@/lib/import/commit';
 import { DEDUP_HASH_VERSION } from '@/lib/import/dedup';
 import { applyLoanMatchers } from '@/lib/loans';
 import { parseAmountToCents } from '@/lib/money';
+import { recordBalanceSnapshot } from '@/lib/networth';
 import type { RowError } from '@/lib/import/parse';
 import { SimplefinError, fetchAccounts, type Fetcher, type SimplefinAccount } from './client';
 import {
@@ -185,6 +186,22 @@ export async function runSync(input: { userId: number; fetcher?: Fetcher; now?: 
       balanceCents,
       balanceDate,
     });
+
+    // Balance snapshot capture (spec 2026-08-22, v1.7.0, Task 6). Both fields are required --
+    // a null balanceCents (unparseable) or null balanceDate (missing/malformed) would produce
+    // a meaningless or undated row, so recordBalanceSnapshot is simply not called at all
+    // rather than being handed a null it would have to reject itself. This account's rows
+    // from commitImport() above are already committed, so -- same reasoning as the runEngine
+    // try/catch below, just one loop iteration earlier -- a snapshot failure (a locked db, a
+    // schema mismatch, anything) must not throw out of the sync and lose those rows' place in
+    // markSynced(), nor stop the loop from reaching the REMAINING linked accounts.
+    if (balanceCents !== null && balanceDate !== null) {
+      try {
+        recordBalanceSnapshot({ accountId: link.accountId, date: balanceDate, balanceCents, source: 'simplefin' });
+      } catch (error) {
+        console.error('[simplefin] balance snapshot failed', error);
+      }
+    }
 
     const currency = String(remote.currency ?? link.currency ?? 'CAD').toUpperCase();
     results.push({

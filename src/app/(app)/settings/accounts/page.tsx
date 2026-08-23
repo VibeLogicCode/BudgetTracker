@@ -1,7 +1,9 @@
 import { requireAdmin } from '@/lib/auth/session';
 import { listAccounts } from '@/lib/accounts';
 import { listUsers } from '@/lib/auth/users';
+import { todayIso } from '@/lib/dates';
 import { hasReadableMapping, listProfiles } from '@/lib/import/presets';
+import { latestSnapshots } from '@/lib/networth';
 import { isSimplefinManaged } from '@/lib/simplefin/connection';
 import { AccountsManager } from './accounts-manager';
 
@@ -9,6 +11,11 @@ export const dynamic = 'force-dynamic';
 
 export default async function AccountsPage() {
   await requireAdmin();
+
+  const today = todayIso();
+  // v1.7.0 Task 6 (spec 2026-08-22): one row per account with a snapshot at or before today;
+  // an account absent from this map has never had a balance recorded, SimpleFIN or manual.
+  const balanceByAccountId = new Map(latestSnapshots(today).map((snapshot) => [snapshot.accountId, snapshot] as const));
 
   const allProfiles = listProfiles();
   // Same two conditions the import picker offers (Task 4, MUST-4.1): a profile that has been
@@ -22,17 +29,22 @@ export default async function AccountsPage() {
     .map((p) => ({ id: p.id, name: p.name }));
   const profileNameById = new Map(allProfiles.map((p) => [p.id, p.name] as const));
 
-  const accounts = listAccounts({ includeInactive: true }).map((account) => ({
-    id: account.id,
-    name: account.name,
-    institution: account.institution,
-    type: account.type,
-    ownerUserId: account.ownerUserId,
-    isActive: account.isActive,
-    isSimplefinManaged: isSimplefinManaged(account.id),
-    importProfileId: account.importProfileId,
-    importProfileName: account.importProfileId === null ? null : profileNameById.get(account.importProfileId) ?? null,
-  }));
+  const accounts = listAccounts({ includeInactive: true }).map((account) => {
+    const balance = balanceByAccountId.get(account.id) ?? null;
+    return {
+      id: account.id,
+      name: account.name,
+      institution: account.institution,
+      type: account.type,
+      ownerUserId: account.ownerUserId,
+      isActive: account.isActive,
+      isSimplefinManaged: isSimplefinManaged(account.id),
+      importProfileId: account.importProfileId,
+      importProfileName: account.importProfileId === null ? null : profileNameById.get(account.importProfileId) ?? null,
+      latestBalanceCents: balance?.balanceCents ?? null,
+      latestBalanceDate: balance?.date ?? null,
+    };
+  });
   const people = listUsers().map((user) => ({ id: user.id, name: user.name, isActive: user.isActive }));
-  return <AccountsManager accounts={accounts} people={people} profiles={offeredProfiles} />;
+  return <AccountsManager accounts={accounts} people={people} profiles={offeredProfiles} today={today} />;
 }

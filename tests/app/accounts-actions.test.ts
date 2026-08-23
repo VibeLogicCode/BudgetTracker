@@ -293,3 +293,109 @@ describe('updateAccountAction (spec 2026-08-22 v1.7.0 Task 1b: one form replaces
     for (const route of PROFILE_RENDERING_ROUTES) expect(calls).toContain(route);
   });
 });
+
+describe('updateAccountAction — manual balance entry (spec 2026-08-22 v1.7.0 Task 6)', () => {
+  function snapshotRows() {
+    return current!.sqlite
+      .prepare('select account_id, date, balance_cents, source from account_balance_snapshots')
+      .all() as { account_id: number; date: string; balance_cents: number; source: string }[];
+  }
+
+  it('supplying a balance records a snapshot', async () => {
+    const { db } = setup();
+    const id = insertTestAccount(db, { name: 'Joint Chequing' });
+
+    const result = await updateAccountAction(
+      {},
+      formData({ accountId: String(id), name: 'Joint Chequing', owner: '', profile: '', balance: '1234.56', asOfDate: '2026-08-20' }),
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(snapshotRows()).toEqual([{ account_id: id, date: '2026-08-20', balance_cents: 123456, source: 'manual' }]);
+  });
+
+  it('accepts a negative balance for a credit card without flipping its sign', async () => {
+    const { db } = setup();
+    const id = insertTestAccount(db, { name: 'Visa', type: 'credit' });
+
+    const result = await updateAccountAction(
+      {},
+      formData({ accountId: String(id), name: 'Visa', owner: '', profile: '', balance: '-450.00', asOfDate: '2026-08-20' }),
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(snapshotRows()).toEqual([{ account_id: id, date: '2026-08-20', balance_cents: -45000, source: 'manual' }]);
+  });
+
+  it('a second save for the same as-of date replaces that day\'s balance rather than adding a row', async () => {
+    const { db } = setup();
+    const id = insertTestAccount(db, { name: 'Joint Chequing' });
+
+    await updateAccountAction(
+      {},
+      formData({ accountId: String(id), name: 'Joint Chequing', owner: '', profile: '', balance: '100.00', asOfDate: '2026-08-20' }),
+    );
+    await updateAccountAction(
+      {},
+      formData({ accountId: String(id), name: 'Joint Chequing', owner: '', profile: '', balance: '200.00', asOfDate: '2026-08-20' }),
+    );
+
+    expect(snapshotRows()).toEqual([{ account_id: id, date: '2026-08-20', balance_cents: 20000, source: 'manual' }]);
+  });
+
+  it('leaving the balance blank records nothing and still saves the other fields', async () => {
+    const { db, bobId } = setup();
+    const id = insertTestAccount(db, { name: 'Joint Chequing' });
+
+    const result = await updateAccountAction(
+      {},
+      formData({ accountId: String(id), name: 'Renamed Chequing', owner: String(bobId), profile: '', balance: '', asOfDate: '2026-08-20' }),
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(getAccount(id)).toMatchObject({ name: 'Renamed Chequing', ownerUserId: bobId });
+    expect(snapshotRows()).toEqual([]);
+  });
+
+  it('an unparseable balance returns an error and writes nothing -- not even the name change', async () => {
+    const { db } = setup();
+    const id = insertTestAccount(db, { name: 'Joint Chequing' });
+
+    const result = await updateAccountAction(
+      {},
+      formData({ accountId: String(id), name: 'Attempted Rename', owner: '', profile: '', balance: 'not-a-number', asOfDate: '2026-08-20' }),
+    );
+
+    expect(result.error).toBeTruthy();
+    expect(getAccount(id)).toMatchObject({ name: 'Joint Chequing' });
+    expect(snapshotRows()).toEqual([]);
+  });
+
+  it('an invalid as-of date returns an error and writes nothing, even with a valid balance', async () => {
+    const { db } = setup();
+    const id = insertTestAccount(db, { name: 'Joint Chequing' });
+
+    const result = await updateAccountAction(
+      {},
+      formData({ accountId: String(id), name: 'Attempted Rename', owner: '', profile: '', balance: '100.00', asOfDate: 'not-a-date' }),
+    );
+
+    expect(result.error).toBeTruthy();
+    expect(getAccount(id)).toMatchObject({ name: 'Joint Chequing' });
+    expect(snapshotRows()).toEqual([]);
+  });
+
+  it('rejects a non-admin caller even when a balance is supplied', async () => {
+    const { db } = setup();
+    const id = insertTestAccount(db, { name: 'Joint Chequing' });
+    vi.mocked(requireAdmin).mockRejectedValueOnce(new Error('not admin'));
+
+    await expect(
+      updateAccountAction(
+        {},
+        formData({ accountId: String(id), name: 'Joint Chequing', owner: '', profile: '', balance: '100.00', asOfDate: '2026-08-20' }),
+      ),
+    ).rejects.toThrow(/not admin/);
+    expect(snapshotRows()).toEqual([]);
+  });
+});

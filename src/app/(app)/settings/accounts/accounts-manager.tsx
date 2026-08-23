@@ -10,6 +10,8 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { TableWrap } from '@/components/ui/Table';
 import { Field, inputClass, labelClass, selectClass } from '@/components/ui/form';
 import { SettingsIcon } from '@/components/icons';
+import { todayIso } from '@/lib/dates';
+import { formatCents } from '@/lib/money';
 import { createAccountAction, setAccountActiveAction, updateAccountAction, type AccountsFormState } from './actions';
 
 export interface AccountRow {
@@ -31,6 +33,14 @@ export interface AccountRow {
    */
   importProfileId: number | null;
   importProfileName: string | null;
+  /**
+   * v1.7.0 Task 6 (spec 2026-08-22): the newest row from account_balance_snapshots at or
+   * before today, resolved by page.tsx via latestSnapshots() -- null means no snapshot exists
+   * yet for this account (SimpleFIN has not synced a balance, and nobody has entered one by
+   * hand). SIGNED exactly as recorded: a credit card's balance stays negative here.
+   */
+  latestBalanceCents: number | null;
+  latestBalanceDate: string | null;
 }
 
 export interface PersonRow {
@@ -55,10 +65,18 @@ export function AccountsManager({
   accounts,
   people,
   profiles,
+  // v1.7.0 Task 6 (spec 2026-08-22): page.tsx always passes today's date computed server-side
+  // (todayIso()), the same way goals-client.tsx's `today` prop works, so a save that does not
+  // touch the balance date still submits a real value. The fallback below only matters for
+  // callers that omit it (mainly tests unrelated to this feature): it is read once, inside the
+  // editor panel, which itself only ever exists after a client click -- never in the initial
+  // server-rendered markup -- so there is no hydration mismatch to protect against here.
+  today = todayIso(),
 }: {
   accounts: AccountRow[];
   people: PersonRow[];
   profiles: ProfileOption[];
+  today?: string;
 }) {
   const [createState, create] = useActionState(createAccountAction, initialState);
   const [activeState, setActive] = useActionState(setAccountActiveAction, initialState);
@@ -137,6 +155,7 @@ export function AccountsManager({
                 <th scope="col">Type</th>
                 <th scope="col">Owner</th>
                 <th scope="col">Mapping</th>
+                <th scope="col">Balance</th>
                 <th scope="col">Source</th>
                 <th scope="col">Status</th>
                 <th scope="col">Actions</th>
@@ -154,6 +173,11 @@ export function AccountsManager({
                     </td>
                     <td className="text-muted">
                       {account.isSimplefinManaged ? '—' : account.importProfileName ?? 'none'}
+                    </td>
+                    <td className="text-muted">
+                      {account.latestBalanceCents === null
+                        ? 'no balance yet'
+                        : `${formatCents(account.latestBalanceCents)} as of ${account.latestBalanceDate}`}
                     </td>
                     <td>
                       <span className={account.isSimplefinManaged ? 'badge badge--blue' : 'badge badge--slate'}>
@@ -182,7 +206,7 @@ export function AccountsManager({
                   </tr>
                   {editing !== null && editing.id === account.id ? (
                     <tr>
-                      <td colSpan={8} className="bg-surface-2">
+                      <td colSpan={9} className="bg-surface-2">
                         <form action={update} onSubmit={() => setEditing(null)} className="flex flex-wrap items-end gap-3 py-2">
                           <input type="hidden" name="accountId" value={account.id} />
                           <div className="flex flex-col gap-1">
@@ -235,6 +259,30 @@ export function AccountsManager({
                               </select>
                             </div>
                           )}
+                          {/* v1.7.0 Task 6 (spec 2026-08-22): two fields riding this same
+                              submit, not a fourth button or a second form. Balance always
+                              opens BLANK regardless of the account's latest snapshot -- typing
+                              nothing here must leave that snapshot alone, which only works if
+                              blank is the starting value, not the current balance echoed back. */}
+                          <div className="flex flex-col gap-1">
+                            <span className={labelClass}>Balance</span>
+                            <input
+                              name="balance"
+                              placeholder="e.g. 1234.56"
+                              aria-label={`Balance for ${account.name}`}
+                              className={`w-28 ${rowInput}`}
+                            />
+                          </div>
+                          <div className="flex flex-col gap-1">
+                            <span className={labelClass}>Balance date</span>
+                            <input
+                              type="date"
+                              name="asOfDate"
+                              defaultValue={today}
+                              aria-label={`Balance date for ${account.name}`}
+                              className={rowInput}
+                            />
+                          </div>
                           <div className="flex gap-2">
                             <SubmitButton size="sm">Save</SubmitButton>
                             <button type="button" onClick={() => setEditing(null)} className={rowButton}>

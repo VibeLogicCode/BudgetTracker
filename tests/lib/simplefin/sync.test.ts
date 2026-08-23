@@ -266,12 +266,17 @@ describe('runSync', () => {
     expect((sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c).toBe(0);
   });
 
-  it('records the reported balance on the link', async () => {
-    const { userId } = setup();
+  it('records the reported balance on the link and writes a matching balance snapshot (spec 2026-08-22 v1.7.0 Task 6)', async () => {
+    const { userId, sqlite } = setup();
     await runSync({ userId, fetcher: bridge(accountSet([])), now: NOW });
     const link = listLinks()[0];
     expect(link.lastBalanceCents).toBe(123456);
     expect(link.lastBalanceDate).not.toBeNull();
+
+    const snapshot = sqlite
+      .prepare('select account_id, date, balance_cents, source from account_balance_snapshots')
+      .get() as { account_id: number; date: string; balance_cents: number; source: string };
+    expect(snapshot).toEqual({ account_id: link.accountId, date: link.lastBalanceDate, balance_cents: 123456, source: 'simplefin' });
   });
 
   it('counts unparseable rows as errors rather than crashing the sync', async () => {
@@ -316,11 +321,58 @@ describe('runSync', () => {
   });
 
   it('does not crash when the account balance-date is malformed — the balance itself is still recorded', async () => {
-    const { userId } = setup();
+    const { userId, sqlite } = setup();
     const fetcher = bridge(accountSet([], { 'balance-date': 'not-a-timestamp' }));
     await expect(runSync({ userId, fetcher, now: NOW })).resolves.toBeTruthy();
     const link = listLinks()[0];
     expect(link.lastBalanceCents).toBe(123456);
     expect(link.lastBalanceDate).toBeNull();
+    // No date means recordBalanceSnapshot cannot run (spec 2026-08-22 v1.7.0 Task 6 requires
+    // BOTH balanceCents and balanceDate) -- a snapshot dated null would be meaningless.
+    expect((sqlite.prepare('select count(*) as c from account_balance_snapshots').get() as { c: number }).c).toBe(0);
+  });
+
+  it('a malformed balance-date still commits the sync\'s transactions and just skips the balance snapshot (spec 2026-08-22 v1.7.0 Task 6)', async () => {
+    const { userId, sqlite } = setup();
+    const fetcher = bridge(
+      accountSet(
+        [{ id: 'txn-1', posted: Math.floor(Date.parse('2026-08-10T15:00:00Z') / 1000), amount: '-12.34', description: 'GOOD ROW', pending: false }],
+        { 'balance-date': 'not-a-timestamp' },
+      ),
+    );
+
+    const result = await runSync({ userId, fetcher, now: NOW });
+
+    expect(result.totalAdded).toBe(1);
+    expect((sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c).toBe(1);
+    expect((sqlite.prepare('select count(*) as c from account_balance_snapshots').get() as { c: number }).c).toBe(0);
+  });
+
+  it('does not write a balance snapshot when the balance itself is unparseable, even with a valid balance-date', async () => {
+    const { userId, sqlite } = setup();
+    const fetcher = bridge(accountSet([], { balance: 'not-a-number' }));
+
+    await runSync({ userId, fetcher, now: NOW });
+
+    const link = listLinks()[0];
+    expect(link.lastBalanceCents).toBeNull();
+    expect((sqlite.prepare('select count(*) as c from account_balance_snapshots').get() as { c: number }).c).toBe(0);
+  });
+
+  it('a snapshot failure does not fail the sync -- transactions stay committed and markSynced still runs', async () => {
+    const { userId, sqlite } = setup();
+    const networth = await import('@/lib/networth');
+    const spy = vi.spyOn(networth, 'recordBalanceSnapshot').mockImplementation(() => {
+      throw new Error('disk exploded');
+    });
+    const fetcher = bridge(
+      accountSet([{ id: 'txn-1', posted: Math.floor(Date.parse('2026-08-10T15:00:00Z') / 1000), amount: '-12.34', description: 'GOOD ROW', pending: false }]),
+    );
+
+    await expect(runSync({ userId, fetcher, now: NOW })).resolves.toBeTruthy();
+
+    expect((sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c).toBe(1);
+    expect(getConnection()?.lastSyncAt).toBe(NOW.toISOString());
+    spy.mockRestore();
   });
 });
