@@ -65,3 +65,35 @@ describe('Ruling R1 (spec 2026-08-23 v1.8.0): the balance resolver reads raw tra
     expect(/transactionSplits|isTransfer|EFFECTIVE_AMOUNT/.test(stripComments(commentOnly))).toBe(false);
   });
 });
+
+/**
+ * Ruling R1 applies to reconciliation identically (spec 2026-08-23, v1.8.0, Task 5):
+ * src/lib/balance-reconcile.ts's reconcileAccount calls src/lib/balance.ts's movementBetween
+ * rather than re-deriving its own transaction sum, so R1's guarantee has exactly ONE
+ * implementation for both of this release's balance features to share. Same two regex guards as
+ * the describe block above, applied to the new file, plus a third that is the concrete,
+ * grep-able form of "has no transaction sum of its own": this file must not even reference the
+ * transactions table or an amount column, and must actually call movementBetween.
+ */
+describe('Ruling R1 (spec 2026-08-23 v1.8.0, Task 5): reconciliation reads raw transaction amounts too', () => {
+  it('src/lib/balance-reconcile.ts never references transactionSplits, isTransfer, or EFFECTIVE_AMOUNT in code', () => {
+    const source = stripComments(read('src/lib/balance-reconcile.ts'));
+    expect(/transactionSplits/.test(source)).toBe(false);
+    expect(/isTransfer/.test(source)).toBe(false);
+    expect(/EFFECTIVE_AMOUNT/.test(source)).toBe(false);
+  });
+
+  it('src/lib/balance-reconcile.ts never imports a spend-aggregate helper from budgets.ts, reports.ts, or categorize/engine.ts', () => {
+    const source = read('src/lib/balance-reconcile.ts');
+    expect(/from\s+['"]@\/lib\/budgets['"]/.test(source)).toBe(false);
+    expect(/from\s+['"]@\/lib\/reports['"]/.test(source)).toBe(false);
+    expect(/from\s+['"]@\/lib\/categorize\/engine['"]/.test(source)).toBe(false);
+  });
+
+  it('src/lib/balance-reconcile.ts has no transaction sum of its own -- it must call movementBetween instead', () => {
+    const source = stripComments(read('src/lib/balance-reconcile.ts'));
+    expect(/\btransactions\b/.test(source)).toBe(false);
+    expect(/amountCents/.test(source)).toBe(false);
+    expect(source).toMatch(/movementBetween/);
+  });
+});

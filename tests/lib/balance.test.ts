@@ -4,7 +4,7 @@ import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser
 import { normalizeMerchant } from '@/lib/categorize/normalize';
 import { recordBalanceSnapshot } from '@/lib/networth';
 import { setTransactionSplits } from '@/lib/splits';
-import { balanceAsOf, balancesAsOf } from '@/lib/balance';
+import { balanceAsOf, balancesAsOf, movementBetween } from '@/lib/balance';
 
 /**
  * balanceAsOf / balancesAsOf (spec 2026-08-23, v1.8.0, Task 4). Ruling R1 -- the resolver reads
@@ -224,5 +224,71 @@ describe('balancesAsOf: many accounts in one call', () => {
   it('returns an empty map for an empty account list, without touching the database', () => {
     setup();
     expect(balancesAsOf({ accountIds: [], date: '2026-07-31' })).toEqual(new Map());
+  });
+});
+
+describe('movementBetween: raw sum over an explicit date range (v1.8.0 Task 5)', () => {
+  // Task 5's reconciliation building block: unlike balanceAsOf/balancesAsOf above, this does not
+  // look up an anchor snapshot at all -- both dates are given by the caller (two ALREADY-KNOWN
+  // statement dates from src/lib/balance-reconcile.ts). Same ruling R1 raw sum either way, which
+  // is the whole reason this lives here rather than being re-derived in that file.
+  it('sums raw transaction amounts strictly after afterDate and up to and including throughDate', () => {
+    const { seedAccount, seedTransaction } = setup();
+    const accountId = seedAccount({ type: 'chequing' });
+    seedTransaction({ accountId, date: '2026-07-05', amountCents: -1000 });
+    seedTransaction({ accountId, date: '2026-07-10', amountCents: -2000 });
+
+    expect(movementBetween({ accountId, afterDate: '2026-07-01', throughDate: '2026-07-15' })).toBe(-3000);
+  });
+
+  it('excludes a transaction dated exactly on afterDate -- that date is already inside the earlier balance', () => {
+    const { seedAccount, seedTransaction } = setup();
+    const accountId = seedAccount({ type: 'chequing' });
+    seedTransaction({ accountId, date: '2026-07-01', amountCents: -50000 });
+
+    expect(movementBetween({ accountId, afterDate: '2026-07-01', throughDate: '2026-07-20' })).toBe(0);
+  });
+
+  it('includes a transaction dated exactly on throughDate', () => {
+    const { seedAccount, seedTransaction } = setup();
+    const accountId = seedAccount({ type: 'chequing' });
+    seedTransaction({ accountId, date: '2026-07-20', amountCents: -1500 });
+
+    expect(movementBetween({ accountId, afterDate: '2026-07-01', throughDate: '2026-07-20' })).toBe(-1500);
+  });
+
+  it('excludes a transaction dated after throughDate', () => {
+    const { seedAccount, seedTransaction } = setup();
+    const accountId = seedAccount({ type: 'chequing' });
+    seedTransaction({ accountId, date: '2026-07-21', amountCents: -1500 });
+
+    expect(movementBetween({ accountId, afterDate: '2026-07-01', throughDate: '2026-07-20' })).toBe(0);
+  });
+
+  it('counts a transfer-flagged transaction -- ruling R1 applies to this sum identically', () => {
+    // Same trap as balanceAsOf: a credit-card payment is normally is_transfer=1 to keep it out
+    // of spend reporting, but reconciliation needs the real money movement, transfer or not.
+    const { seedAccount, seedTransaction } = setup();
+    const accountId = seedAccount({ type: 'credit' });
+    seedTransaction({ accountId, date: '2026-07-10', amountCents: 50000, isTransfer: true });
+
+    expect(movementBetween({ accountId, afterDate: '2026-07-01', throughDate: '2026-07-20' })).toBe(50000);
+  });
+
+  it('returns 0, not null, for a range with no transactions', () => {
+    const { seedAccount } = setup();
+    const accountId = seedAccount({ type: 'chequing' });
+
+    expect(movementBetween({ accountId, afterDate: '2026-07-01', throughDate: '2026-07-20' })).toBe(0);
+  });
+
+  it('sums only the given account, not any other', () => {
+    const { seedAccount, seedTransaction } = setup();
+    const a = seedAccount({ type: 'chequing', name: 'A' });
+    const b = seedAccount({ type: 'chequing', name: 'B' });
+    seedTransaction({ accountId: a, date: '2026-07-10', amountCents: -1000 });
+    seedTransaction({ accountId: b, date: '2026-07-10', amountCents: -999999 });
+
+    expect(movementBetween({ accountId: a, afterDate: '2026-07-01', throughDate: '2026-07-20' })).toBe(-1000);
   });
 });

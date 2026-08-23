@@ -1,6 +1,7 @@
 import { requireAdmin } from '@/lib/auth/session';
 import { listAccounts } from '@/lib/accounts';
 import { listUsers } from '@/lib/auth/users';
+import { reconcileAccount } from '@/lib/balance-reconcile';
 import { todayIso } from '@/lib/dates';
 import { hasReadableMapping, listProfiles } from '@/lib/import/presets';
 import { latestSnapshots } from '@/lib/networth';
@@ -46,6 +47,12 @@ export default async function AccountsPage() {
       // Lets the cell tell "this IS the balance on that date" from "this is today's balance,
       // and that date is only where it was anchored" -- see AccountRow.latestBalanceMovedCents.
       latestBalanceMovedCents: balance?.movedSinceCents ?? null,
+      // v1.8.0 Task 5 (spec 2026-08-23): computed for every account, active or not, the same
+      // way latestSnapshots above is -- a deactivated account's past statements are still worth
+      // reconciling. Ruling R7: reconcileAccount only ever reports, so this is safe to compute
+      // unconditionally on every page load; there is no write path for it to accidentally
+      // trigger.
+      discrepancies: reconcileAccount({ accountId: account.id }),
     };
   });
   const people = listUsers().map((user) => ({ id: user.id, name: user.name, isActive: user.isActive }));

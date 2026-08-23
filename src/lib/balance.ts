@@ -57,6 +57,19 @@ import type { Db } from '@/db/client';
  * is the entire reason this release caches nothing (see "What this release does NOT build" in
  * the v1.8.0 spec): a wrong number corrects itself the next time a real balance is recorded,
  * rather than compounding forever the way an incremented running total would.
+ *
+ * v1.8.0 Task 5 (spec 2026-08-23) adds `movementBetween` below, a second, narrower export this
+ * file offers for src/lib/balance-reconcile.ts's reconciliation: the raw signed sum of
+ * transactions.amount_cents for one account, strictly after one EXPLICIT date and up to and
+ * including another -- no anchor lookup, because reconciliation already knows both dates (they
+ * are two of the account's own source='csv' snapshots) and only needs the movement between them
+ * checksummed against what the statement itself says changed. RULING R1 above applies to this
+ * sum identically and for the identical reason: a transfer-flagged credit-card payment between
+ * two statement dates is real money that moved through the account, and filtering it out would
+ * flag a perfectly clean statement as a missing import. `movementBetween` lives HERE, not
+ * re-derived in balance-reconcile.ts, so R1's guarantee has exactly ONE implementation for both
+ * of this release's balance features to share -- guarded by the same tests/ops/
+ * balance-invariants.test.ts grep that already covers this file, extended to cover that one too.
  */
 
 export interface ResolvedBalance {
@@ -165,4 +178,36 @@ export function balancesAsOf(input: { accountIds: number[]; date: string }): Map
  */
 export function balanceAsOf(input: { accountId: number; date: string }): ResolvedBalance | null {
   return balancesAsOf({ accountIds: [input.accountId], date: input.date }).get(input.accountId) ?? null;
+}
+
+/**
+ * The raw movement of money through one account, strictly after `afterDate` and up to and
+ * including `throughDate` -- v1.8.0 Task 5's building block for
+ * src/lib/balance-reconcile.ts's reconcileAccount, which asks a narrower question than
+ * balanceAsOf above: not "what is the balance on date D", but "how much moved between two
+ * ALREADY-KNOWN statement dates, so that figure can be checksummed against what the statement
+ * itself says changed." Same ruling R1 as this file's header docblock, applied to a single
+ * account and an explicit date range instead of a batch anchored on balancesAsOf's own
+ * newest-snapshot lookup: raw transactions.amount_cents, no is_transfer predicate, no splits
+ * join, no category predicate.
+ *
+ * `afterDate` is exclusive and `throughDate` is inclusive, matching balancesAsOf's own
+ * anchor-to-target convention (ruling R2: a snapshot is that date's CLOSING balance, so the day
+ * a range starts from is already inside the earlier figure and must not be summed again).
+ *
+ * Returns 0, never null, for a range with no matching transactions -- unlike balanceAsOf there
+ * is no "nothing to anchor on" case here, because the caller already supplies both dates: an
+ * empty account, or an empty date range, genuinely moved zero cents.
+ */
+export function movementBetween(input: { accountId: number; afterDate: string; throughDate: string }): number {
+  const { accountId, afterDate, throughDate } = input;
+
+  // RULING R1: raw transactions.amount_cents, no transfer predicate, no splits join, no
+  // category predicate -- see this file's header docblock.
+  const row = getDb()
+    .select({ movedCents: sql<number>`coalesce(sum(${transactions.amountCents}), 0)`.as('moved_cents') })
+    .from(transactions)
+    .where(and(eq(transactions.accountId, accountId), gt(transactions.date, afterDate), lte(transactions.date, throughDate)))
+    .get();
+  return row?.movedCents ?? 0;
 }

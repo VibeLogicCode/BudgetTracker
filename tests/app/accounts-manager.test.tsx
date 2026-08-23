@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { render, cleanup, fireEvent, screen } from '@testing-library/react';
-import { AccountsManager, type AccountRow, type PersonRow, type ProfileOption } from '@/app/(app)/settings/accounts/accounts-manager';
+import {
+  AccountsManager,
+  discrepancyMessage,
+  type AccountRow,
+  type PersonRow,
+  type ProfileOption,
+} from '@/app/(app)/settings/accounts/accounts-manager';
 
 // Server actions aren't under test here -- only the UI. The v1.6.0 pinned-mapping display
 // (spec 2026-08-22, MUST-5.1: show each account's pinned mapping by name, or "none") and the
@@ -39,6 +45,9 @@ function account(over: Partial<AccountRow> = {}): AccountRow {
     // label. Every fixture below that overrides only the cents/date pair inherits this and
     // therefore keeps the pre-v1.8.0 wording, which is correct for those cases.
     latestBalanceMovedCents: 0,
+    // v1.8.0 Task 5 (spec 2026-08-23): empty means clean -- nothing renders. Every fixture that
+    // does not care about reconciliation inherits this, which is the common case.
+    discrepancies: [],
     ...over,
   };
 }
@@ -291,5 +300,108 @@ describe('AccountsManager — latest balance display and manual entry (spec 2026
     expect(updateAccountAction).toHaveBeenCalled();
     expect((form.querySelector('[name="balance"]') as HTMLInputElement).value).toBe('500.00');
     expect((form.querySelector('[name="asOfDate"]') as HTMLInputElement).value).toBe('2026-08-22');
+  });
+});
+
+describe('discrepancyMessage (spec 2026-08-23 v1.8.0 Task 5, ruling R7)', () => {
+  it('says "lower" when the imported transactions add up to more than the statement', () => {
+    expect(
+      discrepancyMessage({
+        accountId: 1,
+        fromDate: '2026-07-01',
+        toDate: '2026-07-20',
+        expectedCents: 95000,
+        impliedCents: 100000,
+        deltaCents: 5000,
+      }),
+    ).toBe(
+      'Your statement balance for 2026-07-20 is $50.00 lower than your imported transactions account for — an import is probably missing rows between 2026-07-01 and 2026-07-20.',
+    );
+  });
+
+  it('says "higher" when the imported transactions add up to less than the statement', () => {
+    expect(
+      discrepancyMessage({
+        accountId: 1,
+        fromDate: '2026-05-01',
+        toDate: '2026-05-15',
+        expectedCents: 20000,
+        impliedCents: 19000,
+        deltaCents: -1000,
+      }),
+    ).toBe(
+      'Your statement balance for 2026-05-15 is $10.00 higher than your imported transactions account for — an import is probably missing rows between 2026-05-01 and 2026-05-15.',
+    );
+  });
+});
+
+describe('AccountsManager — reconciliation diagnostics (spec 2026-08-23 v1.8.0 Task 5)', () => {
+  it('renders nothing extra for an account with no discrepancies', () => {
+    render(<AccountsManager accounts={[account()]} people={PEOPLE} profiles={PROFILES} />);
+    expect(screen.queryByText(/probably missing rows/i)).toBeNull();
+  });
+
+  it('renders one line per discrepancy under the account, and names both dates', () => {
+    render(
+      <AccountsManager
+        accounts={[
+          account({
+            discrepancies: [
+              {
+                accountId: 100,
+                fromDate: '2026-07-01',
+                toDate: '2026-07-20',
+                expectedCents: 95000,
+                impliedCents: 100000,
+                deltaCents: 5000,
+              },
+              {
+                accountId: 100,
+                fromDate: '2026-05-01',
+                toDate: '2026-05-15',
+                expectedCents: 20000,
+                impliedCents: 19000,
+                deltaCents: -1000,
+              },
+            ],
+          }),
+        ]}
+        people={PEOPLE}
+        profiles={PROFILES}
+      />,
+    );
+
+    expect(screen.getByText(/\$50\.00 lower than your imported transactions account for/)).toBeTruthy();
+    expect(screen.getByText(/\$10\.00 higher than your imported transactions account for/)).toBeTruthy();
+    expect(screen.getByText(/between 2026-07-01 and 2026-07-20/)).toBeTruthy();
+    expect(screen.getByText(/between 2026-05-01 and 2026-05-15/)).toBeTruthy();
+  });
+
+  it('adds no badge -- the row keeps exactly the SimpleFIN/CSV source badge and the active/deactivated status badge it already had', () => {
+    // Task 5 Step 4: diagnostic, not an alert. document.querySelectorAll rather than
+    // screen.getByRole('status') or similar: a `.badge` span here carries no accessible role of
+    // its own, only a class, so counting the class is the direct way to prove reconciliation did
+    // not add a third one alongside the two the row already renders.
+    const { container } = render(
+      <AccountsManager
+        accounts={[
+          account({
+            discrepancies: [
+              {
+                accountId: 100,
+                fromDate: '2026-07-01',
+                toDate: '2026-07-20',
+                expectedCents: 95000,
+                impliedCents: 100000,
+                deltaCents: 5000,
+              },
+            ],
+          }),
+        ]}
+        people={PEOPLE}
+        profiles={PROFILES}
+      />,
+    );
+    expect(container.querySelectorAll('.badge').length).toBe(2);
   });
 });

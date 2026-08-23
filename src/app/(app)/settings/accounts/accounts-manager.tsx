@@ -13,6 +13,12 @@ import { SettingsIcon } from '@/components/icons';
 import { todayIso } from '@/lib/dates';
 import { formatCents } from '@/lib/money';
 import { createAccountAction, setAccountActiveAction, updateAccountAction, type AccountsFormState } from './actions';
+// Type-only (ruling P4): this file is 'use client' and must never VALUE-import
+// src/lib/balance-reconcile.ts, which reaches @/db/client to run reconcileAccount. `import
+// type` erases at compile time, so only the shape of Discrepancy crosses into the client
+// bundle -- page.tsx (a server component) is the only caller of reconcileAccount itself, and
+// hands the results down as plain data through the `discrepancies` prop below.
+import type { Discrepancy } from '@/lib/balance-reconcile';
 
 export interface AccountRow {
   id: number;
@@ -56,6 +62,16 @@ export interface AccountRow {
    * latestBalanceCents is null.
    */
   latestBalanceMovedCents: number | null;
+  /**
+   * v1.8.0 Task 5 (spec 2026-08-23), resolved by page.tsx via reconcileAccount()
+   * (src/lib/balance-reconcile.ts). Ruling R7: reconciliation reports, it never corrects, so
+   * this array IS the entire feature's UI surface -- one plain-language line per entry (see
+   * discrepancyMessage below), rendered directly under the account, and nothing at all when the
+   * array is empty. No badge and no nav count anywhere else in the app reflects this: it is a
+   * diagnostic a household member reads when troubleshooting a number that looks wrong, not an
+   * alert that demands attention.
+   */
+  discrepancies: Discrepancy[];
 }
 
 export interface PersonRow {
@@ -75,6 +91,26 @@ const initialState: AccountsFormState = {};
 
 const rowInput = 'field-control w-auto px-2 py-1 text-xs';
 const rowButton = 'btn btn--secondary btn--sm';
+
+/**
+ * The entire text of ruling R7's diagnostic (spec 2026-08-23, v1.8.0 Task 5): report the gap,
+ * name both statement dates, and go no further -- never guess which transaction is missing, and
+ * never say the account "lost" or "gained" money, since nothing here knows which side is wrong.
+ * `deltaCents` is impliedCents - expectedCents (src/lib/balance-reconcile.ts's own docblock):
+ * positive means this app's OWN imported transactions add up to MORE than the bank says the
+ * account holds on `toDate` -- the statement reads LOWER than our rows account for -- and
+ * negative is the exact mirror. Exported so tests can assert on the sentence directly rather
+ * than re-deriving it from rendered DOM text.
+ */
+export function discrepancyMessage(discrepancy: Discrepancy): string {
+  const { fromDate, toDate, deltaCents } = discrepancy;
+  const direction = deltaCents > 0 ? 'lower' : 'higher';
+  const amount = formatCents(Math.abs(deltaCents));
+  return (
+    `Your statement balance for ${toDate} is ${amount} ${direction} than your imported transactions account for ` +
+    `— an import is probably missing rows between ${fromDate} and ${toDate}.`
+  );
+}
 
 export function AccountsManager({
   accounts,
@@ -221,6 +257,20 @@ export function AccountsManager({
                       </div>
                     </td>
                   </tr>
+                  {/* v1.8.0 Task 5 (spec 2026-08-23), ruling R7: diagnostic, not an alert -- one
+                      plain-language line per discrepancy, no badge, no icon, nothing rendered
+                      at all when the account is clean. */}
+                  {account.discrepancies.length > 0 ? (
+                    <tr>
+                      <td colSpan={9} className="bg-warning-soft/50">
+                        <ul className="flex flex-col gap-1 px-1 py-2 text-xs text-warning-soft-fg">
+                          {account.discrepancies.map((discrepancy) => (
+                            <li key={`${discrepancy.fromDate}-${discrepancy.toDate}`}>{discrepancyMessage(discrepancy)}</li>
+                          ))}
+                        </ul>
+                      </td>
+                    </tr>
+                  ) : null}
                   {editing !== null && editing.id === account.id ? (
                     <tr>
                       <td colSpan={9} className="bg-surface-2">

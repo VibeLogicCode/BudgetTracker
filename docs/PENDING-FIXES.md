@@ -209,6 +209,40 @@ paper found is a benign per-photo outcome and saying "scanning is unavailable" t
 actively misleading. About 30 minutes. Deliberately left out of v1.8.0 as scope beyond the F5 fix
 itself.
 
+## 5a. Reconciliation is an N+1 that grows with statement history
+
+Shipped that way in v1.8.0, deliberately, correctness unaffected. Recorded with the arithmetic so
+it is a known cost rather than a surprise.
+
+`reconcileAccount` (`src/lib/balance-reconcile.ts`) walks an account's `source='csv'` snapshots
+and calls `movementBetween` once per consecutive PAIR, and
+`src/app/(app)/settings/accounts/page.tsx` calls `reconcileAccount` once per account on every
+load of Settings → Accounts.
+
+**The growth.** TD's export carries a running balance on every transaction row, so importing it
+writes a snapshot per statement DATE — roughly 20 a month. A year of one chequing account is
+therefore ~250 snapshots, ~249 pairs, ~249 queries. Across five accounts with a year of history
+that is well over a thousand queries per page load, and it grows linearly with history forever.
+Each one is a prepared indexed lookup in the tens of microseconds, so the real cost today is tens
+of milliseconds on an admin page — fine, but pure waste, and unbounded.
+
+**Why it was not collapsed into one query.** The obvious fix is to fetch the account's
+transactions once and bucket them per interval in JS. But that would give this module its own
+transaction sum, and ruling R1 (raw `amount_cents`, no transfer filter, no splits join) is
+deliberately implemented in exactly ONE file so `tests/ops/balance-invariants.test.ts`'s grep can
+guard it. A second sum here is precisely the drift that guard exists to prevent.
+
+**The fix that keeps R1 intact:** add a `movementByInterval(accountId, dates[])` to
+`src/lib/balance.ts` returning a map of interval to movement, computed there in one query (or one
+fetch-and-bucket) — so reconciliation gets two queries per account regardless of history and R1
+still lives in one place. About 30 minutes.
+
+**A cheaper alternative worth considering first, but it is a product decision, not a refactor:**
+bound reconciliation to recent history — the last N pairs, or snapshots inside the last 12
+months. That caps the work AND arguably improves the diagnostic, since a discrepancy from three
+years ago that the owner has already decided to live with should probably stop being reported. It
+needs a ruling on the window, so it was not chosen unilaterally.
+
 ## 6. v1.5.0 image size anomaly — investigated 2026-08-23, main cause still open
 
 Time-boxed investigation done in v1.8.0. **The leading hypothesis was confirmed as real and then
