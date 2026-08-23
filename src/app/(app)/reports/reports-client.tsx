@@ -16,17 +16,24 @@ import { rangeParams, type ResolvedRange } from '@/lib/date-range';
 import { monthLabel, monthOf } from '@/lib/dates';
 import type { DebtPoint } from '@/lib/loans';
 import { formatCents } from '@/lib/money';
-import { STALE_SNAPSHOT_DAYS, type NetWorthPoint } from '@/lib/networth';
+import type { NetWorthPoint } from '@/lib/networth';
+// Value-imported from the pure module directly, not from '@/lib/networth': that module imports
+// getDb from @/db/client at module scope for its OTHER exports, so importing this number FROM
+// IT -- even via a re-export -- would still drag better-sqlite3/node:fs into this client bundle
+// (see src/lib/networth-constants.ts's docblock; this is the exact bug that guard fixed).
+import { STALE_SNAPSHOT_DAYS } from '@/lib/networth-constants';
 import type { BaselineRow } from '@/lib/predict/suggest';
-import {
-  savingsRate,
-  type CategoryBreakdownRow,
-  type CategoryMonthTrend,
-  type MonthTrendRow,
-  type PersonSplitRow,
-  type TopMerchantRow,
-  type YoYRow,
+import type {
+  CategoryBreakdownRow,
+  CategoryMonthTrend,
+  MonthTrendRow,
+  PersonSplitRow,
+  TopMerchantRow,
+  YoYRow,
 } from '@/lib/reports';
+// Same reasoning as STALE_SNAPSHOT_DAYS above, for '@/lib/reports' and its @/db/client import --
+// see src/lib/savings-rate.ts's docblock.
+import { savingsRate } from '@/lib/savings-rate';
 import type { TaxYearRow } from '@/lib/tax';
 
 /** Task 15b (v1.7.0): one taxYearReport() row, plus its place in the category tree. tax.ts's

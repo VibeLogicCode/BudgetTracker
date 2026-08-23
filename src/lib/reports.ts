@@ -4,6 +4,7 @@ import { categories, transactions, transactionSplits, users } from '@/db/schema'
 import { listCategories } from '@/lib/categories';
 import { addMonths, monthEnd, monthOf, monthRange, monthStart } from '@/lib/dates';
 import { netSpentCents } from '@/lib/money';
+import { savingsRate, type SavingsRate } from '@/lib/savings-rate';
 import { EFFECTIVE_AMOUNT, EFFECTIVE_CATEGORY, splitsForTransactions } from '@/lib/splits';
 import { listTransactions, type TransactionFilter } from '@/lib/transactions';
 
@@ -139,29 +140,12 @@ export function cashflowTrend(months: number, opts: { endMonth?: string; attribu
   });
 }
 
-export interface SavingsRate {
-  incomeCents: number;
-  spendCents: number;
-  netCents: number;
-  /** null whenever there is no positive income to divide by (Task 14: never a division-by-zero
-   *  artifact) -- the caller shows a plain "no income" sentence instead of a percentage. */
-  pct: number | null;
-}
-
-/**
- * Task 14 (spec 2026-08-22, v1.7.0): aggregates a cashflowTrend() series into the one summary
- * line the Reports "Cash flow and savings rate" card shows -- total income, total spend, total
- * saved (net), and the savings-rate percentage (net over income, rounded to a whole percent).
- * pct is null whenever incomeCents is not strictly positive, so the UI never divides by zero
- * or renders a nonsensical percentage for a range with no income.
- */
-export function savingsRate(rows: MonthTrendRow[]): SavingsRate {
-  const incomeCents = rows.reduce((sum, row) => sum + row.incomeCents, 0);
-  const spendCents = rows.reduce((sum, row) => sum + row.spendCents, 0);
-  const netCents = rows.reduce((sum, row) => sum + row.netCents, 0);
-  const pct = incomeCents > 0 ? Math.round((netCents / incomeCents) * 100) : null;
-  return { incomeCents, spendCents, netCents, pct };
-}
+// Re-exported so every existing importer of savingsRate/SavingsRate from '@/lib/reports' keeps
+// working unchanged -- the actual implementation lives in @/lib/savings-rate (client-bundle fix,
+// 2026-08-23): a 'use client' component (reports-client.tsx) needs this function, and importing
+// it from THIS file would still drag @/db/client's better-sqlite3/node:fs graph into the browser
+// bundle even though the function itself never touches the database. See that module's docblock.
+export { savingsRate, type SavingsRate };
 
 export interface CategoryMonthTrend {
   categoryId: number;

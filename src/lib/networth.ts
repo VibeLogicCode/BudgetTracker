@@ -5,6 +5,7 @@ import { getAccount, listAccounts } from '@/lib/accounts';
 import { nowIso } from '@/lib/clock';
 import { addMonths, daysBetweenIso, isIsoDate, monthEnd, monthOf, monthRange, todayIso } from '@/lib/dates';
 import { debtOverTime } from '@/lib/loans';
+import { STALE_SNAPSHOT_DAYS } from '@/lib/networth-constants';
 
 /**
  * Balance snapshot capture and net worth (spec 2026-08-22, v1.7.0, Task 6). This file owns
@@ -128,14 +129,12 @@ export interface NetWorthPoint {
   accountsStale: number;
 }
 
-/**
- * Adversarial-review fix (2026-08-23): the threshold for "too old to trust", not merely "not
- * from this exact month". An account that syncs automatically or gets a manual update once a
- * month should always have a snapshot inside 31 days; 45 leaves slack for exactly one missed
- * cycle (a skipped sync, a forgotten manual entry) without concealing a gap that has gone on
- * longer than that.
- */
-export const STALE_SNAPSHOT_DAYS = 45;
+// Re-exported so every existing importer of STALE_SNAPSHOT_DAYS from '@/lib/networth' keeps
+// working unchanged -- the actual constant lives in @/lib/networth-constants (client-bundle fix,
+// 2026-08-23): a 'use client' component (reports-client.tsx) needs this number, and importing it
+// from THIS file would still drag @/db/client's better-sqlite3/node:fs graph into the browser
+// bundle even though the number itself never touches the database. See that module's docblock.
+export { STALE_SNAPSHOT_DAYS };
 
 /**
  * Task 7. Net worth over time: ruling 6's "signed snapshot balances (assets +, credit cards -
