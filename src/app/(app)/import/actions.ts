@@ -70,7 +70,7 @@ const cardPersonSchema = z.object({
  * already permits assigning to a since-deactivated user (src/lib/import/card-people.ts,
  * MUST-3.1's "remains valid and resolvable for display"), and this action only re-checks
  * that the id refers to a real user at all, the same existence-only check
- * setAccountOwnerAction applies to a submitted owner id.
+ * updateAccountAction applies to a submitted owner id.
  */
 export async function setCardPersonAction(_prev: CardPersonState, formData: FormData): Promise<CardPersonState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };

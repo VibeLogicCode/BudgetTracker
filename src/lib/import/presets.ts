@@ -368,7 +368,7 @@ export function setAccountProfile(accountId: number, profileId: number): void {
  * task. This one is reachable without running an import at all, and `profileId: null` CLEARS
  * the pin, which setAccountProfile has no way to express. Whether the chosen profile is one an
  * admin should actually be allowed to pin (active + readable) is the caller's job, the same
- * layering setAccountOwnerAction already uses for validating a chosen owner id in
+ * layering updateAccountAction already uses for validating a chosen owner id in
  * src/app/(app)/settings/accounts/actions.ts.
  */
 export function setAccountPinnedProfile(accountId: number, profileId: number | null): void {

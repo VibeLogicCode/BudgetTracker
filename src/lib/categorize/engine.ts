@@ -1,6 +1,6 @@
 import { and, asc, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
-import { transactions } from '@/db/schema';
+import { transactions, transactionSplits } from '@/db/schema';
 import { nowIso } from '@/lib/clock';
 import { applyLoanMatchers } from '@/lib/loans';
 import { classify, train, untrain } from './bayes';
@@ -99,8 +99,21 @@ export interface EngineResult {
   skipped: number;
 }
 
-/** Only rows with category_id IS NULL or source = 'bayes' are ever touched. */
-const ELIGIBLE = or(isNull(transactions.categoryId), eq(transactions.categorizationSource, 'bayes'));
+/**
+ * Only rows with category_id IS NULL or source = 'bayes' are ever touched -- and, per spec
+ * ruling 2a (v1.7.0), never a row that has splits. A split row is categorized by its parts
+ * (transaction_splits, see src/lib/splits.ts), even though setTransactionSplits deliberately
+ * leaves the parent's OWN category_id untouched -- so an uncategorized-before-split row would
+ * otherwise stay eligible here forever. That is not merely cosmetic: if this row's merchant
+ * later matches a transfer rule, rerunEngine (below) would set is_transfer = 1 on it, and
+ * every report/budget aggregate excludes transfers, so that one flag would silently erase
+ * every one of its split parts everywhere. Served by transaction_splits_txn_idx (migration
+ * 0009).
+ */
+const ELIGIBLE = and(
+  or(isNull(transactions.categoryId), eq(transactions.categorizationSource, 'bayes')),
+  sql`not exists (select 1 from ${transactionSplits} where ${transactionSplits.txnId} = ${transactions.id})`,
+);
 
 /** Chunked well under SQLite's bound-parameter ceiling — see the note in dedup.ts. */
 const ID_CHUNK = 400;
@@ -390,11 +403,17 @@ export function applyCategoryToMatching(input: {
 /**
  * Review queue = uncategorized rows plus auto-assigned-but-unconfirmed Bayes rows.
  * Transfers are excluded: spec section 3 removes them from all spend/income
- * reporting, so they never need a category.
+ * reporting, so they never need a category. Split rows are excluded too (spec ruling 2a,
+ * v1.7.0): a split row is categorized by its parts (see the comment on ELIGIBLE above, and
+ * src/lib/splits.ts), so a transaction that was genuinely uncategorized before being split --
+ * category_id stays NULL, since a split never invents or overwrites the parent's own category
+ * -- must not nag here forever just because that column is still empty. Served by
+ * transaction_splits_txn_idx (migration 0009).
  */
 export const REVIEW_WHERE = and(
   eq(transactions.isTransfer, false),
   or(isNull(transactions.categoryId), eq(transactions.categorizationSource, 'bayes')),
+  sql`not exists (select 1 from ${transactionSplits} where ${transactionSplits.txnId} = ${transactions.id})`,
 );
 
 export function reviewQueueIds(limit = 100, offset = 0): number[] {
