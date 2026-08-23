@@ -78,6 +78,24 @@ what Budgets renders, so the two cannot diverge.
 
 ## 3. Nothing alerts when the balance pipeline quietly stops
 
+**Owner declined the alert on 2026-08-23** ("leave this"). Not started, and not to be started
+unasked. Recorded in full below because the reasoning still holds and because v1.8.0 narrowed
+the exposure considerably without closing it.
+
+**What v1.8.0 changed.** Balances are now resolved as newest-snapshot-plus-movement
+(`src/lib/balance.ts`), and a statement's own balance column writes a `source='csv'` snapshot on
+every import (`ImportMapping.balanceCol`). So for any account whose bank publishes a running
+balance, a snapshot now lands every time a statement is imported, and the stale window shrinks
+from "whenever SimpleFIN last worked" to "since the last import". Staleness also now keys on the
+ANCHOR date rather than the resolved figure, so an account carrying an old anchor still reports
+as stale even though the resolver returns a current-looking number.
+
+**What is still exposed.** An account with no balance column and no SimpleFIN link — a credit
+card whose export carries only charges — moves only when someone types a figure. Its resolved
+balance stays arithmetically correct from the CSV, but a genuinely missed statement shifts every
+balance after it with nothing to catch it. On accounts WITH a balance column, `reconcileAccount`
+(v1.8.0) does catch it. On accounts without one, nothing does.
+
 Deferred during the v1.7.0 review on 2026-08-23. The disclosure half was fixed; the alert half
 was not.
 
@@ -101,3 +119,44 @@ since that is the specific path that breaks silently.
 
 **Small**, an hour or two, and it is the difference between an honest number and a number someone
 notices is wrong six months later.
+
+## 4. Receipt scanner: real-browser verification — CLOSED for desktop Chrome
+
+The v1.5.0 ledger carried "STILL OWED: ANY real-browser verification of the scanner", because the
+owner declined the offered Playwright check on 2026-08-22 and the scanner shipped verified only
+against recording fakes at the `loadScanner` boundary.
+
+**Owner exercised it in desktop Chrome on 2026-08-23 and reports it working.** That closes the
+open-ended part of the item.
+
+**Remaining untested: iOS Safari**, and it is untested for different reasons than Android Chrome
+was. Three things differ there and none are exercised by any test in this repo: its own WASM
+memory ceiling (the bundle compiles a ~9 MB inlined wasm, which is exactly the size class iOS
+kills tabs over), its own file-picker behaviour, and HEIC photos straight off an iPhone camera
+roll, which desktop Chrome never produces.
+
+**If no household member uses an iPhone, this item is closed outright** — that is the whole
+condition, and it is written as a condition rather than as an open "untested" line so it does not
+sit here forever collecting doubt. Android Chrome is no longer called out separately: the F5 fix
+below removed the failure mode that made a slow phone dangerous.
+
+## 5. Scanner "unavailable" message is unreachable in production
+
+Found on 2026-08-23 while doing the F5 injection fix (v1.8.0), not fixed, small.
+
+v1.8.0 added `SCANNER_UNAVAILABLE_MESSAGE` to `src/components/warranty/ReceiptUploader.tsx` so a
+person whose scanner fails is told why their photo uploaded unscanned. It is wired into
+`decide()`'s catch block — which is dead code in production, because `scanReceiptFile()` has its
+own top-level try/catch that swallows everything and returns `{file}`. Only a test that mocks a
+rejection reaches it.
+
+**So the timeout case is still silent.** On a slow phone: the uploader says "Preparing the
+scanner", 15 seconds pass, `SCANNER_LOAD_TIMEOUT_MS` fires, and the original photo uploads with no
+explanation. Behaviour is correct (MUST-8.15 — a failure costs nothing but a plain upload) but
+unexplained.
+
+**Fix shape.** `ScanResult` needs to distinguish "the scanner could not load" from "the scanner
+ran and found no paper". Both currently return `{file}`, and they must not share a message: no
+paper found is a benign per-photo outcome and saying "scanning is unavailable" there would be
+actively misleading. About 30 minutes. Deliberately left out of v1.8.0 as scope beyond the F5 fix
+itself.
