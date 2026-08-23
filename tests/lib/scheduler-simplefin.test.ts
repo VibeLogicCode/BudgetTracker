@@ -16,6 +16,8 @@ import { saveEmailTarget, saveSmtp } from '@/lib/notify/config';
 import { drainOutboxForTests, resetOutboxPumpForTests } from '@/lib/notify/outbox';
 import { resetNotifySenderForTests, setNotifySenderForTests } from '@/lib/notify/send';
 import { deleteSetting, setSetting } from '@/lib/settings';
+import * as settingsModule from '@/lib/settings';
+import * as connectionModule from '@/lib/simplefin/connection';
 import * as syncModule from '@/lib/simplefin/sync';
 
 // Obviously-fake credential: SimpleFIN access URLs embed HTTP basic-auth credentials, and
@@ -122,6 +124,71 @@ describe('runSimplefinTick — the gate (absence or an invalid value both mean o
 
     expect(spy).not.toHaveBeenCalled();
     expect(outboxCount()).toBe(0);
+  });
+});
+
+/**
+ * Defect fix: the gate (getSetting, getConnection, remainingRequestsToday, isAutoSyncDue) sat
+ * outside any try/catch, unlike every sibling job in scheduler.ts. node-cron swallows a throw
+ * from a scheduled callback so the process never crashed, but nothing was ever logged either:
+ * a database hiccup in the gate meant auto-sync silently stopped working with nothing to
+ * diagnose from. The fix catches and logs exactly like the sibling jobs, and must not leave
+ * the single-flight flag stuck true.
+ */
+describe('runSimplefinTick — a throw from the gate is caught and logged, not left to escape', () => {
+  it('does not throw, and logs the failure the same way sibling jobs do, when the gate itself blows up', () => {
+    const boom = new Error('database is locked');
+    const spy = vi.spyOn(settingsModule, 'getSetting').mockImplementation(() => {
+      throw boom;
+    });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(() => runSimplefinTick(new Date())).not.toThrow();
+      expect(errorSpy).toHaveBeenCalledWith('[simplefin] tick failed', boom);
+    } finally {
+      spy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('does not leave the single-flight flag stuck true: the next due tick still runs the sync', () => {
+    const adminId = adminWithEmail();
+    const now = new Date('2026-08-22T12:00:00Z');
+    saveClaimedConnection(FAKE_ACCESS_URL, now);
+    markSynced(new Date(now.getTime() - 999 * 3600 * 1000));
+    setSetting(SETTING_AUTO_SYNC, 'daily');
+    setSetting(SETTING_AUTO_SYNC_USER_ID, String(adminId));
+
+    const boom = new Error('database is locked');
+    // Throws on exactly the first call (this tick's gate); the second tick's gate call falls
+    // through to the real implementation.
+    const connSpy = vi.spyOn(connectionModule, 'getConnection').mockImplementationOnce(() => {
+      throw boom;
+    });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const runSyncSpy = vi.spyOn(syncModule, 'runSync').mockResolvedValue({
+      ranAt: now.toISOString(),
+      accounts: [],
+      errlist: [],
+      totalAdded: 0,
+      totalDuplicates: 0,
+      engine: { processed: 0, categorized: 0, transfers: 0, skipped: 0 },
+      engineFailed: false,
+      loanLinksCreated: 0,
+      loanMatchFailed: false,
+    });
+    try {
+      expect(() => runSimplefinTick(now)).not.toThrow();
+      expect(errorSpy).toHaveBeenCalledWith('[simplefin] tick failed', boom);
+      expect(runSyncSpy).not.toHaveBeenCalled();
+
+      runSimplefinTick(new Date(now.getTime() + 1000));
+      expect(runSyncSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      connSpy.mockRestore();
+      errorSpy.mockRestore();
+      runSyncSpy.mockRestore();
+    }
   });
 });
 

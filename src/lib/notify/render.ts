@@ -264,12 +264,24 @@ function renderDigest(input: Extract<RenderInput, { event: 'weekly_digest' }>): 
 
 /**
  * Task 16 (v1.7.0): the monthly digest, sharing the weekly digest's plain-text table style
- * (the same padded() helper) rather than inventing a second one. Unlike the weekly digest,
- * there is no "nothing to report" branch: the household's income/spend/net for a real closed
- * calendar month is never truly empty in the way an arbitrary trailing week can be, and a
- * missing budgeted total already renders its own honest sentence below.
+ * (the same padded() helper) rather than inventing a second one.
+ *
+ * Defect fix: a real closed calendar month for a dormant household IS truly empty -- no
+ * income, no spend, no merchants and no budget ever resolved -- and used to render a full
+ * message reading Income $0.00 / Spent $0.00 / Net $0.00 / "No budgets were set this month.",
+ * identically every month forever, with no way to tell it apart from a working digest. This
+ * now gets the same "nothing to report" branch the weekly digest already has (renderDigest
+ * above), in the same voice, rather than repeating a message that reads all zeroes.
  */
 function renderMonthlyDigest(input: Extract<RenderInput, { event: 'monthly_digest' }>): string {
+  const empty =
+    input.incomeCents === 0 &&
+    input.spendCents === 0 &&
+    input.netCents === 0 &&
+    input.topMerchants.length === 0 &&
+    input.budgetedLimitCents === 0;
+  if (empty) return 'No transactions were recorded last month.';
+
   const parts: string[] = [
     `Income: ${money(input.incomeCents)}`,
     `Spent: ${money(input.spendCents)}`,

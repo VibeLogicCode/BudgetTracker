@@ -96,12 +96,21 @@ export function runNotifyTick(now: Date = new Date()): void {
  * with a notification channel and no update checks still makes no GitHub call.
  */
 export function runUpdateTick(now: Date = new Date()): void {
-  // The dormancy gate is the tick's first statement: one indexed read of a settings key
-  // that is ABSENT on every install nobody has enabled this on.
-  if (!isUpdateCheckEnabled()) return;
-  if (updateTicking) return;
-  const state = readUpdateState();
-  if (!dueForCheck(state.lastCheckedAt, now)) return; // UPDATE_CHECK_INTERVAL_MS
+  try {
+    // The dormancy gate is the tick's first statement: one indexed read of a settings key
+    // that is ABSENT on every install nobody has enabled this on.
+    if (!isUpdateCheckEnabled()) return;
+    if (updateTicking) return;
+    const state = readUpdateState();
+    if (!dueForCheck(state.lastCheckedAt, now)) return; // UPDATE_CHECK_INTERVAL_MS
+  } catch (error) {
+    // Defect fix (same shape as runSimplefinTick's identical pre-existing gap below): a
+    // throw here used to escape uncaught. node-cron swallows an uncaught throw from a
+    // scheduled callback, so the process never crashed, but nothing was ever logged either.
+    // updateTicking is never set inside this try, so a throw here can never leave it stuck.
+    console.error('[update] tick failed', error);
+    return;
+  }
   updateTicking = true;
   void runUpdateCheck({ now })
     .catch((error) => console.error('[update] check failed', error))
@@ -119,22 +128,32 @@ export function runUpdateTick(now: Date = new Date()): void {
  * of its daily budget.
  */
 export function runSimplefinTick(now: Date = new Date()): void {
-  // The dormancy gate is the tick's first statement, same shape as isUpdateCheckEnabled():
-  // one indexed settings read. isAutoSyncInterval is the SAME guard the Connections page's
-  // <select> and the server action's zod schema use, so a stored value none of the three
-  // recognise -- including plain absence -- can only ever mean "off" everywhere at once.
-  const stored = getSetting(SETTING_AUTO_SYNC);
-  if (stored === null || !isAutoSyncInterval(stored)) return;
+  try {
+    // The dormancy gate is the tick's first statement, same shape as isUpdateCheckEnabled():
+    // one indexed settings read. isAutoSyncInterval is the SAME guard the Connections page's
+    // <select> and the server action's zod schema use, so a stored value none of the three
+    // recognise -- including plain absence -- can only ever mean "off" everywhere at once.
+    const stored = getSetting(SETTING_AUTO_SYNC);
+    if (stored === null || !isAutoSyncInterval(stored)) return;
 
-  const connection = getConnection();
-  if (!connection || !connection.enabled) return;
+    const connection = getConnection();
+    if (!connection || !connection.enabled) return;
 
-  // An exhausted daily request budget is expected backpressure, not a failure (design ruling
-  // 7): this returns silently, same as the two checks above, and never reaches
-  // raiseSyncFailed below.
-  if (remainingRequestsToday(now) === 0) return;
+    // An exhausted daily request budget is expected backpressure, not a failure (design ruling
+    // 7): this returns silently, same as the two checks above, and never reaches
+    // raiseSyncFailed below.
+    if (remainingRequestsToday(now) === 0) return;
 
-  if (!isAutoSyncDue(connection.lastSyncAt, AUTO_SYNC_INTERVALS[stored].dueAfterHours, now)) return;
+    if (!isAutoSyncDue(connection.lastSyncAt, AUTO_SYNC_INTERVALS[stored].dueAfterHours, now)) return;
+  } catch (error) {
+    // Defect fix: this gate used to sit outside any try/catch, unlike every sibling job in
+    // this file. node-cron swallows an uncaught throw from a scheduled callback, so a
+    // database hiccup here never crashed the process, but it never logged anything either --
+    // auto-sync would silently stop firing with nothing to diagnose from. simplefinTicking is
+    // never set inside this try, so a throw here can never leave it stuck true.
+    console.error('[simplefin] tick failed', error);
+    return;
+  }
 
   if (simplefinTicking) return;
   simplefinTicking = true;

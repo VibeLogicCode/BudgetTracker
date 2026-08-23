@@ -306,6 +306,43 @@ describe('Task 16 (v1.7.0): the monthly digest', () => {
     expect(body).not.toContain('Top merchants');
   });
 
+  /**
+   * Defect fix: a dormant household with no spend and no budgets in the closed month used to
+   * get a real message reading Income $0.00 / Spent $0.00 / Net $0.00 / "No budgets were set
+   * this month.", identically every month forever, indistinguishable from a working digest
+   * that happened to see no activity. This gives the monthly digest the same "nothing to
+   * report" treatment the weekly digest already has (see the weekly "an empty week still
+   * sends" test above), in the same voice.
+   */
+  it('an empty month still sends, with its own sentence, not four lines of zeroes', () => {
+    const { body } = renderEvent({
+      ...full,
+      incomeCents: 0,
+      spendCents: 0,
+      netCents: 0,
+      budgetedLimitCents: 0,
+      budgetedSpentCents: 0,
+      topMerchants: [],
+    });
+    expect(body).toBe('No transactions were recorded last month.');
+    expect(body).not.toContain('$0.00');
+    expect(body).not.toContain('No budgets were set this month.');
+  });
+
+  it('is not treated as empty when a budget exists, even with zero income, spend and merchants', () => {
+    const { body } = renderEvent({
+      ...full,
+      incomeCents: 0,
+      spendCents: 0,
+      netCents: 0,
+      topMerchants: [],
+      budgetedLimitCents: 50000,
+      budgetedSpentCents: 0,
+    });
+    expect(body).toContain('Income: $0.00');
+    expect(body).toContain('Budgets: $0.00 of $500.00 spent, $500.00 left.');
+  });
+
   it('never uses an em dash or an arrow character, in the subject or the body', () => {
     const { subject, body } = renderEvent(full);
     expect(subject).not.toContain('—');

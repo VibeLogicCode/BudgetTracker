@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray, isNotNull, isNull, or } from 'drizzle-orm';
+import { and, eq, gt, gte, inArray, isNotNull, isNull, or } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { warrantyItemTypes, warrantyItems } from '@/db/schema';
 import { addDaysIso, addMonthsClamped, daysBetweenIso, monthEnd, monthOf, monthsBetween } from '@/lib/dates';
@@ -79,7 +79,11 @@ export function upcomingBills(input: { today: string; days: number }): UpcomingB
       and(
         inArray(warrantyItemTypes.kind, RECURRING_KINDS),
         isNotNull(warrantyItems.billingCycle),
-        isNotNull(warrantyItems.billingAmountCents),
+        // Defect fix: isNotNull alone let a billing amount of exactly 0 through as "set",
+        // putting a $0.00 subscription in the Coming up list contributing nothing. gt(...,
+        // 0) excludes both NULL and a zero (or negative) amount in one comparison, since SQL
+        // evaluates `column > 0` as false/unknown, never true, for either.
+        gt(warrantyItems.billingAmountCents, 0),
         or(isNull(warrantyItems.expiryDate), gte(warrantyItems.expiryDate, today)),
       ),
     )

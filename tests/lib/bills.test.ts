@@ -171,6 +171,21 @@ describe('upcomingBills — filters', () => {
     expect(result[0].name).toBe('Valid');
   });
 
+  /**
+   * Defect fix: a billing amount of exactly 0 is "set" as far as isNotNull is concerned, so
+   * a $0.00 subscription used to show up in the Coming up list contributing nothing. A zero
+   * amount is meaningless on a card whose whole job is telling someone what the month owes,
+   * so it is excluded the same way a missing amount already is.
+   */
+  it('excludes an item with a billing amount of exactly 0, but keeps a normal one', () => {
+    const { types, item } = setup();
+    item({ typeId: types.subscription, purchaseDate: '2025-12-01', billingCycle: 'monthly', billingAmountCents: 0, name: 'Free tier' });
+    item({ typeId: types.subscription, purchaseDate: '2025-12-01', billingCycle: 'monthly', billingAmountCents: 500, name: 'Valid' });
+    const result = upcomingBills({ today: '2026-01-01', days: 60 });
+    expect(result).toHaveLength(1);
+    expect(result[0].name).toBe('Valid');
+  });
+
   it('excludes warranty-kind and loan-kind items even when billing fields are set', () => {
     const { types, item } = setup();
     item({ typeId: types.warranty, purchaseDate: '2025-12-01', billingCycle: 'monthly', billingAmountCents: 999, name: 'Warranty item' });

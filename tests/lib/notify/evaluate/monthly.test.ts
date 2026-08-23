@@ -337,3 +337,49 @@ describe('Task 16 (v1.7.0): the monthly digest', () => {
     expect(row.body).not.toContain('→');
   });
 });
+
+/**
+ * Defect fix: fireMonthlyDigest had no "nothing to say" guard, unlike the weekly digest. A
+ * dormant household opted into monthly_digest with no spend and no budgets in the closed
+ * month got the identical all-zero message every month, with no way to tell it apart from a
+ * working digest. The fix matches the weekly digest's own precedent (which still enqueues
+ * every week, and lets the renderer say "No transactions were recorded this week." for an
+ * empty one) rather than skipping the enqueue outright.
+ */
+describe('Defect fix: an empty closed month gets an honest short digest, not four lines of zeroes', () => {
+  it('still fires once (still enqueues), but the body is the honest short line, not Income/Spent/Net at $0.00', () => {
+    const userId = optedInUser();
+    enableMonthlyDigest(userId);
+    setPref(userId, 'predicted_vs_actual', 'email', false);
+    setPref(userId, 'suggested_budget_refresh', 'email', false);
+    // Deliberately no seedHistory() and no budgets: July has no transactions anywhere.
+
+    expect(evaluateMonthBoundary({ userId, now: new Date('2026-08-01T09:00:00Z'), tz: TZ })).toBe(1);
+    expect(keys()).toEqual(['monthly-digest:2026-07']);
+    const row = t.sqlite.prepare('select subject, body from notification_outbox limit 1').get() as {
+      subject: string;
+      body: string;
+    };
+    expect(row.subject).toBe('Monthly summary for July 2026');
+    expect(row.body).toBe('No transactions were recorded last month.');
+    expect(row.body).not.toContain('$0.00');
+    expect(row.body).not.toContain('No budgets were set this month.');
+  });
+
+  it('a month WITH real activity still produces the full digest, unchanged', () => {
+    const userId = optedInUser();
+    enableMonthlyDigest(userId);
+    setPref(userId, 'predicted_vs_actual', 'email', false);
+    setPref(userId, 'suggested_budget_refresh', 'email', false);
+    seedHistory();
+
+    expect(evaluateMonthBoundary({ userId, now: new Date('2026-08-01T09:00:00Z'), tz: TZ })).toBe(1);
+    const row = t.sqlite.prepare('select subject, body from notification_outbox limit 1').get() as {
+      subject: string;
+      body: string;
+    };
+    expect(row.body).not.toBe('No transactions were recorded last month.');
+    expect(row.body).toContain('Spent: $713.40');
+    expect(row.body).toContain('No budgets were set this month.');
+  });
+});
