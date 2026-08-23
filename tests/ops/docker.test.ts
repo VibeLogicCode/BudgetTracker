@@ -218,16 +218,31 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.7.0 release', () => {
+  it('MUST-7.1: the 1.8.0 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.7.0');
+    expect(pkg.version).toBe('1.8.0');
     const changelog = read('CHANGELOG.md');
-    expect(changelog).toMatch(/^## \[1\.7\.0\] - 2026-08-23$/m);
+    expect(changelog).toMatch(/^## \[1\.8\.0\] - 2026-08-23$/m);
     // An empty Unreleased section is left in place for the next session.
-    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.7.0]'));
-    const section = changelog.slice(changelog.indexOf('## [1.7.0]'), changelog.indexOf('## [1.6.0]'));
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.8.0]'));
+    const section = changelog.slice(changelog.indexOf('## [1.8.0]'), changelog.indexOf('## [1.7.0]'));
     // The release's own headline claims. One per feature, so a section that quietly loses one
     // of them fails here rather than shipping a changelog that undersells or overstates.
+    expect(section).toMatch(/balance column|running balance/i);
+    expect(section).toMatch(/owe/i);
+    expect(section).toMatch(/### Fixed/);
+    expect(section).toMatch(/Coming up/i);
+    expect(section).toMatch(/dropdown/i);
+    expect(section).toMatch(/scanner/i);
+    // Ruling R7: the reconciliation copy must promise reporting only. A changelog that claimed
+    // this feature fixes anything for you would be describing software that does not exist.
+    expect(section).toMatch(/only reports|nothing is adjusted/i);
+  });
+
+  it('MUST-7.1: the 1.7.0 release is still recorded intact (append-only discipline)', () => {
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toMatch(/^## \[1\.7\.0\] - 2026-08-23$/m);
+    const section = changelog.slice(changelog.indexOf('## [1.7.0]'), changelog.indexOf('## [1.6.0]'));
     expect(section).toMatch(/split/i);
     expect(section).toMatch(/net worth/i);
     expect(section).toMatch(/roll/i);

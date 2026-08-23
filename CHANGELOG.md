@@ -21,6 +21,43 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.8.0] - 2026-08-23
+
+### Added
+
+- **Your bank's own balance column now drives your account balances.** If a statement carries a
+  running balance — TD's chequing export does, in its fifth column — map it once in the import
+  mapping and every import records that balance for each statement date. The built-in TD
+  Chequing/Debit mapping ships with it already set, so it just works. Nothing is inferred: these
+  are the bank's own figures, per date.
+- **Balances now stay current between imports.** An account's balance is worked out as the most
+  recent recorded balance plus everything that has moved since, so it no longer sits frozen at
+  whatever the last snapshot said. For a card whose export has no balance column, enter the
+  statement balance once and the transactions carry it forward from there — a credit-card export
+  is a complete ledger, so that arithmetic is exact rather than an estimate. Entering a fresh
+  balance at any date re-anchors everything after it, so a number that has drifted corrects
+  itself instead of staying wrong.
+- **Statements are now checked against your own transactions.** Two consecutive statement
+  balances should differ by exactly the transactions between them. When they do not, Settings ->
+  Accounts says so and names the period, because that gap is usually a statement you never
+  imported. It only reports — nothing is adjusted for you, and no filler transaction is invented.
+- **Credit-card balances are entered as what you owe.** The field on a credit account now says
+  "Amount currently owed" and stores it as a debt, instead of taking a signed number and trusting
+  you to get the sign right.
+
+### Fixed
+
+- The dashboard's Coming up card contradicted itself, showing a total for the next 30 days above
+  a sentence counting only what falls before month end — so a bill due next month made it read
+  "$77.00" and "$0.00 of bills are still to come" at the same time. Both figures were right and
+  both are worth having; the card now says which window each one covers.
+- Category dropdowns listed parents and children in creation order, so a child could sit nowhere
+  near its parent. Every category dropdown in the app now groups children under their parent, in
+  the same order the Budgets page uses.
+- The receipt scanner could load itself twice on a slow phone. If the first attempt took more
+  than fifteen seconds, the next photo started a second copy of the image-processing engine
+  alongside the first, doubling its memory use on exactly the device that was already struggling.
+
 ## [1.7.0] - 2026-08-23
 
 ### Added
