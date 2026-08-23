@@ -5,7 +5,7 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { isSameOrigin } from '@/lib/auth/csrf';
 import { requireUser } from '@/lib/auth/session';
-import { clearBudget, copyBudgetsFromPreviousMonth, resolveBudget, upsertBudget, type BudgetScope } from '@/lib/budgets';
+import { clearBudget, copyBudgetsFromPreviousMonth, resolveBudget, setRollover, upsertBudget, type BudgetScope } from '@/lib/budgets';
 import { currentMonth, isMonthKey } from '@/lib/dates';
 import { readEnv } from '@/lib/env';
 import { formatCents, parseAmountToCents } from '@/lib/money';
@@ -165,4 +165,43 @@ export async function applyAllSuggestionsAction(_prev: BudgetActionState, formDa
 
   revalidatePath('/budgets');
   return { message: `Set ${set} budgets from suggestions. Skipped ${skipped} categories that already had a limit.` };
+}
+
+/**
+ * The "Roll over unspent" toggle (v1.7.0, Task 11). Permission is deliberately STRICTER than
+ * setLimitAction's for household scope: any member may set a household budget's amount, but
+ * rollover is a policy choice about how a shared budget behaves across months, so turning it
+ * on or off there is admin-only. A personal budget's own owner may still toggle it for
+ * themselves without being an admin, same as they may set their own limit.
+ *
+ * Enabling always writes startMonth = the page's currently displayed month (the `month`
+ * field); setRollover's own no-op rule (src/lib/budgets.ts) leaves an already-on row's
+ * original startMonth untouched, so re-submitting this form never moves it. Disabling deletes
+ * the row regardless of `month` -- setRollover ignores startMonth on that path.
+ */
+export async function setRolloverAction(_prev: BudgetActionState, formData: FormData): Promise<BudgetActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  const user = await requireUser();
+  const scope = scopeSchema.safeParse(formData.get('scope'));
+  const month = monthSchema.safeParse(String(formData.get('month') ?? ''));
+  const categoryId = categoryIdSchema.safeParse(formData.get('categoryId'));
+  const rawUserId = userIdField.safeParse(String(formData.get('userId') ?? ''));
+  if (!scope.success || !month.success || !categoryId.success || !rawUserId.success) {
+    return { error: 'Invalid request.' };
+  }
+
+  const userId = scope.data === 'personal' ? (rawUserId.data === '' ? user.id : Number(rawUserId.data)) : null;
+  if (scope.data === 'household' && user.role !== 'admin') {
+    return { error: 'Only an admin can change rollover for a household budget.' };
+  }
+  if (scope.data === 'personal' && userId !== user.id && user.role !== 'admin') {
+    return { error: 'You can only change rollover for your own personal budgets.' };
+  }
+
+  // An unchecked checkbox is simply absent from the submitted form.
+  const enabled = formData.get('enabled') === 'on';
+  setRollover({ scope: scope.data, userId, categoryId: categoryId.data, enabled, startMonth: month.data });
+  revalidatePath('/budgets');
+  return { message: enabled ? 'Roll over unspent turned on.' : 'Roll over unspent turned off.' };
 }

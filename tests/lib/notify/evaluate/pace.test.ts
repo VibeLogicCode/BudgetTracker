@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { categoryIdByName, createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../../helpers/db';
-import { upsertBudget } from '@/lib/budgets';
+import { effectiveBudget, setRollover, upsertBudget } from '@/lib/budgets';
 import { saveEmailTarget, saveSmtp, setPref } from '@/lib/notify/config';
 import { resetOutboxPumpForTests } from '@/lib/notify/outbox';
 import { resetNotifySenderForTests, setNotifySenderForTests } from '@/lib/notify/send';
@@ -214,6 +214,34 @@ describe('notify MUST-4.2: a user with the event switched off hears nothing', ()
     const groceries = categoryIdByName(t.db, 'Groceries');
     upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-08', amountCents: 60000 });
     spend(groceries, 26000);
+    expect(evaluateBudgetPace({ userId, now: NOW, tz: TZ })).toBe(0);
+    expect(keys()).toEqual([]);
+  });
+});
+
+/**
+ * v1.7.0 Task 11, deliverable (c): same verification as budget.test.ts's equivalent block --
+ * `grep -n "resolveBudget" src/lib/notify/evaluate/pace.ts` returns no matches; `candidateFor`
+ * (this file's source, above) reads only `row.limitCents` / `row.spentCents` from
+ * `budgetProgress()`, which already carries the EFFECTIVE limit (base + rollover carry) per
+ * budgets.ts's BudgetRow doc comment.
+ *
+ * CONCLUSION: current behaviour is already correct; no fix was needed in pace.ts. This test
+ * pins it: a carry that would clear the 110 percent overshoot floor against the base alone
+ * keeps the projection comfortably under it once the carry is counted.
+ */
+describe('v1.7.0 Task 11: rollover carry keeps a covered category off the pace alert', () => {
+  it('budget_pace does not fire when the carry covers the projected overshoot', () => {
+    const userId = emailUser();
+    const groceries = categoryIdByName(t.db, 'Groceries');
+    setRollover({ scope: 'household', userId: null, categoryId: groceries, enabled: true, startMonth: '2026-07' });
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-07', amountCents: 100000 });
+    // August: a $500 base. $400 spent at day 12 of a 31-day month projects to about $1033.33 --
+    // over 110% of the $500 base alone -- but only about 69% of the $1500 effective limit.
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-08', amountCents: 50000 });
+    expect(effectiveBudget('household', null, groceries, '2026-08').carryCents).toBe(100000);
+
+    spend(groceries, 40000);
     expect(evaluateBudgetPace({ userId, now: NOW, tz: TZ })).toBe(0);
     expect(keys()).toEqual([]);
   });

@@ -11,6 +11,7 @@ vi.mock('@/app/(app)/budgets/actions', () => ({
   copyPreviousMonthAction: vi.fn(async () => ({})),
   applySuggestionAction: vi.fn(async () => ({})),
   applyAllSuggestionsAction: vi.fn(async () => ({})),
+  setRolloverAction: vi.fn(async () => ({})),
 }));
 
 afterEach(() => cleanup());

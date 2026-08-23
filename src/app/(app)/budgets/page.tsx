@@ -1,6 +1,6 @@
 import { requireUser } from '@/lib/auth/session';
 import { listUsers } from '@/lib/auth/users';
-import { budgetProgress, budgetTotals, type BudgetRow } from '@/lib/budgets';
+import { budgetProgress, budgetTotals, rolloverStartMonth, type BudgetRow, type BudgetScope } from '@/lib/budgets';
 import { currentMonth, isMonthKey, monthEnd, todayIso } from '@/lib/dates';
 import { readEnv } from '@/lib/env';
 import { flattenBudgetRows } from '@/lib/notify/evaluate/pace';
@@ -39,6 +39,24 @@ export function sectionFrom(
   return { suggestions, projections, noAttribution: false };
 }
 
+/**
+ * The set of category ids with rollover ON for this (scope, user), among the rows the page
+ * actually renders for that section (v1.7.0, Task 11). BudgetRow itself (src/lib/budgets.ts,
+ * not modified by this task) carries no "is rollover on" field -- only baseLimitCents and
+ * carryCents, which tell the reader THAT a carry exists but not whether the toggle is on for a
+ * row that is not currently carrying anything (e.g. its startMonth is this month or later).
+ * So this reads rolloverStartMonth once per rendered row -- the same function
+ * setRolloverAction and effectiveBudget already treat as the single source of truth for
+ * on/off (a row's existence in budget_rollover means on; see budgets.ts's doc comment).
+ */
+export function rolloverIdsFor(scope: BudgetScope, userId: number | null, rows: BudgetRow[]): number[] {
+  const ids: number[] = [];
+  for (const row of flattenBudgetRows(rows)) {
+    if (rolloverStartMonth(scope, userId, row.categoryId) !== null) ids.push(row.categoryId);
+  }
+  return ids;
+}
+
 export default async function BudgetsPage({
   searchParams,
 }: {
@@ -50,12 +68,17 @@ export default async function BudgetsPage({
   const month = raw && isMonthKey(raw) ? raw : currentMonth();
 
   const household = budgetProgress(month, 'household', null);
+  const householdRolloverIds = rolloverIdsFor('household', null, household);
   const people = listUsers().filter((u) => u.isActive);
-  const personal = people.map((person) => ({
-    userId: person.id,
-    name: person.name,
-    rows: budgetProgress(month, 'personal', person.id),
-  }));
+  const personal = people.map((person) => {
+    const rows = budgetProgress(month, 'personal', person.id);
+    return {
+      userId: person.id,
+      name: person.name,
+      rows,
+      rolloverIds: rolloverIdsFor('personal', person.id, rows),
+    };
+  });
 
   const { tz } = readEnv();
   const today = todayIso(new Date(), tz);
@@ -96,6 +119,7 @@ export default async function BudgetsPage({
       currentUserId={user.id}
       currentUserIsAdmin={user.role === 'admin'}
       household={household}
+      householdRolloverIds={householdRolloverIds}
       householdTotals={budgetTotals(household)}
       personal={personal}
       predictions={predictions}

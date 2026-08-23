@@ -18,6 +18,7 @@ import {
   applySuggestionAction,
   copyPreviousMonthAction,
   setLimitAction,
+  setRolloverAction,
   type BudgetActionState,
 } from './actions';
 
@@ -39,7 +40,10 @@ function Row({
   month,
   action,
   applyAction,
+  rolloverAction,
   editable,
+  canToggleRollover,
+  rolloverOn,
   predict,
 }: {
   row: BudgetRow;
@@ -49,7 +53,17 @@ function Row({
   month: string;
   action: (formData: FormData) => void;
   applyAction: (formData: FormData) => void;
+  rolloverAction: (formData: FormData) => void;
   editable: boolean;
+  /**
+   * v1.7.0 Task 11: admin, or for a personal-scope row its own owner -- a STRICTER gate than
+   * `editable`, which lets every member edit a household row's amount. Rollover is a policy
+   * choice about how a shared household budget behaves across months, so toggling it there is
+   * admin-only; setRolloverAction carries the server-side twin of this check.
+   */
+  canToggleRollover: boolean;
+  /** Category ids with rollover currently on, for this section (scope + user). */
+  rolloverOn: Set<number>;
   predict: RowPredictions | null;
 }) {
   const suggestion = predict?.suggestionOf.get(row.categoryId) ?? null;
@@ -70,7 +84,11 @@ function Row({
             // else's personal section may only read it: setLimitAction rejects the write,
             // so rendering an input that always fails is a promise the server won't keep.
             <span className="text-xs text-subtle">
-              {row.limitCents === null ? 'read-only' : `${formatCents(row.limitCents)} · read-only`}
+              {row.limitCents === null
+                ? 'read-only'
+                : row.baseLimitCents !== null && row.carryCents > 0
+                  ? `${formatCents(row.baseLimitCents)} plus ${formatCents(row.carryCents)} carried · read-only`
+                  : `${formatCents(row.limitCents)} · read-only`}
             </span>
           ) : (
             <>
@@ -81,13 +99,23 @@ function Row({
                 <input type="hidden" name="categoryId" value={row.categoryId} />
                 <input
                   name="amount"
-                  defaultValue={row.limitCents === null ? '' : (row.limitCents / 100).toFixed(2)}
+                  // v1.7.0 rollover: this must default to the BASE, never the effective
+                  // limitCents. A Save on this form always writes the base (setLimitAction ->
+                  // upsertBudget), so defaulting to the effective number would silently bake
+                  // the carry into the base the moment someone hit Save without changing
+                  // anything.
+                  defaultValue={row.baseLimitCents === null ? '' : (row.baseLimitCents / 100).toFixed(2)}
                   placeholder="none"
                   aria-label={`Monthly limit for ${row.categoryName}`}
                   className="field-control w-24 px-2 py-1 text-right text-xs"
                 />
                 <button type="submit" className="btn btn--ghost btn--sm px-2 text-xs">Save</button>
               </form>
+              {row.baseLimitCents !== null && row.carryCents > 0 ? (
+                <p className="mt-1 text-xs text-muted">
+                  {formatCents(row.baseLimitCents)} plus {formatCents(row.carryCents)} carried
+                </p>
+              ) : null}
               {suggestion ? (
                 <form action={applyAction}>
                   <input type="hidden" name="scope" value={scope} />
@@ -111,6 +139,19 @@ function Row({
               ) : null}
             </>
           )}
+          {!row.isArchived && canToggleRollover ? (
+            <form action={rolloverAction} className="mt-1 flex items-center gap-1.5">
+              <input type="hidden" name="scope" value={scope} />
+              <input type="hidden" name="userId" value={userId ?? ''} />
+              <input type="hidden" name="month" value={month} />
+              <input type="hidden" name="categoryId" value={row.categoryId} />
+              <label className="flex items-center gap-1.5 text-xs text-muted">
+                <input type="checkbox" name="enabled" value="on" defaultChecked={rolloverOn.has(row.categoryId)} />
+                Roll over unspent
+              </label>
+              <button type="submit" className="btn btn--ghost btn--sm px-2 text-xs">Save</button>
+            </form>
+          ) : null}
         </td>
         <td className="text-right"><Money cents={row.spentCents} plain /></td>
         <td className="text-right">
@@ -142,7 +183,10 @@ function Row({
           month={month}
           action={action}
           applyAction={applyAction}
+          rolloverAction={rolloverAction}
           editable={editable}
+          canToggleRollover={canToggleRollover}
+          rolloverOn={rolloverOn}
           predict={predict}
         />
       ))}
@@ -172,6 +216,7 @@ export function BudgetsClient({
   currentUserId,
   currentUserIsAdmin = false,
   household,
+  householdRolloverIds = [],
   householdTotals,
   personal,
   predictions = null,
@@ -180,8 +225,10 @@ export function BudgetsClient({
   currentUserId: number;
   currentUserIsAdmin?: boolean;
   household: BudgetRow[];
+  /** v1.7.0 Task 11: category ids (household scope) with "Roll over unspent" currently on. */
+  householdRolloverIds?: number[];
   householdTotals: { budgetedLimitCents: number; budgetedSpentCents: number; totalSpentCents: number };
-  personal: { userId: number; name: string; rows: BudgetRow[] }[];
+  personal: { userId: number; name: string; rows: BudgetRow[]; rolloverIds?: number[] }[];
   /** MUST-14.1: null for a past or future month, and on any caller that has none. */
   predictions?: BudgetPredictions | null;
 }) {
@@ -189,13 +236,14 @@ export function BudgetsClient({
   const [copyState, dispatchCopy] = useActionState(copyPreviousMonthAction, initial);
   const [applyState, dispatchApply] = useActionState(applySuggestionAction, initial);
   const [applyAllState, dispatchApplyAll] = useActionState(applyAllSuggestionsAction, initial);
+  const [rolloverState, dispatchRollover] = useActionState(setRolloverAction, initial);
 
   // ONE banner, showing only the most recent submission. Independent action states
   // rendered side by side meant a success message from a save sat next to a fresh error
   // from a copy (and the other way round), so the page reported two contradictory
   // outcomes at once. Remembering which action fired last is enough to keep the banner
   // honest without merging the server actions.
-  const [latest, setLatest] = useState<'limit' | 'copy' | 'apply' | 'applyAll' | null>(null);
+  const [latest, setLatest] = useState<'limit' | 'copy' | 'apply' | 'applyAll' | 'rollover' | null>(null);
   const action = (formData: FormData) => {
     setLatest('limit');
     dispatchLimit(formData);
@@ -212,6 +260,10 @@ export function BudgetsClient({
     setLatest('applyAll');
     dispatchApplyAll(formData);
   };
+  const rolloverAction = (formData: FormData) => {
+    setLatest('rollover');
+    dispatchRollover(formData);
+  };
   const banner: BudgetActionState =
     latest === 'limit'
       ? limitState
@@ -221,7 +273,9 @@ export function BudgetsClient({
           ? applyState
           : latest === 'applyAll'
             ? applyAllState
-            : initial;
+            : latest === 'rollover'
+              ? rolloverState
+              : initial;
 
   // Members may edit household budgets and their OWN personal budgets; admins may edit
   // anyone's (mirrors setLimitAction / copyPreviousMonthAction, spec section 6).
@@ -243,6 +297,12 @@ export function BudgetsClient({
     (predictions?.personal ?? []).map((entry) => [entry.userId, rowPredict(entry.predictions)]),
   );
   const paceTitle = predictions ? 'Appears from the 7th of the month.' : undefined;
+
+  // v1.7.0 Task 11: "Roll over unspent" is admin, and for a personal-scope budget its own
+  // owner -- STRICTER than canEditPersonal for household scope (any member may edit a
+  // household amount, but rollover is a policy choice about the shared budget, so changing it
+  // there is admin-only). For personal scope the two checks are the same admin-or-owner rule.
+  const householdRolloverOn = new Set(householdRolloverIds);
 
   const previous = addMonths(month, -1);
   const next = addMonths(month, 1);
@@ -329,7 +389,10 @@ export function BudgetsClient({
               month={month}
               action={action}
               applyAction={applyAction}
+              rolloverAction={rolloverAction}
               editable
+              canToggleRollover={currentUserIsAdmin}
+              rolloverOn={householdRolloverOn}
               predict={householdPredict}
             />
           ))}
@@ -338,6 +401,7 @@ export function BudgetsClient({
 
       {personal.map((person) => {
         const personPredict = personalPredict.get(person.userId) ?? null;
+        const personRolloverOn = new Set(person.rolloverIds ?? []);
         const personNoAttribution =
           predictions?.personal.find((entry) => entry.userId === person.userId)?.predictions.noAttribution ?? false;
         const showHistorySentence = predictions !== null && predictions.monthsUsed < MIN_HISTORY_MONTHS;
@@ -410,7 +474,12 @@ export function BudgetsClient({
                   month={month}
                   action={action}
                   applyAction={applyAction}
+                  rolloverAction={rolloverAction}
                   editable={canEditPersonal(person.userId)}
+                  // Same admin-or-owner rule as editable, for personal scope (unlike
+                  // household, where rollover is admin-only but the amount is not).
+                  canToggleRollover={canEditPersonal(person.userId)}
+                  rolloverOn={personRolloverOn}
                   predict={personPredict}
                 />
               ))}

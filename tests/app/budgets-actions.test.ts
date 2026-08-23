@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createSeededTestDb, categoryIdByName, insertTestUser, type TestDb } from '../helpers/db';
-import { resolveBudget, upsertBudget } from '@/lib/budgets';
+import { budgetProgress, resolveBudget, rolloverStartMonth, setRollover, upsertBudget } from '@/lib/budgets';
 
 let currentUser: { id: number; name: string; username: string; role: 'admin' | 'member' } = {
   id: 1,
@@ -22,7 +22,8 @@ vi.mock('next/cache', () => ({
   revalidatePath: vi.fn(),
 }));
 
-import { copyPreviousMonthAction, setLimitAction } from '@/app/(app)/budgets/actions';
+import { copyPreviousMonthAction, setLimitAction, setRolloverAction } from '@/app/(app)/budgets/actions';
+import { rolloverIdsFor } from '@/app/(app)/budgets/page';
 
 const SAME_ORIGIN = new Headers({ origin: 'http://nas.local:3000', host: 'nas.local:3000' });
 const CROSS_ORIGIN = new Headers({ origin: 'http://evil.local', host: 'nas.local:3000' });
@@ -154,5 +155,136 @@ describe('copyPreviousMonthAction — review finding 6', () => {
     const household = await copyPreviousMonthAction({}, formData({ scope: 'household', month: '2026-03', userId: '' }));
     expect(household.message).toMatch(/copied 1/i);
     expect(resolveBudget('household', null, groceries, '2026-03')).toBe(8000);
+  });
+});
+
+/**
+ * v1.7.0 Task 11, deliverable (a): the "Roll over unspent" toggle's server action. Permission
+ * is deliberately STRICTER than setLimitAction's for household scope: the spec (Task 11,
+ * "Budgets page:" bullet) says "admin + the personal-scope owner", not "any member" -- rollover
+ * is a policy choice about how a shared household budget behaves across months, so changing it
+ * there is admin-only, while a personal budget's own owner may still choose it for themselves,
+ * same as they may set their own limit.
+ */
+describe('setRolloverAction — admin, and for a personal-scope budget its own owner', () => {
+  it('rejects a cross-origin submission before touching the database', async () => {
+    const { admin, groceries } = setup();
+    currentUser = { id: admin, name: 'Admin', username: 'admin', role: 'admin' };
+    mockHeaders = CROSS_ORIGIN;
+    const result = await setRolloverAction(
+      {},
+      formData({ scope: 'household', month: '2026-03', categoryId: String(groceries), userId: '', enabled: 'on' }),
+    );
+    expect(result.error).toMatch(/cross-origin/i);
+    expect(rolloverStartMonth('household', null, groceries)).toBeNull();
+  });
+
+  it('rejects a non-admin member turning rollover on for a household budget', async () => {
+    const { groceries } = setup();
+    const result = await setRolloverAction(
+      {},
+      formData({ scope: 'household', month: '2026-03', categoryId: String(groceries), userId: '', enabled: 'on' }),
+    );
+    expect(result.error).toMatch(/admin/i);
+    expect(rolloverStartMonth('household', null, groceries)).toBeNull();
+  });
+
+  it('lets an admin turn rollover on for a household budget, starting at the submitted month', async () => {
+    const { admin, groceries } = setup();
+    currentUser = { id: admin, name: 'Admin', username: 'admin', role: 'admin' };
+    const result = await setRolloverAction(
+      {},
+      formData({ scope: 'household', month: '2026-03', categoryId: String(groceries), userId: '', enabled: 'on' }),
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.message).toMatch(/on/i);
+    expect(rolloverStartMonth('household', null, groceries)).toBe('2026-03');
+  });
+
+  it('lets an admin turn household rollover back off, and the row is gone', async () => {
+    const { admin, groceries } = setup();
+    setRollover({ scope: 'household', userId: null, categoryId: groceries, enabled: true, startMonth: '2026-01' });
+    currentUser = { id: admin, name: 'Admin', username: 'admin', role: 'admin' };
+    // No "enabled" field at all -- exactly what an unchecked checkbox submits.
+    const result = await setRolloverAction({}, formData({ scope: 'household', month: '2026-03', categoryId: String(groceries), userId: '' }));
+    expect(result.message).toMatch(/off/i);
+    expect(rolloverStartMonth('household', null, groceries)).toBeNull();
+  });
+
+  it("rejects a member turning rollover on for another member's personal budget", async () => {
+    const { bob, groceries } = setup();
+    const result = await setRolloverAction(
+      {},
+      formData({ scope: 'personal', month: '2026-03', categoryId: String(groceries), userId: String(bob), enabled: 'on' }),
+    );
+    expect(result.error).toMatch(/your own/i);
+    expect(rolloverStartMonth('personal', bob, groceries)).toBeNull();
+  });
+
+  it('lets a member turn rollover on for their own personal budget without being an admin', async () => {
+    const { alice, groceries } = setup();
+    const result = await setRolloverAction(
+      {},
+      formData({ scope: 'personal', month: '2026-03', categoryId: String(groceries), userId: '', enabled: 'on' }),
+    );
+    expect(result.error).toBeUndefined();
+    expect(rolloverStartMonth('personal', alice, groceries)).toBe('2026-03');
+  });
+
+  it("lets an admin turn rollover on for another member's personal budget", async () => {
+    const { admin, bob, groceries } = setup();
+    currentUser = { id: admin, name: 'Admin', username: 'admin', role: 'admin' };
+    const result = await setRolloverAction(
+      {},
+      formData({ scope: 'personal', month: '2026-03', categoryId: String(groceries), userId: String(bob), enabled: 'on' }),
+    );
+    expect(result.error).toBeUndefined();
+    expect(rolloverStartMonth('personal', bob, groceries)).toBe('2026-03');
+  });
+
+  it('rejects an invalid month and writes nothing', async () => {
+    const { admin, groceries } = setup();
+    currentUser = { id: admin, name: 'Admin', username: 'admin', role: 'admin' };
+    const result = await setRolloverAction(
+      {},
+      formData({ scope: 'household', month: 'not-a-month', categoryId: String(groceries), userId: '', enabled: 'on' }),
+    );
+    expect(result.error).toBe('Invalid request.');
+    expect(rolloverStartMonth('household', null, groceries)).toBeNull();
+  });
+
+  it('re-enabling an already-on rollover leaves its original startMonth untouched (setRollover\'s own no-op rule)', async () => {
+    const { admin, groceries } = setup();
+    setRollover({ scope: 'household', userId: null, categoryId: groceries, enabled: true, startMonth: '2026-01' });
+    currentUser = { id: admin, name: 'Admin', username: 'admin', role: 'admin' };
+    await setRolloverAction({}, formData({ scope: 'household', month: '2026-06', categoryId: String(groceries), userId: '', enabled: 'on' }));
+    expect(rolloverStartMonth('household', null, groceries)).toBe('2026-01');
+  });
+});
+
+/**
+ * v1.7.0 Task 11: rolloverIdsFor (src/app/(app)/budgets/page.tsx) is the page's own bridge
+ * between budget_rollover's absence-is-off rows and the client's on/off checkboxes -- BudgetRow
+ * itself (src/lib/budgets.ts, not modified by this task) carries no boolean "is rollover on"
+ * field, only baseLimitCents/carryCents, so the page reads rolloverStartMonth per rendered row.
+ */
+describe('rolloverIdsFor (page.tsx)', () => {
+  it('is empty when nothing is enabled, lists the category once enabled, and empties again once disabled', () => {
+    const { groceries } = setup();
+    expect(rolloverIdsFor('household', null, budgetProgress('2026-03'))).not.toContain(groceries);
+
+    setRollover({ scope: 'household', userId: null, categoryId: groceries, enabled: true, startMonth: '2026-03' });
+    expect(rolloverIdsFor('household', null, budgetProgress('2026-03'))).toContain(groceries);
+
+    setRollover({ scope: 'household', userId: null, categoryId: groceries, enabled: false, startMonth: '2026-03' });
+    expect(rolloverIdsFor('household', null, budgetProgress('2026-03'))).not.toContain(groceries);
+  });
+
+  it('keeps household and personal rollover independent for the same category', () => {
+    const { alice, groceries } = setup();
+    setRollover({ scope: 'personal', userId: alice, categoryId: groceries, enabled: true, startMonth: '2026-03' });
+
+    expect(rolloverIdsFor('personal', alice, budgetProgress('2026-03', 'personal', alice))).toContain(groceries);
+    expect(rolloverIdsFor('household', null, budgetProgress('2026-03'))).not.toContain(groceries);
   });
 });
