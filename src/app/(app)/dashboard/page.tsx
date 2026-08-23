@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { requireUser } from '@/lib/auth/session';
 import { listAccounts } from '@/lib/accounts';
 import { listUsers } from '@/lib/auth/users';
+import { safeToSpend, upcomingBills } from '@/lib/bills';
 import { budgetProgress, budgetTotals } from '@/lib/budgets';
 import { reviewQueueCount } from '@/lib/categorize/engine';
 import { currentMonth, monthEnd, monthLabel, monthStart, todayIso } from '@/lib/dates';
@@ -12,6 +13,7 @@ import { cashflowTrend, topMerchants } from '@/lib/reports';
 import { expiringSoonItems } from '@/lib/warranty/search';
 import { formatCents } from '@/lib/money';
 import { BudgetProgressBar } from '@/components/BudgetProgressBar';
+import { ComingUpCard } from '@/components/ComingUpCard';
 import { GoalCard } from '@/components/GoalCard';
 import { LoansCard } from '@/components/LoansCard';
 import { CashflowChart } from '@/components/charts/CashflowChart';
@@ -61,6 +63,14 @@ export default async function DashboardPage({
   // does not change with the person switcher (the same reasoning LoansCard's totalOwedCents
   // already follows). Only the latest point is needed here; the trend lives on Reports.
   const netWorthLatest = netWorthOverTime(1, { today }).at(0) ?? null;
+
+  // Task 9: upcoming bills + safe-to-spend, also whole-household (safeToSpend carries no
+  // person parameter -- like loans and net worth, a bill and a budgeted limit are not
+  // attributed to one person the way a transaction is). `householdTotals` reuses `totals`
+  // when the page is already unscoped rather than re-querying.
+  const bills = upcomingBills({ today, days: 30 });
+  const spendPlan = safeToSpend({ month, today });
+  const householdTotals = scopeUserId === null ? totals : budgetTotals(budgetProgress(month));
 
   // The trend already covers this month, so the headline income/net figures come
   // out of it rather than costing a second query.
@@ -164,6 +174,15 @@ export default async function DashboardPage({
 
       {/* MUST-15.1: self-hiding. Rendered unconditionally; absent when there is nothing to say. */}
       <LoansCard loans={loans} totalOwedCents={totalOwedCents} />
+
+      {/* Task 9: self-hiding, same pattern as LoansCard -- absent when there are no bills
+          coming up AND no budgeted limits at all this month. */}
+      <ComingUpCard
+        bills={bills}
+        budgetedRemainingCents={spendPlan.budgetedRemainingCents}
+        billsDueCents={spendPlan.billsDueCents}
+        hasBudgetedLimits={householdTotals.budgetedLimitCents > 0}
+      />
 
       <Card>
         <CardHeader
