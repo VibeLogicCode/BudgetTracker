@@ -21,6 +21,99 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.7.0] - 2026-08-23
+
+### Added
+
+- **A transaction can now be split across several categories.** One trip to a warehouse store
+  is rarely one category, and until now the whole amount had to land in a single one. A row's
+  Split action divides it into as many parts as you like, each with its own category and an
+  optional note, and it will not save until the parts add up to the transaction exactly. Every
+  budget, report and prediction then counts that transaction once, at its parts. A split row
+  shows a badge instead of a category name, and Remove split puts it back. Two consequences
+  worth knowing: a split transaction leaves the review queue, because you have already said
+  where its money went, and the bulk Categorize and Mark transfer buttons skip split rows and
+  tell you how many they skipped, since either one would contradict the split. Marking who
+  spent it still works normally. CSV export writes one line per part, so a spreadsheet adds up
+  to the same totals the app shows.
+- **SimpleFIN accounts can sync on their own, every 6 hours, every 12 hours, daily or weekly.**
+  Settings -> Connections now has an Automatic sync setting, off until you choose an interval.
+  Everything the app tells you is only as current as its data, so this is the difference
+  between reports that describe last month and reports that describe now. If a sync fails you
+  get one notification that day, and no more. A day whose SimpleFIN request allowance is
+  already spent is not treated as a failure and says nothing, since that is the service
+  working as designed rather than something to fix.
+- **Net worth over time, on Reports and as a dashboard figure.** Every sync now records each
+  account's balance, and balances can also be typed in by hand for accounts that do not sync,
+  in the same Update account form as everything else. The chart shows what you own, what you
+  owe including loans, and the difference, month by month. Two deliberate honesty rules: no
+  month is drawn before the first balance was recorded, so the line never invents history, and
+  when accounts have no balance yet the card says how many, so a figure is never quietly
+  incomplete. This history only accumulates going forward, so the chart is thin at first and
+  becomes useful with a few months behind it.
+- **A Coming up card showing what the month still owes.** Subscriptions and contracts with a
+  billing cycle and amount now project their next due dates, with a total, alongside what the
+  budgets have left. Surprises are what actually break a budget, and this is the part the app
+  could see coming and was not saying. Bills anchored on the 31st behave correctly in short
+  months.
+- **Budgets can roll unspent money forward.** Insurance, property tax, car repairs and gifts do
+  not fit a flat monthly limit, and every month one of them lands the budget reads as blown,
+  which teaches everyone to ignore budgets. Any category can now carry its leftover forward
+  from the month you switch it on. Only leftovers carry, never overspend, so one expensive
+  month cannot borrow against the next, and the page shows the base limit and the carried
+  amount separately so a limit never looks mysteriously larger than what you typed. Budget
+  alerts respect the carry, so a category covered by its own leftovers stops warning you.
+  Suggested budgets still work from the limit you typed, not the carried total.
+- **Three more Reports cards.** Top merchants, which the dashboard had for the current month
+  only, now answers the same question over any range. Year over year puts a month beside the
+  month before it and the same month last year, which is the only fair way to read utilities,
+  holidays and anything else seasonal. Cash flow adds income, spend and the share you kept, and
+  says plainly when there was no income rather than printing a percentage of nothing.
+- **Tax-relevant categories and a tax year report.** Mark categories as tax relevant in
+  Settings -> Managers, and Reports will total a full year of them per person, with a CSV to
+  download. One thing to watch: if you flag both a parent category and one of its children,
+  the parent's figure already includes the child and the child also has its own row, so the
+  rows overlap on purpose. The card says so, because adding up the column is exactly what
+  someone does at tax time.
+- **Each loan says roughly when it will be paid off.** Based on what has actually been paid
+  over the last six complete months, not on the interest rate, which this app still only ever
+  displays. The current month is left out because it is usually part way through and would
+  understate the pace.
+- **An optional monthly summary.** Off unless you turn it on. Early in each month it reports
+  the month just finished: what came in and went out, how the budgets did, and the five
+  merchants that took the most. It is built from the same figures the pages show, so it cannot
+  disagree with them, and it means someone who never opens the app still knows where the
+  household stands.
+- **The app can be installed on a phone's home screen.** It gets its own icon and opens in its
+  own window instead of a browser tab. There is no offline mode: this app lives on your
+  network, and cached financial data that might be days stale would be worse than no data.
+
+### Changed
+
+- **One Update account form replaced three separate buttons on Settings -> Accounts.** Each row
+  carried a rename box, an owner dropdown, a mapping dropdown and three nearly identical save
+  buttons. It is now one form that saves the name, owner, mapping and balance together, plus
+  Deactivate. Nothing was removed except the clutter.
+- **The scheduler is now allowed to sync.** Until this release it deliberately never could, and
+  that rule was enforced by a test. Automatic sync replaces it with a narrower rule: exactly
+  one place in the code may start a sync, and only when you have turned the setting on.
+
+### Fixed
+
+Both of these predate this release. Everything else the review turned up was in code written
+for this release and never reached a running install, so it is not listed here.
+
+- **Editing a limit you had already set did not wake the budget alerts.** Budget alerts skip
+  recomputing when nothing appears to have changed, and that judgement could not see an edit to
+  an existing month's limit, only a brand new one. So lowering a limit you had already set left
+  the alerts judging your spending against the old number until some unrelated transaction
+  happened to land. Worse, re-typing the limit could not be used to force it either, which is
+  the obvious thing to try.
+- **A failed update check said nothing at all.** If the daily check for a new version failed
+  before it started, it stopped silently. Nothing crashed, but unlike every other background
+  job it wrote no log line, so there was nothing to explain why update checks had gone quiet.
+  It now reports a failure the way the backup and notification jobs do.
+
 ## [1.6.0] - 2026-08-22
 
 ### Added

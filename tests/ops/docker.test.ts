@@ -218,13 +218,31 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.6.0 release', () => {
+  it('MUST-7.1: the 1.7.0 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.6.0');
+    expect(pkg.version).toBe('1.7.0');
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toMatch(/^## \[1\.7\.0\] - 2026-08-23$/m);
+    // An empty Unreleased section is left in place for the next session.
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.7.0]'));
+    const section = changelog.slice(changelog.indexOf('## [1.7.0]'), changelog.indexOf('## [1.6.0]'));
+    // The release's own headline claims. One per feature, so a section that quietly loses one
+    // of them fails here rather than shipping a changelog that undersells or overstates.
+    expect(section).toMatch(/split/i);
+    expect(section).toMatch(/net worth/i);
+    expect(section).toMatch(/roll/i);
+    expect(section).toMatch(/tax/i);
+    expect(section).toMatch(/paid off/i);
+    expect(section).toMatch(/install/i);
+    // The two genuinely pre-existing fixes are called out as such, since everything else the
+    // review found was in code written for this release and never reached a running install.
+    expect(section).toContain('### Fixed');
+    expect(section).toMatch(/predate this release/i);
+  });
+
+  it('MUST-7.1: the 1.6.0 release is still recorded intact (append-only discipline)', () => {
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.6\.0\] - 2026-08-22$/m);
-    // An empty Unreleased section is left in place for the next session.
-    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.6.0]'));
     const section = changelog.slice(changelog.indexOf('## [1.6.0]'), changelog.indexOf('## [1.5.1]'));
     expect(section).toMatch(/cardholder/i);
     expect(section).toMatch(/deactivat/i);
