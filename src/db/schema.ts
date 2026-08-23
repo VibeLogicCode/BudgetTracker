@@ -429,7 +429,12 @@ export const simplefinAccountLinks = sqliteTable(
  * no ON CONFLICT clause of its own.
  *
  * NOT represented here; SQL only:
- *   - CHECK (source IN ('simplefin','manual'))
+ *   - CHECK (source IN ('simplefin','manual','csv'))   -- widened by 0010_balances
+ *
+ * The three sources rank in authority as simplefin > csv > manual (ruling R3, v1.8.0 spec):
+ * a bank's own figure outranks a hand-typed one for the same date. 'csv' is deliberately
+ * distinct from 'manual' so that ordering is expressible at all -- see
+ * src/lib/import/mapping.ts's balanceCol, which produces it.
  */
 export const accountBalanceSnapshots = sqliteTable(
   'account_balance_snapshots',
@@ -440,7 +445,7 @@ export const accountBalanceSnapshots = sqliteTable(
       .references(() => accounts.id, { onDelete: 'cascade' }),
     date: text('date').notNull(),
     balanceCents: integer('balance_cents').notNull(),
-    source: text('source', { enum: ['simplefin', 'manual'] }).notNull(),
+    source: text('source', { enum: ['simplefin', 'manual', 'csv'] }).notNull(),
     createdAt: text('created_at').notNull(),
   },
   (t) => [uniqueIndex('account_balance_snapshots_uq').on(t.accountId, t.date)],
