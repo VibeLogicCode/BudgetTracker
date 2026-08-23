@@ -1,12 +1,12 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
-import { confirmCategory, setTransferFlag } from '@/lib/categorize/engine';
+import { clearCategory, confirmCategory, setTransferFlag } from '@/lib/categorize/engine';
 import { listRules } from '@/lib/categorize/rules';
 import { normalizeMerchant } from '@/lib/categorize/normalize';
 import { bulkSetAttribution, bulkSetCategory, bulkSetTransfer } from '@/lib/transactions';
 import { categoryBreakdown } from '@/lib/reports';
-import { setTransactionSplits } from '@/lib/splits';
+import { getSplits, setTransactionSplits } from '@/lib/splits';
 import { nowIso } from '@/lib/clock';
 
 /**
@@ -33,6 +33,20 @@ import { nowIso } from '@/lib/clock';
  * refuse outright (return false, write nothing -- no category/transfer write, no rule, no
  * Bayes training) for a transaction that has splits, and the two bulk functions in
  * src/lib/transactions.ts count the refusals as "skipped" instead of failing the whole batch.
+ *
+ * Defect 3 (final pre-release review, 2026-08-22, worse than either above): clearCategory was
+ * the one sibling of confirmCategory/setTransferFlag that never got this guard, even though it
+ * is reachable through the OTHER half of the very same setCategoryAction if/else that defect 2
+ * closed one branch of. setTransactionSplits stamps categorization_source = 'manual' on the
+ * parent when splitting (so the row leaves the review queue) but, by design ruling 2, never
+ * calls train() -- so a split parent that a rule or Bayes had already categorized carries
+ * 'manual' with NO training behind it, breaking the invariant clearCategory's untrain() relied
+ * on (that 'manual' + a real category_id means THIS row's own tokens were trained). Calling
+ * clearCategory on such a row untrains someone ELSE's real training at the shared merchant
+ * (e.g. another, unsplit transaction at the same merchant that was legitimately confirmed) and
+ * unconditionally deletes that merchant's exact category rule too -- neither of which this
+ * split row ever earned. clearCategory now gets the identical guard: refuse outright and write
+ * nothing for a transaction that has splits.
  */
 
 let current: TestDb | null = null;
@@ -138,6 +152,88 @@ describe('confirmCategory refuses a split transaction (defect 2 fix, manual coun
     const id = add({ description: 'CONTROL MERCHANT' });
     expect(confirmCategory({ transactionId: id, categoryId: coffee, userId: alice })).toBe(true);
     expect(listRules('category')).toHaveLength(1);
+  });
+});
+
+describe('clearCategory refuses a split transaction (defect 3 fix, the third sibling Task 2b never covered)', () => {
+  /**
+   * T1 confirms 'groceries' at a merchant -- real training: docCount 1, one bayes_tokens row
+   * per distinct token in the normalized merchant. T2 is a SEPARATE transaction at the SAME
+   * merchant, given the same category as if Bayes had guessed it, then split -- which stamps
+   * ITS parent 'manual' (setTransactionSplits, ruling 2) without ever training it. This is the
+   * reviewer's exact reproduction shape: calling clearCategory on T2 must never be able to
+   * untrain what T1 actually earned.
+   */
+  function setupSharedMerchantScenario() {
+    const { db, alice, add, readTxn } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const gas = categoryIdByName(db, 'Gas');
+    const merchant = 'ACME SPLIT MERCHANT';
+    const t1 = add({ description: merchant });
+    expect(confirmCategory({ transactionId: t1, categoryId: groceries, userId: alice })).toBe(true);
+    const t2 = add({ description: merchant });
+    current!.db.run(sql`update transactions set category_id = ${groceries}, categorization_source = 'bayes' where id = ${t2}`);
+    splitSeventyThirty(t2, groceries, gas, alice);
+    return { alice, groceries, gas, t1, t2, readTxn };
+  }
+
+  function bayesStateFor(categoryId: number) {
+    const totals = current!.sqlite
+      .prepare('select doc_count as docCount, token_total as tokenTotal from bayes_category_totals where category_id = ?')
+      .get(categoryId) as { docCount: number; tokenTotal: number } | undefined;
+    const tokens = current!.sqlite
+      .prepare('select token, count from bayes_tokens where category_id = ? order by token')
+      .all(categoryId) as { token: string; count: number }[];
+    return { totals: totals ?? { docCount: 0, tokenTotal: 0 }, tokens };
+  }
+
+  it("reviewer's exact reproduction: T1's real training survives a clearCategory aimed at split T2", () => {
+    const { alice, groceries, t2 } = setupSharedMerchantScenario();
+
+    // Real training from T1's confirm, pinned exactly: 'ACME SPLIT MERCHANT' tokenizes to
+    // three distinct tokens, each trained once.
+    const before = bayesStateFor(groceries);
+    expect(before).toEqual({
+      totals: { docCount: 1, tokenTotal: 3 },
+      tokens: [
+        { token: 'ACME', count: 1 },
+        { token: 'MERCHANT', count: 1 },
+        { token: 'SPLIT', count: 1 },
+      ],
+    });
+
+    expect(clearCategory({ transactionId: t2, userId: alice })).toBe(false);
+
+    // Unchanged, down to the exact numbers -- not merely "still some tokens exist".
+    expect(bayesStateFor(groceries)).toEqual(before);
+  });
+
+  it("does not delete the merchant rule T1's confirm created, and leaves T2's row and its split parts exactly as they were", () => {
+    const { alice, groceries, t2, readTxn } = setupSharedMerchantScenario();
+    const beforeTxn = readTxn(t2);
+    const beforeSplits = getSplits(t2);
+    expect(beforeTxn).toMatchObject({ category_id: groceries, categorization_source: 'manual' });
+
+    expect(clearCategory({ transactionId: t2, userId: alice })).toBe(false);
+
+    expect(listRules('category')).toHaveLength(1);
+    expect(listRules('category')[0]).toMatchObject({ pattern: 'ACME SPLIT MERCHANT', matchType: 'exact', categoryId: groceries });
+    // The parent's own category/source and its split rows must not end up inconsistent with
+    // each other -- a refused call writes NOTHING, on either side.
+    expect(readTxn(t2)).toEqual(beforeTxn);
+    expect(getSplits(t2)).toEqual(beforeSplits);
+  });
+
+  it('an unsplit control transaction can still be cleared normally', () => {
+    const { db, alice, add, readTxn } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const id = add({ description: 'CONTROL MERCHANT' });
+    expect(confirmCategory({ transactionId: id, categoryId: coffee, userId: alice })).toBe(true);
+
+    expect(clearCategory({ transactionId: id, userId: alice })).toBe(true);
+
+    expect(readTxn(id)).toMatchObject({ category_id: null, categorization_source: 'none' });
+    expect((current!.sqlite.prepare('select count(*) as c from bayes_tokens').get() as { c: number }).c).toBe(0);
   });
 });
 

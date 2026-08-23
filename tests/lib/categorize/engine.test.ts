@@ -275,14 +275,28 @@ describe('the learning loop', () => {
     expect(listRules('category')).toHaveLength(0);
   });
 
+  /**
+   * Regression anchor (2026-08-22 split-guard fix): clearCategory now refuses a split
+   * transaction (see the guard tests in tests/lib/splits-bulk.test.ts), so this is the test
+   * that proves the ORDINARY, unsplit case still untrains exactly as it did before that guard
+   * was added -- pinned with exact doc/token-count numbers, not just "some tokens exist".
+   */
   it('clearCategory untrains and returns the row to uncategorized', () => {
     const { db, sqlite, add, userId } = setup();
     const coffee = categoryIdByName(db, 'Coffee');
     const id = add('POS PURCHASE TIM HORTONS #4821 TORONTO ON');
-    confirmCategory({ transactionId: id, categoryId: coffee, userId });
-    clearCategory({ transactionId: id, userId });
+    expect(confirmCategory({ transactionId: id, categoryId: coffee, userId })).toBe(true);
+    expect(
+      sqlite.prepare('select doc_count as docCount, token_total as tokenTotal from bayes_category_totals where category_id = ?').get(coffee),
+    ).toEqual({ docCount: 1, tokenTotal: 2 });
+
+    expect(clearCategory({ transactionId: id, userId })).toBe(true);
+
     expect(readTxn(sqlite, id)).toMatchObject({ category_id: null, categorization_source: 'none' });
     expect((sqlite.prepare('select count(*) as c from bayes_tokens').get() as { c: number }).c).toBe(0);
+    expect(
+      sqlite.prepare('select doc_count as docCount, token_total as tokenTotal from bayes_category_totals where category_id = ?').get(coffee),
+    ).toEqual({ docCount: 0, tokenTotal: 0 });
   });
 
   it('applyCategoryToMatching confirms every matching row and creates one rule', () => {

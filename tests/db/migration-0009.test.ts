@@ -1,16 +1,25 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { openDatabase } from '@/db/client';
 import { createTestDb, insertTestUser, insertTestAccount, type TestDb } from '../helpers/db';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const REAL_MIGRATIONS_DIR = path.join(root, 'drizzle');
 const now = '2026-08-22T12:00:00.000Z';
 
 let current: TestDb | null = null;
 afterEach(() => {
   current?.cleanup();
   current = null;
+  // Belt and braces: every upgrade-path test below points this at a temp folder while it
+  // builds a 0008-era database, then deletes it again to fall back to the real (0009-including)
+  // drizzle/ folder. Clear it here too so a failed assertion mid-test never leaks the override
+  // into a later, unrelated test in this same process (same idiom as migration-0004/0008's own
+  // suites).
+  delete process.env.BUDGET_MIGRATIONS_DIR;
 });
 
 function insertCategory(sqlite: TestDb['sqlite'], name = 'Groceries'): number {
@@ -329,5 +338,157 @@ describe('budget_rollover constraints', () => {
     expect(() => insert.run('household', userId, categoryId, now)).toThrowError(/CHECK constraint failed/);
     // ...and a personal row must carry a non-NULL one.
     expect(() => insert.run('personal', null, categoryId, now)).toThrowError(/CHECK constraint failed/);
+  });
+});
+
+/**
+ * Coverage-gap fix (final pre-release review, 2026-08-22): migrations 0004 and 0008 each carry
+ * an "idempotent reboot" test and an "upgrade from a pre-migration database" test; 0009 only
+ * ever exercised a fresh single-shot install. This matters for a concrete, near-term reason:
+ * the owner is about to purge and re-import on real data, and the restore-from-backup path
+ * re-runs migrations on the next boot -- so the upgrade path below is a real first-week
+ * scenario, not a hypothetical one.
+ */
+describe('idempotent reboot', () => {
+  it('reopening an already-migrated file applies 0009 exactly once', () => {
+    current = createTestDb();
+    const file = current.path;
+    current.sqlite.close();
+
+    const again = openDatabase(file);
+    try {
+      const cols = again.sqlite.prepare('pragma table_info(categories)').all() as { name: string }[];
+      expect(cols.filter((c) => c.name === 'tax_relevant')).toHaveLength(1);
+
+      const tables = again.sqlite
+        .prepare(
+          `select name from sqlite_master where type = 'table'
+             and name in ('transaction_splits', 'account_balance_snapshots', 'budget_rollover') order by name`,
+        )
+        .all() as { name: string }[];
+      expect(tables).toEqual([
+        { name: 'account_balance_snapshots' },
+        { name: 'budget_rollover' },
+        { name: 'transaction_splits' },
+      ]);
+
+      // A second CREATE TABLE or ALTER TABLE ADD COLUMN of the same objects would have thrown
+      // by now ("table already exists" / "duplicate column name"); reaching here at all is
+      // itself part of the proof, on top of the exact single-copy assertions above.
+    } finally {
+      again.sqlite.close();
+    }
+  });
+});
+
+/**
+ * Builds a database that has only ever seen migrations 0000-0008 (a real household's v1.6.x
+ * database the moment before this release), by pointing BUDGET_MIGRATIONS_DIR at a temp folder
+ * holding copies of just those nine files plus a journal trimmed to their entries. Reopening
+ * the SAME file with the default (real, 0009-including) migrations folder reproduces exactly
+ * what happens the first time this release boots against an existing database -- which is also
+ * exactly what happens after a pre-0009 backup is restored, since restoreFromArtifact() only
+ * replaces the database FILE and never touches schema itself; migration application happens
+ * the next time the app calls openDatabase() at boot, the same call this test makes directly.
+ * Same shape as buildPreMigrationDb() in migration-0004/import-attribution-schema's own suites.
+ */
+function buildPreMigrationDb(): { file: string; tempMigrationsDir: string } {
+  const stageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-tracker-0008-migrations-'));
+  for (const name of [
+    '0000_init.sql',
+    '0001_add_must_change_password.sql',
+    '0002_warranty_tracker.sql',
+    '0003_warranty_item_types.sql',
+    '0004_item_type_kinds.sql',
+    '0005_billing_cycle.sql',
+    '0006_notifications.sql',
+    '0007_loans.sql',
+    '0008_import_attribution.sql',
+  ]) {
+    fs.copyFileSync(path.join(REAL_MIGRATIONS_DIR, name), path.join(stageDir, name));
+  }
+  fs.mkdirSync(path.join(stageDir, 'meta'));
+  const journal = JSON.parse(fs.readFileSync(path.join(REAL_MIGRATIONS_DIR, 'meta/_journal.json'), 'utf8')) as {
+    version: string;
+    dialect: string;
+    entries: { idx: number }[];
+  };
+  fs.writeFileSync(
+    path.join(stageDir, 'meta/_journal.json'),
+    JSON.stringify({ ...journal, entries: journal.entries.filter((e) => e.idx <= 8) }),
+  );
+  const dbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-tracker-0008-db-'));
+  return { file: path.join(dbDir, 'budget.db'), tempMigrationsDir: stageDir };
+}
+
+describe('a v1.6.x database (no 0009 applied) boots and migrates cleanly', () => {
+  it('applies exactly 0009: creates the three new tables and categories.tax_relevant, with pre-existing rows intact', () => {
+    const { file, tempMigrationsDir } = buildPreMigrationDb();
+    process.env.BUDGET_MIGRATIONS_DIR = tempMigrationsDir;
+    const staged = openDatabase(file);
+
+    // A real pre-0009 row: no tax_relevant column exists yet on this database.
+    const legacyCols = staged.sqlite.prepare('pragma table_info(categories)').all() as { name: string }[];
+    expect(legacyCols.some((c) => c.name === 'tax_relevant')).toBe(false);
+    const preExistingCategoryId = insertCategory(staged.sqlite, 'Medical');
+    const userId = insertTestUser(staged.db, { username: 'alex' });
+    const accountId = insertTestAccount(staged.db, { name: 'Chequing' });
+    const txnId = insertTransaction(staged.sqlite, accountId, userId, -5000);
+    staged.sqlite.close();
+
+    delete process.env.BUDGET_MIGRATIONS_DIR; // falls back to the real drizzle/ folder, which now includes 0009
+    const upgraded = openDatabase(file);
+    try {
+      // categories.tax_relevant: NOT NULL, and ALTER TABLE ADD COLUMN ... DEFAULT 0 backfills
+      // the pre-existing row.
+      const cols = upgraded.sqlite.prepare('pragma table_info(categories)').all() as {
+        name: string;
+        notnull: number;
+      }[];
+      const flag = cols.find((c) => c.name === 'tax_relevant');
+      expect(flag).toBeDefined();
+      expect(flag!.notnull).toBe(1);
+      const categoryRow = upgraded.sqlite
+        .prepare('select tax_relevant from categories where id = ?')
+        .get(preExistingCategoryId) as { tax_relevant: number };
+      expect(categoryRow.tax_relevant).toBe(0);
+
+      // The three new tables now exist, empty...
+      const tableNames = upgraded.sqlite
+        .prepare(
+          `select name from sqlite_master where type = 'table'
+             and name in ('transaction_splits', 'account_balance_snapshots', 'budget_rollover') order by name`,
+        )
+        .all() as { name: string }[];
+      expect(tableNames).toEqual([
+        { name: 'account_balance_snapshots' },
+        { name: 'budget_rollover' },
+        { name: 'transaction_splits' },
+      ]);
+      expect((upgraded.sqlite.prepare('select count(*) as n from transaction_splits').get() as { n: number }).n).toBe(0);
+      expect((upgraded.sqlite.prepare('select count(*) as n from account_balance_snapshots').get() as { n: number }).n).toBe(0);
+      expect((upgraded.sqlite.prepare('select count(*) as n from budget_rollover').get() as { n: number }).n).toBe(0);
+
+      // ...and usable: a real split insert against the pre-existing transaction/category works
+      // end to end, cascading correctly on the pre-existing foreign keys.
+      upgraded.sqlite
+        .prepare(`insert into transaction_splits (txn_id, category_id, amount_cents, created_at) values (?, ?, ?, ?)`)
+        .run(txnId, preExistingCategoryId, -5000, now);
+      expect((upgraded.sqlite.prepare('select count(*) as n from transaction_splits').get() as { n: number }).n).toBe(1);
+
+      // Pre-existing rows from before the upgrade are untouched.
+      const category = upgraded.sqlite.prepare('select name from categories where id = ?').get(preExistingCategoryId) as {
+        name: string;
+      };
+      expect(category.name).toBe('Medical');
+      const txn = upgraded.sqlite.prepare('select amount_cents from transactions where id = ?').get(txnId) as {
+        amount_cents: number;
+      };
+      expect(txn.amount_cents).toBe(-5000);
+    } finally {
+      upgraded.sqlite.close();
+      fs.rmSync(path.dirname(file), { recursive: true, force: true });
+      fs.rmSync(tempMigrationsDir, { recursive: true, force: true });
+    }
   });
 });

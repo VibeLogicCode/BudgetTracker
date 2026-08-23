@@ -7,6 +7,7 @@ import { nowIso } from '@/lib/clock';
 import { createWarrantyItem, getWarrantyItem } from '@/lib/warranty/items';
 import { createItemType } from '@/lib/warranty/types';
 import { setTransactionSplits } from '@/lib/splits';
+import { confirmCategory } from '@/lib/categorize/engine';
 
 let currentUser = { id: 1, name: 'Alice', username: 'alice', role: 'admin' as const };
 // v1.3.1: toggleable so the loan actions' cross-origin-first test can flip it, same idiom as
@@ -35,6 +36,7 @@ import {
   bulkTransferAction,
   saveNoteAction,
   setAttributionAction,
+  setCategoryAction,
   unassignFromLoanAction,
 } from '@/app/(app)/transactions/actions';
 
@@ -457,5 +459,64 @@ describe('bulkTransferAction and bulkCategorizeAction: split rows are skipped an
 
     const result = await bulkCategorizeAction({}, formData({ ids: `${splitId},${a},${b}`, categoryId: String(coffee) }));
     expect(result.message).toBe('Categorized 2 transactions. 1 split transaction was skipped, clear its split first.');
+  });
+});
+
+/**
+ * Final pre-release review fix (2026-08-22): setCategoryAction's EMPTY-selection branch calls
+ * clearCategory, the third sibling of confirmCategory/setTransferFlag that never got Task 2b's
+ * split guard (see the clearCategory tests in tests/lib/splits-bulk.test.ts for the engine-level
+ * proof this refuses and untrains nothing). This is the action-level path: a stale form
+ * resubmit, or a second household member's unrefreshed page, is the only realistic way to POST
+ * an empty categoryId for a split row, since the UI hides this form entirely once a row shows
+ * a "Split" badge.
+ */
+describe('setCategoryAction: clearing a category on a split transaction is refused (third sibling to the bulk split guard)', () => {
+  it("errors and leaves the split parent's category, source and Bayes training untouched", async () => {
+    const { db, sqlite, userId, addTxn } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const gas = categoryIdByName(db, 'Gas');
+    const id = addTxn('ACME SPLIT MERCHANT', -10000);
+    expect(confirmCategory({ transactionId: id, categoryId: groceries, userId })).toBe(true);
+    setTransactionSplits({
+      txnId: id,
+      parts: [
+        { categoryId: groceries, amountCents: -7000 },
+        { categoryId: gas, amountCents: -3000 },
+      ],
+      userId,
+    });
+    const readRow = () =>
+      sqlite.prepare('select category_id, categorization_source from transactions where id = ?').get(id) as {
+        category_id: number | null;
+        categorization_source: string;
+      };
+    const before = readRow();
+    expect(before).toEqual({ category_id: groceries, categorization_source: 'manual' });
+
+    const result = await setCategoryAction({}, formData({ transactionId: String(id), categoryId: '' }));
+
+    expect(result.error).toBeTruthy();
+    expect(result.message).toBeUndefined();
+    expect(readRow()).toEqual(before);
+    // The real training confirmCategory did for this merchant/category must survive.
+    expect((sqlite.prepare('select count(*) as c from bayes_tokens where category_id = ?').get(groceries) as { c: number }).c).toBeGreaterThan(0);
+  });
+
+  it('an unsplit control transaction can still have its category cleared through the action', async () => {
+    const { db, sqlite, userId, addTxn } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const id = addTxn('CONTROL MERCHANT');
+    expect(confirmCategory({ transactionId: id, categoryId: groceries, userId })).toBe(true);
+
+    const result = await setCategoryAction({}, formData({ transactionId: String(id), categoryId: '' }));
+
+    expect(result.message).toBe('Category updated.');
+    expect(result.error).toBeUndefined();
+    const row = sqlite.prepare('select category_id, categorization_source from transactions where id = ?').get(id) as {
+      category_id: number | null;
+      categorization_source: string;
+    };
+    expect(row).toEqual({ category_id: null, categorization_source: 'none' });
   });
 });

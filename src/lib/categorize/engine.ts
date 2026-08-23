@@ -220,9 +220,10 @@ export function rerunEngine(scope: { accountId?: number } = {}): EngineResult {
 /**
  * Same "not exists (select 1 from transaction_splits ...)" shape as ELIGIBLE/REVIEW_WHERE
  * above -- polarity flipped (this asks whether a split EXISTS, they ask whether one does
- * not) and scoped to one row instead of filtering a table scan. Used by confirmCategory and
- * setTransferFlag to refuse a write on a transaction that has splits; see their doc comments
- * for why. Deliberately a `.where()` predicate rather than a computed `.select()` field: a
+ * not) and scoped to one row instead of filtering a table scan. Used by confirmCategory,
+ * setTransferFlag and clearCategory to refuse a write on a transaction that has splits; see
+ * their doc comments for why. Deliberately a `.where()` predicate rather than a computed
+ * `.select()` field: a
  * drizzle column reference interpolated into a raw `sql` fragment used as a SELECT-list value
  * is not table-qualified the way the same reference is when it appears in a `.where()`
  * condition, so embedding it as a select field here would let the correlated subquery's bare
@@ -333,7 +334,40 @@ export function confirmCategory(input: {
   return true;
 }
 
-export function clearCategory(input: { transactionId: number; userId: number; at?: Date }): void {
+/**
+ * Returns false, and does NOTHING (no category write, no rule deletion, no untraining), for a
+ * transaction that has splits. Final pre-release review finding (2026-08-22): this is the
+ * third sibling of confirmCategory/setTransferFlag above, and the one Task 2b's guard missed --
+ * it is reached through the OTHER half of setCategoryAction's if/else (the empty-selection
+ * branch), the same action confirmCategory's guard already protects the other half of.
+ *
+ * Why this one is dangerous rather than merely inconsistent: setTransactionSplits (see
+ * src/lib/splits.ts) stamps categorization_source = 'manual' on the parent when splitting --
+ * that is what pulls an auto-assigned Bayes row out of the review queue -- but, per design
+ * ruling 2, it NEVER calls train(). So a split parent that a rule or Bayes had already
+ * categorized before being split ends up 'manual' with a real category_id and NO training
+ * behind it, breaking the one invariant this function's untrain() call relied on (that
+ * 'manual' + a non-null category_id means THIS row's own tokens were the ones trained -- true
+ * before splits existed, when confirmCategory was the only writer of 'manual' and always
+ * paired it with a real train()). Left unguarded, clearing such a row untrains whatever OTHER,
+ * unsplit transaction at the same merchant actually earned that training, and -- unconditionally,
+ * regardless of category_id -- deletes that merchant's exact category rule too, poisoning the
+ * categorizer for every future transaction from that merchant. Reproduced: confirm a control
+ * transaction to a category (real training), then confirm/split a second transaction at the
+ * SAME merchant and clear its category -- the control's own training and rule are erased even
+ * though it was never touched.
+ *
+ * The blast radius stops at the categorizer, not the ledger: every split-aware aggregate reads
+ * EFFECTIVE_CATEGORY (src/lib/splits.ts), which ignores the parent's own category_id entirely,
+ * so a stray write here would not corrupt any total. But it WOULD leave category_id null on a
+ * row whose split parts still carry real categories -- an inconsistent record for a column a
+ * person was never shown a way to edit in the first place (the transactions page hides this
+ * form for a split row; only a stale resubmit or a second household member's unrefreshed
+ * session can still reach it). Refusing outright, like confirmCategory/setTransferFlag, avoids
+ * both problems at once. Callers must check this return value; see setCategoryAction in
+ * src/app/(app)/transactions/actions.ts, its only caller.
+ */
+export function clearCategory(input: { transactionId: number; userId: number; at?: Date }): boolean {
   const db = getDb();
   const row = db
     .select({
@@ -345,6 +379,7 @@ export function clearCategory(input: { transactionId: number; userId: number; at
     .where(eq(transactions.id, input.transactionId))
     .get();
   if (!row) throw new Error(`No transaction ${input.transactionId}`);
+  if (transactionHasSplits(input.transactionId)) return false;
 
   if (row.source === 'manual' && row.categoryId !== null) {
     untrain(tokenize(row.normalizedMerchant), row.categoryId);
@@ -355,6 +390,7 @@ export function clearCategory(input: { transactionId: number; userId: number; at
     .set({ categoryId: null, categorizationSource: 'none', confidence: null, updatedAt: nowIso(input.at ?? new Date()) })
     .where(eq(transactions.id, input.transactionId))
     .run();
+  return true;
 }
 
 /**

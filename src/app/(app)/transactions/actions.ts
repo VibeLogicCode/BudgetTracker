@@ -86,6 +86,16 @@ export async function manualEntryAction(_prev: ActionState, formData: FormData):
   return { message: 'Transaction added.' };
 }
 
+/**
+ * clearCategory (src/lib/categorize/engine.ts) now refuses -- returns false, writes nothing --
+ * for a split transaction, the same guard confirmCategory below it already had. In normal use
+ * this branch is unreachable for a split row: the transactions page shows a "Split" badge
+ * instead of this very category form once a row has parts. Only a stale form resubmit (the
+ * page had this form open before the row got split) or a second household member's
+ * unrefreshed session can still POST an empty categoryId for one, so the refusal is surfaced
+ * as a plain error rather than silently claiming "Category updated." for a write that never
+ * happened.
+ */
 export async function setCategoryAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
 
@@ -94,8 +104,13 @@ export async function setCategoryAction(_prev: ActionState, formData: FormData):
   const raw = String(formData.get('categoryId') ?? '');
   if (!Number.isInteger(transactionId) || transactionId <= 0) return { error: 'Invalid request.' };
 
-  if (raw === '') clearCategory({ transactionId, userId: user.id });
-  else confirmCategory({ transactionId, categoryId: Number(raw), userId: user.id });
+  if (raw === '') {
+    if (!clearCategory({ transactionId, userId: user.id })) {
+      return { error: 'This transaction is split — clear its split first, then change its category.' };
+    }
+  } else {
+    confirmCategory({ transactionId, categoryId: Number(raw), userId: user.id });
+  }
 
   revalidatePath('/transactions');
   revalidatePath('/review');
