@@ -21,6 +21,33 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.9.0] - 2026-08-23
+
+### Changed
+
+- Moved to Next.js 16 and React 19.2. Nothing about how you use the app changes. This is the
+  web framework the app is built on, and staying current on it is what keeps security fixes
+  available — the three advisories that could not be closed in 1.8.1 are closed by this upgrade,
+  taking the project from twelve open advisories at the start of the day to six, none of which
+  can be reached by a running install. Builds are also faster, since the new build system is now
+  the default.
+- The request filter that redirects you to the login page when your session has expired now runs
+  on the same Node runtime as the rest of the app rather than a separate restricted one. Verified
+  by hand against a real production build: pages redirect, API routes answer 401 instead of
+  redirecting, the login and setup pages stay reachable, and the security headers still go out on
+  every response.
+
+### Security
+
+- Closed the last three advisories that needed the framework upgrade to fix (`next`, and the
+  `postcss` and `sharp` libraries it pulls in). The `sharp` one was the only one of the three with
+  any path to a running install, since it is what resizes uploaded receipt photos.
+- Stopped the release image from carrying files it never needed. The new build system copies more
+  of the project into the shipped image than the old one did, which would have included this
+  project's own test suite and internal working notes. Neither belongs in a published image, and
+  both are now excluded before the image is built. Nothing was ever published — this was caught
+  while preparing this release.
+
 ## [1.8.1] - 2026-08-23
 
 ### Changed
