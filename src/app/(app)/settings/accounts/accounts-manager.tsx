@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState } from 'react';
+import { Fragment, useActionState, useState } from 'react';
 import { FormError } from '@/components/FormError';
 import { SubmitButton } from '@/components/SubmitButton';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
@@ -8,16 +8,9 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { Notice } from '@/components/ui/Notice';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { TableWrap } from '@/components/ui/Table';
-import { Field, inputClass, selectClass } from '@/components/ui/form';
+import { Field, inputClass, labelClass, selectClass } from '@/components/ui/form';
 import { SettingsIcon } from '@/components/icons';
-import {
-  createAccountAction,
-  renameAccountAction,
-  setAccountActiveAction,
-  setAccountOwnerAction,
-  setAccountProfileAction,
-  type AccountsFormState,
-} from './actions';
+import { createAccountAction, setAccountActiveAction, updateAccountAction, type AccountsFormState } from './actions';
 
 export interface AccountRow {
   id: number;
@@ -31,7 +24,9 @@ export interface AccountRow {
    * v1.6.0 (spec 2026-08-22, MUST-5.1). importProfileName is resolved by page.tsx from the
    * FULL profile list, not the filtered `profiles` prop below -- a pin can point at a profile
    * that has since been deactivated or gone unreadable (Task 4's "dormant pin"), and it still
-   * has to show its real name here, not "none". Only the SELECT below is limited to what
+   * has to show its real name here, not "none". The editor's mapping SELECT adds the dormant
+   * pin as its own extra option so it stays preselected (v1.7.0 Task 1b: a save aimed at name
+   * or owner must not silently clear it) -- a genuinely NEW pick is still limited to what
    * `profiles` offers.
    */
   importProfileId: number | null;
@@ -66,13 +61,23 @@ export function AccountsManager({
   profiles: ProfileOption[];
 }) {
   const [createState, create] = useActionState(createAccountAction, initialState);
-  const [renameState, rename] = useActionState(renameAccountAction, initialState);
-  const [ownerState, setOwner] = useActionState(setAccountOwnerAction, initialState);
   const [activeState, setActive] = useActionState(setAccountActiveAction, initialState);
-  const [profileState, setProfile] = useActionState(setAccountProfileAction, initialState);
+  const [updateState, update] = useActionState(updateAccountAction, initialState);
+  // v1.7.0 Task 1b: one row's editor open at a time, same show-one-at-a-time shape as
+  // transactions-client.tsx's rename modal. owner/profile are the STRING form values the
+  // selects below need ('' for Joint/None), not the raw nullable ids.
+  const [editing, setEditing] = useState<{ id: number; name: string; owner: string; profile: string } | null>(null);
 
-  const rowError = renameState.error ?? ownerState.error ?? activeState.error ?? profileState.error;
-  const rowMessage = renameState.message ?? ownerState.message ?? activeState.message ?? profileState.message;
+  const rowError = activeState.error ?? updateState.error;
+  const rowMessage = activeState.message ?? updateState.message;
+
+  const openEditor = (account: AccountRow) =>
+    setEditing({
+      id: account.id,
+      name: account.name,
+      owner: account.ownerUserId === null ? '' : String(account.ownerUserId),
+      profile: account.importProfileId === null ? '' : String(account.importProfileId),
+    });
 
   return (
     <div className="flex flex-col gap-6">
@@ -139,93 +144,108 @@ export function AccountsManager({
             </thead>
             <tbody>
               {accounts.map((account) => (
-                <tr key={account.id} className="align-top">
-                  <td className="font-medium text-ink">{account.name}</td>
-                  <td className="text-muted">{account.institution === '' ? '—' : account.institution}</td>
-                  <td className="text-muted capitalize">{account.type}</td>
-                  <td className="text-muted">
-                    {account.ownerUserId === null ? 'Joint' : (people.find((p) => p.id === account.ownerUserId)?.name ?? 'Joint')}
-                  </td>
-                  <td className="text-muted">
-                    {account.isSimplefinManaged ? '—' : account.importProfileName ?? 'none'}
-                  </td>
-                  <td>
-                    <span className={account.isSimplefinManaged ? 'badge badge--blue' : 'badge badge--slate'}>
-                      {account.isSimplefinManaged ? 'SimpleFIN' : 'CSV'}
-                    </span>
-                  </td>
-                  <td>
-                    <span className={account.isActive ? 'badge badge--green' : 'badge badge--muted'}>
-                      {account.isActive ? 'active' : 'deactivated'}
-                    </span>
-                  </td>
-                  <td>
-                    <div className="flex flex-wrap gap-2">
-                      <form action={rename} className="flex gap-1">
-                        <input type="hidden" name="accountId" value={account.id} />
-                        <input name="name" defaultValue={account.name} aria-label={`Rename ${account.name}`} className={`w-36 ${rowInput}`} />
-                        <button type="submit" className={rowButton}>
-                          Rename
+                <Fragment key={account.id}>
+                  <tr className="align-top">
+                    <td className="font-medium text-ink">{account.name}</td>
+                    <td className="text-muted">{account.institution === '' ? '—' : account.institution}</td>
+                    <td className="text-muted capitalize">{account.type}</td>
+                    <td className="text-muted">
+                      {account.ownerUserId === null ? 'Joint' : (people.find((p) => p.id === account.ownerUserId)?.name ?? 'Joint')}
+                    </td>
+                    <td className="text-muted">
+                      {account.isSimplefinManaged ? '—' : account.importProfileName ?? 'none'}
+                    </td>
+                    <td>
+                      <span className={account.isSimplefinManaged ? 'badge badge--blue' : 'badge badge--slate'}>
+                        {account.isSimplefinManaged ? 'SimpleFIN' : 'CSV'}
+                      </span>
+                    </td>
+                    <td>
+                      <span className={account.isActive ? 'badge badge--green' : 'badge badge--muted'}>
+                        {account.isActive ? 'active' : 'deactivated'}
+                      </span>
+                    </td>
+                    <td>
+                      <div className="flex flex-wrap gap-2">
+                        <button type="button" onClick={() => openEditor(account)} className={rowButton}>
+                          Update account
                         </button>
-                      </form>
-                      <form action={setOwner} className="flex gap-1">
-                        <input type="hidden" name="accountId" value={account.id} />
-                        <select
-                          name="owner"
-                          defaultValue={account.ownerUserId === null ? '' : String(account.ownerUserId)}
-                          aria-label={`Owner of ${account.name}`}
-                          className={rowInput}
-                        >
-                          <option value="">Joint</option>
-                          {people.map((person) => (
-                            <option key={person.id} value={person.id}>
-                              {person.name}
-                            </option>
-                          ))}
-                        </select>
-                        <button type="submit" className={rowButton}>
-                          Set owner
-                        </button>
-                      </form>
-                      {account.isSimplefinManaged ? null : (
-                        <form action={setProfile} className="flex gap-1">
+                        <form action={setActive}>
                           <input type="hidden" name="accountId" value={account.id} />
-                          <select
-                            name="profile"
-                            // The pin only preselects when it is actually one of the offered
-                            // (active+readable) profiles below -- the same MUST-5.2 rule
-                            // import-client.tsx's preselect follows, so this select is never
-                            // asked to land on a value with no matching <option>.
-                            defaultValue={
-                              account.importProfileId !== null && profiles.some((p) => p.id === account.importProfileId)
-                                ? String(account.importProfileId)
-                                : ''
-                            }
-                            aria-label={`Mapping for ${account.name}`}
-                            className={rowInput}
-                          >
-                            <option value="">None</option>
-                            {profiles.map((profile) => (
-                              <option key={profile.id} value={profile.id}>
-                                {profile.name}
-                              </option>
-                            ))}
-                          </select>
+                          <input type="hidden" name="active" value={account.isActive ? '0' : '1'} />
                           <button type="submit" className={rowButton}>
-                            Set mapping
+                            {account.isActive ? 'Deactivate' : 'Reactivate'}
                           </button>
                         </form>
-                      )}
-                      <form action={setActive}>
-                        <input type="hidden" name="accountId" value={account.id} />
-                        <input type="hidden" name="active" value={account.isActive ? '0' : '1'} />
-                        <button type="submit" className={rowButton}>
-                          {account.isActive ? 'Deactivate' : 'Reactivate'}
-                        </button>
-                      </form>
-                    </div>
-                  </td>
-                </tr>
+                      </div>
+                    </td>
+                  </tr>
+                  {editing !== null && editing.id === account.id ? (
+                    <tr>
+                      <td colSpan={8} className="bg-surface-2">
+                        <form action={update} onSubmit={() => setEditing(null)} className="flex flex-wrap items-end gap-3 py-2">
+                          <input type="hidden" name="accountId" value={account.id} />
+                          <div className="flex flex-col gap-1">
+                            <span className={labelClass}>Name</span>
+                            <input
+                              name="name"
+                              defaultValue={editing.name}
+                              aria-label={`Name for ${account.name}`}
+                              className={`w-36 ${rowInput}`}
+                            />
+                          </div>
+                          <div className="flex flex-col gap-1">
+                            <span className={labelClass}>Owner</span>
+                            <select
+                              name="owner"
+                              defaultValue={editing.owner}
+                              aria-label={`Owner of ${account.name}`}
+                              className={rowInput}
+                            >
+                              <option value="">Joint</option>
+                              {people.map((person) => (
+                                <option key={person.id} value={person.id}>
+                                  {person.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          {account.isSimplefinManaged ? null : (
+                            <div className="flex flex-col gap-1">
+                              <span className={labelClass}>Import mapping</span>
+                              <select
+                                name="profile"
+                                defaultValue={editing.profile}
+                                aria-label={`Mapping for ${account.name}`}
+                                className={rowInput}
+                              >
+                                <option value="">None</option>
+                                {profiles.map((profile) => (
+                                  <option key={profile.id} value={profile.id}>
+                                    {profile.name}
+                                  </option>
+                                ))}
+                                {/* Dormant pin (spec 2026-08-22 v1.6.0): a pin pointing at a
+                                    profile that is no longer offered (deactivated or gone
+                                    unreadable) still needs an <option> to preselect, or saving
+                                    this editor for an unrelated field would silently clear it. */}
+                                {editing.profile !== '' && !profiles.some((p) => String(p.id) === editing.profile) ? (
+                                  <option value={editing.profile}>{account.importProfileName}</option>
+                                ) : null}
+                              </select>
+                            </div>
+                          )}
+                          <div className="flex gap-2">
+                            <SubmitButton size="sm">Save</SubmitButton>
+                            <button type="button" onClick={() => setEditing(null)} className={rowButton}>
+                              Cancel
+                            </button>
+                          </div>
+                        </form>
+                      </td>
+                    </tr>
+                  ) : null}
+                </Fragment>
               ))}
             </tbody>
           </TableWrap>

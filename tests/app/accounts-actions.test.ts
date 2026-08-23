@@ -18,14 +18,14 @@ vi.mock('next/cache', () => ({
 
 import {
   createAccountAction,
-  renameAccountAction,
   setAccountActiveAction,
-  setAccountOwnerAction,
-  setAccountProfileAction,
+  updateAccountAction,
 } from '@/app/(app)/settings/accounts/actions';
 import { getAccount, listAccounts } from '@/lib/accounts';
+import { requireAdmin } from '@/lib/auth/session';
 import { revalidatePath } from 'next/cache';
 import { getProfileByName, setProfileActive } from '@/lib/import/presets';
+import { linkAccount } from '@/lib/simplefin/connection';
 import { PROFILE_RENDERING_ROUTES } from '@/app/(app)/settings/managers/revalidation-routes';
 
 let current: TestDb | null = null;
@@ -109,73 +109,6 @@ describe('createAccountAction', () => {
   });
 });
 
-describe('renameAccountAction', () => {
-  it('renames without changing the id the transactions point at', async () => {
-    setup();
-    await createAccountAction({}, formData({ name: 'Chequeing', institution: 'TD', type: 'chequing', owner: '' }));
-    const id = listAccounts()[0].id;
-
-    const result = await renameAccountAction({}, formData({ accountId: String(id), name: 'Joint Chequing' }));
-
-    expect(result.message).toMatch(/Joint Chequing/);
-    expect(getAccount(id)).toMatchObject({ id, name: 'Joint Chequing' });
-  });
-
-  it('refuses a blank name and an unknown account', async () => {
-    setup();
-    await createAccountAction({}, formData({ name: 'Joint', institution: 'TD', type: 'chequing', owner: '' }));
-    const id = listAccounts()[0].id;
-
-    expect((await renameAccountAction({}, formData({ accountId: String(id), name: '  ' }))).error).toBeTruthy();
-    expect((await renameAccountAction({}, formData({ accountId: '4242', name: 'Nope' }))).error).toMatch(/no longer exists/i);
-    expect(getAccount(id)).toMatchObject({ name: 'Joint' });
-  });
-
-  it('rejects a cross-origin request', async () => {
-    setup();
-    await createAccountAction({}, formData({ name: 'Joint', institution: 'TD', type: 'chequing', owner: '' }));
-    const id = listAccounts()[0].id;
-    requestHeaders = new Headers({ origin: 'http://evil.example', host: 'nas.local:3000' });
-
-    expect((await renameAccountAction({}, formData({ accountId: String(id), name: 'Owned' }))).error).toBe('Cross-origin request rejected');
-    expect(getAccount(id)).toMatchObject({ name: 'Joint' });
-  });
-});
-
-describe('setAccountOwnerAction', () => {
-  it('moves an account between a person and Joint', async () => {
-    const { bobId } = setup();
-    await createAccountAction({}, formData({ name: 'Joint Chequing', institution: 'TD', type: 'chequing', owner: '' }));
-    const id = listAccounts()[0].id;
-
-    await setAccountOwnerAction({}, formData({ accountId: String(id), owner: String(bobId) }));
-    expect(getAccount(id)!.ownerUserId).toBe(bobId);
-
-    const backToJoint = await setAccountOwnerAction({}, formData({ accountId: String(id), owner: '' }));
-    expect(backToJoint.message).toMatch(/Joint/i);
-    expect(getAccount(id)!.ownerUserId).toBeNull();
-  });
-
-  it('refuses an owner who does not exist', async () => {
-    setup();
-    await createAccountAction({}, formData({ name: 'Joint Chequing', institution: 'TD', type: 'chequing', owner: '' }));
-    const id = listAccounts()[0].id;
-
-    expect((await setAccountOwnerAction({}, formData({ accountId: String(id), owner: '9999' }))).error).toMatch(/no longer exists/i);
-    expect(getAccount(id)!.ownerUserId).toBeNull();
-  });
-
-  it('rejects a cross-origin request', async () => {
-    const { bobId } = setup();
-    await createAccountAction({}, formData({ name: 'Joint Chequing', institution: 'TD', type: 'chequing', owner: '' }));
-    const id = listAccounts()[0].id;
-    requestHeaders = new Headers({ origin: 'http://evil.example', host: 'nas.local:3000' });
-
-    expect((await setAccountOwnerAction({}, formData({ accountId: String(id), owner: String(bobId) }))).error).toBe('Cross-origin request rejected');
-    expect(getAccount(id)!.ownerUserId).toBeNull();
-  });
-});
-
 describe('setAccountActiveAction (archive only — there is no delete)', () => {
   it('deactivates and reactivates, keeping the row either way', async () => {
     setup();
@@ -209,87 +142,152 @@ describe('setAccountActiveAction (archive only — there is no delete)', () => {
   });
 });
 
-describe('setAccountProfileAction (spec 2026-08-22 v1.6.0, MUST-5.1: pin a mapping without running an import)', () => {
-  it('pins an account to an active, readable profile', async () => {
-    setup();
+describe('updateAccountAction (spec 2026-08-22 v1.7.0 Task 1b: one form replaces three row buttons)', () => {
+  it('updates name, owner and mapping together in one submit', async () => {
+    const { db, bobId } = setup();
     const builtin = getProfileByName('TD Chequing/Debit')!;
-    await createAccountAction({}, formData({ name: 'Joint Chequing', institution: 'TD', type: 'chequing', owner: '' }));
-    const id = listAccounts()[0].id;
+    const id = insertTestAccount(db, { name: 'Joint Chequing' });
 
-    const result = await setAccountProfileAction({}, formData({ accountId: String(id), profile: String(builtin.id) }));
+    const result = await updateAccountAction(
+      {},
+      formData({ accountId: String(id), name: 'Bob Chequing', owner: String(bobId), profile: String(builtin.id) }),
+    );
 
     expect(result.error).toBeUndefined();
-    expect(getAccount(id)!.importProfileId).toBe(builtin.id);
+    expect(getAccount(id)).toMatchObject({ name: 'Bob Chequing', ownerUserId: bobId, importProfileId: builtin.id });
   });
 
-  it('clears an existing pin back to none', async () => {
-    const { db } = setup();
+  it('changing only the name leaves owner and mapping untouched', async () => {
+    const { db, bobId } = setup();
     const builtin = getProfileByName('TD Visa')!;
-    const id = insertTestAccount(db, { name: 'Joint Visa', type: 'credit', importProfileId: builtin.id });
+    const id = insertTestAccount(db, { name: 'Bob Visa', ownerUserId: bobId, importProfileId: builtin.id });
 
-    const result = await setAccountProfileAction({}, formData({ accountId: String(id), profile: '' }));
+    const result = await updateAccountAction(
+      {},
+      formData({ accountId: String(id), name: 'Bob Visa Gold', owner: String(bobId), profile: String(builtin.id) }),
+    );
 
     expect(result.error).toBeUndefined();
-    expect(result.message).toMatch(/cleared/i);
-    expect(getAccount(id)!.importProfileId).toBeNull();
+    expect(getAccount(id)).toMatchObject({ name: 'Bob Visa Gold', ownerUserId: bobId, importProfileId: builtin.id });
   });
 
-  it('refuses a profile that has been deactivated, the same active+readable filter the import picker applies', async () => {
+  it('does not clear a dormant pin -- a mapping no longer offered -- when the save does not intend to touch it', async () => {
     const { db } = setup();
     const builtin = getProfileByName('Scotiabank Chequing/Debit')!;
-    setProfileActive(builtin.id, false);
-    const id = insertTestAccount(db, { name: 'Joint Chequing' });
+    const id = insertTestAccount(db, { name: 'Joint Chequing', importProfileId: builtin.id });
+    setProfileActive(builtin.id, false); // the pin is now dormant: deactivated, no longer offered
 
-    const result = await setAccountProfileAction({}, formData({ accountId: String(id), profile: String(builtin.id) }));
+    const result = await updateAccountAction(
+      {},
+      formData({ accountId: String(id), name: 'Joint Chequing Renamed', owner: '', profile: String(builtin.id) }),
+    );
 
-    expect(result.error).toMatch(/not available/i);
-    expect(getAccount(id)!.importProfileId).toBeNull();
+    expect(result.error).toBeUndefined();
+    expect(getAccount(id)).toMatchObject({ name: 'Joint Chequing Renamed', importProfileId: builtin.id });
   });
 
-  it('refuses an unknown profile id', async () => {
+  it('rejects a cross-origin request before touching the database', async () => {
     const { db } = setup();
-    const id = insertTestAccount(db, { name: 'Joint Chequing' });
-
-    const result = await setAccountProfileAction({}, formData({ accountId: String(id), profile: '999999' }));
-
-    expect(result.error).toMatch(/not available/i);
-    expect(getAccount(id)!.importProfileId).toBeNull();
-  });
-
-  it('refuses an unknown account', async () => {
-    setup();
-    const builtin = getProfileByName('TD Visa')!;
-    const result = await setAccountProfileAction({}, formData({ accountId: '4242', profile: String(builtin.id) }));
-    expect(result.error).toMatch(/no longer exists/i);
-  });
-
-  it('refuses a malformed profile field instead of writing an unusable value', async () => {
-    const { db } = setup();
-    const id = insertTestAccount(db, { name: 'Joint Chequing' });
-    const result = await setAccountProfileAction({}, formData({ accountId: String(id), profile: 'not-a-number' }));
-    expect(result.error).toBeTruthy();
-    expect(getAccount(id)!.importProfileId).toBeNull();
-  });
-
-  it('rejects a cross-origin request', async () => {
-    const { db } = setup();
-    const builtin = getProfileByName('TD Visa')!;
     const id = insertTestAccount(db, { name: 'Joint Chequing' });
     requestHeaders = new Headers({ origin: 'http://evil.example', host: 'nas.local:3000' });
 
-    const result = await setAccountProfileAction({}, formData({ accountId: String(id), profile: String(builtin.id) }));
+    const result = await updateAccountAction({}, formData({ accountId: String(id), name: 'Attacker Rename', owner: '', profile: '' }));
 
     expect(result.error).toBe('Cross-origin request rejected');
+    expect(getAccount(id)).toMatchObject({ name: 'Joint Chequing' });
+  });
+
+  it('refuses a non-admin caller', async () => {
+    const { db } = setup();
+    const id = insertTestAccount(db, { name: 'Joint Chequing' });
+    vi.mocked(requireAdmin).mockRejectedValueOnce(new Error('not admin'));
+
+    await expect(
+      updateAccountAction({}, formData({ accountId: String(id), name: 'Attacker Rename', owner: '', profile: '' })),
+    ).rejects.toThrow(/not admin/);
+    expect(getAccount(id)).toMatchObject({ name: 'Joint Chequing' });
+  });
+
+  it('returns the existing message for an unknown account', async () => {
+    setup();
+    const result = await updateAccountAction({}, formData({ accountId: '4242', name: 'Nope', owner: '', profile: '' }));
+    expect(result.error).toMatch(/no longer exists/i);
+  });
+
+  it('refuses a blank name', async () => {
+    const { db } = setup();
+    const id = insertTestAccount(db, { name: 'Joint Chequing' });
+    const result = await updateAccountAction({}, formData({ accountId: String(id), name: '   ', owner: '', profile: '' }));
+    expect(result.error).toBeTruthy();
+    expect(getAccount(id)).toMatchObject({ name: 'Joint Chequing' });
+  });
+
+  it('refuses a malformed owner value with the existing message', async () => {
+    const { db } = setup();
+    const id = insertTestAccount(db, { name: 'Joint Chequing' });
+    const result = await updateAccountAction(
+      {},
+      formData({ accountId: String(id), name: 'Joint Chequing', owner: 'not-a-number', profile: '' }),
+    );
+    expect(result.error).toBe('Pick an owner, or Joint.');
+  });
+
+  it('refuses an owner who does not exist', async () => {
+    const { db } = setup();
+    const id = insertTestAccount(db, { name: 'Joint Chequing' });
+    const result = await updateAccountAction({}, formData({ accountId: String(id), name: 'Joint Chequing', owner: '9999', profile: '' }));
+    expect(result.error).toMatch(/no longer exists/i);
+    expect(getAccount(id)!.ownerUserId).toBeNull();
+  });
+
+  it('refuses a malformed mapping value with the existing message', async () => {
+    const { db } = setup();
+    const id = insertTestAccount(db, { name: 'Joint Chequing' });
+    const result = await updateAccountAction(
+      {},
+      formData({ accountId: String(id), name: 'Joint Chequing', owner: '', profile: 'not-a-number' }),
+    );
+    expect(result.error).toBe('Pick a mapping, or None.');
+  });
+
+  it('refuses a mapping that is not offered -- unknown or deactivated', async () => {
+    const { db } = setup();
+    const id = insertTestAccount(db, { name: 'Joint Chequing' });
+
+    const unknown = await updateAccountAction({}, formData({ accountId: String(id), name: 'Joint Chequing', owner: '', profile: '999999' }));
+    expect(unknown.error).toMatch(/not available/i);
+
+    const builtin = getProfileByName('Scotiabank Chequing/Debit')!;
+    setProfileActive(builtin.id, false);
+    const deactivated = await updateAccountAction(
+      {},
+      formData({ accountId: String(id), name: 'Joint Chequing', owner: '', profile: String(builtin.id) }),
+    );
+    expect(deactivated.error).toMatch(/not available/i);
     expect(getAccount(id)!.importProfileId).toBeNull();
+  });
+
+  it('never applies a mapping change to a SimpleFIN-managed account, even if one is submitted', async () => {
+    const { db } = setup();
+    const builtin = getProfileByName('TD Visa')!;
+    const id = insertTestAccount(db, { name: 'Bridge Chequing' });
+    linkAccount({ simplefinAccountId: 'remote-1', accountId: id, currency: 'CAD' });
+
+    const result = await updateAccountAction(
+      {},
+      formData({ accountId: String(id), name: 'Bridge Chequing Renamed', owner: '', profile: String(builtin.id) }),
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(getAccount(id)).toMatchObject({ name: 'Bridge Chequing Renamed', importProfileId: null });
   });
 
   it('revalidates every route that renders a profile list, including /settings/accounts itself', async () => {
     const { db } = setup();
-    const builtin = getProfileByName('TD Visa')!;
     const id = insertTestAccount(db, { name: 'Joint Chequing' });
     vi.mocked(revalidatePath).mockClear();
 
-    await setAccountProfileAction({}, formData({ accountId: String(id), profile: String(builtin.id) }));
+    await updateAccountAction({}, formData({ accountId: String(id), name: 'Joint Chequing', owner: '', profile: '' }));
 
     const calls = vi.mocked(revalidatePath).mock.calls.map((call) => call[0]);
     for (const route of PROFILE_RENDERING_ROUTES) expect(calls).toContain(route);
