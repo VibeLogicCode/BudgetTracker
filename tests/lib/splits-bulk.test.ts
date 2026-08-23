@@ -1,0 +1,259 @@
+import { describe, it, expect, afterEach } from 'vitest';
+import { sql } from 'drizzle-orm';
+import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
+import { confirmCategory, setTransferFlag } from '@/lib/categorize/engine';
+import { listRules } from '@/lib/categorize/rules';
+import { normalizeMerchant } from '@/lib/categorize/normalize';
+import { bulkSetAttribution, bulkSetCategory, bulkSetTransfer } from '@/lib/transactions';
+import { categoryBreakdown } from '@/lib/reports';
+import { setTransactionSplits } from '@/lib/splits';
+import { nowIso } from '@/lib/clock';
+
+/**
+ * Adversarial-review fix (2026-08-22): two holes in the transaction-splits feature that Task
+ * 2b (spec ruling 2a) never covered, because Task 2b only guarded the AUTOMATIC engine path
+ * (ELIGIBLE/REVIEW_WHERE in src/lib/categorize/engine.ts). Neither confirmCategory nor
+ * setTransferFlag -- the two functions behind the MANUAL bulk "Categorize" and "Mark
+ * transfer" actions -- had ever been told a split transaction is off-limits.
+ *
+ * Defect 1 (serious, data loss): bulkSetTransfer -> setTransferFlag wrote is_transfer = 1 on
+ * a split transaction's PARENT row. Every split-aware aggregate (categoryBreakdown included)
+ * filters is_transfer = false, so the split's parts -- still sitting untouched in
+ * transaction_splits, still summing correctly -- vanished from every report and budget while
+ * the row went on displaying "Split - N parts". It also upserted a `transfer` merchant rule,
+ * so the very next UNSPLIT transaction from that merchant would be auto-flagged too.
+ *
+ * Defect 2 (lower, poisoned signal): bulkSetCategory -> confirmCategory overwrote the
+ * parent's category_id, trained Bayes and (rules on) wrote a merchant rule mapping that
+ * merchant to ONE category, despite the transaction being deliberately divided across
+ * several. Reports stayed correct (EFFECTIVE_CATEGORY prefers the split rows), but the false
+ * merchant signal would mis-categorize other, unsplit transactions from that merchant.
+ *
+ * The fix mirrors Task 2b's own mechanism exactly: confirmCategory and setTransferFlag now
+ * refuse outright (return false, write nothing -- no category/transfer write, no rule, no
+ * Bayes training) for a transaction that has splits, and the two bulk functions in
+ * src/lib/transactions.ts count the refusals as "skipped" instead of failing the whole batch.
+ */
+
+let current: TestDb | null = null;
+afterEach(() => {
+  current?.cleanup();
+  current = null;
+});
+
+const MARCH_RANGE = { from: '2026-03-01', to: '2026-03-31' };
+
+function setup() {
+  current = createSeededTestDb();
+  const alice = insertTestUser(current.db, { name: 'Alice', username: 'alice' });
+  const joint = insertTestAccount(current.db, { name: 'Joint Chequing' });
+
+  const add = (over: Partial<{ description: string; amountCents: number; date: string }> = {}) => {
+    const description = over.description ?? 'ACME SPLIT MERCHANT';
+    const row = current!.db.get<{ id: number }>(sql`
+      insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, category_id, categorization_source, created_by, created_at, updated_at)
+      values (${joint}, ${over.date ?? '2026-03-10'}, ${description}, ${normalizeMerchant(description)},
+              ${over.amountCents ?? -10000}, null, 'none', ${alice}, ${nowIso()}, ${nowIso()})
+      returning id`);
+    return row.id;
+  };
+
+  const readTxn = (id: number) =>
+    current!.sqlite
+      .prepare('select category_id, categorization_source, is_transfer from transactions where id = ?')
+      .get(id) as { category_id: number | null; categorization_source: string; is_transfer: number };
+
+  return { db: current.db, sqlite: current.sqlite, alice, joint, add, readTxn };
+}
+
+/** Splits `id` (a -$100.00 fixture txn) into $70 groceries / $30 gas -- the reviewer's own
+ *  reproduction numbers. */
+function splitSeventyThirty(id: number, groceries: number, gas: number, userId: number) {
+  setTransactionSplits({
+    txnId: id,
+    parts: [
+      { categoryId: groceries, amountCents: -7000 },
+      { categoryId: gas, amountCents: -3000 },
+    ],
+    userId,
+  });
+}
+
+/** The amount categoryBreakdown reports for one category over the fixture's month, treating
+ *  "absent from the rows" the same as "present at 0" -- the reviewer described the bug as
+ *  categoryBreakdown "reporting 0 and 0", and a transaction excluded entirely by the
+ *  is_transfer filter produces the former, not the latter. */
+function spentAt(categoryId: number): number {
+  return categoryBreakdown(MARCH_RANGE).find((r) => r.categoryId === categoryId)?.spentCents ?? 0;
+}
+
+describe('setTransferFlag refuses a split transaction (defect 1 fix, manual counterpart to Task 2b)', () => {
+  it('returns false and writes nothing: is_transfer stays 0, no transfer rule, split parts still report their own amounts', () => {
+    const { db, alice, add, readTxn } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const gas = categoryIdByName(db, 'Gas');
+    const id = add();
+    splitSeventyThirty(id, groceries, gas, alice);
+
+    expect(spentAt(groceries)).toBe(7000);
+    expect(spentAt(gas)).toBe(3000);
+
+    expect(setTransferFlag({ transactionId: id, isTransfer: true, userId: alice })).toBe(false);
+
+    expect(readTxn(id).is_transfer).toBe(0);
+    expect(listRules('transfer')).toHaveLength(0);
+    expect(spentAt(groceries)).toBe(7000);
+    expect(spentAt(gas)).toBe(3000);
+  });
+
+  it('an unsplit control transaction can still be flagged a transfer normally', () => {
+    const { alice, add, readTxn } = setup();
+    const id = add({ description: 'CONTROL MERCHANT' });
+    expect(setTransferFlag({ transactionId: id, isTransfer: true, userId: alice })).toBe(true);
+    expect(readTxn(id).is_transfer).toBe(1);
+    expect(listRules('transfer')).toHaveLength(1);
+  });
+});
+
+describe('confirmCategory refuses a split transaction (defect 2 fix, manual counterpart to Task 2b)', () => {
+  it('returns false and writes nothing: category_id unchanged, no rule, no Bayes training', () => {
+    const { db, sqlite, alice, add, readTxn } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const gas = categoryIdByName(db, 'Gas');
+    const coffee = categoryIdByName(db, 'Coffee');
+    const id = add();
+    splitSeventyThirty(id, groceries, gas, alice);
+    const before = readTxn(id);
+
+    expect(confirmCategory({ transactionId: id, categoryId: coffee, userId: alice })).toBe(false);
+
+    expect(readTxn(id)).toEqual(before);
+    expect(listRules('category')).toHaveLength(0);
+    expect((sqlite.prepare('select count(*) as c from bayes_tokens').get() as { c: number }).c).toBe(0);
+  });
+
+  it('an unsplit control transaction can still be confirmed normally', () => {
+    const { db, alice, add } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const id = add({ description: 'CONTROL MERCHANT' });
+    expect(confirmCategory({ transactionId: id, categoryId: coffee, userId: alice })).toBe(true);
+    expect(listRules('category')).toHaveLength(1);
+  });
+});
+
+describe('bulkSetTransfer (defect 1, the actual reported path): skips split rows and reports both counts', () => {
+  it("reviewer's exact reproduction: bulkSetTransfer no longer erases a split's money from categoryBreakdown", () => {
+    const { db, alice, add, readTxn } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const gas = categoryIdByName(db, 'Gas');
+    const id = add();
+    splitSeventyThirty(id, groceries, gas, alice);
+
+    expect(spentAt(groceries)).toBe(7000);
+    expect(spentAt(gas)).toBe(3000);
+
+    const result = bulkSetTransfer([id], true, alice);
+
+    expect(result).toEqual({ changed: 0, skipped: 1 });
+    expect(readTxn(id).is_transfer).toBe(0);
+    expect(spentAt(groceries)).toBe(7000);
+    expect(spentAt(gas)).toBe(3000);
+    expect(listRules('transfer')).toHaveLength(0);
+  });
+
+  it('mixed batch: two unsplit rows are changed, the split one is skipped, counts are 2 changed / 1 skipped', () => {
+    const { db, alice, add, readTxn } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const gas = categoryIdByName(db, 'Gas');
+    const splitId = add({ description: 'ACME SPLIT MERCHANT' });
+    splitSeventyThirty(splitId, groceries, gas, alice);
+    const a = add({ description: 'CONTROL A' });
+    const b = add({ description: 'CONTROL B' });
+
+    const result = bulkSetTransfer([splitId, a, b], true, alice);
+
+    expect(result).toEqual({ changed: 2, skipped: 1 });
+    expect(readTxn(splitId).is_transfer).toBe(0);
+    expect(readTxn(a).is_transfer).toBe(1);
+    expect(readTxn(b).is_transfer).toBe(1);
+    expect(listRules('transfer')).toHaveLength(2); // the two controls, never the split row
+  });
+
+  it('an all-split batch changes nothing and reports every row skipped', () => {
+    const { db, alice, add } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const gas = categoryIdByName(db, 'Gas');
+    const first = add({ description: 'ACME SPLIT MERCHANT ONE' });
+    const second = add({ description: 'ACME SPLIT MERCHANT TWO' });
+    splitSeventyThirty(first, groceries, gas, alice);
+    splitSeventyThirty(second, groceries, gas, alice);
+
+    expect(bulkSetTransfer([first, second], true, alice)).toEqual({ changed: 0, skipped: 2 });
+  });
+
+  it('an empty id list reports zero changed and zero skipped', () => {
+    const { alice } = setup();
+    expect(bulkSetTransfer([], true, alice)).toEqual({ changed: 0, skipped: 0 });
+  });
+});
+
+describe('bulkSetCategory (defect 2, the actual reported path): skips split rows and reports both counts', () => {
+  it('a bulk categorize attempt on a split row writes no rule, no Bayes tokens, and leaves category_id unchanged', () => {
+    const { db, sqlite, alice, add, readTxn } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const gas = categoryIdByName(db, 'Gas');
+    const coffee = categoryIdByName(db, 'Coffee');
+    const id = add();
+    splitSeventyThirty(id, groceries, gas, alice);
+    const before = readTxn(id);
+
+    const result = bulkSetCategory([id], coffee, alice, true);
+
+    expect(result).toEqual({ changed: 0, skipped: 1 });
+    expect(readTxn(id)).toEqual(before);
+    expect(listRules('category')).toHaveLength(0);
+    expect((sqlite.prepare('select count(*) as c from bayes_tokens').get() as { c: number }).c).toBe(0);
+  });
+
+  it('mixed batch: two unsplit rows are changed, the split one is skipped, counts are 2 changed / 1 skipped', () => {
+    const { db, alice, add, readTxn } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const gas = categoryIdByName(db, 'Gas');
+    const coffee = categoryIdByName(db, 'Coffee');
+    const splitId = add({ description: 'ACME SPLIT MERCHANT' });
+    splitSeventyThirty(splitId, groceries, gas, alice);
+    const a = add({ description: 'CONTROL A' });
+    const b = add({ description: 'CONTROL B' });
+
+    const result = bulkSetCategory([splitId, a, b], coffee, alice, true);
+
+    expect(result).toEqual({ changed: 2, skipped: 1 });
+    expect(readTxn(a).category_id).toBe(coffee);
+    expect(readTxn(b).category_id).toBe(coffee);
+    expect(readTxn(splitId).category_id).toBeNull();
+    expect(listRules('category').map((r) => r.pattern).sort()).toEqual(
+      [normalizeMerchant('CONTROL A'), normalizeMerchant('CONTROL B')].sort(),
+    );
+  });
+
+  it('an empty id list reports zero changed and zero skipped', () => {
+    const { alice } = setup();
+    expect(bulkSetCategory([], 1, alice, true)).toEqual({ changed: 0, skipped: 0 });
+  });
+});
+
+describe('bulk attribution on a split transaction still works (the fix must not over-reach into ruling 1)', () => {
+  it('bulkSetAttribution changes a split transaction exactly like any other row', () => {
+    const { db, sqlite, alice, add } = setup();
+    const bob = insertTestUser(db, { name: 'Bob', username: 'bob' });
+    const groceries = categoryIdByName(db, 'Groceries');
+    const gas = categoryIdByName(db, 'Gas');
+    const id = add();
+    splitSeventyThirty(id, groceries, gas, alice);
+
+    expect(bulkSetAttribution([id], bob)).toBe(1);
+    expect((sqlite.prepare('select attributed_user_id as a from transactions where id = ?').get(id) as { a: number | null }).a).toBe(
+      bob,
+    );
+  });
+});

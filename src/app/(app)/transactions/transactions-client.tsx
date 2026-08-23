@@ -110,6 +110,13 @@ export function TransactionsClient({
   const activeCategories = categories.filter((c) => !c.isArchived);
 
   const toggle = (id: number) => setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  // v1.7.0 bulk-guard fix: Categorize and Mark transfer both silently skip a split
+  // transaction now (its money already lives in transaction_splits, not this row's own
+  // category/transfer flag -- see the guard in src/lib/categorize/engine.ts). Selection
+  // itself stays open to a split row on purpose, because bulk ATTRIBUTION is still valid on
+  // one (ruling 1: attribution is whole-transaction) -- this count only powers a cheap
+  // heads-up in the toolbar below, never a disabled checkbox.
+  const selectedSplitCount = selected.filter((id) => (splits[id] ?? []).length > 0).length;
   const notice =
     manualState.message ?? rowState.message ?? attrState.message ?? bulkCatState.message ?? bulkTfrState.message ??
     renameState.message ?? assignState.message ?? unassignState.message ?? splitState.message;
@@ -339,6 +346,12 @@ export function TransactionsClient({
       {selected.length > 0 ? (
         <div className="flex flex-wrap items-end gap-4 rounded-lg border border-accent-soft bg-accent-soft px-4 py-3">
           <span className="py-2 text-sm font-semibold text-accent-soft-fg">{selected.length} selected</span>
+          {selectedSplitCount > 0 ? (
+            <p className="w-full text-xs text-accent-soft-fg">
+              {selectedSplitCount} of {selected.length} selected {selectedSplitCount === 1 ? 'is' : 'are'} split and will be
+              skipped by Categorize and Mark transfer.
+            </p>
+          ) : null}
           <form action={bulkCatAction} className="flex flex-wrap items-center gap-2">
             <input type="hidden" name="ids" value={selected.join(',')} />
             <select name="categoryId" aria-label="Category for the selected transactions" className={selectClass}>

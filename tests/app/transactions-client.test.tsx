@@ -343,3 +343,101 @@ describe('Split editor (v1.7.0 Task 4)', () => {
     expect(txnIdInputs.every((input) => input.value === '2')).toBe(true);
   });
 });
+
+/**
+ * Adversarial-review fix (2026-08-22), requirement (c): bulkSetCategory/bulkSetTransfer now
+ * skip a split row (see src/lib/categorize/engine.ts's guard on confirmCategory/
+ * setTransferFlag), but selection itself must stay open to a split row -- bulk ATTRIBUTION is
+ * still legitimate on one (ruling 1: attribution is whole-transaction), and disabling the
+ * checkbox would block that valid operation along with the two it should actually skip. These
+ * tests prove the checkbox and the attribution controls are untouched, and that the toolbar
+ * only ever adds a cheap heads-up, never a block.
+ */
+describe('Bulk toolbar and a split row (v1.7.0 bulk-guard fix, requirement c)', () => {
+  const splitRows: SplitRow[] = [
+    { id: 501, txnId: 1, categoryId: 42, amountCents: -300, note: null },
+    { id: 502, txnId: 1, categoryId: 7, amountCents: -200, note: null },
+  ];
+
+  it('the row checkbox for a split transaction is never disabled', () => {
+    render(
+      <TransactionsClient
+        page={pageWithRow({ id: 1 })}
+        accounts={[{ id: 1, name: 'Joint Chequing' }]}
+        categories={[]}
+        people={[]}
+        today="2026-03-02"
+        splits={{ 1: splitRows }}
+      />,
+    );
+    const checkbox = screen.getByLabelText('Select transaction 1') as HTMLInputElement;
+    expect(checkbox.disabled).toBe(false);
+  });
+
+  it('selecting a split row still works and opens the bulk toolbar, including bulk Attribute', () => {
+    render(
+      <TransactionsClient
+        page={pageWithRow({ id: 1 })}
+        accounts={[{ id: 1, name: 'Joint Chequing' }]}
+        categories={[]}
+        people={[]}
+        today="2026-03-02"
+        splits={{ 1: splitRows }}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText('Select transaction 1'));
+    expect(screen.getByText('1 selected')).toBeTruthy();
+    // Bulk attribution is still offered -- attribution stays legitimate on a split row.
+    expect(screen.getByRole('button', { name: 'Attribute' })).toBeTruthy();
+    // Categorize and Mark transfer are ALSO still offered (they skip, not block).
+    expect(screen.getByRole('button', { name: 'Categorize' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Mark transfer' })).toBeTruthy();
+  });
+
+  it('warns in the toolbar that a selected split row will be skipped by Categorize and Mark transfer', () => {
+    render(
+      <TransactionsClient
+        page={pageWithRow({ id: 1 })}
+        accounts={[{ id: 1, name: 'Joint Chequing' }]}
+        categories={[]}
+        people={[]}
+        today="2026-03-02"
+        splits={{ 1: splitRows }}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText('Select transaction 1'));
+    expect(screen.getByText(/split and will be skipped/i)).toBeTruthy();
+  });
+
+  it('does not warn when the selected row has no split', () => {
+    render(
+      <TransactionsClient
+        page={pageWithRow({ id: 1 })}
+        accounts={[{ id: 1, name: 'Joint Chequing' }]}
+        categories={[]}
+        people={[]}
+        today="2026-03-02"
+        splits={{}}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText('Select transaction 1'));
+    expect(screen.getByText('1 selected')).toBeTruthy();
+    expect(screen.queryByText(/split and will be skipped/i)).toBeNull();
+  });
+
+  it('the per-row attribution select and Save button still render for a split row', () => {
+    const { container } = render(
+      <TransactionsClient
+        page={pageWithRow({ id: 1 })}
+        accounts={[{ id: 1, name: 'Joint Chequing' }]}
+        categories={[]}
+        people={[{ id: 9, name: 'Bob' }]}
+        today="2026-03-02"
+        splits={{ 1: splitRows }}
+      />,
+    );
+    const attributionSelect = container.querySelector('tbody select[name="attributedUserId"]');
+    expect(attributionSelect).toBeTruthy();
+    expect(attributionSelect!.closest('form')).toBeTruthy();
+  });
+});

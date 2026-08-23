@@ -1,11 +1,12 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
-import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
+import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
 import { normalizeMerchant } from '@/lib/categorize/normalize';
 import { nowIso } from '@/lib/clock';
 import { createWarrantyItem, getWarrantyItem } from '@/lib/warranty/items';
 import { createItemType } from '@/lib/warranty/types';
+import { setTransactionSplits } from '@/lib/splits';
 
 let currentUser = { id: 1, name: 'Alice', username: 'alice', role: 'admin' as const };
 // v1.3.1: toggleable so the loan actions' cross-origin-first test can flip it, same idiom as
@@ -30,6 +31,8 @@ vi.mock('next/cache', () => ({
 import { CROSS_ORIGIN_ERROR } from '@/lib/auth/csrf';
 import {
   assignToLoanAction,
+  bulkCategorizeAction,
+  bulkTransferAction,
   saveNoteAction,
   setAttributionAction,
   unassignFromLoanAction,
@@ -351,5 +354,108 @@ describe('MUST-14.8 … MUST-14.11: assign and unassign', () => {
     const { txnId } = seedLoanAndSpend(2_000_000, -45_000);
     const result = await assignToLoanAction(formData({ transactionId: String(txnId), itemId: '' }));
     expect(result.error).toBe('Pick a loan first.');
+  });
+});
+
+/** Splits a freshly-added -$100.00 txn into $70 groceries / $30 gas -- the reviewer's own
+ *  reproduction numbers -- via the given setup()'s own addTxn/userId. */
+function splitAMerchant(
+  addTxn: (description?: string, amountCents?: number) => number,
+  groceries: number,
+  gas: number,
+  userId: number,
+  description: string,
+): number {
+  const id = addTxn(description, -10000);
+  setTransactionSplits({
+    txnId: id,
+    parts: [
+      { categoryId: groceries, amountCents: -7000 },
+      { categoryId: gas, amountCents: -3000 },
+    ],
+    userId,
+  });
+  return id;
+}
+
+/**
+ * Adversarial-review fix (2026-08-22): bulkTransferAction and bulkCategorizeAction now report
+ * a truthful message when bulkSetTransfer/bulkSetCategory (src/lib/transactions.ts) skip a
+ * split transaction instead of silently either erasing its money (defect 1, "Mark transfer")
+ * or poisoning the categorizer with a false merchant signal (defect 2, "Categorize"). See the
+ * guard on confirmCategory/setTransferFlag in src/lib/categorize/engine.ts.
+ */
+describe('bulkTransferAction and bulkCategorizeAction: split rows are skipped and reported', () => {
+  it('bulkTransferAction: an ordinary batch with no splits is unaffected', async () => {
+    const { addTxn } = setup();
+    const a = addTxn('CONTROL A');
+    const b = addTxn('CONTROL B');
+    const result = await bulkTransferAction({}, formData({ ids: `${a},${b}`, isTransfer: '1' }));
+    expect(result.message).toBe('Marked 2 transactions as transfers.');
+  });
+
+  it('bulkTransferAction: an all-split batch of one reports the singular skip sentence', async () => {
+    const { db, userId, addTxn } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const gas = categoryIdByName(db, 'Gas');
+    const id = splitAMerchant(addTxn, groceries, gas, userId, 'ACME SPLIT MERCHANT');
+
+    const result = await bulkTransferAction({}, formData({ ids: String(id), isTransfer: '1' }));
+    expect(result.message).toBe('Marked 0 transactions as transfers. 1 split transaction was skipped, clear its split first.');
+  });
+
+  it('bulkTransferAction: a partially-split batch reports both counts', async () => {
+    const { db, userId, addTxn } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const gas = categoryIdByName(db, 'Gas');
+    const splitId = splitAMerchant(addTxn, groceries, gas, userId, 'ACME SPLIT MERCHANT');
+    const a = addTxn('CONTROL A');
+    const b = addTxn('CONTROL B');
+
+    const result = await bulkTransferAction({}, formData({ ids: `${splitId},${a},${b}`, isTransfer: '1' }));
+    expect(result.message).toBe('Marked 2 transactions as transfers. 1 split transaction was skipped, clear its split first.');
+  });
+
+  it('bulkTransferAction: two split rows report the plural skip sentence', async () => {
+    const { db, userId, addTxn } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const gas = categoryIdByName(db, 'Gas');
+    const first = splitAMerchant(addTxn, groceries, gas, userId, 'ACME SPLIT ONE');
+    const second = splitAMerchant(addTxn, groceries, gas, userId, 'ACME SPLIT TWO');
+
+    const result = await bulkTransferAction({}, formData({ ids: `${first},${second}`, isTransfer: '1' }));
+    expect(result.message).toBe('Marked 0 transactions as transfers. 2 split transactions were skipped, clear their split first.');
+  });
+
+  it('bulkCategorizeAction: a single unsplit row reports the singular changed sentence, no skip clause', async () => {
+    const { db, addTxn } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const id = addTxn('CONTROL A');
+    const result = await bulkCategorizeAction({}, formData({ ids: String(id), categoryId: String(groceries) }));
+    expect(result.message).toBe('Categorized 1 transaction.');
+  });
+
+  it('bulkCategorizeAction: an all-split batch of one reports the singular skip sentence', async () => {
+    const { db, userId, addTxn } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const gas = categoryIdByName(db, 'Gas');
+    const coffee = categoryIdByName(db, 'Coffee');
+    const id = splitAMerchant(addTxn, groceries, gas, userId, 'ACME SPLIT MERCHANT');
+
+    const result = await bulkCategorizeAction({}, formData({ ids: String(id), categoryId: String(coffee) }));
+    expect(result.message).toBe('Categorized 0 transactions. 1 split transaction was skipped, clear its split first.');
+  });
+
+  it('bulkCategorizeAction: a partially-split batch reports both counts', async () => {
+    const { db, userId, addTxn } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const gas = categoryIdByName(db, 'Gas');
+    const coffee = categoryIdByName(db, 'Coffee');
+    const splitId = splitAMerchant(addTxn, groceries, gas, userId, 'ACME SPLIT MERCHANT');
+    const a = addTxn('CONTROL A');
+    const b = addTxn('CONTROL B');
+
+    const result = await bulkCategorizeAction({}, formData({ ids: `${splitId},${a},${b}`, categoryId: String(coffee) }));
+    expect(result.message).toBe('Categorized 2 transactions. 1 split transaction was skipped, clear its split first.');
   });
 });

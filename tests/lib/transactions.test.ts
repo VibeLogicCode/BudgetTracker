@@ -261,7 +261,7 @@ describe('bulk actions', () => {
     const { db, sqlite, alice, add } = setup();
     const coffee = categoryIdByName(db, 'Coffee');
     const ids = [add({ description: 'TIM HORTONS' }), add({ description: 'STARBUCKS' })];
-    expect(bulkSetCategory(ids, coffee, alice, true)).toBe(2);
+    expect(bulkSetCategory(ids, coffee, alice, true)).toEqual({ changed: 2, skipped: 0 });
     const rows = sqlite.prepare('select category_id, categorization_source from transactions').all() as { category_id: number; categorization_source: string }[];
     expect(rows.every((r) => r.category_id === coffee && r.categorization_source === 'manual')).toBe(true);
     expect(listRules('category').map((r) => r.pattern).sort()).toEqual(['STARBUCKS', 'TIM HORTONS']);
@@ -277,7 +277,7 @@ describe('bulk actions', () => {
   it('bulk mark transfer teaches exact transfer rules', () => {
     const { sqlite, alice, add } = setup();
     const ids = [add({ description: 'E-TRANSFER SENT J DOE' })];
-    expect(bulkSetTransfer(ids, true, alice)).toBe(1);
+    expect(bulkSetTransfer(ids, true, alice)).toEqual({ changed: 1, skipped: 0 });
     expect((sqlite.prepare('select is_transfer from transactions where id = ?').get(ids[0]) as { is_transfer: number }).is_transfer).toBe(1);
     expect(listRules('transfer').map((r) => ({ pattern: r.pattern, matchType: r.matchType }))).toEqual([
       { pattern: 'E-TRANSFER SENT J DOE', matchType: 'exact' },
@@ -287,8 +287,8 @@ describe('bulk actions', () => {
   it('bulk actions on an empty id list do nothing', () => {
     const { alice } = setup();
     expect(bulkSetAttribution([], null)).toBe(0);
-    expect(bulkSetCategory([], 1, alice, true)).toBe(0);
-    expect(bulkSetTransfer([], true, alice)).toBe(0);
+    expect(bulkSetCategory([], 1, alice, true)).toEqual({ changed: 0, skipped: 0 });
+    expect(bulkSetTransfer([], true, alice)).toEqual({ changed: 0, skipped: 0 });
   });
 });
 

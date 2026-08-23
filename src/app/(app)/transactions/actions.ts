@@ -32,6 +32,22 @@ const idList = z
   .string()
   .transform((value) => value.split(',').map((v) => Number(v.trim())).filter((v) => Number.isInteger(v) && v > 0));
 
+/**
+ * bulkSetCategory and bulkSetTransfer (src/lib/transactions.ts) both skip -- never fail -- a
+ * split transaction: see the guard on confirmCategory/setTransferFlag in
+ * src/lib/categorize/engine.ts, the manual counterpart of Task 2b's automatic-engine
+ * exclusion (spec ruling 2a). Silence here would let a person believe every selected row was
+ * changed when a split one quietly was not, so both bulk actions below report the skip in
+ * plain language instead.
+ */
+function splitSkipSentence(skipped: number): string | null {
+  if (skipped <= 0) return null;
+  const noun = skipped === 1 ? 'transaction' : 'transactions';
+  const verb = skipped === 1 ? 'was' : 'were';
+  const pronoun = skipped === 1 ? 'its' : 'their';
+  return `${skipped} split ${noun} ${verb} skipped, clear ${pronoun} split first.`;
+}
+
 export async function manualEntryAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
 
@@ -111,10 +127,12 @@ export async function bulkCategorizeAction(_prev: ActionState, formData: FormDat
   const categoryId = Number(formData.get('categoryId'));
   if (!Number.isInteger(categoryId) || categoryId <= 0) return { error: 'Pick a category first.' };
   const createRules = formData.get('createRules') === 'on';
-  const changed = bulkSetCategory(ids, categoryId, user.id, createRules);
+  const { changed, skipped } = bulkSetCategory(ids, categoryId, user.id, createRules);
   revalidatePath('/transactions');
   revalidatePath('/review');
-  return { message: `Categorized ${changed} transactions.` };
+  const changedSentence = `Categorized ${changed} transaction${changed === 1 ? '' : 's'}.`;
+  const skipSentence = splitSkipSentence(skipped);
+  return { message: skipSentence ? `${changedSentence} ${skipSentence}` : changedSentence };
 }
 
 export async function bulkTransferAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
@@ -123,9 +141,14 @@ export async function bulkTransferAction(_prev: ActionState, formData: FormData)
   const user = await requireUser();
   const ids = idList.parse(String(formData.get('ids') ?? ''));
   const isTransfer = formData.get('isTransfer') === '1';
-  const changed = bulkSetTransfer(ids, isTransfer, user.id);
+  const { changed, skipped } = bulkSetTransfer(ids, isTransfer, user.id);
   revalidatePath('/transactions');
-  return { message: `${isTransfer ? 'Marked' : 'Unmarked'} ${changed} transactions as transfers.` };
+  const verb = isTransfer ? 'Marked' : 'Unmarked';
+  const noun = changed === 1 ? 'transaction' : 'transactions';
+  const complement = changed === 1 ? 'a transfer' : 'transfers';
+  const changedSentence = `${verb} ${changed} ${noun} as ${complement}.`;
+  const skipSentence = splitSkipSentence(skipped);
+  return { message: skipSentence ? `${changedSentence} ${skipSentence}` : changedSentence };
 }
 
 export async function saveNoteAction(_prev: ActionState, formData: FormData): Promise<ActionState> {

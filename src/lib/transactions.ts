@@ -251,22 +251,39 @@ export function bulkSetAttribution(ids: number[], attributedUserId: number | nul
   return Number(result.changes ?? 0);
 }
 
-export function bulkSetCategory(ids: number[], categoryId: number, userId: number, createRules: boolean): number {
-  let changed = 0;
-  for (const id of ids) {
-    confirmCategory({ transactionId: id, categoryId, userId, createRule: createRules });
-    changed += 1;
-  }
-  return changed;
+/**
+ * Return shape for the two bulk actions below, whose per-row write can be refused outright by
+ * a split transaction (see the guard on confirmCategory/setTransferFlag in
+ * src/lib/categorize/engine.ts -- the manual counterpart of Task 2b's automatic-engine
+ * exclusion, spec ruling 2a). A refusal is not a failure of the whole batch: the row is
+ * skipped and counted separately so the caller can report the truth instead of either
+ * silently corrupting that row or aborting everyone else's change. Bulk attribution has no
+ * such guard -- attribution is legitimately whole-transaction even for a split row (ruling 1)
+ * -- and keeps its plain `number` return.
+ */
+export interface BulkResult {
+  changed: number;
+  skipped: number;
 }
 
-export function bulkSetTransfer(ids: number[], isTransfer: boolean, userId: number): number {
+export function bulkSetCategory(ids: number[], categoryId: number, userId: number, createRules: boolean): BulkResult {
   let changed = 0;
+  let skipped = 0;
   for (const id of ids) {
-    setTransferFlag({ transactionId: id, isTransfer, userId });
-    changed += 1;
+    if (confirmCategory({ transactionId: id, categoryId, userId, createRule: createRules })) changed += 1;
+    else skipped += 1;
   }
-  return changed;
+  return { changed, skipped };
+}
+
+export function bulkSetTransfer(ids: number[], isTransfer: boolean, userId: number): BulkResult {
+  let changed = 0;
+  let skipped = 0;
+  for (const id of ids) {
+    if (setTransferFlag({ transactionId: id, isTransfer, userId })) changed += 1;
+    else skipped += 1;
+  }
+  return { changed, skipped };
 }
 
 /**

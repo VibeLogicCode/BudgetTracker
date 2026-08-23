@@ -218,9 +218,49 @@ export function rerunEngine(scope: { accountId?: number } = {}): EngineResult {
 }
 
 /**
+ * Same "not exists (select 1 from transaction_splits ...)" shape as ELIGIBLE/REVIEW_WHERE
+ * above -- polarity flipped (this asks whether a split EXISTS, they ask whether one does
+ * not) and scoped to one row instead of filtering a table scan. Used by confirmCategory and
+ * setTransferFlag to refuse a write on a transaction that has splits; see their doc comments
+ * for why. Deliberately a `.where()` predicate rather than a computed `.select()` field: a
+ * drizzle column reference interpolated into a raw `sql` fragment used as a SELECT-list value
+ * is not table-qualified the way the same reference is when it appears in a `.where()`
+ * condition, so embedding it as a select field here would let the correlated subquery's bare
+ * `id` resolve against transaction_splits' OWN id column instead of the outer transactions
+ * row -- silently matching every row once ANY split exists anywhere. Served by
+ * transaction_splits_txn_idx (migration 0009).
+ */
+function transactionHasSplits(transactionId: number): boolean {
+  const row = getDb()
+    .select({ id: transactions.id })
+    .from(transactions)
+    .where(
+      and(
+        eq(transactions.id, transactionId),
+        sql`exists (select 1 from ${transactionSplits} where ${transactionSplits.txnId} = ${transactions.id})`,
+      ),
+    )
+    .get();
+  return row !== undefined;
+}
+
+/**
  * The confirmed state. Sets source = 'manual' (the Bayes training set),
  * upserts an exact merchant rule, and updates token counts, decrementing the
  * previous category on a recategorization.
+ *
+ * Returns false, and does NOTHING (no category write, no rule, no Bayes training), for a
+ * transaction that has splits. Spec ruling 2a: a split row is categorized BY ITS PARTS
+ * (transaction_splits, see src/lib/splits.ts), never by the parent's own category_id, so
+ * overwriting that column here would misrepresent what the transaction "is" AND poison the
+ * categorizer -- this function trains Bayes and writes an exact merchant rule from whatever
+ * ONE category it is given, which would then mis-categorize every OTHER, unsplit transaction
+ * from this merchant on a signal that was only ever true for one arbitrarily-chosen part of
+ * this one. Task 2b (v1.7.0) closed this same hole for the AUTOMATIC engine path
+ * (ELIGIBLE/REVIEW_WHERE, below); this closes it for the MANUAL confirm path -- the per-row
+ * and bulk "Categorize" actions -- which those predicates never touched. Callers that
+ * bulk-confirm must check this return value and report the skip; see bulkSetCategory in
+ * src/lib/transactions.ts.
  */
 export function confirmCategory(input: {
   transactionId: number;
@@ -228,7 +268,7 @@ export function confirmCategory(input: {
   userId: number;
   createRule?: boolean;
   at?: Date;
-}): void {
+}): boolean {
   const db = getDb();
   const at = input.at ?? new Date();
   const row = db
@@ -241,6 +281,7 @@ export function confirmCategory(input: {
     .where(eq(transactions.id, input.transactionId))
     .get();
   if (!row) throw new Error(`No transaction ${input.transactionId}`);
+  if (transactionHasSplits(input.transactionId)) return false;
 
   const tokens = tokenize(row.normalizedMerchant);
 
@@ -261,7 +302,7 @@ export function confirmCategory(input: {
       // it into the action layer would put a fifth caller in a sixth place and is the change
       // to make if that cost ever shows up in a profile.
       applyLoanMatchers([input.transactionId], at);
-      return;
+      return true;
     }
     untrain(tokens, row.categoryId);
   }
@@ -289,6 +330,7 @@ export function confirmCategory(input: {
 
   train(tokens, input.categoryId);
   applyLoanMatchers([input.transactionId], at);
+  return true;
 }
 
 export function clearCategory(input: { transactionId: number; userId: number; at?: Date }): void {
@@ -315,7 +357,22 @@ export function clearCategory(input: { transactionId: number; userId: number; at
     .run();
 }
 
-export function setTransferFlag(input: { transactionId: number; isTransfer: boolean; userId: number; at?: Date }): void {
+/**
+ * Returns false, and does NOTHING (no is_transfer write, no rule created or removed), for a
+ * transaction that has splits. Spec ruling 2a: a split's parts ARE its categorization, and
+ * setTransactionSplits already refuses to split a transfer in the first place (a transfer has
+ * no "category" to divide) -- so a split row should never legitimately reach is_transfer = 1.
+ * Without this guard, flagging one a transfer anyway silently drops every one of its split
+ * parts out of every report and budget (all of which exclude transfers, per
+ * categoryBreakdown/categorySpend and friends), while the row keeps displaying its own
+ * "Split - N parts" badge -- the money is gone with no visible sign why. Worse, marking it
+ * also upserts a merchant rule, so the NEXT unsplit transaction from the same merchant would
+ * be auto-flagged a transfer on the next import too. Task 2b (v1.7.0) closed the
+ * automatic-engine side of this (ELIGIBLE/REVIEW_WHERE, above); this closes the manual "Mark
+ * transfer" side, which those predicates never touched. Callers that bulk-flag must check
+ * this return value and report the skip; see bulkSetTransfer in src/lib/transactions.ts.
+ */
+export function setTransferFlag(input: { transactionId: number; isTransfer: boolean; userId: number; at?: Date }): boolean {
   const db = getDb();
   const at = input.at ?? new Date();
   const row = db
@@ -324,6 +381,7 @@ export function setTransferFlag(input: { transactionId: number; isTransfer: bool
     .where(eq(transactions.id, input.transactionId))
     .get();
   if (!row) throw new Error(`No transaction ${input.transactionId}`);
+  if (transactionHasSplits(input.transactionId)) return false;
 
   db.update(transactions)
     .set({ isTransfer: input.isTransfer, updatedAt: nowIso(at) })
@@ -362,6 +420,7 @@ export function setTransferFlag(input: { transactionId: number; isTransfer: bool
     // this row — today's behaviour is unchanged: remove that rule.
     deleteExactRule(row.normalizedMerchant, 'transfer');
   }
+  return true;
 }
 
 /** "Apply category to all N matching transactions + create rule" (bulk action). */
