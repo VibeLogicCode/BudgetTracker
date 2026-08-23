@@ -1,8 +1,8 @@
-import { and, gte, lte, sql } from 'drizzle-orm';
+import { sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { budgetRollover, budgets, transactions } from '@/db/schema';
 import { budgetProgress, type BudgetRow } from '@/lib/budgets';
-import { currentMonth, monthEnd, monthStart } from '@/lib/dates';
+import { currentMonth } from '@/lib/dates';
 import { getUserSettings, isEventEnabled, notifiableUsers } from '@/lib/notify/config';
 import { CHANNELS, budgetExceededKey, budgetThresholdKey, type BudgetScopeKey } from '@/lib/notify/events';
 import { enqueue } from '@/lib/notify/outbox';
@@ -40,9 +40,26 @@ function flatten(rows: BudgetRow[], acc: BudgetRow[] = []): BudgetRow[] {
  * BudgetRow.limitCents/pct/spentCents, which fireFor reads verbatim) actually depends on,
  * folded into one comparable string:
  *
- *   - transactions, scoped to `month`: count + max(id) catch an inserted/deleted row;
- *     max(updated_at) catches a RE-CATEGORISATION of an existing row (same count, same max
- *     id, spentCents still moves because it's keyed by category).
+ *   - transactions, whole table, unscoped: count + max(id) catch an inserted/deleted row
+ *     ANYWHERE, not just the current month; max(updated_at) catches a RE-CATEGORISATION of
+ *     an existing row anywhere too (same count, same max id, spentCents still moves because
+ *     it's keyed by category). Whole-table rather than scoped to `month` (review fix,
+ *     2026-08-23): since rollover shipped, effectiveBudget()'s carry walk
+ *     (categorySpendWithRollupSeries in src/lib/budgets.ts) reads up to 24 PRIOR months of
+ *     transactions, so a category's CURRENT-month effective limit can change because of a
+ *     transaction dated in a month the current-month window never touches. That's the
+ *     ROUTINE case for this app's main data-entry paths -- a CSV statement import (a bank
+ *     export always covers a past period) or a SimpleFIN lookback sync -- not a rare
+ *     coincidence, so a month-scoped aggregate would miss it on every ordinary backdated
+ *     import and keep alerting against a stale limit until an unrelated current-month write
+ *     happened to move the fingerprint. Deliberately whole-table rather than a rolling
+ *     24-month window: a windowed version would have to mirror effectiveBudget's
+ *     `addMonths(month, -24)` lookback-floor arithmetic here too, and the two copies
+ *     drifting apart later (the constant changing, or becoming per-category) would silently
+ *     reopen a narrower version of this same gap. Whole-table has no boundary to get subtly
+ *     wrong, still costs one indexed aggregate read -- never a query per category or per
+ *     month -- and still collapses to an identical string, preserving the dedup guard,
+ *     whenever nothing in the table has actually changed.
  *   - budgets, whole table, unscoped: count + max(id) catch a NEW (scope, user, category,
  *     month) row -- e.g. "set a budget mid-month" firing the same tick rather than waiting
  *     for the next transaction. sum(amount_cents) is the extra piece (review fix,
@@ -72,19 +89,10 @@ function flatten(rows: BudgetRow[], acc: BudgetRow[] = []): BudgetRow[] {
  * cheap aggregate). Judged astronomically unlikely relative to the bug fixed here: it
  * requires two DIFFERENT budget rows edited in the exact same evaluation tick to values
  * whose sum happens to net to zero change.
- *
- * A second, separate, PRE-EXISTING and also-not-fixed-here gap: the transactions component
- * above is scoped to the CURRENT month only, but effectiveBudget()'s rollover carry walk
- * (categorySpendWithRollupSeries) can read up to 24 PRIOR months of transactions. A
- * backdated transaction inserted into a prior month, after the fact, would change that
- * month's rolled-up spend -- and therefore the CURRENT month's carry -- without moving
- * count/max(id)/max(updated_at) for the current month's window. Out of scope here: the task
- * this fix belongs to explicitly keeps the transactions component unchanged, and a
- * whole-table-unscoped version of it (matching the budgets/rollover shape) would widen how
- * often EVERY household re-evaluates on EVERY tick, not just rollover users.
  */
 function fingerprint(month: string, participants: Participant[]): string {
-  // One query, served by the existing transactions(date) index.
+  // Whole table, unscoped -- see doc comment above for why. Still one aggregate query,
+  // same shape as the budgets/budget_rollover reads below.
   const row = getDb()
     .select({
       n: sql<number>`count(*)`,
@@ -92,7 +100,6 @@ function fingerprint(month: string, participants: Participant[]): string {
       maxUpdated: sql<string>`coalesce(max(${transactions.updatedAt}), '')`,
     })
     .from(transactions)
-    .where(and(gte(transactions.date, monthStart(month)), lte(transactions.date, monthEnd(month))))
     .get();
 
   const budgetRow = getDb()

@@ -478,3 +478,97 @@ describe('v1.7.0 Task 11: rollover carry keeps a covered category from false-ala
     expect(keys()).toEqual([]);
   });
 });
+
+/**
+ * DEFECT regression (adversarial review, 2026-08-23): the transactions component of
+ * fingerprint() was scoped to the CURRENT month only. Since rollover shipped,
+ * effectiveBudget()'s carry walk (categorySpendWithRollupSeries in src/lib/budgets.ts) reads
+ * up to 24 PRIOR months of transactions, so a category's CURRENT month effective limit can
+ * change because of a transaction dated in a month the current-month window never touches.
+ * That is the ROUTINE case for this app's main entry paths -- a CSV statement import (a
+ * bank export always covers a past period) or a SimpleFIN lookback sync -- not a rare
+ * coincidence. A month-scoped fingerprint misses it entirely and keeps alerting against a
+ * stale limit until an unrelated current-month write happens to move the fingerprint. The
+ * fix widens the transactions component to the whole table, matching the shape
+ * budgets/budget_rollover already use below.
+ *
+ * Reproduction numbers are verified end to end, with NO manual resetBudgetFingerprintForTests()
+ * call between the "before" and "after" evaluateBudgets() calls in any of these tests -- that
+ * absence is the entire point.
+ */
+describe('DEFECT regression: fingerprint must react to a backdated prior-month transaction that moves a rollover carry', () => {
+  it('fires once a backdated July transaction collapses a rollover carry, with no manual fingerprint reset in between', () => {
+    emailUser();
+    const groceries = categoryIdByName(t.db, 'Groceries');
+    setRollover({ scope: 'household', userId: null, categoryId: groceries, enabled: true, startMonth: '2026-07' });
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-07', amountCents: 150000 }); // $1500 July, no July spend yet
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-08', amountCents: 50000 }); // $500 August base
+    expect(effectiveBudget('household', null, groceries, '2026-08')).toEqual({
+      baseCents: 50000,
+      carryCents: 150000,
+      effectiveCents: 200000,
+    });
+
+    // $1200 is 60% of the $2000 effective limit -- under the 80% threshold. Silent, and this
+    // also seeds the fingerprint cache with the pre-backdate state.
+    spend(groceries, 120000);
+    expect(evaluateBudgets({ now: NOW, tz: TZ })).toBe(0);
+    expect(keys()).toEqual([]);
+
+    // A BACKDATED July transaction, dated a month before `now` -- the routine shape of a CSV
+    // import or a SimpleFIN lookback sync, not current-month data entry. It fully consumes
+    // July's $1500 budget, so July's carry into August collapses from $1500 to $0: the SAME
+    // $1200 August spend is now 240% of the $500-only effective limit -- past both the 80%
+    // threshold and the 100% exceeded line. Nothing dated inside August changed at all.
+    spend(groceries, 150000, null, '2026-07-15');
+    expect(effectiveBudget('household', null, groceries, '2026-08')).toEqual({
+      baseCents: 50000,
+      carryCents: 0,
+      effectiveCents: 50000,
+    });
+    expect(evaluateBudgets({ now: NOW, tz: TZ })).toBe(2);
+    expect(keys().sort()).toEqual([`budget:h:${groceries}:2026-08:100`, `budget:h:${groceries}:2026-08:80`].sort());
+  });
+
+  it('still dedups correctly: two identical evaluations back to back return 0 the second time, with a backdated transaction already reflected', () => {
+    emailUser();
+    const groceries = categoryIdByName(t.db, 'Groceries');
+    setRollover({ scope: 'household', userId: null, categoryId: groceries, enabled: true, startMonth: '2026-07' });
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-07', amountCents: 150000 });
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-08', amountCents: 50000 });
+    spend(groceries, 150000, null, '2026-07-15'); // backdated -- collapses the carry to 0 up front
+    spend(groceries, 120000); // 240% of the $500-only effective limit -- fires both
+    expect(evaluateBudgets({ now: NOW, tz: TZ })).toBe(2);
+
+    // Nothing at all changes between these two calls. This is the regression a whole-table
+    // transactions aggregate could introduce: re-evaluating (and re-attempting to enqueue)
+    // on every tick even when nothing moved, rather than short-circuiting on the guard.
+    // enqueue() is itself idempotent (MUST-3.9), so even a wrongly-forced recompute would
+    // still show 0 NEWLY inserted here -- keys() staying at length 2 alone doesn't prove the
+    // guard fired. The discriminating assertion is evaluateBudgets() itself returning 0,
+    // which only happens via the early `key === lastBudgetKey` return, never via the
+    // recompute path finding nothing new to enqueue.
+    expect(evaluateBudgets({ now: NOW, tz: TZ })).toBe(0);
+    expect(keys()).toHaveLength(2);
+  });
+
+  it('a backdated prior-month transaction for a category with no rollover does not change its alert outcome', () => {
+    emailUser();
+    const gas = categoryIdByName(t.db, 'Gas');
+    upsertBudget({ scope: 'household', userId: null, categoryId: gas, month: '2026-08', amountCents: 10000 }); // $100
+    spend(gas, 5000); // $50 = 50% -- under threshold, silent
+    expect(evaluateBudgets({ now: NOW, tz: TZ })).toBe(0);
+    expect(keys()).toEqual([]);
+
+    // A backdated JULY transaction on the same NO-ROLLOVER category. No budget_rollover row
+    // exists for Gas, so effectiveBudget() short-circuits to the August base every time,
+    // regardless of July's spend -- this insert cannot change Gas's August limit. It DOES
+    // move the whole-table transactions aggregate (a new row: higher count, higher max id
+    // and max updated_at), forcing a recompute with no manual fingerprint reset -- proving
+    // the forced recompute alone does not manufacture an alert where the alertable state
+    // hasn't actually changed.
+    spend(gas, 900000, null, '2026-07-10');
+    expect(evaluateBudgets({ now: NOW, tz: TZ })).toBe(0);
+    expect(keys()).toEqual([]);
+  });
+});
