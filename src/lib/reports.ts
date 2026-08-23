@@ -1,9 +1,10 @@
 import { and, eq, gte, isNull, lte, sql, type SQL } from 'drizzle-orm';
 import { getDb } from '@/db/client';
-import { categories, transactions, users } from '@/db/schema';
+import { categories, transactions, transactionSplits, users } from '@/db/schema';
 import { listCategories } from '@/lib/categories';
 import { addMonths, monthEnd, monthOf, monthRange, monthStart } from '@/lib/dates';
 import { netSpentCents } from '@/lib/money';
+import { EFFECTIVE_AMOUNT, EFFECTIVE_CATEGORY } from '@/lib/splits';
 import { listTransactions, type TransactionFilter } from '@/lib/transactions';
 
 export interface DateRange {
@@ -44,11 +45,15 @@ export interface CategoryBreakdownRow {
 export function categoryBreakdown(
   input: DateRange & { attributedUserId?: PersonScope; rollup?: boolean; includeIncome?: boolean },
 ): CategoryBreakdownRow[] {
+  // Split-aware (spec 2026-08-22, v1.7.0, Task 3): a split transaction is counted once, at
+  // its parts' own categories/amounts (EFFECTIVE_CATEGORY/EFFECTIVE_AMOUNT, src/lib/splits.ts)
+  // via the LEFT JOIN below, never at its own lump category/amount and never at both.
   const rows = getDb()
-    .select({ categoryId: transactions.categoryId, total: sql<number>`sum(${transactions.amountCents})` })
+    .select({ categoryId: EFFECTIVE_CATEGORY, total: sql<number>`sum(${EFFECTIVE_AMOUNT})` })
     .from(transactions)
+    .leftJoin(transactionSplits, eq(transactionSplits.txnId, transactions.id))
     .where(and(...rangeClauses(input, input.attributedUserId)))
-    .groupBy(transactions.categoryId)
+    .groupBy(EFFECTIVE_CATEGORY)
     .all();
 
   const all = listCategories({ includeArchived: true });
@@ -101,14 +106,19 @@ export function cashflowTrend(months: number, opts: { endMonth?: string; attribu
   const startMonth = addMonths(endMonth, -(months - 1));
   const keys = monthRange(startMonth, endMonth);
 
+  // Split-aware (Task 3): each split part is classified as income/spend by ITS OWN category
+  // (the categories join below keys off EFFECTIVE_CATEGORY, not the parent's own
+  // transactions.category_id), so a part filed under an income category moves into the
+  // income series even when the parent transaction itself was not.
   const rows = getDb()
     .select({
       month: sql<string>`substr(${transactions.date}, 1, 7)`,
       isIncome: categories.isIncome,
-      total: sql<number>`sum(${transactions.amountCents})`,
+      total: sql<number>`sum(${EFFECTIVE_AMOUNT})`,
     })
     .from(transactions)
-    .leftJoin(categories, eq(categories.id, transactions.categoryId))
+    .leftJoin(transactionSplits, eq(transactionSplits.txnId, transactions.id))
+    .leftJoin(categories, eq(categories.id, EFFECTIVE_CATEGORY))
     .where(and(...rangeClauses({ from: monthStart(startMonth), to: monthEnd(endMonth) }, opts.attributedUserId)))
     .groupBy(sql`substr(${transactions.date}, 1, 7)`, categories.isIncome)
     .all();
@@ -143,21 +153,25 @@ export function categoryMonthOverMonth(input: {
   limit?: number;
 }): { months: string[]; rows: CategoryMonthTrend[] } {
   const months = monthRange(input.fromMonth, input.toMonth);
+  // Split-aware (Task 3): grouped by EFFECTIVE_CATEGORY so each split part gets its own
+  // monthly row, and the income-exclusion join below keys off EFFECTIVE_CATEGORY too, so a
+  // part's own category decides inclusion rather than the parent's.
   const rows = getDb()
     .select({
       month: sql<string>`substr(${transactions.date}, 1, 7)`,
-      categoryId: transactions.categoryId,
-      total: sql<number>`sum(${transactions.amountCents})`,
+      categoryId: EFFECTIVE_CATEGORY,
+      total: sql<number>`sum(${EFFECTIVE_AMOUNT})`,
     })
     .from(transactions)
-    .leftJoin(categories, eq(categories.id, transactions.categoryId))
+    .leftJoin(transactionSplits, eq(transactionSplits.txnId, transactions.id))
+    .leftJoin(categories, eq(categories.id, EFFECTIVE_CATEGORY))
     .where(
       and(
         ...rangeClauses({ from: monthStart(input.fromMonth), to: monthEnd(input.toMonth) }, input.attributedUserId),
         eq(categories.isIncome, false),
       ),
     )
-    .groupBy(sql`substr(${transactions.date}, 1, 7)`, transactions.categoryId)
+    .groupBy(sql`substr(${transactions.date}, 1, 7)`, EFFECTIVE_CATEGORY)
     .all();
 
   const all = listCategories({ includeArchived: true });
@@ -192,10 +206,16 @@ export interface PersonSplitRow {
 }
 
 export function personSpendSplit(input: DateRange): PersonSplitRow[] {
+  // Split-aware (Task 3): grouped by transactions.attributedUserId (attribution stays
+  // whole-transaction, design ruling 1 -- a split has no owner of its own), but the income
+  // exclusion join keys off EFFECTIVE_CATEGORY and the summed amount is EFFECTIVE_AMOUNT, so
+  // BOTH of a split's parts land on the parent's person, each correctly included/excluded by
+  // its OWN category rather than the parent's.
   const rows = getDb()
-    .select({ userId: transactions.attributedUserId, total: sql<number>`sum(${transactions.amountCents})` })
+    .select({ userId: transactions.attributedUserId, total: sql<number>`sum(${EFFECTIVE_AMOUNT})` })
     .from(transactions)
-    .leftJoin(categories, eq(categories.id, transactions.categoryId))
+    .leftJoin(transactionSplits, eq(transactionSplits.txnId, transactions.id))
+    .leftJoin(categories, eq(categories.id, EFFECTIVE_CATEGORY))
     .where(and(...rangeClauses(input, undefined), sql`coalesce(${categories.isIncome}, 0) = 0`))
     .groupBy(transactions.attributedUserId)
     .all();

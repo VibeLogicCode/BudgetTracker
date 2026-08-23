@@ -1,11 +1,12 @@
 import { and, eq, gte, isNotNull, lte, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
-import { transactions } from '@/db/schema';
+import { transactions, transactionSplits } from '@/db/schema';
 import { listCategories, type CategoryRecord } from '@/lib/categories';
 import { addMonths, monthEnd, monthOf, monthRange, monthStart } from '@/lib/dates';
 import { netSpentCents } from '@/lib/money';
 import { historyMonths, seasonalApplies } from '@/lib/predict/window';
 import { seasonalFactor, suggestBudget, type SuggestionResult } from '@/lib/predict/suggest';
+import { EFFECTIVE_AMOUNT, EFFECTIVE_CATEGORY } from '@/lib/splits';
 
 /**
  * The ONLY module under src/lib/predict/ that touches the database (MUST-2.1). Server-only:
@@ -40,6 +41,12 @@ export interface SeasonalSeries {
 /**
  * MUST-4.8: one grouped query for the whole window, served by transactions_date_idx. Not one
  * query per month and not one resolveBudget() call per category per month.
+ *
+ * Split-aware (spec 2026-08-22, v1.7.0, Task 3): LEFT JOIN transaction_splits and read
+ * EFFECTIVE_CATEGORY/EFFECTIVE_AMOUNT (src/lib/splits.ts) instead of the transaction's own
+ * columns, so a split transaction is counted once, at its parts -- the date/transfer/
+ * attribution predicates keep reading the parent's own columns, since a split has no date or
+ * owner of its own.
  */
 function cells(
   months: string[],
@@ -53,7 +60,7 @@ function cells(
     gte(transactions.date, monthStart(months[0])),
     lte(transactions.date, monthEnd(months[months.length - 1])),
     eq(transactions.isTransfer, false),
-    isNotNull(transactions.categoryId),
+    isNotNull(EFFECTIVE_CATEGORY),
   ];
   if (scope === 'personal') {
     if (userId === null) throw new Error('Personal series requires a user');
@@ -62,10 +69,11 @@ function cells(
 
   const month = sql<string>`substr(${transactions.date}, 1, 7)`;
   const rows = getDb()
-    .select({ month, categoryId: transactions.categoryId, total: sql<number>`sum(${transactions.amountCents})` })
+    .select({ month, categoryId: EFFECTIVE_CATEGORY, total: sql<number>`sum(${EFFECTIVE_AMOUNT})` })
     .from(transactions)
+    .leftJoin(transactionSplits, eq(transactionSplits.txnId, transactions.id))
     .where(and(...clauses))
-    .groupBy(month, transactions.categoryId)
+    .groupBy(month, EFFECTIVE_CATEGORY)
     .all();
 
   for (const row of rows) {

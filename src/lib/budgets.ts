@@ -1,10 +1,11 @@
 import { and, eq, gte, isNull, lte, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
-import { budgets, transactions } from '@/db/schema';
+import { budgets, transactions, transactionSplits } from '@/db/schema';
 import { listCategories, type CategoryRecord } from '@/lib/categories';
 import { nowIso } from '@/lib/clock';
 import { addMonths, isMonthKey, monthEnd, monthStart } from '@/lib/dates';
 import { netSpentCents, pctOf } from '@/lib/money';
+import { EFFECTIVE_AMOUNT, EFFECTIVE_CATEGORY } from '@/lib/splits';
 
 export type BudgetScope = 'household' | 'personal';
 
@@ -100,6 +101,12 @@ export function clearBudget(input: { scope: BudgetScope; userId: number | null; 
  * `resolveBudget('personal', null, ...)`), 'household' always counts every row
  * regardless of attribution, and omitting `scope` falls back to filtering on
  * `attributedUserId` when one is given (back-compat for direct callers).
+ *
+ * Split-aware (spec 2026-08-22, v1.7.0, Task 3): LEFT JOIN transaction_splits and read
+ * EFFECTIVE_CATEGORY/EFFECTIVE_AMOUNT (src/lib/splits.ts) instead of the transaction's own
+ * columns, so a split transaction is counted once, at its parts, never at its own lump
+ * category/amount and never at both. The date/transfer/attribution predicates below
+ * deliberately keep reading the PARENT's columns -- a split has no date or owner of its own.
  */
 export function categorySpend(
   month: string,
@@ -113,17 +120,18 @@ export function categorySpend(
     gte(transactions.date, monthStart(month)),
     lte(transactions.date, monthEnd(month)),
     eq(transactions.isTransfer, false),
-    sql`${transactions.categoryId} is not null`,
+    sql`${EFFECTIVE_CATEGORY} is not null`,
   ];
   if (opts.scope !== 'household' && opts.attributedUserId !== undefined && opts.attributedUserId !== null) {
     clauses.push(eq(transactions.attributedUserId, opts.attributedUserId));
   }
 
   const rows = getDb()
-    .select({ categoryId: transactions.categoryId, total: sql<number>`sum(${transactions.amountCents})` })
+    .select({ categoryId: EFFECTIVE_CATEGORY, total: sql<number>`sum(${EFFECTIVE_AMOUNT})` })
     .from(transactions)
+    .leftJoin(transactionSplits, eq(transactionSplits.txnId, transactions.id))
     .where(and(...clauses))
-    .groupBy(transactions.categoryId)
+    .groupBy(EFFECTIVE_CATEGORY)
     .all();
 
   const result = new Map<number, number>();
