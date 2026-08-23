@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ReceiptUploader } from '@/components/warranty/ReceiptUploader';
 
 afterEach(() => {
@@ -58,9 +58,20 @@ describe('ReceiptUploader', () => {
 
       // The staged array reaching the parent form must carry the real file, not an entry
       // whose previewUrl silently came back null/undefined because createObjectURL threw.
-      const lastCall = onStagedChange.mock.calls.at(-1)?.[0];
-      expect(lastCall).toHaveLength(1);
-      expect(lastCall[0]).toMatchObject({ stagingId: 's1', previewUrl: 'blob:mock-preview' });
+      //
+      // waitFor, not a bare assertion on the last call: findByAltText above resolves when the
+      // IMAGE renders, which happens from local preview state -- a DIFFERENT async continuation
+      // from the one that calls onStagedChange with the staged entry, since that one waits on
+      // the mocked fetch to resolve and commit. On a fast machine both land in the same batch
+      // and a bare assertion passes; on a slower or differently-scheduled runner the assertion
+      // wins the race and sees the earlier empty-array call instead. That is exactly how this
+      // failed once on CI and passed on a re-run of the SAME commit (v1.8.1, 2026-08-23) --
+      // awaiting a proxy for the condition rather than the condition itself.
+      await waitFor(() => {
+        const lastCall = onStagedChange.mock.calls.at(-1)?.[0];
+        expect(lastCall).toHaveLength(1);
+        expect(lastCall[0]).toMatchObject({ stagingId: 's1', previewUrl: 'blob:mock-preview' });
+      });
     },
   );
 

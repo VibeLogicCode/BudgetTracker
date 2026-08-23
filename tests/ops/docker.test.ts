@@ -166,6 +166,33 @@ describe('.dockerignore', () => {
     expect(lines).not.toContain('vendor/');
     expect(lines).not.toContain('/vendor');
   });
+
+  /**
+   * Next 16 regression guard. Turbopack traces `output: 'standalone'` by copying the project
+   * tree, not just the files output-file-tracing identified, and the Dockerfile does
+   * `COPY /app/.next/standalone ./` -- so whatever survives .dockerignore reaches the SHIPPED
+   * IMAGE. Measured on the 16.3.2 upgrade: .git 25 MB, plus docs/, tests/ and .superpowers/
+   * all landed inside .next/standalone/ on a local build.
+   *
+   * .superpowers is the one that actually matters and is why this test exists: it is
+   * GITIGNORED internal working notes, and this image is PUBLIC on GHCR. An exclusion someone
+   * "tidies up" later would publish them silently, with a green suite.
+   */
+  it('excludes the build context that Next 16 standalone tracing would otherwise ship', () => {
+    const lines = dockerignore.split(/\r?\n/).map((line) => line.trim());
+    for (const entry of ['.superpowers', 'tests', '.git', 'docs']) {
+      expect(lines).toContain(entry);
+    }
+  });
+
+  it('still admits everything the image genuinely needs', () => {
+    // The mirror of the test above: over-excluding is the other way to break the image, and
+    // it fails at RUN time (a missing asset, a 500) rather than at build time.
+    const lines = dockerignore.split(/\r?\n/).map((line) => line.trim());
+    for (const needed of ['src', 'public', 'drizzle', 'scripts', 'vendor', 'CHANGELOG.md', 'package.json']) {
+      expect(lines).not.toContain(needed);
+    }
+  });
 });
 
 describe('version and changelog', () => {
@@ -218,19 +245,24 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.8.1 release', () => {
+  it('MUST-7.1: the 1.9.0 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.8.1');
+    expect(pkg.version).toBe('1.9.0');
     const changelog = read('CHANGELOG.md');
-    expect(changelog).toMatch(/^## \[1\.8\.1\] - 2026-08-23$/m);
+    expect(changelog).toMatch(/^## \[1\.9\.0\] - 2026-08-23$/m);
     // An empty Unreleased section is left in place for the next session.
-    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.8.1]'));
-    const patch = changelog.slice(changelog.indexOf('## [1.8.1]'), changelog.indexOf('## [1.8.0]'));
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.9.0]'));
+    const patch = changelog.slice(changelog.indexOf('## [1.9.0]'), changelog.indexOf('## [1.8.1]'));
     // A toolchain-only release must SAY it changes nothing about the running app. A changelog
     // entry that let a reader think their install gained a feature would be worse than none.
     expect(patch).toMatch(/### Changed/);
-    expect(patch).toMatch(/TypeScript 6\.0\.3/);
-    expect(patch).toMatch(/nothing about the running app changes/i);
+    expect(patch).toMatch(/Next\.js 16/);
+    expect(patch).toMatch(/React 19\.2/);
+    // The runtime move of the auth filter is the one behavioural change in this release, and
+    // the entry must say it was verified against a real production build rather than implying
+    // a green suite was the evidence -- a green suite is exactly what missed the v1.5.1 500.
+    expect(patch).toMatch(/Node runtime/i);
+    expect(patch).toMatch(/production build/i);
     // The devDependency and the note must move together -- a claim about 6.0.3 with the pin
     // still on 5.x is exactly the two-places-one-bump bug MUST-7.1 exists to catch.
     const pkgFull = JSON.parse(read('package.json')) as {
@@ -238,6 +270,8 @@ describe('version and changelog', () => {
       devDependencies: Record<string, string>;
     };
     expect(pkgFull.devDependencies.typescript).toMatch(/^\^?6\./);
+    expect(pkgFull.dependencies.next).toMatch(/^\^?16\./);
+    expect(pkgFull.dependencies.react).toMatch(/^\^?19\.[2-9]/);
     // Same discipline for the two advisory bumps this release claims: a Security note naming
     // versions the manifest does not actually pin is the two-places-one-bump bug wearing a
     // security label, which is worse than the plain kind because it reads as reassurance.
@@ -246,9 +280,9 @@ describe('version and changelog', () => {
     expect(pkgFull.dependencies['node-cron']).toMatch(/^\^?4\./);
   });
 
-  it('MUST-7.1: the 1.8.0 release is still recorded intact (append-only discipline)', () => {
+  it('MUST-7.1: the 1.8.1 release is still recorded intact (append-only discipline)', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).not.toBe('1.8.0');
+    expect(pkg.version).not.toBe('1.8.1');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.8\.0\] - 2026-08-23$/m);
     const section = changelog.slice(changelog.indexOf('## [1.8.0]'), changelog.indexOf('## [1.7.0]'));

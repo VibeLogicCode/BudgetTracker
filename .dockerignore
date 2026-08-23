@@ -10,3 +10,20 @@ coverage
 *.db-shm
 .env
 .env.local
+
+# Next 16 (Turbopack) traces output: 'standalone' far more inclusively than Next 15 did: it
+# copies the project tree rather than only the files output-file-tracing identified. The
+# Dockerfile then does `COPY /app/.next/standalone ./`, so anything left in the build context
+# ends up in the SHIPPED IMAGE. Verified on the 16.3.2 upgrade: a local build put .git (25 MB),
+# docs/, tests/ and .superpowers/ inside .next/standalone/.
+#
+# .git, docs and .tmp-data were already excluded above, so those never reached the builder. The
+# four below were not, and .superpowers is the one that actually matters: it is GITIGNORED
+# working notes, and this image is PUBLIC on GHCR. tests/ is 3 MB of dead weight in a runtime
+# image. Neither is needed to build or run.
+#
+# tests/ops/docker.test.ts asserts these stay excluded, so the leak cannot come back quietly.
+.superpowers
+tests
+.github
+install

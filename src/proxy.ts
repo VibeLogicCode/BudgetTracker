@@ -3,8 +3,22 @@ import { SESSION_COOKIE_NAME } from '@/lib/auth/session-constants';
 import { securityHeaders } from '@/lib/auth/security-headers';
 
 /**
- * Middleware runs on the Edge runtime and MUST NOT import better-sqlite3.
- * Real session validation happens server-side in requireUser(); this only:
+ * Next 16 renamed this file's convention from `middleware` to `proxy`, and that is NOT just a
+ * rename: `proxy` runs on the NODE runtime, not Edge, and that is not configurable.
+ *
+ * So the old reason written here -- "Middleware runs on the Edge runtime and MUST NOT import
+ * better-sqlite3" -- is now FALSE. The rule it justified is still right, but for a different
+ * reason, and the distinction matters: on Node nothing STOPS this file opening the database, so
+ * the only thing keeping it cheap is a deliberate choice. Keep it.
+ *
+ * THE REAL REASON THIS STAYS DATABASE-FREE: the matcher below runs it on essentially every
+ * request, including every static asset that is not excluded. Anything added here is paid on all
+ * of them, forever. A query that looks trivial in isolation becomes the app's floor for latency.
+ * Session VALIDATION deliberately lives in requireUser() server-side, where it runs once per
+ * page rather than once per request, and that split is the design -- not a workaround for a
+ * runtime restriction that no longer exists.
+ *
+ * This only:
  *   1. attaches security headers to every response, and
  *   2. bounces requests with no session cookie away from app pages.
  *
@@ -31,7 +45,13 @@ function isApiPath(pathname: string): boolean {
   return pathname === '/api' || pathname.startsWith('/api/');
 }
 
-/** Edge-safe random nonce: Web Crypto + base64, no Buffer/Node dependency. */
+/**
+ * Random nonce via Web Crypto + base64. Written against the web standard rather than
+ * node:crypto/Buffer, which was once REQUIRED here (Edge had no Node builtins) and is now
+ * merely correct: `crypto.getRandomValues` and `btoa` are both globals on Node too, so this
+ * keeps working unchanged after the move to the Node runtime. Left as-is deliberately -- there
+ * is nothing to gain from rewriting working crypto to use a different API.
+ */
 function generateNonce(): string {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
@@ -40,7 +60,7 @@ function generateNonce(): string {
   return btoa(binary);
 }
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const isPublic = PUBLIC_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
   const hasCookie = request.cookies.has(SESSION_COOKIE_NAME);

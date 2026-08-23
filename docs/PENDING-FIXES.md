@@ -278,7 +278,7 @@ tried here: a Next major upgrade is its own release with its own breaking-change
 45-minute dependency bump, and this item was time-boxed. Note that blocker 2 is independent of
 Next entirely — a Next 16 upgrade would not clear it on its own.
 
-## 5c. Dependency advisories — triaged 2026-08-23, two fixed in 1.8.1, three wait for Next 16
+## 5c. Dependency advisories — triaged 2026-08-23; 12 down to 6 across 1.8.1 and 1.9.0
 
 `npm audit` reported 12 (6 moderate, 6 high) during the v1.8.0 image build. Triaged rather than
 blanket-fixed, because EVERY suggested fix is a semver major — `npm audit fix --force` here means
@@ -296,7 +296,7 @@ a security patch.
 - `node-cron` 3.0.3 -> 4.6.0, clearing the `uuid` moderate (bounds check when a caller supplies
   its own buffer — node-cron never does).
 
-**Waiting on Next 16 (see 5d), which fixes all three together:**
+**FIXED in 1.9.0 by the Next 16 upgrade, exactly as predicted — verified, 9 advisories down to 6:**
 - `next` (HIGH, via postcss + sharp)
 - `postcss` (HIGH, XSS and path traversal via attacker-controlled `sourceMappingURL`) — BUILD
   TIME only. postcss runs during `next build` and is not in the runtime image.
@@ -316,11 +316,44 @@ a security patch.
 DEV SERVER accepting cross-origin requests; it arrives via `drizzle-kit` and no dev server runs
 here).
 
-## 5d. Next.js 16 — its own release, and it pays for itself three ways
+## 5d. Next.js 16 — SHIPPED in v1.9.0
 
-Next 16.3.2 is published; this project is pinned `^15.0.0` (15.5.23 installed). Deliberately NOT
-folded into 1.8.1. Planned as its own MINOR release (1.9.0, not a patch) so the version number
-itself signals "behaviour may have moved, look at this one after installing".
+Shipped 2026-08-23 as its own minor release. Kept because the acceptance bar below was the point
+of the exercise, and because ONE unexpected finding came out of it that a future upgrade must not
+undo (the standalone-tracing change, below).
+
+**What the migration actually cost:** far less than budgeted. `tsc` clean and the full suite green
+(3695 passed / 244 files) on the first try after two mechanical changes — the `middleware`/`proxy`
+rename and the React 19.2 bump. Every other Next 16 breaking change turned out not to apply:
+`next lint` was unused, there are no parallel routes, no webpack config, no synchronous request
+APIs left, and `images: { unoptimized: true }` bypasses all five `next/image` changes at once.
+
+**The one that mattered: Turbopack changed how `output: 'standalone'` is traced.** Next 15 copied
+only the files output-file-tracing identified. Turbopack copies the PROJECT TREE. A local build
+put `.git` (25 MB), `docs/`, `tests/` and `.superpowers/` inside `.next/standalone/`, and the
+Dockerfile does `COPY /app/.next/standalone ./` — so anything surviving `.dockerignore` lands in
+the SHIPPED, PUBLIC image. `.git` and `docs/` were already excluded; `tests/` (3 MB) and
+`.superpowers/` (5.8 MB of GITIGNORED internal working notes) were not. Both are now excluded, and
+`tests/ops/docker.test.ts` guards BOTH directions — that the exclusions stay, and that nothing the
+image genuinely needs gets over-excluded, since over-excluding fails at run time rather than build
+time. Nothing was ever published.
+
+**What was verified by hand, because a green suite is not evidence for this class of change** (the
+v1.5.1 500 passed 3,000 tests): a real production build's standalone server was booted and probed.
+`/api/health` 200 with db and dataDir ok; `/` dispatches to `/setup` on an empty database;
+`/transactions`, `/reports`, `/settings/accounts`, `/review` all 307 to `/login` with no session;
+`/api/reports/export` and `/api/backup/download` answer 401 rather than redirecting; the manifest
+and icons stay public; CSP-with-nonce, `x-frame-options: DENY` and `nosniff` all present; the
+scheduler registered all three cron jobs; no errors in the server log.
+
+**Next owns `tsconfig.json` formatting now.** The build rewrote it — expanded the arrays, added
+`.next/dev/types/**/*.ts` (dev output moved to `.next/dev`), and switched `jsx` from `preserve` to
+`react-jsx`. Accepted rather than reverted: Next re-applies it on every build, so reverting only
+manufactures permanent diff noise. `tsc` is clean and the suite is green with it.
+
+**Pre-existing, found while probing, NOT fixed:** `/favicon.ico` returns 404 — the file has never
+existed in this repo (`git log --all` on that path is empty) and the app serves `/icons/*`
+instead. Browsers request it on every visit and get a 404. Harmless, and unrelated to Next 16.
 
 **Why it earns its own release rather than riding along.** This is the one upgrade where this
 repo's test suite is structurally weakest, and there is a scar to prove it: in v1.5.0 a `const`
