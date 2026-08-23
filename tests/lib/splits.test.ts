@@ -342,6 +342,40 @@ describe('setTransactionSplits: review queue interplay', () => {
     expect(parent.categoryId).toBe(groceries);
     expect(parent.categorizationSource).toBe('manual');
   });
+
+  it('clearing a split still bumps updated_at even when category_id is not null (the budget-evaluator fingerprint depends on this)', () => {
+    const { db, alice, add } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const coffee = categoryIdByName(db, 'Coffee');
+    const id = add({ amountCents: -5000, categoryId: groceries, source: 'rule' });
+
+    setTransactionSplits({
+      txnId: id,
+      parts: [
+        { categoryId: groceries, amountCents: -3000 },
+        { categoryId: coffee, amountCents: -2000 },
+      ],
+      userId: alice,
+    });
+
+    // Force updated_at to a known-stale value so the clear's own bump is unambiguous,
+    // independent of how close together the two setTransactionSplits calls land in real time.
+    db.run(sql`update transactions set updated_at = ${SENTINEL_TIMESTAMP} where id = ${id}`);
+
+    setTransactionSplits({ txnId: id, parts: [], userId: alice });
+
+    const parent = db.select().from(transactions).where(eq(transactions.id, id)).get()!;
+    // category_id was never null, so categorization_source stays exactly as the split left it
+    // (see the test above) -- but updated_at MUST move regardless. evaluateBudgets()'s
+    // fingerprint (src/lib/notify/evaluate/budget.ts) is built from
+    // max(transactions.updated_at); that is the ONLY column that changes when a split is
+    // cleared off a row that already carried a category, so if this stays stale the evaluator
+    // can silently miss a budget that just went over (see the end-to-end reproduction in
+    // tests/lib/notify/evaluate/budget.test.ts).
+    expect(parent.categoryId).toBe(groceries);
+    expect(parent.categorizationSource).toBe('manual');
+    expect(parent.updatedAt).not.toBe(SENTINEL_TIMESTAMP);
+  });
 });
 
 describe('getSplits', () => {

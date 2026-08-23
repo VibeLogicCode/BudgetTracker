@@ -115,12 +115,28 @@ export function setTransactionSplits(input: { txnId: number; parts: SplitPart[];
 
     if (parts.length === 0) {
       tx.delete(transactionSplits).where(eq(transactionSplits.txnId, txnId)).run();
+
+      // This write must stay UNCONDITIONAL -- do not fold it back into the categoryId===null
+      // branch below. The fingerprint consumer is evaluateBudgets() (src/lib/notify/evaluate/
+      // budget.ts), which short-circuits a whole tick when transactions(count, max(id),
+      // max(updated_at)) + budgets(count, max(id)) are unchanged since the last evaluation.
+      // Clearing a split on a row that already carried a category changes what every
+      // aggregate reports for that category (its spend jumps from the split's own part back
+      // up to the parent's full amount) without inserting or deleting a transaction row, and
+      // -- in that case -- without touching categorization_source either, so updated_at is
+      // the ONLY column left that can move the fingerprint and let the evaluator notice. It
+      // is also the honest record: the transaction's effective categorization just changed.
+      // Losing this (e.g. by "simplifying" it back inside the branch below) lets a split that
+      // was keeping a category under budget get cleared, silently overshoot, and never alert
+      // until some unrelated transaction happens to change the fingerprint first.
+      tx.update(transactions).set({ updatedAt: at }).where(eq(transactions.id, txnId)).run();
+
       // Design ruling 2 applies to clearing too: this gives the ENGINE (rules/Bayes) another
       // look, exactly as if the row had just arrived, rather than teaching it anything. A
       // row that already carries a real, confirmed category is left alone -- clearing a
       // split must never silently blank out a categorization a person already confirmed.
       if (parent.categoryId === null) {
-        tx.update(transactions).set({ categorizationSource: 'none', updatedAt: at }).where(eq(transactions.id, txnId)).run();
+        tx.update(transactions).set({ categorizationSource: 'none' }).where(eq(transactions.id, txnId)).run();
         runEngine([txnId]);
       }
       return;
