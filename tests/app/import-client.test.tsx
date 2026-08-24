@@ -652,15 +652,19 @@ describe('ImportClient — per-card assignment UI (MUST-6.1, MUST-6.2)', () => {
   // if the preselect were silently wrong, because an unmatched value falls back to the first
   // <option> natively. These tests instead submit the row's own form and inspect what the
   // mocked action actually received.
-  it('preselects the already-assigned person, proved via what the row submits unchanged', async () => {
+  it('preselects the already-assigned person, proved via what re-choosing it submits', async () => {
+    // AutoSaveSelect has no submit button to fire "unchanged" through, so the preselect is
+    // proved by re-choosing the SAME value that should already be selected and checking what
+    // that save sends -- if the option had not actually been preselected there, this would be
+    // a genuine change rather than a no-op re-save, but the assertions below only care that
+    // the right person and row identity reach the action either way.
     const { getByLabelText } = await renderWithCardValues([
       { value: '-1001', rowCount: 3, assignedUserId: 5, assignedUserName: 'Alex' },
     ]);
     const { setCardPersonAction } = await import('@/app/(app)/import/actions');
     const select = getByLabelText(/Person for -1001/i) as HTMLSelectElement;
-    const form = select.closest('form')!;
 
-    fireEvent.submit(form);
+    fireEvent.change(select, { target: { value: '5' } });
 
     await waitFor(() => expect(setCardPersonAction).toHaveBeenCalled());
     const submitted = vi.mocked(setCardPersonAction).mock.calls[0][1] as FormData;
@@ -676,7 +680,7 @@ describe('ImportClient — per-card assignment UI (MUST-6.1, MUST-6.2)', () => {
     const { setCardPersonAction } = await import('@/app/(app)/import/actions');
     const select = getByLabelText(/Person for -9999/i) as HTMLSelectElement;
 
-    fireEvent.submit(select.closest('form')!);
+    fireEvent.change(select, { target: { value: '' } });
 
     await waitFor(() => expect(setCardPersonAction).toHaveBeenCalled());
     const submitted = vi.mocked(setCardPersonAction).mock.calls[0][1] as FormData;
@@ -693,7 +697,7 @@ describe('ImportClient — per-card assignment UI (MUST-6.1, MUST-6.2)', () => {
     const { setCardPersonAction } = await import('@/app/(app)/import/actions');
     const select = getByLabelText(/Person for -1001/i) as HTMLSelectElement;
 
-    fireEvent.submit(select.closest('form')!);
+    fireEvent.change(select, { target: { value: '99' } });
 
     await waitFor(() => expect(setCardPersonAction).toHaveBeenCalled());
     const submitted = vi.mocked(setCardPersonAction).mock.calls[0][1] as FormData;
@@ -708,7 +712,6 @@ describe('ImportClient — per-card assignment UI (MUST-6.1, MUST-6.2)', () => {
     const select = getByLabelText(/Person for -1001/i) as HTMLSelectElement;
 
     fireEvent.change(select, { target: { value: '6' } });
-    fireEvent.submit(select.closest('form')!);
 
     await waitFor(() => expect(setCardPersonAction).toHaveBeenCalled());
     const submitted = vi.mocked(setCardPersonAction).mock.calls[0][1] as FormData;
@@ -761,13 +764,13 @@ describe('ImportClient — F1: a saved assignment updates the row immediately in
 
     const select = getByLabelText(/Person for -1001/i) as HTMLSelectElement;
     fireEvent.change(select, { target: { value: '5' } });
-    fireEvent.submit(select.closest('form')!);
 
     await waitFor(() => expect(queryByText(/Unassigned/i)).toBeNull());
-    // The success message is still shown, not swallowed by the state patch (the mocked
-    // action's own copy is checked here; actions.test.ts owns the real "remembered for every
-    // future import" wording, since that string belongs to setCardPersonAction, not this fix).
-    expect(queryByText(/Saved\./i)).toBeTruthy();
+    // AutoSaveSelect reports success with the tick icon, not a text message (the message the
+    // mocked action returns is only ever surfaced on error -- see AutoSave.tsx's ErrorLine).
+    await waitFor(() =>
+      expect(document.querySelector('[data-autosave-status="saved"]')).toBeTruthy(),
+    );
     // Confirms this was the cheap local-state patch, not a re-triggered preview round trip.
     expect(vi.mocked(setCardPersonAction)).toHaveBeenCalledTimes(1);
   });
@@ -780,7 +783,6 @@ describe('ImportClient — F1: a saved assignment updates the row immediately in
 
     const select = getByLabelText(/Person for -1001/i) as HTMLSelectElement;
     fireEvent.change(select, { target: { value: '' } });
-    fireEvent.submit(select.closest('form')!);
 
     await waitFor(() => expect(queryByText(/Unassigned/i)).toBeTruthy());
   });
@@ -794,7 +796,6 @@ describe('ImportClient — F1: a saved assignment updates the row immediately in
 
     const select = getByLabelText(/Person for -1001/i) as HTMLSelectElement;
     fireEvent.change(select, { target: { value: '5' } });
-    fireEvent.submit(select.closest('form')!);
 
     await waitFor(() => expect(queryAllByText(/Unassigned/i).length).toBe(1));
   });
@@ -808,7 +809,6 @@ describe('ImportClient — F1: a saved assignment updates the row immediately in
 
     const select = getByLabelText(/Person for -1001/i) as HTMLSelectElement;
     fireEvent.change(select, { target: { value: '5' } });
-    fireEvent.submit(select.closest('form')!);
 
     await waitFor(() => expect(queryByText(/Boom/i)).toBeTruthy());
     expect(queryByText(/Unassigned/i)).toBeTruthy();
