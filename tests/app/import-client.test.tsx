@@ -647,22 +647,22 @@ describe('ImportClient — per-card assignment UI (MUST-6.1, MUST-6.2)', () => {
     expect((getByRole('button', { name: /^Import \d+ transactions$/ }) as HTMLButtonElement).disabled).toBe(false);
   });
 
-  // The controlled/defaultValue-select lesson from Task 5's ledger applies here too: proving
-  // "already assigned shows preselected" by reading the <select>'s own .value would pass even
-  // if the preselect were silently wrong, because an unmatched value falls back to the first
-  // <option> natively. These tests instead submit the row's own form and inspect what the
-  // mocked action actually received.
-  it('preselects the already-assigned person, proved via what re-choosing it submits', async () => {
-    // AutoSaveSelect has no submit button to fire "unchanged" through, so the preselect is
-    // proved by re-choosing the SAME value that should already be selected and checking what
-    // that save sends -- if the option had not actually been preselected there, this would be
-    // a genuine change rather than a no-op re-save, but the assertions below only care that
-    // the right person and row identity reach the action either way.
+  // AutoSaveSelect is a CONTROLLED select (`value`, not `defaultValue`): when its `value` names
+  // no matching <option>, the DOM does NOT fall back to the first option the way an uncontrolled
+  // `defaultValue` select does -- per the HTML select algorithm, setting .value to something with
+  // no matching option leaves selectedIndex at -1, so reading .value back gives "". That makes
+  // asserting the initial `select.value` a real proof of preselection here, unlike the
+  // defaultValue trap Task 5's ledger warned about for the old, uncontrolled version of this
+  // select: a wrongly-missing <option> (or a wrong internal `value`) reads back as "", not as a
+  // false-positive match. These tests check that initial value, then also re-choose the same
+  // person and inspect what the mocked action actually received.
+  it('preselects the already-assigned person, proved via its initial value and what re-choosing it submits', async () => {
     const { getByLabelText } = await renderWithCardValues([
       { value: '-1001', rowCount: 3, assignedUserId: 5, assignedUserName: 'Alex' },
     ]);
     const { setCardPersonAction } = await import('@/app/(app)/import/actions');
     const select = getByLabelText(/Person for -1001/i) as HTMLSelectElement;
+    expect(select.value).toBe('5');
 
     fireEvent.change(select, { target: { value: '5' } });
 
@@ -696,6 +696,7 @@ describe('ImportClient — per-card assignment UI (MUST-6.1, MUST-6.2)', () => {
     ]);
     const { setCardPersonAction } = await import('@/app/(app)/import/actions');
     const select = getByLabelText(/Person for -1001/i) as HTMLSelectElement;
+    expect(select.value).toBe('99');
 
     fireEvent.change(select, { target: { value: '99' } });
 
