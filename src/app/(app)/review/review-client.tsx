@@ -156,7 +156,7 @@ export function ReviewClient({
                 className={pickerClass}
               />
               {row.matchingCount > 1 ? (
-                <form action={applyAll} className="flex items-center gap-1.5">
+                <form action={applyAll} className="flex flex-wrap items-center gap-1.5">
                   <input type="hidden" name="normalizedMerchant" value={row.normalizedMerchant} />
                   <select
                     name="categoryId"
