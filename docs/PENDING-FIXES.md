@@ -593,3 +593,54 @@ can pick) is clearly worse on thermal receipts. The tier above costs the product
 **The decisive argument against an engine swap is simpler than any of that:** a perfect recognizer
 still returns `$100.00` for a receipt whose total is `$47.32` and which also prints `CASH $100.00`.
 The defect is in the extractor, and no change of engine reaches it.
+
+---
+
+## H. Settings -> Updates needs a page refresh to show the result (~1h, not started)
+
+Reported 2026-08-24. Press **Check now** in Settings -> Updates: the button greys out, then
+settles, but whether an update is available only appears after refreshing the page.
+
+**It is NOT a missing `revalidatePath`.** `checkForUpdateNowAction` already calls
+`revalidatePath(UPDATE_PATH)`, and `UPDATE_PATH` is `'/settings'`, which is exactly where
+`UpdatesCard` renders. That was the first guess and it is wrong.
+
+**The leading hypothesis is how the actions are wired**, and `updates-client.tsx` is inconsistent
+with itself in a way that points straight at it:
+
+```ts
+const [autoState,  saveAuto] = useActionState(setAutoApplyAction, initial);                     // direct
+const [checkState, checkNow] = useActionState(async () => checkForUpdateNowAction(), initial);  // wrapped
+```
+
+`saveAuto` hands React the server action itself. `checkNow` -- and `enable`, `disable`, `apply`,
+`dismiss` -- hand it an inline `async` closure defined inside a `'use client'` module, i.e. a
+CLIENT function that calls the server action as an RPC. The router therefore never processes a
+server-action response for those, so the server cache is invalidated while the client keeps the
+props from the original render. And the availability UI is driven by `props.latestVersion` /
+`props.severity`, not by the action's returned `message`, so nothing on screen moves.
+
+The wrapping is not arbitrary: `useActionState` calls its action as `(prevState, formData)`, and
+`checkForUpdateNowAction()` takes no parameters, so passing it directly is a type error. The closure
+was the path of least resistance.
+
+**Confirm before fixing -- there is a 30-second test.** If the hypothesis holds, **Save** on the
+auto-apply checkbox updates the card without a refresh while **Check now** does not. If BOTH need a
+refresh, the cause is elsewhere (look at `(app)/layout.tsx`'s `dynamic = 'force-dynamic'` and
+whether `readUpdateState()` is reading a cached value) and this entry is wrong.
+
+Two fixes, in preference order:
+
+1. **Give the no-arg update actions the `(prevState, formData)` signature** and pass them directly,
+   matching `setAutoApplyAction`. Fixes the cause rather than the symptom, and removes an
+   inconsistency that will otherwise keep producing this bug in the next action someone adds.
+   Applies to `enableUpdateChecksAction`, `disableUpdateChecksAction`, `checkForUpdateNowAction`,
+   and the wrapped `applyUpdateAction` / `dismissUpdateAction` call sites.
+2. **`router.refresh()` after a successful action.** Works regardless of which mechanism is at
+   fault, but treats the symptom and leaves the inconsistency in place.
+
+**Also worth fixing while in there:** pressing **Check now** when already on the newest version
+returns `'You are on the newest published version.'` -- a message the user may never see for the
+same reason. Whatever the fix, assert that the *returned message* renders, not just that the props
+refresh, so the button says something even when nothing changed. A control that greys out and then
+looks identical is indistinguishable from a control that did nothing.
