@@ -183,7 +183,18 @@ export function AutoSaveCheckbox({
 
   return (
     <span className="flex flex-col gap-0.5">
-      <label className="flex items-center gap-1.5 text-xs text-muted">
+      {/* `relative` here (harmless for a flex layout) is load-bearing when labelHidden: the
+          sr-only span below is `position: absolute` with no positioned ancestor between it
+          and this label, so without one its containing block becomes the initial containing
+          block instead of this label. That escapes this row's own TableWrap `overflow-x-auto`
+          clipping for scroll-region purposes even though the span paints invisibly, and on a
+          table with one of these per row it was inflating `document.documentElement.
+          scrollWidth` well past the viewport at narrow widths -- a real, user-reachable
+          horizontal page scroll (confirmed by `window.scrollTo` actually moving `scrollX`),
+          not just a stray metric. Scoping the containing block here keeps the sr-only span (and
+          therefore its layout footprint) inside the same clipped box as everything else in the
+          row. */}
+      <label className="relative flex items-center gap-1.5 text-xs text-muted">
         <input
           type="checkbox"
           name={name}
