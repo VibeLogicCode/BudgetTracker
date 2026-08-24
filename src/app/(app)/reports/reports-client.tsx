@@ -9,6 +9,7 @@ import { LoanIcon, ReportsIcon, TrendDownIcon, TrendFlatIcon, TrendUpIcon } from
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Money } from '@/components/ui/Money';
+import { PageGuide } from '@/components/ui/PageGuide';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { AmountCell, TableWrap } from '@/components/ui/Table';
 import { Field, inputClass, selectClass } from '@/components/ui/form';
@@ -123,6 +124,35 @@ export function ReportsClient({
           </a>
         }
       />
+
+      {/* Of the eleven empty states on this page, `breakdown.length === 0` is the one that
+          stands for the whole screen: Spending by category is the first card and the only one
+          that is empty whenever the range genuinely has no non-transfer spend in it. Driving
+          the panel off any single later card would open it on a page that is otherwise full,
+          or leave it shut on a page that is entirely empty. */}
+      <PageGuide empty={breakdown.length === 0}>
+        <p>
+          Reports answers questions about a stretch of time rather than the current month: where
+          the money went by category, how one month compares with the last, how a year compares
+          with the year before, and how the household&rsquo;s split by person works out. The date
+          range and person at the top drive every card below at once, and{' '}
+          <strong className="font-semibold text-ink">Export CSV</strong> gives you the same rows
+          in a spreadsheet.
+        </p>
+        <p>
+          Most of these cards are comparisons, so they have nothing to compare until several
+          months of statements are on file. A card saying it does not have enough history yet is
+          not broken — importing older statements is what fills it in, and month-over-month,
+          year-over-year and the spending baselines all get more useful the further back your
+          imports go.
+        </p>
+        <p>
+          Two cards are waiting on a setting rather than on history. Net worth needs a balance
+          recorded against at least one account under Settings, and the Tax year card only lists
+          categories you have marked as tax relevant under Settings and Managers. Neither will
+          fill in from importing more months.
+        </p>
+      </PageGuide>
 
       <Card>
         <CardBody className="pt-5">

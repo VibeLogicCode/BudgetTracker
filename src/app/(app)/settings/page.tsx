@@ -14,6 +14,7 @@ import {
   type IconProps,
 } from '@/components/icons';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
+import { PageGuide } from '@/components/ui/PageGuide';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { isOcrFailingSystemically } from '@/lib/warranty/ocr/health';
 import { readEffectiveOcrEngine, readOcrEngineState } from '@/lib/warranty/ocr/onnx/probe';
@@ -46,6 +47,32 @@ export default async function SettingsPage() {
   return (
     <div className="flex flex-col gap-6">
       <PageHeader title="Settings" description="Your account, and — for admins — how the household's data is managed." />
+
+      {/* `empty={false}`: there is no EmptyState on this page and nothing to borrow a condition
+          from. This is an index of links, so it renders the same whether the database is full or
+          brand new — there is no state in which it has nothing to show. */}
+      <PageGuide empty={false}>
+        <p>
+          Everything here is configuration rather than money. The top of the page is your own
+          account — your name, your password, and two-factor sign-in if you want it — and it
+          looks the same for everyone.
+        </p>
+        <p>
+          Of the admin sections below, <strong className="font-semibold text-ink">Bank
+          accounts</strong> is the one that has to be done first: an import has to land in an
+          account, so nothing can be brought in until at least one exists. Alongside it,
+          Categories, merchant rules and import profiles is where you adjust how imported rows
+          get named and sorted, and where a bank&rsquo;s import mapping can be switched off
+          without deleting it if you stop using that bank.
+        </p>
+        <p>
+          The rest is optional and can wait. Notifications decide whether the app messages you
+          and where; nothing is sent anywhere until a channel is set up. Backups covers the
+          nightly archive, downloading one, and restoring it. Users controls who can sign in and
+          what they are allowed to change. Connections is for bank sync, which is an alternative
+          to CSV import rather than a requirement for it.
+        </p>
+      </PageGuide>
 
       <Card>
         <CardHeader

@@ -8,6 +8,7 @@ import { Card } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Money } from '@/components/ui/Money';
 import { Notice } from '@/components/ui/Notice';
+import { PageGuide } from '@/components/ui/PageGuide';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { selectClass } from '@/components/ui/form';
 import type { CategoryRecord } from '@/lib/categories';
@@ -50,6 +51,29 @@ export function ReviewClient({
         title="Review queue"
         description="Transactions the categorizer could not place with confidence. Correcting one teaches it."
       />
+      {/* Same `rows.length === 0` the success state below is rendered on. An empty queue is the
+          state a reader reaches most often, and it is exactly when "why did this screen exist
+          again?" needs answering, since the queue fills itself back up on the next import. */}
+      <PageGuide empty={rows.length === 0}>
+        <p>
+          Every import runs each new transaction past the categorizer. Anything it could not
+          place with confidence waits here instead of being filed under a guess, so this screen
+          is the one place where a wrong category is a decision you made rather than one the app
+          made quietly.
+        </p>
+        <p>
+          Accepting a guess or correcting it does two things: it files that transaction, and it
+          teaches the categorizer what that merchant is. The same merchant arrives already
+          sorted next time. Where a merchant already has other unsorted rows on file, the count
+          beside it offers to apply your choice to all of them at once.
+        </p>
+        <p>
+          This queue is not a one-time setup step. It empties, then refills the next time you
+          import a statement, so clearing it is part of the monthly routine rather than
+          something you finish once.
+        </p>
+      </PageGuide>
+
       <FormError message={error} />
       {notice ? <Notice tone="success">{notice}</Notice> : null}
 

@@ -9,6 +9,7 @@ import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Money } from '@/components/ui/Money';
 import { Notice } from '@/components/ui/Notice';
+import { PageGuide } from '@/components/ui/PageGuide';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Field, inputClass, selectClass } from '@/components/ui/form';
 import type { ContributionRecord, GoalWithProgress } from '@/lib/goals';
@@ -48,6 +49,37 @@ export function GoalsClient({
           </a>
         }
       />
+      {/* The same `goals.length === 0` the "No goals yet" state below is rendered on, so the
+          panel is open exactly on the screen that has nothing but the new-goal form on it. */}
+      <PageGuide empty={goals.length === 0}>
+        <p>
+          A goal is a target amount with an optional date — a trip, a deductible, a replacement
+          for something that is wearing out. It is a record of what you are saving towards, not
+          an account: no money moves anywhere when you create one.
+        </p>
+        <p>
+          Progress comes from contributions you log yourself. When you put money aside, enter the
+          amount and the date on that goal&rsquo;s card. This is deliberately separate from
+          imported transactions, because a transfer into savings looks the same to a bank
+          whatever you were saving it for.
+        </p>
+        <p>
+          After the first contribution each card shows the average you have been putting in per
+          month and the month that pace finishes the goal. Give the goal a target date as well
+          and it also shows what the remaining amount works out to per month. Both figures are
+          arithmetic on what you have logged, and they move as you log more.
+        </p>
+        <p>
+          {/* The archive link's own label is deliberately NOT quoted here: goals-client.test
+              locates that link by its exact text, and a second element carrying the same
+              string would make it ambiguous -- the same trap guides.tsx documents for
+              MUST-11.8. */}
+          A goal you are done with can be archived rather than deleted, which keeps its
+          contribution history. The link beside the page title switches between the goals still
+          running and the ones already put away, and an archived goal can be brought back.
+        </p>
+      </PageGuide>
+
       <FormError message={error} />
       {notice ? <Notice tone="success">{notice}</Notice> : null}
 

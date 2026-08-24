@@ -9,6 +9,7 @@ import { Card, CardBody, CardFooter, CardHeader } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Money } from '@/components/ui/Money';
 import { Notice } from '@/components/ui/Notice';
+import { PageGuide } from '@/components/ui/PageGuide';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { AmountCell, TableWrap } from '@/components/ui/Table';
 import { Field, inputClass, labelClass, selectClass } from '@/components/ui/form';
@@ -183,6 +184,31 @@ export function TransactionsClient({
   return (
     <div className="flex flex-col gap-6">
       <PageHeader title="Transactions" description="Every line from every account, with what it was spent on." />
+
+      {/* `page.rows.length === 0` is the same test the table's own "Nothing matches these
+          filters" state is rendered on, deliberately rather than a second count of the whole
+          ledger: on a filtered view with no hits the reader is looking at an empty screen
+          either way, and that is when the explanation of how the filters compose is worth
+          having open. */}
+      <PageGuide empty={page.rows.length === 0}>
+        <p>
+          Every line from every imported statement lands here. The filters above compose rather
+          than replace one another, so a date range, an account, a category, a person and a
+          search term all narrow the same list at once — and the address bar keeps whatever you
+          picked, so a filtered view can be bookmarked or shared.
+        </p>
+        <p>
+          One charge can belong to more than one category. Open a row and split it into parts,
+          and each part counts towards its own category in Budgets and Reports instead of the
+          whole amount landing on the first one.
+        </p>
+        <p>
+          An imported amount is fixed here. You can rename the merchant, change the category,
+          attribute the row to a person or mark it a transfer, but the figure itself comes from
+          the statement — if that is wrong, undo the import on the Import page and bring the
+          corrected file in again.
+        </p>
+      </PageGuide>
 
       <FormError message={error} />
       {notice ? <Notice tone="success">{notice}</Notice> : null}

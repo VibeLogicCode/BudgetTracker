@@ -7,6 +7,7 @@ import { Card, CardBody, CardFooter } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Money } from '@/components/ui/Money';
 import { Notice } from '@/components/ui/Notice';
+import { PageGuide } from '@/components/ui/PageGuide';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { TableWrap } from '@/components/ui/Table';
 import { Field, inputClass, selectClass } from '@/components/ui/form';
@@ -80,6 +81,29 @@ export function WarrantiesClient({
           </Link>
         }
       />
+
+      {/* `result.rows.length === 0` is the one condition both empty states below hang off --
+          `searching` only decides which of the two is shown, not whether the list is empty --
+          so reusing it here cannot disagree with what the page itself calls an empty result. */}
+      <PageGuide empty={result.rows.length === 0}>
+        <p>
+          Four kinds of paperwork live on this page: warranties on things you bought,
+          subscriptions you might want to cancel, contracts with a term, and loans. They share
+          one screen because the question is the same for all of them — what does this cover, and
+          when does it run out?
+        </p>
+        <p>
+          Each item carries the dates that matter and whose it is. What expires soonest surfaces
+          on the Dashboard on its own, so nothing here has to be checked by hand to catch a
+          cancel-by date. The filters compose, and the resulting view stays in the address bar.
+        </p>
+        <p>
+          Attach the receipt or the document itself and the app reads the text off the image on
+          this server, then makes every word printed on it searchable. A model number or a
+          policy number you never typed in anywhere is enough to find the item years later. The
+          image never leaves the machine the app runs on.
+        </p>
+      </PageGuide>
 
       {result.error ? <Notice tone="error">{result.error}</Notice> : null}
 

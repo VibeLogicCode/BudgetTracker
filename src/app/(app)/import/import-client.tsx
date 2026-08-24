@@ -8,6 +8,7 @@ import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Money } from '@/components/ui/Money';
 import { Notice } from '@/components/ui/Notice';
+import { PageGuide } from '@/components/ui/PageGuide';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { TableWrap } from '@/components/ui/Table';
 import { Field, selectClass } from '@/components/ui/form';
@@ -363,6 +364,35 @@ export function ImportClient({
           </a>
         }
       />
+
+      {/* `historyRows.length === 0` is the History card's own "Nothing imported yet" test, and
+          nothing has ever been imported is precisely the reader who has not been told what a
+          bank profile or a mapping is. Once there is history the panel folds away. */}
+      <PageGuide empty={historyRows.length === 0}>
+        <p>
+          This is where a bank statement becomes transactions. Download a CSV file from your
+          bank&rsquo;s website — most banks call it &ldquo;export&rdquo; or &ldquo;download
+          transactions&rdquo; — pick the account it belongs to, and upload it. Nothing is written
+          to the database until you press the import button on the preview.
+        </p>
+        <p>
+          Several banks have a built-in profile, so their file is understood as soon as it is
+          uploaded. Any other bank works through <strong className="font-semibold text-ink">Add
+          a bank</strong>, which walks you through pointing out which column is the date, which
+          is the amount and which is the description. That mapping is saved against the account,
+          so the next statement from the same bank needs no setup.
+        </p>
+        <p>
+          Re-uploading a file, or uploading one whose dates overlap a file you already brought
+          in, is safe: matching rows are marked as duplicates in the preview and left out of the
+          count you import. Every import is listed under History with an undo beside it.
+        </p>
+        <p>
+          If a statement covers a card that more than one person uses, the preview lists each
+          value found in the cardholder column so you can say who each one is. That is what puts
+          a joint card&rsquo;s rows against the right person in Budgets and Reports.
+        </p>
+      </PageGuide>
 
       {error ? <Notice tone="error">{error}</Notice> : null}
       {summary ? (

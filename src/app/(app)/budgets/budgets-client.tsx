@@ -6,6 +6,7 @@ import { FormError } from '@/components/FormError';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { Money } from '@/components/ui/Money';
 import { Notice } from '@/components/ui/Notice';
+import { PageGuide } from '@/components/ui/PageGuide';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { TableWrap } from '@/components/ui/Table';
 import { addMonths, monthLabel } from '@/lib/dates';
@@ -321,6 +322,43 @@ export function BudgetsClient({
           </nav>
         }
       />
+
+      {/* `empty={false}` on purpose: this page has no EmptyState to borrow a condition from,
+          because it never renders an empty screen. The table is one row per top-level category
+          and the categories are seeded on install, so there is always something to look at even
+          before a single statement has been imported. */}
+      {/* This page has no EmptyState to borrow a condition from: the table is one row per
+          top-level category and categories are seeded on install, so it is never structurally
+          empty. "No limit set anywhere yet" is the honest equivalent -- it means nobody has
+          used this page, which is exactly when the panel should be open. Spending is not part
+          of the test on purpose: a household can have months of imported transactions and still
+          have never set a budget, and that reader needs the explanation most. */}
+      <PageGuide empty={householdTotals.budgetedLimitCents === 0}>
+        <p>
+          A budget here is a limit on one category for one month, and the figure beside it is
+          what has actually been spent against it out of your imported transactions. Nothing is
+          typed in twice — you set the limit, the spending comes from the statements.
+        </p>
+        <p>
+          A limit you set applies to the month shown at the top and to every month after it,
+          until you set a different one. So a normal month needs no visits at all; you come back
+          when something has changed. Use the arrows beside the month to look at another one, or{' '}
+          <strong className="font-semibold text-ink">Copy previous month</strong> to start from
+          what was in force last month.
+        </p>
+        <p>
+          There are two scopes. The Household section is the shared budget everyone in the house
+          is measured against together. Below it, each person gets their own section for limits
+          that apply only to the transactions attributed to them — a personal limit sits on top
+          of the household one rather than replacing it.
+        </p>
+        <p>
+          Once there are three full calendar months of history, a suggested figure appears
+          beside each row, and from the seventh of the current month the progress column also
+          shows the pace the month is running at. Both are read off your own past spending in
+          that category; neither is an opinion about what the amount ought to be.
+        </p>
+      </PageGuide>
 
       <FormError message={banner.error} />
       {banner.message ? <Notice tone="success">{banner.message}</Notice> : null}
