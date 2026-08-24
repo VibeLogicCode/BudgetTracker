@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { AppShell } from '@/components/app-shell/AppShell';
+import { activeNavItem, NAV } from '@/components/app-shell/nav';
 
 vi.mock('next/navigation', () => ({
   usePathname: () => '/dashboard',
@@ -107,5 +108,47 @@ describe('AppShell mobile menu (regression: opened off-screen at the document to
 
     fireEvent.click(button);
     expect(screen.getByRole('button', { name: 'Close menu' }).getAttribute('aria-expanded')).toBe('true');
+  });
+});
+
+describe('Help is reachable from the shell', () => {
+  it('is the last nav entry, sitting outside the money-flow sequence', () => {
+    expect(NAV.at(-1)).toMatchObject({ href: '/help', label: 'Help' });
+    // Placed after Settings, not inside the flow -- see the NAV docblock.
+    expect(NAV.map((item) => item.href).indexOf('/help')).toBe(NAV.length - 1);
+  });
+
+  it('needs no special case in activeNavItem: longest prefix already resolves it', () => {
+    expect(activeNavItem('/help')?.href).toBe('/help');
+    // No other href is a prefix of /help, so nothing else can win it.
+    expect(activeNavItem('/help/anything')?.href).toBe('/help');
+  });
+
+  it('renders the Help link in the rail and in the phone menu', () => {
+    render(
+      <AppShell user={user} reviewCount={0} version="1.2.3">
+        <p>content</p>
+      </AppShell>,
+    );
+
+    expect(document.querySelector('aside a[href="/help"]')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
+    const panel = document.getElementById('mobile-nav') as HTMLElement;
+    expect(panel.querySelector('a[href="/help"]')).toBeTruthy();
+  });
+
+  it('offers help from the version footer, for a reader who never reads the rail', () => {
+    render(
+      <AppShell user={user} reviewCount={0} version="1.2.3">
+        <p>content</p>
+      </AppShell>,
+    );
+
+    const footer = document.querySelector('footer') as HTMLElement;
+    expect(footer.textContent).toContain('Budget Tracker v1.2.3');
+    expect(footer.querySelector('a[href="/help"]')).toBeTruthy();
+    // The what's-new link keeps its place; help joins it rather than replacing it.
+    expect(footer.querySelector('a[href="/settings"]')).toBeTruthy();
   });
 });

@@ -3,6 +3,7 @@ import {
   DashboardIcon,
   GoalsIcon,
   ImportIcon,
+  InfoIcon,
   ReportsIcon,
   ReviewIcon,
   SettingsIcon,
@@ -18,9 +19,19 @@ export interface NavItem {
 }
 
 /**
- * The nine sections, in the order money moves through the app: see the month,
- * check the transactions behind it, fix what the categorizer was unsure of,
- * bring more in, then the planning surfaces, then the back office.
+ * Ten entries, and only the first nine are a sequence. Those nine follow the order
+ * money moves through the app: see the month, check the transactions behind it, fix
+ * what the categorizer was unsure of, bring more in, then the planning surfaces,
+ * then the back office. Help is not a step in that flow -- it sits outside it, and
+ * is last only because a list has to end somewhere, not because it comes after
+ * Settings.
+ *
+ * The count and that distinction are written down because this docblock is the only
+ * thing telling the next reader where a new entry belongs. A docblock that still
+ * describes the list it used to match is how the list gets mis-ordered: the same
+ * failure v1.9.0 had to fix in src/proxy.ts, where a stale rationale outlived the
+ * rule it justified. A new *section* goes in the money-flow run, at the point where
+ * it belongs in that flow, and this count moves with it; Help stays at the end.
  */
 export const NAV: NavItem[] = [
   { href: '/dashboard', label: 'Dashboard', Icon: DashboardIcon },
@@ -37,6 +48,7 @@ export const NAV: NavItem[] = [
   { href: '/warranties', label: 'Contracts & Coverage', Icon: WarrantiesIcon },
   { href: '/reports', label: 'Reports', Icon: ReportsIcon },
   { href: '/settings', label: 'Settings', Icon: SettingsIcon },
+  { href: '/help', label: 'Help', Icon: InfoIcon },
 ];
 
 /**

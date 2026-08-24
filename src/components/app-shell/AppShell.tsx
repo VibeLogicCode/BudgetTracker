@@ -157,11 +157,20 @@ export function AppShell({
         </main>
 
         {/* Which build am I looking at? — the first question of any support conversation.
-            Settings → About has the same number plus the full revision log. */}
+            Settings → About has the same number plus the full revision log.
+
+            Help repeats a rail entry on purpose: a reader who has not worked out that the
+            rail is navigation is exactly the reader who needs the handbook, and the footer
+            is the one thing on every page that survives the phone layout collapsing the
+            rail behind a menu button. */}
         <footer className="mx-auto w-full max-w-6xl px-4 pb-8 text-xs text-subtle sm:px-6 lg:px-8">
           Budget Tracker v{version} ·{' '}
           <Link className="text-accent-text underline underline-offset-2" href="/settings">
             what&rsquo;s new
+          </Link>{' '}
+          ·{' '}
+          <Link className="text-accent-text underline underline-offset-2" href="/help">
+            help
           </Link>
         </footer>
       </div>
