@@ -245,9 +245,27 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.10.3 release', () => {
+  it('MUST-7.1: the 1.11.0 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.10.3');
+    expect(pkg.version).toBe('1.11.0');
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toMatch(/^## \[1\.11\.0\] - 2026-08-24$/m);
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.11.0]'));
+    const entry = changelog.slice(changelog.indexOf('## [1.11.0]'), changelog.indexOf('## [1.10.3]'));
+    expect(entry).toMatch(/### Changed/);
+    // The two headline claims, asserted as claims and not just as a version number: an entry
+    // that bumped the version without saying what a reader will see is the gap this guard is
+    // for.
+    expect(entry).toMatch(/save themselves/i);
+    // A save that can be refused must document what happens on refusal, or "it saves itself"
+    // reads as "it always works".
+    expect(entry).toMatch(/goes back to its previous\s+value/i);
+    expect(entry).toMatch(/cut off|clipped/i);
+  });
+
+  it('MUST-7.1: the 1.10.3 release is still recorded intact (append-only discipline)', () => {
+    const pkg = JSON.parse(read('package.json')) as { version: string };
+    expect(pkg.version).not.toBe('1.10.3');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.10\.3\] - 2026-08-24$/m);
     expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.10.3]'));

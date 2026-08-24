@@ -21,6 +21,37 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.11.0] - 2026-08-24
+
+### Changed
+
+- **Editable cells now save themselves.** Choosing a category, a person, a budget limit, a
+  cardholder, an item type or its kind used to mean picking a value and then clicking a Save
+  button next to it. The value is now saved the moment you pick it — a tick appears beside the
+  control — and a text box saves when you press Enter or click away, and only if you changed
+  something. Nothing saves while you are still typing.
+- **If a save is refused, nothing is silently lost.** The control goes back to its previous
+  value and the reason appears in red beside it, instead of the change appearing to stick.
+- **Row actions moved into a single ⋯ menu.** On Transactions, that menu holds Rename, Split,
+  Create warranty and the loan assignments; on Settings → Accounts and Settings → Users it
+  holds the buttons that used to sit side by side in the last column. Reset password opens a
+  row beneath instead of living in the menu, so a half-typed password cannot be thrown away by
+  a stray click.
+- **The wide tables fit on a desktop again.** Transactions went from needing 76rem of width to
+  68rem and Budgets from 60rem to 56rem, because the width was going to buttons rather than to
+  data. A narrow screen still scrolls sideways, and no column has been narrowed to pay for it.
+- **Actions that change more than one row still ask first.** "Apply to all N matching",
+  "Mark as transfer", "Accept", and every deactivate, delete, archive and undo keep their own
+  button. Only single-row, reversible edits save themselves.
+
+### Fixed
+
+- **The action controls at the end of a transactions row no longer get cut off.** They read
+  "Cre…", "Spli…" and "Assign to l…" when the table was scrolled; the menu that replaced them
+  is positioned against the window rather than inside the scrolling table, so it cannot be
+  clipped — including on the last row of a long table.
+- **The review page's apply-to-all row no longer widens the page past a phone viewport.**
+
 ## [1.10.3] - 2026-08-24
 
 ### Fixed
