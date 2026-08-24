@@ -93,7 +93,10 @@ export function WizardClient({ starterMapping }: { starterMapping: ImportMapping
                 {rows.map((row, rowIndex) => (
                   <tr key={rowIndex}>
                     {row.map((cell, cellIndex) => (
-                      <td key={cellIndex} className="max-w-40 truncate text-xs">{cell}</td>
+                      // A capped, ellipsised cell needs the full value on hover, or a wide
+                      // column in someone's file is silently unreadable in the one place they
+                      // are being asked to identify it.
+                      <td key={cellIndex} className="max-w-40 truncate text-xs" title={cell}>{cell}</td>
                     ))}
                   </tr>
                 ))}

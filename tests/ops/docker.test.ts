@@ -245,9 +245,30 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.10.0 release', () => {
+  it('MUST-7.1: the 1.10.1 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.10.0');
+    expect(pkg.version).toBe('1.10.1');
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toMatch(/^## \[1\.10\.1\] - 2026-08-24$/m);
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.10.1]'));
+    const patch = changelog.slice(changelog.indexOf('## [1.10.1]'), changelog.indexOf('## [1.10.0]'));
+    expect(patch).toMatch(/### Fixed/);
+    // A layout-only release must say so. A reader who thought a column of figures had been
+    // recomputed would go hunting for a change that was never made.
+    expect(patch).toMatch(/layout only/i);
+    // The three surfaces this release actually touched, one claim each.
+    expect(patch).toMatch(/Roll over unspent/);
+    expect(patch).toMatch(/import history/i);
+    expect(patch).toMatch(/CSV preview/i);
+    // Ruling: nothing may be hidden to make a table fit. The guard for it lives in
+    // tests/ops/table-layout.test.ts; this asserts the release described it honestly rather
+    // than claiming a fit it achieved by clipping.
+    expect(patch).toMatch(/scrolls sideways rather\s+than hiding anything/);
+  });
+
+  it('MUST-7.1: the 1.10.0 release is still recorded intact (append-only discipline)', () => {
+    const pkg = JSON.parse(read('package.json')) as { version: string };
+    expect(pkg.version).not.toBe('1.10.0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.10\.0\] - 2026-08-23$/m);
     // An empty Unreleased section is left in place for the next session.

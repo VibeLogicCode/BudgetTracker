@@ -113,7 +113,8 @@ export function ReportsClient({
   const netWorthLatestPoint = netWorth.length > 0 ? netWorth[netWorth.length - 1] : null;
 
   return (
-    <div className="flex flex-col gap-6">
+    // data-page-width: the month-over-month table grows a column per month (see globals.css).
+    <div data-page-width="wide" className="flex flex-col gap-6">
       <PageHeader
         eyebrow={range.label}
         title="Reports"

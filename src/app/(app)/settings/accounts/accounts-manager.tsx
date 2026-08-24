@@ -208,7 +208,29 @@ export function AccountsManager({
             }
           />
         ) : (
-          <TableWrap bare>
+          <TableWrap bare fixed>
+            {/* Nine columns, two of which carry controls, so auto sizing was handing the width
+                to the Balance sentence ("... now · from a balance recorded <date>") and leaving
+                Actions to stack its two buttons over a column of dead space. The widths below
+                total 67rem, which is what the shell leaves once max-w-6xl loses its gutters --
+                narrower viewports scroll the wrapper instead of squeezing a button. */}
+            <colgroup>
+              {/* Account and institution names are member-typed; longer ones wrap rather than
+                  truncate, so nothing is hidden. Institution's floor is its own heading. */}
+              <col style={{ width: '8rem' }} />
+              <col style={{ width: '7.5rem' }} />
+              <col style={{ width: '4.5rem' }} />
+              <col style={{ width: '5.5rem' }} />
+              <col style={{ width: '6.5rem' }} />
+              {/* The widest read-only cell: a two-clause balance sentence, happy to wrap. */}
+              <col style={{ width: '11rem' }} />
+              {/* Badges never wrap (.badge is nowrap), so these two need room for the longest
+                  label -- "SimpleFIN" and "deactivated" -- or the chip spills into its neighbour. */}
+              <col style={{ width: '7rem' }} />
+              <col style={{ width: '7.5rem' }} />
+              {/* Room for the widest button ("Update account") on its own line. */}
+              <col style={{ width: '9.5rem' }} />
+            </colgroup>
             <thead>
               <tr>
                 <th scope="col">Name</th>

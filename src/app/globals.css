@@ -535,6 +535,44 @@
     vertical-align: middle;
   }
 
+  /* ----- Opt a dense page out of the shell's reading-width cap -----
+     AppShell caps `main` at max-w-6xl (1152px), which is right for prose and card grids and
+     too narrow for a table whose row carries controls: Transactions sized every column to
+     its content and still left the description column 10rem, so long merchant strings wrapped
+     over three lines while a wide monitor showed 400px of empty gutter either side.
+
+     Raising the global cap would pay for that by lengthening the measure on every page,
+     including Help, whose whole job is reading. So the page opts in instead, by marking its
+     root element -- no prop threading through the client AppShell, and no page has to know
+     the shell exists. A browser without `:has()` support simply keeps the 6xl cap, which is
+     today's layout, so the worst case of this rule is that it does nothing. */
+  main:has(> [data-page-width='wide']) {
+    max-width: 96rem;
+  }
+
+  /* ----- Fixed column widths (TableWrap `fixed`), see that component's docblock -----
+     Opt-in, because `auto` is still right for a table of short read-only values. The
+     colgroup owns the widths here, so a long merchant or category name can no longer take
+     space away from a select or a number input. */
+  .data-table--fixed {
+    table-layout: fixed;
+  }
+
+  /* A fixed column cannot widen for its content, so overlong unbroken text (a raw bank
+     description, a URL) must be allowed to break rather than spill across the next cell. */
+  .data-table--fixed tbody td {
+    overflow-wrap: anywhere;
+  }
+
+  /* Opt a single cell out of wrapping and clip it instead. Pair with a `title` so the full
+     value is still readable -- ellipsis without a title hides data, which is the bug this
+     whole rule set exists to fix. */
+  .data-table .cell-truncate {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .data-table tbody tr:last-child td {
     border-bottom: 0;
   }

@@ -21,6 +21,29 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.10.1] - 2026-08-24
+
+### Fixed
+
+- **Tables cut off their last column and squashed the ones that mattered.** On Transactions the
+  right-hand actions column was clipped at the edge of the card. On Budgets the limit column was
+  squeezed so hard that "Roll over unspent" wrapped onto two lines, while the category column sat
+  in empty space. One cause behind both: table columns were sized from their contents, so a long
+  merchant or category name took the width it wanted and the dropdowns, inputs and buttons on the
+  same row got whatever was left. Every dense table now states its column widths outright, so a
+  control can no longer be starved by the text beside it. **No figure, total or balance changed —
+  this is layout only.**
+- The same fault was found and fixed on the **account list** in Settings (the balance sentence
+  added in 1.8.0 pushed its buttons off the edge) and on the **import history** table (its Undo
+  button sat behind a long filename). Four other tables were checked and left alone; two more were
+  noted as close to the limit but not yet broken.
+- **The import wizard's CSV preview trimmed long cells with no way to read them** — on the one
+  screen whose entire job is deciding what each column contains. Hovering now shows the full value.
+- **Transactions and Reports now use the width of a wide screen** instead of sitting between empty
+  margins, so a long description has room on one or two lines rather than three. Pages meant for
+  reading keep their narrower measure. On a small screen every table still scrolls sideways rather
+  than hiding anything.
+
 ## [1.10.0] - 2026-08-23
 
 Guidance, not arithmetic. **No financial calculation changed in this release** — no balance, no

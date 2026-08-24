@@ -182,7 +182,8 @@ export function TransactionsClient({
   const splitRemainderCents = splitting ? splitting.amountCents - sumCents(activeSplitParts.map(draftPartCents)) : 0;
 
   return (
-    <div className="flex flex-col gap-6">
+    // data-page-width: this table needs more than the shell's 6xl reading cap (see globals.css).
+    <div data-page-width="wide" className="flex flex-col gap-6">
       <PageHeader title="Transactions" description="Every line from every account, with what it was spent on." />
 
       {/* `page.rows.length === 0` is the same test the table's own "Nothing matches these
@@ -420,10 +421,50 @@ export function TransactionsClient({
       ) : null}
 
       <Card as="div">
-        <TableWrap bare>
+        {/* `fixed` because five of these eight columns carry controls, not text. Under auto
+            layout the browser gave Description and Account every pixel their longest string
+            asked for and the row grew past the shell's content width, so the actions column
+            fell off the right edge of the card and read as truncated data.
+
+            The widths below are sized from what each cell must show WITHOUT clipping, in that
+            order of priority: a select is sized so its own selected value stays readable (the
+            row's category and person are data), a link is sized so its label fits on one line,
+            and Description takes what is left. That leaves Description narrow enough to wrap a
+            long bank string over two or three lines, which is the deliberate trade: a taller
+            row shows everything, a wider one would have to hide a control's value to pay for
+            it. They sum to 67rem, inside the shell's 68rem content width, and the wrapper
+            still scrolls below that so no column is ever cut off on a phone. */}
+        <TableWrap bare fixed>
+          <colgroup>
+            {/* Just the checkbox, plus the 1rem of cell padding either side. */}
+            <col style={{ width: '3rem' }} />
+            {/* An ISO date in tabular figures, which is the same width on every row. */}
+            <col style={{ width: '7rem' }} />
+            {/* Deliberately the narrowest text column: the same account name repeats down the
+                whole page, so it is the one value worth clipping to an ellipsis (see the
+                `cell-truncate` + `title` pair on the cell) rather than breaking mid-word. */}
+            <col style={{ width: '5rem' }} />
+            {/* NO width, deliberately: under `table-layout: fixed` an unsized column takes
+                whatever the sized ones leave, so the description -- the column a reader
+                actually scans -- absorbs the slack instead of it being shared pro-rata with
+                the selects. That is what makes the wide opt-in above pay off here: the extra
+                width lands on the merchant text rather than padding controls that were already
+                wide enough. Wraps over several lines when it must; never clips. */}
+            <col />
+            {/* A signed five-figure amount on one line. */}
+            <col style={{ width: '7rem' }} />
+            {/* The widest control on the row: the category select has to show a name as long as
+                "Uncategorized" beside its Save button. */}
+            <col style={{ width: '13rem' }} />
+            {/* Same shape, shorter values -- a person's name or "Household". */}
+            <col style={{ width: '11rem' }} />
+            {/* "Create warranty" on one line, and the loan select beside its Assign button. */}
+            <col style={{ width: '10rem' }} />
+          </colgroup>
           <thead>
             <tr>
-              <th scope="col" className="w-8" />
+              {/* No width class on the header cells: the colgroup owns the widths now. */}
+              <th scope="col" />
               <th scope="col">Date</th>
               <th scope="col">Account</th>
               <th scope="col">Description</th>
@@ -446,7 +487,11 @@ export function TransactionsClient({
                   />
                 </td>
                 <td className="tabnum whitespace-nowrap text-muted">{row.date}</td>
-                <td className="whitespace-nowrap text-muted">{row.accountName}</td>
+                {/* The one cell that clips instead of wrapping: an account name is mostly one
+                    or two long words, so breaking it mid-word to fit the narrowest column on
+                    the row is harder to read than an ellipsis. The `title` keeps the full name
+                    available, which is the condition for using `cell-truncate` at all. */}
+                <td className="cell-truncate text-muted" title={row.accountName}>{row.accountName}</td>
                 <td>
                   <span className="flex flex-wrap items-center gap-1.5">
                     <button
@@ -523,7 +568,11 @@ export function TransactionsClient({
                     <button type="submit" className="btn btn--ghost btn--sm px-2 text-xs">Save</button>
                   </form>
                 </td>
-                <td className="whitespace-nowrap">
+                {/* No `whitespace-nowrap` any more: this column no longer widens for its
+                    content, so holding the two links on one line would push them out over the
+                    card's edge -- the very clipping this colgroup exists to fix. They wrap
+                    instead, one per line. */}
+                <td>
                   {/* MUST-11.1 / MUST-11.2: a purchase can carry a warranty; a transfer cannot.
                       MUST-11.3: the URL carries ONLY the id. The add page derives the date,
                       the abs() price and the vendor from the transaction row server-side. */}

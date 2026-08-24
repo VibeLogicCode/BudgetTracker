@@ -77,7 +77,10 @@ function Row({
           {row.categoryName}
           {row.isArchived ? <span className="ml-1.5 text-xs text-subtle">(archived)</span> : null}
         </td>
-        <td className="w-44">
+        {/* No width class on this cell or the progress one any more: the colgroup owns the
+            widths under fixed layout, and a `w-44` here only reads as if it still decided
+            something. */}
+        <td>
           {row.isArchived || !editable ? (
             // Two reasons a limit is not editable here. Archived categories can no longer
             // be actively budgeted (spec section 3) — the row is a read-only record of the
@@ -162,7 +165,7 @@ function Row({
             <Money cents={row.remainingCents} />
           )}
         </td>
-        <td className="w-44">
+        <td>
           <BudgetProgressBar limitCents={row.limitCents} spentCents={row.spentCents} label={row.categoryName} />
           {projection !== null && predict !== null ? (
             <p
@@ -195,9 +198,35 @@ function Row({
   );
 }
 
+/**
+ * One table shape, rendered once for the household section and once per person, so the
+ * column widths only have to be decided here.
+ *
+ * `fixed` because this row is mostly controls, not text. Under auto layout the browser gave
+ * the category names all the width they asked for and left the limit cell with the remainder,
+ * which was too narrow for "Roll over unspent" to sit beside its checkbox and Save -- the
+ * label wrapped and the two Save buttons stacked, next to a category column of empty space.
+ * The widths below are what each cell's contents actually need, so nothing is renegotiable:
+ * the limit column is sized from its widest line (checkbox + label + Save), not from whatever
+ * the text columns leave behind. They sum to 60rem, inside the shell's content width, and the
+ * wrapper still scrolls horizontally below that so no column is ever cut off.
+ */
 function BudgetTable({ children, paceTitle }: { children: React.ReactNode; paceTitle?: string }) {
   return (
-    <TableWrap bare>
+    <TableWrap bare fixed>
+      <colgroup>
+        {/* Deepest label plus its indent (16px + 20px per level, see Row). Names longer than
+            this wrap rather than truncate, so nothing is hidden. */}
+        <col style={{ width: '18rem' }} />
+        {/* The defect being fixed: room for checkbox + "Roll over unspent" + Save on ONE line,
+            which is wider than the limit input + Save above it. */}
+        <col style={{ width: '16rem' }} />
+        {/* Two money columns; a formatted amount with a minus sign is the widest thing in them. */}
+        <col style={{ width: '7rem' }} />
+        <col style={{ width: '7rem' }} />
+        {/* Progress bar over the "On pace for ..." sentence, which wraps to two lines happily. */}
+        <col style={{ width: '12rem' }} />
+      </colgroup>
       <thead>
         <tr>
           <th scope="col">Category</th>

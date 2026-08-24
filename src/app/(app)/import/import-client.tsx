@@ -647,7 +647,24 @@ export function ImportClient({
             Once you upload a statement it lands here, with an undo next to it.
           </EmptyState>
         ) : (
-          <TableWrap bare>
+          <TableWrap bare fixed>
+            {/* The undo button is the last column, and under auto sizing a bank's filename --
+                one long unbreakable token in a monospace cell -- could push the row past the
+                shell's width and take that button off the edge with it. Fixed widths keep undo
+                where the eye expects it and make the filename the thing that gives way. */}
+            <colgroup>
+              {/* Stamp and account name are nowrap/truncated, so each needs its full run. */}
+              <col style={{ width: '10rem' }} />
+              <col style={{ width: '10rem' }} />
+              {/* The filename gets the biggest share, and still truncates with a title. */}
+              <col style={{ width: '15rem' }} />
+              <col style={{ width: '7rem' }} />
+              {/* Three counts, each floored by its own heading rather than its digits. */}
+              <col style={{ width: '5rem' }} />
+              <col style={{ width: '5rem' }} />
+              <col style={{ width: '5.5rem' }} />
+              <col style={{ width: '5.5rem' }} />
+            </colgroup>
             <thead>
               <tr>
                 <th scope="col">When</th>
@@ -664,8 +681,10 @@ export function ImportClient({
               {historyRows.map((row) => (
                 <tr key={row.id}>
                   <td className="tabnum whitespace-nowrap text-muted">{row.createdAt.slice(0, 16).replace('T', ' ')}</td>
-                  <td className="whitespace-nowrap">{row.accountName}</td>
-                  <td className="font-mono text-xs">{row.filename}</td>
+                  {/* Truncate with a title, never a bare ellipsis: the full account name and
+                      the full filename stay readable on hover and to a screen reader. */}
+                  <td className="cell-truncate" title={row.accountName}>{row.accountName}</td>
+                  <td className="cell-truncate font-mono text-xs" title={row.filename}>{row.filename}</td>
                   <td className="text-muted">{row.importedByName}</td>
                   <td className="tabnum text-right">{row.rowsAdded}</td>
                   <td className="tabnum text-right text-muted">{row.rowsDuplicate}</td>
