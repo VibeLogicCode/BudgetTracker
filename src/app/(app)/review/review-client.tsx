@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useActionState } from 'react';
 import { FormError } from '@/components/FormError';
 import { CheckIcon } from '@/components/icons';
+import { AutoSaveSelect } from '@/components/ui/AutoSave';
 import { Card } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Money } from '@/components/ui/Money';
@@ -18,6 +19,9 @@ import { acceptGuessAction, applyToAllMatchingAction, fixCategoryAction, markTra
 
 const initial: ReviewState = {};
 
+/** Bound for the auto-save select; fixCategoryAction itself is unchanged. */
+const saveFixCategory = (formData: FormData) => fixCategoryAction({}, formData);
+
 /** Dense enough to sit three-across in a row of actions without shouting. */
 const pickerClass = 'field-control w-auto max-w-[12rem] px-2 py-1 text-xs';
 
@@ -31,7 +35,6 @@ export function ReviewClient({
   categories: CategoryRecord[];
 }) {
   const [acceptState, accept] = useActionState(acceptGuessAction, initial);
-  const [fixState, fix] = useActionState(fixCategoryAction, initial);
   const [allState, applyAll] = useActionState(applyToAllMatchingAction, initial);
   const [transferState, markTransfer] = useActionState(markTransferAction, initial);
 
@@ -41,8 +44,8 @@ export function ReviewClient({
   // CategoryRecord -- it never reaches @/db/client, so it stays safe for this 'use client' file.
   const options = categoryOptions(categories);
 
-  const notice = acceptState.message ?? fixState.message ?? allState.message ?? transferState.message;
-  const error = acceptState.error ?? fixState.error ?? allState.error ?? transferState.error;
+  const notice = acceptState.message ?? allState.message ?? transferState.message;
+  const error = acceptState.error ?? allState.error ?? transferState.error;
 
   return (
     <div className="flex flex-col gap-5">
@@ -131,21 +134,27 @@ export function ReviewClient({
                   </button>
                 </form>
               ) : null}
-              <form action={fix} className="flex items-center gap-1.5">
-                <input type="hidden" name="transactionId" value={row.id} />
-                <select
-                  name="categoryId"
-                  defaultValue={row.categoryId ?? ''}
-                  aria-label={`Category for ${row.normalizedMerchant}`}
-                  className={pickerClass}
-                >
-                  <option value="">Choose a category…</option>
-                  {options.map((opt) => (
-                    <option key={opt.id} value={opt.id}>{'\u00A0\u00A0'.repeat(opt.depth) + opt.label}</option>
-                  ))}
-                </select>
-                <button type="submit" className="btn btn--secondary btn--sm">Set</button>
-              </form>
+              {/* The "Set" button is gone: picking a category IS the decision, and holding it
+                  behind a second click was the idiom this release removes. The placeholder is
+                  `disabled` so it can only ever be the starting state -- fixCategoryAction
+                  answers an empty categoryId with "Pick a category.", and with no Set button to
+                  hold back there would be nothing to stop a person selecting it. The same
+                  guard the transactions loan select already used. */}
+              <AutoSaveSelect
+                name="categoryId"
+                defaultValue={row.categoryId === null ? '' : String(row.categoryId)}
+                options={[
+                  { value: '', label: 'Choose a category…', disabled: true },
+                  ...options.map((opt) => ({
+                    value: String(opt.id),
+                    label: '  '.repeat(opt.depth) + opt.label,
+                  })),
+                ]}
+                fields={{ transactionId: String(row.id) }}
+                action={saveFixCategory}
+                ariaLabel={`Category for ${row.normalizedMerchant}`}
+                className={pickerClass}
+              />
               {row.matchingCount > 1 ? (
                 <form action={applyAll} className="flex items-center gap-1.5">
                   <input type="hidden" name="normalizedMerchant" value={row.normalizedMerchant} />

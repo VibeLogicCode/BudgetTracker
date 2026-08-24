@@ -1,9 +1,10 @@
 'use client';
 
-import { useActionState, useState } from 'react';
+import { useState } from 'react';
 import { MappingEditor } from '@/components/MappingEditor';
 import { SubmitButton } from '@/components/SubmitButton';
 import { ImportIcon } from '@/components/icons';
+import { AutoSaveSelect, type AutoSaveResult } from '@/components/ui/AutoSave';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Money } from '@/components/ui/Money';
@@ -15,24 +16,20 @@ import { Field, selectClass } from '@/components/ui/form';
 import type { ImportMapping } from '@/lib/import/mapping';
 import type { CardValueSummary, PreviewResult } from '@/lib/import/preview';
 import type { ImportHistoryRow } from '@/lib/import/commit';
-import { setCardPersonAction, type CardPersonState } from './actions';
+import { setCardPersonAction } from './actions';
 
 interface AccountOption { id: number; name: string; importProfileId: number | null }
 interface ProfileOption { id: number; name: string; isBuiltin: boolean; mapping: ImportMapping }
 interface PersonOption { id: number; name: string }
 
-const CARD_PERSON_INITIAL: CardPersonState = {};
-
 /**
- * One card value's assignment row (spec 2026-08-22 v1.6.0, MUST-6.1/MUST-6.2). Its own
- * useActionState so each row's save is independent -- there can be several of these per
- * preview, and each one submits and reports on its own.
+ * One card value's assignment row (spec 2026-08-22 v1.6.0, MUST-6.1/MUST-6.2). Each row's save
+ * is still independent -- there can be several of these per preview -- because each row holds
+ * its own auto-save state (AutoSaveSelect's internal useAutoSave), not a shared one.
  *
- * The person <select> is UNCONTROLLED (`defaultValue`, not `value`) on purpose, the same
- * idiom src/app/(app)/settings/accounts/accounts-manager.tsx already uses for its owner and
- * mapping selects: the actually-submitted value lives in the DOM via plain form semantics,
- * not React state, so a stale re-render can never silently disagree with what a click on
- * Save would send.
+ * The person <select> is now controlled by AutoSaveSelect rather than uncontrolled with
+ * `defaultValue`: it needs to be able to revert to the last saved value when the server
+ * refuses an edit, which an uncontrolled select has no way to do.
  *
  * `options` is `people` (active users) PLUS the currently assigned person when they are not
  * already in that list -- an assignment can point at a since-deactivated user
@@ -68,21 +65,22 @@ function CardValueRow({
    */
   onSaved: (cardValue: string, userId: number | null, userName: string | null) => void;
 }) {
-  // Wraps the server action instead of passing it to useActionState directly: the action's
-  // own return value only ever carries a message/error, never the person that was actually
-  // submitted, but that's exactly what's needed to patch local state without a second
-  // request. Reading the FormData the form itself just built keeps this honest about what was
-  // really sent, the same discipline every other assertion in this file already applies to
-  // `.value` vs. actual submitted data.
-  async function saveAndNotify(prevState: CardPersonState, formData: FormData): Promise<CardPersonState> {
-    const result = await setCardPersonAction(prevState, formData);
+  /**
+   * F1 (post-1.6.0): the action's return value only ever carries a message or an error, never
+   * the person that was submitted -- but that is exactly what is needed to patch local state
+   * without a second request. Reading back the FormData the control just built keeps this
+   * honest about what was really sent. Patching locally beats re-running `rePreview(mapping)`,
+   * which would re-read and re-parse the whole staged file to refresh a value this row already
+   * knows. Not called on error, so a failed save leaves the row exactly as it was.
+   */
+  async function savePerson(formData: FormData): Promise<AutoSaveResult> {
+    const result = await setCardPersonAction({}, formData);
     if (!result.error) {
       const raw = formData.get('person');
       const newUserId = raw === null || raw === '' ? null : Number(raw);
-      // A re-save of the SAME assignee (id unchanged) keeps their existing name rather than
-      // re-deriving it -- the only source for a name is `people` (active users), which would
-      // wrongly overwrite a since-deactivated assignee's real name with `undefined` if they
-      // aren't in that list.
+      // A re-save of the SAME assignee keeps their existing name rather than re-deriving it:
+      // `people` holds only ACTIVE users, so re-deriving would overwrite a since-deactivated
+      // assignee's real name with undefined.
       const newUserName =
         newUserId === null
           ? null
@@ -94,7 +92,6 @@ function CardValueRow({
     return result;
   }
 
-  const [state, save] = useActionState(saveAndNotify, CARD_PERSON_INITIAL);
   const options: PersonOption[] =
     assignedUserId !== null && !people.some((p) => p.id === assignedUserId)
       ? [...people, { id: assignedUserId, name: `${assignedUserName ?? 'Former user'} (inactive)` }]
@@ -109,32 +106,24 @@ function CardValueRow({
       {assignedUserId === null ? (
         <span className="text-xs text-muted">Unassigned — falls back to the account owner at import.</span>
       ) : null}
-      <form action={save} className="ml-auto flex items-center gap-2">
-        <input type="hidden" name="accountId" value={accountId} />
-        <input type="hidden" name="cardValue" value={cardValue} />
-        <select
+      {/* `options` is `people` PLUS the currently assigned person when they are not in that
+          list: an assignment can point at a since-deactivated user (MUST-3.1), and without the
+          extra option the select's value would match no <option>, which the browser resolves by
+          selecting the FIRST one -- making a real assignment look unassigned. */}
+      <span className="ml-auto flex items-center gap-2">
+        <AutoSaveSelect
           name="person"
           defaultValue={assignedUserId === null ? '' : String(assignedUserId)}
-          aria-label={`Person for ${cardValue}`}
+          options={[
+            { value: '', label: 'Account owner (default)' },
+            ...options.map((person) => ({ value: String(person.id), label: person.name })),
+          ]}
+          fields={{ accountId: String(accountId), cardValue }}
+          action={savePerson}
+          ariaLabel={`Person for ${cardValue}`}
           className={selectClass}
-        >
-          <option value="">Account owner (default)</option>
-          {options.map((person) => (
-            <option key={person.id} value={person.id}>
-              {person.name}
-            </option>
-          ))}
-        </select>
-        <button type="submit" className="btn btn--secondary btn--sm">
-          Save
-        </button>
-      </form>
-      {state.message ? <span className="text-xs font-medium text-positive-soft-fg">{state.message}</span> : null}
-      {state.error ? (
-        <span className="text-xs font-medium text-negative-soft-fg" role="alert">
-          {state.error}
-        </span>
-      ) : null}
+        />
+      </span>
     </li>
   );
 }
