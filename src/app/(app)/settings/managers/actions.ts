@@ -3,6 +3,7 @@
 import { headers } from 'next/headers';
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
+import BetterSqlite3 from 'better-sqlite3';
 import { isSameOrigin } from '@/lib/auth/csrf';
 import { requireAdmin } from '@/lib/auth/session';
 import { archiveCategory, createCategory, listCategories, renameCategory, setCategoryTaxRelevant } from '@/lib/categories';
@@ -65,7 +66,18 @@ export async function renameCategoryAction(_prev: ManagerState, formData: FormDa
   const id = Number(formData.get('categoryId'));
   const name = String(formData.get('name') ?? '').trim();
   if (!Number.isInteger(id) || id <= 0 || name.length === 0) return { error: 'Invalid request.' };
-  renameCategory(id, name);
+  try {
+    renameCategory(id, name);
+  } catch (error) {
+    // categories_name_parent_uq (drizzle/0000_init.sql) is a UNIQUE index on (name,
+    // COALESCE(parent_id, 0)) -- renaming to a sibling's name throws a raw SQLite constraint
+    // error here, which reads badly to an admin. Translate it the way item-types/actions.ts's
+    // failure() does for the same class of error.
+    if (error instanceof BetterSqlite3.SqliteError && error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+      return { error: 'A category with that name already exists here.' };
+    }
+    return { error: error instanceof Error ? error.message : 'Could not rename the category.' };
+  }
   revalidateCategoryRoutes();
   return { message: 'Category renamed.' };
 }

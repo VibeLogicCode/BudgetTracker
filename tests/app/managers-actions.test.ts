@@ -252,6 +252,22 @@ describe('category mutations revalidate every route that renders categories (fin
     for (const route of CATEGORY_RENDERING_ROUTES) expect(calls).toContain(route);
   });
 
+  // Fix wave (2026-08-23 review, finding I2): renameCategory() had no try/catch, so renaming
+  // to a sibling's name threw the raw categories_name_parent_uq SQLITE_CONSTRAINT error past
+  // useAutoSave's startTransition instead of coming back as a readable {error}.
+  it('renameCategoryAction returns a readable error instead of throwing when the new name collides with a sibling', async () => {
+    const { db } = setup();
+    // "Coffee" and "Restaurants" are both seeded under "Food" -- same parent, so renaming one
+    // to the other's name hits categories_name_parent_uq (name, COALESCE(parent_id, 0)).
+    const coffee = categoryIdByName(db, 'Coffee');
+    const result = await renameCategoryAction({}, formData({ categoryId: String(coffee), name: 'Restaurants' }));
+    expect(result.error).toBeTruthy();
+    expect(result.message).toBeUndefined();
+    // The category must be untouched -- a failed rename must not have partially applied.
+    const row = current!.sqlite.prepare('select name from categories where id = ?').get(coffee) as { name: string };
+    expect(row.name).toBe('Coffee');
+  });
+
   it('archiveCategoryAction revalidates every route that renders categories', async () => {
     const { db } = setup();
     const coffee = categoryIdByName(db, 'Coffee');
