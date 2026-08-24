@@ -1,3 +1,4 @@
+import { ITEM_TYPE_IMMUTABLE_ERROR } from '@/lib/warranty/constants';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -491,15 +492,47 @@ describe('updateWarrantyAction', () => {
     expect(result.error).toBeTruthy();
   });
 
-  it('round-trips a typeId change on update', async () => {
+  /**
+   * v1.10.2 reversed this test's expectation, deliberately. It used to assert that an update
+   * could move an item to a different type. The type decides which fields the form offers --
+   * model and serial for a purchase, principal and balance for a loan -- so changing it
+   * afterwards strands whatever the old kind stored and asks the record to be read as
+   * something it was never filled in as. Same rule as transactions.amount_cents: a value that
+   * governs how other values are interpreted is immutable after insert.
+   *
+   * The check is server-side because the form's read-only control is only advice to a browser.
+   * A wrong type stays fixable: delete the item and add it again.
+   */
+  it('refuses a typeId change on update and leaves the item on its original type', async () => {
     const laptop = listItemTypes().find((t) => t.name === 'Laptop')!;
     const to = await redirectPath(() => createWarrantyAction({}, formData(baseFields())));
     const id = Number(to.split('/').pop());
+    const before = getWarrantyItem(id)!;
+    expect(before.typeId).not.toBe(laptop.id);
+
     const result = await updateWarrantyAction({}, formData(baseFields({ itemId: String(id), typeId: String(laptop.id) })));
-    expect(result.message).toBeTruthy();
-    const item = getWarrantyItem(id)!;
-    expect(item.typeId).toBe(laptop.id);
-    expect(item.typeName).toBe('Laptop');
+    expect(result.error).toBe(ITEM_TYPE_IMMUTABLE_ERROR);
+
+    const after = getWarrantyItem(id)!;
+    expect(after.typeId).toBe(before.typeId);
+  });
+
+  it('still accepts an update that leaves the typeId alone', async () => {
+    // The guard must reject a CHANGE, not every update that happens to post a typeId -- the
+    // edit form posts the unchanged value on every save.
+    const to = await redirectPath(() => createWarrantyAction({}, formData(baseFields())));
+    const id = Number(to.split('/').pop());
+    const before = getWarrantyItem(id)!;
+    const result = await updateWarrantyAction(
+      {},
+      formData(baseFields({
+        itemId: String(id),
+        name: 'Renamed, same type',
+        typeId: before.typeId === null ? '' : String(before.typeId),
+      })),
+    );
+    expect(result.error).toBeUndefined();
+    expect(getWarrantyItem(id)!.name).toBe('Renamed, same type');
   });
 
   it('refuses an unknown typeId on update and leaves the item unchanged', async () => {

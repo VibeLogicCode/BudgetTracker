@@ -513,10 +513,16 @@ export const warrantyItems = sqliteTable(
     typeId: integer('type_id').references(() => warrantyItemTypes.id),
     /**
      * v1.2.4, added by drizzle/0005_billing_cycle.sql. Declared last -- same
-     * ALTER-TABLE-ADD-COLUMN convention as typeId above. Both nullable: only an item whose
-     * TYPE has kind 'subscription' or 'contract' ever carries a non-NULL value here, and
-     * that rule is enforced in the app layer (src/lib/warranty/items.ts), never derived on
-     * read -- a CHECK on this table cannot see across to warranty_item_types.kind.
+     * ALTER-TABLE-ADD-COLUMN convention as typeId above. Both nullable: an item carries a
+     * non-NULL value here only if its TYPE has a kind OTHER than 'warranty', and that rule is
+     * enforced in the app layer (src/lib/warranty/items.ts, billingAllowedForKind), never
+     * derived on read -- a CHECK on this table cannot see across to warranty_item_types.kind.
+     *
+     * This said "only 'subscription' or 'contract'" until v1.10.2. That was written in v1.2.4
+     * and went stale in v1.3.1, when loans arrived and got their own row in BILLING_WORDING: a
+     * loan has a monthly payment, so billing applies to it too. The gate has allowed loans
+     * ever since, which made this docblock describe an invariant the code does not hold --
+     * the kind of note that gets trusted and then propagated.
      */
     billingCycle: text('billing_cycle', { enum: ['monthly', 'annual'] }),
     billingAmountCents: integer('billing_amount_cents'),

@@ -123,6 +123,17 @@ export function formOpenEndedLabel(kind: ItemKind): string {
 }
 
 /**
+ * The add form's submit button, keyed by kind. It read "Save warranty" whatever the type was,
+ * so choosing Loan and being asked to "Save warranty" contradicted the select directly above
+ * it. Derived from ITEM_KIND_LABELS rather than a fifth column in the matrix, because the
+ * button is the kind's own noun and nothing more -- a separate string here could drift from
+ * the label the admin page shows for the same kind.
+ */
+export function formSaveLabel(kind: ItemKind): string {
+  return `Save ${ITEM_KIND_LABELS[kind].toLowerCase()}`;
+}
+
+/**
  * MUST-10.4's live computed date beside the term input, keyed by kind. Supersedes
  * `coveredThroughLabel` (v1.2.2 Task 2 controller ruling -- see the KIND_WORDING docblock
  * above).
@@ -232,6 +243,34 @@ export function billingAllowedForKind(kind: ItemKind): boolean {
 export function loanFieldsAllowedForKind(kind: ItemKind): boolean {
   return kind === 'loan';
 }
+
+/**
+ * Model, serial number and price describe a PHYSICAL PURCHASE, so they belong to `warranty`
+ * and to nothing else. A loan has no model and no serial, and its money lives in the loan
+ * columns; a subscription's and a contract's money live in the billing pair. Showing a bare
+ * "Price" beside "Original amount" on a loan is what prompted this: the form asked for the
+ * same fact twice under two names, and neither answer was the one the record keeps.
+ *
+ * Same app-layer argument as the two gates above: a CHECK on `warranty_items` cannot see
+ * across to `warranty_item_types.kind`, so applicability is enforced here and in items.ts.
+ *
+ * NOTE for the edit form: this decides what a form OFFERS, never what it may hide. An item
+ * whose type changed after it was saved can still hold a model or a price, and a field with a
+ * value in it must stay on screen -- hiding a stored value is how data gets silently dropped
+ * on the next save.
+ */
+export function productFieldsAllowedForKind(kind: ItemKind): boolean {
+  return kind === 'warranty';
+}
+
+/**
+ * Refused when an update tries to move an item to a different type (v1.10.2). Lives here with
+ * the rest of the kind wording, not in the action: MUST-19.11 keeps user-facing kind wording in
+ * one place, and actions.ts has a test asserting its exports are all actions -- a string
+ * constant exported from there breaks that guard for no reason.
+ */
+export const ITEM_TYPE_IMMUTABLE_ERROR =
+  'The type cannot be changed after an item is saved. Delete this item and add it again to change its type.';
 
 /**
  * MUST-12.3: the second wording matrix, beside KIND_WORDING. The `warranty` row exists only

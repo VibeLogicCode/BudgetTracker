@@ -245,9 +245,32 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.10.1 release', () => {
+  it('MUST-7.1: the 1.10.2 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.10.1');
+    expect(pkg.version).toBe('1.10.2');
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toMatch(/^## \[1\.10\.2\] - 2026-08-24$/m);
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.10.2]'));
+    const patch = changelog.slice(changelog.indexOf('## [1.10.2]'), changelog.indexOf('## [1.10.1]'));
+    expect(patch).toMatch(/### Fixed/);
+    expect(patch).toMatch(/### Changed/);
+    // The two reported defects and the rule that came out of them, one claim each.
+    expect(patch).toMatch(/Serial number/);
+    expect(patch).toMatch(/Save warranty/);
+    expect(patch).toMatch(/type is now fixed once it has been saved/i);
+    // Freezing the type removes a control, so the entry must say how to recover from a wrong
+    // one. A restriction documented without its escape hatch reads as a dead end.
+    // \s+ because the sentence wraps in the file -- a literal-space regex passes or fails on
+    // where the paragraph happened to break, which is not what is being asserted.
+    expect(patch).toMatch(/delete the\s+item and add it again/i);
+    // ...and must say that an existing value is never hidden, which is the guarantee the
+    // value-preserving gate exists to make.
+    expect(patch).toMatch(/nothing you saved earlier can be erased/i);
+  });
+
+  it('MUST-7.1: the 1.10.1 release is still recorded intact (append-only discipline)', () => {
+    const pkg = JSON.parse(read('package.json')) as { version: string };
+    expect(pkg.version).not.toBe('1.10.1');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.10\.1\] - 2026-08-24$/m);
     expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.10.1]'));

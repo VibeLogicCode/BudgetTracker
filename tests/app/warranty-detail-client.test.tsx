@@ -194,32 +194,42 @@ describe('WarrantyDetailClient', () => {
     expect(screen.getByText('Payoff date')).toBeTruthy();
   });
 
-  // v1.2.2 Task 2: dynamic form labels -- the edit form's fieldset legend and Purchase-date
-  // label follow the SELECTED type's kind live, not just the item's already-saved kind.
-  it("follows the edit form's SELECTED type kind live for the term legend and date label", () => {
+  // v1.2.2 Task 2 gave the edit form kind-aware labels and tested them by CHANGING the type
+  // select. v1.10.2 froze the type after the first save, so there is no switch left to make:
+  // the labels follow the item's own saved kind, and each kind gets its own render.
+  it("words the term legend and the open-ended label from the item's saved kind", () => {
     // Scoped to the <legend> element itself: the read-only summary above the edit form
-    // renders the SAME text via the item's own (unchanged) kind, so a page-wide getByText
-    // would ambiguously match both.
+    // renders the SAME text via the item's kind, so a page-wide getByText would match both.
     const { container } = renderDetail({ item: item({ typeId: 1, typeName: 'Appliance', kind: 'warranty' }) });
     fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
     expect(container.querySelector('form legend')!.textContent).toBe('Warranty (months)');
 
-    const select = container.querySelector('form select[name="typeId"]') as HTMLSelectElement;
-    fireEvent.change(select, { target: { value: '3' } });
-    expect(container.querySelector('form legend')!.textContent).toBe('Term (months)');
-    // formOpenEndedLabel('loan') === 'Ongoing (no end date)' -- the Lifetime checkbox's own
-    // label text follows the selected kind too.
+    cleanup();
+    const loan = renderDetail({ item: item({ typeId: 3, typeName: 'Car loan', kind: 'loan' }) });
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    expect(loan.container.querySelector('form legend')!.textContent).toBe('Term (months)');
+    // formOpenEndedLabel('loan') === 'Ongoing (no end date)'.
     expect(screen.getByText('Ongoing (no end date)')).toBeTruthy();
   });
 
   // --- reviewer M14 ---
 
-  it("preselects the edit form's type dropdown to the item's current type", () => {
+  /**
+   * v1.10.2: the type is fixed after the first save, so the edit form shows it rather than
+   * offering it. Two things are asserted together on purpose -- that there is no control to
+   * change it, AND that the value still posts. A disabled <select> would post nothing, which
+   * the action reads as "clear the type": the opposite of freezing it.
+   */
+  it('shows the type as read-only and still posts it unchanged', () => {
     const { container } = renderDetail({ item: item({ typeId: 2, typeName: 'Netflix plan' }) });
     fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
-    const select = container.querySelector('form select[name="typeId"]') as HTMLSelectElement;
-    expect(select).toBeTruthy();
-    expect(select.value).toBe('2');
+
+    expect(container.querySelector('form select[name="typeId"]')).toBeNull();
+    const hidden = container.querySelector('form input[type="hidden"][name="typeId"]') as HTMLInputElement;
+    expect(hidden).toBeTruthy();
+    expect(hidden.value).toBe('2');
+    // Read-only must not mean invisible -- the name is still on screen.
+    expect(screen.getAllByText('Netflix plan').length).toBeGreaterThan(0);
   });
 
   // --- reviewer findings: busy states, action-slot isolation, attach reset ---
@@ -316,28 +326,29 @@ describe('WarrantyDetailClient', () => {
     expect(cycleSelect.value).toBe('monthly');
     expect(amountInput.value).toBe('15.99');
 
-    const typeSelect = container.querySelector('form select[name="typeId"]') as HTMLSelectElement;
-    fireEvent.change(typeSelect, { target: { value: '1' } }); // Appliance, kind warranty
-    expect(container.querySelector('form select[name="billingCycle"]')).toBeNull();
-    expect(container.querySelector('form input[name="billingAmount"]')).toBeNull();
+    // A warranty has no billing pair. Its own render, now that the type cannot be switched.
+    cleanup();
+    const warranty = renderDetail({ item: item({ typeId: 1, typeName: 'Appliance', kind: 'warranty' }) });
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    expect(warranty.container.querySelector('form select[name="billingCycle"]')).toBeNull();
+    expect(warranty.container.querySelector('form input[name="billingAmount"]')).toBeNull();
   });
 });
 
 // v1.3.1: the loan fieldset, the read-only money block and the Payment matching sub-card.
 describe('MUST-14.1 / MUST-14.3 / MUST-14.5 / MUST-14.6 / MUST-12.3: the loan surfaces', () => {
-  it('the edit form shows the Loan fieldset only for the SELECTED loan-kind type, and follows it live', () => {
-    const { container } = renderDetail({ item: item({ typeId: 1, typeName: 'Appliance', kind: 'warranty' }) });
+  it('the edit form shows the Loan fieldset only for a loan-kind item', () => {
+    const warranty = renderDetail({ item: item({ typeId: 1, typeName: 'Appliance', kind: 'warranty' }) });
     fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
-    expect(container.querySelector('form input[name="currentBalance"]')).toBeNull();
+    expect(warranty.container.querySelector('form input[name="principal"]')).toBeNull();
+    expect(warranty.container.querySelector('form input[name="currentBalance"]')).toBeNull();
 
-    const select = container.querySelector('form select[name="typeId"]') as HTMLSelectElement;
-    fireEvent.change(select, { target: { value: '3' } }); // Car loan, kind loan
-    expect(container.querySelector('form input[name="principal"]')).toBeTruthy();
-    expect(container.querySelector('form input[name="interestRate"]')).toBeTruthy();
-    expect(container.querySelector('form input[name="currentBalance"]')).toBeTruthy();
-
-    fireEvent.change(select, { target: { value: '1' } }); // back to Appliance, kind warranty
-    expect(container.querySelector('form input[name="currentBalance"]')).toBeNull();
+    cleanup();
+    const loan = renderDetail({ item: item({ typeId: 3, typeName: 'Car loan', kind: 'loan' }) });
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    expect(loan.container.querySelector('form input[name="principal"]')).toBeTruthy();
+    expect(loan.container.querySelector('form input[name="interestRate"]')).toBeTruthy();
+    expect(loan.container.querySelector('form input[name="currentBalance"]')).toBeTruthy();
   });
 
   // Task 9 review finding (MED), carried into this task: the edit form used to omit the loan
@@ -400,8 +411,9 @@ describe('MUST-14.1 / MUST-14.3 / MUST-14.5 / MUST-14.6 / MUST-12.3: the loan su
     expect(screen.getByText('Payment')).toBeTruthy();
     expect(screen.getByText('Payment amount')).toBeTruthy();
 
-    const typeSelect = container.querySelector('form select[name="typeId"]') as HTMLSelectElement;
-    fireEvent.change(typeSelect, { target: { value: '2' } }); // Netflix plan, kind subscription
+    cleanup();
+    renderDetail({ item: item({ typeId: 2, typeName: 'Netflix plan', kind: 'subscription' }) });
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
     expect(screen.getByText('Billing')).toBeTruthy();
     expect(screen.getByText('Amount')).toBeTruthy();
   });
@@ -527,5 +539,42 @@ describe('MUST-14.1 / MUST-14.3 / MUST-14.5 / MUST-14.6 / MUST-12.3: the loan su
     });
     const dt = Array.from(container.querySelectorAll('dt')).find((el) => el.textContent === 'Original')!;
     expect(dt.closest('dl')).toBeTruthy();
+  });
+});
+
+describe('product fields follow the kind, without dropping a stored value', () => {
+  it('offers model, serial and price for a warranty', () => {
+    renderDetail({ item: item({ typeId: 1, typeName: 'Appliance', kind: 'warranty' }) });
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    expect(screen.queryByLabelText('Model')).not.toBeNull();
+    expect(screen.queryByLabelText('Serial number')).not.toBeNull();
+    expect(screen.queryByLabelText('Price')).not.toBeNull();
+  });
+
+  it('drops all three for a loan that has none of them', () => {
+    renderDetail({
+      item: item({ typeId: 3, typeName: 'Car loan', kind: 'loan', model: null, serial: null, priceCents: null }),
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    expect(screen.queryByLabelText('Model')).toBeNull();
+    expect(screen.queryByLabelText('Serial number')).toBeNull();
+    expect(screen.queryByLabelText('Price')).toBeNull();
+  });
+
+  /**
+   * The safety net, and the reason the gate is `kind || storedValue` rather than a bare kind
+   * check. Freezing the type stops NEW mismatches; it cannot retro-fix an item whose type was
+   * changed before v1.10.2. Hiding an input that holds a value would post it blank on the next
+   * save and silently delete what was there -- the same "never hide data" rule as the table work.
+   */
+  it('keeps a field a mismatched item already holds, so saving cannot erase it', () => {
+    renderDetail({
+      item: item({ typeId: 3, typeName: 'Car loan', kind: 'loan', model: 'MX-5', serial: null, priceCents: 129900 }),
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    expect((screen.getByLabelText('Model') as HTMLInputElement).value).toBe('MX-5');
+    expect((screen.getByLabelText('Price') as HTMLInputElement).value).toBe('1299.00');
+    // The one it genuinely has no value for stays hidden.
+    expect(screen.queryByLabelText('Serial number')).toBeNull();
   });
 });

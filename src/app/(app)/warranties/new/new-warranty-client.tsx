@@ -21,6 +21,8 @@ import {
   formTermLabel,
   loanFieldsAllowedForKind,
   type ItemKind,
+  formSaveLabel,
+  productFieldsAllowedForKind,
 } from '@/lib/warranty/constants';
 import { computeExpiryDate } from '@/lib/warranty/expiry';
 import { createWarrantyAction, type WarrantyActionState } from '../actions';
@@ -134,6 +136,7 @@ export function NewWarrantyClient({
   const [interestRate, setInterestRate] = useState('');
   const [currentBalance, setCurrentBalance] = useState('');
   const loanApplicable = loanFieldsAllowedForKind(selectedKind);
+  const productApplicable = productFieldsAllowedForKind(selectedKind);
   useEffect(() => {
     if (!loanApplicable) {
       setPrincipal('');
@@ -225,13 +228,20 @@ export function NewWarrantyClient({
                 />
               </Field>
 
-              <Field label="Model">
-                <input name="model" maxLength={200} className={inputClass} />
-              </Field>
+              {/* A model and a serial describe a physical purchase; a loan, a subscription and
+                  a contract have neither. Gated rather than relabelled -- there is no sensible
+                  loan-flavoured name for "Serial number". */}
+              {productApplicable ? (
+                <>
+                  <Field label="Model">
+                    <input name="model" maxLength={200} className={inputClass} />
+                  </Field>
 
-              <Field label="Serial number">
-                <input name="serial" maxLength={200} className={inputClass} />
-              </Field>
+                  <Field label="Serial number">
+                    <input name="serial" maxLength={200} className={inputClass} />
+                  </Field>
+                </>
+              ) : null}
 
               <Field
                 label={formStartLabel(selectedKind)}
@@ -257,30 +267,40 @@ export function NewWarrantyClient({
                 />
               </Field>
 
-              <Field
-                label="Price"
-                htmlFor="warranty-price"
-                hint={suggestedNote(suggested.price, () => {
-                  setPrice('');
-                  setSuggested((s) => ({ ...s, price: false }));
-                })}
-              >
-                <input
-                  id="warranty-price"
-                  name="price"
-                  inputMode="decimal"
-                  value={price}
-                  onChange={(e) => {
-                    setPrice(e.target.value);
-                    setTouched((t) => ({ ...t, price: true }));
+              {/* What a thing cost, which only a purchase has. A loan's money is its original
+                  amount and balance; a subscription's and a contract's is the billing pair
+                  below. Asking for "Price" as well meant the form asked for the same fact
+                  twice and stored neither answer where the record keeps it. */}
+              {productApplicable ? (
+                <Field
+                  label="Price"
+                  htmlFor="warranty-price"
+                  hint={suggestedNote(suggested.price, () => {
+                    setPrice('');
                     setSuggested((s) => ({ ...s, price: false }));
-                  }}
-                  className={inputClass}
-                />
-              </Field>
+                  })}
+                >
+                  <input
+                    id="warranty-price"
+                    name="price"
+                    inputMode="decimal"
+                    value={price}
+                    onChange={(e) => {
+                      setPrice(e.target.value);
+                      setTouched((t) => ({ ...t, price: true }));
+                      setSuggested((s) => ({ ...s, price: false }));
+                    }}
+                    className={inputClass}
+                  />
+                </Field>
+              ) : null}
 
-              {/* v1.3.0: Billing only applies to subscription/contract kinds -- hidden
-                  entirely for warranty/loan, so an absent field posts as blank -> null
+              {/* Billing applies to every kind EXCEPT warranty -- a subscription and a
+                  contract are billed, and so is a loan, which has a monthly payment
+                  (BILLING_WORDING carries a loan row for exactly that). This comment used to
+                  say "hidden entirely for warranty/loan", which the gate has not done since
+                  v1.3.1 added loans; a stale reason is worse than none, because the next
+                  reader trusts it. An absent field posts as blank -> null
                   (readBillingCycle/readBillingAmountCents in actions.ts). */}
               {billingApplicable ? (
                 <>
@@ -412,7 +432,7 @@ export function NewWarrantyClient({
 
             {/* Never disabled by OCR: the Save button's only busy state is the form submission
                 itself, via useFormStatus inside SubmitButton (MUST-10.2 step 2). */}
-            <SubmitButton className="w-fit">Save warranty</SubmitButton>
+            <SubmitButton className="w-fit">{formSaveLabel(selectedKind)}</SubmitButton>
           </form>
         </CardBody>
       </Card>

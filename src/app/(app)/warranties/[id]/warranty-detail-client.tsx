@@ -29,6 +29,7 @@ import {
   loanFieldsAllowedForKind,
   openEndedDisplayLabel,
   type ItemKind,
+  productFieldsAllowedForKind,
 } from '@/lib/warranty/constants';
 import type { WarrantyStatus } from '@/lib/warranty/expiry';
 import type { WarrantyItemRow, WarrantyReceiptRow } from '@/lib/warranty/items';
@@ -551,12 +552,13 @@ function EditForm({
 }) {
   const [isLifetime, setIsLifetime] = useState(item.isLifetime);
   const [months, setMonths] = useState(item.warrantyMonths === null ? '' : String(item.warrantyMonths));
-  // v1.2.2 Task 2: the type <select> below used to be uncontrolled (defaultValue only), which
-  // is fine for form submission but cannot drive live label wording. Tracked here purely so
-  // the fieldset legend and the Purchase-date label can follow the SELECTED type's kind while
-  // editing -- not just the item's already-saved kind -- without changing the field's `name`
-  // or how the action reads it (still a plain <select name="typeId">).
-  const [typeId, setTypeId] = useState(item.typeId === null ? '' : String(item.typeId));
+  // Plain const, not state, since v1.10.2 made the type fixed after the first save: there is
+  // no <select> here any more to change it, so there is nothing to track. It was state for
+  // v1.2.2 Task 2, when editing the type had to re-word the date labels and the fieldset
+  // legend live; with the type frozen, the item's saved type is the only one there can be.
+  // The name and the posted value are unchanged -- the action still reads `typeId`, and now
+  // rejects one that does not match what is stored.
+  const typeId = item.typeId === null ? '' : String(item.typeId);
   const selectedType = types.find((t) => String(t.id) === typeId);
   const selectedKind: ItemKind = selectedType?.kind ?? 'warranty';
   // v1.3.0: same live-follows-the-selected-kind treatment as the type/date fields above.
@@ -565,6 +567,7 @@ function EditForm({
     item.billingAmountCents === null ? '' : (item.billingAmountCents / 100).toFixed(2),
   );
   const billingApplicable = billingAllowedForKind(selectedKind);
+  const productApplicable = productFieldsAllowedForKind(selectedKind);
   useEffect(() => {
     if (!billingApplicable) {
       setBillingCycle('');
@@ -623,39 +626,47 @@ function EditForm({
             <Field label="Name" className="sm:col-span-2">
               <input name="name" required maxLength={200} defaultValue={item.name} className={inputClass} />
             </Field>
-            <Field label="Type">
-              <select
-                name="typeId"
-                value={typeId}
-                onChange={(e) => setTypeId(e.target.value)}
-                className={selectClass}
-              >
-                <option value="">— none —</option>
-                {types.map((type) => (
-                  <option key={type.id} value={type.id}>{type.name}</option>
-                ))}
-              </select>
+            {/* Fixed once the item exists, so it is shown rather than offered. The type decides
+                which fields this form has -- a model and a serial for a purchase, a principal
+                and a balance for a loan -- so changing it later would strand whatever the old
+                kind stored. The value still posts, from a hidden input, because the action
+                validates it against the stored one and rejects a mismatch; a disabled <select>
+                would post nothing and read as "clear the type". Wrong type: delete and re-add. */}
+            <Field label="Type" hint="Fixed after the first save. To change it, delete this item and add it again.">
+              <input type="hidden" name="typeId" value={typeId} />
+              <p className="field-control bg-surface-2 text-muted">{selectedType?.name ?? '— none —'}</p>
             </Field>
             <Field label="Vendor">
               <input name="vendor" maxLength={200} defaultValue={item.vendor ?? ''} className={inputClass} />
             </Field>
-            <Field label="Model">
-              <input name="model" maxLength={200} defaultValue={item.model ?? ''} className={inputClass} />
-            </Field>
-            <Field label="Serial number">
-              <input name="serial" maxLength={200} defaultValue={item.serial ?? ''} className={inputClass} />
-            </Field>
+            {/* Offered for a warranty, and kept for anything that already holds one. An item
+                whose type was changed after it was saved can still carry a model, a serial or
+                a price, and a field holding a value must stay on screen: hide the input and
+                the next save posts it blank, which silently deletes what was there. So the
+                gate gets an OR on the stored value, not a bare kind check. */}
+            {productApplicable || item.model ? (
+              <Field label="Model">
+                <input name="model" maxLength={200} defaultValue={item.model ?? ''} className={inputClass} />
+              </Field>
+            ) : null}
+            {productApplicable || item.serial ? (
+              <Field label="Serial number">
+                <input name="serial" maxLength={200} defaultValue={item.serial ?? ''} className={inputClass} />
+              </Field>
+            ) : null}
             <Field label={formStartLabel(selectedKind)}>
               <input type="date" name="purchaseDate" required max={today} defaultValue={item.purchaseDate} className={inputClass} />
             </Field>
-            <Field label="Price">
-              <input
-                name="price"
-                inputMode="decimal"
-                defaultValue={item.priceCents === null ? '' : (item.priceCents / 100).toFixed(2)}
-                className={inputClass}
-              />
-            </Field>
+            {productApplicable || item.priceCents !== null ? (
+              <Field label="Price">
+                <input
+                  name="price"
+                  inputMode="decimal"
+                  defaultValue={item.priceCents === null ? '' : (item.priceCents / 100).toFixed(2)}
+                  className={inputClass}
+                />
+              </Field>
+            ) : null}
 
             {billingApplicable ? (
               <>

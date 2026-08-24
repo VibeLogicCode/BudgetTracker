@@ -216,3 +216,52 @@ describe('MUST-14.1 / MUST-12.3: the loan surfaces', () => {
     expect(screen.getByText('Amount')).toBeTruthy();
   });
 });
+
+describe('fields and the submit button follow the selected type', () => {
+  /** Picking the type is what drives everything below; id 3 is the loan fixture. */
+  function selectType(id: number) {
+    fireEvent.change(screen.getByLabelText('Type'), { target: { value: String(id) } });
+  }
+
+  it('offers a model, a serial and a price for a warranty', () => {
+    renderForm();
+    selectType(1);
+    expect(screen.queryByLabelText('Model')).not.toBeNull();
+    expect(screen.queryByLabelText('Serial number')).not.toBeNull();
+    expect(screen.queryByLabelText('Price')).not.toBeNull();
+  });
+
+  it('drops all three for a loan, whose money is its own amounts', () => {
+    renderForm();
+    selectType(3);
+    expect(screen.queryByLabelText('Model')).toBeNull();
+    expect(screen.queryByLabelText('Serial number')).toBeNull();
+    // The reported bug: a bare "Price" sitting beside "Original amount" asked for the same
+    // fact twice, and stored neither answer where the loan record keeps it.
+    expect(screen.queryByLabelText('Price')).toBeNull();
+    // Regex, not an exact string: Field puts the hint INSIDE the <label>, so the input's
+    // accessible name is the label plus its hint sentence.
+    expect(screen.queryByLabelText(/Original amount/)).not.toBeNull();
+  });
+
+  it('drops all three for a subscription too', () => {
+    renderForm();
+    selectType(2);
+    expect(screen.queryByLabelText('Model')).toBeNull();
+    expect(screen.queryByLabelText('Serial number')).toBeNull();
+    expect(screen.queryByLabelText('Price')).toBeNull();
+  });
+
+  it('names the kind on the submit button, so it cannot contradict the type select above it', () => {
+    renderForm();
+    selectType(3);
+    expect(screen.queryByRole('button', { name: 'Save loan' })).not.toBeNull();
+    expect(screen.queryByRole('button', { name: 'Save warranty' })).toBeNull();
+
+    selectType(2);
+    expect(screen.queryByRole('button', { name: 'Save subscription' })).not.toBeNull();
+
+    selectType(1);
+    expect(screen.queryByRole('button', { name: 'Save warranty' })).not.toBeNull();
+  });
+});

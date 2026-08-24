@@ -21,6 +21,27 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.10.2] - 2026-08-24
+
+### Fixed
+
+- **The add form asked for things the chosen type does not have.** Picking Loan still showed
+  Model, Serial number and Price — and Price sat directly above Original amount, so the form asked
+  for the same fact twice and stored neither answer where a loan keeps it. Those three now appear
+  only for a warranty, which is the only kind that describes a physical purchase. A subscription
+  and a contract keep their billing pair; a loan keeps its original amount, rate and balance.
+- **The submit button said "Save warranty" whatever you were saving.** It now names the kind you
+  picked, so it cannot contradict the Type selector directly above it.
+
+### Changed
+
+- **An item's type is now fixed once it has been saved.** The type decides which fields the form
+  offers, so changing it later left the old kind's values stranded in a record that no longer had
+  anywhere to show them. The edit form displays the type instead of offering it, and the server
+  refuses a change even if the request is crafted by hand. If you picked the wrong type, delete the
+  item and add it again — and an item that already holds a value the new rules would hide keeps
+  showing that field, so nothing you saved earlier can be erased by saving again.
+
 ## [1.10.1] - 2026-08-24
 
 ### Fixed

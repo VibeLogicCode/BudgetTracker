@@ -18,13 +18,16 @@ import {
   expiryPhraseForKind,
   expiringSoonLabel,
   expiringSoonLabelForKind,
+  ITEM_TYPE_IMMUTABLE_ERROR,
   formEndLabel,
+  formSaveLabel,
   formOpenEndedLabel,
   formStartLabel,
   formTermLabel,
   isBillingCycle,
   isItemKind,
   loanFieldsAllowedForKind,
+  productFieldsAllowedForKind,
   openEndedDisplayLabel,
 } from '@/lib/warranty/constants';
 
@@ -246,5 +249,33 @@ describe('client safety (Ruling P4)', () => {
     // into the browser bundle.
     expect(source).not.toMatch(/from '@\/db\//);
     expect(source).not.toMatch(/better-sqlite3|drizzle-orm/);
+  });
+});
+
+describe('v1.10.2: product-field applicability and the submit-button noun', () => {
+  it('confines model, serial and price to a physical purchase', () => {
+    expect(productFieldsAllowedForKind('warranty')).toBe(true);
+    for (const kind of ['subscription', 'contract', 'loan'] as const) {
+      expect(productFieldsAllowedForKind(kind)).toBe(false);
+    }
+  });
+
+  it('names the kind on the submit button for every kind', () => {
+    expect(formSaveLabel('warranty')).toBe('Save warranty');
+    expect(formSaveLabel('subscription')).toBe('Save subscription');
+    expect(formSaveLabel('contract')).toBe('Save contract');
+    expect(formSaveLabel('loan')).toBe('Save loan');
+  });
+
+  it('derives the button noun from ITEM_KIND_LABELS, so the two cannot drift apart', () => {
+    for (const kind of ITEM_KINDS) {
+      expect(formSaveLabel(kind)).toBe(`Save ${ITEM_KIND_LABELS[kind].toLowerCase()}`);
+    }
+  });
+
+  it('says how to change a type instead of only refusing', () => {
+    // The refusal is only actionable if it names the way out, since there is no longer a
+    // control for it.
+    expect(ITEM_TYPE_IMMUTABLE_ERROR).toMatch(/delete this item and add it again/i);
   });
 });

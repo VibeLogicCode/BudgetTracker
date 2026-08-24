@@ -34,7 +34,13 @@ import {
 import { MAX_FILES_PER_UPLOAD } from '@/lib/warranty/receipts';
 import { STAGING_ID_RE } from '@/lib/warranty/staging';
 import { findItemType } from '@/lib/warranty/types';
-import { ITEM_KIND_LABELS, isBillingCycle, type BillingCycle, type ItemKind } from '@/lib/warranty/constants';
+import {
+  ITEM_KIND_LABELS,
+  ITEM_TYPE_IMMUTABLE_ERROR,
+  isBillingCycle,
+  type BillingCycle,
+  type ItemKind,
+} from '@/lib/warranty/constants';
 
 export interface WarrantyActionState {
   error?: string;
@@ -366,6 +372,17 @@ export async function updateWarrantyAction(
     const parsed = readItemInput(formData, 0, { cents: existing.currentBalanceCents, updatedAt: existing.balanceUpdatedAt });
     if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Could not save that item.' };
     if (!typeExistsOrNull(parsed.data.typeId)) return { error: ITEM_TYPE_MISSING_ERROR };
+    // The type is fixed once the item exists. It decides which fields the form even offers --
+    // a model and a serial for a purchase, a principal and a balance for a loan -- so changing
+    // it later strands whatever the old kind had stored and asks the record to be read as
+    // something it was never filled in as. Same principle as transactions.amount_cents being
+    // immutable after insert: a value that governs how other values are INTERPRETED cannot
+    // move under them.
+    //
+    // Enforced here, not just by the read-only control on the form: a disabled input is a
+    // suggestion to a browser and nothing at all to a crafted POST. Getting the type wrong
+    // stays fixable -- delete the item and add it again.
+    if (parsed.data.typeId !== existing.typeId) return { error: ITEM_TYPE_IMMUTABLE_ERROR };
     if (!updateWarrantyItem(id.data, parsed.data)) return { error: 'That item no longer exists.' };
     // Bug fix (v1.2.4): this used to say "Warranty updated." unconditionally -- wrong for a
     // subscription/contract/loan. The saved type's kind decides the noun, the same fallback
