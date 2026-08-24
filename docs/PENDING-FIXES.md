@@ -687,3 +687,15 @@ The fix is `aria-describedby`: give the hint an id and point the input at it, so
 Consequence to know about meanwhile: `getByLabelText('Original amount')` does not match those
 fields, and a test has to use a regex. That is a symptom, not the bug — do not "fix" it by loosening
 the tests.
+
+**K. A second load-sensitive OCR test (~30 min).** `tests/lib/warranty/ocr/onnx/engine.test.ts`
+> "runs no inference at all for a PDF" hit the 20s `testTimeout` in one full-suite run during the
+v1.10.3 release and passed 7/7 in isolation immediately after. Same family as item E, different
+file and a different mechanism: E was a Windows handle in teardown, this is a genuine wall-clock
+timeout on a test that loads the PDF stack while 249 other files compete for the CPU.
+
+The fix is not a bigger timeout — it is to stop the test doing real model/PDF loading work it does
+not need in order to assert that NO inference ran. Assert on the session spy, with the heavy path
+stubbed, so the test measures the code rather than the machine. **Two OCR tests have now flaked
+this way; if a third appears, treat the suite's OCR integration layer as the problem rather than
+each test.**

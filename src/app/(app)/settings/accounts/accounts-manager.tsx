@@ -208,7 +208,7 @@ export function AccountsManager({
             }
           />
         ) : (
-          <TableWrap bare fixed>
+          <TableWrap bare fixed minWidth="67rem">
             {/* Nine columns, two of which carry controls, so auto sizing was handing the width
                 to the Balance sentence ("... now · from a balance recorded <date>") and leaving
                 Actions to stack its two buttons over a column of dead space. The widths below

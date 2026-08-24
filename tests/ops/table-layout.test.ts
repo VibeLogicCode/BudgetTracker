@@ -59,6 +59,35 @@ describe('table cells never truncate silently', () => {
     expect(offenders).toEqual([]);
   });
 
+  /**
+   * The guard for the bug v1.10.1 shipped and v1.10.3 fixed.
+   *
+   * `.data-table` is `width: 100%`, so a `table-layout: fixed` table can never grow past its
+   * container -- which means the `overflow-x-auto` wrapper has nothing to overflow and never
+   * scrolls. The browser honours the <colgroup> by shrinking every column instead. On a phone
+   * that turned the transactions description into a single character, printing merchant names
+   * one letter per line, while the release notes claimed narrow screens would scroll.
+   *
+   * `minWidth` is what makes that claim true, so `fixed` without it is the defect, not a style
+   * preference. Checked by grep because the pairing is a property of every call site, and the
+   * failure is invisible at the width a developer happens to have open.
+   */
+  it('every fixed TableWrap also passes minWidth, or nothing scrolls and columns crush instead', () => {
+    const bad: string[] = [];
+    for (const rel of tsxFiles('src')) {
+      const source = fs.readFileSync(path.join(root, rel), 'utf8');
+      // Opening tag only: `fixed` and `minWidth` are both attributes of the same element.
+      for (const match of source.matchAll(/<TableWrap[^>]*>/g)) {
+        const tag = match[0];
+        if (!/\bfixed\b/.test(tag)) continue;
+        if (!/\bminWidth=/.test(tag)) {
+          bad.push(`${rel}: ${tag.trim()}`);
+        }
+      }
+    }
+    expect(bad).toEqual([]);
+  });
+
   it('finds the truncating cells at all, so the check above cannot pass vacuously', () => {
     // A floor, not a count: adding a truncating cell must fail the assertion above with its
     // own file:line, not this one.

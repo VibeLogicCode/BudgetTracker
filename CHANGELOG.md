@@ -21,6 +21,21 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.10.3] - 2026-08-24
+
+### Fixed
+
+- **On a phone, 1.10.1 broke the transactions table badly.** Instead of the table scrolling
+  sideways, its columns were squeezed until the description was one character wide, printing
+  merchant names down the screen a letter per line. 1.10.1's notes promised narrow screens would
+  scroll; they could not, because the table was never allowed to be wider than the screen in the
+  first place. It is now, so a narrow screen scrolls and every column keeps its size. **This was a
+  regression introduced in 1.10.1 — if you are on 1.10.1, update.**
+- **The account column no longer cuts names to "Amex…".** 1.10.1 narrowed it and relied on hovering
+  to reveal the rest, which is no use on a phone. It is wider now and shows the whole name.
+- **Rows on the transactions page are shorter again.** The buttons at the end of each row were
+  stacking three deep and making every row unnecessarily tall.
+
 ## [1.10.2] - 2026-08-24
 
 ### Fixed

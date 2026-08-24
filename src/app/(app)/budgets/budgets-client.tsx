@@ -213,7 +213,7 @@ function Row({
  */
 function BudgetTable({ children, paceTitle }: { children: React.ReactNode; paceTitle?: string }) {
   return (
-    <TableWrap bare fixed>
+    <TableWrap bare fixed minWidth="60rem">
       <colgroup>
         {/* Deepest label plus its indent (16px + 20px per level, see Row). Names longer than
             this wrap rather than truncate, so nothing is hidden. */}

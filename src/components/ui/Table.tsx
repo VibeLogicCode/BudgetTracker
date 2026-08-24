@@ -11,6 +11,7 @@ export function TableWrap({
   className = '',
   bare = false,
   fixed = false,
+  minWidth,
 }: {
   children: React.ReactNode;
   /** Extra classes for the scroll container. */
@@ -33,11 +34,31 @@ export function TableWrap({
    * divides the width equally, which is worse than auto.
    */
   fixed?: boolean;
+  /**
+   * REQUIRED whenever `fixed` is set, and the reason is a bug this shipped without it.
+   *
+   * `.data-table` is `width: 100%`, so a fixed-layout table can never grow past its
+   * container -- which means `overflow-x-auto` above NEVER engages, because there is nothing
+   * to overflow. On a narrow screen the browser then honours the <colgroup> by shrinking
+   * every column instead, and any column left elastic collapses to nothing: on a phone the
+   * transactions description came out one character wide, spelling merchant names down the
+   * page a letter per line.
+   *
+   * A min-width equal to the colgroup's own total restores the intent: the table keeps its
+   * real size, and the container scrolls sideways when the viewport cannot hold it. Pass the
+   * sum of the <col> widths.
+   */
+  minWidth?: string;
 }) {
   const shell = bare ? '' : 'rounded-lg border border-line bg-surface shadow-card';
   return (
     <div className={`w-full overflow-x-auto ${shell} ${className}`}>
-      <table className={fixed ? 'data-table data-table--fixed' : 'data-table'}>{children}</table>
+      <table
+        className={fixed ? 'data-table data-table--fixed' : 'data-table'}
+        style={minWidth ? { minWidth } : undefined}
+      >
+        {children}
+      </table>
     </div>
   );
 }

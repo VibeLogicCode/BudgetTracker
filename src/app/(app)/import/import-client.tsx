@@ -647,7 +647,7 @@ export function ImportClient({
             Once you upload a statement it lands here, with an undo next to it.
           </EmptyState>
         ) : (
-          <TableWrap bare fixed>
+          <TableWrap bare fixed minWidth="63rem">
             {/* The undo button is the last column, and under auto sizing a bank's filename --
                 one long unbreakable token in a monospace cell -- could push the row past the
                 shell's width and take that button off the edge with it. Fixed widths keep undo

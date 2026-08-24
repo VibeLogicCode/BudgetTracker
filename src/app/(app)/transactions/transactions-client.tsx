@@ -434,23 +434,27 @@ export function TransactionsClient({
             row shows everything, a wider one would have to hide a control's value to pay for
             it. They sum to 67rem, inside the shell's 68rem content width, and the wrapper
             still scrolls below that so no column is ever cut off on a phone. */}
-        <TableWrap bare fixed>
+        {/* minWidth is the colgroup's own total. Without it this table could not exceed its
+            container, so the scroll container had nothing to scroll and the browser shrank
+            every column instead -- see TableWrap's minWidth docblock for what that did to a
+            phone. */}
+        <TableWrap bare fixed minWidth="76rem">
           <colgroup>
             {/* Just the checkbox, plus the 1rem of cell padding either side. */}
             <col style={{ width: '3rem' }} />
             {/* An ISO date in tabular figures, which is the same width on every row. */}
             <col style={{ width: '7rem' }} />
-            {/* Deliberately the narrowest text column: the same account name repeats down the
-                whole page, so it is the one value worth clipping to an ellipsis (see the
-                `cell-truncate` + `title` pair on the cell) rather than breaking mid-word. */}
-            <col style={{ width: '5rem' }} />
-            {/* NO width, deliberately: under `table-layout: fixed` an unsized column takes
-                whatever the sized ones leave, so the description -- the column a reader
-                actually scans -- absorbs the slack instead of it being shared pro-rata with
-                the selects. That is what makes the wide opt-in above pay off here: the extra
-                width lands on the merchant text rather than padding controls that were already
-                wide enough. Wraps over several lines when it must; never clips. */}
-            <col />
+            {/* Wide enough to READ an account name. This was 5rem for one release, which
+                truncated "Amex - Chequing" to "Amex…" -- and a `title` is no answer on a phone,
+                where there is no hover. Buying a rem for the description by making a column
+                unreadable is not a trade worth making. */}
+            <col style={{ width: '9rem' }} />
+            {/* An explicit width, NOT elastic. Left unsized it took "whatever the others do not
+                need", which is generous on a wide monitor and nothing at all on a narrow one:
+                the sized columns took their rem and this one collapsed to a single character,
+                spelling merchant names vertically. A real width plus the table's min-width means
+                narrow viewports scroll instead of crushing this column. */}
+            <col style={{ width: '15rem' }} />
             {/* A signed five-figure amount on one line. */}
             <col style={{ width: '7rem' }} />
             {/* The widest control on the row: the category select has to show a name as long as
@@ -458,8 +462,10 @@ export function TransactionsClient({
             <col style={{ width: '13rem' }} />
             {/* Same shape, shorter values -- a person's name or "Household". */}
             <col style={{ width: '11rem' }} />
-            {/* "Create warranty" on one line, and the loan select beside its Assign button. */}
-            <col style={{ width: '10rem' }} />
+            {/* Holds "Create warranty", "Split…", and -- when loans exist -- an "Assign to
+                loan" select beside its Assign button. 11rem keeps the first two on one line
+                each rather than three separate lines, which is what tripled row height. */}
+            <col style={{ width: '11rem' }} />
           </colgroup>
           <thead>
             <tr>
@@ -487,11 +493,10 @@ export function TransactionsClient({
                   />
                 </td>
                 <td className="tabnum whitespace-nowrap text-muted">{row.date}</td>
-                {/* The one cell that clips instead of wrapping: an account name is mostly one
-                    or two long words, so breaking it mid-word to fit the narrowest column on
-                    the row is harder to read than an ellipsis. The `title` keeps the full name
-                    available, which is the condition for using `cell-truncate` at all. */}
-                <td className="cell-truncate text-muted" title={row.accountName}>{row.accountName}</td>
+                {/* Wraps rather than clips, and keeps the title as a courtesy for a very long
+                    name. An ellipsis here relied on hover to recover the value, which a phone
+                    does not have. */}
+                <td className="text-muted" title={row.accountName}>{row.accountName}</td>
                 <td>
                   <span className="flex flex-wrap items-center gap-1.5">
                     <button

@@ -245,9 +245,25 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.10.2 release', () => {
+  it('MUST-7.1: the 1.10.3 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.10.2');
+    expect(pkg.version).toBe('1.10.3');
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toMatch(/^## \[1\.10\.3\] - 2026-08-24$/m);
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.10.3]'));
+    const patch = changelog.slice(changelog.indexOf('## [1.10.3]'), changelog.indexOf('## [1.10.2]'));
+    expect(patch).toMatch(/### Fixed/);
+    // A release that fixes a regression of OUR OWN making must say so, and say which version
+    // introduced it, so someone on that version knows the update is not optional.
+    expect(patch).toMatch(/regression introduced in 1\.10\.1/i);
+    expect(patch).toMatch(/phone/i);
+    // The claim 1.10.1 made and could not keep. Naming it here is the correction.
+    expect(patch).toMatch(/scroll/i);
+  });
+
+  it('MUST-7.1: the 1.10.2 release is still recorded intact (append-only discipline)', () => {
+    const pkg = JSON.parse(read('package.json')) as { version: string };
+    expect(pkg.version).not.toBe('1.10.2');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.10\.2\] - 2026-08-24$/m);
     expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.10.2]'));
