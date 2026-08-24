@@ -26,10 +26,11 @@ All notable changes to Budget Tracker are recorded here.
 ### Changed
 
 - **Editable cells now save themselves.** Choosing a category, a person, a budget limit, a
-  cardholder, an item type or its kind used to mean picking a value and then clicking a Save
-  button next to it. The value is now saved the moment you pick it — a tick appears beside the
-  control — and a text box saves when you press Enter or click away, and only if you changed
-  something. Nothing saves while you are still typing.
+  cardholder, an item type or its kind, or renaming a category and marking it tax-relevant on
+  Settings → Categories, used to mean picking a value and then clicking a Save button next to
+  it. The value is now saved the moment you pick it — a tick appears beside the control — and
+  a text box saves when you press Enter or click away, and only if you changed something.
+  Nothing saves while you are still typing.
 - **If a save is refused, nothing is silently lost.** The control goes back to its previous
   value and the reason appears in red beside it, instead of the change appearing to stick.
 - **Row actions moved into a single ⋯ menu.** On Transactions, that menu holds Rename, Split,
