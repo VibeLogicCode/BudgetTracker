@@ -27,6 +27,13 @@ const PROFILES: ProfileOption[] = [
   { id: 11, name: 'TD Visa' },
 ];
 
+/** Task 6 (spec 2026-08-23): "Update account" moved behind the row kebab, so every test that
+ *  used to reach it with one click now opens "Actions for <name>" first -- the same two-step
+ *  tests/unit/row-menu.test.tsx already uses for the menu component itself. */
+function openAccountMenu(accountName: string) {
+  fireEvent.click(screen.getByRole('button', { name: `Actions for ${accountName}` }));
+}
+
 function account(over: Partial<AccountRow> = {}): AccountRow {
   return {
     id: 100,
@@ -86,13 +93,14 @@ describe('AccountsManager — pinned mapping display (spec 2026-08-22 v1.6.0, MU
 });
 
 describe('AccountsManager — one Update account editor (spec 2026-08-22 v1.7.0, Task 1b)', () => {
-  it('renders one Update account button and no Rename, Set owner or Set mapping buttons', () => {
+  it('renders one Update account item and no Rename, Set owner or Set mapping items', () => {
     render(<AccountsManager accounts={[account()]} people={PEOPLE} profiles={PROFILES} />);
+    openAccountMenu('Joint Chequing');
 
-    expect(screen.getByRole('button', { name: 'Update account' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Rename' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Set owner' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Set mapping' })).toBeNull();
+    expect(screen.getByRole('menuitem', { name: 'Update account' })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: 'Rename' })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'Set owner' })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'Set mapping' })).toBeNull();
   });
 
   it('opening the editor pre-fills name, owner and mapping with the account current values', () => {
@@ -104,7 +112,8 @@ describe('AccountsManager — one Update account editor (spec 2026-08-22 v1.7.0,
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Update account' }));
+    openAccountMenu('Old Name');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Update account' }));
 
     expect((screen.getByLabelText(/Name for Old Name/i) as HTMLInputElement).value).toBe('Old Name');
     expect((screen.getByLabelText(/Owner of Old Name/i) as HTMLSelectElement).value).toBe('1');
@@ -119,13 +128,13 @@ describe('AccountsManager — one Update account editor (spec 2026-08-22 v1.7.0,
         profiles={PROFILES}
       />,
     );
-    const buttons = screen.getAllByRole('button', { name: 'Update account' });
-
-    fireEvent.click(buttons[0]);
+    openAccountMenu('First');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Update account' }));
     expect(screen.getByLabelText(/Name for First/i)).toBeTruthy();
     expect(screen.queryByLabelText(/Name for Second/i)).toBeNull();
 
-    fireEvent.click(buttons[1]);
+    openAccountMenu('Second');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Update account' }));
     expect(screen.queryByLabelText(/Name for First/i)).toBeNull();
     expect(screen.getByLabelText(/Name for Second/i)).toBeTruthy();
   });
@@ -134,7 +143,8 @@ describe('AccountsManager — one Update account editor (spec 2026-08-22 v1.7.0,
     const { updateAccountAction } = await import('@/app/(app)/settings/accounts/actions');
     render(<AccountsManager accounts={[account()]} people={PEOPLE} profiles={PROFILES} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Update account' }));
+    openAccountMenu('Joint Chequing');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Update account' }));
     expect(screen.getByLabelText(/Name for Joint Chequing/i)).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
@@ -145,7 +155,8 @@ describe('AccountsManager — one Update account editor (spec 2026-08-22 v1.7.0,
 
   it('offers only the given active+readable profiles in the mapping select, plus a None option', () => {
     render(<AccountsManager accounts={[account()]} people={PEOPLE} profiles={PROFILES} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Update account' }));
+    openAccountMenu('Joint Chequing');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Update account' }));
 
     const select = screen.getByLabelText(/Mapping for Joint Chequing/i) as HTMLSelectElement;
     const optionLabels = Array.from(select.options).map((o) => o.textContent);
@@ -160,7 +171,8 @@ describe('AccountsManager — one Update account editor (spec 2026-08-22 v1.7.0,
         profiles={PROFILES}
       />,
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Update account' }));
+    openAccountMenu('Joint Chequing');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Update account' }));
 
     const select = screen.getByLabelText(/Mapping for Joint Chequing/i) as HTMLSelectElement;
     expect(select.value).toBe('11');
@@ -174,7 +186,8 @@ describe('AccountsManager — one Update account editor (spec 2026-08-22 v1.7.0,
         profiles={PROFILES}
       />,
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Update account' }));
+    openAccountMenu('Joint Chequing');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Update account' }));
 
     const select = screen.getByLabelText(/Mapping for Joint Chequing/i) as HTMLSelectElement;
     expect(select.value).toBe('99');
@@ -186,7 +199,8 @@ describe('AccountsManager — one Update account editor (spec 2026-08-22 v1.7.0,
   it('submits name, owner and mapping together via updateAccountAction', async () => {
     const { updateAccountAction } = await import('@/app/(app)/settings/accounts/actions');
     render(<AccountsManager accounts={[account({ id: 42 })]} people={PEOPLE} profiles={PROFILES} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Update account' }));
+    openAccountMenu('Joint Chequing');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Update account' }));
 
     const nameInput = screen.getByLabelText(/Name for Joint Chequing/i) as HTMLInputElement;
     const ownerSelect = screen.getByLabelText(/Owner of Joint Chequing/i) as HTMLSelectElement;
@@ -207,7 +221,8 @@ describe('AccountsManager — one Update account editor (spec 2026-08-22 v1.7.0,
 
   it('offers no mapping field for a SimpleFIN-managed account, even inside the editor', () => {
     render(<AccountsManager accounts={[account({ isSimplefinManaged: true })]} people={PEOPLE} profiles={PROFILES} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Update account' }));
+    openAccountMenu('Joint Chequing');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Update account' }));
 
     expect(screen.getByLabelText(/Name for Joint Chequing/i)).toBeTruthy();
     expect(screen.getByLabelText(/Owner of Joint Chequing/i)).toBeTruthy();
@@ -262,7 +277,8 @@ describe('AccountsManager — latest balance display and manual entry (spec 2026
 
   it('the editor has no separate button or second form: Balance and Balance date are two fields inside the same Update account editor', () => {
     render(<AccountsManager accounts={[account()]} people={PEOPLE} profiles={PROFILES} today="2026-08-22" />);
-    fireEvent.click(screen.getByRole('button', { name: 'Update account' }));
+    openAccountMenu('Joint Chequing');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Update account' }));
 
     const balanceInput = screen.getByLabelText(/Balance for Joint Chequing/i);
     const dateInput = screen.getByLabelText(/Balance date for Joint Chequing/i);
@@ -280,7 +296,8 @@ describe('AccountsManager — latest balance display and manual entry (spec 2026
         today="2026-08-22"
       />,
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Update account' }));
+    openAccountMenu('Joint Chequing');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Update account' }));
 
     expect((screen.getByLabelText(/Balance for Joint Chequing/i) as HTMLInputElement).value).toBe('');
     expect((screen.getByLabelText(/Balance date for Joint Chequing/i) as HTMLInputElement).value).toBe('2026-08-22');
@@ -289,7 +306,8 @@ describe('AccountsManager — latest balance display and manual entry (spec 2026
   it('submits balance and asOfDate together with the rest of the form', async () => {
     const { updateAccountAction } = await import('@/app/(app)/settings/accounts/actions');
     render(<AccountsManager accounts={[account({ id: 42 })]} people={PEOPLE} profiles={PROFILES} today="2026-08-22" />);
-    fireEvent.click(screen.getByRole('button', { name: 'Update account' }));
+    openAccountMenu('Joint Chequing');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Update account' }));
 
     const balanceInput = screen.getByLabelText(/Balance for Joint Chequing/i) as HTMLInputElement;
     fireEvent.change(balanceInput, { target: { value: '500.00' } });

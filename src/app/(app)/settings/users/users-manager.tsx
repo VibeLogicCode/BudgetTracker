@@ -1,13 +1,14 @@
 'use client';
 
-import { useActionState } from 'react';
+import { Fragment, useActionState, useState } from 'react';
 import { FormError } from '@/components/FormError';
 import { SubmitButton } from '@/components/SubmitButton';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { Notice } from '@/components/ui/Notice';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { TableWrap } from '@/components/ui/Table';
-import { Field, inputClass, selectClass } from '@/components/ui/form';
+import { Field, inputClass, labelClass, selectClass } from '@/components/ui/form';
+import { RowMenu, RowMenuButton, RowMenuForm } from '@/components/ui/RowMenu';
 import { createUserAction, resetMfaAction, resetPasswordAction, setActiveAction, type UsersFormState } from './actions';
 import type { UserRecord } from '@/lib/auth/users';
 
@@ -21,6 +22,13 @@ export function UsersManager({ users }: { users: UserRecord[] }) {
   const [rowState, rowAction] = useActionState(setActiveAction, initialState);
   const [pwState, resetPassword] = useActionState(resetPasswordAction, initialState);
   const [mfaState, resetMfa] = useActionState(resetMfaAction, initialState);
+  /**
+   * Which row (if any) has its password sub-row open. A password field must not live inside a
+   * menu -- a menu closes on Escape, on an outside click and on scroll, all of which would
+   * discard a half-typed credential -- so "Reset password…" opens the expandable row instead,
+   * the pattern accounts-manager.tsx already uses for its editor.
+   */
+  const [resetting, setResetting] = useState<number | null>(null);
 
   const rowMessage = rowState.message ?? pwState.message ?? mfaState.message;
 
@@ -76,52 +84,69 @@ export function UsersManager({ users }: { users: UserRecord[] }) {
           </thead>
           <tbody>
             {users.map((user) => (
-              <tr key={user.id} className="align-top">
-                <td className="font-medium text-ink">{user.name}</td>
-                <td className="font-mono text-xs text-muted">{user.username}</td>
-                <td>
-                  <span className={user.role === 'admin' ? 'badge badge--accent' : 'badge badge--slate'}>{user.role}</span>
-                </td>
-                <td>
-                  <span className={user.totpEnabled ? 'badge badge--green' : 'badge badge--muted'}>
-                    {user.totpEnabled ? 'on' : 'off'}
-                  </span>
-                </td>
-                <td>
-                  <span className={user.isActive ? 'badge badge--green' : 'badge badge--muted'}>
-                    {user.isActive ? 'active' : 'deactivated'}
-                  </span>
-                </td>
-                <td>
-                  <div className="flex flex-wrap gap-2">
-                    <form action={rowAction}>
-                      <input type="hidden" name="userId" value={user.id} />
-                      <input type="hidden" name="active" value={user.isActive ? '0' : '1'} />
-                      <button type="submit" className={rowButton}>
+              <Fragment key={user.id}>
+                <tr className="align-top">
+                  <td className="font-medium text-ink">{user.name}</td>
+                  <td className="font-mono text-xs text-muted">{user.username}</td>
+                  <td>
+                    <span className={user.role === 'admin' ? 'badge badge--accent' : 'badge badge--slate'}>{user.role}</span>
+                  </td>
+                  <td>
+                    <span className={user.totpEnabled ? 'badge badge--green' : 'badge badge--muted'}>
+                      {user.totpEnabled ? 'on' : 'off'}
+                    </span>
+                  </td>
+                  <td>
+                    <span className={user.isActive ? 'badge badge--green' : 'badge badge--muted'}>
+                      {user.isActive ? 'active' : 'deactivated'}
+                    </span>
+                  </td>
+                  {/* Three button-forms used to sit side by side here -- the widest actions cell
+                      in the app, and the one that pushed this table past its card. */}
+                  <td className="text-right">
+                    <RowMenu label={`Actions for ${user.name}`}>
+                      <RowMenuForm
+                        action={rowAction}
+                        fields={{ userId: String(user.id), active: user.isActive ? '0' : '1' }}
+                      >
                         {user.isActive ? 'Deactivate' : 'Reactivate'}
-                      </button>
-                    </form>
-                    <form action={resetPassword} className="flex gap-1">
-                      <input type="hidden" name="userId" value={user.id} />
-                      <input
-                        name="password"
-                        placeholder="New password"
-                        aria-label={`New password for ${user.name}`}
-                        className={`w-36 ${rowInput}`}
-                      />
-                      <button type="submit" className={rowButton}>
-                        Reset password
-                      </button>
-                    </form>
-                    <form action={resetMfa}>
-                      <input type="hidden" name="userId" value={user.id} />
-                      <button type="submit" className={rowButton}>
+                      </RowMenuForm>
+                      <RowMenuButton onSelect={() => setResetting(user.id)}>Reset password…</RowMenuButton>
+                      <RowMenuForm action={resetMfa} fields={{ userId: String(user.id) }}>
                         Reset MFA
-                      </button>
-                    </form>
-                  </div>
-                </td>
-              </tr>
+                      </RowMenuForm>
+                    </RowMenu>
+                  </td>
+                </tr>
+                {resetting === user.id ? (
+                  <tr>
+                    <td colSpan={6} className="bg-surface-2">
+                      <form
+                        action={resetPassword}
+                        onSubmit={() => setResetting(null)}
+                        className="flex flex-wrap items-end gap-3 py-2"
+                      >
+                        <input type="hidden" name="userId" value={user.id} />
+                        <div className="flex flex-col gap-1">
+                          <span className={labelClass}>New password</span>
+                          <input
+                            name="password"
+                            placeholder="At least 10 characters"
+                            aria-label={`New password for ${user.name}`}
+                            className={`w-52 ${rowInput}`}
+                          />
+                        </div>
+                        <div className="flex gap-2">
+                          <SubmitButton size="sm">Reset password</SubmitButton>
+                          <button type="button" onClick={() => setResetting(null)} className={rowButton}>
+                            Cancel
+                          </button>
+                        </div>
+                      </form>
+                    </td>
+                  </tr>
+                ) : null}
+              </Fragment>
             ))}
           </tbody>
         </TableWrap>

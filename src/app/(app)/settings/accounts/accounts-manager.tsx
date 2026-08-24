@@ -9,6 +9,7 @@ import { Notice } from '@/components/ui/Notice';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { TableWrap } from '@/components/ui/Table';
 import { Field, hintClass, inputClass, labelClass, selectClass } from '@/components/ui/form';
+import { RowMenu, RowMenuButton, RowMenuForm } from '@/components/ui/RowMenu';
 import { SettingsIcon } from '@/components/icons';
 import { todayIso } from '@/lib/dates';
 import { formatCents } from '@/lib/money';
@@ -208,11 +209,11 @@ export function AccountsManager({
             }
           />
         ) : (
-          <TableWrap bare fixed minWidth="67rem">
+          <TableWrap bare fixed minWidth="60.5rem">
             {/* Nine columns, two of which carry controls, so auto sizing was handing the width
                 to the Balance sentence ("... now · from a balance recorded <date>") and leaving
                 Actions to stack its two buttons over a column of dead space. The widths below
-                total 67rem, which is what the shell leaves once max-w-6xl loses its gutters --
+                total 60.5rem, which is what the shell leaves once max-w-6xl loses its gutters --
                 narrower viewports scroll the wrapper instead of squeezing a button. */}
             <colgroup>
               {/* Account and institution names are member-typed; longer ones wrap rather than
@@ -228,8 +229,9 @@ export function AccountsManager({
                   label -- "SimpleFIN" and "deactivated" -- or the chip spills into its neighbour. */}
               <col style={{ width: '7rem' }} />
               <col style={{ width: '7.5rem' }} />
-              {/* Room for the widest button ("Update account") on its own line. */}
-              <col style={{ width: '9.5rem' }} />
+              {/* The kebab: one 2rem button plus padding. It replaced "Update account" and
+                  "Deactivate" side by side, which is where the other 6.5rem went. */}
+              <col style={{ width: '3rem' }} />
             </colgroup>
             <thead>
               <tr>
@@ -241,7 +243,7 @@ export function AccountsManager({
                 <th scope="col">Balance</th>
                 <th scope="col">Source</th>
                 <th scope="col">Status</th>
-                <th scope="col">Actions</th>
+                <th scope="col" />
               </tr>
             </thead>
             <tbody>
@@ -274,19 +276,16 @@ export function AccountsManager({
                         {account.isActive ? 'active' : 'deactivated'}
                       </span>
                     </td>
-                    <td>
-                      <div className="flex flex-wrap gap-2">
-                        <button type="button" onClick={() => openEditor(account)} className={rowButton}>
-                          Update account
-                        </button>
-                        <form action={setActive}>
-                          <input type="hidden" name="accountId" value={account.id} />
-                          <input type="hidden" name="active" value={account.isActive ? '0' : '1'} />
-                          <button type="submit" className={rowButton}>
-                            {account.isActive ? 'Deactivate' : 'Reactivate'}
-                          </button>
-                        </form>
-                      </div>
+                    <td className="text-right">
+                      <RowMenu label={`Actions for ${account.name}`}>
+                        <RowMenuButton onSelect={() => openEditor(account)}>Update account</RowMenuButton>
+                        <RowMenuForm
+                          action={setActive}
+                          fields={{ accountId: String(account.id), active: account.isActive ? '0' : '1' }}
+                        >
+                          {account.isActive ? 'Deactivate' : 'Reactivate'}
+                        </RowMenuForm>
+                      </RowMenu>
                     </td>
                   </tr>
                   {/* v1.8.0 Task 5 (spec 2026-08-23), ruling R7: diagnostic, not an alert -- one
