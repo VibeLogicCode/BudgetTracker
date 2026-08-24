@@ -11,6 +11,12 @@ coverage
 .env
 .env.local
 
+# Gitignored local scratch space for real bank CSVs (see .gitignore) -- never committed, but a
+# LOCAL docker build traces the project tree (Turbopack standalone, see below) and would copy
+# real statements into the image if this were left off. CI builds from a clean checkout so
+# nothing has leaked publicly, but a local build must not be able to.
+real-statements/
+
 # Next 16 (Turbopack) traces output: 'standalone' far more inclusively than Next 15 did: it
 # copies the project tree rather than only the files output-file-tracing identified. The
 # Dockerfile then does `COPY /app/.next/standalone ./`, so anything left in the build context
