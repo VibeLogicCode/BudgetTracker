@@ -509,7 +509,7 @@ stack is entirely inside `node_modules/vitest/dist/chunks/rpc.*.js` -- not one a
 It is the worker missing its RPC deadline while reporting task updates, not a test result.
 
 Two things point at the environment rather than the code: the working copy sits inside a
-OneDrive-synced directory (the stack literally shows `OneDrive%20-%20REDACTED`), and
+OneDrive-synced directory (the worker stack's file URLs carry the OneDrive folder prefix), and
 OneDrive's filter driver stalls exactly this kind of many-small-writes load on Windows; and Linux
 CI on the same commits does not report it. **Treat CI, not this machine, as the gate for suite
 health.**
