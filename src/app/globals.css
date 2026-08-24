@@ -566,3 +566,48 @@
     transform: none;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Print
+
+   The browser's own Print-to-PDF IS the printable handbook (/help). That is the
+   whole reason this block exists and the reason it is this short: the help page
+   carries no collapsed sections, so nothing has to be forced open here — only
+   the app chrome has to get out of the way. Anything that is navigation rather
+   than content is dropped; the content itself is left exactly as designed, so
+   there is one set of styles to keep true instead of two.
+
+   The selectors are structural on purpose. AppShell marks none of its chrome
+   with a print-specific class, and reaching in to add one would put knowledge
+   of printing in a component that has nothing else to do with it. `aside` and
+   `footer` each occur once in the whole app (the nav rail and the version
+   line); `header` does not, so the sticky page header is matched by the
+   utility it is already positioned with, and the phone menu button by the
+   panel it controls.
+--------------------------------------------------------------------------- */
+@media print {
+  aside,
+  header.sticky,
+  footer,
+  [aria-controls='mobile-nav'],
+  #mobile-nav {
+    display: none !important;
+  }
+
+  /* The rail is gone, so the gutter it was sitting in should go with it. */
+  .lg\:pl-64 {
+    padding-left: 0 !important;
+  }
+
+  main {
+    max-width: none !important;
+    padding: 0 !important;
+  }
+
+  /* A card is one self-contained explanation; splitting one across a page
+     break costs a reader the heading it belonged to. */
+  .card {
+    break-inside: avoid;
+    box-shadow: none !important;
+  }
+}

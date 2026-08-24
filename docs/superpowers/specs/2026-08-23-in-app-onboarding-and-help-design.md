@@ -149,7 +149,13 @@ suggested rhythm rather than a requirement, per ruling A2.
 **Part 2 — the feature index.** One short section per nav section, plus explicit coverage of the
 features no screen advertises:
 
-- sharing packs — a redacted slice for an accountant or co-owner
+- sharing packs — **corrected during implementation.** This spec, following the README, called
+  them "a redacted slice of your data" for an accountant. `src/lib/packs.ts` contains no
+  transaction, amount, balance, receipt or person: a pack is categories plus learned merchant
+  rules, or import column mappings. It exports *setup*, not data, so it is safe to hand to
+  anyone and useless to an accountant. The help page documents what the code does and points
+  at Reports → export CSV for real figures. The README bullet was wrong in the same way and
+  was fixed in this release.
 - the cardholder column, so a joint card's rows attribute to the right person
 - deactivating a mapping without deleting it
 - statement balances, and how a balance resolves from a snapshot plus movement

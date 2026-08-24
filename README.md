@@ -40,8 +40,11 @@ run time to read a receipt.
   a self-hosted OpenCV.js and jscanify, before it uploads.
 - **SimpleFIN (optional)** — link accounts for automatic balance/transaction sync if you want it;
   CSV import always works without it.
-- **Sharing packs** — export a redacted slice of your data to share with someone (an accountant,
-  a co-owner) without handing over the whole database.
+- **Sharing packs** — export your *setup*, not your data: a rules pack carries categories and the
+  merchant rules the categorizer has learned, and a profiles pack carries import column mappings.
+  Neither contains a transaction, an amount, a balance, a receipt or a person, so a pack is safe to
+  hand to anyone — it gives another household a working categorizer without revealing a cent. To
+  share actual figures with an accountant, use Reports → export CSV instead.
 - **Multi-user with TOTP two-factor auth** — one admin-managed household, per-user passwords and
   optional authenticator-app 2FA.
 
