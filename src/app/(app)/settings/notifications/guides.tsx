@@ -1,3 +1,4 @@
+import { GuidePanel as Panel } from '@/components/ui/GuidePanel';
 import type { SmtpPreset } from '@/lib/notify/config';
 
 /**
@@ -41,13 +42,19 @@ function Heading({ children }: { children: React.ReactNode }) {
   return <p className="text-sm font-semibold text-ink">{children}</p>;
 }
 
-/** MUST-11.5: a <details> with the shared summary, so every form carries the same shape. */
+/**
+ * MUST-11.5: a <details> with the shared summary, so every form carries the same shape.
+ *
+ * The shell moved to `@/components/ui/GuidePanel` when the per-page guides wanted the same
+ * panel (ruling A6). What stays here is the one thing that is specific to this page: the
+ * question. Every notification form asks it with the same words, which is what MUST-11.5
+ * asserts, so the string is bound once here rather than repeated at each call site.
+ */
 export function GuidePanel({ open, children }: { open: boolean; children: React.ReactNode }) {
   return (
-    <details open={open} className="rounded-md bg-info-soft px-3.5 py-3 text-sm text-info-soft-fg">
-      <summary className="cursor-pointer font-semibold">How do I set this up?</summary>
-      <div className="mt-3 flex flex-col gap-3">{children}</div>
-    </details>
+    <Panel summary="How do I set this up?" open={open}>
+      {children}
+    </Panel>
   );
 }
 
