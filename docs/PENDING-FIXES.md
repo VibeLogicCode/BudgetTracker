@@ -517,3 +517,79 @@ health.**
 If it becomes worth fixing: raise the worker RPC timeout, or reduce reporter chatter by pinning a
 `pool`/`maxWorkers` in `vitest.config.ts`. **Do not chase it as a product bug** -- and do not
 "resolve" it by ignoring exit codes locally, because that would also hide a real failure.
+
+---
+
+## G. Receipt suggestions read the wrong amount and vendor (~2-3h, not started)
+
+Reported 2026-08-24 after a real test on an Android phone in Chrome. **The engine is not the
+problem and neither is the phone.** The failure is in `src/lib/warranty/suggest.ts` — 160 lines of
+pure regex that run *after* the text is read. Everything expensive already works: vendored models,
+detection, `REC_DROP_SCORE` filtering, and `assembleText`, which groups detection boxes into real
+newline-separated lines by vertical overlap *specifically* so `suggest.ts` can work, and says so in
+its docblock.
+
+**Do the diagnostic first.** `select ocr_text from warranty_receipts order by id desc limit 1`.
+Accurate text with wrong fields confirms the extractor and the plan below stands. Garbled text
+means preprocessing instead, and item 4 of the earlier OCR notes (long-side caps) comes first.
+
+### The amount
+
+`suggestPriceCents` has two passes. Pass 1 takes the last currency number on the last line matching
+`total|amount due|grand total|balance due`, excluding `subtotal`. **Pass 2, when pass 1 finds
+nothing, takes the largest currency-formatted number anywhere in the text.**
+
+Pass 2 is the likely culprit. On a real receipt the largest number is routinely not the total:
+`CASH $100.00` / `CHANGE $52.68` against a `$47.32` total yields **$100.00**. A tip line, a card
+slip printing `TOTAL SALE` twice, or a pre-discount `qty x price` all do the same. And pass 1 misses
+on a single mangled character — `TOTAL` recognised as `T0TAL` or `IOTAL` — then falls silently
+through to pass 2 with nothing telling the user a fallback happened.
+
+1. **Delete the pass-2 fallback (~30 min).** Best value per minute here. Suggest *nothing* when the
+   total line is not found. `MUST-8.1` already guarantees nothing auto-commits — the design is
+   suggest-and-confirm — so a blank field the user fills beats a plausible wrong number they must
+   first *notice* is wrong. **Confidently wrong is the worst output a suggester can produce**, and
+   that is the whole argument for this change; do not reintroduce a "best guess" later.
+2. **Exclude the payment lines (~1h).** Worth more than fuzzy-matching the word TOTAL: reject any
+   candidate line matching `cash|change|tender|tendered|tip|gratuity|approved|payment|cash back`
+   before considering it. Then add the fuzzy total variants (`O`/`0`, `I`/`1`, `total due`,
+   `amount`, `montant`, `balance`) — bilingual Canadian receipts need `montant`.
+
+### Visibility
+
+3. **Show the OCR text beside the form (~1h).** Makes a wrong suggestion visibly wrong and
+   correctable in one place, and makes the pipeline debuggable at all — there is currently no way
+   for a user to see why a field came out wrong.
+
+### The vendor — NOT covered by the above, and still open
+
+`suggestVendor` returns the first of the first five lines with 3+ letters that does not match
+`VENDOR_SKIP_RE` (`^receipt|invoice|order|tel|phone|fax|www.|https?:|digit`). That is "whatever is
+printed at the top". A logo yields confident nonsense from PP-OCRv5; if the logo reads as nothing,
+the street address is correctly skipped for starting with a digit and the **city line becomes the
+vendor**. Nine anchored patterns against the many shapes a real receipt header takes.
+
+Two candidate fixes, undecided:
+- **Tappable OCR lines (~30 min on top of item 3).** Once the text is on screen, let the user tap a
+  line to fill the vendor. Turns guessing into selection: always right, nothing to go stale.
+- **Match against known merchants (~1-2h).** Fuzzy-match the OCR text against normalized merchants
+  already learned from imported statements (`merchantRules`, `normalizeMerchant`). Better than any
+  top-line heuristic, needs no new dependency, and improves as the categorizer learns.
+
+### Is there a better OCR engine? No — not one that keeps the product's promise
+
+PP-OCRv5 is at or near the top of open self-hosted OCR, and tesseract (the other engine the probe
+can pick) is clearly worse on thermal receipts. The tier above costs the product:
+
+- **Cloud document AI** (Google Document AI, Azure Document Intelligence, AWS Textract) returns
+  structured receipt fields rather than raw text and would beat any regex here — but it breaks the
+  zero-egress claim in the README's first paragraph, needs a key and a bill, and cannot work on a
+  LAN-only install, which is a supported deployment.
+- **Local structured extraction** (Donut, LayoutLM, a small vision-language model) keeps zero
+  egress and is the genuine upgrade path, but means 1-4 GB of weights against today's small ONNX
+  files, far more RAM than a Synology typically has, and tens of seconds to minutes per receipt on
+  NAS-class CPU.
+
+**The decisive argument against an engine swap is simpler than any of that:** a perfect recognizer
+still returns `$100.00` for a receipt whose total is `$47.32` and which also prints `CASH $100.00`.
+The defect is in the extractor, and no change of engine reaches it.
