@@ -650,24 +650,23 @@ looks identical is indistinguishable from a control that did nothing.
 ## I. Tables that fit today only because the data happens to be short (~20 min each)
 
 From the v1.10.1 audit. Every table in the app was checked against the ~1086px content width.
-Four were broken and are fixed (transactions, budgets, settings→accounts, import history). These
-four are not broken — they are one long name away from it, because a text column with no declared
-width takes what it wants and starves the controls beside it. Fix each the same way when it bites:
-`TableWrap fixed` plus a `<colgroup>`. Do not pre-emptively convert all of them; an unnecessary
-colgroup is a width that has to be maintained.
+Four were broken and are fixed (transactions, budgets, settings→accounts, import history). Two
+more were flagged as at-risk in that audit — not broken, but one long name away from it, because
+a text column with no declared width takes what it wants and starves the controls beside it. The
+other two originally listed here, `settings/users/users-manager.tsx` and
+`settings/item-types/item-types-manager.tsx`, no longer describe the current markup: the
+v1.11.0 row-controls redesign collapsed their side-by-side forms and buttons into a single
+kebab menu (and, for item-types, an auto-saving name input), so the cells this item used to warn
+about don't exist anymore. Fix each remaining one the same way when it bites: `TableWrap fixed`
+plus a `<colgroup>`. Do not pre-emptively convert all of them; an unnecessary colgroup is a width
+that has to be maintained.
 
-- **`settings/users/users-manager.tsx`** — worst of the four, and the worst remaining table in the
-  app. Three forms (Deactivate, a password input + Reset password, Reset MFA) share one ~522px
-  Actions cell with roughly 45px of headroom. One long display name or username tips it over and
-  the forms stack.
-- **`settings/item-types/item-types-manager.tsx`** — Name accepts 60 characters. A long type name
-  reaches ~1276px and starves a control cell holding an input, a select and three buttons.
 - **`settings/managers/managers-client.tsx`** (merchant rules table) — ~926px today; a long
   monospace pattern beside a "Parent › Child" category label reaches ~1100px and squeezes the
   trailing delete button.
 - **`warranties/warranties-client.tsx`** — ~1090px, already at the edge, but read-only: four
   `whitespace-nowrap` cells plus two badges. Its failure mode is a horizontal scrollbar, not a
-  starved control, so it is the least urgent of the four.
+  starved control, so it is the least urgent of the two.
 
 Also noted and deliberately left alone: `reports/reports-client.tsx`'s month-over-month table grows
 a column per month and will exceed any fixed width over a long range. It has no control to starve
@@ -699,3 +698,29 @@ not need in order to assert that NO inference ran. Assert on the session spy, wi
 stubbed, so the test measures the code rather than the machine. **Two OCR tests have now flaked
 this way; if a third appears, treat the suite's OCR integration layer as the problem rather than
 each test.**
+
+---
+
+## v1.11.0 leftovers (found during the row-controls redesign fix wave, deliberately not fixed mid-release)
+
+**L. Auto-save success is silent to assistive tech (~20 min).** `StatusSlot` in
+`src/components/ui/AutoSave.tsx` renders the pending spinner and the "saved" tick with
+`aria-hidden="true"`, on the reasoning that a purely visual tick beside a control someone is
+looking at needs no announcement. That reasoning only covers sight: a screen-reader user who
+changes an `AutoSaveSelect`, an `AutoSaveCheckbox` or commits an `AutoSaveTextInput` gets no
+confirmation that anything happened at all, while a REFUSED save is announced (`ErrorLine` uses
+`role="alert"`). The asymmetry is the bug — success and failure should both be observable, not
+just failure. Fix shape: give the saved state a polite live region (`aria-live="polite"`,
+distinct from the hidden decorative icon) so "Saved" is announced without interrupting whatever
+the user does next; keep it terse so it doesn't turn into chatter on a control someone edits
+repeatedly.
+
+**M. Kebab accessible names collide for identical transaction descriptions (~15 min).** Each row's
+`RowMenuButton` on `/transactions` derives its accessible name from the row's description (see
+`transactions-client.tsx`'s per-row `RowMenu`), so two transactions with the same merchant text on
+the same statement — a common case, e.g. two identical coffee-shop charges — produce two "⋯" buttons
+with the same accessible name and nothing else to tell them apart for a screen-reader or
+`getByRole` user. Sighted users disambiguate by row position/amount/date; neither is in the name.
+Fix shape: append something that is unique per row without being noisy for the common case, e.g.
+the row's date (or date + amount), the same way other rows in this app compose an accessible name
+from more than one field when the primary one repeats.
