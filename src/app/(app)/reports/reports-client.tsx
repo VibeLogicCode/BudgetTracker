@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { CashflowChart } from '@/components/charts/CashflowChart';
 import { CategoryBarChart } from '@/components/charts/CategoryBarChart';
 import { DebtTrendChart } from '@/components/charts/DebtTrendChart';
@@ -162,11 +163,27 @@ export function ReportsClient({
         />
         <CardBody padded={false}>
           {baselineMonthsUsed < 3 ? (
-            <EmptyState icon={ReportsIcon} title="Not enough history yet">
+            <EmptyState
+              icon={ReportsIcon}
+              title="Not enough history yet"
+              action={
+                <Link href="/import" className="btn btn--secondary btn--sm">
+                  Import older statements
+                </Link>
+              }
+            >
               Baselines appear after three full calendar months.
             </EmptyState>
           ) : baselines.length === 0 ? (
-            <EmptyState icon={ReportsIcon} title="No category has enough regular spend for a baseline yet">
+            <EmptyState
+              icon={ReportsIcon}
+              title="No category has enough regular spend for a baseline yet"
+              action={
+                <Link href="/import" className="btn btn--secondary btn--sm">
+                  Import more statements
+                </Link>
+              }
+            >
               A category needs a median spend above the suggestion floor, and this household's does not clear it yet.
             </EmptyState>
           ) : (
@@ -214,7 +231,15 @@ export function ReportsClient({
       <Card>
         <CardHeader title="Category breakdown" description="Net spend per category over the range." />
         {breakdown.length === 0 ? (
-          <EmptyState icon={ReportsIcon} title="Nothing spent in this range">
+          <EmptyState
+            icon={ReportsIcon}
+            title="Nothing spent in this range"
+            action={
+              <Link href="/reports" className="btn btn--secondary btn--sm">
+                Clear filters
+              </Link>
+            }
+          >
             Widen the dates, or import the statements that cover them.
           </EmptyState>
         ) : (
@@ -227,7 +252,15 @@ export function ReportsClient({
       <Card>
         <CardHeader title="Cash flow and savings rate" description="Income and spend by month over the range above." />
         {cashflow.length === 0 ? (
-          <EmptyState icon={ReportsIcon} title="Nothing to show for this range" />
+          <EmptyState
+            icon={ReportsIcon}
+            title="Nothing to show for this range"
+            action={
+              <Link href="/reports" className="btn btn--secondary btn--sm">
+                Clear filters
+              </Link>
+            }
+          />
         ) : (
           <CardBody className="flex flex-col gap-3">
             <CashflowChart data={cashflow} />
@@ -239,7 +272,15 @@ export function ReportsClient({
       <Card>
         <CardHeader title="Month over month" description="The same categories, month by month." />
         {monthOverMonth.rows.length === 0 ? (
-          <EmptyState icon={ReportsIcon} title="No months to compare yet" />
+          <EmptyState
+            icon={ReportsIcon}
+            title="No months to compare yet"
+            action={
+              <Link href="/reports" className="btn btn--secondary btn--sm">
+                Clear filters
+              </Link>
+            }
+          />
         ) : (
           <TableWrap bare>
             <thead>
@@ -276,7 +317,15 @@ export function ReportsClient({
           description={`${monthLabel(yoyMonth)} compared with last month and the same month last year.`}
         />
         {yoy.length === 0 ? (
-          <EmptyState icon={ReportsIcon} title="Nothing to compare yet" />
+          <EmptyState
+            icon={ReportsIcon}
+            title="Nothing to compare yet"
+            action={
+              <Link href="/reports" className="btn btn--secondary btn--sm">
+                Clear filters
+              </Link>
+            }
+          />
         ) : (
           <TableWrap bare>
             <thead>
@@ -306,7 +355,15 @@ export function ReportsClient({
       <Card>
         <CardHeader title="Who spent it" description="Split by the person each transaction is attributed to." />
         {split.length === 0 ? (
-          <EmptyState icon={ReportsIcon} title="Nothing to split yet" />
+          <EmptyState
+            icon={ReportsIcon}
+            title="Nothing to split yet"
+            action={
+              <Link href="/reports" className="btn btn--secondary btn--sm">
+                Clear filters
+              </Link>
+            }
+          />
         ) : (
           <ul className="border-t border-line text-sm">
             {split.map((row) => (
@@ -325,7 +382,15 @@ export function ReportsClient({
       <Card>
         <CardHeader title="Top merchants" description="The largest net charges over the range above." />
         {merchants.length === 0 ? (
-          <EmptyState icon={ReportsIcon} title="No merchant charges in this range">
+          <EmptyState
+            icon={ReportsIcon}
+            title="No merchant charges in this range"
+            action={
+              <Link href="/reports" className="btn btn--secondary btn--sm">
+                Clear filters
+              </Link>
+            }
+          >
             Widen the dates, or import the statements that cover them.
           </EmptyState>
         ) : (
@@ -355,7 +420,15 @@ export function ReportsClient({
       <Card>
         <CardHeader title="Net worth" description="Assets minus debts and loans, carried forward from the balances you have on file." />
         {netWorth.length === 0 ? (
-          <EmptyState icon={ReportsIcon} title="No balances recorded yet">
+          <EmptyState
+            icon={ReportsIcon}
+            title="No balances recorded yet"
+            action={
+              <Link href="/settings/accounts" className="btn btn--secondary btn--sm">
+                Record a balance
+              </Link>
+            }
+          >
             Record a balance for at least one account in Settings and Accounts to see net worth here.
           </EmptyState>
         ) : (
@@ -388,7 +461,15 @@ export function ReportsClient({
           }
         />
         {taxRows.length === 0 ? (
-          <EmptyState icon={ReportsIcon} title="Nothing marked tax-relevant yet">
+          <EmptyState
+            icon={ReportsIcon}
+            title="Nothing marked tax-relevant yet"
+            action={
+              <Link href="/settings/managers" className="btn btn--secondary btn--sm">
+                Mark categories as tax relevant
+              </Link>
+            }
+          >
             Mark categories as tax relevant in Settings and Managers to see them here.
           </EmptyState>
         ) : (
@@ -454,7 +535,15 @@ export function ReportsClient({
               nothing to show. This also retires what was otherwise a dead branch, since the
               current month is always non-null once the card renders at all. */}
           {debt.filter((point) => point.owedCents !== null).length < 2 ? (
-            <EmptyState icon={LoanIcon} title="Not enough history yet">
+            <EmptyState
+              icon={LoanIcon}
+              title="Not enough history yet"
+              action={
+                <Link href="/import" className="btn btn--secondary btn--sm">
+                  Import older statements
+                </Link>
+              }
+            >
               The chart appears after a month of tracked activity.
             </EmptyState>
           ) : (
