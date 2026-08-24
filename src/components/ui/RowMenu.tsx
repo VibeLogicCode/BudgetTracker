@@ -172,7 +172,7 @@ export function RowMenu({ label, children }: { label: string; children: ReactNod
             aria-label={label}
             onKeyDown={onKeyDown}
             style={{ position: 'fixed', top: position.top, left: position.left, width: MENU_WIDTH_REM }}
-            className="z-40 flex flex-col gap-0.5 rounded-md border border-line bg-surface p-1 shadow-card"
+            className="z-50 flex flex-col gap-0.5 rounded-md border border-line bg-surface p-1 shadow-card"
           >
             {children}
           </div>
@@ -225,8 +225,10 @@ export function RowMenuForm({
     // Closing in onSubmit (not onClick) so the submission has already started -- the same idiom
     // accounts-manager.tsx uses for its editor row, `onSubmit={() => setEditing(null)}`.
     // Wrapped so the return type matches <form>'s own `action` prop (void | Promise<void>):
-    // the public `action` signature stays `Promise<unknown>` because that is what
-    // useActionState's dispatcher returns, and callers must not have to narrow it themselves.
+    // the public `action` signature stays `Promise<unknown>` because that is the frozen
+    // useActionState dispatcher contract this component is built against -- the union is wide
+    // enough that any async server action already fits it, so callers must not have to narrow
+    // it themselves.
     <form
       action={(formData: FormData) => {
         void action(formData);
