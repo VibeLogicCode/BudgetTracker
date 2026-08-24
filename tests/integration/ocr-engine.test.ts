@@ -131,7 +131,20 @@ afterEach(async () => {
   current = null;
   if (originalDataDir === undefined) delete process.env.DATA_DIR;
   else process.env.DATA_DIR = originalDataDir;
-  fs.rmSync(dataDir, { recursive: true, force: true });
+  // `force` covers a missing path, NOT an EPERM from a handle Windows has not let go of yet.
+  // releaseOcrEngine() above asks the session to close, but the OS can lag behind the await, so
+  // on Windows this hook threw `EPERM ...\budget-ocr-int-XXXXXX` and vitest attributed it to
+  // whichever test ran last -- reporting a red assertion that had in fact passed. maxRetries is
+  // Node's own answer to exactly that (EPERM/EBUSY/ENOTEMPTY, Windows-only in practice).
+  //
+  // If it still will not go after a second of retries, that is a real handle leak and worth
+  // seeing, but it is still not a test result: deleting a temp directory is cleanup, and failing
+  // the run for it converts a passing suite into a mystery. So it warns rather than throws.
+  try {
+    fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
+  } catch (error) {
+    console.warn(`[ocr-engine.test] could not remove ${dataDir}; a handle is probably still open`, error);
+  }
 });
 
 describe('MUST-13.4: the whole engine path against a fake session set', () => {

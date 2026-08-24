@@ -245,9 +245,39 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.9.0 release', () => {
+  it('MUST-7.1: the 1.10.0 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.9.0');
+    expect(pkg.version).toBe('1.10.0');
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toMatch(/^## \[1\.10\.0\] - 2026-08-23$/m);
+    // An empty Unreleased section is left in place for the next session.
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.10.0]'));
+    const patch = changelog.slice(changelog.indexOf('## [1.10.0]'), changelog.indexOf('## [1.9.0]'));
+    expect(patch).toMatch(/### Added/);
+    expect(patch).toMatch(/### Fixed/);
+    // The release's own headline claims, one per surface, so a section that quietly loses one
+    // fails here rather than shipping a changelog that undersells what an install gained.
+    expect(patch).toMatch(/Help/);
+    expect(patch).toMatch(/getting-started card/i);
+    expect(patch).toMatch(/What is this page for\?/);
+    // A documentation release must SAY it moves no money. A reader who thought their balances
+    // had been recomputed would go looking for a difference that is not there -- the same
+    // reasoning that made 1.9.0 state it changed nothing about the running app.
+    expect(patch).toMatch(/No financial calculation changed/i);
+    expect(patch).toMatch(/no database migration/i);
+    // Ruling A2: the help page must not dispense financial advice, and the changelog must not
+    // imply it does. This is the one claim in the release that would be a product change
+    // rather than a documentation change if it were ever true.
+    expect(patch).not.toMatch(/how much you should (spend|save)/i);
+    // The README correction is a privacy claim, so it has to be recorded as one rather than
+    // filed as a typo: the old wording overstated what a sharing pack reveals.
+    expect(patch).toMatch(/sharing packs/i);
+    expect(read('README.md')).not.toMatch(/redacted slice/);
+  });
+
+  it('MUST-7.1: the 1.9.0 release is still recorded intact (append-only discipline)', () => {
+    const pkg = JSON.parse(read('package.json')) as { version: string };
+    expect(pkg.version).not.toBe('1.9.0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.9\.0\] - 2026-08-23$/m);
     // An empty Unreleased section is left in place for the next session.

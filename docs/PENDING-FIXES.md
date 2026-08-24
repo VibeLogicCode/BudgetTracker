@@ -452,3 +452,68 @@ amd64 figure lands near arm64's, there is no anomaly and this item closes with n
 installs `@img/sharp-win32-x64` (18.3 MB) and `@img/sharp-wasm32` (8.6 MB); a Linux image build
 installs the Linux platform packages instead. The `@img` figure above is an estimate, not a
 measurement of the image.
+
+---
+
+## v1.10.0 leftovers (found by the onboarding work, deliberately not fixed mid-release)
+
+**A. `personSpendSplit` has an unreachable empty state (~10 min).** In
+`src/app/(app)/reports/reports-client.tsx` the "Nothing to split yet" `EmptyState` is gated on
+`split.length === 0`, but `personSpendSplit` unconditionally pushes an "unattributed" row even at
+zero, so the array is never empty. The empty state was given an action for consistency with the
+guard, but the branch looks dead. Either the push is wrong or the empty state should go — read
+`personSpendSplit` and decide which, rather than deleting the branch on the strength of this note.
+
+**B. Guard 2 matches href prefixes (~15 min, only if a singular route is ever added).**
+`tests/ops/onboarding-coverage.test.ts` guard 2 asserts each `NAV` href appears in the help
+content as a substring. `/settings` currently matches six times because `/settings/accounts`,
+`/settings/backups` and friends contain it. Harmless today. It would silently accept a future
+`/report` or `/budget` route that is a strict prefix of an already-documented path — the guard
+would pass while that route went undocumented, which is the one failure this guard exists to
+prevent. Fix by matching the href as a whole path segment rather than a bare substring.
+
+**C. Guard 3 searches every local module a page imports (~15 min).** For `/settings` that is four
+files, so a stray `<PageGuide` in a sibling panel would satisfy the route even if the page itself
+lost its own. Tightening it means naming which file counts, which is what ruling A7 forbids, so
+the broad version shipped and the failure message prints the searched set. Revisit only if a false
+pass actually happens.
+
+**D. Budgets and Settings guide panels use a derived-but-approximate `empty` (no action needed).**
+Neither page has an `EmptyState` to borrow a condition from. Budgets uses
+`householdTotals.budgetedLimitCents === 0` — nobody has set a limit anywhere — which is the honest
+equivalent. Settings passes `empty={false}` because an index of links renders identically on a
+full and a virgin database. Recorded so a future reader does not mistake either for an oversight.
+
+**E. `ocr-engine.test.ts` teardown could not delete its temp directory on Windows (FIXED in
+v1.10.0).** Found during the v1.10.0 release run and unrelated to it. A full-suite run reported
+`MUST-4.40: a session that never settles fails with the timeout message` as failing, but the
+assertions passed: the throw came from the `afterEach` hook, `fs.rmSync(dataDir, {recursive,
+force})` raising `EPERM` on a temp directory Windows still held a handle to, and vitest attributes
+a hook throw to whichever test ran last. `force` covers a missing path, not an open handle, and
+`releaseOcrEngine()` can return before the OS has actually let go.
+
+Fixed with Node's own `maxRetries`/`retryDelay` (its answer to EPERM/EBUSY on Windows), and a
+`try`/`catch` that warns instead of throwing, because removing a temp directory is cleanup and not
+a test result. A persistent failure now prints the path and stays visible without turning a green
+suite red.
+
+**Worth remembering as a diagnosis, not just a fix:** the first read of this was "a timeout test is
+wall-clock-flaky under load", which was wrong and would have led to raising a timeout that was
+never the problem. The line number in the stack -- a teardown hook, not the test body -- was what
+settled it. A named test in a vitest failure is not necessarily the code that threw.
+
+**F. `[vitest-worker]: Timeout calling "onTaskUpdate"` makes a fully passing local suite exit 1
+(~30 min, local only).** As of v1.10.0 the suite is 249 files / 3750 tests, and every local full
+run reports all files passed, all tests passed, **and** one unhandled error, which sets exit 1. The
+stack is entirely inside `node_modules/vitest/dist/chunks/rpc.*.js` -- not one application frame.
+It is the worker missing its RPC deadline while reporting task updates, not a test result.
+
+Two things point at the environment rather than the code: the working copy sits inside a
+OneDrive-synced directory (the stack literally shows `OneDrive%20-%20REDACTED`), and
+OneDrive's filter driver stalls exactly this kind of many-small-writes load on Windows; and Linux
+CI on the same commits does not report it. **Treat CI, not this machine, as the gate for suite
+health.**
+
+If it becomes worth fixing: raise the worker RPC timeout, or reduce reporter chatter by pinning a
+`pool`/`maxWorkers` in `vitest.config.ts`. **Do not chase it as a product bug** -- and do not
+"resolve" it by ignoring exit codes locally, because that would also hide a real failure.

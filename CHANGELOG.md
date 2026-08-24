@@ -21,6 +21,48 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.10.0] - 2026-08-23
+
+Guidance, not arithmetic. **No financial calculation changed in this release** — no balance, no
+budget, no total, no category is computed differently than it was in 1.9.0. Everything below is
+about the app explaining itself. There is no database migration.
+
+### Added
+
+- **Help**, a new section in the sidebar and a link in the footer of every page. It has two parts:
+  one suggested monthly routine, and a plain-language guide to every screen plus the features
+  nothing on screen advertises — sharing packs, per-cardholder attribution on a joint card,
+  retiring a bank mapping without deleting it, statement balances, receipt text search, optional
+  bank sync, and backups. It ends with a short glossary. The page prints: use your browser's
+  Print or Save as PDF and the sidebar, header and footer drop away, so the guide can be read on
+  paper by anyone in the household who would rather not read it on a screen.
+- **A getting-started card on the Dashboard** listing what is left to set up — add a bank account,
+  then import your first statement — with a link straight to each. It reads the actual state of
+  your data rather than remembering what you clicked, and it disappears for good once both are
+  done, so there is no notice to dismiss. Members who cannot add accounts are not shown steps
+  they cannot take.
+- **Every screen explains itself while it is empty.** A short "What is this page for?" panel sits
+  under the heading of all nine sections, open while that page has nothing to show and collapsed
+  once it does — the explanation is there when you need it and out of the way when you do not.
+
+### Fixed
+
+- **Nineteen empty screens dead-ended onto nothing.** Every empty list, panel and report now
+  offers the next step, and the offer matches the reason it is empty: create the first one, clear
+  a filter that is hiding existing rows, import older statements when a chart needs more months,
+  or open the setting that has not been configured yet. Two report panels were mislabelled as
+  needing more history when they were really waiting on a setting — "no balances recorded" and
+  "nothing marked tax-relevant" now point at the setting that fixes them instead of at Import,
+  where nothing you did would have helped.
+- **The README described sharing packs backwards.** It called a pack "a redacted slice of your
+  data" to hand to an accountant. A pack contains no transaction, amount, balance, receipt or
+  person: it carries your categories and the merchant rules the categorizer has learned, or your
+  import column mappings. It is safe to give to anyone, and of no use to an accountant — for real
+  figures, export a CSV from Reports. The old wording overstated what a pack reveals, which is the
+  worse direction for a claim about privacy to be wrong in.
+- The Dashboard no longer shows an admin the same "add your bank accounts" prompt twice, once as a
+  banner and once as a setup step.
+
 ## [1.9.0] - 2026-08-23
 
 ### Changed
