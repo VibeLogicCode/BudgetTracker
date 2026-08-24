@@ -70,7 +70,7 @@ used by `reviewQueueCount()` and `countMatchingMerchant()` — not `listAccounts
 
 ```ts
 export interface OnboardingStep {
-  key: 'account' | 'import' | 'review';
+  key: 'account' | 'import';
   title: string;
   body: string;
   href: string;
@@ -87,10 +87,22 @@ Signals, in order:
 |---|---|---|
 | `account` | at least one row in `accounts` | `/settings/accounts` |
 | `import` | at least one row in `imports` | `/import` |
-| `review` | `reviewQueueCount() === 0` **and** the `import` step is done | `/review` |
 
-The extra condition on `review` matters: an empty database has an empty review queue, so without
-it the step would read as already done before any data exists.
+**Both signals latch, and that is the requirement — not a coincidence.** A household adds its
+first account once and imports once; neither is ever undone in practice. Filtering on them is
+therefore genuinely one-shot, which is what lets ruling A9 refuse a dismiss control.
+
+**"Clear the review queue" was a third step and was cut during implementation.** The review queue
+is not a milestone — it refills on every import. Keyed on `reviewQueueCount() === 0`, the step
+un-completes itself, so the card returns in month fourteen still headed "Getting started",
+directly above the existing "N transactions need review" banner that already reports the same
+count. That does not merely read badly: ruling A9 justified having no dismiss button on the
+promise that the card disappears for good, so a step that can un-complete breaks the argument for
+the card's shape, not just its wording. `tests/lib/onboarding.test.ts` pins this with an explicit
+regression case — setup stays finished after the queue refills.
+
+Cutting it leaves Review explained in four other places: the count badge on its own nav item, the
+dashboard banner, its `PageGuide`, and its section in the help page.
 
 ## Component 2 — GettingStartedCard
 
@@ -101,7 +113,16 @@ Props-only and dumb: it receives `steps: OnboardingStep[]` and renders nothing w
 empty. Placed first in the Dashboard card stack, rendered unconditionally, following the
 `LoansCard` / `ComingUpCard` self-hiding comment already in that file.
 
-**Why three steps and not six (ruling A9).** Budgets and goals are where this app's value is, and
+**The role rule lives on the page, not in the card.** The card is deliberately role-blind. Only an
+admin can create an account, and every import must land in one, so a member with no accounts yet
+has no step they can actually take — they get the existing "ask an admin to add them" banner and no
+card. Once accounts exist, importing is something a member can do, so the card returns without the
+step that was never theirs. The admin half of that banner was **deleted**: it became the card's
+first step, which says the same thing with the reason attached, and keeping both put two prompts to
+the same page one above the other on a household's very first screen. What survived is the half the
+role-blind card cannot express.
+
+**Why a short list and not six steps (ruling A9).** Budgets and goals are where this app's value is, and
 the temptation is to make them steps four and five. They are not steps, because a household that
 only wants transaction tracking would face a card it can never complete, and a per-step "skip"
 requires a per-user flag, which requires a migration — spending schema on a dismiss button.

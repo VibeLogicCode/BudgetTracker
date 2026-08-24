@@ -48,9 +48,9 @@ function setup() {
 const keysOf = () => onboardingSteps().map((step) => step.key);
 
 describe('onboardingSteps', () => {
-  it('returns all three steps in dependency order for an empty database', () => {
+  it('returns both steps in dependency order for an empty database', () => {
     setup();
-    expect(keysOf()).toEqual(['account', 'import', 'review']);
+    expect(keysOf()).toEqual(['account', 'import']);
   });
 
   it('carries the copy each step needs to render its own call to action', () => {
@@ -67,30 +67,43 @@ describe('onboardingSteps', () => {
   it('drops the account step once one account exists', () => {
     const { addAccount } = setup();
     addAccount();
-    expect(keysOf()).toEqual(['import', 'review']);
+    expect(keysOf()).toEqual(['import']);
   });
 
-  it('leaves only review when an import exists but the queue is not empty', () => {
-    const { addAccount, addImport, addUnreviewedTxn } = setup();
+  it('returns no steps once an account and an import both exist', () => {
+    const { addAccount, addImport } = setup();
     const account = addAccount();
     addImport(account);
-    addUnreviewedTxn(account);
-    expect(keysOf()).toEqual(['review']);
-  });
-
-  it('returns no steps once an import exists and the queue is empty', () => {
-    const { addAccount, addImport, addReviewedTxn } = setup();
-    const account = addAccount();
-    addImport(account);
-    addReviewedTxn(account);
     expect(onboardingSteps()).toEqual([]);
   });
 
-  it('still reports review as undone when nothing has been imported yet', () => {
-    const { addAccount } = setup();
-    addAccount();
-    // The review queue is trivially empty here because there are no transactions at all.
-    // Without the extra condition tying review to the import step, this would read as done.
-    expect(keysOf()).toEqual(['import', 'review']);
+  /**
+   * The regression guard for the defect this module was rewritten to fix.
+   *
+   * A third step keyed on an empty review queue made setup un-finish itself: the queue refills
+   * on every import, so the card came back -- still headed "Getting started" -- in month
+   * fourteen, above the banner that already reports the same count. Ruling A9 justified having
+   * no dismiss control on the promise that the card disappears for good, so a step that can
+   * un-complete breaks the reason the card has no dismiss button, not merely its wording.
+   *
+   * Both remaining signals latch. A dirty queue must therefore change nothing here.
+   */
+  it('stays finished when the review queue refills after setup, so the card cannot return', () => {
+    const { addAccount, addImport, addUnreviewedTxn } = setup();
+    const account = addAccount();
+    addImport(account);
+    expect(onboardingSteps()).toEqual([]);
+
+    addUnreviewedTxn(account);
+    expect(onboardingSteps()).toEqual([]);
+  });
+
+  it('keeps the import step while an account exists but nothing has been imported', () => {
+    const { addAccount, addReviewedTxn } = setup();
+    const account = addAccount();
+    // Transactions can exist without an import row (added by hand, or synced), and an empty
+    // review queue must not be mistaken for a finished import either way.
+    addReviewedTxn(account);
+    expect(keysOf()).toEqual(['import']);
   });
 });

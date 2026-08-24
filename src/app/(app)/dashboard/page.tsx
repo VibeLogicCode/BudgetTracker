@@ -9,16 +9,19 @@ import { currentMonth, monthEnd, monthLabel, monthStart, todayIso } from '@/lib/
 import { listGoals } from '@/lib/goals';
 import { listLoans } from '@/lib/loans';
 import { netWorthHint, netWorthOverTime } from '@/lib/networth';
+import { onboardingSteps } from '@/lib/onboarding';
 import { cashflowTrend, topMerchants } from '@/lib/reports';
 import { expiringSoonItems } from '@/lib/warranty/search';
 import { formatCents } from '@/lib/money';
 import { BudgetProgressBar } from '@/components/BudgetProgressBar';
 import { ComingUpCard } from '@/components/ComingUpCard';
+import { GettingStartedCard } from '@/components/GettingStartedCard';
 import { GoalCard } from '@/components/GoalCard';
 import { LoansCard } from '@/components/LoansCard';
 import { CashflowChart } from '@/components/charts/CashflowChart';
 import { AlertIcon, ArrowRightIcon, InfoIcon } from '@/components/icons';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
+import { PageGuide } from '@/components/ui/PageGuide';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { StatTile } from '@/components/ui/StatTile';
 import { TableWrap } from '@/components/ui/Table';
@@ -48,6 +51,19 @@ export default async function DashboardPage({
   // install has none. Say so here rather than letting the Import page
   // dead-end.
   const hasAccounts = listAccounts().length > 0;
+
+  // Task 6 (spec 2026-08-23, ruling A4): counted, not remembered. Every step's done-ness is
+  // re-derived per render inside onboarding.ts, so this page holds no setup state of its own.
+  // GettingStartedCard is deliberately role-blind, so the role rule lives here. Only an admin
+  // can create an account, and every import has to land in one -- so for a member with no
+  // accounts yet there is no step they can actually take, and the "ask an admin" banner below
+  // is the honest thing to show instead of a card whose buttons would bounce them. Once
+  // accounts exist, importing is something a member can do, so the card comes back minus the
+  // step that was never theirs.
+  const setupSteps =
+    user.role === 'admin' || hasAccounts
+      ? onboardingSteps().filter((step) => user.role === 'admin' || step.key !== 'account')
+      : [];
 
   // MUST-10.6: the widget respects the dashboard's existing person switcher. Household
   // shows every item, a selected person shows only items they own.
@@ -79,6 +95,11 @@ export default async function DashboardPage({
   const netCents = thisMonth?.netCents ?? incomeCents - totals.totalSpentCents;
 
   const budgetRows = rows.filter((row) => !row.isIncome && (row.limitCents !== null || row.spentCents !== 0));
+  // What the guide panel's open state is derived from. `merchants` is reused rather than counted
+  // again because it is already this page's own test for a month with nothing in it -- the one
+  // the Top merchants card prints "No transactions this month yet" for -- so the panel cannot be
+  // open on a month this page is otherwise calling full.
+  const monthIsEmpty = merchants.length === 0;
   const scopedPerson = scopeUserId === null ? null : people.find((person) => person.id === scopeUserId);
 
   return (
@@ -106,22 +127,37 @@ export default async function DashboardPage({
         }
       />
 
-      {!hasAccounts ? (
-        user.role === 'admin' ? (
-          <CalloutLink href="/settings/accounts" tone="info">
-            Add your bank accounts to get started
-          </CalloutLink>
-        ) : (
-          // Only admins can create accounts, so pointing a member at a page
-          // that would bounce them straight back here helps nobody.
-          <div
-            role="status"
-            className="flex items-center gap-2.5 rounded-md bg-info-soft px-3.5 py-3 text-sm text-info-soft-fg"
-          >
-            <InfoIcon className="h-4 w-4 shrink-0" />
-            No bank accounts yet — ask an admin to add them to get started.
-          </div>
-        )
+      <PageGuide empty={monthIsEmpty}>
+        <p>
+          This is the current month at a glance: what the household spent, what came in, and how
+          much of any limit you set is left. Every figure here is read back from imported
+          statements, so nothing on this screen is edited in place.
+        </p>
+        <p>
+          The pills beside the greeting scope the spending figures to one household member, or to
+          everyone. Loans, net worth and upcoming bills stay household-wide whichever pill is
+          chosen, because a balance owed is not attributed to a person the way a transaction is.
+        </p>
+        <p>
+          Cards on this page hide themselves when they have nothing to say. A short page means
+          there is nothing on file for them yet, not that something failed.
+        </p>
+      </PageGuide>
+
+      {/* The admin half of this banner became GettingStartedCard's first step, which says the
+          same thing with the reason attached, so keeping both put two prompts to the same page
+          one above the other on a household's very first screen. What survives is the half the
+          card cannot express: the card is role-blind, and only an admin can create an account,
+          so pointing a member at a page that would bounce them straight back here helps
+          nobody. */}
+      {!hasAccounts && user.role !== 'admin' ? (
+        <div
+          role="status"
+          className="flex items-center gap-2.5 rounded-md bg-info-soft px-3.5 py-3 text-sm text-info-soft-fg"
+        >
+          <InfoIcon className="h-4 w-4 shrink-0" />
+          No bank accounts yet — ask an admin to add them to get started.
+        </div>
       ) : null}
 
       {reviewCount > 0 ? (
@@ -129,6 +165,12 @@ export default async function DashboardPage({
           {reviewCount} transactions need review
         </CalloutLink>
       ) : null}
+
+      {/* Task 6: self-hiding, same pattern as LoansCard below -- absent once every step is done,
+          which is the whole of the dismiss story (ruling A9). First of the cards, and above the
+          tiles rather than among them: during setup the tiles are all zeros, so the order of
+          operations is the only thing on this page worth reading. */}
+      <GettingStartedCard steps={setupSteps} />
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatTile

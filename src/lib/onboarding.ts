@@ -1,7 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { accounts, imports } from '@/db/schema';
-import { reviewQueueCount } from '@/lib/categorize/engine';
 
 /**
  * What "set up" means, in one place (spec 2026-08-23, ruling A4).
@@ -17,7 +16,7 @@ import { reviewQueueCount } from '@/lib/categorize/engine';
  * listImportHistory() would load and join whole result sets to answer a boolean.
  */
 export interface OnboardingStep {
-  key: 'account' | 'import' | 'review';
+  key: 'account' | 'import';
   title: string;
   body: string;
   href: string;
@@ -44,13 +43,6 @@ const STEPS: readonly OnboardingStep[] = [
     href: '/import',
     cta: 'Start an import',
   },
-  {
-    key: 'review',
-    title: 'Clear the review queue',
-    body: 'The categorizer flags anything it was unsure about. Accept or correct each one and it remembers that merchant next time.',
-    href: '/review',
-    cta: 'Open Review',
-  },
 ];
 
 function hasAnyAccount(): boolean {
@@ -73,19 +65,23 @@ function hasAnyImport(): boolean {
  * The steps still undone, in dependency order. An empty array means setup is complete,
  * which is how the card knows to render nothing.
  *
- * `review` is done only when the queue is empty AND something has been imported. Without
- * that second condition an untouched database -- which trivially has an empty queue --
- * would report the last step as finished before any data existed, so a new household would
- * be shown a checklist that was already two-thirds green and told nothing about Review.
+ * BOTH SIGNALS LATCH, AND THAT IS THE WHOLE REASON THERE ARE ONLY TWO OF THEM.
+ *
+ * "Clear the review queue" was a third step in the design and had to be cut: the queue is
+ * not a milestone, it refills on every import. A step keyed on `reviewQueueCount() === 0`
+ * makes this card reappear in month fourteen, still titled "Getting started", directly above
+ * the "N transactions need review" banner that already says so -- and ruling A9 promised a
+ * card that disappears for good and justified having no dismiss control on exactly that
+ * promise. An account row and an import row, by contrast, are things a household does once
+ * and never undoes, so filtering on them really is one-shot.
+ *
+ * Review is not left unexplained by the cut. It has the count badge on its own nav item, the
+ * dashboard banner, its own page guide, and a section in the help page.
  */
 export function onboardingSteps(): OnboardingStep[] {
-  const accountDone = hasAnyAccount();
-  const importDone = hasAnyImport();
-  const reviewDone = importDone && reviewQueueCount() === 0;
   const done: Record<OnboardingStep['key'], boolean> = {
-    account: accountDone,
-    import: importDone,
-    review: reviewDone,
+    account: hasAnyAccount(),
+    import: hasAnyImport(),
   };
   return STEPS.filter((step) => !done[step.key]);
 }
