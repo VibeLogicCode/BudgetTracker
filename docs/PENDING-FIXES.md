@@ -644,3 +644,46 @@ returns `'You are on the newest published version.'` -- a message the user may n
 same reason. Whatever the fix, assert that the *returned message* renders, not just that the props
 refresh, so the button says something even when nothing changed. A control that greys out and then
 looks identical is indistinguishable from a control that did nothing.
+
+---
+
+## I. Tables that fit today only because the data happens to be short (~20 min each)
+
+From the v1.10.1 audit. Every table in the app was checked against the ~1086px content width.
+Four were broken and are fixed (transactions, budgets, settings→accounts, import history). These
+four are not broken — they are one long name away from it, because a text column with no declared
+width takes what it wants and starves the controls beside it. Fix each the same way when it bites:
+`TableWrap fixed` plus a `<colgroup>`. Do not pre-emptively convert all of them; an unnecessary
+colgroup is a width that has to be maintained.
+
+- **`settings/users/users-manager.tsx`** — worst of the four, and the worst remaining table in the
+  app. Three forms (Deactivate, a password input + Reset password, Reset MFA) share one ~522px
+  Actions cell with roughly 45px of headroom. One long display name or username tips it over and
+  the forms stack.
+- **`settings/item-types/item-types-manager.tsx`** — Name accepts 60 characters. A long type name
+  reaches ~1276px and starves a control cell holding an input, a select and three buttons.
+- **`settings/managers/managers-client.tsx`** (merchant rules table) — ~926px today; a long
+  monospace pattern beside a "Parent › Child" category label reaches ~1100px and squeezes the
+  trailing delete button.
+- **`warranties/warranties-client.tsx`** — ~1090px, already at the edge, but read-only: four
+  `whitespace-nowrap` cells plus two badges. Its failure mode is a horizontal scrollbar, not a
+  starved control, so it is the least urgent of the four.
+
+Also noted and deliberately left alone: `reports/reports-client.tsx`'s month-over-month table grows
+a column per month and will exceed any fixed width over a long range. It has no control to starve
+and scrolling a matrix sideways is the intended way to read one.
+
+## J. `Field` puts its hint inside the `<label>`, so hints become part of the accessible name (~30 min)
+
+Found while writing the v1.10.2 tests. `src/components/ui/form.tsx`'s `Field` renders as a `<label>`
+wrapper when no `htmlFor` is given, and the `hint` sits inside it — so the input's accessible name
+becomes "Original amount What you borrowed. Used for the payoff bar." rather than "Original amount".
+A screen reader reads the whole sentence as the field's name every time it lands there.
+
+The fix is `aria-describedby`: give the hint an id and point the input at it, so the hint is
+*described* rather than *named*. Requires the input to have an id, which is why `htmlFor` exists on
+`Field` already — the `htmlFor` branch is the shape to extend.
+
+Consequence to know about meanwhile: `getByLabelText('Original amount')` does not match those
+fields, and a test has to use a regex. That is a symptom, not the bug — do not "fix" it by loosening
+the tests.
