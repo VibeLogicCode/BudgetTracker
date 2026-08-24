@@ -48,9 +48,10 @@ describe('ItemTypesManager — create form (5b lesson, made enforceable)', () =>
     expect(select.value).toBe('warranty');
   });
 
-  it('lists a row per type, with its own kind select carrying the current value', () => {
+  it('lists a row per type, with its own name input and kind select carrying the current value', () => {
     render(<ItemTypesManager types={[type({ id: 5, name: 'Netflix', kind: 'subscription', isSubscription: true })]} />);
-    expect(screen.getByText('Netflix')).toBeTruthy();
+    const nameInput = screen.getByRole('textbox', { name: /rename netflix/i }) as HTMLInputElement;
+    expect(nameInput.value).toBe('Netflix');
     const rowSelect = screen.getByRole('combobox', { name: /kind of netflix/i }) as HTMLSelectElement;
     expect(rowSelect.value).toBe('subscription');
   });

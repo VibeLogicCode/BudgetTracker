@@ -9,6 +9,7 @@ import { Notice } from '@/components/ui/Notice';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { TableWrap } from '@/components/ui/Table';
 import { Field, inputClass, selectClass } from '@/components/ui/form';
+import { AutoSaveCheckbox, AutoSaveTextInput } from '@/components/ui/AutoSave';
 import type { CategoryRecord } from '@/lib/categories';
 import type { MerchantRuleRecord } from '@/lib/categorize/rules';
 import type { ProfileRecord, ProfileUsage } from '@/lib/import/presets';
@@ -32,6 +33,9 @@ import {
 const initial: ManagerState = {};
 
 const rowInput = 'field-control w-auto px-2 py-1 text-xs';
+
+const saveCategoryName = (formData: FormData) => renameCategoryAction({}, formData);
+const saveCategoryTaxRelevant = (formData: FormData) => setCategoryTaxRelevantAction({}, formData);
 
 /** How the delete confirm step describes what a delete will do, computed from a read path
  * (getProfileUsage, via the server page) rather than from deleteProfile's own return value --
@@ -78,9 +82,7 @@ export function ManagersClient({
   profilePackRows: ProfilesExportRow[];
 }) {
   const [createState, createCategory] = useActionState(createCategoryAction, initial);
-  const [renameState, renameCategory] = useActionState(renameCategoryAction, initial);
   const [archiveState, archiveCategory] = useActionState(archiveCategoryAction, initial);
-  const [taxState, saveCategoryTax] = useActionState(setCategoryTaxRelevantAction, initial);
   const [ruleState, saveRule] = useActionState(updateRuleAction, initial);
   const [deleteState, removeRule] = useActionState(deleteRuleAction, initial);
   const [profileState, saveProfile] = useActionState(saveProfileMappingAction, initial);
@@ -101,9 +103,7 @@ export function ManagersClient({
 
   const notice =
     createState.message ??
-    renameState.message ??
     archiveState.message ??
-    taxState.message ??
     ruleState.message ??
     deleteState.message ??
     profileState.message ??
@@ -111,9 +111,7 @@ export function ManagersClient({
     activeState.message;
   const error =
     createState.error ??
-    renameState.error ??
     archiveState.error ??
-    taxState.error ??
     ruleState.error ??
     deleteState.error ??
     profileState.error ??
@@ -168,16 +166,14 @@ export function ManagersClient({
             {categories.map((category) => (
               <tr key={category.id}>
                 <td style={{ paddingLeft: category.parentId ? 36 : 16 }}>
-                  <form action={renameCategory} className="flex items-center gap-1.5">
-                    <input type="hidden" name="categoryId" value={category.id} />
-                    <input
-                      name="name"
-                      defaultValue={category.name}
-                      aria-label={`Rename ${category.name}`}
-                      className={`w-44 ${rowInput}`}
-                    />
-                    <button type="submit" className="btn btn--ghost btn--sm px-2 text-xs">rename</button>
-                  </form>
+                  <AutoSaveTextInput
+                    name="name"
+                    defaultValue={category.name}
+                    fields={{ categoryId: String(category.id) }}
+                    action={saveCategoryName}
+                    ariaLabel={`Rename ${category.name}`}
+                    className={`w-44 ${rowInput}`}
+                  />
                 </td>
                 <td>
                   <span className={category.isIncome ? 'badge badge--green' : 'badge badge--slate'}>
@@ -186,16 +182,16 @@ export function ManagersClient({
                 </td>
                 <td>{category.isArchived ? <span className="badge badge--muted">archived</span> : null}</td>
                 <td>
-                  <form action={saveCategoryTax} className="flex items-center gap-1.5">
-                    <input type="hidden" name="categoryId" value={category.id} />
-                    <input
-                      type="checkbox"
-                      name="taxRelevant"
-                      defaultChecked={category.taxRelevant}
-                      aria-label={`Mark ${category.name} tax-relevant`}
-                    />
-                    <button type="submit" className="btn btn--ghost btn--sm px-2 text-xs">save</button>
-                  </form>
+                  {/* labelHidden: the column header already says "Tax", but the accessible name
+                      has to name the ROW, so the sentence stays and only its pixels go. */}
+                  <AutoSaveCheckbox
+                    name="taxRelevant"
+                    defaultChecked={category.taxRelevant}
+                    fields={{ categoryId: String(category.id) }}
+                    action={saveCategoryTaxRelevant}
+                    label={`Mark ${category.name} tax-relevant`}
+                    labelHidden
+                  />
                 </td>
                 <td className="text-right">
                   <form action={archiveCategory}>

@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState, useState } from 'react';
+import { useActionState } from 'react';
 import { FormError } from '@/components/FormError';
 import { SubmitButton } from '@/components/SubmitButton';
 import { WarrantiesIcon } from '@/components/icons';
@@ -10,6 +10,7 @@ import { Notice } from '@/components/ui/Notice';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { TableWrap } from '@/components/ui/Table';
 import { Field, inputClass, selectClass } from '@/components/ui/form';
+import { AutoSaveSelect, AutoSaveTextInput } from '@/components/ui/AutoSave';
 import {
   createItemTypeAction,
   deleteItemTypeAction,
@@ -25,35 +26,17 @@ const initialState: ItemTypesFormState = {};
 const rowInput = 'field-control w-auto px-2 py-1 text-xs';
 const rowButton = 'btn btn--secondary btn--sm';
 
-/**
- * Which of the three per-row actions most recently ran. Without this, a stale success
- * message from one row action (e.g. a rename) could render beside a fresh error from a
- * different one (e.g. a delete refusal) -- two unrelated results shown as if simultaneous.
- * Only the latest action's result is ever displayed.
- */
-type RowActionSlot = 'rename' | 'flag' | 'delete' | null;
+/** Bound for the auto-save controls. Type immutability on saved ITEMS is enforced server-side
+ *  and is unaffected: this renames the TYPE and changes the TYPE's kind. */
+const saveItemTypeName = (formData: FormData) => renameItemTypeAction({}, formData);
+const saveItemTypeKind = (formData: FormData) => setKindAction({}, formData);
 
 export function ItemTypesManager({ types }: { types: ItemTypeWithUsage[] }) {
   const [createState, create] = useActionState(createItemTypeAction, initialState);
-  const [activeSlot, setActiveSlot] = useState<RowActionSlot>(null);
+  const [deleteState, remove] = useActionState(deleteItemTypeAction, initialState);
 
-  const [renameState, rename] = useActionState(async (prev: ItemTypesFormState, formData: FormData) => {
-    setActiveSlot('rename');
-    return renameItemTypeAction(prev, formData);
-  }, initialState);
-  const [flagState, changeKind] = useActionState(async (prev: ItemTypesFormState, formData: FormData) => {
-    setActiveSlot('flag');
-    return setKindAction(prev, formData);
-  }, initialState);
-  const [deleteState, remove] = useActionState(async (prev: ItemTypesFormState, formData: FormData) => {
-    setActiveSlot('delete');
-    return deleteItemTypeAction(prev, formData);
-  }, initialState);
-
-  const rowState =
-    activeSlot === 'rename' ? renameState : activeSlot === 'flag' ? flagState : activeSlot === 'delete' ? deleteState : undefined;
-  const rowError = rowState?.error;
-  const rowMessage = rowState?.message;
+  const rowError = deleteState.error;
+  const rowMessage = deleteState.message;
 
   return (
     <div className="flex flex-col gap-6">
@@ -132,58 +115,40 @@ export function ItemTypesManager({ types }: { types: ItemTypeWithUsage[] }) {
             <tbody>
               {types.map((type) => (
                 <tr key={type.id} className="align-top">
-                  <td className="font-medium text-ink">{type.name}</td>
+                  <td className="font-medium text-ink">
+                    <AutoSaveTextInput
+                      name="name"
+                      defaultValue={type.name}
+                      fields={{ typeId: String(type.id) }}
+                      action={saveItemTypeName}
+                      ariaLabel={`Rename ${type.name}`}
+                      className={`w-36 ${rowInput}`}
+                    />
+                  </td>
                   <td>
-                    <span className={type.kind === 'warranty' ? 'badge badge--muted' : 'badge badge--accent'}>
-                      {ITEM_KIND_LABELS[type.kind]}
-                    </span>
+                    <AutoSaveSelect
+                      name="kind"
+                      defaultValue={type.kind}
+                      options={ITEM_KINDS.map((kind) => ({ value: kind, label: ITEM_KIND_LABELS[kind] }))}
+                      fields={{ typeId: String(type.id) }}
+                      action={saveItemTypeKind}
+                      ariaLabel={`Kind of ${type.name}`}
+                      className={rowInput}
+                    />
                   </td>
                   <td className="tabnum text-right text-muted">{type.usageCount}</td>
                   <td>
-                    <div className="flex flex-wrap gap-2">
-                      <form action={rename} className="flex gap-1">
-                        <input type="hidden" name="typeId" value={type.id} />
-                        <input
-                          name="name"
-                          defaultValue={type.name}
-                          maxLength={60}
-                          aria-label={`Rename ${type.name}`}
-                          className={`w-36 ${rowInput}`}
-                        />
-                        <button type="submit" className={rowButton}>
-                          Rename
-                        </button>
-                      </form>
-                      <form action={changeKind} className="flex gap-1">
-                        <input type="hidden" name="typeId" value={type.id} />
-                        <select
-                          name="kind"
-                          defaultValue={type.kind}
-                          aria-label={`Kind of ${type.name}`}
-                          className={rowInput}
-                        >
-                          {ITEM_KINDS.map((kind) => (
-                            <option key={kind} value={kind}>
-                              {ITEM_KIND_LABELS[kind]}
-                            </option>
-                          ))}
-                        </select>
-                        <button type="submit" className={rowButton}>
-                          Update kind
-                        </button>
-                      </form>
-                      <form action={remove}>
-                        <input type="hidden" name="typeId" value={type.id} />
-                        <button
-                          type="submit"
-                          disabled={type.usageCount > 0}
-                          title={type.usageCount > 0 ? `${type.usageCount} item(s) use this type` : undefined}
-                          className={rowButton}
-                        >
-                          Delete
-                        </button>
-                      </form>
-                    </div>
+                    <form action={remove}>
+                      <input type="hidden" name="typeId" value={type.id} />
+                      <button
+                        type="submit"
+                        disabled={type.usageCount > 0}
+                        title={type.usageCount > 0 ? `${type.usageCount} item(s) use this type` : undefined}
+                        className={rowButton}
+                      >
+                        Delete
+                      </button>
+                    </form>
                   </td>
                 </tr>
               ))}

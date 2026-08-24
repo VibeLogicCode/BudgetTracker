@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
-import { render, cleanup, fireEvent, screen } from '@testing-library/react';
+import { render, cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
 import { ManagersClient } from '@/app/(app)/settings/managers/managers-client';
 import { getBuiltinPreset } from '@/lib/import/presets';
 import type { ProfileRecord, ProfileUsage } from '@/lib/import/presets';
@@ -175,17 +175,20 @@ describe('ManagersClient — Tax checkbox', () => {
     expect((screen.getByRole('checkbox', { name: /coffee/i }) as HTMLInputElement).checked).toBe(false);
   });
 
-  it('submitting a row\'s Tax form calls setCategoryTaxRelevantAction with that category\'s id', async () => {
+  it('checking a row\'s Tax checkbox calls setCategoryTaxRelevantAction with that category\'s id', async () => {
     const { setCategoryTaxRelevantAction } = await import('@/app/(app)/settings/managers/actions');
     render(<ManagersClient {...baseProps({ categories: [category({ id: 9, name: 'Medical', taxRelevant: false })] })} />);
     const checkbox = screen.getByRole('checkbox', { name: /medical/i });
-    const form = checkbox.closest('form')!;
-    expect((form.querySelector('[name="categoryId"]') as HTMLInputElement).value).toBe('9');
-    fireEvent.submit(form);
-    expect(setCategoryTaxRelevantAction).toHaveBeenCalled();
+    fireEvent.click(checkbox);
+    await waitFor(() => expect(setCategoryTaxRelevantAction).toHaveBeenCalled());
+    // Bound as `(formData) => setCategoryTaxRelevantAction({}, formData)`, so the FormData the
+    // hook built is the mock's SECOND argument, not its first.
+    const sent = (setCategoryTaxRelevantAction as ReturnType<typeof vi.fn>).mock.calls[0][1] as FormData;
+    expect(sent.get('categoryId')).toBe('9');
   });
 
-  it('each category row has its own independent Tax form', () => {
+  it('each category row\'s Tax checkbox saves with its own category id', async () => {
+    const { setCategoryTaxRelevantAction } = await import('@/app/(app)/settings/managers/actions');
     render(
       <ManagersClient
         {...baseProps({
@@ -193,10 +196,17 @@ describe('ManagersClient — Tax checkbox', () => {
         })}
       />,
     );
-    const medicalForm = screen.getByRole('checkbox', { name: /medical/i }).closest('form')!;
-    const coffeeForm = screen.getByRole('checkbox', { name: /coffee/i }).closest('form')!;
-    expect(medicalForm).not.toBe(coffeeForm);
-    expect((medicalForm.querySelector('[name="categoryId"]') as HTMLInputElement).value).toBe('1');
-    expect((coffeeForm.querySelector('[name="categoryId"]') as HTMLInputElement).value).toBe('2');
+    const medicalCheckbox = screen.getByRole('checkbox', { name: /medical/i });
+    const coffeeCheckbox = screen.getByRole('checkbox', { name: /coffee/i });
+    expect(medicalCheckbox).not.toBe(coffeeCheckbox);
+
+    fireEvent.click(medicalCheckbox);
+    await waitFor(() => expect(setCategoryTaxRelevantAction).toHaveBeenCalledTimes(1));
+    const mock = setCategoryTaxRelevantAction as ReturnType<typeof vi.fn>;
+    expect((mock.mock.calls[0][1] as FormData).get('categoryId')).toBe('1');
+
+    fireEvent.click(coffeeCheckbox);
+    await waitFor(() => expect(setCategoryTaxRelevantAction).toHaveBeenCalledTimes(2));
+    expect((mock.mock.calls[1][1] as FormData).get('categoryId')).toBe('2');
   });
 });
