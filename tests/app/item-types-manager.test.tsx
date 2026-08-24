@@ -55,4 +55,12 @@ describe('ItemTypesManager — create form (5b lesson, made enforceable)', () =>
     const rowSelect = screen.getByRole('combobox', { name: /kind of netflix/i }) as HTMLSelectElement;
     expect(rowSelect.value).toBe('subscription');
   });
+
+  // Fix wave (2026-08-23 review, finding M2): the auto-save conversion dropped this input's
+  // maxLength, silently lifting the 60-character limit itemTypeNameSchema enforces server-side.
+  it('caps the row name input at 60 characters, matching itemTypeNameSchema', () => {
+    render(<ItemTypesManager types={[type({ id: 5, name: 'Netflix' })]} />);
+    const nameInput = screen.getByRole('textbox', { name: /rename netflix/i }) as HTMLInputElement;
+    expect(nameInput.maxLength).toBe(60);
+  });
 });

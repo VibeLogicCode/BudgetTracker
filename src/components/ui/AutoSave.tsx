@@ -217,6 +217,7 @@ export function AutoSaveTextInput({
   ariaLabel,
   inputMode = 'text',
   placeholder,
+  maxLength,
   className = AUTO_SAVE_CONTROL,
 }: {
   name: string;
@@ -226,6 +227,7 @@ export function AutoSaveTextInput({
   ariaLabel: string;
   inputMode?: 'decimal' | 'text';
   placeholder?: string;
+  maxLength?: number;
   className?: string;
 }) {
   const { save, pending, status, error } = useAutoSave(action, fields);
@@ -267,6 +269,7 @@ export function AutoSaveTextInput({
           defaultValue={defaultValue}
           inputMode={inputMode}
           placeholder={placeholder}
+          maxLength={maxLength}
           aria-label={ariaLabel}
           className={className}
           onKeyDown={(event) => {

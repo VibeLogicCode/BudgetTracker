@@ -122,6 +122,7 @@ export function ItemTypesManager({ types }: { types: ItemTypeWithUsage[] }) {
                       fields={{ typeId: String(type.id) }}
                       action={saveItemTypeName}
                       ariaLabel={`Rename ${type.name}`}
+                      maxLength={60}
                       className={`w-36 ${rowInput}`}
                     />
                   </td>
