@@ -79,7 +79,7 @@ export function UsersManager({ users }: { users: UserRecord[] }) {
               <th scope="col">Role</th>
               <th scope="col">MFA</th>
               <th scope="col">Status</th>
-              <th scope="col">Actions</th>
+              <th scope="col" />
             </tr>
           </thead>
           <tbody>
