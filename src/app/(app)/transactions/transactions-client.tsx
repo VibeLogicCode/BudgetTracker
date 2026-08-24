@@ -14,6 +14,8 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { AmountCell, TableWrap } from '@/components/ui/Table';
 import { Field, inputClass, labelClass, selectClass } from '@/components/ui/form';
 import { DateRangePicker } from '@/components/ui/DateRangePicker';
+import { AutoSaveSelect } from '@/components/ui/AutoSave';
+import { RowMenu, RowMenuButton, RowMenuForm, RowMenuLink } from '@/components/ui/RowMenu';
 import { categoryOptions, type CategoryLike } from '@/lib/category-order';
 import { type ResolvedRange } from '@/lib/date-range';
 import type { LoanLink } from '@/lib/loans';
@@ -49,8 +51,13 @@ const blankSplitPart = (): SplitPartDraft => ({ categoryId: '', amount: '', note
 
 const initial: ActionState = {};
 
-/** The dense per-row controls: small, quiet, and not competing with the amounts. */
-const rowControl = 'field-control w-auto max-w-[11rem] px-2 py-1 text-xs';
+/**
+ * The auto-save controls take `(formData) => Promise<{ error?: string }>`. Both actions are
+ * declared `(prevState, formData)` for useActionState, so the first argument is bound here --
+ * once, at module level, rather than in a closure whose identity changes on every render.
+ */
+const saveCategory = (formData: FormData) => setCategoryAction({}, formData);
+const saveAttribution = (formData: FormData) => setAttributionAction({}, formData);
 
 export function TransactionsClient({
   page,
@@ -80,7 +87,6 @@ export function TransactionsClient({
   const [renaming, setRenaming] = useState<{ id: number; current: string; merchant: string } | null>(null);
   const [splitting, setSplitting] = useState<{ id: number; amountCents: number; parts: SplitPartDraft[] } | null>(null);
   const [manualState, manualAction] = useActionState(manualEntryAction, initial);
-  const [rowState, rowAction] = useActionState(setCategoryAction, initial);
   const [attrState, attrAction] = useActionState(setAttributionAction, initial);
   const [bulkCatState, bulkCatAction] = useActionState(bulkCategorizeAction, initial);
   const [bulkTfrState, bulkTfrAction] = useActionState(bulkTransferAction, initial);
@@ -126,10 +132,10 @@ export function TransactionsClient({
   // heads-up in the toolbar below, never a disabled checkbox.
   const selectedSplitCount = selected.filter((id) => (splits[id] ?? []).length > 0).length;
   const notice =
-    manualState.message ?? rowState.message ?? attrState.message ?? bulkCatState.message ?? bulkTfrState.message ??
+    manualState.message ?? attrState.message ?? bulkCatState.message ?? bulkTfrState.message ??
     renameState.message ?? assignState.message ?? unassignState.message ?? splitState.message;
   const error =
-    manualState.error ?? rowState.error ?? attrState.error ?? bulkCatState.error ?? bulkTfrState.error ??
+    manualState.error ?? attrState.error ?? bulkCatState.error ?? bulkTfrState.error ??
     renameState.error ?? assignState.error ?? unassignState.error ?? splitState.error;
 
   // Opens this row's split editor, prefilled from its existing parts (or two blank parts for
@@ -421,51 +427,31 @@ export function TransactionsClient({
       ) : null}
 
       <Card as="div">
-        {/* `fixed` because five of these eight columns carry controls, not text. Under auto
-            layout the browser gave Description and Account every pixel their longest string
-            asked for and the row grew past the shell's content width, so the actions column
-            fell off the right edge of the card and read as truncated data.
-
-            The widths below are sized from what each cell must show WITHOUT clipping, in that
-            order of priority: a select is sized so its own selected value stays readable (the
-            row's category and person are data), a link is sized so its label fits on one line,
-            and Description takes what is left. That leaves Description narrow enough to wrap a
-            long bank string over two or three lines, which is the deliberate trade: a taller
-            row shows everything, a wider one would have to hide a control's value to pay for
-            it. They sum to 67rem, inside the shell's 68rem content width, and the wrapper
-            still scrolls below that so no column is ever cut off on a phone. */}
-        {/* minWidth is the colgroup's own total. Without it this table could not exceed its
-            container, so the scroll container had nothing to scroll and the browser shrank
-            every column instead -- see TableWrap's minWidth docblock for what that did to a
-            phone. */}
-        <TableWrap bare fixed minWidth="76rem">
+        {/* minWidth is the colgroup's own total (3+7+9+15+7+13+11+3 = 68rem). Without it this
+            table could not exceed its container, so the scroll container had nothing to scroll
+            and the browser shrank every column instead -- see TableWrap's minWidth docblock. */}
+        <TableWrap bare fixed minWidth="68rem">
           <colgroup>
             {/* Just the checkbox, plus the 1rem of cell padding either side. */}
             <col style={{ width: '3rem' }} />
             {/* An ISO date in tabular figures, which is the same width on every row. */}
             <col style={{ width: '7rem' }} />
-            {/* Wide enough to READ an account name. This was 5rem for one release, which
-                truncated "Amex - Chequing" to "Amex…" -- and a `title` is no answer on a phone,
-                where there is no hover. Buying a rem for the description by making a column
-                unreadable is not a trade worth making. */}
+            {/* Wide enough to READ an account name -- a `title` is no answer on a phone. */}
             <col style={{ width: '9rem' }} />
-            {/* An explicit width, NOT elastic. Left unsized it took "whatever the others do not
-                need", which is generous on a wide monitor and nothing at all on a narrow one:
-                the sized columns took their rem and this one collapsed to a single character,
-                spelling merchant names vertically. A real width plus the table's min-width means
-                narrow viewports scroll instead of crushing this column. */}
+            {/* An explicit width, NOT elastic: left unsized this collapsed to one character on
+                a narrow screen and spelled merchant names vertically (v1.10.1). */}
             <col style={{ width: '15rem' }} />
             {/* A signed five-figure amount on one line. */}
             <col style={{ width: '7rem' }} />
-            {/* The widest control on the row: the category select has to show a name as long as
-                "Uncategorized" beside its Save button. */}
+            {/* The category select plus its 1rem status slot. It no longer carries a Save
+                button, which is where part of this table's old width went. */}
             <col style={{ width: '13rem' }} />
             {/* Same shape, shorter values -- a person's name or "Household". */}
             <col style={{ width: '11rem' }} />
-            {/* Holds "Create warranty", "Split…", and -- when loans exist -- an "Assign to
-                loan" select beside its Assign button. 11rem keeps the first two on one line
-                each rather than three separate lines, which is what tripled row height. */}
-            <col style={{ width: '11rem' }} />
+            {/* The kebab: one 2rem button plus padding. This column used to be 11rem of link,
+                button and select, and it was the column that clipped at the card's edge. The
+                menu itself is position:fixed, so it is not constrained by this width. */}
+            <col style={{ width: '3rem' }} />
           </colgroup>
           <thead>
             <tr>
@@ -499,14 +485,14 @@ export function TransactionsClient({
                 <td className="text-muted" title={row.accountName}>{row.accountName}</td>
                 <td>
                   <span className="flex flex-wrap items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => setRenaming({ id: row.id, current: row.displayDescription ?? row.rawDescription, merchant: row.normalizedMerchant })}
-                      title={row.displayDescription ? `Bank text: ${row.rawDescription}` : 'Click to rename'}
-                      className="rounded-xs text-left font-medium text-ink hover:text-accent-text"
+                    {/* Renaming happens from the row menu now. The title stays: it is the only
+                        place the bank's own text is visible once a row has been renamed. */}
+                    <span
+                      className="font-medium text-ink"
+                      title={row.displayDescription ? `Bank text: ${row.rawDescription}` : undefined}
                     >
                       {row.displayDescription ?? row.rawDescription}
-                    </button>
+                    </span>
                     {row.displaySource === 'manual' ? <span className="badge badge--blue">renamed</span> : null}
                     {row.displaySource === 'rename' ? <span className="badge badge--blue">rule</span> : null}
                     {row.isTransfer ? <span className="badge badge--slate">transfer</span> : null}
@@ -517,131 +503,99 @@ export function TransactionsClient({
                   <Money cents={row.amountCents} />
                 </AmountCell>
                 <td>
-                  {/* v1.7.0 Task 4: a split transaction no longer has ONE category to select
-                      -- its money is divided across its parts' own categories -- so the
-                      row's category cell shows a badge instead of the recategorize form.
-                      Editing what those parts ARE happens through "Split…" below. */}
+                  {/* v1.7.0 Task 4: a split transaction has no ONE category -- its money is
+                      divided across its parts -- so it shows a badge instead of a control.
+                      Editing the parts happens through Split… in the row menu. */}
                   {(splits[row.id] ?? []).length > 0 ? (
                     <span className="badge badge--blue">{`Split · ${(splits[row.id] ?? []).length} parts`}</span>
                   ) : (
-                    <form action={rowAction} className="flex items-center gap-1.5">
-                      <input type="hidden" name="transactionId" value={row.id} />
-                      <select
-                        name="categoryId"
-                        defaultValue={row.categoryId ?? ''}
-                        aria-label={`Category for transaction ${row.id}`}
-                        className={rowControl}
-                      >
-                        <option value="">Uncategorized</option>
-                        {/* Task 6: live categories grouped under their parent via categoryOptions
-                            (it excludes archived ones itself). Archived categories are appended
-                            below, flat and disabled, rather than run through the same grouping --
-                            full (archived-inclusive) COVERAGE stays on purpose: if this row's own
-                            category was archived after the fact, it must still appear as a real
-                            <option> so the browser's initial selection matches it. Otherwise the
-                            select silently falls back to "Uncategorized" and an untouched "save"
-                            click would clear (and untrain) a legitimate historical categorization. */}
-                        {categoryOptions(categories).map((opt) => (
-                          <option key={opt.id} value={opt.id}>{'\u00A0\u00A0'.repeat(opt.depth) + opt.label}</option>
-                        ))}
-                        {categories
+                    <AutoSaveSelect
+                      name="categoryId"
+                      defaultValue={row.categoryId === null ? '' : String(row.categoryId)}
+                      /* Live categories grouped under their parent, then the ARCHIVED ones flat
+                         and disabled. That coverage is deliberate: a row whose category was
+                         archived after the fact must still have a real <option>, or the browser
+                         silently selects "Uncategorized" -- and with auto-save a stray change
+                         would then clear (and untrain) a legitimate historical categorization. */
+                      options={[
+                        { value: '', label: 'Uncategorized' },
+                        ...groupedCategories.map((opt) => ({
+                          value: String(opt.id),
+                          label: '  '.repeat(opt.depth) + opt.label,
+                        })),
+                        ...categories
                           .filter((c) => c.isArchived)
-                          .map((c) => (
-                            <option key={c.id} value={c.id} disabled>
-                              {label(c.id)} (archived)
-                            </option>
-                          ))}
-                      </select>
-                      <button type="submit" className="btn btn--ghost btn--sm px-2 text-xs">Save</button>
-                    </form>
+                          .map((c) => ({ value: String(c.id), label: `${label(c.id)} (archived)`, disabled: true })),
+                      ]}
+                      fields={{ transactionId: String(row.id) }}
+                      action={saveCategory}
+                      ariaLabel={`Category for transaction ${row.id}`}
+                    />
                   )}
                 </td>
                 <td>
-                  <form action={attrAction} className="flex items-center gap-1.5">
-                    <input type="hidden" name="ids" value={row.id} />
-                    <select
-                      name="attributedUserId"
-                      defaultValue={row.attributedUserId ?? ''}
-                      aria-label={`Person for transaction ${row.id}`}
-                      className={rowControl}
+                  <AutoSaveSelect
+                    name="attributedUserId"
+                    defaultValue={row.attributedUserId === null ? '' : String(row.attributedUserId)}
+                    options={[
+                      { value: '', label: 'Household' },
+                      ...people.map((person) => ({ value: String(person.id), label: person.name })),
+                    ]}
+                    fields={{ ids: String(row.id) }}
+                    action={saveAttribution}
+                    ariaLabel={`Person for transaction ${row.id}`}
+                  />
+                </td>
+                {/* One menu instead of a link, a button and a select-with-button. The label
+                    names the ROW, not the column: "Actions" repeated identically down a table
+                    tells a screen reader nothing about which row it is on.
+                    MUST-11.1/11.2: a purchase can carry a warranty, a transfer cannot.
+                    MUST-11.3: the URL carries ONLY the id; the add page derives the rest.
+                    MUST-14.8: a transfer never carries a loan control. MUST-14.10 stays
+                    reachable because assign items are always offered alongside existing links,
+                    never replaced by them. */}
+                <td className="text-right">
+                  <RowMenu label={`Actions for ${row.displayDescription ?? row.rawDescription}`}>
+                    <RowMenuButton
+                      onSelect={() =>
+                        setRenaming({
+                          id: row.id,
+                          current: row.displayDescription ?? row.rawDescription,
+                          merchant: row.normalizedMerchant,
+                        })
+                      }
                     >
-                      <option value="">Household</option>
-                      {people.map((p) => (
-                        <option key={p.id} value={p.id}>{p.name}</option>
-                      ))}
-                    </select>
-                    <button type="submit" className="btn btn--ghost btn--sm px-2 text-xs">Save</button>
-                  </form>
-                </td>
-                {/* No `whitespace-nowrap` any more: this column no longer widens for its
-                    content, so holding the two links on one line would push them out over the
-                    card's edge -- the very clipping this colgroup exists to fix. They wrap
-                    instead, one per line. */}
-                <td>
-                  {/* MUST-11.1 / MUST-11.2: a purchase can carry a warranty; a transfer cannot.
-                      MUST-11.3: the URL carries ONLY the id. The add page derives the date,
-                      the abs() price and the vendor from the transaction row server-side. */}
-                  {row.isTransfer ? null : (
-                    <>
-                      <Link href={`/warranties/new?transactionId=${row.id}`} className="btn btn--ghost btn--sm text-xs text-accent-text">
-                        Create warranty
-                      </Link>{' '}
-                      <button
-                        type="button"
-                        onClick={() => openSplitEditor(row)}
-                        aria-label={`Split transaction ${row.id}`}
-                        className="btn btn--ghost btn--sm text-xs text-accent-text"
-                      >
-                        Split…
-                      </button>
-                    </>
-                  )}
-                  {/* MUST-14.8: a transfer never carries a loan control, and neither does a
-                      page that was given no loans. The established precedent for a per-row
-                      action is the link above.
-                      F4 fix-round: EVERY link on the row gets its own line and its own
-                      Unassign, not just the first -- a combined payment split across two
-                      loans used to hide the second link entirely. The assign select is now
-                      ALWAYS shown alongside existing links (not replaced by them), which is
-                      what makes the over-link warn path (MUST-14.10) reachable from the UI at
-                      all -- it used to be dead code once a row had one link, since the
-                      control that could create a second one had already disappeared. */}
-                  {row.isTransfer || loanOptions.length === 0 ? null : (
-                    <span className="flex flex-col items-end gap-1">
-                      {(loanLinks[row.id] ?? []).map((link) => (
-                        <span key={link.id} className="flex items-center gap-1.5">
-                          <span className="text-xs text-muted">{link.itemName}</span>
-                          <form action={unassignLoan}>
-                            <input type="hidden" name="transactionId" value={row.id} />
-                            <input type="hidden" name="itemId" value={link.itemId} />
-                            <SubmitButton className="btn btn--ghost btn--sm">Unassign</SubmitButton>
-                          </form>
-                        </span>
-                      ))}
-                      <form action={assignLoan} className="flex items-center gap-1.5">
-                        <input type="hidden" name="transactionId" value={row.id} />
-                        {/* F12 fix-round: `required` blocks the browser from submitting with
-                            nothing picked, and the blank option is `disabled` so it can only
-                            ever be the placeholder, never a real (empty) selection -- paired
-                            with assignToLoanAction's own server-side check for the friendly
-                            "Pick a loan first." message a stripped/tampered request would
-                            otherwise get back as a bare "Invalid request." */}
-                        <select
-                          name="itemId"
-                          defaultValue=""
-                          required
-                          aria-label={`Assign transaction ${row.id} to a loan`}
-                          className={rowControl}
-                        >
-                          <option value="" disabled>Assign to loan…</option>
-                          {loanOptions.map((loan) => (
-                            <option key={loan.id} value={loan.id}>{loan.name}</option>
-                          ))}
-                        </select>
-                        <button type="submit" className="btn btn--ghost btn--sm px-2 text-xs">Assign</button>
-                      </form>
-                    </span>
-                  )}
+                      Rename…
+                    </RowMenuButton>
+                    {row.isTransfer ? null : (
+                      <>
+                        <RowMenuButton onSelect={() => openSplitEditor(row)}>Split…</RowMenuButton>
+                        <RowMenuLink href={`/warranties/new?transactionId=${row.id}`}>Create warranty</RowMenuLink>
+                      </>
+                    )}
+                    {row.isTransfer
+                      ? null
+                      : (loanLinks[row.id] ?? []).map((link) => (
+                          <RowMenuForm
+                            key={`unassign-${link.id}`}
+                            action={unassignLoan}
+                            fields={{ transactionId: String(row.id), itemId: String(link.itemId) }}
+                          >
+                            {`Unassign from ${link.itemName}`}
+                          </RowMenuForm>
+                        ))}
+                    {row.isTransfer
+                      ? null
+                      : loanOptions.map((loan) => (
+                          <RowMenuForm
+                            key={`assign-${loan.id}`}
+                            action={assignLoan}
+                            fields={{ transactionId: String(row.id), itemId: String(loan.id) }}
+                          >
+                            {`Assign to ${loan.name}`}
+                          </RowMenuForm>
+                        ))}
+                  </RowMenu>
                 </td>
               </tr>
             ))}

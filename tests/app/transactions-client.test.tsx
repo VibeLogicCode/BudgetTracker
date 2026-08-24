@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, cleanup, screen, fireEvent } from '@testing-library/react';
 import { TransactionsClient } from '@/app/(app)/transactions/transactions-client';
+import { setCategoryAction } from '@/app/(app)/transactions/actions';
 import type { TransactionPage, TransactionRow } from '@/lib/transactions';
 import type { SplitRow } from '@/lib/splits';
 
@@ -18,6 +19,14 @@ vi.mock('@/app/(app)/transactions/actions', () => ({
 }));
 
 afterEach(() => cleanup());
+
+// v1.10.1 Task 3: the row's actions collapsed into a kebab (RowMenu), which renders its
+// items only once opened -- so any test that used to find "Create warranty", "Split…" or a
+// loan link/select directly in the DOM must open the row's menu first, the same way a person
+// would click the ⋯ button before seeing them.
+function openRowMenu(name: string) {
+  fireEvent.click(screen.getByRole('button', { name }));
+}
 
 function pageWithRow(overrides: Partial<TransactionRow> = {}): TransactionPage {
   const row: TransactionRow = {
@@ -67,7 +76,7 @@ describe('TransactionsClient — archived-category silent-clear hazard', () => {
     expect(selectedOption?.hasAttribute('disabled')).toBe(true);
   });
 
-  it('saving the row without changing the selection would resubmit the same archived category, not clear it', () => {
+  it('never auto-submits on mount -- only a real change would clear the archived category', () => {
     const { container } = render(
       <TransactionsClient
         page={pageWithRow()}
@@ -78,12 +87,13 @@ describe('TransactionsClient — archived-category silent-clear hazard', () => {
       />,
     );
 
-    const rowForm = container.querySelector('tbody select[name="categoryId"]')!.closest('form') as HTMLFormElement;
-    const rowSelect = rowForm.elements.namedItem('categoryId') as HTMLSelectElement;
-    // Simulate reading the form exactly as a real submit would, without ever touching the select.
-    const submittedValue = new FormData(rowForm).get('categoryId');
-    expect(submittedValue).toBe('42');
-    expect(rowSelect.value).not.toBe('');
+    // AutoSaveSelect has no <form> or Save button any more -- it fires only from the
+    // select's own onChange (src/components/ui/AutoSave.tsx). Rendering the row must not
+    // itself submit anything, or an untouched row would silently clear (and untrain) a
+    // legitimate historical categorization the moment the page loaded.
+    const rowSelect = container.querySelector('tbody select[name="categoryId"]') as HTMLSelectElement;
+    expect(rowSelect.value).toBe('42');
+    expect(setCategoryAction).not.toHaveBeenCalled();
   });
 
   it('excludes archived categories from the filter, bulk-categorize and manual-entry pickers', () => {
@@ -116,6 +126,7 @@ describe('Create warranty row action (§11)', () => {
     const { container } = render(
       <TransactionsClient page={pageWithRow({ id: 77 })} accounts={[]} categories={[]} people={[]} today="2026-08-16" />,
     );
+    openRowMenu('Actions for TIM HORTONS');
     const link = container.querySelector('a[href="/warranties/new?transactionId=77"]');
     expect(link).toBeTruthy();
     expect(link!.textContent).toMatch(/create warranty/i);
@@ -131,6 +142,7 @@ describe('Create warranty row action (§11)', () => {
         today="2026-08-16"
       />,
     );
+    openRowMenu('Actions for TIM HORTONS');
     expect(container.querySelector('a[href="/warranties/new?transactionId=78"]')).toBeNull();
   });
 
@@ -144,6 +156,7 @@ describe('Create warranty row action (§11)', () => {
         today="2026-08-16"
       />,
     );
+    openRowMenu('Actions for HOME DEPOT');
     const href = container.querySelector('a[href^="/warranties/new"]')!.getAttribute('href')!;
     expect(href).toBe('/warranties/new?transactionId=79');
     expect(href).not.toContain('amount');
@@ -165,13 +178,14 @@ describe('MUST-14.8 / MUST-14.9: the row control', () => {
 
   it('with no loans, the assign control is absent entirely', () => {
     render(<TransactionsClient {...baseProps} loanOptions={[]} loanLinks={{}} />);
-    expect(screen.queryByText('Assign to loan…')).toBeNull();
-    expect(screen.queryByText('Assign')).toBeNull();
+    openRowMenu('Actions for TIM HORTONS');
+    expect(screen.queryByText(/Assign to/)).toBeNull();
   });
 
-  it('a linked row shows the link and Unassign, AND keeps the assign select reachable (F4 fix-round)', () => {
+  it('a linked row shows Unassign and keeps the assign item reachable (F4 fix-round)', () => {
     // F4: the select used to disappear entirely once a row had a link, which made the
-    // over-link warn path (MUST-14.10) unreachable from the UI. It must stay visible.
+    // over-link warn path (MUST-14.10) unreachable from the UI. The row menu keeps both --
+    // "Unassign from Civic" and "Assign to Civic" -- offered together, one item each.
     render(
       <TransactionsClient
         {...baseProps}
@@ -183,11 +197,9 @@ describe('MUST-14.8 / MUST-14.9: the row control', () => {
         }}
       />,
     );
-    expect(screen.getByText('Unassign')).toBeTruthy();
-    // "Civic" appears twice now -- the link's own name, and the (still-visible) select's
-    // option -- so this is an AllBy, not a plain getByText.
-    expect(screen.getAllByText('Civic').length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText('Assign to loan…')).toBeTruthy();
+    openRowMenu('Actions for TIM HORTONS');
+    expect(screen.getByText('Unassign from Civic')).toBeTruthy();
+    expect(screen.getByText('Assign to Civic')).toBeTruthy();
   });
 
   it('renders every link on a row, each with its own Unassign (F4 fix-round: a combined payment)', () => {
@@ -203,20 +215,22 @@ describe('MUST-14.8 / MUST-14.9: the row control', () => {
         }}
       />,
     );
-    expect(screen.getAllByText('Unassign')).toHaveLength(2);
-    expect(screen.getByText('Boat', { selector: 'span.text-xs' })).toBeTruthy();
+    openRowMenu('Actions for TIM HORTONS');
+    expect(screen.getByText('Unassign from Civic')).toBeTruthy();
+    expect(screen.getByText('Unassign from Boat')).toBeTruthy();
   });
 
-  it('an unlinked row renders the select when there ARE loans', () => {
+  it('an unlinked row renders an assign item for the loan when there ARE loans', () => {
     render(<TransactionsClient {...baseProps} loanOptions={[{ id: 7, name: 'Civic' }]} loanLinks={{}} />);
-    expect(screen.getByText('Assign to loan…')).toBeTruthy();
-    expect(screen.getByText('Civic')).toBeTruthy();
+    openRowMenu('Actions for TIM HORTONS');
+    expect(screen.getByText('Assign to Civic')).toBeTruthy();
   });
 
   it('a transfer row renders neither control', () => {
     render(<TransactionsClient {...transferOnlyProps} loanOptions={[{ id: 7, name: 'Civic' }]} loanLinks={{}} />);
-    expect(screen.queryByText('Assign to loan…')).toBeNull();
-    expect(screen.queryByText('Unassign')).toBeNull();
+    openRowMenu('Actions for TIM HORTONS');
+    expect(screen.queryByText(/Assign to/)).toBeNull();
+    expect(screen.queryByText(/Unassign/)).toBeNull();
   });
 });
 
@@ -279,7 +293,8 @@ describe('Split editor (v1.7.0 Task 4)', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Split transaction 1' }));
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Split…' }));
 
     const categorySelects = screen.getAllByLabelText(/Category for part/) as HTMLSelectElement[];
     expect(categorySelects.map((s) => s.value)).toEqual(['42', '7']);
@@ -303,7 +318,8 @@ describe('Split editor (v1.7.0 Task 4)', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Split transaction 1' }));
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Split…' }));
 
     const saveButton = screen.getByRole('button', { name: 'Save split' }) as HTMLButtonElement;
     expect(saveButton.disabled).toBe(true);
@@ -332,11 +348,18 @@ describe('Split editor (v1.7.0 Task 4)', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Split transaction 1' }));
+    // Both rows share the same rawDescription (twoRowPage doesn't override it), so their
+    // kebabs share one accessible name -- getAllByRole plus index stands in for "row 1's
+    // kebab" and "row 2's kebab".
+    const kebabs = screen.getAllByRole('button', { name: 'Actions for TIM HORTONS' });
+
+    fireEvent.click(kebabs[0]);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Split…' }));
     expect(screen.getAllByText('Split this transaction')).toHaveLength(1);
     expect((container.querySelector('input[name="txnId"]') as HTMLInputElement).value).toBe('1');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Split transaction 2' }));
+    fireEvent.click(kebabs[1]);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Split…' }));
     expect(screen.getAllByText('Split this transaction')).toHaveLength(1);
     const txnIdInputs = Array.from(container.querySelectorAll('input[name="txnId"]')) as HTMLInputElement[];
     expect(txnIdInputs.length).toBeGreaterThan(0);
@@ -425,7 +448,7 @@ describe('Bulk toolbar and a split row (v1.7.0 bulk-guard fix, requirement c)', 
     expect(screen.queryByText(/split and will be skipped/i)).toBeNull();
   });
 
-  it('the per-row attribution select and Save button still render for a split row', () => {
+  it('the per-row attribution select still auto-saves for a split row', () => {
     const { container } = render(
       <TransactionsClient
         page={pageWithRow({ id: 1 })}
@@ -436,8 +459,9 @@ describe('Bulk toolbar and a split row (v1.7.0 bulk-guard fix, requirement c)', 
         splits={{ 1: splitRows }}
       />,
     );
+    // AutoSaveSelect has no <form> of its own any more (see src/components/ui/AutoSave.tsx) --
+    // the assertion that matters is that a split row still gets the control at all.
     const attributionSelect = container.querySelector('tbody select[name="attributedUserId"]');
     expect(attributionSelect).toBeTruthy();
-    expect(attributionSelect!.closest('form')).toBeTruthy();
   });
 });
