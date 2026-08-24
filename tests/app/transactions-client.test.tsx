@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, cleanup, screen, fireEvent } from '@testing-library/react';
+import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/react';
 import { TransactionsClient } from '@/app/(app)/transactions/transactions-client';
 import { setCategoryAction } from '@/app/(app)/transactions/actions';
 import type { TransactionPage, TransactionRow } from '@/lib/transactions';
@@ -20,7 +20,7 @@ vi.mock('@/app/(app)/transactions/actions', () => ({
 
 afterEach(() => cleanup());
 
-// v1.10.1 Task 3: the row's actions collapsed into a kebab (RowMenu), which renders its
+// v1.11.0 Task 3: the row's actions collapsed into a kebab (RowMenu), which renders its
 // items only once opened -- so any test that used to find "Create warranty", "Split…" or a
 // loan link/select directly in the DOM must open the row's menu first, the same way a person
 // would click the ⋯ button before seeing them.
@@ -231,6 +231,45 @@ describe('MUST-14.8 / MUST-14.9: the row control', () => {
     openRowMenu('Actions for TIM HORTONS');
     expect(screen.queryByText(/Assign to/)).toBeNull();
     expect(screen.queryByText(/Unassign/)).toBeNull();
+  });
+
+  // Fix wave (2026-08-23 review, finding I4): the six kebab-form dispatch paths across the
+  // suite had zero coverage that clicking the menuitem actually fires the bound server action
+  // with the right fields. These two cover Assign to loan / Unassign from loan.
+  it('clicking "Assign to <loan>" calls assignToLoanAction with the transaction and loan ids', async () => {
+    const { assignToLoanAction } = await import('@/app/(app)/transactions/actions');
+    render(<TransactionsClient {...baseProps} loanOptions={[{ id: 7, name: 'Civic' }]} loanLinks={{}} />);
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to Civic' }));
+
+    await waitFor(() => expect(assignToLoanAction).toHaveBeenCalled());
+    // Bound as `(_prev, formData) => assignToLoanAction(formData)` (transactions-client.tsx),
+    // so the FormData the kebab form built is the mock's FIRST and only argument.
+    const sent = (assignToLoanAction as ReturnType<typeof vi.fn>).mock.calls[0][0] as FormData;
+    expect(sent.get('transactionId')).toBe(String(linkedRowId));
+    expect(sent.get('itemId')).toBe('7');
+  });
+
+  it('clicking "Unassign from <loan>" calls unassignFromLoanAction with the transaction and loan ids', async () => {
+    const { unassignFromLoanAction } = await import('@/app/(app)/transactions/actions');
+    render(
+      <TransactionsClient
+        {...baseProps}
+        loanOptions={[{ id: 7, name: 'Civic' }]}
+        loanLinks={{
+          [linkedRowId]: [
+            { id: 1, txnId: linkedRowId, itemId: 7, itemName: 'Civic', amountCents: 45000, appliedCents: 45000, source: 'manual' },
+          ],
+        }}
+      />,
+    );
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Unassign from Civic' }));
+
+    await waitFor(() => expect(unassignFromLoanAction).toHaveBeenCalled());
+    const sent = (unassignFromLoanAction as ReturnType<typeof vi.fn>).mock.calls[0][0] as FormData;
+    expect(sent.get('transactionId')).toBe(String(linkedRowId));
+    expect(sent.get('itemId')).toBe('7');
   });
 });
 

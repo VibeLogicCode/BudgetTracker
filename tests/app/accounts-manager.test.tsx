@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
-import { render, cleanup, fireEvent, screen } from '@testing-library/react';
+import { render, cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
 import {
   AccountsManager,
   discrepancyMessage,
@@ -318,6 +318,40 @@ describe('AccountsManager — latest balance display and manual entry (spec 2026
     expect(updateAccountAction).toHaveBeenCalled();
     expect((form.querySelector('[name="balance"]') as HTMLInputElement).value).toBe('500.00');
     expect((form.querySelector('[name="asOfDate"]') as HTMLInputElement).value).toBe('2026-08-22');
+  });
+});
+
+describe('AccountsManager — Deactivate/Reactivate via kebab (fix wave 2026-08-23 review, finding I4)', () => {
+  it('an active account shows "Deactivate" in the kebab; clicking it calls setAccountActiveAction with active=0', async () => {
+    const { setAccountActiveAction } = await import('@/app/(app)/settings/accounts/actions');
+    render(<AccountsManager accounts={[account({ id: 42, isActive: true })]} people={PEOPLE} profiles={PROFILES} />);
+    openAccountMenu('Joint Chequing');
+
+    expect(screen.getByRole('menuitem', { name: 'Deactivate' })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: 'Reactivate' })).toBeNull();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Deactivate' }));
+
+    await waitFor(() => expect(setAccountActiveAction).toHaveBeenCalled());
+    // Bound directly to useActionState (`useActionState(setAccountActiveAction, ...)`), so the
+    // FormData the kebab form built is the mock's SECOND argument (state is the first).
+    const sent = (setAccountActiveAction as ReturnType<typeof vi.fn>).mock.calls[0][1] as FormData;
+    expect(sent.get('accountId')).toBe('42');
+    expect(sent.get('active')).toBe('0');
+  });
+
+  it('a deactivated account shows "Reactivate" in the kebab; clicking it calls setAccountActiveAction with active=1', async () => {
+    const { setAccountActiveAction } = await import('@/app/(app)/settings/accounts/actions');
+    render(<AccountsManager accounts={[account({ id: 42, isActive: false })]} people={PEOPLE} profiles={PROFILES} />);
+    openAccountMenu('Joint Chequing');
+
+    expect(screen.getByRole('menuitem', { name: 'Reactivate' })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: 'Deactivate' })).toBeNull();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Reactivate' }));
+
+    await waitFor(() => expect(setAccountActiveAction).toHaveBeenCalled());
+    const sent = (setAccountActiveAction as ReturnType<typeof vi.fn>).mock.calls[0][1] as FormData;
+    expect(sent.get('accountId')).toBe('42');
+    expect(sent.get('active')).toBe('1');
   });
 });
 
