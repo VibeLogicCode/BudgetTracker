@@ -201,7 +201,15 @@ export function BackupsClient({
       <Card>
         <CardHeader title="Nightly history" description={`${backups.length} archive${backups.length === 1 ? '' : 's'} on disk.`} />
         {backups.length === 0 ? (
-          <EmptyState icon={ImportIcon} title="No backups yet. The job runs at 02:00 local time.">
+          <EmptyState
+            icon={ImportIcon}
+            title="No backups yet. The job runs at 02:00 local time."
+            action={
+              <a href="/api/backup/download" className="btn btn--primary btn--sm">
+                Download backup now
+              </a>
+            }
+          >
             You can also make one right now with Download backup now.
           </EmptyState>
         ) : (

@@ -138,7 +138,15 @@ export function WarrantiesClient({
       <Card>
         {result.rows.length === 0 ? (
           searching ? (
-            <EmptyState icon={WarrantiesIcon} title="No matches for that search.">
+            <EmptyState
+              icon={WarrantiesIcon}
+              title="No matches for that search."
+              action={
+                <Link href="/warranties" className="btn btn--secondary btn--sm">
+                  Clear filters
+                </Link>
+              }
+            >
               Try fewer words, or clear the status and owner filters.
             </EmptyState>
           ) : (

@@ -568,7 +568,15 @@ export function TransactionsClient({
           </tbody>
         </TableWrap>
         {page.rows.length === 0 ? (
-          <EmptyState icon={TransactionsIcon} title="Nothing matches these filters">
+          <EmptyState
+            icon={TransactionsIcon}
+            title="Nothing matches these filters"
+            action={
+              <Link href="/transactions" className="btn btn--secondary btn--sm">
+                Clear filters
+              </Link>
+            }
+          >
             Widen the date range or clear the search — or import a statement to get some transactions in here.
           </EmptyState>
         ) : null}

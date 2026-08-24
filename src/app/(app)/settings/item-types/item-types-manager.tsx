@@ -71,34 +71,36 @@ export function ItemTypesManager({ types }: { types: ItemTypeWithUsage[] }) {
         }
       />
 
-      <Card className="max-w-md">
-        <CardHeader title="Add a type" />
-        <CardBody>
-          <form action={create} className="flex flex-col gap-4">
-            <FormError message={createState.error} />
-            {createState.message ? <Notice tone="success">{createState.message}</Notice> : null}
-            <Field label="Type name">
-              <input name="name" placeholder="Appliance" required maxLength={60} className={inputClass} />
-            </Field>
-            <Field label="Kind">
-              {/*
-                A plain <select> -- FormData.get() only ever returns one value for this key
-                either way, but a <select> also sidesteps the hidden-input-shadowing bug a
-                checkbox had here (see the create-form regression tests): there is exactly one
-                control and exactly one value, chosen, never inferred from absence.
-              */}
-              <select name="kind" defaultValue="warranty" className={selectClass}>
-                {ITEM_KINDS.map((kind) => (
-                  <option key={kind} value={kind}>
-                    {ITEM_KIND_LABELS[kind]}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <SubmitButton className="w-fit">Add type</SubmitButton>
-          </form>
-        </CardBody>
-      </Card>
+      <div id="add-type">
+        <Card className="max-w-md">
+          <CardHeader title="Add a type" />
+          <CardBody>
+            <form action={create} className="flex flex-col gap-4">
+              <FormError message={createState.error} />
+              {createState.message ? <Notice tone="success">{createState.message}</Notice> : null}
+              <Field label="Type name">
+                <input name="name" placeholder="Appliance" required maxLength={60} className={inputClass} />
+              </Field>
+              <Field label="Kind">
+                {/*
+                  A plain <select> -- FormData.get() only ever returns one value for this key
+                  either way, but a <select> also sidesteps the hidden-input-shadowing bug a
+                  checkbox had here (see the create-form regression tests): there is exactly one
+                  control and exactly one value, chosen, never inferred from absence.
+                */}
+                <select name="kind" defaultValue="warranty" className={selectClass}>
+                  {ITEM_KINDS.map((kind) => (
+                    <option key={kind} value={kind}>
+                      {ITEM_KIND_LABELS[kind]}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <SubmitButton className="w-fit">Add type</SubmitButton>
+            </form>
+          </CardBody>
+        </Card>
+      </div>
 
       <FormError message={rowError} />
       {rowMessage ? <Notice tone="success">{rowMessage}</Notice> : null}
@@ -106,7 +108,15 @@ export function ItemTypesManager({ types }: { types: ItemTypeWithUsage[] }) {
       <Card>
         <CardHeader title="Types" description={`${types.length} type${types.length === 1 ? '' : 's'}.`} />
         {types.length === 0 ? (
-          <EmptyState icon={WarrantiesIcon} title="No item types yet">
+          <EmptyState
+            icon={WarrantiesIcon}
+            title="No item types yet"
+            action={
+              <a href="#add-type" className="btn btn--primary btn--sm">
+                Add a type
+              </a>
+            }
+          >
             Add one above — Appliance, Electronics and Subscription are a good start.
           </EmptyState>
         ) : (

@@ -53,7 +53,15 @@ export function GoalsClient({
 
       {goals.length === 0 ? (
         <Card>
-          <EmptyState icon={GoalsIcon} title="No goals yet">
+          <EmptyState
+            icon={GoalsIcon}
+            title="No goals yet"
+            action={
+              <a href="#new-goal" className="btn btn--primary btn--sm">
+                Add a goal
+              </a>
+            }
+          >
             A goal is a target amount and, if you want one, a date. Add the first one below and log contributions as you go.
           </EmptyState>
         </Card>
@@ -134,31 +142,33 @@ export function GoalsClient({
         </div>
       )}
 
-      <Card className="max-w-md">
-        <CardHeader title="New goal" description="Name it, give it a target, and it starts tracking pace on the first contribution." />
-        <CardBody>
-          <form action={create} className="flex flex-col gap-4">
-            <Field label="Name">
-              <input name="name" placeholder="Trip to Japan" required className={inputClass} />
-            </Field>
-            <Field label="Target amount">
-              <input name="target" placeholder="5000" required className={inputClass} />
-            </Field>
-            <Field label="Target date (optional)">
-              <input type="date" name="targetDate" className={inputClass} />
-            </Field>
-            <Field label="Owner">
-              <select name="owner" className={selectClass}>
-                <option value="shared">Shared</option>
-                {people.map((person) => (
-                  <option key={person.id} value={person.id}>{person.name}</option>
-                ))}
-              </select>
-            </Field>
-            <SubmitButton className="w-fit">Create goal</SubmitButton>
-          </form>
-        </CardBody>
-      </Card>
+      <div id="new-goal">
+        <Card className="max-w-md">
+          <CardHeader title="New goal" description="Name it, give it a target, and it starts tracking pace on the first contribution." />
+          <CardBody>
+            <form action={create} className="flex flex-col gap-4">
+              <Field label="Name">
+                <input name="name" placeholder="Trip to Japan" required className={inputClass} />
+              </Field>
+              <Field label="Target amount">
+                <input name="target" placeholder="5000" required className={inputClass} />
+              </Field>
+              <Field label="Target date (optional)">
+                <input type="date" name="targetDate" className={inputClass} />
+              </Field>
+              <Field label="Owner">
+                <select name="owner" className={selectClass}>
+                  <option value="shared">Shared</option>
+                  {people.map((person) => (
+                    <option key={person.id} value={person.id}>{person.name}</option>
+                  ))}
+                </select>
+              </Field>
+              <SubmitButton className="w-fit">Create goal</SubmitButton>
+            </form>
+          </CardBody>
+        </Card>
+      </div>
     </div>
   );
 }

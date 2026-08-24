@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useActionState } from 'react';
 import { FormError } from '@/components/FormError';
 import { CheckIcon } from '@/components/icons';
@@ -54,7 +55,20 @@ export function ReviewClient({
 
       {rows.length === 0 ? (
         <Card>
-          <EmptyState icon={CheckIcon} title="Nothing to review. Everything is categorized.">
+          <EmptyState
+            icon={CheckIcon}
+            title="Nothing to review. Everything is categorized."
+            action={
+              <>
+                <Link href="/transactions" className="btn btn--primary btn--sm">
+                  See what was categorized
+                </Link>
+                <Link href="/import" className="btn btn--secondary btn--sm">
+                  Bring in more
+                </Link>
+              </>
+            }
+          >
             New imports land here whenever the categorizer is unsure.
           </EmptyState>
         </Card>

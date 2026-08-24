@@ -474,6 +474,7 @@ export function NotificationsClient(data: NotificationsPageData) {
 
       {/* §11.4: everyone. Two sub-cards; each shows its own last_error, last_success_at,
           and an Unverified badge until verified_at is set. */}
+      <div id="telegram-channel">
       <Card>
         <CardHeader title="Telegram" description="Your own bot, messaging your own chat." />
         <CardBody className="flex flex-col gap-4">
@@ -490,6 +491,7 @@ export function NotificationsClient(data: NotificationsPageData) {
           />
         </CardBody>
       </Card>
+      </div>
 
       <Card>
         <CardHeader title="Email" description="Where the household relay sends your messages." />
@@ -631,7 +633,15 @@ export function NotificationsClient(data: NotificationsPageData) {
       <Card>
         <CardHeader title="Recent deliveries" description="The last twenty messages this app tried to send." />
         {data.deliveries.length === 0 ? (
-          <EmptyState icon={BellIcon} title="Nothing sent yet.">
+          <EmptyState
+            icon={BellIcon}
+            title="Nothing sent yet."
+            action={
+              <a href="#telegram-channel" className="btn btn--primary btn--sm">
+                Set up a channel
+              </a>
+            }
+          >
             Deliveries appear here once a channel is set up and an event fires.
           </EmptyState>
         ) : (

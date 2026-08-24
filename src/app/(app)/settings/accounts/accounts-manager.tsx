@@ -156,39 +156,41 @@ export function AccountsManager({
         description="Every import needs an account to land in. Add one per bank account you export a CSV from (or plan to link to SimpleFIN). Accounts are deactivated, never deleted — the transactions and import history that point at them have to keep working."
       />
 
-      <Card className="max-w-md">
-        <CardHeader title="Add an account" />
-        <CardBody>
-          <form action={create} className="flex flex-col gap-4">
-            <FormError message={createState.error} />
-            {createState.message ? <Notice tone="success">{createState.message}</Notice> : null}
-            <Field label="Name">
-              <input name="name" placeholder="Joint Chequing" required className={inputClass} />
-            </Field>
-            <Field label="Institution (optional)">
-              <input name="institution" placeholder="TD" className={inputClass} />
-            </Field>
-            <Field label="Type">
-              <select name="type" defaultValue="chequing" className={selectClass}>
-                <option value="chequing">Chequing</option>
-                <option value="credit">Credit</option>
-                <option value="cash">Cash</option>
-              </select>
-            </Field>
-            <Field label="Owner">
-              <select name="owner" defaultValue="" className={selectClass}>
-                <option value="">Joint (household)</option>
-                {people.map((person) => (
-                  <option key={person.id} value={person.id}>
-                    {person.name}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <SubmitButton className="w-fit">Add account</SubmitButton>
-          </form>
-        </CardBody>
-      </Card>
+      <div id="add-account">
+        <Card className="max-w-md">
+          <CardHeader title="Add an account" />
+          <CardBody>
+            <form action={create} className="flex flex-col gap-4">
+              <FormError message={createState.error} />
+              {createState.message ? <Notice tone="success">{createState.message}</Notice> : null}
+              <Field label="Name">
+                <input name="name" placeholder="Joint Chequing" required className={inputClass} />
+              </Field>
+              <Field label="Institution (optional)">
+                <input name="institution" placeholder="TD" className={inputClass} />
+              </Field>
+              <Field label="Type">
+                <select name="type" defaultValue="chequing" className={selectClass}>
+                  <option value="chequing">Chequing</option>
+                  <option value="credit">Credit</option>
+                  <option value="cash">Cash</option>
+                </select>
+              </Field>
+              <Field label="Owner">
+                <select name="owner" defaultValue="" className={selectClass}>
+                  <option value="">Joint (household)</option>
+                  {people.map((person) => (
+                    <option key={person.id} value={person.id}>
+                      {person.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <SubmitButton className="w-fit">Add account</SubmitButton>
+            </form>
+          </CardBody>
+        </Card>
+      </div>
 
       <FormError message={rowError} />
       {rowMessage ? <Notice tone="success">{rowMessage}</Notice> : null}
@@ -196,7 +198,15 @@ export function AccountsManager({
       <Card>
         <CardHeader title="Accounts" description={`${accounts.length} account${accounts.length === 1 ? '' : 's'}.`} />
         {accounts.length === 0 ? (
-          <EmptyState icon={SettingsIcon} title="No accounts yet. Add the first one above." />
+          <EmptyState
+            icon={SettingsIcon}
+            title="No accounts yet. Add the first one above."
+            action={
+              <a href="#add-account" className="btn btn--primary btn--sm">
+                Add an account
+              </a>
+            }
+          />
         ) : (
           <TableWrap bare>
             <thead>

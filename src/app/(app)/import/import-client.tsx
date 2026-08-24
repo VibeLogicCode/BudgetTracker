@@ -380,6 +380,7 @@ export function ImportClient({
         </Notice>
       ) : null}
 
+      <div id="choose-file">
       {accounts.length === 0 ? (
         <Card>
           <CardHeader
@@ -494,6 +495,7 @@ export function ImportClient({
           </CardBody>
         </Card>
       )}
+      </div>
 
       {preview && mapping ? (
         <Card>
@@ -603,7 +605,15 @@ export function ImportClient({
       <Card>
         <CardHeader title="History" description="Every import, and the button that takes one back out." />
         {historyRows.length === 0 ? (
-          <EmptyState icon={ImportIcon} title="Nothing imported yet">
+          <EmptyState
+            icon={ImportIcon}
+            title="Nothing imported yet"
+            action={
+              <a href="#choose-file" className="btn btn--primary btn--sm">
+                Upload a statement
+              </a>
+            }
+          >
             Once you upload a statement it lands here, with an undo next to it.
           </EmptyState>
         ) : (
