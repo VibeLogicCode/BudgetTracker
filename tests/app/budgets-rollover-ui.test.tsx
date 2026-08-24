@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, cleanup } from '@testing-library/react';
+import { render, cleanup, fireEvent, waitFor } from '@testing-library/react';
 import { BudgetsClient } from '@/app/(app)/budgets/budgets-client';
+import { setRolloverAction } from '@/app/(app)/budgets/actions';
 import type { BudgetRow } from '@/lib/budgets';
 
 /**
@@ -17,10 +18,16 @@ vi.mock('@/app/(app)/budgets/actions', () => ({
   copyPreviousMonthAction: vi.fn(async () => ({})),
   applySuggestionAction: vi.fn(async () => ({})),
   applyAllSuggestionsAction: vi.fn(async () => ({})),
-  setRolloverAction: vi.fn(async () => ({})),
+  // Typed explicitly (not just `async () => ({})`): otherwise vitest infers a zero-arg mock,
+  // and `.mock.calls[n][1]` below has no such index under strict mode -- the mock's OWN
+  // inferred arity, not the real action's signature, decides that.
+  setRolloverAction: vi.fn(async (_prev: unknown, _formData: FormData) => ({})),
 }));
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
 
 function makeRow(overrides: Partial<BudgetRow> = {}): BudgetRow {
   return {
@@ -156,7 +163,7 @@ describe('rollover toggle — reflects on/off state and submits the right fields
     expect(checkbox.checked).toBe(false);
   });
 
-  it('is checked when the category id is in householdRolloverIds, and its form carries the right fields', () => {
+  it('is checked when the category id is in householdRolloverIds, and toggling it submits the right fields', async () => {
     const { container } = render(
       <BudgetsClient
         month="2026-03"
@@ -171,18 +178,26 @@ describe('rollover toggle — reflects on/off state and submits the right fields
     const checkbox = container.querySelector('input[name="enabled"]') as HTMLInputElement;
     expect(checkbox.checked).toBe(true);
 
-    const data = new FormData(checkbox.closest('form') as HTMLFormElement);
+    // AutoSaveCheckbox has no <form> to read a static FormData from -- it builds one itself,
+    // on change, from `fields` plus the control's own name/value. Toggling off then back on
+    // exercises both branches: the second save is what carries `enabled`.
+    fireEvent.click(checkbox);
+    await waitFor(() => expect(vi.mocked(setRolloverAction)).toHaveBeenCalledTimes(1));
+    fireEvent.click(checkbox);
+    await waitFor(() => expect(vi.mocked(setRolloverAction)).toHaveBeenCalledTimes(2));
+
+    const data = vi.mocked(setRolloverAction).mock.calls[1][1];
     expect(data.get('scope')).toBe('household');
     expect(data.get('month')).toBe('2026-03');
     expect(data.get('categoryId')).toBe('9');
     expect(data.get('userId')).toBe('');
     // A checked checkbox contributes its value; an unchecked one is absent from FormData
-    // entirely (asserted in the test above), which is exactly how setRolloverAction tells the
-    // two states apart server-side.
+    // entirely (the first of the two calls above), which is exactly how setRolloverAction
+    // tells the two states apart server-side.
     expect(data.get('enabled')).toBe('on');
   });
 
-  it("a personal row's toggle carries that person's userId, not the viewer's", () => {
+  it("a personal row's toggle carries that person's userId, not the viewer's", async () => {
     const { container } = render(
       <BudgetsClient
         month="2026-04"
@@ -195,7 +210,11 @@ describe('rollover toggle — reflects on/off state and submits the right fields
     );
     const checkbox = container.querySelector('input[name="enabled"]') as HTMLInputElement;
     expect(checkbox.checked).toBe(true);
-    const data = new FormData(checkbox.closest('form') as HTMLFormElement);
+
+    fireEvent.click(checkbox);
+    await waitFor(() => expect(vi.mocked(setRolloverAction)).toHaveBeenCalledTimes(1));
+
+    const data = vi.mocked(setRolloverAction).mock.calls[0][1];
     expect(data.get('scope')).toBe('personal');
     expect(data.get('userId')).toBe('2');
     expect(data.get('categoryId')).toBe('7');

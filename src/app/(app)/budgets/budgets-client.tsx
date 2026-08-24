@@ -3,6 +3,7 @@
 import { useActionState, useState } from 'react';
 import { BudgetProgressBar } from '@/components/BudgetProgressBar';
 import { FormError } from '@/components/FormError';
+import { AutoSaveCheckbox, AutoSaveTextInput } from '@/components/ui/AutoSave';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { Money } from '@/components/ui/Money';
 import { Notice } from '@/components/ui/Notice';
@@ -25,6 +26,11 @@ import {
 
 const initial: BudgetActionState = {};
 
+/** Bound once: both actions are `(prevState, formData)` for useActionState, and the auto-save
+ *  controls want `(formData)`. No server-side change of any kind. */
+const saveLimit = (formData: FormData) => setLimitAction({}, formData);
+const saveRollover = (formData: FormData) => setRolloverAction({}, formData);
+
 /** Everything a row needs from the predictions, resolved once per section. */
 interface RowPredictions {
   suggestionOf: Map<number, CategorySuggestion>;
@@ -39,9 +45,7 @@ function Row({
   scope,
   userId,
   month,
-  action,
   applyAction,
-  rolloverAction,
   editable,
   canToggleRollover,
   rolloverOn,
@@ -52,9 +56,7 @@ function Row({
   scope: 'household' | 'personal';
   userId: number | null;
   month: string;
-  action: (formData: FormData) => void;
   applyAction: (formData: FormData) => void;
-  rolloverAction: (formData: FormData) => void;
   editable: boolean;
   /**
    * v1.7.0 Task 11: admin, or for a personal-scope row its own owner -- a STRICTER gate than
@@ -96,25 +98,24 @@ function Row({
             </span>
           ) : (
             <>
-              <form action={action} className="flex items-center gap-1.5">
-                <input type="hidden" name="scope" value={scope} />
-                <input type="hidden" name="userId" value={userId ?? ''} />
-                <input type="hidden" name="month" value={month} />
-                <input type="hidden" name="categoryId" value={row.categoryId} />
-                <input
-                  name="amount"
-                  // v1.7.0 rollover: this must default to the BASE, never the effective
-                  // limitCents. A Save on this form always writes the base (setLimitAction ->
-                  // upsertBudget), so defaulting to the effective number would silently bake
-                  // the carry into the base the moment someone hit Save without changing
-                  // anything.
-                  defaultValue={row.baseLimitCents === null ? '' : (row.baseLimitCents / 100).toFixed(2)}
-                  placeholder="none"
-                  aria-label={`Monthly limit for ${row.categoryName}`}
-                  className="field-control w-24 px-2 py-1 text-right text-xs"
-                />
-                <button type="submit" className="btn btn--ghost btn--sm px-2 text-xs">Save</button>
-              </form>
+              {/* This must default to the BASE limit, never the effective `limitCents`: a save
+                  writes the base (setLimitAction -> upsertBudget), so defaulting to the
+                  effective number would bake the carry into the base on the next edit. */}
+              <AutoSaveTextInput
+                name="amount"
+                defaultValue={row.baseLimitCents === null ? '' : (row.baseLimitCents / 100).toFixed(2)}
+                fields={{
+                  scope,
+                  userId: userId === null ? '' : String(userId),
+                  month,
+                  categoryId: String(row.categoryId),
+                }}
+                action={saveLimit}
+                ariaLabel={`Monthly limit for ${row.categoryName}`}
+                inputMode="decimal"
+                placeholder="none"
+                className="field-control w-24 px-2 py-1 text-right text-xs"
+              />
               {row.baseLimitCents !== null && row.carryCents > 0 ? (
                 <p className="mt-1 text-xs text-muted">
                   {formatCents(row.baseLimitCents)} plus {formatCents(row.carryCents)} carried
@@ -144,17 +145,22 @@ function Row({
             </>
           )}
           {!row.isArchived && canToggleRollover ? (
-            <form action={rolloverAction} className="mt-1 flex items-center gap-1.5">
-              <input type="hidden" name="scope" value={scope} />
-              <input type="hidden" name="userId" value={userId ?? ''} />
-              <input type="hidden" name="month" value={month} />
-              <input type="hidden" name="categoryId" value={row.categoryId} />
-              <label className="flex items-center gap-1.5 text-xs text-muted">
-                <input type="checkbox" name="enabled" value="on" defaultChecked={rolloverOn.has(row.categoryId)} />
-                Roll over unspent
-              </label>
-              <button type="submit" className="btn btn--ghost btn--sm px-2 text-xs">Save</button>
-            </form>
+            <span className="mt-1 flex">
+              {/* An unchecked box is ABSENT from the request, which is exactly what
+                  setRolloverAction reads (`formData.get('enabled') === 'on'`). */}
+              <AutoSaveCheckbox
+                name="enabled"
+                defaultChecked={rolloverOn.has(row.categoryId)}
+                fields={{
+                  scope,
+                  userId: userId === null ? '' : String(userId),
+                  month,
+                  categoryId: String(row.categoryId),
+                }}
+                action={saveRollover}
+                label="Roll over unspent"
+              />
+            </span>
           ) : null}
         </td>
         <td className="text-right"><Money cents={row.spentCents} plain /></td>
@@ -185,9 +191,7 @@ function Row({
           scope={scope}
           userId={userId}
           month={month}
-          action={action}
           applyAction={applyAction}
-          rolloverAction={rolloverAction}
           editable={editable}
           canToggleRollover={canToggleRollover}
           rolloverOn={rolloverOn}
@@ -207,20 +211,21 @@ function Row({
  * which was too narrow for "Roll over unspent" to sit beside its checkbox and Save -- the
  * label wrapped and the two Save buttons stacked, next to a category column of empty space.
  * The widths below are what each cell's contents actually need, so nothing is renegotiable:
- * the limit column is sized from its widest line (checkbox + label + Save), not from whatever
- * the text columns leave behind. They sum to 60rem, inside the shell's content width, and the
+ * the limit column is sized from its widest line (checkbox + label + status), not from whatever
+ * the text columns leave behind. They sum to 56rem, inside the shell's content width, and the
  * wrapper still scrolls horizontally below that so no column is ever cut off.
  */
 function BudgetTable({ children, paceTitle }: { children: React.ReactNode; paceTitle?: string }) {
   return (
-    <TableWrap bare fixed minWidth="60rem">
+    <TableWrap bare fixed minWidth="56rem">
       <colgroup>
-        {/* Deepest label plus its indent (16px + 20px per level, see Row). Names longer than
-            this wrap rather than truncate, so nothing is hidden. */}
+        {/* Deepest label plus its indent (16px + 20px per level, see Row). Longer names wrap
+            rather than truncate, so nothing is hidden. */}
         <col style={{ width: '18rem' }} />
-        {/* The defect being fixed: room for checkbox + "Roll over unspent" + Save on ONE line,
-            which is wider than the limit input + Save above it. */}
-        <col style={{ width: '16rem' }} />
+        {/* Was 16rem to fit checkbox + "Roll over unspent" + Save on one line. The Save is
+            gone, so the widest line here is now the checkbox, its label and the 1rem status
+            slot -- 4rem narrower, and the table fits a 1280px viewport without scrolling. */}
+        <col style={{ width: '12rem' }} />
         {/* Two money columns; a formatted amount with a minus sign is the widest thing in them. */}
         <col style={{ width: '7rem' }} />
         <col style={{ width: '7rem' }} />
@@ -262,22 +267,18 @@ export function BudgetsClient({
   /** MUST-14.1: null for a past or future month, and on any caller that has none. */
   predictions?: BudgetPredictions | null;
 }) {
-  const [limitState, dispatchLimit] = useActionState(setLimitAction, initial);
   const [copyState, dispatchCopy] = useActionState(copyPreviousMonthAction, initial);
   const [applyState, dispatchApply] = useActionState(applySuggestionAction, initial);
   const [applyAllState, dispatchApplyAll] = useActionState(applyAllSuggestionsAction, initial);
-  const [rolloverState, dispatchRollover] = useActionState(setRolloverAction, initial);
 
   // ONE banner, showing only the most recent submission. Independent action states
   // rendered side by side meant a success message from a save sat next to a fresh error
   // from a copy (and the other way round), so the page reported two contradictory
   // outcomes at once. Remembering which action fired last is enough to keep the banner
-  // honest without merging the server actions.
-  const [latest, setLatest] = useState<'limit' | 'copy' | 'apply' | 'applyAll' | 'rollover' | null>(null);
-  const action = (formData: FormData) => {
-    setLatest('limit');
-    dispatchLimit(formData);
-  };
+  // honest without merging the server actions. The limit and rollover controls report
+  // themselves, inline, beside the control that failed -- a per-row failure now names its
+  // own row by position instead of appearing at the top of the page.
+  const [latest, setLatest] = useState<'copy' | 'apply' | 'applyAll' | null>(null);
   const copyAction = (formData: FormData) => {
     setLatest('copy');
     dispatchCopy(formData);
@@ -290,22 +291,8 @@ export function BudgetsClient({
     setLatest('applyAll');
     dispatchApplyAll(formData);
   };
-  const rolloverAction = (formData: FormData) => {
-    setLatest('rollover');
-    dispatchRollover(formData);
-  };
   const banner: BudgetActionState =
-    latest === 'limit'
-      ? limitState
-      : latest === 'copy'
-        ? copyState
-        : latest === 'apply'
-          ? applyState
-          : latest === 'applyAll'
-            ? applyAllState
-            : latest === 'rollover'
-              ? rolloverState
-              : initial;
+    latest === 'copy' ? copyState : latest === 'apply' ? applyState : latest === 'applyAll' ? applyAllState : initial;
 
   // Members may edit household budgets and their OWN personal budgets; admins may edit
   // anyone's (mirrors setLimitAction / copyPreviousMonthAction, spec section 6).
@@ -454,9 +441,7 @@ export function BudgetsClient({
               scope="household"
               userId={null}
               month={month}
-              action={action}
               applyAction={applyAction}
-              rolloverAction={rolloverAction}
               editable
               canToggleRollover={currentUserIsAdmin}
               rolloverOn={householdRolloverOn}
@@ -539,9 +524,7 @@ export function BudgetsClient({
                   scope="personal"
                   userId={person.userId}
                   month={month}
-                  action={action}
                   applyAction={applyAction}
-                  rolloverAction={rolloverAction}
                   editable={canEditPersonal(person.userId)}
                   // Same admin-or-owner rule as editable, for personal scope (unlike
                   // household, where rollover is admin-only but the amount is not).
