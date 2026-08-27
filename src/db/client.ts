@@ -29,16 +29,33 @@ export function migrationsFolder(): string {
 
 /**
  * The ONLY place a better-sqlite3 Database is constructed.
- * Every connection gets foreign_keys=ON, journal_mode=WAL, busy_timeout=5000,
- * then Drizzle migrations are applied (idempotent).
+ * Every connection gets journal_mode=WAL, busy_timeout=5000 and foreign_keys=ON,
+ * with Drizzle migrations applied (idempotent) in between.
+ *
+ * v1.12.0: foreign keys are OFF for the migration pass and back ON immediately after. This is
+ * required, not defensive. Drizzle's SQLite dialect runs every pending migration inside one
+ * explicit BEGIN ... COMMIT, and SQLite documents `PRAGMA foreign_keys` as a NO-OP inside a
+ * transaction -- so the pragma cannot be set from inside a .sql file at all, and a table rebuild
+ * is impossible unless it is set here. drizzle/0011_bill_installments.sql is the first migration
+ * that needs one: SQLite cannot ALTER a CHECK, and warranty_item_types has a child table.
+ *
+ * A pragma-driven orphan sweep runs immediately afterwards and refuses to start on any orphan.
+ * Turning enforcement off for a window means a bad migration could leave one behind silently;
+ * this makes that loud on the very next boot rather than at some unrelated read months later.
  */
 export function openDatabase(filePath: string): DbInstance {
   const sqlite = new BetterSqlite3(filePath);
-  sqlite.pragma('foreign_keys = ON');
   sqlite.pragma('journal_mode = WAL');
   sqlite.pragma('busy_timeout = 5000');
+  sqlite.pragma('foreign_keys = OFF');
   const db = drizzle(sqlite, { schema });
   migrate(db, { migrationsFolder: migrationsFolder() });
+  sqlite.pragma('foreign_keys = ON');
+  const orphans = sqlite.pragma('foreign_key_check') as unknown[];
+  if (orphans.length > 0) {
+    sqlite.close();
+    throw new Error(`Database has ${orphans.length} orphaned row(s) after migration; refusing to start.`);
+  }
   return { db, sqlite };
 }
 

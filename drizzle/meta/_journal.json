@@ -78,6 +78,13 @@
       "when": 1756080000000,
       "tag": "0010_balances",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1756166400000,
+      "tag": "0011_bill_installments",
+      "breakpoints": true
     }
   ]
 }
