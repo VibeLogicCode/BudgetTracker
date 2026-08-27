@@ -724,3 +724,35 @@ with the same accessible name and nothing else to tell them apart for a screen-r
 Fix shape: append something that is unique per row without being noisy for the common case, e.g.
 the row's date (or date + amount), the same way other rows in this app compose an accessible name
 from more than one field when the primary one repeats.
+
+## Owner requests after v1.11.0 (2026-08-24, not started)
+
+**N. Page guides should start collapsed everywhere (~15 min).** `PageGuide` renders
+`<GuidePanel open={empty}>` (`src/components/ui/PageGuide.tsx:17`), so the "What is this page
+for?" panel opens itself whenever a page has no data yet. Owner ruling: it should be collapsed by
+default on every page and expand only when the user clicks it. Change is `open={false}` (or drop
+the prop) plus the onboarding-coverage guard and any PageGuide test that asserts the empty-state
+expansion. Keep the panel itself — only the default state changes. The v1.10.0 spec argued for
+auto-expanding on empty pages; this reverses that ruling on owner feedback.
+
+**O. Contracts & Coverage: tax bills with due dates, for reminders (~4-6h, needs a short spec).**
+Owner wants to enter a property-tax bill with its due dates so the app reminds them. Today's
+billing model on items is a cadence — `BILLING_CYCLE_LABELS` is Monthly / Annual only — and
+property tax is installments on fixed, irregular dates (two to six a year depending on the
+municipality), so no cadence expresses it and a "Tax" item type under the existing `contract` kind
+would remind on the wrong days.
+
+Recommended shape: a fifth `ItemKind`, `bill`, whose reminder data is an explicit schedule — a
+child table of (item_id, due_date, amount_cents, paid_at NULL) rows — instead of billing_cycle /
+billing_amount_cents. The Coming-up card and the notification events already read items, so
+"due in N days" reminders and "overdue" surfacing come from wiring the schedule into those two
+readers, not from new machinery. Marking an installment paid is the one new action (and the
+natural home for the existing payment-matching rules: a matched transaction marks the installment
+paid). `productFieldsAllowedForKind`, `billingAllowedForKind` and `loanFieldsAllowedForKind` in
+`src/lib/warranty/constants.ts` each gain the new kind; the type-immutability rule (v1.10.2)
+already covers it.
+
+Cheaper alternative if the schedule is too much: add Quarterly / Semi-annual cadences and let the
+owner create a "Property tax" item type of kind `contract`. Rejected for now because installment
+dates are set by the municipality, not by a regular interval, and a reminder that fires on the
+wrong day is worse than none.
