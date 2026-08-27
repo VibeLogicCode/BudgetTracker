@@ -53,8 +53,12 @@ describe('the journal entry', () => {
     expect(entry!.when - prior!.when).toBe(86_400_000);
     // Append-only: 0009 keeps its slot.
     expect(prior?.tag).toBe('0009_finish_line');
-    // And 10 really is the last entry -- a later idx would mean this test is stale.
-    expect(Math.max(...journal.entries.map((e) => e.idx))).toBe(10);
+    // 10 sits immediately after 9 in idx order -- that's what this test actually needs to guard.
+    // (Not "10 is the journal's last entry": that pinned the tail and broke the moment a later
+    // migration appended its own entry -- e.g. 0011 -- even though 0010's own slot was untouched
+    // and still exactly right. Append-only growth past 10 is expected, not a regression.)
+    const idxs = journal.entries.map((e) => e.idx).sort((a, b) => a - b);
+    expect(idxs.indexOf(10)).toBe(idxs.indexOf(9) + 1);
   });
 });
 
