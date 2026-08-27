@@ -23,6 +23,29 @@ All notable changes to Budget Tracker are recorded here.
 
 ## [1.12.0] - 2026-08-24
 
+**Before updating:** this release rebuilds the `warranty_item_types` table to make room for the
+new Bill kind — the first time a Budget Tracker migration has recreated a table holding data you
+typed. Take a backup first: **Settings → Backups → Download backup now**, or confirm last
+night's scheduled backup succeeded. Use that, not a file copy — the database runs in WAL mode, so
+copying `budget.db` off the NAS while the container is running silently leaves out your most
+recent changes; the app's own backup is a consistent snapshot.
+
+**Stop the old container before starting the new one** rather than hot-swapping, so only one
+process opens the database during the migration.
+
+**The migration is all-or-nothing.** Every statement and its bookkeeping row commit in a single
+transaction, so an interrupted update leaves your v1.11.0 database exactly as it was — start the
+container again and it will retry.
+
+**To roll back:** restore the backup you took above, then run the v1.11.0 image. A backup made
+*by* v1.12.0 will be refused by v1.11.0 as newer (`npm run restore-backup -- --allow-newer`
+overrides this on the disaster path only), which is why the backup must be taken *before* you
+pull.
+
+**If the app refuses to start** with `Database has N orphaned row(s) after migration`, it has
+found a pre-existing broken reference that earlier versions never checked for. Restore your
+backup and open an issue — do not delete the database.
+
 ### Added
 
 - **Bills with due dates.** A property tax bill is not a monthly or an annual subscription — it

@@ -755,3 +755,33 @@ Cheaper alternative if the schedule is too much: add Quarterly / Semi-annual cad
 owner create a "Property tax" item type of kind `contract`. Rejected for now because installment
 dates are set by the municipality, not by a regular interval, and a reminder that fires on the
 wrong day is worse than none.
+
+## v1.12.0 leftovers (found during the final whole-branch review, deliberately not fixed mid-release)
+
+**P. The Coming-up card has no row cap and, with `includeOverdue`, no lower date bound (~20
+min).** `ComingUpCard` (`src/components/ComingUpCard.tsx`) renders every row `unpaidInstallments()`
+returns for the window; unlike the notification evaluator, it has nothing resembling
+`MAX_NEW_ROWS_PER_USER_PER_EVALUATION` to stop at. A household that falls far behind on a bill —
+or several — gets a wall of rows instead of a card, and because `includeOverdue` carries no lower
+bound either, an installment from years ago is exactly as eligible as one from last week. The
+card's aria-label total folds all of them in, so the announced count is exactly as unbounded as
+the visible list. Fix shape: cap the rendered rows (with a "+N more" affordance, the same shape
+other cards in this app already use for overflow) and give overdue rows a lower bound of their
+own — most-overdue-first with a cutoff, not literally everything ever missed.
+
+**Q. The `/warranties` list row for a Bill shows "Ongoing" and nothing about its installments
+(in-spec; ~30 min).** `warranties-client.tsx`'s row rendering has no bill-specific case, so a
+Bill-kind item's row falls through to the same "Ongoing" status text a lifetime warranty gets —
+correct per the design spec, which scoped the schedule UI to the item's own detail page, but it
+means a bill that is three weeks overdue is silent on the one page most people actually navigate
+to. Obvious v1.12.1 candidate: surface the earliest unpaid due date, or an overdue count, in the
+row the same way the loan row already surfaces its balance.
+
+**R. The bill detail header card renders Vendor / Model / Serial / Price as "—" rows for a kind
+that cannot carry them (~15 min).** `warranty-detail-client.tsx`'s header card is shared across all
+five kinds and shows every product field regardless of whether the current kind's gates
+(`productFieldsAllowedForKind` et al. in `src/lib/warranty/constants.ts`) allow it to be set. For a
+Bill, none of those fields can ever hold a value, so the card is four guaranteed em-dashes above
+the Installments section. Fix shape: hide inapplicable fields via the same kind gates the add/edit
+forms already use, on the display side too, instead of rendering an empty placeholder for a field
+the kind was never allowed to fill in.
