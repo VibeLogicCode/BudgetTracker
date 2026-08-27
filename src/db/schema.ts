@@ -878,7 +878,10 @@ export const loanPayments = sqliteTable(
  * drizzle/0011_bill_installments.sql.
  *
  * NOT represented here; SQL only:
- *   - CHECK (due_date GLOB '____-__-__')
+ *   - CHECK (due_date LIKE '____-__-__') -- LIKE, not GLOB: GLOB's wildcards are ? and *, and
+ *     treats _ as a literal underscore, so a GLOB pattern of underscores would only ever match
+ *     a due_date that is literally four dashes and eight underscores. LIKE is the one whose
+ *     wildcards are % and _, which is what this pattern actually needs.
  *   - CHECK (amount_cents > 0)
  *   - CHECK (paid_txn_id IS NULL OR paid_at IS NOT NULL)
  *

@@ -49,8 +49,10 @@ export function evaluateComingDue(input: { userId: number; now: Date; tz: string
 
   let enqueuedRows = 0;
 
-  // dueSoonDays is the caller's, deliberately: the evaluator's window is the user's own
-  // comingDueDays, and the detail page uses its own. Neither invents a third.
+  // This evaluator's window is the user's own comingDueDays (settings, above), deliberately not
+  // shared with the detail page's INSTALLMENT_DUE_SOON_DAYS constant -- that is a separate,
+  // fixed lookahead the detail page uses for its own "Due soon" badge. Neither reader invents
+  // a third window; each just uses its own.
   const installments = unpaidInstallments({
     today,
     windowEnd: horizon,

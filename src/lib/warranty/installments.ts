@@ -21,6 +21,29 @@ import {
  * the window are always parameters, never `new Date()`. The one exception is the OPTIONAL `at`
  * on the two writers, which defaults to nowIso() the way every other writer in this codebase
  * does.
+ *
+ * THREE READERS, THREE DELIBERATELY DIFFERENT KIND FILTERS. This asymmetry is the feature, not
+ * an inconsistency to clean up:
+ *   - listInstallments() (below) applies NO kind filter at all. Ruling B7: a gate decides what a
+ *     form offers, never what it may hide, and a row must stay reachable on the item's own page
+ *     after its type's kind is flipped away from bill, or ruling B6's "kept, never deleted" rows
+ *     would be unreachable as well as invisible.
+ *   - unpaidInstallments() (below) INNER JOINs warrantyItemTypes on kind = 'bill'. Ruling B6:
+ *     once a type stops being kind bill, its items' installments go quiet on the dashboard and in
+ *     notifications -- a reader that is no longer offering the bill UI has no business nagging
+ *     about it either.
+ *   - the payment matcher's activeRules() (src/lib/loans.ts) admits kind IN ('loan', 'bill'), but
+ *     makes the non-null-balance requirement LOAN-only (ruling B10/B11). A bill has no balance to
+ *     move, so inheriting the loan dormancy condition unchanged would make every bill rule save
+ *     successfully and then never fire -- silently, since nothing about creating the rule would
+ *     complain.
+ *
+ * Tightening the first (adding a kind filter to listInstallments) turns a kind flip into data
+ * loss: a person could no longer even see, let alone recover, installments they typed while the
+ * type was still kind bill. Loosening the second (dropping unpaidInstallments' kind filter, or
+ * giving it a bill-shaped balance requirement copied from the loan side) turns it into phantom
+ * nagging: reminders for installments whose item no longer presents as a bill anywhere a person
+ * would look, or rules that appear configured but can never fire.
  */
 
 /** The lookahead the DETAIL PAGE uses for its "Due soon" badge. The notification evaluator

@@ -66,10 +66,18 @@ export function openDatabase(filePath: string): DbInstance {
     sqlite.close();
     throw migrationError;
   }
-  const orphans = sqlite.pragma('foreign_key_check') as unknown[];
+  const orphans = sqlite.pragma('foreign_key_check') as { table: string; rowid: number; parent: string; fkid: number }[];
   if (orphans.length > 0) {
     sqlite.close();
-    throw new Error(`Database has ${orphans.length} orphaned row(s) after migration; refusing to start.`);
+    // Name what is broken, not just how much: a headless NAS's only record of this failure is
+    // its log, and "table#rowid→parent" is enough to go find the row without a shell on the box.
+    const sample = orphans
+      .slice(0, 5)
+      .map((o) => `${o.table}#${o.rowid}→${o.parent}`)
+      .join(', ');
+    throw new Error(
+      `Database has ${orphans.length} orphaned row(s) after migration; refusing to start. First ${Math.min(orphans.length, 5)}: ${sample}`,
+    );
   }
   return { db, sqlite };
 }

@@ -28,7 +28,14 @@
 -- INSERT ... SELECT, DROP, RENAME, and every surviving constraint and index re-declared:
 --   * both 0003 CHECKs (is_subscription IN (0,1); length(trim(name)) BETWEEN 1 AND 60)
 --   * the widened kind CHECK, now five values
---   * AUTOINCREMENT, so ids keep climbing rather than being reused
+--   * AUTOINCREMENT -- surviving rows keep their existing ids, but this is not an absolute
+--     never-reused guarantee across the rebuild: SQLite seeds the __new_ table's sequence from
+--     the highest id the INSERT ... SELECT actually copies, not from the highest id the OLD
+--     table's sqlite_sequence remembers ever having assigned. If the all-time-highest type id had
+--     already been deleted before this migration ran, the rebuilt table's sequence regresses to
+--     the current max(id) and a future insert can reissue that deleted id. Harmless here: FK
+--     enforcement means no live warranty_items row can still be pointing at a deleted type, so a
+--     reissued id cannot collide with a dangling reference.
 --   * warranty_item_types_name_uq, WITH its COLLATE NOCASE collation
 -- The explicit id column in the INSERT is what keeps warranty_items.type_id resolving.
 --
