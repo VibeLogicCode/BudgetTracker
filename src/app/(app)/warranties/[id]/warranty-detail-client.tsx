@@ -12,6 +12,9 @@ import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { Money } from '@/components/ui/Money';
 import { Notice } from '@/components/ui/Notice';
 import { TableWrap } from '@/components/ui/Table';
+import { RowMenu, RowMenuForm } from '@/components/ui/RowMenu';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { BellIcon } from '@/components/icons';
 import { Field, inputClass, labelClass, selectClass, textareaClass } from '@/components/ui/form';
 import { formatCents } from '@/lib/money';
 import type { LoanRule } from '@/lib/loans';
@@ -30,16 +33,26 @@ import {
   openEndedDisplayLabel,
   type ItemKind,
   productFieldsAllowedForKind,
+  INSTALLMENT_SECTION_LABEL,
+  installmentStateLabel,
+  installmentsAllowedForKind,
+  matchingAllowedForKind,
+  matchingBlurbForKind,
+  type InstallmentState,
 } from '@/lib/warranty/constants';
 import type { WarrantyStatus } from '@/lib/warranty/expiry';
 import type { WarrantyItemRow, WarrantyReceiptRow } from '@/lib/warranty/items';
+import type { InstallmentRow } from '@/lib/warranty/installments';
 import {
+  addInstallmentAction,
   attachReceiptsAction,
   deleteLoanRuleAction,
   deleteReceiptAction,
   deleteWarrantyAction,
+  removeInstallmentAction,
   reRunOcrAction,
   saveLoanRuleAction,
+  setInstallmentPaidAction,
   updateWarrantyAction,
   type WarrantyActionState,
 } from '../actions';
@@ -50,6 +63,15 @@ const OCR_CHIP: Record<WarrantyReceiptRow['ocrStatus'], string> = {
   pending: 'Reading…',
   done: 'Read',
   failed: 'Could not read',
+};
+
+/** The `.badge` primitive is the shared thing, not StatusBadge's five hues: StatusBadge is about
+ *  an ITEM's own lifecycle, and an installment is not an item. */
+const INSTALLMENT_BADGE: Record<InstallmentState, string> = {
+  paid: 'badge badge--green',
+  overdue: 'badge badge--red',
+  due_soon: 'badge badge--amber',
+  scheduled: 'badge badge--muted',
 };
 
 type TypeOption = { id: number; name: string; kind: ItemKind };
@@ -93,6 +115,7 @@ export function WarrantyDetailClient({
   payoffFraction,
   lastPaymentAt,
   paymentCount,
+  installments,
 }: {
   item: WarrantyItemRow;
   receipts: WarrantyReceiptRow[];
@@ -110,6 +133,9 @@ export function WarrantyDetailClient({
   payoffFraction: number | null;
   lastPaymentAt: string | null;
   paymentCount: number;
+  /** v1.12.0: a bill's due-date schedule. Always supplied; the card decides whether to render
+   *  (ruling B7 -- a gate never hides a stored value). */
+  installments: InstallmentRow[];
 }) {
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -163,6 +189,18 @@ export function WarrantyDetailClient({
   // call still refreshes `rules` from the server either way.
   const [deleteRuleState, removeRule] = useActionState(
     (_prev: WarrantyActionState, formData: FormData) => deleteLoanRuleAction(formData),
+    initial,
+  );
+
+  // v1.12.0: the Installments card's own inline results, reported inside the card exactly as
+  // the Payment matching card's are -- they are not among the five actions activeSlot
+  // disambiguates between.
+  const [addInstallmentState, addInstallmentDispatch] = useActionState(addInstallmentAction, initial);
+  const [installmentRowState, installmentRowDispatch] = useActionState(
+    (_prev: WarrantyActionState, formData: FormData) =>
+      formData.get('intent') === 'remove'
+        ? removeInstallmentAction(_prev, formData)
+        : setInstallmentPaidAction(_prev, formData),
     initial,
   );
 
@@ -380,16 +418,154 @@ export function WarrantyDetailClient({
         )}
       </div>
 
-      {/* MUST-14.5 / MUST-14.6 / MUST-13.9: loan-kind only. Always states the budget rule
-          above the table, so the person reads it exactly where they are making the decision. */}
-      {item.kind !== 'loan' ? null : (
+      {/* Ruling B7: rendered when the kind ALLOWS installments, or when the item already HAS
+          some -- a gate decides what a form offers, never what it may hide, and an item whose
+          type was flipped away from Bill still holds rows a person typed. Add and Mark paid are
+          disabled outside kind 'bill'; Remove never is. */}
+      {!installmentsAllowedForKind(item.kind) && installments.length === 0 ? null : (
+        <Card>
+          <CardHeader
+            title={
+              <>
+                {INSTALLMENT_SECTION_LABEL} ({installments.filter((row) => row.paidAt === null).length} unpaid,{' '}
+                {formatCents(
+                  installments.filter((row) => row.paidAt === null).reduce((sum, row) => sum + row.amountCents, 0),
+                )}{' '}
+                outstanding)
+              </>
+            }
+          />
+          <CardBody className="flex flex-col gap-4">
+            <p className="text-sm text-muted">
+              Enter each due date the way it appears on the bill. The app reminds you before each one and flags any
+              that go past.
+            </p>
+            {installments.length === 0 ? (
+              <EmptyState
+                icon={BellIcon}
+                title="No installments yet"
+                action={
+                  <a href="#add-installment" className="btn btn--primary btn--sm">
+                    Add the first due date
+                  </a>
+                }
+              >
+                A bill is a list of dates and amounts. Add the first one below and the reminders follow.
+              </EmptyState>
+            ) : (
+              <>
+                {/* Not `fixed`, so tests/ops/table-layout.test.ts's fixed-implies-minWidth pairing
+                    does not apply -- same shape as the loan rules table directly below. */}
+                <TableWrap bare>
+                  <thead>
+                    <tr>
+                      <th scope="col">Due date</th>
+                      <th scope="col">Amount</th>
+                      <th scope="col">Status</th>
+                      <th scope="col"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {installments.map((row) => (
+                      <tr key={row.id}>
+                        <td className={row.state === 'overdue' ? 'font-medium text-danger' : 'font-medium text-ink'}>
+                          {row.dueDate}
+                        </td>
+                        <td className="money">{formatCents(row.amountCents)}</td>
+                        <td>
+                          <span className={INSTALLMENT_BADGE[row.state]}>{installmentStateLabel(row.state)}</span>
+                          {row.paidTxn === null ? null : (
+                            <span className="mt-1 block text-xs text-muted">
+                              Paid by{' '}
+                              <Link href={`/transactions?q=${encodeURIComponent(row.paidTxn.description)}`}>
+                                {row.paidTxn.date} · {row.paidTxn.description}
+                              </Link>
+                              {Math.abs(row.paidTxn.amountCents) === row.amountCents ? null : (
+                                /* Ruling C7: the amount is NOT compared when matching, because a
+                                   tax bill arrives with penalties, discounts and rounding. The
+                                   difference is a FACT the household reads and decides about --
+                                   not an error, and not a warning colour. */
+                                <span className="block">
+                                  Transaction was {formatCents(Math.abs(row.paidTxn.amountCents))} (
+                                  {formatCents(Math.abs(Math.abs(row.paidTxn.amountCents) - row.amountCents))}{' '}
+                                  {Math.abs(row.paidTxn.amountCents) > row.amountCents ? 'more' : 'less'} than
+                                  scheduled)
+                                </span>
+                              )}
+                            </span>
+                          )}
+                        </td>
+                        <td className="text-right">
+                          {/* Ruling B9: two actions collapse into one kebab, and the accessible
+                              name carries the amount AND the date -- a repeated single field is
+                              the defect PENDING-FIXES item M records. */}
+                          <RowMenu label={`Actions for the ${formatCents(row.amountCents)} installment due ${row.dueDate}`}>
+                            {row.paidAt === null ? (
+                              installmentsAllowedForKind(item.kind) ? (
+                                <RowMenuForm
+                                  action={installmentRowDispatch}
+                                  fields={{ intent: 'paid', id: String(row.id), itemId: String(item.id), paid: 'true' }}
+                                >
+                                  Mark paid
+                                </RowMenuForm>
+                              ) : null
+                            ) : (
+                              <RowMenuForm
+                                action={installmentRowDispatch}
+                                fields={{ intent: 'paid', id: String(row.id), itemId: String(item.id), paid: 'false' }}
+                              >
+                                Unmark
+                              </RowMenuForm>
+                            )}
+                            <RowMenuForm
+                              action={installmentRowDispatch}
+                              fields={{ intent: 'remove', id: String(row.id), itemId: String(item.id) }}
+                            >
+                              Remove
+                            </RowMenuForm>
+                          </RowMenu>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </TableWrap>
+                {/* Same F3-fix-round treatment as the loan rules table: the stale case ("removed
+                    already, in another tab") has somewhere to surface. */}
+                <FormError message={installmentRowState.error} />
+              </>
+            )}
+            {installmentsAllowedForKind(item.kind) ? (
+              <form action={addInstallmentDispatch} id="add-installment" className="flex flex-col gap-3">
+                <input type="hidden" name="itemId" value={item.id} />
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Field label="Due date">
+                    <input type="date" name="dueDate" className={inputClass} required />
+                  </Field>
+                  <Field label="Amount">
+                    <input name="amount" inputMode="decimal" className={inputClass} placeholder="e.g. 1200.00" />
+                  </Field>
+                </div>
+                <FormError message={addInstallmentState.error} />
+                {addInstallmentState.message === undefined ? null : (
+                  <Notice tone="success">{addInstallmentState.message}</Notice>
+                )}
+                {/* One form, one submit. No auto-save (ruling B8): correcting an installment is
+                    remove and re-add, exactly as the loan rules card next to it works. */}
+                <SubmitButton className="btn btn--primary self-start">Add installment</SubmitButton>
+              </form>
+            ) : null}
+          </CardBody>
+        </Card>
+      )}
+
+      {/* MUST-14.5 / MUST-14.6 / MUST-13.9: matching-allowed kinds only (loan and bill, v1.12.0).
+          Always states the budget rule above the table, so the person reads it exactly where
+          they are making the decision. */}
+      {!matchingAllowedForKind(item.kind) ? null : (
         <Card>
           <CardHeader title="Payment matching" />
           <CardBody className="flex flex-col gap-4">
-            <p className="text-sm text-muted">
-              When a transaction&apos;s merchant contains this text, the app treats it as a payment on this loan and
-              takes it off the balance. The payment still counts in your budget and in your reports.
-            </p>
+            <p className="text-sm text-muted">{matchingBlurbForKind(item.kind)}</p>
             {rules.length === 0 ? null : (
               <>
                 <TableWrap bare>
@@ -442,17 +618,20 @@ export function WarrantyDetailClient({
               {/* MUST-13.9: UNCHECKED by default, and the hint says which case is which. A
                   person types today's balance and then saves a rule; back-filling a year of
                   payments would subtract them all from a figure that already accounts for
-                  them. */}
-              <label className="flex items-start gap-2 text-sm text-muted">
-                <input type="checkbox" name="backfill" className="mt-1" />
-                <span>
-                  Also link matching payments from the last 12 months
-                  <span className="field-hint block">
-                    Only tick this if the balance you typed is the balance from before those payments. Ticking it
-                    will subtract every payment it finds.
+                  them. Loan-only (spec Component 5): the server refuses a bill's backfill too
+                  (Step 4), so the checkbox is not offered for one either. */}
+              {item.kind === 'loan' ? (
+                <label className="flex items-start gap-2 text-sm text-muted">
+                  <input type="checkbox" name="backfill" className="mt-1" />
+                  <span>
+                    Also link matching payments from the last 12 months
+                    <span className="field-hint block">
+                      Only tick this if the balance you typed is the balance from before those payments. Ticking it
+                      will subtract every payment it finds.
+                    </span>
                   </span>
-                </span>
-              </label>
+                </label>
+              ) : null}
               <FormError message={ruleState.error} />
               {ruleState.message === undefined ? null : <Notice tone="success">{ruleState.message}</Notice>}
               <SubmitButton className="btn btn--primary self-start">Add rule</SubmitButton>

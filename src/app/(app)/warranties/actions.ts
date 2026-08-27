@@ -35,9 +35,21 @@ import { MAX_FILES_PER_UPLOAD } from '@/lib/warranty/receipts';
 import { STAGING_ID_RE } from '@/lib/warranty/staging';
 import { findItemType } from '@/lib/warranty/types';
 import {
+  addInstallment,
+  listInstallments,
+  markInstallmentPaid,
+  removeInstallment,
+  unmarkInstallmentPaid,
+  INSTALLMENT_DUE_SOON_DAYS,
+} from '@/lib/warranty/installments';
+import {
   ITEM_KIND_LABELS,
   ITEM_TYPE_IMMUTABLE_ERROR,
   isBillingCycle,
+  INSTALLMENT_KIND_ERROR,
+  MATCHING_KIND_ERROR,
+  installmentsAllowedForKind,
+  matchingAllowedForKind,
   type BillingCycle,
   type ItemKind,
 } from '@/lib/warranty/constants';
@@ -528,7 +540,9 @@ export async function saveLoanRuleAction(_prev: WarrantyActionState, formData: F
 
   const item = getWarrantyItem(parsed.data.itemId);
   if (!item) return { error: 'That item no longer exists.' };
-  if (item.kind !== 'loan') return { error: 'Payment matching only applies to loans.' };
+  // v1.12.0: bills carry matching rules too -- a match marks their earliest unpaid installment
+  // paid instead of moving a balance. MUST-19.11: the sentence lives in constants.ts now.
+  if (!matchingAllowedForKind(item.kind)) return { error: MATCHING_KIND_ERROR };
   if (listLoanRules(item.id).length >= MAX_RULES_PER_LOAN) return { error: RULE_LIMIT };
 
   let ruleId: number;
@@ -548,7 +562,11 @@ export async function saveLoanRuleAction(_prev: WarrantyActionState, formData: F
   }
 
   let message = 'Rule saved. It will apply to payments that arrive from now on.';
-  if (parsed.data.backfill) {
+  // Loan-only, deliberately. Retroactively marking a year of installments paid from a year of
+  // transactions is exactly the mistake the checkbox's own hint warns about, and a bill has
+  // three or four installments a year that are one click each. The checkbox is not rendered for
+  // a bill either; this is the server half of the same rule.
+  if (parsed.data.backfill && item.kind === 'loan') {
     // MUST-14.12: the ONE loan action with a limit, and the rule is still saved when it is
     // refused -- only the historical pass is skipped.
     const verdict = checkLoanBackfill();
@@ -580,4 +598,114 @@ export async function deleteLoanRuleAction(formData: FormData): Promise<Warranty
   deleteLoanRule(parsed.data.id);
   revalidateAll(parsed.data.itemId);
   return { message: 'Rule removed. Payments already linked are untouched.' };
+}
+
+/**
+ * v1.12.0: a bill's due-date schedule (spec 2026-08-24, Component 7).
+ *
+ * Each of these takes requireUser(), not requireAdmin -- deliberately, and matching every other
+ * action in this file: an item's own household member manages that item's paperwork.
+ *
+ * The installment is always looked up THROUGH its claimed itemId rather than by id alone, the
+ * same F10-fix-round discipline deleteLoanRuleAction uses: a mismatched pair (tampered, or a
+ * stale tab racing a row that moved) would otherwise mutate an unrelated bill and revalidate the
+ * wrong page.
+ */
+const installmentRefSchema = z.object({
+  id: z.coerce.number().int().positive(),
+  itemId: z.coerce.number().int().positive(),
+});
+
+function findInstallment(itemId: number, id: number) {
+  // The window is irrelevant to a lookup, but listInstallments' signature asks for one; today's
+  // date and the page's own window keep the derived state honest if a caller ever reads it.
+  return listInstallments(itemId, todayIso(), INSTALLMENT_DUE_SOON_DAYS).find((row) => row.id === id);
+}
+
+const INSTALLMENT_GONE = 'That installment no longer exists.';
+
+export async function addInstallmentAction(
+  _prev: WarrantyActionState,
+  formData: FormData,
+): Promise<WarrantyActionState> {
+  // MUST-13.1: origin FIRST, before auth, before validation, before any read.
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+  await requireUser();
+
+  const parsed = z
+    .object({ itemId: z.coerce.number().int().positive() })
+    .safeParse({ itemId: formData.get('itemId') });
+  if (!parsed.success) return { error: 'Invalid request.' };
+
+  const item = getWarrantyItem(parsed.data.itemId);
+  if (!item) return { error: 'That item no longer exists.' };
+  if (!installmentsAllowedForKind(item.kind)) return { error: INSTALLMENT_KIND_ERROR };
+
+  const dueDate = str(formData, 'dueDate').trim();
+  const cents = parseAmountToCents(str(formData, 'amount').trim());
+  if (cents === null) return { error: 'Amount is not a number.' };
+  // Magnitude, the same normalisation readPriceCents() applies: a person typing -1,200.00 for a
+  // bill means the size of the bill, and the CHECK in drizzle/0011 refuses anything else anyway.
+  const amountCents = Math.abs(cents);
+
+  try {
+    addInstallment({ itemId: item.id, dueDate, amountCents });
+  } catch (error) {
+    return failure(error, 'Could not add that installment.');
+  }
+  revalidateAll(item.id);
+  return { message: `Installment added for ${dueDate}.` };
+}
+
+export async function removeInstallmentAction(
+  _prev: WarrantyActionState,
+  formData: FormData,
+): Promise<WarrantyActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+  await requireUser();
+  const parsed = installmentRefSchema.safeParse({ id: formData.get('id'), itemId: formData.get('itemId') });
+  if (!parsed.success) return { error: 'Invalid request.' };
+
+  // Ruling B7: NO kind check here. Removing a stored row must stay possible after a type's kind
+  // has been flipped away from bill, or ruling B6's kept rows would be unreachable as well as
+  // invisible.
+  if (findInstallment(parsed.data.itemId, parsed.data.id) === undefined) return { error: INSTALLMENT_GONE };
+  removeInstallment(parsed.data.id);
+  revalidateAll(parsed.data.itemId);
+  return { message: 'Installment removed.' };
+}
+
+/**
+ * ONE action for mark and unmark. Two actions differing by a boolean are one action, and a single
+ * revalidate path is easier to keep honest than two.
+ *
+ * Marking is gated on the kind; UNMARKING is not, for ruling B7's reason -- a gate decides what a
+ * form offers, never what it may hide, and a person must always be able to undo a mark on a row
+ * that already exists.
+ */
+export async function setInstallmentPaidAction(
+  _prev: WarrantyActionState,
+  formData: FormData,
+): Promise<WarrantyActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+  await requireUser();
+  const parsed = installmentRefSchema.safeParse({ id: formData.get('id'), itemId: formData.get('itemId') });
+  if (!parsed.success) return { error: 'Invalid request.' };
+  const paid = str(formData, 'paid') === 'true';
+
+  if (findInstallment(parsed.data.itemId, parsed.data.id) === undefined) return { error: INSTALLMENT_GONE };
+
+  if (paid) {
+    const item = getWarrantyItem(parsed.data.itemId);
+    if (!item) return { error: 'That item no longer exists.' };
+    if (!installmentsAllowedForKind(item.kind)) return { error: INSTALLMENT_KIND_ERROR };
+    // Two people marking the same row: the second UPDATE is a no-op and markInstallmentPaid
+    // still reports true, because the desired state holds. That is success, not a race to
+    // report.
+    markInstallmentPaid(parsed.data.id, nowIso());
+  } else {
+    unmarkInstallmentPaid(parsed.data.id);
+  }
+  revalidateAll(parsed.data.itemId);
+  return { message: paid ? 'Marked as paid.' : 'Marked as unpaid.' };
 }

@@ -13,6 +13,12 @@ vi.mock('@/app/(app)/warranties/actions', () => ({
   reRunOcrAction: vi.fn(async () => ({})),
   saveLoanRuleAction: vi.fn(async () => ({})),
   deleteLoanRuleAction: vi.fn(async () => ({})),
+  // v1.12.0: the Installments card's three actions, called unconditionally by useActionState
+  // on every render -- without a stub here the mocked module has no such export and the
+  // component throws before any test-specific behaviour runs.
+  addInstallmentAction: vi.fn(async () => ({})),
+  removeInstallmentAction: vi.fn(async () => ({})),
+  setInstallmentPaidAction: vi.fn(async () => ({})),
 }));
 
 afterEach(() => cleanup());
@@ -64,6 +70,7 @@ function renderDetail(over: Partial<Parameters<typeof WarrantyDetailClient>[0]> 
       payoffFraction={null}
       lastPaymentAt={null}
       paymentCount={0}
+      installments={[]}
       {...over}
     />,
   );

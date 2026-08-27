@@ -7,6 +7,7 @@ import { listLoanRules, listLoans } from '@/lib/loans';
 import { displayNameOf, getTransaction } from '@/lib/transactions';
 import { warrantyStatus } from '@/lib/warranty/expiry';
 import { getWarrantyItem, listWarrantyReceipts } from '@/lib/warranty/items';
+import { INSTALLMENT_DUE_SOON_DAYS, listInstallments } from '@/lib/warranty/installments';
 import { listItemTypes } from '@/lib/warranty/types';
 import { WarrantyDetailClient } from './warranty-detail-client';
 
@@ -41,6 +42,11 @@ export default async function WarrantyDetailPage({ params }: { params: Promise<{
          "Spec ambiguities resolved" note. */
       linkRemoved={item.transactionId !== null && txn === null}
       rules={listLoanRules(item.id)}
+      /* v1.12.0: ALWAYS loaded, whatever the kind -- ruling B7. The card is rendered when the
+         kind allows installments OR when the item already has some, and the client cannot make
+         that second decision without the rows. INSTALLMENT_DUE_SOON_DAYS is the page's own
+         window; the notification evaluator passes the user's comingDueDays instead. */
+      installments={listInstallments(item.id, today, INSTALLMENT_DUE_SOON_DAYS)}
       accounts={listAccounts().map((a) => ({ id: a.id, name: a.name }))}
       payoffFraction={loanSummary?.payoffFraction ?? null}
       lastPaymentAt={loanSummary?.lastPaymentAt ?? null}
