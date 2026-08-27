@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { applyLoanMatchers, listLoans, loansTotalOwedCents, saveLoanRule } from '@/lib/loans';
+import { applyPaymentMatchers, listLoans, loansTotalOwedCents, saveLoanRule } from '@/lib/loans';
 import { setupLoanTest, type LoanTestContext } from './fixtures';
 
 let ctx: LoanTestContext;
@@ -98,9 +98,9 @@ describe('MUST-15.4: listLoans read model', () => {
     const itemId = seedLoanFull({ name: 'Civic' });
     saveLoanRule({ itemId, merchantContains: 'HONDA FIN', accountId: null, enabled: true });
     const txn1 = ctx.spend('HONDA FIN SVC', -10_000, { date: '2026-01-01' });
-    applyLoanMatchers([txn1], new Date('2026-01-02T00:00:00.000Z'));
+    applyPaymentMatchers([txn1], new Date('2026-01-02T00:00:00.000Z'));
     const txn2 = ctx.spend('HONDA FIN SVC', -10_000, { date: '2026-02-01' });
-    applyLoanMatchers([txn2], new Date('2026-02-02T00:00:00.000Z'));
+    applyPaymentMatchers([txn2], new Date('2026-02-02T00:00:00.000Z'));
 
     const loan = listLoans().find((row) => row.itemId === itemId)!;
     expect(loan.paymentCount).toBe(2);

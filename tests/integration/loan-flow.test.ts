@@ -3,7 +3,7 @@ import { commitImport, undoImport } from '@/lib/import/commit';
 import { computeRowHashes } from '@/lib/import/dedup';
 import type { CandidateRow } from '@/lib/import/parse';
 import {
-  applyLoanMatchers,
+  applyPaymentMatchers,
   assignTransactionToLoan,
   debtOverTime,
   deleteLoanRule,
@@ -40,7 +40,7 @@ function row(over: { rawDescription: string; amountCents: number; date: string }
 function importRows(filename: string, rows: CandidateRow[]) {
   const hashed = computeRowHashes(ctx.accountId, rows);
   const committed = commitImport({ accountId: ctx.accountId, profileId: null, filename, importedBy: ctx.userId, rows: hashed, errors: [] });
-  const loanLinksCreated = applyLoanMatchers(committed.insertedTransactionIds);
+  const loanLinksCreated = applyPaymentMatchers(committed.insertedTransactionIds);
   return { ...committed, loanLinksCreated };
 }
 
@@ -67,7 +67,7 @@ it('MUST-19.5: create -> rule -> import -> undo -> re-import -> manual assign ->
   // exists to report on; linking must not additionally change how it is reported).
   const breakdownBeforeLink = categoryBreakdown({ from: '2026-01-01', to: '2026-12-31' });
 
-  const loanLinksCreated = applyLoanMatchers(committed.insertedTransactionIds);
+  const loanLinksCreated = applyPaymentMatchers(committed.insertedTransactionIds);
   expect(loanLinksCreated).toBe(2);
   expect(ctx.balanceOf(itemId)).toBe(2_000_000 - 90_000);
 
@@ -117,7 +117,7 @@ it('AC5: a 500-row import with NO loan rules performs exactly one extra (dormanc
     return original(sqlText);
   }) as typeof ctx.t.sqlite.prepare);
 
-  const loanLinksCreated = applyLoanMatchers(committed.insertedTransactionIds);
+  const loanLinksCreated = applyPaymentMatchers(committed.insertedTransactionIds);
   expect(loanLinksCreated).toBe(0);
   // The ONE indexed read of activeRules() -- MUST-13.3's dormancy bail -- and nothing else:
   // a household with no loan rules pays one query per import, not a query per row.

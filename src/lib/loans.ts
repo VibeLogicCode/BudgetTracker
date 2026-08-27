@@ -335,7 +335,7 @@ function alreadyLinked(tx: ReturnType<typeof getDb>, txnIds: number[]): Set<numb
  * other three call sites (createManualTransaction, confirmCategory) have nowhere spec'd for
  * that signal to go and don't need it.
  */
-export function applyLoanMatchers(txnIds: number[], at: Date = new Date(), report?: { failed: boolean }): number {
+export function applyPaymentMatchers(txnIds: number[], at: Date = new Date(), report?: { failed: boolean }): number {
   if (txnIds.length === 0) return 0;
   try {
     const stamp = nowIso(at);
@@ -430,7 +430,7 @@ export function backfillLoanRule(
       let appliedTotal = 0;
       for (const row of rows) {
         // The query above already filters to amount_cents < 0 (payments only, same rule as
-        // applyLoanMatchers), so row.amountCents is always negative here.
+        // applyPaymentMatchers), so row.amountCents is always negative here.
         const applied = link(tx, {
           txnId: row.id,
           itemId: rule.itemId,
@@ -668,7 +668,7 @@ export interface PayoffProjection {
  * paid off it -- one linked disbursement can make a barely-paid loan look nearly paid off. The
  * query below joins `transactions` and counts a loan_payments row only when
  * transactions.amount_cents < 0, the SAME "re-derive direction from the linked transaction's own
- * immutable sign, never from applied_cents itself" rule applyLoanMatchers's own
+ * immutable sign, never from applied_cents itself" rule applyPaymentMatchers's own
  * `if (txn.amountCents >= 0) continue` guard, unassignTransactionFromLoan and debtOverTime all
  * already follow. Do not simplify this join away: a bare sum(applied_cents) is exactly the
  * defect this comment exists to keep from coming back.

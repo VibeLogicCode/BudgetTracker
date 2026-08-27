@@ -4,7 +4,7 @@ import { nowIso } from '@/lib/clock';
 import { readEnv } from '@/lib/env';
 import { commitImport, type CommitRow } from '@/lib/import/commit';
 import { DEDUP_HASH_VERSION } from '@/lib/import/dedup';
-import { applyLoanMatchers } from '@/lib/loans';
+import { applyPaymentMatchers } from '@/lib/loans';
 import { parseAmountToCents } from '@/lib/money';
 import { recordBalanceSnapshot } from '@/lib/networth';
 import type { RowError } from '@/lib/import/parse';
@@ -75,7 +75,7 @@ export interface SyncResult {
   /** true when runEngine threw after the rows were already committed — same contract as import/flow.ts. */
   engineFailed: boolean;
   loanLinksCreated: number;
-  /** F5 fix-round: true when applyLoanMatchers's own internal catch (MUST-13.5) fired. */
+  /** F5 fix-round: true when applyPaymentMatchers's own internal catch (MUST-13.5) fired. */
   loanMatchFailed: boolean;
 }
 
@@ -240,7 +240,7 @@ export async function runSync(input: { userId: number; fetcher?: Fetcher; now?: 
   // MUST-13.7: same post-commit slot as import/flow.ts, on the sync's own inserted ids.
   // Same out-param pattern as flow.ts for F5's loanMatchFailed.
   const loanMatchReport = { failed: false };
-  const loanLinksCreated = applyLoanMatchers(insertedIds, undefined, loanMatchReport);
+  const loanLinksCreated = applyPaymentMatchers(insertedIds, undefined, loanMatchReport);
   markSynced(now);
 
   return {

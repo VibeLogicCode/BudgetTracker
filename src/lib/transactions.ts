@@ -7,7 +7,7 @@ import { REVIEW_WHERE, confirmCategory, runEngine, setTransferFlag } from '@/lib
 import { normalizeMerchant } from '@/lib/categorize/normalize';
 import { nowIso } from '@/lib/clock';
 import { isIsoDate } from '@/lib/dates';
-import { applyLoanMatchers } from '@/lib/loans';
+import { applyPaymentMatchers } from '@/lib/loans';
 
 export interface TransactionFilter {
   accountId?: number | null;
@@ -232,7 +232,7 @@ export function createManualTransaction(input: {
   }
   // MUST-13.7: a hand-typed loan payment is a loan payment. Runs after confirmCategory so
   // the row is in its final state, and is cheap when no loan rules exist.
-  applyLoanMatchers([row.id]);
+  applyPaymentMatchers([row.id]);
   return row.id;
 }
 

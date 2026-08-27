@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { commitImport, undoImport, type CommitResult } from '@/lib/import/commit';
 import { computeRowHashes } from '@/lib/import/dedup';
 import type { CandidateRow } from '@/lib/import/parse';
-import { applyLoanMatchers, assignTransactionToLoan, loanLinksForTransactions, saveLoanRule, unassignTransactionFromLoan } from '@/lib/loans';
+import { applyPaymentMatchers, assignTransactionToLoan, loanLinksForTransactions, saveLoanRule, unassignTransactionFromLoan } from '@/lib/loans';
 import { setupLoanTest, type LoanTestContext } from './fixtures';
 
 let ctx: LoanTestContext;
@@ -65,7 +65,7 @@ describe('MUST-13.14 / MUST-13.15: import undo', () => {
     // Import B duplicate-hits the shared row only, making it associated with two imports.
     commitOne('b.csv', sharedRow);
 
-    expect(applyLoanMatchers(first.insertedTransactionIds)).toBe(2);
+    expect(applyPaymentMatchers(first.insertedTransactionIds)).toBe(2);
     expect(ctx.balanceOf(itemId)).toBe(startBalance - sharedPayment - 30_000);
 
     const result = undoImport(first.importId);
@@ -82,7 +82,7 @@ describe('MUST-13.14 / MUST-13.15: import undo', () => {
 
     const start = ctx.balanceOf(itemId);
     const first = commitOne('r8.csv', row);
-    applyLoanMatchers(first.insertedTransactionIds);
+    applyPaymentMatchers(first.insertedTransactionIds);
     const moved = ctx.balanceOf(itemId);
     expect(moved).toBeLessThan(start!);
 
@@ -90,7 +90,7 @@ describe('MUST-13.14 / MUST-13.15: import undo', () => {
     expect(ctx.balanceOf(itemId)).toBe(start);
 
     const second = commitOne('r8-again.csv', row);
-    applyLoanMatchers(second.insertedTransactionIds);
+    applyPaymentMatchers(second.insertedTransactionIds);
     expect(ctx.balanceOf(itemId)).toBe(moved);
   });
 
@@ -101,7 +101,7 @@ describe('MUST-13.14 / MUST-13.15: import undo', () => {
 
     const start = ctx.balanceOf(itemId);
     const first = commitOne('clamped.csv', row);
-    expect(applyLoanMatchers(first.insertedTransactionIds)).toBe(1);
+    expect(applyPaymentMatchers(first.insertedTransactionIds)).toBe(1);
     expect(ctx.balanceOf(itemId)).toBe(0);
     const link = loanLinksForTransactions(first.insertedTransactionIds).get(first.insertedTransactionIds[0])![0]!;
     expect(link.amountCents).toBe(45_000);
@@ -190,7 +190,7 @@ describe('F2: reverse paths never fabricate a balance out of NULL', () => {
     };
     const hashed = computeRowHashes(ctx.accountId, [row]);
     const first = commitImport({ accountId: ctx.accountId, profileId: null, filename: 'f2.csv', importedBy: ctx.userId, rows: hashed, errors: [] });
-    applyLoanMatchers(first.insertedTransactionIds);
+    applyPaymentMatchers(first.insertedTransactionIds);
     expect(ctx.balanceOf(itemId)).toBe(1_955_000);
 
     ctx.t.sqlite.prepare('update warranty_items set current_balance_cents = null, balance_updated_at = null where id = ?').run(itemId);
@@ -250,7 +250,7 @@ describe('NEW-1 fix-round: reversal clamps at zero instead of crashing past it',
     };
     const paymentHashed = computeRowHashes(ctx.accountId, [paymentRow]);
     const paymentCommit = commitImport({ accountId: ctx.accountId, profileId: null, filename: 'payment.csv', importedBy: ctx.userId, rows: paymentHashed, errors: [] });
-    applyLoanMatchers(paymentCommit.insertedTransactionIds);
+    applyPaymentMatchers(paymentCommit.insertedTransactionIds);
     expect(ctx.balanceOf(itemId)).toBe(0);
 
     // Undoing the DISBURSEMENT's import: the naive reversal asks for a negative balance. It

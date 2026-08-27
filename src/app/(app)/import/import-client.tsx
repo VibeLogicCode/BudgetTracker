@@ -294,7 +294,7 @@ export function ImportClient({
       // already flowing through CommitFlowResult.attributionSummary (Task 3) -- null
       // whenever there is nothing card-specific to report, so nothing is appended then.
       const withAttribution = body.attributionSummary ? `${base} ${body.attributionSummary}.` : base;
-      // NEW-5 fix-round: applyLoanMatchers is internally guarded (MUST-13.5) the same way
+      // NEW-5 fix-round: applyPaymentMatchers is internally guarded (MUST-13.5) the same way
       // runEngine is caught above, so a matcher failure never fails the import either — it
       // just needs the same honest note engineFailed already gets.
       setSummary(body.loanMatchFailed ? `${withAttribution} Loan payment matching failed for these rows.` : withAttribution);

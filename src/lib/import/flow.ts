@@ -1,6 +1,6 @@
 import { getAccount } from '@/lib/accounts';
 import { runEngine, type EngineResult } from '@/lib/categorize/engine';
-import { applyLoanMatchers } from '@/lib/loans';
+import { applyPaymentMatchers } from '@/lib/loans';
 import { isSimplefinManaged } from '@/lib/simplefin/connection';
 import { commitImport } from './commit';
 import { computeRowHashes } from './dedup';
@@ -25,7 +25,7 @@ export interface CommitFlowResult {
   /** true when runEngine threw after the rows were already committed (review-review finding 2). */
   engineFailed: boolean;
   loanLinksCreated: number;
-  /** F5 fix-round: true when applyLoanMatchers's own internal catch (MUST-13.5) fired. */
+  /** F5 fix-round: true when applyPaymentMatchers's own internal catch (MUST-13.5) fired. */
   loanMatchFailed: boolean;
 }
 
@@ -119,12 +119,12 @@ export function commitStagedImport(input: {
   }
 
   // MUST-13.7: a post-commit side effect outside the commit transaction, exactly as
-  // runEngine already is. applyLoanMatchers is internally guarded (MUST-13.5) and returns 0
+  // runEngine already is. applyPaymentMatchers is internally guarded (MUST-13.5) and returns 0
   // on failure rather than throwing an import away; the loanMatchReport out-param is how
-  // this caller learns that happened (F5 fix-round) without applyLoanMatchers's own return
+  // this caller learns that happened (F5 fix-round) without applyPaymentMatchers's own return
   // type changing for every other call site.
   const loanMatchReport = { failed: false };
-  const loanLinksCreated = applyLoanMatchers(committed.insertedTransactionIds, undefined, loanMatchReport);
+  const loanLinksCreated = applyPaymentMatchers(committed.insertedTransactionIds, undefined, loanMatchReport);
 
   return {
     importId: committed.importId,
