@@ -40,11 +40,11 @@ describe('ItemTypesManager — create form (5b lesson, made enforceable)', () =>
     expect(container.querySelectorAll('form [name="kind"]').length).toBeGreaterThanOrEqual(1);
   });
 
-  it('offers all four kinds as options, defaulting to Warranty', () => {
+  it('offers all five kinds as options, defaulting to Warranty', () => {
     render(<ItemTypesManager types={[]} />);
     const select = screen.getByRole('button', { name: /add type/i }).closest('form')!.querySelector('select[name="kind"]') as HTMLSelectElement;
     const optionLabels = Array.from(select.querySelectorAll('option')).map((o) => o.textContent);
-    expect(optionLabels).toEqual(['Warranty', 'Subscription', 'Contract', 'Loan']);
+    expect(optionLabels).toEqual(['Warranty', 'Subscription', 'Contract', 'Loan', 'Bill']);
     expect(select.value).toBe('warranty');
   });
 

@@ -46,13 +46,16 @@ import { CROSS_ORIGIN_ERROR } from '@/lib/auth/csrf';
 // instead of silently dodging the cross-origin-first guarantee.
 import * as warrantyActions from '@/app/(app)/warranties/actions';
 import {
+  addInstallmentAction,
   attachReceiptsAction,
   createWarrantyAction,
   deleteLoanRuleAction,
   deleteReceiptAction,
   deleteWarrantyAction,
+  removeInstallmentAction,
   reRunOcrAction,
   saveLoanRuleAction,
+  setInstallmentPaidAction,
   updateWarrantyAction,
 } from '@/app/(app)/warranties/actions';
 import { MAX_RULES_PER_LOAN, listLoanRules } from '@/lib/loans';
@@ -174,6 +177,10 @@ describe('cross-origin rejection comes FIRST (MUST-13.1)', () => {
     ['reRunOcrAction', (fd) => reRunOcrAction({}, fd)],
     ['saveLoanRuleAction', (fd) => saveLoanRuleAction({}, fd)],
     ['deleteLoanRuleAction', (fd) => deleteLoanRuleAction(fd)],
+    // v1.12.0: the three bill-installment actions (share this file's action-first origin check).
+    ['addInstallmentAction', (fd) => addInstallmentAction({}, fd)],
+    ['removeInstallmentAction', (fd) => removeInstallmentAction({}, fd)],
+    ['setInstallmentPaidAction', (fd) => setInstallmentPaidAction({}, fd)],
   ];
 
   it.each(cases)('%s refuses a mismatched Origin without touching the database', async (_name, run) => {
