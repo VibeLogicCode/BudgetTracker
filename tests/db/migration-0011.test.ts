@@ -280,7 +280,12 @@ describe('the warranty_item_types rebuild', () => {
     ).toThrowError(/FOREIGN KEY constraint failed/);
   });
 
-  it('carries the AUTOINCREMENT sequence across, so ids are never reused', () => {
+  // This proves ordinary AUTOINCREMENT behaviour on the ALREADY-rebuilt table going forward --
+  // it does not exercise the rebuild itself. The 0011 SQL header documents that the rebuild's
+  // own INSERT ... SELECT can regress the sequence to max(id) when the all-time-highest id had
+  // already been deleted before the migration ran, and that this is harmless under FK
+  // enforcement. That is a one-time, migration-time property and is not asserted here.
+  it('does not reuse an id after an ordinary delete, once the table has been rebuilt', () => {
     current = createTestDb();
     const first = insertType(current.sqlite, 'Alpha', 'warranty');
     current.sqlite.prepare('delete from warranty_item_types where id = ?').run(first);
