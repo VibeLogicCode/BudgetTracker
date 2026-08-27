@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import BetterSqlite3 from 'better-sqlite3';
 import { openDatabase } from '@/db/client';
 import { createTestDb, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
 
@@ -46,6 +47,86 @@ afterEach(() => {
   // at a temp folder. Clear it here too, so a failed assertion mid-test cannot leak the
   // override into a later test in this same process.
   delete process.env.BUDGET_MIGRATIONS_DIR;
+});
+
+/**
+ * A migrations folder holding every real migration plus one deliberately broken extra one, so
+ * migrate() gets partway through a real batch and then throws -- this is what proves
+ * openDatabase's error path (restore foreign_keys, close the handle, rethrow) actually runs,
+ * rather than only the happy path exercised everywhere else in this file.
+ */
+function buildBrokenMigrationsDir(): string {
+  const stageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-tracker-broken-migrations-'));
+  for (const name of fs.readdirSync(REAL_MIGRATIONS_DIR)) {
+    if (name.endsWith('.sql')) fs.copyFileSync(path.join(REAL_MIGRATIONS_DIR, name), path.join(stageDir, name));
+  }
+  fs.writeFileSync(path.join(stageDir, '0012_broken.sql'), 'THIS IS NOT VALID SQL;\n');
+  fs.mkdirSync(path.join(stageDir, 'meta'));
+  const journal = JSON.parse(fs.readFileSync(path.join(REAL_MIGRATIONS_DIR, 'meta/_journal.json'), 'utf8')) as {
+    version: string;
+    dialect: string;
+    entries: { idx: number; version: string; when: number; tag: string; breakpoints: boolean }[];
+  };
+  fs.writeFileSync(
+    path.join(stageDir, 'meta/_journal.json'),
+    JSON.stringify({
+      ...journal,
+      entries: [...journal.entries, { idx: 12, version: '6', when: 1756253000000, tag: '0012_broken', breakpoints: true }],
+    }),
+  );
+  return stageDir;
+}
+
+describe('openDatabase when migrate() itself throws', () => {
+  it('restores foreign_keys=ON and closes the handle before rethrowing, and does not silently swallow the error', () => {
+    // What this test does NOT do, and why: the request behind it was "assert the pragma is ON
+    // afterwards on a fresh handle to the same file". That is not observable. PRAGMA foreign_keys
+    // is per-connection state, never persisted to the database file, and better-sqlite3 defaults
+    // every brand-new connection's foreign_keys to ON regardless of what any earlier connection
+    // to the same file did or did not set -- verified directly: a fresh connection reads ON even
+    // after a prior connection to the same file explicitly set it OFF and closed. So a "fresh
+    // handle" assertion would pass identically whether or not openDatabase's finally block ever
+    // ran, and is not a real test of anything. What actually needs proving -- that the specific
+    // handle openDatabase constructed internally really had foreign_keys set back to ON, and
+    // really was closed, before the throw -- is instead observed here by instrumenting
+    // better-sqlite3's own prototype for the duration of this one call, since openDatabase has no
+    // dependency-injection seam for the Database it constructs.
+    const brokenDir = buildBrokenMigrationsDir();
+    const dbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-tracker-broken-db-'));
+    const file = path.join(dbDir, 'budget.db');
+    process.env.BUDGET_MIGRATIONS_DIR = brokenDir;
+
+    const calls: string[] = [];
+    const originalPragma = BetterSqlite3.prototype.pragma;
+    const originalClose = BetterSqlite3.prototype.close;
+    BetterSqlite3.prototype.pragma = function (this: BetterSqlite3.Database, source: string, options?: unknown) {
+      calls.push(`pragma:${source}`);
+      return originalPragma.call(this, source, options as never);
+    } as typeof originalPragma;
+    BetterSqlite3.prototype.close = function (this: BetterSqlite3.Database) {
+      calls.push('close');
+      return originalClose.call(this);
+    } as typeof originalClose;
+
+    try {
+      expect(() => openDatabase(file)).toThrow();
+    } finally {
+      BetterSqlite3.prototype.pragma = originalPragma;
+      BetterSqlite3.prototype.close = originalClose;
+      fs.rmSync(dbDir, { recursive: true, force: true });
+      fs.rmSync(brokenDir, { recursive: true, force: true });
+    }
+
+    // foreign_keys was turned OFF for the migration pass, migrate() threw partway through (the
+    // broken 0012 statement), and openDatabase's finally block turned it back ON -- BEFORE
+    // closing the handle and rethrowing, exactly the order the fix in src/db/client.ts requires.
+    const offIdx = calls.indexOf('pragma:foreign_keys = OFF');
+    const onIdx = calls.lastIndexOf('pragma:foreign_keys = ON');
+    const closeIdx = calls.indexOf('close');
+    expect(offIdx).toBeGreaterThan(-1);
+    expect(onIdx).toBeGreaterThan(offIdx);
+    expect(closeIdx).toBeGreaterThan(onIdx);
+  });
 });
 
 function insertType(sqlite: TestDb['sqlite'], name: string, kind: string, isSubscription = 0): number {

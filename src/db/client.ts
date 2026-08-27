@@ -42,6 +42,11 @@ export function migrationsFolder(): string {
  * A pragma-driven orphan sweep runs immediately afterwards and refuses to start on any orphan.
  * Turning enforcement off for a window means a bad migration could leave one behind silently;
  * this makes that loud on the very next boot rather than at some unrelated read months later.
+ *
+ * If migrate() itself throws -- a broken .sql file, a partial upgrade -- the pragma still has to
+ * come back ON (a stray disabled connection is its own hazard) and the handle must not be handed
+ * back to the caller half-migrated with enforcement off, so it is closed here and the error
+ * rethrown instead.
  */
 export function openDatabase(filePath: string): DbInstance {
   const sqlite = new BetterSqlite3(filePath);
@@ -49,8 +54,18 @@ export function openDatabase(filePath: string): DbInstance {
   sqlite.pragma('busy_timeout = 5000');
   sqlite.pragma('foreign_keys = OFF');
   const db = drizzle(sqlite, { schema });
-  migrate(db, { migrationsFolder: migrationsFolder() });
-  sqlite.pragma('foreign_keys = ON');
+  let migrationError: unknown;
+  try {
+    migrate(db, { migrationsFolder: migrationsFolder() });
+  } catch (err) {
+    migrationError = err;
+  } finally {
+    sqlite.pragma('foreign_keys = ON');
+  }
+  if (migrationError) {
+    sqlite.close();
+    throw migrationError;
+  }
   const orphans = sqlite.pragma('foreign_key_check') as unknown[];
   if (orphans.length > 0) {
     sqlite.close();
