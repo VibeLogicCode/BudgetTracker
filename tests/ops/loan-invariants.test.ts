@@ -58,3 +58,41 @@ describe('MUST-13.2: loan payments are invisible to every spend calculation', ()
     }
   });
 });
+
+describe('ruling B10: applyLoanMatchers was renamed, not aliased', () => {
+  it('the old name is never CODE in src/ -- no import, call, export or wrapper assignment', () => {
+    // v1.12.0 renamed applyLoanMatchers to applyPaymentMatchers because it now matches bills
+    // too and the old name would be a lie. This repo deletes superseded helpers rather than
+    // keeping wrappers -- KIND_WORDING superseding the four boolean label helpers is the
+    // precedent. A re-added alias is the obvious "kind" thing to do for a caller you did not
+    // notice, and it is exactly what must not happen: two names for one function is two places
+    // to read before you know what runs.
+    //
+    // stripComments (defined above for MUST-13.16, same reason here) keeps this from flagging
+    // src/db/schema.ts and src/lib/loans.ts, which each keep one docblock mention of the old
+    // name narrating WHY the rename happened -- prose that explains a ruling is not a second
+    // definition of the thing the ruling forbids.
+    const offenders = srcFiles()
+      .filter((file) => /\bapplyLoanMatchers\b/.test(stripComments(fs.readFileSync(file, 'utf8'))))
+      .map((file) => path.relative(root, file).replace(/\\/g, '/'));
+    expect(offenders).toEqual([]);
+  });
+
+  it('finds the new name, so the check above cannot pass vacuously', () => {
+    const users = srcFiles()
+      .filter((file) => /\bapplyPaymentMatchers\b/.test(fs.readFileSync(file, 'utf8')))
+      .map((file) => path.relative(root, file).replace(/\\/g, '/'));
+    // The definition plus its five call sites plus the two client-side comments that name it.
+    expect(users).toContain('src/lib/loans.ts');
+    expect(users.length).toBeGreaterThanOrEqual(6);
+  });
+
+  it('the loan_matcher_rules TABLE keeps its name, and the schema says why out loud', () => {
+    // The other half of ruling B10: the function name was free to change and a shipped table
+    // name is not. A future session reading only the rename would reasonably assume the table
+    // was renamed too.
+    const schema = read('src/db/schema.ts');
+    expect(schema).toMatch(/sqliteTable\(\r?\n\s*'loan_matcher_rules'/);
+    expect(schema).toMatch(/bill-kind items/i);
+  });
+});

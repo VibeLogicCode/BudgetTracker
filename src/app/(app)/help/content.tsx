@@ -300,11 +300,11 @@ export const HELP_SECTIONS: HelpSection[] = [
       <>
         <Where path="/warranties">seventh in the menu —</Where>
         <P>
-          One list for everything you keep paperwork on: warranties, subscriptions, contracts and
-          loans. Which of the four an entry behaves as comes from its <B>item type</B>, and the
-          wording follows — a subscription shows a <B>cancel by</B> date where a warranty shows an
-          expiry date. The Dashboard reminds you before a date arrives, which is the whole reason
-          to record one.
+          One list for everything you keep paperwork on: warranties, subscriptions, contracts,
+          loans and bills. Which of the five an entry behaves as comes from its <B>item type</B>,
+          and the wording follows — a subscription shows a <B>cancel by</B> date where a warranty
+          shows an expiry date. The Dashboard reminds you before a date arrives, which is the
+          whole reason to record one.
         </P>
         <P>
           Attach the receipt or the contract as a photo or a PDF. The server reads the text on it,
@@ -323,6 +323,17 @@ export const HELP_SECTIONS: HelpSection[] = [
           A loan recorded here can have real transactions assigned to it from the Transactions
           page, which is what makes the Dashboard&rsquo;s loan card and the debt-over-time report on
           Reports say anything.
+        </P>
+        <P>
+          A <B>bill</B> is the one kind that carries its own list of due dates rather than a
+          repeating cycle — property tax, which falls due two to six times a year on dates the
+          municipality picks. Create an item type of kind <B>Bill</B> under{' '}
+          <B>Settings → Item types</B> (call it <B>Property tax</B>), add the item, then enter
+          each due date and amount in the <B>Installments</B> section on the item&rsquo;s own
+          page. The Dashboard&rsquo;s <B>Coming up</B> card lists them, you are reminded before
+          each one, and anything that goes past is flagged as overdue until you mark it paid. If
+          you add a payment-matching rule, the transaction that pays it marks the next unpaid
+          installment for you.
         </P>
       </>
     ),

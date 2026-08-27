@@ -727,15 +727,14 @@ from more than one field when the primary one repeats.
 
 ## Owner requests after v1.11.0 (2026-08-24, not started)
 
-**N. Page guides should start collapsed everywhere (~15 min).** `PageGuide` renders
-`<GuidePanel open={empty}>` (`src/components/ui/PageGuide.tsx:17`), so the "What is this page
-for?" panel opens itself whenever a page has no data yet. Owner ruling: it should be collapsed by
-default on every page and expand only when the user clicks it. Change is `open={false}` (or drop
-the prop) plus the onboarding-coverage guard and any PageGuide test that asserts the empty-state
-expansion. Keep the panel itself — only the default state changes. The v1.10.0 spec argued for
-auto-expanding on empty pages; this reverses that ruling on owner feedback.
+**N. Page guides should start collapsed everywhere — SHIPPED in v1.12.0.** `PageGuide` lost its
+`empty` prop entirely (ruling B1); every one of the nine call sites now renders a bare
+`<PageGuide>` and the panel opens only when a reader clicks it.
 
-**O. Contracts & Coverage: tax bills with due dates, for reminders (~4-6h, needs a short spec).**
+**O. Contracts & Coverage: tax bills with due dates — SHIPPED in v1.12.0.** A fifth `ItemKind`,
+`bill`, with an explicit `bill_installments` schedule instead of a cadence. See
+`docs/superpowers/specs/2026-08-24-bills-with-due-dates-design.md`.
+
 Owner wants to enter a property-tax bill with its due dates so the app reminds them. Today's
 billing model on items is a cadence — `BILLING_CYCLE_LABELS` is Monthly / Annual only — and
 property tax is installments on fixed, irregular dates (two to six a year depending on the

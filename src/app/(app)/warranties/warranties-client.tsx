@@ -84,10 +84,10 @@ export function WarrantiesClient({
 
       <PageGuide>
         <p>
-          Four kinds of paperwork live on this page: warranties on things you bought,
-          subscriptions you might want to cancel, contracts with a term, and loans. They share
-          one screen because the question is the same for all of them — what does this cover, and
-          when does it run out?
+          Five kinds of paperwork live on this page: warranties on things you bought,
+          subscriptions you might want to cancel, contracts with a term, loans, and bills that
+          fall due on set dates. They share one screen because the question is the same for all
+          of them — what does this cover, and when does it run out?
         </p>
         <p>
           Each item carries the dates that matter and whose it is. What expires soonest surfaces
@@ -99,6 +99,13 @@ export function WarrantiesClient({
           this server, then makes every word printed on it searchable. A model number or a
           policy number you never typed in anywhere is enough to find the item years later. The
           image never leaves the machine the app runs on.
+        </p>
+        <p>
+          A bill is the odd one out: instead of a monthly or annual cycle it carries a list of due
+          dates you type in, which is what a property tax bill actually looks like. Make an item
+          type of kind <strong>Bill</strong> under Settings → Item types, add the item here, and
+          enter each due date on the item&rsquo;s own page. You are reminded before each one and
+          told when one goes past.
         </p>
       </PageGuide>
 
