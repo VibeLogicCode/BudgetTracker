@@ -245,9 +245,31 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.11.0 release', () => {
+  it('MUST-7.1: the 1.12.0 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.11.0');
+    expect(pkg.version).toBe('1.12.0');
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toMatch(/^## \[1\.12\.0\] - 2026-08-24$/m);
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.12.0]'));
+    const entry = changelog.slice(changelog.indexOf('## [1.12.0]'), changelog.indexOf('## [1.11.0]'));
+    expect(entry).toMatch(/### Added/);
+    expect(entry).toMatch(/### Changed/);
+    // The headline claims, asserted as claims and not just as a version number: an entry that
+    // bumped the version without saying what a reader will see is the gap this guard is for.
+    expect(entry).toMatch(/Bills with due dates/i);
+    expect(entry).toMatch(/Installments/);
+    // A release that adds reminders must say what happens when one is missed, or "it reminds you"
+    // reads as "nothing can slip".
+    expect(entry).toMatch(/overdue/i);
+    // The reversal of a shipped behaviour has to be stated, not merely done -- somebody liked it.
+    expect(entry).toMatch(/start collapsed/i);
+    // \s+ because the sentence wraps in the file.
+    expect(entry).toMatch(/un-marks the installments\s+that import paid/i);
+  });
+
+  it('MUST-7.1: the 1.11.0 release is still recorded intact (append-only discipline)', () => {
+    const pkg = JSON.parse(read('package.json')) as { version: string };
+    expect(pkg.version).not.toBe('1.11.0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.11\.0\] - 2026-08-24$/m);
     expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.11.0]'));

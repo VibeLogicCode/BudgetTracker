@@ -21,6 +21,48 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.12.0] - 2026-08-24
+
+### Added
+
+- **Bills with due dates.** A property tax bill is not a monthly or an annual subscription — it
+  arrives two to six times a year on dates a municipality picks, and no repeating cycle describes
+  that. There is now a fifth kind of item, **Bill**, that carries a list of due dates and amounts
+  you type in rather than a billing cycle. Make an item type of kind Bill under Settings → Item
+  types, add the item, then enter each due date in the new **Installments** section on the item's
+  own page.
+- **Reminders before each due date, and a flag on anything that goes past.** Installments coming
+  up appear on the Dashboard's **Coming up** card and in the "Something is coming due"
+  notification you already have — no new switch to find and nothing new to turn on. An overdue
+  installment stays visible until you mark it paid, and it reminds you once a month rather than
+  every day.
+- **Marking an installment paid.** Each row has a **Mark paid** button, and an **Unmark** if you
+  press it by mistake. If you add a payment-matching rule to the bill — the same merchant rules
+  loans already use — the transaction that pays it marks the next unpaid installment for you and
+  records which transaction it was. The amount does not have to match to the cent: a tax bill
+  arrives with penalties and rounding, so the payment is recorded and any difference is shown
+  beside it rather than the match being refused.
+
+### Changed
+
+- **The page guides now start collapsed on every page.** The "What is this page for?" panel used
+  to open itself on any page with nothing on it. It no longer does, anywhere: it opens when you
+  click it and not before. An empty page already explains itself with the message and the button
+  in the middle of it.
+- **Payment-matching rules work on bills as well as loans.** A matched transaction marks an
+  installment instead of moving a balance, and one transaction can still only ever be linked once
+  — a loan and a bill whose rules both match the same merchant cannot both claim it.
+- **Undoing an import now un-marks the installments that import paid.** Previously the link would
+  have been dropped while the installment stayed marked paid by a transaction that no longer
+  existed. Installments you marked by hand are never touched by an undo.
+
+### Fixed
+
+- **A bill's own dates and its schedule are kept apart.** Choosing Bill as an item's type hides
+  the billing cycle, the product fields and the loan fields, which do not apply to it — and
+  changing a type's kind away from Bill keeps every due date you typed rather than deleting them.
+  They simply stop being read, and they come back if you change the kind back.
+
 ## [1.11.0] - 2026-08-24
 
 ### Changed
