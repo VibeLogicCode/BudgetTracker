@@ -47,12 +47,29 @@ export interface RefreshLine {
 export type RenderInput =
   | {
       event: 'coming_due';
+      /**
+       * Ruling B15: REQUIRED, not optional. Making it required forces every existing call site
+       * to write `variant: 'item'`, which is a compiler-checked edit rather than a silent
+       * default that would let an old-shaped call quietly mean something new. There is no new
+       * event id: "something is coming due" is one idea and stays one switch in the matrix
+       * (MUST-4.5 makes the id permanent anyway).
+       */
+      variant: 'item';
       itemName: string;
       kind: ItemKind;
       expiryDate: string;
       todayIso: string;
       vendor: string | null;
       priceCents: number | null;
+    }
+  | {
+      event: 'coming_due';
+      variant: 'installment';
+      itemName: string;
+      dueDate: string;
+      amountCents: number;
+      todayIso: string;
+      overdue: boolean;
     }
   | {
       event: 'budget_threshold';
@@ -308,6 +325,25 @@ export function renderEvent(input: RenderInput): { subject: string; body: string
   switch (input.event) {
     case 'coming_due': {
       const name = truncateText(input.itemName, NAME_MAX);
+      if (input.variant === 'installment') {
+        // The noun comes from ITEM_KIND_LABELS, not from a literal (MUST-19.11): a bill
+        // installment is a BILL's installment, and one place names that kind.
+        const noun = ITEM_KIND_LABELS.bill;
+        const amount = money(input.amountCents);
+        if (input.overdue) {
+          const daysAgo = daysBetweenIso(input.dueDate, input.todayIso);
+          return {
+            subject: `Overdue: ${name}`,
+            body:
+              `${noun} "${name}": ${amount} was due ${input.dueDate} and is still unpaid ` +
+              `(${daysAgo} day${daysAgo === 1 ? '' : 's'} ago).`,
+          };
+        }
+        return {
+          subject: `Coming due: ${name}`,
+          body: `${noun} "${name}": ${amount} due ${input.dueDate} (${inDays(input.todayIso, input.dueDate)}).`,
+        };
+      }
       // MUST-6.14: the verb comes from expiryPhraseForKind() so notifications never become
       // a second place any of the four verbs is written (MUST-19.11 of the warranty spec).
       const phrase = expiryPhraseForKind(input.kind, input.expiryDate);

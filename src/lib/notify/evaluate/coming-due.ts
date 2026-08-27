@@ -3,9 +3,10 @@ import { getDb } from '@/db/client';
 import { warrantyItemTypes, warrantyItems } from '@/db/schema';
 import { addDaysIso, todayIso } from '@/lib/dates';
 import { getUserSettings } from '@/lib/notify/config';
-import { comingDueKey } from '@/lib/notify/events';
+import { comingDueKey, installmentDueKey, installmentOverdueKey } from '@/lib/notify/events';
 import { enqueue } from '@/lib/notify/outbox';
 import { renderEvent } from '@/lib/notify/render';
+import { unpaidInstallments } from '@/lib/warranty/installments';
 import { isItemKind, type ItemKind } from '@/lib/warranty/constants';
 
 /**
@@ -27,11 +28,62 @@ export const MAX_NEW_ROWS_PER_USER_PER_EVALUATION = 20;
  *
  * MUST-6.12: one outbox row PER ITEM, key `due:<itemId>:<expiryDate>`, so an item is
  * announced once and then never again rather than nagging daily for the whole window.
+ *
+ * v1.12.0 (ruling C6): a SECOND source, read before the item-expiry loop -- unpaid installments
+ * on this user's bill-kind items. No new event id and no new channel (ruling B15); the same
+ * coming_due payload carries a variant.
+ *
+ * ORDER MATTERS ONLY BECAUSE OF THE CAP. MAX_NEW_ROWS_PER_USER_PER_EVALUATION is shared across
+ * all three sources and still counts ROWS, not items. Overdue installments are enqueued first,
+ * then upcoming installments, then item expiries: when the cap bites, the household should lose
+ * the least urgent message, not the most.
+ *
+ * MUST-6.11's ownership rule needs no new column -- an installment's owner is its item's
+ * owner_user_id, which unpaidInstallments() filters on.
  */
 export function evaluateComingDue(input: { userId: number; now: Date; tz: string }): number {
   const settings = getUserSettings(input.userId);
   const today = todayIso(input.now, input.tz);
   const horizon = addDaysIso(today, settings.comingDueDays);
+  const month = today.slice(0, 7);
+
+  let enqueuedRows = 0;
+
+  // dueSoonDays is the caller's, deliberately: the evaluator's window is the user's own
+  // comingDueDays, and the detail page uses its own. Neither invents a third.
+  const installments = unpaidInstallments({
+    today,
+    windowEnd: horizon,
+    includeOverdue: true,
+    ownerUserId: input.userId,
+  });
+  // Overdue first (see the docblock). unpaidInstallments returns due_date ASC, so a stable
+  // partition preserves date order inside each group.
+  const ordered = [...installments.filter((row) => row.overdue), ...installments.filter((row) => !row.overdue)];
+
+  for (const row of ordered) {
+    if (enqueuedRows >= MAX_NEW_ROWS_PER_USER_PER_EVALUATION) break;
+    const { subject, body } = renderEvent({
+      event: 'coming_due',
+      variant: 'installment',
+      itemName: row.itemName,
+      dueDate: row.dueDate,
+      amountCents: row.amountCents,
+      todayIso: today,
+      overdue: row.overdue,
+    });
+    const result = enqueue({
+      userId: input.userId,
+      eventId: 'coming_due',
+      dedupKey: row.overdue
+        ? installmentOverdueKey(row.installmentId, month)
+        : installmentDueKey(row.installmentId, row.dueDate),
+      subject,
+      body,
+      at: input.now,
+    });
+    enqueuedRows += result.inserted.length;
+  }
 
   const rows = getDb()
     .select({
@@ -56,10 +108,6 @@ export function evaluateComingDue(input: { userId: number; now: Date; tz: string
     .orderBy(asc(warrantyItems.expiryDate), asc(warrantyItems.id))
     .all();
 
-  // MUST-6.13 counts ROWS, not items: enqueue() inserts one row per enabled channel, so a
-  // user with both Telegram and email on gets two rows per item. Counting items here would
-  // let the cap through at up to double the outbox rows MUST-6.13 actually promises.
-  let enqueuedRows = 0;
   for (const row of rows) {
     if (enqueuedRows >= MAX_NEW_ROWS_PER_USER_PER_EVALUATION) break;
     const expiryDate = row.expiryDate;
@@ -69,6 +117,7 @@ export function evaluateComingDue(input: { userId: number; now: Date; tz: string
     const kind: ItemKind = row.kind !== null && isItemKind(row.kind) ? row.kind : 'warranty';
     const { subject, body } = renderEvent({
       event: 'coming_due',
+      variant: 'item',
       itemName: row.name,
       kind,
       expiryDate,

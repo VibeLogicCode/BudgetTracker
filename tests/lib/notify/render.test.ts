@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { NOTIFICATION_EVENTS } from '@/lib/notify/events';
 import { NAME_MAX, USER_AGENT_MAX, renderEvent, truncateText, type RenderInput } from '@/lib/notify/render';
+import { ITEM_KIND_LABELS } from '@/lib/warranty/constants';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
@@ -20,6 +21,7 @@ describe('MUST-6.14 / §10.1: coming_due', () => {
   it('uses the warranty verb for each kind rather than writing its own', () => {
     const base = {
       event: 'coming_due',
+      variant: 'item',
       itemName: 'Dishwasher',
       expiryDate: '2026-09-01',
       todayIso: '2026-08-17',
@@ -35,6 +37,7 @@ describe('MUST-6.14 / §10.1: coming_due', () => {
   it('renders the subject, the days remaining, and the optional vendor and price', () => {
     const { subject, body } = renderEvent({
       event: 'coming_due',
+      variant: 'item',
       itemName: 'Netflix',
       kind: 'subscription',
       expiryDate: '2026-08-27',
@@ -49,7 +52,7 @@ describe('MUST-6.14 / §10.1: coming_due', () => {
   });
 
   it('says "tomorrow" and "today" rather than "in 1 days" / "in 0 days"', () => {
-    const base = { event: 'coming_due', itemName: 'X', kind: 'warranty', todayIso: '2026-08-17', vendor: null, priceCents: null } as const;
+    const base = { event: 'coming_due', variant: 'item', itemName: 'X', kind: 'warranty', todayIso: '2026-08-17', vendor: null, priceCents: null } as const;
     expect(renderEvent({ ...base, expiryDate: '2026-08-18' }).body).toContain('tomorrow');
     expect(renderEvent({ ...base, expiryDate: '2026-08-17' }).body).toContain('today');
   });
@@ -356,6 +359,7 @@ describe('MUST-10.3: untrusted values are plain and truncated', () => {
   it('renders markup literally', () => {
     const { subject, body } = renderEvent({
       event: 'coming_due',
+      variant: 'item',
       itemName: '<b>x</b>',
       kind: 'warranty',
       expiryDate: '2026-09-01',
@@ -396,7 +400,7 @@ describe('MUST-10.3: untrusted values are plain and truncated', () => {
  */
 const SAMPLES_BY_EVENT: Record<string, RenderInput[]> = {
   coming_due: [
-    { event: 'coming_due', itemName: 'X', kind: 'warranty', expiryDate: '2026-09-01', todayIso: '2026-08-17', vendor: null, priceCents: null },
+    { event: 'coming_due', variant: 'item', itemName: 'X', kind: 'warranty', expiryDate: '2026-09-01', todayIso: '2026-08-17', vendor: null, priceCents: null },
   ],
   budget_threshold: [
     { event: 'budget_threshold', scope: 'household', categoryName: 'C', month: '2026-08', pct: 80, spentCents: 1, limitCents: 2 },
@@ -679,5 +683,49 @@ describe('MUST-6.4 / MUST-6.5: update_available renders three bodies and no URL'
     const { body } = renderEvent({ ...base, severity: 'patch', canApplyInApp: true, publishedAt: '2026-08-16T09:00:00Z' });
     expect(body).toContain('Published 2026-08-16 09:00.');
     expect(body).not.toMatch(/https?:/);
+  });
+});
+
+describe('coming_due, the installment variant (ruling B15)', () => {
+  it('renders an upcoming installment', () => {
+    const { subject, body } = renderEvent({
+      event: 'coming_due',
+      variant: 'installment',
+      itemName: 'Municipal tax',
+      dueDate: '2026-09-30',
+      amountCents: 120_000,
+      todayIso: '2026-09-23',
+      overdue: false,
+    });
+    expect(subject).toBe('Coming due: Municipal tax');
+    expect(body).toBe('Bill "Municipal tax": $1,200.00 due 2026-09-30 (in 7 days).');
+  });
+
+  it('renders an overdue installment differently, and says how long', () => {
+    const { subject, body } = renderEvent({
+      event: 'coming_due',
+      variant: 'installment',
+      itemName: 'Municipal tax',
+      dueDate: '2026-09-30',
+      amountCents: 120_000,
+      todayIso: '2026-10-05',
+      overdue: true,
+    });
+    expect(subject).toBe('Overdue: Municipal tax');
+    expect(body).toBe('Bill "Municipal tax": $1,200.00 was due 2026-09-30 and is still unpaid (5 days ago).');
+  });
+
+  it('takes the noun "Bill" from ITEM_KIND_LABELS, not from a literal', () => {
+    // MUST-19.11 applied to notifications: if the label ever changes, this body changes with it.
+    const { body } = renderEvent({
+      event: 'coming_due',
+      variant: 'installment',
+      itemName: 'X',
+      dueDate: '2026-09-30',
+      amountCents: 100,
+      todayIso: '2026-09-23',
+      overdue: false,
+    });
+    expect(body.startsWith(`${ITEM_KIND_LABELS.bill} "X"`)).toBe(true);
   });
 });

@@ -5,6 +5,8 @@ import { saveEmailTarget, saveSmtp, saveTelegramTarget, saveUserSettings, DEFAUL
 import { resetNotifySenderForTests, setNotifySenderForTests } from '@/lib/notify/send';
 import { resetOutboxPumpForTests } from '@/lib/notify/outbox';
 import { MAX_NEW_ROWS_PER_USER_PER_EVALUATION, evaluateComingDue } from '@/lib/notify/evaluate/coming-due';
+import { installmentDueKey, installmentOverdueKey } from '@/lib/notify/events';
+import { addInstallment } from '@/lib/warranty/installments';
 
 let t: TestDb;
 const NOW = new Date('2026-08-17T12:00:00Z');
@@ -45,7 +47,7 @@ function bothChannelsUser(): number {
   return userId;
 }
 
-function typeId(kind: 'warranty' | 'subscription' | 'contract' | 'loan'): number {
+function typeId(kind: 'warranty' | 'subscription' | 'contract' | 'loan' | 'bill'): number {
   const row = t.db.get<{ id: number }>(
     sql`insert into warranty_item_types (name, is_subscription, kind, created_at)
         values (${`${kind}-${Math.random().toString(36).slice(2, 8)}`}, ${kind === 'subscription' ? 1 : 0}, ${kind}, ${'2026-01-01T00:00:00.000Z'})
@@ -59,7 +61,7 @@ function item(over: {
   name?: string;
   expiryDate?: string | null;
   isLifetime?: boolean;
-  kind?: 'warranty' | 'subscription' | 'contract' | 'loan';
+  kind?: 'warranty' | 'subscription' | 'contract' | 'loan' | 'bill';
   vendor?: string | null;
   priceCents?: number | null;
 }): number {
@@ -192,5 +194,81 @@ describe('MUST-6.14: the verb comes from the item’s kind', () => {
     const row = t.sqlite.prepare('select body from notification_outbox').get() as { body: string };
     expect(row.body).toContain('Costco');
     expect(row.body).toContain('$1,299.99');
+  });
+});
+
+describe('installments in the coming-due evaluation', () => {
+  function billWith(userId: number, dues: string[], amountCents = 120_000): { itemId: number; ids: number[] } {
+    const itemId = item({ ownerUserId: userId, name: 'Municipal tax', kind: 'bill', expiryDate: null });
+    return { itemId, ids: dues.map((dueDate) => addInstallment({ itemId, dueDate, amountCents })) };
+  }
+
+  function keysFor(userId: number): string[] {
+    return (
+      t.sqlite
+        .prepare('select dedup_key from notification_outbox where user_id = ? order by dedup_key')
+        .all(userId) as { dedup_key: string }[]
+    ).map((r) => r.dedup_key);
+  }
+
+  it('enqueues one row per channel for an installment inside the window, under installmentDueKey', () => {
+    const userId = bothChannelsUser();
+    const { ids } = billWith(userId, ['2026-08-20']);
+    expect(evaluateComingDue({ userId, now: NOW, tz: TZ })).toBe(2);
+    expect(new Set(keysFor(userId))).toEqual(new Set([installmentDueKey(ids[0]!, '2026-08-20')]));
+  });
+
+  it('says nothing the next day about the same installment', () => {
+    const userId = emailUser();
+    billWith(userId, ['2026-08-20']);
+    evaluateComingDue({ userId, now: NOW, tz: TZ });
+    expect(evaluateComingDue({ userId, now: new Date('2026-08-18T12:00:00Z'), tz: TZ })).toBe(0);
+  });
+
+  it('nags monthly about an overdue one, not daily (ruling B16)', () => {
+    const userId = emailUser();
+    const { ids } = billWith(userId, ['2026-05-01']);
+    expect(evaluateComingDue({ userId, now: NOW, tz: TZ })).toBe(1);
+    expect(keysFor(userId)).toEqual([installmentOverdueKey(ids[0]!, '2026-08')]);
+    // Tomorrow: nothing.
+    expect(evaluateComingDue({ userId, now: new Date('2026-08-18T12:00:00Z'), tz: TZ })).toBe(0);
+    // Next calendar month: one more, under its own bounded key.
+    expect(evaluateComingDue({ userId, now: new Date('2026-09-02T12:00:00Z'), tz: TZ })).toBe(1);
+    expect(keysFor(userId).sort()).toEqual(
+      [installmentOverdueKey(ids[0]!, '2026-08'), installmentOverdueKey(ids[0]!, '2026-09')].sort(),
+    );
+  });
+
+  it('an item expiry that falls on one of its own installment dates produces TWO rows, not one', () => {
+    // The distinct key prefixes are what make this true; a shared prefix would let one message
+    // silently suppress the other.
+    const userId = emailUser();
+    const itemId = item({ ownerUserId: userId, name: 'Municipal tax', kind: 'bill', expiryDate: '2026-08-20' });
+    const installmentId = addInstallment({ itemId, dueDate: '2026-08-20', amountCents: 120_000 });
+    expect(evaluateComingDue({ userId, now: NOW, tz: TZ })).toBe(2);
+    expect(keysFor(userId).sort()).toEqual([`bill:${installmentId}:2026-08-20`, `due:${itemId}:2026-08-20`].sort());
+  });
+
+  it('never announces a paid installment or another household member’s', () => {
+    const mine = emailUser();
+    const theirs = emailUser();
+    const { ids } = billWith(mine, ['2026-08-20', '2026-08-21']);
+    billWith(theirs, ['2026-08-20']);
+    t.sqlite.prepare('update bill_installments set paid_at = ? where id = ?').run('2026-08-01T00:00:00.000Z', ids[0]);
+    expect(evaluateComingDue({ userId: mine, now: NOW, tz: TZ })).toBe(1);
+    expect(keysFor(mine)).toEqual([installmentDueKey(ids[1]!, '2026-08-21')]);
+  });
+
+  it('spends the shared flood cap on overdue rows first, then upcoming, then item expiries', () => {
+    // The cap counts ROWS across all three sources. When it bites, the household should lose the
+    // least urgent message, not the most -- which is the only reason the order matters.
+    const userId = emailUser();
+    const dues: string[] = [];
+    for (let i = 0; i < MAX_NEW_ROWS_PER_USER_PER_EVALUATION + 5; i += 1) {
+      dues.push(`2026-08-${String(18 + (i % 10)).padStart(2, '0')}`);
+    }
+    const { ids } = billWith(userId, ['2026-05-01', ...dues]);
+    expect(evaluateComingDue({ userId, now: NOW, tz: TZ })).toBe(MAX_NEW_ROWS_PER_USER_PER_EVALUATION);
+    expect(keysFor(userId)).toContain(installmentOverdueKey(ids[0]!, '2026-08'));
   });
 });

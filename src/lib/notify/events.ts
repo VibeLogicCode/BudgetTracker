@@ -48,7 +48,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
   {
     id: 'coming_due',
     label: 'Something is coming due',
-    blurb: 'A warranty, subscription, contract or loan reaches its date soon.',
+    blurb: 'A warranty, subscription, contract or loan reaches its date soon, or a bill installment is due.',
     audience: 'all',
     trigger: 'daily_slot',
     defaultEnabled: true,
@@ -215,6 +215,32 @@ function scopeLetter(scope: BudgetScopeKey): 'h' | 'p' {
 /** Once per item per expiry date, EVER. Editing the date is a new fact and a new key. */
 export function comingDueKey(itemId: number, expiryDate: string): string {
   return `due:${itemId}:${expiryDate}`;
+}
+
+/**
+ * v1.12.0. Once per installment per due date, EVER -- editing the date is a new fact and gets a
+ * new key, exactly as comingDueKey treats an edited expiry date.
+ *
+ * The `bill:` prefix is LOAD-BEARING. comingDueKey is `due:<itemId>:<date>`, and an item's own
+ * end date can legitimately equal one of its installment due dates; under a shared prefix one
+ * message would silently suppress the other.
+ */
+export function installmentDueKey(installmentId: number, dueDate: string): string {
+  return `bill:${installmentId}:${dueDate}`;
+}
+
+/**
+ * v1.12.0, ruling B16. MUST-3.12 requires every dedup key to be bounded to a calendar period
+ * evaluation only visits within the current few days, or derived from a never-recurring
+ * timestamp. An overdue installment stays overdue for ever, so a date-free key
+ * (`overdue:<id>`) would be announced once and then RE-announced whenever the 400-day retention
+ * sweep pruned it -- the exact resurrection MUST-3.12 forbids. Keying it by calendar month makes
+ * it an honest monthly nag with a bounded key.
+ *
+ * `month` is YYYY-MM.
+ */
+export function installmentOverdueKey(installmentId: number, month: string): string {
+  return `overdue:${installmentId}:${month}`;
 }
 
 /** Once per scope/category/month/threshold. The pct is the user's configured threshold. */
