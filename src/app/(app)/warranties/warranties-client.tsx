@@ -82,10 +82,7 @@ export function WarrantiesClient({
         }
       />
 
-      {/* `result.rows.length === 0` is the one condition both empty states below hang off --
-          `searching` only decides which of the two is shown, not whether the list is empty --
-          so reusing it here cannot disagree with what the page itself calls an empty result. */}
-      <PageGuide empty={result.rows.length === 0}>
+      <PageGuide>
         <p>
           Four kinds of paperwork live on this page: warranties on things you bought,
           subscriptions you might want to cancel, contracts with a term, and loans. They share

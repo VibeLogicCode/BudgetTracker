@@ -7,38 +7,30 @@ import { PageGuide } from '@/components/ui/PageGuide';
 afterEach(cleanup);
 
 /**
- * Ruling A6 / A4-style derivation: the panel's open state is a function of whether the page
- * has anything on it, so there is nothing to persist and no per-user flag to migrate. These
- * tests pin the derivation in both directions, because "open when empty" is the whole reason
- * the panel is allowed to exist without a dismiss control.
+ * v1.12.0 REVERSAL (spec docs/superpowers/specs/2026-08-24-bills-with-due-dates-design.md,
+ * item N / ruling B1). This panel used to derive its open state from the page being empty, and
+ * two tests here pinned that derivation in both directions. The owner lived with it and
+ * disagreed: a panel that opens itself is a panel in the way, and an empty page is already
+ * explained by its EmptyState and its action button. The derivation is gone, the `empty` prop
+ * is gone with it, and the single test below replaces both -- kept as a test rather than a
+ * deletion so the record shows the behaviour was once the opposite.
  */
 describe('PageGuide: the per-page "what is this for?" panel', () => {
-  it('is open when the page has no data to show', () => {
+  it('is collapsed on every page, whether or not the page has data', () => {
     const { container } = render(
-      <PageGuide empty>
+      <PageGuide>
         <p>body</p>
       </PageGuide>,
     );
     const details = container.querySelector('details');
     expect(details).not.toBeNull();
-    expect(details?.open).toBe(true);
-    expect(details?.hasAttribute('open')).toBe(true);
-  });
-
-  it('is closed once the page has data, so it is not in the way', () => {
-    const { container } = render(
-      <PageGuide empty={false}>
-        <p>body</p>
-      </PageGuide>,
-    );
-    const details = container.querySelector('details');
     expect(details?.open).toBe(false);
     expect(details?.hasAttribute('open')).toBe(false);
   });
 
   it('asks exactly one question, on every page that carries it', () => {
     const { container } = render(
-      <PageGuide empty>
+      <PageGuide>
         <p>body</p>
       </PageGuide>,
     );
@@ -47,7 +39,7 @@ describe('PageGuide: the per-page "what is this for?" panel', () => {
 
   it('renders its children as the panel body', () => {
     const { container } = render(
-      <PageGuide empty={false}>
+      <PageGuide>
         <p>what this screen summarises</p>
       </PageGuide>,
     );

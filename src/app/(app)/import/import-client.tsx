@@ -354,10 +354,7 @@ export function ImportClient({
         }
       />
 
-      {/* `historyRows.length === 0` is the History card's own "Nothing imported yet" test, and
-          nothing has ever been imported is precisely the reader who has not been told what a
-          bank profile or a mapping is. Once there is history the panel folds away. */}
-      <PageGuide empty={historyRows.length === 0}>
+      <PageGuide>
         <p>
           This is where a bank statement becomes transactions. Download a CSV file from your
           bank&rsquo;s website — most banks call it &ldquo;export&rdquo; or &ldquo;download

@@ -127,7 +127,7 @@ export default async function DashboardPage({
         }
       />
 
-      <PageGuide empty={monthIsEmpty}>
+      <PageGuide>
         <p>
           This is the current month at a glance: what the household spent, what came in, and how
           much of any limit you set is left. Every figure here is read back from imported

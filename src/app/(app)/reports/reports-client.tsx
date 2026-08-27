@@ -126,12 +126,7 @@ export function ReportsClient({
         }
       />
 
-      {/* Of the eleven empty states on this page, `breakdown.length === 0` is the one that
-          stands for the whole screen: Spending by category is the first card and the only one
-          that is empty whenever the range genuinely has no non-transfer spend in it. Driving
-          the panel off any single later card would open it on a page that is otherwise full,
-          or leave it shut on a page that is entirely empty. */}
-      <PageGuide empty={breakdown.length === 0}>
+      <PageGuide>
         <p>
           Reports answers questions about a stretch of time rather than the current month: where
           the money went by category, how one month compares with the last, how a year compares

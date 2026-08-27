@@ -48,10 +48,7 @@ export default async function SettingsPage() {
     <div className="flex flex-col gap-6">
       <PageHeader title="Settings" description="Your account, and — for admins — how the household's data is managed." />
 
-      {/* `empty={false}`: there is no EmptyState on this page and nothing to borrow a condition
-          from. This is an index of links, so it renders the same whether the database is full or
-          brand new — there is no state in which it has nothing to show. */}
-      <PageGuide empty={false}>
+      <PageGuide>
         <p>
           Everything here is configuration rather than money. The top of the page is your own
           account — your name, your password, and two-factor sign-in if you want it — and it

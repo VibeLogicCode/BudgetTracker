@@ -339,17 +339,7 @@ export function BudgetsClient({
         }
       />
 
-      {/* `empty={false}` on purpose: this page has no EmptyState to borrow a condition from,
-          because it never renders an empty screen. The table is one row per top-level category
-          and the categories are seeded on install, so there is always something to look at even
-          before a single statement has been imported. */}
-      {/* This page has no EmptyState to borrow a condition from: the table is one row per
-          top-level category and categories are seeded on install, so it is never structurally
-          empty. "No limit set anywhere yet" is the honest equivalent -- it means nobody has
-          used this page, which is exactly when the panel should be open. Spending is not part
-          of the test on purpose: a household can have months of imported transactions and still
-          have never set a budget, and that reader needs the explanation most. */}
-      <PageGuide empty={householdTotals.budgetedLimitCents === 0}>
+      <PageGuide>
         <p>
           A budget here is a limit on one category for one month, and the figure beside it is
           what has actually been spent against it out of your imported transactions. Nothing is

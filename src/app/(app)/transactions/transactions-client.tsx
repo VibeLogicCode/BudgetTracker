@@ -192,12 +192,7 @@ export function TransactionsClient({
     <div data-page-width="wide" className="flex flex-col gap-6">
       <PageHeader title="Transactions" description="Every line from every account, with what it was spent on." />
 
-      {/* `page.rows.length === 0` is the same test the table's own "Nothing matches these
-          filters" state is rendered on, deliberately rather than a second count of the whole
-          ledger: on a filtered view with no hits the reader is looking at an empty screen
-          either way, and that is when the explanation of how the filters compose is worth
-          having open. */}
-      <PageGuide empty={page.rows.length === 0}>
+      <PageGuide>
         <p>
           Every line from every imported statement lands here. The filters above compose rather
           than replace one another, so a date range, an account, a category, a person and a

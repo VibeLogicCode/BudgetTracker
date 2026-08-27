@@ -54,10 +54,7 @@ export function ReviewClient({
         title="Review queue"
         description="Transactions the categorizer could not place with confidence. Correcting one teaches it."
       />
-      {/* Same `rows.length === 0` the success state below is rendered on. An empty queue is the
-          state a reader reaches most often, and it is exactly when "why did this screen exist
-          again?" needs answering, since the queue fills itself back up on the next import. */}
-      <PageGuide empty={rows.length === 0}>
+      <PageGuide>
         <p>
           Every import runs each new transaction past the categorizer. Anything it could not
           place with confidence waits here instead of being filed under a guess, so this screen

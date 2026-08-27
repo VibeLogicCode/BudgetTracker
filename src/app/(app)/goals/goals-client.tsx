@@ -49,9 +49,7 @@ export function GoalsClient({
           </a>
         }
       />
-      {/* The same `goals.length === 0` the "No goals yet" state below is rendered on, so the
-          panel is open exactly on the screen that has nothing but the new-goal form on it. */}
-      <PageGuide empty={goals.length === 0}>
+      <PageGuide>
         <p>
           A goal is a target amount with an optional date — a trip, a deductible, a replacement
           for something that is wearing out. It is a record of what you are saving towards, not
