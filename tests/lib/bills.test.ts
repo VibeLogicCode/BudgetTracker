@@ -5,8 +5,9 @@ import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser
 import { nowIso } from '@/lib/clock';
 import { upsertBudget } from '@/lib/budgets';
 import { upcomingBills, safeToSpend } from '@/lib/bills';
+import { addInstallment, markInstallmentPaid } from '@/lib/warranty/installments';
 
-type Kind = 'warranty' | 'subscription' | 'contract' | 'loan';
+type Kind = 'warranty' | 'subscription' | 'contract' | 'loan' | 'bill';
 type Cycle = 'monthly' | 'annual';
 
 let current: TestDb | null = null;
@@ -87,7 +88,9 @@ describe('upcomingBills — next-occurrence math', () => {
     const { types, item } = setup();
     item({ typeId: types.subscription, purchaseDate: '2026-01-15', billingCycle: 'monthly', billingAmountCents: 999, name: 'Streaming Co' });
     const result = upcomingBills({ today: '2026-02-20', days: 30 });
-    expect(result).toEqual([{ itemId: expect.any(Number), name: 'Streaming Co', kind: 'subscription', dueDate: '2026-03-15', amountCents: 999 }]);
+    expect(result).toEqual([
+      { itemId: expect.any(Number), name: 'Streaming Co', kind: 'subscription', dueDate: '2026-03-15', amountCents: 999, installmentId: null, overdue: false },
+    ]);
   });
 
   it('clamps a 31st anchor into February 28 in a non-leap year', () => {
@@ -110,7 +113,9 @@ describe('upcomingBills — next-occurrence math', () => {
     const { types, item } = setup();
     item({ typeId: types.contract, purchaseDate: '2020-06-10', billingCycle: 'annual', billingAmountCents: 120000, name: 'Home service plan' });
     const result = upcomingBills({ today: '2026-03-01', days: 110 });
-    expect(result).toEqual([{ itemId: expect.any(Number), name: 'Home service plan', kind: 'contract', dueDate: '2026-06-10', amountCents: 120000 }]);
+    expect(result).toEqual([
+      { itemId: expect.any(Number), name: 'Home service plan', kind: 'contract', dueDate: '2026-06-10', amountCents: 120000, installmentId: null, overdue: false },
+    ]);
   });
 
   it('rolls the annual anniversary to next year once this year’s date has already passed', () => {
@@ -277,5 +282,104 @@ describe('safeToSpend', () => {
 
     const input = { month: '2026-03', today: '2026-03-20' };
     expect(safeToSpend(input)).toEqual(safeToSpend(input));
+  });
+});
+
+describe('upcomingBills — schedule-derived rows', () => {
+  function billWithSchedule(dues: { dueDate: string; amountCents: number; paid?: boolean }[]): {
+    itemId: number;
+    ids: number[];
+  } {
+    const userId = insertTestUser(current!.db, { username: 'user-1' });
+    const typeId = insertItemType(current!.db, 'bill', 'Property tax');
+    const itemId = insertItem(current!.db, { ownerUserId: userId, typeId, purchaseDate: '2024-01-15', name: 'Municipal tax' });
+    const ids = dues.map((due) => {
+      const id = addInstallment({ itemId, dueDate: due.dueDate, amountCents: due.amountCents });
+      if (due.paid) markInstallmentPaid(id);
+      return id;
+    });
+    return { itemId, ids };
+  }
+
+  it('includes an unpaid installment inside the window, with its id and overdue false', () => {
+    current = createSeededTestDb();
+    const { itemId, ids } = billWithSchedule([{ dueDate: '2026-09-15', amountCents: 120_000 }]);
+    const result = upcomingBills({ today: '2026-09-01', days: 30 });
+    expect(result).toEqual([
+      {
+        itemId,
+        name: 'Municipal tax',
+        kind: 'bill',
+        dueDate: '2026-09-15',
+        amountCents: 120_000,
+        installmentId: ids[0],
+        overdue: false,
+      },
+    ]);
+  });
+
+  it('never includes a paid one', () => {
+    current = createSeededTestDb();
+    billWithSchedule([{ dueDate: '2026-09-15', amountCents: 120_000, paid: true }]);
+    expect(upcomingBills({ today: '2026-09-01', days: 30 })).toEqual([]);
+  });
+
+  it('includes an overdue one only when asked, and sorts it ahead of everything', () => {
+    current = createSeededTestDb();
+    billWithSchedule([
+      { dueDate: '2024-05-01', amountCents: 70_000 },
+      { dueDate: '2026-09-15', amountCents: 120_000 },
+    ]);
+    expect(upcomingBills({ today: '2026-09-01', days: 30 }).map((b) => b.dueDate)).toEqual(['2026-09-15']);
+    const withOverdue = upcomingBills({ today: '2026-09-01', days: 30, includeOverdue: true });
+    expect(withOverdue.map((b) => b.dueDate)).toEqual(['2024-05-01', '2026-09-15']);
+    expect(withOverdue.map((b) => b.overdue)).toEqual([true, false]);
+  });
+
+  it('leaves the cadence half alone in the same call', () => {
+    current = createSeededTestDb();
+    // Distinct username from billWithSchedule's own insertTestUser('user-1') call below --
+    // both run against the same seeded db, and users.username carries a UNIQUE index.
+    const userId = insertTestUser(current.db, { username: 'user-2' });
+    const subType = insertItemType(current.db, 'subscription', 'Streaming');
+    insertItem(current.db, {
+      name: 'Streaming plan',
+      ownerUserId: userId,
+      typeId: subType,
+      purchaseDate: '2026-01-10',
+      billingCycle: 'monthly',
+      billingAmountCents: 1_599,
+    });
+    const { ids } = billWithSchedule([{ dueDate: '2026-09-15', amountCents: 120_000 }]);
+    const result = upcomingBills({ today: '2026-09-01', days: 30 });
+    expect(result.map((b) => [b.kind, b.dueDate, b.installmentId])).toEqual([
+      ['subscription', '2026-09-10', null],
+      ['bill', '2026-09-15', ids[0]],
+    ]);
+  });
+});
+
+describe('safeToSpend does not move for an ancient unpaid installment', () => {
+  it('keeps includeOverdue at its default false — the regression this default guards', () => {
+    current = createSeededTestDb();
+    const userId = insertTestUser(current.db, { username: 'user-1' });
+    const typeId = insertItemType(current.db, 'bill', 'Property tax');
+    const itemId = insertItem(current.db, { ownerUserId: userId, typeId, purchaseDate: '2024-01-15' });
+    const before = safeToSpend({ month: '2026-09', today: '2026-09-01' }).billsDueCents;
+    // Two years old and never marked paid. billsDueCents answers "is what is left in my budget
+    // enough for what the REST OF THIS MONTH still owes"; folding this in would distort that
+    // number permanently, and would do so most for the household worst at housekeeping.
+    addInstallment({ itemId, dueDate: '2024-05-01', amountCents: 500_000 });
+    expect(safeToSpend({ month: '2026-09', today: '2026-09-01' }).billsDueCents).toBe(before);
+  });
+
+  it('but an installment falling INSIDE the month does move it', () => {
+    current = createSeededTestDb();
+    const userId = insertTestUser(current.db, { username: 'user-1' });
+    const typeId = insertItemType(current.db, 'bill', 'Property tax');
+    const itemId = insertItem(current.db, { ownerUserId: userId, typeId, purchaseDate: '2024-01-15' });
+    const before = safeToSpend({ month: '2026-09', today: '2026-09-01' }).billsDueCents;
+    addInstallment({ itemId, dueDate: '2026-09-15', amountCents: 120_000 });
+    expect(safeToSpend({ month: '2026-09', today: '2026-09-01' }).billsDueCents).toBe(before + 120_000);
   });
 });

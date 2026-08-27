@@ -38,6 +38,7 @@ export function ComingUpCard({
   if (bills.length === 0 && !hasBudgetedLimits) return null;
 
   const listTotalCents = bills.reduce((sum, bill) => sum + bill.amountCents, 0);
+  const hasOverdue = bills.some((bill) => bill.overdue);
   const budgetPhrase = hasBudgetedLimits
     ? `Budgets have ${formatCents(budgetedRemainingCents)} left this month`
     : 'No category limits set yet';
@@ -54,7 +55,9 @@ export function ComingUpCard({
     <Card>
       <CardHeader
         title="Coming up"
-        description="Bills due in the next 30 days."
+        description={
+          hasOverdue ? 'Bills due in the next 30 days, and anything overdue.' : 'Bills due in the next 30 days.'
+        }
         action={
           bills.length > 0 ? (
             <span className="money-lg" aria-label={`Total due ${formatCents(listTotalCents)}`}>
@@ -73,12 +76,17 @@ export function ComingUpCard({
         <ul className="border-t border-line text-sm">
           {bills.map((bill) => (
             <li
-              key={bill.itemId}
+              // v1.12.0: ONE item can contribute several rows now (a bill's installments), so
+              // itemId alone is no longer a key. installmentId identifies a schedule row; a
+              // cadence row has at most one occurrence per item in this window, so its item id
+              // still does.
+              key={bill.installmentId === null ? `item-${bill.itemId}` : `installment-${bill.installmentId}`}
               className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b border-line px-5 py-3 last:border-b-0 sm:px-6"
             >
               <span className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
                 <span className="font-medium text-ink">{bill.name}</span>
-                <span className="text-xs text-subtle">{bill.dueDate}</span>
+                <span className={bill.overdue ? 'text-xs text-danger' : 'text-xs text-subtle'}>{bill.dueDate}</span>
+                {bill.overdue ? <span className="badge badge--red">Overdue</span> : null}
               </span>
               <span className="money shrink-0">{formatCents(bill.amountCents)}</span>
             </li>

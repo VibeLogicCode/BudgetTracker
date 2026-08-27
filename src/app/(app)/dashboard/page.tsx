@@ -84,7 +84,9 @@ export default async function DashboardPage({
   // person parameter -- like loans and net worth, a bill and a budgeted limit are not
   // attributed to one person the way a transaction is). `householdTotals` reuses `totals`
   // when the page is already unscoped rather than re-querying.
-  const bills = upcomingBills({ today, days: 30 });
+  // v1.12.0: the CARD wants overdue rows -- surfacing the thing you forgot is its whole job.
+  // safeToSpend below deliberately does not; see upcomingBills' docblock.
+  const bills = upcomingBills({ today, days: 30, includeOverdue: true });
   const spendPlan = safeToSpend({ month, today });
   const householdTotals = scopeUserId === null ? totals : budgetTotals(budgetProgress(month));
 
