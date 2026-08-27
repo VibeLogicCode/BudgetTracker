@@ -12,6 +12,7 @@ import {
   setItemTypeKind,
   typeUsageCount,
 } from '@/lib/warranty/types';
+import { addInstallment, listInstallments } from '@/lib/warranty/installments';
 
 let current: TestDb | null = null;
 
@@ -364,5 +365,52 @@ describe('deleteItemType', () => {
   it('throws a readable error for an unknown id', () => {
     setup();
     expect(() => deleteItemType(9999)).toThrowError(/no longer exists|not found/i);
+  });
+});
+
+/**
+ * Ruling B6. setItemTypeKind() clears disallowed COLUMNS on a flip, and that is right for a
+ * cadence nobody typed. Installment ROWS are dates and amounts a person entered by hand, and
+ * deleting them because someone changed a dropdown on the Settings page is silent data loss. So
+ * the clearing pass is deliberately ASYMMETRIC, and this pins both halves.
+ */
+describe('flipping a type to and from bill', () => {
+  it('flipping TO bill clears the billing pair and the four loan columns on its items', () => {
+    const { userId } = setup();
+    const typeId = createItemType('Municipal', 'loan').id;
+    const itemId = insertItem(typeId, userId, 'Car');
+    current!.sqlite
+      .prepare(
+        `update warranty_items set billing_cycle = 'monthly', billing_amount_cents = 45000,
+           principal_cents = 2000000, interest_rate_bps = 550, current_balance_cents = 1500000,
+           balance_updated_at = ? where id = ?`,
+      )
+      .run(ISO, itemId);
+
+    setItemTypeKind(typeId, 'bill');
+
+    const after = getWarrantyItem(itemId)!;
+    expect(after.kind).toBe('bill');
+    expect(after.billingCycle).toBeNull();
+    expect(after.billingAmountCents).toBeNull();
+    expect(after.principalCents).toBeNull();
+    expect(after.interestRateBps).toBeNull();
+    expect(after.currentBalanceCents).toBeNull();
+    expect(after.balanceUpdatedAt).toBeNull();
+  });
+
+  it('flipping AWAY from bill deletes NO installment row, and they come back', () => {
+    const { userId } = setup();
+    const typeId = createItemType('Property tax', 'bill').id;
+    const itemId = insertItem(typeId, userId, 'Municipal tax');
+    addInstallment({ itemId, dueDate: '2026-09-30', amountCents: 120_000, at: ISO });
+    addInstallment({ itemId, dueDate: '2026-11-30', amountCents: 120_000, at: ISO });
+
+    setItemTypeKind(typeId, 'contract');
+    // The rows are KEPT. Every reader joins on kind = 'bill', so they simply go quiet.
+    expect(listInstallments(itemId, '2026-08-24', 30)).toHaveLength(2);
+
+    setItemTypeKind(typeId, 'bill');
+    expect(listInstallments(itemId, '2026-08-24', 30).map((r) => r.dueDate)).toEqual(['2026-09-30', '2026-11-30']);
   });
 });

@@ -29,6 +29,14 @@ import {
   loanFieldsAllowedForKind,
   productFieldsAllowedForKind,
   openEndedDisplayLabel,
+  installmentsAllowedForKind,
+  matchingAllowedForKind,
+  installmentStateLabel,
+  INSTALLMENT_SECTION_LABEL,
+  INSTALLMENT_KIND_ERROR,
+  MATCHING_KIND_ERROR,
+  matchingBlurbForKind,
+  INSTALLMENT_STATES,
 } from '@/lib/warranty/constants';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -93,8 +101,8 @@ describe('kind-keyed form/detail labels (v1.2.2 Task 2 — supersede the boolean
 });
 
 describe('item kinds (v1.2.2 — Contracts & Coverage)', () => {
-  it('lists the four kinds and recognises them with the guard', () => {
-    expect(ITEM_KINDS).toEqual(['warranty', 'subscription', 'contract', 'loan']);
+  it('lists the five kinds and recognises them with the guard', () => {
+    expect(ITEM_KINDS).toEqual(['warranty', 'subscription', 'contract', 'loan', 'bill']);
     for (const kind of ITEM_KINDS) expect(isItemKind(kind)).toBe(true);
     expect(isItemKind('lease')).toBe(false);
   });
@@ -105,6 +113,7 @@ describe('item kinds (v1.2.2 — Contracts & Coverage)', () => {
       subscription: 'Subscription',
       contract: 'Contract',
       loan: 'Loan',
+      bill: 'Bill',
     });
   });
 
@@ -277,5 +286,92 @@ describe('v1.10.2: product-field applicability and the submit-button noun', () =
     // The refusal is only actionable if it names the way out, since there is no longer a
     // control for it.
     expect(ITEM_TYPE_IMMUTABLE_ERROR).toMatch(/delete this item and add it again/i);
+  });
+});
+
+/**
+ * v1.12.0: five kinds against five gates, written as a TABLE rather than as five assertions.
+ * The table is the point. billingAllowedForKind used to read `kind !== 'warranty'`, and a
+ * negative gate silently admits every kind nobody has thought of yet -- adding 'bill' under it
+ * would have handed a bill the cadence fields ruling C4 forbids. A table fails loudly the moment
+ * a sixth kind is added without a decision about each gate (ruling B4).
+ */
+describe('the five kinds against the five applicability gates', () => {
+  const expected: Record<
+    string,
+    { billing: boolean; loan: boolean; product: boolean; installments: boolean; matching: boolean }
+  > = {
+    warranty: { billing: false, loan: false, product: true, installments: false, matching: false },
+    subscription: { billing: true, loan: false, product: false, installments: false, matching: false },
+    contract: { billing: true, loan: false, product: false, installments: false, matching: false },
+    loan: { billing: true, loan: true, product: false, installments: false, matching: true },
+    bill: { billing: false, loan: false, product: false, installments: true, matching: true },
+  };
+
+  it('has a row for every kind and a kind for every row', () => {
+    expect([...ITEM_KINDS].sort()).toEqual(Object.keys(expected).sort());
+  });
+
+  for (const kind of ITEM_KINDS) {
+    it(`${kind}`, () => {
+      const row = expected[kind];
+      expect({
+        billing: billingAllowedForKind(kind),
+        loan: loanFieldsAllowedForKind(kind),
+        product: productFieldsAllowedForKind(kind),
+        installments: installmentsAllowedForKind(kind),
+        matching: matchingAllowedForKind(kind),
+      }).toEqual(row);
+    });
+  }
+
+  it('every Record<ItemKind, ...> matrix is total, which is what the compiler enforces', () => {
+    for (const kind of ITEM_KINDS) {
+      expect(typeof ITEM_KIND_LABELS[kind]).toBe('string');
+      expect(ITEM_KIND_LABELS[kind].length).toBeGreaterThan(0);
+      expect(typeof formStartLabel(kind)).toBe('string');
+      expect(typeof formTermLabel(kind)).toBe('string');
+      expect(typeof formEndLabel(kind)).toBe('string');
+      expect(typeof formOpenEndedLabel(kind)).toBe('string');
+      expect(typeof coveredThroughLabelForKind(kind)).toBe('string');
+      expect(typeof billingSectionLabelForKind(kind)).toBe('string');
+      expect(typeof billingAmountLabelForKind(kind)).toBe('string');
+      expect(typeof openEndedDisplayLabel(kind)).toBe('string');
+    }
+    expect(Object.keys(ITEM_KIND_LABELS)).toHaveLength(5);
+  });
+
+  it("bill's label is Bill, and reuses contract's date wording (ruling B5)", () => {
+    expect(ITEM_KIND_LABELS.bill).toBe('Bill');
+    expect(formStartLabel('bill')).toBe('Start date');
+    expect(formTermLabel('bill')).toBe('Term (months)');
+    expect(formEndLabel('bill')).toBe('End date');
+    expect(expiryNounForKind('bill')).toBe('ends on');
+    expect(coveredThroughLabelForKind('bill')).toBe('In effect through');
+    expect(openEndedDisplayLabel('bill')).toBe('Ongoing');
+    // The one place B5's enumeration parts from `contract`: the open-ended checkbox label.
+    expect(formOpenEndedLabel('bill')).toBe('Ongoing (no end date)');
+    // Those dates describe the ITEM's life ("we have owned this property since..."), never the
+    // schedule -- warranty_items.purchase_date is NOT NULL and stays so.
+  });
+
+  it('names the four installment states in one place', () => {
+    expect(INSTALLMENT_SECTION_LABEL).toBe('Installments');
+    expect(INSTALLMENT_STATES).toEqual(['paid', 'overdue', 'due_soon', 'scheduled']);
+    expect(installmentStateLabel('paid')).toBe('Paid');
+    expect(installmentStateLabel('overdue')).toBe('Overdue');
+    expect(installmentStateLabel('due_soon')).toBe('Due soon');
+    expect(installmentStateLabel('scheduled')).toBe('Scheduled');
+  });
+
+  it('names both refusals and both matching blurbs in one place (MUST-19.11)', () => {
+    expect(MATCHING_KIND_ERROR).toBe('Payment matching only applies to loans and bills.');
+    expect(INSTALLMENT_KIND_ERROR).toBe('A due-date schedule only applies to bills.');
+    expect(matchingBlurbForKind('loan')).toContain('takes it off the balance');
+    expect(matchingBlurbForKind('bill')).toContain('next unpaid installment');
+    expect(matchingBlurbForKind('bill')).not.toContain('balance');
+    // Both blurbs must keep the budget promise MUST-14.6 requires above the rules table.
+    expect(matchingBlurbForKind('loan')).toContain('still counts in your budget');
+    expect(matchingBlurbForKind('bill')).toContain('still counts in your budget');
   });
 });

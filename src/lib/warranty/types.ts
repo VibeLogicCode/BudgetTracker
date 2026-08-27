@@ -187,6 +187,13 @@ export function setItemTypeKind(id: number, kind: ItemKind): ItemType {
      * MUST-12.6: the billing pair moves with the rule it always had. loan -> subscription
      * KEEPS the pair (both kinds allow it) and clears only the money fields;
      * loan -> warranty loses both sets.
+     *
+     * v1.12.0 (ruling B6): the asymmetry is deliberate. A flip TO 'bill' clears the billing pair
+     * and the four loan columns, because both gates say false for a bill and the schedule
+     * replaces the cadence. A flip AWAY FROM 'bill' clears nothing and deletes NOTHING: a
+     * bill_installments row is a date and an amount a person typed by hand, and dropping it
+     * because somebody changed a Settings-page dropdown is silent data loss. Every reader joins
+     * on kind = 'bill', so kept rows go quiet and come back if the type is flipped back.
      */
     if (!loanFieldsAllowedForKind(cleanKind)) {
       const itemIds = tx

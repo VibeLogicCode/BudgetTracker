@@ -595,16 +595,23 @@ export const warrantyReceipts = sqliteTable(
  *   - CHECK (is_subscription IN (0,1)) and CHECK (length(trim(name)) BETWEEN 1 AND 60)  (0003)
  *   - the COLLATE NOCASE collation on warranty_item_types_name_uq, which is what makes
  *     'Laptop' and 'laptop' the same type (ASCII-only folding -- accepted, section 19.2) (0003)
- *   - CHECK (kind IN ('warranty','subscription','contract','loan'))                     (0004)
+ *   - CHECK (kind IN ('warranty','subscription','contract','loan','bill'))               (0004, widened by 0011)
  *
- * `kind` (0004) is now the classifier: warranty / subscription / contract / loan. It arrives
- * by ALTER TABLE ADD COLUMN, so -- same convention as users.mustChangePassword and
+ * `kind` (0004) is now the classifier: warranty / subscription / contract / loan / bill. It
+ * arrives by ALTER TABLE ADD COLUMN, so -- same convention as users.mustChangePassword and
  * warrantyItems.typeId -- it is declared LAST here, physically the last column.
  * `is_subscription` is KEPT for old readers (append-only discipline) and is maintained by
  * src/lib/warranty/types.ts as `kind === 'subscription'` on every write, so it never drifts
  * out of sync with `kind`. The period start, length and end are still
  * warranty_items.purchase_date / warranty_months / expiry_date reused verbatim (MUST-19.8).
  * The kind changes wording only, never derivation (MUST-19.12).
+ *
+ * v1.12.0: `kind` gains a fifth value, 'bill'. SQLite cannot ALTER a CHECK, so
+ * drizzle/0011_bill_installments.sql REBUILT this table -- the second time a shipped table in
+ * this schema has been recreated, and the first time one carrying data nobody can regenerate
+ * has been. Unlike 0010's drop-and-recreate, 0011 does the full INSERT ... SELECT rebuild and a
+ * test asserts every row survives, because a hand-typed item type exists nowhere else and
+ * warranty_items.type_id points at it.
  */
 export const warrantyItemTypes = sqliteTable(
   'warranty_item_types',
@@ -613,7 +620,7 @@ export const warrantyItemTypes = sqliteTable(
     name: text('name').notNull(),
     isSubscription: integer('is_subscription', { mode: 'boolean' }).notNull().default(false),
     createdAt: text('created_at').notNull(),
-    kind: text('kind', { enum: ['warranty', 'subscription', 'contract', 'loan'] }).notNull().default('warranty'),
+    kind: text('kind', { enum: ['warranty', 'subscription', 'contract', 'loan', 'bill'] }).notNull().default('warranty'),
   },
   (t) => [uniqueIndex('warranty_item_types_name_uq').on(t.name)],
 );
@@ -796,6 +803,13 @@ export const notificationOutbox = sqliteTable(
  * MUST-11.11: merchant_contains is compared against transactions.normalized_merchant, which
  * normalizeMerchant() UPPERCASES. The stored value is uppercased on write and compared with
  * instr(...) > 0 against the uppercased parameter, with no lower() wrapper on either side.
+ *
+ * v1.12.0: this table now also carries rules for BILL-kind items, whose matched transactions
+ * mark an installment paid instead of moving a balance. The name is historical and stays: the
+ * rule row's shape did not change by one column, and renaming a shipped table for accuracy is a
+ * migration with a cost and no benefit. The FUNCTION that reads it was renamed
+ * (applyLoanMatchers -> applyPaymentMatchers) because a function name is free to change and a
+ * table name is not.
  */
 export const loanMatcherRules = sqliteTable(
   'loan_matcher_rules',
@@ -856,5 +870,52 @@ export const loanPayments = sqliteTable(
     uniqueIndex('loan_payments_txn_item_uq').on(t.txnId, t.itemId),
     index('loan_payments_item_idx').on(t.itemId, t.id),
     index('loan_payments_txn_idx').on(t.txnId),
+  ],
+);
+
+/**
+ * A bill's explicit schedule (spec 2026-08-24, ruling C3). Mirrors
+ * drizzle/0011_bill_installments.sql.
+ *
+ * NOT represented here; SQL only:
+ *   - CHECK (due_date GLOB '____-__-__')
+ *   - CHECK (amount_cents > 0)
+ *   - CHECK (paid_txn_id IS NULL OR paid_at IS NOT NULL)
+ *
+ * Named after the FEATURE that owns it, not after its parent table (ruling B3) -- the same way
+ * loan_matcher_rules and loan_payments both hang off warranty_items and neither is called
+ * warranty_item_*.
+ *
+ * bill_installments_txn_uq IS the idempotency guard (ruling B12), the same shape
+ * loan_payments_txn_item_uq takes. SQLite treats NULLs as distinct in a unique index, so the
+ * many hand-marked rows need no partial index, and a matched transaction can mark at most one
+ * installment, for ever, whatever re-runs.
+ *
+ * There is deliberately NO unique index on (item_id, due_date): two parcels can fall due on the
+ * same day for one bill at different amounts. Ordering is due_date ASC, id ASC everywhere, so
+ * "the earliest unpaid installment" is total and deterministic even then.
+ */
+export const billInstallments = sqliteTable(
+  'bill_installments',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    itemId: integer('item_id')
+      .notNull()
+      .references(() => warrantyItems.id, { onDelete: 'cascade' }),
+    /** ISO YYYY-MM-DD. The municipality's date, typed by a person. */
+    dueDate: text('due_date').notNull(),
+    amountCents: integer('amount_cents').notNull(),
+    /** ISO timestamp, or NULL for unpaid. The one field every reader filters on. */
+    paidAt: text('paid_at'),
+    /** NULL means a PERSON marked this paid (ruling B13). Non-NULL means a rule matched. There
+     *  is deliberately no `source` column: this link column already answers the question, and a
+     *  second column that must agree with it is a second column that can disagree with it. */
+    paidTxnId: integer('paid_txn_id').references(() => transactions.id, { onDelete: 'set null' }),
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => [
+    uniqueIndex('bill_installments_txn_uq').on(t.paidTxnId),
+    index('bill_installments_item_idx').on(t.itemId, t.dueDate),
+    index('bill_installments_due_idx').on(t.paidAt, t.dueDate),
   ],
 );

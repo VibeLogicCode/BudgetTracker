@@ -15,21 +15,25 @@
  * is Task 2; this module only builds the foundation.
  */
 
-/** v1.2.2: the four kinds an item type can be. Loans are dates + documents only -- no
- * balance math (spec section 17, decision recorded there). */
-export const ITEM_KINDS = ['warranty', 'subscription', 'contract', 'loan'] as const;
+/** v1.2.2: the kinds an item type can be. Loans are dates + documents only -- no
+ * balance math (spec section 17, decision recorded there). v1.12.0 adds a fifth, `bill`: an
+ * item whose reminder data is an explicit SCHEDULE of due dates (bill_installments) rather
+ * than a cadence, because a property tax bill falls due on irregular dates a municipality
+ * picks and no interval expresses that. */
+export const ITEM_KINDS = ['warranty', 'subscription', 'contract', 'loan', 'bill'] as const;
 export type ItemKind = (typeof ITEM_KINDS)[number];
 
 export function isItemKind(value: string): value is ItemKind {
   return (ITEM_KINDS as readonly string[]).includes(value);
 }
 
-/** Human labels for the admin page's kind <select> (four options, one per kind). */
+/** Human labels for the admin page's kind <select> (five options, one per kind). */
 export const ITEM_KIND_LABELS: Record<ItemKind, string> = {
   warranty: 'Warranty',
   subscription: 'Subscription',
   contract: 'Contract',
   loan: 'Loan',
+  bill: 'Bill',
 };
 
 /**
@@ -40,6 +44,7 @@ export const ITEM_KIND_LABELS: Record<ItemKind, string> = {
  *   subscription: Start date    / Duration (months)  / cancel by / Cancel-by date / Active through    / Ongoing (no end date)
  *   contract:     Start date    / Term (months)      / ends on   / End date     / In effect through  / Open-ended
  *   loan:         Start date    / Term (months)      / paid off by / Payoff date / Term runs through / Ongoing (no end date)
+ *   bill:         Start date    / Term (months)      / ends on   / End date     / In effect through  / Ongoing (no end date)
  *
  * v1.2.2 Task 2 (controller ruling): this matrix SUPERSEDES the four old boolean label
  * helpers (`purchaseDateLabel`, `termLabel`, `expiryDateLabel`, `coveredThroughLabel`), which
@@ -95,6 +100,21 @@ const KIND_WORDING: Record<
     expiringVerb: 'Paid off',
     end: 'Payoff date',
     coveredThrough: 'Term runs through',
+    openEnded: 'Ongoing (no end date)',
+  },
+  // Ruling B5: `contract`'s row, because a bill's own dates describe the ITEM's life ("we have
+  // owned this property since...") and never the schedule -- purchase_date is NOT NULL and
+  // stays so. Duplicating one row of a wording matrix is not a MUST-19.11 violation: that rule
+  // forbids a second PLACE, not a fifth row. The one departure from `contract` is `openEnded`:
+  // "Open-ended" reads as a contract with no fixed term, and a bill that is simply ongoing is
+  // better named the way a subscription and a loan already name it.
+  bill: {
+    start: 'Start date',
+    term: 'Term (months)',
+    expiryVerb: 'ends on',
+    expiringVerb: 'Ends',
+    end: 'End date',
+    coveredThrough: 'In effect through',
     openEnded: 'Ongoing (no end date)',
   },
 };
@@ -228,15 +248,20 @@ export const BILLING_CYCLE_LABELS: Record<BillingCycle, string> = {
  * v1.3.1: widened to include 'loan'. A loan's billing pair is its regular PAYMENT
  * (see BILLING_WORDING) -- the amount and the cadence, not an interest calculation.
  *
- * This is the ENTIRE server-side rule change. assertBillingMatchesKind() in items.ts calls
- * this predicate, setItemTypeKind()'s clearing pass calls it, and both forms gate their
- * fieldset on it -- so one edit moves every one of them together. The rule lives here, in
- * the app layer, rather than in SQL, because a CHECK on warranty_items cannot see across to
- * warranty_item_types.kind; drizzle/0005_billing_cycle.sql's own header says so, which is
- * why widening it needs no DDL and no table rebuild (MUST-11.6).
+ * v1.12.0 (ruling B4): an ALLOWLIST, not a negation. This read `kind !== 'warranty'`, and a
+ * negative gate is a gate that admits every kind nobody has thought of yet: adding 'bill' under
+ * it would silently have handed a bill the cadence fields ruling C4 forbids, with no compiler
+ * error and no test failure. A bill's schedule REPLACES the cadence; it never sits beside it.
+ *
+ * This is still the ENTIRE server-side rule. assertBillingMatchesKind() in items.ts calls this
+ * predicate, setItemTypeKind()'s clearing pass calls it, and both forms gate their fieldset on
+ * it -- so one edit moves every one of them together. The rule lives here, in the app layer,
+ * rather than in SQL, because a CHECK on warranty_items cannot see across to
+ * warranty_item_types.kind; drizzle/0005_billing_cycle.sql's own header says so, which is why
+ * widening it needs no DDL and no table rebuild (MUST-11.6).
  */
 export function billingAllowedForKind(kind: ItemKind): boolean {
-  return kind !== 'warranty';
+  return kind === 'subscription' || kind === 'contract' || kind === 'loan';
 }
 
 /** v1.3.1: the four money columns are loan-only, by the same app-layer argument. */
@@ -264,6 +289,28 @@ export function productFieldsAllowedForKind(kind: ItemKind): boolean {
 }
 
 /**
+ * v1.12.0: a due-date SCHEDULE instead of a cadence, and bills only. Property tax is two to six
+ * installments a year on fixed, irregular dates a municipality sets; no cadence expresses that,
+ * and a reminder that fires on the wrong day is worse than no reminder.
+ *
+ * Same "a gate decides what a form OFFERS, never what it may HIDE" note productFieldsAllowedForKind
+ * carries: the detail page renders the Installments section whenever the item HAS installments,
+ * whatever the kind (ruling B7). This predicate gates ADD and MARK PAID, not the section.
+ */
+export function installmentsAllowedForKind(kind: ItemKind): boolean {
+  return kind === 'bill';
+}
+
+/**
+ * v1.12.0: which kinds may carry merchant-matching rules at all. A matched transaction takes a
+ * payment off a loan's balance, or marks a bill's earliest unpaid installment paid; for the
+ * other three kinds there is nothing for a match to do.
+ */
+export function matchingAllowedForKind(kind: ItemKind): boolean {
+  return kind === 'loan' || kind === 'bill';
+}
+
+/**
  * Refused when an update tries to move an item to a different type (v1.10.2). Lives here with
  * the rest of the kind wording, not in the action: MUST-19.11 keeps user-facing kind wording in
  * one place, and actions.ts has a test asserting its exports are all actions -- a string
@@ -285,6 +332,9 @@ const BILLING_WORDING: Record<ItemKind, { section: string; amount: string; month
   subscription: { section: 'Billing', amount: 'Amount', monthly: '/ month', annual: '/ year' },
   contract: { section: 'Billing', amount: 'Amount', monthly: '/ month', annual: '/ year' },
   loan: { section: 'Payment', amount: 'Payment amount', monthly: 'per month', annual: 'per year' },
+  // Present only so the record is total, and unreachable: billingAllowedForKind('bill') is
+  // false, exactly as the `warranty` row's own comment above explains.
+  bill: { section: 'Billing', amount: 'Amount', monthly: '/ month', annual: '/ year' },
 };
 
 export function billingSectionLabelForKind(kind: ItemKind): string {
@@ -313,8 +363,70 @@ const OPEN_ENDED_DISPLAY_LABEL: Record<ItemKind, string> = {
   subscription: 'Lifetime',
   contract: 'Ongoing',
   loan: 'Open-ended',
+  bill: 'Ongoing',
 };
 
 export function openEndedDisplayLabel(kind: ItemKind): string {
   return OPEN_ENDED_DISPLAY_LABEL[kind];
+}
+
+/**
+ * v1.12.0: the four states an installment can be in. Declared HERE rather than beside the data
+ * layer in installments.ts for the Ruling P4 reason that governs this whole module: the detail
+ * page is a client component and calls installmentStateLabel(), so both the labels and the type
+ * they are keyed by have to live somewhere that never imports @/db. installments.ts imports the
+ * type from here; it does not redeclare it.
+ *
+ * The state is DERIVED at read time, never stored -- see installmentStateFor() -- so there is no
+ * column that can disagree with the dates it is computed from.
+ */
+export type InstallmentState = 'paid' | 'overdue' | 'due_soon' | 'scheduled';
+export const INSTALLMENT_STATES: readonly InstallmentState[] = ['paid', 'overdue', 'due_soon', 'scheduled'];
+
+/** MUST-19.11: the one place the section is named. */
+export const INSTALLMENT_SECTION_LABEL = 'Installments';
+
+const INSTALLMENT_STATE_LABELS: Record<InstallmentState, string> = {
+  paid: 'Paid',
+  overdue: 'Overdue',
+  due_soon: 'Due soon',
+  scheduled: 'Scheduled',
+};
+
+export function installmentStateLabel(state: InstallmentState): string {
+  return INSTALLMENT_STATE_LABELS[state];
+}
+
+/**
+ * v1.12.0. Replaces the string literal 'Payment matching only applies to loans.' that was
+ * hard-coded in warranties/actions.ts. Lives here with the rest of the kind wording, not in the
+ * action: MUST-19.11 keeps user-facing kind wording in one place, and actions.ts has a test
+ * asserting its exports are all actions -- a string constant exported from there breaks that
+ * guard for no reason. Same argument as ITEM_TYPE_IMMUTABLE_ERROR above.
+ */
+export const MATCHING_KIND_ERROR = 'Payment matching only applies to loans and bills.';
+
+/** v1.12.0: refused by addInstallment() in the data layer and by addInstallmentAction. */
+export const INSTALLMENT_KIND_ERROR = 'A due-date schedule only applies to bills.';
+
+/**
+ * The sentence above the Payment matching rules table. Both arms keep MUST-14.6's budget
+ * promise, because that is the thing a person is most likely to get wrong about this feature:
+ * a matched payment is still a real transaction in the budget and in the reports.
+ *
+ * Only 'loan' and 'bill' are reachable -- matchingAllowedForKind() gates the whole card -- and
+ * the other three fall through to the loan sentence rather than inventing a fourth string for a
+ * screen nobody can reach.
+ */
+export function matchingBlurbForKind(kind: ItemKind): string {
+  if (kind === 'bill') {
+    return (
+      "When a transaction's merchant contains this text, the app marks the next unpaid installment on this bill " +
+      'as paid and records which transaction paid it. The payment still counts in your budget and in your reports.'
+    );
+  }
+  return (
+    "When a transaction's merchant contains this text, the app treats it as a payment on this loan and takes it " +
+    'off the balance. The payment still counts in your budget and in your reports.'
+  );
 }
