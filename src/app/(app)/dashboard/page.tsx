@@ -95,11 +95,6 @@ export default async function DashboardPage({
   const netCents = thisMonth?.netCents ?? incomeCents - totals.totalSpentCents;
 
   const budgetRows = rows.filter((row) => !row.isIncome && (row.limitCents !== null || row.spentCents !== 0));
-  // What the guide panel's open state is derived from. `merchants` is reused rather than counted
-  // again because it is already this page's own test for a month with nothing in it -- the one
-  // the Top merchants card prints "No transactions this month yet" for -- so the panel cannot be
-  // open on a month this page is otherwise calling full.
-  const monthIsEmpty = merchants.length === 0;
   const scopedPerson = scopeUserId === null ? null : people.find((person) => person.id === scopeUserId);
 
   return (
