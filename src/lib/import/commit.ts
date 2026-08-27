@@ -2,7 +2,7 @@ import { and, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { accounts, imports, transactionImports, transactions, users } from '@/db/schema';
 import { nowIso } from '@/lib/clock';
-import { reverseLoanLinksForTransactions } from '@/lib/loans';
+import { reverseInstallmentLinksForTransactions, reverseLoanLinksForTransactions } from '@/lib/loans';
 import { recordBalanceSnapshot } from '@/lib/networth';
 import { listAccountCardPeople } from './card-people';
 import { findExistingByHashes, type HashedRow } from './dedup';
@@ -415,6 +415,10 @@ export function undoImport(importId: number): UndoResult {
       // remove the rows anyway -- but a cascade cannot restore a balance, so the explicit
       // reversal must run first.
       loanRowsReversed = reverseLoanLinksForTransactions(sole);
+      // Ruling B14, same argument one line up and the same position: ON DELETE SET NULL drops
+      // the link but cannot restore paid_at, so an installment would be left marked paid by a
+      // transaction that no longer exists.
+      reverseInstallmentLinksForTransactions(sole);
 
       // transaction_imports rows cascade away with the transaction.
       tx.delete(transactions).where(inArray(transactions.id, sole)).run();

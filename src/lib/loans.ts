@@ -1,6 +1,6 @@
-import { and, asc, eq, gte, inArray, sql } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray, isNull, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
-import { loanMatcherRules, loanPayments, transactions, users, warrantyItemTypes, warrantyItems } from '@/db/schema';
+import { billInstallments, loanMatcherRules, loanPayments, transactions, users, warrantyItemTypes, warrantyItems } from '@/db/schema';
 import { nowIso } from '@/lib/clock';
 import { addDaysIso, addMonths, addMonthsClamped, monthEnd, monthOf, monthRange, todayIso } from '@/lib/dates';
 import type { RateVerdict } from '@/lib/notify/ratelimit';
@@ -180,13 +180,19 @@ interface ActiveRule {
   itemId: number;
   merchantContains: string;
   accountId: number | null;
-  balanceCents: number;
+  /** NULL for a bill, and for a loan whose balance was never anchored. */
+  balanceCents: number | null;
+  kind: 'loan' | 'bill';
 }
 
 /**
- * Every ENABLED rule whose item is a loan-kind item with a non-null current_balance_cents,
- * in ONE query. This is the loans-side dormancy bail: a household with no loans pays one
- * indexed read per import and nothing else (AC5).
+ * Every ENABLED rule whose item is a loan-kind OR bill-kind item, in ONE query. This is the
+ * dormancy bail: a household with neither pays one indexed read per import and nothing else
+ * (AC5).
+ *
+ * v1.12.0: the balance requirement is a LOAN dormancy condition, not a general one. A bill has
+ * no balance to move, so requiring a non-null one would make every bill rule permanently inert
+ * -- the rule would save, report success, and never fire.
  */
 function activeRules(tx: ReturnType<typeof getDb>): ActiveRule[] {
   return tx
@@ -195,7 +201,8 @@ function activeRules(tx: ReturnType<typeof getDb>): ActiveRule[] {
       itemId: loanMatcherRules.itemId,
       merchantContains: loanMatcherRules.merchantContains,
       accountId: loanMatcherRules.accountId,
-      balanceCents: sql<number>`${warrantyItems.currentBalanceCents}`,
+      balanceCents: sql<number | null>`${warrantyItems.currentBalanceCents}`,
+      kind: sql<'loan' | 'bill'>`${warrantyItemTypes.kind}`,
     })
     .from(loanMatcherRules)
     .innerJoin(warrantyItems, eq(warrantyItems.id, loanMatcherRules.itemId))
@@ -203,8 +210,8 @@ function activeRules(tx: ReturnType<typeof getDb>): ActiveRule[] {
     .where(
       and(
         eq(loanMatcherRules.enabled, true),
-        eq(warrantyItemTypes.kind, 'loan'),
-        sql`${warrantyItems.currentBalanceCents} is not null`,
+        inArray(warrantyItemTypes.kind, ['loan', 'bill']),
+        sql`(${warrantyItemTypes.kind} = 'bill' OR ${warrantyItems.currentBalanceCents} is not null)`,
       ),
     )
     .orderBy(asc(loanMatcherRules.id))
@@ -306,14 +313,65 @@ function candidates(tx: ReturnType<typeof getDb>, txnIds: number[]): Candidate[]
   return out;
 }
 
+/**
+ * MUST-13.4, across both kinds (ruling B11): the union of loan_payments.txn_id and
+ * bill_installments.paid_txn_id over the same chunked id set. A loan and a bill whose rules
+ * both match one merchant string cannot both take the payment, and that is only expressible if
+ * both branches read ONE set.
+ */
 function alreadyLinked(tx: ReturnType<typeof getDb>, txnIds: number[]): Set<number> {
   const out = new Set<number>();
   for (const chunk of chunkIds(txnIds)) {
     for (const row of tx.select({ txnId: loanPayments.txnId }).from(loanPayments).where(inArray(loanPayments.txnId, chunk)).all()) {
       out.add(row.txnId);
     }
+    for (const row of tx
+      .select({ txnId: billInstallments.paidTxnId })
+      .from(billInstallments)
+      .where(inArray(billInstallments.paidTxnId, chunk))
+      .all()) {
+      if (row.txnId !== null) out.add(row.txnId);
+    }
   }
   return out;
+}
+
+/**
+ * The bill arm of the rule path (ruling C7). Marks the EARLIEST unpaid installment on this item
+ * and records which transaction paid it.
+ *
+ * THE AMOUNT IS NOT COMPARED, deliberately. A tax bill arrives with penalties, discounts and
+ * rounding, and refusing to match on a few dollars' difference would leave the household with an
+ * installment that is paid and a reminder that says it is not. The transaction is recorded so
+ * the difference is VISIBLE on the detail page instead of being decided here.
+ *
+ * `AND paid_at IS NULL` in the UPDATE, plus bill_installments_txn_uq (ruling B12), are together
+ * the idempotency guard -- the same pairing loan_payments uses. A re-run cannot double-mark, and
+ * one transaction can never mark two installments.
+ *
+ * Neither current_balance_cents nor balance_updated_at is touched: a bill has no balance, and
+ * MUST-11.8's human anchor stays a loan concept.
+ */
+function markEarliestUnpaid(
+  tx: ReturnType<typeof getDb>,
+  input: { txnId: number; itemId: number; at: string },
+): boolean {
+  const target = tx
+    .select({ id: billInstallments.id })
+    .from(billInstallments)
+    .where(and(eq(billInstallments.itemId, input.itemId), isNull(billInstallments.paidAt)))
+    .orderBy(asc(billInstallments.dueDate), asc(billInstallments.id))
+    .limit(1)
+    .get();
+  // Nothing scheduled, or all paid: no link and no error. The transaction is a normal
+  // transaction, the household sees it on /transactions, and nothing is fabricated.
+  if (target === undefined) return false;
+  const result = tx
+    .update(billInstallments)
+    .set({ paidAt: input.at, paidTxnId: input.txnId })
+    .where(and(eq(billInstallments.id, target.id), isNull(billInstallments.paidAt)))
+    .run();
+  return result.changes > 0;
 }
 
 /**
@@ -334,6 +392,12 @@ function alreadyLinked(tx: ReturnType<typeof getDb>, txnIds: number[]): Set<numb
  * simplefin/sync.ts pass one, to surface `loanMatchFailed` alongside `engineFailed`. The
  * other three call sites (createManualTransaction, confirmCategory) have nowhere spec'd for
  * that signal to go and don't need it.
+ *
+ * v1.12.0: this function matches BILLS too, which is why it is no longer called
+ * applyLoanMatchers (ruling B10 -- there is no alias; a name that lies is worse than a rename).
+ * The bill branch is inside the SAME db.transaction, the SAME dormancy bail and the SAME
+ * try/catch, so MUST-13.5 (never throws into an import, a sync, a manual entry or a category
+ * confirmation) holds for it unchanged.
  */
 export function applyPaymentMatchers(txnIds: number[], at: Date = new Date(), report?: { failed: boolean }): number {
   if (txnIds.length === 0) return 0;
@@ -361,6 +425,13 @@ export function applyPaymentMatchers(txnIds: number[], at: Date = new Date(), re
             (rule.accountId === null || rule.accountId === txn.accountId),
         );
         if (match === undefined) continue;
+
+        if (match.kind === 'bill') {
+          if (!markEarliestUnpaid(tx, { txnId: txn.id, itemId: match.itemId, at: stamp })) continue;
+          linked.add(txn.id);
+          created += 1;
+          continue;
+        }
 
         const applied = link(tx, {
           txnId: txn.id,
@@ -401,8 +472,14 @@ export function backfillLoanRule(
   try {
     const stamp = nowIso(at);
     return getDb().transaction((tx) => {
-      const rule = activeRules(tx).find((candidate) => candidate.ruleId === ruleId);
+      // v1.12.0: backfill stays loan-only (design doc, Component 5) -- a bill ruleId is simply
+      // not found here, same "no link, no error" shape as every other dormant-rule case.
+      const rule = activeRules(tx).find((candidate) => candidate.ruleId === ruleId && candidate.kind === 'loan');
       if (rule === undefined) return { linked: 0, appliedCents: 0 };
+      // activeRules' WHERE clause requires a non-null balance for every loan-kind row it
+      // returns, so this is never actually null; the fallback only satisfies the type after
+      // ActiveRule.balanceCents was widened to number | null for the bill branch.
+      const anchoredBalance = rule.balanceCents ?? 0;
 
       const rows = tx
         .select({
@@ -425,7 +502,7 @@ export function backfillLoanRule(
         .limit(cap)
         .all();
 
-      let balance = rule.balanceCents;
+      let balance = anchoredBalance;
       let linked = 0;
       let appliedTotal = 0;
       for (const row of rows) {
@@ -594,6 +671,35 @@ export function reverseLoanLinksForTransactions(txnIds: number[]): number {
     db.delete(loanPayments).where(inArray(loanPayments.txnId, chunk)).run();
   }
   return rows.length;
+}
+
+/**
+ * Ruling B14: called INSIDE undoImport's existing transaction, BEFORE tx.delete(transactions).
+ *
+ * The ON DELETE SET NULL on paid_txn_id would drop the link anyway -- but a cascade cannot
+ * restore paid_at, so without this an installment would be left marked paid by a transaction
+ * that no longer exists. That is the same argument reverseLoanLinksForTransactions already makes
+ * about balances, which is why the two are called from the same place, one after the other.
+ *
+ * Keyed on paid_txn_id IN (...), so it can NEVER touch a hand-marked row: a hand-marked row has
+ * paid_txn_id NULL, and that is precisely what "a person marked this" means here (ruling B13).
+ *
+ * Returns the number of installments un-marked. Uses getDb() rather than a passed handle for the
+ * reason the note below reverseLoanLinksForTransactions states -- do not change one without the
+ * other.
+ */
+export function reverseInstallmentLinksForTransactions(txnIds: number[]): number {
+  if (txnIds.length === 0) return 0;
+  const db = getDb();
+  let reversed = 0;
+  for (const chunk of chunkIds(txnIds)) {
+    reversed += db
+      .update(billInstallments)
+      .set({ paidAt: null, paidTxnId: null })
+      .where(inArray(billInstallments.paidTxnId, chunk))
+      .run().changes;
+  }
+  return reversed;
 }
 
 // Note on reverseLoanLinksForTransactions and the enclosing transaction: it uses getDb()
