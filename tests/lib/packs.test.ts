@@ -32,10 +32,10 @@ function setup() {
   const coffee = categoryIdByName(current.db, 'Coffee');
   const groceries = categoryIdByName(current.db, 'Groceries');
   const kids = categoryIdByName(current.db, 'Kids');
-  upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: userId });
-  upsertRuleFromCorrection({ pattern: 'LOBLAWS', matchType: 'contains', ruleKind: 'category', categoryId: groceries, createdBy: userId });
-  upsertRuleFromCorrection({ pattern: 'TOY STORE', matchType: 'exact', ruleKind: 'category', categoryId: kids, createdBy: userId });
-  upsertRuleFromCorrection({ pattern: 'E-TRANSFER SENT J DOE', matchType: 'exact', ruleKind: 'transfer', categoryId: null, createdBy: userId });
+  upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: userId, actorRole: 'admin' });
+  upsertRuleFromCorrection({ pattern: 'LOBLAWS', matchType: 'contains', ruleKind: 'category', categoryId: groceries, createdBy: userId, actorRole: 'admin' });
+  upsertRuleFromCorrection({ pattern: 'TOY STORE', matchType: 'exact', ruleKind: 'category', categoryId: kids, createdBy: userId, actorRole: 'admin' });
+  upsertRuleFromCorrection({ pattern: 'E-TRANSFER SENT J DOE', matchType: 'exact', ruleKind: 'transfer', categoryId: null, createdBy: userId, actorRole: 'admin' });
   return { db: current.db, sqlite: current.sqlite, userId, coffee, groceries, kids };
 }
 
@@ -84,7 +84,7 @@ describe('rules pack privacy', () => {
 
   it('never exports rename rules, even with the transfer toggle on (spec v1.4)', () => {
     const { userId } = setup();
-    upsertRuleFromCorrection({ pattern: 'MCDONALDS', matchType: 'exact', ruleKind: 'rename', categoryId: null, renameTo: "McDonald's", createdBy: userId });
+    upsertRuleFromCorrection({ pattern: 'MCDONALDS', matchType: 'exact', ruleKind: 'rename', categoryId: null, renameTo: "McDonald's", createdBy: userId, actorRole: 'admin' });
     expect(exportRulesPack().rules.some((r) => r.pattern === 'MCDONALDS')).toBe(false);
     expect(exportRulesPack({ includeTransferRules: true }).rules).toHaveLength(4);
     expect(previewRulesPackExport({ includeTransferRules: true }).some((r) => r.ruleKind === 'rename')).toBe(false);
@@ -95,7 +95,7 @@ describe('rules pack privacy', () => {
   // for the same reason as rename — it's a local override, not shareable knowledge.
   it('never exports not_transfer rules, even with the transfer toggle on (controller ruling a)', () => {
     const { userId } = setup();
-    upsertRuleFromCorrection({ pattern: 'ACME PAYROLL CO', matchType: 'exact', ruleKind: 'not_transfer', categoryId: null, createdBy: userId });
+    upsertRuleFromCorrection({ pattern: 'ACME PAYROLL CO', matchType: 'exact', ruleKind: 'not_transfer', categoryId: null, createdBy: userId, actorRole: 'admin' });
     expect(exportRulesPack().rules.some((r) => r.pattern === 'ACME PAYROLL CO')).toBe(false);
     const withTransfers = exportRulesPack({ includeTransferRules: true });
     expect(withTransfers.rules).toHaveLength(4);
@@ -359,20 +359,26 @@ describe('importRulesPack', () => {
     expect(groceries).toBeGreaterThan(0);
   });
 
-  it('overwrites on request, resetting hit_count and created_by', () => {
-    const { sqlite, groceries } = setup();
+  it('overwrites on request, resetting hit_count, and preserves who originally set the rule up', () => {
+    const { sqlite, groceries, userId } = setup();
     sqlite.prepare("update merchant_rules set hit_count = 42 where pattern = 'TIM HORTONS'").run();
     const result = importRulesPack(
       packFrom([{ pattern: 'TIM HORTONS', match_type: 'exact', category: 'Groceries' }], [{ name: 'Groceries', parent: 'Food' }]),
       { onConflict: 'overwrite' },
     );
     expect(result).toMatchObject({ rulesAdded: 0, rulesOverwritten: 1, rulesKept: 0 });
-    const row = sqlite.prepare("select category_id, created_by, hit_count from merchant_rules where pattern = 'TIM HORTONS'").get() as {
+    const row = sqlite
+      .prepare("select category_id, created_by, last_modified_by, hit_count from merchant_rules where pattern = 'TIM HORTONS'")
+      .get() as {
       category_id: number;
       created_by: number | null;
+      last_modified_by: number | null;
       hit_count: number;
     };
-    expect(row).toEqual({ category_id: groceries, created_by: null, hit_count: 0 });
+    // v1.13.0 ruling R4: created_by is never rewritten by the shared upsert once a rule exists
+    // (see rules.ts), so a pack re-import over Alice's own rule keeps her as its author. Only
+    // last_modified_by moves, to null, recording the import as a system touch rather than hers.
+    expect(row).toEqual({ category_id: groceries, created_by: userId, last_modified_by: null, hit_count: 0 });
   });
 
   it('is not a conflict when the incoming rule already matches', () => {

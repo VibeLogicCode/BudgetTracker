@@ -474,14 +474,24 @@ export function importRulesPack(input: unknown, opts: { onConflict?: 'keep' | 'o
       rulesAdded += 1;
     }
 
-    // Reuse the Task 12 upsert so the unique key stays the single source of truth,
-    // then reset the provenance columns: imported rules carry no local history.
+    // Reuse the Task 12 upsert so the unique key stays the single source of truth.
+    // actorRole: 'admin' -- pack import already resolved its own keep/overwrite conflict above
+    // (this line is unreached under 'keep' when a rule exists and differs), so R4's ownership
+    // check has nothing left to add here; the outcome must be unconditional either way.
+    //
+    // v1.13.0 ruling R4 changed what "reset the provenance columns" can mean here: the shared
+    // upsert never puts created_by in its own UPDATE branch any more (that is the whole of R4 --
+    // see rules.ts), so re-importing a pack over a rule a household member already set up no
+    // longer erases who that was. lastModifiedBy: null still lands (createdBy: null, above,
+    // flows straight into it), recording the import itself as a system action rather than a
+    // personal edit -- it is only created_by, on an existing row, that this can no longer touch.
     upsertRuleFromCorrection({
       pattern: rule.pattern,
       matchType: rule.match_type,
       ruleKind: rule.rule_kind,
       categoryId: category?.id ?? null,
       createdBy: null,
+      actorRole: 'admin',
     });
     db.update(merchantRules)
       .set({ hitCount: 0, lastUsedAt: null })

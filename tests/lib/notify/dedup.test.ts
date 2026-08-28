@@ -138,7 +138,8 @@ describe('MUST-3.11: every dedup key matches its documented shape', () => {
     expect(weeklyDigestKey('2026-09-01')).toBe('digest:2026-09-01');
     expect(newSigninKey('2026-09-01T12:00:00.000Z')).toBe('signin:2026-09-01T12:00:00.000Z');
     expect(restoreOutcomeKey('2026-09-01T12:00:00.000Z')).toBe('restore:2026-09-01T12:00:00.000Z');
-    expect(staleImportKey('2026-08-31')).toBe('stale:2026-08-31');
+    // v1.13.0 ruling R14: the key now carries the account id (item AM / PROD-10).
+    expect(staleImportKey('2026-08-31', 4)).toBe('stale:2026-08-31:4');
   });
 });
 

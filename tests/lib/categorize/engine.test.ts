@@ -85,7 +85,7 @@ describe('transfer detection', () => {
 
   it('honours a learned exact transfer rule', () => {
     setup();
-    upsertRuleFromCorrection({ pattern: 'E-TRANSFER SENT J DOE', matchType: 'exact', ruleKind: 'transfer', categoryId: null, createdBy: null });
+    upsertRuleFromCorrection({ pattern: 'E-TRANSFER SENT J DOE', matchType: 'exact', ruleKind: 'transfer', categoryId: null, createdBy: null, actorRole: 'admin' });
     const ctx = buildContext();
     expect(detectTransfer('E-TRANSFER SENT J DOE', ctx)).toBe(true);
     // exact only — a similar e-transfer must not be caught
@@ -99,8 +99,8 @@ describe('categorizeTransaction ordering', () => {
     const coffee = categoryIdByName(db, 'Coffee');
     const restaurants = categoryIdByName(db, 'Restaurants');
     const groceries = categoryIdByName(db, 'Groceries');
-    upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: null });
-    upsertRuleFromCorrection({ pattern: 'TIM', matchType: 'contains', ruleKind: 'category', categoryId: restaurants, createdBy: null });
+    upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: null, actorRole: 'admin' });
+    upsertRuleFromCorrection({ pattern: 'TIM', matchType: 'contains', ruleKind: 'category', categoryId: restaurants, createdBy: null, actorRole: 'admin' });
     for (let i = 0; i < 3; i += 1) train(['TIM', 'HORTONS'], groceries);
     for (let i = 0; i < 3; i += 1) train(['METRO', 'PLUS'], restaurants);
 
@@ -111,7 +111,7 @@ describe('categorizeTransaction ordering', () => {
   it('falls back to a contains rule', () => {
     const { db } = setup();
     const restaurants = categoryIdByName(db, 'Restaurants');
-    upsertRuleFromCorrection({ pattern: 'TIM', matchType: 'contains', ruleKind: 'category', categoryId: restaurants, createdBy: null });
+    upsertRuleFromCorrection({ pattern: 'TIM', matchType: 'contains', ruleKind: 'category', categoryId: restaurants, createdBy: null, actorRole: 'admin' });
     expect(categorizeTransaction({ id: 1, normalizedMerchant: 'TIM HORTONS EXPRESS' }, buildContext())).toMatchObject({
       categoryId: restaurants,
       source: 'rule',
@@ -144,7 +144,7 @@ describe('categorizeTransaction ordering', () => {
   it('short-circuits on a transfer and does not categorize it', () => {
     const { db } = setup();
     const coffee = categoryIdByName(db, 'Coffee');
-    upsertRuleFromCorrection({ pattern: 'PAYMENT', matchType: 'contains', ruleKind: 'category', categoryId: coffee, createdBy: null });
+    upsertRuleFromCorrection({ pattern: 'PAYMENT', matchType: 'contains', ruleKind: 'category', categoryId: coffee, createdBy: null, actorRole: 'admin' });
     expect(categorizeTransaction({ id: 1, normalizedMerchant: 'PAYMENT - THANK YOU' }, buildContext())).toMatchObject({
       categoryId: null,
       source: 'none',
@@ -157,7 +157,9 @@ describe('runEngine', () => {
   it('writes the outcome and bumps rule hit counts', () => {
     const { db, sqlite, add } = setup();
     const coffee = categoryIdByName(db, 'Coffee');
-    const ruleId = upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: null });
+    const upserted = upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: null, actorRole: 'admin' });
+    if (!upserted.ok) throw new Error('unexpected refusal');
+    const ruleId = upserted.ruleId;
     const id = add('POS PURCHASE TIM HORTONS #4821 TORONTO ON');
 
     const result = runEngine([id]);
@@ -178,7 +180,7 @@ describe('runEngine', () => {
     const { db, sqlite, add, userId } = setup();
     const coffee = categoryIdByName(db, 'Coffee');
     const groceries = categoryIdByName(db, 'Groceries');
-    upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: userId });
+    upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: userId, actorRole: 'admin' });
 
     const manualId = add('POS PURCHASE TIM HORTONS #4821 TORONTO ON');
     db.run(sql`update transactions set category_id = ${groceries}, categorization_source = 'manual' where id = ${manualId}`);
@@ -197,7 +199,7 @@ describe('runEngine', () => {
     const groceries = categoryIdByName(db, 'Groceries');
     const id = add('POS PURCHASE TIM HORTONS #4821 TORONTO ON');
     db.run(sql`update transactions set category_id = ${groceries}, categorization_source = 'bayes', confidence = 2.5 where id = ${id}`);
-    upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: null });
+    upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: null, actorRole: 'admin' });
 
     expect(runEngine([id])).toMatchObject({ processed: 1, categorized: 1 });
     expect(readTxn(sqlite, id)).toMatchObject({ category_id: coffee, categorization_source: 'rule', confidence: null });
@@ -376,9 +378,9 @@ describe('merchant renames', () => {
 
   it('resolves a rename rule with exact-then-longest-contains precedence', () => {
     const { userId } = setup();
-    upsertRenameRule({ pattern: 'MCDONALDS', matchType: 'exact', renameTo: "McDonald's", userId });
-    upsertRenameRule({ pattern: 'MCD', matchType: 'contains', renameTo: 'Mickey D', userId });
-    upsertRenameRule({ pattern: 'MCDONALDS EXPRESS', matchType: 'contains', renameTo: "McDonald's Express", userId });
+    upsertRenameRule({ pattern: 'MCDONALDS', matchType: 'exact', renameTo: "McDonald's", userId, actorRole: 'admin' });
+    upsertRenameRule({ pattern: 'MCD', matchType: 'contains', renameTo: 'Mickey D', userId, actorRole: 'admin' });
+    upsertRenameRule({ pattern: 'MCDONALDS EXPRESS', matchType: 'contains', renameTo: "McDonald's Express", userId, actorRole: 'admin' });
 
     const ctx = buildContext();
     expect(resolveRename('MCDONALDS', ctx)).toBe("McDonald's");
@@ -389,7 +391,7 @@ describe('merchant renames', () => {
 
   it('applies on import through runEngine and leaves the raw text alone', () => {
     const { sqlite, add, userId } = setup();
-    upsertRenameRule({ pattern: 'MCDONALDS', matchType: 'exact', renameTo: "McDonald's", userId });
+    upsertRenameRule({ pattern: 'MCDONALDS', matchType: 'exact', renameTo: "McDonald's", userId, actorRole: 'admin' });
     const id = add('POS PURCHASE MCDONALDS #4821 TORONTO ON');
 
     runEngine([id]);
@@ -408,7 +410,7 @@ describe('merchant renames', () => {
     db.run(sql`update transactions set dedup_hash = 'frozen-hash-value' where id = ${id}`);
     const before = sqlite.prepare('select raw_description, normalized_merchant, dedup_hash from transactions where id = ?').get(id);
 
-    upsertRenameRule({ pattern: 'MCDONALDS', matchType: 'exact', renameTo: "McDonald's", userId });
+    upsertRenameRule({ pattern: 'MCDONALDS', matchType: 'exact', renameTo: "McDonald's", userId, actorRole: 'admin' });
     setTransactionDisplayName({ transactionId: id, displayDescription: 'Lunch place', userId });
     applyRenameRules();
 
@@ -422,7 +424,8 @@ describe('merchant renames', () => {
     const b = add('POS PURCHASE MCDONALDS #1099 OAKVILLE ON', -1500, '2026-03-05');
     const other = add('LOBLAWS #1042 BURLINGTON ON');
 
-    const result = upsertRenameRule({ pattern: 'MCDONALDS', matchType: 'exact', renameTo: "McDonald's", userId });
+    const result = upsertRenameRule({ pattern: 'MCDONALDS', matchType: 'exact', renameTo: "McDonald's", userId, actorRole: 'admin' });
+    if (!result.ok) throw new Error('unexpected refusal');
     expect(result.rowsUpdated).toBe(2);
     expect(readDisplay(sqlite, a).display_description).toBe("McDonald's");
     expect(readDisplay(sqlite, b).display_description).toBe("McDonald's");
@@ -432,8 +435,8 @@ describe('merchant renames', () => {
   it('re-applies when the rule text is edited', () => {
     const { sqlite, add, userId } = setup();
     const id = add('POS PURCHASE MCDONALDS #4821 TORONTO ON');
-    upsertRenameRule({ pattern: 'MCDONALDS', matchType: 'exact', renameTo: "McDonald's", userId });
-    upsertRenameRule({ pattern: 'MCDONALDS', matchType: 'exact', renameTo: 'Golden Arches', userId });
+    upsertRenameRule({ pattern: 'MCDONALDS', matchType: 'exact', renameTo: "McDonald's", userId, actorRole: 'admin' });
+    upsertRenameRule({ pattern: 'MCDONALDS', matchType: 'exact', renameTo: 'Golden Arches', userId, actorRole: 'admin' });
     expect(readDisplay(sqlite, id).display_description).toBe('Golden Arches');
     expect(listRules('rename')).toHaveLength(1);
   });
@@ -444,14 +447,14 @@ describe('merchant renames', () => {
     const ruled = add('POS PURCHASE MCDONALDS #1099 OAKVILLE ON', -1500, '2026-03-05');
 
     setTransactionDisplayName({ transactionId: manual, displayDescription: 'Lunch with Bob', userId });
-    upsertRenameRule({ pattern: 'MCDONALDS', matchType: 'exact', renameTo: "McDonald's", userId });
+    upsertRenameRule({ pattern: 'MCDONALDS', matchType: 'exact', renameTo: "McDonald's", userId, actorRole: 'admin' });
 
     expect(readDisplay(sqlite, manual)).toMatchObject({ display_description: 'Lunch with Bob', display_source: 'manual' });
     expect(readDisplay(sqlite, ruled)).toMatchObject({ display_description: "McDonald's", display_source: 'rename' });
 
     runEngine([manual, ruled]);
     applyRenameRules();
-    upsertRenameRule({ pattern: 'MCDONALDS', matchType: 'exact', renameTo: 'Golden Arches', userId });
+    upsertRenameRule({ pattern: 'MCDONALDS', matchType: 'exact', renameTo: 'Golden Arches', userId, actorRole: 'admin' });
 
     expect(readDisplay(sqlite, manual)).toMatchObject({ display_description: 'Lunch with Bob', display_source: 'manual' });
     expect(readDisplay(sqlite, ruled).display_description).toBe('Golden Arches');
@@ -460,7 +463,7 @@ describe('merchant renames', () => {
   it('clearing a manual rename hands the row back to the rules', () => {
     const { sqlite, add, userId } = setup();
     const id = add('POS PURCHASE MCDONALDS #4821 TORONTO ON');
-    upsertRenameRule({ pattern: 'MCDONALDS', matchType: 'exact', renameTo: "McDonald's", userId });
+    upsertRenameRule({ pattern: 'MCDONALDS', matchType: 'exact', renameTo: "McDonald's", userId, actorRole: 'admin' });
     setTransactionDisplayName({ transactionId: id, displayDescription: 'Lunch with Bob', userId });
     expect(readDisplay(sqlite, id).display_source).toBe('manual');
 
@@ -472,7 +475,7 @@ describe('merchant renames', () => {
     const { sqlite, add, userId } = setup();
     const ruled = add('POS PURCHASE MCDONALDS #4821 TORONTO ON');
     const manual = add('POS PURCHASE MCDONALDS #1099 OAKVILLE ON', -1500, '2026-03-05');
-    upsertRenameRule({ pattern: 'MCDONALDS', matchType: 'exact', renameTo: "McDonald's", userId });
+    upsertRenameRule({ pattern: 'MCDONALDS', matchType: 'exact', renameTo: "McDonald's", userId, actorRole: 'admin' });
     setTransactionDisplayName({ transactionId: manual, displayDescription: 'Lunch with Bob', userId });
 
     const result = deleteRenameRule({ pattern: 'MCDONALDS', matchType: 'exact' });
@@ -492,8 +495,8 @@ describe('merchant renames', () => {
     const { db, sqlite, add, userId } = setup();
     const restaurants = categoryIdByName(db, 'Restaurants');
     const id = add('POS PURCHASE MCDONALDS #4821 TORONTO ON');
-    upsertRuleFromCorrection({ pattern: 'MCDONALDS', matchType: 'exact', ruleKind: 'category', categoryId: restaurants, createdBy: userId });
-    upsertRenameRule({ pattern: 'MCDONALDS', matchType: 'exact', renameTo: "McDonald's", userId });
+    upsertRuleFromCorrection({ pattern: 'MCDONALDS', matchType: 'exact', ruleKind: 'category', categoryId: restaurants, createdBy: userId, actorRole: 'admin' });
+    upsertRenameRule({ pattern: 'MCDONALDS', matchType: 'exact', renameTo: "McDonald's", userId, actorRole: 'admin' });
 
     runEngine([id]);
     expect(readTxn(sqlite, id)).toMatchObject({ category_id: restaurants, categorization_source: 'rule' });
@@ -503,7 +506,7 @@ describe('merchant renames', () => {
 
   it('rename rules never leak into category or transfer matching', () => {
     const { add, userId } = setup();
-    upsertRenameRule({ pattern: 'PAYMENT - THANK YOU', matchType: 'exact', renameTo: 'Card payment', userId });
+    upsertRenameRule({ pattern: 'PAYMENT - THANK YOU', matchType: 'exact', renameTo: 'Card payment', userId, actorRole: 'admin' });
     const ctx = buildContext();
     expect(matchRule('PAYMENT - THANK YOU', 'category', ctx.rules)).toBeNull();
     // The card-payment pattern list still flags it; the rename rule is not what did that.
@@ -514,7 +517,7 @@ describe('merchant renames', () => {
 
   it('rejects an empty rename target', () => {
     const { userId } = setup();
-    expect(() => upsertRenameRule({ pattern: 'MCDONALDS', matchType: 'exact', renameTo: '   ', userId })).toThrowError(/non-empty display name/);
+    expect(() => upsertRenameRule({ pattern: 'MCDONALDS', matchType: 'exact', renameTo: '   ', userId, actorRole: 'admin' })).toThrowError(/non-empty display name/);
   });
 });
 

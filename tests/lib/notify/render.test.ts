@@ -156,9 +156,16 @@ describe('§10.1: the operational events', () => {
     expect(failed.body).toContain('12');
   });
 
-  it('stale_import states the weeks, the last import and why it matters', () => {
-    const { subject, body } = renderEvent({ event: 'stale_import', weeks: 3, lastImportIso: '2026-07-27', daysAgo: 21 });
+  it('stale_import states the account, the weeks, the last import and why it matters', () => {
+    const { subject, body } = renderEvent({
+      event: 'stale_import',
+      weeks: 3,
+      lastImportIso: '2026-07-27',
+      daysAgo: 21,
+      accountName: 'Amex',
+    });
     expect(subject).toBe('No transactions imported in 3 weeks');
+    expect(body).toContain('Amex');
     expect(body).toContain('The last import was 2026-07-27 (21 days ago).');
     expect(body).toContain('Bank exports are how this app learns what you spent.');
   });
@@ -429,7 +436,7 @@ const SAMPLES_BY_EVENT: Record<string, RenderInput[]> = {
   restore_outcome: [
     { event: 'restore_outcome', status: 'success', sourceName: 's', requestedByUsername: 'u', finishedAt: 'f', receiptsRestored: 0, missingReceiptRows: 0, error: null },
   ],
-  stale_import: [{ event: 'stale_import', weeks: 3, lastImportIso: '2026-07-27', daysAgo: 21 }],
+  stale_import: [{ event: 'stale_import', weeks: 3, lastImportIso: '2026-07-27', daysAgo: 21, accountName: 'Amex' }],
   update_available: [
     { event: 'update_available', currentVersion: '1.3.1', latestVersion: '1.4.0', severity: 'major', publishedAt: null, canApplyInApp: true },
     { event: 'update_available', currentVersion: '1.3.1', latestVersion: '1.4.0', severity: 'major', publishedAt: null, canApplyInApp: false },

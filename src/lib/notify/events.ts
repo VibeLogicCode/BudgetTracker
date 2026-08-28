@@ -120,7 +120,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
   {
     id: 'stale_import',
     label: 'Nothing has been imported lately',
-    blurb: 'No bank export has landed for the number of weeks you set.',
+    blurb: 'An account has gone the number of weeks you set with no import, checked per account.',
     audience: 'all',
     trigger: 'daily_slot',
     defaultEnabled: false,
@@ -298,8 +298,13 @@ export function restoreOutcomeKey(finishedAt: string): string {
   return `restore:${finishedAt}`;
 }
 
-export function staleImportKey(mondayIso: string): string {
-  return `stale:${mondayIso}`;
+/**
+ * v1.13.0 ruling R14. BOTH arguments are required, so the compiler names the one call site -- an
+ * optional accountId would leave the old household-wide key reachable, and a stale key that still
+ * exists is a stale key somebody will eventually pass.
+ */
+export function staleImportKey(mondayIso: string, accountId: number): string {
+  return `stale:${mondayIso}:${accountId}`;
 }
 
 /**

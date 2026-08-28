@@ -22,10 +22,10 @@ function packFromSender(includeTransferRules: boolean) {
   const pets = createCategory({ name: 'Pets', parentId: null });
   const vet = createCategory({ name: 'Vet', parentId: pets });
 
-  upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: categoryIdByName(sender.db, 'Coffee'), createdBy: userId });
-  upsertRuleFromCorrection({ pattern: 'LOBLAWS', matchType: 'contains', ruleKind: 'category', categoryId: categoryIdByName(sender.db, 'Groceries'), createdBy: userId });
-  upsertRuleFromCorrection({ pattern: 'RIVERSIDE ANIMAL HOSPITAL', matchType: 'exact', ruleKind: 'category', categoryId: vet, createdBy: userId });
-  upsertRuleFromCorrection({ pattern: 'E-TRANSFER SENT J DOE', matchType: 'exact', ruleKind: 'transfer', categoryId: null, createdBy: userId });
+  upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: categoryIdByName(sender.db, 'Coffee'), createdBy: userId, actorRole: 'admin' });
+  upsertRuleFromCorrection({ pattern: 'LOBLAWS', matchType: 'contains', ruleKind: 'category', categoryId: categoryIdByName(sender.db, 'Groceries'), createdBy: userId, actorRole: 'admin' });
+  upsertRuleFromCorrection({ pattern: 'RIVERSIDE ANIMAL HOSPITAL', matchType: 'exact', ruleKind: 'category', categoryId: vet, createdBy: userId, actorRole: 'admin' });
+  upsertRuleFromCorrection({ pattern: 'E-TRANSFER SENT J DOE', matchType: 'exact', ruleKind: 'transfer', categoryId: null, createdBy: userId, actorRole: 'admin' });
   createProfile({ name: 'Tangerine Chequing', institution: 'Tangerine', mapping: { ...getBuiltinPreset('Scotiabank Chequing/Debit'), dateFormat: 'YYYY-MM-DD' } });
 
   const rules = exportRulesPack({ includeTransferRules });
@@ -107,7 +107,7 @@ describe('rules pack round trip onto a fresh database', () => {
     // no users row yet — insert one so the FK on merchant_rules.created_by holds.)
     const receiverUserId = insertTestUser(current.db, { name: 'Receiver', username: 'receiver' });
     const restaurants = categoryIdByName(current.db, 'Restaurants');
-    upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: restaurants, createdBy: receiverUserId });
+    upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: restaurants, createdBy: receiverUserId, actorRole: 'admin' });
 
     const kept = importRulesPack(rules);
     expect(kept).toMatchObject({ rulesAdded: 0, rulesKept: 1, rulesOverwritten: 0 });

@@ -136,7 +136,8 @@ describe('MUST-3.11: the exact dedup key strings', () => {
     expect(weeklyDigestKey('2026-08-17')).toBe('digest:2026-08-17');
     expect(newSigninKey('2026-08-17T12:00:00.000Z')).toBe('signin:2026-08-17T12:00:00.000Z');
     expect(restoreOutcomeKey('2026-08-17T12:00:00.000Z')).toBe('restore:2026-08-17T12:00:00.000Z');
-    expect(staleImportKey('2026-08-17')).toBe('stale:2026-08-17');
+    // v1.13.0 ruling R14: the key now carries the account id (item AM / PROD-10).
+    expect(staleImportKey('2026-08-17', 4)).toBe('stale:2026-08-17:4');
   });
 
   it('never repeats user or channel inside the key — the unique index already carries them', () => {

@@ -113,7 +113,18 @@ export type RenderInput =
       missingReceiptRows: number;
       error: string | null;
     }
-  | { event: 'stale_import'; weeks: number; lastImportIso: string; daysAgo: number }
+  | {
+      event: 'stale_import';
+      weeks: number;
+      lastImportIso: string;
+      daysAgo: number;
+      /**
+       * v1.13.0 ruling R14 (item AM / PROD-10). Required, not optional: the alert now groups by
+       * account, so every message names which one has gone quiet -- omitting it would let a call
+       * site silently fall back to the old, ambiguous household-wide wording.
+       */
+      accountName: string;
+    }
   | {
       event: 'update_available';
       currentVersion: string;
@@ -428,9 +439,13 @@ export function renderEvent(input: RenderInput): { subject: string; body: string
       return { subject: input.status === 'success' ? 'Restore succeeded' : 'Restore FAILED', body: lines.join('\n') };
     }
     case 'stale_import':
+      // v1.13.0 ruling R14 (item AM / PROD-10): the account is named in its own line so five
+      // separate messages for five separate accounts never read as identical repeats of each
+      // other. The exact "last import was..." sentence is unchanged from before this ruling.
       return {
         subject: `No transactions imported in ${input.weeks} weeks`,
         body: [
+          `${truncateText(input.accountName, NAME_MAX)} has not been imported in ${input.weeks} weeks.`,
           `The last import was ${input.lastImportIso} (${input.daysAgo} days ago).`,
           'Bank exports are how this app learns what you spent.',
         ].join('\n'),

@@ -19,8 +19,8 @@ function setup() {
   current = createSeededTestDb();
   const admin = insertTestUser(current.db, { name: 'Alice', username: 'alice', role: 'admin' });
   const member = insertTestUser(current.db, { name: 'Bob', username: 'bob', role: 'member' });
-  upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: categoryIdByName(current.db, 'Coffee'), createdBy: admin });
-  upsertRuleFromCorrection({ pattern: 'E-TRANSFER SENT J DOE', matchType: 'exact', ruleKind: 'transfer', categoryId: null, createdBy: admin });
+  upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: categoryIdByName(current.db, 'Coffee'), createdBy: admin, actorRole: 'admin' });
+  upsertRuleFromCorrection({ pattern: 'E-TRANSFER SENT J DOE', matchType: 'exact', ruleKind: 'transfer', categoryId: null, createdBy: admin, actorRole: 'admin' });
   return { adminToken: createSession(admin).token, memberToken: createSession(member).token };
 }
 

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../../helpers/db';
+import { setAccountActive } from '@/lib/accounts';
 import { DEFAULT_USER_SETTINGS, saveEmailTarget, saveSmtp, saveUserSettings, setPref } from '@/lib/notify/config';
 import { resetOutboxPumpForTests } from '@/lib/notify/outbox';
 import { resetNotifySenderForTests, setNotifySenderForTests } from '@/lib/notify/send';
@@ -41,18 +42,27 @@ function emailUser(): number {
   return userId;
 }
 
-function importAt(userId: number, createdAt: string): void {
-  const accountId = insertTestAccount(t.db);
+/** Inserts an import row. Reuses `accountId` when given (so the SAME account's clock advances);
+ * otherwise creates a fresh account. Always returns the account id used. */
+function importAt(userId: number, createdAt: string, accountId?: number): number {
+  const id = accountId ?? insertTestAccount(t.db);
   t.db.run(
     sql`insert into imports (account_id, profile_id, filename, imported_by, rows_added, rows_duplicate, rows_error, created_at)
-        values (${accountId}, null, ${'export.csv'}, ${userId}, 10, 0, 0, ${createdAt})`,
+        values (${id}, null, ${'export.csv'}, ${userId}, 10, 0, 0, ${createdAt})`,
   );
+  return id;
 }
 
 function keys(): string[] {
   return (t.sqlite.prepare('select dedup_key from notification_outbox order by id').all() as { dedup_key: string }[]).map(
     (r) => r.dedup_key,
   );
+}
+
+function pendingOutbox(userId: number): { body: string; dedupKey: string }[] {
+  return t.sqlite
+    .prepare('select body, dedup_key as dedupKey from notification_outbox where user_id = ? order by id')
+    .all(userId) as { body: string; dedupKey: string }[];
 }
 
 describe('decision 10: an install with zero imports never fires', () => {
@@ -84,20 +94,20 @@ describe('MUST-3.11: one message per calendar week while stale', () => {
   it('dedupes within a week and fires again the following week', () => {
     const userId = emailUser();
     saveUserSettings(userId, { ...DEFAULT_USER_SETTINGS, staleImportWeeks: 3 });
-    importAt(userId, '2026-07-01T12:00:00.000Z');
+    const accountId = importAt(userId, '2026-07-01T12:00:00.000Z');
     expect(evaluateStaleImport({ userId, now: new Date('2026-08-17T12:00:00Z'), tz: TZ })).toBe(1); // Monday
     expect(evaluateStaleImport({ userId, now: new Date('2026-08-19T12:00:00Z'), tz: TZ })).toBe(0); // Wednesday
     expect(evaluateStaleImport({ userId, now: new Date('2026-08-24T12:00:00Z'), tz: TZ })).toBe(1); // next Monday
-    expect(keys()).toEqual(['stale:2026-08-17', 'stale:2026-08-24']);
+    expect(keys()).toEqual([`stale:2026-08-17:${accountId}`, `stale:2026-08-24:${accountId}`]);
   });
 });
 
-describe('MUST-14.8: any imports row resets the clock, including a SimpleFIN sync', () => {
-  it('a recent import silences the event', () => {
+describe('MUST-14.8: any imports row resets the SAME account clock, including a SimpleFIN sync', () => {
+  it('a recent import to the same account silences the event', () => {
     const userId = emailUser();
     saveUserSettings(userId, { ...DEFAULT_USER_SETTINGS, staleImportWeeks: 3 });
-    importAt(userId, '2026-07-01T12:00:00.000Z');
-    importAt(userId, '2026-08-16T12:00:00.000Z');
+    const accountId = importAt(userId, '2026-07-01T12:00:00.000Z');
+    importAt(userId, '2026-08-16T12:00:00.000Z', accountId);
     expect(evaluateStaleImport({ userId, now: new Date('2026-08-17T12:00:00Z'), tz: TZ })).toBe(0);
   });
 });
@@ -114,5 +124,43 @@ describe('the body', () => {
     };
     expect(row.subject).toBe('No transactions imported in 3 weeks');
     expect(row.body).toContain('The last import was 2026-07-27 (21 days ago).');
+  });
+});
+
+describe('ruling R14: the stale-import alert names the account', () => {
+  let userId = 0;
+  let accountA = 0;
+  let accountB = 0;
+
+  beforeEach(() => {
+    userId = emailUser();
+    saveUserSettings(userId, { ...DEFAULT_USER_SETTINGS, staleImportWeeks: 3 });
+    accountA = insertTestAccount(t.db, { name: 'Chequing' });
+    accountB = insertTestAccount(t.db, { name: 'Amex', type: 'credit' });
+    importAt(userId, '2026-08-26T12:00:00.000Z', accountA); // 1 day before 'now' below: fresh
+    importAt(userId, '2026-07-28T12:00:00.000Z', accountB); // 30 days before 'now' below: stale
+  });
+
+  it('fires once for the lagging account and not for the fresh one', () => {
+    expect(evaluateStaleImport({ userId, now: new Date('2026-08-27T09:00:00Z'), tz: 'America/Toronto' })).toBe(1);
+    const queued = pendingOutbox(userId);
+    expect(queued).toHaveLength(1);
+    expect(queued[0]?.body).toContain('Amex');
+    expect(queued[0]?.dedupKey).toBe(`stale:2026-08-24:${accountB}`);
+  });
+
+  it('a second evaluation in the same week enqueues nothing', () => {
+    evaluateStaleImport({ userId, now: new Date('2026-08-27T09:00:00Z'), tz: 'America/Toronto' });
+    expect(evaluateStaleImport({ userId, now: new Date('2026-08-28T09:00:00Z'), tz: 'America/Toronto' })).toBe(0);
+  });
+
+  it('the next Monday is a new key, so it nags again', () => {
+    evaluateStaleImport({ userId, now: new Date('2026-08-27T09:00:00Z'), tz: 'America/Toronto' });
+    expect(evaluateStaleImport({ userId, now: new Date('2026-09-03T09:00:00Z'), tz: 'America/Toronto' })).toBe(1);
+  });
+
+  it('an inactive account never fires, and an install with no imports still fires nothing', () => {
+    setAccountActive(accountB, false);
+    expect(evaluateStaleImport({ userId, now: new Date('2026-08-27T09:00:00Z'), tz: 'America/Toronto' })).toBe(0);
   });
 });

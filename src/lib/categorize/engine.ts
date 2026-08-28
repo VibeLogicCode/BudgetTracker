@@ -346,12 +346,17 @@ export function confirmCategory(input: {
     .run();
 
   if (input.createRule !== false && row.normalizedMerchant.length > 0) {
+    // v1.13.0 ruling R4 (item AH / SEC-6): confirmCategory does not yet take its own caller's
+    // actorRole (that lands with the specific action that needs it -- see upsertRenameRule below
+    // for the one Task 8 threads end to end). 'admin' here reproduces this function's UNCHANGED
+    // pre-R4 behaviour: unconditional overwrite, exactly as every existing caller already expects.
     upsertRuleFromCorrection({
       pattern: row.normalizedMerchant,
       matchType: 'exact',
       ruleKind: 'category',
       categoryId: input.categoryId,
       createdBy: input.userId,
+      actorRole: 'admin',
       at,
     });
   }
@@ -467,12 +472,15 @@ export function setTransferFlag(input: { transactionId: number; isTransfer: bool
   if (input.isTransfer) {
     // EXACT match only: a contains rule learned from an e-transfer description
     // would over-match every unrelated e-transfer.
+    // actorRole: 'admin' reproduces this function's pre-R4 behaviour (see the identical note on
+    // confirmCategory, above) -- unconditional overwrite, unchanged.
     upsertRuleFromCorrection({
       pattern: row.normalizedMerchant,
       matchType: 'exact',
       ruleKind: 'transfer',
       categoryId: null,
       createdBy: input.userId,
+      actorRole: 'admin',
       at,
     });
     // Re-flagging as a transfer must undo any earlier "not a transfer" override
@@ -489,6 +497,7 @@ export function setTransferFlag(input: { transactionId: number; isTransfer: bool
       ruleKind: 'not_transfer',
       categoryId: null,
       createdBy: input.userId,
+      actorRole: 'admin',
       at,
     });
   } else {
@@ -523,12 +532,15 @@ export function applyCategoryToMatching(input: {
     confirmCategory({ transactionId: id, categoryId: input.categoryId, userId: input.userId, createRule: false, at: input.at });
   }
   if (ids.length > 0) {
+    // actorRole: 'admin' reproduces this function's pre-R4 behaviour (see the identical note on
+    // confirmCategory, above) -- unconditional overwrite, unchanged.
     upsertRuleFromCorrection({
       pattern: input.normalizedMerchant,
       matchType: 'exact',
       ruleKind: 'category',
       categoryId: input.categoryId,
       createdBy: input.userId,
+      actorRole: 'admin',
       at: input.at,
     });
   }
@@ -694,29 +706,39 @@ export function setTransactionDisplayName(input: {
     .run();
 }
 
-/** "All matching + future": create/update the rule, then bulk-apply it retroactively. */
+/**
+ * "All matching + future": create/update the rule, then bulk-apply it retroactively.
+ *
+ * v1.13.0 ruling R4 (item AH / SEC-6). Now threads `actorRole` through to `upsertRuleFromCorrection`
+ * and can refuse. A refused upsert must not bulk-apply anything: the rule the household has is
+ * unchanged, so a retroactive pass would rewrite rows to a name nobody agreed on.
+ */
 export function upsertRenameRule(input: {
   pattern: string;
   matchType: MatchType;
   renameTo: string;
   userId: number;
+  /** The ACTOR's role, not the rule's. An admin may write over anyone's rule. */
+  actorRole: 'admin' | 'member';
   at?: Date;
-}): { ruleId: number; rowsUpdated: number } {
+}): { ok: true; ruleId: number; rowsUpdated: number } | { ok: false; reason: 'owned_by_another'; ownerName: string } {
   const renameTo = input.renameTo.trim();
   if (renameTo.length === 0) throw new Error('A rename rule needs a non-empty display name');
   if (input.pattern.trim().length === 0) throw new Error('A rename rule needs a pattern');
 
-  const ruleId = upsertRuleFromCorrection({
+  const result = upsertRuleFromCorrection({
     pattern: input.pattern,
     matchType: input.matchType,
     ruleKind: 'rename',
     categoryId: null,
     renameTo,
     createdBy: input.userId,
+    actorRole: input.actorRole,
     at: input.at,
   });
+  if (!result.ok) return result;
   const rowsUpdated = applyRenameRules(undefined, buildContext());
-  return { ruleId, rowsUpdated };
+  return { ok: true, ruleId: result.ruleId, rowsUpdated };
 }
 
 export function deleteRenameRule(input: { pattern: string; matchType: MatchType }): {
