@@ -785,3 +785,589 @@ Bill, none of those fields can ever hold a value, so the card is four guaranteed
 the Installments section. Fix shape: hide inapplicable fields via the same kind gates the add/edit
 forms already use, on the display side too, instead of rendering an empty placeholder for a field
 the kind was never allowed to fill in.
+
+---
+
+## v1.12.1 candidates from the 2026-08-27 fresh-eyes review (bugfix batch, all small)
+
+**S. Sub-category budget limits are silently dropped from every household total.**
+Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md MON-1
+
+What: A household that budgets at the child level (e.g. Food > Groceries $600, Food >
+Restaurants $200) sees each child's limit correctly on `/budgets`, but the household summary,
+the dashboard tile and safe-to-spend all report $0.00 budgeted — `budgetTotals()` iterates
+top-level rows only and never descends into `row.children`. Archiving a child compounds it: its
+spend keeps rolling into the parent while its limit disappears, so the parent looks over budget
+for no visible reason.
+
+Evidence: `src/lib/budgets.ts:471-488` (`budgetTotals` never touches `row.children`);
+`src/lib/budgets.ts:449-458` (top-level-only rows handed to it).
+
+Fix: Flatten rows before totaling (reuse `flattenBudgetRows` from
+`src/lib/notify/evaluate/budget.ts`), deciding explicitly whether a parent's own limit supersedes
+its children's or sums with them (recommended: supersede, since `spentCents` already includes the
+children's). Render archived children with a limit or spend as read-only rows instead of dropping
+them.
+
+Effort: S · Proposed release: v1.12.1
+
+**T. Manual loan assign ignores an existing bill-installment link.**
+Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md MON-2
+
+What: The rule matcher enforces cross-table exclusivity between loans and bill installments
+(`alreadyLinked()` unions both tables), but the manual "assign to loan" path never checks
+`bill_installments` — a transaction already marking an installment paid can be hand-assigned to a
+loan and decrement its balance by the same money, and the over-link warning is blind to it
+because it only sums `loan_payments` links.
+
+Evidence: `src/lib/loans.ts:540-575` (`assignTransactionToLoan`, no `bill_installments` query);
+`src/app/(app)/transactions/actions.ts:284-289` (over-link warning sums `loan_payments` only).
+
+Fix: Extract the union query behind `alreadyLinked` into an exported
+`paymentLinksForTransaction(txnId)` and call it from `assignTransactionToLoan` — refuse with a
+named error, or at minimum feed the bill leg into the existing over-link warning.
+
+Effort: S · Proposed release: v1.12.1
+
+**U. Transactions row category select creates/deletes household merchant rules on change.**
+Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md UX-2
+
+What: On Transactions, picking a category from the row's auto-save select doesn't just tag that
+row — it silently creates or overwrites a household-wide merchant rule and trains the Bayes
+classifier; picking "Uncategorized" deletes that merchant's rule. Nothing on screen tells the
+user this happened, since `AutoSave` only reads `result.error` and discards the action's
+confirming sentence. Review page's teaching behavior is intentional and should stay as-is.
+
+Evidence: `src/lib/categorize/engine.ts:321-330` (`upsertRuleFromCorrection` runs whenever
+`createRule !== false`); `src/app/(app)/transactions/actions.ts:112` (caller passes no
+`createRule`); `src/app/(app)/transactions/transactions-client.tsx:507-529` (the row select).
+
+Fix: Pass `createRule: false` from the transactions row select so a row edit is genuinely
+single-row and reversible — leave Review alone, since that screen is about teaching the
+categorizer. Make `clearCategory`'s rule-deletion require a deliberate control rather than a
+plain select change.
+
+Effort: S · Proposed release: v1.12.1
+
+**V. useAutoSave has no try/catch; a thrown action fails silently.**
+Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md UX-3
+
+What: The hook awaits the server action but only handles a returned `{error}` — a thrown action
+(SQLITE_BUSY during the nightly backup, a full disk, several library calls that throw by design)
+fails invisibly: no message, no revert, the control keeps showing a value the database never
+accepted.
+
+Evidence: `src/components/ui/AutoSave.tsx:56-70` (no try/catch around the action call); throwing
+callers include `src/app/(app)/transactions/actions.ts:112` (`confirmCategory`, throws at
+`src/lib/categorize/engine.ts:284`) and `src/app/(app)/budgets/actions.ts:50,58,204`.
+
+Fix: Wrap the await in try/catch inside `useAutoSave`, set `status: 'error'`, call
+`hooks.onError()`, and show a generic "Could not save — the app may be busy. Try again."
+sentence.
+
+Effort: S · Proposed release: v1.12.1
+
+**W. No error.tsx / not-found.tsx / global-error.tsx anywhere.**
+Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md UX-1
+
+What: Any server-side failure (locked SQLite during backup, a bad row) or a stale bookmark to a
+deleted item renders Next's bare default error/404 screen — unstyled, no navigation, no theme, no
+way back — instead of the app's own chrome.
+
+Evidence: no `error.tsx`, `not-found.tsx` or `global-error.tsx` anywhere under `src/app`;
+`notFound()` is called from `src/app/(app)/warranties/[id]/page.tsx:19,21` and
+`src/app/(app)/warranties/new/page.tsx:17` with nothing to catch it.
+
+Fix: Add `src/app/(app)/error.tsx` (plain sentence, "Try again" `reset()` button, link to
+/dashboard), `src/app/(app)/not-found.tsx` (same chrome, link back), and
+`src/app/global-error.tsx` for the root-layout case.
+
+Effort: S · Proposed release: v1.12.1
+
+**X. Blanking a budget limit field wipes the limit for all future months.**
+Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md UX-4
+
+What: The budget limit input commits on blur; an emptied value is not "no change" — it clears the
+budget from that month forward via `clearBudget`. Someone who selects the number to retype it and
+gets distracted has silently deleted a recurring limit, with only a tick as feedback.
+
+Evidence: `src/app/(app)/budgets/actions.ts:49-53` (calls `clearBudget`); `src/lib/budgets.ts:101-103`
+(upsert of `amountCents: null`); `src/app/(app)/budgets/budgets-client.tsx:104-118` (commits on
+blur).
+
+Fix: Treat an emptied field as a no-op in `AutoSaveTextInput` when the previous value was
+non-empty; move "clear this budget" to an explicit small button in the cell instead.
+
+Effort: S · Proposed release: v1.12.1
+
+**Y. Three money inputs lack inputMode="decimal".**
+Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md UX-9
+
+What: "Add a transaction → Amount", "Contribution amount" and "New goal → Target amount" have no
+`inputMode`, so phones show the full QWERTY keyboard instead of a number pad — exactly the fields
+a kid logging cash or a relative dropping money into a goal touches. Every other amount field in
+the app already sets it.
+
+Evidence: `src/app/(app)/transactions/transactions-client.tsx:637`;
+`src/app/(app)/goals/goals-client.tsx:110,184`.
+
+Fix: Add `inputMode="decimal"` to all three fields.
+
+Effort: S · Proposed release: v1.12.1
+
+**Z. Password change does not revoke other sessions.**
+Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md SEC-3
+
+What: `changePasswordAction` verifies the current password, calls `setUserPassword`, then
+returns — it never destroys any other session. A captured session cookie (shared laptop, lent
+phone) keeps working for up to 30 more days after the victim "fixes" it by changing their
+password. Two sibling flows (forced first-login change, admin reset) already do this correctly.
+
+Evidence: `src/app/(app)/settings/actions.ts:80-96` (no session call after `setUserPassword`);
+contrast `src/app/(auth)/change-password/actions.ts:55-56` (`destroyOtherSessionsForUser`).
+
+Fix: After `setUserPassword` at `src/app/(app)/settings/actions.ts:93`, read the session cookie
+and call `destroyOtherSessionsForUser(user.id, token)` — the same lines
+`change-password/actions.ts` already uses.
+
+Effort: S · Proposed release: v1.12.1
+
+**AA. Disabling TOTP requires no password re-auth.**
+Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md SEC-4
+
+What: `disableTotpAction` takes no password, no current TOTP code, and no confirmation beyond the
+button click. Anyone at an unlocked browser or holding a stolen session can strip the account's
+second factor in one click, and the owner is never notified — there is no `mfa_disabled`
+notification event.
+
+Evidence: `src/app/(app)/settings/actions.ts:131-139` (entire action, no password check); contrast
+`src/app/(app)/settings/users/actions.ts:96` (admin MFA reset calls `destroyAllSessionsForUser`).
+
+Fix: Require the current password in `disableTotpAction` (mirror the `verifyPassword` block at
+`settings/actions.ts:87-90`), then call `destroyOtherSessionsForUser`. Add `mfa_disabled` and
+`password_changed` events to `src/lib/notify/events.ts` with `defaultEnabled: true`.
+
+Effort: S · Proposed release: v1.12.1
+
+**AB. Rate limiter trusts X-Real-IP without TRUST_PROXY.**
+Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md SEC-5
+
+What: The login action substitutes the client-controlled `X-Real-IP` header for the socket
+address and passes it as `clientIpFromHeaders`' "trusted" `socketIp` argument. With `TRUST_PROXY`
+off (the default), an attacker who varies the header defeats the per-(username, IP) lockout layer
+entirely, and the same forged value is rendered verbatim into the "New sign-in" alert.
+
+Evidence: `src/app/(auth)/login/actions.ts:51` (passes `x-real-ip` as `socketIp`);
+`src/lib/auth/ratelimit.ts:140-150` (returns `socketIp` unconditionally when `trustProxy` is
+false).
+
+Fix: Ignore `x-real-ip` in `ratelimit.ts:141` unless `env.trustProxy` is on (same treatment
+`x-forwarded-for` already gets); have `login/actions.ts:51` pass `null` otherwise. Validate/truncate
+the value before it reaches `sessions.ip` or `renderEvent`.
+
+Effort: S · Proposed release: v1.12.1
+
+**AC. Session cookie Secure flag only under TRUST_PROXY.**
+Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md SEC-7
+
+What: The login/setup actions pass a literal `'http:'` as the protocol, so the only path to a
+Secure cookie is `TRUST_PROXY=1` plus a matching `X-Forwarded-Proto`. An app behind an HTTPS
+reverse proxy with `TRUST_PROXY` left at its default `0` gets a 30-day session cookie sent over
+any plain-HTTP request to the same host, with nothing detecting the mismatch and no HSTS header
+to close the gap browser-side.
+
+Evidence: `src/app/(auth)/login/actions.ts:83-92` (calls `shouldUseSecureCookie('http:', ...)`);
+`src/lib/auth/security-headers.ts:37-48` (no `Strict-Transport-Security`).
+
+Fix: Detect the mismatch (`TRUST_PROXY` off but an incoming request carries
+`X-Forwarded-Proto: https`) and log a loud warning / admin banner. Emit HSTS only when the
+resolved connection is HTTPS.
+
+Effort: S · Proposed release: v1.12.1
+
+**AD. Forced-password-change gate misses report export routes.**
+Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md SEC-9
+
+What: The forced-password-change gate lives in the app layout and deliberately exempts `/api/*`
+routes. But `/api/reports/export` and `/api/reports/tax-export` are `/api/*` routes that stream
+the entire household ledger — so an account still holding an admin-typed temporary password can
+pull everything before ever choosing its own password.
+
+Evidence: `src/app/(app)/layout.tsx:10-22` (gate is page-layer only, `/api/*` exempt by design);
+`src/app/api/reports/export/route.ts:21-22,55` (session check only, then full export).
+
+Fix: Add a `mustChangePassword` check to the two report-export routes and to
+`/api/backup/download`, returning 403 with a "finish setting your password first" message.
+
+Effort: S · Proposed release: v1.12.1
+
+**AE. undoImport leaves balance snapshots behind.**
+Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md MON-5
+
+What: `commitImport` writes a `source='csv'` balance snapshot per statement date; `undoImport`
+carefully reverses Bayes training, loan links and bill `paid_at`, but never touches
+`account_balance_snapshots` — there is no delete path for that table anywhere in `src/`. Undoing
+an import into the wrong account leaves that account permanently anchored on the wrong bank's
+balance, silently swinging net worth.
+
+Evidence: `src/lib/import/commit.ts:257-259` (snapshot write inside commit);
+`src/lib/import/commit.ts:390-435` (`undoImport`, no snapshot handling); `src/lib/balance.ts:117-171`
+(stale snapshot stays authoritative forever).
+
+Fix: Record which import wrote each snapshot (an `import_id` column, or capture the
+`(account_id, date)` set in `CommitResult`) and delete exactly those rows in `undoImport`, inside
+the same transaction. Short of that, add an admin "delete this snapshot" control on Settings →
+Accounts.
+
+Effort: S · Proposed release: v1.12.1
+
+## v1.13.0 candidates from the 2026-08-27 fresh-eyes review (privacy model — needs owner ruling first)
+
+**AF. No per-user data boundary (SEC-1 + PROD-1 combined).**
+Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md SEC-1, PROD-1
+
+What: There is no per-user data boundary anywhere except budgets' write scope and the
+notification tables. Any signed-in person — including friends and extended family with their own
+logins — can read every transaction, every warranty/loan/subscription/bill (including by guessing
+`/warranties/<id>`), every receipt image, every goal contribution, the whole ledger via CSV
+export, and every other member's personal budget on one `/budgets` page load. This is documented
+design intent for a two-adult household ("owner_user_id is ATTRIBUTION, not access control") and
+is the wrong design for the stated population of friends and extended family with their own
+logins.
+
+Evidence: `src/app/(app)/warranties/actions.ts:69-76` (explicit design statement);
+`src/lib/transactions.ts:166-168` (`getTransaction` has no filter);
+`src/app/(app)/warranties/[id]/page.tsx:17-21` (no ownership comparison).
+
+Fix: Owner ruling needed between two options — (a) one household per container for friends
+(documented in INSTALL.md, zero code), or (b) a `users.visibility` `'self'` flag for kids, adding
+an owner predicate to roughly six list helpers (transactions, accounts, goals, loans, warranty
+items, reports) plus the `/warranties/[id]` page and the receipts route ownership check.
+Whichever path, add a `tests/ops/` invariant guard (style of `balance-invariants.test.ts`)
+asserting every exported `get*`/`list*` in those modules takes a viewer id, plus a route-level
+test that user B's session gets 404 from another user's receipt.
+
+Effort: L · Proposed release: v1.13.0
+
+**AG. Destructive actions unscoped and no audit log.**
+Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md SEC-2
+
+What: Deletion is as unscoped as reading, and there is no audit table in the schema. Any member
+can delete any warranty/loan/subscription item and its receipts, delete any individual receipt
+file, and undo any import (deleting every transaction it introduced plus training/links) — and
+because no row records the actor, nobody can tell afterward which account did it.
+
+Evidence: `src/app/(app)/warranties/actions.ts:411-433` (`deleteWarrantyAction`, no owner check);
+`src/app/api/import/undo/route.ts:18-29` (only `userFromRequest` + `importExists` before
+`undoImport`).
+
+Fix: Gate destructive operations behind ownership-or-admin, reusing `canActOnOwner()` from
+`src/app/(app)/goals/actions.ts:27-29`, in `warranties/actions.ts` delete/deleteReceipt and
+`api/import/undo/route.ts`. Add a minimal append-only `audit_log(id, at, userId, action, entity,
+entityId)` written by the delete paths and `undoImport`, surfaced on an admin page.
+
+Effort: M · Proposed release: v1.13.0
+
+**AH. Members can silently overwrite admin-only merchant rules.**
+Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md SEC-6
+
+What: Rule management at `/settings/managers` is admin-only, but four member-level actions
+(rename-for-all, fix-category-apply-to-all, mark-transfer) write the same `merchant_rules` table
+through the back door, and the upsert overwrites an existing rule's category, rename text and
+`createdBy` on conflict — so a member can silently rewrite an admin's rule and the row then claims
+the member authored it, with no way for that member to undo it.
+
+Evidence: `src/app/(app)/settings/managers/actions.ts:122-125,173-176` (admin-only management);
+`src/lib/categorize/rules.ts:85-88` (`.onConflictDoUpdate` overwrites `createdBy`).
+
+Fix: Either let members read `/settings/managers`' rule list read-only, or (smaller, do
+regardless) preserve `createdBy` on conflict and add a `lastModifiedBy` column so overwrites are
+attributable.
+
+Effort: S · Proposed release: v1.13.0
+
+**AI. A person cannot exist without a login (attribution-only users).**
+Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md PROD-8
+
+What: Attribution pickers are built from `listUsers()`, so tracking spending on/by someone — a
+young child, a relative living with the household, a housemate who doesn't want an account —
+requires creating a real login and a temporary password for them, carrying `mustChangePassword`
+on an account nobody will sign into. And every login created for a real person immediately gets
+full read of everything (AF above).
+
+Evidence: `src/app/(app)/transactions/page.tsx:69`, `src/app/(app)/budgets/page.tsx:72` (both
+build pickers from `listUsers()`); `src/db/schema.ts:19,22` (only `role` and `isActive`, no
+`canSignIn` notion).
+
+Fix: Allow a user row with logins disabled — a `canSignIn` boolean, or treat `isActive = false`
+users as still selectable for attribution while `attemptLogin` continues to refuse them. Resolve
+the existing inconsistency where `budgets/page.tsx:72` filters to active users but
+`transactions/page.tsx:69` does not.
+
+Effort: S · Proposed release: v1.13.0
+
+## v1.14.0 candidates from the 2026-08-27 fresh-eyes review (household features)
+
+**AJ. Anomaly/duplicate/price-creep insights computed but never shown on screen.**
+Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md PROD-2
+
+What: Unusual-charge detection, duplicate-charge detection and subscription price-creep are all
+implemented and tested but reachable only via a Telegram or email notification — a member with no
+channel configured never learns Netflix went up or a restaurant charged twice.
+
+Evidence: `src/lib/predict/anomalies.ts` (`unusualVerdict`, `creepVerdict`, `findDuplicates`,
+`hasEnoughHouseholdHistory`); only importer is `src/lib/notify/evaluate/anomalies.ts:10` — no
+page or component under `src/app/` imports it.
+
+Fix: A self-hiding "Needs a look" card on the dashboard (same pattern as `LoansCard`/
+`ComingUpCard`) listing this month's unusual charges, duplicate pairs and crept subscriptions,
+each row linking to the transaction. Purely a read-only card over functions that already exist
+and are tested.
+
+Effort: S · Proposed release: v1.14.0
+
+**AK. Quick-add transaction.**
+Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md PROD-4
+
+What: With no bank sync, hand entry is the main loop for cash and e-transfers, but the only way
+in is scrolling past the filter bar, bulk toolbar and every table row to a seven-field form at
+the very bottom of `/transactions`. Nothing remembers the last account or category, and the PWA
+manifest declares no `shortcuts`.
+
+Evidence: `src/app/(app)/transactions/transactions-client.tsx:617-666` (form position/fields);
+`src/app/manifest.ts` (no `shortcuts` entry).
+
+Fix: A manifest `shortcuts` entry ("Add a transaction" → `/transactions#add`), an "Add" button in
+the page header that scrolls to and focuses the form, and defaulting the account/category selects
+to the user's last pick.
+
+Effort: S · Proposed release: v1.14.0
+
+**AL. saveNoteAction dead code; notes promised in help but unreachable; thin search.**
+Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md PROD-6
+
+What: The help page tells users a transaction's note is editable, but there is no note UI
+anywhere — `saveNoteAction` has exactly one occurrence in the repo (its own definition), manual
+entry hard-codes `notes: null`, and notes export to CSV always empty. Transaction search is
+`LIKE` over description/merchant only, not notes or amount, unlike the warranty side's proper
+FTS5 index.
+
+Evidence: `src/app/(app)/transactions/actions.ts:169-190` (`saveNoteAction`, no call sites);
+`src/app/(app)/help/content.tsx:161-168` (help page claims it's editable);
+`src/lib/transactions.ts:126-137` (search scope).
+
+Fix: Add "Note…" to the row menu wired to the existing action, add a note field to manual entry,
+include notes in the search `OR` clause.
+
+Effort: S · Proposed release: v1.14.0
+
+**AM. Stale-import alert per account.**
+Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md PROD-10
+
+What: The stale-import alert looks at the single most recent import across the whole household,
+so importing one account silences the alert for every other account, even one untouched since
+February — exactly backwards for a household on manual CSV across five accounts.
+
+Evidence: `src/lib/notify/evaluate/stale.ts:24-30` (one query, no `accountId` grouping; dedup key
+is week-only).
+
+Fix: Group the query by `accountId` over active CSV-managed accounts, compare each account's
+newest import against `staleImportWeeks`, and extend the dedup key to carry the account id. No
+migration needed.
+
+Effort: S · Proposed release: v1.14.0
+
+**AN. Bridge from due bill installment to a recorded transaction.**
+Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md PROD-3
+
+What: The app knows rent, the property-tax installment and the insurance renewal are coming, and
+will remind someone, but when the money actually moves the household must wait for the statement
+or retype it by hand — and for e-transfers or the cash account, the statement never arrives at
+all. There is no recurring/scheduled transaction feature.
+
+Evidence: `src/lib/bills.ts:81-146` (reminders only, no auto-create); repo-wide search for
+recurring/scheduled-transaction creation returns nothing.
+
+Fix: Not a scheduler — a "Record this payment" button on the Coming-up card and bill detail page
+that opens manual entry pre-filled with the bill's amount/date/description/category, and on save
+marks the installment paid and links the transaction (`bill_installments.paidTxnId` already
+exists for this).
+
+Effort: M · Proposed release: v1.14.0
+
+**AO. OFX/QFX import and more Canadian bank presets.**
+Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md PROD-5
+
+What: Only four bank presets exist (TD Chequing, TD Visa, Scotiabank Chequing, Amex Canada) — RBC
+(the largest bank in the country), BMO, CIBC, Tangerine, Simplii, EQ and Desjardins have none. The
+app also accepts only `.csv`, one file at a time.
+
+Evidence: `src/lib/import/presets.ts:7-142` (four `BUILTIN_PRESETS`); repo-wide search for
+`ofx|qfx|qif` returns nothing.
+
+Fix: Cheap: add RBC/BMO/CIBC/Tangerine preset objects (validated against a real scrubbed export
+each). Higher value: an OFX/QFX reader — OFX's bank-assigned `FITID` would make dedup exact
+instead of hash-heuristic, and `transactions.externalId` / `transactions_external_id_uq` already
+exist for SimpleFIN and would take OFX rows with no migration.
+
+Effort: M · Proposed release: v1.14.0
+
+**AP. Savings and asset account types for net worth.**
+Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md PROD-9
+
+What: An account can only be chequing, credit or cash, so net worth is chequing plus cash minus
+credit/loans — the two largest numbers on a Canadian household's balance sheet (registered
+accounts, the house) can't be entered at all.
+
+Evidence: `src/db/schema.ts:85` (`type` enum, three values); `src/lib/networth.ts:217-250`
+(`netWorthOverTime`).
+
+Fix: Add `savings` and `asset` account types, with `asset` accounts excluded from import and
+spend reporting, carrying only a manually-typed balance updated periodically. An enum widen, a
+migration, and a filter on the import account picker.
+
+Effort: M · Proposed release: v1.14.0
+
+**AQ. Sinking fund for irregular annual bills via rollover.**
+Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md PROD-11
+
+What: Budgets and bills are two separate systems that never meet — `safeToSpend` reports
+`budgetedRemainingCents`, `projectedSpendCents` and `billsDueCents` as three separate numbers, and
+a budget row has no idea an installment is coming, so the month the $1,800 tax bill lands, the
+budget simply blows.
+
+Evidence: `src/lib/bills.ts:164-185` (three figures, never combined); `src/lib/budgets.ts:352-383`
+(`effectiveBudget`'s rollover carry, the closest existing thing to a sinking fund).
+
+Fix: A read-side join between `bill_installments` and the budget row showing the required monthly
+set-aside beside the limit ("$1,800 due 30 Jun — set aside $150/month, $900 carried so far"). No
+new storage; rollover is already 80% of an envelope.
+
+Effort: M · Proposed release: v1.14.0
+
+**AR. Kids' own lane (self scope + goals + attribution).**
+Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md PROD-7
+
+What: Nothing in the app is built for a child — no allowance, no chore money, no view-only role,
+no "what's mine" home screen. A per-child savings goal already works but every other child and
+friend can see it (PROD-1/AF above).
+
+Evidence: repo-wide search for allowance/chore/kid features returns no feature code;
+`src/lib/goals.ts:217-228` (goals list unfiltered).
+
+Fix: Do not build an allowance subsystem — the primitives already exist (a per-child cash account
+via `getOrCreateCashAccount`, a goal owned by that child, manual entries). What's missing is the
+view: with the `visibility: 'self'` flag from AF above, a child signing in lands on a dashboard
+scoped to themselves.
+
+Effort: M · Proposed release: v1.14.0
+
+**AS. Per-user full data export and user deletion.**
+Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md PROD-12
+
+What: The only complete export is the admin's whole-database tar.gz (everyone's data, in a format
+only this app reads); CSV exports cover transactions and the tax year only. Users are
+deactivate-only — there is no delete, and no way to remove or hand over one person's data if they
+leave.
+
+Evidence: `src/app/api/backup/download/route.ts:26-45`; `src/lib/auth/users.ts:185` ("Deactivate,
+never delete"); `src/app/(app)/settings/users/actions.ts` (no delete action).
+
+Fix: (a) a "download everything" JSON export, one file per table, admin-only, reusing existing
+query helpers. (b) a per-user offboarding action: export that user's rows, reassign or delete
+their owned rows, then deactivate. Note PROD-1/AF's container-per-household recommendation
+removes most of the urgency for friends specifically.
+
+Effort: M · Proposed release: v1.14.0
+
+## Later / minor, from the 2026-08-27 fresh-eyes review
+
+One item each, kept brief. Status for all: OPEN — from 2026-08-27 fresh-eyes review; see
+docs/reviews/2026-08-27-fresh-eyes-review.md at the id named in each title.
+
+**AT. UX-5 — concurrent edits: the loser's screen keeps showing their own stale value.** Auto-save
+controls seed state from props once and never resync, so when two people edit the same row the
+server takes the last write but the loser's browser goes on showing their own value indefinitely.
+Evidence: `src/components/ui/AutoSave.tsx:128,181,280` (no `useEffect` resync). Fix: resync the
+control when the server's value changes — a `key` per call site including the server value, or a
+`useEffect` that resyncs when `defaultValue` changes and nothing is pending/focused. Effort: M.
+
+**AU. UX-6 — single-tap destructive actions with no confirmation.** Deactivate, Reset MFA, Remove
+(bill installment) and Unassign (loan) all fire on one tap, unlike every other destructive action
+in the app, which confirms first. Evidence: `src/app/(app)/settings/users/users-manager.tsx:108-117`;
+`src/app/(app)/warranties/[id]/warranty-detail-client.tsx:520-525`. Fix: follow the backups
+inline-confirm pattern for the account-level actions, a plain `confirm()` for Remove/Unassign.
+Effort: S.
+
+**AV. UX-7 — touch targets under 44px throughout the row controls.** The kebab trigger is 32px,
+menu items ~26px tall, auto-save controls are `text-xs` with 4px padding — exactly where the
+destructive actions (AU) and rule-writing select (U) live. Evidence:
+`src/components/ui/RowMenu.tsx:162,47-48`; `src/components/ui/AutoSave.tsx:30`. Fix: `h-11 w-11`
+trigger and `py-2.5` menu items below `sm:`; bump auto-save controls to `py-2 text-sm`. Effort: S.
+
+**AW. UX-8 — kebab actions drop keyboard focus to the page body.** Escape returns focus to the
+kebab button, but choosing a menu item does not — focus lands on `document.body` with no
+announcement. Evidence: `src/components/ui/RowMenu.tsx:153,122-126` (`refocus` only true on the
+Escape path). Fix: pass `close: () => close(true)` in the provider so the trigger is refocused on
+every close path. Effort: S.
+
+**AX. UX-10 — nothing happens on screen while a slow page loads.** No `loading.tsx` anywhere and
+every page is `force-dynamic`, so Reports shows no spinner or skeleton until the whole payload
+arrives. Evidence: no `loading.tsx` under `src/app`; `src/app/(app)/reports/page.tsx:22`
+(`force-dynamic`). Fix: add `loading.tsx` to `(app)/reports` and `(app)/transactions`; narrow the
+whole-page `revalidatePath` calls that re-render every row on each auto-save. Effort: M.
+
+**AY. UX-11 — no safe-area insets on an installed iPhone home-screen app.** The manifest declares
+standalone display, but nothing accounts for the safe area, so the sticky header sits under the
+status bar and the footer under the home indicator. Evidence: `src/app/manifest.ts:24`; `grep -rn
+"safe-area|env(safe" src/` returns nothing. Fix: add `viewportFit: 'cover'` and
+`env(safe-area-inset-top/bottom)` padding to header/footer. Effort: S.
+
+**AZ. UX-12 — shutdown kills in-flight writes; a migration failure is a silent crash loop.** The
+SIGTERM handler exits immediately without closing the HTTP server or SQLite handle, and a boot
+failure's only record is a `docker logs` line. Evidence: `src/instrumentation-node.ts:95-106`
+(`process.exit(0)`, no `closeDb()`). Fix: call `closeDb()` in the signal handler with a short
+grace period; log a framed, unmissable message naming the migration on a boot failure. Effort: M.
+
+**BA. MON-3 — un-marking a bill installment does not stick.** `unmarkInstallmentPaid` clears
+`paid_at`/`paid_txn_id`, but that column is also the matcher's only "already used" record, so the
+transaction becomes a fresh matcher candidate again and gets silently re-marked. Evidence:
+`src/lib/warranty/installments.ts:226-234`; `src/lib/loans.ts:322-341` (`alreadyLinked` keyed on
+`paid_txn_id`). Fix: record the suppression instead of erasing it — a nullable `unlinked_at` or a
+small `payment_match_exclusions(txn_id)` table. Effort: M.
+
+**BB. MON-4 — balance-snapshot source authority (ruling R3) documented but not implemented.**
+Three docblocks state snapshots should rank `simplefin > csv > manual`, but
+`recordBalanceSnapshot`'s `onConflictDoUpdate` is unconditional last-writer-wins. Evidence:
+`src/lib/networth.ts:63-84,41-47`. Fix: implement the rank in the `ON CONFLICT` clause, or remove
+the R3 claim from all three docblocks and state "last write wins" honestly. Effort: S.
+
+**BC. MON-6 — runEngine's in-memory eligibility filter silently drops the splits guard.** The
+`ELIGIBLE` SQL predicate correctly excludes split transactions, but `runEngine(txnIds)` re-derives
+eligibility in JS and drops the splits half — latent today, but the next call site added anywhere
+inherits the hole. Evidence: `src/lib/categorize/engine.ts:102-115,168`. Fix: have
+`selectRowsByIds` carry the splits check so one predicate serves both paths. Effort: S.
+
+**BD. MON-7 — a bill payment marks the earliest unpaid installment regardless of amount or date.**
+`markEarliestUnpaid` never compares the transaction's amount or date — deliberate, but one missed
+mark permanently offsets the whole schedule by one. Evidence: `src/lib/loans.ts:355-375`. Fix:
+prefer the installment whose `due_date` is nearest the transaction's own date within a window
+(~±45 days) before falling back to earliest-unpaid. Effort: M.
+
+**BE. SEC-8 — backup archive is the whole ledger plus password hashes, minus the credential key.**
+`/api/backup/download` snapshots `budget.db` plus every receipt — every password hash and
+encrypted credential ciphertext — but not `secret.key`, so a stolen backup yields everything
+except the notification/bank credentials. Evidence: `src/lib/backup/archive.ts:99-141`;
+`src/lib/env.ts:93-137`. Fix: document in INSTALL.md that a downloaded backup is the complete
+financial record plus password hashes and must be stored encrypted. Effort: S.
+
+**BF. SEC-10 — a TOTP code stays valid for its full ±30s window and can be replayed.**
+`verifyTotp` runs with `window: 1` (~90s validity) and nothing records a code as spent, so a
+code observed in that window can be reused. Evidence: `src/lib/auth/totp.ts:22,71-79`. Fix:
+record the last accepted TOTP counter per user (`users.totpLastCounter`) and reject any code at
+or before it. Effort: S.
+
+**BG. SEC-11 — /api/health tells an unauthenticated caller the exact build version.** The
+healthcheck is correctly public, but returns `version` on every 200 response. Evidence:
+`src/app/api/health/route.ts:62`. Fix: drop `version` from the 200 response, keep it only on 503
+responses where its stated purpose actually applies. Effort: S.
