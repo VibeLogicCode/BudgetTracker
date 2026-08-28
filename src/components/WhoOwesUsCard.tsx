@@ -39,8 +39,15 @@ export function WhoOwesUsCard({
   totalLentCents: number;
   selfScoped: boolean;
 }) {
-  const shown = loans.filter((loan) => (loan.currentBalanceCents ?? 0) > 0);
+  // Review fix-round: matches LoansCard's own rule. A lent loan with a NULL (untracked) balance
+  // used to be silently dropped by the old `> 0` filter, the same as if it had been fully repaid
+  // -- those are not the same thing, and the household should still see "there's a loan here, we
+  // just don't have a balance for it" rather than nothing at all. Only a loan actually repaid to
+  // zero drops off the list.
+  const shown = loans.filter((loan) => loan.currentBalanceCents !== 0);
   if (shown.length === 0) return null;
+
+  const hasUntrackedBalance = shown.some((loan) => loan.currentBalanceCents === null);
 
   return (
     <Card>
@@ -48,8 +55,13 @@ export function WhoOwesUsCard({
         title={selfScoped ? 'Owed to you' : 'Who owes us'}
         description={selfScoped ? 'Money you have lent and not been repaid.' : 'Money the household has lent and not been repaid.'}
         action={
-          <span className="money-lg" aria-label={`Total ${formatCents(totalLentCents)}`}>
-            {formatCents(totalLentCents)}
+          <span className="flex items-center gap-2">
+            {hasUntrackedBalance ? (
+              <span className="text-xs text-subtle">(excludes loans without a tracked balance)</span>
+            ) : null}
+            <span className="money-lg" aria-label={`Total ${formatCents(totalLentCents)}`}>
+              {formatCents(totalLentCents)}
+            </span>
           </span>
         }
       />
@@ -57,7 +69,9 @@ export function WhoOwesUsCard({
         {shown.map((loan) => (
           <li key={loan.itemId} className="flex items-center justify-between gap-4 border-b border-line px-5 py-3 last:border-b-0 sm:px-6">
             <span className="font-medium text-ink">{loan.name}</span>
-            <span className="money whitespace-nowrap">{formatCents(loan.currentBalanceCents ?? 0)}</span>
+            <span className="money whitespace-nowrap">
+              {loan.currentBalanceCents === null ? '—' : formatCents(loan.currentBalanceCents)}
+            </span>
           </li>
         ))}
       </ul>

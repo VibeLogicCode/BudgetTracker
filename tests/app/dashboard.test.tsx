@@ -201,6 +201,35 @@ describe('DashboardPage (ruling R2)', () => {
     }
   });
 
+  // Review fix-round: the page guide's "Loans, net worth ... stay household-wide" clause (and
+  // the new Loans-vs-"Who owes us" sentence) is household-viewer copy -- a self viewer has no
+  // Loans card and no person pills, so that whole clause is gated on !selfScoped and replaced
+  // with one short sentence about their own "Owed to you" card (the BM/P11 defect class).
+  it('a self viewer\'s page guide never claims anything is household-wide', async () => {
+    const { childId } = await setup();
+    currentUser.value = { id: childId, name: 'Kid', username: 'kid', role: 'member', visibility: 'self' };
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+
+    const guide = screen.getByText('What is this page for?').closest('details');
+    expect(guide).not.toBeNull();
+    expect(guide!.textContent).not.toMatch(/household/i);
+    expect(guide!.textContent).not.toMatch(/Who owes us/);
+    expect(guide!.textContent).toMatch(/Owed to you/);
+  });
+
+  it('a household viewer\'s page guide still explains Loans vs "Who owes us"', async () => {
+    const { adultId } = await setup();
+    currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+
+    const guide = screen.getByText('What is this page for?').closest('details');
+    expect(guide).not.toBeNull();
+    expect(guide!.textContent).toMatch(/household-wide/);
+    expect(guide!.textContent).toMatch(/Who owes us/);
+  });
+
   // v1.13.1 review A: DashboardPage passed listAttributablePeople() into QuickAddTransaction
   // without the selfScoped gate the rest of the file uses -- a self viewer's RSC payload
   // carried the whole household roster even though nothing on the page renders it.

@@ -165,17 +165,25 @@ export default async function DashboardPage({
 
       <PageGuide>
         <p>
-          This is the current month at a glance: what the household spent, what came in, and how
-          much of any limit you set is left. Every figure here is read back from imported
-          statements, so nothing on this screen is edited in place.
+          This is the current month at a glance: what {selfScoped ? 'you' : 'the household'} spent,
+          what came in, and how much of any limit you set is left. Every figure here is read back
+          from imported statements, so nothing on this screen is edited in place.
         </p>
-        <p>
-          The pills beside the greeting scope the spending figures to one household member, or to
-          everyone. Loans, net worth and upcoming bills stay household-wide whichever pill is
-          chosen, because a balance owed is not attributed to a person the way a transaction is.
-          A loan can point either way: the Loans card is what the household still owes, and
-          &quot;Who owes us&quot; is money the household has lent out and not been repaid.
-        </p>
+        {selfScoped ? (
+          // Review fix-round: the household clause below (pills, Loans card, "stay
+          // household-wide") describes controls and cards a self viewer never sees -- there are
+          // no pills for them and no Loans card, so that copy would be describing someone
+          // else's page (the BM/P11 defect class). This is the whole of what applies to them.
+          <p>&quot;Owed to you&quot; lists money you have lent out and not yet been repaid.</p>
+        ) : (
+          <p>
+            The pills beside the greeting scope the spending figures to one household member, or to
+            everyone. Loans, net worth and upcoming bills stay household-wide whichever pill is
+            chosen, because a balance owed is not attributed to a person the way a transaction is.
+            A loan can point either way: the Loans card is what the household still owes, and
+            &quot;Who owes us&quot; is money the household has lent out and not been repaid.
+          </p>
+        )}
         <p>
           Cards on this page hide themselves when they have nothing to say. A short page means
           there is nothing on file for them yet, not that something failed.

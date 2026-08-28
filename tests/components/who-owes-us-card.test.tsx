@@ -78,4 +78,32 @@ describe('WhoOwesUsCard (spec BU, ruling P11)', () => {
     // The copy must not imply a household total to a child (Global Constraints, ruling P11).
     expect(document.body.textContent).not.toMatch(/household/i);
   });
+
+  // Review fix-round: this card used to drop a lent loan with an untracked (null) balance
+  // silently, the same defect LoansCard was fixed for. Matching LoansCard's own treatment: a
+  // null-balance row still shows (as "—"), and the total footnote says so.
+  it('a lent loan with an untracked (null) balance shows a dash and the footnote, excluded from the total', () => {
+    render(
+      <WhoOwesUsCard
+        loans={[
+          lent({ itemId: 1, name: 'Loan to a friend', currentBalanceCents: 50_000 }),
+          lent({ itemId: 2, name: 'Untracked loan', currentBalanceCents: null }),
+        ]}
+        totalLentCents={50_000}
+        selfScoped={false}
+      />,
+    );
+    expect(screen.getByText('Untracked loan')).toBeTruthy();
+    expect(screen.getByText('—')).toBeTruthy();
+    expect(screen.getByText('(excludes loans without a tracked balance)')).toBeTruthy();
+    expect(screen.getByLabelText('Total $500.00')).toBeTruthy();
+  });
+
+  it('a lent loan with only an untracked (null) balance does not hide the card', () => {
+    render(
+      <WhoOwesUsCard loans={[lent({ name: 'Untracked loan', currentBalanceCents: null })]} totalLentCents={0} selfScoped={false} />,
+    );
+    expect(screen.getByText('Untracked loan')).toBeTruthy();
+    expect(screen.getByText('—')).toBeTruthy();
+  });
 });
