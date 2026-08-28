@@ -520,7 +520,7 @@ If it becomes worth fixing: raise the worker RPC timeout, or reduce reporter cha
 
 ---
 
-## G. Receipt suggestions read the wrong amount and vendor (~2-3h, not started)
+## G. Receipt suggestions read the wrong amount and vendor — DROPPED 2026-08-28 (owner ruling: removed from the pending list; analysis kept for the record)
 
 Reported 2026-08-24 after a real test on an Android phone in Chrome. **The engine is not the
 problem and neither is the phone.** The failure is in `src/lib/warranty/suggest.ts` — 160 lines of
