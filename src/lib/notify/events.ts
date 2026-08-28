@@ -94,6 +94,22 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     defaultEnabled: true,
   },
   {
+    id: 'password_changed',
+    label: 'Your password was changed',
+    blurb: 'Somebody changed the password on your account.',
+    audience: 'all',
+    trigger: 'immediate',
+    defaultEnabled: true,
+  },
+  {
+    id: 'mfa_disabled',
+    label: 'Two-factor was switched off',
+    blurb: 'Two-factor authentication was turned off on your account.',
+    audience: 'all',
+    trigger: 'immediate',
+    defaultEnabled: true,
+  },
+  {
     id: 'restore_outcome',
     label: 'A restore finished',
     blurb: 'A backup was restored into this install, successfully or not.',
@@ -263,6 +279,19 @@ export function weeklyDigestKey(slotDateIso: string): string {
 
 export function newSigninKey(sessionCreatedAt: string): string {
   return `signin:${sessionCreatedAt}`;
+}
+
+/**
+ * v1.12.1 (item AA / SEC-4). Keyed on the moment it happened, which never recurs -- the same
+ * MUST-3.12 shape newSigninKey uses, and the reason neither needs a calendar bound: a key that
+ * can never be generated a second time cannot be resurrected by the 400-day retention sweep.
+ */
+export function passwordChangedKey(atIso: string): string {
+  return `password_changed:${atIso}`;
+}
+
+export function mfaDisabledKey(atIso: string): string {
+  return `mfa_disabled:${atIso}`;
 }
 
 export function restoreOutcomeKey(finishedAt: string): string {

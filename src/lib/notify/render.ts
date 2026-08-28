@@ -101,6 +101,8 @@ export type RenderInput =
       overBudget: readonly string[];
     }
   | { event: 'new_signin'; name: string; atLabel: string; tz: string; ip: string; userAgent: string | null }
+  | { event: 'password_changed'; name: string; atLabel: string; tz: string }
+  | { event: 'mfa_disabled'; name: string; atLabel: string; tz: string }
   | {
       event: 'restore_outcome';
       status: 'success' | 'failed';
@@ -397,6 +399,24 @@ export function renderEvent(input: RenderInput): { subject: string; body: string
       lines.push('If this was not you, change your password in Settings.');
       return { subject: 'New sign-in to your account', body: lines.join('\n\n') };
     }
+    case 'password_changed':
+      return {
+        subject: 'Your password was changed',
+        body: [
+          `${truncateText(input.name, NAME_MAX)}'s password was changed at ${input.atLabel} (${input.tz}).`,
+          'Every other signed-in session was signed out.',
+          'If this was not you, sign in and change it again straight away.',
+        ].join('\n\n'),
+      };
+    case 'mfa_disabled':
+      return {
+        subject: 'Two-factor authentication was switched off',
+        body: [
+          `Two-factor authentication was turned off on ${truncateText(input.name, NAME_MAX)}'s account at ${input.atLabel} (${input.tz}).`,
+          'Every other signed-in session was signed out.',
+          'If this was not you, sign in, change your password and turn it back on.',
+        ].join('\n\n'),
+      };
     case 'restore_outcome': {
       const lines = [
         `Source: ${truncateText(input.sourceName, NAME_MAX)}`,

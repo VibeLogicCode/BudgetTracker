@@ -5,7 +5,8 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { isSameOrigin } from '@/lib/auth/csrf';
 import { passwordSchema, verifyPassword } from '@/lib/auth/password';
-import { requireAdmin, requireUser } from '@/lib/auth/session';
+import { requireAdmin, requireUser, destroyOtherSessionsForUser } from '@/lib/auth/session';
+import { SESSION_COOKIE_NAME } from '@/lib/auth/session-constants';
 import {
   clearTotpEnrollment,
   decryptTotpSecret,
@@ -21,6 +22,7 @@ import {
 import { findUserByUsername, setUserPassword } from '@/lib/auth/users';
 import { parseChangelog } from '@/lib/changelog';
 import type { ChangelogRelease } from '@/lib/changelog';
+import { raiseAccountSecurityEvent } from '@/lib/notify/raise';
 import { applyUpdate, runUpdateCheck } from '@/lib/update/check';
 import { boundRelease, fetchRemoteChangelog } from '@/lib/update/github';
 import { checkUpdateCheckNow, checkUpdateReview } from '@/lib/update/ratelimit';
@@ -91,8 +93,18 @@ export async function changePasswordAction(_prev: ProfileFormState, formData: Fo
     return { error: 'Current password is incorrect.' };
   }
   await setUserPassword(user.id, parsed.data.newPassword);
+
+  // v1.12.1 (item Z / SEC-3). The two lines src/app/(auth)/change-password/actions.ts:55-56 has
+  // always had, and this action never did. A captured session cookie -- a shared laptop, a lent
+  // phone, plain HTTP on the LAN -- kept working for up to 30 more days after the victim's
+  // instinctive remedy, because nothing deleted it. There is no session list in the UI, so this
+  // was the only escape and it did not exist.
+  const token = (await cookies()).get(SESSION_COOKIE_NAME)?.value;
+  if (token) destroyOtherSessionsForUser(user.id, token);
+
+  raiseAccountSecurityEvent({ userId: user.id, event: 'password_changed', at: new Date() });
   revalidatePath('/settings');
-  return { message: 'Password updated.' };
+  return { message: 'Password updated. Every other session was signed out.' };
 }
 
 export async function beginTotpEnrollmentAction(): Promise<ProfileFormState> {
@@ -128,14 +140,41 @@ export async function confirmTotpEnrollmentAction(_prev: ProfileFormState, formD
   return { message: 'Two-factor authentication is on. Save these recovery codes now.', recoveryCodes: codes };
 }
 
-export async function disableTotpAction(): Promise<ProfileFormState> {
+/**
+ * v1.12.1 (item AA / SEC-4). This took no password, no current code and no confirmation beyond a
+ * button click, so anyone at an unlocked browser -- or holding a stolen session cookie -- could
+ * strip the account's second factor in one click and convert a temporary foothold into a durable
+ * one, with the owner never told. Enrollment is done carefully by comparison: the candidate secret
+ * is held server-side in an encrypted, short-lived cookie precisely so a client cannot supply its
+ * own. The teardown was the unprotected half of the pair.
+ *
+ * Three changes, matching what the ADMIN MFA reset already does
+ * (src/app/(app)/settings/users/actions.ts:96): the current password is verified with the same
+ * block changePasswordAction uses, every other session is destroyed, and the owner is told.
+ */
+export async function disableTotpAction(_prev: ProfileFormState, formData: FormData): Promise<ProfileFormState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
 
   const user = await requireUser();
+  const parsed = z
+    .object({ currentPassword: z.string().min(1, 'Enter your current password.') })
+    .safeParse({ currentPassword: formData.get('currentPassword') ?? '' });
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Enter your current password.' };
+
+  const record = findUserByUsername(user.username);
+  if (!record || !(await verifyPassword(record.passwordHash, parsed.data.currentPassword))) {
+    return { error: 'Current password is incorrect.' };
+  }
+
   clearTotpEnrollment(user.id);
   await clearPendingTotpSecret();
+
+  const token = (await cookies()).get(SESSION_COOKIE_NAME)?.value;
+  if (token) destroyOtherSessionsForUser(user.id, token);
+
+  raiseAccountSecurityEvent({ userId: user.id, event: 'mfa_disabled', at: new Date() });
   revalidatePath('/settings');
-  return { message: 'Two-factor authentication is off.' };
+  return { message: 'Two-factor authentication is off. Every other session was signed out.' };
 }
 
 export interface UpdateActionState {

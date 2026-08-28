@@ -423,6 +423,9 @@ const SAMPLES_BY_EVENT: Record<string, RenderInput[]> = {
     },
   ],
   new_signin: [{ event: 'new_signin', name: 'S', atLabel: 'x', tz: 'UTC', ip: '1.2.3.4', userAgent: null }],
+  // v1.12.1 (item AA / SEC-4): the account-security pair sits beside new_signin here too.
+  password_changed: [{ event: 'password_changed', name: 'S', atLabel: 'x', tz: 'UTC' }],
+  mfa_disabled: [{ event: 'mfa_disabled', name: 'S', atLabel: 'x', tz: 'UTC' }],
   restore_outcome: [
     { event: 'restore_outcome', status: 'success', sourceName: 's', requestedByUsername: 'u', finishedAt: 'f', receiptsRestored: 0, missingReceiptRows: 0, error: null },
   ],
@@ -727,5 +730,31 @@ describe('coming_due, the installment variant (ruling B15)', () => {
       overdue: false,
     });
     expect(body.startsWith(`${ITEM_KIND_LABELS.bill} "X"`)).toBe(true);
+  });
+});
+
+describe('v1.12.1: the two account-security events (item AA / SEC-4)', () => {
+  it('renders the password-changed body', () => {
+    const { subject, body } = renderEvent({
+      event: 'password_changed',
+      name: 'Alice',
+      atLabel: '2026-08-27 09:14',
+      tz: 'America/Toronto',
+    });
+    expect(subject).toBe('Your password was changed');
+    expect(body).toContain('Alice');
+    expect(body).toContain('2026-08-27 09:14');
+    expect(body).toContain('signed out');
+  });
+
+  it('renders the mfa-disabled body', () => {
+    const { subject, body } = renderEvent({
+      event: 'mfa_disabled',
+      name: 'Alice',
+      atLabel: '2026-08-27 09:14',
+      tz: 'America/Toronto',
+    });
+    expect(subject).toBe('Two-factor authentication was switched off');
+    expect(body).toContain('turn it back on');
   });
 });

@@ -5,7 +5,14 @@ import { readEnv } from '@/lib/env';
 import { readRestoreState } from '@/lib/backup/restore';
 import { todayIso } from '@/lib/dates';
 import { adminUserIds } from '@/lib/notify/config';
-import { backupFailedKey, newSigninKey, restoreOutcomeKey, syncFailedKey } from '@/lib/notify/events';
+import {
+  backupFailedKey,
+  mfaDisabledKey,
+  newSigninKey,
+  passwordChangedKey,
+  restoreOutcomeKey,
+  syncFailedKey,
+} from '@/lib/notify/events';
 import { enqueue, kickOutbox } from '@/lib/notify/outbox';
 import { renderEvent } from '@/lib/notify/render';
 
@@ -75,6 +82,49 @@ export function raiseNewSignin(input: {
 function signinName(userId: number): string {
   const row = getDb().select({ name: users.name }).from(users).where(eq(users.id, userId)).get();
   return row?.name ?? 'Somebody';
+}
+
+/**
+ * v1.12.1 (item AA / SEC-4). The account-security pair, raised from
+ * src/app/(app)/settings/actions.ts. Same three properties as raiseNewSignin, for the same
+ * reasons: it NEVER throws into its caller (MUST-6.19 -- a notification failure may not break a
+ * password change), it enqueues synchronously and kicks the pump without awaiting it (MUST-6.2),
+ * and its dedup key is a never-recurring timestamp (MUST-3.12).
+ */
+export function raiseAccountSecurityEvent(input: {
+  userId: number;
+  event: 'password_changed' | 'mfa_disabled';
+  at: Date;
+}): void {
+  try {
+    const { tz } = readEnv();
+    const atLabel = `${todayIso(input.at, tz)} ${new Intl.DateTimeFormat('en-GB', {
+      timeZone: tz,
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    }).format(input.at)}`;
+    const atIso = input.at.toISOString();
+
+    const { subject, body } = renderEvent({
+      event: input.event,
+      name: signinName(input.userId),
+      atLabel,
+      tz,
+    });
+
+    const result = enqueue({
+      userId: input.userId,
+      eventId: input.event,
+      dedupKey: input.event === 'mfa_disabled' ? mfaDisabledKey(atIso) : passwordChangedKey(atIso),
+      subject,
+      body,
+      at: input.at,
+    });
+    if (result.inserted.length > 0) kickOutbox(input.at);
+  } catch (error) {
+    console.error(`[notify] ${input.event} raise failed`, error);
+  }
 }
 
 /**

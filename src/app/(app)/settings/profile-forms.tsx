@@ -18,8 +18,8 @@ const initialState: ProfileFormState = {};
 export function ProfileForms({ totpEnabled, recoveryLeft }: { totpEnabled: boolean; recoveryLeft: number }) {
   const [passwordState, passwordAction] = useActionState(changePasswordAction, initialState);
   const [totpState, totpAction] = useActionState(confirmTotpEnrollmentAction, initialState);
+  const [disableState, disableAction] = useActionState(disableTotpAction, initialState);
   const [enrollment, setEnrollment] = useState<ProfileFormState['enrollment']>(undefined);
-  const [notice, setNotice] = useState<string | null>(null);
 
   return (
     <div className="grid gap-8 lg:grid-cols-2">
@@ -57,13 +57,26 @@ export function ProfileForms({ totpEnabled, recoveryLeft }: { totpEnabled: boole
                 </ul>
               </Notice>
             ) : null}
-            <button
-              type="button"
-              onClick={async () => setNotice((await disableTotpAction()).message ?? null)}
-              className="btn btn--secondary w-fit"
-            >
-              Turn off
-            </button>
+            {/* v1.12.1 (item AA / SEC-4): a form, not a one-click button. Turning the second
+                factor off is the moment an attacker holding a session converts it into permanent
+                access, so it costs the password -- the same bar changePasswordAction sets one
+                column to the left. */}
+            <form action={disableAction} className="flex flex-col gap-3">
+              <FormError message={disableState.error} />
+              {disableState.message ? <Notice tone="success">{disableState.message}</Notice> : null}
+              <Field label="Current password" hint="Confirms it is you before the second factor comes off.">
+                <input
+                  name="currentPassword"
+                  type="password"
+                  autoComplete="current-password"
+                  required
+                  className={inputClass}
+                />
+              </Field>
+              <SubmitButton className="w-fit" variant="danger">
+                Turn off
+              </SubmitButton>
+            </form>
           </>
         ) : enrollment ? (
           <form action={totpAction} className="flex flex-col gap-3">
@@ -103,7 +116,6 @@ export function ProfileForms({ totpEnabled, recoveryLeft }: { totpEnabled: boole
             </button>
           </>
         )}
-        {notice ? <Notice tone="success">{notice}</Notice> : null}
       </div>
     </div>
   );
