@@ -14,6 +14,7 @@ describe('the app error boundary (item W / UX-1, ruling R7)', () => {
     expect(screen.queryByText(/SQLITE_BUSY/)).toBeNull();
     // The digest IS shown: it is the string that makes a support conversation possible, and it
     // carries none of the message.
+    expect(screen.getByText(/Reference/)).toBeTruthy();
     expect(document.body.textContent).toContain('abc123');
   });
 
@@ -32,6 +33,9 @@ describe('the app error boundary (item W / UX-1, ruling R7)', () => {
   it('renders with no digest at all', () => {
     render(<AppError error={new Error('x')} reset={() => {}} />);
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    // The digest block is conditional on error.digest; with none supplied it must not render at
+    // all, not just render an empty value.
+    expect(screen.queryByText(/Reference/)).toBeNull();
   });
 });
 
