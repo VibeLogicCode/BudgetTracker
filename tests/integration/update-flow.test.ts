@@ -145,7 +145,7 @@ it('MUST-19.6: dormant -> enabled -> patch auto-applies -> major never does -> d
   stopScheduler();
 
   // 2. Enable. One tick fetches once; a second within 24 hours fetches nothing.
-  await actions.enableUpdateChecksAction();
+  await actions.enableUpdateChecksAction({}, new FormData());
   stubRelease(`v${APP_VERSION}`);
   runUpdateTick(new Date(base));
   await vi.waitFor(() => expect(fetchCalls).toHaveLength(1));
@@ -179,11 +179,11 @@ it('MUST-19.6: dormant -> enabled -> patch auto-applies -> major never does -> d
   expect(reviewed.release?.groups[0]?.items[0]).toBe('Everything.');
 
   // 6. ...and the apply action refuses a stale version.
-  const applyStale = await actions.applyUpdateAction(form({ version: '0.0.1' }));
+  const applyStale = await actions.applyUpdateAction({}, form({ version: '0.0.1' }));
   expect(applyStale.error).toContain('no longer the one on offer');
 
   // 7. Disable: the state is cleared and further ticks fetch nothing (MUST-3.4, MUST-1.1).
-  await actions.disableUpdateChecksAction();
+  await actions.disableUpdateChecksAction({}, new FormData());
   const before = fetchCalls.length;
   for (let i = 0; i < 12; i += 1) runUpdateTick(new Date(base + 3 * DAY + i * 5 * 60_000));
   expect(fetchCalls.length).toBe(before);
