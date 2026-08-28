@@ -335,9 +335,19 @@ export function WarrantyDetailClient({
             <CardBody className="pt-5">
               <dl className="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
                 <Detail label="Type">{item.typeName ?? '—'}</Detail>
-                <Detail label="Vendor">{item.vendor ?? '—'}</Detail>
-                <Detail label="Model">{item.model ?? '—'}</Detail>
-                <Detail label="Serial number">{item.serial ?? '—'}</Detail>
+                {/* Item R (ruling P6). The gate alone is NOT the condition: productFieldsAllowedForKind's own
+                    docblock says it decides what a form OFFERS, never what a page may hide, because an item
+                    whose type changed after it was saved can still hold a model. So a row disappears only when
+                    the kind forbids it AND it is empty -- which for a Bill is all four, every time. */}
+                {productFieldsAllowedForKind(item.kind) || item.vendor !== null ? (
+                  <Detail label="Vendor">{item.vendor ?? '—'}</Detail>
+                ) : null}
+                {productFieldsAllowedForKind(item.kind) || item.model !== null ? (
+                  <Detail label="Model">{item.model ?? '—'}</Detail>
+                ) : null}
+                {productFieldsAllowedForKind(item.kind) || item.serial !== null ? (
+                  <Detail label="Serial number">{item.serial ?? '—'}</Detail>
+                ) : null}
                 <Detail label={purchaseLabel}>{item.purchaseDate}</Detail>
                 <Detail label={termWordLabel}>
                   {item.isLifetime
@@ -351,7 +361,11 @@ export function WarrantyDetailClient({
                     per-kind open-ended word instead; a non-lifetime item with a genuinely unknown
                     term still falls through to the em dash, unchanged. */}
                 <Detail label={expiryLabel}>{item.isLifetime ? openEndedDisplayLabel(item.kind) : (item.expiryDate ?? '—')}</Detail>
-                <Detail label="Price">{item.priceCents === null ? '—' : <Money cents={item.priceCents} plain />}</Detail>
+                {/* Item R: a loan legitimately carries a price-shaped figure, so its gate is in
+                    the condition too, alongside the same "gate OR held value" rule as above. */}
+                {productFieldsAllowedForKind(item.kind) || loanFieldsAllowedForKind(item.kind) || item.priceCents !== null ? (
+                  <Detail label="Price">{item.priceCents === null ? '—' : <Money cents={item.priceCents} plain />}</Detail>
+                ) : null}
                 {billingAllowedForKind(item.kind) ? (
                   // review fix: cycle and amount are validated as a pair at the schema boundary
                   // (BILLING_PAIR_ERROR) -- render the value only when BOTH are present. Rendering

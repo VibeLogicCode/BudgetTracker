@@ -5,6 +5,7 @@ import { ManagersClient } from '@/app/(app)/settings/managers/managers-client';
 import { getBuiltinPreset } from '@/lib/import/presets';
 import type { ProfileRecord, ProfileUsage } from '@/lib/import/presets';
 import type { CategoryRecord } from '@/lib/categories';
+import type { MerchantRuleRecord } from '@/lib/categorize/rules';
 
 // Server actions aren't under test here -- only the UI the v1.6.0 deactivation feature adds
 // (spec 2026-08-22, MUST-4.1: an inactive badge and an activate/deactivate toggle on every
@@ -39,16 +40,42 @@ function profile(over: Partial<ProfileRecord> = {}): ProfileRecord {
 }
 
 function baseProps(
-  overrides: { profiles?: ProfileRecord[]; profileUsage?: Record<number, ProfileUsage>; categories?: CategoryRecord[] } = {},
+  overrides: {
+    profiles?: ProfileRecord[];
+    profileUsage?: Record<number, ProfileUsage>;
+    categories?: CategoryRecord[];
+    rules?: MerchantRuleRecord[];
+  } = {},
 ) {
   return {
     categories: overrides.categories ?? [],
-    rules: [],
+    rules: overrides.rules ?? [],
     profiles: overrides.profiles ?? [profile()],
     profileUsage: overrides.profileUsage ?? {},
     rulesPackRows: [],
     profilePackRows: [],
   };
+}
+
+function rule(over: Partial<MerchantRuleRecord> = {}): MerchantRuleRecord {
+  return {
+    id: 1,
+    pattern: 'TIM HORTONS',
+    matchType: 'exact',
+    ruleKind: 'category',
+    categoryId: null,
+    renameTo: null,
+    createdBy: null,
+    hitCount: 0,
+    lastUsedAt: null,
+    createdAt: '2026-08-16T00:00:00.000Z',
+    lastModifiedBy: null,
+    ...over,
+  };
+}
+
+function renderManagers(overrides: Parameters<typeof baseProps>[0] = {}) {
+  return render(<ManagersClient {...baseProps(overrides)} />);
 }
 
 function category(over: Partial<CategoryRecord> = {}): CategoryRecord {
@@ -208,5 +235,18 @@ describe('ManagersClient — Tax checkbox', () => {
     fireEvent.click(coffeeCheckbox);
     await waitFor(() => expect(setCategoryTaxRelevantAction).toHaveBeenCalledTimes(2));
     expect((mock.mock.calls[1][1] as FormData).get('categoryId')).toBe('2');
+  });
+});
+
+describe('ManagersClient — the merchant rules table declares its own widths (item I)', () => {
+  it('is a fixed table with one <col> per column', () => {
+    const { container } = renderManagers({ rules: [rule()] });
+    const tables = [...container.querySelectorAll('table')];
+    // Two tables in this file: categories (5 cols) then merchant rules (7 cols). Item I converts
+    // only the second -- the categories table is not on its list.
+    const rules = tables[1];
+    expect(rules?.className).toContain('data-table--fixed');
+    expect(rules?.querySelectorAll('colgroup > col')).toHaveLength(7);
+    expect(rules?.querySelectorAll('thead th')).toHaveLength(7);
   });
 });

@@ -251,7 +251,26 @@ export function ManagersClient({
             <SubmitButton>Save rule</SubmitButton>
           </form>
         </CardBody>
-        <TableWrap bare>
+        {/* Item I. minWidth is the colgroup's own total (14+6+7+13+10+5+3 = 58rem); without it the
+            scroll container has nothing to scroll and the columns crush instead. A long monospace
+            pattern beside a "Parent › Child" label reached ~1100px and squeezed the delete button. */}
+        <TableWrap bare fixed minWidth="58rem">
+          <colgroup>
+            {/* A monospace merchant pattern -- the widest thing in this table by a distance. */}
+            <col style={{ width: '14rem' }} />
+            {/* "exact" / "contains". */}
+            <col style={{ width: '6rem' }} />
+            {/* A rule kind: category / transfer / rename / not_transfer. */}
+            <col style={{ width: '7rem' }} />
+            {/* "Parent › Child" -- the cell that used to starve the button on the right. */}
+            <col style={{ width: '13rem' }} />
+            {/* A rename target, usually shorter than the pattern it replaces. */}
+            <col style={{ width: '10rem' }} />
+            {/* A hit count in tabular figures, right-aligned. */}
+            <col style={{ width: '5rem' }} />
+            {/* The delete button: one small button plus padding. */}
+            <col style={{ width: '3rem' }} />
+          </colgroup>
           <thead>
             <tr>
               <th scope="col">Pattern</th>

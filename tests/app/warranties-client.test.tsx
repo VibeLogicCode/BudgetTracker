@@ -45,6 +45,7 @@ function renderList(res: WarrantySearchResult, over: Partial<Parameters<typeof W
       owner=""
       typeId=""
       sort="expiry"
+      billSchedules={{}}
       {...over}
     />,
   );
@@ -220,5 +221,43 @@ describe('WarrantiesClient', () => {
     );
     const cells = Array.from(container.querySelectorAll('tbody td:nth-child(9)')).map((td) => td.textContent);
     expect(cells).toEqual(['—', '—']);
+  });
+});
+
+describe('WarrantiesClient — a Bill row shows its schedule (item Q)', () => {
+  const bill = () => item({ id: 42, name: 'Property tax', kind: 'bill', isLifetime: true, expiryDate: null, typeName: 'Tax bill' });
+
+  it('shows the next due date instead of "Ongoing"', () => {
+    renderList(result([bill()]), { billSchedules: { 42: { nextDueDate: '2026-09-30', overdueCount: 0 } } });
+    expect(screen.getByText('Next due 2026-09-30')).toBeTruthy();
+    expect(screen.queryByText('Ongoing')).toBeNull();
+  });
+
+  it('leads with the overdue count when the bill is behind', () => {
+    renderList(result([bill()]), { billSchedules: { 42: { nextDueDate: '2026-06-30', overdueCount: 2 } } });
+    expect(screen.getByText('2 overdue · next 2026-06-30')).toBeTruthy();
+  });
+
+  it('still reads "Ongoing" when every installment is paid', () => {
+    renderList(result([bill()]), { billSchedules: {} });
+    expect(screen.getByText('Ongoing')).toBeTruthy();
+  });
+
+  it('leaves a non-bill kind alone', () => {
+    renderList(result([item({ id: 42, kind: 'contract', isLifetime: true, expiryDate: null })]), {
+      billSchedules: { 42: { nextDueDate: '2026-09-30', overdueCount: 0 } },
+    });
+    expect(screen.getByText('Ongoing')).toBeTruthy();
+    expect(screen.queryByText('Next due 2026-09-30')).toBeNull();
+  });
+});
+
+describe('WarrantiesClient — the table declares its own widths (item I, ruling P3)', () => {
+  it('is a fixed table with one <col> per column', () => {
+    const { container } = renderList(result([item()]));
+    const table = container.querySelector('table');
+    expect(table?.className).toContain('data-table--fixed');
+    expect(container.querySelectorAll('colgroup > col')).toHaveLength(9);
+    expect(container.querySelectorAll('thead th')).toHaveLength(9);
   });
 });

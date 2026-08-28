@@ -173,6 +173,25 @@ export function expiryPhraseForKind(kind: ItemKind, expiryDate: string): string 
 }
 
 /**
+ * The /warranties list row for a Bill (item Q, v1.13.1). MUST-19.11: the one place this wording
+ * is written -- warranties-client.tsx composes nothing of its own.
+ *
+ * Dates and counts only, never an amount (ruling P4). The cell this feeds is a fixed-width
+ * column beside eight others, and a bill's money already has a home on its own detail page; a
+ * due date and an overdue count are what stop the row reading "Ongoing" while the bill is three
+ * weeks late.
+ *
+ * nextDueDate null means every installment on this bill is paid, which is genuinely open-ended
+ * from the list's point of view -- so it falls back to the same word every other open-ended kind
+ * uses rather than inventing a second one.
+ */
+export function billScheduleLabel(nextDueDate: string | null, overdueCount: number): string {
+  if (nextDueDate === null) return openEndedDisplayLabel('bill');
+  if (overdueCount > 0) return `${overdueCount} overdue · next ${nextDueDate}`;
+  return `Next due ${nextDueDate}`;
+}
+
+/**
  * MUST-19.11: the one place either verb is written. No component hard-codes them.
  * Return type widened to `string` (not a two-value literal union) -- now that
  * `expiryNounForKind` has four possible outputs, a literal-union return type here would

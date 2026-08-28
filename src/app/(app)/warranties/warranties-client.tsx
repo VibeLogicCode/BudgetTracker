@@ -16,6 +16,7 @@ import { Field, inputClass, selectClass } from '@/components/ui/form';
 // a type-only one) drags better-sqlite3 into this client bundle and breaks `next build`.
 import {
   billingCycleSuffixForKind,
+  billScheduleLabel,
   expiryPhraseForKind,
   openEndedDisplayLabel,
   WARRANTY_SORTS,
@@ -41,6 +42,7 @@ export function WarrantiesClient({
   owner,
   typeId,
   sort,
+  billSchedules,
 }: {
   result: WarrantySearchResult;
   people: { id: number; name: string }[];
@@ -52,6 +54,9 @@ export function WarrantiesClient({
   owner: string;
   typeId: string;
   sort: WarrantySort;
+  /** Item Q: a Bill's next due date and overdue count, keyed by item id. Built server-side in
+   *  page.tsx from unpaidInstallments() -- see that file's docblock for why. */
+  billSchedules: Record<number, { nextDueDate: string; overdueCount: number }>;
 }) {
   const searching = query.trim().length > 0 || status !== '' || owner !== '' || typeId !== '';
 
@@ -192,7 +197,31 @@ export function WarrantiesClient({
             </EmptyState>
           )
         ) : (
-          <TableWrap bare>
+          /* Item I (ruling P3). minWidth is the colgroup's own total (14+9+9+7+13+8+9+7+9 = 85rem).
+             Without it .data-table's width:100% means the overflow-x-auto wrapper has nothing to
+             scroll and the browser crushes every column instead -- see TableWrap's minWidth docblock. */
+          <TableWrap bare fixed minWidth="85rem">
+            <colgroup>
+              {/* The item name, the one column people scan. Left unsized it took whatever the other
+                  eight left over, which on a long name meant a vertical column of characters. */}
+              <col style={{ width: '14rem' }} />
+              {/* An item-type name. */}
+              <col style={{ width: '9rem' }} />
+              {/* A vendor name. */}
+              <col style={{ width: '9rem' }} />
+              {/* An ISO date in tabular figures: the same width on every row. */}
+              <col style={{ width: '7rem' }} />
+              {/* Widened from a date to fit item Q's "2 overdue · next 2026-06-30" on one line. */}
+              <col style={{ width: '13rem' }} />
+              {/* One badge. */}
+              <col style={{ width: '8rem' }} />
+              {/* A person's name, or "Household". */}
+              <col style={{ width: '9rem' }} />
+              {/* A five-figure amount, right-aligned, on one line. */}
+              <col style={{ width: '7rem' }} />
+              {/* An amount plus its cycle suffix ("/mo"). */}
+              <col style={{ width: '9rem' }} />
+            </colgroup>
             <thead>
               <tr>
                 <th scope="col">Item</th>
@@ -229,11 +258,18 @@ export function WarrantiesClient({
                       here, indistinguishable from "no data". Show the per-kind open-ended word
                       instead. */}
                   <td className="whitespace-nowrap text-muted">
-                    {row.isLifetime
-                      ? openEndedDisplayLabel(row.kind)
-                      : row.expiryDate === null
-                        ? '—'
-                        : expiryPhraseForKind(row.kind, row.expiryDate)}
+                    {/* Item Q: a bill has no expiry, it has a schedule. Every other kind falls through
+                        unchanged -- this is one arm added ahead of the existing three, not a rewrite. */}
+                    {row.kind === 'bill'
+                      ? billScheduleLabel(
+                          billSchedules[row.id]?.nextDueDate ?? null,
+                          billSchedules[row.id]?.overdueCount ?? 0,
+                        )
+                      : row.isLifetime
+                        ? openEndedDisplayLabel(row.kind)
+                        : row.expiryDate === null
+                          ? '—'
+                          : expiryPhraseForKind(row.kind, row.expiryDate)}
                   </td>
                   <td>
                     <StatusBadge status={row.status} expiryDate={row.expiryDate} today={today} kind={row.kind} />

@@ -29,6 +29,7 @@ import {
   loanFieldsAllowedForKind,
   productFieldsAllowedForKind,
   openEndedDisplayLabel,
+  billScheduleLabel,
   installmentsAllowedForKind,
   matchingAllowedForKind,
   installmentStateLabel,
@@ -373,5 +374,28 @@ describe('the five kinds against the five applicability gates', () => {
     // Both blurbs must keep the budget promise MUST-14.6 requires above the rules table.
     expect(matchingBlurbForKind('loan')).toContain('still counts in your budget');
     expect(matchingBlurbForKind('bill')).toContain('still counts in your budget');
+  });
+});
+
+describe('billScheduleLabel (item Q, ruling P4)', () => {
+  it('names the next due date when nothing is overdue', () => {
+    expect(billScheduleLabel('2026-09-30', 0)).toBe('Next due 2026-09-30');
+  });
+
+  it('leads with the overdue count when there is one', () => {
+    // A bill three weeks late used to read "Ongoing" on this row, which is the whole defect.
+    expect(billScheduleLabel('2026-06-30', 2)).toBe('2 overdue · next 2026-06-30');
+  });
+
+  it('says "1 overdue", singular', () => {
+    expect(billScheduleLabel('2026-06-30', 1)).toBe('1 overdue · next 2026-06-30');
+  });
+
+  it('falls back to the open-ended word when there is no unpaid installment left', () => {
+    expect(billScheduleLabel(null, 0)).toBe(openEndedDisplayLabel('bill'));
+  });
+
+  it('renders no amount (ruling P4: dates and counts only)', () => {
+    expect(billScheduleLabel('2026-09-30', 3)).not.toMatch(/\$|\d+\.\d\d/);
   });
 });

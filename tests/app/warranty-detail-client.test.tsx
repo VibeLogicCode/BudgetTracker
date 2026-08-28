@@ -639,3 +639,31 @@ describe('the Installments card offers Record payment', () => {
     expect(screen.getByRole('menuitem', { name: /^unmark$/i })).toBeTruthy();
   });
 });
+
+describe('WarrantyDetailClient — inapplicable product fields (item R, ruling P6)', () => {
+  it('drops Vendor, Model, Serial and Price for a Bill that holds none of them', () => {
+    renderDetail({ item: item({ kind: 'bill', vendor: null, model: null, serial: null, priceCents: null }) });
+    // Four guaranteed em-dashes above the Installments section is what this fixes.
+    expect(screen.queryByText('Vendor')).toBeNull();
+    expect(screen.queryByText('Model')).toBeNull();
+    expect(screen.queryByText('Serial number')).toBeNull();
+    expect(screen.queryByText('Price')).toBeNull();
+  });
+
+  it('KEEPS a stored value on a kind that can no longer hold it (constants.ts:272-286)', () => {
+    // The gates decide what a form OFFERS, never what a page may hide: an item whose type
+    // changed after it was saved still holds a model, and hiding a stored value is how data
+    // gets silently dropped on the next save.
+    renderDetail({ item: item({ kind: 'bill', vendor: null, model: 'GDT645SYNFS', serial: null, priceCents: null }) });
+    expect(screen.getByText('Model')).toBeTruthy();
+    expect(screen.getByText('GDT645SYNFS')).toBeTruthy();
+    expect(screen.queryByText('Vendor')).toBeNull();
+  });
+
+  it('leaves a warranty untouched, em-dashes and all', () => {
+    renderDetail({ item: item({ kind: 'warranty', vendor: null, model: null, serial: null, priceCents: null }) });
+    for (const label of ['Vendor', 'Model', 'Serial number', 'Price']) {
+      expect(screen.getByText(label)).toBeTruthy();
+    }
+  });
+});
