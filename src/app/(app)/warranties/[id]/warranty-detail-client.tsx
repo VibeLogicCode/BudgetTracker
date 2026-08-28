@@ -335,13 +335,15 @@ export function WarrantyDetailClient({
             <CardBody className="pt-5">
               <dl className="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
                 <Detail label="Type">{item.typeName ?? '—'}</Detail>
+                {/* v1.13.1 (item 3, backlog sweep). Vendor is not gated by kind at all: every kind's
+                    form (this file's EditForm at ~893, new-warranty-client.tsx) asks for Vendor
+                    unconditionally, so the Detail row must match -- shown for every kind, value or
+                    the em-dash placeholder, never dropped the way Model/Serial/Price are. */}
+                <Detail label="Vendor">{item.vendor ?? '—'}</Detail>
                 {/* Item R (ruling P6). The gate alone is NOT the condition: productFieldsAllowedForKind's own
                     docblock says it decides what a form OFFERS, never what a page may hide, because an item
                     whose type changed after it was saved can still hold a model. So a row disappears only when
-                    the kind forbids it AND it is empty -- which for a Bill is all four, every time. */}
-                {productFieldsAllowedForKind(item.kind) || item.vendor !== null ? (
-                  <Detail label="Vendor">{item.vendor ?? '—'}</Detail>
-                ) : null}
+                    the kind forbids it AND it is empty -- which for a Bill is all three, every time. */}
                 {productFieldsAllowedForKind(item.kind) || item.model !== null ? (
                   <Detail label="Model">{item.model ?? '—'}</Detail>
                 ) : null}
@@ -361,9 +363,14 @@ export function WarrantyDetailClient({
                     per-kind open-ended word instead; a non-lifetime item with a genuinely unknown
                     term still falls through to the em dash, unchanged. */}
                 <Detail label={expiryLabel}>{item.isLifetime ? openEndedDisplayLabel(item.kind) : (item.expiryDate ?? '—')}</Detail>
-                {/* Item R: a loan legitimately carries a price-shaped figure, so its gate is in
-                    the condition too, alongside the same "gate OR held value" rule as above. */}
-                {productFieldsAllowedForKind(item.kind) || loanFieldsAllowedForKind(item.kind) || item.priceCents !== null ? (
+                {/* v1.13.1 (item 3, backlog sweep). The loanFieldsAllowedForKind arm used to keep this
+                    row up for every loan, so a loan with no stored price rendered a guaranteed
+                    "Price —" beside the loan-money block's own "Original" figure below -- the same
+                    fact asked twice under two names. The edit form's own Price gate
+                    (productApplicable || item.priceCents !== null, ~:913) never had that arm; this
+                    now matches it, so the row shows only when the kind offers Price or a value is
+                    actually stored (the same "gate OR held value" rule as Model/Serial above). */}
+                {productFieldsAllowedForKind(item.kind) || item.priceCents !== null ? (
                   <Detail label="Price">{item.priceCents === null ? '—' : <Money cents={item.priceCents} plain />}</Detail>
                 ) : null}
                 {billingAllowedForKind(item.kind) ? (

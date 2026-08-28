@@ -641,10 +641,13 @@ describe('the Installments card offers Record payment', () => {
 });
 
 describe('WarrantyDetailClient — inapplicable product fields (item R, ruling P6)', () => {
-  it('drops Vendor, Model, Serial and Price for a Bill that holds none of them', () => {
+  it('drops Model, Serial and Price for a Bill that holds none of them, but keeps Vendor', () => {
     renderDetail({ item: item({ kind: 'bill', vendor: null, model: null, serial: null, priceCents: null }) });
-    // Four guaranteed em-dashes above the Installments section is what this fixes.
-    expect(screen.queryByText('Vendor')).toBeNull();
+    // v1.13.1 (item 3, backlog sweep). Every kind's edit form asks for Vendor (new-warranty-client
+    // and the edit form both render it unconditionally), so the Detail row must match: it is
+    // shown for every kind, value or the em-dash placeholder, never dropped by kind the way
+    // Model/Serial/Price are.
+    expect(screen.getByText('Vendor')).toBeTruthy();
     expect(screen.queryByText('Model')).toBeNull();
     expect(screen.queryByText('Serial number')).toBeNull();
     expect(screen.queryByText('Price')).toBeNull();
@@ -657,7 +660,6 @@ describe('WarrantyDetailClient — inapplicable product fields (item R, ruling P
     renderDetail({ item: item({ kind: 'bill', vendor: null, model: 'GDT645SYNFS', serial: null, priceCents: null }) });
     expect(screen.getByText('Model')).toBeTruthy();
     expect(screen.getByText('GDT645SYNFS')).toBeTruthy();
-    expect(screen.queryByText('Vendor')).toBeNull();
   });
 
   it('leaves a warranty untouched, em-dashes and all', () => {
@@ -665,5 +667,27 @@ describe('WarrantyDetailClient — inapplicable product fields (item R, ruling P
     for (const label of ['Vendor', 'Model', 'Serial number', 'Price']) {
       expect(screen.getByText(label)).toBeTruthy();
     }
+  });
+
+  // v1.13.1 (item 3, backlog sweep). The Detail Price gate used to be
+  // `productFieldsAllowedForKind(kind) || loanFieldsAllowedForKind(kind) || priceCents !== null`,
+  // so a loan with no stored price got a guaranteed "Price —" row sitting right beside "Original
+  // amount" -- the same fact asked for twice under two names, the very thing
+  // productFieldsAllowedForKind's own docblock (constants.ts) says a loan's form was fixed to
+  // stop doing. Dropping the loanFieldsAllowedForKind arm aligns the Detail gate with the edit
+  // form's own Price gate (warranty-detail-client.tsx:913, new-warranty-client.tsx), which never
+  // had that arm.
+  it('drops Price for a loan with no stored price -- no "Price —" beside its loan-money block', () => {
+    renderDetail({
+      item: item({ typeId: 3, typeName: 'Car loan', kind: 'loan', priceCents: null, principalCents: 250000 }),
+    });
+    expect(screen.queryByText('Price')).toBeNull();
+    // The loan's own money block (labelled "Original", not "Price") is unaffected by this gate.
+    expect(screen.getByText('Original')).toBeTruthy();
+  });
+
+  it('still shows a stored price on a loan (the gate-decides-OFFER-not-HIDE rule still applies)', () => {
+    renderDetail({ item: item({ typeId: 3, typeName: 'Car loan', kind: 'loan', priceCents: 250000 }) });
+    expect(screen.getByText('Price')).toBeTruthy();
   });
 });
