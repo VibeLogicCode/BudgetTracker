@@ -81,7 +81,9 @@ source is invisible and the next person to normalize whitespace silently removes
 Both the implementer and the reviewer emitted raw bytes here by accident before catching it, so
 if a select ever loses its indent, check the bytes first.
 
-## 2a. Settings → Categories admin table has the same ordering defect
+## 2a. Settings → Categories admin table has the same ordering defect — SHIPPED in v1.13.2
+
+**Status (2026-08-28):** SHIPPED in v1.13.2. `orderedCategoryRows()` in `src/lib/category-order.ts` (the grouping walk without the active-only filter, so archived rows stay on screen) now drives the admin table; `categoryOptions()` is built on it, so the pickers and the table cannot drift.
 
 Found 2026-08-23 while converting the selects, not fixed, small.
 

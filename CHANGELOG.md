@@ -21,6 +21,20 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.13.2] - 2026-08-28
+
+**Before updating:** no tables change in this release either; there is no migration. A backup is
+optional and only matters as the way back to 1.13.1.
+
+### Fixed
+
+- **Settings → Categories lists each child under its own parent.** The admin table still drew
+  categories in creation order and only indented the children, so a child added later (say
+  *Kids → Education*, created after *Fees* and its children) appeared indented under the wrong
+  parent at the bottom of the list. The table now uses the same grouping every category picker
+  has used since 1.8.0: a parent, then its children, archived rows included. Display only —
+  nothing about the categories themselves was wrong.
+
 ## [1.13.1] - 2026-08-28
 
 **Before updating:** this release changes no tables at all — it is the smallest kind of update
