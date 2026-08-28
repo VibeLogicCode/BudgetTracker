@@ -282,6 +282,7 @@ export default async function DashboardPage({
         hasBudgetedLimits={householdTotals.budgetedLimitCents > 0}
         monthEndDate={monthEnd(month)}
         canRecord={hasAccounts}
+        today={today}
       />
 
       <Card>

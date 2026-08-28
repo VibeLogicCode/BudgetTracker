@@ -1,7 +1,23 @@
+import Link from 'next/link';
+import { daysBetweenIso } from '@/lib/dates';
 import { formatCents } from '@/lib/money';
 import type { UpcomingBill } from '@/lib/bills';
 import { Card, CardBody, CardFooter, CardHeader } from '@/components/ui/Card';
 import { RecordPaymentForm } from '@/components/RecordPaymentForm';
+
+/**
+ * Item P (ruling P9). The notification evaluator has had a flood guard since v1.4
+ * (MAX_NEW_ROWS_PER_USER_PER_EVALUATION, notify/evaluate/coming-due.ts:18); this card had
+ * nothing, so a household several bills behind got a wall of rows instead of a card.
+ */
+export const COMING_UP_ROW_LIMIT = 8;
+
+/**
+ * And nothing bounded the other end: with includeOverdue, an installment from years ago was
+ * exactly as eligible as one from last week. Most-overdue-first with a cutoff, not literally
+ * everything ever missed.
+ */
+export const COMING_UP_OVERDUE_DAYS = 90;
 
 /**
  * Task 9 (spec 2026-08-22, v1.7.0): SELF-HIDING, in the manner of LoansCard -- the dashboard
@@ -26,6 +42,7 @@ export function ComingUpCard({
   hasBudgetedLimits,
   monthEndDate,
   canRecord,
+  today,
 }: {
   /** Already filtered by the caller to a fixed lookahead window (the next 30 days). */
   bills: UpcomingBill[];
@@ -41,11 +58,18 @@ export function ComingUpCard({
    * (Task 13 computes it -- this card does not re-derive account eligibility itself).
    */
   canRecord: boolean;
+  /** Item P: the reference date for COMING_UP_OVERDUE_DAYS. The dashboard already has it. */
+  today: string;
 }) {
-  if (bills.length === 0 && !hasBudgetedLimits) return null;
+  const withinBound = bills.filter(
+    (b) => !b.overdue || daysBetweenIso(b.dueDate, today) <= COMING_UP_OVERDUE_DAYS,
+  );
+  if (withinBound.length === 0 && !hasBudgetedLimits) return null;
 
-  const listTotalCents = bills.reduce((sum, bill) => sum + bill.amountCents, 0);
-  const hasOverdue = bills.some((bill) => bill.overdue);
+  const listTotalCents = withinBound.reduce((sum, bill) => sum + bill.amountCents, 0);
+  const hasOverdue = withinBound.some((bill) => bill.overdue);
+  const shown = withinBound.slice(0, COMING_UP_ROW_LIMIT);
+  const hiddenCount = withinBound.length - shown.length;
   const budgetPhrase = hasBudgetedLimits
     ? `Budgets have ${formatCents(budgetedRemainingCents)} left this month`
     : 'No category limits set yet';
@@ -66,14 +90,14 @@ export function ComingUpCard({
           hasOverdue ? 'Bills due in the next 30 days, and anything overdue.' : 'Bills due in the next 30 days.'
         }
         action={
-          bills.length > 0 ? (
+          withinBound.length > 0 ? (
             <span className="money-lg" aria-label={`Total due ${formatCents(listTotalCents)}`}>
               {formatCents(listTotalCents)}
             </span>
           ) : null
         }
       />
-      {bills.length === 0 ? (
+      {withinBound.length === 0 ? (
         <CardBody>
           <p className="rounded-md border border-dashed border-line-strong px-4 py-8 text-center text-sm text-muted">
             No bills due in the next 30 days.
@@ -81,7 +105,7 @@ export function ComingUpCard({
         </CardBody>
       ) : (
         <ul className="border-t border-line text-sm">
-          {bills.map((bill) => (
+          {shown.map((bill) => (
             <li
               // v1.12.0: ONE item can contribute several rows now (a bill's installments), so
               // itemId alone is no longer a key. installmentId identifies a schedule row; a
@@ -106,6 +130,16 @@ export function ComingUpCard({
               </span>
             </li>
           ))}
+          {hiddenCount > 0 ? (
+            <li className="border-b border-line px-5 py-3 last:border-b-0 sm:px-6">
+              {/* Ruling P10: there is no "+N more" pattern in this app yet and the Card's `action` slot
+                  already holds the money total, so the affordance goes in the list. This is the shape
+                  the next card copies. */}
+              <Link href="/warranties" className="text-sm font-medium text-accent-text">
+                +{hiddenCount} more due
+              </Link>
+            </li>
+          ) : null}
         </ul>
       )}
       <CardFooter>

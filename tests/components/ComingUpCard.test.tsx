@@ -1,10 +1,16 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
-import { ComingUpCard } from '@/components/ComingUpCard';
+import { ComingUpCard, COMING_UP_ROW_LIMIT } from '@/components/ComingUpCard';
 import type { UpcomingBill } from '@/lib/bills';
 
 afterEach(() => cleanup());
+
+// Item P (rulings P9/P10): a reference date most of this file's existing fixtures have no
+// opinion about (they only test overdue-bill rendering and the button, not the 90-day bound),
+// so one shared constant covers every ComingUpCard render in this file that does not need a
+// specific value of its own.
+const TODAY = '2026-08-16';
 
 // Task 1 (spec 2026-08-23, v1.8.0, ruling R8). The header total is a fixed 30-day lookahead
 // and the footer's billsDueCents is scoped to month end (src/lib/bills.ts) -- two genuinely
@@ -23,6 +29,7 @@ describe('ComingUpCard', () => {
         hasBudgetedLimits
         monthEndDate="2026-08-31"
         canRecord={false}
+        today={TODAY}
       />,
     );
     // The one $77 bill renders "$77.00" twice (header total + its own list row), so the
@@ -43,6 +50,7 @@ describe('ComingUpCard', () => {
         hasBudgetedLimits
         monthEndDate="2026-08-31"
         canRecord={false}
+        today={TODAY}
       />,
     );
     expect(screen.getByText(/\$77\.00 of that falls before Aug 31/i)).toBeTruthy();
@@ -56,6 +64,10 @@ describe('ComingUpCard with overdue rows', () => {
     hasBudgetedLimits: true,
     monthEndDate: '2026-09-30',
     canRecord: false,
+    // Item P's 90-day overdue bound (ruling P9) is dated relative to `today`, and this block's
+    // own overdue fixture is dueDate: '2024-05-01' -- `today` here stays on that same date so
+    // the bound does not silently drop it out of these pre-existing assertions.
+    today: '2024-05-01',
   };
 
   function bill(over: Partial<UpcomingBill> & { dueDate: string; amountCents: number }): UpcomingBill {
@@ -87,7 +99,7 @@ describe('ComingUpCard with overdue rows', () => {
     expect(with_.textContent).toContain('Overdue');
   });
 
-  it('keeps the header total summing EVERY listed row, overdue included', () => {
+  it('keeps the header total summing every row inside the window, including the ones the +N more line stands for (ruling P9)', () => {
     const { container } = render(
       <ComingUpCard
         {...base}
@@ -125,6 +137,7 @@ describe('ComingUpCard record-payment button', () => {
     billsDueCents: 12_000,
     hasBudgetedLimits: true,
     monthEndDate: '2026-09-30',
+    today: TODAY,
   };
 
   function bill(over: Partial<UpcomingBill> & { dueDate: string; amountCents: number }): UpcomingBill {
@@ -171,5 +184,41 @@ describe('ComingUpCard record-payment button', () => {
       />,
     );
     expect(screen.queryByRole('button', { name: /record payment/i })).toBeNull();
+  });
+
+  describe('ComingUpCard caps its rows and bounds its overdue (item P, rulings P9/P10)', () => {
+    const many = (count: number) =>
+      Array.from({ length: count }, (_, i) =>
+        bill({ installmentId: i + 1, itemId: i + 1, name: `Bill ${i + 1}`, dueDate: '2026-09-01', amountCents: 10000, overdue: false }),
+      );
+
+    it('renders at most COMING_UP_ROW_LIMIT rows and offers the rest', () => {
+      const { container } = render(<ComingUpCard {...base} today={TODAY} bills={many(10)} />);
+      // A household several bills behind used to get a wall of rows instead of a card.
+      expect(container.querySelectorAll('li')).toHaveLength(COMING_UP_ROW_LIMIT + 1);
+      expect(screen.getByText('+2 more due')).toBeTruthy();
+      expect(screen.getByRole('link', { name: /more due/ }).getAttribute('href')).toBe('/warranties');
+    });
+
+    it('renders no overflow row when everything fits', () => {
+      render(<ComingUpCard {...base} today={TODAY} bills={many(3)} />);
+      expect(screen.queryByText(/more due/)).toBeNull();
+    });
+
+    it('the header total sums every row inside the window, capped or not', () => {
+      render(<ComingUpCard {...base} today={TODAY} bills={many(10)} />);
+      // Ruling P9: NOT the eight rendered rows. A total that stopped at the cap would understate
+      // what is owed, which is worse than a long list.
+      expect(screen.getByLabelText('Total due $1,000.00')).toBeTruthy();
+    });
+
+    it('drops an installment overdue by more than COMING_UP_OVERDUE_DAYS, from the list AND the total', () => {
+      const ancient = bill({ installmentId: 99, itemId: 99, name: 'Forgotten', dueDate: '2025-01-01', amountCents: 50000, overdue: true });
+      const recent = bill({ installmentId: 1, itemId: 1, name: 'Property tax', dueDate: '2026-07-30', amountCents: 20000, overdue: true });
+      render(<ComingUpCard {...base} today={TODAY} bills={[ancient, recent]} />);
+      expect(screen.queryByText('Forgotten')).toBeNull();
+      expect(screen.getByText('Property tax')).toBeTruthy();
+      expect(screen.getByLabelText('Total due $200.00')).toBeTruthy();
+    });
   });
 });

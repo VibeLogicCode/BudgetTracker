@@ -120,23 +120,36 @@ export function useAutoSave(action: AutoSaveAction, fields: Record<string, strin
  * Fixed-width feedback slot. Fixed width because the tick appears and disappears on its own:
  * a slot that collapsed would reflow the row two seconds after a save, under the cursor of
  * whoever is editing the next cell.
+ *
+ * v1.13.1 (item L, ruling P8). The visual half stays aria-hidden -- a decorative tick beside a
+ * control someone is looking at needs no announcement. But that reasoning only ever covered
+ * SIGHT: a refused save was announced (ErrorLine's role="alert") and a successful one was
+ * announced to nobody, and the asymmetry was the bug. The sr-only polite region below is always
+ * in the tree, because a live region created at the same moment it gets its text is not
+ * announced at all, and it says one word so a control someone edits repeatedly does not turn
+ * into chatter.
  */
 function StatusSlot({ pending, status }: { pending: boolean; status: AutoSaveStatus }) {
   const shown = pending ? 'pending' : status;
   return (
-    <span
-      data-autosave-status={shown}
-      aria-hidden="true"
-      className="inline-flex h-4 w-4 shrink-0 items-center justify-center"
-    >
-      {shown === 'pending' ? (
-        <span className="h-3 w-3 animate-spin rounded-full border border-line border-t-transparent" />
-      ) : shown === 'saved' ? (
-        <CheckIcon className="h-3.5 w-3.5 text-positive-soft-fg" />
-      ) : shown === 'error' ? (
-        <span className="text-xs font-semibold text-negative-soft-fg">!</span>
-      ) : null}
-    </span>
+    <>
+      <span
+        data-autosave-status={shown}
+        aria-hidden="true"
+        className="inline-flex h-4 w-4 shrink-0 items-center justify-center"
+      >
+        {shown === 'pending' ? (
+          <span className="h-3 w-3 animate-spin rounded-full border border-line border-t-transparent" />
+        ) : shown === 'saved' ? (
+          <CheckIcon className="h-3.5 w-3.5 text-positive-soft-fg" />
+        ) : shown === 'error' ? (
+          <span className="text-xs font-semibold text-negative-soft-fg">!</span>
+        ) : null}
+      </span>
+      <span className="sr-only" aria-live="polite">
+        {shown === 'saved' ? 'Saved' : ''}
+      </span>
+    </>
   );
 }
 

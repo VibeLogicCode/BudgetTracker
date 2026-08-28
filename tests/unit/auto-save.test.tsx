@@ -395,3 +395,31 @@ describe('v1.12.1: the control is finger-sized on a phone (item AV / UX-7)', () 
     expect(AUTO_SAVE_CONTROL).toContain('sm:min-h-0');
   });
 });
+
+describe('AutoSave announces success, not only failure (item L, ruling P8)', () => {
+  function liveRegion(): HTMLElement | null {
+    return document.querySelector('[aria-live="polite"]');
+  }
+
+  it('has an empty live region before anything is saved', () => {
+    render(<AutoSaveSelect name="x" defaultValue="a" options={[{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }]} fields={{}} action={async () => ({})} ariaLabel="Pick one" />);
+    // The region must exist BEFORE its content changes -- one added at the same moment it gets
+    // text is not announced by any screen reader.
+    expect(liveRegion()).toBeTruthy();
+    expect(liveRegion()?.textContent).toBe('');
+  });
+
+  it('announces "Saved" after a successful save', async () => {
+    render(<AutoSaveSelect name="x" defaultValue="a" options={[{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }]} fields={{}} action={async () => ({})} ariaLabel="Pick one" />);
+    fireEvent.change(screen.getByLabelText('Pick one'), { target: { value: 'b' } });
+    await waitFor(() => expect(statusOf()).toBe('saved'));
+    expect(liveRegion()?.textContent).toBe('Saved');
+  });
+
+  it('says nothing on a refusal - role="alert" already carries the server\'s words', async () => {
+    render(<AutoSaveSelect name="x" defaultValue="a" options={[{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }]} fields={{}} action={async () => ({ error: 'Nope.' })} ariaLabel="Pick one" />);
+    fireEvent.change(screen.getByLabelText('Pick one'), { target: { value: 'b' } });
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('Nope.'));
+    expect(liveRegion()?.textContent).toBe('');
+  });
+});
