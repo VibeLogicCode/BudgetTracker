@@ -7,7 +7,7 @@ import {
   type WarrantyStatus,
 } from '@/lib/warranty/expiry';
 import type { WarrantyItemRow } from '@/lib/warranty/items';
-import { WARRANTY_SORTS, isWarrantySort, type BillingCycle, type ItemKind, type WarrantySort } from '@/lib/warranty/constants';
+import { WARRANTY_SORTS, isWarrantySort, type BillingCycle, type ItemKind, type LoanDirection, type WarrantySort } from '@/lib/warranty/constants';
 
 /** §17.22 */
 export const WARRANTY_PAGE_SIZE = 50;
@@ -142,6 +142,7 @@ interface RawRow {
   billing_amount_cents: number | null;
   principal_cents: number | null;
   interest_rate_bps: number | null;
+  loan_direction: LoanDirection;
   current_balance_cents: number | null;
   balance_updated_at: string | null;
   budget_category_id: number | null;
@@ -178,6 +179,7 @@ function toListItem(row: RawRow): WarrantyListItem {
     billingAmountCents: row.billing_amount_cents,
     principalCents: row.principal_cents,
     interestRateBps: row.interest_rate_bps,
+    loanDirection: row.loan_direction,
     currentBalanceCents: row.current_balance_cents,
     balanceUpdatedAt: row.balance_updated_at,
     budgetCategoryId: row.budget_category_id,
