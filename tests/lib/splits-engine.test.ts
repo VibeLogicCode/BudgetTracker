@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { eq, sql } from 'drizzle-orm';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
 import { transactions } from '@/db/schema';
-import { eligibleForRerun, reviewQueueCount, reviewQueueIds, rerunEngine } from '@/lib/categorize/engine';
+import { eligibleForRerun, reviewQueueCount, reviewQueueIds, rerunEngine, runEngine } from '@/lib/categorize/engine';
 import { upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { normalizeMerchant } from '@/lib/categorize/normalize';
 import { listReviewQueue } from '@/lib/transactions';
@@ -169,5 +169,47 @@ describe('clearing a split restores normal engine behaviour', () => {
     expect(reviewQueueCount()).toBe(2);
     expect(listReviewQueue().map((r) => r.id).sort(byId)).toEqual([target, control].sort(byId));
     expect(eligibleForRerun().sort(byId)).toEqual([target, control].sort(byId));
+  });
+});
+
+/**
+ * v1.12.1 (item BC / MON-6): runEngine re-derived ELIGIBLE's category half in JavaScript
+ * (`row.categoryId === null || row.source === 'bayes'`) but never carried its splits half, so
+ * a split parent that still matches a transfer/category rule was categorized (or flagged a
+ * transfer) here even though eligibleForRerun/rerunEngine — which go through ELIGIBLE directly
+ * — already excluded it. selectRowsByIds now selects hasSplits alongside the row so both paths
+ * share one predicate.
+ */
+function setupSplitWithNullParentCategory() {
+  const { db, alice, add, splitInTwo } = setup();
+  const groceries = categoryIdByName(db, 'Groceries');
+  const coffee = categoryIdByName(db, 'Coffee');
+  const description = 'ACME SPLIT TRANSFER MERCHANT';
+  const merchant = normalizeMerchant(description);
+  // A rule this uncategorized-before-split row's merchant would otherwise match.
+  upsertRuleFromCorrection({ pattern: merchant, matchType: 'exact', ruleKind: 'transfer', categoryId: null, createdBy: alice });
+
+  const txnId = add({ description, amountCents: -10000, categoryId: null, source: 'none' });
+  splitInTwo(txnId, groceries, coffee);
+
+  return { db, txnId };
+}
+
+describe('v1.12.1: runEngine keeps the splits guard (item BC / MON-6)', () => {
+  it('skips a split parent whose own category_id is NULL, instead of categorizing it', () => {
+    const { db, txnId } = setupSplitWithNullParentCategory();
+    const before = db.get<{ c: number | null; t: number }>(
+      sql`select category_id as c, is_transfer as t from transactions where id = ${txnId}`,
+    );
+
+    const result = runEngine([txnId]);
+
+    const after = db.get<{ c: number | null; t: number }>(
+      sql`select category_id as c, is_transfer as t from transactions where id = ${txnId}`,
+    );
+    expect(after.c).toBe(before.c);
+    expect(after.t).toBe(before.t);
+    expect(result.skipped).toBe(1);
+    expect(result.categorized).toBe(0);
   });
 });

@@ -8,6 +8,7 @@ import { createWarrantyItem, getWarrantyItem } from '@/lib/warranty/items';
 import { createItemType } from '@/lib/warranty/types';
 import { setTransactionSplits } from '@/lib/splits';
 import { confirmCategory } from '@/lib/categorize/engine';
+import { upsertRuleFromCorrection } from '@/lib/categorize/rules';
 
 let currentUser = { id: 1, name: 'Alice', username: 'alice', role: 'admin' as const };
 // v1.3.1: toggleable so the loan actions' cross-origin-first test can flip it, same idiom as
@@ -518,5 +519,40 @@ describe('setCategoryAction: clearing a category on a split transaction is refus
       categorization_source: string;
     };
     expect(row).toEqual({ category_id: null, categorization_source: 'none' });
+  });
+});
+
+describe('v1.12.1: a row edit on /transactions edits ONE row (item U / UX-2, ruling R4)', () => {
+  it('sets the category and creates no household merchant rule', async () => {
+    const { db, addTxn } = setup();
+    const txnId = addTxn('CITY GROCER', -5000);
+    const before = db.get<{ n: number }>(sql`select count(*) as n from merchant_rules`).n;
+
+    await setCategoryAction({}, formData({ transactionId: String(txnId), categoryId: String(categoryIdByName(db, 'Groceries')) }));
+
+    expect(db.get<{ n: number }>(sql`select count(*) as n from merchant_rules`).n).toBe(before);
+    expect(db.get<{ c: number | null }>(sql`select category_id as c from transactions where id = ${txnId}`).c).toBe(
+      categoryIdByName(db, 'Groceries'),
+    );
+  });
+
+  it('clearing to Uncategorized leaves that merchant rule alone', async () => {
+    const { db, userId, addTxn } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const txnId = addTxn('CITY GROCER', -5000);
+    // A rule an admin made deliberately, through Settings -> Rules.
+    upsertRuleFromCorrection({
+      pattern: 'CITY GROCER',
+      matchType: 'exact',
+      ruleKind: 'category',
+      categoryId: groceries,
+      createdBy: userId,
+      at: new Date('2026-08-01T00:00:00.000Z'),
+    });
+
+    await setCategoryAction({}, formData({ transactionId: String(txnId), categoryId: '' }));
+
+    expect(db.get<{ n: number }>(sql`select count(*) as n from merchant_rules where pattern = 'CITY GROCER'`).n).toBe(1);
+    expect(db.get<{ c: number | null }>(sql`select category_id as c from transactions where id = ${txnId}`).c).toBeNull();
   });
 });

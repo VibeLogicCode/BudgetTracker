@@ -202,7 +202,8 @@ describe('clearCategory refuses a split transaction (defect 3 fix, the third sib
       ],
     });
 
-    expect(clearCategory({ transactionId: t2, userId: alice })).toBe(false);
+    // deleteRule: true — this test is about the split guard itself, not the delete decision.
+    expect(clearCategory({ transactionId: t2, userId: alice, deleteRule: true })).toBe(false);
 
     // Unchanged, down to the exact numbers -- not merely "still some tokens exist".
     expect(bayesStateFor(groceries)).toEqual(before);
@@ -214,7 +215,8 @@ describe('clearCategory refuses a split transaction (defect 3 fix, the third sib
     const beforeSplits = getSplits(t2);
     expect(beforeTxn).toMatchObject({ category_id: groceries, categorization_source: 'manual' });
 
-    expect(clearCategory({ transactionId: t2, userId: alice })).toBe(false);
+    // deleteRule: true — this test is about the split guard itself, not the delete decision.
+    expect(clearCategory({ transactionId: t2, userId: alice, deleteRule: true })).toBe(false);
 
     expect(listRules('category')).toHaveLength(1);
     expect(listRules('category')[0]).toMatchObject({ pattern: 'ACME SPLIT MERCHANT', matchType: 'exact', categoryId: groceries });
@@ -230,7 +232,8 @@ describe('clearCategory refuses a split transaction (defect 3 fix, the third sib
     const id = add({ description: 'CONTROL MERCHANT' });
     expect(confirmCategory({ transactionId: id, categoryId: coffee, userId: alice })).toBe(true);
 
-    expect(clearCategory({ transactionId: id, userId: alice })).toBe(true);
+    // deleteRule: true — this test is about the engine's own delete path, not ruling P5.
+    expect(clearCategory({ transactionId: id, userId: alice, deleteRule: true })).toBe(true);
 
     expect(readTxn(id)).toMatchObject({ category_id: null, categorization_source: 'none' });
     expect((current!.sqlite.prepare('select count(*) as c from bayes_tokens').get() as { c: number }).c).toBe(0);

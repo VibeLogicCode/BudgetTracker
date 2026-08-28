@@ -290,7 +290,7 @@ describe('the learning loop', () => {
       sqlite.prepare('select doc_count as docCount, token_total as tokenTotal from bayes_category_totals where category_id = ?').get(coffee),
     ).toEqual({ docCount: 1, tokenTotal: 2 });
 
-    expect(clearCategory({ transactionId: id, userId })).toBe(true);
+    expect(clearCategory({ transactionId: id, userId, deleteRule: true })).toBe(true);
 
     expect(readTxn(sqlite, id)).toMatchObject({ category_id: null, categorization_source: 'none' });
     expect((sqlite.prepare('select count(*) as c from bayes_tokens').get() as { c: number }).c).toBe(0);
@@ -548,5 +548,33 @@ describe('review queue', () => {
     expect(reviewQueueIds(2, 0)).toHaveLength(2);
     expect(reviewQueueIds(2, 2)).toHaveLength(1);
     expect(reviewQueueCount()).toBe(ids.length);
+  });
+});
+
+describe('v1.12.1: clearCategory only deletes a rule when told to (item U, ruling P5)', () => {
+  /** setupConfirmed(): the same three lines behind "clearCategory untrains and returns the row
+   *  to uncategorized" above, factored out for this describe's two deleteRule cases. */
+  function setupConfirmed() {
+    const { db, sqlite, add, userId } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const id = add('POS PURCHASE TIM HORTONS #4821 TORONTO ON');
+    expect(confirmCategory({ transactionId: id, categoryId: coffee, userId })).toBe(true);
+    return { db, sqlite, id, userId };
+  }
+
+  it('deleteRule: false leaves the merchant rule in place and still untrains', () => {
+    const { db, id, userId } = setupConfirmed();
+    expect(db.get<{ n: number }>(sql`select count(*) as n from merchant_rules`).n).toBe(1);
+
+    expect(clearCategory({ transactionId: id, userId, deleteRule: false })).toBe(true);
+
+    expect(db.get<{ n: number }>(sql`select count(*) as n from merchant_rules`).n).toBe(1);
+    expect(db.get<{ c: number | null }>(sql`select category_id as c from transactions where id = ${id}`).c).toBeNull();
+  });
+
+  it('deleteRule: true still deletes it, for the deliberate control that asks for that', () => {
+    const { db, id, userId } = setupConfirmed();
+    expect(clearCategory({ transactionId: id, userId, deleteRule: true })).toBe(true);
+    expect(db.get<{ n: number }>(sql`select count(*) as n from merchant_rules`).n).toBe(0);
   });
 });

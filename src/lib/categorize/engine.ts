@@ -125,21 +125,46 @@ function selectRowsByIds(ids: number[]) {
     normalizedMerchant: string;
     categoryId: number | null;
     source: 'rule' | 'bayes' | 'manual' | 'none';
+    /**
+     * v1.12.1 (item BC / MON-6). ELIGIBLE (above) carries the splits half of the predicate and its
+     * docblock explains at length why. runEngine re-derived eligibility in JavaScript and
+     * reproduced only the category half, so the guard the comment describes as living on ELIGIBLE
+     * did not apply on that path at all. Selecting the flag here means ONE predicate serves both
+     * paths, instead of two that agree today and drift tomorrow.
+     */
+    hasSplits: number;
   }[] = [];
   for (let offset = 0; offset < ids.length; offset += ID_CHUNK) {
     const chunk = ids.slice(offset, offset + ID_CHUNK);
-    rows.push(
-      ...db
-        .select({
-          id: transactions.id,
-          normalizedMerchant: transactions.normalizedMerchant,
-          categoryId: transactions.categoryId,
-          source: transactions.categorizationSource,
-        })
-        .from(transactions)
-        .where(inArray(transactions.id, chunk))
-        .all(),
+    const chunkRows = db
+      .select({
+        id: transactions.id,
+        normalizedMerchant: transactions.normalizedMerchant,
+        categoryId: transactions.categoryId,
+        source: transactions.categorizationSource,
+      })
+      .from(transactions)
+      .where(inArray(transactions.id, chunk))
+      .all();
+    // A drizzle column reference interpolated into a raw sql fragment is not table-qualified
+    // when that fragment sits in the SELECT list (only in a .where() condition -- see the
+    // identical warning on transactionHasSplits, below). A correlated `hasSplits` subquery
+    // written directly into this .select() would have its bare `id` resolve against
+    // transaction_splits' OWN id column instead of this outer transactions row, so it would
+    // come back true for every row in the chunk the moment ANY split exists anywhere in the
+    // database. Querying transaction_splits' txn_id directly, scoped to this same chunk, keeps
+    // the same "not exists (select 1 from transaction_splits where txn_id = transactions.id)"
+    // predicate ELIGIBLE (above) uses -- just resolved as a second membership query instead of
+    // an unqualified correlated one.
+    const splitTxnIds = new Set(
+      db
+        .select({ txnId: transactionSplits.txnId })
+        .from(transactionSplits)
+        .where(inArray(transactionSplits.txnId, chunk))
+        .all()
+        .map((row) => row.txnId),
     );
+    rows.push(...chunkRows.map((row) => ({ ...row, hasSplits: splitTxnIds.has(row.id) ? 1 : 0 })));
   }
   return rows;
 }
@@ -165,7 +190,9 @@ export function runEngine(txnIds: number[]): EngineResult {
     // already confirmed can still need its display name refreshed.
     applyRenameRules(txnIds, ctx);
 
-    const eligible = rows.filter((row) => row.categoryId === null || row.source === 'bayes');
+    const eligible = rows.filter(
+      (row) => (row.categoryId === null || row.source === 'bayes') && row.hasSplits === 0,
+    );
     const skipped = rows.length - eligible.length;
 
     const at = new Date();
@@ -367,7 +394,20 @@ export function confirmCategory(input: {
  * both problems at once. Callers must check this return value; see setCategoryAction in
  * src/app/(app)/transactions/actions.ts, its only caller.
  */
-export function clearCategory(input: { transactionId: number; userId: number; at?: Date }): boolean {
+export function clearCategory(input: {
+  transactionId: number;
+  userId: number;
+  /**
+   * v1.12.1 (item U / UX-2, rulings R4 and P5). REQUIRED, with no default, so the compiler makes
+   * every call site say what it means. Picking "Uncategorized" from the row select on
+   * /transactions used to delete that merchant's household-wide exact rule -- a change to how
+   * everyone's future statements are filed, made by a mis-scroll over a <select> on a phone, with
+   * nothing on screen to say it had happened. The deliberate control for deleting a rule is the
+   * one that already exists: Settings -> Rules (deleteRuleAction, admin-only).
+   */
+  deleteRule: boolean;
+  at?: Date;
+}): boolean {
   const db = getDb();
   const row = db
     .select({
@@ -384,7 +424,7 @@ export function clearCategory(input: { transactionId: number; userId: number; at
   if (row.source === 'manual' && row.categoryId !== null) {
     untrain(tokenize(row.normalizedMerchant), row.categoryId);
   }
-  deleteExactRule(row.normalizedMerchant, 'category');
+  if (input.deleteRule) deleteExactRule(row.normalizedMerchant, 'category');
 
   db.update(transactions)
     .set({ categoryId: null, categorizationSource: 'none', confidence: null, updatedAt: nowIso(input.at ?? new Date()) })

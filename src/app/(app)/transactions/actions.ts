@@ -105,11 +105,17 @@ export async function setCategoryAction(_prev: ActionState, formData: FormData):
   if (!Number.isInteger(transactionId) || transactionId <= 0) return { error: 'Invalid request.' };
 
   if (raw === '') {
-    if (!clearCategory({ transactionId, userId: user.id })) {
+    // deleteRule: false -- ruling R4/P5. See clearCategory's docblock.
+    if (!clearCategory({ transactionId, userId: user.id, deleteRule: false })) {
       return { error: 'This transaction is split — clear its split first, then change its category.' };
     }
   } else {
-    confirmCategory({ transactionId, categoryId: Number(raw), userId: user.id });
+    // createRule: false -- ruling R4. This select tags THIS row. It used to create or overwrite a
+    // household-wide exact merchant rule that files every future import for everyone, and the
+    // action's own confirming sentence ("Category set and rule created.") never reached the
+    // screen, because AutoSave reads only result.error. /review keeps the teaching behaviour:
+    // that screen is ABOUT the categorizer, and its button says so.
+    confirmCategory({ transactionId, categoryId: Number(raw), userId: user.id, createRule: false });
   }
 
   revalidatePath('/transactions');
