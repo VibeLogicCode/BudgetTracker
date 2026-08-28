@@ -223,7 +223,16 @@ async function updateGuard(): Promise<UpdateActionState | null> {
   return null;
 }
 
-export async function enableUpdateChecksAction(): Promise<UpdateActionState> {
+/**
+ * v1.13.1 (item H). All five take (prevState, formData) — including the three that read
+ * neither — so updates-client.tsx can hand React the server action ITSELF rather than an inline
+ * async closure. A closure defined in a 'use client' module is a client function, so React never
+ * processes a server-action response for it: revalidatePath below invalidated the server cache
+ * while the client kept the props from the original render, and the availability UI is driven by
+ * props, not by the message these return. reviewUpdateAction keeps its own shape — it revalidates
+ * nothing and returns a different state type.
+ */
+export async function enableUpdateChecksAction(_prev: UpdateActionState, formData: FormData): Promise<UpdateActionState> {
   const blocked = await updateGuard();
   if (blocked) return blocked;
   const user = await requireAdmin();
@@ -233,7 +242,7 @@ export async function enableUpdateChecksAction(): Promise<UpdateActionState> {
   return { message: 'Update checks are on. This app will ask GitHub once a day whether a newer version is published.' };
 }
 
-export async function disableUpdateChecksAction(): Promise<UpdateActionState> {
+export async function disableUpdateChecksAction(_prev: UpdateActionState, formData: FormData): Promise<UpdateActionState> {
   const blocked = await updateGuard();
   if (blocked) return blocked;
   const user = await requireAdmin();
@@ -254,7 +263,7 @@ export async function setAutoApplyAction(_prev: UpdateActionState, formData: For
   return { message: 'Saved.' };
 }
 
-export async function checkForUpdateNowAction(): Promise<UpdateActionState> {
+export async function checkForUpdateNowAction(_prev: UpdateActionState, formData: FormData): Promise<UpdateActionState> {
   const blocked = await updateGuard();
   if (blocked) return blocked;
   await requireAdmin();
@@ -306,7 +315,7 @@ export async function reviewUpdateAction(formData: FormData): Promise<ReviewUpda
   }
 }
 
-export async function applyUpdateAction(formData: FormData): Promise<UpdateActionState> {
+export async function applyUpdateAction(_prev: UpdateActionState, formData: FormData): Promise<UpdateActionState> {
   const blocked = await updateGuard();
   if (blocked) return blocked;
   await requireAdmin();
@@ -354,7 +363,7 @@ export async function applyUpdateAction(formData: FormData): Promise<UpdateActio
 }
 
 /** §9.3 item 6 / MUST-5.9. Suppresses only the card's prominence — never the check, never the dedup. */
-export async function dismissUpdateAction(formData: FormData): Promise<UpdateActionState> {
+export async function dismissUpdateAction(_prev: UpdateActionState, formData: FormData): Promise<UpdateActionState> {
   const blocked = await updateGuard();
   if (blocked) return blocked;
   await requireAdmin();

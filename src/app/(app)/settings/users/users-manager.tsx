@@ -3,7 +3,7 @@
 import { Fragment, useActionState, useState } from 'react';
 import { FormError } from '@/components/FormError';
 import { SubmitButton } from '@/components/SubmitButton';
-import { AutoSaveSelect } from '@/components/ui/AutoSave';
+import { AutoSaveCheckbox, AutoSaveSelect } from '@/components/ui/AutoSave';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { Notice } from '@/components/ui/Notice';
 import { PageHeader } from '@/components/ui/PageHeader';
@@ -16,6 +16,7 @@ import {
   resetMfaAction,
   resetPasswordAction,
   setActiveAction,
+  setCanSignInAction,
   setVisibilityAction,
   type UsersFormState,
 } from './actions';
@@ -127,6 +128,7 @@ export function UsersManager({ users }: { users: UserRecord[] }) {
               <th scope="col">Username</th>
               <th scope="col">Role</th>
               <th scope="col">Sees</th>
+              <th scope="col">Sign-in</th>
               <th scope="col">MFA</th>
               <th scope="col">Status</th>
               <th scope="col" />
@@ -157,6 +159,20 @@ export function UsersManager({ users }: { users: UserRecord[] }) {
                       fields={{ userId: String(user.id) }}
                       ariaLabel={`What ${user.name} sees`}
                       action={(formData) => setVisibilityAction({}, formData)}
+                    />
+                  </td>
+                  <td>
+                    {/* Item BI (ruling P11). A checkbox, not a select: it is a boolean, and the
+                        row already auto-saves its visibility one cell to the left. Reversible,
+                        single-row, refused server-side with a sentence -- the auto-save safety
+                        rule's own definition. */}
+                    <AutoSaveCheckbox
+                      name="canSignIn"
+                      defaultChecked={user.canSignIn}
+                      fields={{ userId: String(user.id) }}
+                      action={(formData) => setCanSignInAction({}, formData)}
+                      label={`${user.name} can sign in`}
+                      labelHidden
                     />
                   </td>
                   <td>
@@ -192,7 +208,7 @@ export function UsersManager({ users }: { users: UserRecord[] }) {
                 </tr>
                 {confirming?.id === user.id ? (
                   <tr>
-                    <td colSpan={7} className="border-l-2 border-warning bg-warning-soft/40">
+                    <td colSpan={8} className="border-l-2 border-warning bg-warning-soft/40">
                       <div className="flex flex-wrap items-center gap-3 px-4 py-3 text-sm">
                         <p className="text-ink">
                           {confirming.intent === 'deactivate' ? (
@@ -228,7 +244,7 @@ export function UsersManager({ users }: { users: UserRecord[] }) {
                 ) : null}
                 {resetting === user.id ? (
                   <tr>
-                    <td colSpan={7} className="bg-surface-2">
+                    <td colSpan={8} className="bg-surface-2">
                       <form
                         action={resetPassword}
                         onSubmit={() => setResetting(null)}

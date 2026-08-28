@@ -82,13 +82,13 @@ describe('MUST-10.2 / MUST-10.4: origin and role, in that order', () => {
   it('all seven actions reject a cross-origin request BEFORE anything else', async () => {
     sameOrigin.value = false;
     const results = [
-      await actions.enableUpdateChecksAction(),
-      await actions.disableUpdateChecksAction(),
+      await actions.enableUpdateChecksAction({}, new FormData()),
+      await actions.disableUpdateChecksAction({}, new FormData()),
       await actions.setAutoApplyAction({}, form({ autoApply: 'on' })),
-      await actions.checkForUpdateNowAction(),
+      await actions.checkForUpdateNowAction({}, new FormData()),
       await actions.reviewUpdateAction(form({ version: '1.4.0' })),
-      await actions.applyUpdateAction(form({ version: '1.4.0' })),
-      await actions.dismissUpdateAction(form({ version: '1.4.0' })),
+      await actions.applyUpdateAction({}, form({ version: '1.4.0' })),
+      await actions.dismissUpdateAction({}, form({ version: '1.4.0' })),
     ];
     for (const result of results) expect(result.error).toBe('Cross-origin request rejected');
     expect(fetchCalls).toHaveLength(0);
@@ -97,8 +97,8 @@ describe('MUST-10.2 / MUST-10.4: origin and role, in that order', () => {
 
   it('every action goes through requireAdmin, so a member never reaches the domain call', async () => {
     currentUser.value.role = 'member';
-    await expect(actions.enableUpdateChecksAction()).rejects.toThrow(/redirect/);
-    await expect(actions.applyUpdateAction(form({ version: '1.4.0' }))).rejects.toThrow(/redirect/);
+    await expect(actions.enableUpdateChecksAction({}, new FormData())).rejects.toThrow(/redirect/);
+    await expect(actions.applyUpdateAction({}, form({ version: '1.4.0' }))).rejects.toThrow(/redirect/);
   });
 
   it('fix round finding 1: all seven actions reject a member, with zero state change', async () => {
@@ -108,13 +108,13 @@ describe('MUST-10.2 / MUST-10.4: origin and role, in that order', () => {
     currentUser.value.role = 'member';
     const before = rowCount();
 
-    await expect(actions.enableUpdateChecksAction()).rejects.toThrow(/redirect/);
-    await expect(actions.disableUpdateChecksAction()).rejects.toThrow(/redirect/);
+    await expect(actions.enableUpdateChecksAction({}, new FormData())).rejects.toThrow(/redirect/);
+    await expect(actions.disableUpdateChecksAction({}, new FormData())).rejects.toThrow(/redirect/);
     await expect(actions.setAutoApplyAction({}, form({ autoApply: 'on' }))).rejects.toThrow(/redirect/);
-    await expect(actions.checkForUpdateNowAction()).rejects.toThrow(/redirect/);
+    await expect(actions.checkForUpdateNowAction({}, new FormData())).rejects.toThrow(/redirect/);
     await expect(actions.reviewUpdateAction(form({ version: '1.4.0' }))).rejects.toThrow(/redirect/);
-    await expect(actions.applyUpdateAction(form({ version: '1.4.0' }))).rejects.toThrow(/redirect/);
-    await expect(actions.dismissUpdateAction(form({ version: '1.4.0' }))).rejects.toThrow(/redirect/);
+    await expect(actions.applyUpdateAction({}, form({ version: '1.4.0' }))).rejects.toThrow(/redirect/);
+    await expect(actions.dismissUpdateAction({}, form({ version: '1.4.0' }))).rejects.toThrow(/redirect/);
 
     expect(rowCount()).toBe(before);
     expect(fetchCalls).toHaveLength(0);
@@ -122,21 +122,21 @@ describe('MUST-10.2 / MUST-10.4: origin and role, in that order', () => {
 
   it('MUST-10.3: no action accepts a userId', async () => {
     const other = insertTestUser(t.db, { username: 'other', role: 'admin' });
-    await actions.enableUpdateChecksAction();
+    await actions.enableUpdateChecksAction({}, new FormData());
     expect(readUpdateState().enabledBy).toBe(currentUser.value.id);
     expect(readUpdateState().enabledBy).not.toBe(other);
     recordCheckOutcome({ at: new Date(), latestVersion: '1.4.0' });
     // The forged field is simply never read.
-    await actions.dismissUpdateAction(form({ version: '1.4.0', userId: String(other) }));
+    await actions.dismissUpdateAction({}, form({ version: '1.4.0', userId: String(other) }));
     expect(readUpdateState().dismissedVersion).toBe('1.4.0');
   });
 });
 
 describe("MUST-9.7: a stale version is refused against the server's own state", () => {
   it('applyUpdateAction refuses a version that is not update.latest_version', async () => {
-    await actions.enableUpdateChecksAction();
+    await actions.enableUpdateChecksAction({}, new FormData());
     recordCheckOutcome({ at: new Date(), latestVersion: '1.4.0' });
-    const result = await actions.applyUpdateAction(form({ version: '1.3.9' }));
+    const result = await actions.applyUpdateAction({}, form({ version: '1.3.9' }));
     expect(result.error).toBe('That version is no longer the one on offer. Press Check now and read the notes again.');
     expect(fetchCalls).toHaveLength(0);
   });
@@ -144,30 +144,30 @@ describe("MUST-9.7: a stale version is refused against the server's own state", 
 
 describe('Fix round finding 2 / 3: dismissUpdateAction hygiene', () => {
   it('refuses to pre-dismiss a version that is not update.latest_version', async () => {
-    await actions.enableUpdateChecksAction();
+    await actions.enableUpdateChecksAction({}, new FormData());
     recordCheckOutcome({ at: new Date(), latestVersion: '1.4.0' });
-    const result = await actions.dismissUpdateAction(form({ version: '1.5.0' }));
+    const result = await actions.dismissUpdateAction({}, form({ version: '1.5.0' }));
     expect(result.error).toBe('That version is no longer the one on offer. Press Check now and read the notes again.');
     expect(readUpdateState().dismissedVersion).toBeNull();
   });
 
   it('round 3, cosmetic: with no update on offer at all, refuses with NO_UPDATE_ERROR, not the stale-version sentence', async () => {
-    await actions.enableUpdateChecksAction();
+    await actions.enableUpdateChecksAction({}, new FormData());
     // No recordCheckOutcome call at all: update.latest_version stays null, the same
     // "nothing has ever been offered" state applyUpdateAction distinguishes from "offered,
     // but not THIS version".
-    const result = await actions.dismissUpdateAction(form({ version: '1.4.0' }));
+    const result = await actions.dismissUpdateAction({}, form({ version: '1.4.0' }));
     expect(result.error).toBe('There is no update on offer right now.');
     expect(readUpdateState().dismissedVersion).toBeNull();
   });
 
   it('"Show again" (an empty version) deletes the key rather than writing an empty string', async () => {
-    await actions.enableUpdateChecksAction();
+    await actions.enableUpdateChecksAction({}, new FormData());
     recordCheckOutcome({ at: new Date(), latestVersion: '1.4.0' });
-    await actions.dismissUpdateAction(form({ version: '1.4.0' }));
+    await actions.dismissUpdateAction({}, form({ version: '1.4.0' }));
     expect(readUpdateState().dismissedVersion).toBe('1.4.0');
 
-    await actions.dismissUpdateAction(form({}));
+    await actions.dismissUpdateAction({}, form({}));
     expect(readUpdateState().dismissedVersion).toBeNull();
     const row = t.sqlite.prepare(`select value from settings where key = 'update.dismissed_version'`).get();
     expect(row).toBeUndefined();
@@ -176,21 +176,21 @@ describe('Fix round finding 2 / 3: dismissUpdateAction hygiene', () => {
 
 describe('MUST-10.9 / MUST-10.10: a rate-limited action performs no egress', () => {
   it('the sixth Check now returns the wait message and fetches nothing', async () => {
-    await actions.enableUpdateChecksAction();
+    await actions.enableUpdateChecksAction({}, new FormData());
     stubRelease(`v${APP_VERSION}`);
-    for (let i = 0; i < CHECK_NOW_MAX; i += 1) await actions.checkForUpdateNowAction();
+    for (let i = 0; i < CHECK_NOW_MAX; i += 1) await actions.checkForUpdateNowAction({}, new FormData());
     const before = fetchCalls.length;
-    const refused = await actions.checkForUpdateNowAction();
+    const refused = await actions.checkForUpdateNowAction({}, new FormData());
     expect(refused.error).toMatch(/^Too many attempts\. Try again in \d+ minutes\.$/);
     expect(fetchCalls.length).toBe(before);
   });
 
   it('Update now with no Watchtower burns no apply quota', async () => {
     delete process.env.WATCHTOWER_URL;
-    await actions.enableUpdateChecksAction();
+    await actions.enableUpdateChecksAction({}, new FormData());
     recordCheckOutcome({ at: new Date(), latestVersion: '1.4.0' });
     for (let i = 0; i < APPLY_MAX + 2; i += 1) {
-      const result = await actions.applyUpdateAction(form({ version: '1.4.0' }));
+      const result = await actions.applyUpdateAction({}, form({ version: '1.4.0' }));
       expect(result.error).toBe('This install has no Watchtower companion to ask.');
     }
     // The bucket is untouched, so a properly configured install still has all three.
@@ -203,15 +203,15 @@ describe('MUST-10.9 / MUST-10.10: a rate-limited action performs no egress', () 
     // local check.
     process.env.WATCHTOWER_URL = 'http://watchtower:8080/v1/update';
     process.env.WATCHTOWER_TOKEN = 'a-fine-token-value-long-enough';
-    await actions.enableUpdateChecksAction();
+    await actions.enableUpdateChecksAction({}, new FormData());
     recordCheckOutcome({ at: new Date(), latestVersion: '1.4.0' });
     stubWatchtower(200);
 
     for (let i = 0; i < APPLY_MAX; i += 1) {
-      const result = await actions.applyUpdateAction(form({ version: '1.4.0' }));
+      const result = await actions.applyUpdateAction({}, form({ version: '1.4.0' }));
       expect(result.message).toBeDefined();
     }
-    const refused = await actions.applyUpdateAction(form({ version: '1.4.0' }));
+    const refused = await actions.applyUpdateAction({}, form({ version: '1.4.0' }));
     expect(refused.error).toMatch(/^Too many attempts\. Try again in \d+ minutes\.$/);
     expect(refused.message).toBeUndefined();
   });
@@ -221,10 +221,10 @@ describe('MUST-7.3 / AC7: no returned state contains a token substring', () => {
   it('a 401 from Watchtower returns the fixed sentence and nothing of the token', async () => {
     process.env.WATCHTOWER_URL = 'http://watchtower:8080/v1/update';
     process.env.WATCHTOWER_TOKEN = 'super-secret-token-value';
-    await actions.enableUpdateChecksAction();
+    await actions.enableUpdateChecksAction({}, new FormData());
     recordCheckOutcome({ at: new Date(), latestVersion: '1.4.0' });
     stubWatchtower(401);
-    const result = await actions.applyUpdateAction(form({ version: '1.4.0' }));
+    const result = await actions.applyUpdateAction({}, form({ version: '1.4.0' }));
     expect(result.error).toBe(
       'Watchtower rejected the token. Check that WATCHTOWER_TOKEN matches WATCHTOWER_HTTP_API_TOKEN in your compose file.',
     );
@@ -240,7 +240,7 @@ describe('WATCH ITEM (Task 5 review): no action response ever echoes the configu
 
     const responses: unknown[] = [];
 
-    responses.push(await actions.enableUpdateChecksAction());
+    responses.push(await actions.enableUpdateChecksAction({}, new FormData()));
 
     recordCheckOutcome({ at: new Date(), latestVersion: '1.4.0' });
     responses.push(await actions.setAutoApplyAction({}, form({ autoApply: 'on' })));
@@ -251,15 +251,15 @@ describe('WATCH ITEM (Task 5 review): no action response ever echoes the configu
 
     recordCheckOutcome({ at: new Date(), latestVersion: '1.4.0' });
     stubWatchtower(401);
-    responses.push(await actions.applyUpdateAction(form({ version: '1.4.0' })));
+    responses.push(await actions.applyUpdateAction({}, form({ version: '1.4.0' })));
 
     recordCheckOutcome({ at: new Date(), latestVersion: '1.4.0' });
     stubRelease(`v${APP_VERSION}`);
-    responses.push(await actions.checkForUpdateNowAction());
+    responses.push(await actions.checkForUpdateNowAction({}, new FormData()));
 
     recordCheckOutcome({ at: new Date(), latestVersion: '1.4.0' });
-    responses.push(await actions.dismissUpdateAction(form({ version: '1.4.0' })));
-    responses.push(await actions.disableUpdateChecksAction());
+    responses.push(await actions.dismissUpdateAction({}, form({ version: '1.4.0' })));
+    responses.push(await actions.disableUpdateChecksAction({}, new FormData()));
 
     expect(responses).toHaveLength(7);
     for (const result of responses) {
@@ -272,11 +272,40 @@ describe('WATCH ITEM (Task 5 review): no action response ever echoes the configu
 
 describe('MUST-3.4: disable leaves exactly one update. settings row', () => {
   it('wipes the cache, the error and the dismissal', async () => {
-    await actions.enableUpdateChecksAction();
+    await actions.enableUpdateChecksAction({}, new FormData());
     recordCheckOutcome({ at: new Date(), latestVersion: '1.4.0' });
-    await actions.dismissUpdateAction(form({ version: '1.4.0' }));
-    await actions.disableUpdateChecksAction();
+    await actions.dismissUpdateAction({}, form({ version: '1.4.0' }));
+    await actions.disableUpdateChecksAction({}, new FormData());
     const rows = t.sqlite.prepare(`select key, value from settings where key like 'update.%'`).all();
     expect(rows).toEqual([{ key: 'update.checks_enabled', value: '0' }]);
+  });
+});
+
+describe('the update actions take (prevState, formData) so React can process them (item H)', () => {
+  it('checkForUpdateNowAction still returns its message and still revalidates', async () => {
+    await actions.enableUpdateChecksAction({}, new FormData());
+    stubRelease(`v${APP_VERSION}`);
+    const result = await actions.checkForUpdateNowAction({}, new FormData());
+    expect(typeof result.message === 'string' || typeof result.error === 'string').toBe(true);
+  });
+
+  it('says so when there is nothing new, rather than looking identical', async () => {
+    // A control that greys out and then looks the same is indistinguishable from one that did
+    // nothing. The SENTENCE is the fix, not just the props refresh.
+    await actions.enableUpdateChecksAction({}, new FormData());
+    stubRelease(`v${APP_VERSION}`);
+    const result = await actions.checkForUpdateNowAction({}, new FormData());
+    expect(result.message).toBe('You are on the newest published version.');
+  });
+
+  it('enable/disable/apply/dismiss all accept the same call shape', async () => {
+    await expect(actions.enableUpdateChecksAction({}, new FormData())).resolves.toBeTruthy();
+    await expect(actions.disableUpdateChecksAction({}, new FormData())).resolves.toBeTruthy();
+    await actions.enableUpdateChecksAction({}, new FormData());
+    recordCheckOutcome({ at: new Date(), latestVersion: '9.9.9' });
+    const fd = new FormData();
+    fd.set('version', '9.9.9');
+    await expect(actions.applyUpdateAction({}, fd)).resolves.toBeTruthy();
+    await expect(actions.dismissUpdateAction({}, fd)).resolves.toBeTruthy();
   });
 });

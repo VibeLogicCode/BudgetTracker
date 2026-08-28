@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
+import fs from 'node:fs';
+import path from 'node:path';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/react';
 import { UpdatesClient, type UpdatesViewProps } from '@/app/(app)/settings/updates-client';
-import { applyUpdateAction, reviewUpdateAction } from '@/app/(app)/settings/actions';
+import { applyUpdateAction, checkForUpdateNowAction, reviewUpdateAction } from '@/app/(app)/settings/actions';
 
 vi.mock('@/app/(app)/settings/actions', () => ({
   enableUpdateChecksAction: vi.fn(async () => ({})),
@@ -214,5 +216,30 @@ describe('MUST-7.3: the card never receives a token', () => {
     expect(keys).toContain('canApplyInApp');
     for (const key of keys) expect(key.toLowerCase()).not.toContain('token');
     expect(JSON.stringify(base).toLowerCase()).not.toContain('bearer');
+  });
+});
+
+describe('item H: updates-client.tsx passes server actions to useActionState directly', () => {
+  it('passes every server action to useActionState directly (item H)', () => {
+    // The cause, asserted as source shape, because the symptom (stale props after Check now) is
+    // not observable in jsdom: a closure defined in a 'use client' module is a CLIENT function,
+    // so React never processes a server-action response for it and the router never refreshes.
+    const source = fs.readFileSync(
+      path.join(process.cwd(), 'src/app/(app)/settings/updates-client.tsx'),
+      'utf8',
+    );
+    const wrapped = [...source.matchAll(/useActionState\(\s*async\s*\(/g)];
+    // reviewUpdateAction is the one deliberate exception: it revalidates nothing and returns a
+    // different state type (settings/actions.ts:280-284).
+    expect(wrapped).toHaveLength(1);
+  });
+
+  it('shows the action\'s own message when nothing changed', async () => {
+    vi.mocked(checkForUpdateNowAction).mockResolvedValueOnce({
+      message: 'You are on the newest published version.',
+    });
+    render(<UpdatesClient {...base} />);
+    submit('Check now');
+    await waitFor(() => expect(screen.getByText('You are on the newest published version.')).toBeTruthy());
   });
 });

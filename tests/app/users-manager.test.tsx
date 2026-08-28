@@ -14,6 +14,7 @@ vi.mock('@/app/(app)/settings/users/actions', () => ({
   setVisibilityAction: vi.fn(async () => ({})),
   resetPasswordAction: vi.fn(async () => ({})),
   resetMfaAction: vi.fn(async () => ({})),
+  setCanSignInAction: vi.fn(async () => ({})),
 }));
 
 beforeEach(() => vi.clearAllMocks());
@@ -135,5 +136,18 @@ describe('v1.12.1: Deactivate and Reset MFA ask first (item AU / UX-6, ruling R5
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Reset MFA' }));
 
     expect((await screen.findByText(/Every one of their sessions is signed out/)).textContent).toContain(member.name);
+  });
+});
+
+describe('item BI: a sign-in toggle on every row', () => {
+  it('offers a sign-in toggle on every row (item BI)', () => {
+    render(<UsersManager users={[user({ id: 2, name: 'Bob', canSignIn: true })]} />);
+    const toggle = screen.getByLabelText('Bob can sign in') as HTMLInputElement;
+    expect(toggle.checked).toBe(true);
+  });
+
+  it('reflects an attribution-only person', () => {
+    render(<UsersManager users={[user({ id: 3, name: 'Robin', canSignIn: false })]} />);
+    expect((screen.getByLabelText('Robin can sign in') as HTMLInputElement).checked).toBe(false);
   });
 });

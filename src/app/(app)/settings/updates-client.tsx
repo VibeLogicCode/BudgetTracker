@@ -50,12 +50,12 @@ function stamp(iso: string | null): string {
 }
 
 export function UpdatesClient(props: UpdatesViewProps) {
-  const [enableState, enable] = useActionState(async () => enableUpdateChecksAction(), initial);
-  const [disableState, disable] = useActionState(async () => disableUpdateChecksAction(), initial);
+  const [enableState, enable] = useActionState(enableUpdateChecksAction, initial);
+  const [disableState, disable] = useActionState(disableUpdateChecksAction, initial);
   const [autoState, saveAuto] = useActionState(setAutoApplyAction, initial);
-  const [checkState, checkNow] = useActionState(async () => checkForUpdateNowAction(), initial);
-  const [applyState, apply] = useActionState(async (_prev: UpdateActionState, formData: FormData) => applyUpdateAction(formData), initial);
-  const [dismissState, dismiss] = useActionState(async (_prev: UpdateActionState, formData: FormData) => dismissUpdateAction(formData), initial);
+  const [checkState, checkNow] = useActionState(checkForUpdateNowAction, initial);
+  const [applyState, apply] = useActionState(applyUpdateAction, initial);
+  const [dismissState, dismiss] = useActionState(dismissUpdateAction, initial);
   const [review, runReview, reviewPending] = useActionState(
     async (_prev: ReviewUpdateState, formData: FormData) => reviewUpdateAction(formData),
     {} as ReviewUpdateState,

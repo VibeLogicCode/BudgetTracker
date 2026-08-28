@@ -11,8 +11,10 @@ vi.mock('@/lib/auth/session', async (importOriginal) => {
   return { ...actual, requireAdmin: vi.fn(async () => ADMIN) };
 });
 
+let originHeaders = { origin: 'http://nas.local:3000', host: 'nas.local:3000' };
+
 vi.mock('next/headers', () => ({
-  headers: async () => new Headers({ origin: 'http://nas.local:3000', host: 'nas.local:3000' }),
+  headers: async () => new Headers(originHeaders),
 }));
 
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
@@ -22,8 +24,10 @@ import {
   createUserAction,
   resetMfaAction,
   resetPasswordAction,
+  setCanSignInAction,
   setVisibilityAction,
 } from '@/app/(app)/settings/users/actions';
+import { CROSS_ORIGIN_ERROR } from '@/lib/auth/csrf';
 import { createSession } from '@/lib/auth/session';
 import { createUser, findUserById, findUserByUsername, listUsers, mustChangePassword } from '@/lib/auth/users';
 import { enableTotpForUser, generateTotpSecret } from '@/lib/auth/totp';
@@ -32,6 +36,7 @@ let current: TestDb | null = null;
 afterEach(() => {
   current?.cleanup();
   current = null;
+  originHeaders = { origin: 'http://nas.local:3000', host: 'nas.local:3000' };
 });
 
 function formData(fields: Record<string, string>): FormData {
@@ -148,5 +153,40 @@ describe('setVisibilityAction — ruling R2, micro-ruling M1', () => {
     const result = await setVisibilityAction({}, formData({ userId: String(root.id), visibility: 'self' }));
     expect(result.error).toMatch(/member first/i);
     expect(findUserById(root.id)?.visibility).toBe('household');
+  });
+});
+
+describe('setCanSignInAction (item BI)', () => {
+  it('turns a member into an attribution-only person', async () => {
+    current = createTestDb();
+    const bob = await createUser({ name: 'Bob', username: 'bob', password: 'correct horse battery', role: 'member' });
+    const result = await setCanSignInAction({}, formData({ userId: String(bob.id), canSignIn: '0' }));
+    expect(result.message).toBeTruthy();
+    expect(listUsers().find((u) => u.id === bob.id)?.canSignIn).toBe(false);
+  });
+
+  it('turns them back', async () => {
+    current = createTestDb();
+    const bob = await createUser({ name: 'Bob', username: 'bob', password: 'correct horse battery', role: 'member' });
+    await setCanSignInAction({}, formData({ userId: String(bob.id), canSignIn: '0' }));
+    await setCanSignInAction({}, formData({ userId: String(bob.id), canSignIn: '1' }));
+    expect(listUsers().find((u) => u.id === bob.id)?.canSignIn).toBe(true);
+  });
+
+  it('refuses to lock an admin out, in the library\'s own words', async () => {
+    current = createTestDb();
+    const root = await createUser({ name: 'Root', username: 'root', password: 'correct horse battery', role: 'admin' });
+    const result = await setCanSignInAction({}, formData({ userId: String(root.id), canSignIn: '0' }));
+    expect(result.error).toBe('An admin must be able to sign in. Make them a member first.');
+    expect(listUsers().find((u) => u.id === root.id)?.canSignIn).toBe(true);
+  });
+
+  it('rejects a cross-origin request before touching anything', async () => {
+    current = createTestDb();
+    const bob = await createUser({ name: 'Bob', username: 'bob', password: 'correct horse battery', role: 'member' });
+    originHeaders = { origin: 'http://evil.example', host: 'nas.local:3000' };
+    const result = await setCanSignInAction({}, formData({ userId: String(bob.id), canSignIn: '0' }));
+    expect(result.error).toBe(CROSS_ORIGIN_ERROR);
+    expect(listUsers().find((u) => u.id === bob.id)?.canSignIn).toBe(true);
   });
 });

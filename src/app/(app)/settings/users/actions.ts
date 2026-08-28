@@ -16,6 +16,7 @@ import {
   findUserById,
   setMustChangePassword,
   setUserActive,
+  setUserCanSignIn,
   setUserPassword,
   setUserVisibility,
 } from '@/lib/auth/users';
@@ -146,6 +147,34 @@ export async function setVisibilityAction(_prev: UsersFormState, formData: FormD
     setUserVisibility(parsed.data.userId, parsed.data.visibility);
   } catch (error) {
     return { error: error instanceof Error ? error.message : 'Could not update that person.' };
+  }
+  revalidatePath('/settings/users');
+  return { message: 'Updated.' };
+}
+
+/**
+ * v1.13.1 (item BI). setUserCanSignIn has existed since v1.13.0 (src/lib/auth/users.ts:265) with
+ * no server action and no control anywhere, so an admin could create a no-login person at signup
+ * (createPersonWithoutLogin) but could not convert an existing member into one, or back, without
+ * editing the database by hand. Shaped exactly like setVisibilityAction above; the last-admin
+ * refusal is the library's own throw, surfaced verbatim.
+ */
+export async function setCanSignInAction(_prev: UsersFormState, formData: FormData): Promise<UsersFormState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  await requireAdmin();
+  const userIdParsed = z.coerce.number().int().positive().safeParse(formData.get('userId'));
+  if (!userIdParsed.success) return { error: 'Invalid request.' };
+  // Accepts both an explicit '0'/'1' (this action's own test contract, and setActiveAction's
+  // convention) and AutoSaveCheckbox's native shape ('on' when checked, the field OMITTED
+  // entirely when not) -- the same "absent means off" rule an unchecked HTML checkbox has
+  // always followed.
+  const raw = formData.get('canSignIn');
+  const canSignIn = raw === '1' || raw === 'on';
+  try {
+    setUserCanSignIn(userIdParsed.data, canSignIn);
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : 'Could not update the user.' };
   }
   revalidatePath('/settings/users');
   return { message: 'Updated.' };
