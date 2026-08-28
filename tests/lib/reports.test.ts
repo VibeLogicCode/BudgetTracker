@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
+import type { Viewer } from '@/lib/auth/viewer';
 import {
   UNATTRIBUTED_LABEL,
   cashflowTrend,
@@ -15,6 +16,11 @@ import {
 } from '@/lib/reports';
 import { nowIso } from '@/lib/clock';
 import { setTransactionSplits } from '@/lib/splits';
+
+// v1.13.0 ruling R2: every aggregate under test here now takes a viewer as its last argument.
+// A household viewer's ownerScope() is always null, so passing this constant reproduces the
+// pre-v1.13.0 unscoped behaviour every one of these pre-existing tests already assumes.
+const HOUSEHOLD: Viewer = { id: 1, role: 'admin', visibility: 'household' };
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -56,14 +62,14 @@ describe('categoryBreakdown', () => {
     add({ categoryId: groceries, amountCents: 2000 });
     add({ categoryId: groceries, amountCents: -99999, isTransfer: true });
 
-    const rows = categoryBreakdown(MARCH);
+    const rows = categoryBreakdown(MARCH, HOUSEHOLD);
     expect(rows.find((r) => r.categoryId === groceries)?.spentCents).toBe(10000);
   });
 
   it('includes an Uncategorized bucket with a null id', () => {
     const { add } = setup();
     add({ categoryId: null, amountCents: -4000 });
-    const rows = categoryBreakdown(MARCH);
+    const rows = categoryBreakdown(MARCH, HOUSEHOLD);
     expect(rows.find((r) => r.categoryId === null)).toMatchObject({ categoryName: 'Uncategorized', spentCents: 4000 });
   });
 
@@ -74,8 +80,8 @@ describe('categoryBreakdown', () => {
     add({ categoryId: salary, amountCents: 500000 });
     add({ categoryId: groceries, amountCents: -12000 });
 
-    expect(categoryBreakdown(MARCH).some((r) => r.categoryId === salary)).toBe(false);
-    const withIncome = categoryBreakdown({ ...MARCH, includeIncome: true });
+    expect(categoryBreakdown(MARCH, HOUSEHOLD).some((r) => r.categoryId === salary)).toBe(false);
+    const withIncome = categoryBreakdown({ ...MARCH, includeIncome: true }, HOUSEHOLD);
     expect(withIncome.find((r) => r.categoryId === salary)?.spentCents).toBe(-500000);
   });
 
@@ -88,10 +94,10 @@ describe('categoryBreakdown', () => {
     add({ categoryId: groceries, amountCents: -20000 });
     add({ categoryId: coffee, amountCents: -3000 });
 
-    const flat = categoryBreakdown(MARCH);
+    const flat = categoryBreakdown(MARCH, HOUSEHOLD);
     expect(flat.find((r) => r.categoryId === food)?.spentCents).toBe(1000);
 
-    const rolled = categoryBreakdown({ ...MARCH, rollup: true });
+    const rolled = categoryBreakdown({ ...MARCH, rollup: true }, HOUSEHOLD);
     expect(rolled.find((r) => r.categoryId === food)?.spentCents).toBe(24000);
     expect(rolled.some((r) => r.categoryId === groceries)).toBe(false);
   });
@@ -104,15 +110,15 @@ describe('categoryBreakdown', () => {
     add({ categoryId: groceries, amountCents: -3000, date: '2026-03-31', attributedUserId: bob });
     add({ categoryId: groceries, amountCents: -4000, date: '2026-04-01' });
 
-    expect(categoryBreakdown(MARCH).find((r) => r.categoryId === groceries)?.spentCents).toBe(5000);
-    expect(categoryBreakdown({ ...MARCH, attributedUserId: alice }).find((r) => r.categoryId === groceries)?.spentCents).toBe(2000);
+    expect(categoryBreakdown(MARCH, HOUSEHOLD).find((r) => r.categoryId === groceries)?.spentCents).toBe(5000);
+    expect(categoryBreakdown({ ...MARCH, attributedUserId: alice }, HOUSEHOLD).find((r) => r.categoryId === groceries)?.spentCents).toBe(2000);
   });
 
   it('sorts by spend, highest first', () => {
     const { db, add } = setup();
     add({ categoryId: categoryIdByName(db, 'Coffee'), amountCents: -1000 });
     add({ categoryId: categoryIdByName(db, 'Groceries'), amountCents: -9000 });
-    const rows = categoryBreakdown(MARCH);
+    const rows = categoryBreakdown(MARCH, HOUSEHOLD);
     expect(rows[0].categoryName).toBe('Groceries');
   });
 });
@@ -127,7 +133,7 @@ describe('cashflowTrend', () => {
     add({ categoryId: null, amountCents: -30000, date: '2026-03-06' });
     add({ categoryId: null, amountCents: -900000, date: '2026-03-07', isTransfer: true });
 
-    const trend = cashflowTrend(3, { endMonth: '2026-03' });
+    const trend = cashflowTrend(3, { endMonth: '2026-03' }, HOUSEHOLD);
     expect(trend.map((r) => r.month)).toEqual(['2026-01', '2026-02', '2026-03']);
     const march = trend[2];
     expect(march.incomeCents).toBe(500000);
@@ -139,14 +145,14 @@ describe('cashflowTrend', () => {
     const { db, add } = setup();
     const groceries = categoryIdByName(db, 'Groceries');
     add({ categoryId: groceries, amountCents: 5000, date: '2026-03-05' });
-    const march = cashflowTrend(1, { endMonth: '2026-03' })[0];
+    const march = cashflowTrend(1, { endMonth: '2026-03' }, HOUSEHOLD)[0];
     expect(march.incomeCents).toBe(0);
     expect(march.spendCents).toBe(-5000);
   });
 
   it('emits zero-filled months with no activity', () => {
     setup();
-    const trend = cashflowTrend(12, { endMonth: '2026-03' });
+    const trend = cashflowTrend(12, { endMonth: '2026-03' }, HOUSEHOLD);
     expect(trend).toHaveLength(12);
     expect(trend[0].month).toBe('2025-04');
     expect(trend.every((r) => r.incomeCents === 0 && r.spendCents === 0)).toBe(true);
@@ -159,9 +165,9 @@ describe('cashflowTrend', () => {
     add({ categoryId: groceries, amountCents: -20000, date: '2026-03-06', attributedUserId: bob });
     add({ categoryId: groceries, amountCents: -30000, date: '2026-03-07', attributedUserId: null });
 
-    expect(cashflowTrend(1, { endMonth: '2026-03' })[0].spendCents).toBe(60000);
-    expect(cashflowTrend(1, { endMonth: '2026-03', attributedUserId: alice })[0].spendCents).toBe(10000);
-    expect(cashflowTrend(1, { endMonth: '2026-03', attributedUserId: 'unattributed' })[0].spendCents).toBe(30000);
+    expect(cashflowTrend(1, { endMonth: '2026-03' }, HOUSEHOLD)[0].spendCents).toBe(60000);
+    expect(cashflowTrend(1, { endMonth: '2026-03', attributedUserId: alice }, HOUSEHOLD)[0].spendCents).toBe(10000);
+    expect(cashflowTrend(1, { endMonth: '2026-03', attributedUserId: 'unattributed' }, HOUSEHOLD)[0].spendCents).toBe(30000);
   });
 });
 
@@ -174,7 +180,7 @@ describe('categoryMonthOverMonth', () => {
     add({ categoryId: groceries, amountCents: -12000, date: '2026-02-05' });
     add({ categoryId: coffee, amountCents: -2000, date: '2026-02-05' });
 
-    const result = categoryMonthOverMonth({ fromMonth: '2026-01', toMonth: '2026-03' });
+    const result = categoryMonthOverMonth({ fromMonth: '2026-01', toMonth: '2026-03' }, HOUSEHOLD);
     expect(result.months).toEqual(['2026-01', '2026-02', '2026-03']);
     const groceriesRow = result.rows.find((r) => r.categoryId === groceries)!;
     expect(groceriesRow.byMonth).toEqual({ '2026-01': 10000, '2026-02': 12000, '2026-03': 0 });
@@ -188,7 +194,7 @@ describe('categoryMonthOverMonth', () => {
     add({ categoryId: categoryIdByName(db, 'Groceries'), amountCents: -10000, date: '2026-01-05' });
     add({ categoryId: categoryIdByName(db, 'Coffee'), amountCents: -2000, date: '2026-01-05' });
     add({ categoryId: categoryIdByName(db, 'Gas'), amountCents: -5000, date: '2026-01-05' });
-    expect(categoryMonthOverMonth({ fromMonth: '2026-01', toMonth: '2026-01', limit: 2 }).rows).toHaveLength(2);
+    expect(categoryMonthOverMonth({ fromMonth: '2026-01', toMonth: '2026-01', limit: 2 }, HOUSEHOLD).rows).toHaveLength(2);
   });
 
   it('stays continuous across a year boundary', () => {
@@ -199,7 +205,7 @@ describe('categoryMonthOverMonth', () => {
     add({ categoryId: groceries, amountCents: -7000, date: '2026-01-05' });
     add({ categoryId: groceries, amountCents: -8000, date: '2026-02-01' });
 
-    const result = categoryMonthOverMonth({ fromMonth: '2025-11', toMonth: '2026-02' });
+    const result = categoryMonthOverMonth({ fromMonth: '2025-11', toMonth: '2026-02' }, HOUSEHOLD);
     expect(result.months).toEqual(['2025-11', '2025-12', '2026-01', '2026-02']);
     const row = result.rows.find((r) => r.categoryId === groceries)!;
     expect(row.byMonth).toEqual({ '2025-11': 5000, '2025-12': 6000, '2026-01': 7000, '2026-02': 8000 });
@@ -216,7 +222,7 @@ describe('personSpendSplit', () => {
     add({ categoryId: groceries, amountCents: -30000, attributedUserId: null });
     add({ categoryId: null, amountCents: -5000, attributedUserId: null });
 
-    const split = personSpendSplit(MARCH);
+    const split = personSpendSplit(MARCH, HOUSEHOLD);
     expect(UNATTRIBUTED_LABEL).toBe('Household/unattributed');
     expect(split.find((r) => r.userId === alice)).toMatchObject({ label: 'Alice', spentCents: 10000 });
     expect(split.find((r) => r.userId === bob)).toMatchObject({ label: 'Bob', spentCents: 20000 });
@@ -226,7 +232,7 @@ describe('personSpendSplit', () => {
   it('always includes the unattributed bucket, even at zero', () => {
     const { db, alice, add } = setup();
     add({ categoryId: categoryIdByName(db, 'Groceries'), amountCents: -10000, attributedUserId: alice });
-    expect(personSpendSplit(MARCH).find((r) => r.userId === null)).toMatchObject({ spentCents: 0 });
+    expect(personSpendSplit(MARCH, HOUSEHOLD).find((r) => r.userId === null)).toMatchObject({ spentCents: 0 });
   });
 
   it('excludes income and transfers', () => {
@@ -234,7 +240,7 @@ describe('personSpendSplit', () => {
     add({ categoryId: categoryIdByName(db, 'Salary'), amountCents: 500000, attributedUserId: alice });
     add({ categoryId: categoryIdByName(db, 'Groceries'), amountCents: -900000, attributedUserId: alice, isTransfer: true });
     add({ categoryId: categoryIdByName(db, 'Groceries'), amountCents: -1000, attributedUserId: alice });
-    expect(personSpendSplit(MARCH).find((r) => r.userId === alice)?.spentCents).toBe(1000);
+    expect(personSpendSplit(MARCH, HOUSEHOLD).find((r) => r.userId === alice)?.spentCents).toBe(1000);
   });
 });
 
@@ -247,7 +253,7 @@ describe('topMerchants', () => {
     add({ categoryId: groceries, amountCents: 2000, merchant: 'LOBLAWS' });
     add({ categoryId: groceries, amountCents: -5000, merchant: 'METRO' });
 
-    const rows = topMerchants({ ...MARCH, limit: 5 });
+    const rows = topMerchants({ ...MARCH, limit: 5 }, HOUSEHOLD);
     expect(rows[0]).toMatchObject({ normalizedMerchant: 'LOBLAWS', spentCents: 20000, count: 3 });
     expect(rows[1]).toMatchObject({ normalizedMerchant: 'METRO', spentCents: 5000, count: 1 });
   });
@@ -258,7 +264,7 @@ describe('topMerchants', () => {
     add({ categoryId: groceries, amountCents: 3000, merchant: 'REFUND ONLY' });
     add({ categoryId: groceries, amountCents: -1000, merchant: 'A' });
     add({ categoryId: groceries, amountCents: -2000, merchant: 'B' });
-    const rows = topMerchants({ ...MARCH, limit: 1 });
+    const rows = topMerchants({ ...MARCH, limit: 1 }, HOUSEHOLD);
     expect(rows).toHaveLength(1);
     expect(rows[0].normalizedMerchant).toBe('B');
   });
@@ -292,7 +298,7 @@ describe('topMerchants — split-aware income filter and sum (v1.7.0 review fix)
       userId: 1,
     });
 
-    const rows = topMerchants({ ...MARCH, limit: 5 });
+    const rows = topMerchants({ ...MARCH, limit: 5 }, HOUSEHOLD);
     const costco = rows.find((r) => r.normalizedMerchant === 'COSTCO');
     expect(costco).toBeDefined();
     expect(costco).toMatchObject({ spentCents: 10000, count: 1 });
@@ -314,7 +320,7 @@ describe('topMerchants — split-aware income filter and sum (v1.7.0 review fix)
       userId: 1,
     });
 
-    const rows = topMerchants({ ...MARCH, limit: 5 });
+    const rows = topMerchants({ ...MARCH, limit: 5 }, HOUSEHOLD);
     const costco = rows.find((r) => r.normalizedMerchant === 'COSTCO')!;
     expect(costco.count).toBe(1);
     expect(costco.spentCents).toBe(9000);
@@ -336,7 +342,7 @@ describe('topMerchants — split-aware income filter and sum (v1.7.0 review fix)
       userId: 1,
     });
 
-    const rows = topMerchants({ ...MARCH, limit: 5 });
+    const rows = topMerchants({ ...MARCH, limit: 5 }, HOUSEHOLD);
     const costco = rows.find((r) => r.normalizedMerchant === 'COSTCO')!;
     // Only the two expense parts ($50 + $30) -- the $20 income part is excluded WITHOUT
     // taking the expense parts down with it.
@@ -349,7 +355,7 @@ describe('topMerchants — split-aware income filter and sum (v1.7.0 review fix)
     const groceries = categoryIdByName(db, 'Groceries');
     add({ categoryId: groceries, amountCents: -4500, merchant: 'METRO' });
 
-    const rows = topMerchants({ ...MARCH, limit: 5 });
+    const rows = topMerchants({ ...MARCH, limit: 5 }, HOUSEHOLD);
     expect(rows.find((r) => r.normalizedMerchant === 'METRO')).toMatchObject({ spentCents: 4500, count: 1 });
   });
 
@@ -367,7 +373,7 @@ describe('topMerchants — split-aware income filter and sum (v1.7.0 review fix)
       userId: 1,
     });
 
-    const rows = topMerchants({ ...MARCH, limit: 10 });
+    const rows = topMerchants({ ...MARCH, limit: 10 }, HOUSEHOLD);
     expect(rows.filter((r) => r.normalizedMerchant === 'COSTCO')).toHaveLength(1);
   });
 });
@@ -485,7 +491,7 @@ describe('csv export', () => {
     const id = add({ categoryId: groceries, amountCents: -4500, merchant: 'LOBLAWS', date: '2026-03-05' });
     db.run(sql`update transactions set notes = ${'=SUM(1)'} where id = ${id}`);
 
-    const csv = transactionsCsv({ from: '2026-03-01', to: '2026-03-31' });
+    const csv = transactionsCsv({ from: '2026-03-01', to: '2026-03-31' }, HOUSEHOLD);
     const row = csv.trim().split('\r\n')[1];
     expect(row).toContain(`'=SUM(1)`);
     expect(row).not.toContain(',=SUM(1)');
@@ -499,7 +505,7 @@ describe('csv export', () => {
     add({ categoryId: groceries, amountCents: -12345, attributedUserId: alice, merchant: 'LOBLAWS', date: '2026-03-05' });
     add({ categoryId: null, amountCents: -500, merchant: 'UNKNOWN SHOP', date: '2026-03-06' });
 
-    const csv = transactionsCsv({ from: '2026-03-01', to: '2026-03-31' });
+    const csv = transactionsCsv({ from: '2026-03-01', to: '2026-03-31' }, HOUSEHOLD);
     const lines = csv.trim().split('\r\n');
     expect(lines[0]).toBe('Date,Account,Description,Merchant,Amount,Category,Person,Transfer,Source,Notes');
     expect(lines).toHaveLength(3);
@@ -517,7 +523,7 @@ describe('transactionsCsv — splits (v1.7.0 Task 4)', () => {
     const groceries = categoryIdByName(db, 'Groceries');
     add({ categoryId: groceries, amountCents: -12345, attributedUserId: alice, merchant: 'LOBLAWS', date: '2026-03-05' });
 
-    const csv = transactionsCsv({ from: '2026-03-01', to: '2026-03-31' });
+    const csv = transactionsCsv({ from: '2026-03-01', to: '2026-03-31' }, HOUSEHOLD);
     expect(csv).toBe(
       'Date,Account,Description,Merchant,Amount,Category,Person,Transfer,Source,Notes\r\n' +
         '2026-03-05,Joint Chequing,LOBLAWS,LOBLAWS,-123.45,Food > Groceries,Alice,no,manual,\r\n',
@@ -540,7 +546,7 @@ describe('transactionsCsv — splits (v1.7.0 Task 4)', () => {
       ],
     });
 
-    const csv = transactionsCsv({ from: '2026-03-01', to: '2026-03-31' });
+    const csv = transactionsCsv({ from: '2026-03-01', to: '2026-03-31' }, HOUSEHOLD);
     const lines = csv.trim().split('\r\n');
     expect(lines).toHaveLength(4); // header + 3 parts, never the parent's own lump row
     expect(lines[1]).toBe(
@@ -568,7 +574,7 @@ describe('transactionsCsv — splits (v1.7.0 Task 4)', () => {
       ],
     });
 
-    const csv = transactionsCsv({ from: '2026-03-01', to: '2026-03-31' });
+    const csv = transactionsCsv({ from: '2026-03-01', to: '2026-03-31' }, HOUSEHOLD);
     const lines = csv.trim().split('\r\n');
     expect(lines[1]).toContain(`'=SUM(1)`);
     expect(lines[1]).not.toContain(',=SUM(1)');

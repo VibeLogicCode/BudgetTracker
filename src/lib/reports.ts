@@ -1,6 +1,7 @@
 import { and, eq, gte, isNull, lte, sql, type SQL } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { categories, transactions, transactionSplits, users } from '@/db/schema';
+import { ownerScope, type Viewer } from '@/lib/auth/viewer';
 import { listCategories } from '@/lib/categories';
 import { addMonths, monthEnd, monthOf, monthRange, monthStart } from '@/lib/dates';
 import { netSpentCents } from '@/lib/money';
@@ -21,6 +22,19 @@ function personClause(scope: PersonScope): SQL | null {
   if (scope === undefined || scope === null) return null;
   if (scope === 'unattributed') return isNull(transactions.attributedUserId);
   return eq(transactions.attributedUserId, scope);
+}
+
+/**
+ * v1.13.0 ruling R2: a self viewer's person scope is THEIR OWN id, whatever the URL asked for.
+ *
+ * This is the one place in reports.ts that knows about visibility. Every exported aggregate below
+ * runs its requested scope through it before building a clause, so a page cannot forget -- and
+ * `viewer` is a required parameter on all seven, so a NEW aggregate cannot forget either: it will
+ * not compile until its author decides what scope it is reading.
+ */
+function scopeFor(requested: PersonScope, viewer: Viewer): PersonScope {
+  const own = ownerScope(viewer);
+  return own === null ? requested : own;
 }
 
 function rangeClauses(range: DateRange, scope: PersonScope): SQL[] {
@@ -45,7 +59,9 @@ export interface CategoryBreakdownRow {
 
 export function categoryBreakdown(
   input: DateRange & { attributedUserId?: PersonScope; rollup?: boolean; includeIncome?: boolean },
+  viewer: Viewer,
 ): CategoryBreakdownRow[] {
+  const scope = scopeFor(input.attributedUserId, viewer);
   // Split-aware (spec 2026-08-22, v1.7.0, Task 3): a split transaction is counted once, at
   // its parts' own categories/amounts (EFFECTIVE_CATEGORY/EFFECTIVE_AMOUNT, src/lib/splits.ts)
   // via the LEFT JOIN below, never at its own lump category/amount and never at both.
@@ -53,7 +69,7 @@ export function categoryBreakdown(
     .select({ categoryId: EFFECTIVE_CATEGORY, total: sql<number>`sum(${EFFECTIVE_AMOUNT})` })
     .from(transactions)
     .leftJoin(transactionSplits, eq(transactionSplits.txnId, transactions.id))
-    .where(and(...rangeClauses(input, input.attributedUserId)))
+    .where(and(...rangeClauses(input, scope)))
     .groupBy(EFFECTIVE_CATEGORY)
     .all();
 
@@ -102,7 +118,12 @@ export interface MonthTrendRow {
   netCents: number;
 }
 
-export function cashflowTrend(months: number, opts: { endMonth?: string; attributedUserId?: PersonScope } = {}): MonthTrendRow[] {
+export function cashflowTrend(
+  months: number,
+  opts: { endMonth?: string; attributedUserId?: PersonScope } = {},
+  viewer: Viewer,
+): MonthTrendRow[] {
+  const scope = scopeFor(opts.attributedUserId, viewer);
   const endMonth = opts.endMonth ?? monthOf(new Date().toISOString().slice(0, 10));
   const startMonth = addMonths(endMonth, -(months - 1));
   const keys = monthRange(startMonth, endMonth);
@@ -120,7 +141,7 @@ export function cashflowTrend(months: number, opts: { endMonth?: string; attribu
     .from(transactions)
     .leftJoin(transactionSplits, eq(transactionSplits.txnId, transactions.id))
     .leftJoin(categories, eq(categories.id, EFFECTIVE_CATEGORY))
-    .where(and(...rangeClauses({ from: monthStart(startMonth), to: monthEnd(endMonth) }, opts.attributedUserId)))
+    .where(and(...rangeClauses({ from: monthStart(startMonth), to: monthEnd(endMonth) }, scope)))
     .groupBy(sql`substr(${transactions.date}, 1, 7)`, categories.isIncome)
     .all();
 
@@ -154,12 +175,16 @@ export interface CategoryMonthTrend {
   totalCents: number;
 }
 
-export function categoryMonthOverMonth(input: {
-  fromMonth: string;
-  toMonth: string;
-  attributedUserId?: PersonScope;
-  limit?: number;
-}): { months: string[]; rows: CategoryMonthTrend[] } {
+export function categoryMonthOverMonth(
+  input: {
+    fromMonth: string;
+    toMonth: string;
+    attributedUserId?: PersonScope;
+    limit?: number;
+  },
+  viewer: Viewer,
+): { months: string[]; rows: CategoryMonthTrend[] } {
+  const scope = scopeFor(input.attributedUserId, viewer);
   const months = monthRange(input.fromMonth, input.toMonth);
   // Split-aware (Task 3): grouped by EFFECTIVE_CATEGORY so each split part gets its own
   // monthly row, and the income-exclusion join below keys off EFFECTIVE_CATEGORY too, so a
@@ -175,7 +200,7 @@ export function categoryMonthOverMonth(input: {
     .leftJoin(categories, eq(categories.id, EFFECTIVE_CATEGORY))
     .where(
       and(
-        ...rangeClauses({ from: monthStart(input.fromMonth), to: monthEnd(input.toMonth) }, input.attributedUserId),
+        ...rangeClauses({ from: monthStart(input.fromMonth), to: monthEnd(input.toMonth) }, scope),
         eq(categories.isIncome, false),
       ),
     )
@@ -230,7 +255,8 @@ export interface YoYRow {
  * EFFECTIVE_AMOUNT so a split transaction is counted once, at its parts' own categories, never
  * at the parent's own lump category/amount.
  */
-export function categoryYearOverYear(input: { month: string; attributedUserId?: PersonScope }): YoYRow[] {
+export function categoryYearOverYear(input: { month: string; attributedUserId?: PersonScope }, viewer: Viewer): YoYRow[] {
+  const scope = scopeFor(input.attributedUserId, viewer);
   const thisMonth = input.month;
   const lastMonth = addMonths(thisMonth, -1);
   const lastYear = addMonths(thisMonth, -12);
@@ -246,7 +272,7 @@ export function categoryYearOverYear(input: { month: string; attributedUserId?: 
     .leftJoin(categories, eq(categories.id, EFFECTIVE_CATEGORY))
     .where(
       and(
-        ...rangeClauses({ from: monthStart(lastYear), to: monthEnd(thisMonth) }, input.attributedUserId),
+        ...rangeClauses({ from: monthStart(lastYear), to: monthEnd(thisMonth) }, scope),
         eq(categories.isIncome, false),
       ),
     )
@@ -303,7 +329,13 @@ export interface PersonSplitRow {
   spentCents: number;
 }
 
-export function personSpendSplit(input: DateRange): PersonSplitRow[] {
+/**
+ * A self viewer gets exactly one row -- their own. The split IS the household comparison otherwise,
+ * which is precisely the "reports of household totals" ruling R2 forbids, so the Reports page renders
+ * this section only for a household viewer (Task 13). Returning one row rather than throwing keeps
+ * this function total for any caller.
+ */
+export function personSpendSplit(input: DateRange, viewer: Viewer): PersonSplitRow[] {
   // Split-aware (Task 3): grouped by transactions.attributedUserId (attribution stays
   // whole-transaction, design ruling 1 -- a split has no owner of its own), but the income
   // exclusion join keys off EFFECTIVE_CATEGORY and the summed amount is EFFECTIVE_AMOUNT, so
@@ -328,7 +360,10 @@ export function personSpendSplit(input: DateRange): PersonSplitRow[] {
 
   // The unattributed bucket is always present — never silently dropped.
   result.push({ userId: null, label: UNATTRIBUTED_LABEL, spentCents: spendByUser.get(null) ?? 0 });
-  return result.sort((a, b) => b.spentCents - a.spentCents);
+  const sorted = result.sort((a, b) => b.spentCents - a.spentCents);
+
+  const own = ownerScope(viewer);
+  return own === null ? sorted : sorted.filter((row) => row.userId === own);
 }
 
 export interface TopMerchantRow {
@@ -337,7 +372,8 @@ export interface TopMerchantRow {
   count: number;
 }
 
-export function topMerchants(input: DateRange & { limit?: number; attributedUserId?: PersonScope }): TopMerchantRow[] {
+export function topMerchants(input: DateRange & { limit?: number; attributedUserId?: PersonScope }, viewer: Viewer): TopMerchantRow[] {
+  const scope = scopeFor(input.attributedUserId, viewer);
   // Split-aware (v1.7.0 review fix, 2026-08-22): merchant IDENTITY still groups by the
   // parent's own normalizedMerchant -- a split never changes who charged the card, so the
   // GROUPING here was always correct. What was wrong was the income FILTER and the SUM: this
@@ -364,7 +400,7 @@ export function topMerchants(input: DateRange & { limit?: number; attributedUser
     .from(transactions)
     .leftJoin(transactionSplits, eq(transactionSplits.txnId, transactions.id))
     .leftJoin(categories, eq(categories.id, EFFECTIVE_CATEGORY))
-    .where(and(...rangeClauses(input, input.attributedUserId), sql`coalesce(${categories.isIncome}, 0) = 0`))
+    .where(and(...rangeClauses(input, scope), sql`coalesce(${categories.isIncome}, 0) = 0`))
     .groupBy(transactions.normalizedMerchant)
     .all();
 
@@ -419,7 +455,7 @@ export function toCsv<T extends Record<string, unknown>>(rows: T[], columns: Csv
   return `${lines.join('\r\n')}\r\n`;
 }
 
-export function transactionsCsv(filter: TransactionFilter): string {
+export function transactionsCsv(filter: TransactionFilter, viewer: Viewer): string {
   const all = listCategories({ includeArchived: true });
   const byId = new Map(all.map((row) => [row.id, row]));
   // Shared by the unsplit and per-part rows below so a part's category renders with exactly
@@ -431,11 +467,11 @@ export function transactionsCsv(filter: TransactionFilter): string {
     return parent ? `${parent.name} > ${category.name}` : category.name;
   };
 
-  const page = listTransactions({ ...filter, page: 1, pageSize: 200 });
+  const page = listTransactions({ ...filter, page: 1, pageSize: 200 }, viewer);
   const rows: Record<string, unknown>[] = [];
 
   for (let pageNumber = 1; pageNumber <= page.pageCount; pageNumber += 1) {
-    const chunk = pageNumber === 1 ? page : listTransactions({ ...filter, page: pageNumber, pageSize: 200 });
+    const chunk = pageNumber === 1 ? page : listTransactions({ ...filter, page: pageNumber, pageSize: 200 }, viewer);
     // Split-aware (spec 2026-08-22, v1.7.0, Task 4): one batched lookup per page of up to
     // 200 transactions, not a query per row.
     const splitsByTxn = splitsForTransactions(chunk.rows.map((row) => row.id));
