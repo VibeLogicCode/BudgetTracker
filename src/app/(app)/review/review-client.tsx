@@ -22,8 +22,12 @@ const initial: ReviewState = {};
 /** Bound for the auto-save select; fixCategoryAction itself is unchanged. */
 const saveFixCategory = (formData: FormData) => fixCategoryAction({}, formData);
 
-/** Dense enough to sit three-across in a row of actions without shouting. */
-const pickerClass = 'field-control w-auto max-w-[12rem] px-2 py-1 text-xs';
+/** Dense enough to sit three-across in a row of actions without shouting. `min-h-11 sm:min-h-0`
+ *  matches AUTO_SAVE_CONTROL's own floor (src/components/ui/AutoSave.tsx): `field-control`'s
+ *  padding/line-height alone clear only ~38px, short of the 44px minimum these selects need on
+ *  the phones this household uses, so the floor has to be set explicitly rather than assumed
+ *  from the surrounding classes. */
+const pickerClass = 'field-control w-auto max-w-[12rem] px-2 py-1 text-xs min-h-11 sm:min-h-0';
 
 export function ReviewClient({
   total,
@@ -103,8 +107,16 @@ export function ReviewClient({
           <li key={row.id} className="card flex flex-col gap-3 p-4">
             <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
               <span className="text-sm">
-                <strong className="font-semibold text-ink">{row.normalizedMerchant}</strong>{' '}
-                <span className="text-muted">— {row.rawDescription}</span>
+                <strong className="font-semibold text-ink">{row.normalizedMerchant}</strong>
+                {/* v1.13.3: a raw description that is identical to the already-normalized
+                    merchant name added nothing -- "TIM HORTONS — TIM HORTONS" on every row
+                    where no normalization actually happened. Shown once instead. */}
+                {row.normalizedMerchant !== row.rawDescription ? (
+                  <>
+                    {' '}
+                    <span className="text-muted">— {row.rawDescription}</span>
+                  </>
+                ) : null}
               </span>
               <Money cents={row.amountCents} className="text-base font-semibold" />
             </div>
@@ -136,40 +148,60 @@ export function ReviewClient({
                   `disabled` so it can only ever be the starting state -- fixCategoryAction
                   answers an empty categoryId with "Pick a category.", and with no Set button to
                   hold back there would be nothing to stop a person selecting it. The same
-                  guard the transactions loan select already used. */}
-              <AutoSaveSelect
-                name="categoryId"
-                defaultValue={row.categoryId === null ? '' : String(row.categoryId)}
-                options={[
-                  { value: '', label: 'Choose a category…', disabled: true },
-                  ...options.map((opt) => ({
-                    value: String(opt.id),
-                    label: '  '.repeat(opt.depth) + opt.label,
-                  })),
-                ]}
-                fields={{ transactionId: String(row.id) }}
-                action={saveFixCategory}
-                ariaLabel={`Category for ${row.normalizedMerchant}`}
-                className={pickerClass}
-              />
+                  guard the transactions loan select already used.
+
+                  v1.13.3: this select and the "apply to all" one below it used to render as two
+                  identical, unlabelled "Choose a category…" pickers -- nothing on screen said one
+                  recategorizes only this transaction while the other rewrites every transaction
+                  from this merchant (plus future imports) and files a rule. AutoSaveSelect has no
+                  id/htmlFor to wire a real <label> to its <select>, so the caption below is a
+                  visible sibling <span> rather than a <label>; the select's own accessible name
+                  still comes from `ariaLabel`, unchanged. */}
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-1.5">
+                <span className="text-xs font-medium text-muted">This transaction only</span>
+                <AutoSaveSelect
+                  name="categoryId"
+                  defaultValue={row.categoryId === null ? '' : String(row.categoryId)}
+                  options={[
+                    { value: '', label: 'Choose for this one…', disabled: true },
+                    ...options.map((opt) => ({
+                      value: String(opt.id),
+                      label: '  '.repeat(opt.depth) + opt.label,
+                    })),
+                  ]}
+                  fields={{ transactionId: String(row.id) }}
+                  action={saveFixCategory}
+                  ariaLabel={`Category for ${row.normalizedMerchant}`}
+                  className={pickerClass}
+                />
+              </div>
               {row.matchingCount > 1 ? (
-                <form action={applyAll} className="flex flex-wrap items-center gap-1.5">
-                  <input type="hidden" name="normalizedMerchant" value={row.normalizedMerchant} />
-                  <select
-                    name="categoryId"
-                    defaultValue={row.categoryId ?? ''}
-                    aria-label={`Category for all ${row.matchingCount} matching ${row.normalizedMerchant}`}
-                    className={pickerClass}
-                  >
-                    <option value="">Choose a category…</option>
-                    {options.map((opt) => (
-                      <option key={opt.id} value={opt.id}>{'\u00A0\u00A0'.repeat(opt.depth) + opt.label}</option>
-                    ))}
-                  </select>
-                  <button type="submit" className="btn btn--secondary btn--sm">
-                    Apply to all {row.matchingCount} matching + create rule
-                  </button>
-                </form>
+                <div className="flex flex-col gap-1.5 rounded-lg border border-line p-3">
+                  <p className="text-xs font-semibold text-ink">
+                    Every &quot;{row.normalizedMerchant}&quot; — {row.matchingCount} transactions, plus future imports
+                  </p>
+                  <p className="text-xs text-muted">
+                    Only for merchants that are always one category (coffee shop, streaming).
+                    Walmart, Amazon, e-transfers: use the select above.
+                  </p>
+                  <form action={applyAll} className="flex flex-col gap-1.5 sm:flex-row sm:items-center">
+                    <input type="hidden" name="normalizedMerchant" value={row.normalizedMerchant} />
+                    <select
+                      name="categoryId"
+                      defaultValue={row.categoryId ?? ''}
+                      aria-label={`Category for all ${row.matchingCount} matching ${row.normalizedMerchant}`}
+                      className={pickerClass}
+                    >
+                      <option value="">Choose for all {row.matchingCount}…</option>
+                      {options.map((opt) => (
+                        <option key={opt.id} value={opt.id}>{'  '.repeat(opt.depth) + opt.label}</option>
+                      ))}
+                    </select>
+                    <button type="submit" className="btn btn--secondary btn--sm">
+                      Apply to all {row.matchingCount} matching + create rule
+                    </button>
+                  </form>
+                </div>
               ) : null}
               <form action={markTransfer}>
                 <input type="hidden" name="transactionId" value={row.id} />
