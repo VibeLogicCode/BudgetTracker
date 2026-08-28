@@ -10,6 +10,7 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { TableWrap } from '@/components/ui/Table';
 import { Field, inputClass, selectClass } from '@/components/ui/form';
 import { AutoSaveCheckbox, AutoSaveTextInput } from '@/components/ui/AutoSave';
+import { orderedCategoryRows } from '@/lib/category-order';
 import type { CategoryRecord } from '@/lib/categories';
 import type { MerchantRuleRecord } from '@/lib/categorize/rules';
 import type { ProfileRecord, ProfileUsage } from '@/lib/import/presets';
@@ -163,9 +164,9 @@ export function ManagersClient({
             </tr>
           </thead>
           <tbody>
-            {categories.map((category) => (
+            {orderedCategoryRows(categories).map(({ row: category, depth }) => (
               <tr key={category.id}>
-                <td style={{ paddingLeft: category.parentId ? 36 : 16 }}>
+                <td style={{ paddingLeft: depth === 1 ? 36 : 16 }}>
                   <AutoSaveTextInput
                     name="name"
                     defaultValue={category.name}

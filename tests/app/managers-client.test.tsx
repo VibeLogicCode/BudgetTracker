@@ -238,6 +238,24 @@ describe('ManagersClient — Tax checkbox', () => {
   });
 });
 
+describe('ManagersClient — the categories table groups children under their parent (backlog 2a)', () => {
+  it('lists a late-created child right after its parent, not at the end', () => {
+    const { container } = renderManagers({
+      categories: [
+        category({ id: 1, name: 'Kids', sortOrder: 0 }),
+        category({ id: 2, name: 'Fees', sortOrder: 1 }),
+        category({ id: 3, name: 'Bank Fees', parentId: 2, sortOrder: 2 }),
+        category({ id: 4, name: 'Interest', parentId: 2, sortOrder: 3 }),
+        category({ id: 5, name: 'Education', parentId: 1, sortOrder: 4 }),
+        category({ id: 6, name: 'Activities', parentId: 1, sortOrder: 5, isArchived: true }),
+      ],
+    });
+    const table = container.querySelector('table');
+    const names = Array.from(table?.querySelectorAll('tbody input[name="name"]') ?? []).map((el) => (el as HTMLInputElement).defaultValue);
+    expect(names).toEqual(['Kids', 'Education', 'Activities', 'Fees', 'Bank Fees', 'Interest']);
+  });
+});
+
 describe('ManagersClient — the merchant rules table declares its own widths (item I)', () => {
   it('is a fixed table with one <col> per column', () => {
     const { container } = renderManagers({ rules: [rule()] });

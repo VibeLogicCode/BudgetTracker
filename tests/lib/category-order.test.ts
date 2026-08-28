@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { categoryOptions } from '@/lib/category-order';
+import { categoryOptions, orderedCategoryRows } from '@/lib/category-order';
 import type { CategoryRecord } from '@/lib/categories';
 
 /**
@@ -64,5 +64,27 @@ describe('categoryOptions', () => {
       { id: 1, label: 'Food', depth: 0 },
       { id: 2, label: 'Groceries', depth: 1 },
     ]);
+  });
+});
+
+describe('orderedCategoryRows (backlog 2a: the admin table keeps archived rows, so it cannot use categoryOptions)', () => {
+  const row = (id: number, name: string, parentId: number | null, sortOrder: number, isArchived = false) => ({ id, name, parentId, sortOrder, isArchived });
+
+  it('places every child directly after its own parent, archived rows included', () => {
+    const rows = [
+      row(1, 'Kids', null, 0),
+      row(2, 'Fees', null, 1),
+      row(3, 'Bank Fees', 2, 2),
+      row(4, 'Interest', 2, 3),
+      row(5, 'Education', 1, 4),
+      row(6, 'Activities', 1, 5, true),
+    ];
+    expect(orderedCategoryRows(rows).map((r) => `${r.depth}:${r.row.name}`)).toEqual([
+      '0:Kids', '1:Education', '1:Activities', '0:Fees', '1:Bank Fees', '1:Interest',
+    ]);
+  });
+
+  it('promotes a child whose parent is missing from the list to the top level', () => {
+    expect(orderedCategoryRows([row(5, 'Education', 99, 0)])).toEqual([{ row: row(5, 'Education', 99, 0), depth: 0 }]);
   });
 });

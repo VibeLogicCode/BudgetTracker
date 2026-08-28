@@ -37,25 +37,34 @@ export interface CategoryOption {
  */
 export type CategoryLike = Pick<CategoryRecord, 'id' | 'name' | 'parentId' | 'sortOrder' | 'isArchived'>;
 
-export function categoryOptions(all: CategoryLike[]): CategoryOption[] {
-  // Categories are limited to two levels (enforced at creation in createCategory), so sorting
-  // once up front and walking it twice (outer pass over top-level rows, inner pass to pick out
-  // each one's children) is enough -- no recursion needed the way categoryTree() has none either.
-  const active = [...all].filter((category) => !category.isArchived).sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id);
-  const activeIds = new Set(active.map((category) => category.id));
+/**
+ * Backlog 2a: the grouping walk on its own, generic over the row type and WITHOUT the
+ * active-only filter, for callers that must keep archived rows on screen (the Settings ->
+ * Categories admin table). Same order as categoryOptions by construction: rows sorted by
+ * (sortOrder, id), each top-level row immediately followed by its own children in that same
+ * order. A child whose parent is not in `all` is promoted to depth 0 rather than dropped.
+ */
+export function orderedCategoryRows<T extends CategoryLike>(all: T[]): Array<{ row: T; depth: 0 | 1 }> {
+  const sorted = [...all].sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id);
+  const ids = new Set(sorted.map((category) => category.id));
+  const isTopLevel = (category: T) => category.parentId === null || !ids.has(category.parentId);
 
-  // A child whose parent got archived or was deleted out from under it has nowhere left to
-  // nest -- promoted to depth 0 instead of dropped, so it stays selectable rather than
-  // disappearing with no way to notice (it is still a category some past transaction may hold).
-  const isTopLevel = (category: CategoryLike) => category.parentId === null || !activeIds.has(category.parentId);
-
-  const options: CategoryOption[] = [];
-  for (const category of active) {
+  const rows: Array<{ row: T; depth: 0 | 1 }> = [];
+  for (const category of sorted) {
     if (!isTopLevel(category)) continue; // placed under its parent below, not here
-    options.push({ id: category.id, label: category.name, depth: 0 });
-    for (const child of active) {
-      if (child.parentId === category.id) options.push({ id: child.id, label: child.name, depth: 1 });
+    rows.push({ row: category, depth: 0 });
+    for (const child of sorted) {
+      if (child.parentId === category.id) rows.push({ row: child, depth: 1 });
     }
   }
-  return options;
+  return rows;
+}
+
+export function categoryOptions(all: CategoryLike[]): CategoryOption[] {
+  // Categories are limited to two levels (enforced at creation in createCategory). Archived
+  // rows are dropped BEFORE the walk, so a child whose parent got archived has nowhere left to
+  // nest and is promoted to depth 0 by orderedCategoryRows -- it stays selectable rather than
+  // disappearing with no way to notice (some past transaction may still hold it).
+  const active = all.filter((category) => !category.isArchived);
+  return orderedCategoryRows(active).map(({ row, depth }) => ({ id: row.id, label: row.name, depth }));
 }
