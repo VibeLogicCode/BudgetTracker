@@ -1621,7 +1621,11 @@ Status: SHIPPED in v1.14.0 — see docs/superpowers/specs/2026-08-28-loans-lent-
 A new Direction control on the loan item form (kind `loan` only) offers "Owed to us" alongside the
 existing default; the Dashboard gains a "Who owes us" card (titled "Owed to you" and self-scoped for
 a `self` viewer, hidden at zero); Reports' debt-over-time chart plots what's lent out as its own
-series, separate from the household debt line.
+series, separate from the household debt line. Owner rulings folded in before tagging (same release):
+direction labels read "Lent out — they owe us" / "Borrowed — we owe them" everywhere; the household
+Loans card is titled "What we owe"; and the Transactions row menu gained **Assign to new loan…**
+(Addendum A in the spec, Task T9) so a loan can be created and its first entry assigned from the row
+itself — ten friends no longer means ten detours through Warranties & bills.
 
 **Asked 2026-08-28** while categorising an e-transfer to a friend. Today a **Loan** item models only
 a debt the household owes (`src/lib/loans.ts`): the sign of the assigned transaction decides the
