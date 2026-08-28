@@ -575,6 +575,7 @@ export function TransactionsClient({
                             key={`unassign-${link.id}`}
                             action={unassignLoan}
                             fields={{ transactionId: String(row.id), itemId: String(link.itemId) }}
+                            confirm={`Unassign this transaction from ${link.itemName}? That loan's balance moves back up.`}
                           >
                             {`Unassign from ${link.itemName}`}
                           </RowMenuForm>
@@ -634,7 +635,7 @@ export function TransactionsClient({
                 <input name="description" required className={inputClass} />
               </Field>
               <Field label="Amount">
-                <input name="amount" placeholder="12.34" required className={inputClass} />
+                <input name="amount" inputMode="decimal" placeholder="12.34" required className={inputClass} />
               </Field>
               <Field label="Direction">
                 <select name="direction" className={selectClass}>

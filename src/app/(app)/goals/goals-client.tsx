@@ -108,6 +108,7 @@ export function GoalsClient({
                     <input type="hidden" name="goalId" value={goal.id} />
                     <input
                       name="amount"
+                      inputMode="decimal"
                       placeholder="Amount"
                       required
                       aria-label={`Contribution amount for ${goal.name}`}
@@ -181,7 +182,7 @@ export function GoalsClient({
                 <input name="name" placeholder="Trip to Japan" required className={inputClass} />
               </Field>
               <Field label="Target amount">
-                <input name="target" placeholder="5000" required className={inputClass} />
+                <input name="target" inputMode="decimal" placeholder="5000" required className={inputClass} />
               </Field>
               <Field label="Target date (optional)">
                 <input type="date" name="targetDate" className={inputClass} />

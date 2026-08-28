@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { cleanup, render } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import { GoalsClient } from '@/app/(app)/goals/goals-client';
 import { computePace, type GoalWithProgress } from '@/lib/goals';
 
@@ -68,5 +68,19 @@ describe('GoalsClient — polish item 6: archived goals are reachable again', ()
     expect(getByText('Archived')).toBeTruthy();
     const field = container.querySelector('input[name="archived"]') as HTMLInputElement;
     expect(field.value).toBe('0');
+  });
+});
+
+describe('v1.12.1: the number pad opens for both goal money fields (item Y / UX-9)', () => {
+  it('the contribution amount carries inputMode="decimal"', () => {
+    renderClient();
+    const field = screen.getAllByLabelText(/Contribution amount for /)[0] as HTMLInputElement;
+    expect(field.getAttribute('inputmode')).toBe('decimal');
+  });
+
+  it('the new goal target carries inputMode="decimal"', () => {
+    renderClient();
+    const target = document.querySelector('input[name="target"]') as HTMLInputElement | null;
+    expect(target?.getAttribute('inputmode')).toBe('decimal');
   });
 });

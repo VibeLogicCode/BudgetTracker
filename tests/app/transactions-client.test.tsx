@@ -251,6 +251,9 @@ describe('MUST-14.8 / MUST-14.9: the row control', () => {
   });
 
   it('clicking "Unassign from <loan>" calls unassignFromLoanAction with the transaction and loan ids', async () => {
+    // v1.12.1 (item AU / UX-6, ruling R5): Unassign now confirms first. Mocked to accept, so
+    // this test still covers the underlying dispatch; the refusal path is RowMenu's own test.
+    const spy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     const { unassignFromLoanAction } = await import('@/app/(app)/transactions/actions');
     render(
       <TransactionsClient
@@ -267,9 +270,11 @@ describe('MUST-14.8 / MUST-14.9: the row control', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Unassign from Civic' }));
 
     await waitFor(() => expect(unassignFromLoanAction).toHaveBeenCalled());
+    expect(spy).toHaveBeenCalled();
     const sent = (unassignFromLoanAction as ReturnType<typeof vi.fn>).mock.calls[0][0] as FormData;
     expect(sent.get('transactionId')).toBe(String(linkedRowId));
     expect(sent.get('itemId')).toBe('7');
+    spy.mockRestore();
   });
 });
 
@@ -502,5 +507,15 @@ describe('Bulk toolbar and a split row (v1.7.0 bulk-guard fix, requirement c)', 
     // the assertion that matters is that a split row still gets the control at all.
     const attributionSelect = container.querySelector('tbody select[name="attributedUserId"]');
     expect(attributionSelect).toBeTruthy();
+  });
+});
+
+describe('v1.12.1: the number pad opens for the manual-entry amount (item Y / UX-9)', () => {
+  it('the Amount field carries inputMode="decimal"', () => {
+    render(
+      <TransactionsClient page={pageWithRow()} accounts={[]} categories={[]} people={[]} today="2026-03-02" />,
+    );
+    const amount = document.querySelector('input[name="amount"]') as HTMLInputElement | null;
+    expect(amount?.getAttribute('inputmode')).toBe('decimal');
   });
 });

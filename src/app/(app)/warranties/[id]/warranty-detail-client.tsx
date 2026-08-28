@@ -520,6 +520,7 @@ export function WarrantyDetailClient({
                             <RowMenuForm
                               action={installmentRowDispatch}
                               fields={{ intent: 'remove', id: String(row.id), itemId: String(item.id) }}
+                              confirm={`Remove the installment due ${row.dueDate}? Its amount, and any payment recorded against it, go with it.`}
                             >
                               Remove
                             </RowMenuForm>

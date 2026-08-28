@@ -30,6 +30,15 @@ export function UsersManager({ users }: { users: UserRecord[] }) {
    */
   const [resetting, setResetting] = useState<number | null>(null);
 
+  /**
+   * v1.12.1 (item AU / UX-6, ruling R5). Which row has a destructive confirmation open, and which
+   * one. Deactivating locks a household member out and Reset MFA destroys every one of their
+   * sessions; both used to go through on one tap of a ~26px menu item, while import undo,
+   * forgetting a bank connection and deleting a receipt all asked first. This is the backups
+   * page's inline panel, in the shape this table already uses for "Reset password…".
+   */
+  const [confirming, setConfirming] = useState<{ id: number; intent: 'deactivate' | 'mfa' } | null>(null);
+
   const rowMessage = rowState.message ?? pwState.message ?? mfaState.message;
 
   return (
@@ -105,19 +114,59 @@ export function UsersManager({ users }: { users: UserRecord[] }) {
                       in the app, and the one that pushed this table past its card. */}
                   <td className="text-right">
                     <RowMenu label={`Actions for ${user.name}`}>
-                      <RowMenuForm
-                        action={rowAction}
-                        fields={{ userId: String(user.id), active: user.isActive ? '0' : '1' }}
-                      >
-                        {user.isActive ? 'Deactivate' : 'Reactivate'}
-                      </RowMenuForm>
+                      {user.isActive ? (
+                        <RowMenuButton onSelect={() => setConfirming({ id: user.id, intent: 'deactivate' })}>
+                          Deactivate
+                        </RowMenuButton>
+                      ) : (
+                        // Reactivating is not destructive, so it keeps its one-tap form.
+                        <RowMenuForm action={rowAction} fields={{ userId: String(user.id), active: '1' }}>
+                          Reactivate
+                        </RowMenuForm>
+                      )}
                       <RowMenuButton onSelect={() => setResetting(user.id)}>Reset password…</RowMenuButton>
-                      <RowMenuForm action={resetMfa} fields={{ userId: String(user.id) }}>
+                      <RowMenuButton onSelect={() => setConfirming({ id: user.id, intent: 'mfa' })}>
                         Reset MFA
-                      </RowMenuForm>
+                      </RowMenuButton>
                     </RowMenu>
                   </td>
                 </tr>
+                {confirming?.id === user.id ? (
+                  <tr>
+                    <td colSpan={6} className="border-l-2 border-warning bg-warning-soft/40">
+                      <div className="flex flex-wrap items-center gap-3 px-4 py-3 text-sm">
+                        <p className="text-ink">
+                          {confirming.intent === 'deactivate' ? (
+                            <>
+                              Deactivate <strong className="font-semibold">{user.name}</strong>? They will not be able
+                              to sign in, and every session they have open stops working.
+                            </>
+                          ) : (
+                            <>
+                              Reset two-factor for <strong className="font-semibold">{user.name}</strong>? Every one of
+                              their sessions is signed out, and they sign in with just a password until they set it up
+                              again.
+                            </>
+                          )}
+                        </p>
+                        <form
+                          action={confirming.intent === 'deactivate' ? rowAction : resetMfa}
+                          onSubmit={() => setConfirming(null)}
+                          className="flex gap-2"
+                        >
+                          <input type="hidden" name="userId" value={user.id} />
+                          {confirming.intent === 'deactivate' ? <input type="hidden" name="active" value="0" /> : null}
+                          <SubmitButton size="sm" variant="danger">
+                            {confirming.intent === 'deactivate' ? 'Deactivate' : 'Reset MFA'}
+                          </SubmitButton>
+                          <button type="button" onClick={() => setConfirming(null)} className={rowButton}>
+                            Cancel
+                          </button>
+                        </form>
+                      </div>
+                    </td>
+                  </tr>
+                ) : null}
                 {resetting === user.id ? (
                   <tr>
                     <td colSpan={6} className="bg-surface-2">

@@ -44,8 +44,14 @@ function useRowMenuClose(): () => void {
   return context === null ? () => {} : context.close;
 }
 
+/**
+ * v1.12.1 (item AV / UX-7): `py-2.5 text-sm` below the `sm:` breakpoint. Menu items were roughly
+ * 26px tall stacked 4px apart -- well under the 44px minimum, and exactly where the destructive
+ * items and the rule-writing select live. The menu is `position: fixed` at 14rem, so it has the
+ * room. Every new value is scoped back to today's at `sm:`, so desktop is unchanged.
+ */
 const ITEM_CLASS =
-  'flex w-full items-center rounded-xs px-2.5 py-1.5 text-left text-xs text-ink hover:bg-surface-2 focus:bg-surface-2 focus:outline-none';
+  'flex w-full items-center rounded-xs px-2.5 py-2.5 text-left text-sm text-ink hover:bg-surface-2 focus:bg-surface-2 focus:outline-none sm:py-1.5 sm:text-xs';
 
 function menuItems(root: HTMLElement | null): HTMLElement[] {
   return root === null ? [] : Array.from(root.querySelectorAll<HTMLElement>('[role="menuitem"]'));
@@ -150,7 +156,14 @@ export function RowMenu({ label, children }: { label: string; children: ReactNod
   };
 
   return (
-    <RowMenuContext.Provider value={{ close: () => close(false) }}>
+    // v1.12.1 (item AW / UX-8): close(TRUE). Escape already returned focus to the trigger;
+    // choosing an item did not -- the menu closed, the page re-rendered and focus landed on
+    // document.body, so a keyboard or screen-reader user who deactivated a member was dumped at
+    // the top of the document with no announcement and a long tab back. The outside-click and
+    // scroll/resize paths below deliberately KEEP close(false): stealing focus back from wherever
+    // somebody just clicked is its own defect. The success/error Notice banners are already live
+    // regions, so the announcement follows for free.
+    <RowMenuContext.Provider value={{ close: () => close(true) }}>
       <span className="inline-flex">
         <button
           ref={trigger}
@@ -159,7 +172,7 @@ export function RowMenu({ label, children }: { label: string; children: ReactNod
           aria-expanded={open}
           aria-label={label}
           onClick={() => (open ? close(false) : show())}
-          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted hover:bg-surface-2 hover:text-ink"
+          className="inline-flex h-11 w-11 items-center justify-center rounded-md text-muted hover:bg-surface-2 hover:text-ink sm:h-8 sm:w-8"
         >
           <span aria-hidden="true" className="text-base leading-none">
             ⋯
@@ -212,10 +225,19 @@ export function RowMenuButton({ onSelect, children }: { onSelect: () => void; ch
 export function RowMenuForm({
   action,
   fields,
+  confirm,
   children,
 }: {
   action: (formData: FormData) => void | Promise<unknown>;
   fields: Record<string, string>;
+  /**
+   * v1.12.1 (item AU / UX-6, ruling R5). When set, this sentence is put to the person before the
+   * submission starts. Used by the two ROW-level destructive actions -- Remove an installment,
+   * Unassign a loan -- matching the plain confirm() the receipt delete on the warranty detail page
+   * already uses. The two ACCOUNT-level ones (Deactivate, Reset MFA) get the heavier inline panel
+   * instead, in users-manager.tsx, because "which person" has to stay visible while you decide.
+   */
+  confirm?: string;
   children: ReactNode;
 }) {
   const close = useRowMenuClose();
@@ -234,7 +256,15 @@ export function RowMenuForm({
         void action(formData);
       }}
       role="none"
-      onSubmit={() => close()}
+      onSubmit={(event) => {
+        // `window.confirm`, spelled out: the PROP is called `confirm` and shadows the global
+        // inside this component, so the bare name here would be a call to a string.
+        if (confirm !== undefined && !window.confirm(confirm)) {
+          event.preventDefault();
+          return;
+        }
+        close();
+      }}
     >
       {Object.entries(fields).map(([name, value]) => (
         <input key={name} type="hidden" name={name} value={value} />
