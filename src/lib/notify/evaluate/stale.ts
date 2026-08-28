@@ -12,13 +12,21 @@ import { renderEvent } from '@/lib/notify/render';
 
 /**
  * Mirrors digest.ts's own viewerFor exactly (kept local rather than shared for the same reason
- * that module's docblock gives): falls back to a household-scoped viewer if the recipient's own
- * row is somehow gone by the time this evaluator runs, reproducing the pre-R2 unscoped behaviour
- * rather than crashing a scheduled run over one missing row.
+ * that module's docblock gives).
+ *
+ * v1.13.1 (item BT, the same defect BK already fixed in digest.ts/monthly.ts but named those two
+ * files only). Returns null when the recipient's own row is gone by the time this runs (a deleted
+ * account mid-batch), rather than falling back to a household-scoped viewer. The fallback used to
+ * stand in for the missing row so one deletion could not sink the whole run -- the run is still
+ * fine without it, since skipping this one recipient is not a crash. What the fallback got wrong
+ * is the scope it guessed: evaluateStaleImport's own ruling R2 guard below exists specifically so
+ * a self-scoped recipient is never told about an account they cannot see, and a household-shaped
+ * fallback for a vanished self-scoped user silently defeated that guard for the one case it most
+ * needed to hold.
  */
-function viewerFor(userId: number): Viewer {
+function viewerFor(userId: number): Viewer | null {
   const user = findUserById(userId);
-  return user ? { id: user.id, role: user.role, visibility: user.visibility } : { id: userId, role: 'admin', visibility: 'household' };
+  return user ? { id: user.id, role: user.role, visibility: user.visibility } : null;
 }
 
 /**
@@ -49,7 +57,10 @@ function viewerFor(userId: number): Viewer {
  * all -- rather than trying to scope the account list down.
  */
 export function evaluateStaleImport(input: { userId: number; now: Date; tz: string }): number {
-  if (isSelfScoped(viewerFor(input.userId))) return 0;
+  const viewer = viewerFor(input.userId);
+  // Item BT: 0 already means "no outbox row was enqueued" to every caller of this function.
+  if (viewer === null) return 0;
+  if (isSelfScoped(viewer)) return 0;
 
   const rows = getDb()
     .select({

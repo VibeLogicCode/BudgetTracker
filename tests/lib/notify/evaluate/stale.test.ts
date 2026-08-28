@@ -1,10 +1,24 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../../helpers/db';
 import { setAccountActive } from '@/lib/accounts';
 import { DEFAULT_USER_SETTINGS, saveEmailTarget, saveSmtp, saveUserSettings, setPref } from '@/lib/notify/config';
 import { resetOutboxPumpForTests } from '@/lib/notify/outbox';
 import { resetNotifySenderForTests, setNotifySenderForTests } from '@/lib/notify/send';
+
+// Item BT's own test needs findUserById mockable independently of enqueue()'s separate
+// isEventEnabled() guard (config.ts), which runs its own raw `users` query and would otherwise
+// mask viewerFor()'s behaviour: a REAL row deletion satisfies isEventEnabled's live-user check
+// failing too, so evaluateStaleImport would already return 0 via that unrelated gate regardless
+// of what viewerFor does. Spying on findUserById reproduces the race the docblock actually
+// describes -- gone at the moment viewerFor's OWN lookup runs -- without also making
+// isEventEnabled see the row as gone. Mirrors digest.test.ts's own BK test (2033d4b).
+vi.mock('@/lib/auth/users', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/users')>();
+  return { ...actual, findUserById: vi.fn(actual.findUserById) };
+});
+
+import { findUserById } from '@/lib/auth/users';
 import { evaluateStaleImport } from '@/lib/notify/evaluate/stale';
 
 let t: TestDb;
@@ -14,6 +28,7 @@ beforeEach(() => {
   t = createSeededTestDb();
   resetOutboxPumpForTests();
   setNotifySenderForTests(async () => {});
+  vi.mocked(findUserById).mockClear();
 });
 
 afterEach(() => {
@@ -184,5 +199,28 @@ describe('ruling R2 (item I5): a self-scoped recipient never gets stale_import, 
     saveUserSettings(userId, { ...DEFAULT_USER_SETTINGS, staleImportWeeks: 3 });
     importAt(userId, '2026-07-01T12:00:00.000Z');
     expect(evaluateStaleImport({ userId, now: new Date('2026-08-17T12:00:00Z'), tz: TZ })).toBe(1);
+  });
+});
+
+describe('item BT: viewerFor skips rather than falling back to a household scope', () => {
+  it('sends nothing when the recipient\'s own row is gone, even with a genuinely stale account', () => {
+    const userId = emailUser();
+    saveUserSettings(userId, { ...DEFAULT_USER_SETTINGS, staleImportWeeks: 3 });
+    importAt(userId, '2026-07-01T12:00:00.000Z'); // genuinely stale by 'now' below
+    // The fallback was { role: 'admin', visibility: 'household' }, so a self-scoped recipient
+    // whose row vanished mid-batch would read as household-scoped instead, and the ruling R2
+    // guard that exists specifically to keep a self viewer from being nagged about accounts they
+    // cannot see would silently not fire for that one case.
+    //
+    // findUserById is stubbed to return null for exactly the one call viewerFor makes, leaving
+    // the real users/prefs rows untouched -- a real row deletion would ALSO trip enqueue()'s own
+    // independent isEventEnabled() live-user check (config.ts), which would return 0 regardless
+    // of what viewerFor does and prove nothing about this fix.
+    vi.mocked(findUserById).mockReturnValueOnce(null);
+    expect(evaluateStaleImport({ userId, now: new Date('2026-08-17T12:00:00Z'), tz: TZ })).toBe(0);
+    const count = (
+      t.sqlite.prepare('select count(*) as c from notification_outbox where user_id = ?').get(userId) as { c: number }
+    ).c;
+    expect(count).toBe(0);
   });
 });
