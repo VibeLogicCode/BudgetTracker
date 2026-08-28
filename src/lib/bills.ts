@@ -1,8 +1,9 @@
-import { and, eq, gt, gte, inArray, isNotNull, isNull, or } from 'drizzle-orm';
+import { and, asc, eq, gt, gte, inArray, isNotNull, isNull, or } from 'drizzle-orm';
 import { getDb } from '@/db/client';
-import { warrantyItemTypes, warrantyItems } from '@/db/schema';
+import { billInstallments, warrantyItemTypes, warrantyItems } from '@/db/schema';
+import { ownerScope, type Viewer } from '@/lib/auth/viewer';
 import { addDaysIso, addMonthsClamped, daysBetweenIso, monthEnd, monthOf, monthsBetween } from '@/lib/dates';
-import { budgetProgress, budgetTotals } from '@/lib/budgets';
+import { budgetProgress, budgetTotals, type BudgetRow } from '@/lib/budgets';
 import { sumCents } from '@/lib/money';
 import { projectMonthEnd } from '@/lib/predict/pace';
 import { unpaidInstallments } from '@/lib/warranty/installments';
@@ -77,11 +78,33 @@ const RECURRING_KINDS = ['subscription', 'contract'] as const;
  *
  * Overdue rows need no second sort key: their dates are earlier, so the existing ascending sort
  * already puts them first.
+ *
+ * v1.13.0 ruling R2: `viewer` is REQUIRED. Both halves are scoped -- the cadence half by the
+ * item's owner_user_id, and the schedule half through unpaidInstallments' existing ownerUserId
+ * option, which has been there since v1.12.0 and needed no change.
  */
-export function upcomingBills(input: { today: string; days: number; includeOverdue?: boolean }): UpcomingBill[] {
+export function upcomingBills(input: {
+  today: string;
+  days: number;
+  includeOverdue?: boolean;
+  viewer: Viewer;
+}): UpcomingBill[] {
   const { today, days } = input;
   const includeOverdue = input.includeOverdue ?? false;
   const windowEnd = addDaysIso(today, days);
+  const scope = ownerScope(input.viewer);
+
+  const clauses = [
+    inArray(warrantyItemTypes.kind, RECURRING_KINDS),
+    isNotNull(warrantyItems.billingCycle),
+    // Defect fix: isNotNull alone let a billing amount of exactly 0 through as "set",
+    // putting a $0.00 subscription in the Coming up list contributing nothing. gt(...,
+    // 0) excludes both NULL and a zero (or negative) amount in one comparison, since SQL
+    // evaluates `column > 0` as false/unknown, never true, for either.
+    gt(warrantyItems.billingAmountCents, 0),
+    or(isNull(warrantyItems.expiryDate), gte(warrantyItems.expiryDate, today)),
+  ];
+  if (scope !== null) clauses.push(eq(warrantyItems.ownerUserId, scope));
 
   const rows = getDb()
     .select({
@@ -97,18 +120,7 @@ export function upcomingBills(input: { today: string; days: number; includeOverd
     // (see warrantyItemTypes' doc comment / toItemRow in items.ts) and can never be a bill,
     // so it is correctly dropped by requiring a matching type row at all.
     .innerJoin(warrantyItemTypes, eq(warrantyItemTypes.id, warrantyItems.typeId))
-    .where(
-      and(
-        inArray(warrantyItemTypes.kind, RECURRING_KINDS),
-        isNotNull(warrantyItems.billingCycle),
-        // Defect fix: isNotNull alone let a billing amount of exactly 0 through as "set",
-        // putting a $0.00 subscription in the Coming up list contributing nothing. gt(...,
-        // 0) excludes both NULL and a zero (or negative) amount in one comparison, since SQL
-        // evaluates `column > 0` as false/unknown, never true, for either.
-        gt(warrantyItems.billingAmountCents, 0),
-        or(isNull(warrantyItems.expiryDate), gte(warrantyItems.expiryDate, today)),
-      ),
-    )
+    .where(and(...clauses))
     .all();
 
   const result: UpcomingBill[] = [];
@@ -129,7 +141,7 @@ export function upcomingBills(input: { today: string; days: number; includeOverd
     });
   }
 
-  for (const row of unpaidInstallments({ today, windowEnd, includeOverdue })) {
+  for (const row of unpaidInstallments({ today, windowEnd, includeOverdue, ownerUserId: scope ?? undefined })) {
     result.push({
       itemId: row.itemId,
       name: row.itemName,
@@ -160,14 +172,21 @@ export function upcomingBills(input: { today: string; days: number; includeOverd
  * summed. Deliberately a DIFFERENT window than the dashboard card's own "next 30 days" list:
  * this is "what's left in the budget, minus what the month itself still owes", not a fixed
  * lookahead.
+ *
+ * v1.13.0 micro-ruling M8: for a SELF viewer this reads the PERSONAL budget scope, not the
+ * household one. Leaving it household would put the family's total on a child's dashboard
+ * through the Coming-up card, which ruling R2 forbids -- and it would do so through the one
+ * figure on that card nobody would think to check.
  */
 export function safeToSpend(input: {
   month: string;
   today: string;
+  viewer: Viewer;
 }): { budgetedRemainingCents: number; projectedSpendCents: number | null; billsDueCents: number } {
   const { month, today } = input;
+  const scope = ownerScope(input.viewer);
 
-  const totals = budgetTotals(budgetProgress(month));
+  const totals = budgetTotals(scope === null ? budgetProgress(month) : budgetProgress(month, 'personal', scope));
   const budgetedRemainingCents = totals.budgetedLimitCents - totals.budgetedSpentCents;
 
   const dayOfMonth = Number(today.slice(8, 10));
@@ -179,7 +198,85 @@ export function safeToSpend(input: {
   });
 
   const daysUntilMonthEnd = daysBetweenIso(today, monthEnd(month));
-  const billsDueCents = sumCents(upcomingBills({ today, days: daysUntilMonthEnd }).map((bill) => bill.amountCents));
+  const billsDueCents = sumCents(
+    upcomingBills({ today, days: daysUntilMonthEnd, viewer: input.viewer }).map((bill) => bill.amountCents),
+  );
 
   return { budgetedRemainingCents, projectedSpendCents, billsDueCents };
+}
+
+export interface SinkingFund {
+  categoryId: number;
+  itemId: number;
+  itemName: string;
+  /** The next unpaid installment on that bill. */
+  dueDate: string;
+  targetCents: number;
+  /** The budgets row's own carryCents -- what rollover has already accumulated. */
+  carriedCents: number;
+}
+
+/**
+ * v1.13.0 ruling R11 (item AQ), micro-ruling M9. READ-SIDE ONLY. It changes no limit, no
+ * rollover and no total; it joins what the budgets page already has (a row with a carryCents)
+ * to what the bills side already has (an unpaid installment on a linked item) so the row can
+ * say what it is saving for.
+ *
+ * The owner explicitly refused a per-category monthly target: rollover IS the envelope, and
+ * this is the sentence that makes it legible. Do not add a target column here later without
+ * reopening R11.
+ *
+ * One entry per category -- the SOONEST unpaid installment wins when two linked bills share
+ * one (billInstallments is ordered due_date ASC, id ASC, and only the first match per category
+ * is kept).
+ */
+export function sinkingFundsFor(input: {
+  month: string;
+  today: string;
+  rows: BudgetRow[];
+  viewer: Viewer;
+}): Map<number, SinkingFund> {
+  const carryByCategory = new Map<number, number>();
+  const walk = (rows: BudgetRow[]) => {
+    for (const row of rows) {
+      carryByCategory.set(row.categoryId, row.carryCents);
+      walk(row.children);
+    }
+  };
+  walk(input.rows);
+
+  const scope = ownerScope(input.viewer);
+  const clauses = [eq(warrantyItemTypes.kind, 'bill'), isNotNull(warrantyItems.budgetCategoryId), isNull(billInstallments.paidAt)];
+  if (scope !== null) clauses.push(eq(warrantyItems.ownerUserId, scope));
+
+  const rows = getDb()
+    .select({
+      categoryId: warrantyItems.budgetCategoryId,
+      itemId: warrantyItems.id,
+      itemName: warrantyItems.name,
+      dueDate: billInstallments.dueDate,
+      amountCents: billInstallments.amountCents,
+    })
+    .from(billInstallments)
+    .innerJoin(warrantyItems, eq(warrantyItems.id, billInstallments.itemId))
+    .innerJoin(warrantyItemTypes, eq(warrantyItemTypes.id, warrantyItems.typeId))
+    .where(and(...clauses))
+    .orderBy(asc(billInstallments.dueDate), asc(billInstallments.id))
+    .all();
+
+  const out = new Map<number, SinkingFund>();
+  for (const row of rows) {
+    if (row.categoryId === null) continue;
+    if (out.has(row.categoryId)) continue;
+    if (!carryByCategory.has(row.categoryId)) continue;
+    out.set(row.categoryId, {
+      categoryId: row.categoryId,
+      itemId: row.itemId,
+      itemName: row.itemName,
+      dueDate: row.dueDate,
+      targetCents: row.amountCents,
+      carriedCents: carryByCategory.get(row.categoryId) ?? 0,
+    });
+  }
+  return out;
 }

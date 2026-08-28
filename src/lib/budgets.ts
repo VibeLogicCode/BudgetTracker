@@ -25,7 +25,9 @@ export interface BudgetRow {
    *  off, or on but carrying nothing yet. */
   baseLimitCents: number | null;
   /** Positive-only leftover carried in from prior months (ruling 4: overspend never carries
-   *  a debt forward). Zero when rollover is off. */
+   *  a debt forward). Zero when rollover is off.
+   *  v1.13.0 ruling R11: `sinkingFundsFor` in src/lib/bills.ts reads this figure to say what a
+   *  category is accumulating toward. It writes nothing here. */
   carryCents: number;
   spentCents: number;
   remainingCents: number | null;
