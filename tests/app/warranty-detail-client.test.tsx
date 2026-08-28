@@ -40,6 +40,8 @@ function item(over: Partial<WarrantyItemRow> = {}): WarrantyItemRow {
     createdAt: '2026-08-16T00:00:00.000Z', updatedAt: '2026-08-16T00:00:00.000Z',
     billingCycle: null, billingAmountCents: null,
     principalCents: null, interestRateBps: null, currentBalanceCents: null, balanceUpdatedAt: null,
+    // v1.13.0 Task 5: budgetCategoryId is on every WarrantyItemRow now (ruling R11 / M9).
+    budgetCategoryId: null,
     ...over,
   };
 }
@@ -71,6 +73,9 @@ function renderDetail(over: Partial<Parameters<typeof WarrantyDetailClient>[0]> 
       lastPaymentAt={null}
       paymentCount={0}
       installments={[]}
+      // v1.13.0 Task 11: the budget-category picker's options (Task 12's page.tsx supplies the
+      // real list). Empty by default -- only the tests exercising the picker need non-empty.
+      categories={[]}
       {...over}
     />,
   );
@@ -583,5 +588,54 @@ describe('product fields follow the kind, without dropping a stored value', () =
     expect((screen.getByLabelText('Price') as HTMLInputElement).value).toBe('1299.00');
     // The one it genuinely has no value for stays hidden.
     expect(screen.queryByLabelText('Serial number')).toBeNull();
+  });
+});
+
+// Task 11 fix round 1 (controller ruling): the Installments card's row kebab gained a
+// "Record payment" item above "Mark paid" (ruling R8), gated the same way "Mark paid" already
+// was -- unpaid rows on a bill-kind item. Paid rows offer "Unmark" instead, never this.
+describe('the Installments card offers Record payment', () => {
+  const billItem = item({ kind: 'bill', typeId: 4, typeName: 'Property tax' });
+
+  it('shows it for an unpaid installment', () => {
+    renderDetail({
+      item: billItem,
+      installments: [
+        {
+          id: 101,
+          itemId: 42,
+          dueDate: '2026-09-01',
+          amountCents: 20000,
+          paidAt: null,
+          paidTxnId: null,
+          paidTxn: null,
+          state: 'scheduled',
+        },
+      ],
+    });
+    fireEvent.click(screen.getByRole('button', { name: /actions for the \$200\.00 installment due 2026-09-01/i }));
+    expect(screen.getByRole('menuitem', { name: /^record payment$/i })).toBeTruthy();
+  });
+
+  it('hides it once the installment is paid', () => {
+    renderDetail({
+      item: billItem,
+      installments: [
+        {
+          id: 102,
+          itemId: 42,
+          dueDate: '2026-07-01',
+          amountCents: 15000,
+          paidAt: '2026-07-02T00:00:00.000Z',
+          paidTxnId: 55,
+          paidTxn: { id: 55, date: '2026-07-02', description: 'Muni Tax', amountCents: -15000 },
+          state: 'paid',
+        },
+      ],
+    });
+    fireEvent.click(screen.getByRole('button', { name: /actions for the \$150\.00 installment due 2026-07-01/i }));
+    expect(screen.queryByRole('menuitem', { name: /^record payment$/i })).toBeNull();
+    // Unmark takes its place -- the row still has a kebab, just not this item.
+    expect(screen.getByRole('menuitem', { name: /^unmark$/i })).toBeTruthy();
   });
 });
