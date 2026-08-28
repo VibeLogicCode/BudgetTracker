@@ -219,7 +219,15 @@ describe('v1.12.1: x-real-ip is untrusted unless TRUST_PROXY is on (item AB / SE
   const untrusted = { trustProxy: false } as AppEnv;
   const trusted = { trustProxy: true } as AppEnv;
 
-  it('ignores x-real-ip with TRUST_PROXY off, so a varying header shares one bucket', () => {
+  // v1.12.1 fix round 1: this used to be two separate tests, one asserting only the
+  // untrusted('unknown') half and one asserting only the trusted('10.0.0.1') half. The
+  // untrusted half alone is vacuous against the PRE-FIX clientIpFromHeaders: that code never
+  // had an x-real-ip branch at all (trusted or not), so it also returned 'unknown' there --
+  // meaning that assertion, run alone, could not tell fixed code from broken code. Folding
+  // both halves into one test with the SAME header and SAME call shape, differing only in
+  // env.trustProxy, means a regression in either direction (reads the header unconditionally,
+  // or stops reading it even when trusted) fails this test.
+  it('honours x-real-ip only when TRUST_PROXY is on, so a varying header shares one bucket when it is off', () => {
     const a = clientIpFromHeaders(new Headers({ 'x-real-ip': '10.0.0.1' }), null, untrusted);
     const b = clientIpFromHeaders(new Headers({ 'x-real-ip': '10.0.0.2' }), null, untrusted);
     expect(a).toBe('unknown');
@@ -227,10 +235,11 @@ describe('v1.12.1: x-real-ip is untrusted unless TRUST_PROXY is on (item AB / SE
     // The point of the test: Layer A is keyed on this string, so an attacker who varies the
     // header used to get a fresh 5-failure allowance per value.
     expect(a).toBe(b);
-  });
-
-  it('honours x-real-ip when TRUST_PROXY is on', () => {
+    // Flip TRUST_PROXY on with the exact same headers: now the value must be honoured, and
+    // must track the header instead of collapsing to a shared 'unknown' -- proving the two
+    // 'unknown' results above are TRUST_PROXY doing its job, not the header path going unread.
     expect(clientIpFromHeaders(new Headers({ 'x-real-ip': '10.0.0.1' }), null, trusted)).toBe('10.0.0.1');
+    expect(clientIpFromHeaders(new Headers({ 'x-real-ip': '10.0.0.2' }), null, trusted)).toBe('10.0.0.2');
   });
 
   it('still prefers the first x-forwarded-for entry when both are present and trusted', () => {
@@ -243,8 +252,14 @@ describe('v1.12.1: x-real-ip is untrusted unless TRUST_PROXY is on (item AB / SE
     expect(clientIpFromHeaders(new Headers(), 'also-not-an-ip', untrusted)).toBe('unknown');
   });
 
-  it('refuses an over-long value, which used to reach sessions.ip and the sign-in alert unbounded', () => {
+  // v1.12.1 fix round 1: the original version of this test only tried the over-long value on
+  // x-real-ip, which the PRE-FIX code never read regardless of trust -- so it passed against
+  // broken code for the same reason as above (it never reached any header-based branch that
+  // could return the raw value). x-forwarded-for is the header the pre-fix code DID read when
+  // trusted, with no length check, so it is the one that actually exercises the new bound.
+  it('refuses an over-long value from either proxy header, which used to reach sessions.ip and the sign-in alert unbounded', () => {
     const long = '1'.repeat(300);
+    expect(clientIpFromHeaders(new Headers({ 'x-forwarded-for': long }), null, trusted)).toBe('unknown');
     expect(clientIpFromHeaders(new Headers({ 'x-real-ip': long }), null, trusted)).toBe('unknown');
   });
 

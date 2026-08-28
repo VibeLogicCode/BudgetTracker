@@ -89,14 +89,16 @@ describe('middleware', () => {
 });
 
 describe('v1.12.1: HSTS and the TRUST_PROXY mismatch warning (item AC / SEC-7, ruling P6)', () => {
-  it('sends HSTS when the request URL itself is https', () => {
-    const response = proxy(new NextRequest('https://budget.example/dashboard'));
-    expect(response.headers.get('Strict-Transport-Security')).toBe('max-age=31536000; includeSubDomains');
-  });
-
-  it('sends no HSTS on the plain-HTTP LAN default, where it would brick the install', () => {
-    const response = proxy(new NextRequest('http://192.168.1.20:3000/dashboard'));
-    expect(response.headers.get('Strict-Transport-Security')).toBeNull();
+  // v1.12.1 fix round 1: the plain-HTTP assertion, tested alone, passed against the PRE-FIX
+  // proxy() too -- that code never called securityHeaders with an https option at all, so
+  // "no HSTS on plain HTTP" was true before this feature existed and proved nothing about the
+  // fix. Pairing it with the real-https case in the same test means a regression that stops
+  // sending HSTS at all (not just one that sends it unconditionally) fails this test.
+  it('sends HSTS when the request URL itself is https, and none on the plain-HTTP LAN default, where it would brick the install', () => {
+    const secure = proxy(new NextRequest('https://budget.example/dashboard'));
+    expect(secure.headers.get('Strict-Transport-Security')).toBe('max-age=31536000; includeSubDomains');
+    const plain = proxy(new NextRequest('http://192.168.1.20:3000/dashboard'));
+    expect(plain.headers.get('Strict-Transport-Security')).toBeNull();
   });
 
   it('warns, and still sends no HSTS, when a proxy claims https but TRUST_PROXY is off', () => {

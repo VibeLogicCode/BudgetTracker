@@ -57,13 +57,18 @@ describe("MUST-8.9 / AC11: script-src gains 'wasm-unsafe-eval' and nothing else"
 });
 
 describe('v1.12.1: HSTS only on a real HTTPS connection (item AC / SEC-7, ruling P6)', () => {
-  it('is absent by default, because the documented default is plain HTTP on a LAN', () => {
+  // v1.12.1 fix round 1: the absence assertion, tested alone, passed against the PRE-FIX
+  // securityHeaders() too -- that code never emitted HSTS under any input, so "absent by
+  // default" was true before this feature existed and proved nothing about the fix. Pairing it
+  // with the { https: true } case in the same test means a regression that stops sending HSTS
+  // at all (not just a regression that sends it unconditionally) fails this test.
+  it('is absent by default and present only when https is true, because the documented default is plain HTTP on a LAN', () => {
     expect(securityHeaders()['Strict-Transport-Security']).toBeUndefined();
     expect(securityHeaders('abc123')['Strict-Transport-Security']).toBeUndefined();
-  });
-
-  it('is present when the connection resolved to HTTPS', () => {
     expect(securityHeaders(undefined, { https: true })['Strict-Transport-Security']).toBe(
+      'max-age=31536000; includeSubDomains',
+    );
+    expect(securityHeaders('abc123', { https: true })['Strict-Transport-Security']).toBe(
       'max-age=31536000; includeSubDomains',
     );
   });
