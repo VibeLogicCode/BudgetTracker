@@ -21,7 +21,7 @@ import {
   setTransferFlag,
   upsertRenameRule,
 } from '@/lib/categorize/engine';
-import { listRules, matchRule, upsertRuleFromCorrection } from '@/lib/categorize/rules';
+import { exactRuleOwner, listRules, matchRule, upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { classify, train } from '@/lib/categorize/bayes';
 import { normalizeMerchant, tokenize } from '@/lib/categorize/normalize';
 import { nowIso } from '@/lib/clock';
@@ -737,5 +737,89 @@ describe('ruling R4, fix round 1: confirmCategory / setTransferFlag / applyCateg
       expect(result).toEqual({ ok: true, count: 1 });
       expect(readTxn(sqlite, a).category_id).toBe(groceries);
     });
+  });
+});
+
+describe('ruling R4, fix round 2 (item BJ): setTransferFlag refuses over the rule it would DELETE', () => {
+  function setupOwnedRule(opts: { cardPattern?: boolean; startFlagged?: boolean } = {}) {
+    current = createSeededTestDb();
+    const adminId = insertTestUser(current.db, { name: 'Admin Owner', username: 'admin-owner-bj', role: 'admin' });
+    const memberId = insertTestUser(current.db, { name: 'Member Other', username: 'member-other-bj', role: 'member' });
+    const accountId = insertTestAccount(current.db);
+    const raw = opts.cardPattern ? 'TD VISA PAYMENT' : 'ACME PAYROLL CO';
+    const merchant = normalizeMerchant(raw);
+    const row = current.db.get<{ id: number }>(sql`
+      insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, categorization_source, is_transfer, created_by, created_at, updated_at)
+      values (${accountId}, '2026-03-02', ${raw}, ${merchant}, -500, 'none', ${opts.startFlagged ? 1 : 0}, ${adminId}, ${nowIso()}, ${nowIso()})
+      returning id`);
+    return { adminId, memberId, txnId: row.id, merchant };
+  }
+
+  function isTransferOf(txnId: number): boolean {
+    return readTxn(current!.sqlite, txnId).is_transfer === 1;
+  }
+
+  it('refuses a member re-flagging a merchant whose not_transfer rule an admin owns', () => {
+    const { adminId, memberId, txnId, merchant } = setupOwnedRule();
+    upsertRuleFromCorrection({
+      pattern: merchant, matchType: 'exact', ruleKind: 'not_transfer',
+      categoryId: null, createdBy: adminId, actorRole: 'admin',
+    });
+
+    const result = setTransferFlag({ transactionId: txnId, isTransfer: true, userId: memberId, actorRole: 'member' });
+
+    // The whole action refuses. An "optional owner check" that still deletes on a refusal is
+    // not this fix -- every sibling R4 writer leaves every row and every rule untouched.
+    expect(result).toEqual({ ok: false, reason: 'owned_by_another', ownerName: 'Admin Owner' });
+    expect(exactRuleOwner(merchant, 'not_transfer')).not.toBeNull();
+    expect(exactRuleOwner(merchant, 'transfer')).toBeNull();
+    expect(isTransferOf(txnId)).toBe(false);
+  });
+
+  it('refuses a member un-flagging a card-pattern merchant whose transfer rule an admin owns', () => {
+    const { adminId, memberId, txnId, merchant } = setupOwnedRule({ cardPattern: true, startFlagged: true });
+    upsertRuleFromCorrection({
+      pattern: merchant, matchType: 'exact', ruleKind: 'transfer',
+      categoryId: null, createdBy: adminId, actorRole: 'admin',
+    });
+
+    const result = setTransferFlag({ transactionId: txnId, isTransfer: false, userId: memberId, actorRole: 'member' });
+
+    expect(result).toEqual({ ok: false, reason: 'owned_by_another', ownerName: 'Admin Owner' });
+    expect(exactRuleOwner(merchant, 'transfer')).not.toBeNull();
+    expect(isTransferOf(txnId)).toBe(true);
+  });
+
+  it('lets an admin delete anyone\'s opposite-kind rule', () => {
+    const { adminId, memberId, txnId, merchant } = setupOwnedRule();
+    upsertRuleFromCorrection({
+      pattern: merchant, matchType: 'exact', ruleKind: 'not_transfer',
+      categoryId: null, createdBy: memberId, actorRole: 'member',
+    });
+
+    expect(setTransferFlag({ transactionId: txnId, isTransfer: true, userId: adminId, actorRole: 'admin' })).toEqual({ ok: true });
+    expect(exactRuleOwner(merchant, 'not_transfer')).toBeNull();
+  });
+
+  it('lets a member delete their OWN opposite-kind rule', () => {
+    const { memberId, txnId, merchant } = setupOwnedRule();
+    upsertRuleFromCorrection({
+      pattern: merchant, matchType: 'exact', ruleKind: 'not_transfer',
+      categoryId: null, createdBy: memberId, actorRole: 'member',
+    });
+
+    expect(setTransferFlag({ transactionId: txnId, isTransfer: true, userId: memberId, actorRole: 'member' })).toEqual({ ok: true });
+    expect(exactRuleOwner(merchant, 'not_transfer')).toBeNull();
+  });
+
+  it('deletes an ownerless rule as before', () => {
+    const { memberId, txnId, merchant } = setupOwnedRule();
+    upsertRuleFromCorrection({
+      pattern: merchant, matchType: 'exact', ruleKind: 'not_transfer',
+      categoryId: null, createdBy: null, actorRole: 'admin',
+    });
+
+    expect(setTransferFlag({ transactionId: txnId, isTransfer: true, userId: memberId, actorRole: 'member' })).toEqual({ ok: true });
+    expect(exactRuleOwner(merchant, 'not_transfer')).toBeNull();
   });
 });

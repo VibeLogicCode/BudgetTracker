@@ -9,11 +9,13 @@ import {
   bumpRuleUsage,
   deleteExactRule,
   deleteRule,
+  exactRuleOwner,
   listRules,
   matchRule,
   upsertRuleFromCorrection,
   type MatchType,
   type MerchantRuleRecord,
+  type RuleKind,
 } from './rules';
 
 /**
@@ -488,6 +490,14 @@ export function clearCategory(input: {
  * `'member'` and the transfer/not_transfer rule this flip would learn was created by somebody
  * else. Whichever rule the flip needs is resolved -- and can refuse -- BEFORE is_transfer is ever
  * written, so a refusal never leaves the flag flipped alongside a rule nobody agreed to.
+ *
+ * v1.13.1 ruling R4, fix round 2 (item BJ). The check above gates the rule this action WRITES;
+ * the OPPOSITE-kind rule it removes as housekeeping (the two deleteExactRule calls below) was
+ * deleted unconditionally, so a member re-flagging one transaction could delete an
+ * admin-authored not_transfer or transfer rule with no ownership check at all. That rule is
+ * now resolved HERE, in the same block and before is_transfer is written, and a member who
+ * does not own it gets the whole action refused -- no row touched, no rule deleted -- exactly
+ * as confirmCategory and upsertRuleFromCorrection already refuse for the rule they write.
  */
 export function setTransferFlag(input: {
   transactionId: number;
@@ -509,7 +519,24 @@ export function setTransferFlag(input: {
 
   const matchesCardPattern = CARD_PAYMENT_PATTERNS.some((pattern) => row.normalizedMerchant.includes(pattern));
 
-  // R4 ownership check FIRST: whichever rule this flip would learn is resolved -- and can
+  // v1.13.1 ruling R4, fix round 2 (item BJ): the OPPOSITE-kind rule this flip would remove as
+  // housekeeping below (deleteExactRule at the end of this function) -- 'not_transfer' when
+  // re-flagging as a transfer, 'transfer' when un-flagging -- is resolved and can refuse FIRST,
+  // before the rule this flip WRITES (the block below) or is_transfer itself is ever touched. It
+  // has to run before the write-side upsertRuleFromCorrection call, not after: that call both
+  // checks AND WRITES the rule it owns in one step, so checking housekeeping ownership only
+  // after it ran could refuse the whole action while still leaving a freshly-created rule behind
+  // -- the "optional owner check that still deletes on a refusal" this fix explicitly rejects,
+  // applied to a create instead of a delete.
+  const housekeepingKind: RuleKind = input.isTransfer ? 'not_transfer' : 'transfer';
+  if (input.actorRole !== 'admin') {
+    const owner = exactRuleOwner(row.normalizedMerchant, housekeepingKind);
+    if (owner !== null && owner.createdBy !== null && owner.createdBy !== input.userId) {
+      return { ok: false, reason: 'owned_by_another', ownerName: owner.ownerName };
+    }
+  }
+
+  // R4 ownership check: whichever rule this flip would learn is resolved -- and can
   // refuse -- before is_transfer itself is ever written.
   if (input.isTransfer) {
     // EXACT match only: a contains rule learned from an e-transfer description
@@ -549,10 +576,12 @@ export function setTransferFlag(input: {
     // Re-flagging as a transfer must undo any earlier "not a transfer" override
     // on this exact merchant, or detectTransfer's not_transfer check (which runs
     // first) would keep silently vetoing this very rule on every future re-run.
+    // Ownership of this rule was already settled above (item BJ) -- a refusal never reaches here.
     deleteExactRule(row.normalizedMerchant, 'not_transfer');
   } else if (!matchesCardPattern) {
     // Only a learned transfer rule (or a purely manual flag) could have flagged
     // this row — today's behaviour is unchanged: remove that rule.
+    // Ownership of this rule was already settled above (item BJ) -- a refusal never reaches here.
     deleteExactRule(row.normalizedMerchant, 'transfer');
   }
   return { ok: true };

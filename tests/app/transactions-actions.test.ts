@@ -980,3 +980,42 @@ describe('ruling R2 fix round 3 -- a self viewer writes are forced to their own 
     expect(row.a).toBe(selfUserId);
   });
 });
+
+describe('bulk ownership pre-check (item BL, ruling P14)', () => {
+  function categoryOf(sqlite: TestDb['sqlite'], id: number): number | null {
+    return (sqlite.prepare('select category_id as c from transactions where id = ?').get(id) as { c: number | null }).c;
+  }
+
+  it('still refuses a household viewer a nonexistent id and writes nothing', async () => {
+    // The regression this ruling exists to pin: getTransaction(id, viewer) returned null for
+    // "no such row" as well as "not yours", and allTransactionsVisible refused on both. A
+    // scope-only rewrite would quietly start accepting bogus ids from a household viewer.
+    const { sqlite, addTxn } = setup();
+    const groceries = categoryIdByName(current!.db, 'Groceries');
+    const txnId = addTxn('CITY GROCER', -1200);
+    const before = categoryOf(sqlite, txnId);
+
+    const result = await bulkCategorizeAction({}, formData({ ids: `${txnId},999999`, categoryId: String(groceries) }));
+
+    expect(result.error).toBe(NOT_YOURS_ERROR);
+    expect(categoryOf(sqlite, txnId)).toBe(before);
+  });
+
+  it("still refuses a self viewer somebody else's id and writes nothing", async () => {
+    const { db, sqlite, userId, accountId } = setup();
+    const groceries = categoryIdByName(current!.db, 'Groceries');
+    const bobsTxnId = db.get<{ id: number }>(sql`
+      insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, attributed_user_id, created_by, created_at, updated_at)
+      values (${accountId}, '2026-03-02', 'BOBS ROW', ${normalizeMerchant('BOBS ROW')}, -1200, ${userId}, ${userId}, ${nowIso()}, ${nowIso()})
+      returning id`).id;
+    const selfUserId = insertTestUser(db, { name: 'Kid', username: 'kid', role: 'member' });
+    db.run(sql`update users set visibility = 'self' where id = ${selfUserId}`);
+    currentUser = { id: selfUserId, name: 'Kid', username: 'kid', role: 'member', visibility: 'self' };
+    const before = categoryOf(sqlite, bobsTxnId);
+
+    const result = await bulkCategorizeAction({}, formData({ ids: String(bobsTxnId), categoryId: String(groceries) }));
+
+    expect(result.error).toBe(NOT_YOURS_ERROR);
+    expect(categoryOf(sqlite, bobsTxnId)).toBe(before);
+  });
+});

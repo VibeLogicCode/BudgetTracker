@@ -13,6 +13,7 @@ import {
   listReviewQueue,
   listTransactions,
   manualTransactionSchema,
+  transactionOwners,
   updateTransactionNotes,
 } from '@/lib/transactions';
 import { normalizeMerchant } from '@/lib/categorize/normalize';
@@ -511,5 +512,32 @@ describe('bulkSetCategory / bulkSetTransfer — ruling R4 fix round 2: a member 
       .all(fresh, owned) as { id: number; isTransfer: number }[];
     expect(rows.find((r) => r.id === fresh)?.isTransfer).toBe(0);
     expect(rows.find((r) => r.id === owned)?.isTransfer).toBe(1);
+  });
+});
+
+describe('transactionOwners (item BL)', () => {
+  function seedTwo() {
+    const { alice, add } = setup();
+    const aliceTxn = add({ attributedUserId: alice });
+    const unattributedTxn = add({ attributedUserId: null });
+    return { aliceTxn, unattributedTxn, aliceId: alice };
+  }
+
+  it('returns one entry per existing id, owner only', () => {
+    const { aliceTxn, unattributedTxn, aliceId } = seedTwo();
+    const owners = transactionOwners([aliceTxn, unattributedTxn]);
+    expect(owners.get(aliceTxn)).toBe(aliceId);
+    expect(owners.get(unattributedTxn)).toBeNull();
+    expect(owners.size).toBe(2);
+  });
+
+  it('omits an id that does not exist, so a caller can still tell the two apart', () => {
+    const { aliceTxn } = seedTwo();
+    const owners = transactionOwners([aliceTxn, 999999]);
+    expect(owners.has(999999)).toBe(false);
+  });
+
+  it('returns an empty map for no ids', () => {
+    expect(transactionOwners([]).size).toBe(0);
   });
 });

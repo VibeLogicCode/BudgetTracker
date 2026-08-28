@@ -19,6 +19,7 @@ import {
   bulkSetTransfer,
   createManualTransaction,
   getTransaction,
+  transactionOwners,
   updateTransactionNotes,
 } from '@/lib/transactions';
 import { clearCategory, confirmCategory, setTransactionDisplayName, upsertRenameRule } from '@/lib/categorize/engine';
@@ -46,9 +47,19 @@ const idList = z
  * single id must resolve, or the whole action refuses and writes nothing. A household viewer's
  * ownerScope() is always null, so getTransaction never refuses for one -- this is a no-op for
  * every existing (household) test in this file.
+ *
+ * v1.13.1 (item BL, ruling P14): the loop above was one full-row fetch per id. It is now one
+ * narrow query, and BOTH refusals it used to make are kept explicitly -- an id with no row at
+ * all, and an id owned by somebody else. Losing the first would have let a household viewer
+ * bulk-write against ids that do not exist.
  */
 function allTransactionsVisible(ids: number[], viewer: SessionUser): boolean {
-  return ids.every((id) => getTransaction(id, viewer) !== null);
+  const owners = transactionOwners(ids);
+  for (const id of ids) if (!owners.has(id)) return false;
+  const scope = ownerScope(viewer);
+  if (scope === null) return true;
+  for (const owner of owners.values()) if (owner !== scope) return false;
+  return true;
 }
 
 /**

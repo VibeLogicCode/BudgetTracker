@@ -212,6 +212,29 @@ export function getTransaction(id: number, viewer: Viewer): TransactionRow | nul
   return baseQuery().where(where).get() ?? null;
 }
 
+/**
+ * Owner ids for a set of transaction ids, in ONE query.
+ *
+ * v1.13.1 (item BL, ruling P14). This is NOT a read-model and deliberately returns no money, no
+ * description and no merchant -- it is the narrow half of an ownership pre-check that used to
+ * run getTransaction (three joins and the full SELECTION) once per selected id on every bulk
+ * action, for a check that needs one column.
+ *
+ * An id with no row is ABSENT from the map rather than present with a null owner, because the
+ * caller has to keep telling those two apart: "no such row" and "not yours" are the same
+ * refusal (see getTransaction's own comment) and a household viewer POSTing a bogus id is
+ * refused today and must stay refused.
+ */
+export function transactionOwners(ids: number[]): Map<number, number | null> {
+  if (ids.length === 0) return new Map();
+  const rows = getDb()
+    .select({ id: transactions.id, attributedUserId: transactions.attributedUserId })
+    .from(transactions)
+    .where(inArray(transactions.id, ids))
+    .all();
+  return new Map(rows.map((row) => [row.id, row.attributedUserId]));
+}
+
 export function createManualTransaction(input: {
   accountId: number;
   date: string;

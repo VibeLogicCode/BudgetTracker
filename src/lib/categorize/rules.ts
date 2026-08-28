@@ -78,6 +78,33 @@ export type RuleUpsertResult =
 export const ruleOwnedError = (ownerName: string) =>
   `${ownerName} set up this rule. Ask an admin to change it under Settings → Categories & rules.`;
 
+/**
+ * Who owns the exact rule on (pattern, kind), or null if there is none.
+ *
+ * v1.13.1 (item BJ, ruling P13). upsertRuleFromCorrection has asked this question inline since
+ * v1.13.0 (:96-107) for the rule it WRITES; setTransferFlag now needs the same answer about the
+ * rule it DELETES, and two copies of a leftJoin whose fallback string has to match is exactly
+ * how the two answers drift apart. Same query, same 'Another member' fallback, one definition.
+ */
+export function exactRuleOwner(
+  pattern: string,
+  kind: RuleKind,
+): { createdBy: number | null; ownerName: string } | null {
+  const row = getDb()
+    .select({ createdBy: merchantRules.createdBy, ownerName: users.name })
+    .from(merchantRules)
+    .leftJoin(users, eq(users.id, merchantRules.createdBy))
+    .where(
+      and(
+        eq(merchantRules.pattern, pattern),
+        eq(merchantRules.matchType, 'exact'),
+        eq(merchantRules.ruleKind, kind),
+      ),
+    )
+    .get();
+  return row === undefined ? null : { createdBy: row.createdBy, ownerName: row.ownerName ?? 'Another member' };
+}
+
 export function upsertRuleFromCorrection(input: {
   pattern: string;
   matchType: MatchType;

@@ -66,6 +66,11 @@ const EXEMPT: { file: string; fn: string; why: string }[] = [
     fn: 'listLoanRules',
     why: 'internal resolver: warranties/[id]/page.tsx and warranties/actions.ts call it only with item.id after getWarrantyItem(id, viewer) already confirmed the viewer may see this item.',
   },
+  {
+    file: 'src/lib/transactions.ts',
+    fn: 'transactionOwners',
+    why: 'not a read-model: returns transaction id and attributed_user_id only -- no amount, no description, no merchant, no joins. It exists so the bulk ownership pre-check in transactions/actions.ts costs one query instead of one getTransaction per selected id, and its callers compare the owners it returns against ownerScope(viewer) themselves before any write (item BL, v1.13.1).',
+  },
 ];
 
 /**
