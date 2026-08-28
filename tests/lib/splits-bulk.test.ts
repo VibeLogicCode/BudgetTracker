@@ -257,9 +257,9 @@ describe('bulkSetTransfer (defect 1, the actual reported path): skips split rows
     expect(spentAt(groceries)).toBe(7000);
     expect(spentAt(gas)).toBe(3000);
 
-    const result = bulkSetTransfer([id], true, alice);
+    const result = bulkSetTransfer([id], true, alice, 'admin');
 
-    expect(result).toEqual({ changed: 0, skipped: 1 });
+    expect(result).toEqual({ ok: true, changed: 0, skipped: 1 });
     expect(readTxn(id).is_transfer).toBe(0);
     expect(spentAt(groceries)).toBe(7000);
     expect(spentAt(gas)).toBe(3000);
@@ -275,9 +275,9 @@ describe('bulkSetTransfer (defect 1, the actual reported path): skips split rows
     const a = add({ description: 'CONTROL A' });
     const b = add({ description: 'CONTROL B' });
 
-    const result = bulkSetTransfer([splitId, a, b], true, alice);
+    const result = bulkSetTransfer([splitId, a, b], true, alice, 'admin');
 
-    expect(result).toEqual({ changed: 2, skipped: 1 });
+    expect(result).toEqual({ ok: true, changed: 2, skipped: 1 });
     expect(readTxn(splitId).is_transfer).toBe(0);
     expect(readTxn(a).is_transfer).toBe(1);
     expect(readTxn(b).is_transfer).toBe(1);
@@ -293,12 +293,12 @@ describe('bulkSetTransfer (defect 1, the actual reported path): skips split rows
     splitSeventyThirty(first, groceries, gas, alice);
     splitSeventyThirty(second, groceries, gas, alice);
 
-    expect(bulkSetTransfer([first, second], true, alice)).toEqual({ changed: 0, skipped: 2 });
+    expect(bulkSetTransfer([first, second], true, alice, 'admin')).toEqual({ ok: true, changed: 0, skipped: 2 });
   });
 
   it('an empty id list reports zero changed and zero skipped', () => {
     const { alice } = setup();
-    expect(bulkSetTransfer([], true, alice)).toEqual({ changed: 0, skipped: 0 });
+    expect(bulkSetTransfer([], true, alice, 'admin')).toEqual({ ok: true, changed: 0, skipped: 0 });
   });
 });
 
@@ -312,9 +312,9 @@ describe('bulkSetCategory (defect 2, the actual reported path): skips split rows
     splitSeventyThirty(id, groceries, gas, alice);
     const before = readTxn(id);
 
-    const result = bulkSetCategory([id], coffee, alice, true);
+    const result = bulkSetCategory([id], coffee, alice, true, 'admin');
 
-    expect(result).toEqual({ changed: 0, skipped: 1 });
+    expect(result).toEqual({ ok: true, changed: 0, skipped: 1 });
     expect(readTxn(id)).toEqual(before);
     expect(listRules('category')).toHaveLength(0);
     expect((sqlite.prepare('select count(*) as c from bayes_tokens').get() as { c: number }).c).toBe(0);
@@ -330,9 +330,9 @@ describe('bulkSetCategory (defect 2, the actual reported path): skips split rows
     const a = add({ description: 'CONTROL A' });
     const b = add({ description: 'CONTROL B' });
 
-    const result = bulkSetCategory([splitId, a, b], coffee, alice, true);
+    const result = bulkSetCategory([splitId, a, b], coffee, alice, true, 'admin');
 
-    expect(result).toEqual({ changed: 2, skipped: 1 });
+    expect(result).toEqual({ ok: true, changed: 2, skipped: 1 });
     expect(readTxn(a).category_id).toBe(coffee);
     expect(readTxn(b).category_id).toBe(coffee);
     expect(readTxn(splitId).category_id).toBeNull();
@@ -343,7 +343,7 @@ describe('bulkSetCategory (defect 2, the actual reported path): skips split rows
 
   it('an empty id list reports zero changed and zero skipped', () => {
     const { alice } = setup();
-    expect(bulkSetCategory([], 1, alice, true)).toEqual({ changed: 0, skipped: 0 });
+    expect(bulkSetCategory([], 1, alice, true, 'admin')).toEqual({ ok: true, changed: 0, skipped: 0 });
   });
 });
 

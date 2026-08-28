@@ -4,7 +4,8 @@ import { headers } from 'next/headers';
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { isSameOrigin } from '@/lib/auth/csrf';
-import { requireUser } from '@/lib/auth/session';
+import { requireUser, type SessionUser } from '@/lib/auth/session';
+import { NOT_YOURS_ERROR } from '@/lib/auth/viewer';
 import { acceptsTransactions, getAccount, getOrCreateCashAccount } from '@/lib/accounts';
 import { setLastAccountId } from '@/lib/auth/users';
 import { assignTransactionToLoan, loanLinksForTransactions, unassignTransactionFromLoan } from '@/lib/loans';
@@ -33,6 +34,22 @@ const CROSS_ORIGIN_ERROR = 'Cross-origin request rejected';
 const idList = z
   .string()
   .transform((value) => value.split(',').map((v) => Number(v.trim())).filter((v) => Number.isInteger(v) && v > 0));
+
+/**
+ * v1.13.0 ruling R2 fix round 2 (controller finding): none of the write actions in this file
+ * resolved their target row(s) through the viewer before writing, so a self viewer could POST a
+ * `transactionId`/`ids` value belonging to somebody else and change its category, transfer flag or
+ * attribution -- listTransactions' own filter never runs on a write path, only on the page's own
+ * read. getTransaction(id, viewer) returns null for a row outside the viewer's scope, the
+ * deliberately same answer as "no such row" (see its own doc comment in src/lib/transactions.ts),
+ * so a scoped loop over every id in the request is the one place this needs checking: every
+ * single id must resolve, or the whole action refuses and writes nothing. A household viewer's
+ * ownerScope() is always null, so getTransaction never refuses for one -- this is a no-op for
+ * every existing (household) test in this file.
+ */
+function allTransactionsVisible(ids: number[], viewer: SessionUser): boolean {
+  return ids.every((id) => getTransaction(id, viewer) !== null);
+}
 
 /**
  * bulkSetCategory and bulkSetTransfer (src/lib/transactions.ts) both skip -- never fail -- a
@@ -121,6 +138,8 @@ export async function setCategoryAction(_prev: ActionState, formData: FormData):
   const transactionId = Number(formData.get('transactionId'));
   const raw = String(formData.get('categoryId') ?? '');
   if (!Number.isInteger(transactionId) || transactionId <= 0) return { error: 'Invalid request.' };
+  // Ruling R2 fix round 2: resolve the row through the viewer BEFORE either write path below.
+  if (getTransaction(transactionId, user) === null) return { error: NOT_YOURS_ERROR };
 
   if (raw === '') {
     // deleteRule: false -- ruling R4/P5. See clearCategory's docblock.
@@ -162,10 +181,12 @@ const attributedUserIdField = z.string().trim().refine((v) => v === '' || /^\d+$
 export async function setAttributionAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
 
-  await requireUser();
+  const user = await requireUser();
   const ids = idList.parse(String(formData.get('ids') ?? ''));
   const parsed = attributedUserIdField.safeParse(String(formData.get('attributedUserId') ?? ''));
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Invalid person selection.' };
+  // Ruling R2 fix round 2: every id must resolve through the viewer, or nothing is written.
+  if (!allTransactionsVisible(ids, user)) return { error: NOT_YOURS_ERROR };
   bulkSetAttribution(ids, parsed.data === '' ? null : Number(parsed.data));
   revalidatePath('/transactions');
   return { message: `Attribution updated for ${ids.length} transactions.` };
@@ -178,12 +199,18 @@ export async function bulkCategorizeAction(_prev: ActionState, formData: FormDat
   const ids = idList.parse(String(formData.get('ids') ?? ''));
   const categoryId = Number(formData.get('categoryId'));
   if (!Number.isInteger(categoryId) || categoryId <= 0) return { error: 'Pick a category first.' };
+  // Ruling R2 fix round 2: every id must resolve through the viewer, or nothing is written.
+  if (!allTransactionsVisible(ids, user)) return { error: NOT_YOURS_ERROR };
   const createRules = formData.get('createRules') === 'on';
-  const { changed, skipped } = bulkSetCategory(ids, categoryId, user.id, createRules);
+  // Ruling R4 fix round 2 (controller finding): actorRole threaded through -- bulkSetCategory
+  // refuses the WHOLE batch (writes nothing) rather than silently overwriting a rule someone
+  // else in the household owns.
+  const result = bulkSetCategory(ids, categoryId, user.id, createRules, user.role);
+  if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
   revalidatePath('/transactions');
   revalidatePath('/review');
-  const changedSentence = `Categorized ${changed} transaction${changed === 1 ? '' : 's'}.`;
-  const skipSentence = splitSkipSentence(skipped);
+  const changedSentence = `Categorized ${result.changed} transaction${result.changed === 1 ? '' : 's'}.`;
+  const skipSentence = splitSkipSentence(result.skipped);
   return { message: skipSentence ? `${changedSentence} ${skipSentence}` : changedSentence };
 }
 
@@ -193,13 +220,19 @@ export async function bulkTransferAction(_prev: ActionState, formData: FormData)
   const user = await requireUser();
   const ids = idList.parse(String(formData.get('ids') ?? ''));
   const isTransfer = formData.get('isTransfer') === '1';
-  const { changed, skipped } = bulkSetTransfer(ids, isTransfer, user.id);
+  // Ruling R2 fix round 2: every id must resolve through the viewer, or nothing is written.
+  if (!allTransactionsVisible(ids, user)) return { error: NOT_YOURS_ERROR };
+  // Ruling R4 fix round 2 (controller finding): actorRole threaded through -- bulkSetTransfer
+  // refuses the WHOLE batch (writes nothing) rather than silently overwriting a rule someone
+  // else in the household owns.
+  const result = bulkSetTransfer(ids, isTransfer, user.id, user.role);
+  if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
   revalidatePath('/transactions');
   const verb = isTransfer ? 'Marked' : 'Unmarked';
-  const noun = changed === 1 ? 'transaction' : 'transactions';
-  const complement = changed === 1 ? 'a transfer' : 'transfers';
-  const changedSentence = `${verb} ${changed} ${noun} as ${complement}.`;
-  const skipSentence = splitSkipSentence(skipped);
+  const noun = result.changed === 1 ? 'transaction' : 'transactions';
+  const complement = result.changed === 1 ? 'a transfer' : 'transfers';
+  const changedSentence = `${verb} ${result.changed} ${noun} as ${complement}.`;
+  const skipSentence = splitSkipSentence(result.skipped);
   return { message: skipSentence ? `${changedSentence} ${skipSentence}` : changedSentence };
 }
 

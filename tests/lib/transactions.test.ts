@@ -267,7 +267,7 @@ describe('bulk actions', () => {
     const { db, sqlite, alice, add } = setup();
     const coffee = categoryIdByName(db, 'Coffee');
     const ids = [add({ description: 'TIM HORTONS' }), add({ description: 'STARBUCKS' })];
-    expect(bulkSetCategory(ids, coffee, alice, true)).toEqual({ changed: 2, skipped: 0 });
+    expect(bulkSetCategory(ids, coffee, alice, true, 'admin')).toEqual({ ok: true, changed: 2, skipped: 0 });
     const rows = sqlite.prepare('select category_id, categorization_source from transactions').all() as { category_id: number; categorization_source: string }[];
     expect(rows.every((r) => r.category_id === coffee && r.categorization_source === 'manual')).toBe(true);
     expect(listRules('category').map((r) => r.pattern).sort()).toEqual(['STARBUCKS', 'TIM HORTONS']);
@@ -276,14 +276,14 @@ describe('bulk actions', () => {
   it('bulk categorize can skip rule creation', () => {
     const { db, alice, add } = setup();
     const coffee = categoryIdByName(db, 'Coffee');
-    bulkSetCategory([add()], coffee, alice, false);
+    bulkSetCategory([add()], coffee, alice, false, 'admin');
     expect(listRules('category')).toHaveLength(0);
   });
 
   it('bulk mark transfer teaches exact transfer rules', () => {
     const { sqlite, alice, add } = setup();
     const ids = [add({ description: 'E-TRANSFER SENT J DOE' })];
-    expect(bulkSetTransfer(ids, true, alice)).toEqual({ changed: 1, skipped: 0 });
+    expect(bulkSetTransfer(ids, true, alice, 'admin')).toEqual({ ok: true, changed: 1, skipped: 0 });
     expect((sqlite.prepare('select is_transfer from transactions where id = ?').get(ids[0]) as { is_transfer: number }).is_transfer).toBe(1);
     expect(listRules('transfer').map((r) => ({ pattern: r.pattern, matchType: r.matchType }))).toEqual([
       { pattern: 'E-TRANSFER SENT J DOE', matchType: 'exact' },
@@ -293,8 +293,8 @@ describe('bulk actions', () => {
   it('bulk actions on an empty id list do nothing', () => {
     const { alice } = setup();
     expect(bulkSetAttribution([], null)).toBe(0);
-    expect(bulkSetCategory([], 1, alice, true)).toEqual({ changed: 0, skipped: 0 });
-    expect(bulkSetTransfer([], true, alice)).toEqual({ changed: 0, skipped: 0 });
+    expect(bulkSetCategory([], 1, alice, true, 'admin')).toEqual({ ok: true, changed: 0, skipped: 0 });
+    expect(bulkSetTransfer([], true, alice, 'admin')).toEqual({ ok: true, changed: 0, skipped: 0 });
   });
 });
 
@@ -376,5 +376,65 @@ describe('notes and single reads', () => {
     updateTransactionNotes(id, null);
     expect(getTransaction(id, VIEWER)?.notes).toBeNull();
     expect(getTransaction(999999, VIEWER)).toBeNull();
+  });
+});
+
+/**
+ * v1.13.0 ruling R4 fix round 2 (controller finding): bulkSetCategory/bulkSetTransfer used to
+ * hard-code `actorRole: 'admin'` at their own confirmCategory/setTransferFlag call sites, so ANY
+ * member's bulk action silently overwrote a household rule someone else owned. Both functions now
+ * take the real actor's role and refuse the WHOLE batch -- rolling back every row this call
+ * already wrote -- the moment any id in it would overwrite a rule it does not own.
+ */
+describe('bulkSetCategory / bulkSetTransfer — ruling R4 fix round 2: a member cannot overwrite another owner\'s rule', () => {
+  it('bulkSetCategory: a member batch spanning an owned merchant and a fresh one refuses and rolls back BOTH rows', () => {
+    const { db, sqlite, alice, add } = setup();
+    const charlie = insertTestUser(db, { name: 'Charlie', username: 'charlie', role: 'member' });
+    const coffee = categoryIdByName(db, 'Coffee');
+    const groceries = categoryIdByName(db, 'Groceries');
+
+    // Alice (admin) already owns the rule for OWNER MERCHANT.
+    const owned = add({ description: 'OWNER MERCHANT' });
+    expect(bulkSetCategory([owned], groceries, alice, true, 'admin')).toEqual({ ok: true, changed: 1, skipped: 0 });
+
+    const fresh = add({ description: 'FRESH MERCHANT' });
+    const result = bulkSetCategory([fresh, owned], coffee, charlie, true, 'member');
+
+    expect(result).toEqual({ ok: false, reason: 'owned_by_another', ownerName: 'Alice' });
+    // Neither row moved -- not even `fresh`, which had no conflict of its own.
+    const rows = sqlite
+      .prepare('select id, category_id as categoryId from transactions where id in (?, ?)')
+      .all(fresh, owned) as { id: number; categoryId: number | null }[];
+    expect(rows.find((r) => r.id === fresh)?.categoryId).toBeNull();
+    expect(rows.find((r) => r.id === owned)?.categoryId).toBe(groceries);
+    // No rule was created for FRESH MERCHANT by the rolled-back attempt.
+    expect(listRules('category').map((r) => r.pattern)).not.toContain(normalizeMerchant('FRESH MERCHANT'));
+  });
+
+  it('bulkSetCategory: an admin CAN overwrite the same rule', () => {
+    const { db, alice, add } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const coffee = categoryIdByName(db, 'Coffee');
+    const owned = add({ description: 'OWNER MERCHANT 2' });
+    expect(bulkSetCategory([owned], groceries, alice, true, 'admin')).toEqual({ ok: true, changed: 1, skipped: 0 });
+    expect(bulkSetCategory([owned], coffee, alice, true, 'admin')).toEqual({ ok: true, changed: 1, skipped: 0 });
+  });
+
+  it('bulkSetTransfer: a member batch spanning an owned merchant and a fresh one refuses and rolls back BOTH rows', () => {
+    const { db, sqlite, alice, add } = setup();
+    const charlie = insertTestUser(db, { name: 'Charlie', username: 'charlie', role: 'member' });
+
+    const owned = add({ description: 'E-TRANSFER OWNER' });
+    expect(bulkSetTransfer([owned], true, alice, 'admin')).toEqual({ ok: true, changed: 1, skipped: 0 });
+
+    const fresh = add({ description: 'E-TRANSFER FRESH' });
+    const result = bulkSetTransfer([fresh, owned], true, charlie, 'member');
+
+    expect(result).toEqual({ ok: false, reason: 'owned_by_another', ownerName: 'Alice' });
+    const rows = sqlite
+      .prepare('select id, is_transfer as isTransfer from transactions where id in (?, ?)')
+      .all(fresh, owned) as { id: number; isTransfer: number }[];
+    expect(rows.find((r) => r.id === fresh)?.isTransfer).toBe(0);
+    expect(rows.find((r) => r.id === owned)?.isTransfer).toBe(1);
   });
 });

@@ -9,8 +9,18 @@ import { createItemType } from '@/lib/warranty/types';
 import { setTransactionSplits } from '@/lib/splits';
 import { confirmCategory } from '@/lib/categorize/engine';
 import { ruleOwnedError, upsertRuleFromCorrection } from '@/lib/categorize/rules';
+import { NOT_YOURS_ERROR } from '@/lib/auth/viewer';
 
-let currentUser: { id: number; name: string; username: string; role: 'admin' | 'member' } = {
+let currentUser: {
+  id: number;
+  name: string;
+  username: string;
+  role: 'admin' | 'member';
+  /** Fix round 2 (ruling R2): defaults to undefined, which ownerScope() treats exactly like
+   *  'household' (its check is `viewer.visibility === 'self'`) -- every pre-existing test in
+   *  this file relies on that default. Only the R2 self-viewer tests set it explicitly. */
+  visibility?: 'household' | 'self';
+} = {
   id: 1,
   name: 'Alice',
   username: 'alice',
@@ -715,5 +725,171 @@ describe("renameTransactionAction — ruling R4: a member cannot overwrite anoth
       .prepare('select rename_to as renameTo from merchant_rules where pattern = ?')
       .get(normalizeMerchant('CITY GROCER')) as { renameTo: string };
     expect(rule.renameTo).toBe('City Grocer (renamed)');
+  });
+});
+
+/**
+ * Controller fix round 2, finding 1: bulkCategorizeAction/bulkTransferAction used to call
+ * bulkSetCategory/bulkSetTransfer with a hard-coded actorRole: 'admin', so any member selecting
+ * rows and clicking Categorize/Mark transfer (the create-rules checkbox defaults checked) could
+ * silently overwrite a household rule owned by someone else. Both actions now pass user.role
+ * and translate a { ok: false, reason: 'owned_by_another' } refusal into the same ruleOwnedError
+ * sentence the single-row and rename paths already use.
+ */
+describe('bulkCategorizeAction / bulkTransferAction -- ruling R4 fix round 2', () => {
+  it('bulkCategorizeAction: a member is refused over a foreign-owned rule, and the row is unchanged', async () => {
+    const { db, sqlite, userId, addTxn } = setup();
+    const bob = insertTestUser(db, { name: 'Bob', username: 'bob', role: 'member' });
+    const groceries = categoryIdByName(db, 'Groceries');
+    const coffee = categoryIdByName(db, 'Coffee');
+
+    upsertRuleFromCorrection({
+      pattern: normalizeMerchant('OWNER MERCHANT'),
+      matchType: 'exact',
+      ruleKind: 'category',
+      categoryId: groceries,
+      createdBy: userId,
+      actorRole: 'admin',
+    });
+    const txnId = addTxn('OWNER MERCHANT', -1500);
+    currentUser = { id: bob, name: 'Bob', username: 'bob', role: 'member' };
+
+    const result = await bulkCategorizeAction({}, formData({ ids: String(txnId), categoryId: String(coffee), createRules: 'on' }));
+
+    expect(result.error).toBe(ruleOwnedError('Alice'));
+    expect(result.message).toBeUndefined();
+    const row = sqlite.prepare('select category_id as c from transactions where id = ?').get(txnId) as { c: number | null };
+    expect(row.c).toBeNull();
+  });
+
+  it('bulkCategorizeAction: an admin CAN overwrite the same rule', async () => {
+    const { db, userId, addTxn } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const coffee = categoryIdByName(db, 'Coffee');
+    upsertRuleFromCorrection({
+      pattern: normalizeMerchant('OWNER MERCHANT'),
+      matchType: 'exact',
+      ruleKind: 'category',
+      categoryId: groceries,
+      createdBy: userId,
+      actorRole: 'admin',
+    });
+    const txnId = addTxn('OWNER MERCHANT', -1500);
+    // currentUser is already the admin setup() created.
+
+    const result = await bulkCategorizeAction({}, formData({ ids: String(txnId), categoryId: String(coffee), createRules: 'on' }));
+
+    expect(result.error).toBeUndefined();
+    expect(result.message).toBe('Categorized 1 transaction.');
+  });
+
+  it('bulkTransferAction: a member is refused over a foreign-owned rule, and the row is unchanged', async () => {
+    const { db, sqlite, userId, addTxn } = setup();
+    const bob = insertTestUser(db, { name: 'Bob', username: 'bob', role: 'member' });
+    upsertRuleFromCorrection({
+      pattern: normalizeMerchant('E-TRANSFER OWNER'),
+      matchType: 'exact',
+      ruleKind: 'transfer',
+      categoryId: null,
+      createdBy: userId,
+      actorRole: 'admin',
+    });
+    const txnId = addTxn('E-TRANSFER OWNER', -1500);
+    currentUser = { id: bob, name: 'Bob', username: 'bob', role: 'member' };
+
+    const result = await bulkTransferAction({}, formData({ ids: String(txnId), isTransfer: '1' }));
+
+    expect(result.error).toBe(ruleOwnedError('Alice'));
+    expect(result.message).toBeUndefined();
+    const row = sqlite.prepare('select is_transfer as t from transactions where id = ?').get(txnId) as { t: number };
+    expect(row.t).toBe(0);
+  });
+});
+
+/**
+ * Controller fix round 2, finding 2: none of these four actions resolved their target row(s)
+ * through the viewer before writing, so a self viewer could POST a transactionId/ids value
+ * belonging to someone else and change its category, transfer flag or attribution. Every action
+ * now refuses the whole request (writes nothing) with NOT_YOURS_ERROR when any target row does
+ * not resolve through getTransaction(id, viewer).
+ */
+describe('ruling R2 fix round 2 -- a self viewer cannot write another persons transaction', () => {
+  function setupSelfViewer() {
+    const { db, sqlite, userId, accountId, addTxn } = setup();
+    // userId/currentUser from setup() is Alice, household-visibility admin -- the "someone
+    // else" whose transaction the self viewer must not be able to touch.
+    const selfUserId = insertTestUser(db, { name: 'Kid', username: 'kid', role: 'member' });
+    db.run(sql`update users set visibility = 'self' where id = ${selfUserId}`);
+    // A transaction attributed to Alice, not the self viewer.
+    const foreignTxnId = db.get<{ id: number }>(sql`
+      insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, attributed_user_id, created_by, created_at, updated_at)
+      values (${accountId}, '2026-03-02', 'FOREIGN ROW', ${normalizeMerchant('FOREIGN ROW')}, -1200, ${userId}, ${userId}, ${nowIso()}, ${nowIso()})
+      returning id`).id;
+    currentUser = { id: selfUserId, name: 'Kid', username: 'kid', role: 'member', visibility: 'self' };
+    return { sqlite, foreignTxnId, addTxn };
+  }
+
+  it('setCategoryAction refuses and leaves the category untouched', async () => {
+    const { sqlite, foreignTxnId } = setupSelfViewer();
+    const groceries = categoryIdByName(current!.db, 'Groceries');
+
+    const result = await setCategoryAction({}, formData({ transactionId: String(foreignTxnId), categoryId: String(groceries) }));
+
+    expect(result.error).toBe(NOT_YOURS_ERROR);
+    const row = sqlite.prepare('select category_id as c from transactions where id = ?').get(foreignTxnId) as {
+      c: number | null;
+    };
+    expect(row.c).toBeNull();
+  });
+
+  it('bulkCategorizeAction refuses and leaves the category untouched', async () => {
+    const { sqlite, foreignTxnId } = setupSelfViewer();
+    const groceries = categoryIdByName(current!.db, 'Groceries');
+
+    const result = await bulkCategorizeAction({}, formData({ ids: String(foreignTxnId), categoryId: String(groceries) }));
+
+    expect(result.error).toBe(NOT_YOURS_ERROR);
+    const row = sqlite.prepare('select category_id as c from transactions where id = ?').get(foreignTxnId) as {
+      c: number | null;
+    };
+    expect(row.c).toBeNull();
+  });
+
+  it('bulkTransferAction refuses and leaves is_transfer untouched', async () => {
+    const { sqlite, foreignTxnId } = setupSelfViewer();
+
+    const result = await bulkTransferAction({}, formData({ ids: String(foreignTxnId), isTransfer: '1' }));
+
+    expect(result.error).toBe(NOT_YOURS_ERROR);
+    const row = sqlite.prepare('select is_transfer as t from transactions where id = ?').get(foreignTxnId) as { t: number };
+    expect(row.t).toBe(0);
+  });
+
+  it('setAttributionAction refuses and leaves attribution untouched', async () => {
+    const { sqlite, foreignTxnId } = setupSelfViewer();
+
+    const result = await setAttributionAction({}, formData({ ids: String(foreignTxnId), attributedUserId: '' }));
+
+    expect(result.error).toBe(NOT_YOURS_ERROR);
+    const row = sqlite.prepare('select attributed_user_id as a from transactions where id = ?').get(foreignTxnId) as {
+      a: number | null;
+    };
+    // still attributed to Alice -- the clear-to-household write never ran.
+    expect(row.a).not.toBeNull();
+  });
+
+  it('a household viewer (the pre-existing default) is unaffected by any of the above', async () => {
+    // Regression guard: currentUser here is the plain household admin setup() seeds -- every
+    // existing test in this file already exercises this path, so this is a single, explicit
+    // witness rather than a duplicate of the whole suite.
+    const { sqlite, addTxn } = setup();
+    const groceries = categoryIdByName(current!.db, 'Groceries');
+    const txnId = addTxn('HOUSEHOLD ROW', -900);
+
+    const result = await setCategoryAction({}, formData({ transactionId: String(txnId), categoryId: String(groceries) }));
+
+    expect(result.message).toBe('Category updated.');
+    const row = sqlite.prepare('select category_id as c from transactions where id = ?').get(txnId) as { c: number | null };
+    expect(row.c).toBe(groceries);
   });
 });

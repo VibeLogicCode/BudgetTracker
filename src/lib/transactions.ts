@@ -284,44 +284,97 @@ export function bulkSetAttribution(ids: number[], attributedUserId: number | nul
 }
 
 /**
- * Return shape for the two bulk actions below, whose per-row write can be refused outright by
- * a split transaction (see the guard on confirmCategory/setTransferFlag in
+ * Return shape for the two bulk actions below. A split transaction's per-row write can be
+ * refused outright (see the guard on confirmCategory/setTransferFlag in
  * src/lib/categorize/engine.ts -- the manual counterpart of Task 2b's automatic-engine
- * exclusion, spec ruling 2a). A refusal is not a failure of the whole batch: the row is
+ * exclusion, spec ruling 2a) -- that refusal is not a failure of the whole batch: the row is
  * skipped and counted separately so the caller can report the truth instead of either
  * silently corrupting that row or aborting everyone else's change. Bulk attribution has no
  * such guard -- attribution is legitimately whole-transaction even for a split row (ruling 1)
  * -- and keeps its plain `number` return.
+ *
+ * v1.13.0 ruling R4 fix round 2 (controller finding): `owned_by_another` is NOT a per-row skip
+ * like `has_splits` is. A bulk selection can span several different merchants, each with its own
+ * rule ownership; treating an ownership refusal the same as a split-skip would let a member's
+ * batch quietly categorize/flag every row EXCEPT the one merchant somebody else owns, which is
+ * still an overwrite of nothing (fine) alongside a silent partial success the person never asked
+ * for. Every other R4 refusal in this codebase (confirmCategory/setTransferFlag/
+ * applyCategoryToMatching/upsertRenameRule) is resolved -- and can refuse -- before ANY row in
+ * its own scope is touched; this is that same guarantee for a bulk id list: the whole call is
+ * wrapped in one DB transaction, and hitting `owned_by_another` on any id throws to roll back
+ * every write this call already made, so a refusal always leaves the entire selection exactly as
+ * it was.
  */
-export interface BulkResult {
-  changed: number;
-  skipped: number;
+export type BulkResult =
+  | { ok: true; changed: number; skipped: number }
+  | { ok: false; reason: 'owned_by_another'; ownerName: string };
+
+/** Thrown only inside the transactions below, to unwind via ROLLBACK; never escapes this file. */
+class BulkOwnershipRefusal extends Error {
+  constructor(readonly ownerName: string) {
+    super('owned_by_another');
+  }
 }
 
-// actorRole: 'admin' at both call sites below -- bulkSetCategory/bulkSetTransfer do not yet take
-// their own caller's role (Wave C threads that through src/app/(app)/transactions/actions.ts,
-// which this task does not touch); this reproduces the pre-R4 behaviour of an unconditional
-// overwrite, unchanged. `.ok` replaces the old bare-boolean truthiness check.
-export function bulkSetCategory(ids: number[], categoryId: number, userId: number, createRules: boolean): BulkResult {
+export function bulkSetCategory(
+  ids: number[],
+  categoryId: number,
+  userId: number,
+  createRules: boolean,
+  /** The ACTOR's role, not any one rule's. Threaded from the caller (v1.13.0 ruling R4 fix
+   *  round 2) -- see confirmCategory's own doc comment for what an admin may do that a member
+   *  may not. */
+  actorRole: 'admin' | 'member',
+): BulkResult {
   let changed = 0;
   let skipped = 0;
-  for (const id of ids) {
-    const result = confirmCategory({ transactionId: id, categoryId, userId, createRule: createRules, actorRole: 'admin' });
-    if (result.ok) changed += 1;
-    else skipped += 1;
+  try {
+    getDb().transaction(() => {
+      for (const id of ids) {
+        const result = confirmCategory({ transactionId: id, categoryId, userId, createRule: createRules, actorRole });
+        if (result.ok) {
+          changed += 1;
+        } else if (result.reason === 'owned_by_another') {
+          throw new BulkOwnershipRefusal(result.ownerName);
+        } else {
+          skipped += 1;
+        }
+      }
+    });
+  } catch (error) {
+    if (error instanceof BulkOwnershipRefusal) return { ok: false, reason: 'owned_by_another', ownerName: error.ownerName };
+    throw error;
   }
-  return { changed, skipped };
+  return { ok: true, changed, skipped };
 }
 
-export function bulkSetTransfer(ids: number[], isTransfer: boolean, userId: number): BulkResult {
+export function bulkSetTransfer(
+  ids: number[],
+  isTransfer: boolean,
+  userId: number,
+  /** The ACTOR's role, not any one rule's (v1.13.0 ruling R4 fix round 2). */
+  actorRole: 'admin' | 'member',
+): BulkResult {
   let changed = 0;
   let skipped = 0;
-  for (const id of ids) {
-    const result = setTransferFlag({ transactionId: id, isTransfer, userId, actorRole: 'admin' });
-    if (result.ok) changed += 1;
-    else skipped += 1;
+  try {
+    getDb().transaction(() => {
+      for (const id of ids) {
+        const result = setTransferFlag({ transactionId: id, isTransfer, userId, actorRole });
+        if (result.ok) {
+          changed += 1;
+        } else if (result.reason === 'owned_by_another') {
+          throw new BulkOwnershipRefusal(result.ownerName);
+        } else {
+          skipped += 1;
+        }
+      }
+    });
+  } catch (error) {
+    if (error instanceof BulkOwnershipRefusal) return { ok: false, reason: 'owned_by_another', ownerName: error.ownerName };
+    throw error;
   }
-  return { changed, skipped };
+  return { ok: true, changed, skipped };
 }
 
 /**
