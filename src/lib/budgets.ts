@@ -453,20 +453,61 @@ export function budgetProgress(month: string, scope: BudgetScope = 'household', 
     .filter((category) => !category.isArchived || (spendByCategory.get(category.id) ?? 0) !== 0)
     .map((parent) => {
       const allChildren = all.filter((row) => row.parentId === parent.id);
-      const renderChildren = allChildren.filter((row) => !row.isArchived);
+      // v1.12.1 (item S / MON-1). This used to be a blanket `!row.isArchived`, while allChildren
+      // (the rollup) kept archived rows -- so archiving a child made its LIMIT disappear from
+      // every number while its SPEND went on counting against the parent, and the parent flipped
+      // to over budget for no visible reason anybody could see on the page. The rule is now the
+      // archived-TOP-LEVEL rule from four lines up, applied one level down: an archived child
+      // surfaces when it still carries a resolved limit or real spend this month, and is dropped
+      // when it carries neither.
+      const renderChildren = allChildren.filter(
+        (row) =>
+          !row.isArchived ||
+          (spendByCategory.get(row.id) ?? 0) !== 0 ||
+          resolveBudget(scope, userId, row.id, month) !== null,
+      );
       return buildRow(parent, spendByCategory, scope, userId, month, renderChildren, allChildren);
     });
 }
 
 /**
- * Totals across the TOP LEVEL only — children are already rolled into their parent.
- * Three numbers, deliberately not one "spent of limit": mixing all non-income spend
- * against only the rows that happen to have a resolved limit reads as a nonsense
- * percentage (e.g. "$3,200 of $1,000 budgeted" on a month with unbudgeted categories).
- *   - budgetedLimitCents / budgetedSpentCents: only rows with a resolved limit —
- *     this pair is what the progress bar should be driven by.
- *   - totalSpentCents: every non-income row's spend, budgeted or not (includes a
- *     surfaced archived top-level row's spend, per finding 2).
+ * Flatten budgetProgress()'s parent/child tree into one list, depth-first, parent before its own
+ * children.
+ *
+ * v1.12.1 (ruling P2): this used to live in src/lib/notify/evaluate/pace.ts, which is where a
+ * budget helper ended up because the notification evaluators needed it first. It moves here, beside
+ * the function whose shape it knows, and pace.ts re-exports it -- so src/lib/budgets.ts never
+ * imports from src/lib/notify/**, and monthly.ts and budgets/page.tsx keep working unedited.
+ */
+export function flattenBudgetRows(rows: BudgetRow[], acc: BudgetRow[] = []): BudgetRow[] {
+  for (const row of rows) {
+    acc.push(row);
+    if (row.children.length > 0) flattenBudgetRows(row.children, acc);
+  }
+  return acc;
+}
+
+/**
+ * Three numbers, deliberately not one "spent of limit": mixing all non-income spend against only
+ * the rows that happen to have a resolved limit reads as a nonsense percentage (e.g. "$3,200 of
+ * $1,000 budgeted" on a month with unbudgeted categories).
+ *   - budgetedLimitCents / budgetedSpentCents: only rows with a resolved limit -- this pair is
+ *     what the progress bar should be driven by.
+ *   - totalSpentCents: every non-income TOP-LEVEL row's spend, budgeted or not (a parent's
+ *     spentCents already rolls its children's in, so descending here would double count).
+ *
+ * v1.12.1 (item S / MON-1, ruling P3). This used to iterate the top level ONLY, with the comment
+ * "children are already rolled into their parent". That is true for SPEND and false for LIMITS: a
+ * parent with no limit of its own contributes limitCents === null and was skipped, taking every
+ * child limit underneath it with it -- so a household that budgets at the child level (Food >
+ * Groceries $600, Food > Restaurants $200) was told it had budgeted $0.00 on the budgets header,
+ * the dashboard tile and safe-to-spend, while the page one row down rendered both child limits
+ * correctly.
+ *
+ * The overlap rule is explicit and is ruling P3: a parent's own limit SUPERSEDES its children's
+ * when it is set, and only when it is null do the children's limits sum. A naive flatten-and-sum
+ * would double count whenever both levels carry a limit, because the parent's spentCents already
+ * includes the children's -- one pot of spending measured against two pots of budget.
  */
 export function budgetTotals(rows: BudgetRow[]): {
   budgetedLimitCents: number;
@@ -480,8 +521,16 @@ export function budgetTotals(rows: BudgetRow[]): {
     if (row.isIncome) continue;
     totalSpentCents += row.spentCents;
     if (row.limitCents !== null) {
+      // The parent's own limit wins, and its spentCents already includes every child's.
       budgetedLimitCents += row.limitCents;
       budgetedSpentCents += row.spentCents;
+      continue;
+    }
+    // No limit at this level: the children speak for it.
+    for (const child of flattenBudgetRows(row.children)) {
+      if (child.isIncome || child.limitCents === null) continue;
+      budgetedLimitCents += child.limitCents;
+      budgetedSpentCents += child.spentCents;
     }
   }
   return { budgetedLimitCents, budgetedSpentCents, totalSpentCents };

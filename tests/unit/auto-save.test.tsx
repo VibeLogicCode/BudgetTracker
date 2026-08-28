@@ -321,6 +321,52 @@ describe('v1.12.1: the control follows the server (item AT / UX-5, ruling R3)', 
 
     expect(input.value).toBe('650');
   });
+
+  it('catches a focused field up on blur when nothing was typed, so a later edit commits against the new server value', async () => {
+    // Fix round 1 (item AT / UX-5, ruling R3). Sequence: field shows V1 and is focused ->
+    // another user's edit lands, prop moves to V2, the resync effect skips it (focused) ->
+    // this user tabs away WITHOUT typing anything -> the field must show V2 and its baselines
+    // must be V2, so that a later, real edit is compared and saved against V2 -- not silently
+    // sent with a V1 baseline that would misrepresent what changed.
+    const action = vi.fn(async (_formData: FormData) => ({}));
+    const { rerender } = render(
+      <AutoSaveTextInput
+        name="amount"
+        defaultValue="600.00"
+        fields={{ categoryId: '7' }}
+        action={action}
+        ariaLabel="Monthly limit for Groceries"
+      />,
+    );
+    const input = screen.getByLabelText('Monthly limit for Groceries') as HTMLInputElement;
+    input.focus();
+
+    // The other user's edit lands while this field is focused: prop moves V1 -> V2.
+    rerender(
+      <AutoSaveTextInput
+        name="amount"
+        defaultValue="480.00"
+        fields={{ categoryId: '7' }}
+        action={action}
+        ariaLabel="Monthly limit for Groceries"
+      />,
+    );
+    // Still focused, so the field is untouched -- it does not yet show the new server value.
+    expect(input.value).toBe('600.00');
+
+    // This user tabs away without typing anything.
+    fireEvent.blur(input);
+
+    expect(input.value).toBe('480.00');
+    expect(action).not.toHaveBeenCalled();
+
+    // A later, real edit must be evaluated and saved against the caught-up V2 baseline.
+    fireEvent.change(input, { target: { value: '500.00' } });
+    fireEvent.blur(input);
+
+    await waitFor(() => expect(action).toHaveBeenCalledTimes(1));
+    expect((action.mock.calls[0][0] as FormData).get('amount')).toBe('500.00');
+  });
 });
 
 describe('v1.12.1: the control is finger-sized on a phone (item AV / UX-7)', () => {
@@ -329,5 +375,13 @@ describe('v1.12.1: the control is finger-sized on a phone (item AV / UX-7)', () 
     expect(AUTO_SAVE_CONTROL).toContain('text-sm');
     expect(AUTO_SAVE_CONTROL).toContain('sm:py-1');
     expect(AUTO_SAVE_CONTROL).toContain('sm:text-xs');
+  });
+
+  it('fix round 1: the control has a 44px minimum height below sm: that sm: lifts back off', () => {
+    // py-2/text-sm alone still rendered under 44px: .field-control's own line-height and
+    // padding come from an earlier CSS layer, and combine with the utilities to clear only
+    // ~38px. min-h-11 (2.75rem = 44px) is an explicit floor padding/line-height can't undercut.
+    expect(AUTO_SAVE_CONTROL).toContain('min-h-11');
+    expect(AUTO_SAVE_CONTROL).toContain('sm:min-h-0');
   });
 });

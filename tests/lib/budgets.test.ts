@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
-import { budgetProgress, budgetTotals, categorySpend, clearBudget, copyBudgetsFromPreviousMonth, resolveBudget, upsertBudget } from '@/lib/budgets';
+import { budgetProgress, budgetTotals, categorySpend, clearBudget, copyBudgetsFromPreviousMonth, flattenBudgetRows, resolveBudget, upsertBudget } from '@/lib/budgets';
 import { nowIso } from '@/lib/clock';
 
 let current: TestDb | null = null;
@@ -224,13 +224,26 @@ describe('budgetProgress', () => {
     expect(budgetTotals(rows)).toEqual({ budgetedLimitCents: 100000, budgetedSpentCents: 20000, totalSpentCents: 20000 });
   });
 
-  it('omits archived categories', () => {
+  it('omits an archived category with no limit and no spend', () => {
+    const { db, sqlite } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    sqlite.prepare('update categories set is_archived = 1 where id = ?').run(coffee);
+    const rows = budgetProgress('2026-03');
+    expect(rows.flatMap((r) => r.children).some((c) => c.categoryId === coffee)).toBe(false);
+  });
+
+  // v1.12.1 (item S / MON-1): this used to assert `false` unconditionally -- omitting an archived
+  // child even when it still carried real spend, which is exactly the compounding half of MON-1
+  // (the limit vanished from every total while the spend went on counting against the parent, with
+  // no row left to explain why). An archived child with spend is now a read-only row, same as an
+  // archived child with a limit.
+  it('keeps an archived category that still carries spend, unlike one with neither limit nor spend', () => {
     const { db, sqlite, spend } = setup();
     const coffee = categoryIdByName(db, 'Coffee');
     sqlite.prepare('update categories set is_archived = 1 where id = ?').run(coffee);
     spend({ categoryId: coffee, amountCents: -1000 });
     const rows = budgetProgress('2026-03');
-    expect(rows.flatMap((r) => r.children).some((c) => c.categoryId === coffee)).toBe(false);
+    expect(rows.flatMap((r) => r.children).some((c) => c.categoryId === coffee)).toBe(true);
   });
 });
 
@@ -298,7 +311,12 @@ describe('budgetTotals — review finding 1: unbudgeted spend must not pollute t
 });
 
 describe('budgetProgress — review finding 2: archived-category spend', () => {
-  it("rolls an archived child's spend into its live parent without rendering the child as its own row", () => {
+  // v1.12.1 (item S / MON-1): this used to assert the child was never rendered as its own row --
+  // that was the compounding half of the defect (spend rolled up, but the row that would have
+  // explained why was suppressed). An archived child that still carries real spend now surfaces
+  // as a read-only row, same as one that still carries a limit; the rollup into the parent is
+  // unchanged.
+  it("rolls an archived child's spend into its live parent, rendering the child as a read-only row", () => {
     const { db, sqlite, spend } = setup();
     const food = categoryIdByName(db, 'Food');
     const groceries = categoryIdByName(db, 'Groceries');
@@ -310,7 +328,7 @@ describe('budgetProgress — review finding 2: archived-category spend', () => {
     const rows = budgetProgress('2026-03');
     const foodRow = rows.find((r) => r.categoryId === food)!;
     expect(foodRow.spentCents).toBe(23000); // groceries (20000) + archived coffee (3000), no longer dropped
-    expect(foodRow.children.some((c) => c.categoryId === coffee)).toBe(false);
+    expect(foodRow.children.some((c) => c.categoryId === coffee)).toBe(true);
   });
 
   it('surfaces an archived top-level category with real spend as a read-only row and folds it into totalSpentCents', () => {
@@ -407,5 +425,78 @@ describe('budgetProgress — review finding 7 (folded): income categories are no
     const rows = budgetProgress('2026-03');
     expect(rows.some((r) => r.categoryId === income)).toBe(false);
     expect(rows.flatMap((r) => r.children).some((c) => c.categoryId === salary)).toBe(false);
+  });
+});
+
+describe('budgetTotals counts limits set on sub-categories (item S / MON-1, ruling P3)', () => {
+  it('sums the children when the parent carries no limit of its own', () => {
+    const { db, spend } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const restaurants = categoryIdByName(db, 'Restaurants');
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-03', amountCents: 60000 });
+    upsertBudget({ scope: 'household', userId: null, categoryId: restaurants, month: '2026-03', amountCents: 20000 });
+    spend({ categoryId: groceries, amountCents: -50000 });
+    spend({ categoryId: restaurants, amountCents: -15000 });
+
+    const totals = budgetTotals(budgetProgress('2026-03'));
+    // The defect: this used to be 0, and the dashboard said "$0.00 left in budgets" while the
+    // page itself rendered both child limits correctly one row down.
+    expect(totals.budgetedLimitCents).toBe(80000);
+    expect(totals.budgetedSpentCents).toBe(65000);
+    expect(totals.totalSpentCents).toBe(65000);
+  });
+
+  it('does not double count: a parent with its own limit supersedes its children (ruling P3)', () => {
+    const { db, spend } = setup();
+    const food = categoryIdByName(db, 'Food');
+    const groceries = categoryIdByName(db, 'Groceries');
+    upsertBudget({ scope: 'household', userId: null, categoryId: food, month: '2026-03', amountCents: 100000 });
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-03', amountCents: 60000 });
+    spend({ categoryId: groceries, amountCents: -50000 });
+
+    const totals = budgetTotals(budgetProgress('2026-03'));
+    // 100000, NOT 160000: the parent's spentCents already rolls the child's in, so adding both
+    // limits would compare one pot of spending against two pots of budget.
+    expect(totals.budgetedLimitCents).toBe(100000);
+    expect(totals.budgetedSpentCents).toBe(50000);
+  });
+
+  it('keeps an archived child that still carries a limit and spend', () => {
+    const { db, spend } = setup();
+    const restaurants = categoryIdByName(db, 'Restaurants');
+    upsertBudget({ scope: 'household', userId: null, categoryId: restaurants, month: '2026-03', amountCents: 20000 });
+    spend({ categoryId: restaurants, amountCents: -15000 });
+    db.run(sql`update categories set is_archived = 1 where id = ${restaurants}`);
+
+    const rows = budgetProgress('2026-03');
+    const food = rows.find((row) => row.categoryName === 'Food');
+    expect(food?.children.map((child) => child.categoryName)).toContain('Restaurants');
+    // The compounding half of MON-1: the spend kept rolling into Food while the limit vanished,
+    // so Food read as over budget for no visible reason.
+    expect(budgetTotals(rows).budgetedLimitCents).toBe(20000);
+  });
+
+  it('drops an archived child that carries neither a limit nor spend', () => {
+    const { db } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    db.run(sql`update categories set is_archived = 1 where id = ${coffee}`);
+
+    const food = budgetProgress('2026-03').find((row) => row.categoryName === 'Food');
+    expect(food?.children.map((child) => child.categoryName)).not.toContain('Coffee');
+  });
+});
+
+describe('flattenBudgetRows (moved here from notify/evaluate/pace.ts, ruling P2)', () => {
+  it('returns parents and children in depth-first order', () => {
+    const { db } = setup();
+    upsertBudget({
+      scope: 'household',
+      userId: null,
+      categoryId: categoryIdByName(db, 'Groceries'),
+      month: '2026-03',
+      amountCents: 60000,
+    });
+    const names = flattenBudgetRows(budgetProgress('2026-03')).map((row) => row.categoryName);
+    expect(names.indexOf('Food')).toBeLessThan(names.indexOf('Groceries'));
   });
 });

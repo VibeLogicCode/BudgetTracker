@@ -1,4 +1,4 @@
-import { budgetProgress, type BudgetRow } from '@/lib/budgets';
+import { budgetProgress, flattenBudgetRows, type BudgetRow } from '@/lib/budgets';
 import { currentMonth, monthEnd, todayIso } from '@/lib/dates';
 import { isEventEnabled } from '@/lib/notify/config';
 import { CHANNELS, budgetPaceKey, type BudgetScopeKey } from '@/lib/notify/events';
@@ -11,16 +11,13 @@ import { projectMonthEnd } from '@/lib/predict/pace';
  * MUST-10.8: no fingerprint. This runs at most once per user per day by construction, and its
  * dedup key makes a second run inside the catch-up window a no-op.
  *
- * budget.ts has an identical private flatten(). Spec section 2.2's file table is exhaustive
- * and does not list budget.ts, so the shared copy lives here and monthly.ts imports it.
+ * v1.12.1 (ruling P2): flattenBudgetRows now LIVES in src/lib/budgets.ts, beside budgetProgress
+ * and budgetTotals, because budgetTotals needs it too and a money helper importing from
+ * src/lib/notify/** would be the wrong way round. It is re-exported here so monthly.ts's import
+ * and budgets/page.tsx's import keep resolving unchanged -- one definition, two names for the same
+ * path, and no third traversal anywhere.
  */
-export function flattenBudgetRows(rows: BudgetRow[], acc: BudgetRow[] = []): BudgetRow[] {
-  for (const row of rows) {
-    acc.push(row);
-    if (row.children.length > 0) flattenBudgetRows(row.children, acc);
-  }
-  return acc;
-}
+export { flattenBudgetRows } from '@/lib/budgets';
 
 /** One row that cleared every fire condition except the per-evaluation cap. */
 interface PaceCandidate {

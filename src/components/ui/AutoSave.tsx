@@ -34,8 +34,18 @@ export type AutoSaveStatus = 'idle' | 'saved' | 'error';
  * and it is exactly where the destructive row actions and the category select live. Every new value
  * is scoped back to today's at `sm:`, so desktop rendering is byte-identical. TableWrap already
  * scrolls horizontally on a phone, so the extra height costs nothing.
+ *
+ * v1.12.1 fix round 1: `py-2 text-sm` alone still rendered under 44px. `.field-control`'s own
+ * `line-height: 1.4` and `padding: 0.5rem 0.75rem` come from the `components` layer, and Tailwind's
+ * `utilities` layer (which `py-2`/`text-sm` belong to) loads after it and wins on equal specificity
+ * -- but a UTILITY value only wins where it sets the SAME property; here `.field-control`'s
+ * `line-height` utility (1.4, i.e. ~19.6px of text) combines with `py-2`'s 2x8px to clear only
+ * ~38px, short of the 44px this item is actually about. `min-h-11` (2.75rem = 44px) sets a floor
+ * that padding and line-height can't be undercut by regardless of layer order, and `sm:min-h-0`
+ * lifts the floor back off at the breakpoint where the original, smaller control returns.
  */
-export const AUTO_SAVE_CONTROL = 'field-control w-auto max-w-[11rem] px-2 py-2 text-sm sm:py-1 sm:text-xs';
+export const AUTO_SAVE_CONTROL =
+  'field-control w-auto max-w-[11rem] px-2 py-2 text-sm min-h-11 sm:min-h-0 sm:py-1 sm:text-xs';
 
 /**
  * What a THROWN action says (item V / UX-3). Deliberately NOT the thrown message: Next redacts
@@ -346,7 +356,24 @@ export function AutoSaveTextInput({
     const element = input.current;
     if (element === null) return;
     const next = element.value;
-    if (next === sent.current) return;
+    if (next === sent.current) {
+      // v1.12.1 fix round 1 (item AT / UX-5, ruling R3). The resync effect above deliberately
+      // skips a FOCUSED field so a live edit is never overwritten -- but if the field is then
+      // blurred with nothing typed, that skip is the only thing that ran, and nothing else was
+      // ever going to catch this field up: the effect's dependencies (`defaultValue`, `pending`)
+      // don't change again on blur, so `serverValue.current` would otherwise sit on the stale
+      // value forever. `defaultValue` here is the prop from THIS render, so it already reflects
+      // whatever landed while the field was focused. Catching up now -- and only when nothing was
+      // typed -- means a field left alone shows what the server actually holds, and a field that
+      // WAS edited still goes through the normal save path below untouched.
+      if (defaultValue !== serverValue.current) {
+        serverValue.current = defaultValue;
+        saved.current = defaultValue;
+        sent.current = defaultValue;
+        element.value = defaultValue;
+      }
+      return;
+    }
     // v1.12.1 (item X / UX-4). An emptied field is NOT "clear this". Somebody who selected the
     // number to retype it and got distracted used to delete a recurring budget limit -- from this
     // month FORWARD, not just this month -- with a tick as the only feedback. Blanking a field

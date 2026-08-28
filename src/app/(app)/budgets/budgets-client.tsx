@@ -31,6 +31,16 @@ const initial: BudgetActionState = {};
 const saveLimit = (formData: FormData) => setLimitAction({}, formData);
 const saveRollover = (formData: FormData) => setRolloverAction({}, formData);
 
+/**
+ * v1.12.1 (item X / UX-4). The deliberate half of the pair: AutoSaveTextInput now treats an
+ * emptied field as a no-op, so "clear this budget from this month forward" needs a control of its
+ * own. Same action, same four fields, an explicitly empty `amount` -- setLimitAction's blank
+ * branch is unchanged and still the only path to clearBudget.
+ */
+const clearLimit = (formData: FormData) => {
+  void setLimitAction({}, formData);
+};
+
 /** Everything a row needs from the predictions, resolved once per section. */
 interface RowPredictions {
   suggestionOf: Map<number, CategorySuggestion>;
@@ -116,6 +126,23 @@ function Row({
                 placeholder="none"
                 className="field-control w-24 px-2 py-1 text-right text-xs"
               />
+              {row.baseLimitCents !== null ? (
+                <form action={clearLimit}>
+                  <input type="hidden" name="scope" value={scope} />
+                  <input type="hidden" name="userId" value={userId ?? ''} />
+                  <input type="hidden" name="month" value={month} />
+                  <input type="hidden" name="categoryId" value={row.categoryId} />
+                  <input type="hidden" name="amount" value="" />
+                  <button
+                    type="submit"
+                    aria-label={`Clear the budget for ${row.categoryName} from this month forward`}
+                    title="Clears this budget from this month forward"
+                    className="btn btn--ghost btn--sm px-2 text-xs"
+                  >
+                    clear
+                  </button>
+                </form>
+              ) : null}
               {row.baseLimitCents !== null && row.carryCents > 0 ? (
                 <p className="mt-1 text-xs text-muted">
                   {formatCents(row.baseLimitCents)} plus {formatCents(row.carryCents)} carried

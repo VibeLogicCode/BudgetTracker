@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, cleanup } from '@testing-library/react';
+import { render, cleanup, screen } from '@testing-library/react';
 import { BudgetsClient } from '@/app/(app)/budgets/budgets-client';
 import { sectionFrom } from '@/app/(app)/budgets/page';
 import type { BudgetRow } from '@/lib/budgets';
@@ -58,18 +58,30 @@ function predictionsWith(over: Partial<BudgetPredictions> = {}): BudgetPredictio
   };
 }
 
-/** The file's existing inline shape, plus whatever the test under way needs. */
-function renderBudgets(predictions: BudgetPredictions | null) {
+/**
+ * The file's existing inline shape, plus whatever the test under way needs.
+ *
+ * v1.12.1 (item X / UX-4): widened with an optional `limitCents` override so the clear-button
+ * tests can vary just the row's limit without a second render(<BudgetsClient/>) call of their own
+ * -- renderClient below is a thin alias over this, not a second mount.
+ */
+function renderBudgets(predictions: BudgetPredictions | null, opts: { limitCents?: number | null } = {}) {
   return render(
     <BudgetsClient
       month="2026-03"
       currentUserId={1}
-      household={[makeRow()]}
+      household={[makeRow(opts.limitCents !== undefined ? { limitCents: opts.limitCents, baseLimitCents: opts.limitCents } : {})]}
       householdTotals={{ budgetedLimitCents: 20000, budgetedSpentCents: 5000, totalSpentCents: 5000 }}
       personal={[]}
       predictions={predictions}
     />,
   );
+}
+
+/** v1.12.1 (item X / UX-4): the clear-button tests only care about one Groceries row's limit,
+ *  not predictions -- this is renderBudgets(null, opts), named for what those tests read. */
+function renderClient({ limitCents }: { limitCents: number | null }) {
+  return renderBudgets(null, { limitCents });
 }
 
 describe('BudgetsClient — review finding 2: archived rows are read-only', () => {
@@ -349,5 +361,26 @@ describe('MUST-14.3 to MUST-14.6: the predictive controls', () => {
   it('MUST-15.3: the pace column header carries its own explanation', () => {
     const { container } = renderBudgets(predictionsWith());
     expect(container.querySelector('th[title]')?.getAttribute('title')).toBe('Appears from the 7th of the month.');
+  });
+});
+
+describe('v1.12.1: clearing a budget is a deliberate button (item X / UX-4)', () => {
+  it('renders a clear control on a row that has a limit', () => {
+    renderClient({ limitCents: 60000 });
+    expect(screen.getByRole('button', { name: /Clear the budget for Groceries/ })).toBeTruthy();
+  });
+
+  it('renders no clear control on a row with no limit', () => {
+    renderClient({ limitCents: null });
+    expect(screen.queryByRole('button', { name: /Clear the budget for Groceries/ })).toBeNull();
+  });
+
+  it('the clear control submits an empty amount, which is what clearBudget reads', () => {
+    renderClient({ limitCents: 60000 });
+    const button = screen.getByRole('button', { name: /Clear the budget for Groceries/ });
+    const form = button.closest('form');
+    expect((form?.querySelector('input[name="amount"]') as HTMLInputElement | null)?.value).toBe('');
+    expect((form?.querySelector('input[name="categoryId"]') as HTMLInputElement | null)?.value).toBeTruthy();
+    expect((form?.querySelector('input[name="month"]') as HTMLInputElement | null)?.value).toBeTruthy();
   });
 });
