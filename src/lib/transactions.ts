@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { getDb } from '@/db/client';
 import { accounts, categories, transactions, users } from '@/db/schema';
 import { getAccount } from '@/lib/accounts';
+import { ownerScope, type Viewer } from '@/lib/auth/viewer';
 import { REVIEW_WHERE, confirmCategory, runEngine, setTransferFlag } from '@/lib/categorize/engine';
 import { normalizeMerchant } from '@/lib/categorize/normalize';
 import { nowIso } from '@/lib/clock';
@@ -110,7 +111,7 @@ function escapeLikeNeedle(value: string): string {
   return value.replace(/[\\%_]/g, (match) => `${LIKE_ESCAPE}${match}`);
 }
 
-function buildWhere(filter: TransactionFilter): SQL | undefined {
+function buildWhere(filter: TransactionFilter, viewer: Viewer): SQL | undefined {
   const clauses: SQL[] = [];
   if (typeof filter.accountId === 'number') clauses.push(eq(transactions.accountId, filter.accountId));
 
@@ -119,6 +120,13 @@ function buildWhere(filter: TransactionFilter): SQL | undefined {
 
   if (filter.attributedUserId === 'unattributed') clauses.push(isNull(transactions.attributedUserId));
   else if (typeof filter.attributedUserId === 'number') clauses.push(eq(transactions.attributedUserId, filter.attributedUserId));
+
+  // v1.13.0 ruling R2. Appended AFTER the caller's own person clause, never instead of it: a self
+  // viewer who asks for somebody else must get an unsatisfiable AND (zero rows), not a filter
+  // silently rewritten to themselves. A rewrite would show them their own spending under another
+  // person's name, which is a worse answer than an empty page.
+  const scope = ownerScope(viewer);
+  if (scope !== null) clauses.push(eq(transactions.attributedUserId, scope));
 
   if (filter.from) clauses.push(gte(transactions.date, filter.from));
   if (filter.to) clauses.push(lte(transactions.date, filter.to));
@@ -130,6 +138,11 @@ function buildWhere(filter: TransactionFilter): SQL | undefined {
       sql`upper(${transactions.normalizedMerchant}) like ${needle} escape ${LIKE_ESCAPE}`,
       // Search what the user can actually see, too (spec v1.4 display names).
       sql`upper(coalesce(${transactions.displayDescription}, '')) like ${needle} escape ${LIKE_ESCAPE}`,
+      // v1.13.0 ruling R13. The merchant half of that ruling needed no edit -- normalizedMerchant is
+      // already in this OR, one line above, and a second clause over the same column would be a
+      // duplicate rather than a fix. No FTS5 index: ruling R13 says LIKE, and the warranty side's
+      // index exists because it also covers OCR'd receipt text, which has no analogue here.
+      sql`upper(coalesce(${transactions.notes}, '')) like ${needle} escape ${LIKE_ESCAPE}`,
     );
     if (clause) clauses.push(clause);
   }
@@ -141,10 +154,15 @@ function buildWhere(filter: TransactionFilter): SQL | undefined {
   return and(...clauses);
 }
 
-export function listTransactions(filter: TransactionFilter = {}): TransactionPage {
+/**
+ * v1.13.0 ruling R2: `viewer` is REQUIRED, not optional. An optional parameter lets a forgotten call
+ * site compile into a silent leak; a required one makes the compiler name every page that has to
+ * decide what it is showing and to whom.
+ */
+export function listTransactions(filter: TransactionFilter, viewer: Viewer): TransactionPage {
   const pageSize = Math.min(200, Math.max(1, filter.pageSize && filter.pageSize > 0 ? filter.pageSize : 50));
   const page = Math.max(1, filter.page ?? 1);
-  const where = buildWhere(filter);
+  const where = buildWhere(filter, viewer);
 
   const totalRow = getDb()
     .select({ c: sql<number>`count(*)` })
@@ -163,8 +181,19 @@ export function listTransactions(filter: TransactionFilter = {}): TransactionPag
   return { rows, total, page, pageSize, pageCount: Math.max(1, Math.ceil(total / pageSize)) };
 }
 
-export function getTransaction(id: number): TransactionRow | null {
-  return baseQuery().where(eq(transactions.id, id)).get() ?? null;
+/**
+ * null for a row outside the viewer's scope -- deliberately the same answer as "no such row", and
+ * deliberately not a throw. The warranty detail page looks a linked transaction up by id
+ * (src/app/(app)/warranties/[id]/page.tsx), and it already renders "no link" for a transaction that
+ * no longer exists; a foreign transaction takes the same path with no extra branch, and the caller
+ * cannot tell the two apart, which is the point.
+ */
+export function getTransaction(id: number, viewer: Viewer): TransactionRow | null {
+  const scope = ownerScope(viewer);
+  const where = scope === null
+    ? eq(transactions.id, id)
+    : and(eq(transactions.id, id), eq(transactions.attributedUserId, scope));
+  return baseQuery().where(where).get() ?? null;
 }
 
 export function createManualTransaction(input: {

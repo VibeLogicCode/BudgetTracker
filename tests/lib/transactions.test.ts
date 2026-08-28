@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
+import type { Viewer } from '@/lib/auth/viewer';
 import {
   bulkSetAttribution,
   bulkSetCategory,
@@ -18,6 +19,11 @@ import { normalizeMerchant } from '@/lib/categorize/normalize';
 import { listRules } from '@/lib/categorize/rules';
 import { setTransactionDisplayName, upsertRenameRule } from '@/lib/categorize/engine';
 import { nowIso } from '@/lib/clock';
+
+// v1.13.0 ruling R2: listTransactions/getTransaction now require a viewer. Every existing call in
+// this file predates viewer scoping and expects the pre-v1.13.0, household-wide result set, so a
+// household viewer here reproduces byte-identical behaviour to before.
+const VIEWER: Viewer = { id: 1, role: 'admin', visibility: 'household' };
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -49,19 +55,19 @@ describe('listTransactions', () => {
   it('paginates newest first and reports the total', () => {
     const { add } = setup();
     for (let i = 1; i <= 12; i += 1) add({ date: `2026-03-${String(i).padStart(2, '0')}`, description: `SHOP ${i}` });
-    const page = listTransactions({ pageSize: 5, page: 1 });
+    const page = listTransactions({ pageSize: 5, page: 1 }, VIEWER);
     expect(page.total).toBe(12);
     expect(page.pageCount).toBe(3);
     expect(page.rows).toHaveLength(5);
     expect(page.rows[0].date).toBe('2026-03-12');
-    expect(listTransactions({ pageSize: 5, page: 3 }).rows).toHaveLength(2);
+    expect(listTransactions({ pageSize: 5, page: 3 }, VIEWER).rows).toHaveLength(2);
   });
 
   it('joins the account, category and attributed user names', () => {
     const { db, alice, joint, add } = setup();
     const coffee = categoryIdByName(db, 'Coffee');
     const id = add({ categoryId: coffee, attributedUserId: alice, source: 'manual' });
-    const row = listTransactions().rows.find((r) => r.id === id)!;
+    const row = listTransactions({}, VIEWER).rows.find((r) => r.id === id)!;
     expect(row).toMatchObject({
       accountId: joint,
       accountName: 'Joint Chequing',
@@ -81,13 +87,13 @@ describe('listTransactions', () => {
     const a = add({ accountId: joint, categoryId: coffee, attributedUserId: alice, date: '2026-03-01', description: 'TIM HORTONS' });
     const b = add({ accountId: aliceVisa, categoryId: groceries, attributedUserId: bob, date: '2026-04-15', description: 'LOBLAWS #1042' });
 
-    expect(listTransactions({ accountId: joint }).rows.map((r) => r.id)).toEqual([a]);
-    expect(listTransactions({ categoryId: groceries }).rows.map((r) => r.id)).toEqual([b]);
-    expect(listTransactions({ attributedUserId: alice }).rows.map((r) => r.id)).toEqual([a]);
-    expect(listTransactions({ from: '2026-04-01' }).rows.map((r) => r.id)).toEqual([b]);
-    expect(listTransactions({ to: '2026-03-31' }).rows.map((r) => r.id)).toEqual([a]);
-    expect(listTransactions({ search: 'loblaws' }).rows.map((r) => r.id)).toEqual([b]);
-    expect(listTransactions({ search: 'hortons' }).rows.map((r) => r.id)).toEqual([a]);
+    expect(listTransactions({ accountId: joint }, VIEWER).rows.map((r) => r.id)).toEqual([a]);
+    expect(listTransactions({ categoryId: groceries }, VIEWER).rows.map((r) => r.id)).toEqual([b]);
+    expect(listTransactions({ attributedUserId: alice }, VIEWER).rows.map((r) => r.id)).toEqual([a]);
+    expect(listTransactions({ from: '2026-04-01' }, VIEWER).rows.map((r) => r.id)).toEqual([b]);
+    expect(listTransactions({ to: '2026-03-31' }, VIEWER).rows.map((r) => r.id)).toEqual([a]);
+    expect(listTransactions({ search: 'loblaws' }, VIEWER).rows.map((r) => r.id)).toEqual([b]);
+    expect(listTransactions({ search: 'hortons' }, VIEWER).rows.map((r) => r.id)).toEqual([a]);
   });
 
   it('treats % and _ in the search box as literal characters, not LIKE wildcards', () => {
@@ -98,11 +104,11 @@ describe('listTransactions', () => {
     const underscoreDecoy = add({ description: 'FEEXWAIVED' });
 
     // "50%" used to mean "50 followed by anything", which swept up the 5000 row.
-    expect(listTransactions({ search: '50%' }).rows.map((r) => r.id)).toEqual([literal]);
-    expect(listTransactions({ search: '50% ' }).rows.map((r) => r.id)).toEqual([literal]);
+    expect(listTransactions({ search: '50%' }, VIEWER).rows.map((r) => r.id)).toEqual([literal]);
+    expect(listTransactions({ search: '50% ' }, VIEWER).rows.map((r) => r.id)).toEqual([literal]);
     // "_" used to match any single character, so FEEXWAIVED matched too.
-    expect(listTransactions({ search: 'FEE_' }).rows.map((r) => r.id)).toEqual([underscore]);
-    expect(listTransactions({ search: 'FEE' }).rows.map((r) => r.id).sort()).toEqual([underscore, underscoreDecoy].sort());
+    expect(listTransactions({ search: 'FEE_' }, VIEWER).rows.map((r) => r.id)).toEqual([underscore]);
+    expect(listTransactions({ search: 'FEE' }, VIEWER).rows.map((r) => r.id).sort()).toEqual([underscore, underscoreDecoy].sort());
     expect(decoy).toBeGreaterThan(0);
   });
 
@@ -111,7 +117,7 @@ describe('listTransactions', () => {
     const withSlash = add({ description: 'A\\B STORE' });
     add({ description: 'AB STORE' });
     // The escape character itself has to be escaped, or "A\" would consume the next char.
-    expect(listTransactions({ search: 'A\\B' }).rows.map((r) => r.id)).toEqual([withSlash]);
+    expect(listTransactions({ search: 'A\\B' }, VIEWER).rows.map((r) => r.id)).toEqual([withSlash]);
   });
 
   it('filters uncategorized and unattributed as first-class values', () => {
@@ -120,10 +126,10 @@ describe('listTransactions', () => {
     const categorized = add({ categoryId: coffee, attributedUserId: alice });
     const bare = add({ description: 'SOME SHOP' });
 
-    expect(listTransactions({ categoryId: 'uncategorized' }).rows.map((r) => r.id)).toEqual([bare]);
-    expect(listTransactions({ uncategorizedOnly: true }).rows.map((r) => r.id)).toEqual([bare]);
-    expect(listTransactions({ attributedUserId: 'unattributed' }).rows.map((r) => r.id)).toEqual([bare]);
-    expect(listTransactions().total).toBe(2);
+    expect(listTransactions({ categoryId: 'uncategorized' }, VIEWER).rows.map((r) => r.id)).toEqual([bare]);
+    expect(listTransactions({ uncategorizedOnly: true }, VIEWER).rows.map((r) => r.id)).toEqual([bare]);
+    expect(listTransactions({ attributedUserId: 'unattributed' }, VIEWER).rows.map((r) => r.id)).toEqual([bare]);
+    expect(listTransactions({}, VIEWER).total).toBe(2);
     expect(categorized).toBeGreaterThan(0);
   });
 
@@ -131,16 +137,16 @@ describe('listTransactions', () => {
     const { add } = setup();
     const normal = add({ description: 'TIM HORTONS' });
     const transfer = add({ description: 'PAYMENT - THANK YOU', isTransfer: true });
-    expect(listTransactions().rows.map((r) => r.id).sort()).toEqual([normal, transfer].sort());
-    expect(listTransactions({ includeTransfers: false }).rows.map((r) => r.id)).toEqual([normal]);
+    expect(listTransactions({}, VIEWER).rows.map((r) => r.id).sort()).toEqual([normal, transfer].sort());
+    expect(listTransactions({ includeTransfers: false }, VIEWER).rows.map((r) => r.id)).toEqual([normal]);
   });
 
   it('clamps the page size', () => {
     const { add } = setup();
     add();
-    expect(listTransactions({ pageSize: 5000 }).pageSize).toBe(200);
-    expect(listTransactions({ pageSize: 0 }).pageSize).toBe(50);
-    expect(listTransactions({ page: -3 }).page).toBe(1);
+    expect(listTransactions({ pageSize: 5000 }, VIEWER).pageSize).toBe(200);
+    expect(listTransactions({ pageSize: 0 }, VIEWER).pageSize).toBe(50);
+    expect(listTransactions({ page: -3 }, VIEWER).page).toBe(1);
   });
 });
 
@@ -167,7 +173,7 @@ describe('createManualTransaction', () => {
     const first = make();
     const second = make();
     expect(second).not.toBe(first);
-    expect(listTransactions().total).toBe(2);
+    expect(listTransactions({}, VIEWER).total).toBe(2);
   });
 
   it('defaults attribution to the account owner when none is given', () => {
@@ -321,7 +327,7 @@ describe('display names (spec v1.4)', () => {
   it('falls back to the raw description until something sets a display name', () => {
     const { add } = setup();
     const id = add({ description: 'POS PURCHASE MCDONALDS #4821 TORONTO ON' });
-    const row = getTransaction(id)!;
+    const row = getTransaction(id, VIEWER)!;
     expect(row).toMatchObject({ displayDescription: null, displaySource: null });
     expect(displayNameOf(row)).toBe('POS PURCHASE MCDONALDS #4821 TORONTO ON');
   });
@@ -334,16 +340,16 @@ describe('display names (spec v1.4)', () => {
     upsertRenameRule({ pattern: 'MCDONALDS', matchType: 'exact', renameTo: "McDonald's", userId: alice });
     setTransactionDisplayName({ transactionId: manual, displayDescription: 'Lunch with Bob', userId: alice });
 
-    expect(getTransaction(ruled)).toMatchObject({ displayDescription: "McDonald's", displaySource: 'rename' });
-    expect(getTransaction(manual)).toMatchObject({ displayDescription: 'Lunch with Bob', displaySource: 'manual' });
-    expect(displayNameOf(getTransaction(manual)!)).toBe('Lunch with Bob');
+    expect(getTransaction(ruled, VIEWER)).toMatchObject({ displayDescription: "McDonald's", displaySource: 'rename' });
+    expect(getTransaction(manual, VIEWER)).toMatchObject({ displayDescription: 'Lunch with Bob', displaySource: 'manual' });
+    expect(displayNameOf(getTransaction(manual, VIEWER)!)).toBe('Lunch with Bob');
   });
 
   it('keeps the raw description available alongside the display name', () => {
     const { alice, add } = setup();
     const id = add({ description: 'SQ *BLUE BOTTLE COFFEE' });
     setTransactionDisplayName({ transactionId: id, displayDescription: 'Blue Bottle', userId: alice });
-    const row = getTransaction(id)!;
+    const row = getTransaction(id, VIEWER)!;
     expect(row.rawDescription).toBe('SQ *BLUE BOTTLE COFFEE');
     expect(row.displayDescription).toBe('Blue Bottle');
   });
@@ -354,9 +360,9 @@ describe('display names (spec v1.4)', () => {
     add({ description: 'LOBLAWS #1042 BURLINGTON ON' });
     setTransactionDisplayName({ transactionId: id, displayDescription: 'Morning ritual', userId: alice });
 
-    expect(listTransactions({ search: 'morning' }).rows.map((r) => r.id)).toEqual([id]);
-    expect(listTransactions({ search: 'blue bottle' }).rows.map((r) => r.id)).toEqual([id]);
-    expect(listTransactions({ search: 'loblaws' }).rows.map((r) => r.id)).not.toContain(id);
+    expect(listTransactions({ search: 'morning' }, VIEWER).rows.map((r) => r.id)).toEqual([id]);
+    expect(listTransactions({ search: 'blue bottle' }, VIEWER).rows.map((r) => r.id)).toEqual([id]);
+    expect(listTransactions({ search: 'loblaws' }, VIEWER).rows.map((r) => r.id)).not.toContain(id);
   });
 });
 
@@ -364,11 +370,11 @@ describe('notes and single reads', () => {
   it('reads one row and updates its note', () => {
     const { add } = setup();
     const id = add();
-    expect(getTransaction(id)?.notes).toBeNull();
+    expect(getTransaction(id, VIEWER)?.notes).toBeNull();
     updateTransactionNotes(id, 'split with Bob');
-    expect(getTransaction(id)?.notes).toBe('split with Bob');
+    expect(getTransaction(id, VIEWER)?.notes).toBe('split with Bob');
     updateTransactionNotes(id, null);
-    expect(getTransaction(id)?.notes).toBeNull();
-    expect(getTransaction(999999)).toBeNull();
+    expect(getTransaction(id, VIEWER)?.notes).toBeNull();
+    expect(getTransaction(999999, VIEWER)).toBeNull();
   });
 });
