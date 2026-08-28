@@ -1029,7 +1029,7 @@ Accounts.
 
 Effort: S · Proposed release: v1.12.1
 
-## v1.13.0 candidates from the 2026-08-27 fresh-eyes review (privacy model — owner ruled 2026-08-27)
+## v1.13.0 from the 2026-08-27 fresh-eyes review (privacy model — owner ruled 2026-08-27)
 
 **Owner ruling (2026-08-27): one family per instance.** Every household runs its own container with
 its own database; friends and extended family are on their own instances already. Multi-tenancy is
@@ -1039,8 +1039,12 @@ the remaining v1.13.0 work is the `users.visibility = 'self'` flag for kid accou
 ownership checks on `/warranties/[id]` and the receipts route, AG's ownership-or-admin gate on
 destructive actions, and one INSTALL.md paragraph stating the one-family-per-instance model.
 
-**AF. No per-user data boundary (SEC-1 + PROD-1 combined).**
-Status: OPEN, RE-SCOPED by owner ruling above (Critical → Medium; fix option (b) only) — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md SEC-1, PROD-1
+**AF. No per-user data boundary (SEC-1 + PROD-1 combined) — SHIPPED in v1.13.0.** A
+`users.visibility` flag, six query chokepoints that each take a viewer, and a `tests/ops/` guard
+that keeps them that way. See
+`docs/superpowers/specs/2026-08-27-kids-scope-and-household-features-design.md`.
+
+Original status when opened: OPEN, RE-SCOPED by owner ruling above (Critical → Medium; fix option (b) only) — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md SEC-1, PROD-1
 
 What: There is no per-user data boundary anywhere except budgets' write scope and the
 notification tables. Any signed-in person — including friends and extended family with their own
@@ -1065,8 +1069,12 @@ test that user B's session gets 404 from another user's receipt.
 
 Effort: L · Proposed release: v1.13.0
 
-**AG. Destructive actions unscoped and no audit log.**
-Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md SEC-2
+**AG. Destructive actions unscoped and no audit log — SHIPPED in v1.13.0.** Deletes and
+import-undo now check ownership-or-admin, and every one writes an `audit_log` row read back on
+Settings → Audit log. See
+`docs/superpowers/specs/2026-08-27-kids-scope-and-household-features-design.md`.
+
+Original status when opened: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md SEC-2
 
 What: Deletion is as unscoped as reading, and there is no audit table in the schema. Any member
 can delete any warranty/loan/subscription item and its receipts, delete any individual receipt
@@ -1084,8 +1092,12 @@ entityId)` written by the delete paths and `undoImport`, surfaced on an admin pa
 
 Effort: M · Proposed release: v1.13.0
 
-**AH. Members can silently overwrite admin-only merchant rules.**
-Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md SEC-6
+**AH. Members can silently overwrite admin-only merchant rules — SHIPPED in v1.13.0.** The
+upsert preserves `created_by` and adds `last_modified_by`; a member's write to another user's
+rule is refused rather than silently applied. See
+`docs/superpowers/specs/2026-08-27-kids-scope-and-household-features-design.md`.
+
+Original status when opened: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md SEC-6
 
 What: Rule management at `/settings/managers` is admin-only, but four member-level actions
 (rename-for-all, fix-category-apply-to-all, mark-transfer) write the same `merchant_rules` table
@@ -1102,8 +1114,12 @@ attributable.
 
 Effort: S · Proposed release: v1.13.0
 
-**AI. A person cannot exist without a login (attribution-only users).**
-Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md PROD-8
+**AI. A person cannot exist without a login (attribution-only users) — SHIPPED in v1.13.0.**
+`users.can_sign_in` lets a person exist for attribution only, and both pickers now list every
+active person consistently. See
+`docs/superpowers/specs/2026-08-27-kids-scope-and-household-features-design.md`.
+
+Original status when opened: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md PROD-8
 
 What: Attribution pickers are built from `listUsers()`, so tracking spending on/by someone — a
 young child, a relative living with the household, a housemate who doesn't want an account —
@@ -1122,10 +1138,14 @@ the existing inconsistency where `budgets/page.tsx:72` filters to active users b
 
 Effort: S · Proposed release: v1.13.0
 
-## v1.14.0 candidates from the 2026-08-27 fresh-eyes review (household features)
+## v1.13.0 from the 2026-08-27 fresh-eyes review (household features — pulled forward from v1.14.0, owner ruled 2026-08-27)
 
-**AJ. Anomaly/duplicate/price-creep insights computed but never shown on screen.**
-Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md PROD-2
+**AJ. Anomaly/duplicate/price-creep insights computed but never shown on screen — SHIPPED in
+v1.13.0.** A self-hiding "Needs a look" card on the dashboard surfaces the anomaly, duplicate and
+price-creep detections that already existed. See
+`docs/superpowers/specs/2026-08-27-kids-scope-and-household-features-design.md`.
+
+Original status when opened: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md PROD-2
 
 What: Unusual-charge detection, duplicate-charge detection and subscription price-creep are all
 implemented and tested but reachable only via a Telegram or email notification — a member with no
@@ -1142,8 +1162,11 @@ and are tested.
 
 Effort: S · Proposed release: v1.14.0
 
-**AK. Quick-add transaction.**
-Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md PROD-4
+**AK. Quick-add transaction — SHIPPED in v1.13.0.** A quick-add form on Transactions and the
+dashboard, defaulting to the last account used, plus a manifest shortcut. See
+`docs/superpowers/specs/2026-08-27-kids-scope-and-household-features-design.md`.
+
+Original status when opened: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md PROD-4
 
 What: With no bank sync, hand entry is the main loop for cash and e-transfers, but the only way
 in is scrolling past the filter bar, bulk toolbar and every table row to a seven-field form at
@@ -1159,8 +1182,12 @@ to the user's last pick.
 
 Effort: S · Proposed release: v1.14.0
 
-**AL. saveNoteAction dead code; notes promised in help but unreachable; thin search.**
-Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md PROD-6
+**AL. saveNoteAction dead code; notes promised in help but unreachable; thin search — SHIPPED in
+v1.13.0.** "Note…" in the row menu wires the existing action to a UI, manual entry can set a
+note, and the search box now searches notes too. See
+`docs/superpowers/specs/2026-08-27-kids-scope-and-household-features-design.md`.
+
+Original status when opened: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md PROD-6
 
 What: The help page tells users a transaction's note is editable, but there is no note UI
 anywhere — `saveNoteAction` has exactly one occurrence in the repo (its own definition), manual
@@ -1177,8 +1204,11 @@ include notes in the search `OR` clause.
 
 Effort: S · Proposed release: v1.14.0
 
-**AM. Stale-import alert per account.**
-Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md PROD-10
+**AM. Stale-import alert per account — SHIPPED in v1.13.0.** The stale-import alert is now
+grouped and deduped per account, so importing one account no longer silences the alert for the
+others. See `docs/superpowers/specs/2026-08-27-kids-scope-and-household-features-design.md`.
+
+Original status when opened: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md PROD-10
 
 What: The stale-import alert looks at the single most recent import across the whole household,
 so importing one account silences the alert for every other account, even one untouched since
@@ -1193,8 +1223,12 @@ migration needed.
 
 Effort: S · Proposed release: v1.14.0
 
-**AN. Bridge from due bill installment to a recorded transaction.**
-Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md PROD-3
+**AN. Bridge from due bill installment to a recorded transaction — SHIPPED in v1.13.0.**
+"Record payment" on an installment writes the transaction and marks it paid in one step, and
+refuses a second time rather than writing twice. See
+`docs/superpowers/specs/2026-08-27-kids-scope-and-household-features-design.md`.
+
+Original status when opened: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md PROD-3
 
 What: The app knows rent, the property-tax installment and the insurance renewal are coming, and
 will remind someone, but when the money actually moves the household must wait for the statement
@@ -1211,8 +1245,12 @@ exists for this).
 
 Effort: M · Proposed release: v1.14.0
 
-**AO. OFX/QFX import and more Canadian bank presets.**
-Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md PROD-5
+**AO. OFX/QFX import and more Canadian bank presets — SHIPPED in v1.13.0.** An OFX/QFX reader
+with FITID-based dedupe, plus RBC/BMO/CIBC presets built from each bank's published layout — not
+yet checked against a real file. See
+`docs/superpowers/specs/2026-08-27-kids-scope-and-household-features-design.md`.
+
+Original status when opened: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md PROD-5
 
 What: Only four bank presets exist (TD Chequing, TD Visa, Scotiabank Chequing, Amex Canada) — RBC
 (the largest bank in the country), BMO, CIBC, Tangerine, Simplii, EQ and Desjardins have none. The
@@ -1228,8 +1266,12 @@ exist for SimpleFIN and would take OFX rows with no migration.
 
 Effort: M · Proposed release: v1.14.0
 
-**AP. Savings and asset account types for net worth.**
-Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md PROD-9
+**AP. Savings and asset account types for net worth — SHIPPED in v1.13.0.** `savings` and
+`asset` account types; an asset account holds a manually-typed balance and is excluded from
+imports and safe-to-spend. See
+`docs/superpowers/specs/2026-08-27-kids-scope-and-household-features-design.md`.
+
+Original status when opened: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md PROD-9
 
 What: An account can only be chequing, credit or cash, so net worth is chequing plus cash minus
 credit/loans — the two largest numbers on a Canadian household's balance sheet (registered
@@ -1244,8 +1286,12 @@ migration, and a filter on the import account picker.
 
 Effort: M · Proposed release: v1.14.0
 
-**AQ. Sinking fund for irregular annual bills via rollover.**
-Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md PROD-11
+**AQ. Sinking fund for irregular annual bills via rollover — SHIPPED in v1.13.0.** A budget
+category linked to a bill now shows a sinking-fund line: what it is accumulating for, and how
+much of the bill's amount is carried so far. See
+`docs/superpowers/specs/2026-08-27-kids-scope-and-household-features-design.md`.
+
+Original status when opened: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md PROD-11
 
 What: Budgets and bills are two separate systems that never meet — `safeToSpend` reports
 `budgetedRemainingCents`, `projectedSpendCents` and `billsDueCents` as three separate numbers, and
@@ -1261,8 +1307,13 @@ new storage; rollover is already 80% of an envelope.
 
 Effort: M · Proposed release: v1.14.0
 
-**AR. Kids' own lane (self scope + goals + attribution).**
-Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md PROD-7
+**AR. Kids' own lane (self scope + goals + attribution) — CLOSED in v1.13.0, no code.**
+Satisfied by AF (`users.visibility = 'self'`) and AI (no-login people): a per-child cash account
+plus a goal that child owns, viewed through the self-scoped dashboard AF shipped, is the kids'
+lane — no allowance subsystem was needed. See
+`docs/superpowers/specs/2026-08-27-kids-scope-and-household-features-design.md`.
+
+Original status when opened: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md PROD-7
 
 What: Nothing in the app is built for a child — no allowance, no chore money, no view-only role,
 no "what's mine" home screen. A per-child savings goal already works but every other child and
@@ -1278,8 +1329,12 @@ scoped to themselves.
 
 Effort: M · Proposed release: v1.14.0
 
-**AS. Per-user full data export and user deletion.**
-Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md PROD-12
+**AS. Per-user full data export and user deletion — DROPPED by the owner, 2026-08-27.** This
+existed for "a friend leaves the shared instance," and the one-family-per-instance ruling (R1,
+see `docs/superpowers/specs/2026-08-27-kids-scope-and-household-features-design.md`) removed
+that case: a friend runs their own instance instead. Not built, not scheduled.
+
+Original status when opened: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md PROD-12
 
 What: The only complete export is the admin's whole-database tar.gz (everyone's data, in a format
 only this app reads); CSV exports cover transactions and the tax year only. Users are
@@ -1421,3 +1476,69 @@ under Settings → Item types." (admins get the link; members get the sentence).
 into a user-managed table. Add the same sentence to the Contracts & coverage page guide and the
 help page's Bills section. Test: render with a type list lacking `bill` → hint present; with one
 → absent. Effort: S.
+
+---
+
+## v1.13.0 leftovers (found during the build review, deliberately not fixed mid-release)
+
+Status for all six below: OPEN — from v1.13.0 build review.
+
+**BI. No `can_sign_in` toggle in the users UI.** `setUserCanSignIn` exists in the users library
+but has no server action and no control anywhere in `users-manager.tsx`, so an admin can create a
+no-login person at signup time (`createPersonWithoutLogin`) but cannot convert an existing member
+into one, or back, without editing the database directly. Evidence: `src/lib/auth/users.ts:265-269`
+(`setUserCanSignIn`, no other call site in the repo). Fix: add a server action shaped like
+`setActiveAction` and a control beside each row, refusing to flip the last signed-in admin the same
+way `setUserCanSignIn` already refuses to disable an admin's own sign-in. Effort: S.
+
+**BJ. `setTransferFlag`'s housekeeping rule delete is not ownership-gated.** Ruling R4 gates the
+rule this action WRITES — `upsertRuleFromCorrection` checks `actorRole` and refuses to overwrite
+another user's rule — but the opposite-kind rule it then removes as housekeeping is deleted
+unconditionally. A member re-flagging one transaction can delete an admin-authored `not_transfer`
+or `transfer` rule with no ownership check at all. Evidence: `src/lib/categorize/engine.ts:552,556`
+(`deleteExactRule` calls carry no actor or ownership argument). Fix: give `deleteExactRule` an
+optional owner check, or route the delete through the same ownership gate `upsertRuleFromCorrection`
+already uses just above it, and refuse the same way that write does. Effort: S.
+
+**BK. `viewerFor`'s null-fallback defaults to household scope.** Both
+`src/lib/notify/evaluate/digest.ts:27-30` and `src/lib/notify/evaluate/monthly.ts:30-33` build a
+viewer from the recipient's own user row and, if that row is gone by the time the scheduled job
+runs (a deleted account mid-batch), fall back to `{ role: 'admin', visibility: 'household' }`
+rather than refusing — a deliberate choice recorded inline, so one missing recipient doesn't crash
+the whole scheduled batch. The consequence: a self-scoped user whose row vanishes in the same
+window their digest fires could, in that one delivery, carry household-wide figures instead of
+only their own. Evidence: the two `viewerFor` functions cited above, both documented with the same
+rationale. Fix: skip sending (return 0) rather than falling back to a household-scoped viewer when
+the recipient's own row cannot be found — silence is safer here than an over-scoped send. Effort: S.
+
+**BL. `allTransactionsVisible` is an O(n) `getTransaction` call per bulk action.** Every bulk
+transaction action on `/transactions` (categorize, transfer-flag, delete) calls
+`allTransactionsVisible`, which loops the selected ids and calls `getTransaction` once per id
+purely to check ownership before the bulk write proceeds — correct, but a full row fetch for a
+check that only needs the owner column, re-run on every bulk action regardless of selection size.
+Evidence: `src/app/(app)/transactions/actions.ts:50-53` (`allTransactionsVisible`, one
+`getTransaction` per id) and its three call sites at lines 189, 203, 224. Fix: add a narrow
+"owners for these ids" query fetching only the id/owner columns in one round trip, and have
+`allTransactionsVisible` use that instead of one full row fetch per id. Effort: S.
+
+**BM. PageGuide prose still promises Export CSV to a self viewer.** Ruling R2 (fix round 2)
+correctly drops the Export CSV BUTTON for a self viewer (`showExport`,
+`reports-client.tsx:111-115`), but the PageGuide paragraph directly below it is unconditional
+prose: "Export CSV gives you the same rows in a spreadsheet" — so a child reading the guide is
+told about a control that is not on the page for them. Evidence:
+`src/app/(app)/reports/reports-client.tsx:149-157` (`<PageGuide>` text, no `showExport` guard).
+Fix: gate that sentence on `showExport` the same way the header action already is, or rephrase it
+to not name a control that may be absent. Effort: S.
+
+**BN. `linked_elsewhere` untested at the action level; asset-skip in `accountForPayment` untested.**
+`recordInstallmentPayment`'s `linked_elsewhere` refusal (when the transaction already paid a loan)
+and bill payment's asset-account skip are both exercised at the library level
+(`src/lib/warranty/installments.ts`), but neither has a test that goes through the actual server
+action / UI surface — `src/app/(app)/bills/actions.ts:81` is the only action-level handling of the
+`linked_elsewhere` reason, and `accountForPayment` (same file, lines 37-64) is the only place that
+skips an asset account when resolving which account a recorded payment lands in — so a future
+refactor of the action layer could silently stop forwarding either result and no test would catch
+it. Evidence: `src/app/(app)/bills/actions.ts:37-64,81`; `src/lib/warranty/installments.ts:311`
+(the result type carrying `linked_elsewhere`). Fix: add an action-level (or route-level) test
+asserting the action surfaces `linked_elsewhere` as a user-facing refusal, and one asserting an
+asset account is skipped when `accountForPayment` resolves the payment's account. Effort: S.

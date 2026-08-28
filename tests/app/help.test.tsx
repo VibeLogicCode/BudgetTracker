@@ -136,6 +136,34 @@ describe('the help page covers the features no screen advertises', () => {
   }
 });
 
+describe('the help page covers the v1.13.0 household features', () => {
+  const all = () => textOf(<>{[HELP_ROUTINE, ...HELP_SECTIONS].map((s) => <div key={s.id}>{s.body}</div>)}</>);
+
+  const cases: [string, RegExp][] = [
+    ['a self-scoped member sees only their own records', /Only their own records/],
+    ['what a self view excludes', /No account balances, no\s*net worth, no household totals/],
+    ['the self view is not a second household', /needs its own container/],
+    ['a person who cannot sign in', /person only/i],
+    ['the audit log', /audit log/i],
+    ['quick add', /Quick add/],
+    ['quick add remembers the last account', /remembers whichever one you used last/],
+    ['the Needs a look card', /Needs a look/],
+    ['notes are searched, not just descriptions', /search box reads notes as well as descriptions/],
+    ['Record payment on a bill installment', /Record payment/],
+    ['OFX\\/QFX files', /OFX and QFX files/],
+    ['the RBC, BMO and CIBC presets are unverified', /rather than\s*checked against a real file yet/],
+    ['savings accounts are left out of safe-to-spend', /left out of safe-to-spend/],
+    ['asset accounts count toward net worth', /counts toward net worth/],
+    ['the sinking-fund line on a linked budget category', /sinking fund/],
+  ];
+
+  for (const [label, pattern] of cases) {
+    it(`names ${label}`, () => {
+      expect(all()).toMatch(pattern);
+    });
+  }
+});
+
 describe('the help page obeys the standing content rules', () => {
   it('ruling A8: uses no <details> anywhere, so Print-to-PDF needs nothing forced open', () => {
     expect(code(contentSource)).not.toContain('<details');

@@ -140,6 +140,17 @@ export const HELP_SECTIONS: HelpSection[] = [
           no loans card; no receipts expiring means no reminder. A sparse Dashboard on a new
           install is the app being quiet, not the app being broken.
         </P>
+        <P>
+          <B>Quick add</B>, at the top of the page and at the top of Transactions, is the fastest
+          way to enter cash or an e-transfer by hand: one line, no scrolling, and the account select
+          remembers whichever one you used last.
+        </P>
+        <P>
+          A <B>Needs a look</B> card lists this month&rsquo;s unusual charges, duplicate-looking
+          charges and subscriptions that went up since last time — the same checks this app has
+          always run in the background, now on screen instead of only reaching you by
+          notification. Like every other card here, it hides itself when there is nothing to flag.
+        </P>
       </>
     ),
   },
@@ -157,6 +168,8 @@ export const HELP_SECTIONS: HelpSection[] = [
           The filters <B>compose</B>: account, category, person and a text search all narrow at
           once. So &ldquo;nothing matches these filters&rdquo; never means the data is gone — it
           means this combination excludes all of it. Clear one filter at a time to find out which.
+          The search box reads notes as well as descriptions, so a word you only wrote in a note
+          still finds the row.
         </P>
         <P>
           <B>The amount is fixed.</B> Nothing in the app edits the amount of an imported
@@ -225,6 +238,13 @@ export const HELP_SECTIONS: HelpSection[] = [
           format does not match the bank&rsquo;s; fix it in the preview and re-read the same file.
         </P>
         <P>
+          <B>OFX and QFX files</B> are read directly, alongside CSV. An OFX file carries the
+          bank&rsquo;s own id for each transaction, so re-importing an overlapping statement matches
+          those rows exactly instead of by comparing amounts and dates. The new <B>RBC, BMO and
+          CIBC</B> presets are built from each bank&rsquo;s published export layout rather than
+          checked against a real file yet — tell us if one comes out wrong.
+        </P>
+        <P>
           <B>A joint card can attribute its rows to the right person.</B> If the statement includes
           a column naming the cardholder, point the mapping at it as the <B>cardholder column</B>{' '}
           and the preview lists every card value it found in the file, so you can assign each one to
@@ -265,6 +285,12 @@ export const HELP_SECTIONS: HelpSection[] = [
           only when you press. From the seventh of the month onward a budgeted category also shows
           where it is heading if the rest of the month looks like the days so far. Both are
           arithmetic on your own data; neither is a recommendation.
+        </P>
+        <P>
+          Linking a category to a bill (on the bill&rsquo;s own page, under Contracts &amp;
+          Coverage) turns its row into a <B>sinking fund</B>: it says what it is accumulating for
+          and how much of the bill&rsquo;s amount is carried so far, so a large irregular bill —
+          property tax, an annual renewal — stops arriving as a surprise the month it lands.
         </P>
       </>
     ),
@@ -333,7 +359,10 @@ export const HELP_SECTIONS: HelpSection[] = [
           page. The Dashboard&rsquo;s <B>Coming up</B> card lists them, you are reminded before
           each one, and anything that goes past is flagged as overdue until you mark it paid. If
           you add a payment-matching rule, the transaction that pays it marks the next unpaid
-          installment for you.
+          installment for you. Paid by some other means, or want to record it the moment it
+          clears? <B>Record payment</B> on the Coming up card or the item&rsquo;s own page writes
+          the transaction and marks the installment paid in the same step, and refuses if that
+          installment is already marked paid rather than writing it twice.
         </P>
       </>
     ),
@@ -391,6 +420,32 @@ export const HELP_SECTIONS: HelpSection[] = [
           Accounts are deactivated rather than deleted, since the transactions and import history
           pointing at them have to keep working. The version of the app you are running is at the
           very bottom of this page, along with the log of what changed in each release.
+        </P>
+        <P>
+          Two more account types cover what a chequing-and-credit household cannot enter:{' '}
+          <B>savings</B> behaves like a chequing account but is left out of safe-to-spend, and{' '}
+          <B>asset</B> — a house, a TFSA, an RRSP — holds only a balance you type in yourself and
+          counts toward net worth. Neither takes an import or a transaction.
+        </P>
+        <Heading>Someone&rsquo;s own view</Heading>
+        <P>
+          On <B>Settings → Users</B>, an admin can set anyone to <B>Only their own records</B>.
+          From then on that person sees the transactions attributed to them, their own budgets,
+          goals and items, and their own upcoming bills — and nothing else. No account balances, no
+          net worth, no household totals, and no other member&rsquo;s rows. It is the right setting
+          for a child&rsquo;s account. It is not a way to run two families on one install:
+          categories, merchant rules and the classifier are shared by everyone here, so a second
+          household needs its own container (see INSTALL.md).
+        </P>
+        <Heading>People who do not sign in</Heading>
+        <P>
+          The same page can add someone as a <B>person only</B> — no password, no sign-in. They
+          show up wherever you choose who a transaction was for, and nowhere else. Useful for a
+          young child or a relative living with you.
+        </P>
+        <P>
+          An <B>audit log</B> at Settings → Audit log lists every deleted item, deleted receipt
+          and undone import, with who did it and when.
         </P>
       </>
     ),

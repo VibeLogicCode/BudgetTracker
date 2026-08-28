@@ -217,7 +217,7 @@ something valid on your system, and start it — no SECRET_KEY to set.
 
 1. Open the URL the installer printed. You land on the **setup wizard**.
 2. The account you create there is the **administrator**. Creating it also seeds the category
-   list and the four built-in bank import profiles.
+   list and the seven built-in bank import profiles.
 3. The wizard then offers an optional **"add your bank accounts"** step. Skip it if you like —
    **Settings → Bank accounts** does the same thing later — but every CSV import has to land in
    an account, so this is the one thing worth doing straight away.
@@ -227,6 +227,12 @@ something valid on your system, and start it — no SECRET_KEY to set.
 5. **Import** — upload a bank CSV, check the preview, commit.
 6. **Recommended:** put HTTPS in front of it (reverse proxy or Tailscale) and set `TRUST_PROXY=1`
    in `.env`. See the README's transport-security section for why this matters on shared Wi-Fi.
+7. **One family per instance.** Budget Tracker is built for a single household: categories, merchant
+   rules and the classifier are shared by everyone with an account here, and there is no tenant
+   boundary in the database. If friends or extended family want to use it, run them a second container
+   with its own `/data` volume and its own `SECRET_KEY` — a compose-file change and no code. Inside one
+   household, Settings → Users can limit a member to **only their own records**, which is the right
+   control for a child's account, not for another family.
 
 ---
 
