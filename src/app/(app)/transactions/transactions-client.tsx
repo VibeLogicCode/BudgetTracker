@@ -630,11 +630,16 @@ export function TransactionsClient({
                     {row.isTransfer
                       ? null
                       : (loanLinks[row.id] ?? []).map((link) => (
+                          // v1.14.0 (ruling P15): "moves back up" was only ever true for a loan
+                          // the household owes -- a lent loan's balance moves back DOWN. Rather
+                          // than plumb a direction through LoanLink and
+                          // loanLinksForTransactions for one sentence, this says what is true
+                          // in both frames.
                           <RowMenuForm
                             key={`unassign-${link.id}`}
                             action={unassignLoan}
                             fields={{ transactionId: String(row.id), itemId: String(link.itemId) }}
-                            confirm={`Unassign this transaction from ${link.itemName}? That loan's balance moves back up.`}
+                            confirm={`Unassign this transaction from ${link.itemName}? That loan's balance moves back to what it was.`}
                           >
                             {`Unassign from ${link.itemName}`}
                           </RowMenuForm>

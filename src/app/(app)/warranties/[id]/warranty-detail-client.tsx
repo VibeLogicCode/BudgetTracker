@@ -31,6 +31,8 @@ import {
   formStartLabel,
   formTermLabel,
   loanFieldsAllowedForKind,
+  LOAN_DIRECTIONS,
+  LOAN_DIRECTION_LABELS,
   openEndedDisplayLabel,
   type ItemKind,
   productFieldsAllowedForKind,
@@ -393,6 +395,14 @@ export function WarrantyDetailClient({
                       '—'
                     )}
                   </Detail>
+                ) : null}
+                {/* v1.14.0 (spec BU, ruling P16). Same "gate OR held value" rule as
+                    Model/Serial/Price above (item R, ruling P6): shown whenever the kind
+                    offers a direction, or the item already carries a non-default one -- an
+                    item whose type was flipped away from loan after being set to 'lent' would
+                    otherwise hide that fact instead of showing it. */}
+                {loanFieldsAllowedForKind(item.kind) || item.loanDirection !== 'owed' ? (
+                  <Detail label="Direction">{LOAN_DIRECTION_LABELS[item.loanDirection]}</Detail>
                 ) : null}
                 <Detail label="Owner">{item.ownerName}</Detail>
                 <Detail label="Notes">{item.notes ?? '—'}</Detail>
@@ -855,12 +865,16 @@ function EditForm({
   const [currentBalanceSeed] = useState(
     item.currentBalanceCents === null ? '' : (item.currentBalanceCents / 100).toFixed(2),
   );
+  // v1.14.0 (spec BU, ruling P16): seeded from the item, same live-follows-the-selected-kind
+  // treatment and the same reset effect as the money fields above.
+  const [loanDirection, setLoanDirection] = useState<string>(item.loanDirection);
   const loanApplicable = loanFieldsAllowedForKind(selectedKind);
   useEffect(() => {
     if (!loanApplicable) {
       setPrincipal('');
       setInterestRate('');
       setCurrentBalance('');
+      setLoanDirection('owed');
     }
   }, [loanApplicable]);
 
@@ -962,6 +976,21 @@ function EditForm({
                 mechanism every other optional field on this form uses. */}
             {loanApplicable ? (
               <>
+                {/* v1.14.0 (spec BU, ruling P16). First field in the block, so a reader picks
+                    the direction before typing amounts. Reuses loanFieldsAllowedForKind as its
+                    gate, exactly like the fields below -- no second predicate. */}
+                <Field label="Direction" hint="Which way this loan points.">
+                  <select
+                    name="loanDirection"
+                    value={loanDirection}
+                    onChange={(e) => setLoanDirection(e.target.value)}
+                    className={selectClass}
+                  >
+                    {LOAN_DIRECTIONS.map((direction) => (
+                      <option key={direction} value={direction}>{LOAN_DIRECTION_LABELS[direction]}</option>
+                    ))}
+                  </select>
+                </Field>
                 <Field label="Original amount" hint="What you borrowed. Used for the payoff bar.">
                   <input
                     name="principal"

@@ -42,6 +42,9 @@ function item(over: Partial<WarrantyItemRow> = {}): WarrantyItemRow {
     principalCents: null, interestRateBps: null, currentBalanceCents: null, balanceUpdatedAt: null,
     // v1.13.0 Task 5: budgetCategoryId is on every WarrantyItemRow now (ruling R11 / M9).
     budgetCategoryId: null,
+    // v1.14.0 (spec BU, T1): required on every row -- 'owed' is the default for every
+    // non-loan item and every pre-1.14.0 row.
+    loanDirection: 'owed',
     ...over,
   };
 }
@@ -551,6 +554,48 @@ describe('MUST-14.1 / MUST-14.3 / MUST-14.5 / MUST-14.6 / MUST-12.3: the loan su
     });
     const dt = Array.from(container.querySelectorAll('dt')).find((el) => el.textContent === 'Original')!;
     expect(dt.closest('dl')).toBeTruthy();
+  });
+});
+
+// v1.14.0 (spec BU, ruling P16): the edit form's Direction control reuses
+// loanFieldsAllowedForKind as its gate, same as the loan money fields above -- no second
+// kind === 'loan' predicate.
+describe('the Direction control on the edit form (spec BU, ruling P16)', () => {
+  it('is absent for a kind that is not a loan', () => {
+    renderDetail({ item: item({ typeId: 1, typeName: 'Appliance', kind: 'warranty' }) });
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    expect(screen.queryByLabelText('Direction')).toBeNull();
+  });
+
+  it('offers exactly the two directions for a loan, seeded from the item', () => {
+    renderDetail({ item: item({ typeId: 3, typeName: 'Car loan', kind: 'loan', loanDirection: 'lent' }) });
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    const select = screen.getByLabelText('Direction') as HTMLSelectElement;
+    expect([...select.options].map((option) => option.textContent)).toEqual(['We owe this', 'Owed to us']);
+    expect(select.value).toBe('lent');
+    // There is no "Not set": the column is NOT NULL and 'owed' is its default (ruling P1).
+    expect([...select.options].map((option) => option.value)).toEqual(['owed', 'lent']);
+  });
+
+  it('posts under the name the action reads', () => {
+    renderDetail({ item: item({ typeId: 3, typeName: 'Car loan', kind: 'loan' }) });
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    expect((screen.getByLabelText('Direction') as HTMLSelectElement).name).toBe('loanDirection');
+  });
+});
+
+// v1.14.0 (spec BU). Same "gate OR held value" rule as Model/Serial/Price above (item R,
+// ruling P6): shown whenever the kind offers it, or a non-default value is on file.
+describe('the Direction detail row (spec BU)', () => {
+  it('shows a Direction row for a loan and reads it back in words', () => {
+    renderDetail({ item: item({ typeId: 3, typeName: 'Car loan', kind: 'loan', loanDirection: 'lent' }) });
+    expect(screen.getByText('Direction')).toBeTruthy();
+    expect(screen.getByText('Owed to us')).toBeTruthy();
+  });
+
+  it('hides the Direction row for a non-loan item that carries the default', () => {
+    renderDetail({ item: item({ typeId: 1, typeName: 'Appliance', kind: 'warranty', loanDirection: 'owed' }) });
+    expect(screen.queryByText('Direction')).toBeNull();
   });
 });
 

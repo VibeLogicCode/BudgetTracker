@@ -20,6 +20,8 @@ import {
   formStartLabel,
   formTermLabel,
   loanFieldsAllowedForKind,
+  LOAN_DIRECTIONS,
+  LOAN_DIRECTION_LABELS,
   type ItemKind,
   formSaveLabel,
   productFieldsAllowedForKind,
@@ -138,6 +140,11 @@ export function NewWarrantyClient({
   const [principal, setPrincipal] = useState('');
   const [interestRate, setInterestRate] = useState('');
   const [currentBalance, setCurrentBalance] = useState('');
+  // v1.14.0 (spec BU, ruling P16): the Direction control follows the SAME loanApplicable gate
+  // as the money fields below -- no second kind === 'loan' check -- and resets to 'owed' in the
+  // same effect, so a person who picks 'lent' and then switches the type away does not have a
+  // hidden 'lent' value silently posted for an item this form no longer offers it on.
+  const [loanDirection, setLoanDirection] = useState('owed');
   const loanApplicable = loanFieldsAllowedForKind(selectedKind);
   const productApplicable = productFieldsAllowedForKind(selectedKind);
   useEffect(() => {
@@ -145,6 +152,7 @@ export function NewWarrantyClient({
       setPrincipal('');
       setInterestRate('');
       setCurrentBalance('');
+      setLoanDirection('owed');
     }
   }, [loanApplicable]);
 
@@ -369,6 +377,21 @@ export function NewWarrantyClient({
                   mechanism every other optional field on this form uses. */}
               {loanApplicable ? (
                 <>
+                  {/* v1.14.0 (spec BU, ruling P16). First field in the block, so a reader picks
+                      the direction before typing amounts. Reuses loanFieldsAllowedForKind as
+                      its gate, exactly like the fields below -- no second predicate. */}
+                  <Field label="Direction" hint="Which way this loan points.">
+                    <select
+                      name="loanDirection"
+                      value={loanDirection}
+                      onChange={(e) => setLoanDirection(e.target.value)}
+                      className={selectClass}
+                    >
+                      {LOAN_DIRECTIONS.map((direction) => (
+                        <option key={direction} value={direction}>{LOAN_DIRECTION_LABELS[direction]}</option>
+                      ))}
+                    </select>
+                  </Field>
                   <Field label="Original amount" hint="What you borrowed. Used for the payoff bar.">
                     <input
                       name="principal"

@@ -48,12 +48,14 @@ import {
   ITEM_KIND_LABELS,
   ITEM_TYPE_IMMUTABLE_ERROR,
   isBillingCycle,
+  isLoanDirection,
   INSTALLMENT_KIND_ERROR,
   MATCHING_KIND_ERROR,
   installmentsAllowedForKind,
   matchingAllowedForKind,
   type BillingCycle,
   type ItemKind,
+  type LoanDirection,
 } from '@/lib/warranty/constants';
 
 export interface WarrantyActionState {
@@ -139,6 +141,14 @@ function readBillingCycle(formData: FormData): BillingCycle | null {
   const raw = str(formData, 'billingCycle').trim();
   if (raw.length === 0) return null;
   if (!isBillingCycle(raw)) throw new Error('Billing must be Monthly or Annual.');
+  return raw;
+}
+
+/** v1.14.0 (spec BU). Same shape as readBillingCycle above: '' means "no seed" -> the default. */
+function readLoanDirection(formData: FormData): LoanDirection {
+  const raw = str(formData, 'loanDirection').trim();
+  if (raw === '') return 'owed';
+  if (!isLoanDirection(raw)) throw new Error('Direction must be "We owe this" or "Owed to us".');
   return raw;
 }
 
@@ -282,6 +292,7 @@ function readItemInput(
     notes: str(formData, 'notes'),
     billingCycle: readBillingCycle(formData),
     billingAmountCents: readBillingAmountCents(formData),
+    loanDirection: readLoanDirection(formData),
     principalCents: readPrincipalCents(formData),
     interestRateBps: readInterestRateBps(formData),
     currentBalanceCents: effectiveBalanceCents,

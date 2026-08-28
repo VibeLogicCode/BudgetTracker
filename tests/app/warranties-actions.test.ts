@@ -470,6 +470,31 @@ describe('createWarrantyAction — billing cycle and amount', () => {
   });
 });
 
+// v1.14.0 (spec BU): readLoanDirection follows readBillingCycle's own shape exactly -- '' means
+// "no seed" -> the column's own default, anything else must be one of the two values.
+describe('createWarrantyAction — loan direction (spec BU)', () => {
+  it('an empty loanDirection field means owed (the same shape readBillingCycle has)', async () => {
+    // An old cached page, or a form this app did not render, posts nothing at all -- that must
+    // mean the default, not a refusal.
+    const to = await redirectPath(() => createWarrantyAction({}, formData(baseFields({ loanDirection: '' }))));
+    const item = getWarrantyItem(Number(to.split('/').pop()), ADMIN)!;
+    expect(item.loanDirection).toBe('owed');
+  });
+
+  it('stores lent when the form says so', async () => {
+    const to = await redirectPath(() =>
+      createWarrantyAction({}, formData(loanForm({ loanDirection: 'lent' }))),
+    );
+    const item = getWarrantyItem(Number(to.split('/').pop()), ADMIN)!;
+    expect(item.loanDirection).toBe('lent');
+  });
+
+  it('refuses a value that is neither', async () => {
+    const result = await createWarrantyAction({}, formData(loanForm({ loanDirection: 'given' })));
+    expect(result?.error).toMatch(/direction/i);
+  });
+});
+
 describe('updateWarrantyAction', () => {
   it('updates fields and recomputes expiry', async () => {
     const to = await redirectPath(() => createWarrantyAction({}, formData(baseFields())));

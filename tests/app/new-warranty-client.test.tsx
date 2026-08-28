@@ -226,6 +226,45 @@ describe('MUST-14.1 / MUST-12.3: the loan surfaces', () => {
   });
 });
 
+// v1.14.0 (spec BU, ruling P16): the Direction control reuses loanFieldsAllowedForKind as its
+// gate -- no second kind === 'loan' predicate -- and defaults to 'owed', the column's own
+// default, so an untouched form posts exactly what a pre-1.14.0 form always posted.
+describe('the Direction control (spec BU, ruling P16)', () => {
+  it('is absent for a kind that is not a loan', () => {
+    renderForm();
+    expect(screen.queryByLabelText('Direction')).toBeNull();
+  });
+
+  it('offers exactly the two directions for a loan, defaulting to "We owe this"', () => {
+    const { container } = renderForm();
+    fireEvent.change(container.querySelector('select[name="typeId"]')!, { target: { value: '3' } }); // Car loan
+    const select = screen.getByLabelText('Direction') as HTMLSelectElement;
+    expect([...select.options].map((option) => option.textContent)).toEqual(['We owe this', 'Owed to us']);
+    expect(select.value).toBe('owed');
+    // There is no "Not set": the column is NOT NULL and 'owed' is its default (ruling P1).
+    expect([...select.options].map((option) => option.value)).toEqual(['owed', 'lent']);
+  });
+
+  it('posts under the name the action reads', () => {
+    const { container } = renderForm();
+    fireEvent.change(container.querySelector('select[name="typeId"]')!, { target: { value: '3' } });
+    expect((screen.getByLabelText('Direction') as HTMLSelectElement).name).toBe('loanDirection');
+  });
+
+  it('resets to "We owe this" when the kind switches away from loan and back', () => {
+    const { container } = renderForm();
+    fireEvent.change(container.querySelector('select[name="typeId"]')!, { target: { value: '3' } });
+    fireEvent.change(screen.getByLabelText('Direction'), { target: { value: 'lent' } });
+    expect((screen.getByLabelText('Direction') as HTMLSelectElement).value).toBe('lent');
+
+    fireEvent.change(container.querySelector('select[name="typeId"]')!, { target: { value: '1' } }); // Appliance
+    expect(screen.queryByLabelText('Direction')).toBeNull();
+
+    fireEvent.change(container.querySelector('select[name="typeId"]')!, { target: { value: '3' } });
+    expect((screen.getByLabelText('Direction') as HTMLSelectElement).value).toBe('owed');
+  });
+});
+
 describe('fields and the submit button follow the selected type', () => {
   /** Picking the type is what drives everything below; id 3 is the loan fixture. */
   function selectType(id: number) {

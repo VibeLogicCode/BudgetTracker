@@ -283,6 +283,28 @@ describe('MUST-14.8 / MUST-14.9: the row control', () => {
     expect(sent.get('itemId')).toBe('7');
     spy.mockRestore();
   });
+
+  // v1.14.0 (ruling P15): "moves back up" was only ever true for a loan the household owes.
+  // Rather than plumb a direction through LoanLink and loanLinksForTransactions for one
+  // sentence, the confirm now says what is true in both frames.
+  it('the unassign confirm is direction-neutral (ruling P15)', () => {
+    const spy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    render(
+      <TransactionsClient
+        {...baseProps}
+        loanOptions={[{ id: 7, name: 'Civic' }]}
+        loanLinks={{
+          [linkedRowId]: [
+            { id: 1, txnId: linkedRowId, itemId: 7, itemName: 'Civic', amountCents: 45000, appliedCents: 45000, source: 'manual' },
+          ],
+        }}
+      />,
+    );
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Unassign from Civic' }));
+    expect(spy).toHaveBeenCalledWith("Unassign this transaction from Civic? That loan's balance moves back to what it was.");
+    spy.mockRestore();
+  });
 });
 
 describe('Split editor (v1.7.0 Task 4)', () => {
