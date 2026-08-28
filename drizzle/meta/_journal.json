@@ -85,6 +85,13 @@
       "when": 1756166400000,
       "tag": "0011_bill_installments",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1756252800000,
+      "tag": "0012_totp_last_counter",
+      "breakpoints": true
     }
   ]
 }

@@ -1,0 +1,76 @@
+-- WARNING: this migration is hand-maintained, not drizzle-kit-generated.
+-- Read the header of drizzle/0000_init.sql and the docblock in drizzle.config.ts before
+-- adding another one: there is no 0000_snapshot.json, so `drizzle-kit generate` would
+-- diff against an empty baseline and re-emit the whole schema. Hand-author the SQL,
+-- append the matching entry to drizzle/meta/_journal.json, and mirror the tables in
+-- src/db/schema.ts -- in that order.
+--
+-- v1.12.1 (spec docs/superpowers/specs/2026-08-27-v1-12-1-bugfix-batch-design.md). TWO additive
+-- columns and nothing else. This is deliberately the opposite of 0011, whose warranty_item_types
+-- rebuild was the riskiest step of the previous release: both columns below are nullable with no
+-- default, so SQLite rewrites no rows, holds no long lock, and recreates no table, index, CHECK or
+-- trigger. There is no PRAGMA in this file and there must never be one -- see 0011's header for
+-- why a pragma inside drizzle's BEGIN ... COMMIT would be a lie.
+--
+--   1. users.totp_last_counter -- the highest TOTP time-step counter this user has already spent.
+--      A code at or below it is refused (item BF / SEC-10). NULL means "no code has been accepted
+--      yet", which is the correct state for every existing row and for a user who has never
+--      enrolled: the login path treats NULL as "nothing spent", so no backfill is needed.
+--
+--   2. bill_installments.unlinked_at -- an ISO timestamp stamped when a PERSON un-marks an
+--      installment that a payment rule had marked paid (item BA / MON-3). Before this column,
+--      paid_txn_id was the ONLY record that a transaction had ever been consumed by a bill, and
+--      the third CHECK on this table forbids keeping paid_txn_id on a row whose paid_at is NULL --
+--      so un-marking necessarily erased the evidence and the matcher silently re-marked the row on
+--      the next pass. The suppression now lives on the installment: markMatchingUnpaid skips a row
+--      carrying unlinked_at, and a HAND mark clears it, because a deliberate act is exactly what
+--      the suppression exists to protect.
+--
+-- Objects that exist ONLY in SQL and have NO Drizzle representation now number, after this
+-- migration:
+--   1. the categories.parent_id self-referencing foreign key             (0000)
+--   2. the COALESCE(display_description, raw_description) index          (0000)
+--   3. the COALESCE month expression index                               (0000)
+--   4. every CHECK constraint on warranty_items                          (0002, extended by 0007)
+--   5. every CHECK constraint on warranty_receipts                       (0002)
+--   6. the warranty_search FTS5 contentless virtual table                (0002)
+--   7. its six triggers, which are its ONLY writer                       (0002)
+--   8. the is_subscription/name CHECK constraints on warranty_item_types (0003, re-declared 0011)
+--   9. the COLLATE NOCASE collation on warranty_item_types_name_uq       (0003, re-declared 0011)
+--  10. warranty_items.type_id arriving by ALTER TABLE ADD COLUMN         (0003)
+--  11. the CHECK constraint on warranty_item_types.kind                  (0004, SUPERSEDED by 31)
+--  12. warranty_item_types.kind itself, by ALTER TABLE ADD COLUMN        (0004)
+--  13. the CHECK constraints on billing_cycle and billing_amount_cents,
+--      and both columns arriving by ALTER TABLE ADD COLUMN               (0005)
+--  14. the id = 1 singleton CHECK on notification_smtp                   (0006)
+--  15. every other CHECK constraint on notification_smtp                 (0006)
+--  16. every CHECK constraint on notification_targets, including the     (0006)
+--      channel/secret_encrypted pairing rule
+--  17. every CHECK constraint on notification_prefs                      (0006)
+--  18. every CHECK constraint on notification_user_settings              (0006)
+--  19. every CHECK constraint on notification_outbox                     (0006)
+--  20. notification_prefs' WITHOUT ROWID storage class                   (0006)
+--  21. the CHECK constraints on the four loan money columns, and all
+--      four columns arriving by ALTER TABLE ADD COLUMN                   (0007)
+--  22. every CHECK constraint on loan_matcher_rules                      (0007)
+--  23. the coalesce(account_id, -1) EXPRESSION in loan_matcher_rules_uq  (0007)
+--  24. every CHECK constraint on loan_payments                           (0007)
+--  25. the CHECK constraint on transaction_splits                        (0009)
+--  26. the CHECK constraint on account_balance_snapshots                 (0009, superseded by 0010)
+--  27. both CHECK constraints on budget_rollover, including the          (0009)
+--      scope/user_id pairing rule
+--  28. the coalesce(user_id, -1) EXPRESSION in budget_rollover_uq        (0009)
+--  29. categories.tax_relevant arriving by ALTER TABLE ADD COLUMN        (0009)
+--  30. every CHECK constraint on bill_installments                       (0011)
+--  31. the widened kind CHECK on warranty_item_types, now five values,   (0011)
+--      SUPERSEDING entry 11
+--  32. users.totp_last_counter arriving by ALTER TABLE ADD COLUMN        (0012)
+--  33. bill_installments.unlinked_at arriving by ALTER TABLE ADD COLUMN  (0012)
+--
+-- Neither new column carries a CHECK. totp_last_counter's only invariant -- monotonic per user --
+-- is enforced by the conditional UPDATE in consumeTotpCounter (src/lib/auth/totp.ts), the same way
+-- consumeRecoveryCode enforces single use; expressing it as a CHECK is impossible, because a CHECK
+-- cannot see the previous value of the row it is checking.
+ALTER TABLE `users` ADD COLUMN `totp_last_counter` integer;
+--> statement-breakpoint
+ALTER TABLE `bill_installments` ADD COLUMN `unlinked_at` text;

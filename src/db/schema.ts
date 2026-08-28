@@ -27,6 +27,17 @@ export const users = sqliteTable(
      * the DDL so the mirror stays readable against `pragma table_info(users)`.
      */
     mustChangePassword: integer('must_change_password', { mode: 'boolean' }).notNull().default(false),
+    /**
+     * Mirrors drizzle/0012_totp_last_counter.sql. Declared last for the same reason
+     * mustChangePassword is: ALTER TABLE ADD COLUMN appends physically, and this mirror has to
+     * stay readable against `pragma table_info(users)`.
+     *
+     * The highest TOTP time-step counter this user has already spent (item BF / SEC-10). NULL
+     * means nothing has been accepted yet -- correct for every pre-0012 row and for anyone who
+     * has never enrolled. verifyTotpCounter derives the counter; consumeTotpCounter advances it
+     * with a conditional UPDATE, the same single-use shape consumeRecoveryCode uses.
+     */
+    totpLastCounter: integer('totp_last_counter'),
   },
   (t) => [uniqueIndex('users_username_uq').on(t.username)],
 );
@@ -915,6 +926,18 @@ export const billInstallments = sqliteTable(
      *  second column that must agree with it is a second column that can disagree with it. */
     paidTxnId: integer('paid_txn_id').references(() => transactions.id, { onDelete: 'set null' }),
     createdAt: text('created_at').notNull(),
+    /**
+     * Mirrors drizzle/0012_totp_last_counter.sql, appended last for the same physical reason.
+     *
+     * ISO timestamp stamped when a PERSON un-marks an installment a payment rule had marked paid
+     * (item BA / MON-3). paid_txn_id used to be the only record that a transaction had ever been
+     * consumed by a bill, and this table's third CHECK forbids keeping it on an unpaid row -- so
+     * an un-mark erased the evidence and the matcher re-marked the row on its next pass. The
+     * suppression lives here instead: markMatchingUnpaid (src/lib/loans.ts) skips a row carrying
+     * this, and markInstallmentPaid CLEARS it, because a hand mark is the deliberate act the
+     * suppression exists to protect.
+     */
+    unlinkedAt: text('unlinked_at'),
   },
   (t) => [
     uniqueIndex('bill_installments_txn_uq').on(t.paidTxnId),
