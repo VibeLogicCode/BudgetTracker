@@ -406,3 +406,113 @@ that the entry does **not** say "no migration".
 
 Item **BU**'s heading gains `— SHIPPED in v1.14.0` and a `Status:` line naming this spec, the same
 form every shipped item above it uses.
+
+---
+
+# Addendum A — Assign to new loan (owner-confirmed 2026-08-28)
+
+Confirmed by the owner after the direction wording landed (`81777b3`). It is an addendum, not a
+re-open: nothing above changes, and rulings P1–P16 all stay in force.
+
+## Behaviour
+
+A transaction row's menu (`/transactions`) gains one more item, **"Assign to new loan…"**, offered
+in the same non-transfer block the existing `Assign to <loan>` / `Unassign from <loan>` items live
+in. Choosing it opens an **inline sub-row under the row**, exactly the way `Note…` already does —
+not a dialog, not a form inside the menu — carrying two fields and a Save button:
+
+| Field | Control | Default |
+|---|---|---|
+| Name | `<input name="loanName">` | empty, `autoFocus` |
+| Direction | `<select name="loanDirection">` over `LOAN_DIRECTIONS`, labelled from `LOAN_DIRECTION_LABELS` | `lent` (*Lent out — they owe us*) |
+
+Submitting creates the loan item **and** assigns this transaction as its first entry, in ONE
+database transaction. The balance afterwards is `|amountCents|` in every accepted case.
+
+The existing **"Assign to `<loan>`"** items are untouched and stay exactly where they are: money out
+on a lent loan adds to what they owe, money in reduces it (ruling P4's flip, already shipped).
+
+**Guardrails.**
+
+- A `lent` loan created from an **incoming** (positive) transaction is refused:
+  *"A loan you lent out starts with money going out."* A loan you lent out cannot begin with money
+  arriving; that would be a repayment of a loan that does not exist yet.
+- `owed` accepts **either** sign. The first entry of a borrowed loan may legitimately be the deposit
+  that arrived, or the first payment made on money borrowed before the household started tracking it.
+
+Help and `CHANGELOG.md` already describe all of this (`81777b3`); the implementation task must not
+edit either file.
+
+## Rulings
+
+All are the planner's, numbered A-series so they never collide with P1–P16.
+**PLANNER rulings — owner may reverse.**
+
+| # | Ruling |
+|---|---|
+| **A1** | **An inline disclosure sub-row, not a form inside the menu.** The new item is a `RowMenuButton` that opens the same kind of `<tr><td colSpan={COLUMN_COUNT}>` editor the `Note…` item already opens (`transactions-client.tsx:665` ff), with one more nullable state slot (`creatingLoan`) mirroring `noting` exactly, so opening it on a second row replaces whichever was open. A `RowMenuForm` cannot hold two fields: the menu is a 14rem fixed-position list of `role="menuitem"` rows, and a name box plus a select inside one would be unreadable and structurally wrong for assistive tech. |
+| **A2** | **Both refusal strings live in `src/lib/warranty/constants.ts`**, beside `LOAN_DIRECTION_KIND_ERROR` — `LOAN_LENT_FIRST_ENTRY_ERROR` and `LOAN_ALREADY_LINKED_ERROR`. Two standing reasons: MUST-19.11 keeps user-facing kind/direction wording in one place, and ruling **P4** forbids the literal `'lent'` in `src/lib/loans.ts`, which is where the refusal is raised. |
+| **A3** | **The seed is defined as `target − delta`, never as a second write.** `link()` stays the ONLY code that moves `current_balance_cents` on this path. The new item is created with `currentBalanceCents` set to the balance the loan had *the instant before this transaction*, and the assign then moves it to `|amountCents|` on its own. See the seed table below. There is no post-assign `update warranty_items set current_balance_cents`, so an unassign returns the loan to its seed by construction — the same contract every other unassign carries. |
+| **A4** | **One `getDb().transaction()` wraps type resolution, the implicit type create, the item insert and the assign.** A throw anywhere — a zero-amount transaction, an already-linked transaction, a direction/kind mismatch — rolls back the item *and* the implicitly created type, so a refused submission leaves nothing behind. `createWarrantyItem`'s own inner `db.transaction` joins the outer one (better-sqlite3 nests as a savepoint; the note under `reverseLoanLinksForTransactions` records this codebase's existing reliance on that), and its `deferred` side-effect list is empty here because `staged` is `[]`. |
+| **A5** | **The implicit item-type create is allowed for a member.** `createItemType()` in `src/lib/warranty/types.ts` carries no role check of its own: `requireAdmin()` sits in `settings/item-types/actions.ts`, gating that SCREEN, not the function. The implicit create is far narrower than that screen — at most one type, named exactly `Loan`, of kind `loan`, only when no loan-kind type exists at all — and it never renames, re-kinds or deletes one. Refusing a member here would mean a household whose admin never created a Loan type cannot use this feature at all, which is the very detour the feature exists to remove. |
+| **A6** | **The type chosen is the first `kind: 'loan'` type in `listItemTypes()` order** — `name collate nocase` — which is the exact order the New item form's own dropdown renders (`warranties/new/page.tsx:48`). Item types carry no active/archived flag (`src/db/schema.ts`), so "first active" and "first" are the same row; the plan says *first* and means it. |
+| **A7** | **Idempotency: a transaction that already carries ANY loan link is refused** (`paymentLinksForTransaction(txnId).loans > 0` → `LOAN_ALREADY_LINKED_ERROR`). That is what makes a double-submit safe: the first submit creates the link, the second is refused, and the household is never left holding two loans that each claim the same money as their opening entry. MUST-11.16 (a combined payment split across two loans) is **untouched** — it governs `Assign to <loan>`, which is where a genuine combined payment belongs. `assignTransactionToLoan` already refuses the bill leg of this same question (v1.12.1 item T); this is the loan leg of it, on this path only. |
+| **A8** | **The assign copy is EXTRACTED, not copied.** `loanAssignedMessage()` moves into `constants.ts` (pure, no `@/db`; `formatCents` comes from `@/lib/money`, which imports nothing at all) and BOTH `assignToLoanAction` and the new action call it. MUST-19.11 again: a second copy of `3efb23f`'s direction-aware sentences is a second place they can drift. `assignToLoanAction` keeps its own over-link warning branch, which is about LINKS rather than the balance and is unreachable on the create path (A7 refuses a second link outright). |
+| **A9** | **The result message is `Created <name>. ` followed by `loanAssignedMessage(...)`.** Both facts, in the order they happened, with the second half word-for-word the sentence the existing assign already produces. A bespoke sentence for the create path was considered and rejected under A8. |
+| **A10** | **Owner resolution belongs to the action, and `canActOnOwner` is enforced there** — see the self-scope table below. `createLoanFromTransaction` re-derives the same two facts from the viewer it is handed, so a caller that does not route through the action cannot skip either. |
+| **A11** | **No audit row.** `AuditAction` is `'delete_item' \| 'delete_receipt' \| 'undo_import'` (`src/lib/audit.ts:15`): item *creation* is audited nowhere in this codebase, the ordinary create-item action included. Auditing this one path and not the form beside it would make the log claim a completeness it does not have. `src/lib/audit.ts` is not opened. |
+| **A12** | **`createLoanFromTransaction(input, viewer)` takes a REQUIRED viewer and is registered in `tests/ops/visibility-invariants.test.ts`'s `REQUIRE_VIEWER`**, floor raised 27 → 28. It is a WRITER, not a read model, so its entry carries a one-line note saying so: the guarantee borrowed from that list is the mechanical one it actually asserts — the parameter exists and is never optional — which is exactly what stops a future caller compiling a scope-free create. |
+| **A13** | **No new transfer check server-side.** The menu item sits inside the existing `row.isTransfer ? null :` block, like every other loan item; `assignTransactionToLoan` has never refused a transfer on the manual path and this addendum does not change it (the neighbour of ruling P8: the *rule* path skips transfers, the manual path is a person's deliberate act). |
+
+## Seed and sign, per case
+
+`a` = `transactions.amount_cents` (immutable, signed). `m = |a|`.
+`e = loanSignedDelta(direction, a)` — negative always means "this balance goes DOWN" (P4).
+
+| direction | `a` | `e` | seed `current_balance_cents` | `link()` applies | balance after |
+|---|---|---|---|---|---|
+| `lent` | `< 0` (money out) | `+m` | **0** | `+m` | **`m`** |
+| `lent` | `> 0` (money in) | `−m` | — | — | **REFUSED** — `LOAN_LENT_FIRST_ENTRY_ERROR` |
+| `owed` | `> 0` (money in — the borrowed money arriving) | `+m` | **0** | `+m` | **`m`** |
+| `owed` | `< 0` (money out — a first payment on money borrowed earlier) | `−m` | **`2m`** | `−m`, clamped against the seed, which is `≥ m`, so applied in full | **`m`** |
+| either | `0` | — | — | — | REFUSED by `assignTransactionToLoan`'s existing zero-amount guard; the whole create rolls back (A4) |
+
+One expression, no direction literal, no new sign logic:
+
+```ts
+const magnitude = Math.abs(txn.amountCents);
+const seedCents = isLoanRepayment(input.direction, txn.amountCents) ? magnitude * 2 : 0;
+```
+
+`2m` is arithmetic, not fabrication: if `m` is still owed *after* a payment of `m`, then `2m` was
+owed before it. `balance_updated_at` is set to the same `at` as the row — MUST-11.7's pairing is
+enforced by `assertBalanceAnchorPairing`, so the two are written together or the create throws — and
+`link()` never touches it afterwards (MUST-11.8).
+
+`principal_cents`, `interest_rate_bps`, `billing_cycle` and `billing_amount_cents` are **left NULL**.
+Nothing here knows the principal of a loan whose first entry is a payment, and MUST-13.1 keeps the
+rate display-only in any case. `purchase_date` is the transaction's own `date`; `warranty_months` is
+null and `is_lifetime` false, so `computeExpiryDate` returns null (open-ended — a loan's own
+"Ongoing (no end date)").
+
+## Self-scope
+
+| Viewer | Transaction resolved through | `owner_user_id` of the new loan | Then |
+|---|---|---|---|
+| `self` (a kid) | `getTransaction(txnId, viewer)` — null for a row outside their scope, the same refusal as "no such row" | **`viewer.id`, always** — never the row's `attributed_user_id`, which for a self viewer is already their own id and must not become a second source of truth | `canActOnOwner` passes trivially |
+| `household` | `getTransaction(txnId, viewer)` (unscoped for them) | **`transaction.attributedUserId ?? viewer.id`** — a household transaction with no attribution becomes the actor's own loan | `canActOnOwner(ownerUserId, viewer)`: a member creating a loan against a row attributed to somebody ELSE is refused with `NOT_YOURS_ERROR`; an admin is not |
+
+That is the pairing `warranties/actions.ts` already uses (`:279` for the owner fallback, `:457` for
+the refusal), reused rather than re-invented.
+
+## Guard strategy
+
+| Guard | How the implementation passes it, legitimately |
+|---|---|
+| `tests/ops/row-controls.test.ts` | The offence is a per-row `<form>` whose ONLY editable control is one `<select>` (every `<input>` in it `type="hidden"`, no `<textarea>`, a submit, a single-row write). The new form carries a **visible text input** (`name="loanName"`), so `inputs.length !== hidden.length` and the scanner exempts it at that exact line — the same exemption the accounts editor row and the "Add a user" card already take. It is a real two-field editor, not an auto-save cell, and the guard's own docblock names that as the shape it means to allow. **Not** an `AutoSaveSelect`: nothing may be written before a name is typed. |
+| 44px targets | The sub-row uses `inputClass` / `selectClass` / `SubmitButton` from `@/components/ui/form`, which already carry the phone-height floor; the menu item is a `RowMenuButton` and inherits `ITEM_CLASS`'s `min-h-11`. No hand-rolled classes. |
+| `tests/ops/use-server-exports.test.ts` | `transactions/actions.ts` gains exactly one export, `createLoanFromTransactionAction`, an `async function`. The zod schema and every helper stay module-private. |
+| `tests/ops/loan-invariants.test.ts` (ruling P4) | `src/lib/loans.ts` gains no literal `'lent'`: the refusal tests `isLoanRepayment(direction, amountCents)`, the message is a constant imported from `constants.ts`, and the direction is passed through to `createWarrantyItem` unread. No arithmetic touches `interestRateBps`. |
+| `tests/ops/client-bundle.test.ts` | `constants.ts` gains one import, `@/lib/money`, which has zero imports of its own. |
+| `tests/ops/visibility-invariants.test.ts` | Ruling A12 — one `REQUIRE_VIEWER` entry, floor 27 → 28. |
+| `tests/ops/table-layout.test.ts` | No new column: the sub-row is a `colSpan={COLUMN_COUNT}` cell, the shape `Note…` already uses. |

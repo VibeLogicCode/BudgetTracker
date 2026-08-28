@@ -1734,3 +1734,730 @@ unedited), `tests/ops/visibility-invariants.test.ts` (no signature changes), `te
 - MUST-13.1 and MUST-13.2 hold: nothing accrues interest, no loan-linked row leaves its category or
   its budgets, and `transactions.amount_cents` is never written.
 - No tag, no push.
+
+---
+
+## Addendum A — the ninth task
+
+**Spec:** `docs/superpowers/specs/2026-08-28-loans-lent-direction-design.md`, **Addendum A**
+(owner-confirmed 2026-08-28). Rulings **A1–A13** are cited by number below and are read alongside
+P1–P16, which are unchanged.
+
+**Ordering.** T9 runs **alone**, after lanes A, B and C have all reported done, and **before Task 8**
+(the release commit) — it opens `src/lib/loans.ts` (lane A's file), `src/lib/warranty/constants.ts`
+(T1's), and `src/app/(app)/transactions/transactions-client.tsx` (T6's), so it can only start once
+each of those has been committed by its owner. Task 8's `git status --short` gate then covers T9's
+files too.
+
+**Already shipped, do not touch.** `81777b3` landed the help paragraph and the CHANGELOG bullet for
+this feature. **T9 must not edit `src/app/(app)/help/content.tsx` or `CHANGELOG.md`** — the copy
+there ("Assign to new loan…", "creates the loan right there and assigns that row as its first
+entry") is the contract this task implements, not something it writes.
+
+**Path ownership (extends the disjointness table above).**
+
+| Path | Owner | Concurrent with |
+|---|---|---|
+| `src/lib/loans.ts` | T1, then lane A, **then T9** | nothing — T9 runs alone |
+| `src/lib/warranty/constants.ts` | T1, **then T9** | nothing |
+| `src/app/(app)/transactions/actions.ts` | **T9 only** | nothing |
+| `src/app/(app)/transactions/transactions-client.tsx` | T6 (lane C), **then T9** | nothing |
+| `tests/ops/visibility-invariants.test.ts` | **T9 only** (the plan above never writes it) | nothing |
+
+### Task 9: create a loan straight from a transaction row
+
+**Files:**
+- Modify: `src/lib/warranty/constants.ts` (two error constants + `loanAssignedMessage`, beside
+  `LOAN_DIRECTION_KIND_ERROR` at `:~350`), `src/lib/loans.ts` (one new exported writer, beside
+  `assignTransactionToLoan` at `:679`), `src/app/(app)/transactions/actions.ts` (one new action,
+  beside `assignToLoanAction` at `:362`, which also switches to the extracted message helper),
+  `src/app/(app)/transactions/transactions-client.tsx` (one `RowMenuButton` in the loan block at
+  `:645` ff, one state slot beside `noting` at `:104`, one sub-row beside the note sub-row at
+  `:665` ff), `tests/ops/visibility-invariants.test.ts` (one `REQUIRE_VIEWER` entry + floor 27 → 28,
+  ruling A12)
+- Test: `tests/app/transactions-actions.test.ts`, `tests/app/transactions-client.test.tsx`,
+  `tests/lib/warranty/constants.test.ts` (all extend)
+- Read but never write: `src/lib/warranty/items.ts`, `src/lib/warranty/types.ts`,
+  `src/lib/transactions.ts`, `src/lib/auth/viewer.ts`, `src/lib/audit.ts` (ruling A11 — no audit
+  row), `src/app/(app)/help/content.tsx` and `CHANGELOG.md` (already shipped in `81777b3`)
+
+**Interfaces:**
+
+- Produces — `src/lib/warranty/constants.ts` (pure; its only new import is `@/lib/money`, which
+  imports nothing at all, so `tests/ops/client-bundle.test.ts` is unaffected):
+
+```ts
+/** Addendum A, ruling A2. A loan you lent out cannot begin with money arriving. */
+export const LOAN_LENT_FIRST_ENTRY_ERROR = 'A loan you lent out starts with money going out.';
+
+/** Addendum A, ruling A7: the double-submit guard for the create-a-loan path only. */
+export const LOAN_ALREADY_LINKED_ERROR = 'That transaction is already assigned to a loan.';
+
+/**
+ * Addendum A, ruling A8. The wording 3efb23f wrote inline in assignToLoanAction, extracted so the
+ * create-a-loan path says the same sentences instead of a second copy of them (MUST-19.11).
+ * `balanceAfterCents` is the item's balance READ BACK after the move: null means the balance is
+ * unknown (never anchored), 0 means it is now zero.
+ */
+export function loanAssignedMessage(input: {
+  direction: LoanDirection;
+  appliedCents: number;
+  balanceAfterCents: number | null;
+}): string;
+```
+
+- Produces — `src/lib/loans.ts` (no literal `'lent'`, ruling P4):
+
+```ts
+export interface NewLoanFromTransaction {
+  txnId: number;
+  name: string;
+  direction: LoanDirection;
+  at?: Date;
+}
+
+export interface NewLoanResult {
+  itemId: number;
+  name: string;
+  direction: LoanDirection;
+  /** Unsigned, exactly as assignTransactionToLoan reports it. */
+  appliedCents: number;
+  /** The balance after the assign: |txn.amountCents| in every accepted case (ruling A3). */
+  balanceAfterCents: number;
+}
+
+/**
+ * Addendum A. Creates a loan item and assigns `txnId` as its first entry, in ONE db transaction
+ * (ruling A4). Throws — never returns an error shape — so the action's existing catch surfaces
+ * every refusal the same way assignToLoanAction already surfaces assignTransactionToLoan's.
+ *
+ * `viewer` is REQUIRED (ruling A12) and is the only source of the new item's owner_user_id
+ * (ruling A10): a self viewer's own id, otherwise the transaction's attributed_user_id falling
+ * back to the viewer's own.
+ */
+export function createLoanFromTransaction(input: NewLoanFromTransaction, viewer: Viewer): NewLoanResult;
+```
+
+- Produces — `src/app/(app)/transactions/actions.ts`: exactly ONE new export,
+  `export async function createLoanFromTransactionAction(_prev: ActionState, formData: FormData): Promise<ActionState>`.
+  An `async function`, which is the only export shape that file allows
+  (`tests/ops/use-server-exports.test.ts`). The zod schema and every helper stay module-private.
+- Consumes: `LOAN_DIRECTIONS`, `LOAN_DIRECTION_LABELS`, `isLoanDirection`, `isLoanRepayment`,
+  `LoanDirection` (T1, `@/lib/warranty/constants`); `createWarrantyItem` + `WarrantyInput`
+  (`@/lib/warranty/items`); `listItemTypes`, `createItemType` (`@/lib/warranty/types`);
+  `assignTransactionToLoan`, `paymentLinksForTransaction` (already in `loans.ts`); `getTransaction`
+  (`@/lib/transactions`); `canActOnOwner`, `ownerScope`, `NOT_YOURS_ERROR`, `Viewer`
+  (`@/lib/auth/viewer`); `Field`, `inputClass`, `selectClass`, `SubmitButton`, `RowMenuButton`
+  (already imported by `transactions-client.tsx`).
+- **Not** produced: no new column, no migration, no audit action, no new component, no change to
+  `LoanLink` or `loanLinksForTransactions`.
+
+- [ ] **Step 1: Write the failing tests.**
+
+Append to `tests/lib/warranty/constants.test.ts` (the extraction, pinned before it moves):
+
+```ts
+describe('loanAssignedMessage (Addendum A, ruling A8)', () => {
+  it('says what came off a loan the household owes', () => {
+    expect(loanAssignedMessage({ direction: 'owed', appliedCents: 50_000, balanceAfterCents: 150_000 }))
+      .toBe('Assigned. $500.00 came off the balance.');
+  });
+
+  it('names the zero when an owed balance lands on it', () => {
+    expect(loanAssignedMessage({ direction: 'owed', appliedCents: 50_000, balanceAfterCents: 0 }))
+      .toBe('Assigned. $500.00 came off; the balance is now $0.00.');
+  });
+
+  it('speaks in the other frame for a loan lent out', () => {
+    expect(loanAssignedMessage({ direction: 'lent', appliedCents: 50_000, balanceAfterCents: 50_000 }))
+      .toBe('Assigned. $500.00 added to what they owe.');
+  });
+
+  it('is honest when nothing moved', () => {
+    expect(loanAssignedMessage({ direction: 'owed', appliedCents: 0, balanceAfterCents: null }))
+      .toBe('Assigned. The balance was unknown, so it did not move.');
+    expect(loanAssignedMessage({ direction: 'owed', appliedCents: 0, balanceAfterCents: 0 }))
+      .toBe('Assigned. The balance was already $0.00, so nothing came off.');
+  });
+});
+```
+
+Append to `tests/app/transactions-actions.test.ts`. Reuse that file's own `setup()`, `formData()`,
+`balanceOf()` and `currentUser` idioms — every helper below must be the file's real one, plus at
+most these two small local ones in its established style:
+
+```ts
+/** Addendum A: a transaction with the sign the case under test needs. */
+function addSigned(amountCents: number, description = 'E-TRANSFER SAM'): number {
+  const { accountId, userId } = ctx!;
+  const row = current!.db.get<{ id: number }>(sql`
+    insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, created_by, created_at, updated_at)
+    values (${accountId}, '2026-03-02', ${description}, ${normalizeMerchant(description)}, ${amountCents}, ${userId}, ${nowIso()}, ${nowIso()})
+    returning id`);
+  return row.id;
+}
+
+function loanItems(): { id: number; name: string; balance: number | null; direction: string; type_id: number }[] {
+  return current!.sqlite
+    .prepare(
+      `select i.id, i.name, i.current_balance_cents as balance, i.loan_direction as direction, i.type_id
+         from warranty_items i join warranty_item_types t on t.id = i.type_id
+        where t.kind = 'loan' order by i.id`,
+    )
+    .all() as never;
+}
+
+describe('createLoanFromTransactionAction — Addendum A', () => {
+  it('lends: money out on a new lent loan leaves them owing exactly that amount', async () => {
+    setup();
+    const txnId = addSigned(-50_000);
+    const result = await createLoanFromTransactionAction(
+      {},
+      formData({ transactionId: String(txnId), loanName: 'Loan to Sam', loanDirection: 'lent' }),
+    );
+    expect(result.error).toBeUndefined();
+    const [loan] = loanItems();
+    expect(loan!.name).toBe('Loan to Sam');
+    expect(loan!.direction).toBe('lent');
+    // Ruling A3: seed 0, link() applies +m, balance after = |amount|.
+    expect(loan!.balance).toBe(50_000);
+    expect(result.message).toBe('Created Loan to Sam. Assigned. $500.00 added to what they owe.');
+  });
+
+  it('borrows, money in: the deposit that arrived becomes the opening balance', async () => {
+    setup();
+    const txnId = addSigned(50_000);
+    await createLoanFromTransactionAction(
+      {},
+      formData({ transactionId: String(txnId), loanName: 'Bank loan', loanDirection: 'owed' }),
+    );
+    expect(loanItems()[0]!.balance).toBe(50_000);
+  });
+
+  it('borrows, money out: a first payment still leaves |amount| owing (seed 2m, ruling A3)', async () => {
+    setup();
+    const txnId = addSigned(-50_000);
+    await createLoanFromTransactionAction(
+      {},
+      formData({ transactionId: String(txnId), loanName: 'Family loan', loanDirection: 'owed' }),
+    );
+    // Seeded at 2m so link()'s repayment of m lands on m: if m is still owed after paying m,
+    // 2m was owed before it. NOT a second write -- link() is the only mover.
+    expect(loanItems()[0]!.balance).toBe(50_000);
+  });
+
+  it('refuses a lent loan opened by money coming IN, and writes nothing at all', async () => {
+    setup();
+    const txnId = addSigned(50_000);
+    const result = await createLoanFromTransactionAction(
+      {},
+      formData({ transactionId: String(txnId), loanName: 'Loan to Sam', loanDirection: 'lent' }),
+    );
+    expect(result.error).toBe('A loan you lent out starts with money going out.');
+    // Ruling A4: one transaction, so a refusal leaves no item, no type and no link behind.
+    expect(loanItems()).toEqual([]);
+    expect(
+      current!.sqlite.prepare('select count(*) as n from loan_payments').get() as { n: number },
+    ).toEqual({ n: 0 });
+  });
+
+  it('creates the Loan item type when the household has none, and reuses it next time', async () => {
+    setup();
+    await createLoanFromTransactionAction(
+      {},
+      formData({ transactionId: String(addSigned(-50_000)), loanName: 'First', loanDirection: 'lent' }),
+    );
+    const types = current!.sqlite
+      .prepare("select id, name from warranty_item_types where kind = 'loan'")
+      .all() as { id: number; name: string }[];
+    expect(types.map((t) => t.name)).toEqual(['Loan']);   // ruling A5
+    await createLoanFromTransactionAction(
+      {},
+      formData({ transactionId: String(addSigned(-25_000)), loanName: 'Second', loanDirection: 'lent' }),
+    );
+    expect(
+      current!.sqlite.prepare("select count(*) as n from warranty_item_types where kind = 'loan'").get(),
+    ).toEqual({ n: 1 });
+    expect(loanItems().map((loan) => loan.balance)).toEqual([50_000, 25_000]);
+  });
+
+  it('uses the first loan-kind type by name when one already exists (ruling A6)', async () => {
+    setup();
+    createItemType('Zebra loan', 'loan');
+    const alpha = createItemType('Alpha loan', 'loan');
+    await createLoanFromTransactionAction(
+      {},
+      formData({ transactionId: String(addSigned(-50_000)), loanName: 'Loan to Sam', loanDirection: 'lent' }),
+    );
+    expect(loanItems()[0]!.type_id).toBe(alpha.id);
+  });
+
+  it('refuses a second submit of the same transaction (ruling A7 — the double-submit guard)', async () => {
+    setup();
+    const txnId = addSigned(-50_000);
+    await createLoanFromTransactionAction(
+      {},
+      formData({ transactionId: String(txnId), loanName: 'Loan to Sam', loanDirection: 'lent' }),
+    );
+    const second = await createLoanFromTransactionAction(
+      {},
+      formData({ transactionId: String(txnId), loanName: 'Loan to Sam', loanDirection: 'lent' }),
+    );
+    expect(second.error).toBe('That transaction is already assigned to a loan.');
+    expect(loanItems()).toHaveLength(1);
+    expect(loanItems()[0]!.balance).toBe(50_000);
+  });
+
+  it('refuses a name that is only whitespace', async () => {
+    setup();
+    const result = await createLoanFromTransactionAction(
+      {},
+      formData({ transactionId: String(addSigned(-50_000)), loanName: '   ', loanDirection: 'lent' }),
+    );
+    expect(result.error).toBeTruthy();
+    expect(loanItems()).toEqual([]);
+  });
+
+  it('refuses a direction that is neither', async () => {
+    setup();
+    const result = await createLoanFromTransactionAction(
+      {},
+      formData({ transactionId: String(addSigned(-50_000)), loanName: 'Loan to Sam', loanDirection: 'given' }),
+    );
+    expect(result.error).toBeTruthy();
+    expect(loanItems()).toEqual([]);
+  });
+
+  it('checks the origin before anything else', async () => {
+    setup();
+    sameOrigin.value = false;
+    const result = await createLoanFromTransactionAction(
+      {},
+      formData({ transactionId: String(addSigned(-50_000)), loanName: 'Loan to Sam', loanDirection: 'lent' }),
+    );
+    expect(result.error).toBe(CROSS_ORIGIN_ERROR);
+    expect(loanItems()).toEqual([]);
+  });
+});
+
+describe('createLoanFromTransactionAction — scope (rulings A10, A12)', () => {
+  it('a self viewer cannot open a loan against somebody else\'s transaction', async () => {
+    const { db, accountId } = setup();
+    const otherId = insertTestUser(db, { name: 'Bob', username: 'bob' });
+    const txnId = addSigned(-50_000);
+    current!.sqlite.prepare('update transactions set attributed_user_id = ? where id = ?').run(otherId, txnId);
+    currentUser = { id: currentUser.id, name: 'Kid', username: 'kid', role: 'member', visibility: 'self' };
+    const result = await createLoanFromTransactionAction(
+      {},
+      formData({ transactionId: String(txnId), loanName: 'Loan to Sam', loanDirection: 'lent' }),
+    );
+    expect(result.error).toBeTruthy();
+    expect(loanItems()).toEqual([]);
+  });
+
+  it('a self viewer\'s own loan is owned by them, never by the row\'s attribution', async () => {
+    const { db, accountId } = setup();
+    const txnId = addSigned(-50_000);
+    current!.sqlite.prepare('update transactions set attributed_user_id = ? where id = ?').run(currentUser.id, txnId);
+    currentUser = { ...currentUser, role: 'member', visibility: 'self' };
+    await createLoanFromTransactionAction(
+      {},
+      formData({ transactionId: String(txnId), loanName: 'Loan to Sam', loanDirection: 'lent' }),
+    );
+    const owner = current!.sqlite
+      .prepare('select owner_user_id as o from warranty_items order by id desc limit 1')
+      .get() as { o: number };
+    expect(owner.o).toBe(currentUser.id);
+  });
+
+  it('a household MEMBER is refused a row attributed to someone else', async () => {
+    const { db } = setup();
+    const otherId = insertTestUser(db, { name: 'Bob', username: 'bob' });
+    const txnId = addSigned(-50_000);
+    current!.sqlite.prepare('update transactions set attributed_user_id = ? where id = ?').run(otherId, txnId);
+    currentUser = { ...currentUser, role: 'member' };
+    const result = await createLoanFromTransactionAction(
+      {},
+      formData({ transactionId: String(txnId), loanName: 'Loan to Sam', loanDirection: 'lent' }),
+    );
+    expect(result.error).toBe(NOT_YOURS_ERROR);
+    expect(loanItems()).toEqual([]);
+  });
+
+  it('a household ADMIN may, and the loan belongs to the person the row is attributed to', async () => {
+    const { db } = setup();
+    const otherId = insertTestUser(db, { name: 'Bob', username: 'bob' });
+    const txnId = addSigned(-50_000);
+    current!.sqlite.prepare('update transactions set attributed_user_id = ? where id = ?').run(otherId, txnId);
+    await createLoanFromTransactionAction(
+      {},
+      formData({ transactionId: String(txnId), loanName: 'Loan to Sam', loanDirection: 'lent' }),
+    );
+    const owner = current!.sqlite
+      .prepare('select owner_user_id as o from warranty_items order by id desc limit 1')
+      .get() as { o: number };
+    expect(owner.o).toBe(otherId);
+  });
+});
+```
+
+Append to `tests/app/transactions-client.test.tsx` (add `createLoanFromTransactionAction: vi.fn(async () => ({}))`
+to the existing `vi.mock` of the actions module first, or every render throws):
+
+```tsx
+describe('Assign to new loan — Addendum A', () => {
+  it('is offered on a normal row even when the household has no loans yet', () => {
+    render(<TransactionsClient {...baseProps} loanOptions={[]} loanLinks={{}} />);
+    openRowMenu('Actions for TIM HORTONS');
+    expect(screen.getByRole('menuitem', { name: 'Assign to new loan…' })).toBeTruthy();
+  });
+
+  it('is not offered on a transfer (MUST-14.8, ruling A13)', () => {
+    render(<TransactionsClient {...transferOnlyProps} loanOptions={[]} loanLinks={{}} />);
+    openRowMenu('Actions for TIM HORTONS');
+    expect(screen.queryByRole('menuitem', { name: 'Assign to new loan…' })).toBeNull();
+  });
+
+  it('opens an inline sub-row with a name box and a direction select, defaulting to lent', () => {
+    render(<TransactionsClient {...baseProps} loanOptions={[]} loanLinks={{}} />);
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to new loan…' }));
+    const name = screen.getByLabelText('Loan name') as HTMLInputElement;
+    const direction = screen.getByLabelText('Direction') as HTMLSelectElement;
+    expect(name.name).toBe('loanName');
+    expect(direction.name).toBe('loanDirection');
+    expect(direction.value).toBe('lent');
+    expect([...direction.options].map((option) => option.textContent)).toEqual([
+      'Borrowed — we owe them',
+      'Lent out — they owe us',
+    ]);
+    // The 44px floor lives in the shared control class, not in hand-rolled utilities
+    // (Addendum A, guard strategy): both controls must carry it.
+    expect(name.className).toContain('field-control');
+    expect(direction.className).toContain('field-control');
+  });
+
+  it('submits the transaction id, the name and the direction', async () => {
+    const spy = vi.mocked(createLoanFromTransactionAction);
+    spy.mockClear();
+    const { container } = render(<TransactionsClient {...baseProps} loanOptions={[]} loanLinks={{}} />);
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to new loan…' }));
+    fireEvent.change(screen.getByLabelText('Loan name'), { target: { value: 'Loan to Sam' } });
+    fireEvent.submit(container.querySelector('form[data-testid="new-loan-form"]') as HTMLFormElement);
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    const submitted = spy.mock.calls.at(-1)![1] as FormData;
+    expect(submitted.get('transactionId')).toBe('1');
+    expect(submitted.get('loanName')).toBe('Loan to Sam');
+    expect(submitted.get('loanDirection')).toBe('lent');
+  });
+
+  it('opening it on a second row replaces the first, like the note editor', () => {
+    render(<TransactionsClient {...twoRowProps} loanOptions={[]} loanLinks={{}} />);
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to new loan…' }));
+    openRowMenu('Actions for SECOND ROW');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to new loan…' }));
+    expect(screen.getAllByLabelText('Loan name')).toHaveLength(1);
+  });
+});
+```
+
+`baseProps`, `transferOnlyProps` and `openRowMenu` are that file's existing helpers; build
+`twoRowProps` from its own `pageWithRow` shape rather than inventing a second convention. If the
+existing `saveNoteAction` test reaches its form by a different query than `data-testid`, match that
+query instead and drop the `data-testid` from the implementation — do not add a second idiom to the
+file.
+
+- [ ] **Step 2: Run them and watch them fail.**
+
+```
+npx vitest run tests/lib/warranty/constants.test.ts tests/app/transactions-actions.test.ts tests/app/transactions-client.test.tsx --reporter=dot
+```
+
+- [ ] **Step 3: The wording, in `src/lib/warranty/constants.ts` (rulings A2, A8).**
+
+Add the two constants beside `LOAN_DIRECTION_KIND_ERROR`, then MOVE the sentences out of
+`assignToLoanAction` into one exported function — `import { formatCents } from '@/lib/money';` is the
+only new import this file takes.
+
+`isRepayment` is an explicit INPUT, not something this function re-derives: `appliedCents` is
+unsigned (see `link()`'s docblock), so a verdict computed from it here would be a second, weaker
+copy of the sign logic `isLoanRepayment` already owns — exactly the drift ruling A8 exists to
+prevent. Both callers pass `isLoanRepayment(direction, txn.amountCents)`:
+
+```ts
+export function loanAssignedMessage(input: {
+  direction: LoanDirection;
+  isRepayment: boolean;
+  appliedCents: number;
+  balanceAfterCents: number | null;
+}): string {
+  if (input.appliedCents === 0) {
+    return input.balanceAfterCents === null
+      ? 'Assigned. The balance was unknown, so it did not move.'
+      : 'Assigned. The balance was already $0.00, so nothing came off.';
+  }
+  const amount = formatCents(input.appliedCents);
+  if (input.isRepayment) {
+    if (input.direction !== 'owed') return `Assigned. ${amount} came off what they owe.`;
+    if (input.balanceAfterCents === 0) return `Assigned. ${amount} came off; the balance is now $0.00.`;
+    return `Assigned. ${amount} came off the balance.`;
+  }
+  if (input.direction !== 'owed') return `Assigned. ${amount} added to what they owe.`;
+  return `Assigned. The balance went up ${amount} (money in).`;
+}
+```
+
+Update the four test cases in Step 1's `constants.test.ts` block to pass `isRepayment` explicitly —
+`true` for the two "came off" cases, `false` for "added to what they owe", either for the
+`appliedCents: 0` pair. The sentences themselves must stay byte-for-byte what `3efb23f` shipped;
+`tests/app/transactions-actions.test.ts` already pins them through `assignToLoanAction` and that
+suite must stay green **without edits to those existing cases** — that is the proof the extraction
+changed no behaviour.
+
+- [ ] **Step 4: The writer, in `src/lib/loans.ts` (rulings A3–A7).**
+
+Directly below `assignTransactionToLoan`. No literal `'lent'` anywhere in it (ruling P4):
+
+```ts
+export function createLoanFromTransaction(input: NewLoanFromTransaction, viewer: Viewer): NewLoanResult {
+  const at = input.at ?? new Date();
+  const stamp = nowIso(at);
+  const name = input.name.trim();
+  if (name.length === 0) throw new Error('Give the loan a name.');
+
+  const txn = getTransaction(input.txnId, viewer);
+  if (txn === null) throw new Error('That transaction no longer exists.');
+  // Ruling A10: a self viewer's loan is theirs, full stop; a household viewer's follows the row's
+  // attribution and falls back to their own id. canActOnOwner then refuses a member acting on
+  // somebody else's row, exactly as warranties/actions.ts does.
+  const ownerUserId = ownerScope(viewer) === null ? (txn.attributedUserId ?? viewer.id) : viewer.id;
+  if (!canActOnOwner(ownerUserId, viewer)) throw new Error(NOT_YOURS_ERROR);
+
+  // Ruling A2 + P4: for a non-'owed' loan, "the first entry is a repayment" and "the money came
+  // IN" are the same statement -- said once, through the helper that owns the flip, so the other
+  // direction's value is never spelled out in this file.
+  if (input.direction !== 'owed' && isLoanRepayment(input.direction, txn.amountCents)) {
+    throw new Error(LOAN_LENT_FIRST_ENTRY_ERROR);
+  }
+  // Ruling A7: the double-submit guard.
+  if (paymentLinksForTransaction(input.txnId).loans > 0) throw new Error(LOAN_ALREADY_LINKED_ERROR);
+
+  const magnitude = Math.abs(txn.amountCents);
+  // Ruling A3: seed = target - delta. link() is still the only code that moves the balance.
+  const seedCents = isLoanRepayment(input.direction, txn.amountCents) ? magnitude * 2 : 0;
+
+  return getDb().transaction((): NewLoanResult => {
+    const typeId = firstLoanTypeId() ?? createItemType('Loan', 'loan').id;   // rulings A5, A6
+    const itemId = createWarrantyItem(
+      {
+        name,
+        vendor: null,
+        model: null,
+        serial: null,
+        purchaseDate: txn.date,
+        warrantyMonths: null,
+        isLifetime: false,
+        priceCents: null,
+        ownerUserId,
+        transactionId: input.txnId,
+        typeId,
+        notes: null,
+        currentBalanceCents: seedCents,
+        balanceUpdatedAt: stamp,     // MUST-11.7: both, or neither
+        loanDirection: input.direction,
+      },
+      [],
+      stamp,
+    );
+    const result = assignTransactionToLoan({ txnId: input.txnId, itemId, at });
+    return {
+      itemId,
+      name,
+      direction: input.direction,
+      appliedCents: result.appliedCents,
+      balanceAfterCents: seedCents + (isLoanRepayment(input.direction, txn.amountCents) ? -result.appliedCents : result.appliedCents),
+    };
+  });
+}
+```
+
+Three things to get right while writing it:
+
+1. **`firstLoanTypeId()`** is a module-private helper — `listItemTypes().find((type) => type.kind === 'loan')?.id ?? null`
+   — so the order is the dropdown's own (ruling A6) and no second `order by` is written anywhere.
+2. **`balanceAfterCents` is computed, not re-read.** `link()` clamps, and every accepted case here
+   applies in full (the repayment case is seeded at `2m`, so the clamp cannot bite) — but if a
+   future change makes it bite, this arithmetic and the database would disagree silently. Prefer
+   re-reading the row inside the same transaction if that reads more honestly to you; the tests in
+   Step 1 assert the DATABASE's value either way.
+3. **Nothing here writes `transactions`** (MUST-13.2), touches `interest_rate_bps` (MUST-13.1) or
+   appends an audit row (ruling A11).
+
+Then confirm by grep, before moving on:
+
+```
+grep -n "'lent'\|\"lent\"" src/lib/loans.ts
+```
+
+It must print nothing.
+
+- [ ] **Step 5: The action, in `src/app/(app)/transactions/actions.ts`.**
+
+Beside `assignToLoanAction`, following its shape (origin check first, `requireUser`, zod, one
+`try/catch` around the writer, three `revalidatePath` calls):
+
+```ts
+const newLoanSchema = z.object({
+  transactionId: z.coerce.number().int().positive(),
+  loanName: z.string().trim().min(1, 'Give the loan a name.').max(200),
+  loanDirection: z.enum(LOAN_DIRECTIONS),
+});
+
+export async function createLoanFromTransactionAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+  const user = await requireUser();
+  const parsed = newLoanSchema.safeParse({
+    transactionId: formData.get('transactionId'),
+    loanName: formData.get('loanName') ?? '',
+    loanDirection: formData.get('loanDirection') ?? 'lent',
+  });
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Invalid request.' };
+
+  let created: NewLoanResult;
+  try {
+    created = createLoanFromTransaction(
+      { txnId: parsed.data.transactionId, name: parsed.data.loanName, direction: parsed.data.loanDirection },
+      user,
+    );
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : 'Could not create that loan.' };
+  }
+  revalidatePath('/transactions');
+  revalidatePath('/dashboard');
+  revalidatePath('/reports');
+  // Ruling A9: both facts, with the second half word-for-word the sentence the plain assign says.
+  const txn = getTransaction(parsed.data.transactionId, user);
+  return {
+    message: `Created ${created.name}. ${loanAssignedMessage({
+      direction: created.direction,
+      isRepayment: txn !== null && isLoanRepayment(created.direction, txn.amountCents),
+      appliedCents: created.appliedCents,
+      balanceAfterCents: created.balanceAfterCents,
+    })}`,
+  };
+}
+```
+
+In the SAME edit, switch `assignToLoanAction`'s own trailing branches to
+`loanAssignedMessage({...})` and delete the inlined sentences (ruling A8). Its over-link warning
+branch, its `!result.linked` branch and its `getWarrantyItem` read stay exactly where they are —
+the balance it passes as `balanceAfterCents` is `item?.currentBalanceCents ?? null`, read after the
+assign, which is what those sentences already meant.
+
+- [ ] **Step 6: The menu item and the sub-row (ruling A1).**
+
+`transactions-client.tsx`. One state slot beside `noting`:
+
+```tsx
+const [newLoan, setNewLoan] = useState<{ id: number } | null>(null);
+const [newLoanState, newLoanAction] = useActionState(createLoanFromTransactionAction, initial);
+```
+
+One `RowMenuButton`, LAST in the existing `row.isTransfer ? null : ...` loan block so the existing
+`Assign to <loan>` items keep their order:
+
+```tsx
+<RowMenuButton onSelect={() => setNewLoan({ id: row.id })}>Assign to new loan…</RowMenuButton>
+```
+
+And one sub-row, directly after the `noting` sub-row and built the same way — a
+`colSpan={COLUMN_COUNT}` cell, `onSubmit={() => setNewLoan(null)}`, a hidden `transactionId`, two
+`<Field>`s and a `SubmitButton` with a ghost Cancel:
+
+```tsx
+{newLoan?.id === row.id ? (
+  <tr>
+    <td colSpan={COLUMN_COUNT}>
+      <form action={newLoanAction} onSubmit={() => setNewLoan(null)} className="flex flex-col gap-2 py-2" data-testid="new-loan-form">
+        <input type="hidden" name="transactionId" value={row.id} />
+        <Field label="Loan name" hint="Who the loan is with — a name you will recognise later.">
+          <input name="loanName" autoFocus className={inputClass} />
+        </Field>
+        <Field label="Direction">
+          <select name="loanDirection" defaultValue="lent" className={selectClass}>
+            {LOAN_DIRECTIONS.map((direction) => (
+              <option key={direction} value={direction}>{LOAN_DIRECTION_LABELS[direction]}</option>
+            ))}
+          </select>
+        </Field>
+        <div className="flex gap-2">
+          <SubmitButton className="w-fit">Create loan</SubmitButton>
+          <button type="button" className="btn btn--ghost btn--sm" onClick={() => setNewLoan(null)}>
+            Cancel
+          </button>
+        </div>
+      </form>
+    </td>
+  </tr>
+) : null}
+```
+
+Render `newLoanState`'s error/message through the same `Notice` / `FormError` the other row actions
+on this page already use — do not add a second banner idiom. Any apostrophe or quote mark added to
+that hint must be escaped the way the rest of the file escapes them (`&rsquo;`, `&ldquo;`).
+
+**Why this passes `tests/ops/row-controls.test.ts`:** the form holds one `<select>` AND one visible
+`<input>` that is not `type="hidden"`, so the scanner's `inputs.length !== hidden.length` line skips
+it — the same exemption the accounts editor row takes. Do not "simplify" the name field away into a
+prompt, and do not convert the select to `AutoSaveSelect`.
+
+- [ ] **Step 7: Register the new viewer-taking function (ruling A12).**
+
+`tests/ops/visibility-invariants.test.ts`, in `REQUIRE_VIEWER`:
+
+```ts
+  // Addendum A: a WRITER, not a read model -- it is listed here for the one guarantee this list
+  // mechanically asserts, that the viewer parameter exists and is never optional. That is what
+  // stops a future caller compiling a create that skips the owner rules (rulings A10, A12).
+  { file: 'src/lib/loans.ts', fn: 'createLoanFromTransaction' },
+```
+
+and raise the floor in the same file:
+
+```ts
+  it('the named lists cannot shrink below 28 entries', () => {
+    expect(REQUIRE_VIEWER.length + EXEMPT.length).toBeGreaterThanOrEqual(28);
+  });
+```
+
+- [ ] **Step 8: Run the tests, the guards and `tsc`.**
+
+```
+npx vitest run tests/lib/warranty/constants.test.ts tests/app/transactions-actions.test.ts tests/app/transactions-client.test.tsx tests/lib/loans tests/ops/row-controls.test.ts tests/ops/use-server-exports.test.ts tests/ops/visibility-invariants.test.ts tests/ops/loan-invariants.test.ts tests/ops/client-bundle.test.ts tests/ops/table-layout.test.ts tests/app/help.test.tsx --reporter=dot
+npx tsc --noEmit
+```
+
+Every one must be green, and `tests/app/help.test.tsx` must pass **without being edited** — it
+already asserts the copy `81777b3` shipped, which is the contract this task implements.
+
+- [ ] **Step 9: Commit.**
+
+```
+git status --short
+git add src/lib/warranty/constants.ts src/lib/loans.ts src/app/\(app\)/transactions/actions.ts src/app/\(app\)/transactions/transactions-client.tsx tests/ops/visibility-invariants.test.ts tests/lib/warranty/constants.test.ts tests/app/transactions-actions.test.ts tests/app/transactions-client.test.tsx && git commit -m "feat(transactions): create a loan straight from a transaction row"
+```
+
+### Definition of done — Task 9
+
+- A row menu on `/transactions` offers **"Assign to new loan…"** on every non-transfer row, even in a
+  household with no loans and no loan-kind item type.
+- Submitting it creates the loan and the link in ONE transaction, and the new balance is
+  `|amountCents|` in all three accepted cases.
+- A `lent` loan opened by incoming money is refused, and the refusal leaves no item, no type and no
+  link behind.
+- A second submit of the same transaction is refused; exactly one loan exists.
+- `src/lib/loans.ts` still contains no literal `'lent'`.
+- `src/app/(app)/help/content.tsx` and `CHANGELOG.md` are untouched by this task, and
+  `tests/app/help.test.tsx` passes unedited.
