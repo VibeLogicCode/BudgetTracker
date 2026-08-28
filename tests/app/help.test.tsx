@@ -164,6 +164,19 @@ describe('the help page covers the v1.13.0 household features', () => {
   }
 });
 
+describe('the help page explains loan direction (spec BU)', () => {
+  const all = () => textOf(<>{[HELP_ROUTINE, ...HELP_SECTIONS].map((s) => <div key={s.id}>{s.body}</div>)}</>);
+
+  it('explains that a loan can point either way', () => {
+    const text = all();
+    expect(text).toContain('A loan can point either way');
+    expect(text).toContain('We owe this');
+    expect(text).toContain('Owed to us');
+    // Rulings A1/A2 for this file: mechanics only. No figures, no advice.
+    expect(text).not.toMatch(/you should|we recommend/i);
+  });
+});
+
 describe('the help page obeys the standing content rules', () => {
   it('ruling A8: uses no <details> anywhere, so Print-to-PDF needs nothing forced open', () => {
     expect(code(contentSource)).not.toContain('<details');

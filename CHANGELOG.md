@@ -21,6 +21,50 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.14.0] - 2026-08-28
+
+**Before updating:** this release adds one column to one table (`warranty_items`). Nothing is
+rebuilt and nothing is dropped, but take a backup first anyway: **Settings → Backups → Download
+backup now**, or confirm last night's scheduled backup succeeded. Use that, not a file copy — the
+database runs in WAL mode, so copying `budget.db` off the NAS while the container is running
+silently leaves out your most recent changes; the app's own backup is a consistent snapshot.
+
+**Stop the old container before starting the new one** rather than hot-swapping, so only one
+process opens the database during the migration.
+
+**The migration is all-or-nothing.** The one added column commits in a single transaction, so an
+interrupted update leaves your v1.13.3 database exactly as it was — start the container again and
+it will retry.
+
+**To roll back:** restore the backup you took above, then run the v1.13.3 image.
+
+### Added
+
+- **A loan can now point either way.** Every loan kept its old meaning — a debt the household
+  owes — and that stays the default, unchanged. A new **Direction** control on the loan form
+  offers a second choice, **Owed to us**, for money you lent someone: money leaving the account
+  now adds to what they owe you, and money coming back takes it off again.
+- **A "Who owes us" card on the Dashboard**, listing anyone who owes the household money and
+  hiding itself when nobody does. A member who only sees their own records sees it titled **Owed
+  to you**, listing only their own loans.
+- **A second line on the Reports debt chart**, plotting what the household has lent out
+  separately from what it owes, with a legend once both lines have something to show.
+
+### Changed
+
+- **Money you have lent out no longer counts toward the household debt total or the debt side of
+  net worth.** It stays out of the "What the household still owes" figure and out of net worth's
+  debt line, because money owed to the household is not a debt the household owes. Someone whose
+  net worth figure moves after this update is entitled to know why, and this is the one number
+  this release changes without being asked.
+
+### Fixed
+
+- **Review page** — the per-row category select and the "apply to all matching + create rule"
+  select now carry visible labels ("This transaction only" / "Every <merchant> — N transactions,
+  plus future imports") and a hint; duplicated row titles collapse; child categories keep their
+  indent in every dropdown.
+
 ## [1.13.3] - 2026-08-28
 
 **Before updating:** no tables change; there is no migration. The app is identical to 1.13.2,

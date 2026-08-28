@@ -351,6 +351,13 @@ export const HELP_SECTIONS: HelpSection[] = [
           Reports say anything.
         </P>
         <P>
+          A loan can point either way. <B>We owe this</B> is the usual one — money leaving the
+          account pays it down. <B>Owed to us</B> is for money you lent someone: money leaving
+          the account adds to what they owe you, and money coming back takes it off again. Loans
+          you lent out are kept out of the debt figures and get their own card on the Dashboard
+          and their own line on the debt report.
+        </P>
+        <P>
           A <B>bill</B> is the one kind that carries its own list of due dates rather than a
           repeating cycle — property tax, which falls due two to six times a year on dates the
           municipality picks. Create an item type of kind <B>Bill</B> under{' '}
