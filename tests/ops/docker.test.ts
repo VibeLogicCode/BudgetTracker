@@ -245,9 +245,21 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.13.2 release', () => {
+  it('MUST-7.1: the 1.13.3 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.13.2');
+    expect(pkg.version).toBe('1.13.3');
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toMatch(/^## \[1\.13\.3\] - 2026-08-28$/m);
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.13.3]'));
+    expect(changelog.indexOf('## [1.13.3]')).toBeLessThan(changelog.indexOf('## [1.13.2]'));
+    const entry = changelog.slice(changelog.indexOf('## [1.13.3]'), changelog.indexOf('## [1.13.2]'));
+    expect(entry).toMatch(/no migration/i);
+    expect(entry).toMatch(/Test-only/);
+  });
+
+  it('MUST-7.1: the 1.13.2 release is still recorded intact (append-only discipline)', () => {
+    const pkg = JSON.parse(read('package.json')) as { version: string };
+    expect(pkg.version).not.toBe('1.13.2');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.13\.2\] - 2026-08-28$/m);
     expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.13.2]'));

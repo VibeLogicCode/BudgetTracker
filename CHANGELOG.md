@@ -21,6 +21,17 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.13.3] - 2026-08-28
+
+**Before updating:** no tables change; there is no migration. The app is identical to 1.13.2,
+whose image was never published because its build failed on a timing-sensitive test.
+
+### Changed
+
+- **Test-only.** One AutoSave test asserted the status slot synchronously after waiting for the
+  error message; under CI load the transition's pending flag had not yet cleared, so the build
+  failed. The test now waits for the status like its siblings do. No application code changed.
+
 ## [1.13.2] - 2026-08-28
 
 **Before updating:** no tables change in this release either; there is no migration. A backup is
