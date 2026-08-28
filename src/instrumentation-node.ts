@@ -132,8 +132,18 @@ function handleShutdownSignal(signal: NodeJS.Signals): void {
   // better-sqlite3's close() is synchronous and finishes any statement already running, which is
   // exactly the grace period an in-flight write needs.
   //
-  // The timer is the backstop: a close that wedges must not hold the container open for ever, and
-  // .unref() means the timer itself never keeps the process alive if the close finishes first.
+  // Fix round 1: a synchronous NATIVE call cannot be preempted by a JS timer -- close() runs on
+  // the one JS thread, so if it genuinely wedged inside better-sqlite3, this process could not
+  // run *any* JS, including the timer's own callback, until it returned. That case is not, and
+  // cannot be, what hardStop guards against, and in practice close() does not block: it only
+  // finishes whatever statement is already running (already fast) and touches no network or other
+  // external I/O. What hardStop actually backstops is this function's OWN exit path: it is armed
+  // and unref'd before closeDb() runs so that if a future change to this handler ever inserts an
+  // await between here and the terminal process.exit(0) below -- or some other code path in the
+  // process is quietly keeping the event loop alive -- the container still goes down within 10s
+  // instead of hanging on a shutdown that never reaches its own exit call. .unref() means the
+  // timer itself never keeps the process alive if the close (and the rest of the handler) finish
+  // first, which is what happens today.
   const hardStop = setTimeout(() => {
     console.error('[shutdown] the database did not close within 10s; exiting anyway');
     process.exit(0);
