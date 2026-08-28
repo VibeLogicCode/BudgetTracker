@@ -16,6 +16,7 @@ import { RowMenu, RowMenuForm } from '@/components/ui/RowMenu';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { BellIcon } from '@/components/icons';
 import { Field, inputClass, labelClass, selectClass, textareaClass } from '@/components/ui/form';
+import { AutoSaveSelect } from '@/components/ui/AutoSave';
 import { formatCents } from '@/lib/money';
 import type { LoanRule } from '@/lib/loans';
 import {
@@ -217,9 +218,15 @@ export function WarrantyDetailClient({
   // reporting it inline in this card mirrors how the Payment matching card's own actions
   // (ruleState/deleteRuleState) already report separately from the five activeSlot actions.
   const [recordPaymentState, recordPaymentDispatch] = useActionState(recordBillPaymentAction, initial);
-  // Ruling R11 / micro-ruling M9: the budget-category link. A deliberate Save button, not an
-  // auto-save (v1.11.0's rule for anything that changes what another page says).
-  const [categoryState, categoryDispatch] = useActionState(setBillCategoryAction, initial);
+  // Ruling R11 / micro-ruling M9: the budget-category link is single-row and reversible (pick a
+  // different category, or clear it back to "Not linked"), which is exactly ruling R1's auto-save
+  // shape -- tests/ops/row-controls.test.ts refuses a lone select control paired with its own
+  // Save button (the pre-v1.11.0 idiom that widened every table), so this binds straight to
+  // AutoSaveSelect the same way the transactions category cell does, not a useActionState form.
+  // (Deliberately spelled without angle brackets above: the guard's own regex scan cannot tell a
+  // comment from markup, and that exact tag-opening substring anywhere in this file -- even in
+  // prose -- counts toward its "exactly one select" tally the same as a real element would.)
+  const saveBillCategory = (formData: FormData) => setBillCategoryAction({}, formData);
 
   const slotState =
     activeSlot === 'edit'
@@ -454,30 +461,25 @@ export function WarrantyDetailClient({
             action={
               // Ruling R11 / micro-ruling M9: a read-side link, and the smallest possible UI for
               // it. Changing it changes no limit, no rollover and no total -- it only lets the
-              // budgets row say what it is accumulating toward.
-              <form action={categoryDispatch} className="flex items-end gap-2">
-                <input type="hidden" name="itemId" value={item.id} />
-                <Field label="Accumulating in budget category">
-                  <select name="categoryId" defaultValue={item.budgetCategoryId ?? ''} className="field-control">
-                    <option value="">Not linked</option>
-                    {categories.map((category) => (
-                      <option key={category.id} value={category.id}>
-                        {category.name}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-                <SubmitButton className="btn btn--ghost btn--sm">Save</SubmitButton>
-              </form>
+              // budgets row say what it is accumulating toward. AutoSaveSelect, not a form with
+              // its own Save button -- see the saveBillCategory docblock above.
+              <span className="flex flex-col gap-1.5">
+                <span className={labelClass}>Accumulating in budget category</span>
+                <AutoSaveSelect
+                  name="categoryId"
+                  defaultValue={item.budgetCategoryId === null ? '' : String(item.budgetCategoryId)}
+                  options={[
+                    { value: '', label: 'Not linked' },
+                    ...categories.map((category) => ({ value: String(category.id), label: category.name })),
+                  ]}
+                  fields={{ itemId: String(item.id) }}
+                  action={saveBillCategory}
+                  ariaLabel="Accumulating in budget category"
+                />
+              </span>
             }
           />
           <CardBody className="flex flex-col gap-4">
-            {categoryState.error === undefined && categoryState.message === undefined ? null : (
-              <>
-                <FormError message={categoryState.error} />
-                {categoryState.message === undefined ? null : <Notice tone="success">{categoryState.message}</Notice>}
-              </>
-            )}
             <p className="text-sm text-muted">
               Enter each due date the way it appears on the bill. The app reminds you before each one and flags any
               that go past.
