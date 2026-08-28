@@ -263,6 +263,15 @@ function activeRules(tx: ReturnType<typeof getDb>): ActiveRule[] {
  * null as 0 here was the exact bug: a disbursement against an unset balance would otherwise
  * record a phantom `applied_cents`, and a LATER unassign, after a person finally anchors the
  * balance, would subtract that phantom figure off a real number it had nothing to do with.
+ *
+ * Review round (Lane A, v1.14.0): returns BOTH `appliedCents` (unsigned, what's stored in
+ * loan_payments.applied_cents) and `deltaCents` (the SIGNED move actually applied to the
+ * balance, in the loan's own frame). `applyPaymentMatchers` and `backfillLoanRule` add
+ * `deltaCents` straight onto their own running total instead of re-deriving the sign a second
+ * time via `isLoanRepayment(direction, txn.amountCents)` -- this function already decided that
+ * once, right here, and a caller re-deriving it is a second place that sign logic could drift
+ * from this one. `assignTransactionToLoan` (which reports appliedCents unsigned) uses only the
+ * other field.
  */
 function link(
   tx: ReturnType<typeof getDb>,
@@ -275,7 +284,7 @@ function link(
     at: string;
     direction: LoanDirection;
   },
-): number | null {
+): { appliedCents: number; deltaCents: number } | null {
   const magnitude = Math.abs(input.signedAmountCents);
   // v1.14.0 (spec BU, ruling P4): the loan's own frame, not the account's. For an owed loan
   // loanSignedDelta is the identity and every line below is byte-for-byte what it was.
@@ -306,7 +315,7 @@ function link(
       .where(eq(warrantyItems.id, input.itemId))
       .run();
   }
-  return applied;
+  return { appliedCents: applied, deltaCents: delta };
 }
 
 interface Candidate {
@@ -551,7 +560,7 @@ export function applyPaymentMatchers(txnIds: number[], at: Date = new Date(), re
         }
 
         const direction = directions.get(match.itemId) ?? 'owed';
-        const applied = link(tx, {
+        const result = link(tx, {
           txnId: txn.id,
           itemId: match.itemId,
           signedAmountCents: txn.amountCents,
@@ -560,12 +569,12 @@ export function applyPaymentMatchers(txnIds: number[], at: Date = new Date(), re
           at: stamp,
           direction,
         });
-        if (applied === null) continue;
-        // v1.14.0: the running balance moves the way the LOAN moves, not the way the account
-        // does -- so a second matched advance on a lent loan clamps against the balance the
-        // first one already raised, not against a balance the first one wrongly shrank.
-        const moved = isLoanRepayment(direction, txn.amountCents) ? -applied : applied;
-        balances.set(match.itemId, (balances.get(match.itemId) ?? 0) + moved);
+        if (result === null) continue;
+        // Review round (Lane A): link() already decided the sign once (deltaCents, in the
+        // loan's own frame) -- add THAT straight to the running total instead of re-deriving
+        // it here a second time. A second place computing the same sign is a second place it
+        // could drift from the first, silently.
+        balances.set(match.itemId, (balances.get(match.itemId) ?? 0) + result.deltaCents);
         linked.add(txn.id);
         created += 1;
       }
@@ -633,7 +642,11 @@ export function backfillLoanRule(
         // rule as applyPaymentMatchers -- ruling P8), so row.amountCents is always negative
         // here. Ruling P4: pass the loan's OWN direction through link(), and move the running
         // balance the way the loan moves, not the way the account does.
-        const applied = link(tx, {
+        //
+        // Review round (Lane A): `balance` is advanced by link()'s own returned deltaCents,
+        // the SAME sign decision applyPaymentMatchers now consumes, rather than this loop
+        // re-deriving isLoanRepayment(rule.direction, row.amountCents) a second time.
+        const result = link(tx, {
           txnId: row.id,
           itemId: rule.itemId,
           signedAmountCents: row.amountCents,
@@ -642,9 +655,9 @@ export function backfillLoanRule(
           at: stamp,
           direction: rule.direction,
         });
-        if (applied === null) continue;
-        balance += isLoanRepayment(rule.direction, row.amountCents) ? -applied : applied;
-        appliedTotal += applied;
+        if (result === null) continue;
+        balance += result.deltaCents;
+        appliedTotal += result.appliedCents;
         linked += 1;
       }
       return { linked, appliedCents: appliedTotal };
@@ -701,7 +714,7 @@ export function assignTransactionToLoan(input: { txnId: number; itemId: number; 
     // loan can take today -- applyPaymentMatchers' rules only ever match outgoing money.
     // NEW-2 fix-round: item.balance is passed through UNCOALESCED -- `?? 0` here used to
     // treat "unknown balance" as "zero balance", see link()'s docblock.
-    const applied = link(tx, {
+    const result = link(tx, {
       txnId: input.txnId,
       itemId: input.itemId,
       signedAmountCents: txn.amountCents,
@@ -710,7 +723,7 @@ export function assignTransactionToLoan(input: { txnId: number; itemId: number; 
       at: stamp,
       direction: item.direction,
     });
-    return applied === null ? { linked: false, appliedCents: 0 } : { linked: true, appliedCents: applied };
+    return result === null ? { linked: false, appliedCents: 0 } : { linked: true, appliedCents: result.appliedCents };
   });
 }
 
@@ -1153,13 +1166,14 @@ export interface DebtPoint {
  * a payment.
  *
  * v1.14.0 (spec BU, rulings P5, P6): a second, independent reconstruction over loans pointed the
- * other way, as its own series (DebtPoint.lentCents). The two SQL queries above are BYTE-IDENTICAL
- * to before this release (ruling P5) -- the per-month `case when amount_cents < 0 ...` sum already
- * computes the undo delta in the OWED frame, and the other direction's undo delta is exactly its
- * negation, so the flip happens in the in-memory fold below via loanSignedDelta, never in SQL. A
- * loan contributes to exactly one series; one series going unknown for a month must never break
- * the other, so "unknown" is now tracked PER SERIES rather than returned early for the whole month
- * as the pre-1.14.0 version did.
+ * other way, as its own series (DebtPoint.lentCents). Of the two SQL queries above, the per-month
+ * `case when amount_cents < 0 ...` aggregation is UNCHANGED from before this release (ruling P5)
+ * -- it already computes the undo delta in the OWED frame, and the other direction's undo delta
+ * is exactly its negation, so the flip happens in the in-memory fold below via loanSignedDelta,
+ * never in SQL. The loans query only gained the `direction` column (needed to sort each loan into
+ * its own series below). A loan contributes to exactly one series; one series going unknown for
+ * a month must never break the other, so "unknown" is now tracked PER SERIES rather than returned
+ * early for the whole month as the pre-1.14.0 version did.
  *
  * Task 10 carry (a) -- KNOWN, DOCUMENTED drift after a clamped unassign: unassignTransactionFromLoan
  * and reverseLoanLinksForTransactions clamp their restore at zero (NEW-1 fix-round) rather than
