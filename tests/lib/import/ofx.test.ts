@@ -94,4 +94,39 @@ describe('parseOfx (ruling R9)', () => {
     expect(looksLikeOfx('statement.csv', Buffer.from('a,b,c\n1,2,3', 'utf8'))).toBe(false);
     expect(looksLikeOfx('statement.ofx', Buffer.from('a,b,c\n1,2,3', 'utf8'))).toBe(false);
   });
+
+  it('truncates a DTPOSTED carrying a bracketed timezone/offset suffix to the date part only, never by timezone conversion', () => {
+    // A very common real-world DTPOSTED shape: 'YYYYMMDDHHMMSS[offset:TZNAME]'. Only the first
+    // eight characters are a calendar date -- the bracket is never parsed as an offset to shift
+    // the day by.
+    const withTz = SGML.replace('<DTPOSTED>20260815120000', '<DTPOSTED>20260815120000[-5:EST]');
+    const result = parseOfx(Buffer.from(withTz, 'utf8'));
+    expect(result.rows[2]?.date).toBe('2026-08-15');
+  });
+
+  it('keeps the first occurrence of a FITID repeated within one file and reports the second as a row error, without aborting the rest of the file', () => {
+    // commitImport dedups on externalId via a unique index (transactions_external_id_uq); a
+    // second row with the SAME FITID reaching commit would abort the whole transaction with a
+    // raw throw. parseOfx must never hand commit two rows sharing one FITID.
+    const repeated = SGML.replace(
+      '<STMTTRN><TRNTYPE>CREDIT<DTPOSTED>20260815120000<TRNAMT>2100.00<FITID>FIT-0003<NAME>PAYROLL DEPOSIT</STMTTRN>',
+      `<STMTTRN><TRNTYPE>DEBIT<DTPOSTED>20260805120000<TRNAMT>-15.00<FITID>FIT-0001<NAME>DUPLICATE MERCHANT</STMTTRN>
+<STMTTRN><TRNTYPE>CREDIT<DTPOSTED>20260815120000<TRNAMT>2100.00<FITID>FIT-0003<NAME>PAYROLL DEPOSIT</STMTTRN>`,
+    );
+    const result = parseOfx(Buffer.from(repeated, 'utf8'));
+    expect(result.rows).toHaveLength(3); // FIT-0001 kept once (first), FIT-0002, FIT-0003
+    expect(result.rows.map((r) => r.externalId)).toEqual(['FIT-0001', 'FIT-0002', 'FIT-0003']);
+    expect(result.rows[0]?.rawDescription).toBe('GROCERY STORE'); // the first occurrence wins
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]?.reason).toBe('duplicate external id FIT-0001');
+  });
+
+  it('reports a transaction the download was truncated inside (STMTTRN never closed) as a row error instead of silently dropping it', () => {
+    const cutIndex = SGML.indexOf('<STMTTRN><TRNTYPE>CREDIT');
+    const truncated = SGML.slice(0, cutIndex) + '<STMTTRN><TRNTYPE>CREDIT<DTPOSTED>20260815120000<TRNAMT>2100.00<FITID>FIT-0003<NAME>PAYROLL DEPOSIT';
+    const result = parseOfx(Buffer.from(truncated, 'utf8'));
+    expect(result.rows).toHaveLength(2); // the two transactions that DID close still parse
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]?.reason).toBe('statement ended mid-transaction');
+  });
 });

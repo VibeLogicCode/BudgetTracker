@@ -50,7 +50,15 @@ export type RowErrorReason =
   | 'unparseable amount'
   | 'missing amount'
   | 'ambiguous amount'
-  | 'malformed row';
+  | 'malformed row'
+  // v1.13.0 fix round 2 (OFX, src/lib/import/ofx.ts): a truncated download -- the file stops
+  // mid-<STMTTRN>, no closing tag at all -- has no CSV equivalent, so it gets its own literal
+  // rather than being squeezed into 'malformed row'.
+  | 'statement ended mid-transaction'
+  // A template-literal member (not a second free-form `string` arm, which would swallow every
+  // other literal above) so a repeated FITID's row error can name the actual id -- e.g.
+  // 'duplicate external id FIT-0001' -- while every other reason stays a closed, typo-proof set.
+  | `duplicate external id ${string}`;
 
 export interface RowError {
   rowIndex: number;

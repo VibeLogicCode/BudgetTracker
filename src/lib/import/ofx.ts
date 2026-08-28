@@ -92,6 +92,13 @@ export function parseOfx(buf: Buffer): OfxParseResult {
   let currency: string | null = null;
   let current: Record<string, string> | null = null;
   let rowIndex = 0;
+  // v1.13.0 fix round 2 (reviewer finding, Important): a repeated FITID reaching commitImport
+  // hits transactions_external_id_uq INSIDE the commit transaction and aborts the whole import
+  // with a raw throw -- so parseOfx itself must never hand commit two rows sharing one FITID.
+  // Tracked here (not in commit.ts, which is Task 12's) because "which occurrence wins" is a
+  // parsing decision, not a commit one: the FIRST occurrence is kept, exactly like a CSV
+  // preset's own descCols/amountCol would keep whatever a person actually meant.
+  const seenExternalIds = new Set<string>();
 
   for (const tag of tags) {
     if (tag.name === 'CURDEF' && tag.value.length > 0 && currency === null) {
@@ -107,13 +114,17 @@ export function parseOfx(buf: Buffer): OfxParseResult {
         const date = toIsoDate(record.DTPOSTED ?? '');
         const description = [record.NAME ?? '', record.MEMO ?? ''].map((part) => part.trim()).filter(Boolean).join(' ');
         const amountCents = parseAmountToCents(record.TRNAMT ?? '');
+        const externalId = (record.FITID ?? '').trim() || null;
         if (date === null) {
           errors.push({ rowIndex, cells, reason: 'unparseable date' });
         } else if (description.length === 0) {
           errors.push({ rowIndex, cells, reason: 'missing description' });
         } else if (amountCents === null) {
           errors.push({ rowIndex, cells, reason: 'unparseable amount' });
+        } else if (externalId !== null && seenExternalIds.has(externalId)) {
+          errors.push({ rowIndex, cells, reason: `duplicate external id ${externalId}` });
         } else {
+          if (externalId !== null) seenExternalIds.add(externalId);
           rows.push({
             rowIndex,
             // The bank's own string, kept verbatim: dedupHash trims it and nothing else reads it.
@@ -127,7 +138,7 @@ export function parseOfx(buf: Buffer): OfxParseResult {
             // deliberately not read: recordBalanceSnapshot keys on (account, date), and one figure
             // whose date is the download time is not a statement date's closing balance.
             balanceCents: null,
-            externalId: (record.FITID ?? '').trim() || null,
+            externalId,
             cells,
           });
         }
@@ -136,6 +147,16 @@ export function parseOfx(buf: Buffer): OfxParseResult {
       continue;
     }
     if (current !== null && !tag.closing && tag.value.length > 0) current[tag.name] = tag.value;
+  }
+
+  // v1.13.0 fix round 2 (reviewer finding, Important): a truncated download (the file simply
+  // stops mid-<STMTTRN>, no closing tag at all) used to be silently dropped -- `current` would
+  // still be non-null when the tag loop ends, and nothing ever reported it. Whatever fields DID
+  // arrive before the cut are surfaced in `cells` the same way any other row error's cells are.
+  if (current !== null) {
+    const record = current;
+    const cells = [record.DTPOSTED ?? '', record.NAME ?? '', record.TRNAMT ?? '', record.FITID ?? ''];
+    errors.push({ rowIndex, cells, reason: 'statement ended mid-transaction' });
   }
 
   const first = rows.at(0)?.date;
