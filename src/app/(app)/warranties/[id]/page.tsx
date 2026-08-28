@@ -52,9 +52,12 @@ export default async function WarrantyDetailPage({ params }: { params: Promise<{
          window; the notification evaluator passes the user's comingDueDays instead. */
       installments={listInstallments(item.id, today, INSTALLMENT_DUE_SOON_DAYS)}
       /* v1.13.0 ruling R11: the budget-category select on a bill's Installments card. Archived
-         categories are excluded -- linking a bill to a category nobody budgets in would render a
+         AND income categories are excluded -- a bill is an expense, and linking one to a category
+         nobody budgets in (archived) or that isn't an expense line at all (income) would render a
          sinking-fund line against a row the budgets page does not show. */
-      categories={listCategories({ includeArchived: false }).map((category) => ({ id: category.id, name: category.name }))}
+      categories={listCategories({ includeArchived: false })
+        .filter((category) => !category.isIncome)
+        .map((category) => ({ id: category.id, name: category.name }))}
       accounts={listAccounts({}, viewer).map((a) => ({ id: a.id, name: a.name }))}
       payoffFraction={loanSummary?.payoffFraction ?? null}
       lastPaymentAt={loanSummary?.lastPaymentAt ?? null}
