@@ -94,7 +94,7 @@ export default async function DashboardPage({
   // Review fix-round: one read-model scan, not two -- loansTotalOwedCents() would otherwise
   // call listLoans() again just to re-derive the sum LoansCard's own props already carry.
   const loans = listLoans(today, viewer);
-  // v1.14.0 (spec BU): one scan, partitioned. LoansCard's "What the household still owes" is now
+  // v1.14.0 (spec BU): one scan, partitioned. LoansCard's "What we owe" is now
   // true rather than accidentally true, and the lent rows are a different question entirely.
   const owedLoans = loans.filter((loan) => loan.loanDirection === 'owed');
   const lentLoans = loans.filter((loan) => loan.loanDirection !== 'owed');

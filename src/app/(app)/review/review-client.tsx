@@ -117,8 +117,16 @@ export function ReviewClient({
                     collapses whitespace, so a raw description that differed only by case or
                     incidental spacing (e.g. "King of the Nor_f" vs "KING OF THE NOR_F") still
                     rendered twice. Put the raw description through the same trim/collapse/upper
-                    footing before comparing, so only a MEANINGFUL difference shows the em dash. */}
-                {row.normalizedMerchant !== row.rawDescription.trim().replace(/\s+/g, ' ').toUpperCase() ? (
+                    footing before comparing, so only a MEANINGFUL difference shows the em dash.
+
+                    Fix round on 5439851 (this round): normalizeMerchant (src/lib/categorize/normalize.ts)
+                    also runs raw.normalize('NFC') before uppercasing, so a composed vs decomposed
+                    accented merchant name (e.g. the precomposed 'CAFÉ' vs the decomposed
+                    'CAFÉ', E followed by a combining acute) compares as identical there. This
+                    footing must match or the two forms would show a spurious "X — X" even
+                    though they're the same merchant. */}
+                {row.normalizedMerchant !==
+                row.rawDescription.trim().replace(/\s+/g, ' ').normalize('NFC').toUpperCase() ? (
                   <>
                     {' '}
                     <span className="text-muted">— {row.rawDescription}</span>
@@ -173,7 +181,7 @@ export function ReviewClient({
                     { value: '', label: 'Choose for this one…', disabled: true },
                     ...options.map((opt) => ({
                       value: String(opt.id),
-                      label: '  '.repeat(opt.depth) + opt.label,
+                      label: '  '.repeat(opt.depth) + opt.label,
                     })),
                   ]}
                   fields={{ transactionId: String(row.id) }}

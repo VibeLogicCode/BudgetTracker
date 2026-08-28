@@ -359,7 +359,7 @@ export const HELP_SECTIONS: HelpSection[] = [
         </P>
         <P>
           You don&rsquo;t have to start on this page to record a loan. From the Transactions
-          page, a row&rsquo;s menu offers <B>Assign to &ldquo;&lt;loan&gt;&rdquo;</B> for an
+          page, a row&rsquo;s menu offers <B>Assign to &lt;loan name&gt;</B> for an
           existing loan — money out on a loan you lent out adds to what they owe, money in
           reduces it — and <B>Assign to new loan…</B>, which creates the loan right there and
           assigns that row as its first entry.

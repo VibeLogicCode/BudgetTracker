@@ -142,8 +142,40 @@ describe('ReviewClient — labeling the per-row and apply-to-all category select
     expect(screen.getByText('KING OF THE NOR_F')).toBeTruthy();
   });
 
+  // Fix round on 5439851, item 2: normalizeMerchant (src/lib/categorize/normalize.ts) runs
+  // raw.normalize('NFC') before uppercasing, so a composed and a decomposed spelling of the same
+  // accented merchant are the same string to it. The dedupe here must run its raw description
+  // through that same NFC step, or a decomposed raw description (e.g. imported from a statement
+  // that spells the accent as a combining character) would still show a spurious "X — X" against
+  // a normalizedMerchant that was itself derived by the NFC-normalizing path.
+  it('renders the name once when the raw description differs from the normalized merchant only by Unicode composition (NFC vs NFD)', () => {
+    const { container } = render(
+      <ReviewClient
+        total={1}
+        rows={[
+          row({
+            id: 9,
+            normalizedMerchant: 'CAFÉ',
+            rawDescription: 'café', // decomposed: "cafe" + combining acute accent (U+0301)
+            matchingCount: 1,
+          }),
+        ]}
+        categories={categories}
+      />,
+    );
+    expect(container.textContent).not.toContain('—');
+    expect(screen.getByText('CAFÉ')).toBeTruthy();
+  });
+
   // Fix round on 5439851, item 1: bulk options must keep NBSP indentation (ASCII spaces collapse
   // in rendered text), so a depth-1 category's rendered option text still starts with two NBSPs.
+  //
+  // Scoped to the apply-to-all <form> specifically (found via its hidden `normalizedMerchant`
+  // input, the one marker unique to that form): querying every <option> in the container also
+  // catches the per-row AutoSaveSelect, whose plain options prop AutoSaveSelect itself rewrites
+  // with NBSP before handing it to the DOM (src/components/ui/AutoSave.tsx) -- that rewrite would
+  // make this assertion pass even if the *bulk* select's own literal indentation regressed to
+  // ordinary ASCII spaces, which is exactly the bug this test exists to catch.
   it('renders bulk-select depth-1 category options with NBSP indentation', () => {
     const nestedCategories: CategoryRecord[] = [
       { id: 1, name: 'Dining', parentId: null, icon: null, color: null, isIncome: false, isArchived: false, sortOrder: 0, taxRelevant: false },
@@ -156,7 +188,10 @@ describe('ReviewClient — labeling the per-row and apply-to-all category select
         categories={nestedCategories}
       />,
     );
-    const options = Array.from(container.querySelectorAll('option')).filter((option) =>
+    const merchantInput = container.querySelector('input[name="normalizedMerchant"]');
+    const bulkForm = merchantInput?.closest('form');
+    expect(bulkForm).toBeTruthy();
+    const options = Array.from(bulkForm!.querySelectorAll('option')).filter((option) =>
       (option.textContent ?? '').startsWith('  '),
     );
     expect(options.length).toBeGreaterThan(0);
