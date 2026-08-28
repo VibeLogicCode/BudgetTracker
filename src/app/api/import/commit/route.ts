@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { CsrfError, assertSameOrigin } from '@/lib/auth/csrf';
 import { userFromRequest } from '@/lib/auth/session';
 import { isSelfScoped } from '@/lib/auth/viewer';
-import { getAccount } from '@/lib/accounts';
+import { acceptsTransactions, getAccount } from '@/lib/accounts';
 import { importMappingSchema } from '@/lib/import/mapping';
 import { getProfile } from '@/lib/import/presets';
 import { commitStagedImport } from '@/lib/import/flow';
@@ -41,7 +41,14 @@ export async function POST(request: Request): Promise<Response> {
 
   const parsed = bodySchema.safeParse(await request.json());
   if (!parsed.success) return Response.json({ error: parsed.error.issues[0]?.message ?? 'Invalid request' }, { status: 400 });
-  if (!getAccount(parsed.data.accountId)) return Response.json({ error: 'Unknown account' }, { status: 404 });
+  const account = getAccount(parsed.data.accountId);
+  if (!account) return Response.json({ error: 'Unknown account' }, { status: 404 });
+  // v1.13.0 ruling R10 (item I6): commitStagedImport itself now refuses this too (defense in
+  // depth for any other caller), but checking here first means a direct hit on this route gets
+  // a clean 400 instead of the generic 500 an uncaught thrown Error would otherwise produce.
+  if (!acceptsTransactions(account.type)) {
+    return Response.json({ error: 'That account only holds a balance you type in.' }, { status: 400 });
+  }
   if (!getProfile(parsed.data.profileId)) return Response.json({ error: 'Unknown import profile' }, { status: 404 });
 
   try {

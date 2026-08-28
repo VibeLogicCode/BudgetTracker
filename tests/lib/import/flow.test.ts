@@ -99,3 +99,29 @@ describe('commitStagedImport — fork ordering (review finding 3)', () => {
     expect(account.import_profile_id).toBeNull();
   });
 });
+
+// v1.13.0 whole-branch review, item I6. An asset account (ruling R10) holds a typed balance and
+// takes no transactions at all -- the picker on every page that leads here already filters these
+// out, but commitStagedImport itself had no second gate, the same one manualEntryAction
+// (transactions/actions.ts) already carries for the hand-entry path.
+describe('commitStagedImport — ruling R10: an asset account refuses to import (item I6)', () => {
+  it('throws and inserts no transaction row, no import row, for an asset account', () => {
+    const { sqlite, userId, profileId } = setup();
+    const assetAccountId = createAccount({ name: 'Family Home', institution: '', type: 'asset', ownerUserId: null });
+    const stagingId = writeStagedFile(fixture('td-chequing.csv'));
+
+    expect(() =>
+      commitStagedImport({
+        stagingId,
+        filename: 'td.csv',
+        accountId: assetAccountId,
+        profileId,
+        mapping: getBuiltinPreset('TD Chequing/Debit'),
+        userId,
+      }),
+    ).toThrow('That account only holds a balance you type in.');
+
+    expect((sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c).toBe(0);
+    expect((sqlite.prepare('select count(*) as c from imports').get() as { c: number }).c).toBe(0);
+  });
+});

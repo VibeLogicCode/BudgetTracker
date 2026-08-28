@@ -1,4 +1,4 @@
-import { getAccount } from '@/lib/accounts';
+import { acceptsTransactions, getAccount } from '@/lib/accounts';
 import { runEngine, type EngineResult } from '@/lib/categorize/engine';
 import { applyPaymentMatchers } from '@/lib/loans';
 import { isSimplefinManaged } from '@/lib/simplefin/connection';
@@ -40,6 +40,13 @@ export function commitStagedImport(input: {
 }): CommitFlowResult {
   const account = getAccount(input.accountId);
   if (!account) throw new Error(`No account ${input.accountId}`);
+
+  // v1.13.0 ruling R10 (item I6): an asset account holds a typed balance and takes no
+  // transactions or imports at all -- the account picker already filters these out on every
+  // page that leads here, and the manual-entry write path (transactions/actions.ts) has this
+  // same second gate. commitStagedImport had no equivalent: an asset account's id posted
+  // directly to /api/import/commit reached this far unchecked.
+  if (!acceptsTransactions(account.type)) throw new Error('That account only holds a balance you type in.');
 
   // Spec section 3: an account is CSV-managed or SimpleFIN-managed, never both.
   if (isSimplefinManaged(input.accountId)) {

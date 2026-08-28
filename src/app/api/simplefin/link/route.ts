@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { CsrfError, assertSameOrigin } from '@/lib/auth/csrf';
 import { userFromRequest } from '@/lib/auth/session';
-import { getAccount } from '@/lib/accounts';
+import { acceptsTransactions, getAccount } from '@/lib/accounts';
 import { MAX_SIMPLEFIN_BODY_BYTES, SimplefinError } from '@/lib/simplefin/client';
 import { linkAccount, listLinks, unlinkAccount } from '@/lib/simplefin/connection';
 
@@ -40,6 +40,12 @@ export async function POST(request: Request): Promise<Response> {
 
   const account = getAccount(parsed.data.accountId);
   if (!account) return Response.json({ error: 'Unknown account.' }, { status: 404 });
+  // v1.13.0 ruling R10 (item I6): an asset account holds a typed balance and takes no
+  // transactions or syncs at all -- this route had no equivalent of the type gate every other
+  // account-accepting write path (manual entry, CSV commit) already enforces.
+  if (!acceptsTransactions(account.type)) {
+    return Response.json({ error: 'That account only holds a balance you type in.' }, { status: 400 });
+  }
 
   try {
     linkAccount(parsed.data);

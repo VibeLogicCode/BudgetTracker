@@ -167,6 +167,26 @@ describe('POST /api/simplefin/link', () => {
       (await linkRoute(jsonRequest('http://nas.local:3000/api/simplefin/link', { action: 'link', simplefinAccountId: 'r', accountId, currency: 'CAD' }, memberToken))).status,
     ).toBe(403);
   });
+
+  // v1.13.0 whole-branch review, item I6. An asset account (ruling R10) takes no transactions or
+  // syncs at all -- this route accepted any local accountId with no type check.
+  it('400s an asset account, and links nothing', async () => {
+    const { adminToken } = setup();
+    const assetAccountId = insertTestAccount(current!.db, { name: 'Family Home', type: 'asset' });
+    saveClaimedConnection(ACCESS_URL);
+
+    const response = await linkRoute(
+      jsonRequest(
+        'http://nas.local:3000/api/simplefin/link',
+        { action: 'link', simplefinAccountId: 'remote-asset', accountId: assetAccountId, currency: 'CAD' },
+        adminToken,
+      ),
+    );
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toBe('That account only holds a balance you type in.');
+    expect(listLinks()).toHaveLength(0);
+  });
 });
 
 describe('POST /api/simplefin/sync', () => {
