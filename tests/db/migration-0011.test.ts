@@ -182,7 +182,13 @@ describe('the journal entry', () => {
     expect(entry!.when - prior!.when).toBe(86_400_000);
     // Append-only: 0010 keeps its slot.
     expect(prior?.tag).toBe('0010_balances');
-    expect(Math.max(...journal.entries.map((e) => e.idx))).toBe(11);
+    // 11 sits immediately after 10 in idx order -- that's what this test actually needs to guard.
+    // (Not "11 is the journal's last entry": that pinned the tail and broke the moment a later
+    // migration appended its own entry -- e.g. 0012 -- even though 0011's own slot was untouched
+    // and still exactly right. Append-only growth past 11 is expected, not a regression. Same
+    // treatment migration-0010.test.ts received here when 0011 landed.)
+    const idxs = journal.entries.map((e) => e.idx).sort((a, b) => a - b);
+    expect(idxs.indexOf(11)).toBe(idxs.indexOf(10) + 1);
   });
 });
 
@@ -308,7 +314,19 @@ describe('bill_installments', () => {
     const cols = (current!.sqlite.prepare('pragma table_info(bill_installments)').all() as { name: string }[]).map(
       (c) => c.name,
     );
-    expect(cols).toEqual(['id', 'item_id', 'due_date', 'amount_cents', 'paid_at', 'paid_txn_id', 'created_at']);
+    // unlinked_at arrived later, by ALTER TABLE ADD COLUMN in 0012 -- appended last, same as
+    // every other additive column in this schema, so it belongs at the end of this list rather
+    // than pinning the table back to its as-created 0011 shape.
+    expect(cols).toEqual([
+      'id',
+      'item_id',
+      'due_date',
+      'amount_cents',
+      'paid_at',
+      'paid_txn_id',
+      'created_at',
+      'unlinked_at',
+    ]);
   });
 
   it('refuses a non-positive amount', () => {
