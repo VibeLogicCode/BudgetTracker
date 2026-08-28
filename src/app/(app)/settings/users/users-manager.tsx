@@ -3,13 +3,22 @@
 import { Fragment, useActionState, useState } from 'react';
 import { FormError } from '@/components/FormError';
 import { SubmitButton } from '@/components/SubmitButton';
+import { AutoSaveSelect } from '@/components/ui/AutoSave';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { Notice } from '@/components/ui/Notice';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { TableWrap } from '@/components/ui/Table';
-import { Field, inputClass, labelClass, selectClass } from '@/components/ui/form';
+import { Field, hintClass, inputClass, labelClass, selectClass } from '@/components/ui/form';
 import { RowMenu, RowMenuButton, RowMenuForm } from '@/components/ui/RowMenu';
-import { createUserAction, resetMfaAction, resetPasswordAction, setActiveAction, type UsersFormState } from './actions';
+import {
+  createPersonAction,
+  createUserAction,
+  resetMfaAction,
+  resetPasswordAction,
+  setActiveAction,
+  setVisibilityAction,
+  type UsersFormState,
+} from './actions';
 import type { UserRecord } from '@/lib/auth/users';
 
 const initialState: UsersFormState = {};
@@ -19,6 +28,7 @@ const rowButton = 'btn btn--secondary btn--sm';
 
 export function UsersManager({ users }: { users: UserRecord[] }) {
   const [createState, create] = useActionState(createUserAction, initialState);
+  const [personState, createPerson] = useActionState(createPersonAction, initialState);
   const [rowState, rowAction] = useActionState(setActiveAction, initialState);
   const [pwState, resetPassword] = useActionState(resetPasswordAction, initialState);
   const [mfaState, resetMfa] = useActionState(resetMfaAction, initialState);
@@ -49,31 +59,61 @@ export function UsersManager({ users }: { users: UserRecord[] }) {
         description="Everyone who can sign in. Members see the whole household; admins can also change these settings."
       />
 
-      <Card className="max-w-md">
-        <CardHeader title="Add a user" description="They pick their own password the first time they sign in." />
-        <CardBody>
-          <form action={create} className="flex flex-col gap-4">
-            <FormError message={createState.error} />
-            {createState.message ? <Notice tone="success">{createState.message}</Notice> : null}
-            <Field label="Name">
-              <input name="name" placeholder="Alex" required className={inputClass} />
-            </Field>
-            <Field label="Username">
-              <input name="username" placeholder="alex" required className={inputClass} />
-            </Field>
-            <Field label="Temporary password" hint="At least 10 characters.">
-              <input name="password" placeholder="At least 10 characters" required className={inputClass} />
-            </Field>
-            <Field label="Role">
-              <select name="role" defaultValue="member" className={selectClass}>
-                <option value="member">Member</option>
-                <option value="admin">Admin</option>
-              </select>
-            </Field>
-            <SubmitButton className="w-fit">Create user</SubmitButton>
-          </form>
-        </CardBody>
-      </Card>
+      <div className="grid gap-6 sm:grid-cols-2">
+        <Card>
+          <CardHeader title="Add a user" description="They pick their own password the first time they sign in." />
+          <CardBody>
+            <form action={create} className="flex flex-col gap-4">
+              <FormError message={createState.error} />
+              {createState.message ? <Notice tone="success">{createState.message}</Notice> : null}
+              <Field label="Name">
+                <input name="name" placeholder="Alex" required className={inputClass} />
+              </Field>
+              <Field label="Username">
+                <input name="username" placeholder="alex" required className={inputClass} />
+              </Field>
+              <Field label="Temporary password" hint="At least 10 characters.">
+                <input name="password" placeholder="At least 10 characters" required className={inputClass} />
+              </Field>
+              <Field label="Role">
+                <select name="role" defaultValue="member" className={selectClass}>
+                  <option value="member">Member</option>
+                  <option value="admin">Admin</option>
+                </select>
+              </Field>
+              <SubmitButton className="w-fit">Create user</SubmitButton>
+            </form>
+          </CardBody>
+        </Card>
+
+        {/* v1.13.0 ruling R5. No password field at all -- createPersonWithoutLogin hashes 32
+            random bytes nobody is ever told, and this person cannot sign in and cannot be made
+            an admin (micro-ruling M1 blocks self+admin; a no-login person cannot be given a role
+            other than 'member' at all, since no role-setting action exists in this app). */}
+        <Card>
+          <CardHeader
+            title="Add a person without a login"
+            description="For a child, a relative or a housemate who is never going to sign in."
+          />
+          <CardBody>
+            <form action={createPerson} className="flex flex-col gap-4">
+              <FormError message={personState.error} />
+              {personState.message ? <Notice tone="success">{personState.message}</Notice> : null}
+              <Field label="Name">
+                <input name="name" placeholder="Robin" required className={inputClass} />
+              </Field>
+              <Field label="Username">
+                <input name="username" placeholder="robin" required className={inputClass} />
+              </Field>
+              <p className={hintClass}>
+                They will show up wherever you choose who a transaction was for. They cannot sign in and
+                cannot be made an admin.
+              </p>
+              <SubmitButton className="w-fit">Add person</SubmitButton>
+            </form>
+          </CardBody>
+        </Card>
+      </div>
 
       <FormError message={rowState.error ?? pwState.error ?? mfaState.error} />
       {rowMessage ? <Notice tone="success">{rowMessage}</Notice> : null}
@@ -86,6 +126,7 @@ export function UsersManager({ users }: { users: UserRecord[] }) {
               <th scope="col">Name</th>
               <th scope="col">Username</th>
               <th scope="col">Role</th>
+              <th scope="col">Sees</th>
               <th scope="col">MFA</th>
               <th scope="col">Status</th>
               <th scope="col" />
@@ -99,6 +140,24 @@ export function UsersManager({ users }: { users: UserRecord[] }) {
                   <td className="font-mono text-xs text-muted">{user.username}</td>
                   <td>
                     <span className={user.role === 'admin' ? 'badge badge--accent' : 'badge badge--slate'}>{user.role}</span>
+                  </td>
+                  <td>
+                    {/* v1.13.0 ruling R2, micro-ruling M1: an admin cannot be set 'self' --
+                        setVisibilityAction refuses it server-side ("Make them a member first."),
+                        surfaced here through the same auto-save error line every other row control
+                        uses, rather than disabling the control (the refusal is the server's to
+                        make, not a client-side guess at who counts as "an admin" this instant). */}
+                    <AutoSaveSelect
+                      name="visibility"
+                      defaultValue={user.visibility}
+                      options={[
+                        { value: 'household', label: 'Household' },
+                        { value: 'self', label: 'Only themselves' },
+                      ]}
+                      fields={{ userId: String(user.id) }}
+                      ariaLabel={`What ${user.name} sees`}
+                      action={(formData) => setVisibilityAction({}, formData)}
+                    />
                   </td>
                   <td>
                     <span className={user.totpEnabled ? 'badge badge--green' : 'badge badge--muted'}>
@@ -133,7 +192,7 @@ export function UsersManager({ users }: { users: UserRecord[] }) {
                 </tr>
                 {confirming?.id === user.id ? (
                   <tr>
-                    <td colSpan={6} className="border-l-2 border-warning bg-warning-soft/40">
+                    <td colSpan={7} className="border-l-2 border-warning bg-warning-soft/40">
                       <div className="flex flex-wrap items-center gap-3 px-4 py-3 text-sm">
                         <p className="text-ink">
                           {confirming.intent === 'deactivate' ? (
@@ -169,7 +228,7 @@ export function UsersManager({ users }: { users: UserRecord[] }) {
                 ) : null}
                 {resetting === user.id ? (
                   <tr>
-                    <td colSpan={6} className="bg-surface-2">
+                    <td colSpan={7} className="bg-surface-2">
                       <form
                         action={resetPassword}
                         onSubmit={() => setResetting(null)}

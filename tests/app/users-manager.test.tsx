@@ -9,7 +9,9 @@ import type { UserRecord } from '@/lib/auth/users';
 // use for their own RowMenuForm items.
 vi.mock('@/app/(app)/settings/users/actions', () => ({
   createUserAction: vi.fn(async () => ({})),
+  createPersonAction: vi.fn(async () => ({})),
   setActiveAction: vi.fn(async () => ({})),
+  setVisibilityAction: vi.fn(async () => ({})),
   resetPasswordAction: vi.fn(async () => ({})),
   resetMfaAction: vi.fn(async () => ({})),
 }));
@@ -27,6 +29,9 @@ function user(over: Partial<UserRecord> = {}): UserRecord {
     isActive: true,
     mustChangePassword: false,
     createdAt: '2026-01-01T00:00:00.000Z',
+    visibility: 'household',
+    canSignIn: true,
+    lastAccountId: null,
     ...over,
   };
 }
@@ -44,6 +49,9 @@ const member = {
   isActive: true,
   mustChangePassword: false,
   createdAt: '2026-01-01T00:00:00.000Z',
+  visibility: 'household',
+  canSignIn: true,
+  lastAccountId: null,
 } as UserRecord;
 
 // Fix wave (2026-08-23 review, finding I4): the RowMenuForm dispatch paths on this page had

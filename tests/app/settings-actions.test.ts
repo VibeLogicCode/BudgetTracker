@@ -29,10 +29,15 @@ vi.mock('next/cache', () => ({
   revalidatePath: vi.fn(),
 }));
 
-import { changePasswordAction, confirmTotpEnrollmentAction, disableTotpAction } from '@/app/(app)/settings/actions';
+import {
+  beginTotpEnrollmentAction,
+  changePasswordAction,
+  confirmTotpEnrollmentAction,
+  disableTotpAction,
+} from '@/app/(app)/settings/actions';
 import { SESSION_COOKIE_NAME, createSession } from '@/lib/auth/session';
 import { createUser } from '@/lib/auth/users';
-import { enableTotpForUser, generateTotpSecret } from '@/lib/auth/totp';
+import { consumeTotpCounter, currentTotpToken, enableTotpForUser, generateTotpSecret, verifyTotpCounter } from '@/lib/auth/totp';
 
 /** actions.ts's own private PENDING_TOTP_COOKIE name -- stable, not exported. */
 const PENDING_TOTP_COOKIE = 'bt_pending_totp';
@@ -101,6 +106,33 @@ describe('confirmTotpEnrollmentAction — finding 6c: pending-enrollment cookie'
     const result = await withSession(token, () => confirmTotpEnrollmentAction({}, formData({ code: 'not-a-code' })));
     expect(result.error).toBeTruthy();
     expect(result.error).not.toMatch(/expired/i);
+  });
+});
+
+describe('confirmTotpEnrollmentAction — v1.12.1 SEC-10 verify-then-spend, carried into v1.13.0', () => {
+  it('a valid code from the QR-code secret enables two-factor', async () => {
+    const { token } = await signedInUser();
+    const begin = await withSession(token, () => beginTotpEnrollmentAction());
+    const secret = begin.enrollment!.secret;
+    const code = currentTotpToken(secret);
+    const result = await withSession(token, () => confirmTotpEnrollmentAction({}, formData({ code })));
+    expect(result.message).toMatch(/two-factor authentication is on/i);
+    expect(result.recoveryCodes?.length).toBeGreaterThan(0);
+  });
+
+  it('refuses a code whose time-step counter has already been spent, so it cannot be replayed', async () => {
+    const { userId, token } = await signedInUser();
+    const begin = await withSession(token, () => beginTotpEnrollmentAction());
+    const secret = begin.enrollment!.secret;
+    const at = new Date();
+    const code = currentTotpToken(secret, at);
+    const counter = verifyTotpCounter(secret, code, at)!;
+    // Simulate this exact counter already having been accepted once (e.g. shoulder-surfed and
+    // used elsewhere in the same ~90s window) -- confirmTotpEnrollmentAction must refuse it.
+    consumeTotpCounter(userId, counter);
+
+    const result = await withSession(token, () => confirmTotpEnrollmentAction({}, formData({ code })));
+    expect(result.error).toMatch(/already used/i);
   });
 });
 

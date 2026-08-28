@@ -11,12 +11,16 @@ import { AccountsManager } from './accounts-manager';
 export const dynamic = 'force-dynamic';
 
 export default async function AccountsPage() {
-  await requireAdmin();
+  const user = await requireAdmin();
 
   const today = todayIso();
   // v1.7.0 Task 6 (spec 2026-08-22): one row per account with a snapshot at or before today;
   // an account absent from this map has never had a balance recorded, SimpleFIN or manual.
-  const balanceByAccountId = new Map(latestSnapshots(today).map((snapshot) => [snapshot.accountId, snapshot] as const));
+  // v1.13.0 ruling R2: this page is requireAdmin(), so the viewer is always household-scoped --
+  // passed through anyway because latestSnapshots/listAccounts now require one.
+  const balanceByAccountId = new Map(
+    latestSnapshots(today, user).map((snapshot) => [snapshot.accountId, snapshot] as const),
+  );
 
   const allProfiles = listProfiles();
   // Same two conditions the import picker offers (Task 4, MUST-4.1): a profile that has been
@@ -30,7 +34,7 @@ export default async function AccountsPage() {
     .map((p) => ({ id: p.id, name: p.name }));
   const profileNameById = new Map(allProfiles.map((p) => [p.id, p.name] as const));
 
-  const accounts = listAccounts({ includeInactive: true }).map((account) => {
+  const accounts = listAccounts({ includeInactive: true }, user).map((account) => {
     const balance = balanceByAccountId.get(account.id) ?? null;
     return {
       id: account.id,

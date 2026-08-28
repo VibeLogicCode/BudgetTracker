@@ -37,6 +37,8 @@ const ADMIN_LINKS: { href: string; label: string; blurb: string; Icon: (props: I
   },
   { href: '/settings/backups', label: 'Backups', blurb: 'Nightly archives, downloads and restore.', Icon: ImportIcon },
   { href: '/settings/connections', label: 'Connections (SimpleFIN)', blurb: 'Bank sync instead of CSV, where it is set up.', Icon: ImportIcon },
+  // v1.13.0 ruling R3.
+  { href: '/settings/audit', label: 'Audit log', blurb: 'Every deletion and every undone import, with who did it.', Icon: SettingsIcon },
 ];
 
 export default async function SettingsPage() {

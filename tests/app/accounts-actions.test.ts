@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
 
-let currentUser = { id: 1, name: 'Admin', username: 'admin', role: 'admin' as const };
+let currentUser = { id: 1, name: 'Admin', username: 'admin', role: 'admin' as const, visibility: 'household' as const };
 let requestHeaders = new Headers({ origin: 'http://nas.local:3000', host: 'nas.local:3000' });
 
 vi.mock('@/lib/auth/session', () => ({
@@ -43,7 +43,7 @@ function setup() {
   current = createSeededTestDb();
   const adminId = insertTestUser(current.db, { name: 'Admin', username: 'admin', role: 'admin' });
   const bobId = insertTestUser(current.db, { name: 'Bob', username: 'bob', role: 'member' });
-  currentUser = { id: adminId, name: 'Admin', username: 'admin', role: 'admin' };
+  currentUser = { id: adminId, name: 'Admin', username: 'admin', role: 'admin', visibility: 'household' };
   return { db: current.db, adminId, bobId };
 }
 
@@ -60,7 +60,7 @@ describe('createAccountAction', () => {
 
     expect(result.error).toBeUndefined();
     expect(result.message).toMatch(/Joint Chequing/);
-    const accounts = listAccounts();
+    const accounts = listAccounts({}, currentUser);
     expect(accounts).toHaveLength(1);
     expect(accounts[0]).toMatchObject({ name: 'Joint Chequing', institution: 'TD Canada Trust', type: 'chequing', ownerUserId: null, isActive: true });
   });
@@ -70,34 +70,47 @@ describe('createAccountAction', () => {
     const result = await createAccountAction({}, formData({ name: 'Grocery Cash', institution: '', type: 'cash', owner: '' }));
 
     expect(result.error).toBeUndefined();
-    expect(listAccounts()[0]).toMatchObject({ name: 'Grocery Cash', institution: '', type: 'cash' });
+    expect(listAccounts({}, currentUser)[0]).toMatchObject({ name: 'Grocery Cash', institution: '', type: 'cash' });
   });
 
   it('assigns a personal owner when one is picked', async () => {
     const { bobId } = setup();
     await createAccountAction({}, formData({ name: 'Bob Visa', institution: 'Amex', type: 'credit', owner: String(bobId) }));
-    expect(listAccounts()[0]).toMatchObject({ name: 'Bob Visa', ownerUserId: bobId });
+    expect(listAccounts({}, currentUser)[0]).toMatchObject({ name: 'Bob Visa', ownerUserId: bobId });
   });
 
   it('refuses a nameless account', async () => {
     setup();
     const result = await createAccountAction({}, formData({ name: '   ', institution: 'TD', type: 'chequing', owner: '' }));
     expect(result.error).toMatch(/name/i);
-    expect(listAccounts()).toHaveLength(0);
+    expect(listAccounts({}, currentUser)).toHaveLength(0);
   });
 
   it('refuses an unsupported type instead of writing an unusable row', async () => {
     setup();
-    const result = await createAccountAction({}, formData({ name: 'Savings', institution: 'TD', type: 'savings', owner: '' }));
+    // v1.13.0 ruling R10 widened the enum to five types (chequing/credit/cash/savings/asset) --
+    // 'savings' used to be the unsupported value this test picked; 'mortgage' is not one of the
+    // five and still is not.
+    const result = await createAccountAction({}, formData({ name: 'Mortgage', institution: 'TD', type: 'mortgage', owner: '' }));
     expect(result.error).toBeTruthy();
-    expect(listAccounts()).toHaveLength(0);
+    expect(listAccounts({}, currentUser)).toHaveLength(0);
+  });
+
+  it('ruling R10: accepts the two new types, savings and asset', async () => {
+    setup();
+    const savings = await createAccountAction({}, formData({ name: 'Emergency Fund', institution: 'TD', type: 'savings', owner: '' }));
+    expect(savings.error).toBeUndefined();
+    const asset = await createAccountAction({}, formData({ name: 'The House', institution: '', type: 'asset', owner: '' }));
+    expect(asset.error).toBeUndefined();
+    const accounts = listAccounts({}, currentUser);
+    expect(accounts.map((a) => a.type).sort()).toEqual(['asset', 'savings']);
   });
 
   it('refuses an owner who does not exist rather than throwing a foreign-key error', async () => {
     setup();
     const result = await createAccountAction({}, formData({ name: 'Ghost Account', institution: 'TD', type: 'chequing', owner: '9999' }));
     expect(result.error).toMatch(/no longer exists/i);
-    expect(listAccounts()).toHaveLength(0);
+    expect(listAccounts({}, currentUser)).toHaveLength(0);
   });
 
   it('rejects a cross-origin request before touching the database', async () => {
@@ -105,7 +118,7 @@ describe('createAccountAction', () => {
     requestHeaders = new Headers({ origin: 'http://evil.example', host: 'nas.local:3000' });
     const result = await createAccountAction({}, formData({ name: 'Attacker Account', institution: 'X', type: 'chequing', owner: '' }));
     expect(result.error).toBe('Cross-origin request rejected');
-    expect(listAccounts()).toHaveLength(0);
+    expect(listAccounts({}, currentUser)).toHaveLength(0);
   });
 });
 
@@ -113,16 +126,16 @@ describe('setAccountActiveAction (archive only — there is no delete)', () => {
   it('deactivates and reactivates, keeping the row either way', async () => {
     setup();
     await createAccountAction({}, formData({ name: 'Old Visa', institution: 'TD', type: 'credit', owner: '' }));
-    const id = listAccounts()[0].id;
+    const id = listAccounts({}, currentUser)[0].id;
 
     const off = await setAccountActiveAction({}, formData({ accountId: String(id), active: '0' }));
     expect(off.message).toMatch(/deactivated/i);
-    expect(listAccounts()).toHaveLength(0);
-    expect(listAccounts({ includeInactive: true })).toHaveLength(1);
+    expect(listAccounts({}, currentUser)).toHaveLength(0);
+    expect(listAccounts({ includeInactive: true }, currentUser)).toHaveLength(1);
     expect(getAccount(id)).toMatchObject({ id, isActive: false });
 
     await setAccountActiveAction({}, formData({ accountId: String(id), active: '1' }));
-    expect(listAccounts()).toHaveLength(1);
+    expect(listAccounts({}, currentUser)).toHaveLength(1);
   });
 
   it('refuses a malformed request and an unknown account', async () => {
@@ -134,7 +147,7 @@ describe('setAccountActiveAction (archive only — there is no delete)', () => {
   it('rejects a cross-origin request', async () => {
     setup();
     await createAccountAction({}, formData({ name: 'Old Visa', institution: 'TD', type: 'credit', owner: '' }));
-    const id = listAccounts()[0].id;
+    const id = listAccounts({}, currentUser)[0].id;
     requestHeaders = new Headers({ origin: 'http://evil.example', host: 'nas.local:3000' });
 
     expect((await setAccountActiveAction({}, formData({ accountId: String(id), active: '0' }))).error).toBe('Cross-origin request rejected');

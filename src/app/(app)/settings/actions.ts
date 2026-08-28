@@ -9,6 +9,7 @@ import { requireAdmin, requireUser, destroyOtherSessionsForUser } from '@/lib/au
 import { SESSION_COOKIE_NAME } from '@/lib/auth/session-constants';
 import {
   clearTotpEnrollment,
+  consumeTotpCounter,
   decryptTotpSecret,
   enableTotpForUser,
   encryptTotpSecret,
@@ -17,7 +18,7 @@ import {
   storeRecoveryCodes,
   totpKeyUri,
   totpQrDataUri,
-  verifyTotp,
+  verifyTotpCounter,
 } from '@/lib/auth/totp';
 import { findUserByUsername, setUserPassword } from '@/lib/auth/users';
 import { parseChangelog } from '@/lib/changelog';
@@ -129,10 +130,17 @@ export async function confirmTotpEnrollmentAction(_prev: ProfileFormState, formD
   if (!secret) {
     return { error: 'That enrollment expired. Start over and scan a fresh QR code.' };
   }
-  if (!verifyTotp(secret, parsed.data.code)) {
+  // v1.12.1 (item BF / SEC-10), carried into v1.13.0: verify-then-spend, the same pair
+  // login's own MFA challenge uses, so the code shown during enrollment cannot be observed
+  // (screenshotted, shoulder-surfed) and replayed a second time.
+  const counter = verifyTotpCounter(secret, parsed.data.code);
+  if (counter === null) {
     return { error: 'That code did not match. Try the next one your app shows.' };
   }
   enableTotpForUser(user.id, secret);
+  if (!consumeTotpCounter(user.id, counter)) {
+    return { error: 'That code was already used. Try the next one your app shows.' };
+  }
   await clearPendingTotpSecret();
   const codes = generateRecoveryCodes();
   storeRecoveryCodes(user.id, codes);

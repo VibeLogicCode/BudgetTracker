@@ -9,12 +9,15 @@ import { destroyAllSessionsForUser } from '@/lib/auth/session';
 import { clearAttemptsFor } from '@/lib/auth/ratelimit';
 import { clearTotpEnrollment } from '@/lib/auth/totp';
 import {
+  createPersonSchema,
+  createPersonWithoutLogin,
   createUser,
   createUserSchema,
   findUserById,
   setMustChangePassword,
   setUserActive,
   setUserPassword,
+  setUserVisibility,
 } from '@/lib/auth/users';
 import { passwordSchema } from '@/lib/auth/password';
 
@@ -100,4 +103,50 @@ export async function resetMfaAction(_prev: UsersFormState, formData: FormData):
   destroyAllSessionsForUser(parsed.data.userId);
   revalidatePath('/settings/users');
   return { message: 'MFA cleared and their sessions were signed out. They can enroll a new authenticator at their next sign-in.' };
+}
+
+/**
+ * v1.13.0 ruling R5: "Add a person without a login". createPersonWithoutLogin() itself sets
+ * role: 'member', canSignIn: false and a throwaway password hash nobody knows — this action's
+ * only job is form parsing and the same isSameOrigin/requireAdmin/try-catch shape every other
+ * action in this file follows.
+ */
+export async function createPersonAction(_prev: UsersFormState, formData: FormData): Promise<UsersFormState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  await requireAdmin();
+  const parsed = createPersonSchema.safeParse({
+    name: formData.get('name') ?? '',
+    username: formData.get('username') ?? '',
+  });
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Please check the form.' };
+  try {
+    await createPersonWithoutLogin(parsed.data);
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : 'Could not add that person.' };
+  }
+  revalidatePath('/settings/users');
+  return { message: `${parsed.data.name} added. They cannot sign in and cannot be made an admin.` };
+}
+
+/**
+ * v1.13.0 ruling R2, micro-ruling M1. setUserVisibility() itself is the one place the
+ * admin-on-self refusal is enforced ("Make them a member first.") — this action only surfaces
+ * that message on the form the same way every other action's try/catch does.
+ */
+export async function setVisibilityAction(_prev: UsersFormState, formData: FormData): Promise<UsersFormState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  await requireAdmin();
+  const parsed = z
+    .object({ userId: z.coerce.number().int().positive(), visibility: z.enum(['household', 'self']) })
+    .safeParse({ userId: formData.get('userId'), visibility: formData.get('visibility') });
+  if (!parsed.success) return { error: 'Invalid request.' };
+  try {
+    setUserVisibility(parsed.data.userId, parsed.data.visibility);
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : 'Could not update that person.' };
+  }
+  revalidatePath('/settings/users');
+  return { message: 'Updated.' };
 }

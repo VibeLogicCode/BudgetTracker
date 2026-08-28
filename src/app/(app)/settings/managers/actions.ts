@@ -7,7 +7,7 @@ import BetterSqlite3 from 'better-sqlite3';
 import { isSameOrigin } from '@/lib/auth/csrf';
 import { requireAdmin } from '@/lib/auth/session';
 import { archiveCategory, createCategory, listCategories, renameCategory, setCategoryTaxRelevant } from '@/lib/categories';
-import { deleteRule, listRules, upsertRuleFromCorrection } from '@/lib/categorize/rules';
+import { deleteRule, listRules, ruleOwnedError, upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { deleteRenameRule, upsertRenameRule } from '@/lib/categorize/engine';
 import {
   createProfile,
@@ -150,13 +150,18 @@ export async function updateRuleAction(_prev: ManagerState, formData: FormData):
       matchType: parsed.data.matchType,
       renameTo: parsed.data.renameTo,
       userId: admin.id,
+      // v1.13.0 ruling R4. This action is requireAdmin()-gated, so the refusal branch below is
+      // unreachable in practice (an admin actor always passes upsertRuleFromCorrection's
+      // ownership check) -- the guard exists so the type stays sound if that ever changes.
+      actorRole: admin.role,
     });
+    if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
     revalidatePath('/settings/managers');
     revalidatePath('/transactions');
     return { message: `Rename rule saved and applied to ${result.rowsUpdated} transaction${result.rowsUpdated === 1 ? '' : 's'}.` };
   }
 
-  upsertRuleFromCorrection({
+  const upserted = upsertRuleFromCorrection({
     pattern: parsed.data.pattern,
     matchType: parsed.data.matchType,
     ruleKind: parsed.data.ruleKind,
@@ -165,7 +170,9 @@ export async function updateRuleAction(_prev: ManagerState, formData: FormData):
         ? null
         : Number(parsed.data.categoryId),
     createdBy: admin.id,
+    actorRole: admin.role,
   });
+  if (!upserted.ok) return { error: ruleOwnedError(upserted.ownerName) };
   revalidatePath('/settings/managers');
   return { message: 'Rule saved.' };
 }

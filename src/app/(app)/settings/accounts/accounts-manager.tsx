@@ -20,12 +20,16 @@ import { createAccountAction, setAccountActiveAction, updateAccountAction, type 
 // bundle -- page.tsx (a server component) is the only caller of reconcileAccount itself, and
 // hands the results down as plain data through the `discrepancies` prop below.
 import type { Discrepancy } from '@/lib/balance-reconcile';
+// Type-only, same reasoning as Discrepancy above: AccountType is a plain string union with no
+// runtime import of its own, but @/lib/accounts as a module also exports value-level functions
+// that reach @/db/client, so only the type may cross into this client component.
+import type { AccountType } from '@/lib/accounts';
 
 export interface AccountRow {
   id: number;
   name: string;
   institution: string;
-  type: 'chequing' | 'credit' | 'cash';
+  type: AccountType;
   ownerUserId: number | null;
   isActive: boolean;
   isSimplefinManaged: boolean;
@@ -137,6 +141,9 @@ export function AccountsManager({
   // transactions-client.tsx's rename modal. owner/profile are the STRING form values the
   // selects below need ('' for Joint/None), not the raw nullable ids.
   const [editing, setEditing] = useState<{ id: number; name: string; owner: string; profile: string } | null>(null);
+  // Ruling R10: savings and asset are new enough that the select needs a one-line explanation
+  // right under it, and only the one that applies to what is currently picked.
+  const [newAccountType, setNewAccountType] = useState<AccountType>('chequing');
 
   const rowError = activeState.error ?? updateState.error;
   const rowMessage = activeState.message ?? updateState.message;
@@ -170,11 +177,27 @@ export function AccountsManager({
               <Field label="Institution (optional)">
                 <input name="institution" placeholder="TD" className={inputClass} />
               </Field>
-              <Field label="Type">
-                <select name="type" defaultValue="chequing" className={selectClass}>
+              <Field
+                label="Type"
+                hint={
+                  newAccountType === 'savings'
+                    ? 'Savings — like a chequing account, but left out of safe-to-spend.'
+                    : newAccountType === 'asset'
+                      ? 'Asset — a house, a TFSA or an RRSP. You type the balance in; it takes no transactions and no imports.'
+                      : undefined
+                }
+              >
+                <select
+                  name="type"
+                  value={newAccountType}
+                  onChange={(e) => setNewAccountType(e.target.value as AccountType)}
+                  className={selectClass}
+                >
                   <option value="chequing">Chequing</option>
                   <option value="credit">Credit</option>
                   <option value="cash">Cash</option>
+                  <option value="savings">Savings</option>
+                  <option value="asset">Asset</option>
                 </select>
               </Field>
               <Field label="Owner">

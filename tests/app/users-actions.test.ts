@@ -17,9 +17,15 @@ vi.mock('next/headers', () => ({
 
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 
-import { createUserAction, resetMfaAction, resetPasswordAction } from '@/app/(app)/settings/users/actions';
+import {
+  createPersonAction,
+  createUserAction,
+  resetMfaAction,
+  resetPasswordAction,
+  setVisibilityAction,
+} from '@/app/(app)/settings/users/actions';
 import { createSession } from '@/lib/auth/session';
-import { createUser, findUserByUsername, mustChangePassword } from '@/lib/auth/users';
+import { createUser, findUserById, findUserByUsername, listUsers, mustChangePassword } from '@/lib/auth/users';
 import { enableTotpForUser, generateTotpSecret } from '@/lib/auth/totp';
 
 let current: TestDb | null = null;
@@ -105,5 +111,42 @@ describe('MFA reset does not raise the password flag', () => {
     const bob = await createUser({ name: 'Bob', username: 'bob', password: 'correct horse battery', role: 'member' });
     await resetMfaAction({}, formData({ userId: String(bob.id) }));
     expect(mustChangePassword(bob.id)).toBe(false);
+  });
+});
+
+describe('createPersonAction — ruling R5: a person without a login', () => {
+  it('adds a person with no password at all', async () => {
+    current = createTestDb();
+    const result = await createPersonAction({}, formData({ name: 'Person Three', username: 'user-3' }));
+    expect(result.message).toMatch(/added/i);
+    const person = listUsers().find((row) => row.username === 'user-3');
+    expect(person).not.toBeUndefined();
+    expect(person?.canSignIn).toBe(false);
+    expect(person?.role).toBe('member');
+  });
+
+  it('rejects a duplicate username with a clean error', async () => {
+    current = createTestDb();
+    await createUser({ name: 'Bob', username: 'bob', password: 'correct horse battery', role: 'member' });
+    const result = await createPersonAction({}, formData({ name: 'Robin', username: 'bob' }));
+    expect(result.error).toMatch(/taken/i);
+  });
+});
+
+describe('setVisibilityAction — ruling R2, micro-ruling M1', () => {
+  it('limits a member to their own records', async () => {
+    current = createTestDb();
+    const bob = await createUser({ name: 'Bob', username: 'bob', password: 'correct horse battery', role: 'member' });
+    const result = await setVisibilityAction({}, formData({ userId: String(bob.id), visibility: 'self' }));
+    expect(result.message).toBeTruthy();
+    expect(findUserById(bob.id)?.visibility).toBe('self');
+  });
+
+  it('the same call against an admin is refused with a plain sentence', async () => {
+    current = createTestDb();
+    const root = await createUser({ name: 'Root', username: 'root', password: 'correct horse battery', role: 'admin' });
+    const result = await setVisibilityAction({}, formData({ userId: String(root.id), visibility: 'self' }));
+    expect(result.error).toMatch(/member first/i);
+    expect(findUserById(root.id)?.visibility).toBe('household');
   });
 });

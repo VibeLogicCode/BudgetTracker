@@ -52,10 +52,11 @@ function revalidateProfileRoutes(): void {
   for (const route of PROFILE_RENDERING_ROUTES) revalidatePath(route);
 }
 
+// Ruling R10: five types, up from three.
 const createSchema = z.object({
   name: z.string().trim().min(1, 'Give the account a name').max(80),
   institution: z.string().trim().max(80),
-  type: z.enum(['chequing', 'credit', 'cash']),
+  type: z.enum(['chequing', 'credit', 'cash', 'savings', 'asset']),
   owner: ownerField,
 });
 
