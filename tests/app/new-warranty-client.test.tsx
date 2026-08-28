@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, cleanup, screen, fireEvent } from '@testing-library/react';
 import { NewWarrantyClient } from '@/app/(app)/warranties/new/new-warranty-client';
+import type { ItemKind } from '@/lib/warranty/constants';
 
 vi.mock('@/app/(app)/warranties/actions', () => ({
   createWarrantyAction: vi.fn(async () => ({})),
@@ -16,14 +17,22 @@ const types = [
   { id: 3, name: 'Car loan', kind: 'loan' as const },
 ];
 
-function renderForm(over: { prefill?: object; typeId?: number | null } = {}) {
+function renderForm(
+  over: {
+    prefill?: object;
+    typeId?: number | null;
+    types?: { id: number; name: string; kind: ItemKind }[];
+    isAdmin?: boolean;
+  } = {},
+) {
   return render(
     <NewWarrantyClient
       people={people}
-      types={types}
+      types={over.types ?? types}
       currentUserId={7}
       today="2026-08-16"
       prefill={over.prefill ?? {}}
+      isAdmin={over.isAdmin ?? true}
     />,
   );
 }
@@ -263,5 +272,31 @@ describe('fields and the submit button follow the selected type', () => {
 
     selectType(1);
     expect(screen.queryByRole('button', { name: 'Save warranty' })).not.toBeNull();
+  });
+});
+
+const HINT = /Tracking a bill with due dates\?/;
+
+describe('v1.12.1: the Bill kind is findable from /warranties/new (item BH)', () => {
+  it('hints at Settings → Item types when no bill-kind type exists, with a link for an admin', () => {
+    renderForm({ types: [{ id: 1, name: 'Appliance', kind: 'warranty' }], isAdmin: true });
+    expect(screen.getByText(HINT)).toBeTruthy();
+    expect(screen.getByRole('link', { name: /Item types/ }).getAttribute('href')).toBe('/settings/item-types');
+  });
+
+  it('gives a member the sentence and no link, because that page is admin-only', () => {
+    renderForm({ types: [{ id: 1, name: 'Appliance', kind: 'warranty' }], isAdmin: false });
+    expect(screen.getByText(HINT)).toBeTruthy();
+    expect(screen.queryByRole('link', { name: /Item types/ })).toBeNull();
+  });
+
+  it('says nothing once a bill-kind type exists', () => {
+    renderForm({ types: [{ id: 2, name: 'Property tax', kind: 'bill' }], isAdmin: true });
+    expect(screen.queryByText(HINT)).toBeNull();
+  });
+
+  it('says nothing about bills when there are no types at all — that case has its own empty state', () => {
+    renderForm({ types: [], isAdmin: true });
+    expect(screen.queryByText(HINT)).toBeNull();
   });
 });

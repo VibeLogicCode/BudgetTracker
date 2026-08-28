@@ -780,3 +780,19 @@ describe('the app makes no network call unless SimpleFIN is configured', () => {
     expect(scheduler).toMatch(/if \(stored === null \|\| !isAutoSyncInterval\(stored\)\) return;/);
   });
 });
+
+describe('v1.12.1: INSTALL.md says what a backup archive really contains (item BE / SEC-8)', () => {
+  const install = read('INSTALL.md');
+
+  it('names the password hashes and the encryption advice', () => {
+    const section = install.slice(install.indexOf('## Restoring from a backup'), install.indexOf('### If the app will not start'));
+    expect(section).toMatch(/password hash/i);
+    expect(section).toMatch(/encrypted/i);
+  });
+
+  it('names secret.key and what does not come back without it', () => {
+    const section = install.slice(install.indexOf('## Restoring from a backup'), install.indexOf('### If the app will not start'));
+    expect(section).toContain('secret.key');
+    expect(section).toMatch(/will not bring those settings back/i);
+  });
+});

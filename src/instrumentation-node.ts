@@ -5,7 +5,7 @@
  * only ever `import()`s this file behind a NEXT_RUNTIME === 'nodejs' check, so the
  * Edge compilation of that file stays trivially side-effect free.
  */
-import { getDb } from '@/db/client';
+import { closeDb, getDb } from '@/db/client';
 import { RESTART_EXIT_CODE, applyStagedRestoreOnBoot } from '@/lib/backup/restore';
 import { raiseRestoreOutcome } from '@/lib/notify/raise';
 import { startScheduler } from '@/lib/scheduler';
@@ -36,7 +36,35 @@ if (restoreOutcome === 'restart') {
 
 // Opening the database here also applies the pragmas and runs migrations on boot. This is
 // how a restored older backup migrates forward (MUST-20.24).
-getDb();
+//
+// v1.12.1 (item AZ / UX-12). Wrapped, because this is the one call at boot that can fail for a
+// reason a person has to act on -- a migration that will not apply, an orphaned row after an
+// upgrade -- and an unwrapped throw here fails register(), which restarts the container, which
+// fails the healthcheck, which restarts the container. The only record of why used to be a stack
+// trace in `docker logs` that the owner had to know to go and read. A frame and a named rescue
+// command make it findable in a wall of restart noise.
+try {
+  getDb();
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error('');
+  console.error('==============================================================================');
+  console.error(' BUDGET TRACKER CANNOT START: the database did not open.');
+  console.error('');
+  console.error(` Reason: ${message}`);
+  console.error('');
+  console.error(' This is almost always a migration that will not apply to the database in');
+  console.error(' /data. The app will keep restarting until it is fixed. Restore the most recent');
+  console.error(' backup with the bundled script, from inside the container:');
+  console.error('');
+  console.error('   node --experimental-strip-types scripts/restore-backup.ts \\');
+  console.error('     /data/backups/budget-YYYY-MM-DD.tar.gz');
+  console.error('');
+  console.error(' Nothing in /data has been modified by this failed boot.');
+  console.error('==============================================================================');
+  console.error('');
+  process.exit(1);
+}
 
 // MUST-7.6: one line, either way. Missing assets DO NOT crash the app. Receipts still
 // upload and OCR jobs simply record 'failed' with "OCR engine unavailable on this
@@ -98,7 +126,26 @@ function handleShutdownSignal(signal: NodeJS.Signals): void {
   } catch (error) {
     console.error('[shutdown] failed to clear the OCR in-flight marker', error);
   }
-  console.log(`[shutdown] received ${signal}, exiting`);
+  // v1.12.1 (item AZ / UX-12). This used to exit the instant the signal arrived, so whoever was
+  // mid-save when the container stopped lost the request and the WAL was never checkpointed --
+  // closeDb() has existed at src/db/client.ts since the beginning and was never called from here.
+  // better-sqlite3's close() is synchronous and finishes any statement already running, which is
+  // exactly the grace period an in-flight write needs.
+  //
+  // The timer is the backstop: a close that wedges must not hold the container open for ever, and
+  // .unref() means the timer itself never keeps the process alive if the close finishes first.
+  const hardStop = setTimeout(() => {
+    console.error('[shutdown] the database did not close within 10s; exiting anyway');
+    process.exit(0);
+  }, 10_000);
+  hardStop.unref();
+  try {
+    closeDb();
+  } catch (error) {
+    console.error('[shutdown] failed to close the database', error);
+  }
+  clearTimeout(hardStop);
+  console.log(`[shutdown] received ${signal}, database closed, exiting`);
   process.exit(0);
 }
 

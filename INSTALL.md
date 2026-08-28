@@ -332,6 +332,20 @@ backups folder costs roughly `retention × (database + all receipts)`. Fourteen 
 of a 300 MB receipt library is about 4 GB. Settings → Backups lists each archive's size and
 lets you lower the retention count.
 
+**What is actually in that file, stated plainly.** A backup archive is the complete financial
+record of your household — every transaction, every balance, every receipt image — plus the
+password hash of every account on this install. Those hashes are strong (argon2id), but a stolen
+archive gives an attacker unlimited offline attempts at them, so **store backups somewhere
+encrypted**: an encrypted external disk, an encrypted share, or an encrypted cloud folder. Do not
+leave one in a downloads folder or e-mail it to yourself.
+
+The archive does **not** contain `data/secret.key`, and that is deliberate. Your Telegram bot token,
+SMTP password, SimpleFIN access URL and two-factor secrets are stored encrypted in the database and
+are derived from that key, so an archive on its own cannot yield them. The other side of the same
+coin: **restoring an archive onto a different machine will not bring those settings back unless you
+copy `data/secret.key` across too.** Everything else — transactions, budgets, receipts, accounts,
+passwords — restores normally either way.
+
 **Settings → Backups → Restore** is the normal way to restore a backup — pick a row, tick the box
 confirming that current data will be replaced, and click **Restore and restart**. The app
 validates the archive completely (magic bytes, the tar entry allow-list, an integrity check of

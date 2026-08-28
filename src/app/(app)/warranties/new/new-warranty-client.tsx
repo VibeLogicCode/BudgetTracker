@@ -46,6 +46,7 @@ export function NewWarrantyClient({
   currentUserId,
   today,
   prefill,
+  isAdmin,
 }: {
   people: { id: number; name: string }[];
   /** Delta T9: an optional type dropdown, with a blank "none" choice, plus listItemTypes(). */
@@ -53,6 +54,8 @@ export function NewWarrantyClient({
   currentUserId: number;
   today: string;
   prefill: WarrantyPrefill;
+  /** v1.12.1 (item BH): admins get the link to Settings → Item types; members get the sentence. */
+  isAdmin: boolean;
 }) {
   const [state, action] = useActionState(createWarrantyAction, initial);
 
@@ -197,13 +200,44 @@ export function NewWarrantyClient({
                 <input name="name" required maxLength={200} className={inputClass} />
               </Field>
 
-              <Field label="Type">
-                <select name="typeId" value={typeId} onChange={(e) => setTypeId(e.target.value)} className={selectClass}>
+              {/* v1.12.1 (item BH). Switched to htmlFor/id so the label's accessible name stays
+                  "Type" -- Field renders a bare wrapping <label> when htmlFor is absent, and the
+                  hint paragraph added below would otherwise be folded into that label's
+                  accessible name (breaking getByLabelText('Type') at every other call site that
+                  renders the default, bill-less fixture). */}
+              <Field label="Type" htmlFor="warranty-type">
+                <select
+                  id="warranty-type"
+                  name="typeId"
+                  value={typeId}
+                  onChange={(e) => setTypeId(e.target.value)}
+                  className={selectClass}
+                >
                   <option value="">— none —</option>
                   {types.map((type) => (
                     <option key={type.id} value={type.id}>{type.name}</option>
                   ))}
                 </select>
+                {/* v1.12.1 (item BH). v1.12.0 added the `bill` kind, seeded no item type of that
+                    kind (and deliberately does not -- warranty_item_types is user-managed and this
+                    app has never seeded a row into it), and offers only existing types here. So an
+                    owner who read the release note and came looking for "Bill" found nothing and had
+                    no pointer to where one is made. Shown only when there is at least one type and
+                    none of them is a bill: with no types at all the person's problem is a different
+                    one, and the form's own empty state is about that. */}
+                {types.length > 0 && !types.some((type) => type.kind === 'bill') ? (
+                  <p className="mt-1.5 text-xs text-muted">
+                    Tracking a bill with due dates? First add an item type with kind Bill under{' '}
+                    {isAdmin ? (
+                      <Link href="/settings/item-types" className="text-accent-text underline underline-offset-2">
+                        Settings → Item types
+                      </Link>
+                    ) : (
+                      <span className="font-medium text-ink">Settings → Item types</span>
+                    )}
+                    .
+                  </p>
+                ) : null}
               </Field>
 
               <Field

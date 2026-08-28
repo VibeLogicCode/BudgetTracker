@@ -41,6 +41,7 @@ export default async function NewWarrantyPage({
       currentUserId={user.id}
       today={todayIso()}
       prefill={prefill}
+      isAdmin={user.role === 'admin'}
     />
   );
 }
