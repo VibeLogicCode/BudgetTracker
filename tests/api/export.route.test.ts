@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
 import { GET } from '@/app/api/reports/export/route';
 import { createSession, SESSION_COOKIE_NAME } from '@/lib/auth/session';
+import { setUserVisibility } from '@/lib/auth/users';
 import { nowIso } from '@/lib/clock';
 import { addMonths, currentMonth, monthEnd, monthStart } from '@/lib/dates';
 
@@ -130,5 +131,26 @@ describe('GET /api/reports/export', () => {
     // The seeded row is dated 2026-03-05, outside any preset window resolved from today, so
     // its presence here is what proves fallback: null applies no date clause.
     expect(await response.text()).toContain('LOBLAWS');
+  });
+
+  it('v1.13.0 ruling R2: a self-scoped viewer still gets a 200, but only their own rows -- transactionsCsv scopes via viewer, unlike the tax-year export', async () => {
+    current = createSeededTestDb();
+    const alice = insertTestUser(current.db, { name: 'Alice', username: 'alice', role: 'admin' });
+    const kid = insertTestUser(current.db, { name: 'Kid', username: 'kid', role: 'member' });
+    setUserVisibility(kid, 'self');
+    const account = insertTestAccount(current.db, { name: 'Joint Chequing' });
+    const groceries = categoryIdByName(current.db, 'Groceries');
+    current.db.run(sql`
+      insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, category_id, categorization_source, is_transfer, attributed_user_id, created_by, created_at, updated_at)
+      values
+        (${account}, '2026-03-05', 'LOBLAWS #1042', 'LOBLAWS', -12345, ${groceries}, 'manual', 0, ${alice}, ${alice}, ${nowIso()}, ${nowIso()}),
+        (${account}, '2026-03-06', 'KID SNACKS', 'KID SNACKS', -500, ${groceries}, 'manual', 0, ${kid}, ${kid}, ${nowIso()}, ${nowIso()})`);
+    const { token } = createSession(kid);
+
+    const response = await GET(exportRequest('http://nas.local:3000/api/reports/export', token));
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain('KID SNACKS');
+    expect(body).not.toContain('LOBLAWS');
   });
 });

@@ -4,6 +4,7 @@ import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser
 import { GET } from '@/app/api/reports/tax-export/route';
 import { createSession, SESSION_COOKIE_NAME } from '@/lib/auth/session';
 import { setCategoryTaxRelevant } from '@/lib/categories';
+import { setUserVisibility } from '@/lib/auth/users';
 import { nowIso } from '@/lib/clock';
 
 /**
@@ -142,5 +143,14 @@ describe('GET /api/reports/tax-export', () => {
     setup();
     const response = await GET(taxExportRequest('http://nas.local:3000/api/reports/tax-export?year=abcd', null));
     expect(response.status).toBe(401);
+  });
+
+  it('v1.13.0 ruling R2: refuses a self-scoped viewer -- taxYearReport has no owner scoping of its own', async () => {
+    setup();
+    const kid = insertTestUser(current!.db, { name: 'Kid', username: 'kid', role: 'member' });
+    setUserVisibility(kid, 'self');
+    const { token } = createSession(kid);
+    const response = await GET(taxExportRequest('http://nas.local:3000/api/reports/tax-export?year=2026', token));
+    expect(response.status).toBe(403);
   });
 });

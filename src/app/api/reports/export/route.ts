@@ -61,7 +61,7 @@ export async function GET(request: Request): Promise<Response> {
     includeTransfers: params.get('transfers') !== '0',
   };
 
-  const csv = transactionsCsv(filter);
+  const csv = transactionsCsv(filter, user);
   return new Response(csv, {
     status: 200,
     headers: {

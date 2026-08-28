@@ -1,5 +1,6 @@
 import { isSameOriginOrHeaderless } from '@/lib/auth/csrf';
 import { userFromRequest } from '@/lib/auth/session';
+import { isSelfScoped } from '@/lib/auth/viewer';
 import { mustChangePassword } from '@/lib/auth/users';
 import { taxYearCsv } from '@/lib/tax';
 
@@ -23,6 +24,13 @@ export async function GET(request: Request): Promise<Response> {
 
   // v1.12.1 (item AD / SEC-9): same guard, same reasoning, as /api/reports/export/route.ts.
   if (mustChangePassword(user.id)) return new Response('Finish setting your password first.', { status: 403 });
+
+  // v1.13.0 ruling R2. taxYearReport/taxYearCsv (src/lib/tax.ts) roll up EVERY household member's
+  // spend into one report with no owner scoping of its own -- unlike transactionsCsv, this file
+  // was not given a viewer parameter by any Wave A/B task. Rather than let a self viewer download
+  // the whole household's tax-year breakdown, this route refuses them outright, the same
+  // server-side-refusal pattern as /review, /import and /settings.
+  if (isSelfScoped(user)) return new Response('Not available on this account.', { status: 403 });
 
   const year = parseTaxYear(new URL(request.url).searchParams.get('year'));
   if (year === null) return new Response('Bad Request', { status: 400 });

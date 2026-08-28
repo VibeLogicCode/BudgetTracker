@@ -2,11 +2,12 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createSeededTestDb, insertTestUser, type TestDb } from '../helpers/db';
 import { addContribution, createGoal, getGoal, listContributions } from '@/lib/goals';
 
-let currentUser: { id: number; name: string; username: string; role: 'admin' | 'member' } = {
+let currentUser: { id: number; name: string; username: string; role: 'admin' | 'member'; visibility: 'household' | 'self' } = {
   id: 1,
   name: 'Alice',
   username: 'alice',
   role: 'member',
+  visibility: 'household',
 };
 let mockHeaders = new Headers({ origin: 'http://nas.local:3000', host: 'nas.local:3000' });
 
@@ -50,7 +51,7 @@ function setup() {
   const alice = insertTestUser(current.db, { name: 'Alice', username: 'alice', role: 'member' });
   const bob = insertTestUser(current.db, { name: 'Bob', username: 'bob', role: 'member' });
   const admin = insertTestUser(current.db, { name: 'Admin', username: 'admin', role: 'admin' });
-  currentUser = { id: alice, name: 'Alice', username: 'alice', role: 'member' };
+  currentUser = { id: alice, name: 'Alice', username: 'alice', role: 'member', visibility: 'household' };
   mockHeaders = SAME_ORIGIN;
   return { alice, bob, admin };
 }
@@ -77,7 +78,7 @@ describe('createGoalAction', () => {
 
   it("lets an admin create a goal owned by another member", async () => {
     const { admin, bob } = setup();
-    currentUser = { id: admin, name: 'Admin', username: 'admin', role: 'admin' };
+    currentUser = { id: admin, name: 'Admin', username: 'admin', role: 'admin', visibility: 'household' };
     const result = await createGoalAction(
       {},
       formData({ name: 'Trip', target: '500.00', targetDate: '', owner: String(bob) }),
@@ -111,7 +112,7 @@ describe('addContributionAction', () => {
       formData({ goalId: String(goalId), amount: '50.00', date: '2026-08-05', note: '' }),
     );
     expect(result.error).toMatch(/cross-origin/i);
-    expect(getGoal(goalId)!.savedCents).toBe(0);
+    expect(getGoal(goalId, currentUser)!.savedCents).toBe(0);
   });
 
   it("rejects a member logging a contribution to another member's personal goal", async () => {
@@ -122,19 +123,19 @@ describe('addContributionAction', () => {
       formData({ goalId: String(goalId), amount: '50.00', date: '2026-08-05', note: '' }),
     );
     expect(result.error).toMatch(/your own/i);
-    expect(getGoal(goalId)!.savedCents).toBe(0);
+    expect(getGoal(goalId, currentUser)!.savedCents).toBe(0);
   });
 
   it("lets an admin log a contribution to another member's personal goal", async () => {
     const { admin, bob } = setup();
     const goalId = createGoal({ name: 'Trip', ownerUserId: bob, targetCents: 100000, targetDate: null });
-    currentUser = { id: admin, name: 'Admin', username: 'admin', role: 'admin' };
+    currentUser = { id: admin, name: 'Admin', username: 'admin', role: 'admin', visibility: 'household' };
     const result = await addContributionAction(
       {},
       formData({ goalId: String(goalId), amount: '50.00', date: '2026-08-05', note: '' }),
     );
     expect(result.message).toBeTruthy();
-    expect(getGoal(goalId)!.savedCents).toBe(5000);
+    expect(getGoal(goalId, currentUser)!.savedCents).toBe(5000);
   });
 
   it('happy path: a member logs a contribution to their own goal and a shared goal', async () => {
@@ -145,7 +146,7 @@ describe('addContributionAction', () => {
       formData({ goalId: String(own), amount: '25.00', date: '2026-08-05', note: '' }),
     );
     expect(ownResult.message).toBeTruthy();
-    expect(getGoal(own)!.savedCents).toBe(2500);
+    expect(getGoal(own, currentUser)!.savedCents).toBe(2500);
 
     const shared = createGoal({ name: 'Emergency fund', ownerUserId: null, targetCents: 100000, targetDate: null });
     const sharedResult = await addContributionAction(
@@ -153,7 +154,7 @@ describe('addContributionAction', () => {
       formData({ goalId: String(shared), amount: '10.00', date: '2026-08-05', note: '' }),
     );
     expect(sharedResult.message).toBeTruthy();
-    expect(getGoal(shared)!.savedCents).toBe(1000);
+    expect(getGoal(shared, currentUser)!.savedCents).toBe(1000);
   });
 });
 
@@ -176,7 +177,7 @@ describe('archiveGoalAction', () => {
   it("lets an admin archive another member's personal goal", async () => {
     const { admin, bob } = setup();
     const goalId = createGoal({ name: 'Trip', ownerUserId: bob, targetCents: 100000, targetDate: null });
-    currentUser = { id: admin, name: 'Admin', username: 'admin', role: 'admin' };
+    currentUser = { id: admin, name: 'Admin', username: 'admin', role: 'admin', visibility: 'household' };
     const result = await archiveGoalAction({}, formData({ goalId: String(goalId), archived: '1' }));
     expect(result.message).toMatch(/archived/i);
   });
@@ -204,7 +205,7 @@ describe('deleteContributionAction', () => {
       formData({ goalId: String(goalId), contributionId: String(contributionId) }),
     );
     expect(result.error).toMatch(/cross-origin/i);
-    expect(listContributions(goalId)).toHaveLength(1);
+    expect(listContributions(goalId, currentUser)).toHaveLength(1);
   });
 
   it("rejects a member removing a contribution from another member's personal goal", async () => {
@@ -216,7 +217,7 @@ describe('deleteContributionAction', () => {
       formData({ goalId: String(goalId), contributionId: String(contributionId) }),
     );
     expect(result.error).toMatch(/your own/i);
-    expect(listContributions(goalId)).toHaveLength(1);
+    expect(listContributions(goalId, currentUser)).toHaveLength(1);
   });
 
   it("rejects a contributionId/goalId pairing that doesn't actually match", async () => {
@@ -230,20 +231,20 @@ describe('deleteContributionAction', () => {
       formData({ goalId: String(ownGoal), contributionId: String(contributionId) }),
     );
     expect(result.error).toMatch(/not found/i);
-    expect(listContributions(otherGoal)).toHaveLength(1);
+    expect(listContributions(otherGoal, currentUser)).toHaveLength(1);
   });
 
   it("lets an admin remove a contribution from another member's personal goal", async () => {
     const { admin, bob } = setup();
     const goalId = createGoal({ name: 'Trip', ownerUserId: bob, targetCents: 100000, targetDate: null });
     const contributionId = addContribution({ goalId, userId: bob, amountCents: 3000, date: '2026-08-05' });
-    currentUser = { id: admin, name: 'Admin', username: 'admin', role: 'admin' };
+    currentUser = { id: admin, name: 'Admin', username: 'admin', role: 'admin', visibility: 'household' };
     const result = await deleteContributionAction(
       {},
       formData({ goalId: String(goalId), contributionId: String(contributionId) }),
     );
     expect(result.message).toMatch(/removed/i);
-    expect(listContributions(goalId)).toHaveLength(0);
+    expect(listContributions(goalId, currentUser)).toHaveLength(0);
   });
 
   it('happy path: a member removes a contribution from their own goal', async () => {
@@ -255,6 +256,6 @@ describe('deleteContributionAction', () => {
       formData({ goalId: String(goalId), contributionId: String(contributionId) }),
     );
     expect(result.message).toMatch(/removed/i);
-    expect(listContributions(goalId)).toHaveLength(0);
+    expect(listContributions(goalId, currentUser)).toHaveLength(0);
   });
 });
