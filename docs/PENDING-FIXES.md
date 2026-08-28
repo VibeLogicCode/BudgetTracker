@@ -788,10 +788,18 @@ the kind was never allowed to fill in.
 
 ---
 
-## v1.12.1 candidates from the 2026-08-27 fresh-eyes review (bugfix batch, all small)
+## SHIPPED in v1.12.1 — from the 2026-08-27 fresh-eyes review (bugfix batch)
+
+**Shipped 2026-08-27 in v1.12.1.** Spec:
+`docs/superpowers/specs/2026-08-27-v1-12-1-bugfix-batch-design.md`. Plan:
+`docs/superpowers/plans/2026-08-27-v1-12-1-bugfix-batch.md`. Three parts of the review's proposed
+fixes were deliberately NOT built and are recorded in the spec as planner rulings the owner may
+reverse: no admin banner for the TRUST_PROXY mismatch (P6), no `revalidatePath` narrowing (P7), and
+`clearCategory`'s "deliberate control" for deleting a rule is the existing admin control at
+Settings → Rules rather than a new one (P5).
 
 **S. Sub-category budget limits are silently dropped from every household total.**
-Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md MON-1
+Status: SHIPPED in v1.12.1 — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md MON-1
 
 What: A household that budgets at the child level (e.g. Food > Groceries $600, Food >
 Restaurants $200) sees each child's limit correctly on `/budgets`, but the household summary,
@@ -812,7 +820,7 @@ them.
 Effort: S · Proposed release: v1.12.1
 
 **T. Manual loan assign ignores an existing bill-installment link.**
-Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md MON-2
+Status: SHIPPED in v1.12.1 — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md MON-2
 
 What: The rule matcher enforces cross-table exclusivity between loans and bill installments
 (`alreadyLinked()` unions both tables), but the manual "assign to loan" path never checks
@@ -830,7 +838,7 @@ named error, or at minimum feed the bill leg into the existing over-link warning
 Effort: S · Proposed release: v1.12.1
 
 **U. Transactions row category select creates/deletes household merchant rules on change.**
-Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md UX-2
+Status: SHIPPED in v1.12.1 — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md UX-2
 
 What: On Transactions, picking a category from the row's auto-save select doesn't just tag that
 row — it silently creates or overwrites a household-wide merchant rule and trains the Bayes
@@ -850,7 +858,7 @@ plain select change.
 Effort: S · Proposed release: v1.12.1
 
 **V. useAutoSave has no try/catch; a thrown action fails silently.**
-Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md UX-3
+Status: SHIPPED in v1.12.1 — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md UX-3
 
 What: The hook awaits the server action but only handles a returned `{error}` — a thrown action
 (SQLITE_BUSY during the nightly backup, a full disk, several library calls that throw by design)
@@ -868,7 +876,7 @@ sentence.
 Effort: S · Proposed release: v1.12.1
 
 **W. No error.tsx / not-found.tsx / global-error.tsx anywhere.**
-Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md UX-1
+Status: SHIPPED in v1.12.1 — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md UX-1
 
 What: Any server-side failure (locked SQLite during backup, a bad row) or a stale bookmark to a
 deleted item renders Next's bare default error/404 screen — unstyled, no navigation, no theme, no
@@ -885,7 +893,7 @@ Fix: Add `src/app/(app)/error.tsx` (plain sentence, "Try again" `reset()` button
 Effort: S · Proposed release: v1.12.1
 
 **X. Blanking a budget limit field wipes the limit for all future months.**
-Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md UX-4
+Status: SHIPPED in v1.12.1 — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md UX-4
 
 What: The budget limit input commits on blur; an emptied value is not "no change" — it clears the
 budget from that month forward via `clearBudget`. Someone who selects the number to retype it and
@@ -901,7 +909,7 @@ non-empty; move "clear this budget" to an explicit small button in the cell inst
 Effort: S · Proposed release: v1.12.1
 
 **Y. Three money inputs lack inputMode="decimal".**
-Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md UX-9
+Status: SHIPPED in v1.12.1 — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md UX-9
 
 What: "Add a transaction → Amount", "Contribution amount" and "New goal → Target amount" have no
 `inputMode`, so phones show the full QWERTY keyboard instead of a number pad — exactly the fields
@@ -916,7 +924,7 @@ Fix: Add `inputMode="decimal"` to all three fields.
 Effort: S · Proposed release: v1.12.1
 
 **Z. Password change does not revoke other sessions.**
-Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md SEC-3
+Status: SHIPPED in v1.12.1 — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md SEC-3
 
 What: `changePasswordAction` verifies the current password, calls `setUserPassword`, then
 returns — it never destroys any other session. A captured session cookie (shared laptop, lent
@@ -933,7 +941,7 @@ and call `destroyOtherSessionsForUser(user.id, token)` — the same lines
 Effort: S · Proposed release: v1.12.1
 
 **AA. Disabling TOTP requires no password re-auth.**
-Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md SEC-4
+Status: SHIPPED in v1.12.1 — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md SEC-4
 
 What: `disableTotpAction` takes no password, no current TOTP code, and no confirmation beyond the
 button click. Anyone at an unlocked browser or holding a stolen session can strip the account's
@@ -950,7 +958,7 @@ Fix: Require the current password in `disableTotpAction` (mirror the `verifyPass
 Effort: S · Proposed release: v1.12.1
 
 **AB. Rate limiter trusts X-Real-IP without TRUST_PROXY.**
-Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md SEC-5
+Status: SHIPPED in v1.12.1 — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md SEC-5
 
 What: The login action substitutes the client-controlled `X-Real-IP` header for the socket
 address and passes it as `clientIpFromHeaders`' "trusted" `socketIp` argument. With `TRUST_PROXY`
@@ -968,7 +976,7 @@ the value before it reaches `sessions.ip` or `renderEvent`.
 Effort: S · Proposed release: v1.12.1
 
 **AC. Session cookie Secure flag only under TRUST_PROXY.**
-Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md SEC-7
+Status: SHIPPED in v1.12.1 — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md SEC-7
 
 What: The login/setup actions pass a literal `'http:'` as the protocol, so the only path to a
 Secure cookie is `TRUST_PROXY=1` plus a matching `X-Forwarded-Proto`. An app behind an HTTPS
@@ -986,7 +994,7 @@ resolved connection is HTTPS.
 Effort: S · Proposed release: v1.12.1
 
 **AD. Forced-password-change gate misses report export routes.**
-Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md SEC-9
+Status: SHIPPED in v1.12.1 — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md SEC-9
 
 What: The forced-password-change gate lives in the app layout and deliberately exempts `/api/*`
 routes. But `/api/reports/export` and `/api/reports/tax-export` are `/api/*` routes that stream
@@ -1002,7 +1010,7 @@ Fix: Add a `mustChangePassword` check to the two report-export routes and to
 Effort: S · Proposed release: v1.12.1
 
 **AE. undoImport leaves balance snapshots behind.**
-Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md MON-5
+Status: SHIPPED in v1.12.1 — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md MON-5
 
 What: `commitImport` writes a `source='csv'` balance snapshot per statement date; `undoImport`
 carefully reverses Bayes training, loan links and bill `paid_at`, but never touches
@@ -1288,9 +1296,9 @@ removes most of the urgency for friends specifically.
 
 Effort: M · Proposed release: v1.14.0
 
-## Later / minor, from the 2026-08-27 fresh-eyes review
+## SHIPPED in v1.12.1 — later/minor items, re-scoped in by the owner 2026-08-27
 
-One item each, kept brief. Status for all: OPEN — from 2026-08-27 fresh-eyes review; see
+One item each, kept brief. Status for all: SHIPPED in v1.12.1 — from 2026-08-27 fresh-eyes review; see
 docs/reviews/2026-08-27-fresh-eyes-review.md at the id named in each title.
 
 **Owner re-scope (2026-08-27):** "no harm in completing them" — every item in this section moves
@@ -1396,7 +1404,7 @@ healthcheck is correctly public, but returns `version` on every 200 response. Ev
 responses where its stated purpose actually applies. Effort: S.
 
 **BH. Bill kind undiscoverable: nothing seeds or hints at a Bill item type.**
-Status: OPEN — owner report 2026-08-27, first use of v1.12.0. Proposed release: v1.12.1.
+Status: SHIPPED in v1.12.1 — owner report 2026-08-27, first use of v1.12.0. Proposed release: v1.12.1.
 
 What: v1.12.0 added the `bill` kind but seeds no item type of that kind, and `/warranties/new`
 offers only existing types. An owner looking for "Bill" on the New item page finds nothing and has

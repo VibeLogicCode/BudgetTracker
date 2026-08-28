@@ -245,9 +245,37 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.12.0 release', () => {
+  it('MUST-7.1: the 1.12.1 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.12.0');
+    expect(pkg.version).toBe('1.12.1');
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toMatch(/^## \[1\.12\.1\] - 2026-08-27$/m);
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.12.1]'));
+    const entry = changelog.slice(changelog.indexOf('## [1.12.1]'), changelog.indexOf('## [1.12.0]'));
+    expect(entry).toMatch(/### Fixed/);
+    expect(entry).toMatch(/### Security/);
+    // A release that touches the schema must say so BEFORE the list of what changed, or the reader
+    // finds out after they have already pulled. \s+ throughout because the sentences wrap.
+    expect(entry).toMatch(/\*\*Before updating:\*\*/);
+    expect(entry).toMatch(/does not rebuild either of them/i);
+    // The headline claims, asserted as claims and not just as a version number: an entry that
+    // bumped the version without saying what a reader will see is the gap this guard is for.
+    expect(entry).toMatch(/sub-categories are counted again/i);
+    expect(entry).toMatch(/pay a bill and a loan/i);
+    expect(entry).toMatch(/Un-marking a bill installment sticks/i);
+    // A release fixing silent failures has to say what the app does INSTEAD, or "it fails
+    // silently" is replaced by "it is fixed" and neither tells a person anything.
+    expect(entry).toMatch(/Could not save/);
+    expect(entry).toMatch(/treated as\s+"no change"/i);
+    // Every security change is a claim about what an attacker can no longer do.
+    expect(entry).toMatch(/signs out every other session/i);
+    expect(entry).toMatch(/can only be used once/i);
+    expect(entry).toMatch(/no longer trusts a header the client controls/i);
+  });
+
+  it('MUST-7.1: the 1.12.0 release is still recorded intact (append-only discipline)', () => {
+    const pkg = JSON.parse(read('package.json')) as { version: string };
+    expect(pkg.version).not.toBe('1.12.0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.12\.0\] - 2026-08-24$/m);
     expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.12.0]'));

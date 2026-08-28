@@ -21,6 +21,92 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.12.1] - 2026-08-27
+
+**Before updating:** this release adds one new piece of information to each of two existing tables
+and does not rebuild either of them, so it is a much smaller step than 1.12.0 was. Take a backup
+anyway — **Settings → Backups → Download backup now**, or confirm last night's scheduled backup
+succeeded — because a backup is the only way back to 1.12.0 if you want it.
+
+### Fixed
+
+- **Budgets set on sub-categories are counted again.** If you budget at the child level — Food ›
+  Groceries $600, Food › Restaurants $200 — the household summary, the Dashboard tile and
+  safe-to-spend all said you had budgeted $0.00. They now add up the limits you actually set. A
+  category you archived keeps its limit visible for as long as it still carries spend, instead of
+  quietly dropping the limit while the spend kept counting against its parent.
+- **One payment can no longer pay a bill and a loan at the same time.** Assigning a transaction to a
+  loan by hand now checks whether it has already marked a bill installment paid, and refuses. The
+  automatic rules always checked; the manual button did not.
+- **Un-marking a bill installment sticks.** The app used to forget that the transaction had ever been
+  used, so the next time anything re-ran the matcher — even just picking the same category again —
+  the installment was silently marked paid all over again. Removing an installment that has a payment
+  recorded against it is refused too; un-mark it first.
+- **A bill payment marks the right installment.** A matched payment now marks the installment whose
+  due date is nearest the payment's own date, within 45 days, instead of always the oldest unpaid
+  one. One missed mark used to shift the whole schedule by one, permanently. If the nearest-due
+  installment has been deliberately un-marked, the matcher declines rather than marking a farther one.
+- **Undoing an import no longer leaves the wrong balance behind.** Importing a statement into the
+  wrong account and pressing Undo used to delete the transactions but keep the balance that statement
+  had written, leaving the account anchored on another account's figure for ever. Undo now removes
+  those balances too.
+- **A bank's own balance outranks a typed one, as documented.** A balance read from a statement is no
+  longer overwritten by a hand-typed correction for the same account and day. This rule was written
+  down in three places and implemented in none.
+- **A save that fails now says so.** If the app is busy — the nightly backup, a full disk — an
+  auto-saving control used to stop spinning and go on showing a value the database never accepted. It
+  now says "Could not save — the app may be busy. Try again." and puts the value back.
+- **Emptying a budget box no longer deletes the budget.** Selecting the number to retype it and
+  getting distracted used to clear that limit for every future month. An empty box is now treated as
+  "no change", and there is a small **clear** button in the cell for when you really mean it.
+- **Two people editing the same row.** Whoever's change lost used to go on seeing their own value,
+  with a tick beside it, until they reloaded. Controls now follow the server.
+- **Error and "not found" screens are the app's own.** A server-side failure or a stale bookmark to a
+  deleted item used to show the framework's bare error page — no navigation, no theme, no way back.
+  Both now render inside the app with a plain sentence, a **Try again** button and a link to the
+  Dashboard.
+- **Something happens on screen while Reports and Transactions load.** Both show a skeleton
+  immediately instead of nothing at all.
+- **Bigger tap targets, and the keyboard goes back where it was.** The row ⋯ button and its menu
+  items are finger-sized on a phone, the row controls are taller, and choosing a menu item returns
+  focus to the button you opened it from instead of dropping it at the top of the page.
+- **Deactivate, Reset MFA, Remove and Unassign ask first.** Every other destructive action in the app
+  already did.
+- **The number pad opens for three more money fields:** adding a transaction, contributing to a goal,
+  and a new goal's target amount.
+- **Installed on an iPhone home screen, the app stays clear of the notch and the home indicator.**
+- **A clean container stop closes the database.** Stopping or restarting the container used to exit
+  the instant the signal arrived, without closing SQLite. And a migration that fails at boot now
+  prints a framed message naming the problem and the rescue command, instead of a bare stack trace.
+- **Picking a category on the Transactions page changes that row and nothing else.** It used to
+  create or overwrite a household-wide rule for that merchant, and picking "Uncategorized" deleted
+  one, with nothing on screen to say so. The Review page still teaches the categorizer — that is what
+  it is for.
+- **The New item page points at the Bill kind.** If you have no item type of kind Bill yet, it now
+  says where to make one instead of leaving you to guess.
+
+### Security
+
+- **Changing your password signs out every other session.** A captured session cookie used to keep
+  working for up to 30 more days after you changed the password because of it.
+- **Turning off two-factor authentication asks for your password** and signs out every other session.
+  Turning it off, and changing your password, now also send you a notification.
+- **Sign-in rate limiting no longer trusts a header the client controls.** Unless `TRUST_PROXY` is
+  on, `X-Real-IP` is ignored, and the address recorded on a session and shown in the "New sign-in"
+  alert is validated and length-capped.
+- **HSTS is sent when the connection really is HTTPS**, and the app warns in its log when it is
+  behind an HTTPS proxy with `TRUST_PROXY` left off — the configuration where the session cookie
+  silently is not marked Secure.
+- **Bulk exports are blocked until a temporary password has been changed.** The transactions export,
+  the tax-year export and the backup download now honour the same "finish setting your password" gate
+  the pages do.
+- **A two-factor code can only be used once.** It used to stay valid for its full ±30-second window
+  and could be replayed.
+- **`/api/health` no longer tells an unauthenticated caller the exact build version.** It still
+  reports it on the 503 responses, where the question is "which build is broken?".
+- **INSTALL.md now says plainly what a downloaded backup contains:** the complete household financial
+  record plus every password hash. Store it encrypted.
+
 ## [1.12.0] - 2026-08-24
 
 **Before updating:** this release rebuilds the `warranty_item_types` table to make room for the
