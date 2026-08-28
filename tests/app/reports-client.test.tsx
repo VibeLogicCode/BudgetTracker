@@ -411,4 +411,36 @@ describe('ReportsClient — the page guide names no absent control (item BM, rul
     expect(text).toContain('Export CSV');
     expect(text).toContain('split by person');
   });
+
+  // Review B fix round, item 3. The ungated clause "The date range and person at the top drive
+  // every card below at once" named the Person select even when showPersonSplit is false, and
+  // the third guide paragraph named the Net worth and Tax year cards even when showHouseholdTotals
+  // is false -- both self-viewer-only omissions the same class of bug as showExport/showPersonSplit
+  // above, just missed by the first pass.
+  it('names no person, Net worth or Tax year copy for a self viewer', () => {
+    const { container } = render(
+      <ReportsClient
+        {...baseProps()}
+        showPersonSplit={false}
+        showHouseholdTotals={false}
+        showExport={false}
+      />,
+    );
+    const description = container.querySelector('p.max-w-2xl')?.textContent ?? '';
+    const guide = guideText(container);
+    for (const text of ['person', 'Net worth', 'Tax year']) {
+      expect(description).not.toContain(text);
+      expect(guide).not.toContain(text);
+    }
+  });
+
+  it('still says person, Net worth and Tax year to a household viewer', () => {
+    const { container } = render(<ReportsClient {...baseProps()} />);
+    const description = container.querySelector('p.max-w-2xl')?.textContent ?? '';
+    const guide = guideText(container);
+    expect(description).toContain('person');
+    expect(guide).toContain('person');
+    expect(guide).toContain('Net worth');
+    expect(guide).toContain('Tax year');
+  });
 });

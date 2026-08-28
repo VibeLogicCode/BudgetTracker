@@ -47,7 +47,11 @@ export function Field({
   children: React.ReactNode;
   className?: string;
 }) {
-  const hintId = hint !== undefined && hint !== null && htmlFor ? `${htmlFor}-hint` : undefined;
+  // Review B fix round (item 5): this used to test `hint !== undefined && hint !== null`, but
+  // the hint <span> below renders under `{hint ? ... : null}` -- a truthiness test. hint=''
+  // passed the former and failed the latter, so aria-describedby pointed at an id nothing ever
+  // rendered. Same truthiness test on both sides closes that gap.
+  const hintId = hint && htmlFor ? `${htmlFor}-hint` : undefined;
   const described =
     hintId !== undefined && React.isValidElement<{ 'aria-describedby'?: string }>(children) &&
     children.props['aria-describedby'] === undefined

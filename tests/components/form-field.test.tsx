@@ -59,4 +59,19 @@ describe('Field — the hint is a description, never part of the name (item J, r
     );
     expect(screen.getByLabelText('Name')).toBeTruthy();
   });
+
+  // Review B fix round, item 5. hintId used a `hint !== undefined && hint !== null` test, but
+  // the hint <span> only renders under `{hint ? ... : null}` -- a truthy test. hint="" passed
+  // the first and failed the second, so the control got aria-describedby pointing at an id
+  // nothing ever rendered: a dangling reference.
+  it('does not point aria-describedby at a hint id when hint is an empty string', () => {
+    render(
+      <Field label="Original amount" hint="" htmlFor="loan-original">
+        <input id="loan-original" className={inputClass} name="principal" />
+      </Field>,
+    );
+    const input = screen.getByLabelText('Original amount');
+    expect(input.getAttribute('aria-describedby')).toBeNull();
+    expect(document.getElementById('loan-original-hint')).toBeNull();
+  });
 });

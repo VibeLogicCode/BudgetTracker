@@ -87,7 +87,13 @@ export function ComingUpCard({
       <CardHeader
         title="Coming up"
         description={
-          hasOverdue ? 'Bills due in the next 30 days, and anything overdue.' : 'Bills due in the next 30 days.'
+          hasOverdue
+            ? // Review B fix round (item 4): the bare "and anything overdue" overpromised -- a
+              // bill overdue by more than COMING_UP_OVERDUE_DAYS is dropped from this card
+              // entirely (see withinBound above), so the clause now names the actual bound
+              // rather than reading as "every overdue bill, no matter how old".
+              'Bills due in the next 30 days, and anything overdue in the last 90 days.'
+            : 'Bills due in the next 30 days.'
         }
         action={
           withinBound.length > 0 ? (
@@ -100,7 +106,21 @@ export function ComingUpCard({
       {withinBound.length === 0 ? (
         <CardBody>
           <p className="rounded-md border border-dashed border-line-strong px-4 py-8 text-center text-sm text-muted">
-            No bills due in the next 30 days.
+            {/* Review B fix round (item 4): withinBound can be empty while `bills` is not --
+                every unpaid bill fell outside the 90-day overdue bound. Saying "No bills due"
+                there is worse than the flood of rows the bound exists to prevent: it reads as
+                nothing owed, when the opposite is true. */}
+            {bills.length > 0 ? (
+              <>
+                Nothing due in the next 30 days. Older overdue bills are on the{' '}
+                <Link href="/warranties" className="font-medium text-accent-text">
+                  Warranties &amp; bills page
+                </Link>
+                .
+              </>
+            ) : (
+              'No bills due in the next 30 days.'
+            )}
           </p>
         </CardBody>
       ) : (

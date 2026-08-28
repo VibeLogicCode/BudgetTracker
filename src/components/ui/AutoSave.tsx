@@ -122,34 +122,51 @@ export function useAutoSave(action: AutoSaveAction, fields: Record<string, strin
  * whoever is editing the next cell.
  *
  * v1.13.1 (item L, ruling P8). The visual half stays aria-hidden -- a decorative tick beside a
- * control someone is looking at needs no announcement. But that reasoning only ever covered
- * SIGHT: a refused save was announced (ErrorLine's role="alert") and a successful one was
- * announced to nobody, and the asymmetry was the bug. The sr-only polite region below is always
- * in the tree, because a live region created at the same moment it gets its text is not
- * announced at all, and it says one word so a control someone edits repeatedly does not turn
- * into chatter.
+ * control someone is looking at needs no announcement.
+ *
+ * Review B fix round (items 1-2): this used to ALSO render the sr-only aria-live region right
+ * here, which put it inside AutoSaveCheckbox's wrapping <label> -- so after a save the
+ * checkbox's accessible name became "TaxSaved", the exact defect item J removed from Field's
+ * hint. StatusSlot now returns only the visual half; each caller renders the live region itself
+ * via LiveStatus, as a SIBLING of the label/control rather than a child of it.
  */
 function StatusSlot({ pending, status }: { pending: boolean; status: AutoSaveStatus }) {
   const shown = pending ? 'pending' : status;
   return (
-    <>
-      <span
-        data-autosave-status={shown}
-        aria-hidden="true"
-        className="inline-flex h-4 w-4 shrink-0 items-center justify-center"
-      >
-        {shown === 'pending' ? (
-          <span className="h-3 w-3 animate-spin rounded-full border border-line border-t-transparent" />
-        ) : shown === 'saved' ? (
-          <CheckIcon className="h-3.5 w-3.5 text-positive-soft-fg" />
-        ) : shown === 'error' ? (
-          <span className="text-xs font-semibold text-negative-soft-fg">!</span>
-        ) : null}
-      </span>
-      <span className="sr-only" aria-live="polite">
-        {shown === 'saved' ? 'Saved' : ''}
-      </span>
-    </>
+    <span
+      data-autosave-status={shown}
+      aria-hidden="true"
+      className="inline-flex h-4 w-4 shrink-0 items-center justify-center"
+    >
+      {shown === 'pending' ? (
+        <span className="h-3 w-3 animate-spin rounded-full border border-line border-t-transparent" />
+      ) : shown === 'saved' ? (
+        <CheckIcon className="h-3.5 w-3.5 text-positive-soft-fg" />
+      ) : shown === 'error' ? (
+        <span className="text-xs font-semibold text-negative-soft-fg">!</span>
+      ) : null}
+    </span>
+  );
+}
+
+/**
+ * The announcing half StatusSlot used to carry (item L, ruling P8): a live region that is
+ * always in the tree -- a region created at the same moment it gets its text is not announced
+ * at all -- and says one word on success, so a control someone edits repeatedly does not turn
+ * into chatter. A refusal says nothing here; ErrorLine's role="alert" already carries it.
+ *
+ * Review B fix round (items 1-2). Rendered as a SIBLING of the label/control, never inside a
+ * <label>, so it can never become part of a control's accessible name. Every call site places
+ * it inside a `relative` ancestor: `.sr-only` is `position: absolute`, and an unpositioned
+ * ancestor makes the region's containing block the page itself -- which can inflate
+ * `document.documentElement.scrollWidth` on a table with one of these per row (the same
+ * horizontal-scroll bug AutoSaveCheckbox's docblock records for the labelHidden text span).
+ */
+function LiveStatus({ status }: { status: AutoSaveStatus }) {
+  return (
+    <span className="sr-only" aria-live="polite">
+      {status === 'saved' ? 'Saved' : ''}
+    </span>
   );
 }
 
@@ -210,7 +227,10 @@ export function AutoSaveSelect({
   }, [defaultValue, pending]);
 
   return (
-    <span className="flex flex-col gap-0.5">
+    // `relative`: LiveStatus below is `.sr-only` (position: absolute) and sits as a sibling of
+    // this inner control span, not inside it -- see LiveStatus's docblock for why it must have
+    // a positioned ancestor here rather than escaping to the page (review B fix round, item 2).
+    <span className="relative flex flex-col gap-0.5">
       <span className="flex items-center gap-1.5">
         {/* NOT disabled while pending: disabling a focused <select> closes it on some mobile
             browsers, mid-choice. Further changes simply queue and the last one wins. */}
@@ -238,6 +258,7 @@ export function AutoSaveSelect({
         </select>
         <StatusSlot pending={pending} status={status} />
       </span>
+      <LiveStatus status={status} />
       <ErrorLine error={error} />
     </span>
   );
@@ -274,18 +295,22 @@ export function AutoSaveCheckbox({
   }, [defaultChecked, pending]);
 
   return (
-    <span className="flex flex-col gap-0.5">
+    // `relative`: LiveStatus below is `.sr-only` (position: absolute) and is deliberately a
+    // SIBLING of the <label>, not a child of it -- rendering it inside the label is what made
+    // the accessible name "TaxSaved" (review B fix round, item 1). This wrapper gives it a
+    // positioned ancestor of its own, same reasoning as the label's own `relative` below.
+    <span className="relative flex flex-col gap-0.5">
       {/* `relative` here (harmless for a flex layout) is load-bearing when labelHidden: the
-          sr-only span below is `position: absolute` with no positioned ancestor between it
-          and this label, so without one its containing block becomes the initial containing
-          block instead of this label. That escapes this row's own TableWrap `overflow-x-auto`
-          clipping for scroll-region purposes even though the span paints invisibly, and on a
-          table with one of these per row it was inflating `document.documentElement.
-          scrollWidth` well past the viewport at narrow widths -- a real, user-reachable
-          horizontal page scroll (confirmed by `window.scrollTo` actually moving `scrollX`),
-          not just a stray metric. Scoping the containing block here keeps the sr-only span (and
-          therefore its layout footprint) inside the same clipped box as everything else in the
-          row. */}
+          sr-only label-text span below is `position: absolute` with no positioned ancestor
+          between it and this label, so without one its containing block becomes the initial
+          containing block instead of this label. That escapes this row's own TableWrap
+          `overflow-x-auto` clipping for scroll-region purposes even though the span paints
+          invisibly, and on a table with one of these per row it was inflating
+          `document.documentElement.scrollWidth` well past the viewport at narrow widths -- a
+          real, user-reachable horizontal page scroll (confirmed by `window.scrollTo` actually
+          moving `scrollX`), not just a stray metric. Scoping the containing block here keeps the
+          sr-only span (and therefore its layout footprint) inside the same clipped box as
+          everything else in the row. */}
       <label className="relative flex items-center gap-1.5 text-xs text-muted">
         <input
           type="checkbox"
@@ -307,6 +332,7 @@ export function AutoSaveCheckbox({
         <span className={labelHidden ? 'sr-only' : undefined}>{label}</span>
         <StatusSlot pending={pending} status={status} />
       </label>
+      <LiveStatus status={status} />
       <ErrorLine error={error} />
     </span>
   );
@@ -411,7 +437,9 @@ export function AutoSaveTextInput({
   };
 
   return (
-    <span className="flex flex-col gap-0.5">
+    // `relative`: see AutoSaveSelect's identical wrapper for why LiveStatus needs it here
+    // (review B fix round, item 2).
+    <span className="relative flex flex-col gap-0.5">
       <span className="flex items-center gap-1.5">
         {/* Uncontrolled on purpose, the idiom this codebase already uses for row controls: the
             submitted value lives in the DOM, so typing never re-renders the row and a stale
@@ -435,6 +463,7 @@ export function AutoSaveTextInput({
         />
         <StatusSlot pending={pending} status={status} />
       </span>
+      <LiveStatus status={status} />
       <ErrorLine error={error} />
     </span>
   );

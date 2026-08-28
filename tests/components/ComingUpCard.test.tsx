@@ -223,5 +223,29 @@ describe('ComingUpCard record-payment button', () => {
       expect(screen.getByText('Property tax')).toBeTruthy();
       expect(screen.getByLabelText('Total due $200.00')).toBeTruthy();
     });
+
+    // Review B fix round, item 4. Before the fix, a bill dropped for being more than 90 days
+    // overdue vanished silently: the header still promised "and anything overdue" (unqualified),
+    // and if it was the only bill, the card claimed "No bills due in the next 30 days." -- as if
+    // nothing were owed at all.
+    it('names the 90-day bound in the header clause', () => {
+      const recent = bill({ installmentId: 1, itemId: 1, name: 'Property tax', dueDate: '2026-07-30', amountCents: 20000, overdue: true });
+      const { container } = render(<ComingUpCard {...base} today={TODAY} bills={[recent]} />);
+      expect(container.textContent).toContain('and anything overdue in the last 90 days.');
+    });
+
+    it('points to the Warranties & bills page instead of claiming nothing is due, when every unpaid bill is beyond the 90-day bound', () => {
+      const ancient = bill({ installmentId: 99, itemId: 99, name: 'Forgotten', dueDate: '2025-01-01', amountCents: 50000, overdue: true });
+      render(<ComingUpCard {...base} today={TODAY} bills={[ancient]} />);
+      expect(screen.queryByText('No bills due in the next 30 days.')).toBeNull();
+      expect(screen.getByText(/Nothing due in the next 30 days\. Older overdue bills are on the/)).toBeTruthy();
+      const link = screen.getByRole('link', { name: /Warranties & bills page/i });
+      expect(link.getAttribute('href')).toBe('/warranties');
+    });
+
+    it('still says "No bills due in the next 30 days." when there are no bills at all', () => {
+      render(<ComingUpCard {...base} today={TODAY} bills={[]} />);
+      expect(screen.getByText('No bills due in the next 30 days.')).toBeTruthy();
+    });
   });
 });

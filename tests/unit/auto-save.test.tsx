@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import {
   AUTO_SAVE_CONTROL,
   AUTO_SAVE_THROW_ERROR,
+  AutoSaveCheckbox,
   AutoSaveSelect,
   AutoSaveTextInput,
 } from '@/components/ui/AutoSave';
@@ -421,5 +422,84 @@ describe('AutoSave announces success, not only failure (item L, ruling P8)', () 
     fireEvent.change(screen.getByLabelText('Pick one'), { target: { value: 'b' } });
     await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('Nope.'));
     expect(liveRegion()?.textContent).toBe('');
+  });
+
+  // Review B fix round, item 1: the live region used to render INSIDE AutoSaveCheckbox's
+  // wrapping <label>, so after a save the checkbox's accessible name became "TaxSaved" -- the
+  // exact defect item J removed for Field's hint. This is item L's own version of that bug.
+  it('does not fold into a wrapping <label>\'s accessible name for AutoSaveCheckbox', async () => {
+    const action = vi.fn(async () => ({}));
+    render(
+      <AutoSaveCheckbox
+        name="taxRelevant"
+        defaultChecked={false}
+        fields={{ categoryId: '1' }}
+        action={action}
+        label="Tax"
+        labelHidden
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText('Tax'));
+
+    await waitFor(() => expect(statusOf()).toBe('saved'));
+    // Before the fix this lookup failed outright: the accessible name had become "TaxSaved".
+    expect(screen.getByLabelText('Tax')).toBeTruthy();
+    expect(liveRegion()?.textContent).toBe('Saved');
+  });
+
+  // Review B fix round, item 2: .sr-only is position: absolute. An unpositioned wrapper makes
+  // the live region's containing block the page itself, which can inflate
+  // document.documentElement.scrollWidth (the horizontal-scroll bug AutoSaveCheckbox's own
+  // docblock already records for the labelHidden text span). A source-shape assertion, not a
+  // layout measurement: jsdom does not lay anything out, so this checks the live region's
+  // parent actually carries the `relative` class that scopes its containing block.
+  describe('the live region sits inside a `relative` ancestor (review B, item 2)', () => {
+    it('for AutoSaveSelect', () => {
+      render(
+        <AutoSaveSelect
+          name="x"
+          defaultValue="a"
+          options={[{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }]}
+          fields={{}}
+          action={async () => ({})}
+          ariaLabel="Pick one"
+        />,
+      );
+      const region = liveRegion();
+      expect(region).toBeTruthy();
+      expect(region?.parentElement?.className.split(' ')).toContain('relative');
+    });
+
+    it('for AutoSaveTextInput', () => {
+      render(
+        <AutoSaveTextInput
+          name="amount"
+          defaultValue="100.00"
+          fields={{ categoryId: '1' }}
+          action={async () => ({})}
+          ariaLabel="Monthly limit for Groceries"
+        />,
+      );
+      const region = liveRegion();
+      expect(region).toBeTruthy();
+      expect(region?.parentElement?.className.split(' ')).toContain('relative');
+    });
+
+    it('for AutoSaveCheckbox', () => {
+      render(
+        <AutoSaveCheckbox
+          name="taxRelevant"
+          defaultChecked={false}
+          fields={{ categoryId: '1' }}
+          action={async () => ({})}
+          label="Tax"
+          labelHidden
+        />,
+      );
+      const region = liveRegion();
+      expect(region).toBeTruthy();
+      expect(region?.parentElement?.className.split(' ')).toContain('relative');
+    });
   });
 });

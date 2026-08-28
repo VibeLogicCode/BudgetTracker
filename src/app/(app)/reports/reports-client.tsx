@@ -136,7 +136,11 @@ export function ReportsClient({
       <PageHeader
         eyebrow={range.label}
         title="Reports"
-        description="Where the money went over a stretch of time, by category and by person."
+        description={
+          showPersonSplit
+            ? 'Where the money went over a stretch of time, by category and by person.'
+            : 'Where the money went over a stretch of time, by category.'
+        }
         actions={
           showExport ? (
             <a href={exportHref} className="btn btn--secondary">
@@ -149,14 +153,22 @@ export function ReportsClient({
       {/* item BM (ruling P15): both clauses are gated, not just the Export one the backlog named.
           showExport and showPersonSplit are both !isSelfScoped(viewer) (reports/page.tsx:169,176),
           and this paragraph made two promises a self viewer cannot keep -- a control that is not on
-          their page (:140-146) and a card that is dropped for them (:412). */}
+          their page (:140-146) and a card that is dropped for them (:412).
+
+          Review B fix round (item 3): the second clause below -- "and person at the top drive
+          every card" -- named the Person select even when showPersonSplit is false, and the third
+          paragraph named Net worth and Tax year even when showHouseholdTotals is false (both cards
+          are dropped entirely for that viewer, ruling R2). Same class of bug as the two clauses
+          above; this just gates the rest of it. */}
       <PageGuide>
         <p>
           Reports answers questions about a stretch of time rather than the current month: where
           the money went by category, how one month compares with the last, how a year compares
           with the year before
-          {showPersonSplit ? ", and how the household's split by person works out" : ''}. The date
-          range and person at the top drive every card below at once
+          {showPersonSplit ? ", and how the household's split by person works out" : ''}.{' '}
+          {showPersonSplit
+            ? 'The date range and person at the top drive every card below at once'
+            : 'The date range at the top drives every card below at once'}
           {showExport ? (
             <>
               , and <strong className="font-semibold text-ink">Export CSV</strong> gives you the same
@@ -172,12 +184,14 @@ export function ReportsClient({
           year-over-year and the spending baselines all get more useful the further back your
           imports go.
         </p>
-        <p>
-          Two cards are waiting on a setting rather than on history. Net worth needs a balance
-          recorded against at least one account under Settings, and the Tax year card only lists
-          categories you have marked as tax relevant under Settings and Managers. Neither will
-          fill in from importing more months.
-        </p>
+        {showHouseholdTotals ? (
+          <p>
+            Two cards are waiting on a setting rather than on history. Net worth needs a balance
+            recorded against at least one account under Settings, and the Tax year card only lists
+            categories you have marked as tax relevant under Settings and Managers. Neither will
+            fill in from importing more months.
+          </p>
+        ) : null}
       </PageGuide>
 
       <Card>
