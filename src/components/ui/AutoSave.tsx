@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState, useTransition } from 'react';
+import { useEffect, useRef, useState, useTransition } from 'react';
 import { CheckIcon } from '@/components/icons';
 
 /**
@@ -26,8 +26,23 @@ export type AutoSaveAction = (formData: FormData) => Promise<AutoSaveResult>;
 
 export type AutoSaveStatus = 'idle' | 'saved' | 'error';
 
-/** The dense inline control the tables already use (transactions' old `rowControl`). */
-export const AUTO_SAVE_CONTROL = 'field-control w-auto max-w-[11rem] px-2 py-1 text-xs';
+/**
+ * The dense inline control the tables already use (transactions' old `rowControl`).
+ *
+ * v1.12.1 (item AV / UX-7): `py-2 text-sm` below the `sm:` breakpoint, because a `text-xs` control
+ * with 4px of vertical padding is well under the 44px minimum on the phones this household uses --
+ * and it is exactly where the destructive row actions and the category select live. Every new value
+ * is scoped back to today's at `sm:`, so desktop rendering is byte-identical. TableWrap already
+ * scrolls horizontally on a phone, so the extra height costs nothing.
+ */
+export const AUTO_SAVE_CONTROL = 'field-control w-auto max-w-[11rem] px-2 py-2 text-sm sm:py-1 sm:text-xs';
+
+/**
+ * What a THROWN action says (item V / UX-3). Deliberately NOT the thrown message: Next redacts
+ * real messages in production, so what a person would actually see there is a digest hash in a
+ * table cell. Exported so a test can assert the constant rather than a copied literal.
+ */
+export const AUTO_SAVE_THROW_ERROR = 'Could not save — the app may be busy. Try again.';
 
 const SAVED_TICK_MS = 2000;
 
@@ -54,7 +69,25 @@ export function useAutoSave(action: AutoSaveAction, fields: Record<string, strin
     if (value !== null) formData.set(name, value);
 
     startTransition(async () => {
-      const result = await action(formData);
+      let result: AutoSaveResult;
+      try {
+        result = await action(formData);
+      } catch (error) {
+        // v1.12.1 (item V / UX-3). This hook used to handle only an action that RETURNS {error}.
+        // An action that THROWS -- SQLITE_BUSY while the nightly backup runs, a full disk,
+        // confirmCategory's own `No transaction N` -- stopped the spinner with no tick, no
+        // message and no revert, and the control went on displaying a value the database never
+        // accepted. The person found out on the next page load, if ever.
+        //
+        // The sequence guard is applied here too: a stale rejection must not overwrite the state
+        // of a newer save that has already landed.
+        if (mine !== sequence.current) return;
+        console.error('[auto-save] action threw', error);
+        setStatus('error');
+        setError(AUTO_SAVE_THROW_ERROR);
+        hooks?.onError?.();
+        return;
+      }
       if (mine !== sequence.current) return;
       if (result?.error) {
         setStatus('error');
@@ -127,6 +160,31 @@ export function AutoSaveSelect({
   const { save, pending, status, error } = useAutoSave(action, fields);
   const [value, setValue] = useState(defaultValue);
   const saved = useRef(defaultValue);
+  /** The prop value this control has already reacted to. See the effect below. */
+  const serverValue = useRef(defaultValue);
+
+  /**
+   * v1.12.1 (item AT / UX-5, ruling R3). State was seeded from props exactly once, so the LOSER of
+   * a concurrent edit went on seeing their own value -- with a green tick beside it -- until they
+   * hard-reloaded. Rows keep stable keys, so revalidatePath's refresh re-renders without
+   * remounting, and nothing else would ever correct it.
+   *
+   * Three guards, each load-bearing:
+   *  - `pending`: an edit still in flight has not been decided yet; resyncing over it would
+   *    discard a keystroke the server is about to accept.
+   *  - `defaultValue === serverValue.current`: the effect acts only when the PROP itself moved.
+   *    Without this, the window between our own save resolving and its revalidate landing (when
+   *    the prop is still the OLD value) would flip the control straight back.
+   *  - `saved.current` moves with the state, or the next failed save would revert to a value the
+   *    server has not held since somebody else wrote over it.
+   */
+  useEffect(() => {
+    if (pending) return;
+    if (defaultValue === serverValue.current) return;
+    serverValue.current = defaultValue;
+    saved.current = defaultValue;
+    setValue(defaultValue);
+  }, [defaultValue, pending]);
 
   return (
     <span className="flex flex-col gap-0.5">
@@ -180,6 +238,17 @@ export function AutoSaveCheckbox({
   const { save, pending, status, error } = useAutoSave(action, fields);
   const [checked, setChecked] = useState(defaultChecked);
   const saved = useRef(defaultChecked);
+  /** The prop value this control has already reacted to. Same three guards as AutoSaveSelect;
+   *  see that component's effect for why each one is there (item AT / UX-5, ruling R3). */
+  const serverChecked = useRef(defaultChecked);
+
+  useEffect(() => {
+    if (pending) return;
+    if (defaultChecked === serverChecked.current) return;
+    serverChecked.current = defaultChecked;
+    saved.current = defaultChecked;
+    setChecked(defaultChecked);
+  }, [defaultChecked, pending]);
 
   return (
     <span className="flex flex-col gap-0.5">
@@ -249,12 +318,46 @@ export function AutoSaveTextInput({
    *  fire the same edit again, so the comparison is against what was sent, not what was
    *  acknowledged (the acknowledgement arrives after the blur). */
   const sent = useRef(defaultValue);
+  /** The prop value this control has already reacted to. See the effect below. */
+  const serverValue = useRef(defaultValue);
+
+  /**
+   * v1.12.1 (item AT / UX-5, ruling R3). The same resync AutoSaveSelect gets, with one extra
+   * guard: this input is UNCONTROLLED, so resyncing means writing element.value, and writing
+   * element.value under somebody's cursor is worse than the staleness it fixes. A focused field
+   * is therefore left alone -- the blur that follows will commit whatever the person typed, which
+   * is the behaviour they expect from the field they are standing in.
+   *
+   * Both refs move with the value. `sent` in particular: without it the next blur would compare
+   * against the pre-resync string, decide the field had changed, and write the old number straight
+   * back over the server's -- which is exactly the Budgets "Use $487" defect UX-5 describes.
+   */
+  useEffect(() => {
+    if (pending) return;
+    if (defaultValue === serverValue.current) return;
+    if (input.current !== null && document.activeElement === input.current) return;
+    serverValue.current = defaultValue;
+    saved.current = defaultValue;
+    sent.current = defaultValue;
+    if (input.current !== null) input.current.value = defaultValue;
+  }, [defaultValue, pending]);
 
   const commit = () => {
     const element = input.current;
     if (element === null) return;
     const next = element.value;
     if (next === sent.current) return;
+    // v1.12.1 (item X / UX-4). An emptied field is NOT "clear this". Somebody who selected the
+    // number to retype it and got distracted used to delete a recurring budget limit -- from this
+    // month FORWARD, not just this month -- with a tick as the only feedback. Blanking a field
+    // that held something is now a no-op and the number comes back; clearing is a deliberate
+    // button in the cell (src/app/(app)/budgets/budgets-client.tsx). A field that was ALWAYS empty
+    // is unaffected, so nothing that legitimately submits a blank changes behaviour.
+    if (next.trim() === '' && saved.current.trim() !== '') {
+      element.value = saved.current;
+      sent.current = saved.current;
+      return;
+    }
     sent.current = next;
     save(name, next, {
       onSuccess: () => {

@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { AutoSaveSelect, AutoSaveTextInput } from '@/components/ui/AutoSave';
+import {
+  AUTO_SAVE_CONTROL,
+  AUTO_SAVE_THROW_ERROR,
+  AutoSaveSelect,
+  AutoSaveTextInput,
+} from '@/components/ui/AutoSave';
 
 afterEach(() => cleanup());
 
@@ -185,5 +190,144 @@ describe('AutoSaveTextInput', () => {
     fireEvent.keyDown(input, { key: 'Enter' });
     fireEvent.blur(input);
     await waitFor(() => expect(action).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe('v1.12.1: a thrown action is not a silent failure (item V / UX-3)', () => {
+  it('shows the generic sentence, sets the error status and reverts the select', async () => {
+    const action = vi.fn(async (_formData: FormData) => {
+      throw new Error('SQLITE_BUSY: database is locked');
+    });
+    render(
+      <AutoSaveSelect
+        name="categoryId"
+        defaultValue="2"
+        options={CATEGORIES}
+        fields={{ transactionId: '42' }}
+        action={action}
+        ariaLabel="Category for transaction 42"
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText('Category for transaction 42'), { target: { value: '1' } });
+
+    await waitFor(() => expect(statusOf()).toBe('error'));
+    expect(screen.getByRole('alert').textContent).toBe(AUTO_SAVE_THROW_ERROR);
+    // The thrown message is never shown: Next redacts real messages in production anyway, and a
+    // driver error string in a table cell helps nobody.
+    expect(screen.queryByText(/SQLITE_BUSY/)).toBeNull();
+    expect((screen.getByLabelText('Category for transaction 42') as HTMLSelectElement).value).toBe('2');
+  });
+});
+
+describe('v1.12.1: an emptied field is a no-op (item X / UX-4)', () => {
+  it('does not send, and puts the number back, when the saved value was non-empty', async () => {
+    const action = vi.fn(async (_formData: FormData) => ({}));
+    render(
+      <AutoSaveTextInput
+        name="amount"
+        defaultValue="600.00"
+        fields={{ categoryId: '7' }}
+        action={action}
+        ariaLabel="Monthly limit for Groceries"
+        inputMode="decimal"
+      />,
+    );
+
+    const input = screen.getByLabelText('Monthly limit for Groceries') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '' } });
+    fireEvent.blur(input);
+
+    await waitFor(() => expect(input.value).toBe('600.00'));
+    expect(action).not.toHaveBeenCalled();
+  });
+
+  it('still saves a real edit, and still saves a field that was always empty', async () => {
+    const action = vi.fn(async (_formData: FormData) => ({}));
+    render(
+      <AutoSaveTextInput
+        name="amount"
+        defaultValue=""
+        fields={{ categoryId: '7' }}
+        action={action}
+        ariaLabel="Monthly limit for Coffee"
+      />,
+    );
+
+    const input = screen.getByLabelText('Monthly limit for Coffee') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '40.00' } });
+    fireEvent.blur(input);
+
+    await waitFor(() => expect(action).toHaveBeenCalledTimes(1));
+    expect((action.mock.calls[0][0] as FormData).get('amount')).toBe('40.00');
+  });
+});
+
+describe('v1.12.1: the control follows the server (item AT / UX-5, ruling R3)', () => {
+  it('resyncs a select when the server value changes underneath it', async () => {
+    const action = vi.fn(async (_formData: FormData) => ({}));
+    const { rerender } = render(
+      <AutoSaveSelect
+        name="categoryId"
+        defaultValue="1"
+        options={CATEGORIES}
+        fields={{ transactionId: '42' }}
+        action={action}
+        ariaLabel="Category for transaction 42"
+      />,
+    );
+    expect((screen.getByLabelText('Category for transaction 42') as HTMLSelectElement).value).toBe('1');
+
+    rerender(
+      <AutoSaveSelect
+        name="categoryId"
+        defaultValue="2"
+        options={CATEGORIES}
+        fields={{ transactionId: '42' }}
+        action={action}
+        ariaLabel="Category for transaction 42"
+      />,
+    );
+
+    await waitFor(() =>
+      expect((screen.getByLabelText('Category for transaction 42') as HTMLSelectElement).value).toBe('2'),
+    );
+  });
+
+  it('does not yank a text input that is focused', async () => {
+    const action = vi.fn(async (_formData: FormData) => ({}));
+    const { rerender } = render(
+      <AutoSaveTextInput
+        name="amount"
+        defaultValue="600.00"
+        fields={{ categoryId: '7' }}
+        action={action}
+        ariaLabel="Monthly limit for Groceries"
+      />,
+    );
+    const input = screen.getByLabelText('Monthly limit for Groceries') as HTMLInputElement;
+    input.focus();
+    fireEvent.change(input, { target: { value: '650' } });
+
+    rerender(
+      <AutoSaveTextInput
+        name="amount"
+        defaultValue="480.00"
+        fields={{ categoryId: '7' }}
+        action={action}
+        ariaLabel="Monthly limit for Groceries"
+      />,
+    );
+
+    expect(input.value).toBe('650');
+  });
+});
+
+describe('v1.12.1: the control is finger-sized on a phone (item AV / UX-7)', () => {
+  it('the default control class carries py-2 text-sm and drops back to today at sm:', () => {
+    expect(AUTO_SAVE_CONTROL).toContain('py-2');
+    expect(AUTO_SAVE_CONTROL).toContain('text-sm');
+    expect(AUTO_SAVE_CONTROL).toContain('sm:py-1');
+    expect(AUTO_SAVE_CONTROL).toContain('sm:text-xs');
   });
 });
