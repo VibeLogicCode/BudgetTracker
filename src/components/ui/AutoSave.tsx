@@ -254,7 +254,13 @@ export function AutoSaveSelect({
         >
           {options.map((option) => (
             <option key={option.value} value={option.value} disabled={option.disabled}>
-              {option.label}
+              {/* Fix round on 5439851, item 2: every call site indents a nested option's label
+                  with repeated ASCII spaces (e.g. '  '.repeat(depth) + name) to show hierarchy --
+                  but a run of plain spaces inside rendered text collapses to one in HTML, so the
+                  indentation vanished right here regardless of what any caller passed in. NBSP
+                  ( ) does not collapse, so leading ASCII spaces are swapped for NBSP once,
+                  in the one place that actually renders every option's text. */}
+              {option.label.replace(/^ +/, (spaces) => ' '.repeat(spaces.length))}
             </option>
           ))}
         </select>

@@ -68,8 +68,8 @@ export function ReviewClient({
         <p>
           Accepting a guess or correcting it does two things: it files that transaction, and it
           teaches the categorizer what that merchant is. The same merchant arrives already
-          sorted next time. Where a merchant already has other unsorted rows on file, the count
-          beside it offers to apply your choice to all of them at once.
+          sorted next time. The count beside a row is every transaction with that merchant, plus
+          future imports, and offers to apply your choice to all of them at once.
         </p>
         <p>
           This queue is not a one-time setup step. It empties, then refills the next time you
@@ -110,8 +110,15 @@ export function ReviewClient({
                 <strong className="font-semibold text-ink">{row.normalizedMerchant}</strong>
                 {/* v1.13.3: a raw description that is identical to the already-normalized
                     merchant name added nothing -- "TIM HORTONS — TIM HORTONS" on every row
-                    where no normalization actually happened. Shown once instead. */}
-                {row.normalizedMerchant !== row.rawDescription ? (
+                    where no normalization actually happened. Shown once instead.
+
+                    Fix round on 5439851, item 3: comparing the raw description straight against
+                    normalizedMerchant was too strict -- normalizeMerchant uppercases and
+                    collapses whitespace, so a raw description that differed only by case or
+                    incidental spacing (e.g. "King of the Nor_f" vs "KING OF THE NOR_F") still
+                    rendered twice. Put the raw description through the same trim/collapse/upper
+                    footing before comparing, so only a MEANINGFUL difference shows the em dash. */}
+                {row.normalizedMerchant !== row.rawDescription.trim().replace(/\s+/g, ' ').toUpperCase() ? (
                   <>
                     {' '}
                     <span className="text-muted">— {row.rawDescription}</span>
@@ -171,7 +178,7 @@ export function ReviewClient({
                   ]}
                   fields={{ transactionId: String(row.id) }}
                   action={saveFixCategory}
-                  ariaLabel={`Category for ${row.normalizedMerchant}`}
+                  ariaLabel={`Category for ${row.normalizedMerchant} — this transaction only`}
                   className={pickerClass}
                 />
               </div>
@@ -189,7 +196,7 @@ export function ReviewClient({
                     <select
                       name="categoryId"
                       defaultValue={row.categoryId ?? ''}
-                      aria-label={`Category for all ${row.matchingCount} matching ${row.normalizedMerchant}`}
+                      aria-label={`Category for all ${row.matchingCount} matching ${row.normalizedMerchant} — every transaction`}
                       className={pickerClass}
                     >
                       <option value="">Choose for all {row.matchingCount}…</option>

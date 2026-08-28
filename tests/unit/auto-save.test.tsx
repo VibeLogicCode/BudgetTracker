@@ -128,6 +128,23 @@ describe('AutoSaveSelect', () => {
   });
 });
 
+describe('AutoSaveSelect renders leading indentation as NBSP (fix round on 5439851, item 2)', () => {
+  it('replaces a label\'s leading ASCII spaces with NBSP so the indentation cannot collapse', () => {
+    render(
+      <AutoSaveSelect
+        name="categoryId"
+        defaultValue=""
+        options={[{ value: '', label: 'Uncategorized' }, { value: '1', label: '  Child' }]}
+        fields={{ transactionId: '42' }}
+        action={async () => ({})}
+        ariaLabel="Category for transaction 42"
+      />,
+    );
+    const option = Array.from(document.querySelectorAll('option')).find((o) => o.value === '1');
+    expect(option?.textContent).toBe('  Child');
+  });
+});
+
 describe('AutoSaveTextInput', () => {
   it('saves on Enter', async () => {
     // Explicit param, same reason as AutoSaveSelect's first test above.
