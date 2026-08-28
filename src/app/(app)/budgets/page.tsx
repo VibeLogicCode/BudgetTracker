@@ -1,5 +1,7 @@
 import { requireUser } from '@/lib/auth/session';
-import { listUsers } from '@/lib/auth/users';
+import { isSelfScoped } from '@/lib/auth/viewer';
+import { listAttributablePeople } from '@/lib/auth/users';
+import { sinkingFundsFor } from '@/lib/bills';
 import { budgetProgress, budgetTotals, rolloverStartMonth, type BudgetRow, type BudgetScope } from '@/lib/budgets';
 import { currentMonth, isMonthKey, monthEnd, todayIso } from '@/lib/dates';
 import { readEnv } from '@/lib/env';
@@ -62,14 +64,38 @@ export default async function BudgetsPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const user = await requireUser();
+  const viewer = await requireUser();
   const params = await searchParams;
   const raw = Array.isArray(params.month) ? params.month[0] : params.month;
   const month = raw && isMonthKey(raw) ? raw : currentMonth();
 
-  const household = budgetProgress(month, 'household', null);
-  const householdRolloverIds = rolloverIdsFor('household', null, household);
-  const people = listUsers().filter((u) => u.isActive);
+  const selfScoped = isSelfScoped(viewer);
+  // Ruling R2: a self viewer sees no household scope at all -- a household limit is a household
+  // total, which is the thing R2 names. And the personal loop is themselves and nobody else.
+  const household = selfScoped ? null : budgetProgress(month, 'household', null);
+  const householdRolloverIds = household === null ? [] : rolloverIdsFor('household', null, household);
+  const people = selfScoped
+    ? listAttributablePeople().filter((person) => person.id === viewer.id)
+    : listAttributablePeople();
+
+  const { tz } = readEnv();
+  const today = todayIso(new Date(), tz);
+  const dayOfMonth = Number(today.slice(8, 10));
+  const daysInMonth = Number(monthEnd(month).slice(8, 10));
+
+  /**
+   * Ruling R11 / micro-ruling M9. READ-SIDE ONLY -- see sinkingFundsFor's own doc comment.
+   *
+   * Called ONCE PER SECTION, deliberately NOT once against a `[...household, ...personal]`
+   * concatenation: sinkingFundsFor's Map is keyed by categoryId alone, with no scope of its
+   * own, and budgetProgress() returns a row for EVERY category in EVERY scope regardless of
+   * whether that scope actually budgets it. Concatenating rows across sections would mean the
+   * last section walked wins that categoryId's carryCents for every category, including this
+   * one, silently clobbering a real household carry with a personal section's untouched (zero)
+   * one -- or the other way round. Calling it per section, against only that section's own
+   * rows, is the only way each section's own carry survives.
+   */
+  const householdSinkingFunds = household === null ? {} : Object.fromEntries(sinkingFundsFor({ month, today, rows: household, viewer }));
   const personal = people.map((person) => {
     const rows = budgetProgress(month, 'personal', person.id);
     return {
@@ -77,52 +103,64 @@ export default async function BudgetsPage({
       name: person.name,
       rows,
       rolloverIds: rolloverIdsFor('personal', person.id, rows),
+      sinkingFunds: Object.fromEntries(sinkingFundsFor({ month, today, rows, viewer })),
     };
   });
-
-  const { tz } = readEnv();
-  const today = todayIso(new Date(), tz);
-  const dayOfMonth = Number(today.slice(8, 10));
-  const daysInMonth = Number(monthEnd(month).slice(8, 10));
 
   // MUST-14.1: computed ONLY when the viewed month is the current month. A pace projection for
   // July, viewed in August, is not a projection.
   let predictions: BudgetPredictions | null = null;
   if (month === currentMonth(new Date(), tz)) {
     // MUST-16.3 budgets this page at 2 + 2P grouped aggregates, so each scope is read ONCE.
-    const householdScope = suggestionsFor({ targetMonth: month, scope: 'household', userId: null });
-    const householdAllNoSpend = isAllNoSpend(householdScope.byCategory);
+    // Ruling R2: a self viewer never triggers the household-scope query at all -- not even to
+    // discard its result -- because sectionFrom() reads its `suggestions` straight off the
+    // scope's OWN byCategory map, independent of the `rows` passed beside it. Running it for a
+    // self viewer would serialize household category figures into this page's props even
+    // though the Household card never renders them.
+    const householdScope = selfScoped ? null : suggestionsFor({ targetMonth: month, scope: 'household', userId: null });
+    const householdAllNoSpend = householdScope !== null && isAllNoSpend(householdScope.byCategory);
+    const personalSections = personal.map((person) => {
+      const personalScope = suggestionsFor({ targetMonth: month, scope: 'personal', userId: person.userId });
+      return {
+        userId: person.userId,
+        monthsUsed: personalScope.months.length,
+        predictions: {
+          ...sectionFrom(personalScope, person.rows, dayOfMonth, daysInMonth),
+          // MUST-15.2 and MUST-7.2: derived from the HISTORICAL series suggestionsFor()
+          // already computed, not from this month's budgetProgress() snapshot. The current
+          // month is excluded from that series by construction (historyMonths), so this
+          // holds regardless of whether the person has posted anything yet this month.
+          noAttribution: isAllNoSpend(personalScope.byCategory) && !householdAllNoSpend,
+        },
+      };
+    });
     predictions = {
-      monthsUsed: householdScope.months.length,
+      // A self viewer has no household scope to count months from, so their own personal
+      // scope's month count stands in for it -- the same number that section's own
+      // "three full calendar months" sentence is judged against.
+      monthsUsed: householdScope !== null ? householdScope.months.length : (personalSections[0]?.monthsUsed ?? 0),
       dayOfMonth,
-      household: sectionFrom(householdScope, household, dayOfMonth, daysInMonth),
-      personal: personal.map((person) => {
-        const personalScope = suggestionsFor({ targetMonth: month, scope: 'personal', userId: person.userId });
-        return {
-          userId: person.userId,
-          predictions: {
-            ...sectionFrom(personalScope, person.rows, dayOfMonth, daysInMonth),
-            // MUST-15.2 and MUST-7.2: derived from the HISTORICAL series suggestionsFor()
-            // already computed, not from this month's budgetProgress() snapshot. The current
-            // month is excluded from that series by construction (historyMonths), so this
-            // holds regardless of whether the person has posted anything yet this month.
-            noAttribution: isAllNoSpend(personalScope.byCategory) && !householdAllNoSpend,
-          },
-        };
-      }),
+      household:
+        householdScope !== null
+          ? sectionFrom(householdScope, household ?? [], dayOfMonth, daysInMonth)
+          : { suggestions: [], projections: [], noAttribution: false },
+      personal: personalSections.map(({ userId, predictions: sectionPredictions }) => ({ userId, predictions: sectionPredictions })),
     };
   }
 
   return (
     <BudgetsClient
       month={month}
-      currentUserId={user.id}
-      currentUserIsAdmin={user.role === 'admin'}
+      currentUserId={viewer.id}
+      currentUserIsAdmin={viewer.role === 'admin'}
       household={household}
       householdRolloverIds={householdRolloverIds}
-      householdTotals={budgetTotals(household)}
+      householdTotals={household === null ? null : budgetTotals(household)}
       personal={personal}
       predictions={predictions}
+      // A Map is not a valid Server-Component prop -- each section's sinkingFundsFor() result
+      // is serialized to a plain object keyed by category id, per the comment above.
+      householdSinkingFunds={householdSinkingFunds}
     />
   );
 }

@@ -1,12 +1,15 @@
 import Link from 'next/link';
 import { requireUser } from '@/lib/auth/session';
-import { listAccounts } from '@/lib/accounts';
-import { listUsers } from '@/lib/auth/users';
+import { acceptsTransactions, listAccounts } from '@/lib/accounts';
+import { isSelfScoped, ownerScope } from '@/lib/auth/viewer';
+import { findUserById, listAttributablePeople } from '@/lib/auth/users';
 import { safeToSpend, upcomingBills } from '@/lib/bills';
 import { budgetProgress, budgetTotals } from '@/lib/budgets';
+import { listCategories } from '@/lib/categories';
 import { reviewQueueCount } from '@/lib/categorize/engine';
 import { currentMonth, monthEnd, monthLabel, monthStart, todayIso } from '@/lib/dates';
 import { listGoals } from '@/lib/goals';
+import { householdInsights } from '@/lib/insights';
 import { listLoans } from '@/lib/loans';
 import { netWorthHint, netWorthOverTime } from '@/lib/networth';
 import { onboardingSteps } from '@/lib/onboarding';
@@ -18,6 +21,8 @@ import { ComingUpCard } from '@/components/ComingUpCard';
 import { GettingStartedCard } from '@/components/GettingStartedCard';
 import { GoalCard } from '@/components/GoalCard';
 import { LoansCard } from '@/components/LoansCard';
+import { NeedsALookCard } from '@/components/NeedsALookCard';
+import { QuickAddTransaction } from '@/components/QuickAddTransaction';
 import { CashflowChart } from '@/components/charts/CashflowChart';
 import { AlertIcon, ArrowRightIcon, InfoIcon } from '@/components/icons';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
@@ -34,23 +39,36 @@ export default async function DashboardPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const user = await requireUser();
+  const viewer = await requireUser();
   const params = await searchParams;
   const raw = Array.isArray(params.person) ? params.person[0] : params.person;
-  const scopeUserId = raw && /^\d+$/.test(raw) ? Number(raw) : null;
+  const urlScope = raw && /^\d+$/.test(raw) ? Number(raw) : null;
+
+  /**
+   * v1.13.0 ruling R2. For a self viewer the person scope is THEIR OWN id, whatever the URL says --
+   * and the pills that would let them change it are not rendered at all. Everything below reads
+   * `scopeUserId`, so there is one place this decision is made.
+   */
+  const selfScoped = isSelfScoped(viewer);
+  const scopeUserId = ownerScope(viewer) ?? urlScope;
 
   const month = currentMonth();
   const rows = scopeUserId === null ? budgetProgress(month) : budgetProgress(month, 'personal', scopeUserId);
   const totals = budgetTotals(rows);
-  const trend = cashflowTrend(12, { endMonth: month, attributedUserId: scopeUserId });
-  const merchants = topMerchants({ from: monthStart(month), to: monthEnd(month), limit: 8, attributedUserId: scopeUserId });
-  const goals = listGoals();
+  const trend = cashflowTrend(12, { endMonth: month, attributedUserId: scopeUserId }, viewer);
+  const merchants = topMerchants(
+    { from: monthStart(month), to: monthEnd(month), limit: 8, attributedUserId: scopeUserId },
+    viewer,
+  );
+  const goals = listGoals({}, viewer);
   const reviewCount = reviewQueueCount();
-  const people = listUsers().filter((u) => u.isActive);
+  const people = listAttributablePeople();
   // Nothing can be imported until at least one account exists, and a fresh
   // install has none. Say so here rather than letting the Import page
-  // dead-end.
-  const hasAccounts = listAccounts().length > 0;
+  // dead-end. Asset accounts don't accept transactions (ruling: asset accounts refuse
+  // transactions/import), so they don't count toward "can this household do anything yet".
+  const accounts = listAccounts({}, viewer).filter((account) => acceptsTransactions(account.type));
+  const hasAccounts = accounts.length > 0;
 
   // Task 6 (spec 2026-08-23, ruling A4): counted, not remembered. Every step's done-ness is
   // re-derived per render inside onboarding.ts, so this page holds no setup state of its own.
@@ -61,34 +79,34 @@ export default async function DashboardPage({
   // accounts exist, importing is something a member can do, so the card comes back minus the
   // step that was never theirs.
   const setupSteps =
-    user.role === 'admin' || hasAccounts
-      ? onboardingSteps().filter((step) => user.role === 'admin' || step.key !== 'account')
+    viewer.role === 'admin' || hasAccounts
+      ? onboardingSteps().filter((step) => viewer.role === 'admin' || step.key !== 'account')
       : [];
 
   // MUST-10.6: the widget respects the dashboard's existing person switcher. Household
   // shows every item, a selected person shows only items they own.
   const today = todayIso();
-  const expiring = expiringSoonItems(EXPIRING_WIDGET_LIMIT, scopeUserId, today);
+  const expiring = expiringSoonItems(EXPIRING_WIDGET_LIMIT, scopeUserId, today, viewer);
   // Review fix-round: one read-model scan, not two -- loansTotalOwedCents() would otherwise
   // call listLoans() again just to re-derive the sum LoansCard's own props already carry.
-  const loans = listLoans(today);
+  const loans = listLoans(today, viewer);
   const totalOwedCents = loans.reduce((sum, loan) => sum + (loan.currentBalanceCents ?? 0), 0);
 
-  // Net worth (Task 7) is a whole-household figure -- accounts, credit cards and loans have no
-  // per-person attribution the way a transaction does, so unlike the tiles below it this one
-  // does not change with the person switcher (the same reasoning LoansCard's totalOwedCents
-  // already follows). Only the latest point is needed here; the trend lives on Reports.
-  const netWorthLatest = netWorthOverTime(1, { today }).at(0) ?? null;
+  /**
+   * Ruling R2: NO net worth for a self viewer. Net worth is the household's balance sheet --
+   * accounts and loans have no per-person attribution the way a transaction does -- so there
+   * is no honest scoped version of it to render. The query is not even run.
+   */
+  const netWorthLatest = selfScoped ? null : netWorthOverTime(1, { today, viewer }).at(0) ?? null;
 
-  // Task 9: upcoming bills + safe-to-spend, also whole-household (safeToSpend carries no
-  // person parameter -- like loans and net worth, a bill and a budgeted limit are not
-  // attributed to one person the way a transaction is). `householdTotals` reuses `totals`
-  // when the page is already unscoped rather than re-querying.
+  // Task 9: upcoming bills + safe-to-spend. Ruling M8: for a self viewer these read the
+  // PERSONAL budget scope (see safeToSpend's own doc comment), so unlike net worth and loans
+  // they are not simply hidden.
   // v1.12.0: the CARD wants overdue rows -- surfacing the thing you forgot is its whole job.
   // safeToSpend below deliberately does not; see upcomingBills' docblock.
-  const bills = upcomingBills({ today, days: 30, includeOverdue: true });
-  const spendPlan = safeToSpend({ month, today });
-  const householdTotals = scopeUserId === null ? totals : budgetTotals(budgetProgress(month));
+  const bills = upcomingBills({ today, days: 30, includeOverdue: true, viewer });
+  const spendPlan = safeToSpend({ month, today, viewer });
+  const householdTotals = selfScoped ? totals : scopeUserId === null ? totals : budgetTotals(budgetProgress(month));
 
   // The trend already covers this month, so the headline income/net figures come
   // out of it rather than costing a second query.
@@ -99,28 +117,40 @@ export default async function DashboardPage({
   const budgetRows = rows.filter((row) => !row.isIncome && (row.limitCents !== null || row.spentCents !== 0));
   const scopedPerson = scopeUserId === null ? null : people.find((person) => person.id === scopeUserId);
 
+  // Ruling R6. Self-hiding widget: absent whenever there is nothing to say.
+  const insights = householdInsights({ today, viewer });
+
+  // Task 10 (ruling R7): the same component and the same manualEntryAction as /transactions'
+  // own quick-add, so hand entry does not drift between the two surfaces.
+  const categories = listCategories({});
+  const lastAccountId = findUserById(viewer.id)?.lastAccountId ?? null;
+
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
         eyebrow={monthLabel(month)}
-        title={`Hello, ${user.name}`}
+        title={`Hello, ${viewer.name}`}
         description={
-          scopedPerson
-            ? `${scopedPerson.name}'s share of the month.`
-            : 'Everything the household spent and brought in this month.'
+          selfScoped
+            ? 'Your month.'
+            : scopedPerson
+              ? `${scopedPerson.name}'s share of the month.`
+              : 'Everything the household spent and brought in this month.'
         }
         actions={
-          <nav aria-label="Whose money to show" className="flex flex-wrap items-center gap-1 rounded-full border border-line bg-surface-2 p-1">
-            <PersonPill href="/dashboard" label="Household" active={scopeUserId === null} />
-            {people.map((person) => (
-              <PersonPill
-                key={person.id}
-                href={`/dashboard?person=${person.id}`}
-                label={person.name}
-                active={scopeUserId === person.id}
-              />
-            ))}
-          </nav>
+          selfScoped ? undefined : (
+            <nav aria-label="Whose money to show" className="flex flex-wrap items-center gap-1 rounded-full border border-line bg-surface-2 p-1">
+              <PersonPill href="/dashboard" label="Household" active={scopeUserId === null} />
+              {people.map((person) => (
+                <PersonPill
+                  key={person.id}
+                  href={`/dashboard?person=${person.id}`}
+                  label={person.name}
+                  active={scopeUserId === person.id}
+                />
+              ))}
+            </nav>
+          )
         }
       />
 
@@ -141,13 +171,24 @@ export default async function DashboardPage({
         </p>
       </PageGuide>
 
+      {/* Task 10 (ruling R7): the same position it holds on /transactions, so the two surfaces
+          are one habit. */}
+      <QuickAddTransaction
+        variant="card"
+        accounts={accounts}
+        categories={categories}
+        people={people}
+        today={today}
+        defaultAccountId={lastAccountId}
+      />
+
       {/* The admin half of this banner became GettingStartedCard's first step, which says the
           same thing with the reason attached, so keeping both put two prompts to the same page
           one above the other on a household's very first screen. What survives is the half the
           card cannot express: the card is role-blind, and only an admin can create an account,
           so pointing a member at a page that would bounce them straight back here helps
           nobody. */}
-      {!hasAccounts && user.role !== 'admin' ? (
+      {!hasAccounts && viewer.role !== 'admin' ? (
         <div
           role="status"
           className="flex items-center gap-2.5 rounded-md bg-info-soft px-3.5 py-3 text-sm text-info-soft-fg"
@@ -203,7 +244,8 @@ export default async function DashboardPage({
             accountsMissing/accountsStale, so it kept claiming "every tracked account" on days
             the Reports Net worth card was disclosing the opposite for the same figure --
             netWorthHint is the one place that wording is decided now, so the two surfaces
-            cannot disagree. */}
+            cannot disagree. Ruling R2: also absent whenever the viewer is self-scoped -- see
+            netWorthLatest's own comment above. */}
         {netWorthLatest === null ? null : (
           <StatTile
             label="Net worth"
@@ -214,10 +256,16 @@ export default async function DashboardPage({
         )}
       </div>
 
+      {/* Ruling R6 (item AJ / PROD-2): self-hiding, above ExpiringSoonCard -- it is the card
+          that asks for attention, and the cards below it are reference. */}
+      <NeedsALookCard rows={insights} />
+
       <ExpiringSoonCard items={expiring} today={today} />
 
-      {/* MUST-15.1: self-hiding. Rendered unconditionally; absent when there is nothing to say. */}
-      <LoansCard loans={loans} totalOwedCents={totalOwedCents} />
+      {/* MUST-15.1: self-hiding. Rendered unconditionally; absent when there is nothing to say.
+          Ruling R2: a loan balance is household money, so this is hidden entirely for a self
+          viewer -- there is no honest per-person share of it to show instead. */}
+      {selfScoped ? null : <LoansCard loans={loans} totalOwedCents={totalOwedCents} />}
 
       {/* Task 9: self-hiding, same pattern as LoansCard -- absent when there are no bills
           coming up AND no budgeted limits at all this month. */}
@@ -227,6 +275,7 @@ export default async function DashboardPage({
         billsDueCents={spendPlan.billsDueCents}
         hasBudgetedLimits={householdTotals.budgetedLimitCents > 0}
         monthEndDate={monthEnd(month)}
+        canRecord={hasAccounts}
       />
 
       <Card>
@@ -284,37 +333,40 @@ export default async function DashboardPage({
       </Card>
 
       <div className="grid gap-5 lg:grid-cols-5">
-        <Card className="lg:col-span-3">
+        <Card className={selfScoped ? 'lg:col-span-5' : 'lg:col-span-3'}>
           <CardHeader title="12-month cashflow" description="Transfers excluded." />
           <CardBody>
             <CashflowChart data={trend} />
           </CardBody>
         </Card>
 
-        <Card className="lg:col-span-2">
-          <CardHeader title="Top merchants" description={`Where the money went in ${monthLabel(month)}.`} />
-          {merchants.length === 0 ? (
-            <CardBody>
-              <p className="rounded-md border border-dashed border-line-strong px-4 py-8 text-center text-sm text-muted">
-                No transactions this month yet.
-              </p>
-            </CardBody>
-          ) : (
-            <ul className="border-t border-line text-sm">
-              {merchants.map((merchant) => (
-                <li
-                  key={merchant.normalizedMerchant}
-                  className="flex items-baseline justify-between gap-4 border-b border-line px-5 py-2.5 last:border-b-0 sm:px-6"
-                >
-                  <span className="min-w-0 truncate text-ink">
-                    {merchant.normalizedMerchant} <span className="text-subtle">({merchant.count})</span>
-                  </span>
-                  <span className="money shrink-0">{formatCents(merchant.spentCents)}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>
+        {/* Ruling R2: hidden entirely for a self viewer. */}
+        {selfScoped ? null : (
+          <Card className="lg:col-span-2">
+            <CardHeader title="Top merchants" description={`Where the money went in ${monthLabel(month)}.`} />
+            {merchants.length === 0 ? (
+              <CardBody>
+                <p className="rounded-md border border-dashed border-line-strong px-4 py-8 text-center text-sm text-muted">
+                  No transactions this month yet.
+                </p>
+              </CardBody>
+            ) : (
+              <ul className="border-t border-line text-sm">
+                {merchants.map((merchant) => (
+                  <li
+                    key={merchant.normalizedMerchant}
+                    className="flex items-baseline justify-between gap-4 border-b border-line px-5 py-2.5 last:border-b-0 sm:px-6"
+                  >
+                    <span className="min-w-0 truncate text-ink">
+                      {merchant.normalizedMerchant} <span className="text-subtle">({merchant.count})</span>
+                    </span>
+                    <span className="money shrink-0">{formatCents(merchant.spentCents)}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+        )}
       </div>
 
       {goals.length > 0 ? (

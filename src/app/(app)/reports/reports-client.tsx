@@ -66,6 +66,7 @@ export function ReportsClient({
   taxYears,
   taxYear,
   taxRows,
+  showPersonSplit,
 }: {
   range: ResolvedRange;
   today: string;
@@ -95,6 +96,10 @@ export function ReportsClient({
   /** taxYearReport(taxYear), each row's parentId attached by the page. Empty whenever nothing
    *  is flagged for this year, which is what drives the card's empty state below. */
   taxRows: TaxYearDisplayRow[];
+  /** v1.13.0 ruling R2: false for a self viewer -- there is no per-person breakdown to offer
+   *  when the person scope is always and only themselves, so the picker's Person field and the
+   *  "Who spent it" card are both dropped rather than shown with one row. */
+  showPersonSplit: boolean;
 }) {
   const exportHref = `/api/reports/export?${new URLSearchParams({
     ...rangeParams(range),
@@ -154,15 +159,17 @@ export function ReportsClient({
         <CardBody className="pt-5">
           <form method="get" className="flex flex-wrap items-end gap-3">
             <DateRangePicker value={range.preset} from={range.from} to={range.to} today={today} />
-            <Field label="Person">
-              <select name="person" defaultValue={person} className={selectClass}>
-                <option value="">Everyone</option>
-                <option value="unattributed">Household/unattributed</option>
-                {people.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-            </Field>
+            {showPersonSplit ? (
+              <Field label="Person">
+                <select name="person" defaultValue={person} className={selectClass}>
+                  <option value="">Everyone</option>
+                  <option value="unattributed">Household/unattributed</option>
+                  {people.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+              </Field>
+            ) : null}
             <Field label="Compare month" hint="Feeds the year-over-year card below.">
               <input type="month" name="yoyMonth" defaultValue={yoyMonth} max={monthOf(today)} className={inputClass} />
             </Field>
@@ -378,32 +385,36 @@ export function ReportsClient({
         )}
       </Card>
 
-      <Card>
-        <CardHeader title="Who spent it" description="Split by the person each transaction is attributed to." />
-        {split.length === 0 ? (
-          <EmptyState
-            icon={ReportsIcon}
-            title="Nothing to split yet"
-            action={
-              <Link href="/reports" className="btn btn--secondary btn--sm">
-                Clear filters
-              </Link>
-            }
-          />
-        ) : (
-          <ul className="border-t border-line text-sm">
-            {split.map((row) => (
-              <li
-                key={row.userId ?? 'unattributed'}
-                className="flex items-center justify-between gap-4 border-b border-line px-5 py-2.5 last:border-b-0 sm:px-6"
-              >
-                <span>{row.label}</span>
-                <Money cents={row.spentCents} plain />
-              </li>
-            ))}
-          </ul>
-        )}
-      </Card>
+      {/* Ruling R2: dropped entirely for a self viewer -- there is no per-person split to show
+          when the person scope is always and only themselves. */}
+      {showPersonSplit ? (
+        <Card>
+          <CardHeader title="Who spent it" description="Split by the person each transaction is attributed to." />
+          {split.length === 0 ? (
+            <EmptyState
+              icon={ReportsIcon}
+              title="Nothing to split yet"
+              action={
+                <Link href="/reports" className="btn btn--secondary btn--sm">
+                  Clear filters
+                </Link>
+              }
+            />
+          ) : (
+            <ul className="border-t border-line text-sm">
+              {split.map((row) => (
+                <li
+                  key={row.userId ?? 'unattributed'}
+                  className="flex items-center justify-between gap-4 border-b border-line px-5 py-2.5 last:border-b-0 sm:px-6"
+                >
+                  <span>{row.label}</span>
+                  <Money cents={row.spentCents} plain />
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      ) : null}
 
       <Card>
         <CardHeader title="Top merchants" description="The largest net charges over the range above." />

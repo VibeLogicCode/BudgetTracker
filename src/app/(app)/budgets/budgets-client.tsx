@@ -12,6 +12,7 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { TableWrap } from '@/components/ui/Table';
 import { addMonths, monthLabel } from '@/lib/dates';
 import { formatCents } from '@/lib/money';
+import type { SinkingFund } from '@/lib/bills';
 import type { BudgetRow } from '@/lib/budgets';
 import { MIN_HISTORY_MONTHS } from '@/lib/predict/constants';
 import type { BudgetPredictions, CategorySuggestion, SectionPredictions } from '@/lib/predict/suggest';
@@ -50,6 +51,7 @@ function Row({
   canToggleRollover,
   rolloverOn,
   predict,
+  sinkingFunds,
 }: {
   row: BudgetRow;
   depth: number;
@@ -68,9 +70,13 @@ function Row({
   /** Category ids with rollover currently on, for this section (scope + user). */
   rolloverOn: Set<number>;
   predict: RowPredictions | null;
+  /** v1.13.0 ruling R11 / micro-ruling M9: one linked bill's sinking-fund progress, keyed by
+   *  category id (sinkingFundsFor, src/lib/bills.ts). */
+  sinkingFunds: Record<number, SinkingFund>;
 }) {
   const suggestion = predict?.suggestionOf.get(row.categoryId) ?? null;
   const projection = predict?.projectionOf.get(row.categoryId) ?? null;
+  const sinkingFund = sinkingFunds[row.categoryId] ?? null;
 
   // v1.12.1 (item X / UX-4, fix round 2). Clearing used to fire-and-forget the result of
   // setLimitAction (`void setLimitAction(...)`): a failure -- cross-origin rejection, someone
@@ -156,6 +162,15 @@ function Row({
                   {formatCents(row.baseLimitCents)} plus {formatCents(row.carryCents)} carried
                 </p>
               ) : null}
+              {sinkingFund ? (
+                <p className="mt-1 text-xs text-muted">
+                  {/* Ruling R11: rollover IS the envelope; this sentence is what makes it legible.
+                      It reports what the carry already is -- it does not set a target and it does not
+                      change the limit above it. */}
+                  Accumulating for {sinkingFund.itemName} — {formatCents(sinkingFund.carriedCents)} of{' '}
+                  {formatCents(sinkingFund.targetCents)} by {sinkingFund.dueDate}
+                </p>
+              ) : null}
               {suggestion ? (
                 <form action={applyAction}>
                   <input type="hidden" name="scope" value={scope} />
@@ -231,6 +246,7 @@ function Row({
           canToggleRollover={canToggleRollover}
           rolloverOn={rolloverOn}
           predict={predict}
+          sinkingFunds={sinkingFunds}
         />
       ))}
     </>
@@ -290,17 +306,34 @@ export function BudgetsClient({
   householdTotals,
   personal,
   predictions = null,
+  householdSinkingFunds = {},
 }: {
   month: string;
   currentUserId: number;
   currentUserIsAdmin?: boolean;
-  household: BudgetRow[];
+  /** v1.13.0 ruling R2: null for a self viewer -- there is no household scope for them at all,
+   *  and the Household card below does not render. */
+  household: BudgetRow[] | null;
   /** v1.7.0 Task 11: category ids (household scope) with "Roll over unspent" currently on. */
   householdRolloverIds?: number[];
-  householdTotals: { budgetedLimitCents: number; budgetedSpentCents: number; totalSpentCents: number };
-  personal: { userId: number; name: string; rows: BudgetRow[]; rolloverIds?: number[] }[];
+  /** Ruling R2: null exactly when `household` is -- always both together. */
+  householdTotals: { budgetedLimitCents: number; budgetedSpentCents: number; totalSpentCents: number } | null;
+  personal: {
+    userId: number;
+    name: string;
+    rows: BudgetRow[];
+    rolloverIds?: number[];
+    /** v1.13.0 ruling R11 / micro-ruling M9: this person's OWN sinkingFundsFor() result,
+     *  serialized to a plain object keyed by category id. Computed per section on the server
+     *  (see budgets/page.tsx) -- never shared with the household section's own map, since
+     *  sinkingFundsFor's Map is keyed by categoryId alone with no scope of its own. */
+    sinkingFunds?: Record<number, SinkingFund>;
+  }[];
   /** MUST-14.1: null for a past or future month, and on any caller that has none. */
   predictions?: BudgetPredictions | null;
+  /** v1.13.0 ruling R11 / micro-ruling M9: the Household section's own sinkingFundsFor()
+   *  result, serialized to a plain object keyed by category id. */
+  householdSinkingFunds?: Record<number, SinkingFund>;
 }) {
   const [copyState, dispatchCopy] = useActionState(copyPreviousMonthAction, initial);
   const [applyState, dispatchApply] = useActionState(applySuggestionAction, initial);
@@ -404,77 +437,83 @@ export function BudgetsClient({
       <FormError message={banner.error} />
       {banner.message ? <Notice tone="success">{banner.message}</Notice> : null}
 
-      <Card as="section">
-        <CardHeader
-          title={
-            <>
-              Household — spent {formatCents(householdTotals.budgetedSpentCents)} of {formatCents(householdTotals.budgetedLimitCents)} budgeted
-              <span className="font-normal text-muted"> · {formatCents(householdTotals.totalSpentCents)} total spent</span>
-            </>
-          }
-          action={
-            <>
-              <form action={copyAction}>
-                <input type="hidden" name="scope" value="household" />
-                <input type="hidden" name="month" value={month} />
-                <button type="submit" className="btn btn--secondary btn--sm">Copy previous month</button>
-              </form>
-              {/* MUST-15.1: a control that cannot act is not offered. There is nothing to apply
-                  when there are no suggestions, whether that is because history is short or
-                  because every category with history failed the suggestion floor. */}
-              {householdPredict !== null && householdPredict.suggestionOf.size > 0 ? (
-                <form action={applyAllAction}>
+      {/* Ruling R2: a self viewer's `household`/`householdTotals` are null, together, from the
+          server -- there is no household scope for them at all, so this section does not render
+          rather than rendering an empty or zeroed one. */}
+      {household !== null && householdTotals !== null ? (
+        <Card as="section">
+          <CardHeader
+            title={
+              <>
+                Household — spent {formatCents(householdTotals.budgetedSpentCents)} of {formatCents(householdTotals.budgetedLimitCents)} budgeted
+                <span className="font-normal text-muted"> · {formatCents(householdTotals.totalSpentCents)} total spent</span>
+              </>
+            }
+            action={
+              <>
+                <form action={copyAction}>
                   <input type="hidden" name="scope" value="household" />
                   <input type="hidden" name="month" value={month} />
-                  <button
-                    type="submit"
-                    className="btn btn--secondary btn--sm"
-                    title="Only fills in categories with no limit set. Nothing you have typed is changed."
-                  >
-                    Apply all suggestions
-                  </button>
+                  <button type="submit" className="btn btn--secondary btn--sm">Copy previous month</button>
                 </form>
-              ) : null}
-            </>
-          }
-        />
-        <CardBody className="pb-4">
-          <div className="max-w-xs">
-            <BudgetProgressBar
-              // No budgeted rows at all this month reads as "no budget", not a $0 budget —
-              // only an explicit resolved limit on at least one row should drive this bar.
-              limitCents={
-                householdTotals.budgetedLimitCents === 0 && householdTotals.budgetedSpentCents === 0
-                  ? null
-                  : householdTotals.budgetedLimitCents
-              }
-              spentCents={householdTotals.budgetedSpentCents}
-              label="Household budgeted total"
-            />
-          </div>
-          {predictions !== null && predictions.monthsUsed < MIN_HISTORY_MONTHS ? (
-            <p className="text-sm text-muted">Suggestions appear once there are three full calendar months of history.</p>
-          ) : null}
-        </CardBody>
-        <BudgetTable paceTitle={paceTitle}>
-          {household.map((row) => (
-            // Household budgets are editable by every member (spec section 6).
-            <Row
-              key={row.categoryId}
-              row={row}
-              depth={0}
-              scope="household"
-              userId={null}
-              month={month}
-              applyAction={applyAction}
-              editable
-              canToggleRollover={currentUserIsAdmin}
-              rolloverOn={householdRolloverOn}
-              predict={householdPredict}
-            />
-          ))}
-        </BudgetTable>
-      </Card>
+                {/* MUST-15.1: a control that cannot act is not offered. There is nothing to apply
+                    when there are no suggestions, whether that is because history is short or
+                    because every category with history failed the suggestion floor. */}
+                {householdPredict !== null && householdPredict.suggestionOf.size > 0 ? (
+                  <form action={applyAllAction}>
+                    <input type="hidden" name="scope" value="household" />
+                    <input type="hidden" name="month" value={month} />
+                    <button
+                      type="submit"
+                      className="btn btn--secondary btn--sm"
+                      title="Only fills in categories with no limit set. Nothing you have typed is changed."
+                    >
+                      Apply all suggestions
+                    </button>
+                  </form>
+                ) : null}
+              </>
+            }
+          />
+          <CardBody className="pb-4">
+            <div className="max-w-xs">
+              <BudgetProgressBar
+                // No budgeted rows at all this month reads as "no budget", not a $0 budget —
+                // only an explicit resolved limit on at least one row should drive this bar.
+                limitCents={
+                  householdTotals.budgetedLimitCents === 0 && householdTotals.budgetedSpentCents === 0
+                    ? null
+                    : householdTotals.budgetedLimitCents
+                }
+                spentCents={householdTotals.budgetedSpentCents}
+                label="Household budgeted total"
+              />
+            </div>
+            {predictions !== null && predictions.monthsUsed < MIN_HISTORY_MONTHS ? (
+              <p className="text-sm text-muted">Suggestions appear once there are three full calendar months of history.</p>
+            ) : null}
+          </CardBody>
+          <BudgetTable paceTitle={paceTitle}>
+            {household.map((row) => (
+              // Household budgets are editable by every member (spec section 6).
+              <Row
+                key={row.categoryId}
+                row={row}
+                depth={0}
+                scope="household"
+                userId={null}
+                month={month}
+                applyAction={applyAction}
+                editable
+                canToggleRollover={currentUserIsAdmin}
+                rolloverOn={householdRolloverOn}
+                predict={householdPredict}
+                sinkingFunds={householdSinkingFunds}
+              />
+            ))}
+          </BudgetTable>
+        </Card>
+      ) : null}
 
       {personal.map((person) => {
         const personPredict = personalPredict.get(person.userId) ?? null;
@@ -556,6 +595,7 @@ export function BudgetsClient({
                   canToggleRollover={canEditPersonal(person.userId)}
                   rolloverOn={personRolloverOn}
                   predict={personPredict}
+                  sinkingFunds={person.sinkingFunds ?? {}}
                 />
               ))}
             </BudgetTable>

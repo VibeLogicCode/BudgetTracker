@@ -1,4 +1,5 @@
 import { requireUser } from '@/lib/auth/session';
+import { isSelfScoped, ownerScope } from '@/lib/auth/viewer';
 import { listUsers } from '@/lib/auth/users';
 import { listCategories } from '@/lib/categories';
 import { debtOverTime, listLoans } from '@/lib/loans';
@@ -26,7 +27,7 @@ export default async function ReportsPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  await requireUser();
+  const viewer = await requireUser();
   const params = await searchParams;
   const one = (key: string) => {
     const value = params[key];
@@ -46,7 +47,13 @@ export default async function ReportsPage({
   const from = range.from;
   const to = range.to;
   const personRaw = one('person');
-  const person = personRaw === 'unattributed' ? 'unattributed' : personRaw && /^\d+$/.test(personRaw) ? Number(personRaw) : null;
+  const urlScope = personRaw === 'unattributed' ? 'unattributed' : personRaw && /^\d+$/.test(personRaw) ? Number(personRaw) : null;
+  // Ruling R2: a self viewer's person scope is THEIR OWN id, whatever the URL asked for -- the
+  // person picker and the "Who spent it" card are hidden entirely for them below
+  // (showPersonSplit), and every aggregate call is force-scoped through `viewer` regardless, but
+  // this keeps the <select>'s own value and the CSV export link honest about what is actually
+  // being read.
+  const person = ownerScope(viewer) ?? urlScope;
 
   // Task 13 (v1.7.0): the year-over-year card's own month picker, independent of the range
   // above -- "this month" is always exactly one month, never a range. It lives in the same
@@ -107,26 +114,32 @@ export default async function ReportsPage({
     <ReportsClient
       range={range}
       today={today}
-      person={personRaw ?? ''}
+      person={person === null ? '' : String(person)}
       people={listUsers().map((u) => ({ id: u.id, name: u.name }))}
-      breakdown={categoryBreakdown({ from, to, attributedUserId: person, rollup: true })}
-      monthOverMonth={categoryMonthOverMonth({ fromMonth: from.slice(0, 7), toMonth: to.slice(0, 7), attributedUserId: person, limit: 10 })}
-      split={personSpendSplit({ from, to })}
+      breakdown={categoryBreakdown({ from, to, attributedUserId: person, rollup: true }, viewer)}
+      monthOverMonth={categoryMonthOverMonth(
+        { fromMonth: from.slice(0, 7), toMonth: to.slice(0, 7), attributedUserId: person, limit: 10 },
+        viewer,
+      )}
+      split={personSpendSplit({ from, to }, viewer)}
       debt={debtOverTime(24)}
-      hasLoans={listLoans().some((loan) => loan.currentBalanceCents !== null)}
+      hasLoans={listLoans(today, viewer).some((loan) => loan.currentBalanceCents !== null)}
       // Same fixed trailing-24-month window as the Debt over time card above, deliberately
       // independent of the date-range picker at the top of the page (a net worth trend, like a
       // debt trend, is a "how did we get here" widget, not a "for this custom range" one).
-      netWorth={netWorthOverTime(24, { today })}
+      netWorth={netWorthOverTime(24, { today, viewer })}
       baselines={baselines}
       baselineMonthsUsed={baseline.months.length}
-      merchants={topMerchants({ from, to, limit: 15, attributedUserId: person })}
-      yoy={categoryYearOverYear({ month: yoyMonth, attributedUserId: person })}
+      merchants={topMerchants({ from, to, limit: 15, attributedUserId: person }, viewer)}
+      yoy={categoryYearOverYear({ month: yoyMonth, attributedUserId: person }, viewer)}
       yoyMonth={yoyMonth}
-      cashflow={cashflowTrend(cashflowMonths, { endMonth: monthOf(to), attributedUserId: person })}
+      cashflow={cashflowTrend(cashflowMonths, { endMonth: monthOf(to), attributedUserId: person }, viewer)}
       taxYears={taxYearOptions}
       taxYear={selectedTaxYear}
       taxRows={taxRows}
+      // Ruling R2: a self viewer sees no person split at all -- there is no per-person
+      // breakdown to show when the person scope is always and only themselves.
+      showPersonSplit={!isSelfScoped(viewer)}
     />
   );
 }

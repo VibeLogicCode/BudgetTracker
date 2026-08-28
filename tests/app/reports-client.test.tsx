@@ -56,6 +56,10 @@ function baseProps(overrides: { taxYears?: number[]; taxYear?: number | null; ta
     taxYears: overrides.taxYears ?? [],
     taxYear: overrides.taxYear ?? null,
     taxRows: overrides.taxRows ?? [],
+    // v1.13.0 ruling R2: every fixture in this file predates the household/self split, so it
+    // keeps the pre-existing (household-viewer) behavior -- the person picker and split card
+    // both visible -- unless a test overrides it.
+    showPersonSplit: true,
   };
 }
 
