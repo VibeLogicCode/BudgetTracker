@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { appendAudit } from '@/lib/audit';
 import { CsrfError, assertSameOrigin } from '@/lib/auth/csrf';
 import { userFromRequest } from '@/lib/auth/session';
-import { canActOnOwner } from '@/lib/auth/viewer';
+import { canActOnOwner, isSelfScoped } from '@/lib/auth/viewer';
 import { getImport, previewUndoImport, undoImport } from '@/lib/import/commit';
 
 const bodySchema = z.object({
@@ -19,6 +19,9 @@ export async function POST(request: Request): Promise<Response> {
   }
   const user = userFromRequest(request);
   if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  // Task 14 fix round 1 (controller ruling): the import UI already refuses a self viewer,
+  // but these routes are reachable directly -- refuse here too, before any work.
+  if (isSelfScoped(user)) return Response.json({ error: 'Import is not available on this account.' }, { status: 403 });
 
   const parsed = bodySchema.safeParse(await request.json());
   if (!parsed.success) return Response.json({ error: 'Invalid request' }, { status: 400 });

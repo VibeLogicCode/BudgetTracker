@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createSeededTestDb, insertTestUser, type TestDb } from '../helpers/db';
 import { POST as rawPreviewRoute } from '@/app/api/import/raw-preview/route';
 import { createSession, SESSION_COOKIE_NAME } from '@/lib/auth/session';
+import { setUserVisibility } from '@/lib/auth/users';
 import { MAX_FILE_BYTES } from '@/lib/import/parse';
 
 const fixture = (name: string) => fs.readFileSync(path.join(process.cwd(), 'fixtures', name));
@@ -92,5 +93,25 @@ describe('POST /api/import/raw-preview', () => {
     const response = await rawPreviewRoute(fakeRequest);
     expect(response.status).toBe(413);
     expect(formDataSpy).not.toHaveBeenCalled();
+  });
+
+  // Task 14 fix round 1 (controller ruling): the import UI refuses a self viewer, but this
+  // route was reachable directly.
+  it('403s a self-scoped viewer, staging nothing', async () => {
+    const kidId = insertTestUser(current!.db, { name: 'Kid', username: 'kid', role: 'member' });
+    setUserVisibility(kidId, 'self');
+    const kidToken = createSession(kidId).token;
+    const form = new FormData();
+    form.append('file', new File([fixture('scotia.csv')], 'scotia.csv', { type: 'text/csv' }));
+    const request = new Request('http://nas.local:3000/api/import/raw-preview', {
+      method: 'POST',
+      headers: { origin: 'http://nas.local:3000', host: 'nas.local:3000', cookie: `${SESSION_COOKIE_NAME}=${kidToken}` },
+      body: form,
+    });
+
+    const response = await rawPreviewRoute(request);
+    expect(response.status).toBe(403);
+    const tmp = path.join(tempDir, 'tmp');
+    expect(fs.existsSync(tmp) ? fs.readdirSync(tmp) : []).toHaveLength(0);
   });
 });

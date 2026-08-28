@@ -5,6 +5,7 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { isSameOrigin } from '@/lib/auth/csrf';
 import { requireUser } from '@/lib/auth/session';
+import { isSelfScoped } from '@/lib/auth/viewer';
 import { getAccount } from '@/lib/accounts';
 import { findUserById } from '@/lib/auth/users';
 import { deleteAccountCardPerson, upsertAccountCardPerson } from '@/lib/import/card-people';
@@ -23,6 +24,10 @@ export interface CardPersonState {
 }
 
 const CROSS_ORIGIN_ERROR = 'Cross-origin request rejected';
+// Controller ruling (Task 14 fix round 1): this page is gated for a self viewer, but the
+// action file underneath it never was -- a self viewer could POST directly. Same refusal
+// wording review/import/settings already use.
+const NOT_AVAILABLE_ERROR = 'Import is not available on this account.';
 
 const saveSchema = z.object({
   name: z.string().trim().min(1, 'Give the profile a name').max(80),
@@ -34,7 +39,8 @@ const saveSchema = z.object({
 export async function saveWizardProfileAction(_prev: WizardState, formData: FormData): Promise<WizardState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
 
-  await requireUser();
+  const user = await requireUser();
+  if (isSelfScoped(user)) return { error: NOT_AVAILABLE_ERROR };
   const parsed = saveSchema.safeParse({
     name: formData.get('name') ?? '',
     institution: formData.get('institution') ?? '',
@@ -75,7 +81,8 @@ const cardPersonSchema = z.object({
 export async function setCardPersonAction(_prev: CardPersonState, formData: FormData): Promise<CardPersonState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
 
-  await requireUser();
+  const user = await requireUser();
+  if (isSelfScoped(user)) return { error: NOT_AVAILABLE_ERROR };
   const parsed = cardPersonSchema.safeParse({
     accountId: formData.get('accountId'),
     cardValue: formData.get('cardValue') ?? '',

@@ -4,7 +4,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { createSeededTestDb, type TestDb } from '../helpers/db';
 
-const FAKE_USER = { id: 1, name: 'Alice', username: 'alice', role: 'admin' as const };
+const FAKE_USER: { id: number; name: string; username: string; role: 'admin' | 'member'; visibility: 'household' | 'self' } = {
+  id: 1,
+  name: 'Alice',
+  username: 'alice',
+  role: 'admin',
+  visibility: 'household',
+};
 
 let requestHeaders = new Headers({ origin: 'http://nas.local:3000', host: 'nas.local:3000' });
 
@@ -32,6 +38,8 @@ let originalDataDir: string | undefined;
 
 beforeEach(() => {
   requestHeaders = new Headers({ origin: 'http://nas.local:3000', host: 'nas.local:3000' });
+  FAKE_USER.visibility = 'household';
+  FAKE_USER.role = 'admin';
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-wizard-'));
   originalDataDir = process.env.DATA_DIR;
   process.env.DATA_DIR = tempDir;
@@ -111,6 +119,20 @@ describe('saveWizardProfileAction (new-bank wizard)', () => {
     expect(result.error).toBeTruthy();
     expect(listProfiles()).toHaveLength(before);
     expect(getProfileByName('Broken Bank')).toBeNull();
+  });
+
+  it('Task 14 fix round 1: refuses a self-scoped viewer before validation, creating nothing', async () => {
+    FAKE_USER.role = 'member';
+    FAKE_USER.visibility = 'self';
+    const before = listProfiles().length;
+    const result = await saveWizardProfileAction(
+      {},
+      formData({ name: 'Kid Bank', institution: 'Some Bank', mapping: JSON.stringify(getBuiltinPreset('TD Visa')) }),
+    );
+
+    expect(result.error).toBeTruthy();
+    expect(listProfiles()).toHaveLength(before);
+    expect(getProfileByName('Kid Bank')).toBeNull();
   });
 });
 
@@ -198,6 +220,18 @@ describe('setCardPersonAction (MUST-6.1: saves an account_card_people assignment
     const result = await setCardPersonAction({}, formData({ accountId: String(accountId), cardValue: '-1001', person: String(alexId) }));
 
     expect(result.error).toBe('Cross-origin request rejected');
+    expect(listAccountCardPeople(accountId)).toHaveLength(0);
+  });
+
+  it('Task 14 fix round 1: refuses a self-scoped viewer, writing nothing', async () => {
+    const accountId = insertTestAccount(current!.db);
+    const alexId = insertTestUser(current!.db, { name: 'Alex' });
+    FAKE_USER.role = 'member';
+    FAKE_USER.visibility = 'self';
+
+    const result = await setCardPersonAction({}, formData({ accountId: String(accountId), cardValue: '-1001', person: String(alexId) }));
+
+    expect(result.error).toBeTruthy();
     expect(listAccountCardPeople(accountId)).toHaveLength(0);
   });
 });

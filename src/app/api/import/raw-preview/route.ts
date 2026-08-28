@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { CsrfError, assertSameOrigin } from '@/lib/auth/csrf';
 import { userFromRequest } from '@/lib/auth/session';
+import { isSelfScoped } from '@/lib/auth/viewer';
 import { ImportLimitError, MAX_FILE_BYTES, previewRawRows } from '@/lib/import/parse';
 import { writeStagedFile } from '@/lib/import/staging';
 
@@ -19,6 +20,9 @@ export async function POST(request: Request): Promise<Response> {
   }
   const user = userFromRequest(request);
   if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  // Task 14 fix round 1 (controller ruling): the import UI already refuses a self viewer,
+  // but these routes are reachable directly -- refuse here too, before any work.
+  if (isSelfScoped(user)) return Response.json({ error: 'Import is not available on this account.' }, { status: 403 });
 
   // Reject on the declared size BEFORE formData() buffers the whole body —
   // an authenticated user could otherwise force an arbitrarily large body

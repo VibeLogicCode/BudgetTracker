@@ -8,6 +8,7 @@ import { POST as commitRoute } from '@/app/api/import/commit/route';
 import { POST as undoRoute } from '@/app/api/import/undo/route';
 import { createSession, SESSION_COOKIE_NAME } from '@/lib/auth/session';
 import { createAccount } from '@/lib/accounts';
+import { setUserVisibility } from '@/lib/auth/users';
 import { listAudit } from '@/lib/audit';
 import { getBuiltinPreset, getProfileByName } from '@/lib/import/presets';
 import { MAX_FILE_BYTES } from '@/lib/import/parse';
@@ -173,6 +174,19 @@ describe('POST /api/import/preview', () => {
     expect(response.status).toBe(413);
     expect(formDataSpy).not.toHaveBeenCalled();
     expect(jsonSpy).not.toHaveBeenCalled();
+  });
+
+  // Task 14 fix round 1 (controller ruling): the import UI refuses a self viewer, but this
+  // route was reachable directly.
+  it('403s a self-scoped viewer, staging nothing', async () => {
+    const kidId = insertTestUser(current!.db, { name: 'Kid', username: 'kid', role: 'member' });
+    setUserVisibility(kidId, 'self');
+    const kidToken = createSession(kidId).token;
+
+    const response = await previewRoute(uploadRequestAs(kidToken));
+    expect(response.status).toBe(403);
+    const tmp = path.join(tempDir, 'tmp');
+    expect(fs.existsSync(tmp) ? fs.readdirSync(tmp) : []).toHaveLength(0);
   });
 });
 
@@ -352,5 +366,52 @@ describe('POST /api/import/commit and /api/import/undo', () => {
     );
     expect(response.status).toBe(200);
     expect(listAudit()[0]?.userId).not.toBe(importerId);
+  });
+
+  // Task 14 fix round 1 (controller ruling): both routes refuse a self-scoped viewer, before
+  // any work -- neither writes a transaction nor deletes one.
+  it('commit 403s a self-scoped viewer, committing nothing', async () => {
+    const kidId = insertTestUser(current!.db, { name: 'Kid', username: 'kid', role: 'member' });
+    setUserVisibility(kidId, 'self');
+    const kidToken = createSession(kidId).token;
+    const before = (current!.sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c;
+
+    const response = await commitRoute(
+      jsonRequestAs(kidToken, 'http://nas.local:3000/api/import/commit', {
+        stagingId: '00000000-0000-4000-8000-000000000000',
+        filename: 'x.csv',
+        accountId,
+        profileId,
+        mapping: getBuiltinPreset('TD Chequing/Debit'),
+      }),
+    );
+    expect(response.status).toBe(403);
+    expect((current!.sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c).toBe(before);
+  });
+
+  it('undo 403s a self-scoped viewer, leaving the import untouched', async () => {
+    const previewResponse = await previewRoute(uploadRequest());
+    const preview = (await previewResponse.json()) as { stagingId: string };
+    const commitResponse = await commitRoute(
+      jsonRequest('http://nas.local:3000/api/import/commit', {
+        stagingId: preview.stagingId,
+        filename: 'td-chequing.csv',
+        accountId,
+        profileId,
+        mapping: getBuiltinPreset('TD Chequing/Debit'),
+      }),
+    );
+    const committed = (await commitResponse.json()) as { importId: number };
+    const before = (current!.sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c;
+
+    const kidId = insertTestUser(current!.db, { name: 'Kid', username: 'kid', role: 'member' });
+    setUserVisibility(kidId, 'self');
+    const kidToken = createSession(kidId).token;
+
+    const response = await undoRoute(
+      jsonRequestAs(kidToken, 'http://nas.local:3000/api/import/undo', { importId: committed.importId, confirm: true }),
+    );
+    expect(response.status).toBe(403);
+    expect((current!.sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c).toBe(before);
   });
 });
