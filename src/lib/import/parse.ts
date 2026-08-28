@@ -33,6 +33,14 @@ export interface CandidateRow {
    * skipped.
    */
   balanceCents: number | null;
+  /**
+   * v1.13.0 ruling R9: the provider's stable per-transaction id (OFX FITID). null for every
+   * CSV row. commitImport ALREADY dedups on this when set, and stores NULL in dedup_hash for
+   * such a row (src/lib/import/commit.ts:196-198,231-233) -- the SimpleFIN path built exactly
+   * this machinery and OFX needs no change to commit, undo or the transactions_external_id_uq
+   * index at all.
+   */
+  externalId?: string | null;
   cells: string[];
 }
 
@@ -172,7 +180,9 @@ export function parseCsv(buf: Buffer, mapping: ImportMapping): ParseResult {
     // preset except TD Chequing/Debit) short-circuits to null without even reading a cell.
     const balanceCents = mapping.balanceCol === null ? null : parseAmountToCents(cell(cells, mapping.balanceCol));
 
-    rows.push({ rowIndex, rawDate, date, rawDescription, amountCents, balanceCents, cells });
+    // Stamped explicitly (not merely absent) so a CSV row and an OFX row differ in this ONE
+    // field's value, never in whether the field exists on the object.
+    rows.push({ rowIndex, rawDate, date, rawDescription, amountCents, balanceCents, externalId: null, cells });
   });
 
   // Ruling R5: detected from the first vs. last ACCEPTED row (error/skipped rows never reach

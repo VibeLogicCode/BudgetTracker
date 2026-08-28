@@ -5,6 +5,7 @@ import { isSimplefinManaged } from '@/lib/simplefin/connection';
 import { commitImport } from './commit';
 import { computeRowHashes } from './dedup';
 import type { ImportMapping } from './mapping';
+import { looksLikeOfx, parseOfx } from './ofx';
 import { parseCsv } from './parse';
 import { forkProfileIfBuiltin, setAccountProfile } from './presets';
 import { deleteStagedFile, readStagedFile } from './staging';
@@ -54,17 +55,26 @@ export function commitStagedImport(input: {
   // failure here must throw before any fork is created or the account is
   // repointed — otherwise the account would end up pointed at a profile
   // that was never actually used to import anything (review finding 3).
-  const parsed = parseCsv(buf, input.mapping);
+  //
+  // v1.13.0 ruling R9: an OFX/QFX file skips the CSV mapping entirely -- there is nothing to
+  // map, because the format names its own fields. Everything downstream is identical:
+  // computeRowHashes still runs (commitImport ignores the hash for a row carrying an
+  // externalId, commit.ts:196-198), commitImport is the same call, and undoImport partitions
+  // by transaction_imports and has never looked at how a row was deduped.
+  const ofx = looksLikeOfx(input.filename, buf) ? parseOfx(buf) : null;
+  const parsed = ofx ?? parseCsv(buf, input.mapping);
   const hashed = computeRowHashes(input.accountId, parsed.rows);
 
-  // Copy-on-write: an edited built-in forks into a per-account profile.
-  // Only reached once the file above is known to be valid.
-  const profileId = forkProfileIfBuiltin({
-    profileId: input.profileId,
-    accountName: account.name,
-    mapping: input.mapping,
-  });
-  setAccountProfile(input.accountId, profileId);
+  // The fork/repoint pair is skipped for an OFX file -- an OFX import has no mapping to fork,
+  // so pointing the account at a profile it did not use would be a lie.
+  const profileId = ofx
+    ? input.profileId
+    : forkProfileIfBuiltin({
+        profileId: input.profileId,
+        accountName: account.name,
+        mapping: input.mapping,
+      });
+  if (!ofx) setAccountProfile(input.accountId, profileId);
 
   const committed = commitImport({
     accountId: input.accountId,
@@ -77,7 +87,8 @@ export function commitStagedImport(input: {
     // path (the wizard and the main import screen both call commitStagedImport, never
     // commitImport directly) — without passing it through, mapping.cardCol would parse,
     // save and round-trip correctly everywhere but never be consulted at commit time.
-    mapping: input.mapping,
+    // An OFX file has no mapping at all, so null here (never input.mapping) -- ruling R9.
+    mapping: ofx ? null : input.mapping,
     // v1.8.0 Task 3: the real file's detected direction, so closingBalancesByDate picks the
     // correct physical row of a same-date group. Only this real CSV path (and SimpleFIN,
     // which has no file to detect direction from and omits this) ever has one to pass.

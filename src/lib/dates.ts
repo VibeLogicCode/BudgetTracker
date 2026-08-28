@@ -13,7 +13,8 @@ export type DateFormat =
   | 'DD-MMM-YYYY'
   | 'DD-MMM-YY'
   | 'MMM DD, YYYY'
-  | 'YYYY-MM-DD HH:mm';
+  | 'YYYY-MM-DD HH:mm'
+  | 'YYYYMMDD';
 
 /**
  * Date-format auto-detection filters this list in DATE_FORMATS order and keeps every format
@@ -34,6 +35,11 @@ export const DATE_FORMATS: readonly DateFormat[] = [
   'DD-MMM-YY',
   'MMM DD, YYYY',
   'YYYY-MM-DD HH:mm',
+  // v1.13.0 (Task 9): BMO's published transaction-history CSV layout (UNVERIFIED,
+  // src/lib/import/presets.ts) dates its "Date Posted" column with no separator at all.
+  // Listed last, same reasoning as every other unambiguous fixed-width form here: it can
+  // never be confused with a slash/dash format, so its tie-break position doesn't matter.
+  'YYYYMMDD',
 ];
 
 const MONTH_NAMES: Record<string, number> = {
@@ -132,6 +138,14 @@ export function parseDateString(raw: string, format: string): string | null {
     // HH:mm) while a valid one is silently ignored, never rounding the day.
     case 'YYYY-MM-DD HH:mm': {
       const m = /^(\d{4})-(\d{1,2})-(\d{1,2}) (\d{1,2}):(\d{2})$/.exec(text);
+      if (!m) return null;
+      return buildIso(Number(m[1]), Number(m[2]), Number(m[3]));
+    }
+    // Exactly 8 digits, no separator. Anchored to the full string (not sliced) so a value
+    // one digit short or long — e.g. a stray '2026080' — fails rather than silently reading
+    // the wrong month/day out of a misaligned string.
+    case 'YYYYMMDD': {
+      const m = /^(\d{4})(\d{2})(\d{2})$/.exec(text);
       if (!m) return null;
       return buildIso(Number(m[1]), Number(m[2]), Number(m[3]));
     }

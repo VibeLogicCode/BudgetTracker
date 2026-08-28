@@ -1,7 +1,12 @@
 import { describe, it, expect, afterEach } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../helpers/db';
 import { nowIso } from '@/lib/clock';
 import { parseImportMapping, serializeImportMapping } from '@/lib/import/mapping';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 import {
   createProfile,
   deleteProfile,
@@ -26,10 +31,11 @@ afterEach(() => {
 });
 
 describe('profile store', () => {
-  it('lists the four seeded built-ins with parsed mappings', () => {
+  it('lists the seven seeded built-ins with parsed mappings', () => {
     current = createSeededTestDb();
     const profiles = listProfiles();
-    expect(profiles).toHaveLength(4);
+    // v1.13.0 Task 9 adds RBC/BMO/CIBC (UNVERIFIED) to the original four.
+    expect(profiles).toHaveLength(7);
     expect(profiles.every((p) => p.isBuiltin)).toBe(true);
     expect(profiles[0].mapping!.amountMode).toBe('debit_credit');
   });
@@ -70,7 +76,7 @@ describe('copy-on-write built-ins', () => {
     const builtin = getProfileByName('TD Visa')!;
     const id = forkProfileIfBuiltin({ profileId: builtin.id, accountName: 'Joint Visa', mapping: builtin.mapping! });
     expect(id).toBe(builtin.id);
-    expect(listProfiles()).toHaveLength(4);
+    expect(listProfiles()).toHaveLength(7);
   });
 
   it('forks into a new named profile when the mapping is edited', () => {
@@ -87,7 +93,7 @@ describe('copy-on-write built-ins', () => {
 
     // built-in untouched
     expect(getProfile(builtin.id)?.mapping?.dateFormat).toBe('MM/DD/YYYY');
-    expect(listProfiles()).toHaveLength(5);
+    expect(listProfiles()).toHaveLength(8);
   });
 
   it('does not collide when two accounts fork the same built-in', () => {
@@ -106,7 +112,7 @@ describe('copy-on-write built-ins', () => {
     const again = forkProfileIfBuiltin({ profileId: forkedId, accountName: 'Joint Visa', mapping: { ...builtin.mapping!, dateFormat: 'DD/MM/YYYY' } });
     expect(again).toBe(forkedId);
     expect(getProfile(forkedId)?.mapping?.dateFormat).toBe('DD/MM/YYYY');
-    expect(listProfiles()).toHaveLength(5);
+    expect(listProfiles()).toHaveLength(8);
   });
 });
 
@@ -178,7 +184,7 @@ describe('cardCol upgrade compatibility (MUST-2.2, spec 2026-08-22 v1.6.0)', () 
     const id = forkProfileIfBuiltin({ profileId: builtin.id, accountName: 'Joint Visa', mapping: roundTripped });
 
     expect(id).toBe(builtin.id);
-    expect(listProfiles()).toHaveLength(4); // no spurious fork created
+    expect(listProfiles()).toHaveLength(7); // no spurious fork created
   });
 
   it('forkProfileIfBuiltin still forks correctly when cardCol itself is the actual, intentional change', () => {
@@ -254,7 +260,7 @@ describe('deleteProfile (a mapping could not previously be deleted by anyone; cl
     current = createSeededTestDb();
     const builtin = getProfileByName('TD Visa')!;
     expect(() => deleteProfile(builtin.id)).toThrowError(/built-in/i);
-    expect(listProfiles()).toHaveLength(4);
+    expect(listProfiles()).toHaveLength(7);
   });
 
   it('deletes an unused custom profile, reporting nothing cleared', () => {
@@ -266,7 +272,7 @@ describe('deleteProfile (a mapping could not previously be deleted by anyone; cl
     });
     expect(deleteProfile(id)).toEqual({ accountsCleared: 0, importsCleared: 0 });
     expect(getProfile(id)).toBeNull();
-    expect(listProfiles()).toHaveLength(4);
+    expect(listProfiles()).toHaveLength(7);
   });
 
   it('deletes a profile an account still uses, nulling the account reference instead of refusing', () => {
@@ -356,12 +362,12 @@ describe('a profile row whose stored mapping does not parse (settings/managers 5
     const id = insertUnparseableProfile(current, '{"amountMode": "not a real mode"}');
 
     const profiles = listProfiles();
-    expect(profiles).toHaveLength(5);
+    expect(profiles).toHaveLength(8);
     const broken = profiles.find((p) => p.id === id)!;
     expect(broken.mapping).toBeNull();
     expect(broken.mappingError).toBeTruthy();
-    // The other four (valid) rows are completely unaffected by the one bad row.
-    expect(profiles.filter((p) => p.mapping !== null)).toHaveLength(4);
+    // The other seven (valid) rows are completely unaffected by the one bad row.
+    expect(profiles.filter((p) => p.mapping !== null)).toHaveLength(7);
   });
 
   it('also survives mapping text that is not even valid JSON', () => {
@@ -390,7 +396,7 @@ describe('a profile row whose stored mapping does not parse (settings/managers 5
 
     expect(deleteProfile(id)).toEqual({ accountsCleared: 0, importsCleared: 0 });
     expect(getProfile(id)).toBeNull();
-    expect(listProfiles()).toHaveLength(4);
+    expect(listProfiles()).toHaveLength(7);
   });
 
   it('a broken row referenced by an account still clears the reference on delete, same as a valid row', () => {
@@ -425,7 +431,7 @@ describe('isActive / setProfileActive (spec 2026-08-22 v1.6.0, MUST-4.1-4.3: map
     expect(getProfile(builtin.id)?.isActive).toBe(false);
     // still present, still built-in, still deletable-refusal unchanged -- just hidden.
     expect(getProfile(builtin.id)?.isBuiltin).toBe(true);
-    expect(listProfiles()).toHaveLength(4);
+    expect(listProfiles()).toHaveLength(7);
   });
 
   it('reactivates a deactivated profile', () => {
@@ -465,7 +471,7 @@ describe('isActive / setProfileActive (spec 2026-08-22 v1.6.0, MUST-4.1-4.3: map
 
     const pickerView = listProfiles().filter(hasReadableMapping).filter((p) => p.isActive);
     expect(pickerView.find((p) => p.id === scotia.id)).toBeUndefined();
-    expect(pickerView).toHaveLength(3); // the other three built-ins remain
+    expect(pickerView).toHaveLength(6); // the other six built-ins remain
   });
 
   it('reactivating restores the pinned account to the picker with no further action needed (MUST-4.3, other direction)', () => {
@@ -511,4 +517,15 @@ describe('getProfileUsage (read path for the delete confirm step)', () => {
     expect(getProfileUsage(id)).toEqual({ accounts: 1, imports: 1 });
     expect(getProfile(id)).not.toBeNull();
   });
+});
+
+it('v1.13.0: the three new presets parse, are marked UNVERIFIED in source, and round-trip', () => {
+  for (const name of ['RBC Chequing/Visa', 'BMO Chequing/Mastercard', 'CIBC Chequing/Visa'] as const) {
+    const mapping = getBuiltinPreset(name);
+    expect(() => parseImportMapping(serializeImportMapping(mapping))).not.toThrow();
+    expect(mapping.cardCol).toBeNull();
+    expect(mapping.balanceCol).toBeNull();
+  }
+  const source = fs.readFileSync(path.join(root, 'src/lib/import/presets.ts'), 'utf8');
+  expect((source.match(/UNVERIFIED/g) ?? []).length).toBe(3);
 });

@@ -103,14 +103,22 @@ describe('parseDateString', () => {
 
   it('exposes the format list used by the mapping wizard', () => {
     expect(DATE_FORMATS).toContain('MM/DD/YYYY');
-    // 'DD-MMM-YY' and 'YYYY-MM-DD HH:mm' were added to the original 7 formats.
-    expect(DATE_FORMATS).toHaveLength(9);
+    // 'DD-MMM-YY' and 'YYYY-MM-DD HH:mm' were added to the original 7 formats;
+    // 'YYYYMMDD' was added in v1.13.0 Task 9 for the BMO (UNVERIFIED) preset and OFX.
+    expect(DATE_FORMATS).toHaveLength(10);
     expect(DATE_FORMATS).toContain('DD-MMM-YY');
     expect(DATE_FORMATS).toContain('YYYY-MM-DD HH:mm');
+    expect(DATE_FORMATS).toContain('YYYYMMDD');
     expect(isDateFormat('MM/DD/YYYY')).toBe(true);
     expect(isDateFormat('DD-MMM-YY')).toBe(true);
     expect(isDateFormat('YYYY-MM-DD HH:mm')).toBe(true);
+    expect(isDateFormat('YYYYMMDD')).toBe(true);
     expect(isDateFormat('MM-DD-YYYY')).toBe(false);
+  });
+
+  it('parses YYYYMMDD (v1.13.0 Task 9: OFX DTPOSTED / BMO preset), rejecting a short string', () => {
+    expect(parseDateString('20260803', 'YYYYMMDD')).toBe('2026-08-03');
+    expect(parseDateString('2026080', 'YYYYMMDD')).toBeNull();
   });
 });
 

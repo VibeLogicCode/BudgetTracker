@@ -4,6 +4,11 @@ export type AmountMode = 'signed' | 'debit_credit';
 export type SignConvention = 'negative_is_spend' | 'positive_is_spend';
 export type EncodingChoice = 'auto' | 'utf-8' | 'windows-1252';
 
+/**
+ * v1.13.0 (Task 9): an OFX/QFX file (src/lib/import/ofx.ts) has no ImportMapping at all — the
+ * format names its own fields, so commitStagedImport passes `mapping: null` for one rather than
+ * inventing a mapping to describe it.
+ */
 export interface ImportMapping {
   hasHeader: boolean;
   /** Number of leading lines to discard (usually 1 when hasHeader). */

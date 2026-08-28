@@ -9,6 +9,9 @@ export const BUILTIN_PRESET_NAMES = [
   'TD Visa',
   'Scotiabank Chequing/Debit',
   'Amex Canada',
+  'RBC Chequing/Visa',
+  'BMO Chequing/Mastercard',
+  'CIBC Chequing/Visa',
 ] as const;
 
 export type BuiltinPresetName = (typeof BUILTIN_PRESET_NAMES)[number];
@@ -136,6 +139,99 @@ export const BUILTIN_PRESETS: Record<BuiltinPresetName, BuiltinPreset> = {
       // credit card is the amount OWED, not a "money in the account" figure the way a
       // chequing running balance is, and Amex's own CSV never states it per row. Left
       // unmapped (spec 2026-08-23 Task 3), same as TD Visa above.
+      balanceCol: null,
+    },
+  },
+  /**
+   * UNVERIFIED (v1.13.0, micro-ruling M7). No RBC export has been seen by this repo -- built from
+   * RBC's published "download to CSV" layout, whose header row is:
+   *   Account Type, Account Number, Transaction Date, Cheque Number, Description 1, Description 2, CAD$, USD$
+   * Guessed: that Transaction Date is MM/DD/YYYY (RBC's own docs show both, by locale) and that the
+   * CAD$ column is signed with debits negative. Both are the FIRST things to check against a real
+   * file. Everything else is read straight off that header. Ask the owner for one redacted header
+   * line and delete this paragraph when it matches.
+   */
+  'RBC Chequing/Visa': {
+    name: 'RBC Chequing/Visa',
+    institution: 'Royal Bank of Canada',
+    mapping: {
+      hasHeader: true,
+      headerRows: 1,
+      dateCol: 2,
+      dateFormat: 'MM/DD/YYYY',
+      // Two description columns joined with a single space, which is what descCols already does.
+      descCols: [4, 5],
+      amountMode: 'signed',
+      amountCol: 6,
+      debitCol: null,
+      creditCol: null,
+      signConvention: 'negative_is_spend',
+      encoding: 'auto',
+      skipRules: null,
+      // Per-card attribution is account-specific, so it is set on the per-account fork, never baked
+      // into a shared built-in -- the same reasoning the Amex preset's own comment gives.
+      cardCol: null,
+      // No running-balance column in RBC's documented layout.
+      balanceCol: null,
+    },
+  },
+  /**
+   * UNVERIFIED (v1.13.0, micro-ruling M7). No BMO export has been seen by this repo -- built from
+   * BMO's published transaction-history CSV, whose header row is:
+   *   First Bank Card, Transaction Type, Date Posted, Transaction Amount, Description
+   * Guessed: that the file opens with a one-line "following data is valid as of" preamble and a blank
+   * line before that header (hence headerRows 3), and that Date Posted is YYYYMMDD. Both are the
+   * FIRST things to check against a real file. Note that headerRows counts LINES, and papaparse's
+   * skipEmptyLines: 'greedy' (src/lib/import/parse.ts) drops the blank one before this count is
+   * applied -- so if a real file turns out to have no blank line, this becomes 2, not 3.
+   */
+  'BMO Chequing/Mastercard': {
+    name: 'BMO Chequing/Mastercard',
+    institution: 'Bank of Montreal',
+    mapping: {
+      hasHeader: true,
+      headerRows: 3,
+      dateCol: 2,
+      dateFormat: 'YYYYMMDD',
+      descCols: [4],
+      amountMode: 'signed',
+      amountCol: 3,
+      debitCol: null,
+      creditCol: null,
+      signConvention: 'negative_is_spend',
+      encoding: 'auto',
+      skipRules: null,
+      cardCol: null,
+      balanceCol: null,
+    },
+  },
+  /**
+   * UNVERIFIED (v1.13.0, micro-ruling M7). No CIBC export has been seen by this repo -- built from
+   * CIBC's published CSV, which has NO header row at all and whose columns are:
+   *   Date, Description, Debit, Credit[, Card Number]
+   * Guessed: that Date is YYYY-MM-DD and that the fifth column (present on the Visa export, absent on
+   * chequing) is a card number. Both are the FIRST things to check against a real file. The card
+   * column is deliberately NOT mapped as cardCol here for the reason every other built-in gives.
+   */
+  'CIBC Chequing/Visa': {
+    name: 'CIBC Chequing/Visa',
+    institution: 'CIBC',
+    mapping: {
+      hasHeader: false,
+      headerRows: 0,
+      dateCol: 0,
+      dateFormat: 'YYYY-MM-DD',
+      descCols: [1],
+      // Two columns, never both filled: debit is money out, credit is money in. No sign convention
+      // question arises in this mode (see ImportMapping.signConvention's own comment).
+      amountMode: 'debit_credit',
+      amountCol: null,
+      debitCol: 2,
+      creditCol: 3,
+      signConvention: 'negative_is_spend',
+      encoding: 'auto',
+      skipRules: null,
+      cardCol: null,
       balanceCol: null,
     },
   },
