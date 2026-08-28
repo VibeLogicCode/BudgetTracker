@@ -42,6 +42,10 @@ const REQUIRE_VIEWER: { file: string; fn: string }[] = [
   { file: 'src/lib/insights.ts', fn: 'householdInsights' },
   { file: 'src/lib/networth.ts', fn: 'latestSnapshots' },
   { file: 'src/lib/networth.ts', fn: 'netWorthOverTime' },
+  // Addendum A: a WRITER, not a read model -- it is listed here for the one guarantee this list
+  // mechanically asserts, that the viewer parameter exists and is never optional. That is what
+  // stops a future caller compiling a create that skips the owner rules (rulings A10, A12).
+  { file: 'src/lib/loans.ts', fn: 'createLoanFromTransaction' },
 ];
 
 /** Exempt, WITH the reason. Nothing is exempt without one. */
@@ -154,8 +158,8 @@ describe('ruling R2: every read-model helper takes a viewer', () => {
   // v1.13.0 whole-branch review (item M-e): raised from 20 to 27, the actual count as of this
   // review (23 + 4) -- 20 had drifted well below reality and would not have caught a deletion
   // of up to seven real entries.
-  it('the named lists cannot shrink below 27 entries', () => {
-    expect(REQUIRE_VIEWER.length + EXEMPT.length).toBeGreaterThanOrEqual(27);
+  it('the named lists cannot shrink below 28 entries', () => {
+    expect(REQUIRE_VIEWER.length + EXEMPT.length).toBeGreaterThanOrEqual(28);
   });
 });
 

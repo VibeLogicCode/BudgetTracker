@@ -1,12 +1,22 @@
 import { and, asc, eq, gte, inArray, isNull, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { billInstallments, loanMatcherRules, loanPayments, transactions, users, warrantyItemTypes, warrantyItems } from '@/db/schema';
-import { ownerScope, type Viewer } from '@/lib/auth/viewer';
+import { canActOnOwner, ownerScope, NOT_YOURS_ERROR, type Viewer } from '@/lib/auth/viewer';
 import { nowIso } from '@/lib/clock';
 import { addDaysIso, addMonths, addMonthsClamped, daysBetweenIso, monthEnd, monthOf, monthRange, todayIso } from '@/lib/dates';
 import type { RateVerdict } from '@/lib/notify/ratelimit';
 import { meanCents } from '@/lib/predict/stats';
-import { isLoanRepayment, loanSignedDelta, type BillingCycle, type LoanDirection } from '@/lib/warranty/constants';
+import { getTransaction } from '@/lib/transactions';
+import {
+  isLoanRepayment,
+  loanSignedDelta,
+  LOAN_ALREADY_LINKED_ERROR,
+  LOAN_LENT_FIRST_ENTRY_ERROR,
+  type BillingCycle,
+  type LoanDirection,
+} from '@/lib/warranty/constants';
+import { createWarrantyItem, type WarrantyInput } from '@/lib/warranty/items';
+import { createItemType, listItemTypes } from '@/lib/warranty/types';
 
 /**
  * Loan money-tracking (spec 2026-08-17 §13).
@@ -724,6 +734,100 @@ export function assignTransactionToLoan(input: { txnId: number; itemId: number; 
       direction: item.direction,
     });
     return result === null ? { linked: false, appliedCents: 0 } : { linked: true, appliedCents: result.appliedCents };
+  });
+}
+
+export interface NewLoanFromTransaction {
+  txnId: number;
+  name: string;
+  direction: LoanDirection;
+  at?: Date;
+}
+
+export interface NewLoanResult {
+  itemId: number;
+  name: string;
+  direction: LoanDirection;
+  /** Unsigned, exactly as assignTransactionToLoan reports it. */
+  appliedCents: number;
+  /** The balance after the assign: |txn.amountCents| in every accepted case (ruling A3). */
+  balanceAfterCents: number;
+}
+
+/** Ruling A6: the first `kind: 'loan'` type in listItemTypes()'s own order (name collate
+ *  nocase) -- the exact order the New item form's dropdown renders. No second `order by`. */
+function firstLoanTypeId(): number | null {
+  return listItemTypes().find((type) => type.kind === 'loan')?.id ?? null;
+}
+
+/**
+ * Addendum A. Creates a loan item and assigns `txnId` as its first entry, in ONE db transaction
+ * (ruling A4). Throws -- never returns an error shape -- so the action's existing catch surfaces
+ * every refusal the same way assignToLoanAction already surfaces assignTransactionToLoan's.
+ *
+ * `viewer` is REQUIRED (ruling A12) and is the only source of the new item's owner_user_id
+ * (ruling A10): a self viewer's own id, otherwise the transaction's attributed_user_id falling
+ * back to the viewer's own.
+ */
+export function createLoanFromTransaction(input: NewLoanFromTransaction, viewer: Viewer): NewLoanResult {
+  const at = input.at ?? new Date();
+  const stamp = nowIso(at);
+  const name = input.name.trim();
+  if (name.length === 0) throw new Error('Give the loan a name.');
+
+  const txn = getTransaction(input.txnId, viewer);
+  if (txn === null) throw new Error('That transaction no longer exists.');
+  // Ruling A10: a self viewer's loan is theirs, full stop; a household viewer's follows the row's
+  // attribution and falls back to their own id. canActOnOwner then refuses a member acting on
+  // somebody else's row, exactly as warranties/actions.ts does.
+  const ownerUserId = ownerScope(viewer) === null ? (txn.attributedUserId ?? viewer.id) : viewer.id;
+  if (!canActOnOwner(ownerUserId, viewer)) throw new Error(NOT_YOURS_ERROR);
+
+  // Ruling A2 + P4: for a non-'owed' loan, "the first entry is a repayment" and "the money came
+  // IN" are the same statement -- said once, through the helper that owns the flip, so the other
+  // direction's value is never spelled out in this file.
+  if (input.direction !== 'owed' && isLoanRepayment(input.direction, txn.amountCents)) {
+    throw new Error(LOAN_LENT_FIRST_ENTRY_ERROR);
+  }
+  // Ruling A7: the double-submit guard.
+  if (paymentLinksForTransaction(input.txnId).loans > 0) throw new Error(LOAN_ALREADY_LINKED_ERROR);
+
+  const magnitude = Math.abs(txn.amountCents);
+  // Ruling A3: seed = target - delta. link() is still the only code that moves the balance.
+  const seedCents = isLoanRepayment(input.direction, txn.amountCents) ? magnitude * 2 : 0;
+
+  return getDb().transaction((): NewLoanResult => {
+    const typeId = firstLoanTypeId() ?? createItemType('Loan', 'loan').id; // rulings A5, A6
+    const itemId = createWarrantyItem(
+      {
+        name,
+        vendor: null,
+        model: null,
+        serial: null,
+        purchaseDate: txn.date,
+        warrantyMonths: null,
+        isLifetime: false,
+        priceCents: null,
+        ownerUserId,
+        transactionId: input.txnId,
+        typeId,
+        notes: null,
+        currentBalanceCents: seedCents,
+        balanceUpdatedAt: stamp, // MUST-11.7: both, or neither
+        loanDirection: input.direction,
+      } satisfies WarrantyInput,
+      [],
+      stamp,
+    );
+    const result = assignTransactionToLoan({ txnId: input.txnId, itemId, at });
+    return {
+      itemId,
+      name,
+      direction: input.direction,
+      appliedCents: result.appliedCents,
+      balanceAfterCents:
+        seedCents + (isLoanRepayment(input.direction, txn.amountCents) ? -result.appliedCents : result.appliedCents),
+    };
   });
 }
 

@@ -1,3 +1,5 @@
+import { formatCents } from '@/lib/money';
+
 /**
  * Client-safe warranty constants and wording helpers (Ruling P4): this module is imported
  * by client components, so it must stay PURE -- no @/db import, no native db driver, no I/O.
@@ -483,6 +485,44 @@ export const INSTALLMENT_KIND_ERROR = 'A due-date schedule only applies to bills
  * non-loan row carries forever, so only writing 'lent' onto one is worth refusing.
  */
 export const LOAN_DIRECTION_KIND_ERROR = 'Only a loan can be owed to us.';
+
+/** Addendum A, ruling A2. A loan you lent out cannot begin with money arriving. */
+export const LOAN_LENT_FIRST_ENTRY_ERROR = 'A loan you lent out starts with money going out.';
+
+/** Addendum A, ruling A7: the double-submit guard for the create-a-loan path only. */
+export const LOAN_ALREADY_LINKED_ERROR = 'That transaction is already assigned to a loan.';
+
+/**
+ * Addendum A, ruling A8. The wording 3efb23f wrote inline in assignToLoanAction, extracted so the
+ * create-a-loan path says the same sentences instead of a second copy of them (MUST-19.11).
+ * `balanceAfterCents` is the item's balance READ BACK after the move: null means the balance is
+ * unknown (never anchored), 0 means it is now zero.
+ *
+ * `isRepayment` is an explicit INPUT, not something this function re-derives: `appliedCents` is
+ * unsigned (see `link()`'s docblock), so a verdict computed from it here would be a second,
+ * weaker copy of the sign logic `isLoanRepayment` already owns -- exactly the drift ruling A8
+ * exists to prevent. Both callers pass `isLoanRepayment(direction, txn.amountCents)`.
+ */
+export function loanAssignedMessage(input: {
+  direction: LoanDirection;
+  isRepayment: boolean;
+  appliedCents: number;
+  balanceAfterCents: number | null;
+}): string {
+  if (input.appliedCents === 0) {
+    return input.balanceAfterCents === null
+      ? 'Assigned. The balance was unknown, so it did not move.'
+      : 'Assigned. The balance was already $0.00, so nothing came off.';
+  }
+  const amount = formatCents(input.appliedCents);
+  if (input.isRepayment) {
+    if (input.direction !== 'owed') return `Assigned. ${amount} came off what they owe.`;
+    if (input.balanceAfterCents === 0) return `Assigned. ${amount} came off; the balance is now $0.00.`;
+    return `Assigned. ${amount} came off the balance.`;
+  }
+  if (input.direction !== 'owed') return `Assigned. ${amount} added to what they owe.`;
+  return `Assigned. The balance went up ${amount} (money in).`;
+}
 
 /**
  * The sentence above the Payment matching rules table. Both arms keep MUST-14.6's budget

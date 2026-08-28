@@ -43,6 +43,9 @@ import {
   isLoanDirection,
   loanSignedDelta,
   isLoanRepayment,
+  LOAN_LENT_FIRST_ENTRY_ERROR,
+  LOAN_ALREADY_LINKED_ERROR,
+  loanAssignedMessage,
 } from '@/lib/warranty/constants';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -430,5 +433,53 @@ describe('loanSignedDelta (spec BU, ruling P4)', () => {
     expect(isLoanDirection('owed')).toBe(true);
     expect(isLoanDirection('lent')).toBe(true);
     expect(isLoanDirection('given')).toBe(false);
+  });
+});
+
+describe('Addendum A refusal wording (rulings A2, A7)', () => {
+  it('is exactly the sentence the Interfaces block pins', () => {
+    expect(LOAN_LENT_FIRST_ENTRY_ERROR).toBe('A loan you lent out starts with money going out.');
+    expect(LOAN_ALREADY_LINKED_ERROR).toBe('That transaction is already assigned to a loan.');
+  });
+});
+
+describe('loanAssignedMessage (Addendum A, ruling A8)', () => {
+  it('says what came off a loan the household owes', () => {
+    expect(
+      loanAssignedMessage({ direction: 'owed', isRepayment: true, appliedCents: 50_000, balanceAfterCents: 150_000 }),
+    ).toBe('Assigned. $500.00 came off the balance.');
+  });
+
+  it('names the zero when an owed balance lands on it', () => {
+    expect(
+      loanAssignedMessage({ direction: 'owed', isRepayment: true, appliedCents: 50_000, balanceAfterCents: 0 }),
+    ).toBe('Assigned. $500.00 came off; the balance is now $0.00.');
+  });
+
+  it('speaks in the other frame for a loan lent out (a repayment coming in)', () => {
+    expect(
+      loanAssignedMessage({ direction: 'lent', isRepayment: true, appliedCents: 50_000, balanceAfterCents: 50_000 }),
+    ).toBe('Assigned. $500.00 came off what they owe.');
+  });
+
+  it('reports the balance going up when money went out on an owed loan (a disbursement)', () => {
+    expect(
+      loanAssignedMessage({ direction: 'owed', isRepayment: false, appliedCents: 50_000, balanceAfterCents: 150_000 }),
+    ).toBe('Assigned. The balance went up $500.00 (money in).');
+  });
+
+  it('reports what a lent loan grows by when money goes out to them', () => {
+    expect(
+      loanAssignedMessage({ direction: 'lent', isRepayment: false, appliedCents: 50_000, balanceAfterCents: 50_000 }),
+    ).toBe('Assigned. $500.00 added to what they owe.');
+  });
+
+  it('is honest when nothing moved', () => {
+    expect(
+      loanAssignedMessage({ direction: 'owed', isRepayment: false, appliedCents: 0, balanceAfterCents: null }),
+    ).toBe('Assigned. The balance was unknown, so it did not move.');
+    expect(
+      loanAssignedMessage({ direction: 'owed', isRepayment: true, appliedCents: 0, balanceAfterCents: 0 }),
+    ).toBe('Assigned. The balance was already $0.00, so nothing came off.');
   });
 });
