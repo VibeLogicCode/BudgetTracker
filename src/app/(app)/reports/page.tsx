@@ -55,6 +55,20 @@ export default async function ReportsPage({
   // being read.
   const person = ownerScope(viewer) ?? urlScope;
 
+  /**
+   * v1.13.0 ruling R2 (fix round 1, controller directive). R2 binds every page, not just the
+   * dashboard: a self viewer gets NO account balances, NO net worth, and NO report of a
+   * household total. Net worth, debt-over-time and the tax-year card are all household-scope
+   * (debtOverTime and taxYears/taxYearReport take no viewer at all; netWorthOverTime's own
+   * accounts are scoped to the viewer, but R2 is categorical here the same way the dashboard's
+   * netWorthLatest already is -- no net worth for a self viewer, full stop, not merely one
+   * restricted to their own accounts). The three household-wide queries below are skipped
+   * OUTRIGHT for a self viewer, not run and discarded -- the same "no household figure leaves
+   * this file, even unrendered" reasoning already applied on budgets/page.tsx's household-scope
+   * suggestion skip.
+   */
+  const showHouseholdTotals = !isSelfScoped(viewer);
+
   // Task 13 (v1.7.0): the year-over-year card's own month picker, independent of the range
   // above -- "this month" is always exactly one month, never a range. It lives in the same
   // filter form as range/person (below) so Apply carries all three at once and no card's scope
@@ -99,7 +113,7 @@ export default async function ReportsPage({
   // four-digit number and one of the years taxYears() actually returned; anything else
   // (missing, malformed, or simply a year with no data) falls back to the newest year so the
   // <select>, the table and the Download CSV link can never desync from each other.
-  const taxYearOptions = taxYears();
+  const taxYearOptions = showHouseholdTotals ? taxYears() : [];
   const taxYearRaw = one('taxYear');
   const requestedTaxYear = taxYearRaw && /^\d{4}$/.test(taxYearRaw) ? Number(taxYearRaw) : null;
   const selectedTaxYear =
@@ -122,12 +136,12 @@ export default async function ReportsPage({
         viewer,
       )}
       split={personSpendSplit({ from, to }, viewer)}
-      debt={debtOverTime(24)}
-      hasLoans={listLoans(today, viewer).some((loan) => loan.currentBalanceCents !== null)}
+      debt={showHouseholdTotals ? debtOverTime(24) : []}
+      hasLoans={showHouseholdTotals ? listLoans(today, viewer).some((loan) => loan.currentBalanceCents !== null) : false}
       // Same fixed trailing-24-month window as the Debt over time card above, deliberately
       // independent of the date-range picker at the top of the page (a net worth trend, like a
       // debt trend, is a "how did we get here" widget, not a "for this custom range" one).
-      netWorth={netWorthOverTime(24, { today, viewer })}
+      netWorth={showHouseholdTotals ? netWorthOverTime(24, { today, viewer }) : []}
       baselines={baselines}
       baselineMonthsUsed={baseline.months.length}
       merchants={topMerchants({ from, to, limit: 15, attributedUserId: person }, viewer)}
@@ -140,6 +154,9 @@ export default async function ReportsPage({
       // Ruling R2: a self viewer sees no person split at all -- there is no per-person
       // breakdown to show when the person scope is always and only themselves.
       showPersonSplit={!isSelfScoped(viewer)}
+      // Ruling R2 (fix round 1): net worth, debt-over-time and the tax-year card are all
+      // dropped entirely for a self viewer, not shown as a scoped-to-zero/empty-state version.
+      showHouseholdTotals={showHouseholdTotals}
     />
   );
 }

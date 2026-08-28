@@ -74,6 +74,20 @@ describe('ReportsPage (ruling R2)', () => {
       attributedUserId: child.id,
       userId: adult.id,
     });
+    // A household-owned loan with a tracked balance, so the "Debt over time" card (which only
+    // renders at all when hasLoans is true) has something to be present FOR in the household
+    // fixture below -- Net worth and Tax year render their own empty state with no further
+    // setup, but Debt over time is gated on real data existing.
+    const loanType = t.sqlite
+      .prepare(`insert into warranty_item_types (name, is_subscription, kind, created_at) values ('Car loan', 0, 'loan', ?) returning id`)
+      .get(today) as { id: number };
+    t.sqlite
+      .prepare(
+        `insert into warranty_items
+           (name, purchase_date, is_lifetime, owner_user_id, type_id, current_balance_cents, balance_updated_at, created_at, updated_at)
+         values ('Civic', '2024-01-15', 0, ?, ?, 1500000, ?, ?, ?)`,
+      )
+      .run(adult.id, loanType.id, today, today, today);
     return { adultId: adult.id, childId: child.id };
   }
 
@@ -100,5 +114,37 @@ describe('ReportsPage (ruling R2)', () => {
     // Both members' spending shows up, unscoped.
     expect(container.textContent).toContain('$50.00');
     expect(container.textContent).toContain('$12.00');
+  });
+
+  // v1.13.0 ruling R2 (fix round 1, controller directive): R2 binds every page, not just the
+  // dashboard -- a self viewer gets NO account balances, NO net worth, NO reports of household
+  // totals. Net worth, debt-over-time and the tax-year card must be dropped ENTIRELY for a self
+  // viewer, not rendered as a scoped-to-zero/empty-state version of themselves.
+  it('a self viewer sees no Net worth, Debt over time or Tax year card', async () => {
+    const { childId } = await setup();
+    currentUser.value = { id: childId, name: 'Kid', username: 'kid', role: 'member', visibility: 'self' };
+    const { default: ReportsPage } = await import('@/app/(app)/reports/page');
+    const { container } = render(await ReportsPage({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.queryByRole('heading', { name: 'Net worth' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Debt over time' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Tax year' })).toBeNull();
+    // No export link on the page points at the household-wide tax-export route either -- there
+    // is no Tax year card to carry a Download CSV action in the first place.
+    expect(container.querySelector('a[href^="/api/reports/tax-export"]')).toBeNull();
+  });
+
+  it('a household viewer keeps the Net worth, Debt over time and Tax year cards', async () => {
+    const { adultId } = await setup();
+    currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    const { default: ReportsPage } = await import('@/app/(app)/reports/page');
+    render(await ReportsPage({ searchParams: Promise.resolve({}) }));
+
+    // Card headings, not a plain text search -- "Tax year" also appears as the filter form's
+    // own Field label once the picker has a year to offer, which would otherwise collide with
+    // a prefix/exact text match.
+    expect(screen.getByRole('heading', { name: 'Net worth' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Debt over time' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Tax year' })).toBeTruthy();
   });
 });

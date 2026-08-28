@@ -60,6 +60,12 @@ function baseProps(overrides: { taxYears?: number[]; taxYear?: number | null; ta
     // keeps the pre-existing (household-viewer) behavior -- the person picker and split card
     // both visible -- unless a test overrides it.
     showPersonSplit: true,
+    // v1.13.0 ruling R2 (fix round 1): same reasoning as showPersonSplit above -- every fixture
+    // here predates the self-viewer net-worth/debt/tax-year exclusion, so it keeps the
+    // pre-existing (household-viewer) behavior of showing all three unless a test overrides it.
+    // The "Net worth card" describe block below depends on this being true to exercise that
+    // card's own empty/populated states at all.
+    showHouseholdTotals: true,
   };
 }
 

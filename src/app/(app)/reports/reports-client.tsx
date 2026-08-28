@@ -67,6 +67,7 @@ export function ReportsClient({
   taxYear,
   taxRows,
   showPersonSplit,
+  showHouseholdTotals,
 }: {
   range: ResolvedRange;
   today: string;
@@ -100,6 +101,12 @@ export function ReportsClient({
    *  when the person scope is always and only themselves, so the picker's Person field and the
    *  "Who spent it" card are both dropped rather than shown with one row. */
   showPersonSplit: boolean;
+  /** v1.13.0 ruling R2 (fix round 1, controller directive): false for a self viewer -- net
+   *  worth, debt-over-time and the tax-year card are all DROPPED ENTIRELY, not rendered as a
+   *  scoped-to-zero/empty-state version of themselves. R2 binds every page, not just the
+   *  dashboard, and reads categorically ("NO account balances, NO net worth, NO reports of
+   *  household totals"), not "scoped to the viewer's own accounts". */
+  showHouseholdTotals: boolean;
 }) {
   const exportHref = `/api/reports/export?${new URLSearchParams({
     ...rangeParams(range),
@@ -454,116 +461,130 @@ export function ReportsClient({
         )}
       </Card>
 
-      <Card>
-        <CardHeader title="Net worth" description="Assets minus debts and loans, carried forward from the balances you have on file." />
-        {netWorth.length === 0 ? (
-          <EmptyState
-            icon={ReportsIcon}
-            title="No balances recorded yet"
-            action={
-              <Link href="/settings/accounts" className="btn btn--secondary btn--sm">
-                Record a balance
-              </Link>
-            }
-          >
-            Record a balance for at least one account in Settings and Accounts to see net worth here.
-          </EmptyState>
-        ) : (
-          <CardBody className="flex flex-col gap-3">
-            <NetWorthChart data={netWorth} />
-            {/* Honesty over a tidy chart: the line only ever reflects the accounts that have a
-                recorded balance AND treats it as still current, and this says so whenever
-                either is untrue, using the most recent month's counts -- an older gap that has
-                since been filled, or a stale balance that has since been refreshed, is no
-                longer true today, so it does not linger here once every account has caught up. */}
-            {netWorthLatestPoint && (netWorthLatestPoint.accountsMissing > 0 || netWorthLatestPoint.accountsStale > 0) ? (
-              <p className="text-sm text-muted">
-                {accountsNote(netWorthLatestPoint.accountsMissing, netWorthLatestPoint.accountsStale)}
-              </p>
-            ) : null}
-          </CardBody>
-        )}
-      </Card>
-
-      <Card>
-        <CardHeader
-          title="Tax year"
-          description="Net spend in every tax-relevant category, by person, for one calendar year."
-          action={
-            taxYear !== null ? (
-              <a href={`/api/reports/tax-export?year=${taxYear}`} className="btn btn--secondary">
-                Download CSV
-              </a>
-            ) : null
-          }
-        />
-        {taxRows.length === 0 ? (
-          <EmptyState
-            icon={ReportsIcon}
-            title="Nothing marked tax-relevant yet"
-            action={
-              <Link href="/settings/managers" className="btn btn--secondary btn--sm">
-                Mark categories as tax relevant
-              </Link>
-            }
-          >
-            Mark categories as tax relevant in Settings and Managers to see them here.
-          </EmptyState>
-        ) : (
-          <>
-            <TableWrap bare>
-              <thead>
-                <tr>
-                  <th scope="col">Category</th>
-                  <th scope="col">Person</th>
-                  <th scope="col" className="text-right">Amount</th>
-                </tr>
-              </thead>
-              <tbody>
-                {taxOrdered.flatMap(({ row, nested }) =>
-                  row.byUser.map((personRow) => (
-                    <tr key={`${row.categoryId}-${personRow.userId ?? 'unattributed'}`}>
-                      <td
-                        style={{ paddingLeft: nested ? '36px' : '16px' }}
-                        className={nested ? 'text-muted' : 'font-medium text-ink'}
-                      >
-                        {row.categoryName}
-                      </td>
-                      <td className="text-muted">{personRow.label}</td>
-                      <AmountCell>
-                        <Money cents={personRow.cents} plain />
-                      </AmountCell>
-                    </tr>
-                  )),
-                )}
-                <tr>
-                  <td colSpan={2} className="font-semibold text-ink">
-                    Total
-                  </td>
-                  <AmountCell className="font-semibold">
-                    <Money cents={taxGrandTotalCents} plain />
-                  </AmountCell>
-                </tr>
-              </tbody>
-            </TableWrap>
-            {/* Task 15b: a flagged parent's row already folds in every child's spend (flagged or
-                not, per src/lib/tax.ts's module doc comment). When a child is ALSO separately
-                flagged it gets its own row too, indented directly above -- and this note is the
-                one place that overlap is spelled out, so nobody reads this table and adds every
-                row together. */}
-            {taxHasOverlap ? (
-              <CardBody className="pt-3">
+      {/* Ruling R2 (fix round 1, controller directive): dropped entirely for a self viewer, not
+          rendered as a scoped-to-zero/empty-state version -- R2 gives them NO net worth, full
+          stop, not one restricted to their own accounts. */}
+      {showHouseholdTotals ? (
+        <Card>
+          <CardHeader title="Net worth" description="Assets minus debts and loans, carried forward from the balances you have on file." />
+          {netWorth.length === 0 ? (
+            <EmptyState
+              icon={ReportsIcon}
+              title="No balances recorded yet"
+              action={
+                <Link href="/settings/accounts" className="btn btn--secondary btn--sm">
+                  Record a balance
+                </Link>
+              }
+            >
+              Record a balance for at least one account in Settings and Accounts to see net worth here.
+            </EmptyState>
+          ) : (
+            <CardBody className="flex flex-col gap-3">
+              <NetWorthChart data={netWorth} />
+              {/* Honesty over a tidy chart: the line only ever reflects the accounts that have a
+                  recorded balance AND treats it as still current, and this says so whenever
+                  either is untrue, using the most recent month's counts -- an older gap that has
+                  since been filled, or a stale balance that has since been refreshed, is no
+                  longer true today, so it does not linger here once every account has caught up. */}
+              {netWorthLatestPoint && (netWorthLatestPoint.accountsMissing > 0 || netWorthLatestPoint.accountsStale > 0) ? (
                 <p className="text-sm text-muted">
-                  An indented category's amount is already included in its parent's total above it, so adding both
-                  would count it twice.
+                  {accountsNote(netWorthLatestPoint.accountsMissing, netWorthLatestPoint.accountsStale)}
                 </p>
-              </CardBody>
-            ) : null}
-          </>
-        )}
-      </Card>
+              ) : null}
+            </CardBody>
+          )}
+        </Card>
+      ) : null}
 
-      {!hasLoans ? null : (
+      {/* Ruling R2 (fix round 1): dropped entirely for a self viewer -- taxYearReport() rolls up
+          every household member's spend with no owner scoping of its own, and the Download CSV
+          link below points at a household-wide route (Task 14 refuses it server-side, but a
+          self viewer is not offered it here in the first place). */}
+      {showHouseholdTotals ? (
+        <Card>
+          <CardHeader
+            title="Tax year"
+            description="Net spend in every tax-relevant category, by person, for one calendar year."
+            action={
+              taxYear !== null ? (
+                <a href={`/api/reports/tax-export?year=${taxYear}`} className="btn btn--secondary">
+                  Download CSV
+                </a>
+              ) : null
+            }
+          />
+          {taxRows.length === 0 ? (
+            <EmptyState
+              icon={ReportsIcon}
+              title="Nothing marked tax-relevant yet"
+              action={
+                <Link href="/settings/managers" className="btn btn--secondary btn--sm">
+                  Mark categories as tax relevant
+                </Link>
+              }
+            >
+              Mark categories as tax relevant in Settings and Managers to see them here.
+            </EmptyState>
+          ) : (
+            <>
+              <TableWrap bare>
+                <thead>
+                  <tr>
+                    <th scope="col">Category</th>
+                    <th scope="col">Person</th>
+                    <th scope="col" className="text-right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {taxOrdered.flatMap(({ row, nested }) =>
+                    row.byUser.map((personRow) => (
+                      <tr key={`${row.categoryId}-${personRow.userId ?? 'unattributed'}`}>
+                        <td
+                          style={{ paddingLeft: nested ? '36px' : '16px' }}
+                          className={nested ? 'text-muted' : 'font-medium text-ink'}
+                        >
+                          {row.categoryName}
+                        </td>
+                        <td className="text-muted">{personRow.label}</td>
+                        <AmountCell>
+                          <Money cents={personRow.cents} plain />
+                        </AmountCell>
+                      </tr>
+                    )),
+                  )}
+                  <tr>
+                    <td colSpan={2} className="font-semibold text-ink">
+                      Total
+                    </td>
+                    <AmountCell className="font-semibold">
+                      <Money cents={taxGrandTotalCents} plain />
+                    </AmountCell>
+                  </tr>
+                </tbody>
+              </TableWrap>
+              {/* Task 15b: a flagged parent's row already folds in every child's spend (flagged or
+                  not, per src/lib/tax.ts's module doc comment). When a child is ALSO separately
+                  flagged it gets its own row too, indented directly above -- and this note is the
+                  one place that overlap is spelled out, so nobody reads this table and adds every
+                  row together. */}
+              {taxHasOverlap ? (
+                <CardBody className="pt-3">
+                  <p className="text-sm text-muted">
+                    An indented category's amount is already included in its parent's total above it, so adding both
+                    would count it twice.
+                  </p>
+                </CardBody>
+              ) : null}
+            </>
+          )}
+        </Card>
+      ) : null}
+
+      {/* Ruling R2 (fix round 1): showHouseholdTotals gates this independently of hasLoans, so
+          "hidden because self-viewer" is never conflated with "hidden because this household
+          genuinely has no loans yet". */}
+      {!showHouseholdTotals || !hasLoans ? null : (
         <Card>
           <CardHeader title="Debt over time" description="Total owed across every loan with a balance." />
           {/* Review fix-round: gated on "fewer than two" rather than "every point null" -- a
