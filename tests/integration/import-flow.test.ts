@@ -100,11 +100,16 @@ describe('overlapping second import then undo of the first', () => {
     expect((sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c).toBe(10);
 
     expect(previewUndoImport(first.importId)).toMatchObject({ willDelete: 0, willKeep: 9 });
-    expect(undoImport(first.importId)).toEqual({ deleted: 0, kept: 9, loanLinksReversed: 0 });
+    // Every one of the first import's rows is shared with the second, so nothing is sole and
+    // the snapshot-delete block never runs.
+    expect(undoImport(first.importId)).toEqual({ deleted: 0, kept: 9, loanLinksReversed: 0, snapshotsDeleted: 0 });
     expect((sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c).toBe(10);
 
     expect(listImportHistory()).toHaveLength(1);
-    expect(undoImport(second.importId)).toEqual({ deleted: 10, kept: 0, loanLinksReversed: 0 });
+    // The second commit re-wrote a csv snapshot for every one of its own 8 unique statement
+    // dates (the original 7 plus the new row's 2026-03-10) -- undoing it, now the sole owner
+    // of all 10 transactions, removes all 8.
+    expect(undoImport(second.importId)).toEqual({ deleted: 10, kept: 0, loanLinksReversed: 0, snapshotsDeleted: 8 });
     expect((sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c).toBe(0);
   });
 

@@ -35,7 +35,10 @@ describe('undoImport with no overlap', () => {
     const result = commitImport({ accountId, profileId: null, filename: 'td.csv', importedBy: userId, rows: hashed, errors: [] });
 
     expect(previewUndoImport(result.importId)).toEqual({ importId: result.importId, willDelete: 9, willKeep: 0 });
-    expect(undoImport(result.importId)).toEqual({ deleted: 9, kept: 0, loanLinksReversed: 0 });
+    // v1.12.1 (item AE / MON-5): td-chequing.csv's 9 rows span 7 unique statement dates, all
+    // written as 'csv' snapshots on commit (TD Chequing/Debit's balanceCol is mapped) -- a full
+    // undo removes all 7.
+    expect(undoImport(result.importId)).toEqual({ deleted: 9, kept: 0, loanLinksReversed: 0, snapshotsDeleted: 7 });
 
     expect((sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c).toBe(0);
     expect((sqlite.prepare('select count(*) as c from imports').get() as { c: number }).c).toBe(0);
@@ -59,7 +62,8 @@ describe('undoImport after the import’s profile has been deleted', () => {
     expect((sqlite.prepare('select profile_id from imports where id = ?').get(result.importId) as { profile_id: number | null }).profile_id).toBeNull();
 
     expect(previewUndoImport(result.importId)).toEqual({ importId: result.importId, willDelete: 9, willKeep: 0 });
-    expect(undoImport(result.importId)).toEqual({ deleted: 9, kept: 0, loanLinksReversed: 0 });
+    // Same fixture, same 7 dates -- deleting the profile doesn't change what got written.
+    expect(undoImport(result.importId)).toEqual({ deleted: 9, kept: 0, loanLinksReversed: 0, snapshotsDeleted: 7 });
 
     expect((sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c).toBe(0);
     expect((sqlite.prepare('select count(*) as c from imports').get() as { c: number }).c).toBe(0);
@@ -75,7 +79,9 @@ describe('undoImport with overlapping imports — the sole-association rule', ()
 
     // rows 3 and 4 are shared between the two imports
     expect(previewUndoImport(first.importId)).toEqual({ importId: first.importId, willDelete: 3, willKeep: 2 });
-    expect(undoImport(first.importId)).toEqual({ deleted: 3, kept: 2, loanLinksReversed: 0 });
+    // The 3 sole rows are the first three statement dates (2026-03-02/03/04), each its own
+    // csv snapshot -- the shared 2026-03-05 snapshot (written by both commits) is not one of them.
+    expect(undoImport(first.importId)).toEqual({ deleted: 3, kept: 2, loanLinksReversed: 0, snapshotsDeleted: 3 });
 
     const remaining = (sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c;
     expect(remaining).toBe(6);
@@ -97,7 +103,10 @@ describe('undoImport with overlapping imports — the sole-association rule', ()
     const first = commitImport({ accountId, profileId: null, filename: 'part1.csv', importedBy: userId, rows: hashed.slice(0, 5), errors: [] });
     const second = commitImport({ accountId, profileId: null, filename: 'part2.csv', importedBy: userId, rows: hashed.slice(3), errors: [] });
     undoImport(first.importId);
-    expect(undoImport(second.importId)).toEqual({ deleted: 6, kept: 0, loanLinksReversed: 0 });
+    // Undoing the first left the four remaining dates' csv snapshots in place (2026-03-05,
+    // written by the second commit too; 06, 07, 09, written only by the second commit) -- all
+    // four now belong solely to the second import.
+    expect(undoImport(second.importId)).toEqual({ deleted: 6, kept: 0, loanLinksReversed: 0, snapshotsDeleted: 4 });
     expect((sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c).toBe(0);
   });
 
@@ -106,7 +115,9 @@ describe('undoImport with overlapping imports — the sole-association rule', ()
     const first = commitImport({ accountId, profileId: null, filename: 'td.csv', importedBy: userId, rows: hashed, errors: [] });
     commitImport({ accountId, profileId: null, filename: 'td-again.csv', importedBy: userId, rows: hashed, errors: [] });
     expect(previewUndoImport(first.importId)).toEqual({ importId: first.importId, willDelete: 0, willKeep: 9 });
-    expect(undoImport(first.importId)).toEqual({ deleted: 0, kept: 9, loanLinksReversed: 0 });
+    // Nothing is sole, so the snapshot-delete block never runs -- the 7 csv snapshots both
+    // commits wrote are left alone, same as every transaction row.
+    expect(undoImport(first.importId)).toEqual({ deleted: 0, kept: 9, loanLinksReversed: 0, snapshotsDeleted: 0 });
     expect((sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c).toBe(9);
   });
 
@@ -120,8 +131,9 @@ describe('undoImport with overlapping imports — the sole-association rule', ()
     expect(second.rowsDuplicate).toBe(1);
     const transactionId = first.insertedTransactionIds[0];
 
-    // Undoing B: T is shared (associated with both A and B), so it survives.
-    expect(undoImport(second.importId)).toEqual({ deleted: 0, kept: 1, loanLinksReversed: 0 });
+    // Undoing B: T is shared (associated with both A and B), so it survives, and nothing is
+    // sole -- the snapshot-delete block never runs.
+    expect(undoImport(second.importId)).toEqual({ deleted: 0, kept: 1, loanLinksReversed: 0, snapshotsDeleted: 0 });
 
     const row = sqlite.prepare('select import_id from transactions where id = ?').get(transactionId) as { import_id: number | null };
     expect(row.import_id).toBe(first.importId);
@@ -231,7 +243,9 @@ describe('undoImport after a per-card import (MUST-3.5)', () => {
     expect(result.rowsAdded).toBe(7);
 
     expect(previewUndoImport(result.importId)).toEqual({ importId: result.importId, willDelete: 7, willKeep: 0 });
-    expect(undoImport(result.importId)).toEqual({ deleted: 7, kept: 0, loanLinksReversed: 0 });
+    // Amex Canada's preset ships balanceCol: null (a card's stated balance is an amount owed,
+    // not a running balance) -- commitImport never wrote a csv snapshot for this import at all.
+    expect(undoImport(result.importId)).toEqual({ deleted: 7, kept: 0, loanLinksReversed: 0, snapshotsDeleted: 0 });
 
     expect((current.sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c).toBe(0);
     expect((current.sqlite.prepare('select count(*) as c from imports').get() as { c: number }).c).toBe(0);
@@ -260,7 +274,8 @@ describe('undoImport after a per-card import (MUST-3.5)', () => {
     commitImport({ accountId, profileId: null, filename: 'part2.csv', importedBy: owner, mapping, rows: hashed.slice(3), errors: [] });
 
     expect(previewUndoImport(first.importId)).toEqual({ importId: first.importId, willDelete: 3, willKeep: 2 });
-    expect(undoImport(first.importId)).toEqual({ deleted: 3, kept: 2, loanLinksReversed: 0 });
+    // Same Amex preset, same balanceCol: null -- no csv snapshot ever existed to delete.
+    expect(undoImport(first.importId)).toEqual({ deleted: 3, kept: 2, loanLinksReversed: 0, snapshotsDeleted: 0 });
 
     const remaining = current.sqlite
       .prepare('select raw_description as d, attributed_user_id as a from transactions order by id')
