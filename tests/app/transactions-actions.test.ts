@@ -108,7 +108,7 @@ function insertAssetAccount(name = 'Family Home'): number {
 }
 
 /** A loan-kind item, seeded directly through the data layer. */
-function seedLoanItem(opts: { balanceCents?: number } = {}): number {
+function seedLoanItem(opts: { balanceCents?: number; loan_direction?: 'owed' | 'lent' } = {}): number {
   const { userId } = ctx!;
   const loanType = createItemType(`Loan ${randomUUID()}`, 'loan');
   return createWarrantyItem({
@@ -128,6 +128,7 @@ function seedLoanItem(opts: { balanceCents?: number } = {}): number {
     interestRateBps: 549,
     currentBalanceCents: opts.balanceCents ?? 2_000_000,
     balanceUpdatedAt: nowIso(),
+    loanDirection: opts.loan_direction ?? 'owed',
   });
 }
 
@@ -299,6 +300,36 @@ describe('MUST-14.8 … MUST-14.11: assign and unassign', () => {
     const { itemId, txnId } = seedLoanAndSpend(2_000_000, 60_000);
     const result = await assignToLoanAction(formData({ transactionId: String(txnId), itemId: String(itemId) }));
     expect(result.message).toBe('Assigned. The balance went up $600.00 (money in).');
+  });
+
+  /**
+   * Review round (Lane A): the copy above reads `txn.amountCents < 0` as "a payment" -- true
+   * for an `owed` loan, backwards for a `lent` one. An outgoing e-transfer to a friend RAISES
+   * what they owe the household; the old copy would have called that "$500.00 came off the
+   * balance" while it went up. These two pin the honest, direction-aware wording instead.
+   */
+  it('review round (Lane A): a lent-loan advance says it was ADDED to what they owe, not that it came off', async () => {
+    setup();
+    const itemId = seedLoanItem({ balanceCents: 0, loan_direction: 'lent' });
+    const txn = current!.db.get<{ id: number }>(sql`
+      insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, created_by, created_at, updated_at)
+      values (${ctx!.accountId}, '2026-03-05', 'E TRANSFER', ${normalizeMerchant('E TRANSFER')}, -50000, ${ctx!.userId}, ${nowIso()}, ${nowIso()})
+      returning id`);
+    const result = await assignToLoanAction(formData({ transactionId: String(txn.id), itemId: String(itemId) }));
+    expect(result.message).toBe('Assigned. $500.00 added to what they owe.');
+    expect(balanceOf(itemId)).toBe(50_000);
+  });
+
+  it('review round (Lane A): a lent-loan repayment says it came off what they owe', async () => {
+    setup();
+    const itemId = seedLoanItem({ balanceCents: 50_000, loan_direction: 'lent' });
+    const txn = current!.db.get<{ id: number }>(sql`
+      insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, created_by, created_at, updated_at)
+      values (${ctx!.accountId}, '2026-03-05', 'E TRANSFER', ${normalizeMerchant('E TRANSFER')}, 20000, ${ctx!.userId}, ${nowIso()}, ${nowIso()})
+      returning id`);
+    const result = await assignToLoanAction(formData({ transactionId: String(txn.id), itemId: String(itemId) }));
+    expect(result.message).toBe('Assigned. $200.00 came off what they owe.');
+    expect(balanceOf(itemId)).toBe(30_000);
   });
 
   it('F2 fix-round: assigning against an UNKNOWN balance says so honestly, and applies nothing', async () => {

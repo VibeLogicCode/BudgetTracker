@@ -12,6 +12,7 @@ import { assignTransactionToLoan, loanLinksForTransactions, unassignTransactionF
 import { formatCents, parseAmountToCents } from '@/lib/money';
 import { setTransactionSplits } from '@/lib/splits';
 import { getWarrantyItem } from '@/lib/warranty/items';
+import { isLoanRepayment } from '@/lib/warranty/constants';
 import { isIsoDate } from '@/lib/dates';
 import {
   bulkSetAttribution,
@@ -402,9 +403,16 @@ export async function assignToLoanAction(formData: FormData): Promise<ActionStat
   // txn.amount_cents is immutable (tests/lib/loans/invariants.test.ts), so its sign is a safe
   // read of direction even after the fact; result.appliedCents is the exact, already-clamped
   // figure assignTransactionToLoan moved (or didn't).
-  const isPayment = txn !== null && txn.amountCents < 0;
+  //
+  // Review round (Lane A): `txn.amountCents < 0` alone only means "a repayment" for an `owed`
+  // loan. For a `lent` loan the SAME outgoing money is an advance that RAISES what's owed to
+  // the household -- isLoanRepayment re-expresses the sign in the loan's own frame first, the
+  // same helper link() itself uses, so this copy can never disagree with what the balance
+  // actually did. The item is read once, up front, for both branches below.
+  const item = getWarrantyItem(parsed.data.itemId, user);
+  const direction = item?.loanDirection ?? 'owed';
+  const isRepayment = txn !== null && isLoanRepayment(direction, txn.amountCents);
   if (result.appliedCents === 0) {
-    const item = getWarrantyItem(parsed.data.itemId, user);
     return {
       message:
         item !== null && item.currentBalanceCents === null
@@ -412,12 +420,17 @@ export async function assignToLoanAction(formData: FormData): Promise<ActionStat
           : 'Assigned. The balance was already $0.00, so nothing came off.',
     };
   }
-  if (isPayment) {
-    const item = getWarrantyItem(parsed.data.itemId, user);
+  if (isRepayment) {
+    if (direction !== 'owed') {
+      return { message: `Assigned. ${formatCents(result.appliedCents)} came off what they owe.` };
+    }
     if (item !== null && item.currentBalanceCents === 0) {
       return { message: `Assigned. ${formatCents(result.appliedCents)} came off; the balance is now $0.00.` };
     }
     return { message: `Assigned. ${formatCents(result.appliedCents)} came off the balance.` };
+  }
+  if (direction !== 'owed') {
+    return { message: `Assigned. ${formatCents(result.appliedCents)} added to what they owe.` };
   }
   return { message: `Assigned. The balance went up ${formatCents(result.appliedCents)} (money in).` };
 }
