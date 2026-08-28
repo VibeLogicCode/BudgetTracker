@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { categoryIdByName, createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../../helpers/db';
+import { setUserVisibility } from '@/lib/auth/users';
 import { normalizeMerchant } from '@/lib/categorize/normalize';
 import { saveEmailTarget, saveSmtp, setPref } from '@/lib/notify/config';
 import { resetOutboxPumpForTests } from '@/lib/notify/outbox';
@@ -28,8 +29,8 @@ afterEach(() => {
   t.cleanup();
 });
 
-function emailUser(): number {
-  const userId = insertTestUser(t.db, { username: `u${Math.random().toString(36).slice(2, 8)}` });
+function emailUser(role: 'admin' | 'member' = 'admin'): number {
+  const userId = insertTestUser(t.db, { username: `u${Math.random().toString(36).slice(2, 8)}`, role });
   saveSmtp({
     preset: 'brevo',
     host: 'h',
@@ -118,5 +119,28 @@ describe('MUST-3.11: once per weekly slot', () => {
       (r) => r.dedup_key,
     );
     expect(keys).toEqual(['digest:2026-08-17', 'digest:2026-08-24']);
+  });
+});
+
+/**
+ * v1.13.0 ruling R2 (Task 6 fix round 1, controller ruling): the weekly digest builds its viewer
+ * from the RECIPIENT's own user record (viewerFor in digest.ts), so a self-visibility recipient's
+ * "household" figure collapses to their own scope exactly like every other reports.ts aggregate
+ * -- no household total, belonging to someone else, may reach a self viewer through this or any
+ * other channel.
+ */
+describe('ruling R2: a self-visibility recipient never receives the true household total', () => {
+  it('"Household spend" collapses to the recipient\'s own figure, never the full household total', () => {
+    const userId = emailUser('member');
+    setUserVisibility(userId, 'self');
+    const groceries = categoryIdByName(t.db, 'Groceries');
+    spend(groceries, 1000, '2026-08-12', userId); // the recipient's own $10
+    spend(groceries, 9000, '2026-08-13', null); // someone/unattributed else's $90 -- must never reach them
+
+    expect(evaluateWeeklyDigest({ userId, slotDate: '2026-08-17', now: NOW })).toBe(1);
+    expect(body()).toContain('Household spend: $10.00');
+    expect(body()).toContain('Your spend:      $10.00');
+    // The true combined household total ($10 + $90) must never appear anywhere in this recipient's digest.
+    expect(body()).not.toContain('$100.00');
   });
 });

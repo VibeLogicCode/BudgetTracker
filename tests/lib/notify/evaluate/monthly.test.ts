@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { categoryIdByName, createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../../helpers/db';
+import { setUserVisibility } from '@/lib/auth/users';
 import { upsertBudget } from '@/lib/budgets';
 import { saveEmailTarget, saveSmtp, setPref } from '@/lib/notify/config';
 import { resetOutboxPumpForTests } from '@/lib/notify/outbox';
@@ -26,8 +27,8 @@ afterEach(() => {
   t.cleanup();
 });
 
-function optedInUser(): number {
-  const userId = insertTestUser(t.db, { username: `u${Math.random().toString(36).slice(2, 8)}` });
+function optedInUser(role: 'admin' | 'member' = 'admin'): number {
+  const userId = insertTestUser(t.db, { username: `u${Math.random().toString(36).slice(2, 8)}`, role });
   saveSmtp({
     preset: 'brevo',
     host: 'h',
@@ -381,5 +382,35 @@ describe('Defect fix: an empty closed month gets an honest short digest, not fou
     expect(row.body).not.toBe('No transactions were recorded last month.');
     expect(row.body).toContain('Spent: $713.40');
     expect(row.body).toContain('No budgets were set this month.');
+  });
+});
+
+/**
+ * v1.13.0 ruling R2 (Task 6 fix round 1, controller ruling): fireMonthlyDigest builds its viewer
+ * from the RECIPIENT's own user record (viewerFor in monthly.ts), so a self-visibility recipient's
+ * cashflowTrend/topMerchants figures collapse to their own scope exactly like every other
+ * reports.ts aggregate -- no household total belonging to someone else may reach a self viewer
+ * through this or any other channel.
+ */
+describe('ruling R2: a self-visibility recipient\'s monthly digest is scoped to their own spend', () => {
+  it('never shows the true household total, only spend attributed to them', () => {
+    const userId = optedInUser('member');
+    setUserVisibility(userId, 'self');
+    enableMonthlyDigest(userId);
+    setPref(userId, 'predicted_vs_actual', 'email', false);
+    setPref(userId, 'suggested_budget_refresh', 'email', false);
+
+    const groceries = categoryIdByName(t.db, 'Groceries');
+    spend(groceries, 5000, '2026-07-10', userId); // the recipient's own $50
+    spend(groceries, 50000, '2026-07-11', null); // someone/unattributed else's $500 -- must never reach them
+
+    expect(evaluateMonthBoundary({ userId, now: new Date('2026-08-01T09:00:00Z'), tz: TZ })).toBe(1);
+    const row = t.sqlite.prepare('select subject, body from notification_outbox limit 1').get() as {
+      subject: string;
+      body: string;
+    };
+    expect(row.body).toContain('Spent: $50.00');
+    // The true combined household total ($50 + $500) must never appear anywhere in this recipient's digest.
+    expect(row.body).not.toContain('$550.00');
   });
 });

@@ -1,4 +1,6 @@
 import { budgetProgress, budgetTotals, resolveBudget } from '@/lib/budgets';
+import { findUserById } from '@/lib/auth/users';
+import { type Viewer } from '@/lib/auth/viewer';
 import { listCategories } from '@/lib/categories';
 import { addMonths, currentMonth, monthEnd, monthStart, todayIso } from '@/lib/dates';
 import { isEventEnabled } from '@/lib/notify/config';
@@ -16,6 +18,19 @@ import { suggestionsFor } from '@/lib/predict/history';
 import { cashflowTrend, topMerchants } from '@/lib/reports';
 
 const MONTHLY_DIGEST_TOP_MERCHANTS = 5;
+
+/**
+ * v1.13.0 ruling R2 (Task 6 fix round 1, controller ruling): fireMonthlyDigest's cashflowTrend/
+ * topMerchants calls now take a viewer, built from the RECIPIENT's own user record so a
+ * household/admin recipient's digest is byte-identical to before and a self-visibility recipient
+ * sees only their own attributed figures (src/lib/reports.ts's scopeFor forces the self scope
+ * regardless of what is asked). Mirrors digest.ts's own viewerFor exactly; kept local rather than
+ * shared since both files are Task 6's alone and neither exports test-only surface for the other.
+ */
+function viewerFor(userId: number): Viewer {
+  const user = findUserById(userId);
+  return user ? { id: user.id, role: user.role, visibility: user.visibility } : { id: userId, role: 'admin', visibility: 'household' };
+}
 
 /**
  * The two month-boundary reports. Both run on the user's daily slot and both need no
@@ -166,14 +181,18 @@ function fireSuggestedRefresh(input: { userId: number; month: string; now: Date 
 function fireMonthlyDigest(input: { userId: number; endedMonth: string; now: Date }): number {
   if (!CHANNELS.some((channel) => isEventEnabled(input.userId, 'monthly_digest', channel))) return 0;
 
+  const viewer = viewerFor(input.userId);
   // cashflowTrend(1, {endMonth}) always returns exactly one row, for endedMonth itself.
-  const [trend] = cashflowTrend(1, { endMonth: input.endedMonth });
+  const [trend] = cashflowTrend(1, { endMonth: input.endedMonth }, viewer);
   const totals = budgetTotals(budgetProgress(input.endedMonth));
-  const topMerchantLines: DigestLine[] = topMerchants({
-    from: monthStart(input.endedMonth),
-    to: monthEnd(input.endedMonth),
-    limit: MONTHLY_DIGEST_TOP_MERCHANTS,
-  }).map((row) => ({ name: row.normalizedMerchant, cents: row.spentCents }));
+  const topMerchantLines: DigestLine[] = topMerchants(
+    {
+      from: monthStart(input.endedMonth),
+      to: monthEnd(input.endedMonth),
+      limit: MONTHLY_DIGEST_TOP_MERCHANTS,
+    },
+    viewer,
+  ).map((row) => ({ name: row.normalizedMerchant, cents: row.spentCents }));
 
   const { subject, body } = renderEvent({
     event: 'monthly_digest',

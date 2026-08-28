@@ -5,7 +5,13 @@ import { clearCategory, confirmCategory, setTransferFlag } from '@/lib/categoriz
 import { listRules } from '@/lib/categorize/rules';
 import { normalizeMerchant } from '@/lib/categorize/normalize';
 import { bulkSetAttribution, bulkSetCategory, bulkSetTransfer } from '@/lib/transactions';
+import type { Viewer } from '@/lib/auth/viewer';
 import { categoryBreakdown } from '@/lib/reports';
+
+// v1.13.0 ruling R2 (Task 6 fix round 1): categoryBreakdown now takes a viewer as its last
+// argument. A household viewer's ownerScope() is always null, so passing this constant reproduces
+// the pre-v1.13.0 unscoped behaviour this test already assumes.
+const HOUSEHOLD: Viewer = { id: 1, role: 'admin', visibility: 'household' };
 import { getSplits, setTransactionSplits } from '@/lib/splits';
 import { nowIso } from '@/lib/clock';
 
@@ -98,7 +104,7 @@ function splitSeventyThirty(id: number, groceries: number, gas: number, userId: 
  *  categoryBreakdown "reporting 0 and 0", and a transaction excluded entirely by the
  *  is_transfer filter produces the former, not the latter. */
 function spentAt(categoryId: number): number {
-  return categoryBreakdown(MARCH_RANGE).find((r) => r.categoryId === categoryId)?.spentCents ?? 0;
+  return categoryBreakdown(MARCH_RANGE, HOUSEHOLD).find((r) => r.categoryId === categoryId)?.spentCents ?? 0;
 }
 
 describe('setTransferFlag refuses a split transaction (defect 1 fix, manual counterpart to Task 2b)', () => {

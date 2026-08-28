@@ -2,10 +2,16 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
 import { budgetProgress, budgetTotals, categorySpend } from '@/lib/budgets';
+import type { Viewer } from '@/lib/auth/viewer';
 import { cashflowTrend, categoryBreakdown, categoryMonthOverMonth, personSpendSplit } from '@/lib/reports';
 import { categorySeries } from '@/lib/predict/history';
 import { setTransactionSplits } from '@/lib/splits';
 import { nowIso } from '@/lib/clock';
+
+// v1.13.0 ruling R2 (Task 6 fix round 1): every reports.ts aggregate below now takes a viewer as
+// its last argument. A household viewer's ownerScope() is always null, so passing this constant
+// reproduces the pre-v1.13.0 unscoped behaviour every test in this file already assumes.
+const HOUSEHOLD: Viewer = { id: 1, role: 'admin', visibility: 'household' };
 
 /**
  * Task 3 (spec 2026-08-22, v1.7.0): "the double-counting audit". Every category aggregate
@@ -192,7 +198,7 @@ describe('budgetProgress (src/lib/budgets.ts) rolls each split part into its OWN
 describe('categoryBreakdown (src/lib/reports.ts) is split-aware', () => {
   it('flat: lists the two split categories separately, never a $100 row at Groceries', () => {
     const { groceries, gas, kids } = coreFixture();
-    const rows = categoryBreakdown(MARCH_RANGE);
+    const rows = categoryBreakdown(MARCH_RANGE, HOUSEHOLD);
 
     expect(rows.find((r) => r.categoryId === groceries)?.spentCents).toBe(7000);
     expect(rows.find((r) => r.categoryId === gas)?.spentCents).toBe(3000);
@@ -202,7 +208,7 @@ describe('categoryBreakdown (src/lib/reports.ts) is split-aware', () => {
 
   it('rollup: rolls each part into its OWN parent, not one shared parent and not doubled', () => {
     const { food, transport, kids } = coreFixture();
-    const rolled = categoryBreakdown({ ...MARCH_RANGE, rollup: true });
+    const rolled = categoryBreakdown({ ...MARCH_RANGE, rollup: true }, HOUSEHOLD);
 
     expect(rolled.find((r) => r.categoryId === food)?.spentCents).toBe(7000);
     expect(rolled.find((r) => r.categoryId === transport)?.spentCents).toBe(3000);
@@ -214,7 +220,7 @@ describe('categoryBreakdown (src/lib/reports.ts) is split-aware', () => {
 describe('categoryMonthOverMonth (src/lib/reports.ts) is split-aware', () => {
   it('gives each split part its own monthly row -- never a $100 row at Groceries', () => {
     const { groceries, gas, kids } = coreFixture();
-    const result = categoryMonthOverMonth({ fromMonth: MONTH, toMonth: MONTH });
+    const result = categoryMonthOverMonth({ fromMonth: MONTH, toMonth: MONTH }, HOUSEHOLD);
 
     expect(result.rows.find((r) => r.categoryId === groceries)?.byMonth[MONTH]).toBe(7000);
     expect(result.rows.find((r) => r.categoryId === gas)?.byMonth[MONTH]).toBe(3000);
@@ -252,7 +258,7 @@ describe("personSpendSplit (src/lib/reports.ts) attributes BOTH parts to the par
     });
     add({ date: '2026-03-12', amountCents: -4000, categoryId: kids, attributedUserId: null });
 
-    const rows = personSpendSplit(MARCH_RANGE);
+    const rows = personSpendSplit(MARCH_RANGE, HOUSEHOLD);
     const aliceRow = rows.find((r) => r.userId === alice)!;
     const unattributed = rows.find((r) => r.userId === null)!;
 
@@ -285,7 +291,7 @@ describe('cashflowTrend (src/lib/reports.ts) moves an income-classified split pa
       userId: alice,
     });
 
-    const [march] = cashflowTrend(1, { endMonth: MONTH });
+    const [march] = cashflowTrend(1, { endMonth: MONTH }, HOUSEHOLD);
     expect(march.incomeCents).toBe(7000); // only the Salary part -- never the full $100, never $0
     // netSpentCents(3000): a positive, non-income amount nets to a negative "spend" (a
     // credit), the same convention an ordinary refund-only month already uses elsewhere.

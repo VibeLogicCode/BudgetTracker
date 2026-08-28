@@ -1,4 +1,6 @@
 import { budgetProgress, type BudgetRow } from '@/lib/budgets';
+import { findUserById } from '@/lib/auth/users';
+import { type Viewer } from '@/lib/auth/viewer';
 import { reviewQueueCount } from '@/lib/categorize/engine';
 import { addDaysIso, currentMonth } from '@/lib/dates';
 import { categoryBreakdown, topMerchants } from '@/lib/reports';
@@ -8,6 +10,24 @@ import { renderEvent, type DigestLine } from '@/lib/notify/render';
 
 const TOP_CATEGORIES = 5;
 const TOP_MERCHANTS = 3;
+
+/**
+ * v1.13.0 ruling R2 (Task 6 fix round 1, controller ruling): every reports.ts aggregate this
+ * evaluator calls now takes a viewer, and a self-visibility viewer is silently forced to their
+ * own scope regardless of what is asked (src/lib/reports.ts's scopeFor). Building the viewer from
+ * the RECIPIENT's own user record -- not a hardcoded household viewer -- is what makes a
+ * household/admin recipient's digest byte-identical to before, and a self-visibility recipient's
+ * digest carry only their own attributed figures through every line below, never the true
+ * household total (R2: no household totals reach a self viewer through any channel).
+ *
+ * Falls back to a household-scoped viewer if the user row is somehow gone by the time this
+ * evaluator runs (a deleted account mid-batch): that reproduces the pre-R2 unscoped behaviour
+ * rather than crashing the whole scheduled run over one missing row.
+ */
+function viewerFor(userId: number): Viewer {
+  const user = findUserById(userId);
+  return user ? { id: user.id, role: user.role, visibility: user.visibility } : { id: userId, role: 'admin', visibility: 'household' };
+}
 
 function overBudgetNames(rows: BudgetRow[], acc: string[] = []): string[] {
   for (const row of rows) {
@@ -35,9 +55,10 @@ function overBudgetNames(rows: BudgetRow[], acc: string[] = []): string[] {
 export function evaluateWeeklyDigest(input: { userId: number; slotDate: string; now: Date }): number {
   const from = addDaysIso(input.slotDate, -7);
   const to = addDaysIso(input.slotDate, -1);
+  const viewer = viewerFor(input.userId);
 
-  const householdCategories = categoryBreakdown({ from, to });
-  const personalCategories = categoryBreakdown({ from, to, attributedUserId: input.userId });
+  const householdCategories = categoryBreakdown({ from, to }, viewer);
+  const personalCategories = categoryBreakdown({ from, to, attributedUserId: input.userId }, viewer);
 
   const sum = (rows: { spentCents: number }[]): number => rows.reduce((total, row) => total + row.spentCents, 0);
 
@@ -50,7 +71,7 @@ export function evaluateWeeklyDigest(input: { userId: number; slotDate: string; 
   // TopMerchantRow's field is `normalizedMerchant` (src/lib/reports.ts): the merchant name
   // as stored, which normalizeMerchant() UPPERCASES (src/lib/categorize/normalize.ts), so
   // production digests show e.g. "LOBLAWS", not a title-cased or lowercase variant.
-  const topMerchantLines: DigestLine[] = topMerchants({ from, to, limit: TOP_MERCHANTS }).map((row) => ({
+  const topMerchantLines: DigestLine[] = topMerchants({ from, to, limit: TOP_MERCHANTS }, viewer).map((row) => ({
     name: row.normalizedMerchant,
     cents: row.spentCents,
   }));

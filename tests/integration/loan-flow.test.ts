@@ -12,8 +12,14 @@ import {
   saveLoanRule,
   unassignTransactionFromLoan,
 } from '@/lib/loans';
+import type { Viewer } from '@/lib/auth/viewer';
 import { categoryBreakdown } from '@/lib/reports';
 import { setupLoanTest, type LoanTestContext } from '../lib/loans/fixtures';
+
+// v1.13.0 ruling R2 (Task 6 fix round 1): categoryBreakdown now takes a viewer as its last
+// argument. A household viewer's ownerScope() is always null, so passing this constant reproduces
+// the pre-v1.13.0 unscoped behaviour this test already assumes.
+const HOUSEHOLD: Viewer = { id: 1, role: 'admin', visibility: 'household' };
 
 /** MUST-19.5 / AC5: the loan feature end to end, against a real (temp-file) SQLite db. */
 
@@ -65,14 +71,14 @@ it('MUST-19.5: create -> rule -> import -> undo -> re-import -> manual assign ->
   // MUST-13.2: snapshot taken AFTER the transactions exist but BEFORE they are linked, so this
   // isolates the effect of LINKING specifically (importing itself obviously changes what
   // exists to report on; linking must not additionally change how it is reported).
-  const breakdownBeforeLink = categoryBreakdown({ from: '2026-01-01', to: '2026-12-31' });
+  const breakdownBeforeLink = categoryBreakdown({ from: '2026-01-01', to: '2026-12-31' }, HOUSEHOLD);
 
   const loanLinksCreated = applyPaymentMatchers(committed.insertedTransactionIds);
   expect(loanLinksCreated).toBe(2);
   expect(ctx.balanceOf(itemId)).toBe(2_000_000 - 90_000);
 
   // MUST-13.2: the category totals are UNCHANGED by the linking.
-  expect(categoryBreakdown({ from: '2026-01-01', to: '2026-12-31' })).toEqual(breakdownBeforeLink);
+  expect(categoryBreakdown({ from: '2026-01-01', to: '2026-12-31' }, HOUSEHOLD)).toEqual(breakdownBeforeLink);
 
   // The dashboard summary and the debt series agree with the balance.
   expect(loansTotalOwedCents()).toBe(1_910_000);

@@ -1,8 +1,14 @@
 import BetterSqlite3 from 'better-sqlite3';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../../helpers/db';
+import type { Viewer } from '@/lib/auth/viewer';
 import { applyPaymentMatchers, loanLinksForTransactions, saveLoanRule } from '@/lib/loans';
 import { categoryBreakdown } from '@/lib/reports';
+
+// v1.13.0 ruling R2 (Task 6 fix round 1): categoryBreakdown now takes a viewer as its last
+// argument. A household viewer's ownerScope() is always null, so passing this constant reproduces
+// the pre-v1.13.0 unscoped behaviour this test already assumes.
+const HOUSEHOLD: Viewer = { id: 1, role: 'admin', visibility: 'household' };
 
 let t: TestDb;
 let accountId = 0;
@@ -206,9 +212,9 @@ describe('MUST-13.2: a linked payment stays in its category and in every budget'
     const { itemId } = seedLoan({ balanceCents: 2_000_000 });
     saveLoanRule({ itemId, merchantContains: 'HONDA FIN', accountId: null, enabled: true });
     const txnId = spend('HONDA FIN SVC', -45_000, { categoryId: groceries });
-    const before = categoryBreakdown({ from: '2026-01-01', to: '2026-12-31' });
+    const before = categoryBreakdown({ from: '2026-01-01', to: '2026-12-31' }, HOUSEHOLD);
     applyPaymentMatchers([txnId]);
-    expect(categoryBreakdown({ from: '2026-01-01', to: '2026-12-31' })).toEqual(before);
+    expect(categoryBreakdown({ from: '2026-01-01', to: '2026-12-31' }, HOUSEHOLD)).toEqual(before);
     // ...and nothing on the transaction itself moved.
     const row = t.sqlite.prepare('select is_transfer, category_id, attributed_user_id from transactions where id = ?').get(txnId);
     expect(row).toEqual({ is_transfer: 0, category_id: groceries, attributed_user_id: null });
