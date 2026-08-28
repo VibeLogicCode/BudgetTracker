@@ -245,9 +245,30 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.12.1 release', () => {
+  it('MUST-7.1: the 1.13.0 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.12.1');
+    expect(pkg.version).toBe('1.13.0');
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toMatch(/^## \[1\.13\.0\] - 2026-08-27$/m);
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.13.0]'));
+    const entry = changelog.slice(changelog.indexOf('## [1.13.0]'), changelog.indexOf('## [1.12.'));
+    expect(entry).toMatch(/### Added/);
+    expect(entry).toMatch(/### Changed/);
+    // The headline claims, asserted as claims and not just as a version number.
+    expect(entry).toMatch(/Only their own records/);
+    expect(entry).toMatch(/Needs a look/);
+    expect(entry).toMatch(/OFX/);
+    expect(entry).toMatch(/Record payment/);
+    expect(entry).toMatch(/audit/i);
+    // A release that changes who may delete what has to say so, or somebody upgrades into a refusal.
+    expect(entry).toMatch(/require you to own it/i);
+    // The three presets are unverified and the release notes must not imply otherwise.
+    expect(entry).toMatch(/have not yet been checked against a real file/i);
+  });
+
+  it('MUST-7.1: the 1.12.1 release is still recorded intact (append-only discipline)', () => {
+    const pkg = JSON.parse(read('package.json')) as { version: string };
+    expect(pkg.version).not.toBe('1.12.1');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.12\.1\] - 2026-08-27$/m);
     expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.12.1]'));

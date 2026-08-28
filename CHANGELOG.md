@@ -21,6 +21,70 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.13.0] - 2026-08-27
+
+**Before updating:** this release adds columns to four tables and creates one new table
+(`audit_log`). Nothing is rebuilt and nothing is dropped, but take a backup first anyway:
+**Settings → Backups → Download backup now**, or confirm last night's scheduled backup
+succeeded. Use that, not a file copy — the database runs in WAL mode, so copying `budget.db`
+off the NAS while the container is running silently leaves out your most recent changes; the
+app's own backup is a consistent snapshot.
+
+**Stop the old container before starting the new one** rather than hot-swapping, so only one
+process opens the database during the migration.
+
+**The migration is all-or-nothing.** Every statement and its bookkeeping row commit in a single
+transaction, so an interrupted update leaves your v1.12.1 database exactly as it was — start the
+container again and it will retry.
+
+**To roll back:** restore the backup you took above, then run the v1.12.1 image.
+
+### Added
+
+- **A "just me" view for kids.** Settings → Users can set any member to **Only their own records**.
+  That person then sees only transactions attributed to them, their own budgets, goals and items,
+  and their own upcoming bills — no account balances, no net worth, and no household totals
+  anywhere. Everyone else's screens are unchanged.
+- **People without a login.** Settings → Users can add someone as a person only — no password,
+  no sign-in. They appear in every "who was this for?" picker and can never be an admin.
+- **A "Needs a look" card on the dashboard**, listing this month's unusual charges, duplicate
+  charges and subscriptions that went up. The app has computed these since v1.10.0 and could
+  only reach you by Telegram or email until now. The card hides itself when there is nothing to
+  say.
+- **Quick add.** A one-line form at the top of Transactions and on the dashboard, defaulting to
+  the account you used last. The installed app's icon gains an "Add a transaction" shortcut.
+- **Notes on a transaction.** "Note…" in the row menu opens a box under that row, and the search
+  box now searches notes as well as descriptions.
+- **Record payment** on an upcoming bill installment: one button writes the transaction and marks
+  the installment paid, in one step.
+- **RBC, BMO and CIBC import presets, and OFX/QFX files.** OFX carries the bank's own transaction
+  id, so re-importing an overlapping statement matches exactly instead of by fingerprint. These
+  three presets are built from each bank's published export layout, and
+  have not yet been checked against a real file — tell us if one needs adjusting.
+- **Savings and asset accounts.** An asset (a house, a TFSA, an RRSP) holds a balance you type in
+  and counts toward net worth; it takes no transactions and no imports. Savings behaves like a
+  chequing account but is left out of safe-to-spend.
+- **A sinking-fund line on budgets.** Link a bill to a budget category and that row says what it
+  is accumulating for: "Accumulating for Property tax — $900 of $1,800 by 2026-06-30".
+- **An audit page** at Settings → Audit log, listing every deleted item, deleted receipt and
+  undone import with who did it and when.
+
+### Changed
+
+- **Deleting an item or a receipt, and undoing an import, now require you to own it** (or to be an
+  admin). Until now any signed-in member could delete anyone's records and nothing recorded who
+  did it.
+- **Opening another member's item by its address now shows "not found"** instead of the item.
+- **Changing a merchant rule someone else created now tells you so** instead of silently
+  overwriting it and recording you as its author. Admins can still change any rule.
+- **"You haven't imported in a while" now names the account.** Importing one account no longer
+  silences the alert for the four you have not touched.
+
+### Fixed
+
+- The people picker on Transactions listed deactivated members while the one on Budgets did not.
+  Both now list every active person, whether or not they can sign in.
+
 ## [1.12.1] - 2026-08-27
 
 **Before updating:** this release adds one new piece of information to each of two existing tables
