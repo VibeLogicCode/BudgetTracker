@@ -40,6 +40,8 @@ const REQUIRE_VIEWER: { file: string; fn: string }[] = [
   { file: 'src/lib/bills.ts', fn: 'safeToSpend' },
   { file: 'src/lib/bills.ts', fn: 'sinkingFundsFor' },
   { file: 'src/lib/insights.ts', fn: 'householdInsights' },
+  { file: 'src/lib/networth.ts', fn: 'latestSnapshots' },
+  { file: 'src/lib/networth.ts', fn: 'netWorthOverTime' },
 ];
 
 /** Exempt, WITH the reason. Nothing is exempt without one. */
@@ -48,6 +50,21 @@ const EXEMPT: { file: string; fn: string; why: string }[] = [
     file: 'src/lib/accounts.ts',
     fn: 'getAccount',
     why: 'internal resolver: createManualTransaction, commitImport and commitStagedImport call it with an id they produced themselves and have no viewer to pass. No page or route resolves a user-supplied account id through it.',
+  },
+  {
+    file: 'src/lib/warranty/items.ts',
+    fn: 'getWarrantyReceipt',
+    why: 'internal resolver: warranties/actions.ts (deleteReceiptAction) and api/warranties/receipts/[id]/route.ts use it only to find the receipt\'s parent item id, then check canActOnOwner(getWarrantyItem(item.id, viewer)) before acting on or returning it.',
+  },
+  {
+    file: 'src/lib/warranty/items.ts',
+    fn: 'listWarrantyReceipts',
+    why: 'internal resolver: warranties/[id]/page.tsx calls it only with item.id after getWarrantyItem(id, viewer) already returned non-null for this viewer, so the id it receives was already viewer-checked.',
+  },
+  {
+    file: 'src/lib/loans.ts',
+    fn: 'listLoanRules',
+    why: 'internal resolver: warranties/[id]/page.tsx and warranties/actions.ts call it only with item.id after getWarrantyItem(id, viewer) already confirmed the viewer may see this item.',
   },
 ];
 
@@ -67,7 +84,11 @@ describe('ruling R2: every read-model helper takes a viewer', () => {
     for (const entry of EXEMPT) expect(entry.why.length).toBeGreaterThan(40);
   });
 
-  it('is non-vacuous: the require-list and exempt-list together name at least 20 functions', () => {
+  // Not a claim that the scanner "found" anything -- there is no scanner, by design (M3). This
+  // only checks that the two named lists above have not shrunk: a future edit that quietly
+  // deletes entries from REQUIRE_VIEWER/EXEMPT rather than fixing a rotted signature still
+  // trips this, even though every remaining named entry would otherwise still pass.
+  it('the named lists cannot shrink below 20 entries', () => {
     expect(REQUIRE_VIEWER.length + EXEMPT.length).toBeGreaterThanOrEqual(20);
   });
 });
