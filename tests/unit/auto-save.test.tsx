@@ -84,7 +84,9 @@ describe('AutoSaveSelect', () => {
     // The whole point of the revert: the control must not keep showing a value the server
     // refused, or the row lies about what is stored.
     expect(select.value).toBe('2');
-    expect(statusOf()).toBe('error');
+    // useTransition's `pending` flips false in a LATER commit than setError, so the slot can
+    // still read 'pending' at the instant the alert lands (seen under CI load, v1.13.2 build).
+    await waitFor(() => expect(statusOf()).toBe('error'));
   });
 
   it('ends on the last write when a second change arrives while the first is still in flight', async () => {
