@@ -1,18 +1,24 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { createTestDb, type TestDb } from '../../helpers/db';
+import { createAccount } from '@/lib/accounts';
 import {
   countActiveAdmins,
   countUsers,
   createFirstAdmin,
+  createPersonWithoutLogin,
   createUser,
   createUserSchema,
   findUserById,
   findUserByUsername,
+  listAttributablePeople,
   listUsers,
   mustChangePassword,
+  setLastAccountId,
   setMustChangePassword,
   setUserActive,
+  setUserCanSignIn,
   setUserPassword,
+  setUserVisibility,
   usernameSchema,
   usernameTaken,
 } from '@/lib/auth/users';
@@ -167,5 +173,55 @@ describe('must_change_password (spec v1.5)', () => {
     expect(mustChangePassword(bob.id)).toBe(true);
     setMustChangePassword(bob.id, false);
     expect(mustChangePassword(bob.id)).toBe(false);
+  });
+});
+
+describe('v1.13.0: people without a login, and the visibility flag', () => {
+  it('a person created without a login is attributable but cannot sign in', async () => {
+    current = createTestDb();
+    const person = await createPersonWithoutLogin({ name: 'Kid', username: 'kid' });
+    expect(person.canSignIn).toBe(false);
+    expect(person.role).toBe('member');
+    expect(person.visibility).toBe('household');
+    expect(listAttributablePeople().map((row) => row.username)).toContain('kid');
+  });
+
+  it('stores a hash nothing can verify against, not a shared sentinel', async () => {
+    current = createTestDb();
+    const a = await createPersonWithoutLogin({ name: 'Kid', username: 'kid' });
+    const b = await createPersonWithoutLogin({ name: 'Kid Two', username: 'kid-two' });
+    const hashes = [a, b].map((row) => findUserByUsername(row.username)?.passwordHash);
+    expect(hashes[0]).toBeTruthy();
+    expect(hashes[0]).not.toBe(hashes[1]);
+  });
+
+  it('refuses visibility self on an admin (micro-ruling M1)', async () => {
+    current = createTestDb();
+    const admin = await createUser({ name: 'Alice', username: 'alice', password: 'correct horse battery', role: 'admin' });
+    expect(() => setUserVisibility(admin.id, 'self')).toThrow(/admin/i);
+  });
+
+  it('refuses clearing can_sign_in on an admin', async () => {
+    current = createTestDb();
+    const admin = await createUser({ name: 'Alice', username: 'alice', password: 'correct horse battery', role: 'admin' });
+    expect(() => setUserCanSignIn(admin.id, false)).toThrow(/admin/i);
+  });
+
+  it('listAttributablePeople excludes a deactivated person but keeps a no-login one', async () => {
+    current = createTestDb();
+    const member = await createUser({ name: 'Bob', username: 'bob', password: 'correct horse battery', role: 'member' });
+    await createPersonWithoutLogin({ name: 'Kid', username: 'kid' });
+    setUserActive(member.id, false);
+    expect(listAttributablePeople().map((row) => row.username)).toEqual(['kid']);
+  });
+
+  it('setLastAccountId round-trips and accepts null', async () => {
+    current = createTestDb();
+    const member = await createUser({ name: 'Bob', username: 'bob', password: 'correct horse battery', role: 'member' });
+    const accountId = createAccount({ name: 'Chequing', type: 'chequing', ownerUserId: member.id });
+    setLastAccountId(member.id, accountId);
+    expect(findUserById(member.id)?.lastAccountId).toBe(accountId);
+    setLastAccountId(member.id, null);
+    expect(findUserById(member.id)?.lastAccountId).toBeNull();
   });
 });

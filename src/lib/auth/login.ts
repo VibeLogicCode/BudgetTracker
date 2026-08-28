@@ -67,7 +67,9 @@ export async function attemptLogin(input: {
   };
 
   const user = findUserByUsername(username);
-  if (!user || !user.isActive) {
+  // v1.13.0 ruling R5: canSignIn is checked INSIDE this branch, not before it, so a
+  // no-login username still pays the dummy-hash cost and cannot be distinguished by timing.
+  if (!user || !user.isActive || !user.canSignIn) {
     // Ruling (c): pay the same argon2 cost a real user's password check would
     // have paid, against a fixed dummy hash, before recording the failure — a
     // fast early-return here would otherwise let an attacker distinguish "no
@@ -150,6 +152,6 @@ export async function attemptLogin(input: {
     status: 'ok',
     token: session.token,
     expiresAt: session.expiresAt,
-    user: { id: user.id, name: user.name, username: user.username, role: user.role },
+    user: { id: user.id, name: user.name, username: user.username, role: user.role, visibility: user.visibility },
   };
 }

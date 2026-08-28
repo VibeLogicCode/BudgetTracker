@@ -15,6 +15,13 @@ export interface SessionUser {
   name: string;
   username: string;
   role: 'admin' | 'member';
+  /**
+   * v1.13.0 ruling R2. 'self' scopes every read this person makes to rows they own. Carried on the
+   * session so that every existing requireUser() call site already holds a Viewer and no page has to
+   * fetch the flag separately -- which is what keeps the six chokepoints' viewer argument free at
+   * every call site.
+   */
+  visibility: 'household' | 'self';
 }
 
 export function generateSessionToken(): string {
@@ -66,6 +73,8 @@ export function validateSession(token: string, at: Date = new Date()): SessionUs
       username: users.username,
       role: users.role,
       isActive: users.isActive,
+      visibility: users.visibility,
+      canSignIn: users.canSignIn,
     })
     .from(sessions)
     .innerJoin(users, eq(users.id, sessions.userId))
@@ -74,6 +83,10 @@ export function validateSession(token: string, at: Date = new Date()): SessionUs
 
   if (!row) return null;
   if (!row.isActive) return null;
+  // v1.13.0 ruling R5: a person whose login was withdrawn must not keep the session they had when it
+  // was granted -- the same argument resetMfaAction makes about destroying sessions on an auth
+  // downgrade, expressed here as a read-time refusal so no sweep is needed.
+  if (!row.canSignIn) return null;
   const nowMs = at.getTime();
   if (new Date(row.expiresAt).getTime() <= nowMs) return null;
 
@@ -88,7 +101,7 @@ export function validateSession(token: string, at: Date = new Date()): SessionUs
       .run();
   }
 
-  return { id: row.id, name: row.name, username: row.username, role: row.role };
+  return { id: row.id, name: row.name, username: row.username, role: row.role, visibility: row.visibility };
 }
 
 export function destroySession(token: string): void {

@@ -16,6 +16,7 @@ import {
   userFromRequest,
   validateSession,
 } from '@/lib/auth/session';
+import { createUser, setUserCanSignIn } from '@/lib/auth/users';
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -48,7 +49,7 @@ describe('createSession / validateSession', () => {
     current = createTestDb();
     const userId = insertTestUser(current.db, { name: 'Alice', username: 'alice', role: 'admin' });
     const { token } = createSession(userId, { userAgent: 'vitest', ip: '10.0.0.5' });
-    expect(validateSession(token)).toEqual({ id: userId, name: 'Alice', username: 'alice', role: 'admin' });
+    expect(validateSession(token)).toEqual({ id: userId, name: 'Alice', username: 'alice', role: 'admin', visibility: 'household' });
   });
 
   it('rejects unknown, empty and tampered tokens', () => {
@@ -103,6 +104,15 @@ describe('createSession / validateSession', () => {
     const userId = insertTestUser(current.db, { username: 'bob' });
     const { token } = createSession(userId);
     current.db.run(sql`update users set is_active = 0 where id = ${userId}`);
+    expect(validateSession(token)).toBeNull();
+  });
+
+  it('v1.13.0: a live session stops validating once can_sign_in is cleared', async () => {
+    current = createTestDb();
+    const member = await createUser({ name: 'Alice', username: 'alice', password: 'correct horse battery', role: 'member' });
+    const { token } = createSession(member.id);
+    expect(validateSession(token)?.visibility).toBe('household');
+    setUserCanSignIn(member.id, false);
     expect(validateSession(token)).toBeNull();
   });
 });
@@ -183,7 +193,7 @@ describe('userFromRequest', () => {
     const request = new Request('http://nas.local:3000/api/x', {
       headers: { cookie: `theme=dark; ${SESSION_COOKIE_NAME}=${token}; other=1` },
     });
-    expect(userFromRequest(request)).toEqual({ id: userId, name: 'Carol', username: 'carol', role: 'member' });
+    expect(userFromRequest(request)).toEqual({ id: userId, name: 'Carol', username: 'carol', role: 'member', visibility: 'household' });
   });
 
   it('returns null when the cookie header is absent or the cookie is missing', () => {

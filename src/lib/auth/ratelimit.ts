@@ -145,6 +145,13 @@ export function clearAttemptsFor(username: string): number {
 const IP_MAX = 45;
 const IPV4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
 const IPV6 = /^[0-9a-f:]+$/i;
+/**
+ * The IPv4-mapped IPv6 form (e.g. `::ffff:10.0.0.5`): a run of hex/colon groups followed by one
+ * literal dotted-quad tail. IP_MAX's comment has claimed to accommodate this form since it was
+ * written, but IPV6 above can never match it -- a dotted quad contains '.', which IPV6 forbids --
+ * so every such address was previously refused and fell through to 'unknown'.
+ */
+const IPV6_V4_TAIL = /^[0-9a-f:]*:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i;
 
 /** Rejects anything that is not plainly an address, so a forged header cannot become display text. */
 function validIp(value: string): string | null {
@@ -155,6 +162,8 @@ function validIp(value: string): string | null {
   // Deliberately loose for v6 rather than reimplementing RFC 4291: the point is to refuse free
   // text, not to be a parser. A colon and hex digits only, with at least one colon.
   if (IPV6.test(trimmed) && trimmed.includes(':')) return trimmed;
+  const mapped = IPV6_V4_TAIL.exec(trimmed);
+  if (mapped) return mapped[1].split('.').every((part) => Number(part) <= 255) ? trimmed : null;
   return null;
 }
 

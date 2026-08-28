@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { createTestDb, type TestDb } from '../../helpers/db';
 import { attemptLogin, isSetupRequired, runSetup, GENERIC_LOGIN_ERROR } from '@/lib/auth/login';
-import { createUser, findUserByUsername, setUserActive, countUsers } from '@/lib/auth/users';
+import { createPersonWithoutLogin, createUser, findUserByUsername, setUserActive, countUsers } from '@/lib/auth/users';
 import { validateSession } from '@/lib/auth/session';
 import * as ratelimit from '@/lib/auth/ratelimit';
 import { currentTotpToken, enableTotpForUser, generateRecoveryCodes, generateTotpSecret, storeRecoveryCodes, countUnusedRecoveryCodes } from '@/lib/auth/totp';
@@ -105,6 +105,13 @@ describe('attemptLogin — password only', () => {
     await createUser({ name: 'Bob', username: 'bob', password: PASSWORD, role: 'admin' });
     setUserActive(alice.id, false);
     expect((await attemptLogin({ username: 'alice', password: PASSWORD, ip: IP })).status).toBe('invalid');
+  });
+
+  it('v1.13.0 ruling R5: a person without a login is refused, indistinguishably from an unknown name', async () => {
+    current = createTestDb();
+    await createPersonWithoutLogin({ name: 'Kid', username: 'kid' });
+    const result = await attemptLogin({ username: 'kid', password: PASSWORD, ip: IP });
+    expect(result.status).toBe('invalid');
   });
 
   it('records every attempt in login_attempts', async () => {

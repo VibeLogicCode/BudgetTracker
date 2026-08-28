@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '@/db/client';
@@ -15,6 +16,12 @@ export interface UserRecord {
   /** Spec v1.5: true until the user completes the forced /change-password step. */
   mustChangePassword: boolean;
   createdAt: string;
+  /** v1.13.0 ruling R2. Admin-set on Settings -> Users. */
+  visibility: 'household' | 'self';
+  /** v1.13.0 ruling R5. false = attribution-only person, never on the login path. */
+  canSignIn: boolean;
+  /** v1.13.0 ruling R7: quick-add's default account for this person. */
+  lastAccountId: number | null;
 }
 
 export interface UserWithSecrets extends UserRecord {
@@ -40,6 +47,12 @@ export const createUserSchema = z.object({
   role: z.enum(['admin', 'member']),
 });
 
+/** R5: no password, never admin, never a session. username is still required and still unique. */
+export const createPersonSchema = z.object({
+  name: z.string().trim().min(1, 'Name is required').max(80),
+  username: usernameSchema,
+});
+
 const PUBLIC_COLUMNS = {
   id: users.id,
   name: users.name,
@@ -49,6 +62,9 @@ const PUBLIC_COLUMNS = {
   isActive: users.isActive,
   mustChangePassword: users.mustChangePassword,
   createdAt: users.createdAt,
+  visibility: users.visibility,
+  canSignIn: users.canSignIn,
+  lastAccountId: users.lastAccountId,
 } as const;
 
 export function countUsers(): number {
@@ -117,6 +133,9 @@ export async function createUser(input: {
       totpEnabled: false,
       isActive: true,
       mustChangePassword: input.mustChangePassword === true,
+      visibility: 'household',
+      canSignIn: true,
+      lastAccountId: null,
       createdAt: nowIso(),
     })
     .returning(PUBLIC_COLUMNS)
@@ -154,6 +173,9 @@ export async function createFirstAdmin(input: { name: string; username: string; 
         // The setup wizard's admin chose this password themselves — nobody else
         // knows it, so there is nothing for a forced change to protect against.
         mustChangePassword: false,
+        visibility: 'household',
+        canSignIn: true,
+        lastAccountId: null,
         createdAt: nowIso(),
       })
       .returning(PUBLIC_COLUMNS)
@@ -191,4 +213,73 @@ export function setUserActive(userId: number, active: boolean): void {
     }
   }
   getDb().update(users).set({ isActive: active }).where(eq(users.id, userId)).run();
+}
+
+/**
+ * v1.13.0 ruling R5. A person the money is attributed to who has no login: a young child, a relative
+ * living with the household, a housemate who does not want an account. They appear in every
+ * attribution picker and never on the login path.
+ *
+ * password_hash is NOT NULL, so a row still needs one. It hashes 32 random bytes and throws them
+ * away rather than storing a fixed sentinel: a sentinel would be the SAME value on every install, so
+ * anybody who read this source could try it, and argon2 would happily verify it.
+ */
+export async function createPersonWithoutLogin(input: { name: string; username: string }): Promise<UserRecord> {
+  const parsed = createPersonSchema.parse(input);
+  if (usernameTaken(parsed.username)) throw new Error(`Username "${parsed.username}" is already taken`);
+  const passwordHash = await hashPassword(randomBytes(32).toString('base64'));
+  return getDb()
+    .insert(users)
+    .values({
+      name: parsed.name,
+      username: parsed.username,
+      passwordHash,
+      role: 'member',
+      totpSecretEncrypted: null,
+      totpEnabled: false,
+      isActive: true,
+      mustChangePassword: false,
+      visibility: 'household',
+      canSignIn: false,
+      lastAccountId: null,
+      createdAt: nowIso(),
+    })
+    .returning(PUBLIC_COLUMNS)
+    .get();
+}
+
+/**
+ * Micro-ruling M1: 'self' and role 'admin' are mutually exclusive. Enforced here and not as a SQL
+ * CHECK, because it is a CROSS-COLUMN invariant and a CHECK added by ALTER TABLE ADD COLUMN does not
+ * re-validate existing rows -- the same argument assertBalanceAnchorPairing makes in
+ * src/lib/warranty/items.ts.
+ */
+export function setUserVisibility(userId: number, visibility: 'household' | 'self'): void {
+  if (visibility === 'self' && findUserById(userId)?.role === 'admin') {
+    throw new Error('An admin cannot be limited to their own records. Make them a member first.');
+  }
+  getDb().update(users).set({ visibility }).where(eq(users.id, userId)).run();
+}
+
+/** Ruling R5: an admin must always be able to sign in, so the flag can never be cleared on one. */
+export function setUserCanSignIn(userId: number, canSignIn: boolean): void {
+  if (!canSignIn && findUserById(userId)?.role === 'admin') {
+    throw new Error('An admin must be able to sign in. Make them a member first.');
+  }
+  getDb().update(users).set({ canSignIn }).where(eq(users.id, userId)).run();
+}
+
+/** Ruling R7 / micro-ruling M5. Called by manualEntryAction after a successful write. */
+export function setLastAccountId(userId: number, accountId: number | null): void {
+  getDb().update(users).set({ lastAccountId: accountId }).where(eq(users.id, userId)).run();
+}
+
+/**
+ * The ONE list every attribution picker reads (ruling R5). Active people, login or not -- which
+ * resolves the pre-v1.13.0 inconsistency where transactions/page.tsx:69 listed deactivated members
+ * and budgets/page.tsx:72 did not. listUsers() stays as-is for Settings -> Users, which must show
+ * deactivated rows so they can be reactivated.
+ */
+export function listAttributablePeople(): UserRecord[] {
+  return getDb().select(PUBLIC_COLUMNS).from(users).where(eq(users.isActive, true)).orderBy(users.id).all();
 }

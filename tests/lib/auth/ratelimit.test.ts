@@ -266,4 +266,16 @@ describe('v1.12.1: x-real-ip is untrusted unless TRUST_PROXY is on (item AB / SE
   it('accepts a real IPv6 address', () => {
     expect(clientIpFromHeaders(new Headers({ 'x-real-ip': '2001:db8::1' }), null, trusted)).toBe('2001:db8::1');
   });
+
+  // v1.12.1 final review carry-in: IP_MAX's own comment claims to accommodate an IPv4-mapped
+  // IPv6 address, but the plain hex-and-colon IPV6 regex can never match one -- a dotted quad
+  // contains '.', which that pattern forbids -- so this form was silently refused and collapsed
+  // to 'unknown' before this fix.
+  it('accepts an IPv4-mapped IPv6 address', () => {
+    expect(clientIpFromHeaders(new Headers({ 'x-real-ip': '::ffff:10.0.0.5' }), null, trusted)).toBe('::ffff:10.0.0.5');
+  });
+
+  it('still refuses an IPv4-mapped form with an out-of-range octet', () => {
+    expect(clientIpFromHeaders(new Headers({ 'x-real-ip': '::ffff:999.0.0.5' }), null, trusted)).toBe('unknown');
+  });
 });
