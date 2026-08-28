@@ -22,6 +22,7 @@ describe('ComingUpCard', () => {
         billsDueCents={0}
         hasBudgetedLimits
         monthEndDate="2026-08-31"
+        canRecord={false}
       />,
     );
     // The one $77 bill renders "$77.00" twice (header total + its own list row), so the
@@ -41,6 +42,7 @@ describe('ComingUpCard', () => {
         billsDueCents={7700}
         hasBudgetedLimits
         monthEndDate="2026-08-31"
+        canRecord={false}
       />,
     );
     expect(screen.getByText(/\$77\.00 of that falls before Aug 31/i)).toBeTruthy();
@@ -48,7 +50,13 @@ describe('ComingUpCard', () => {
 });
 
 describe('ComingUpCard with overdue rows', () => {
-  const base = { budgetedRemainingCents: 50_000, billsDueCents: 12_000, hasBudgetedLimits: true, monthEndDate: '2026-09-30' };
+  const base = {
+    budgetedRemainingCents: 50_000,
+    billsDueCents: 12_000,
+    hasBudgetedLimits: true,
+    monthEndDate: '2026-09-30',
+    canRecord: false,
+  };
 
   function bill(over: Partial<UpcomingBill> & { dueDate: string; amountCents: number }): UpcomingBill {
     return {
@@ -106,5 +114,62 @@ describe('ComingUpCard with overdue rows', () => {
       />,
     );
     expect(container.querySelectorAll('li')).toHaveLength(2);
+  });
+});
+
+// Task 11 (ruling R8): the Record-payment button. installmentId is the discriminator, not the
+// kind, because a cadence bill (subscription) has no schedule row to mark paid.
+describe('ComingUpCard record-payment button', () => {
+  const base = {
+    budgetedRemainingCents: 50_000,
+    billsDueCents: 12_000,
+    hasBudgetedLimits: true,
+    monthEndDate: '2026-09-30',
+  };
+
+  function bill(over: Partial<UpcomingBill> & { dueDate: string; amountCents: number }): UpcomingBill {
+    return {
+      itemId: 1,
+      name: 'Municipal tax',
+      kind: 'bill',
+      installmentId: null,
+      overdue: false,
+      ...over,
+    } as UpcomingBill;
+  }
+
+  it('renders the button for a schedule row when canRecord is true', () => {
+    render(
+      <ComingUpCard
+        {...base}
+        canRecord
+        bills={[bill({ dueDate: '2026-09-15', amountCents: 120_000, installmentId: 5 })]}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /record payment/i })).toBeTruthy();
+  });
+
+  it('omits the button when canRecord is false, even for a schedule row', () => {
+    render(
+      <ComingUpCard
+        {...base}
+        canRecord={false}
+        bills={[bill({ dueDate: '2026-09-15', amountCents: 120_000, installmentId: 5 })]}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: /record payment/i })).toBeNull();
+  });
+
+  it('omits the button for a cadence row even when canRecord is true, since there is no schedule row to mark', () => {
+    render(
+      <ComingUpCard
+        {...base}
+        canRecord
+        bills={[
+          bill({ dueDate: '2026-09-15', amountCents: 7_700, installmentId: null, kind: 'subscription' }),
+        ]}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: /record payment/i })).toBeNull();
   });
 });

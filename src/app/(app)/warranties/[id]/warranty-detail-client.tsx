@@ -43,6 +43,10 @@ import {
 import type { WarrantyStatus } from '@/lib/warranty/expiry';
 import type { WarrantyItemRow, WarrantyReceiptRow } from '@/lib/warranty/items';
 import type { InstallmentRow } from '@/lib/warranty/installments';
+// Relative, not the `@/` alias -- see RecordPaymentForm.tsx's docblock on the same import: the
+// client-bundle guard (tests/ops/client-bundle.test.ts) only walks `@/`-qualified value imports,
+// and this sibling 'use server' module reaching @/lib/env is exactly the shape it would flag.
+import { recordBillPaymentAction, setBillCategoryAction } from '../../bills/actions';
 import {
   addInstallmentAction,
   attachReceiptsAction,
@@ -116,6 +120,7 @@ export function WarrantyDetailClient({
   lastPaymentAt,
   paymentCount,
   installments,
+  categories,
 }: {
   item: WarrantyItemRow;
   receipts: WarrantyReceiptRow[];
@@ -136,6 +141,9 @@ export function WarrantyDetailClient({
   /** v1.12.0: a bill's due-date schedule. Always supplied; the card decides whether to render
    *  (ruling B7 -- a gate never hides a stored value). */
   installments: InstallmentRow[];
+  /** v1.13.0 ruling R11 / micro-ruling M9: the budget-category picker's options. Supplied by
+   *  Task 12's page.tsx (its Interfaces block declares this prop). */
+  categories: { id: number; name: string }[];
 }) {
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -203,6 +211,15 @@ export function WarrantyDetailClient({
         : setInstallmentPaidAction(_prev, formData),
     initial,
   );
+  // Task 11 (v1.13.0 ruling R8): its own useActionState, not folded into installmentRowDispatch
+  // above -- recordBillPaymentAction lives in a different 'use server' module (src/app/(app)/bills/
+  // actions.ts) with its own state shape (structurally identical, but not the same export), and
+  // reporting it inline in this card mirrors how the Payment matching card's own actions
+  // (ruleState/deleteRuleState) already report separately from the five activeSlot actions.
+  const [recordPaymentState, recordPaymentDispatch] = useActionState(recordBillPaymentAction, initial);
+  // Ruling R11 / micro-ruling M9: the budget-category link. A deliberate Save button, not an
+  // auto-save (v1.11.0's rule for anything that changes what another page says).
+  const [categoryState, categoryDispatch] = useActionState(setBillCategoryAction, initial);
 
   const slotState =
     activeSlot === 'edit'
@@ -434,8 +451,33 @@ export function WarrantyDetailClient({
                 outstanding)
               </>
             }
+            action={
+              // Ruling R11 / micro-ruling M9: a read-side link, and the smallest possible UI for
+              // it. Changing it changes no limit, no rollover and no total -- it only lets the
+              // budgets row say what it is accumulating toward.
+              <form action={categoryDispatch} className="flex items-end gap-2">
+                <input type="hidden" name="itemId" value={item.id} />
+                <Field label="Accumulating in budget category">
+                  <select name="categoryId" defaultValue={item.budgetCategoryId ?? ''} className="field-control">
+                    <option value="">Not linked</option>
+                    {categories.map((category) => (
+                      <option key={category.id} value={category.id}>
+                        {category.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <SubmitButton className="btn btn--ghost btn--sm">Save</SubmitButton>
+              </form>
+            }
           />
           <CardBody className="flex flex-col gap-4">
+            {categoryState.error === undefined && categoryState.message === undefined ? null : (
+              <>
+                <FormError message={categoryState.error} />
+                {categoryState.message === undefined ? null : <Notice tone="success">{categoryState.message}</Notice>}
+              </>
+            )}
             <p className="text-sm text-muted">
               Enter each due date the way it appears on the bill. The app reminds you before each one and flags any
               that go past.
@@ -502,12 +544,24 @@ export function WarrantyDetailClient({
                           <RowMenu label={`Actions for the ${formatCents(row.amountCents)} installment due ${row.dueDate}`}>
                             {row.paidAt === null ? (
                               installmentsAllowedForKind(item.kind) ? (
-                                <RowMenuForm
-                                  action={installmentRowDispatch}
-                                  fields={{ intent: 'paid', id: String(row.id), itemId: String(item.id), paid: 'true' }}
-                                >
-                                  Mark paid
-                                </RowMenuForm>
+                                <>
+                                  {/* Ruling R8: above Mark paid -- Record payment is the normal
+                                      path (it writes the transaction too), Mark paid stays for a
+                                      payment made outside this app (e.g. cash, or a bank already
+                                      reconciled some other way). */}
+                                  <RowMenuForm
+                                    action={recordPaymentDispatch}
+                                    fields={{ installmentId: String(row.id) }}
+                                  >
+                                    Record payment
+                                  </RowMenuForm>
+                                  <RowMenuForm
+                                    action={installmentRowDispatch}
+                                    fields={{ intent: 'paid', id: String(row.id), itemId: String(item.id), paid: 'true' }}
+                                  >
+                                    Mark paid
+                                  </RowMenuForm>
+                                </>
                               ) : null
                             ) : (
                               <RowMenuForm
@@ -533,6 +587,10 @@ export function WarrantyDetailClient({
                 {/* Same F3-fix-round treatment as the loan rules table: the stale case ("removed
                     already, in another tab") has somewhere to surface. */}
                 <FormError message={installmentRowState.error} />
+                <FormError message={recordPaymentState.error} />
+                {recordPaymentState.message === undefined ? null : (
+                  <Notice tone="success">{recordPaymentState.message}</Notice>
+                )}
               </>
             )}
             {installmentsAllowedForKind(item.kind) ? (

@@ -1,6 +1,7 @@
 import { formatCents } from '@/lib/money';
 import type { UpcomingBill } from '@/lib/bills';
 import { Card, CardBody, CardFooter, CardHeader } from '@/components/ui/Card';
+import { RecordPaymentForm } from '@/components/RecordPaymentForm';
 
 /**
  * Task 9 (spec 2026-08-22, v1.7.0): SELF-HIDING, in the manner of LoansCard -- the dashboard
@@ -24,6 +25,7 @@ export function ComingUpCard({
   billsDueCents,
   hasBudgetedLimits,
   monthEndDate,
+  canRecord,
 }: {
   /** Already filtered by the caller to a fixed lookahead window (the next 30 days). */
   bills: UpcomingBill[];
@@ -34,6 +36,11 @@ export function ComingUpCard({
   /** ISO YYYY-MM-DD, the same month end safeToSpend scoped billsDueCents to. Display only --
    *  this component formats it, it does not derive a month end client-side. */
   monthEndDate: string;
+  /**
+   * v1.13.0 ruling R8: false for a self viewer with no account they can post to, true otherwise
+   * (Task 13 computes it -- this card does not re-derive account eligibility itself).
+   */
+  canRecord: boolean;
 }) {
   if (bills.length === 0 && !hasBudgetedLimits) return null;
 
@@ -88,7 +95,15 @@ export function ComingUpCard({
                 <span className={bill.overdue ? 'text-xs text-danger' : 'text-xs text-subtle'}>{bill.dueDate}</span>
                 {bill.overdue ? <span className="badge badge--red">Overdue</span> : null}
               </span>
-              <span className="money shrink-0">{formatCents(bill.amountCents)}</span>
+              <span className="flex shrink-0 items-center gap-3">
+                <span className="money">{formatCents(bill.amountCents)}</span>
+                {/* Ruling R8: only a SCHEDULE row can be recorded. A cadence bill (a subscription)
+                    has no installment row to mark, so the button would have nothing to write
+                    against -- which is why installmentId is the discriminator here, not the kind. */}
+                {canRecord && bill.installmentId !== null ? (
+                  <RecordPaymentForm installmentId={bill.installmentId} />
+                ) : null}
+              </span>
             </li>
           ))}
         </ul>
