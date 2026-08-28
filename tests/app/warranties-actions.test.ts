@@ -8,7 +8,13 @@ import { sql } from 'drizzle-orm';
 import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
 import { nowIso } from '@/lib/clock';
 
-let currentUser = { id: 1, name: 'Alice', username: 'alice', role: 'member' as const };
+let currentUser: { id: number; name: string; username: string; role: 'admin' | 'member'; visibility: 'household' | 'self' } = {
+  id: 1,
+  name: 'Alice',
+  username: 'alice',
+  role: 'member',
+  visibility: 'household',
+};
 let originHeaders = { origin: 'http://nas.local:3000', host: 'nas.local:3000' };
 
 vi.mock('@/lib/auth/session', () => ({
@@ -59,12 +65,20 @@ import {
   updateWarrantyAction,
 } from '@/app/(app)/warranties/actions';
 import { MAX_RULES_PER_LOAN, listLoanRules } from '@/lib/loans';
-import { createWarrantyItem, getWarrantyItem, listWarrantyReceipts } from '@/lib/warranty/items';
+import { attachStagedReceipts, createWarrantyItem, getWarrantyItem, getWarrantyReceipt, listWarrantyReceipts } from '@/lib/warranty/items';
 import { MAX_FILES_PER_UPLOAD, receiptFileExists } from '@/lib/warranty/receipts';
 import { writeSidecar, writeStagedReceipt } from '@/lib/warranty/staging';
 import { resetOcrQueueForTests } from '@/lib/warranty/ocr/queue';
 import { setOcrEngineForTests } from '@/lib/warranty/ocr/engine';
 import { createItemType, listItemTypes } from '@/lib/warranty/types';
+import { NOT_YOURS_ERROR, type Viewer } from '@/lib/auth/viewer';
+import { listAudit } from '@/lib/audit';
+
+// v1.13.0 ruling R3: a household-visibility, admin-role stand-in used ONLY to read back state for
+// assertions after an action runs -- never the viewer an action itself is exercised as. Its id (0)
+// never matches a real seeded user; ownerScope() doesn't care, because visibility/role alone decide
+// whether a read is scoped, not whether the id is real.
+const ADMIN: Viewer = { id: 0, role: 'admin', visibility: 'household' };
 
 let current: TestDb | null = null;
 let dataDir: string;
@@ -80,7 +94,7 @@ beforeEach(() => {
   originHeaders = { origin: 'http://nas.local:3000', host: 'nas.local:3000' };
   current = createSeededTestDb();
   ownerId = insertTestUser(current.db, { name: 'Alice', username: 'alice' });
-  currentUser = { id: ownerId, name: 'Alice', username: 'alice', role: 'member' };
+  currentUser = { id: ownerId, name: 'Alice', username: 'alice', role: 'member', visibility: 'household' };
   resetOcrQueueForTests();
   setOcrEngineForTests({ recognize: async () => ({ text: 'engine text' }) });
 });
@@ -138,7 +152,7 @@ function loanForm(over: Record<string, string> = {}): Record<string, string> {
 /** Most recently created item -- for tests that don't need the redirect path itself. */
 function latestItem() {
   const row = current!.db.get<{ id: number }>(sql`select id from warranty_items order by id desc limit 1`);
-  return getWarrantyItem(row.id)!;
+  return getWarrantyItem(row.id, ADMIN)!;
 }
 
 /**
@@ -207,7 +221,7 @@ describe('createWarrantyAction', () => {
     const to = await redirectPath(() => createWarrantyAction({}, formData(baseFields())));
     expect(to).toMatch(/^\/warranties\/\d+$/);
     const id = Number(to.split('/').pop());
-    const item = getWarrantyItem(id)!;
+    const item = getWarrantyItem(id, ADMIN)!;
     expect(item.name).toBe('Fridge');
     expect(item.priceCents).toBe(129999);
     expect(item.expiryDate).toBe('2028-08-16');
@@ -216,14 +230,14 @@ describe('createWarrantyAction', () => {
 
   it('stores a positive magnitude even if the price arrives signed (§17.26)', async () => {
     const to = await redirectPath(() => createWarrantyAction({}, formData(baseFields({ price: '-1299.99' }))));
-    expect(getWarrantyItem(Number(to.split('/').pop()))!.priceCents).toBe(129999);
+    expect(getWarrantyItem(Number(to.split('/').pop()), ADMIN)!.priceCents).toBe(129999);
   });
 
   it('handles the Lifetime checkbox by clearing the term', async () => {
     const to = await redirectPath(() =>
       createWarrantyAction({}, formData(baseFields({ isLifetime: 'on', warrantyMonths: '' }))),
     );
-    const item = getWarrantyItem(Number(to.split('/').pop()))!;
+    const item = getWarrantyItem(Number(to.split('/').pop()), ADMIN)!;
     expect(item.isLifetime).toBe(true);
     expect(item.warrantyMonths).toBeNull();
     expect(item.expiryDate).toBeNull();
@@ -311,7 +325,7 @@ describe('createWarrantyAction', () => {
     const to = await redirectPath(() =>
       createWarrantyAction({}, formData(baseFields({ transactionId: String(txn.id) }))),
     );
-    expect(getWarrantyItem(Number(to.split('/').pop()))!.transactionId).toBe(txn.id);
+    expect(getWarrantyItem(Number(to.split('/').pop()), ADMIN)!.transactionId).toBe(txn.id);
   });
 
   // Delta T8 (type-deltas.md): typeId round-trips; empty/'none' -> null; deleted/unknown
@@ -321,7 +335,7 @@ describe('createWarrantyAction', () => {
     const to = await redirectPath(() =>
       createWarrantyAction({}, formData(baseFields({ typeId: String(subscriptionType.id) }))),
     );
-    const item = getWarrantyItem(Number(to.split('/').pop()))!;
+    const item = getWarrantyItem(Number(to.split('/').pop()), ADMIN)!;
     expect(item.typeId).toBe(subscriptionType.id);
     expect(item.typeName).toBe('Subscription');
     expect(item.isSubscription).toBe(true);
@@ -329,7 +343,7 @@ describe('createWarrantyAction', () => {
 
   it('stores NULL when typeId is omitted', async () => {
     const to = await redirectPath(() => createWarrantyAction({}, formData(baseFields())));
-    const item = getWarrantyItem(Number(to.split('/').pop()))!;
+    const item = getWarrantyItem(Number(to.split('/').pop()), ADMIN)!;
     expect(item.typeId).toBeNull();
     expect(item.typeName).toBeNull();
     expect(item.isSubscription).toBe(false);
@@ -337,9 +351,9 @@ describe('createWarrantyAction', () => {
 
   it('treats an empty string and "none" as NULL', async () => {
     const to1 = await redirectPath(() => createWarrantyAction({}, formData(baseFields({ typeId: '' }))));
-    expect(getWarrantyItem(Number(to1.split('/').pop()))!.typeId).toBeNull();
+    expect(getWarrantyItem(Number(to1.split('/').pop()), ADMIN)!.typeId).toBeNull();
     const to2 = await redirectPath(() => createWarrantyAction({}, formData(baseFields({ typeId: 'none' }))));
-    expect(getWarrantyItem(Number(to2.split('/').pop()))!.typeId).toBeNull();
+    expect(getWarrantyItem(Number(to2.split('/').pop()), ADMIN)!.typeId).toBeNull();
   });
 
   it('refuses an unknown typeId and writes nothing', async () => {
@@ -359,7 +373,7 @@ describe('createWarrantyAction — billing cycle and amount', () => {
         formData(baseFields({ typeId: String(sub.id), billingCycle: 'monthly', billingAmount: '15.99' })),
       ),
     );
-    const item = getWarrantyItem(Number(to.split('/').pop()))!;
+    const item = getWarrantyItem(Number(to.split('/').pop()), ADMIN)!;
     expect(item.billingCycle).toBe('monthly');
     expect(item.billingAmountCents).toBe(1599);
   });
@@ -369,7 +383,7 @@ describe('createWarrantyAction — billing cycle and amount', () => {
     const to = await redirectPath(() =>
       createWarrantyAction({}, formData(baseFields({ typeId: String(sub.id) }))),
     );
-    const item = getWarrantyItem(Number(to.split('/').pop()))!;
+    const item = getWarrantyItem(Number(to.split('/').pop()), ADMIN)!;
     expect(item.billingCycle).toBeNull();
     expect(item.billingAmountCents).toBeNull();
   });
@@ -449,7 +463,7 @@ describe('createWarrantyAction — billing cycle and amount', () => {
           formData(baseFields({ typeId: String(sub.id), billingCycle: 'monthly', billingAmount: '9.99' })),
         ),
       );
-      const item = getWarrantyItem(Number(to.split('/').pop()))!;
+      const item = getWarrantyItem(Number(to.split('/').pop()), ADMIN)!;
       expect(item.billingCycle).toBe('monthly');
       expect(item.billingAmountCents).toBe(999);
     });
@@ -465,7 +479,7 @@ describe('updateWarrantyAction', () => {
       formData(baseFields({ itemId: String(id), name: 'Dishwasher', warrantyMonths: '12' })),
     );
     expect(result.message).toBeTruthy();
-    const item = getWarrantyItem(id)!;
+    const item = getWarrantyItem(id, ADMIN)!;
     expect(item.name).toBe('Dishwasher');
     expect(item.expiryDate).toBe('2027-08-16');
   });
@@ -514,13 +528,13 @@ describe('updateWarrantyAction', () => {
     const laptop = listItemTypes().find((t) => t.name === 'Laptop')!;
     const to = await redirectPath(() => createWarrantyAction({}, formData(baseFields())));
     const id = Number(to.split('/').pop());
-    const before = getWarrantyItem(id)!;
+    const before = getWarrantyItem(id, ADMIN)!;
     expect(before.typeId).not.toBe(laptop.id);
 
     const result = await updateWarrantyAction({}, formData(baseFields({ itemId: String(id), typeId: String(laptop.id) })));
     expect(result.error).toBe(ITEM_TYPE_IMMUTABLE_ERROR);
 
-    const after = getWarrantyItem(id)!;
+    const after = getWarrantyItem(id, ADMIN)!;
     expect(after.typeId).toBe(before.typeId);
   });
 
@@ -529,7 +543,7 @@ describe('updateWarrantyAction', () => {
     // edit form posts the unchanged value on every save.
     const to = await redirectPath(() => createWarrantyAction({}, formData(baseFields())));
     const id = Number(to.split('/').pop());
-    const before = getWarrantyItem(id)!;
+    const before = getWarrantyItem(id, ADMIN)!;
     const result = await updateWarrantyAction(
       {},
       formData(baseFields({
@@ -539,7 +553,7 @@ describe('updateWarrantyAction', () => {
       })),
     );
     expect(result.error).toBeUndefined();
-    expect(getWarrantyItem(id)!.name).toBe('Renamed, same type');
+    expect(getWarrantyItem(id, ADMIN)!.name).toBe('Renamed, same type');
   });
 
   it('refuses an unknown typeId on update and leaves the item unchanged', async () => {
@@ -550,7 +564,7 @@ describe('updateWarrantyAction', () => {
       formData(baseFields({ itemId: String(id), name: 'Should not stick', typeId: '999999' })),
     );
     expect(result.error).toBe('That item type no longer exists.');
-    const item = getWarrantyItem(id)!;
+    const item = getWarrantyItem(id, ADMIN)!;
     expect(item.name).toBe('Fridge');
     expect(item.typeId).toBeNull();
   });
@@ -570,7 +584,7 @@ describe('deleteWarrantyAction', () => {
     const stored = listWarrantyReceipts(id)[0].storedFilename;
 
     expect(await redirectPath(() => deleteWarrantyAction({}, formData({ itemId: String(id) })))).toBe('/warranties');
-    expect(getWarrantyItem(id)).toBeNull();
+    expect(getWarrantyItem(id, ADMIN)).toBeNull();
     expect(receiptFileExists(stored)).toBe(false);
     expect(current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_receipts`).c).toBe(0);
     expect(current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_search`).c).toBe(0);
@@ -579,24 +593,29 @@ describe('deleteWarrantyAction', () => {
 
 // M8: pins §1.3 — warranty items are household-shared, not ownership-gated. Guards against a
 // future access-control check creeping in on update/delete.
-describe('household sharing (§1.3): ownership is attribution only, not access control', () => {
-  it('lets a member who does not own the item update AND delete it', async () => {
+// M8, revised for v1.13.0 ruling R3: this used to pin "ownership is attribution only, not access
+// control" for BOTH update and delete. R3 splits the two -- EDITING a household-shared item stays
+// open to every member regardless of ownership (a household shares its subscriptions and its
+// contracts); DELETING one does not (see the R3 describe block below, which pins the delete side).
+describe('household sharing (§1.3): editing stays open to every member, delete does not (ruling R3)', () => {
+  it('lets a member who does not own the item update it, but refuses them the delete', async () => {
     const to = await redirectPath(() => createWarrantyAction({}, formData(baseFields())));
     const id = Number(to.split('/').pop());
-    expect(getWarrantyItem(id)!.ownerUserId).toBe(ownerId);
+    expect(getWarrantyItem(id, ADMIN)!.ownerUserId).toBe(ownerId);
 
-    const otherId = insertTestUser(current!.db, { name: 'Bob', username: 'bob' });
-    currentUser = { id: otherId, name: 'Bob', username: 'bob', role: 'member' };
+    const otherId = insertTestUser(current!.db, { name: 'Bob', username: 'bob', role: 'member' });
+    currentUser = { id: otherId, name: 'Bob', username: 'bob', role: 'member', visibility: 'household' };
 
     const updateResult = await updateWarrantyAction(
       {},
       formData(baseFields({ itemId: String(id), name: 'Renamed by Bob' })),
     );
     expect(updateResult.message).toBeTruthy();
-    expect(getWarrantyItem(id)!.name).toBe('Renamed by Bob');
+    expect(getWarrantyItem(id, ADMIN)!.name).toBe('Renamed by Bob');
 
-    expect(await redirectPath(() => deleteWarrantyAction({}, formData({ itemId: String(id) })))).toBe('/warranties');
-    expect(getWarrantyItem(id)).toBeNull();
+    const deleteResult = await deleteWarrantyAction({}, formData({ itemId: String(id) }));
+    expect(deleteResult.error).toBe(NOT_YOURS_ERROR);
+    expect(getWarrantyItem(id, ADMIN)).not.toBeNull();
   });
 });
 
@@ -664,7 +683,7 @@ describe('MUST-14.4 / MUST-14.7 / MUST-14.14: the loan readers and the rule acti
         formData(loanForm({ principal: '28,000.00', interestRate: '5.49', currentBalance: '$19,550.00' })),
       ),
     );
-    const item = getWarrantyItem(Number(to.split('/').pop()))!;
+    const item = getWarrantyItem(Number(to.split('/').pop()), ADMIN)!;
     expect(item.principalCents).toBe(2_800_000);
     expect(item.interestRateBps).toBe(549);
     expect(item.currentBalanceCents).toBe(1_955_000);
@@ -738,7 +757,7 @@ describe('MUST-14.4 / MUST-14.7 / MUST-14.14: the loan readers and the rule acti
       createWarrantyAction({}, formData(loanForm({ principal: '30,000.00', interestRate: '5.49', currentBalance: '25,000.00' }))),
     );
     const id = Number(to.split('/').pop());
-    const before = getWarrantyItem(id)!;
+    const before = getWarrantyItem(id, ADMIN)!;
     expect(before.currentBalanceCents).not.toBeNull();
 
     const result = await updateWarrantyAction(
@@ -759,7 +778,7 @@ describe('MUST-14.4 / MUST-14.7 / MUST-14.14: the loan readers and the rule acti
     );
     expect(result.message).toBeTruthy();
 
-    const after = getWarrantyItem(id)!;
+    const after = getWarrantyItem(id, ADMIN)!;
     expect(after.name).toBe('Renamed Loan');
     expect(after.principalCents).toBe(before.principalCents);
     expect(after.interestRateBps).toBe(before.interestRateBps);
@@ -772,7 +791,7 @@ describe('MUST-14.4 / MUST-14.7 / MUST-14.14: the loan readers and the rule acti
       createWarrantyAction({}, formData(loanForm({ principal: '30,000.00', interestRate: '5.49', currentBalance: '25,000.00' }))),
     );
     const id = Number(to.split('/').pop());
-    const before = getWarrantyItem(id)!;
+    const before = getWarrantyItem(id, ADMIN)!;
 
     await updateWarrantyAction(
       {},
@@ -787,7 +806,7 @@ describe('MUST-14.4 / MUST-14.7 / MUST-14.14: the loan readers and the rule acti
         }),
       ),
     );
-    const after = getWarrantyItem(id)!;
+    const after = getWarrantyItem(id, ADMIN)!;
     expect(after.currentBalanceCents).toBe(2_400_000);
     expect(after.balanceUpdatedAt).not.toBeNull();
     expect(after.balanceUpdatedAt).not.toBe(before.balanceUpdatedAt);
@@ -815,7 +834,7 @@ describe('Fix wave item 4: the seed decides "untouched", not the live stored val
       createWarrantyAction({}, formData(loanForm({ principal: '30,000.00', interestRate: '5.49', currentBalance: '25,000.00' }))),
     );
     const id = Number(to.split('/').pop());
-    const before = getWarrantyItem(id)!;
+    const before = getWarrantyItem(id, ADMIN)!;
     expect(before.currentBalanceCents).toBe(2_500_000);
 
     // The matcher rule moves the balance directly, exactly as a real matched payment does
@@ -842,7 +861,7 @@ describe('Fix wave item 4: the seed decides "untouched", not the live stored val
     );
     expect(result.message).toBeTruthy();
 
-    const after = getWarrantyItem(id)!;
+    const after = getWarrantyItem(id, ADMIN)!;
     expect(after.name).toBe('Renamed Loan');
     // The automatic move survives: the stale $25,000.00 the tab had did NOT clobber it.
     expect(after.currentBalanceCents).toBe(2_000_000);
@@ -855,7 +874,7 @@ describe('Fix wave item 4: the seed decides "untouched", not the live stored val
       createWarrantyAction({}, formData(loanForm({ principal: '30,000.00', interestRate: '5.49', currentBalance: '25,000.00' }))),
     );
     const id = Number(to.split('/').pop());
-    const before = getWarrantyItem(id)!;
+    const before = getWarrantyItem(id, ADMIN)!;
 
     current!.sqlite.prepare(`update warranty_items set current_balance_cents = ? where id = ?`).run(2_000_000, id);
 
@@ -874,7 +893,7 @@ describe('Fix wave item 4: the seed decides "untouched", not the live stored val
     );
     expect(result.message).toBeTruthy();
 
-    const after = getWarrantyItem(id)!;
+    const after = getWarrantyItem(id, ADMIN)!;
     // The person's own new figure wins -- not the stale seed, and not whatever the matcher
     // left behind either.
     expect(after.currentBalanceCents).toBe(2_400_000);
@@ -921,5 +940,84 @@ describe('F10 fix-round: deleteLoanRuleAction verifies the rule belongs to itemI
     const result = await deleteLoanRuleAction(formData({ id: String(ruleId), itemId: String(itemId) }));
     expect(result.message).toBeTruthy();
     expect(listLoanRules(itemId)).toHaveLength(0);
+  });
+});
+
+/** A plain (non-loan) warranty item owned by `ownerUserId`, seeded directly through the data layer. */
+function seedItem(ownerUserId: number, name = 'Item'): number {
+  return createWarrantyItem({
+    name,
+    vendor: null,
+    model: null,
+    serial: null,
+    purchaseDate: '2026-01-01',
+    warrantyMonths: null,
+    isLifetime: false,
+    priceCents: null,
+    ownerUserId,
+    transactionId: null,
+    typeId: null,
+    notes: null,
+  });
+}
+
+describe('ruling R3: destructive actions are owner-or-admin, and are recorded', () => {
+  let adminId: number;
+  let memberId: number;
+  let adminOwnedItemId: number;
+  let memberOwnedItemId: number;
+  let receiptOnAdminItem: number;
+
+  beforeEach(() => {
+    adminId = insertTestUser(current!.db, { name: 'Admin', role: 'admin' });
+    memberId = insertTestUser(current!.db, { name: 'Bob', role: 'member' });
+    adminOwnedItemId = seedItem(adminId, 'Admin Item');
+    memberOwnedItemId = seedItem(memberId, 'Member Item');
+
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    writeSidecar(stagingId, { status: 'done', text: 'admin receipt text' });
+    [receiptOnAdminItem] = attachStagedReceipts(adminOwnedItemId, [{ stagingId, originalFilename: 'a.jpg' }]);
+  });
+
+  it('a member deleting another person item is refused and the row survives', async () => {
+    currentUser = { id: memberId, name: 'Bob', username: 'bob', role: 'member', visibility: 'household' };
+    const form = new FormData();
+    form.set('itemId', String(adminOwnedItemId));
+    expect((await deleteWarrantyAction({}, form)).error).toBe(NOT_YOURS_ERROR);
+    expect(getWarrantyItem(adminOwnedItemId, ADMIN)).not.toBeNull();
+    expect(listAudit()).toEqual([]);
+  });
+
+  it('an owner deleting their own item succeeds and appends exactly one audit row', async () => {
+    currentUser = { id: memberId, name: 'Bob', username: 'bob', role: 'member', visibility: 'household' };
+    const form = new FormData();
+    form.set('itemId', String(memberOwnedItemId));
+    // redirect() throws by design -- a successful delete signals via a thrown RedirectSignal.
+    await expect(deleteWarrantyAction({}, form)).rejects.toThrow();
+    expect(getWarrantyItem(memberOwnedItemId, ADMIN)).toBeNull();
+    const audit = listAudit();
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({
+      userId: memberId,
+      action: 'delete_item',
+      entity: 'warranty_items',
+      entityId: memberOwnedItemId,
+    });
+  });
+
+  it('an admin may delete anyone item, and the audit row names the admin', async () => {
+    currentUser = { id: adminId, name: 'Admin', username: 'admin', role: 'admin', visibility: 'household' };
+    const form = new FormData();
+    form.set('itemId', String(memberOwnedItemId));
+    await expect(deleteWarrantyAction({}, form)).rejects.toThrow();
+    expect(listAudit()[0]?.userId).toBe(adminId);
+  });
+
+  it('a member deleting a receipt on another person item is refused', async () => {
+    currentUser = { id: memberId, name: 'Bob', username: 'bob', role: 'member', visibility: 'household' };
+    const form = new FormData();
+    form.set('receiptId', String(receiptOnAdminItem));
+    expect((await deleteReceiptAction({}, form)).error).toBe(NOT_YOURS_ERROR);
+    expect(getWarrantyReceipt(receiptOnAdminItem)).not.toBeNull();
   });
 });

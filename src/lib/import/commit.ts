@@ -365,9 +365,19 @@ function partitionByAssociation(importId: number): { sole: number[]; shared: num
   return { sole, shared };
 }
 
-/** Route-layer guard: an undo of an unknown importId must 404, not silently no-op. */
-export function importExists(importId: number): boolean {
-  return getDb().select({ id: imports.id }).from(imports).where(eq(imports.id, importId)).get() !== undefined;
+/**
+ * Route-layer guard: an undo of an unknown importId must 404, not silently no-op. v1.13.0 ruling
+ * R3: also carries `importedBy` and `filename`, so the route can decide who may undo it (owner or
+ * admin) and write an audit detail, without a second query.
+ */
+export function getImport(importId: number): { id: number; importedBy: number; filename: string } | null {
+  return (
+    getDb()
+      .select({ id: imports.id, importedBy: imports.importedBy, filename: imports.filename })
+      .from(imports)
+      .where(eq(imports.id, importId))
+      .get() ?? null
+  );
 }
 
 export interface UndoPreview {

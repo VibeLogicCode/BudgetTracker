@@ -5,8 +5,10 @@ import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import BetterSqlite3 from 'better-sqlite3';
+import { appendAudit } from '@/lib/audit';
 import { CROSS_ORIGIN_ERROR, isSameOrigin } from '@/lib/auth/csrf';
 import { requireUser } from '@/lib/auth/session';
+import { NOT_YOURS_ERROR, canActOnOwner } from '@/lib/auth/viewer';
 import { nowIso } from '@/lib/clock';
 import { todayIso } from '@/lib/dates';
 import {
@@ -68,11 +70,21 @@ export interface WarrantyActionState {
  */
 
 /**
- * Warranty items are household-shared (§1.3): every signed-in member may create, edit or
- * delete any item or receipt. owner_user_id is ATTRIBUTION, not access control, so there is
- * deliberately no requireAdmin() anywhere in this file. Changing an item's type is likewise
- * not an admin action (type-deltas.md T8 / MUST-19.15). Only the type LIST is
- * admin-maintained (settings/item-types).
+ * Warranty items are household-VISIBLE and owner-EDITABLE (v1.13.0, ruling R3, spec
+ * docs/superpowers/specs/2026-08-27-kids-scope-and-household-features-design.md).
+ *
+ * This file used to say: "owner_user_id is ATTRIBUTION, not access control, so there is deliberately
+ * no requireAdmin() anywhere in this file." That was defensible for two adults and wrong for a
+ * household with a fourteen-year-old and a login each: it meant any signed-in member could delete any
+ * other member's item and its receipts, and no row recorded who did it (review 2026-08-27, SEC-2).
+ *
+ * What changed, and only this: the two DESTRUCTIVE actions are now owner-or-admin, via
+ * canActOnOwner() in @/lib/auth/viewer, and both append an audit_log row. Creating and EDITING an
+ * item stay open to every member -- a household shares its subscriptions and its contracts, and
+ * requiring an admin to fix a typo would be the wrong lesson from a deletion problem. There is still
+ * no requireAdmin() in this file, and that is still deliberate. Changing an item's type is likewise
+ * not an admin action (type-deltas.md T8 / MUST-19.15). Only the type LIST is admin-maintained
+ * (settings/item-types).
  */
 
 const idField = z.coerce.number().int().positive();
@@ -368,7 +380,7 @@ export async function updateWarrantyAction(
   formData: FormData,
 ): Promise<WarrantyActionState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
-  await requireUser();
+  const user = await requireUser();
 
   const id = idField.safeParse(formData.get('itemId'));
   if (!id.success) return { error: 'Invalid request.' };
@@ -376,7 +388,7 @@ export async function updateWarrantyAction(
   // F6 fix-round: fetched BEFORE readItemInput so the anchor comparison has something to
   // compare against -- an unrelated edit (name only, the loan fieldset resubmitting the same
   // balance it was seeded with) must not re-stamp balance_updated_at to "now".
-  const existing = getWarrantyItem(id.data);
+  const existing = getWarrantyItem(id.data, user);
   if (!existing) return { error: 'That item no longer exists.' };
 
   let savedKind: ItemKind = 'warranty';
@@ -413,10 +425,17 @@ export async function deleteWarrantyAction(
   formData: FormData,
 ): Promise<WarrantyActionState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
-  await requireUser();
+  const user = await requireUser();
 
   const id = idField.safeParse(formData.get('itemId'));
   if (!id.success) return { error: 'Invalid request.' };
+
+  // Ruling R3. Read the item as an ADMIN-equivalent viewer would -- getWarrantyItem(id, user) already
+  // returns null for a self viewer, and for a household member it returns the row so canActOnOwner
+  // can give the honest refusal below rather than "no longer exists".
+  const item = getWarrantyItem(id.data, user);
+  if (!item) return { error: 'That item no longer exists.' };
+  if (!canActOnOwner(item.ownerUserId, user)) return { error: NOT_YOURS_ERROR };
 
   // M5: errors as return values, never thrown to the client. Same contract as every other
   // action, even though deleteWarrantyItem's own failure modes are narrow today.
@@ -425,6 +444,10 @@ export async function deleteWarrantyAction(
   } catch (error) {
     return failure(error, 'Could not delete that item.');
   }
+
+  // AFTER the delete succeeds, so a refused or failed attempt leaves no row. The name is the detail
+  // because an entity_id whose row is gone tells a reader nothing on its own.
+  appendAudit({ userId: user.id, action: 'delete_item', entity: 'warranty_items', entityId: id.data, detail: item.name });
 
   revalidateAll();
   // Outside the try: redirect() signals by throwing, and catching it would swallow it.
@@ -436,11 +459,11 @@ export async function attachReceiptsAction(
   formData: FormData,
 ): Promise<WarrantyActionState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
-  await requireUser();
+  const user = await requireUser();
 
   const id = idField.safeParse(formData.get('itemId'));
   if (!id.success) return { error: 'Invalid request.' };
-  if (getWarrantyItem(id.data) === null) return { error: 'That item no longer exists.' };
+  if (getWarrantyItem(id.data, user) === null) return { error: 'That item no longer exists.' };
 
   let attached: number[];
   let duplicate = false;
@@ -471,12 +494,17 @@ export async function deleteReceiptAction(
   formData: FormData,
 ): Promise<WarrantyActionState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
-  await requireUser();
+  const user = await requireUser();
 
   const id = idField.safeParse(formData.get('receiptId'));
   if (!id.success) return { error: 'Invalid request.' };
   const receipt = getWarrantyReceipt(id.data);
   if (receipt === null) return { error: 'That receipt no longer exists.' };
+
+  // Ruling R3: a receipt has no owner of its own -- it inherits its parent item's, which is why the
+  // check resolves the item rather than guessing from the receipt row.
+  const item = getWarrantyItem(receipt.warrantyItemId, user);
+  if (!item || !canActOnOwner(item.ownerUserId, user)) return { error: NOT_YOURS_ERROR };
 
   // M5: errors as return values, never thrown to the client.
   try {
@@ -484,6 +512,13 @@ export async function deleteReceiptAction(
   } catch (error) {
     return failure(error, 'Could not remove that receipt.');
   }
+  appendAudit({
+    userId: user.id,
+    action: 'delete_receipt',
+    entity: 'warranty_receipts',
+    entityId: id.data,
+    detail: item.name,
+  });
   revalidateAll(receipt.warrantyItemId);
   return { message: 'Receipt removed.' };
 }
@@ -524,7 +559,7 @@ const loanRuleSchema = z.object({
 
 export async function saveLoanRuleAction(_prev: WarrantyActionState, formData: FormData): Promise<WarrantyActionState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
-  await requireUser();
+  const user = await requireUser();
 
   const accountRaw = str(formData, 'accountId').trim();
   const parsed = loanRuleSchema.safeParse({
@@ -538,7 +573,7 @@ export async function saveLoanRuleAction(_prev: WarrantyActionState, formData: F
   });
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Could not save that rule.' };
 
-  const item = getWarrantyItem(parsed.data.itemId);
+  const item = getWarrantyItem(parsed.data.itemId, user);
   if (!item) return { error: 'That item no longer exists.' };
   // v1.12.0: bills carry matching rules too -- a match marks their earliest unpaid installment
   // paid instead of moving a balance. MUST-19.11: the sentence lives in constants.ts now.
@@ -630,14 +665,14 @@ export async function addInstallmentAction(
 ): Promise<WarrantyActionState> {
   // MUST-13.1: origin FIRST, before auth, before validation, before any read.
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
-  await requireUser();
+  const user = await requireUser();
 
   const parsed = z
     .object({ itemId: z.coerce.number().int().positive() })
     .safeParse({ itemId: formData.get('itemId') });
   if (!parsed.success) return { error: 'Invalid request.' };
 
-  const item = getWarrantyItem(parsed.data.itemId);
+  const item = getWarrantyItem(parsed.data.itemId, user);
   if (!item) return { error: 'That item no longer exists.' };
   if (!installmentsAllowedForKind(item.kind)) return { error: INSTALLMENT_KIND_ERROR };
 
@@ -693,7 +728,7 @@ export async function setInstallmentPaidAction(
   formData: FormData,
 ): Promise<WarrantyActionState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
-  await requireUser();
+  const user = await requireUser();
   const parsed = installmentRefSchema.safeParse({ id: formData.get('id'), itemId: formData.get('itemId') });
   if (!parsed.success) return { error: 'Invalid request.' };
   const paid = str(formData, 'paid') === 'true';
@@ -701,7 +736,7 @@ export async function setInstallmentPaidAction(
   if (findInstallment(parsed.data.itemId, parsed.data.id) === undefined) return { error: INSTALLMENT_GONE };
 
   if (paid) {
-    const item = getWarrantyItem(parsed.data.itemId);
+    const item = getWarrantyItem(parsed.data.itemId, user);
     if (!item) return { error: 'That item no longer exists.' };
     if (!installmentsAllowedForKind(item.kind)) return { error: INSTALLMENT_KIND_ERROR };
     // Two people marking the same row: the second UPDATE is a no-op and markInstallmentPaid

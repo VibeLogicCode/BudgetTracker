@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import { Readable } from 'node:stream';
 import { isSameOriginOrHeaderless } from '@/lib/auth/csrf';
 import { userFromRequest } from '@/lib/auth/session';
-import { getWarrantyReceipt } from '@/lib/warranty/items';
+import { canActOnOwner } from '@/lib/auth/viewer';
+import { getWarrantyItem, getWarrantyReceipt } from '@/lib/warranty/items';
 import { resolveReceiptPath } from '@/lib/warranty/receipts';
 import type { ReceiptMime } from '@/lib/warranty/sniff';
 
@@ -64,6 +65,12 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
   // 4. The row. MUST-4.4: a receipt is only ever located by its database id.
   const receipt = getWarrantyReceipt(id);
   if (!receipt) return new Response('Not found', { status: 404 });
+
+  // 5. v1.13.0 ruling R3. A receipt inherits its parent item's owner. 404 and NOT 403, deliberately:
+  //    a 403 confirms the row exists, and with an incrementing integer id, confirming existence is
+  //    itself the leak the review found (SEC-1). The body is byte-identical to the unknown-id case.
+  const item = getWarrantyItem(receipt.warrantyItemId, user);
+  if (!item || !canActOnOwner(item.ownerUserId, user)) return new Response('Not found', { status: 404 });
 
   const file = resolveReceiptPath(receipt.storedFilename);
   let size: number;

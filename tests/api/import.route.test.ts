@@ -8,6 +8,7 @@ import { POST as commitRoute } from '@/app/api/import/commit/route';
 import { POST as undoRoute } from '@/app/api/import/undo/route';
 import { createSession, SESSION_COOKIE_NAME } from '@/lib/auth/session';
 import { createAccount } from '@/lib/accounts';
+import { listAudit } from '@/lib/audit';
 import { getBuiltinPreset, getProfileByName } from '@/lib/import/presets';
 import { MAX_FILE_BYTES } from '@/lib/import/parse';
 
@@ -63,6 +64,33 @@ function jsonRequest(url: string, body: unknown, withAuth = true) {
   return new Request(url, {
     method: 'POST',
     headers: { ...headers(withAuth), 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+/** Same as uploadRequest()/jsonRequest() above, but signed in as an arbitrary session token --
+ * v1.13.0 ruling R3's tests need a request from someone OTHER than the outer beforeEach's `token`. */
+function uploadRequestAs(sessionToken: string) {
+  const form = new FormData();
+  form.append('file', new File([fixture('td-chequing.csv')], 'td-chequing.csv', { type: 'text/csv' }));
+  form.append('accountId', String(accountId));
+  form.append('profileId', String(profileId));
+  return new Request('http://nas.local:3000/api/import/preview', {
+    method: 'POST',
+    headers: { origin: 'http://nas.local:3000', host: 'nas.local:3000', cookie: `${SESSION_COOKIE_NAME}=${sessionToken}` },
+    body: form,
+  });
+}
+
+function jsonRequestAs(sessionToken: string, url: string, body: unknown) {
+  return new Request(url, {
+    method: 'POST',
+    headers: {
+      origin: 'http://nas.local:3000',
+      host: 'nas.local:3000',
+      'content-type': 'application/json',
+      cookie: `${SESSION_COOKIE_NAME}=${sessionToken}`,
+    },
     body: JSON.stringify(body),
   });
 }
@@ -237,5 +265,92 @@ describe('POST /api/import/commit and /api/import/undo', () => {
 
     const confirmed = await undoRoute(jsonRequest('http://nas.local:3000/api/import/undo', { importId: 999999, confirm: true }));
     expect(confirmed.status).toBe(404);
+  });
+
+  // v1.13.0 ruling R3 (review 2026-08-27, SEC-2): only the person who ran an import, or an admin,
+  // may undo it -- previously any signed-in household member could undo anyone's import.
+  it('ruling R3: a member cannot undo an import somebody else ran, and the row survives', async () => {
+    const importerId = insertTestUser(current!.db, { name: 'Importer', username: 'importer', role: 'member' });
+    const importerToken = createSession(importerId).token;
+    const otherId = insertTestUser(current!.db, { name: 'Other', username: 'other', role: 'member' });
+    const otherToken = createSession(otherId).token;
+
+    const previewResponse = await previewRoute(uploadRequestAs(importerToken));
+    const preview = (await previewResponse.json()) as { stagingId: string };
+    const commitResponse = await commitRoute(
+      jsonRequestAs(importerToken, 'http://nas.local:3000/api/import/commit', {
+        stagingId: preview.stagingId,
+        filename: 'td-chequing.csv',
+        accountId,
+        profileId,
+        mapping: getBuiltinPreset('TD Chequing/Debit'),
+      }),
+    );
+    const committed = (await commitResponse.json()) as { importId: number };
+    const before = (current!.sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c;
+
+    const response = await undoRoute(
+      jsonRequestAs(otherToken, 'http://nas.local:3000/api/import/undo', { importId: committed.importId, confirm: true }),
+    );
+    expect(response.status).toBe(403);
+    expect((current!.sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c).toBe(before);
+    expect(listAudit()).toEqual([]);
+  });
+
+  it('ruling R3: the importer can undo their own import, and one audit row records it with the count', async () => {
+    const importerId = insertTestUser(current!.db, { name: 'Importer', username: 'importer', role: 'member' });
+    const importerToken = createSession(importerId).token;
+
+    const previewResponse = await previewRoute(uploadRequestAs(importerToken));
+    const preview = (await previewResponse.json()) as { stagingId: string };
+    const commitResponse = await commitRoute(
+      jsonRequestAs(importerToken, 'http://nas.local:3000/api/import/commit', {
+        stagingId: preview.stagingId,
+        filename: 'td-chequing.csv',
+        accountId,
+        profileId,
+        mapping: getBuiltinPreset('TD Chequing/Debit'),
+      }),
+    );
+    const committed = (await commitResponse.json()) as { importId: number };
+
+    const response = await undoRoute(
+      jsonRequestAs(importerToken, 'http://nas.local:3000/api/import/undo', { importId: committed.importId, confirm: true }),
+    );
+    expect(response.status).toBe(200);
+
+    const audit = listAudit();
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({
+      userId: importerId,
+      action: 'undo_import',
+      entity: 'imports',
+      entityId: committed.importId,
+    });
+    expect(audit[0]?.detail).toMatch(/\d+ transactions/);
+  });
+
+  it('an admin may undo an import somebody else ran', async () => {
+    const importerId = insertTestUser(current!.db, { name: 'Importer', username: 'importer', role: 'member' });
+    const importerToken = createSession(importerId).token;
+    // `token` (the outer beforeEach's Alice) is seeded via insertTestUser's own default role, admin.
+    const previewResponse = await previewRoute(uploadRequestAs(importerToken));
+    const preview = (await previewResponse.json()) as { stagingId: string };
+    const commitResponse = await commitRoute(
+      jsonRequestAs(importerToken, 'http://nas.local:3000/api/import/commit', {
+        stagingId: preview.stagingId,
+        filename: 'td-chequing.csv',
+        accountId,
+        profileId,
+        mapping: getBuiltinPreset('TD Chequing/Debit'),
+      }),
+    );
+    const committed = (await commitResponse.json()) as { importId: number };
+
+    const response = await undoRoute(
+      jsonRequest('http://nas.local:3000/api/import/undo', { importId: committed.importId, confirm: true }),
+    );
+    expect(response.status).toBe(200);
+    expect(listAudit()[0]?.userId).not.toBe(importerId);
   });
 });

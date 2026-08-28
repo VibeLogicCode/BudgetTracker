@@ -13,7 +13,7 @@ export default async function WarrantiesPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  await requireUser();
+  const viewer = await requireUser();
   const params = await searchParams;
   const one = (key: string) => {
     const value = params[key];
@@ -29,16 +29,19 @@ export default async function WarrantiesPage({
   const page = /^\d+$/.test(one('page')) ? Number(one('page')) : 1;
   const today = todayIso();
 
-  const result = searchWarrantyItems({
-    q: query,
-    status: isWarrantyStatus(status) ? status : null,
-    ownerUserId: /^\d+$/.test(owner) ? Number(owner) : null,
-    // Delta T9: composes with q/status/owner/sort like every other filter.
-    typeId: /^\d+$/.test(typeId) ? Number(typeId) : null,
-    sort,
-    page,
-    today,
-  });
+  const result = searchWarrantyItems(
+    {
+      q: query,
+      status: isWarrantyStatus(status) ? status : null,
+      ownerUserId: /^\d+$/.test(owner) ? Number(owner) : null,
+      // Delta T9: composes with q/status/owner/sort like every other filter.
+      typeId: /^\d+$/.test(typeId) ? Number(typeId) : null,
+      sort,
+      page,
+      today,
+    },
+    viewer,
+  );
 
   return (
     <WarrantiesClient
