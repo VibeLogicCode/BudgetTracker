@@ -195,9 +195,14 @@ export interface LatestSnapshot {
  * preserves that exactly). An account with no qualifying snapshot simply is not in the result,
  * at no extra query cost: `balancesAsOf` is two batched queries no matter how many candidate
  * ids are passed in.
+ *
+ * v1.13.0 fix round 1: `viewer` is required, plumbing only -- threaded straight into the
+ * `listAccounts` call below, same as `netWorthOverTime`'s own `opts.viewer`. Net worth (and this,
+ * its per-account snapshot table) is never shown to a `self` viewer at all (ruling R2), so no new
+ * scoping decision is made here; this just keeps `listAccounts` callable.
  */
-export function latestSnapshots(today: string): LatestSnapshot[] {
-  const accountIds = listAccounts({ includeInactive: true }).map((account) => account.id);
+export function latestSnapshots(today: string, viewer: Viewer): LatestSnapshot[] {
+  const accountIds = listAccounts({ includeInactive: true }, viewer).map((account) => account.id);
   if (accountIds.length === 0) return [];
 
   const resolved = balancesAsOf({ accountIds, date: today });

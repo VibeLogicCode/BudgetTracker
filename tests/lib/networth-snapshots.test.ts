@@ -1,6 +1,10 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
+import type { Viewer } from '@/lib/auth/viewer';
 import { deleteCsvSnapshotsForAccountDates, latestSnapshots, recordBalanceSnapshot } from '@/lib/networth';
+
+/** A household admin sees every account -- every pre-v1.13.0 assertion in this file expects that. */
+const household: Viewer = { id: 1, role: 'admin', visibility: 'household' };
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -101,7 +105,7 @@ describe('recordBalanceSnapshot (spec 2026-08-22 v1.7.0 Task 6)', () => {
     expect(row.balance_cents).toBe(-45000);
     // movedSinceCents 0 throughout this suite: none of these fixtures seed a transaction after
     // the anchor, so every balance here IS its snapshot's own stored figure.
-    expect(latestSnapshots('2026-08-15')).toEqual([
+    expect(latestSnapshots('2026-08-15', household)).toEqual([
       { accountId, date: '2026-08-15', balanceCents: -45000, movedSinceCents: 0 },
     ]);
   });
@@ -127,7 +131,7 @@ describe('latestSnapshots (spec 2026-08-22 v1.7.0 Task 6)', () => {
   it('returns nothing when there are no snapshots at all', () => {
     current = createSeededTestDb();
     insertTestAccount(current.db);
-    expect(latestSnapshots('2026-08-15')).toEqual([]);
+    expect(latestSnapshots('2026-08-15', household)).toEqual([]);
   });
 
   it('picks the newest snapshot at or before today and ignores future-dated rows', () => {
@@ -137,7 +141,7 @@ describe('latestSnapshots (spec 2026-08-22 v1.7.0 Task 6)', () => {
     recordBalanceSnapshot({ accountId, date: '2026-08-10', balanceCents: 110000, source: 'simplefin' });
     recordBalanceSnapshot({ accountId, date: '2026-08-20', balanceCents: 999999, source: 'simplefin' }); // after "today" below
 
-    expect(latestSnapshots('2026-08-15')).toEqual([
+    expect(latestSnapshots('2026-08-15', household)).toEqual([
       { accountId, date: '2026-08-10', balanceCents: 110000, movedSinceCents: 0 },
     ]);
   });
@@ -147,7 +151,7 @@ describe('latestSnapshots (spec 2026-08-22 v1.7.0 Task 6)', () => {
     const accountId = insertTestAccount(current.db);
     recordBalanceSnapshot({ accountId, date: '2026-08-15', balanceCents: 55555, source: 'manual' });
 
-    expect(latestSnapshots('2026-08-15')).toEqual([
+    expect(latestSnapshots('2026-08-15', household)).toEqual([
       { accountId, date: '2026-08-15', balanceCents: 55555, movedSinceCents: 0 },
     ]);
   });
@@ -158,7 +162,7 @@ describe('latestSnapshots (spec 2026-08-22 v1.7.0 Task 6)', () => {
     insertTestAccount(current.db, { name: 'No Balance' });
     recordBalanceSnapshot({ accountId: withSnapshot, date: '2026-08-15', balanceCents: 42000, source: 'simplefin' });
 
-    expect(latestSnapshots('2026-08-15')).toEqual([
+    expect(latestSnapshots('2026-08-15', household)).toEqual([
       { accountId: withSnapshot, date: '2026-08-15', balanceCents: 42000, movedSinceCents: 0 },
     ]);
   });
@@ -180,7 +184,7 @@ describe('latestSnapshots (spec 2026-08-22 v1.7.0 Task 6)', () => {
       )
       .run(accountId, userId, '2026-08-10T00:00:00.000Z', '2026-08-10T00:00:00.000Z');
 
-    expect(latestSnapshots('2026-08-15')).toEqual([
+    expect(latestSnapshots('2026-08-15', household)).toEqual([
       { accountId, date: '2026-08-01', balanceCents: 97500, movedSinceCents: -2500 },
     ]);
   });
@@ -191,7 +195,7 @@ describe('latestSnapshots (spec 2026-08-22 v1.7.0 Task 6)', () => {
     for (const date of ['2026-07-01', '2026-07-15', '2026-08-01', '2026-08-10']) {
       recordBalanceSnapshot({ accountId, date, balanceCents: 1000, source: 'simplefin' });
     }
-    expect(latestSnapshots('2026-08-31')).toHaveLength(1);
+    expect(latestSnapshots('2026-08-31', household)).toHaveLength(1);
   });
 });
 
