@@ -28,24 +28,52 @@ function seedItem(over: {
   createdAt?: string;
   balanceCents?: number | null;
   balanceUpdatedAt?: string | null;
+  /** v1.14.0. Omitted => the INSERT does not name loan_direction at all, so the row takes the
+   *  column DEFAULT exactly as every pre-migration row does (ruling P5's byte-identical proof). */
+  direction?: 'owed' | 'lent';
 }): number {
   const createdAt = over.createdAt ?? '2020-01-01T00:00:00.000Z';
-  const row = t.sqlite
-    .prepare(
-      `insert into warranty_items
-         (name, purchase_date, is_lifetime, owner_user_id, type_id, current_balance_cents, balance_updated_at, created_at, updated_at)
-       values (?, '2020-01-01', 0, ?, ?, ?, ?, ?, ?) returning id`,
-    )
-    .get(
-      over.name ?? 'Loan',
-      userId,
-      typeId,
-      over.balanceCents === undefined ? null : over.balanceCents,
-      over.balanceUpdatedAt ?? null,
-      createdAt,
-      createdAt,
-    ) as { id: number };
+  const row =
+    over.direction === undefined
+      ? (t.sqlite
+          .prepare(
+            `insert into warranty_items
+               (name, purchase_date, is_lifetime, owner_user_id, type_id, current_balance_cents, balance_updated_at, created_at, updated_at)
+             values (?, '2020-01-01', 0, ?, ?, ?, ?, ?, ?) returning id`,
+          )
+          .get(
+            over.name ?? 'Loan',
+            userId,
+            typeId,
+            over.balanceCents === undefined ? null : over.balanceCents,
+            over.balanceUpdatedAt ?? null,
+            createdAt,
+            createdAt,
+          ) as { id: number })
+      : (t.sqlite
+          .prepare(
+            `insert into warranty_items
+               (name, purchase_date, is_lifetime, owner_user_id, type_id, current_balance_cents, balance_updated_at, loan_direction, created_at, updated_at)
+             values (?, '2020-01-01', 0, ?, ?, ?, ?, ?, ?, ?) returning id`,
+          )
+          .get(
+            over.name ?? 'Loan',
+            userId,
+            typeId,
+            over.balanceCents === undefined ? null : over.balanceCents,
+            over.balanceUpdatedAt ?? null,
+            over.direction,
+            createdAt,
+            createdAt,
+          ) as { id: number });
   return row.id;
+}
+
+/** Moves one item's balance_updated_at (the human anchor) directly, by name -- used to make a
+ *  SECOND loan's balance unknown as of an earlier month without touching the first loan's own
+ *  anchor. Local to this file, not fixtures.ts, which lane A shares across four other suites. */
+function anchorBalanceAt(name: string, at: string): void {
+  t.sqlite.prepare('update warranty_items set balance_updated_at = ? where name = ?').run(at, name);
 }
 
 /** Inserts a transaction and its linked loan_payments row, dated `createdAt` -- the column
@@ -210,5 +238,61 @@ describe('Task 10 carry (a): the documented drift after a clamped unassign', () 
     // The CURRENT month is exact: it anchors on current_balance_cents directly, which the
     // clamp kept honestly at zero rather than fabricating a negative number.
     expect(series.find((p) => p.month === '2026-08')!.owedCents).toBe(0);
+  });
+});
+
+describe('debtOverTime splits the two directions (rulings P5, P6)', () => {
+  it('an owed loan reconstructs exactly as before and contributes nothing to lentCents', () => {
+    // The byte-identical proof. seedItem() with no `direction` does not name loan_direction in
+    // its INSERT at all, so this row is shaped exactly like every pre-1.14.0 row on disk.
+    const itemId = seedItem({ name: 'Civic', createdAt: '2024-01-01T00:00:00.000Z', balanceCents: 200_000, balanceUpdatedAt: '2024-01-01T00:00:00.000Z' });
+    const payment = insertTxn({ signedAmountCents: -50_000, date: '2026-08-05' });
+    assignTransactionToLoan({ txnId: payment, itemId, at: new Date('2026-08-05T00:00:00.000Z') });
+
+    const points = debtOverTime(3, { endMonth: '2026-08', today: '2026-08-18' });
+    expect(points.map((p) => p.owedCents)).toEqual([200_000, 200_000, 150_000]);
+    expect(points.map((p) => p.lentCents)).toEqual([null, null, null]);
+  });
+
+  it('a lent loan is excluded from owedCents and reconstructed as its own series', () => {
+    const itemId = seedItem({
+      name: 'Loan to a friend',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      balanceCents: 50_000,
+      balanceUpdatedAt: '2024-01-01T00:00:00.000Z',
+      direction: 'lent',
+    });
+    // A repayment in the current month: walking BACKWARDS, it is added back on.
+    const repayment = insertTxn({ signedAmountCents: 20_000, date: '2026-08-05' });
+    assignTransactionToLoan({ txnId: repayment, itemId, at: new Date('2026-08-05T00:00:00.000Z') });
+
+    const points = debtOverTime(3, { endMonth: '2026-08', today: '2026-08-18' });
+    expect(points.map((p) => p.owedCents)).toEqual([null, null, null]);
+    expect(points.map((p) => p.lentCents)).toEqual([50_000, 50_000, 30_000]);
+  });
+
+  it('the two series are computed independently: one unknown lent loan does not break the debt line', () => {
+    seedItem({ name: 'Civic', createdAt: '2024-01-01T00:00:00.000Z', balanceCents: 200_000, balanceUpdatedAt: '2024-01-01T00:00:00.000Z' });
+    seedItem({
+      name: 'Loan to a friend',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      balanceCents: 50_000,
+      balanceUpdatedAt: '2024-01-01T00:00:00.000Z',
+      direction: 'lent',
+    });
+    // Anchored in the FUTURE relative to the earlier months, which is what makes it unknown there.
+    anchorBalanceAt('Loan to a friend', '2026-08-10T00:00:00.000Z');
+
+    const points = debtOverTime(3, { endMonth: '2026-08', today: '2026-08-18' });
+    expect(points.map((p) => p.owedCents)).toEqual([200_000, 200_000, 200_000]);
+    expect(points.map((p) => p.lentCents)).toEqual([null, null, 50_000]);
+  });
+
+  it('a household with no loans at all still returns both series as null', () => {
+    const points = debtOverTime(2, { endMonth: '2026-08', today: '2026-08-18' });
+    expect(points).toEqual([
+      { month: '2026-07', owedCents: null, lentCents: null },
+      { month: '2026-08', owedCents: null, lentCents: null },
+    ]);
   });
 });

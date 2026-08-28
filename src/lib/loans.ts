@@ -192,7 +192,7 @@ interface ActiveRule {
   balanceCents: number | null;
   kind: 'loan' | 'bill';
   /** v1.14.0 (spec BU). 'owed' for every bill row -- a bill has no direction of its own, and
-   *  loanFieldsAllowedForKind gates 'lent' to loan-kind items only (ruling P3). */
+   *  loanFieldsAllowedForKind gates the other value to loan-kind items only (ruling P3). */
   direction: LoanDirection;
 }
 
@@ -1013,8 +1013,8 @@ export interface LoanSummary {
   /**
    * v1.14.0 (spec BU, ruling P14): shape declared here in T1 -- selected from the column but
    * carrying no behaviour yet. 'owed' is a debt the household owes (every loan before this
-   * release); 'lent' is money someone owes the household. Lane A's Task 2/3 are the ones that
-   * make link(), the reversal paths and debtOverTime actually read it.
+   * release); the other value is money someone owes the household. Lane A's Task 2/3 are the
+   * ones that make link(), the reversal paths and debtOverTime actually read it.
    */
   loanDirection: LoanDirection;
   startDate: string;
@@ -1096,8 +1096,8 @@ export function listLoans(today: string, viewer: Viewer): LoanSummary[] {
 export function loansTotalOwedCents(): number {
   const householdWide: Viewer = { id: 0, role: 'admin', visibility: 'household' };
   // v1.14.0 (spec BU, ruling P6): money someone owes the household is not a debt the household
-  // owes, so a 'lent' loan does not belong in this total -- src/lib/networth.ts reads this
-  // function and correctly stops counting lent loans without being edited itself.
+  // owes, so a loan pointed the other way does not belong in this total -- src/lib/networth.ts
+  // reads this function and correctly stops counting those loans without being edited itself.
   return listLoans(todayIso(), householdWide)
     .filter((loan) => loan.loanDirection === 'owed')
     .reduce((sum, loan) => sum + (loan.currentBalanceCents ?? 0), 0);
@@ -1109,9 +1109,9 @@ export interface DebtPoint {
   month: string;
   owedCents: number | null;
   /**
-   * v1.14.0 (spec BU, ruling P14). The same reconstruction over direction 'lent' loans, as its
-   * own series -- same null semantics, computed independently -- one unknown lent loan must not
-   * break the household-debt line and vice versa.
+   * v1.14.0 (spec BU, ruling P14). The same reconstruction over loans pointed the other way, as
+   * its own series -- same null semantics, computed independently -- one unknown such loan must
+   * not break the household-debt line and vice versa.
    *
    * v1.14.0 shape-first (plan T1): declared here so the dashboard/report lane and the maths
    * lane are type-independent. The second accumulator lands in the same fold below; until it
@@ -1152,6 +1152,15 @@ export interface DebtPoint {
  * than summing applied_cents unsigned, so a disbursement walked backwards is not mistaken for
  * a payment.
  *
+ * v1.14.0 (spec BU, rulings P5, P6): a second, independent reconstruction over loans pointed the
+ * other way, as its own series (DebtPoint.lentCents). The two SQL queries above are BYTE-IDENTICAL
+ * to before this release (ruling P5) -- the per-month `case when amount_cents < 0 ...` sum already
+ * computes the undo delta in the OWED frame, and the other direction's undo delta is exactly its
+ * negation, so the flip happens in the in-memory fold below via loanSignedDelta, never in SQL. A
+ * loan contributes to exactly one series; one series going unknown for a month must never break
+ * the other, so "unknown" is now tracked PER SERIES rather than returned early for the whole month
+ * as the pre-1.14.0 version did.
+ *
  * Task 10 carry (a) -- KNOWN, DOCUMENTED drift after a clamped unassign: unassignTransactionFromLoan
  * and reverseLoanLinksForTransactions clamp their restore at zero (NEW-1 fix-round) rather than
  * ever driving current_balance_cents negative. That clamp is correct for the CURRENT balance --
@@ -1181,6 +1190,7 @@ export function debtOverTime(months: number, opts: { endMonth?: string; today?: 
       createdAt: warrantyItems.createdAt,
       balanceCents: warrantyItems.currentBalanceCents,
       anchorAt: warrantyItems.balanceUpdatedAt,
+      direction: warrantyItems.loanDirection,
     })
     .from(warrantyItems)
     .innerJoin(warrantyItemTypes, eq(warrantyItemTypes.id, warrantyItems.typeId))
@@ -1208,23 +1218,50 @@ export function debtOverTime(months: number, opts: { endMonth?: string; today?: 
     byItem.set(row.itemId, inner);
   }
 
+  // v1.14.0: the old code started `total = 0` (never null, once loans.length > 0 was already
+  // ruled out above) and a loan that contributed nothing for a given month -- not yet created,
+  // or an untracked (null) balance -- left it at that 0. Keep that meaning PER SERIES: a series
+  // whose direction has at least one loan in the household starts at 0 and sums into it; a
+  // series with NO loan of that direction anywhere defaults to null instead, the same way the
+  // whole function would if `loans` were empty. 0 draws the line at zero; null breaks it; those
+  // are different claims and a direction nobody uses should make the honest one.
+  const hasOwed = loans.some((loan) => loan.direction === 'owed');
+  const hasLent = loans.some((loan) => loan.direction !== 'owed');
+
   return keys.map((month) => {
     const end = monthEnd(month);
-    let total = 0;
+    // v1.14.0 (rulings P5, P6): two independent reconstructions over one month axis. A loan
+    // contributes to exactly one of them, and one series going unknown must never break the
+    // other -- so "unknown" is tracked PER SERIES rather than returned early for the whole
+    // month, which is what the pre-1.14.0 single-series version did.
+    let owedTotal: number | null = hasOwed ? 0 : null;
+    let owedUnknown = false;
+    let lentTotal: number | null = hasLent ? 0 : null;
+    let lentUnknown = false;
     for (const loan of loans) {
       if (end < loan.createdAt.slice(0, 10)) continue;
       if (loan.balanceCents === null || loan.anchorAt === null) continue;
-      if (end < loan.anchorAt.slice(0, 10)) return { month, owedCents: null, lentCents: null };
-      let owed = loan.balanceCents;
-      for (const [paymentMonth, cents] of byItem.get(loan.itemId) ?? []) {
-        // "created_at > E" is the whole of every LATER month, since E is a month end.
-        if (paymentMonth > month) owed += cents;
+      const owedSide = loan.direction === 'owed';
+      if (end < loan.anchorAt.slice(0, 10)) {
+        if (owedSide) owedUnknown = true;
+        else lentUnknown = true;
+        continue;
       }
-      total += owed;
+      let balance = loan.balanceCents;
+      for (const [paymentMonth, cents] of byItem.get(loan.itemId) ?? []) {
+        // "created_at > E" is the whole of every LATER month, since E is a month end. The SQL
+        // sum is the undo delta in the OWED frame; loanSignedDelta re-expresses it in the loan's
+        // own frame. For 'owed' it is the identity, which is why the query above did not have to
+        // change (ruling P5).
+        if (paymentMonth > month) balance += loanSignedDelta(loan.direction, cents);
+      }
+      if (owedSide) owedTotal = (owedTotal ?? 0) + balance;
+      else lentTotal = (lentTotal ?? 0) + balance;
     }
-    // v1.14.0 shape-first (plan T1): declared here so the dashboard/report lane and the maths
-    // lane are type-independent. The second accumulator lands in the same fold below; until it
-    // does, null is the honest value -- no lent loan can exist before the item forms ship.
-    return { month, owedCents: total, lentCents: null };
+    return {
+      month,
+      owedCents: owedUnknown ? null : owedTotal,
+      lentCents: lentUnknown ? null : lentTotal,
+    };
   });
 }

@@ -39,6 +39,19 @@ describe('MUST-13.16: exactly one place deletes a transaction row', () => {
   });
 });
 
+describe('ruling P4: one helper owns the sign flip', () => {
+  it('src/lib/loans.ts never spells the direction value itself', () => {
+    // Every sign decision goes through loanSignedDelta/isLoanRepayment (src/lib/warranty/
+    // constants.ts), and every partition tests === 'owed'. A literal 'lent' in this file is a
+    // second place the convention lives, which is how the two drift apart.
+    const offenders = read('src/lib/loans.ts')
+      .split('\n')
+      .map((line, index) => ({ line, number: index + 1 }))
+      .filter((entry) => /'lent'|"lent"/.test(entry.line));
+    expect(offenders).toEqual([]);
+  });
+});
+
 describe('MUST-13.1: the interest rate is display only', () => {
   it('no arithmetic operator is ever applied to interestRateBps in src/lib/loans.ts', () => {
     const offenders = read('src/lib/loans.ts')
