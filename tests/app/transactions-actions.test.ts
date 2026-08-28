@@ -893,3 +893,90 @@ describe('ruling R2 fix round 2 -- a self viewer cannot write another persons tr
     expect(row.c).toBe(groceries);
   });
 });
+
+// v1.13.0 whole-branch review, item I3. manualEntryAction used unscoped getAccount() and trusted
+// whatever attributedUserId a self viewer's form posted; setAttributionAction checked that every
+// TARGET ROW resolved through the viewer, but never checked the DESTINATION PERSON. Both let a
+// self viewer write into someone else's account, or attribute a row to someone else, despite R2's
+// "no household figure leaves this file" posture.
+describe('ruling R2 fix round 3 -- a self viewer writes are forced to their own scope (item I3)', () => {
+  function setupSelfViewer() {
+    const { db, sqlite, userId, accountId } = setup(); // accountId: Alice's Joint Chequing (owner null)
+    const selfUserId = insertTestUser(db, { name: 'Kid', username: 'kid', role: 'member' });
+    db.run(sql`update users set visibility = 'self' where id = ${selfUserId}`);
+    const selfOwnAccountId = insertTestAccount(db, { name: 'Kid Cash', type: 'cash', ownerUserId: selfUserId });
+    currentUser = { id: selfUserId, name: 'Kid', username: 'kid', role: 'member', visibility: 'self' };
+    return { db, sqlite, foreignAccountId: accountId, selfOwnAccountId, selfUserId, otherUserId: userId };
+  }
+
+  it("manualEntryAction refuses an account outside the self viewer's own scope, and inserts no row", async () => {
+    const { sqlite, foreignAccountId } = setupSelfViewer();
+    const before = (sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c;
+
+    const result = await manualEntryAction(
+      {},
+      formData({ amount: '12.34', direction: 'spend', accountId: String(foreignAccountId), date: '2026-03-02', description: 'Sneaky' }),
+    );
+
+    expect(result.error).toBe(NOT_YOURS_ERROR);
+    const after = (sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c;
+    expect(after).toBe(before);
+  });
+
+  it("manualEntryAction forces attribution to the self viewer's own id, ignoring a posted attributedUserId", async () => {
+    const { sqlite, selfOwnAccountId, selfUserId, otherUserId } = setupSelfViewer();
+
+    const result = await manualEntryAction(
+      {},
+      formData({
+        amount: '12.34',
+        direction: 'spend',
+        accountId: String(selfOwnAccountId),
+        date: '2026-03-02',
+        description: 'Coffee',
+        attributedUserId: String(otherUserId),
+      }),
+    );
+
+    expect(result.message).toBeTruthy();
+    const row = sqlite
+      .prepare('select attributed_user_id as a from transactions where account_id = ? order by id desc limit 1')
+      .get(selfOwnAccountId) as { a: number | null };
+    expect(row.a).toBe(selfUserId);
+  });
+
+  it("setAttributionAction refuses attributing the viewer's OWN row to anyone but themself -- another person, or back to household", async () => {
+    const { db, sqlite, selfOwnAccountId, selfUserId, otherUserId } = setupSelfViewer();
+    const ownTxnId = db.get<{ id: number }>(sql`
+      insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, attributed_user_id, created_by, created_at, updated_at)
+      values (${selfOwnAccountId}, '2026-03-02', 'OWN ROW', ${normalizeMerchant('OWN ROW')}, -500, ${selfUserId}, ${selfUserId}, ${nowIso()}, ${nowIso()})
+      returning id`).id;
+
+    const toOther = await setAttributionAction({}, formData({ ids: String(ownTxnId), attributedUserId: String(otherUserId) }));
+    expect(toOther.error).toBe(NOT_YOURS_ERROR);
+
+    const toHousehold = await setAttributionAction({}, formData({ ids: String(ownTxnId), attributedUserId: '' }));
+    expect(toHousehold.error).toBe(NOT_YOURS_ERROR);
+
+    const row = sqlite.prepare('select attributed_user_id as a from transactions where id = ?').get(ownTxnId) as {
+      a: number | null;
+    };
+    expect(row.a).toBe(selfUserId);
+  });
+
+  it('setAttributionAction still allows a self viewer to attribute their own row to themself', async () => {
+    const { db, sqlite, selfOwnAccountId, selfUserId } = setupSelfViewer();
+    const ownTxnId = db.get<{ id: number }>(sql`
+      insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, attributed_user_id, created_by, created_at, updated_at)
+      values (${selfOwnAccountId}, '2026-03-02', 'OWN ROW', ${normalizeMerchant('OWN ROW')}, -500, ${selfUserId}, ${selfUserId}, ${nowIso()}, ${nowIso()})
+      returning id`).id;
+
+    const result = await setAttributionAction({}, formData({ ids: String(ownTxnId), attributedUserId: String(selfUserId) }));
+
+    expect(result.message).toBeTruthy();
+    const row = sqlite.prepare('select attributed_user_id as a from transactions where id = ?').get(ownTxnId) as {
+      a: number | null;
+    };
+    expect(row.a).toBe(selfUserId);
+  });
+});

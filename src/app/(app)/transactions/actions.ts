@@ -5,8 +5,8 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { isSameOrigin } from '@/lib/auth/csrf';
 import { requireUser, type SessionUser } from '@/lib/auth/session';
-import { NOT_YOURS_ERROR } from '@/lib/auth/viewer';
-import { acceptsTransactions, getAccount, getOrCreateCashAccount } from '@/lib/accounts';
+import { NOT_YOURS_ERROR, ownerScope } from '@/lib/auth/viewer';
+import { acceptsTransactions, getAccount, getOrCreateCashAccount, listAccounts } from '@/lib/accounts';
 import { setLastAccountId } from '@/lib/auth/users';
 import { assignTransactionToLoan, loanLinksForTransactions, unassignTransactionFromLoan } from '@/lib/loans';
 import { formatCents, parseAmountToCents } from '@/lib/money';
@@ -88,6 +88,16 @@ export async function manualEntryAction(_prev: ActionState, formData: FormData):
   // is a fact.
   if (!acceptsTransactions(account.type)) return { error: 'That account only holds a balance you type in.' };
 
+  // v1.13.0 ruling R2 fix round 3 (item I3). getAccount() above is UNSCOPED (it is the internal
+  // resolver micro-ruling M3 documents, meant for ids this codebase produced itself) -- so
+  // without this, a self viewer could POST any accountId and write a manual transaction into an
+  // account (and therefore a household) they cannot even see. listAccounts({}, user) is the same
+  // scoped read every page already trusts for "which accounts can this viewer act through".
+  const scope = ownerScope(user);
+  if (scope !== null && !listAccounts({}, user).some((a) => a.id === accountId)) {
+    return { error: NOT_YOURS_ERROR };
+  }
+
   const date = String(formData.get('date') ?? '');
   if (!isIsoDate(date)) return { error: 'Date must be YYYY-MM-DD.' };
 
@@ -102,13 +112,20 @@ export async function manualEntryAction(_prev: ActionState, formData: FormData):
       description: String(formData.get('description') ?? ''),
       amountCents: signed,
       categoryId: categoryRaw === '' ? null : Number(categoryRaw),
-      attributedUserId: attributedRaw === '' ? null : Number(attributedRaw),
+      // v1.13.0 ruling R2 fix round 3 (item I3): a self viewer's attribution is always and only
+      // themselves -- forced here, server-side, rather than trusted from whatever
+      // `attributedUserId` a hand-crafted request claims. QuickAddTransaction already hides the
+      // person picker for a self viewer, so this is the write-side backstop for that same rule.
+      attributedUserId: scope !== null ? scope : attributedRaw === '' ? null : Number(attributedRaw),
       // Ruling R13: the column, the action and the help page's promise all existed; only this
       // line was missing. It was `notes: null` from v1.0.0 to v1.12.1. Quick-add itself never
       // shows a notes field (R7's six-control budget has no room), so this is always '' there
       // and null here -- the note sub-row in the kebab is where a note actually gets typed.
       notes: rawNote.length === 0 ? null : rawNote,
       userId: user.id,
+      // v1.13.0 ruling R4 (item I4): the ACTOR's role, not a hardcoded 'admin' -- so a member's
+      // quick-add can never silently overwrite a merchant rule someone else in the household owns.
+      actorRole: user.role,
     });
   } catch (error) {
     return { error: error instanceof Error ? error.message : 'Could not save the transaction.' };
@@ -185,6 +202,12 @@ export async function setAttributionAction(_prev: ActionState, formData: FormDat
   const ids = idList.parse(String(formData.get('ids') ?? ''));
   const parsed = attributedUserIdField.safeParse(String(formData.get('attributedUserId') ?? ''));
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Invalid person selection.' };
+  // v1.13.0 ruling R2 fix round 3 (item I3): a self viewer may attribute a row to nobody but
+  // themself -- not to another person, and not back to household/unattributed either, both of
+  // which would move money the viewer supposedly owns off of them. allTransactionsVisible below
+  // already keeps them off ROWS outside their scope; this keeps them off DESTINATION people too.
+  const scope = ownerScope(user);
+  if (scope !== null && parsed.data !== String(scope)) return { error: NOT_YOURS_ERROR };
   // Ruling R2 fix round 2: every id must resolve through the viewer, or nothing is written.
   if (!allTransactionsVisible(ids, user)) return { error: NOT_YOURS_ERROR };
   bulkSetAttribution(ids, parsed.data === '' ? null : Number(parsed.data));
