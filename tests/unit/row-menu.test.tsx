@@ -198,7 +198,7 @@ describe('v1.12.1: the kebab is finger-sized on a phone (item AV / UX-7)', () =>
     expect(trigger.className).toContain('sm:w-8');
   });
 
-  it('menu items are py-2.5 below sm:', async () => {
+  it('menu items are py-2.5 with a 44px floor below sm:, reverting at sm:', async () => {
     render(
       <RowMenu label="Actions for CITY TAX OFFICE">
         <RowMenuButton onSelect={() => {}}>Rename…</RowMenuButton>
@@ -208,5 +208,10 @@ describe('v1.12.1: the kebab is finger-sized on a phone (item AV / UX-7)', () =>
     const item = await screen.findByRole('menuitem', { name: 'Rename…' });
     expect(item.className).toContain('py-2.5');
     expect(item.className).toContain('sm:py-1.5');
+    // Fix round 1: py-2.5 text-sm alone renders ~40px, 4px short of the 44px floor -- an
+    // explicit min-h-11 (matching the trigger's own h-11) closes that gap; sm:min-h-0 lets
+    // desktop fall back to its unconstrained, padding-driven height as before.
+    expect(item.className).toContain('min-h-11');
+    expect(item.className).toContain('sm:min-h-0');
   });
 });

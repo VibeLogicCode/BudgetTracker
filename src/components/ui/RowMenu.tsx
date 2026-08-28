@@ -49,9 +49,15 @@ function useRowMenuClose(): () => void {
  * 26px tall stacked 4px apart -- well under the 44px minimum, and exactly where the destructive
  * items and the rule-writing select live. The menu is `position: fixed` at 14rem, so it has the
  * room. Every new value is scoped back to today's at `sm:`, so desktop is unchanged.
+ *
+ * Fix round 1: `py-2.5 text-sm` alone renders ~40px (20px padding + 20px line-height), 4px short
+ * of the 44px floor -- the padding literal was a faithful copy of a spec value that was itself
+ * wrong; the requirement is the rendered height. `min-h-11` (44px) is the explicit floor, the
+ * same idiom the trigger button already uses (`h-11 w-11 ... sm:h-8 sm:w-8`); `sm:min-h-0` lets
+ * desktop fall back to its unconstrained, padding-driven height exactly as before.
  */
 const ITEM_CLASS =
-  'flex w-full items-center rounded-xs px-2.5 py-2.5 text-left text-sm text-ink hover:bg-surface-2 focus:bg-surface-2 focus:outline-none sm:py-1.5 sm:text-xs';
+  'flex w-full min-h-11 items-center rounded-xs px-2.5 py-2.5 text-left text-sm text-ink hover:bg-surface-2 focus:bg-surface-2 focus:outline-none sm:min-h-0 sm:py-1.5 sm:text-xs';
 
 function menuItems(root: HTMLElement | null): HTMLElement[] {
   return root === null ? [] : Array.from(root.querySelectorAll<HTMLElement>('[role="menuitem"]'));
