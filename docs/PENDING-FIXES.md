@@ -1021,10 +1021,18 @@ Accounts.
 
 Effort: S · Proposed release: v1.12.1
 
-## v1.13.0 candidates from the 2026-08-27 fresh-eyes review (privacy model — needs owner ruling first)
+## v1.13.0 candidates from the 2026-08-27 fresh-eyes review (privacy model — owner ruled 2026-08-27)
+
+**Owner ruling (2026-08-27): one family per instance.** Every household runs its own container with
+its own database; friends and extended family are on their own instances already. Multi-tenancy is
+out of scope permanently — do not add a household/tenant id to the schema. Consequences: SEC-1 /
+PROD-1 shrink from "friends see everything" (Critical) to "kids see the adults' money" (Medium);
+the remaining v1.13.0 work is the `users.visibility = 'self'` flag for kid accounts, the
+ownership checks on `/warranties/[id]` and the receipts route, AG's ownership-or-admin gate on
+destructive actions, and one INSTALL.md paragraph stating the one-family-per-instance model.
 
 **AF. No per-user data boundary (SEC-1 + PROD-1 combined).**
-Status: OPEN — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md SEC-1, PROD-1
+Status: OPEN, RE-SCOPED by owner ruling above (Critical → Medium; fix option (b) only) — from 2026-08-27 fresh-eyes review; see docs/reviews/2026-08-27-fresh-eyes-review.md SEC-1, PROD-1
 
 What: There is no per-user data boundary anywhere except budgets' write scope and the
 notification tables. Any signed-in person — including friends and extended family with their own
