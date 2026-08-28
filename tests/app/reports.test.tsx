@@ -64,6 +64,7 @@ describe('ReportsPage (ruling R2)', () => {
       categoryId: null,
       attributedUserId: adult.id,
       userId: adult.id,
+      actorRole: 'admin',
     });
     createManualTransaction({
       accountId,
@@ -73,6 +74,7 @@ describe('ReportsPage (ruling R2)', () => {
       categoryId: null,
       attributedUserId: child.id,
       userId: adult.id,
+      actorRole: 'admin',
     });
     // A household-owned loan with a tracked balance, so the "Debt over time" card (which only
     // renders at all when hasLoans is true) has something to be present FOR in the household
@@ -190,5 +192,31 @@ describe('ReportsPage (ruling R2)', () => {
     expect(screen.getByRole('heading', { name: 'Net worth' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Debt over time' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Tax year' })).toBeTruthy();
+  });
+
+  // v1.13.0 ruling R2 (item C1). The page used to call suggestionsFor({ scope: 'household',
+  // userId: null }) UNCONDITIONALLY and hand its baselines/baselineMonthsUsed straight to the
+  // client regardless of viewer, and reports-client.tsx's "Category baselines" card had no gate
+  // of its own -- so a self viewer's household-wide category baselines rendered exactly like a
+  // household viewer's. Fixed the same way the sibling Net worth/Debt over time/Tax year cards
+  // already are: dropped ENTIRELY for a self viewer, not shown as an empty/scoped-to-zero
+  // version -- this household's real baseline data (below three months, so it would otherwise
+  // render "Not enough history yet") never even computes for one.
+  it('a self viewer sees no Category baselines card', async () => {
+    const { childId } = await setup();
+    currentUser.value = { id: childId, name: 'Kid', username: 'kid', role: 'member', visibility: 'self' };
+    const { default: ReportsPage } = await import('@/app/(app)/reports/page');
+    render(await ReportsPage({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.queryByRole('heading', { name: 'Category baselines' })).toBeNull();
+  });
+
+  it('a household viewer keeps the Category baselines card', async () => {
+    const { adultId } = await setup();
+    currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    const { default: ReportsPage } = await import('@/app/(app)/reports/page');
+    render(await ReportsPage({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.getByRole('heading', { name: 'Category baselines' })).toBeTruthy();
   });
 });

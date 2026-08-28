@@ -87,7 +87,13 @@ export default async function ReportsPage({
   // MUST-11.4: the month comes from the `today` Task 11 already resolved in the app's TZ, NOT
   // from a bare currentMonth(). Near a month boundary a container-local month would make this
   // card and the picker directly above it disagree about what month it is.
-  const baseline = suggestionsFor({ targetMonth: monthOf(today), scope: 'household', userId: null });
+  //
+  // v1.13.0 ruling R2 (item C1): this call was unconditional and always scope: 'household',
+  // userId: null -- so a self viewer's RSC payload carried the whole household's category
+  // baselines regardless of whether the "Category baselines" card below rendered them. Skipped
+  // OUTRIGHT for a self viewer, not run and discarded, mirroring budgets/page.tsx's household-
+  // scope suggestion skip (see this file's own showHouseholdTotals comment above).
+  const baseline = showHouseholdTotals ? suggestionsFor({ targetMonth: monthOf(today), scope: 'household', userId: null }) : null;
   // MUST-14.7 and F19: TOP-LEVEL categories only. categorySeries mirrors budgetProgress, so it
   // also produces a row for each child; listing Food beside Groceries, whose medians overlap by
   // construction, would read as double counting on a card that has no indentation to explain it.
@@ -96,13 +102,15 @@ export default async function ReportsPage({
     allCategories.filter((category) => category.parentId === null).map((category) => [category.id, category.name] as const),
   );
   const baselines: BaselineRow[] = [];
-  for (const [categoryId, result] of baseline.byCategory) {
-    if (!('suggestion' in result)) continue;
-    const categoryName = topLevelNames.get(categoryId);
-    if (categoryName === undefined) continue;
-    baselines.push({ categoryId, categoryName, suggestion: result.suggestion });
+  if (baseline !== null) {
+    for (const [categoryId, result] of baseline.byCategory) {
+      if (!('suggestion' in result)) continue;
+      const categoryName = topLevelNames.get(categoryId);
+      if (categoryName === undefined) continue;
+      baselines.push({ categoryId, categoryName, suggestion: result.suggestion });
+    }
+    baselines.sort((a, b) => b.suggestion.medianCents - a.suggestion.medianCents);
   }
-  baselines.sort((a, b) => b.suggestion.medianCents - a.suggestion.medianCents);
 
   // Task 15b (v1.7.0): the tax-year report card. taxYears() lists every year that has at least
   // one non-transfer transaction, independent of whether any category is currently flagged
@@ -148,7 +156,7 @@ export default async function ReportsPage({
       // debt trend, is a "how did we get here" widget, not a "for this custom range" one).
       netWorth={showHouseholdTotals ? netWorthOverTime(24, { today, viewer }) : []}
       baselines={baselines}
-      baselineMonthsUsed={baseline.months.length}
+      baselineMonthsUsed={baseline === null ? 0 : baseline.months.length}
       merchants={topMerchants({ from, to, limit: 15, attributedUserId: person }, viewer)}
       yoy={categoryYearOverYear({ month: yoyMonth, attributedUserId: person }, viewer)}
       yoyMonth={yoyMonth}

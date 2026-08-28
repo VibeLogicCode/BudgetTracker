@@ -204,6 +204,12 @@ export function ReportsClient({
         </CardBody>
       </Card>
 
+      {/* v1.13.0 ruling R2 (item C1): dropped entirely for a self viewer, not rendered as a
+          scoped-to-zero/empty-state version -- this card is always household-wide
+          (suggestionsFor's scope: 'household' on the page), so there is no honest per-person
+          version of it to show a self viewer instead. Same pattern as the Net worth and Tax
+          year cards below. */}
+      {showHouseholdTotals ? (
       <Card>
         <CardHeader
           title="Category baselines"
@@ -275,6 +281,7 @@ export function ReportsClient({
           )}
         </CardBody>
       </Card>
+      ) : null}
 
       <Card>
         <CardHeader title="Category breakdown" description="Net spend per category over the range." />
