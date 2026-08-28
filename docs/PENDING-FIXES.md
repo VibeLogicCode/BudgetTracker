@@ -1548,3 +1548,12 @@ it. Evidence: `src/app/(app)/bills/actions.ts:37-64,81`; `src/lib/warranty/insta
 (the result type carrying `linked_elsewhere`). Fix: add an action-level (or route-level) test
 asserting the action surfaces `linked_elsewhere` as a user-facing refusal, and one asserting an
 asset account is skipped when `accountForPayment` resolves the payment's account. Effort: S.
+
+**BO. /transactions still serializes the household people roster to a self viewer.**
+Status: OPEN — from the v1.13.0 final re-review. `src/app/(app)/transactions/page.tsx:90` passes `listAttributablePeople()` (ids + names) into the client for every viewer; for a `self` viewer the attribution selects are inert (every choice returns NOT_YOURS_ERROR) but the names still travel. Fix: `people = isSelfScoped(user) ? [] : …` and hide the bulk-attribute and per-row attribution selects for self viewers (the file's own rule at :383: not rendered rather than shown-but-ineffective). Effort: S.
+
+**BP. OFX/QFX import still renders the CSV mapping editor.**
+Status: OPEN — from the v1.13.0 final re-review. `import-client.tsx:552-557` shows `MappingEditor` for an `.ofx`/`.qfx` file and `dateFormatDetection: {status:'none'}` trips its "Could not recognize this column's date format" banner; controls are inert (preview and commit ignore the mapping for OFX). Fix: hide the editor and banner when the preview reports an OFX source. Effort: S.
+
+**BQ. /api/import/preview does not refuse asset accounts.**
+Status: OPEN — from the v1.13.0 final re-review. Commit and SimpleFIN link refuse `asset` accounts (v1.13.0); preview still accepts one and only fails at commit. Read-only, harmless, asymmetric. Fix: same `acceptsTransactions` refusal in the preview route. Effort: S.
