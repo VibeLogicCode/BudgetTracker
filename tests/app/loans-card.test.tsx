@@ -17,6 +17,7 @@ const civic: LoanSummary = {
   balanceUpdatedAt: '2026-08-01T00:00:00.000Z',
   billingCycle: 'monthly',
   billingAmountCents: 45_000,
+  loanDirection: 'owed',
   startDate: '2026-01-15',
   expiryDate: null,
   isLifetime: false,

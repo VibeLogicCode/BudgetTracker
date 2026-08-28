@@ -21,6 +21,7 @@ import { ComingUpCard } from '@/components/ComingUpCard';
 import { GettingStartedCard } from '@/components/GettingStartedCard';
 import { GoalCard } from '@/components/GoalCard';
 import { LoansCard } from '@/components/LoansCard';
+import { WhoOwesUsCard } from '@/components/WhoOwesUsCard';
 import { NeedsALookCard } from '@/components/NeedsALookCard';
 import { QuickAddTransaction } from '@/components/QuickAddTransaction';
 import { CashflowChart } from '@/components/charts/CashflowChart';
@@ -93,7 +94,12 @@ export default async function DashboardPage({
   // Review fix-round: one read-model scan, not two -- loansTotalOwedCents() would otherwise
   // call listLoans() again just to re-derive the sum LoansCard's own props already carry.
   const loans = listLoans(today, viewer);
-  const totalOwedCents = loans.reduce((sum, loan) => sum + (loan.currentBalanceCents ?? 0), 0);
+  // v1.14.0 (spec BU): one scan, partitioned. LoansCard's "What the household still owes" is now
+  // true rather than accidentally true, and the lent rows are a different question entirely.
+  const owedLoans = loans.filter((loan) => loan.loanDirection === 'owed');
+  const lentLoans = loans.filter((loan) => loan.loanDirection !== 'owed');
+  const totalOwedCents = owedLoans.reduce((sum, loan) => sum + (loan.currentBalanceCents ?? 0), 0);
+  const totalLentCents = lentLoans.reduce((sum, loan) => sum + (loan.currentBalanceCents ?? 0), 0);
 
   /**
    * Ruling R2: NO net worth for a self viewer. Net worth is the household's balance sheet --
@@ -167,6 +173,8 @@ export default async function DashboardPage({
           The pills beside the greeting scope the spending figures to one household member, or to
           everyone. Loans, net worth and upcoming bills stay household-wide whichever pill is
           chosen, because a balance owed is not attributed to a person the way a transaction is.
+          A loan can point either way: the Loans card is what the household still owes, and
+          &quot;Who owes us&quot; is money the household has lent out and not been repaid.
         </p>
         <p>
           Cards on this page hide themselves when they have nothing to say. A short page means
@@ -274,7 +282,11 @@ export default async function DashboardPage({
       {/* MUST-15.1: self-hiding. Rendered unconditionally; absent when there is nothing to say.
           Ruling R2: a loan balance is household money, so this is hidden entirely for a self
           viewer -- there is no honest per-person share of it to show instead. */}
-      {selfScoped ? null : <LoansCard loans={loans} totalOwedCents={totalOwedCents} />}
+      {selfScoped ? null : <LoansCard loans={owedLoans} totalOwedCents={totalOwedCents} />}
+
+      {/* v1.14.0: NOT behind selfScoped -- ruling R2 hides household balances from a child, and
+          every row here is a row that child owns (listLoans has already scoped them). */}
+      <WhoOwesUsCard loans={lentLoans} totalLentCents={totalLentCents} selfScoped={selfScoped} />
 
       {/* Task 9: self-hiding, same pattern as LoansCard -- absent when there are no bills
           coming up AND no budgeted limits at all this month. */}

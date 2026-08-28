@@ -5,6 +5,8 @@ import { createAccount } from '@/lib/accounts';
 import { createUser } from '@/lib/auth/users';
 import { recordBalanceSnapshot } from '@/lib/networth';
 import { createManualTransaction } from '@/lib/transactions';
+import { createWarrantyItem } from '@/lib/warranty/items';
+import { createItemType } from '@/lib/warranty/types';
 import { todayIso } from '@/lib/dates';
 import { createTestDb, type TestDb } from '../helpers/db';
 
@@ -100,6 +102,65 @@ describe('DashboardPage (ruling R2)', () => {
     });
     return { adultId: adult.id, childId: child.id };
   }
+
+  /** v1.14.0 (spec BU): a loan item of the given direction, owned by `ownerUserId`, with a
+   *  tracked balance -- following tests/app/transactions-actions.test.ts's seedLoanItem shape. */
+  function seedLoan(over: { name: string; ownerUserId: number; direction: 'owed' | 'lent'; balanceCents: number }): void {
+    const loanType = createItemType(`Loan type for ${over.name}`, 'loan');
+    createWarrantyItem({
+      name: over.name,
+      vendor: null,
+      model: null,
+      serial: null,
+      purchaseDate: '2026-01-01',
+      warrantyMonths: null,
+      isLifetime: false,
+      priceCents: null,
+      ownerUserId: over.ownerUserId,
+      transactionId: null,
+      typeId: loanType.id,
+      notes: null,
+      principalCents: over.balanceCents,
+      interestRateBps: null,
+      currentBalanceCents: over.balanceCents,
+      balanceUpdatedAt: today,
+      loanDirection: over.direction,
+    });
+  }
+
+  it('partitions loans: owed to the Loans card, lent to the "Who owes us" card', async () => {
+    const { adultId } = await setup();
+    seedLoan({ name: 'Civic', ownerUserId: adultId, direction: 'owed', balanceCents: 200_000 });
+    seedLoan({ name: 'Loan to a friend', ownerUserId: adultId, direction: 'lent', balanceCents: 50_000 });
+    currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.getByText('Loans')).toBeTruthy();
+    expect(screen.getByText('Who owes us')).toBeTruthy();
+    expect(screen.getByText('Civic')).toBeTruthy();
+    expect(screen.getByText('Loan to a friend')).toBeTruthy();
+    // Each card's own total is exactly its own loan's balance -- the owed total does not
+    // include the lent loan's balance, and vice versa.
+    expect(screen.getByLabelText('Total owed $2,000.00')).toBeTruthy();
+    expect(screen.getByLabelText('Total $500.00')).toBeTruthy();
+  });
+
+  it('a self viewer sees "Owed to you" but never the Loans card (ruling R2 + P11)', async () => {
+    const { adultId, childId } = await setup();
+    seedLoan({ name: 'Adult owed loan', ownerUserId: adultId, direction: 'owed', balanceCents: 200_000 });
+    seedLoan({ name: 'Loan to a friend', ownerUserId: childId, direction: 'lent', balanceCents: 50_000 });
+    currentUser.value = { id: childId, name: 'Kid', username: 'kid', role: 'member', visibility: 'self' };
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.getByText('Owed to you')).toBeTruthy();
+    expect(screen.queryByText('Who owes us')).toBeNull();
+    expect(screen.queryByText('Loans')).toBeNull();
+    expect(screen.getByText('Loan to a friend')).toBeTruthy();
+    // The other household member's owed loan is never in this viewer's rows at all.
+    expect(screen.queryByText('Adult owed loan')).toBeNull();
+  });
 
   it('a self viewer sees no net worth, no top merchants, and no person switcher', async () => {
     const { childId } = await setup();
