@@ -50,6 +50,7 @@ import {
   assignToLoanAction,
   bulkCategorizeAction,
   bulkTransferAction,
+  createLoanFromTransactionAction,
   manualEntryAction,
   renameTransactionAction,
   saveNoteAction,
@@ -1048,5 +1049,218 @@ describe('bulk ownership pre-check (item BL, ruling P14)', () => {
 
     expect(result.error).toBe(NOT_YOURS_ERROR);
     expect(categoryOf(sqlite, bobsTxnId)).toBe(before);
+  });
+});
+
+/** Addendum A: a transaction with the sign the case under test needs. */
+function addSigned(amountCents: number, description = 'E-TRANSFER SAM'): number {
+  const { accountId, userId } = ctx!;
+  const row = current!.db.get<{ id: number }>(sql`
+    insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, created_by, created_at, updated_at)
+    values (${accountId}, '2026-03-02', ${description}, ${normalizeMerchant(description)}, ${amountCents}, ${userId}, ${nowIso()}, ${nowIso()})
+    returning id`);
+  return row.id;
+}
+
+function loanItems(): { id: number; name: string; balance: number | null; direction: string; type_id: number }[] {
+  return current!.sqlite
+    .prepare(
+      `select i.id, i.name, i.current_balance_cents as balance, i.loan_direction as direction, i.type_id
+         from warranty_items i join warranty_item_types t on t.id = i.type_id
+        where t.kind = 'loan' order by i.id`,
+    )
+    .all() as never;
+}
+
+describe('createLoanFromTransactionAction — Addendum A', () => {
+  it('lends: money out on a new lent loan leaves them owing exactly that amount', async () => {
+    setup();
+    const txnId = addSigned(-50_000);
+    const result = await createLoanFromTransactionAction(
+      {},
+      formData({ transactionId: String(txnId), loanName: 'Loan to Sam', loanDirection: 'lent' }),
+    );
+    expect(result.error).toBeUndefined();
+    const [loan] = loanItems();
+    expect(loan!.name).toBe('Loan to Sam');
+    expect(loan!.direction).toBe('lent');
+    // Ruling A3: seed 0, link() applies +m, balance after = |amount|.
+    expect(loan!.balance).toBe(50_000);
+    expect(result.message).toBe('Created Loan to Sam. Assigned. $500.00 added to what they owe.');
+  });
+
+  it('borrows, money in: the deposit that arrived becomes the opening balance', async () => {
+    setup();
+    const txnId = addSigned(50_000);
+    await createLoanFromTransactionAction(
+      {},
+      formData({ transactionId: String(txnId), loanName: 'Bank loan', loanDirection: 'owed' }),
+    );
+    expect(loanItems()[0]!.balance).toBe(50_000);
+  });
+
+  it('borrows, money out: a first payment still leaves |amount| owing (seed 2m, ruling A3)', async () => {
+    setup();
+    const txnId = addSigned(-50_000);
+    await createLoanFromTransactionAction(
+      {},
+      formData({ transactionId: String(txnId), loanName: 'Family loan', loanDirection: 'owed' }),
+    );
+    // Seeded at 2m so link()'s repayment of m lands on m: if m is still owed after paying m,
+    // 2m was owed before it. NOT a second write -- link() is the only mover.
+    expect(loanItems()[0]!.balance).toBe(50_000);
+  });
+
+  it('refuses a lent loan opened by money coming IN, and writes nothing at all', async () => {
+    setup();
+    const txnId = addSigned(50_000);
+    const result = await createLoanFromTransactionAction(
+      {},
+      formData({ transactionId: String(txnId), loanName: 'Loan to Sam', loanDirection: 'lent' }),
+    );
+    expect(result.error).toBe('A loan you lent out starts with money going out.');
+    // Ruling A4: one transaction, so a refusal leaves no item, no type and no link behind.
+    expect(loanItems()).toEqual([]);
+    expect(
+      current!.sqlite.prepare('select count(*) as n from loan_payments').get() as { n: number },
+    ).toEqual({ n: 0 });
+  });
+
+  it('creates the Loan item type when the household has none, and reuses it next time', async () => {
+    setup();
+    await createLoanFromTransactionAction(
+      {},
+      formData({ transactionId: String(addSigned(-50_000)), loanName: 'First', loanDirection: 'lent' }),
+    );
+    const types = current!.sqlite
+      .prepare("select id, name from warranty_item_types where kind = 'loan'")
+      .all() as { id: number; name: string }[];
+    expect(types.map((t) => t.name)).toEqual(['Loan']);   // ruling A5
+    await createLoanFromTransactionAction(
+      {},
+      formData({ transactionId: String(addSigned(-25_000)), loanName: 'Second', loanDirection: 'lent' }),
+    );
+    expect(
+      current!.sqlite.prepare("select count(*) as n from warranty_item_types where kind = 'loan'").get(),
+    ).toEqual({ n: 1 });
+    expect(loanItems().map((loan) => loan.balance)).toEqual([50_000, 25_000]);
+  });
+
+  it('uses the first loan-kind type by name when one already exists (ruling A6)', async () => {
+    setup();
+    createItemType('Zebra loan', 'loan');
+    const alpha = createItemType('Alpha loan', 'loan');
+    await createLoanFromTransactionAction(
+      {},
+      formData({ transactionId: String(addSigned(-50_000)), loanName: 'Loan to Sam', loanDirection: 'lent' }),
+    );
+    expect(loanItems()[0]!.type_id).toBe(alpha.id);
+  });
+
+  it('refuses a second submit of the same transaction (ruling A7 — the double-submit guard)', async () => {
+    setup();
+    const txnId = addSigned(-50_000);
+    await createLoanFromTransactionAction(
+      {},
+      formData({ transactionId: String(txnId), loanName: 'Loan to Sam', loanDirection: 'lent' }),
+    );
+    const second = await createLoanFromTransactionAction(
+      {},
+      formData({ transactionId: String(txnId), loanName: 'Loan to Sam', loanDirection: 'lent' }),
+    );
+    expect(second.error).toBe('That transaction is already assigned to a loan.');
+    expect(loanItems()).toHaveLength(1);
+    expect(loanItems()[0]!.balance).toBe(50_000);
+  });
+
+  it('refuses a name that is only whitespace', async () => {
+    setup();
+    const result = await createLoanFromTransactionAction(
+      {},
+      formData({ transactionId: String(addSigned(-50_000)), loanName: '   ', loanDirection: 'lent' }),
+    );
+    expect(result.error).toBeTruthy();
+    expect(loanItems()).toEqual([]);
+  });
+
+  it('refuses a direction that is neither', async () => {
+    setup();
+    const result = await createLoanFromTransactionAction(
+      {},
+      formData({ transactionId: String(addSigned(-50_000)), loanName: 'Loan to Sam', loanDirection: 'given' }),
+    );
+    expect(result.error).toBeTruthy();
+    expect(loanItems()).toEqual([]);
+  });
+
+  it('checks the origin before anything else', async () => {
+    setup();
+    sameOrigin.value = false;
+    const result = await createLoanFromTransactionAction(
+      {},
+      formData({ transactionId: String(addSigned(-50_000)), loanName: 'Loan to Sam', loanDirection: 'lent' }),
+    );
+    expect(result.error).toBe(CROSS_ORIGIN_ERROR);
+    expect(loanItems()).toEqual([]);
+  });
+});
+
+describe('createLoanFromTransactionAction — scope (rulings A10, A12)', () => {
+  it("a self viewer cannot open a loan against somebody else's transaction", async () => {
+    const { db, accountId } = setup();
+    const otherId = insertTestUser(db, { name: 'Bob', username: 'bob' });
+    const txnId = addSigned(-50_000);
+    current!.sqlite.prepare('update transactions set attributed_user_id = ? where id = ?').run(otherId, txnId);
+    currentUser = { id: currentUser.id, name: 'Kid', username: 'kid', role: 'member', visibility: 'self' };
+    const result = await createLoanFromTransactionAction(
+      {},
+      formData({ transactionId: String(txnId), loanName: 'Loan to Sam', loanDirection: 'lent' }),
+    );
+    expect(result.error).toBeTruthy();
+    expect(loanItems()).toEqual([]);
+  });
+
+  it("a self viewer's own loan is owned by them, never by the row's attribution", async () => {
+    const { db, accountId } = setup();
+    const txnId = addSigned(-50_000);
+    current!.sqlite.prepare('update transactions set attributed_user_id = ? where id = ?').run(currentUser.id, txnId);
+    currentUser = { ...currentUser, role: 'member', visibility: 'self' };
+    await createLoanFromTransactionAction(
+      {},
+      formData({ transactionId: String(txnId), loanName: 'Loan to Sam', loanDirection: 'lent' }),
+    );
+    const owner = current!.sqlite
+      .prepare('select owner_user_id as o from warranty_items order by id desc limit 1')
+      .get() as { o: number };
+    expect(owner.o).toBe(currentUser.id);
+  });
+
+  it('a household MEMBER is refused a row attributed to someone else', async () => {
+    const { db } = setup();
+    const otherId = insertTestUser(db, { name: 'Bob', username: 'bob' });
+    const txnId = addSigned(-50_000);
+    current!.sqlite.prepare('update transactions set attributed_user_id = ? where id = ?').run(otherId, txnId);
+    currentUser = { ...currentUser, role: 'member' };
+    const result = await createLoanFromTransactionAction(
+      {},
+      formData({ transactionId: String(txnId), loanName: 'Loan to Sam', loanDirection: 'lent' }),
+    );
+    expect(result.error).toBe(NOT_YOURS_ERROR);
+    expect(loanItems()).toEqual([]);
+  });
+
+  it('a household ADMIN may, and the loan belongs to the person the row is attributed to', async () => {
+    const { db } = setup();
+    const otherId = insertTestUser(db, { name: 'Bob', username: 'bob' });
+    const txnId = addSigned(-50_000);
+    current!.sqlite.prepare('update transactions set attributed_user_id = ? where id = ?').run(otherId, txnId);
+    await createLoanFromTransactionAction(
+      {},
+      formData({ transactionId: String(txnId), loanName: 'Loan to Sam', loanDirection: 'lent' }),
+    );
+    const owner = current!.sqlite
+      .prepare('select owner_user_id as o from warranty_items order by id desc limit 1')
+      .get() as { o: number };
+    expect(owner.o).toBe(otherId);
   });
 });

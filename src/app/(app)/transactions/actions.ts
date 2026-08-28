@@ -8,11 +8,17 @@ import { requireUser, type SessionUser } from '@/lib/auth/session';
 import { NOT_YOURS_ERROR, ownerScope } from '@/lib/auth/viewer';
 import { acceptsTransactions, getAccount, getOrCreateCashAccount, listAccounts } from '@/lib/accounts';
 import { setLastAccountId } from '@/lib/auth/users';
-import { assignTransactionToLoan, loanLinksForTransactions, unassignTransactionFromLoan } from '@/lib/loans';
+import {
+  assignTransactionToLoan,
+  createLoanFromTransaction,
+  loanLinksForTransactions,
+  unassignTransactionFromLoan,
+  type NewLoanResult,
+} from '@/lib/loans';
 import { formatCents, parseAmountToCents } from '@/lib/money';
 import { setTransactionSplits } from '@/lib/splits';
 import { getWarrantyItem } from '@/lib/warranty/items';
-import { isLoanRepayment } from '@/lib/warranty/constants';
+import { isLoanRepayment, loanAssignedMessage, LOAN_DIRECTIONS } from '@/lib/warranty/constants';
 import { isIsoDate } from '@/lib/dates';
 import {
   bulkSetAttribution,
@@ -412,27 +418,63 @@ export async function assignToLoanAction(formData: FormData): Promise<ActionStat
   const item = getWarrantyItem(parsed.data.itemId, user);
   const direction = item?.loanDirection ?? 'owed';
   const isRepayment = txn !== null && isLoanRepayment(direction, txn.amountCents);
-  if (result.appliedCents === 0) {
-    return {
-      message:
-        item !== null && item.currentBalanceCents === null
-          ? 'Assigned. The balance was unknown, so it did not move.'
-          : 'Assigned. The balance was already $0.00, so nothing came off.',
-    };
+  return {
+    message: loanAssignedMessage({
+      direction,
+      isRepayment,
+      appliedCents: result.appliedCents,
+      balanceAfterCents: item?.currentBalanceCents ?? null,
+    }),
+  };
+}
+
+const newLoanSchema = z.object({
+  transactionId: z.coerce.number().int().positive(),
+  loanName: z.string().trim().min(1, 'Give the loan a name.').max(80, 'Keep the loan name under 80 characters.'),
+  loanDirection: z.enum(LOAN_DIRECTIONS),
+});
+
+/**
+ * Addendum A. Thin by design: every rule (the seed, the double-submit guard, the lent-loan
+ * refusal, owner resolution) lives in createLoanFromTransaction (src/lib/loans.ts, ruling A4's
+ * one db transaction) -- this action only parses the form, calls it with the signed-in viewer,
+ * and turns a thrown refusal into the same { error } shape every sibling action here returns.
+ */
+export async function createLoanFromTransactionAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+  const user = await requireUser();
+
+  const parsed = newLoanSchema.safeParse({
+    transactionId: formData.get('transactionId'),
+    loanName: formData.get('loanName') ?? '',
+    loanDirection: formData.get('loanDirection') ?? 'lent',
+  });
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Invalid request.' };
+
+  let created: NewLoanResult;
+  try {
+    created = createLoanFromTransaction(
+      { txnId: parsed.data.transactionId, name: parsed.data.loanName, direction: parsed.data.loanDirection },
+      user,
+    );
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : 'Could not create that loan.' };
   }
-  if (isRepayment) {
-    if (direction !== 'owed') {
-      return { message: `Assigned. ${formatCents(result.appliedCents)} came off what they owe.` };
-    }
-    if (item !== null && item.currentBalanceCents === 0) {
-      return { message: `Assigned. ${formatCents(result.appliedCents)} came off; the balance is now $0.00.` };
-    }
-    return { message: `Assigned. ${formatCents(result.appliedCents)} came off the balance.` };
-  }
-  if (direction !== 'owed') {
-    return { message: `Assigned. ${formatCents(result.appliedCents)} added to what they owe.` };
-  }
-  return { message: `Assigned. The balance went up ${formatCents(result.appliedCents)} (money in).` };
+  revalidatePath('/transactions');
+  revalidatePath('/dashboard');
+  revalidatePath('/reports');
+
+  // Ruling A9: both facts, in the order they happened -- the second half word-for-word the
+  // sentence the plain assign already says (ruling A8), never a bespoke one for this path.
+  const txn = getTransaction(parsed.data.transactionId, user);
+  return {
+    message: `Created ${created.name}. ${loanAssignedMessage({
+      direction: created.direction,
+      isRepayment: txn !== null && isLoanRepayment(created.direction, txn.amountCents),
+      appliedCents: created.appliedCents,
+      balanceAfterCents: created.balanceAfterCents,
+    })}`,
+  };
 }
 
 export async function unassignFromLoanAction(formData: FormData): Promise<ActionState> {
