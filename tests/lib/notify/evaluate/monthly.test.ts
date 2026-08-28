@@ -1,11 +1,23 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { categoryIdByName, createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../../helpers/db';
-import { setUserVisibility } from '@/lib/auth/users';
 import { upsertBudget } from '@/lib/budgets';
 import { saveEmailTarget, saveSmtp, setPref } from '@/lib/notify/config';
 import { resetOutboxPumpForTests } from '@/lib/notify/outbox';
 import { resetNotifySenderForTests, setNotifySenderForTests } from '@/lib/notify/send';
+
+// Item BK's own test needs findUserById mockable independently of fireMonthlyDigest's and
+// enqueue()'s separate isEventEnabled() guards (config.ts), which run their own raw `users`
+// query and would otherwise mask viewerFor()'s behaviour: a REAL row deletion would ALSO trip
+// those live-user checks and return 0 regardless of what viewerFor does, proving nothing about
+// this fix. Spying on findUserById reproduces the race the docblock actually describes -- gone
+// at the moment viewerFor's OWN lookup runs -- without also making isEventEnabled see it as gone.
+vi.mock('@/lib/auth/users', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/users')>();
+  return { ...actual, findUserById: vi.fn(actual.findUserById) };
+});
+
+import { findUserById, setUserVisibility } from '@/lib/auth/users';
 import { evaluateMonthBoundary } from '@/lib/notify/evaluate/monthly';
 
 let t: TestDb;
@@ -19,6 +31,7 @@ beforeEach(() => {
   creatorId = insertTestUser(t.db, { username: 'creator' });
   resetOutboxPumpForTests();
   setNotifySenderForTests(async () => {});
+  vi.mocked(findUserById).mockClear();
 });
 
 afterEach(() => {
@@ -412,5 +425,24 @@ describe('ruling R2: a self-visibility recipient\'s monthly digest is scoped to 
     expect(row.body).toContain('Spent: $50.00');
     // The true combined household total ($50 + $500) must never appear anywhere in this recipient's digest.
     expect(row.body).not.toContain('$550.00');
+  });
+});
+
+describe('item BK: viewerFor skips rather than falling back to a household scope', () => {
+  it('sends nothing when the recipient\'s own row is gone', () => {
+    const userId = optedInUser('member');
+    enableMonthlyDigest(userId);
+    setPref(userId, 'predicted_vs_actual', 'email', false);
+    setPref(userId, 'suggested_budget_refresh', 'email', false);
+
+    // findUserById is stubbed to return null for exactly the one call viewerFor makes, leaving
+    // the real users/prefs rows untouched -- a real row deletion would ALSO trip
+    // fireMonthlyDigest's own independent isEventEnabled() live-user check (config.ts), which
+    // would return 0 regardless of what viewerFor does and prove nothing about this fix. This
+    // reproduces the race the docblock actually describes: gone at the moment viewerFor's own
+    // lookup runs.
+    vi.mocked(findUserById).mockReturnValueOnce(null);
+    expect(evaluateMonthBoundary({ userId, now: new Date('2026-08-01T09:00:00Z'), tz: TZ })).toBe(0);
+    expect(keys()).toEqual([]);
   });
 });

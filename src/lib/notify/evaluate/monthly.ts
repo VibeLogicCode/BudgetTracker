@@ -26,10 +26,18 @@ const MONTHLY_DIGEST_TOP_MERCHANTS = 5;
  * sees only their own attributed figures (src/lib/reports.ts's scopeFor forces the self scope
  * regardless of what is asked). Mirrors digest.ts's own viewerFor exactly; kept local rather than
  * shared since both files are Task 6's alone and neither exports test-only surface for the other.
+ *
+ * v1.13.1 (item BK). Returns null when the recipient's own row is gone by the time this runs (a
+ * deleted account mid-batch), and fireMonthlyDigest sends nothing rather than guessing a scope.
+ * A household-scoped fallback used to stand in for the missing row so one deletion could not sink
+ * the whole batch -- the batch is still fine without it, since sending nothing for this one
+ * recipient is not a crash. What the fallback got wrong is the scope it guessed: 'household' for
+ * a recipient who may have been self-scoped, which is exactly the household-wide leak ruling R2
+ * exists to close off.
  */
-function viewerFor(userId: number): Viewer {
+function viewerFor(userId: number): Viewer | null {
   const user = findUserById(userId);
-  return user ? { id: user.id, role: user.role, visibility: user.visibility } : { id: userId, role: 'admin', visibility: 'household' };
+  return user ? { id: user.id, role: user.role, visibility: user.visibility } : null;
 }
 
 /**
@@ -182,6 +190,8 @@ function fireMonthlyDigest(input: { userId: number; endedMonth: string; now: Dat
   if (!CHANNELS.some((channel) => isEventEnabled(input.userId, 'monthly_digest', channel))) return 0;
 
   const viewer = viewerFor(input.userId);
+  // Item BK: 0 already means "no outbox row was enqueued" to every caller of this function.
+  if (viewer === null) return 0;
   // cashflowTrend(1, {endMonth}) always returns exactly one row, for endedMonth itself.
   const [trend] = cashflowTrend(1, { endMonth: input.endedMonth }, viewer);
   const totals = budgetTotals(budgetProgress(input.endedMonth));

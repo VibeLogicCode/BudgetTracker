@@ -20,13 +20,16 @@ const TOP_MERCHANTS = 3;
  * digest carry only their own attributed figures through every line below, never the true
  * household total (R2: no household totals reach a self viewer through any channel).
  *
- * Falls back to a household-scoped viewer if the user row is somehow gone by the time this
- * evaluator runs (a deleted account mid-batch): that reproduces the pre-R2 unscoped behaviour
- * rather than crashing the whole scheduled run over one missing row.
+ * v1.13.1 (item BK). Returns null -- and the evaluator sends NOTHING -- if the user row is gone by
+ * the time this runs (a deleted account mid-batch). It used to fall back to a household-scoped
+ * admin viewer so one missing row could not crash the batch, which is still the right instinct;
+ * the wrong part was the shape of the fallback. A self-scoped recipient whose row vanished in
+ * the window their digest fired would have carried household-wide figures in that one delivery,
+ * which is the single thing ruling R2 exists to prevent. Skipping still cannot crash the batch.
  */
-function viewerFor(userId: number): Viewer {
+function viewerFor(userId: number): Viewer | null {
   const user = findUserById(userId);
-  return user ? { id: user.id, role: user.role, visibility: user.visibility } : { id: userId, role: 'admin', visibility: 'household' };
+  return user ? { id: user.id, role: user.role, visibility: user.visibility } : null;
 }
 
 function overBudgetNames(rows: BudgetRow[], acc: string[] = []): string[] {
@@ -56,6 +59,8 @@ export function evaluateWeeklyDigest(input: { userId: number; slotDate: string; 
   const from = addDaysIso(input.slotDate, -7);
   const to = addDaysIso(input.slotDate, -1);
   const viewer = viewerFor(input.userId);
+  // Item BK: 0 already means "no outbox row was enqueued" to every caller of this function.
+  if (viewer === null) return 0;
 
   const householdCategories = categoryBreakdown({ from, to }, viewer);
   const personalCategories = categoryBreakdown({ from, to, attributedUserId: input.userId }, viewer);

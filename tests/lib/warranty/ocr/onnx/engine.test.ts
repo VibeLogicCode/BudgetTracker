@@ -87,22 +87,36 @@ describe('onnxOcrEngine (MUST-4.1, MUST-4.2)', () => {
   });
 
   it('runs no inference at all for a PDF (MUST-4.2, MUST-7.1)', async () => {
-    const { file: image, dir } = await receiptFile();
+    // v1.13.1 (item K). This used to call receiptFile() -- a 1400x900 raw RGB buffer through
+    // sharp().png() -- and fakeSessions(), whose first line runs the real preprocessReceipt.
+    // Both were dead weight: the PNG is never recognized and runDet is overwritten immediately,
+    // and the cost is what made this test hit the 20s testTimeout in one full-suite run and
+    // pass 7/7 in isolation straight after. Same family as item E, different mechanism: a
+    // genuine wall-clock timeout on a test that loads the PDF stack while 249 other files
+    // compete for the CPU. The fix is not a bigger timeout -- it is to measure the code.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-ocr-pdf-'));
     try {
       let touched = 0;
+      const refuse = async (): Promise<never> => {
+        touched += 1;
+        throw new Error('the PDF path must never reach a session');
+      };
       setOnnxSessionsForTests({
-        ...(await fakeSessions(image)),
-        runDet: async () => {
-          touched += 1;
-          throw new Error('the PDF path must never reach a session');
-        },
+        runDet: refuse,
+        runCls: refuse,
+        runRec: refuse,
+        clsInputHeight: 48,
+        clsInputWidth: 192,
+        recClassCount: DICT.length,
+        dictionary: DICT,
       });
+
       const pdf = path.join(dir, 'not-a-pdf.pdf');
       fs.writeFileSync(pdf, Buffer.from('not really a pdf'));
       await expect(onnxOcrEngine.recognize(pdf, 'application/pdf')).rejects.toThrow();
       expect(touched).toBe(0);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 

@@ -57,6 +57,13 @@ function unpaidCount(id: number): number {
   return listInstallments(id, '2026-08-27', 30).filter((row) => row.paidAt === null).length;
 }
 
+function accountOfLastTransaction(): number {
+  const row = current!.sqlite.prepare('select account_id as accountId from transactions order by id desc limit 1').get() as {
+    accountId: number;
+  };
+  return row.accountId;
+}
+
 beforeEach(() => {
   dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-bills-actions-'));
   originalDataDir = process.env.DATA_DIR;
@@ -157,6 +164,21 @@ describe('recordBillPaymentAction (ruling R8)', () => {
     // recording did not clobber it with some other default.
     const { findUserById } = await import('@/lib/auth/users');
     expect(findUserById(adminId)?.lastAccountId).toBe(otherAccountId);
+  });
+
+  it('skips an asset account when resolving where the payment lands (item BN)', async () => {
+    // Ruling R10: an asset holds a balance somebody types in; it takes no transactions. If the
+    // person's remembered account is one, accountForPayment must walk past it rather than record
+    // a payment against a house.
+    const assetId = insertTestAccount(current!.db, { name: 'House', type: 'asset', ownerUserId: null });
+    setLastAccountId(adminId, assetId);
+
+    const result = await recordBillPaymentAction({}, formData({ installmentId: String(installmentId) }));
+
+    expect(result.message).toBeTruthy();
+    expect(accountOfLastTransaction()).toBe(accountId);
+    const { findUserById } = await import('@/lib/auth/users');
+    expect(findUserById(adminId)?.lastAccountId).toBe(accountId);
   });
 });
 

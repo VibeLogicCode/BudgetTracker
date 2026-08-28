@@ -153,10 +153,23 @@ describe('Guard 2 (ruling A7): every nav section is documented in the help page'
     expect(guardedNav.map((item) => item.href)).not.toContain('/help');
   });
 
-  it('each non-exempt NAV href appears verbatim in the help feature index', () => {
+  it('each non-exempt NAV href appears as a WHOLE PATH SEGMENT in the help feature index', () => {
     const content = read('src/app/(app)/help/content.tsx');
-    const undocumented = guardedNav.filter((item) => !content.includes(item.href));
+    // Item B (ruling P20). This was content.includes(item.href), so /settings was satisfied six
+    // times over by /settings/accounts and friends -- and a future /report or /budget route
+    // would have been silently satisfied by the already-documented /reports or /budgets, which
+    // is the one failure this guard exists to prevent.
+    const documented = (href: string) =>
+      new RegExp(`${href.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-/])`).test(content);
+    const undocumented = guardedNav.filter((item) => !documented(item.href));
     expect(undocumented.map((item) => `${item.href} (${item.label})`)).toEqual([]);
+  });
+
+  it('does not accept a strict prefix as documentation (the failure this guard is for)', () => {
+    const documented = (href: string, content: string) =>
+      new RegExp(`${href.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-/])`).test(content);
+    expect(documented('/report', '<Where path="/reports">Reports —</Where>')).toBe(false);
+    expect(documented('/reports', '<Where path="/reports">Reports —</Where>')).toBe(true);
   });
 });
 
