@@ -19,8 +19,9 @@ import {
  *
  * Clock-free in the project-wide sense (the rule src/lib/bills.ts's header states): `today` and
  * the window are always parameters, never `new Date()`. The one exception is the OPTIONAL `at`
- * on the two writers, which defaults to nowIso() the way every other writer in this codebase
- * does.
+ * on the three writers (addInstallment, markInstallmentPaid, and -- as of v1.12.1's suppression
+ * stamp, item BA / MON-3 -- unmarkInstallmentPaid too), which defaults to nowIso() the way every
+ * other writer in this codebase does.
  *
  * THREE READERS, THREE DELIBERATELY DIFFERENT KIND FILTERS. This asymmetry is the feature, not
  * an inconsistency to clean up:
@@ -194,11 +195,22 @@ export function addInstallment(input: {
 
 /**
  * Ruling B7: NO kind assertion. A gate decides what a form offers, never what it may hide, and
- * removing a stored row must stay possible after a type's kind has been flipped away from bill
- * -- otherwise ruling B6's "kept, never deleted" rows would be unreachable as well as invisible.
+ * removing a stored row must stay possible after a type's kind has been flipped away from bill --
+ * otherwise ruling B6's "kept, never deleted" rows would be unreachable as well as invisible.
+ *
+ * v1.12.1 (item BA / MON-3): a PAID or LINKED row is refused, though. This was the second half of
+ * MON-3 -- deleting a paid, transaction-linked installment discarded the payment record AND
+ * re-opened that transaction to the matcher, with no guard and no confirmation. Un-mark first, then
+ * remove: two deliberate acts for two different decisions. Returns false, which the detail page
+ * already surfaces as an error line.
  */
 export function removeInstallment(id: number): boolean {
-  return getDb().delete(billInstallments).where(eq(billInstallments.id, id)).run().changes > 0;
+  return (
+    getDb()
+      .delete(billInstallments)
+      .where(and(eq(billInstallments.id, id), isNull(billInstallments.paidAt), isNull(billInstallments.paidTxnId)))
+      .run().changes > 0
+  );
 }
 
 /**
@@ -209,25 +221,40 @@ export function removeInstallment(id: number): boolean {
  * make the second UPDATE a no-op, and the desired state still holds, so this reports true. It
  * returns false only when the row is genuinely not there -- the case the action turns into
  * "That installment no longer exists."
+ *
+ * v1.12.1 (item BA / MON-3): this also CLEARS unlinked_at. A hand mark is the deliberate act the
+ * suppression exists to protect, so it must be able to undo one -- otherwise un-marking a row once
+ * would make it permanently unmarkable-again by a rule AND leave a person unable to say "actually,
+ * this one is paid".
  */
 export function markInstallmentPaid(id: number, at: string = nowIso()): boolean {
   const db = getDb();
   const changed = db
     .update(billInstallments)
-    .set({ paidAt: at })
+    .set({ paidAt: at, unlinkedAt: null })
     .where(and(eq(billInstallments.id, id), isNull(billInstallments.paidAt)))
     .run().changes;
   if (changed > 0) return true;
   return db.select({ id: billInstallments.id }).from(billInstallments).where(eq(billInstallments.id, id)).get() !== undefined;
 }
 
-/** Clears BOTH columns -- unmarking a rule-marked row also drops the link, because a paid_txn_id
- *  on an unpaid row is exactly what drizzle/0011's third CHECK forbids. */
-export function unmarkInstallmentPaid(id: number): boolean {
+/**
+ * Clears BOTH columns -- unmarking a rule-marked row also drops the link, because a paid_txn_id on
+ * an unpaid row is exactly what drizzle/0011's third CHECK forbids.
+ *
+ * v1.12.1 (item BA / MON-3, ruling P1): and stamps unlinked_at, which is the whole fix. paid_txn_id
+ * was the ONLY record that a transaction had ever been consumed by a bill -- alreadyLinked() reads
+ * exactly that column -- so clearing it made the transaction a fresh matcher candidate again, and
+ * confirmCategory calls applyPaymentMatchers on BOTH of its exits, including the "already confirmed
+ * to the same category, nothing to retrain" fast path. Re-picking the same category on
+ * /transactions was therefore enough to silently re-mark the row the person had just un-marked, and
+ * no UI action could fix it.
+ */
+export function unmarkInstallmentPaid(id: number, at: string = nowIso()): boolean {
   return (
     getDb()
       .update(billInstallments)
-      .set({ paidAt: null, paidTxnId: null })
+      .set({ paidAt: null, paidTxnId: null, unlinkedAt: at })
       .where(eq(billInstallments.id, id))
       .run().changes > 0
   );

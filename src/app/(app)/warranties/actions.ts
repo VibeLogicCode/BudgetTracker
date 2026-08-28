@@ -670,7 +670,12 @@ export async function removeInstallmentAction(
   // has been flipped away from bill, or ruling B6's kept rows would be unreachable as well as
   // invisible.
   if (findInstallment(parsed.data.itemId, parsed.data.id) === undefined) return { error: INSTALLMENT_GONE };
-  removeInstallment(parsed.data.id);
+  // v1.12.1 (item BA / MON-3): removeInstallment now refuses a paid/linked row, so its return
+  // value must actually be read -- this used to report "Installment removed." unconditionally,
+  // even on the refused case.
+  if (!removeInstallment(parsed.data.id)) {
+    return { error: 'That installment could not be removed. If a payment is recorded against it, unmark it first.' };
+  }
   revalidateAll(parsed.data.itemId);
   return { message: 'Installment removed.' };
 }

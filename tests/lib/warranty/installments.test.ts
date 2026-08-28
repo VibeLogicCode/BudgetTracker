@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
+import { sql } from 'drizzle-orm';
 import { createTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../helpers/db';
 import { INSTALLMENT_KIND_ERROR } from '@/lib/warranty/constants';
 import {
@@ -227,5 +228,71 @@ describe('unpaidInstallments', () => {
     expect(unpaidInstallments({ today: TODAY, windowEnd: '2026-09-23', includeOverdue: true })).toEqual([]);
     current!.sqlite.prepare(`update warranty_item_types set kind = 'bill' where id = ?`).run(typeId);
     expect(unpaidInstallments({ today: TODAY, windowEnd: '2026-09-23', includeOverdue: true })).toHaveLength(1);
+  });
+});
+
+function setupRuleMarked(): { db: TestDb['db']; id: number } {
+  const { userId } = setup();
+  const itemId = billItem(userId);
+  const accountId = insertTestAccount(current!.db, { name: 'Chequing' });
+  const txn = current!.sqlite
+    .prepare(
+      `insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, is_transfer, created_by, created_at, updated_at)
+       values (?, '2026-06-15', 'CITY TAX OFFICE', 'CITY TAX OFFICE', -120000, 0, ?, ?, ?) returning id`,
+    )
+    .get(accountId, userId, NOW, NOW) as { id: number };
+  const id = addInstallment({ itemId, dueDate: '2026-06-15', amountCents: 120_000, at: NOW });
+  current!.sqlite.prepare('update bill_installments set paid_at = ?, paid_txn_id = ? where id = ?').run(NOW, txn.id, id);
+  return { db: current!.db, id };
+}
+
+function setupUnpaid(): { db: TestDb['db']; id: number } {
+  const { userId } = setup();
+  const itemId = billItem(userId);
+  const id = addInstallment({ itemId, dueDate: '2026-06-15', amountCents: 120_000, at: NOW });
+  return { db: current!.db, id };
+}
+
+describe('v1.12.1: unmark records the suppression, and remove is guarded (item BA / MON-3)', () => {
+  it('unmark clears both columns AND stamps unlinked_at', () => {
+    const { db, id } = setupRuleMarked();
+    expect(unmarkInstallmentPaid(id, '2026-06-21T00:00:00.000Z')).toBe(true);
+
+    const row = db.get<{ paidAt: string | null; paidTxn: number | null; unlinked: string | null }>(
+      sql`select paid_at as paidAt, paid_txn_id as paidTxn, unlinked_at as unlinked from bill_installments where id = ${id}`,
+    );
+    expect(row.paidAt).toBeNull();
+    expect(row.paidTxn).toBeNull();
+    expect(row.unlinked).toBe('2026-06-21T00:00:00.000Z');
+  });
+
+  it('a HAND mark clears the suppression, because a deliberate act is what it protects', () => {
+    const { db, id } = setupRuleMarked();
+    unmarkInstallmentPaid(id, '2026-06-21T00:00:00.000Z');
+
+    expect(markInstallmentPaid(id, '2026-06-22T00:00:00.000Z')).toBe(true);
+    const row = db.get<{ paidAt: string | null; unlinked: string | null }>(
+      sql`select paid_at as paidAt, unlinked_at as unlinked from bill_installments where id = ${id}`,
+    );
+    expect(row.paidAt).toBe('2026-06-22T00:00:00.000Z');
+    expect(row.unlinked).toBeNull();
+  });
+
+  it('remove refuses a paid installment, and the row survives', () => {
+    const { db, id } = setupRuleMarked();
+    expect(removeInstallment(id)).toBe(false);
+    expect(db.get<{ n: number }>(sql`select count(*) as n from bill_installments where id = ${id}`).n).toBe(1);
+  });
+
+  it('remove still deletes an unpaid installment', () => {
+    const { db, id } = setupUnpaid();
+    expect(removeInstallment(id)).toBe(true);
+    expect(db.get<{ n: number }>(sql`select count(*) as n from bill_installments where id = ${id}`).n).toBe(0);
+  });
+
+  it('remove still deletes an un-marked installment, so a suppression is not a life sentence', () => {
+    const { id } = setupRuleMarked();
+    unmarkInstallmentPaid(id, '2026-06-21T00:00:00.000Z');
+    expect(removeInstallment(id)).toBe(true);
   });
 });

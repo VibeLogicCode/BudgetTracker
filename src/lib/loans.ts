@@ -2,7 +2,7 @@ import { and, asc, eq, gte, inArray, isNull, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { billInstallments, loanMatcherRules, loanPayments, transactions, users, warrantyItemTypes, warrantyItems } from '@/db/schema';
 import { nowIso } from '@/lib/clock';
-import { addDaysIso, addMonths, addMonthsClamped, monthEnd, monthOf, monthRange, todayIso } from '@/lib/dates';
+import { addDaysIso, addMonths, addMonthsClamped, daysBetweenIso, monthEnd, monthOf, monthRange, todayIso } from '@/lib/dates';
 import type { RateVerdict } from '@/lib/notify/ratelimit';
 import { meanCents } from '@/lib/predict/stats';
 import type { BillingCycle } from '@/lib/warranty/constants';
@@ -23,6 +23,13 @@ import type { BillingCycle } from '@/lib/warranty/constants';
 export const MAX_RULES_PER_LOAN = 5;
 export const LOAN_BACKFILL_DAYS = 365;
 export const LOAN_BACKFILL_MAX = 500;
+
+/**
+ * Ruling R2's window, in one place. A payment further than this from every unpaid installment is
+ * not evidence about which one it paid, so the earliest-unpaid fallback (the v1.12.0 behaviour)
+ * takes over rather than the code guessing.
+ */
+export const INSTALLMENT_MATCH_WINDOW_DAYS = 45;
 
 /** F6 fix-round: the repo's chunking convention (src/lib/import/commit.ts, categorize/engine.ts)
  * applied to the id lists this file receives from callers, which are never capped in advance. */
@@ -285,6 +292,8 @@ interface Candidate {
   normalizedMerchant: string;
   amountCents: number;
   isTransfer: boolean;
+  /** v1.12.1 (item BD / MON-7, ruling R2): the bill branch needs the transaction's OWN date. */
+  date: string;
 }
 
 function candidates(tx: ReturnType<typeof getDb>, txnIds: number[]): Candidate[] {
@@ -298,6 +307,7 @@ function candidates(tx: ReturnType<typeof getDb>, txnIds: number[]): Candidate[]
           normalizedMerchant: transactions.normalizedMerchant,
           amountCents: transactions.amountCents,
           isTransfer: transactions.isTransfer,
+          date: transactions.date,
         })
         .from(transactions)
         .where(inArray(transactions.id, chunk))
@@ -311,6 +321,34 @@ function candidates(tx: ReturnType<typeof getDb>, txnIds: number[]): Candidate[]
   // "first match by date" style guarantees stable regardless of list size.
   out.sort((a, b) => a.id - b.id);
   return out;
+}
+
+/**
+ * How many payment links, of each kind, already name this transaction.
+ *
+ * v1.12.1 (item T / MON-2, ruling P4). The union behind alreadyLinked() below is the rule path's
+ * exclusivity guard -- "a loan and a bill whose rules both match one merchant string cannot both
+ * take the payment" (MUST-13.4, ruling B11). The MANUAL assign path never had it:
+ * assignTransactionToLoan read transactions and warranty_items and nothing else, so a transaction
+ * the matcher had already used to mark an installment paid could be hand-assigned to a loan and
+ * decrement its balance by the same money -- $1,200 of payment recorded as $2,400 of debt
+ * reduction, with the action returning a plain "Assigned." The DB cannot catch it either:
+ * bill_installments_txn_uq and loan_payments_txn_item_uq are each unique within one table and
+ * nothing spans the two.
+ */
+export function paymentLinksForTransaction(txnId: number): { loans: number; bills: number } {
+  const db = getDb();
+  const loans = db
+    .select({ n: sql<number>`count(*)` })
+    .from(loanPayments)
+    .where(eq(loanPayments.txnId, txnId))
+    .get();
+  const bills = db
+    .select({ n: sql<number>`count(*)` })
+    .from(billInstallments)
+    .where(eq(billInstallments.paidTxnId, txnId))
+    .get();
+  return { loans: Number(loans?.n ?? 0), bills: Number(bills?.n ?? 0) };
 }
 
 /**
@@ -337,35 +375,88 @@ function alreadyLinked(tx: ReturnType<typeof getDb>, txnIds: number[]): Set<numb
 }
 
 /**
- * The bill arm of the rule path (ruling C7). Marks the EARLIEST unpaid installment on this item
- * and records which transaction paid it.
+ * The bill arm of the rule path (ruling C7, amended by v1.12.1 ruling R2). Marks ONE unpaid
+ * installment on this item and records which transaction paid it.
  *
- * THE AMOUNT IS NOT COMPARED, deliberately. A tax bill arrives with penalties, discounts and
- * rounding, and refusing to match on a few dollars' difference would leave the household with an
- * installment that is paid and a reminder that says it is not. The transaction is recorded so
- * the difference is VISIBLE on the detail page instead of being decided here.
+ * WHICH one changed in v1.12.1 (item BD / MON-7). It used to be, always, the earliest unpaid, and
+ * that is defensible right up until somebody forgets to mark one: from then on every payment is
+ * recorded against the previous period's installment and the whole schedule is permanently offset
+ * by one, compounding silently -- the Coming-up card shows September still due after September was
+ * paid, and the March row shows a payment that arrived three months late. So: the unpaid
+ * installment whose due_date is NEAREST this transaction's own date wins, when that distance is
+ * within INSTALLMENT_MATCH_WINDOW_DAYS; otherwise the earliest unpaid, exactly as before. Ties go
+ * to the earlier due date, because the candidate list is ordered due_date ASC, id ASC and the
+ * comparison below is strict -- so the choice is total and deterministic even for two parcels
+ * falling due on one day.
  *
- * `AND paid_at IS NULL` in the UPDATE, plus bill_installments_txn_uq (ruling B12), are together
- * the idempotency guard -- the same pairing loan_payments uses. A re-run cannot double-mark, and
- * one transaction can never mark two installments.
+ * THE AMOUNT IS STILL NOT COMPARED, deliberately, and R2 restates it. A tax bill arrives with
+ * penalties, discounts and rounding, and refusing to match on a few dollars' difference would leave
+ * the household with an installment that is paid and a reminder that says it is not. The
+ * transaction is recorded so the difference is VISIBLE on the detail page instead of being decided
+ * here.
+ *
+ * SUPPRESSION (item BA / MON-3) is checked against the NEAREST row, not against a pre-filtered
+ * candidate list -- and that distinction is the fix for MON-3's actual loop. An installment a
+ * person has deliberately un-marked (`unlinked_at` set) is read here alongside every other unpaid
+ * row so its distance can still be compared, but if IT turns out to be the nearest -- the row this
+ * transaction's own date is evidence for -- the match is DECLINED entirely rather than substituted
+ * with a worse guess. Falling back to some other, farther installment would repeat the very
+ * "wrong period" failure item BD exists to prevent, just one suppression later: the person told us
+ * this transaction does not pay the installment closest to it, and picking a different, less
+ * plausible one instead is not a correction, it is a second wrong guess. (`unlinked_at` only
+ * excludes a row from being MARKED here, in the UPDATE below -- it never excludes a row from being
+ * READ, or the nearest-row comparison above would be blind to the one row that matters.) Only when
+ * the WINDOW itself rules out every unpaid row (the plain earliest-unpaid fallback, unchanged from
+ * v1.12.0) does suppression instead simply skip a suppressed row in favour of the next earliest
+ * unsuppressed one -- there the code was never claiming this transaction's date as evidence for
+ * any particular installment, suppressed or not.
+ *
+ * `AND paid_at IS NULL` in the UPDATE, plus bill_installments_txn_uq (ruling B12), are together the
+ * idempotency guard -- the same pairing loan_payments uses. A re-run cannot double-mark, and one
+ * transaction can never mark two installments.
  *
  * Neither current_balance_cents nor balance_updated_at is touched: a bill has no balance, and
  * MUST-11.8's human anchor stays a loan concept.
  */
-function markEarliestUnpaid(
+function markMatchingUnpaid(
   tx: ReturnType<typeof getDb>,
-  input: { txnId: number; itemId: number; at: string },
+  input: { txnId: number; itemId: number; txnDate: string; at: string },
 ): boolean {
-  const target = tx
-    .select({ id: billInstallments.id })
+  const unpaid = tx
+    .select({ id: billInstallments.id, dueDate: billInstallments.dueDate, unlinkedAt: billInstallments.unlinkedAt })
     .from(billInstallments)
     .where(and(eq(billInstallments.itemId, input.itemId), isNull(billInstallments.paidAt)))
     .orderBy(asc(billInstallments.dueDate), asc(billInstallments.id))
-    .limit(1)
-    .get();
+    .all();
   // Nothing scheduled, or all paid: no link and no error. The transaction is a normal
   // transaction, the household sees it on /transactions, and nothing is fabricated.
-  if (target === undefined) return false;
+  if (unpaid.length === 0) return false;
+
+  let nearest = unpaid[0]!;
+  let best = Math.abs(daysBetweenIso(nearest.dueDate, input.txnDate));
+  for (const row of unpaid.slice(1)) {
+    const distance = Math.abs(daysBetweenIso(row.dueDate, input.txnDate));
+    // Strictly less than: a tie leaves the earlier due date in place.
+    if (distance < best) {
+      best = distance;
+      nearest = row;
+    }
+  }
+
+  let target: typeof nearest;
+  if (best <= INSTALLMENT_MATCH_WINDOW_DAYS) {
+    // The nearest row IS this transaction's date acting as evidence. A suppressed nearest row
+    // means a person has already looked at exactly this pairing and said no; see the docblock.
+    if (nearest.unlinkedAt !== null) return false;
+    target = nearest;
+  } else {
+    // Nothing is close enough to BE evidence either way: the v1.12.0 fallback, minus any row a
+    // person has deliberately suppressed.
+    const fallback = unpaid.find((row) => row.unlinkedAt === null);
+    if (fallback === undefined) return false;
+    target = fallback;
+  }
+
   const result = tx
     .update(billInstallments)
     .set({ paidAt: input.at, paidTxnId: input.txnId })
@@ -427,7 +518,7 @@ export function applyPaymentMatchers(txnIds: number[], at: Date = new Date(), re
         if (match === undefined) continue;
 
         if (match.kind === 'bill') {
-          if (!markEarliestUnpaid(tx, { txnId: txn.id, itemId: match.itemId, at: stamp })) continue;
+          if (!markMatchingUnpaid(tx, { txnId: txn.id, itemId: match.itemId, txnDate: txn.date, at: stamp })) continue;
           linked.add(txn.id);
           created += 1;
           continue;
@@ -556,6 +647,17 @@ export function assignTransactionToLoan(input: { txnId: number; itemId: number; 
       .where(eq(warrantyItems.id, input.itemId))
       .get();
     if (!item) throw new Error('That loan no longer exists.');
+
+    // v1.12.1 (item T / MON-2, ruling P4). Ruling P4 chose the refusal over the weaker option of
+    // feeding the bill leg into the over-link WARNING: the rule path already refuses this exact
+    // situation, and a warning that appears after the balance has already moved is not the same
+    // guarantee. assignToLoanAction's existing generic `catch (error) { return { error:
+    // error.message } }` (src/app/(app)/transactions/actions.ts) already surfaces this without any
+    // change there. MUST-11.16 is untouched: a transaction may still be assigned to a SECOND loan,
+    // because a combined payment is legitimate. Only the cross-table case is refused.
+    if (paymentLinksForTransaction(input.txnId).bills > 0) {
+      throw new Error('That transaction already pays a bill installment. Unmark that installment first.');
+    }
 
     if (txn.amountCents === 0) throw new Error('A zero-amount transaction cannot be a loan payment.');
     // F1 ruling: manual assign supports BOTH signs. A negative txn decrements the balance
