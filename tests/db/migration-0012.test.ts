@@ -25,7 +25,7 @@ function columns(db: TestDb, table: string): ColumnInfo[] {
 }
 
 describe('migration 0012 — two additive columns, no rebuild', () => {
-  it('adds users.totp_last_counter as a nullable integer, last in the table', () => {
+  it('adds users.totp_last_counter as a nullable integer, immediately before 0013s columns', () => {
     current = createTestDb();
     const cols = columns(current, 'users');
     const added = cols.find((c) => c.name === 'totp_last_counter');
@@ -33,9 +33,13 @@ describe('migration 0012 — two additive columns, no rebuild', () => {
     expect(added?.type.toLowerCase()).toBe('integer');
     expect(added?.notnull).toBe(0);
     expect(added?.dflt_value).toBeNull();
-    // ALTER TABLE ADD COLUMN appends physically. If this is ever not last, the schema.ts mirror
-    // has stopped matching pragma table_info and the next reader has to guess.
-    expect(cols[cols.length - 1]?.name).toBe('totp_last_counter');
+    // ALTER TABLE ADD COLUMN appends physically, so 0012's column sits immediately before
+    // whatever the NEXT migration appends -- not necessarily last forever. Pinning this to
+    // "last in the table" broke the moment 0013 appended visibility/can_sign_in/last_account_id
+    // after it, even though 0012's own column was untouched and still exactly right. Same
+    // treatment migration-0011.test.ts received here when 0012 landed.
+    const names = cols.map((c) => c.name);
+    expect(names.indexOf('visibility')).toBe(names.indexOf('totp_last_counter') + 1);
   });
 
   it('adds bill_installments.unlinked_at as a nullable text column, last in the table', () => {

@@ -18,7 +18,7 @@ afterEach(() => {
 });
 
 const EXPECTED_TABLES = [
-  'account_balance_snapshots', 'account_card_people', 'accounts', 'bayes_category_totals',
+  'account_balance_snapshots', 'account_card_people', 'accounts', 'audit_log', 'bayes_category_totals',
   'bayes_tokens', 'bill_installments', 'budget_rollover', 'budgets', 'categories', 'goal_contributions', 'goals',
   'import_profiles', 'imports', 'loan_matcher_rules', 'loan_payments', 'login_attempts',
   'merchant_rules', 'notification_outbox', 'notification_prefs', 'notification_smtp',

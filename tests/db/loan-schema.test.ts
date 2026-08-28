@@ -87,10 +87,18 @@ describe('MUST-3.1 / AC6: 0007 is a loans-only migration', () => {
 });
 
 describe('MUST-11.5 / MUST-11.17: the shapes exist after migration', () => {
-  it('adds the four money columns to warranty_items, physically last', () => {
+  it('adds the four money columns to warranty_items, contiguous and in order', () => {
     const cols = t.sqlite.prepare(`pragma table_info(warranty_items)`).all() as { name: string; type: string }[];
-    const tail = cols.slice(-4).map((c) => c.name);
-    expect(tail).toEqual(['principal_cents', 'interest_rate_bps', 'current_balance_cents', 'balance_updated_at']);
+    const names = cols.map((c) => c.name);
+    // ALTER TABLE ADD COLUMN appends physically, so these four sat at the tail as of 0007 -- but
+    // "physically last" broke the moment 0013 appended budget_category_id after them, even though
+    // these four columns and their order were untouched. What actually matters is that they stay
+    // contiguous and in this order, wherever a later migration's columns land after them. Same
+    // treatment migration-0011/0012's tail pins received.
+    const start = names.indexOf('principal_cents');
+    expect(start).toBeGreaterThan(-1);
+    const group = names.slice(start, start + 4);
+    expect(group).toEqual(['principal_cents', 'interest_rate_bps', 'current_balance_cents', 'balance_updated_at']);
     const byName = new Map(cols.map((c) => [c.name, c.type.toLowerCase()]));
     expect(byName.get('principal_cents')).toBe('integer');
     expect(byName.get('interest_rate_bps')).toBe('integer');

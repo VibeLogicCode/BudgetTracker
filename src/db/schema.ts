@@ -7,6 +7,7 @@ import {
   sqliteTable,
   text,
   uniqueIndex,
+  type AnySQLiteColumn,
 } from 'drizzle-orm/sqlite-core';
 
 export const users = sqliteTable(
@@ -38,6 +39,30 @@ export const users = sqliteTable(
      * with a conditional UPDATE, the same single-use shape consumeRecoveryCode uses.
      */
     totpLastCounter: integer('totp_last_counter'),
+    /**
+     * v1.13.0 ruling R2, added by drizzle/0013_household_scope.sql. 'self' scopes every read this
+     * person makes to rows they own. This is a READER boundary, not a role: role still gates actions.
+     * Micro-ruling M1: 'self' and role 'admin' are mutually exclusive, enforced in
+     * setUserVisibility()/createUserAction rather than as a SQL CHECK, because a cross-column CHECK
+     * added by ALTER TABLE ADD COLUMN does not re-validate existing rows.
+     */
+    visibility: text('visibility', { enum: ['household', 'self'] }).notNull().default('household'),
+    /**
+     * v1.13.0 ruling R5. false = a person the money is attributed to who has no login: they appear in
+     * every attribution picker and never on the login path. attemptLogin refuses them before the
+     * password check, and validateSession refuses an existing session.
+     */
+    canSignIn: integer('can_sign_in', { mode: 'boolean' }).notNull().default(true),
+    /**
+     * v1.13.0 ruling R7 / micro-ruling M5: the account this person last posted a manual transaction
+     * to, so quick-add can default to it. No onDelete clause -- NO ACTION matches imports.account_id
+     * and account_card_people.account_id, and accounts are soft-deleted via is_active, never dropped.
+     */
+    // The return type is spelled out explicitly (AnySQLiteColumn) because this reference and
+    // accounts.ownerUserId's reference back to users.id form a genuine cycle: without an
+    // annotation here TS has to infer both tables' types from each other simultaneously and
+    // fails with "implicitly has type 'any' ... referenced ... in its own initializer" (TS7022).
+    lastAccountId: integer('last_account_id').references((): AnySQLiteColumn => accounts.id),
   },
   (t) => [uniqueIndex('users_username_uq').on(t.username)],
 );
@@ -93,7 +118,15 @@ export const accounts = sqliteTable(
     id: integer('id').primaryKey({ autoIncrement: true }),
     name: text('name').notNull(),
     institution: text('institution').notNull(),
-    type: text('type', { enum: ['chequing', 'credit', 'cash'] }).notNull(),
+    /**
+     * v1.13.0 ruling R10: five values, up from three. This column has NEVER carried a SQL CHECK --
+     * drizzle/0000_init.sql:59 declares it as plain `type` text NOT NULL -- so the enum is a
+     * TypeScript-and-zod construct only and widening it needed no migration at all (micro-ruling M2).
+     * Do not go looking for the rebuild; there isn't one. 'savings' behaves like 'chequing' but is
+     * excluded from safe-to-spend; 'asset' carries a manually-typed balance and takes no transactions
+     * and no imports (src/lib/accounts.ts, acceptsTransactions/countsTowardSafeToSpend).
+     */
+    type: text('type', { enum: ['chequing', 'credit', 'cash', 'savings', 'asset'] }).notNull(),
     ownerUserId: integer('owner_user_id').references(() => users.id),
     importProfileId: integer('import_profile_id').references(() => importProfiles.id),
     isActive: integer('is_active', { mode: 'boolean' }).notNull().default(true),
@@ -270,6 +303,12 @@ export const merchantRules = sqliteTable(
     hitCount: integer('hit_count').notNull().default(0),
     lastUsedAt: text('last_used_at'),
     createdAt: text('created_at').notNull(),
+    /**
+     * v1.13.0 ruling R4 (item AH / SEC-6). created_by is no longer overwritten on conflict; this
+     * records who last changed the rule instead. NULL on every row written before v1.13.0 and on any
+     * rule never edited since it was created.
+     */
+    lastModifiedBy: integer('last_modified_by').references(() => users.id),
   },
   (t) => [uniqueIndex('merchant_rules_pattern_uq').on(t.pattern, t.matchType, t.ruleKind)],
 );
@@ -562,6 +601,13 @@ export const warrantyItems = sqliteTable(
     interestRateBps: integer('interest_rate_bps'),
     currentBalanceCents: integer('current_balance_cents'),
     balanceUpdatedAt: text('balance_updated_at'),
+    /**
+     * v1.13.0 ruling R11 (item AQ), micro-ruling M9. Bill-kind items only: the budget category this
+     * bill accumulates against, so the budgets row can say what it is saving toward. A read-side link
+     * and nothing else -- it changes no limit, no rollover and no total. NULL means "not linked",
+     * which is every row before v1.13.0.
+     */
+    budgetCategoryId: integer('budget_category_id').references(() => categories.id),
   },
   (t) => [
     index('warranty_items_expiry_idx').on(t.expiryDate),
@@ -944,4 +990,28 @@ export const billInstallments = sqliteTable(
     index('bill_installments_item_idx').on(t.itemId, t.dueDate),
     index('bill_installments_due_idx').on(t.paidAt, t.dueDate),
   ],
+);
+
+/**
+ * v1.13.0 ruling R3. Append-only. Nothing in src/ updates or deletes a row here; the only writer is
+ * appendAudit() in src/lib/audit.ts and the only reader is the admin page at /settings/audit.
+ * `action` and `entity` carry a LENGTH check in SQL and never a value enum, so a future audited
+ * operation is a code change and not a migration.
+ */
+export const auditLog = sqliteTable(
+  'audit_log',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    /** ISO timestamp from nowIso(). */
+    at: text('at').notNull(),
+    userId: integer('user_id').notNull().references(() => users.id),
+    /** 'delete_item' | 'delete_receipt' | 'undo_import' today. Free text by design. */
+    action: text('action').notNull(),
+    /** The table entity_id belongs to: 'warranty_items' | 'warranty_receipts' | 'imports'. */
+    entity: text('entity').notNull(),
+    entityId: integer('entity_id').notNull(),
+    /** One short human sentence, or NULL. Never a payload dump and never a secret. */
+    detail: text('detail'),
+  },
+  (t) => [index('audit_log_at_idx').on(t.at), index('audit_log_entity_idx').on(t.entity, t.entityId)],
 );

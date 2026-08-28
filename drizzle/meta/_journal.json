@@ -92,6 +92,13 @@
       "when": 1756252800000,
       "tag": "0012_totp_last_counter",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1756339200000,
+      "tag": "0013_household_scope",
+      "breakpoints": true
     }
   ]
 }
