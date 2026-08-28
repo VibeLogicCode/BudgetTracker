@@ -4,7 +4,13 @@ import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser
 import { normalizeMerchant } from '@/lib/categorize/normalize';
 import { nowIso } from '@/lib/clock';
 
-let currentUser = { id: 1, name: 'Alice', username: 'alice', role: 'admin' as const };
+let currentUser: { id: number; name: string; username: string; role: 'admin' | 'member'; visibility: 'household' | 'self' } = {
+  id: 1,
+  name: 'Alice',
+  username: 'alice',
+  role: 'admin',
+  visibility: 'household',
+};
 
 vi.mock('@/lib/auth/session', () => ({
   requireUser: vi.fn(async () => currentUser),
@@ -19,6 +25,7 @@ vi.mock('next/cache', () => ({
 }));
 
 import { fixCategoryAction, markTransferAction } from '@/app/(app)/review/actions';
+import { upsertRuleFromCorrection } from '@/lib/categorize/rules';
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -35,7 +42,7 @@ function formData(fields: Record<string, string>): FormData {
 function setup() {
   current = createSeededTestDb();
   const userId = insertTestUser(current.db, { name: 'Alice', username: 'alice' });
-  currentUser = { id: userId, name: 'Alice', username: 'alice', role: 'admin' };
+  currentUser = { id: userId, name: 'Alice', username: 'alice', role: 'admin', visibility: 'household' };
   const accountId = insertTestAccount(current.db, { name: 'Joint Chequing' });
   const addTxn = (description = 'TIM HORTONS') => {
     const row = current!.db.get<{ id: number }>(sql`
@@ -98,5 +105,46 @@ describe('markTransferAction — missing input validation (finding 2)', () => {
     expect(result.message).toBeTruthy();
     const row = sqlite.prepare('select is_transfer from transactions where id = ?').get(id) as { is_transfer: number };
     expect(row.is_transfer).toBe(1);
+  });
+});
+
+describe('v1.13.0 controller ruling: self viewers are refused server-side, not just kept off the nav', () => {
+  it('refuses a self-scoped viewer on fixCategoryAction', async () => {
+    const { db, addTxn } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const id = addTxn();
+    currentUser = { ...currentUser, role: 'member', visibility: 'self' };
+    const result = await fixCategoryAction({}, formData({ transactionId: String(id), categoryId: String(coffee) }));
+    expect(result.error).toBeTruthy();
+  });
+
+  it('refuses a self-scoped viewer on markTransferAction', async () => {
+    const { addTxn } = setup();
+    const id = addTxn();
+    currentUser = { ...currentUser, role: 'member', visibility: 'self' };
+    const result = await markTransferAction({}, formData({ transactionId: String(id) }));
+    expect(result.error).toBeTruthy();
+  });
+});
+
+describe('v1.13.0 ruling R4: a member overwriting another member\'s rule sees the owner sentence', () => {
+  it('fixCategoryAction refuses and reports the existing rule\'s owner', async () => {
+    const { db, addTxn } = setup();
+    const bob = insertTestUser(db, { name: 'Bob', username: 'bob', role: 'member' });
+    const coffee = categoryIdByName(db, 'Coffee');
+    const groceries = categoryIdByName(db, 'Groceries');
+    const id = addTxn('SOMEBODY ELSES RULE');
+    // Bob's exact category rule already exists for this merchant.
+    upsertRuleFromCorrection({
+      pattern: normalizeMerchant('SOMEBODY ELSES RULE'),
+      matchType: 'exact',
+      ruleKind: 'category',
+      categoryId: groceries,
+      createdBy: bob,
+      actorRole: 'member',
+    });
+    currentUser = { ...currentUser, role: 'member' };
+    const result = await fixCategoryAction({}, formData({ transactionId: String(id), categoryId: String(coffee) }));
+    expect(result.error).toMatch(/bob/i);
   });
 });
