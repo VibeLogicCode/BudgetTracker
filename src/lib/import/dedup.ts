@@ -79,6 +79,36 @@ export function computeRowHashes(accountId: number, rows: CandidateRow[]): Hashe
   }));
 }
 
+/**
+ * v1.13.0 ruling R9 (item C2). externalId -> existing transaction id, scoped to one account --
+ * the same lookup commitImport (src/lib/import/commit.ts) already ran inline to decide whether a
+ * provider-id row (OFX FITID, SimpleFIN transaction id) is a duplicate. Extracted here so
+ * buildPreview (src/lib/import/preview.ts) can run the identical check at preview time: a CSV
+ * row's dedupHash-based check (findExistingByHashes above) never matches a provider-id row,
+ * because commitImport stores NULL in dedup_hash for those (see CommitRow's own doc comment) --
+ * so an OFX preview that only ever called findExistingByHashes would report every row as new,
+ * commit or not, which is exactly the C2 bug this pairs with.
+ */
+export function findExistingByExternalIds(accountId: number, externalIds: string[]): Map<string, number> {
+  const result = new Map<string, number>();
+  if (externalIds.length === 0) return result;
+
+  const db = getDb();
+  const CHUNK = 400;
+  for (let offset = 0; offset < externalIds.length; offset += CHUNK) {
+    const chunk = externalIds.slice(offset, offset + CHUNK);
+    const rows = db
+      .select({ id: transactions.id, externalId: transactions.externalId })
+      .from(transactions)
+      .where(and(eq(transactions.accountId, accountId), isNotNull(transactions.externalId), inArray(transactions.externalId, chunk)))
+      .all();
+    for (const row of rows) {
+      if (row.externalId) result.set(row.externalId, row.id);
+    }
+  }
+  return result;
+}
+
 /** hash -> existing transaction id, scoped to one account. Manual rows (NULL hash) can never match. */
 export function findExistingByHashes(accountId: number, hashes: string[]): Map<string, number> {
   const result = new Map<string, number>();

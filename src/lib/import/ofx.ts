@@ -1,6 +1,6 @@
 import { isIsoDate } from '@/lib/dates';
 import { parseAmountToCents } from '@/lib/money';
-import { decodeBuffer } from './decode';
+import { decodeBuffer, type DetectedEncoding } from './decode';
 import { ImportLimitError, MAX_FILE_BYTES, type CandidateRow, type ParseResult, type RowError } from './parse';
 
 /**
@@ -24,6 +24,9 @@ export interface OfxParseResult {
   currency: string | null;
   dialect: 'sgml' | 'xml';
   dateOrder: ParseResult['dateOrder'];
+  /** v1.13.0 ruling R9 fix (item C2): buildPreview's PreviewResult reports the detected encoding
+   *  for every file, CSV or OFX -- this is what a preview built from an OFX buffer reads. */
+  encoding: DetectedEncoding;
 }
 
 /** Extension AND content. An extension alone is a claim, not evidence. */
@@ -81,7 +84,7 @@ export function parseOfx(buf: Buffer): OfxParseResult {
   // own docblock warns about for CSV. Reusing the same strict-UTF-8-first/1252-fallback
   // decoder here (rather than a second, ad hoc guess) makes an accented merchant name in an
   // OFX file behave identically to one in a CSV file.
-  const { text } = decodeBuffer(buf, 'auto');
+  const { text, encoding } = decodeBuffer(buf, 'auto');
   // An XML declaration or a closing leaf tag is the only reliable tell; OFXHEADER:100 vs
   // OFXHEADER="200" is the other. Reported, never acted on -- the scanner reads both.
   const dialect: 'sgml' | 'xml' = /^\s*<\?xml/i.test(text) || /OFXHEADER\s*=\s*"2/i.test(text) ? 'xml' : 'sgml';
@@ -164,5 +167,5 @@ export function parseOfx(buf: Buffer): OfxParseResult {
   const dateOrder: ParseResult['dateOrder'] =
     first !== undefined && last !== undefined && last < first ? 'newest_first' : 'oldest_first';
 
-  return { rows, errors, currency, dialect, dateOrder };
+  return { rows, errors, currency, dialect, dateOrder, encoding };
 }

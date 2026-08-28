@@ -7,8 +7,10 @@ import { buildPreview, PREVIEW_ROW_LIMIT } from '@/lib/import/preview';
 import { writeStagedFile } from '@/lib/import/staging';
 import { getBuiltinPreset } from '@/lib/import/presets';
 import { commitImport } from '@/lib/import/commit';
+import { commitStagedImport } from '@/lib/import/flow';
 import { computeRowHashes } from '@/lib/import/dedup';
 import { parseCsv } from '@/lib/import/parse';
+import { parseOfx } from '@/lib/import/ofx';
 import { upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { upsertAccountCardPerson } from '@/lib/import/card-people';
 import type { ImportMapping } from '@/lib/import/mapping';
@@ -302,6 +304,133 @@ describe('buildPreview', () => {
       const mapping: ImportMapping = { ...getBuiltinPreset('TD Chequing/Debit'), cardCol: 50 };
       const preview = buildPreview({ stagingId, filename: 'td.csv', accountId, profileId: null, mapping });
       expect(preview.cardValues).toEqual([]);
+    });
+  });
+
+  // v1.13.0 ruling R9 fix (item C2). buildPreview used to call parseCsv unconditionally, so an
+  // OFX/QFX file previewed as garbled CSV (its own SGML tags read as "columns") while
+  // commitStagedImport (src/lib/import/flow.ts) already dispatched on looksLikeOfx correctly --
+  // a preview that bore no resemblance to what committing the same file would actually do.
+  describe('OFX/QFX files (ruling R9, item C2)', () => {
+    // Same synthetic OFX 1.x (SGML) fixture shape as tests/lib/import/ofx.test.ts's own SGML
+    // constant -- three transactions, each with a real bank FITID.
+    const OFX = `OFXHEADER:100
+DATA:OFXSGML
+VERSION:102
+SECURITY:NONE
+ENCODING:USASCII
+CHARSET:1252
+COMPRESSION:NONE
+OLDFILEUID:NONE
+NEWFILEUID:NONE
+
+<OFX>
+<BANKMSGSRSV1><STMTTRNRS><STMTRS>
+<CURDEF>CAD
+<BANKACCTFROM><BANKID>000000000<ACCTID>0000000<ACCTTYPE>CHECKING</BANKACCTFROM>
+<BANKTRANLIST>
+<DTSTART>20260801<DTEND>20260831
+<STMTTRN><TRNTYPE>DEBIT<DTPOSTED>20260803120000<TRNAMT>-42.10<FITID>FIT-0001<NAME>GROCERY STORE</STMTTRN>
+<STMTTRN><TRNTYPE>DEBIT<DTPOSTED>20260812120000<TRNAMT>-180.00<FITID>FIT-0002<NAME>CITY TAX OFFICE</STMTTRN>
+<STMTTRN><TRNTYPE>CREDIT<DTPOSTED>20260815120000<TRNAMT>2100.00<FITID>FIT-0003<NAME>PAYROLL DEPOSIT</STMTTRN>
+</BANKTRANLIST>
+</STMTRS></STMTTRNRS></BANKMSGSRSV1>
+</OFX>`;
+
+    function setupOfx() {
+      current = createSeededTestDb();
+      const userId = insertTestUser(current.db);
+      const accountId = insertTestAccount(current.db);
+      return { db: current.db, sqlite: current.sqlite, userId, accountId };
+    }
+
+    it('previews the real OFX rows (not CSV-garbled columns), with FITIDs as externalIds', () => {
+      const { accountId } = setupOfx();
+      const stagingId = writeStagedFile(Buffer.from(OFX, 'utf8'));
+      // The mapping passed here belongs to whatever CSV profile the account remembers -- ruling
+      // R9 says an OFX file skips it entirely, so any valid CSV mapping proves the point.
+      const preview = buildPreview({
+        stagingId,
+        filename: 'statement.ofx',
+        accountId,
+        profileId: null,
+        mapping: getBuiltinPreset('TD Chequing/Debit'),
+      });
+
+      const parsed = parseOfx(Buffer.from(OFX, 'utf8'));
+      expect(preview.totalRows).toBe(parsed.rows.length);
+      expect(preview.rows).toHaveLength(3);
+      expect(preview.rows.map((r) => r.externalId)).toEqual(['FIT-0001', 'FIT-0002', 'FIT-0003']);
+      expect(preview.rows[0]).toMatchObject({
+        date: '2026-08-03',
+        rawDescription: 'GROCERY STORE',
+        amountCents: -4210,
+        externalId: 'FIT-0001',
+      });
+      expect(preview.rows[2]?.amountCents).toBe(210000);
+      expect(preview.encoding).toBe('utf-8');
+    });
+
+    // The heart of C2: a preview must agree with what commitStagedImport (the ACTUAL commit
+    // path) does with the same bytes -- same row count, same FITIDs stored as external_id.
+    it('yields the same rows commitStagedImport actually inserts, FITID for FITID', () => {
+      const { accountId, userId } = setupOfx();
+
+      const previewStagingId = writeStagedFile(Buffer.from(OFX, 'utf8'));
+      const preview = buildPreview({
+        stagingId: previewStagingId,
+        filename: 'statement.ofx',
+        accountId,
+        profileId: null,
+        mapping: getBuiltinPreset('TD Chequing/Debit'),
+      });
+
+      const commitStagingId = writeStagedFile(Buffer.from(OFX, 'utf8'));
+      const committed = commitStagedImport({
+        stagingId: commitStagingId,
+        filename: 'statement.ofx',
+        accountId,
+        profileId: 1,
+        mapping: getBuiltinPreset('TD Chequing/Debit'),
+        userId,
+      });
+
+      expect(committed.rowsAdded).toBe(preview.rows.length);
+      const storedExternalIds = current!.sqlite
+        .prepare('select external_id as e from transactions where account_id = ? order by e')
+        .all(accountId)
+        .map((row) => (row as { e: string }).e);
+      expect(storedExternalIds).toEqual(preview.rows.map((r) => r.externalId).sort());
+    });
+
+    // findExistingByExternalIds (src/lib/import/dedup.ts): a preview of a statement already
+    // committed must mark its FITID rows as duplicates -- the dedup_hash-only lookup that
+    // predates this fix can never do this, because commitImport stores dedup_hash NULL for a
+    // provider-id row (src/lib/import/commit.ts).
+    it('flags rows already committed by FITID as duplicates on a re-preview', () => {
+      const { accountId, userId } = setupOfx();
+
+      const firstStagingId = writeStagedFile(Buffer.from(OFX, 'utf8'));
+      commitStagedImport({
+        stagingId: firstStagingId,
+        filename: 'statement.ofx',
+        accountId,
+        profileId: 1,
+        mapping: getBuiltinPreset('TD Chequing/Debit'),
+        userId,
+      });
+
+      const secondStagingId = writeStagedFile(Buffer.from(OFX, 'utf8'));
+      const preview = buildPreview({
+        stagingId: secondStagingId,
+        filename: 'statement.ofx',
+        accountId,
+        profileId: null,
+        mapping: getBuiltinPreset('TD Chequing/Debit'),
+      });
+
+      expect(preview.duplicateCount).toBe(3);
+      expect(preview.rows.every((r) => r.isDuplicate)).toBe(true);
     });
   });
 });

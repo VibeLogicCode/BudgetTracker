@@ -5,8 +5,9 @@ import { normalizeMerchant } from '@/lib/categorize/normalize';
 import { buildContext, categorizeTransaction } from '@/lib/categorize/engine';
 import { listAccountCardPeople } from './card-people';
 import { detectDateFormat, type DateFormatDetection } from './detect-date-format';
-import { computeRowHashes, findExistingByHashes, type HashedRow } from './dedup';
+import { computeRowHashes, findExistingByExternalIds, findExistingByHashes, type HashedRow } from './dedup';
 import { normalizeCardValue, type ImportMapping } from './mapping';
+import { looksLikeOfx, parseOfx } from './ofx';
 import { parseCsv, previewRawRows, type CandidateRow, type ParseResult, type RowError } from './parse';
 import { readStagedFile } from './staging';
 import type { DetectedEncoding } from './decode';
@@ -22,6 +23,9 @@ export interface PreviewRow {
   amountCents: number;
   occurrenceIndex: number;
   dedupHash: string;
+  /** v1.13.0 ruling R9 (item C2): the provider's own id (OFX FITID). null for every CSV row --
+   *  see CandidateRow's own doc comment (src/lib/import/parse.ts). */
+  externalId: string | null;
   isDuplicate: boolean;
   duplicateTransactionId: number | null;
   predictedCategoryId: number | null;
@@ -97,12 +101,33 @@ export function buildPreview(input: {
   mapping: ImportMapping;
 }): PreviewResult {
   const buf = readStagedFile(input.stagingId);
-  const parsed = parseCsv(buf, input.mapping);
+  // v1.13.0 ruling R9 fix (item C2). This used to call parseCsv unconditionally, so an OFX/QFX
+  // file previewed as garbled CSV (its own SGML/XML tags read as "columns") while the commit
+  // path (src/lib/import/flow.ts) already dispatched correctly -- a preview that bore no
+  // resemblance to what committing the same file would actually do. Same dispatch as flow.ts's
+  // commitStagedImport, now shared by both.
+  const ofx = looksLikeOfx(input.filename, buf) ? parseOfx(buf) : null;
+  // `csv` (not `parsed.encoding`/`ofx === null`) is what every CSV-only branch below tests --
+  // keeping it its own binding, rather than folding straight into a `parsed` union, is what lets
+  // TypeScript narrow it back to a real ParseResult wherever it's used, since OfxParseResult has
+  // no `skipped` field and this file's date-format/column-picker helpers are typed against
+  // ParseResult specifically.
+  const csv = ofx ? null : parseCsv(buf, input.mapping);
+  const parsed = ofx ?? csv!;
   const hashed = computeRowHashes(input.accountId, parsed.rows);
   const existing = findExistingByHashes(
     input.accountId,
     hashed.map((row) => row.dedupHash),
   );
+  // v1.13.0 ruling R9 fix (item C2): a provider-id row (OFX FITID) is stored with dedup_hash
+  // NULL at commit time (commit.ts), so findExistingByHashes above can never match one of these
+  // rows against an already-committed transaction -- an OFX preview needs this second lookup, the
+  // exact one commitImport itself runs, or it would report every row "new" even on a re-preview
+  // of an already-imported statement.
+  const externalIds = hashed
+    .map((row) => row.externalId ?? null)
+    .filter((value): value is string => value !== null && value.length > 0);
+  const existingByExternalId = findExistingByExternalIds(input.accountId, externalIds);
 
   const ctx = buildContext();
   const categoryNames = new Map<number, string>(
@@ -113,7 +138,10 @@ export function buildPreview(input: {
   const rows: PreviewRow[] = [];
 
   for (const row of hashed) {
-    const duplicateTransactionId = existing.get(row.dedupHash) ?? null;
+    // Mirrors commitImport's own resolution exactly (src/lib/import/commit.ts): a provider id,
+    // when present, is authoritative; only its absence falls back to the CSV dedup hash.
+    const providerId = row.externalId || null;
+    const duplicateTransactionId = providerId ? (existingByExternalId.get(providerId) ?? null) : (existing.get(row.dedupHash) ?? null);
     if (duplicateTransactionId !== null) duplicateCount += 1;
 
     if (rows.length < PREVIEW_ROW_LIMIT) {
@@ -128,6 +156,7 @@ export function buildPreview(input: {
         amountCents: row.amountCents,
         occurrenceIndex: row.occurrenceIndex,
         dedupHash: row.dedupHash,
+        externalId: providerId,
         isDuplicate: duplicateTransactionId !== null,
         duplicateTransactionId,
         predictedCategoryId: outcome.categoryId,
@@ -150,13 +179,22 @@ export function buildPreview(input: {
     totalRows: hashed.length,
     duplicateCount,
     errorCount: parsed.errors.length,
-    skipped: parsed.skipped,
+    // OfxParseResult has no skip-rules concept (ruling R9: an OFX file skips the CSV mapping
+    // entirely, so there is no mapping.skipRules to apply against it either).
+    skipped: csv?.skipped ?? 0,
     truncated: hashed.length > PREVIEW_ROW_LIMIT,
-    dateFormatDetection: detectDateFormat(rawDateColumn(parsed, input.mapping.dateCol)),
-    columnOptions: buildColumnOptions(buf, input.mapping),
+    // Both informational-only, and both meaningless for OFX: its dates are always the fixed
+    // OFX YYYYMMDD shape (parseOfx's own toIsoDate), never mapping.dateFormat, and its cells are
+    // [DTPOSTED, NAME, TRNAMT, FITID] rather than the file's real CSV columns, so re-reading the
+    // buffer as CSV to label "columns" for a picker that OFX has no use for would be actively
+    // misleading rather than merely unused.
+    dateFormatDetection: csv ? detectDateFormat(rawDateColumn(csv, input.mapping.dateCol)) : { candidates: [], status: 'none', detected: null },
+    columnOptions: csv ? buildColumnOptions(buf, input.mapping) : [],
   };
 
-  if (input.mapping.cardCol !== null) {
+  // Ruling R9: an OFX import has no cardholder column -- mapping.cardCol belongs to whatever CSV
+  // mapping this account remembers, not to this file, so it is never consulted for one.
+  if (csv && input.mapping.cardCol !== null) {
     result.cardValues = buildCardValueSummaries(input.accountId, input.mapping.cardCol, hashed);
   }
 

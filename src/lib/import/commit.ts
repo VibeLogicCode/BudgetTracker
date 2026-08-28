@@ -5,7 +5,7 @@ import { nowIso } from '@/lib/clock';
 import { reverseInstallmentLinksForTransactions, reverseLoanLinksForTransactions } from '@/lib/loans';
 import { deleteCsvSnapshotsForAccountDates, recordBalanceSnapshot } from '@/lib/networth';
 import { listAccountCardPeople } from './card-people';
-import { findExistingByHashes, type HashedRow } from './dedup';
+import { findExistingByExternalIds, findExistingByHashes, type HashedRow } from './dedup';
 import { getImportHooks } from './hooks';
 import { normalizeCardValue, type ImportMapping } from './mapping';
 import { closingBalancesByDate, type ParseResult, type RowError } from './parse';
@@ -146,21 +146,11 @@ export function commitImport(input: CommitInput): CommitResult {
     input.rows.map((row) => row.dedupHash),
   );
 
+  // v1.13.0 ruling R9 (item C2): extracted to findExistingByExternalIds (src/lib/import/dedup.ts)
+  // so buildPreview can run the identical externalId lookup at preview time -- this used to be
+  // inlined here only, so a preview of an OFX file had no way to ask the same question.
   const externalIds = input.rows.map((row) => row.externalId ?? null).filter((value): value is string => value !== null && value.length > 0);
-  const existingByExternalId = new Map<string, number>();
-  if (externalIds.length > 0) {
-    const CHUNK = 400;
-    for (let offset = 0; offset < externalIds.length; offset += CHUNK) {
-      const chunk = externalIds.slice(offset, offset + CHUNK);
-      for (const found of db
-        .select({ id: transactions.id, externalId: transactions.externalId })
-        .from(transactions)
-        .where(and(eq(transactions.accountId, input.accountId), isNotNull(transactions.externalId), inArray(transactions.externalId, chunk)))
-        .all()) {
-        if (found.externalId) existingByExternalId.set(found.externalId, found.id);
-      }
-    }
-  }
+  const existingByExternalId = findExistingByExternalIds(input.accountId, externalIds);
 
   return db.transaction((tx) => {
     const importRow = tx
