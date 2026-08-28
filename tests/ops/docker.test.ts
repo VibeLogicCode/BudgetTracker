@@ -245,9 +245,33 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.13.3 release', () => {
+  it('MUST-7.1: the 1.14.0 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.13.3');
+    expect(pkg.version).toBe('1.14.0');
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toMatch(/^## \[1\.14\.0\] - 2026-08-28$/m);
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.14.0]'));
+    expect(changelog.indexOf('## [1.14.0]')).toBeLessThan(changelog.indexOf('## [1.13.3]'));
+    const entry = changelog.slice(changelog.indexOf('## [1.14.0]'), changelog.indexOf('## [1.13.3]'));
+    expect(entry).toMatch(/### Added/);
+    expect(entry).toMatch(/### Changed/);
+    expect(entry).toMatch(/### Fixed/);
+    // Unlike the last three releases, this one DOES change the schema. A reader coming from
+    // 1.13.3 must be told to take a backup, and must not find the "no migration" line here.
+    expect(entry).not.toMatch(/no migration/i);
+    expect(entry).toMatch(/Before updating/);
+    expect(entry).toMatch(/all-or-nothing/i);
+    expect(entry).toMatch(/roll back/i);
+    // The headline claims, asserted as claims and not just as a version number.
+    expect(entry).toMatch(/Owed to us/);
+    expect(entry).toMatch(/Who owes us/);
+    expect(entry).toMatch(/net worth/i);
+    expect(entry).toMatch(/Review page/);
+  });
+
+  it('MUST-7.1: the 1.13.3 release is still recorded intact (append-only discipline)', () => {
+    const pkg = JSON.parse(read('package.json')) as { version: string };
+    expect(pkg.version).not.toBe('1.13.3');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.13\.3\] - 2026-08-28$/m);
     expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.13.3]'));

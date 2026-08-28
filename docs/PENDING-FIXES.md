@@ -1615,7 +1615,13 @@ min. No personal data.
 
 ## Owner feature requests after v1.13.3 (2026-08-28, not started)
 
-## BU. Loans with direction "lent" — money someone owes the household
+## BU. Loans with direction "lent" — money someone owes the household — SHIPPED in v1.14.0
+
+Status: SHIPPED in v1.14.0 — see docs/superpowers/specs/2026-08-28-loans-lent-direction-design.md.
+A new Direction control on the loan item form (kind `loan` only) offers "Owed to us" alongside the
+existing default; the Dashboard gains a "Who owes us" card (titled "Owed to you" and self-scoped for
+a `self` viewer, hidden at zero); Reports' debt-over-time chart plots what's lent out as its own
+series, separate from the household debt line.
 
 **Asked 2026-08-28** while categorising an e-transfer to a friend. Today a **Loan** item models only
 a debt the household owes (`src/lib/loans.ts`): the sign of the assigned transaction decides the
@@ -1639,3 +1645,10 @@ gets one paragraph.
 
 **Effort:** ~1.5 h in the agent pipeline (migration 0014 additive; `loans.ts` sign flip behind one
 helper with tests for both directions; dashboard card; reports series; forms; help). No personal data.
+
+**BV. Review page's per-row and bulk category selects had no visible labels — SHIPPED in v1.14.0.**
+Status: SHIPPED in v1.14.0 (commits `5439851`, `5d1f5b0`). The per-row category select and the
+"apply to all matching + create rule" select on the Review page now carry visible labels ("This
+transaction only" / "Every <merchant> — N transactions, plus future imports") and a hint;
+duplicated row titles collapse; child categories keep their indent in every dropdown. No backlog
+letter existed for this before it shipped; recorded here as a shipped note.
