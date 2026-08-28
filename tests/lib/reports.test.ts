@@ -242,6 +242,16 @@ describe('personSpendSplit', () => {
     add({ categoryId: categoryIdByName(db, 'Groceries'), amountCents: -1000, attributedUserId: alice });
     expect(personSpendSplit(MARCH, HOUSEHOLD).find((r) => r.userId === alice)?.spentCents).toBe(1000);
   });
+
+  it('always returns the unattributed bucket, even at zero (item A, ruling P2)', () => {
+    // Deliberate: a bucket that disappears at zero hides the difference between "nobody
+    // unattributed" and "we stopped counting". reports-client.tsx's empty state is gated on every
+    // row being zero BECAUSE of this, not the other way round.
+    setup();
+    const rows = personSpendSplit({ from: '2099-01-01', to: '2099-01-31' }, HOUSEHOLD);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toEqual({ userId: null, label: UNATTRIBUTED_LABEL, spentCents: 0 });
+  });
 });
 
 describe('topMerchants', () => {

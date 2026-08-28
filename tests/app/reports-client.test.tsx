@@ -353,3 +353,62 @@ describe('ReportsClient — Net worth card', () => {
     expect(card.queryByText(/reported a balance/)).toBeNull();
   });
 });
+
+describe('ReportsClient — the "Who spent it" card (item A, ruling P2)', () => {
+  function splitCard(container: HTMLElement): HTMLElement {
+    const heading = [...container.querySelectorAll('h2, h3')].find((node) => node.textContent === 'Who spent it');
+    const card = heading?.closest('div[class*="card"], section, article') ?? heading?.parentElement?.parentElement;
+    if (!card) throw new Error('the "Who spent it" card is not on the page');
+    return card as HTMLElement;
+  }
+
+  it('shows the empty state when every row is zero', () => {
+    // The defect: personSpendSplit ALWAYS pushes the unattributed bucket (src/lib/reports.ts:361),
+    // so split.length was never 0 for the only viewer who sees this card, and "Nothing to split
+    // yet" -- written, styled and given an action -- could never render.
+    const { container } = render(
+      <ReportsClient {...baseProps()} split={[{ userId: null, label: UNATTRIBUTED_LABEL, spentCents: 0 }]} />,
+    );
+    expect(within(splitCard(container)).getByText('Nothing to split yet')).toBeTruthy();
+  });
+
+  it('shows the rows when any row carries spend', () => {
+    const { container } = render(
+      <ReportsClient
+        {...baseProps()}
+        split={[
+          { userId: 7, label: 'Alice', spentCents: 42000 },
+          { userId: null, label: UNATTRIBUTED_LABEL, spentCents: 0 },
+        ]}
+      />,
+    );
+    const card = within(splitCard(container));
+    expect(card.queryByText('Nothing to split yet')).toBeNull();
+    expect(card.getByText('Alice')).toBeTruthy();
+    // The zero bucket still renders once there is anything to compare it against.
+    expect(card.getByText(UNATTRIBUTED_LABEL)).toBeTruthy();
+  });
+});
+
+describe('ReportsClient — the page guide names no absent control (item BM, ruling P15)', () => {
+  function guideText(container: HTMLElement): string {
+    return container.querySelector('details')?.textContent ?? '';
+  }
+
+  it('does not promise Export CSV to a viewer who has no Export CSV button', () => {
+    const { container } = render(<ReportsClient {...baseProps()} showExport={false} />);
+    expect(guideText(container)).not.toContain('Export CSV');
+  });
+
+  it('does not promise a per-person split to a viewer who has no split card', () => {
+    const { container } = render(<ReportsClient {...baseProps()} showPersonSplit={false} />);
+    expect(guideText(container)).not.toContain('split by person');
+  });
+
+  it('still says both to a household viewer', () => {
+    const { container } = render(<ReportsClient {...baseProps()} />);
+    const text = guideText(container);
+    expect(text).toContain('Export CSV');
+    expect(text).toContain('split by person');
+  });
+});

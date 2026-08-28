@@ -146,14 +146,24 @@ export function ReportsClient({
         }
       />
 
+      {/* item BM (ruling P15): both clauses are gated, not just the Export one the backlog named.
+          showExport and showPersonSplit are both !isSelfScoped(viewer) (reports/page.tsx:169,176),
+          and this paragraph made two promises a self viewer cannot keep -- a control that is not on
+          their page (:140-146) and a card that is dropped for them (:412). */}
       <PageGuide>
         <p>
           Reports answers questions about a stretch of time rather than the current month: where
           the money went by category, how one month compares with the last, how a year compares
-          with the year before, and how the household&rsquo;s split by person works out. The date
-          range and person at the top drive every card below at once, and{' '}
-          <strong className="font-semibold text-ink">Export CSV</strong> gives you the same rows
-          in a spreadsheet.
+          with the year before
+          {showPersonSplit ? ", and how the household's split by person works out" : ''}. The date
+          range and person at the top drive every card below at once
+          {showExport ? (
+            <>
+              , and <strong className="font-semibold text-ink">Export CSV</strong> gives you the same
+              rows in a spreadsheet
+            </>
+          ) : null}
+          .
         </p>
         <p>
           Most of these cards are comparisons, so they have nothing to compare until several
@@ -412,7 +422,11 @@ export function ReportsClient({
       {showPersonSplit ? (
         <Card>
           <CardHeader title="Who spent it" description="Split by the person each transaction is attributed to." />
-          {split.length === 0 ? (
+          {/* item A (ruling P2): NOT split.length === 0 -- personSpendSplit always pushes the
+              unattributed bucket (src/lib/reports.ts:361-362), deliberately, so this array is never
+              empty for the only viewer who sees this card and the branch below was unreachable. The
+              honest condition is "there is nothing to split", which is every row at zero. */}
+          {split.every((row) => row.spentCents === 0) ? (
             <EmptyState
               icon={ReportsIcon}
               title="Nothing to split yet"
