@@ -137,16 +137,55 @@ export function clearAttemptsFor(username: string): number {
   return Number(result.changes ?? 0);
 }
 
-/** Socket IP unless TRUST_PROXY is on, in which case the first X-Forwarded-For entry. */
+/**
+ * The longest textual IPv6 address (an IPv4-mapped form with a zone id) is comfortably under this.
+ * The cap exists because this string is stored on sessions.ip and rendered verbatim into the "New
+ * sign-in" notification, where `name` and `userAgent` are both length-bounded and this was not.
+ */
+const IP_MAX = 45;
+const IPV4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+const IPV6 = /^[0-9a-f:]+$/i;
+
+/** Rejects anything that is not plainly an address, so a forged header cannot become display text. */
+function validIp(value: string): string | null {
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.length > IP_MAX) return null;
+  const v4 = IPV4.exec(trimmed);
+  if (v4) return v4.slice(1).every((part) => Number(part) <= 255) ? trimmed : null;
+  // Deliberately loose for v6 rather than reimplementing RFC 4291: the point is to refuse free
+  // text, not to be a parser. A colon and hex digits only, with at least one colon.
+  if (IPV6.test(trimmed) && trimmed.includes(':')) return trimmed;
+  return null;
+}
+
+/**
+ * The client's address, or the literal 'unknown'.
+ *
+ * v1.12.1 (item AB / SEC-5). Two changes, both about the same mistake. A server action has no
+ * socket, so login/actions.ts used to hand the client-controlled `x-real-ip` HEADER in as the
+ * `socketIp` argument -- the parameter that exists precisely because it is supposed to be free of
+ * untrusted input -- and this function returned it verbatim whenever TRUST_PROXY was off. Layer A
+ * of the lockout (5 failures per username+IP in 15 minutes) is keyed on the result, so varying the
+ * header defeated that layer entirely; and the same forged value was stored on the session row and
+ * rendered into the "New sign-in" alert, letting a successful attacker choose which address the
+ * family was told they had signed in from.
+ *
+ * So: `x-real-ip` is now read ONLY when TRUST_PROXY is on -- the same treatment `x-forwarded-for`
+ * has always had, one line below -- and whatever survives is validated as an address and bounded
+ * in length before it can reach sessions.ip or renderEvent.
+ */
 export function clientIpFromHeaders(headers: Headers, socketIp: string | null, env: AppEnv = readEnv()): string {
   if (env.trustProxy) {
     const forwarded = headers.get('x-forwarded-for');
-    if (forwarded) {
-      const first = forwarded.split(',')[0].trim();
-      if (first.length > 0) return first;
-    }
+    const first = forwarded?.split(',')[0];
+    const fromForwarded = first === undefined ? null : validIp(first);
+    if (fromForwarded !== null) return fromForwarded;
+    const real = headers.get('x-real-ip');
+    const fromReal = real === null ? null : validIp(real);
+    if (fromReal !== null) return fromReal;
   }
-  return socketIp && socketIp.length > 0 ? socketIp : 'unknown';
+  const fromSocket = socketIp === null ? null : validIp(socketIp);
+  return fromSocket ?? 'unknown';
 }
 
 export function purgeOldLoginAttempts(at: Date = new Date(), olderThanDays: number = ATTEMPT_RETENTION_DAYS): number {

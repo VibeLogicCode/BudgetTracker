@@ -34,8 +34,19 @@ function buildCsp(nonce?: string): string {
   ].join('; ');
 }
 
-export function securityHeaders(nonce?: string): Record<string, string> {
-  return {
+/**
+ * v1.12.1 (item AC / SEC-7, ruling P6). `options.https` is resolved by the caller from the real
+ * request (src/proxy.ts), never guessed here.
+ *
+ * HSTS is CONDITIONAL and must stay conditional. The documented default deployment of this app is
+ * plain HTTP on a home LAN; sending Strict-Transport-Security there would tell every browser in the
+ * house to refuse http://192.168.x.x for a year, which is not a hardening, it is a brick. On a real
+ * HTTPS connection it closes the gap SEC-7 describes from the browser side: the session cookie's
+ * Secure flag depends on TRUST_PROXY being set, and an operator who put an HTTPS proxy in front
+ * without setting it gets no Secure cookie and, until now, nothing else either.
+ */
+export function securityHeaders(nonce?: string, options?: { https?: boolean }): Record<string, string> {
+  const headers: Record<string, string> = {
     'Content-Security-Policy': buildCsp(nonce),
     'X-Frame-Options': 'DENY',
     'Referrer-Policy': 'same-origin',
@@ -46,4 +57,8 @@ export function securityHeaders(nonce?: string): Record<string, string> {
     // WebRTC-based viewfinder without noticing why there is not one already.
     'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), interest-cohort=()',
   };
+  if (options?.https === true) {
+    headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains';
+  }
+  return headers;
 }

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { Readable } from 'node:stream';
 import { isSameOriginOrHeaderless } from '@/lib/auth/csrf';
 import { userFromRequest } from '@/lib/auth/session';
+import { mustChangePassword } from '@/lib/auth/users';
 import { createOnDemandBackup } from '@/lib/backup';
 import { todayIso } from '@/lib/dates';
 
@@ -27,6 +28,9 @@ export async function GET(request: Request): Promise<Response> {
   const user = userFromRequest(request);
   if (!user) return new Response('Unauthorized', { status: 401 });
   if (user.role !== 'admin') return new Response('Forbidden', { status: 403 });
+
+  // v1.12.1 (item AD / SEC-9): same guard, same reasoning, as /api/reports/export/route.ts.
+  if (mustChangePassword(user.id)) return new Response('Finish setting your password first.', { status: 403 });
 
   const { path: file, bytes } = createOnDemandBackup();
   try {

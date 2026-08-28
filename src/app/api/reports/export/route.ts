@@ -1,5 +1,6 @@
 import { isSameOriginOrHeaderless } from '@/lib/auth/csrf';
 import { userFromRequest } from '@/lib/auth/session';
+import { mustChangePassword } from '@/lib/auth/users';
 import { transactionsCsv } from '@/lib/reports';
 import { todayIso } from '@/lib/dates';
 import { resolveRange } from '@/lib/date-range';
@@ -20,6 +21,14 @@ export async function GET(request: Request): Promise<Response> {
 
   const user = userFromRequest(request);
   if (!user) return new Response('Unauthorized', { status: 401 });
+
+  // v1.12.1 (item AD / SEC-9). The forced-password-change gate lives in the app layout and exempts
+  // /api/* on purpose -- its threat model is "an admin knows this password", and gating the APIs
+  // would break the logout POST and every in-flight fetch. What that reasoning did not weigh is
+  // that three /api/* routes stream BULK HOUSEHOLD DATA, so an account still holding the temporary
+  // password an admin typed could pull the whole ledger before ever choosing one of its own --
+  // exactly the window the flag exists to close.
+  if (mustChangePassword(user.id)) return new Response('Finish setting your password first.', { status: 403 });
 
   const params = new URL(request.url).searchParams;
   const num = (key: string) => {

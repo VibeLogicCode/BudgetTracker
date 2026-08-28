@@ -48,7 +48,12 @@ export async function loginAction(prevState: LoginFormState, formData: FormData)
     return { error: GENERIC_LOGIN_ERROR, needsTotp: prevState?.needsTotp ?? false, username: prevState?.username };
   }
 
-  const ip = clientIpFromHeaders(requestHeaders, requestHeaders.get('x-real-ip'));
+  // v1.12.1 (item AB / SEC-5): null, not `x-real-ip`. A Server Action has no socket, so there is
+  // no trusted address to pass; clientIpFromHeaders reads the proxy headers itself when
+  // TRUST_PROXY says it may, and falls back to 'unknown' when it may not. Handing a
+  // client-controlled header in as the "trusted" argument was how the per-(username, IP) lockout
+  // layer became attacker-partitioned.
+  const ip = clientIpFromHeaders(requestHeaders, null);
   const result = await attemptLogin({
     username: parsed.data.username,
     password: parsed.data.password,

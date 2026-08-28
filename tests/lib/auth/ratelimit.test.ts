@@ -214,3 +214,41 @@ describe('purgeOldLoginAttempts', () => {
     expect(remaining.c).toBe(1);
   });
 });
+
+describe('v1.12.1: x-real-ip is untrusted unless TRUST_PROXY is on (item AB / SEC-5)', () => {
+  const untrusted = { trustProxy: false } as AppEnv;
+  const trusted = { trustProxy: true } as AppEnv;
+
+  it('ignores x-real-ip with TRUST_PROXY off, so a varying header shares one bucket', () => {
+    const a = clientIpFromHeaders(new Headers({ 'x-real-ip': '10.0.0.1' }), null, untrusted);
+    const b = clientIpFromHeaders(new Headers({ 'x-real-ip': '10.0.0.2' }), null, untrusted);
+    expect(a).toBe('unknown');
+    expect(b).toBe('unknown');
+    // The point of the test: Layer A is keyed on this string, so an attacker who varies the
+    // header used to get a fresh 5-failure allowance per value.
+    expect(a).toBe(b);
+  });
+
+  it('honours x-real-ip when TRUST_PROXY is on', () => {
+    expect(clientIpFromHeaders(new Headers({ 'x-real-ip': '10.0.0.1' }), null, trusted)).toBe('10.0.0.1');
+  });
+
+  it('still prefers the first x-forwarded-for entry when both are present and trusted', () => {
+    const headers = new Headers({ 'x-forwarded-for': '203.0.113.7, 10.0.0.9', 'x-real-ip': '10.0.0.1' });
+    expect(clientIpFromHeaders(headers, null, trusted)).toBe('203.0.113.7');
+  });
+
+  it('refuses a value that is not an IP address, however it arrived', () => {
+    expect(clientIpFromHeaders(new Headers({ 'x-real-ip': 'not-an-ip' }), null, trusted)).toBe('unknown');
+    expect(clientIpFromHeaders(new Headers(), 'also-not-an-ip', untrusted)).toBe('unknown');
+  });
+
+  it('refuses an over-long value, which used to reach sessions.ip and the sign-in alert unbounded', () => {
+    const long = '1'.repeat(300);
+    expect(clientIpFromHeaders(new Headers({ 'x-real-ip': long }), null, trusted)).toBe('unknown');
+  });
+
+  it('accepts a real IPv6 address', () => {
+    expect(clientIpFromHeaders(new Headers({ 'x-real-ip': '2001:db8::1' }), null, trusted)).toBe('2001:db8::1');
+  });
+});

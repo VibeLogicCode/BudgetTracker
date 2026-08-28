@@ -22,15 +22,11 @@ describe('GET /api/health', () => {
       status: string;
       db: string;
       dataDir: string;
-      version: string;
       time: string;
     };
     expect(body.status).toBe('ok');
     expect(body.db).toBe('ok');
     expect(body.dataDir).toBe('ok');
-    // Pinned against package.json, not a literal — a version bump must not need a test edit.
-    expect(body.version).toBe(APP_VERSION);
-    expect(body.version).toMatch(/^\d+\.\d+\.\d+/);
     expect(Number.isNaN(Date.parse(body.time))).toBe(false);
   });
 
@@ -68,5 +64,16 @@ describe('GET /api/health', () => {
       else process.env.DATA_DIR = original;
       fs.rmSync(base, { recursive: true, force: true });
     }
+  });
+});
+
+describe('v1.12.1: /api/health does not name the build to a stranger (item BG / SEC-11)', () => {
+  it('the 200 body carries no version', async () => {
+    current = createTestDb();
+    const response = await GET();
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body.status).toBe('ok');
+    expect('version' in body).toBe(false);
   });
 });

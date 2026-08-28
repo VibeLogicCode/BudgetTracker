@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { SESSION_COOKIE_NAME } from '@/lib/auth/session-constants';
 import { securityHeaders } from '@/lib/auth/security-headers';
+import { readEnv } from '@/lib/env';
 
 /**
  * Next 16 renamed this file's convention from `middleware` to `proxy`, and that is NOT just a
@@ -60,6 +61,40 @@ function generateNonce(): string {
   return btoa(binary);
 }
 
+/**
+ * Once per process, not once per request. This runs on essentially every request including static
+ * assets, and a warning printed on each of them is a warning nobody reads.
+ */
+let warnedAboutProxyMismatch = false;
+
+/**
+ * v1.12.1 (item AC / SEC-7, ruling P6). Two things, from one read of the real request -- which is
+ * why this lives here and not in the login action, which has no request at all.
+ *
+ * 1. Does this connection actually terminate as HTTPS? Either the request's own URL says so, or a
+ *    proxy said so in X-Forwarded-Proto AND the operator told us to believe that proxy.
+ * 2. Is the operator in the quiet failure mode SEC-7 names -- an HTTPS proxy in front, TRUST_PROXY
+ *    left at its default 0 -- in which case the 30-day session cookie is not marked Secure and
+ *    nothing anywhere says so? That gets a loud line in the log the owner reads when something is
+ *    wrong. No admin banner: surfacing it on /settings would mean carrying state from here into a
+ *    server component, which is new storage this release does not add (ruling R6).
+ */
+function resolveHttps(request: NextRequest): boolean {
+  const trustProxy = readEnv().trustProxy;
+  const forwarded = request.headers.get('x-forwarded-proto')?.split(',')[0]?.trim().toLowerCase();
+  if (request.nextUrl.protocol === 'https:') return true;
+  if (trustProxy) return forwarded === 'https';
+  if (forwarded === 'https' && !warnedAboutProxyMismatch) {
+    warnedAboutProxyMismatch = true;
+    console.warn(
+      '[security] A request arrived with X-Forwarded-Proto: https but TRUST_PROXY is off. ' +
+        'The session cookie is NOT being marked Secure, and no HSTS header is being sent. ' +
+        'Set TRUST_PROXY=1 in your compose file if this app really is behind an HTTPS reverse proxy.',
+    );
+  }
+  return false;
+}
+
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const isPublic = PUBLIC_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
@@ -83,7 +118,7 @@ export function proxy(request: NextRequest) {
     response = NextResponse.next({ request: { headers: requestHeaders } });
   }
 
-  for (const [key, value] of Object.entries(securityHeaders(nonce))) {
+  for (const [key, value] of Object.entries(securityHeaders(nonce, { https: resolveHttps(request) }))) {
     response.headers.set(key, value);
   }
   return response;

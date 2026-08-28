@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { NextRequest, type NextResponse } from 'next/server';
 import { proxy } from '@/proxy';
 import { SESSION_COOKIE_NAME } from '@/lib/auth/session-constants';
@@ -85,5 +85,33 @@ describe('middleware', () => {
     const first = nonceOf(proxy(requestFor('/dashboard', { cookie: `${SESSION_COOKIE_NAME}=some-token` })));
     const second = nonceOf(proxy(requestFor('/dashboard', { cookie: `${SESSION_COOKIE_NAME}=some-token` })));
     expect(first).not.toBe(second);
+  });
+});
+
+describe('v1.12.1: HSTS and the TRUST_PROXY mismatch warning (item AC / SEC-7, ruling P6)', () => {
+  it('sends HSTS when the request URL itself is https', () => {
+    const response = proxy(new NextRequest('https://budget.example/dashboard'));
+    expect(response.headers.get('Strict-Transport-Security')).toBe('max-age=31536000; includeSubDomains');
+  });
+
+  it('sends no HSTS on the plain-HTTP LAN default, where it would brick the install', () => {
+    const response = proxy(new NextRequest('http://192.168.1.20:3000/dashboard'));
+    expect(response.headers.get('Strict-Transport-Security')).toBeNull();
+  });
+
+  it('warns, and still sends no HSTS, when a proxy claims https but TRUST_PROXY is off', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const request = new NextRequest('http://budget.example/dashboard', {
+      headers: { 'x-forwarded-proto': 'https' },
+    });
+    const response = proxy(request);
+
+    expect(response.headers.get('Strict-Transport-Security')).toBeNull();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toContain('TRUST_PROXY');
+    // Once per process, not once per request: this runs on essentially every request.
+    proxy(request);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
   });
 });

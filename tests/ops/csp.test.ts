@@ -55,3 +55,23 @@ describe("MUST-8.9 / AC11: script-src gains 'wasm-unsafe-eval' and nothing else"
     expect(source).toMatch(/does not re-enable/);
   });
 });
+
+describe('v1.12.1: HSTS only on a real HTTPS connection (item AC / SEC-7, ruling P6)', () => {
+  it('is absent by default, because the documented default is plain HTTP on a LAN', () => {
+    expect(securityHeaders()['Strict-Transport-Security']).toBeUndefined();
+    expect(securityHeaders('abc123')['Strict-Transport-Security']).toBeUndefined();
+  });
+
+  it('is present when the connection resolved to HTTPS', () => {
+    expect(securityHeaders(undefined, { https: true })['Strict-Transport-Security']).toBe(
+      'max-age=31536000; includeSubDomains',
+    );
+  });
+
+  it('adds nothing else and removes nothing when the flag is on', () => {
+    const plain = securityHeaders('abc123');
+    const secure = securityHeaders('abc123', { https: true });
+    for (const [key, value] of Object.entries(plain)) expect(secure[key]).toBe(value);
+    expect(Object.keys(secure).length).toBe(Object.keys(plain).length + 1);
+  });
+});
