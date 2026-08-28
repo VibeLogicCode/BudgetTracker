@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { Fragment, useActionState, useState } from 'react';
+import { Fragment, useActionState, useEffect, useState } from 'react';
 import { FormError } from '@/components/FormError';
 import { QuickAddTransaction } from '@/components/QuickAddTransaction';
 import { SubmitButton } from '@/components/SubmitButton';
@@ -106,7 +106,13 @@ export function TransactionsClient({
   const [noting, setNoting] = useState<{ id: number; current: string } | null>(null);
   // Addendum A, ruling A1: mirrors `noting` exactly -- one nullable slot, so opening the
   // "Assign to new loan…" sub-row on a different row always replaces whichever one was open.
-  const [newLoan, setNewLoan] = useState<{ id: number } | null>(null);
+  //
+  // Review round: `name` is carried in this state (a CONTROLLED input below), not left as an
+  // uncontrolled DOM value, because React resets a `<form action={...}>`'s uncontrolled fields
+  // to their defaults once the action settles -- on a refusal just as much as a success. Without
+  // this, the very name a person typed when the refusal happened would vanish from the input
+  // the instant the action's promise resolved, even though the form itself stays open.
+  const [newLoan, setNewLoan] = useState<{ id: number; name: string } | null>(null);
   const [attrState, attrAction] = useActionState(setAttributionAction, initial);
   const [bulkCatState, bulkCatAction] = useActionState(bulkCategorizeAction, initial);
   const [bulkTfrState, bulkTfrAction] = useActionState(bulkTransferAction, initial);
@@ -157,14 +163,34 @@ export function TransactionsClient({
   // own useActionState instance), so this banner no longer merges it in. noteState IS merged in,
   // the same as renaming/splitting: the sub-row's own form closes on submit (setNoting(null)),
   // before the action settles, so the top banner is the only place its result is ever seen.
+  // Review round: newLoanState now goes FIRST in both chains, not last. The new-loan sub-row
+  // stays open across a refusal (below) instead of closing on submit like every other editor on
+  // this page, so its own message/error can still be the freshest thing that happened by the
+  // time this renders again -- putting it last let a STALE message from an earlier, unrelated
+  // action (assignState, say) mask a fresh create's own result.
   const notice =
+    newLoanState.message ??
     attrState.message ?? bulkCatState.message ?? bulkTfrState.message ??
-    renameState.message ?? assignState.message ?? unassignState.message ?? splitState.message ?? noteState.message ??
-    newLoanState.message;
+    renameState.message ?? assignState.message ?? unassignState.message ?? splitState.message ?? noteState.message;
   const error =
+    newLoanState.error ??
     attrState.error ?? bulkCatState.error ?? bulkTfrState.error ??
-    renameState.error ?? assignState.error ?? unassignState.error ?? splitState.error ?? noteState.error ??
-    newLoanState.error;
+    renameState.error ?? assignState.error ?? unassignState.error ?? splitState.error ?? noteState.error;
+
+  // Review round: unlike renaming/noting/splitting (which close their own <form onSubmit> right
+  // away, before the action even settles), the new-loan editor must stay open on a REFUSAL --
+  // closing unconditionally discarded whatever name a person had just typed the moment they hit
+  // a refusal (lent + incoming money, already linked, a blank name), leaving only the top banner
+  // to explain why. So this closes it only on the action's own success, the same idiom
+  // warranty-detail-client.tsx uses for its edit form: keyed on the newLoanState object itself,
+  // which useActionState only replaces when the action actually ran, so this fires exactly once
+  // per real create rather than on every render while the editor is open.
+  useEffect(() => {
+    if (newLoanState.message && !newLoanState.error) {
+      setNewLoan(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [newLoanState]);
 
   // Opens this row's split editor, prefilled from its existing parts (or two blank parts for
   // a fresh split) -- the same "one editor, one nullable slot of state" shape `renaming` uses,
@@ -666,7 +692,7 @@ export function TransactionsClient({
                     {/* Addendum A, ruling A1: last in this block so the existing
                         "Assign to <loan>" items keep their order. */}
                     {row.isTransfer ? null : (
-                      <RowMenuButton onSelect={() => setNewLoan({ id: row.id })}>Assign to new loan…</RowMenuButton>
+                      <RowMenuButton onSelect={() => setNewLoan({ id: row.id, name: '' })}>Assign to new loan…</RowMenuButton>
                     )}
                   </RowMenu>
                 </td>
@@ -702,13 +728,24 @@ export function TransactionsClient({
                   <td colSpan={COLUMN_COUNT}>
                     <form
                       action={newLoanAction}
-                      onSubmit={() => setNewLoan(null)}
                       className="flex flex-col gap-2 py-2"
                       data-testid="new-loan-form"
                     >
                       <input type="hidden" name="transactionId" value={row.id} />
+                      {/* Review round: shown INLINE, under the form a refusal leaves open, not
+                          only through the top banner (that still gets it too, via `error`
+                          above) -- the person is looking here, not at the top of the page. */}
+                      <FormError message={newLoanState.error} />
                       <Field label="Loan name" hint="Who the loan is with — a name you will recognise later.">
-                        <input name="loanName" autoFocus className={inputClass} />
+                        <input
+                          name="loanName"
+                          value={newLoan.name}
+                          onChange={(e) => setNewLoan({ id: row.id, name: e.target.value })}
+                          required
+                          maxLength={80}
+                          autoFocus
+                          className={inputClass}
+                        />
                       </Field>
                       <Field label="Direction">
                         <select name="loanDirection" defaultValue="lent" className={selectClass}>

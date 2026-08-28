@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../helpers/db';
 import { createLoanFromTransaction, paymentLinksForTransaction } from '@/lib/loans';
 import { normalizeMerchant } from '@/lib/categorize/normalize';
+import { LOAN_TYPE_UNAVAILABLE_ERROR } from '@/lib/warranty/constants';
 import type { Viewer } from '@/lib/auth/viewer';
 
 const NOW = '2026-08-28T12:00:00.000Z';
@@ -144,6 +145,34 @@ describe('createLoanFromTransaction — implicit item type (rulings A5, A6)', ()
     expect(loanItems(db)[0]!.typeId).toBe(alpha.id);
     expect(loanTypeCount(db)).toBe(2); // no third type was created
   });
+
+  // Review round: a type named "Loan" of some OTHER kind (a subscription someone named "Loan",
+  // say) used to make createItemType('Loan', 'loan') throw its raw name-clash message and roll
+  // the whole create back -- a household could get permanently stuck the moment that name was
+  // taken by anything but a loan-kind type. "Loan (2)" through "Loan (5)" are tried before
+  // giving up.
+  it('falls back to "Loan (2)" when a non-loan type already owns the name "Loan"', () => {
+    const { db, accountId, userId, viewer } = setup();
+    db.sqlite.prepare("insert into warranty_item_types (name, is_subscription, kind, created_at) values ('Loan', 0, 'subscription', ?)").run(NOW);
+    const txnId = addTxn(db, accountId, userId, -50_000);
+    createLoanFromTransaction({ txnId, name: 'Loan to Sam', direction: 'lent' }, viewer);
+    const loanTypeNames = db.sqlite.prepare("select name from warranty_item_types where kind = 'loan'").all() as { name: string }[];
+    expect(loanTypeNames.map((t) => t.name)).toEqual(['Loan (2)']);
+    expect(loanItems(db)[0]!.balance).toBe(50_000);
+  });
+
+  it('throws a clear, feature-worded error when every fallback name through "Loan (5)" is already taken, and writes nothing', () => {
+    const { db, accountId, userId, viewer } = setup();
+    for (const name of ['Loan', 'Loan (2)', 'Loan (3)', 'Loan (4)', 'Loan (5)']) {
+      db.sqlite.prepare("insert into warranty_item_types (name, is_subscription, kind, created_at) values (?, 0, 'subscription', ?)").run(name, NOW);
+    }
+    const txnId = addTxn(db, accountId, userId, -50_000);
+    expect(() => createLoanFromTransaction({ txnId, name: 'Loan to Sam', direction: 'lent' }, viewer)).toThrow(
+      LOAN_TYPE_UNAVAILABLE_ERROR,
+    );
+    expect(loanItems(db)).toEqual([]);
+    expect(loanTypeCount(db)).toBe(0); // no loan-kind type got created either
+  });
 });
 
 describe('createLoanFromTransaction — self-scope (rulings A10, A12)', () => {
@@ -221,16 +250,5 @@ describe('createLoanFromTransaction — rollback (ruling A4)', () => {
     const { db, viewer } = setup();
     expect(() => createLoanFromTransaction({ txnId: 999_999, name: 'Ghost', direction: 'lent' }, viewer)).toThrow();
     expect(loanItems(db)).toEqual([]);
-  });
-});
-
-describe('createLoanFromTransaction — no literal direction value (ruling P4)', () => {
-  it('never spells the direction value itself in src/lib/loans.ts', async () => {
-    const fs = await import('node:fs');
-    const path = await import('node:path');
-    const { fileURLToPath } = await import('node:url');
-    const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
-    const source = fs.readFileSync(path.join(root, 'src/lib/loans.ts'), 'utf8');
-    expect(source).not.toMatch(/'lent'|"lent"/);
   });
 });

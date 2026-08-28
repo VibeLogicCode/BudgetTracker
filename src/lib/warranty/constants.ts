@@ -493,10 +493,25 @@ export const LOAN_LENT_FIRST_ENTRY_ERROR = 'A loan you lent out starts with mone
 export const LOAN_ALREADY_LINKED_ERROR = 'That transaction is already assigned to a loan.';
 
 /**
+ * Review round (T9): createLoanFromTransaction's implicit-type fallback (src/lib/loans.ts) tries
+ * "Loan", then "Loan (2)" through "Loan (5)" before giving up -- this is what a household sees
+ * only in the vanishingly unlikely case that all six names are already taken by some other type.
+ * Feature-worded on purpose (MUST-19.11): the raw ItemTypeError clash message names a type by
+ * ITS OWN name, which reads as an internal detail here, not an instruction anyone can act on.
+ */
+export const LOAN_TYPE_UNAVAILABLE_ERROR = 'Add an item type of kind Loan under Settings → Item types first.';
+
+/**
  * Addendum A, ruling A8. The wording 3efb23f wrote inline in assignToLoanAction, extracted so the
  * create-a-loan path says the same sentences instead of a second copy of them (MUST-19.11).
- * `balanceAfterCents` is the item's balance READ BACK after the move: null means the balance is
- * unknown (never anchored), 0 means it is now zero.
+ *
+ * `balanceAfterCents` is the balance to report AFTER the move: null means unknown (never
+ * anchored), 0 means it is zero. The two callers arrive at it differently, which is exactly why
+ * this stays a shared function rather than two copies of the same sentences --
+ * assignToLoanAction READS IT BACK from the item post-move (falling back to 0 when the item
+ * itself cannot be read back at all, not to null -- a missing item is not the same fact as an
+ * unanchored balance), while createLoanFromTransaction COMPUTES it directly from the seed and
+ * `appliedCents` it already holds, since the item it just created is not re-read.
  *
  * `isRepayment` is an explicit INPUT, not something this function re-derives: `appliedCents` is
  * unsigned (see `link()`'s docblock), so a verdict computed from it here would be a second,

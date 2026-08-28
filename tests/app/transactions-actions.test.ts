@@ -375,6 +375,30 @@ describe('MUST-14.8 … MUST-14.11: assign and unassign', () => {
     expect(balanceOf(itemId)).toBe(0);
   });
 
+  // Review round: assignTransactionToLoan itself performs no owner check (MUST-13.13's own
+  // docblock -- "any signed-in user may assign a transaction to any loan"), but the LATER
+  // getWarrantyItem(itemId, user) read here, done only to compose the confirmation copy, is
+  // scoped to the viewer. A self viewer acting on someone else's loan therefore gets a null
+  // item back even though the assign itself succeeded -- and a null item is not the same fact
+  // as a null BALANCE. `item?.currentBalanceCents ?? null` collapsed both into "unknown"; the
+  // restored copy treats an item that genuinely came back null as a balance of 0 (the same
+  // "nothing came off" sentence the already-zero-balance case above gets), not "unknown".
+  it('review round: a self viewer assigning against a loan they cannot read back still gets the $0.00 wording, not "unknown"', async () => {
+    const { sqlite } = setup();
+    const itemId = seedLoanItem({ balanceCents: 0 }); // owned by ctx!.userId (Alice)
+    const txn = current!.db.get<{ id: number }>(sql`
+      insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, attributed_user_id, created_by, created_at, updated_at)
+      values (${ctx!.accountId}, '2026-03-05', 'HONDA FIN PAYMENT', ${normalizeMerchant('HONDA FIN PAYMENT')}, -45000, ${ctx!.userId}, ${ctx!.userId}, ${nowIso()}, ${nowIso()})
+      returning id`);
+    const kidId = insertTestUser(current!.db, { name: 'Kid', username: 'kid', role: 'member' });
+    sqlite.prepare("update users set visibility = 'self' where id = ?").run(kidId);
+    currentUser = { id: kidId, name: 'Kid', username: 'kid', role: 'member', visibility: 'self' };
+
+    const result = await assignToLoanAction(formData({ transactionId: String(txn.id), itemId: String(itemId) }));
+
+    expect(result.message).toBe('Assigned. The balance was already $0.00, so nothing came off.');
+  });
+
   it('F2 fix-round: a payment larger than the remaining balance clamps and says the balance is now $0.00', async () => {
     setup();
     const itemId = seedLoanItem({ balanceCents: 10_000 });

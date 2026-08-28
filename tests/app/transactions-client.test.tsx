@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, cleanup, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { TransactionsClient } from '@/app/(app)/transactions/transactions-client';
 import { setCategoryAction } from '@/app/(app)/transactions/actions';
 import type { TransactionPage, TransactionRow } from '@/lib/transactions';
@@ -801,5 +801,107 @@ describe('Assign to new loan — Addendum A', () => {
     openRowMenu('Actions for SECOND ROW');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to new loan…' }));
     expect(screen.getAllByLabelText('Loan name')).toHaveLength(1);
+  });
+
+  // Review round: the name input carries HTML validation and focus attributes, not just a
+  // bare, unconstrained <input>.
+  it('the loan name input requires a value, caps at 80 characters, and takes focus on open', () => {
+    render(<TransactionsClient {...baseProps} loanOptions={[]} loanLinks={{}} />);
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to new loan…' }));
+    const name = screen.getByLabelText('Loan name') as HTMLInputElement;
+    expect(name.required).toBe(true);
+    expect(name.maxLength).toBe(80);
+    expect(document.activeElement).toBe(name);
+  });
+});
+
+describe('Assign to new loan — a refusal keeps the editor open (review round)', () => {
+  const baseProps = {
+    page: pageWithRow(),
+    accounts: [{ id: 1, name: 'Joint Chequing' }],
+    categories: [],
+    people: [],
+    today: '2026-03-02',
+  };
+
+  // Before this fix, the sub-row's <form onSubmit> closed unconditionally, so a refusal (lent +
+  // incoming money, already linked, a blank name) discarded whatever name the person had just
+  // typed and left only the top banner to explain why. The form must now stay open, keep the
+  // typed name, and show the refusal where the person is looking -- under the form itself.
+  it('discards nothing: the typed name survives a refusal, and the error shows inline', async () => {
+    const { createLoanFromTransactionAction } = await import('@/app/(app)/transactions/actions');
+    const spy = vi.mocked(createLoanFromTransactionAction);
+    spy.mockResolvedValueOnce({ error: 'A loan you lent out starts with money going out.' });
+    const { container } = render(<TransactionsClient {...baseProps} loanOptions={[]} loanLinks={{}} />);
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to new loan…' }));
+    fireEvent.change(screen.getByLabelText('Loan name'), { target: { value: 'Loan to Sam' } });
+    const form = container.querySelector('form[data-testid="new-loan-form"]') as HTMLFormElement;
+    fireEvent.submit(form);
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+
+    // Still open, still carrying what was typed.
+    await waitFor(() =>
+      expect(within(form).getByText('A loan you lent out starts with money going out.')).toBeTruthy(),
+    );
+    expect(within(form).getByRole('alert')).toBeTruthy();
+    expect((screen.getByLabelText('Loan name') as HTMLInputElement).value).toBe('Loan to Sam');
+  });
+
+  it('a success closes the editor', async () => {
+    const { createLoanFromTransactionAction } = await import('@/app/(app)/transactions/actions');
+    const spy = vi.mocked(createLoanFromTransactionAction);
+    spy.mockResolvedValueOnce({ message: 'Created Loan to Sam. Assigned. $500.00 came off the balance.' });
+    const { container } = render(<TransactionsClient {...baseProps} loanOptions={[]} loanLinks={{}} />);
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to new loan…' }));
+    fireEvent.change(screen.getByLabelText('Loan name'), { target: { value: 'Loan to Sam' } });
+    fireEvent.submit(container.querySelector('form[data-testid="new-loan-form"]') as HTMLFormElement);
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByLabelText('Loan name')).toBeNull());
+  });
+});
+
+describe('Assign to new loan — create result priority (review round)', () => {
+  const twoRowProps = {
+    page: {
+      total: 2,
+      page: 1,
+      pageSize: 50,
+      pageCount: 1,
+      rows: [
+        pageWithRow({ id: 1 }).rows[0],
+        pageWithRow({ id: 2, rawDescription: 'SECOND ROW', normalizedMerchant: 'SECOND ROW' }).rows[0],
+      ],
+    },
+    accounts: [{ id: 1, name: 'Joint Chequing' }],
+    categories: [],
+    people: [],
+    today: '2026-03-02',
+  };
+
+  // newLoanState used to be LAST in the top banner's `??` chain, so a stale message left behind
+  // by an earlier, unrelated action (assignState here) could mask a fresh create's own result.
+  // newLoanState now goes first: the create's own message/error always wins.
+  it('a fresh create result is not masked by a stale assign message', async () => {
+    const { assignToLoanAction, createLoanFromTransactionAction } = await import('@/app/(app)/transactions/actions');
+    vi.mocked(assignToLoanAction).mockResolvedValueOnce({ message: 'That transaction is already linked to this loan.' });
+    vi.mocked(createLoanFromTransactionAction).mockResolvedValueOnce({ message: 'Created Loan to Sam. Assigned. $500.00 came off the balance.' });
+
+    const { container } = render(
+      <TransactionsClient {...twoRowProps} loanOptions={[{ id: 7, name: 'Civic' }]} loanLinks={{}} />,
+    );
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to Civic' }));
+    await waitFor(() => expect(screen.getByText('That transaction is already linked to this loan.')).toBeTruthy());
+
+    openRowMenu('Actions for SECOND ROW');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to new loan…' }));
+    fireEvent.change(screen.getByLabelText('Loan name'), { target: { value: 'Loan to Sam' } });
+    fireEvent.submit(container.querySelector('form[data-testid="new-loan-form"]') as HTMLFormElement);
+
+    await waitFor(() => expect(screen.getByText('Created Loan to Sam. Assigned. $500.00 came off the balance.')).toBeTruthy());
+    expect(screen.queryByText('That transaction is already linked to this loan.')).toBeNull();
   });
 });

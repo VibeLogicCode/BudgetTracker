@@ -12,11 +12,12 @@ import {
   loanSignedDelta,
   LOAN_ALREADY_LINKED_ERROR,
   LOAN_LENT_FIRST_ENTRY_ERROR,
+  LOAN_TYPE_UNAVAILABLE_ERROR,
   type BillingCycle,
   type LoanDirection,
 } from '@/lib/warranty/constants';
 import { createWarrantyItem, type WarrantyInput } from '@/lib/warranty/items';
-import { createItemType, listItemTypes } from '@/lib/warranty/types';
+import { createItemType, listItemTypes, ItemTypeError, type ItemType } from '@/lib/warranty/types';
 
 /**
  * Loan money-tracking (spec 2026-08-17 §13).
@@ -761,6 +762,28 @@ function firstLoanTypeId(): number | null {
 }
 
 /**
+ * Review round (rulings A5, A6 fallback). createItemType('Loan', 'loan') throws outright when
+ * some OTHER kind already owns that exact name (a subscription a person happened to name
+ * "Loan", say) -- and since this only ever runs inside createLoanFromTransaction's own db
+ * transaction, that throw used to roll the whole create back on nothing but the raw name-clash
+ * message. "Loan (2)" through "Loan (5)" are tried before giving up; ItemTypeError is the only
+ * failure retried (a validation error, e.g. a name schema rejection, is never this function's
+ * to swallow and re-throw as something else).
+ */
+function createLoanItemType(): ItemType {
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    const name = attempt === 1 ? 'Loan' : `Loan (${attempt})`;
+    try {
+      return createItemType(name, 'loan');
+    } catch (error) {
+      if (!(error instanceof ItemTypeError)) throw error;
+      if (attempt === 5) throw new Error(LOAN_TYPE_UNAVAILABLE_ERROR);
+    }
+  }
+  throw new Error(LOAN_TYPE_UNAVAILABLE_ERROR);
+}
+
+/**
  * Addendum A. Creates a loan item and assigns `txnId` as its first entry, in ONE db transaction
  * (ruling A4). Throws -- never returns an error shape -- so the action's existing catch surfaces
  * every refusal the same way assignToLoanAction already surfaces assignTransactionToLoan's.
@@ -797,7 +820,7 @@ export function createLoanFromTransaction(input: NewLoanFromTransaction, viewer:
   const seedCents = isLoanRepayment(input.direction, txn.amountCents) ? magnitude * 2 : 0;
 
   return getDb().transaction((): NewLoanResult => {
-    const typeId = firstLoanTypeId() ?? createItemType('Loan', 'loan').id; // rulings A5, A6
+    const typeId = firstLoanTypeId() ?? createLoanItemType().id; // rulings A5, A6
     const itemId = createWarrantyItem(
       {
         name,

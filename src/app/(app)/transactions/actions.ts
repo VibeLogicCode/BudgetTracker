@@ -423,7 +423,12 @@ export async function assignToLoanAction(formData: FormData): Promise<ActionStat
       direction,
       isRepayment,
       appliedCents: result.appliedCents,
-      balanceAfterCents: item?.currentBalanceCents ?? null,
+      // Review round: a null item here means the READ came back empty (the assign itself
+      // already succeeded -- see assignTransactionToLoan, which performs no owner check at
+      // all), not that the balance is unanchored. Those are different facts (loanAssignedMessage
+      // docblock, src/lib/warranty/constants.ts) -- `item === null` reads as balance 0, the same
+      // as any other loan whose balance genuinely sits at zero.
+      balanceAfterCents: item === null ? 0 : item.currentBalanceCents,
     }),
   };
 }
