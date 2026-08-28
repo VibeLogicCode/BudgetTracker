@@ -1496,9 +1496,15 @@ rule this action WRITES — `upsertRuleFromCorrection` checks `actorRole` and re
 another user's rule — but the opposite-kind rule it then removes as housekeeping is deleted
 unconditionally. A member re-flagging one transaction can delete an admin-authored `not_transfer`
 or `transfer` rule with no ownership check at all. Evidence: `src/lib/categorize/engine.ts:552,556`
-(`deleteExactRule` calls carry no actor or ownership argument). Fix: give `deleteExactRule` an
-optional owner check, or route the delete through the same ownership gate `upsertRuleFromCorrection`
-already uses just above it, and refuse the same way that write does. Effort: S.
+(`deleteExactRule` calls carry no actor or ownership argument). Fix (reviewer wording pass: the
+correct fix REFUSES, it does not delete silently after a check): before either `deleteExactRule`
+call, look up the opposite-kind rule's owner — the same lookup `upsertRuleFromCorrection` already
+does for the rule this action writes — and when `actorRole` is `'member'` and that rule belongs to
+someone else, refuse the WHOLE action (`{ ok: false, reason: 'owned_by_another', ownerName }`, no
+row touched, no rule deleted) exactly the way `confirmCategory` and `upsertRuleFromCorrection`
+already refuse for the rule they write. An "optional owner check" that still deletes on a refusal
+is not this fix; every sibling R4 writer's refusal leaves every row and every rule untouched, and
+this one must too. Effort: S.
 
 **BK. `viewerFor`'s null-fallback defaults to household scope.** Both
 `src/lib/notify/evaluate/digest.ts:27-30` and `src/lib/notify/evaluate/monthly.ts:30-33` build a

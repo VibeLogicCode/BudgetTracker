@@ -84,6 +84,10 @@ container again and it will retry.
 
 - The people picker on Transactions listed deactivated members while the one on Budgets did not.
   Both now list every active person, whether or not they can sign in.
+- **Confirming a two-factor code no longer turns MFA on before checking it.** Finishing setup used
+  to enable two-factor and save recovery codes before the code you typed was verified, so a refused
+  (wrong or replayed) code could still leave the account switched on with zero recovery codes. The
+  code is now verified and consumed first; nothing is enabled or stored unless it checks out.
 
 ## [1.12.1] - 2026-08-27
 

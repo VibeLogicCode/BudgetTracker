@@ -68,6 +68,63 @@ const EXEMPT: { file: string; fn: string; why: string }[] = [
   },
 ];
 
+/**
+ * Third named list (v1.13.0 whole-branch review, item M-d). These read-models are, by design,
+ * household-wide with NO viewer parameter at all -- unlike REQUIRE_VIEWER's functions, which
+ * scope themselves down for a self viewer, these three have no self-scoped shape to fall back
+ * to (see item C1's own fix, src/app/(app)/reports/page.tsx: a self viewer gets NO category
+ * baselines, not a household-scoped call run and discarded). The guarantee they carry is
+ * different from both REQUIRE_VIEWER and EXEMPT above: the PAGE that calls them must gate the
+ * call itself -- skip it OUTRIGHT for a self viewer, never run it and throw the result away --
+ * rather than trusting the function to refuse on its own, because it structurally cannot: it
+ * has no viewer to refuse with. This list exists so a future page that starts calling one of
+ * these directly is one grep away from the rule it must uphold, and each reason names exactly
+ * which page currently carries that gate.
+ */
+const HOUSEHOLD_ONLY_AT_PAGE: { file: string; fn: string; why: string }[] = [
+  {
+    file: 'src/lib/predict/history.ts',
+    fn: 'suggestionsFor',
+    why: "no viewer parameter at all. budgets/page.tsx and reports/page.tsx both skip the scope: 'household' call OUTRIGHT for a self viewer (item C1) rather than running it and discarding the result -- the same 'no household figure leaves this file, even unrendered' reasoning both pages document inline.",
+  },
+  {
+    file: 'src/lib/tax.ts',
+    fn: 'taxYearReport',
+    why: 'no viewer parameter at all -- rolls up every household member\'s spend with no owner scoping of its own. reports/page.tsx only calls it when showHouseholdTotals is true, and the Tax year card is dropped entirely (not scoped-to-zero) for a self viewer.',
+  },
+  {
+    file: 'src/lib/tax.ts',
+    fn: 'taxYears',
+    why: 'no viewer parameter at all -- lists every year with a non-transfer transaction across the whole household. reports/page.tsx only calls it when showHouseholdTotals is true.',
+  },
+  {
+    file: 'src/lib/loans.ts',
+    fn: 'debtOverTime',
+    why: 'no viewer parameter at all -- sums every loan balance household-wide with no per-owner split. reports/page.tsx only calls it when showHouseholdTotals is true, and the Debt over time card is dropped entirely for a self viewer.',
+  },
+];
+
+describe('household-only readers gated at the page (item M-d)', () => {
+  for (const { file, fn } of HOUSEHOLD_ONLY_AT_PAGE) {
+    it(`${file} :: ${fn} is exported and takes no viewer`, () => {
+      const source = read(file);
+      const signature = new RegExp(`export function ${fn}\\b[\\s\\S]{0,600}?\\)\\s*:`, 'm').exec(source)?.[0];
+      expect(signature, `${fn} is not exported from ${file}`).toBeTruthy();
+      // The whole point of this list: if one of these ever GROWS a viewer parameter, it belongs
+      // in REQUIRE_VIEWER instead, gated by the function itself rather than by every caller.
+      expect(signature).not.toMatch(/viewer\s*:\s*Viewer/);
+    });
+  }
+
+  it('every entry carries a written reason naming the page that gates it', () => {
+    for (const entry of HOUSEHOLD_ONLY_AT_PAGE) expect(entry.why.length).toBeGreaterThan(40);
+  });
+
+  it('the list cannot shrink below 4 entries', () => {
+    expect(HOUSEHOLD_ONLY_AT_PAGE.length).toBeGreaterThanOrEqual(4);
+  });
+});
+
 describe('ruling R2: every read-model helper takes a viewer', () => {
   for (const { file, fn } of REQUIRE_VIEWER) {
     it(`${file} :: ${fn}`, () => {
@@ -88,8 +145,12 @@ describe('ruling R2: every read-model helper takes a viewer', () => {
   // only checks that the two named lists above have not shrunk: a future edit that quietly
   // deletes entries from REQUIRE_VIEWER/EXEMPT rather than fixing a rotted signature still
   // trips this, even though every remaining named entry would otherwise still pass.
-  it('the named lists cannot shrink below 20 entries', () => {
-    expect(REQUIRE_VIEWER.length + EXEMPT.length).toBeGreaterThanOrEqual(20);
+  //
+  // v1.13.0 whole-branch review (item M-e): raised from 20 to 27, the actual count as of this
+  // review (23 + 4) -- 20 had drifted well below reality and would not have caught a deletion
+  // of up to seven real entries.
+  it('the named lists cannot shrink below 27 entries', () => {
+    expect(REQUIRE_VIEWER.length + EXEMPT.length).toBeGreaterThanOrEqual(27);
   });
 });
 
