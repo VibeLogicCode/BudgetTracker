@@ -1585,16 +1585,21 @@ rendered it; `goals/page.tsx`'s "Owner" dropdown listed every household member's
 `<option>` for a self viewer even though `canActOnOwner` already refuses any owner but
 themselves/shared server-side. Both now match the fix item BO already shipped for `/transactions`.
 
-**BS. `Field`'s implicit-label branch still has no `aria-describedby`.**
-Status: OPEN — from the v1.13.1 planning pass (ruling P7). Item J moved the hint out of the
-`<label>`, so a hint is no longer part of the accessible name anywhere; but 17 call sites pass a
-`hint` with no `htmlFor`, and `src/components/ui/form.tsx` has no `'use client'` directive and is
-rendered from server components, so `useId()` is unavailable and no id can be generated for those.
-The fix is to give those 17 call sites an `htmlFor` and their inputs an `id`, at which point the
-existing `${htmlFor}-hint` wiring covers them. Effort: M, mechanical, spread across nine files.
+**BS. `Field`'s implicit-label branch still has no `aria-describedby` — SHIPPED in v1.13.1.**
+Status was OPEN from the v1.13.1 planning pass (ruling P7), on the assumption that `useId()` is
+unavailable in `src/components/ui/form.tsx` because it has no `'use client'` directive and is
+rendered from server components. That assumption was wrong: React 19's react-server build DOES
+export `useId()` (verified with `grep -c useId node_modules/react/cjs/react.react-server.production.js`
+-> 2), and a Server Component calling a hook the react-server build exports is fine — what a
+Server Component cannot do is carry its own state across a re-render, which `useId()`'s
+tree-position-derived id never needed. The implicit (no `htmlFor`) branch now calls `useId()`
+itself and wraps the label+control in a `<div role="group" aria-describedby>` pointing at the
+hint, since there is no `htmlFor` id to hang `aria-describedby` on the control directly. The
+`htmlFor` branch is unchanged (byte-identical markup). Fixed in `src/components/ui/form.tsx`;
+tests in `tests/components/form-field.test.tsx`.
 
 **BT. `stale.ts`'s `viewerFor` has the same null-fallback-to-household defect as BK, explicitly
-outside BK's scope.** `src/lib/notify/evaluate/stale.ts`'s `viewerFor` (~line 19) falls back to
+outside BK's scope — SHIPPED in v1.13.1.** `src/lib/notify/evaluate/stale.ts`'s `viewerFor` (~line 19) falls back to
 `{ role: 'admin', visibility: 'household' }` when the recipient's own user row is gone by the time
 the evaluator runs — the same shape BK already names for `digest.ts` and `monthly.ts`, but BK's fix
 was scoped to those two files only. Because `evaluateStaleImport` calls

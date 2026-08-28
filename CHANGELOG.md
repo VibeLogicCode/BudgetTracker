@@ -41,10 +41,14 @@ take one anyway if it is easy, because it is the only way back to 1.13.0.
 - **A bill shows its schedule on the Contracts & Coverage list.** A bill three weeks overdue used
   to read "Ongoing" on the one page most people navigate to. It now shows the next due date, or an
   overdue count, in the same column.
-- **A bill's detail page stops showing four blanks.** Vendor, Model, Serial number and Price are
-  fields a bill can never hold, and the card rendered an em-dash for each of them above the
-  installments. They are hidden now — unless the item actually has a value stored, in which case it
-  stays on screen rather than being quietly dropped.
+- **A bill's detail page stops showing three blanks.** Model, Serial number and Price are fields a
+  bill can never hold, and the card rendered an em-dash for each of them above the installments.
+  They are hidden now — unless the item actually has a value stored, in which case it stays on
+  screen rather than being quietly dropped.
+- **Warranty detail rows match the edit form's own fields.** Vendor is asked for on every kind's
+  form, so it is now always listed on the detail page too — value or a placeholder, never dropped
+  by kind the way Model and Serial number are. And a loan with no price typed in no longer shows an
+  empty "Price" row sitting beside its own "Original amount" figure.
 - **Two more tables hold their width before a long value breaks them.** The merchant-rules table
   in Settings → Rules and the Warranties & bills list were one long pattern or item name away from
   squeezing a button off the edge of the card. Both now reserve the space their columns need.
@@ -79,6 +83,11 @@ take one anyway if it is easy, because it is the only way back to 1.13.0.
   names of everyone in the household were being sent to the browser to fill in attribution menus
   and an "Owner" picker that refused every choice but the child's own. Those controls, and the
   names behind them, are gone for that account now.
+- **A stale-import notice is skipped, not sent household-wide, when the recipient is gone.** The
+  same fix the weekly and monthly digests already got: if a person's account was deleted in the
+  same window their stale-import check ran, it used to be treated as an ordinary household member
+  instead of being skipped, which could have named an account they are no longer supposed to see.
+  It is now not sent at all.
 
 ### Changed
 
@@ -90,6 +99,11 @@ take one anyway if it is easy, because it is the only way back to 1.13.0.
 - **Field hints stop being read as part of the field's name.** A hint under an input was being
   read as though it were the label, so "Original amount" was announced as "Original amount What you
   borrowed. Used for the payoff bar." every time.
+- **Field hints are linked to their control via `aria-describedby` even without an explicit id.**
+  Moving the hint out of the label (above) stopped it from being announced as part of the name, but
+  the fields that never had an id to attach the description to were left with a hint that is
+  visible but not announced as belonging to the control at all. They now generate their own id and
+  are described the same way as every field that already had one.
 - **Row menus on Transactions name their row unambiguously.** Two identical charges on the same
   statement produced two menu buttons a screen reader could not tell apart; the button now carries
   the row's date and amount too.
