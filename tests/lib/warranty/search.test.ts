@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import BetterSqlite3 from 'better-sqlite3';
 import { createSeededTestDb, insertTestUser, type TestDb } from '../../helpers/db';
+import type { Viewer } from '@/lib/auth/viewer';
 import { createWarrantyItem } from '@/lib/warranty/items';
 import { createItemType } from '@/lib/warranty/types';
 import {
@@ -17,6 +18,10 @@ import {
   searchWarrantyItems,
   type WarrantySort,
 } from '@/lib/warranty/search';
+
+/** This suite is entirely about search/filter mechanics, not visibility -- every read here is
+ *  household-wide; tests/lib/visibility/warranty.test.ts owns the self-scoping behaviour. */
+const HOUSEHOLD: Viewer = { id: 0, role: 'admin', visibility: 'household' };
 
 let fts: BetterSqlite3.Database;
 
@@ -192,7 +197,7 @@ describe('searchWarrantyItems', () => {
   it('lists everything when the query is empty (no MATCH, no JOIN)', () => {
     seed();
     seed({ name: 'Dishwasher' });
-    const result = searchWarrantyItems({ q: '   ', today: TODAY });
+    const result = searchWarrantyItems({ q: '   ', today: TODAY }, HOUSEHOLD);
     expect(result.total).toBe(2);
     expect(result.rows).toHaveLength(2);
   });
@@ -200,19 +205,19 @@ describe('searchWarrantyItems', () => {
   it('AND-combines multiple words', () => {
     seed({ name: 'Fridge', vendor: 'Home Depot' });
     seed({ name: 'Drill', vendor: 'Rona' });
-    expect(searchWarrantyItems({ q: 'fridge home', today: TODAY }).total).toBe(1);
-    expect(searchWarrantyItems({ q: 'fridge rona', today: TODAY }).total).toBe(0);
+    expect(searchWarrantyItems({ q: 'fridge home', today: TODAY }, HOUSEHOLD).total).toBe(1);
+    expect(searchWarrantyItems({ q: 'fridge rona', today: TODAY }, HOUSEHOLD).total).toBe(0);
   });
 
   it('prefix-matches a partial model number and ignores diacritics', () => {
     const id = seed({ vendor: 'MÉTRO' });
-    expect(searchWarrantyItems({ q: 'GDT645', today: TODAY }).rows[0].id).toBe(id);
-    expect(searchWarrantyItems({ q: 'metro', today: TODAY }).rows[0].id).toBe(id);
+    expect(searchWarrantyItems({ q: 'GDT645', today: TODAY }, HOUSEHOLD).rows[0].id).toBe(id);
+    expect(searchWarrantyItems({ q: 'metro', today: TODAY }, HOUSEHOLD).rows[0].id).toBe(id);
   });
 
   it('returns results rather than throwing for a query full of operators', () => {
     seed({ name: '26" monitor' });
-    const result = searchWarrantyItems({ q: '26" AND monitor', today: TODAY });
+    const result = searchWarrantyItems({ q: '26" AND monitor', today: TODAY }, HOUSEHOLD);
     expect(result.error).toBeUndefined();
   });
 
@@ -226,7 +231,7 @@ describe('searchWarrantyItems', () => {
     for (const q of [nul, `${nul}abc`, 'col:value', 'NEAR(', '"unterminated', '(unbalanced', 'OR NOT AND']) {
       let result: ReturnType<typeof searchWarrantyItems> | undefined;
       expect(() => {
-        result = searchWarrantyItems({ q, today: TODAY });
+        result = searchWarrantyItems({ q, today: TODAY }, HOUSEHOLD);
       }, `threw for q=${JSON.stringify(q)}`).not.toThrow();
       // Either a clean result, or the documented SEARCH_SYNTAX_ERROR — never a raw SQLite message.
       if (result?.error !== undefined) expect(result.error).toBe(SEARCH_SYNTAX_ERROR);
@@ -237,13 +242,13 @@ describe('searchWarrantyItems', () => {
     seed({ name: 'Guard Item' });
     // Simulates an untrusted sort value that slipped past the type system (e.g. an
     // unvalidated URL query param cast upstream).
-    expect(() => searchWarrantyItems({ sort: 'bogus' as unknown as WarrantySort, today: TODAY })).not.toThrow();
-    expect(searchWarrantyItems({ sort: 'bogus' as unknown as WarrantySort, today: TODAY }).rows[0]?.name).toBe(
+    expect(() => searchWarrantyItems({ sort: 'bogus' as unknown as WarrantySort, today: TODAY }, HOUSEHOLD)).not.toThrow();
+    expect(searchWarrantyItems({ sort: 'bogus' as unknown as WarrantySort, today: TODAY }, HOUSEHOLD).rows[0]?.name).toBe(
       'Guard Item',
     );
-    expect(searchWarrantyItems({ page: Number.NaN, today: TODAY }).page).toBe(1);
-    expect(searchWarrantyItems({ page: Number.POSITIVE_INFINITY, today: TODAY }).page).toBe(1);
-    expect(searchWarrantyItems({ page: Number.NEGATIVE_INFINITY, today: TODAY }).page).toBe(1);
+    expect(searchWarrantyItems({ page: Number.NaN, today: TODAY }, HOUSEHOLD).page).toBe(1);
+    expect(searchWarrantyItems({ page: Number.POSITIVE_INFINITY, today: TODAY }, HOUSEHOLD).page).toBe(1);
+    expect(searchWarrantyItems({ page: Number.NEGATIVE_INFINITY, today: TODAY }, HOUSEHOLD).page).toBe(1);
   });
 
   it('derives the same status as warrantyStatus() and composes filters', () => {
@@ -252,36 +257,36 @@ describe('searchWarrantyItems', () => {
     const other = insertTestUser(current!.db, { name: 'Bob', username: 'bob' });
     seed({ name: 'Bob Drill', ownerUserId: other, purchaseDate: '2026-08-16', warrantyMonths: 1 });
 
-    const byStatus = searchWarrantyItems({ status: 'expiring', today: TODAY });
+    const byStatus = searchWarrantyItems({ status: 'expiring', today: TODAY }, HOUSEHOLD);
     expect(byStatus.total).toBe(2);
     expect(byStatus.rows.every((row) => row.status === 'expiring')).toBe(true);
 
-    const composed = searchWarrantyItems({ status: 'expiring', ownerUserId: other, today: TODAY });
+    const composed = searchWarrantyItems({ status: 'expiring', ownerUserId: other, today: TODAY }, HOUSEHOLD);
     expect(composed.total).toBe(1);
     expect(composed.rows[0].name).toBe('Bob Drill');
 
-    const searchAndStatus = searchWarrantyItems({ q: 'kettle', status: 'expiring', today: TODAY });
+    const searchAndStatus = searchWarrantyItems({ q: 'kettle', status: 'expiring', today: TODAY }, HOUSEHOLD);
     expect(searchAndStatus.rows.map((r) => r.id)).toEqual([expiring]);
   });
 
   it('names lifetime and unknown statuses', () => {
     seed({ name: 'Cast iron pan', isLifetime: true, warrantyMonths: null });
     seed({ name: 'Lamp', warrantyMonths: null });
-    expect(searchWarrantyItems({ status: 'lifetime', today: TODAY }).rows[0].name).toBe('Cast iron pan');
-    expect(searchWarrantyItems({ status: 'unknown', today: TODAY }).rows[0].name).toBe('Lamp');
+    expect(searchWarrantyItems({ status: 'lifetime', today: TODAY }, HOUSEHOLD).rows[0].name).toBe('Cast iron pan');
+    expect(searchWarrantyItems({ status: 'unknown', today: TODAY }, HOUSEHOLD).rows[0].name).toBe('Lamp');
   });
 
   it('sorts soonest expiry first with unknown/lifetime last, and honours the other sorts', () => {
     seed({ name: 'Later', purchaseDate: '2026-08-16', warrantyMonths: 60 });
     seed({ name: 'Sooner', purchaseDate: '2026-08-16', warrantyMonths: 1 });
     seed({ name: 'Aardvark', warrantyMonths: null });
-    expect(searchWarrantyItems({ today: TODAY }).rows.map((r) => r.name)).toEqual(['Sooner', 'Later', 'Aardvark']);
-    expect(searchWarrantyItems({ sort: 'name', today: TODAY }).rows[0].name).toBe('Aardvark');
+    expect(searchWarrantyItems({ today: TODAY }, HOUSEHOLD).rows.map((r) => r.name)).toEqual(['Sooner', 'Later', 'Aardvark']);
+    expect(searchWarrantyItems({ sort: 'name', today: TODAY }, HOUSEHOLD).rows[0].name).toBe('Aardvark');
   });
 
   it('counts receipts and reports page metadata', () => {
     seed();
-    const result = searchWarrantyItems({ today: TODAY });
+    const result = searchWarrantyItems({ today: TODAY }, HOUSEHOLD);
     expect(result.rows[0].receiptCount).toBe(0);
     expect(result.page).toBe(1);
     expect(result.pageCount).toBe(1);
@@ -293,7 +298,7 @@ describe('searchWarrantyItems', () => {
       const typedId = seed({ name: 'Spotify', typeId: sub.id });
       const untypedId = seed({ name: 'Untyped Fridge' });
 
-      const result = searchWarrantyItems({ today: TODAY });
+      const result = searchWarrantyItems({ today: TODAY }, HOUSEHOLD);
       const typedRow = result.rows.find((r) => r.id === typedId)!;
       const untypedRow = result.rows.find((r) => r.id === untypedId)!;
       expect(typedRow.typeName).toBe('Streaming Search');
@@ -307,7 +312,7 @@ describe('searchWarrantyItems', () => {
       const typedId = seed({ name: 'Gym membership', typeId: contract.id });
       const untypedId = seed({ name: 'Untyped Toaster Kind' });
 
-      const result = searchWarrantyItems({ today: TODAY });
+      const result = searchWarrantyItems({ today: TODAY }, HOUSEHOLD);
       expect(result.rows.find((r) => r.id === typedId)!.kind).toBe('contract');
       expect(result.rows.find((r) => r.id === untypedId)!.kind).toBe('warranty');
     });
@@ -319,16 +324,16 @@ describe('searchWarrantyItems', () => {
       seed({ name: 'Netflix', typeId: streaming.id, purchaseDate: TODAY, warrantyMonths: 1 });
       seed({ name: 'Untyped Toaster' });
 
-      const byType = searchWarrantyItems({ typeId: laptop.id, today: TODAY });
+      const byType = searchWarrantyItems({ typeId: laptop.id, today: TODAY }, HOUSEHOLD);
       expect(byType.rows.map((r) => r.id)).toEqual([dell]);
 
-      const composedHit = searchWarrantyItems({ typeId: laptop.id, q: 'dell', today: TODAY });
+      const composedHit = searchWarrantyItems({ typeId: laptop.id, q: 'dell', today: TODAY }, HOUSEHOLD);
       expect(composedHit.total).toBe(1);
 
-      const composedMiss = searchWarrantyItems({ typeId: laptop.id, q: 'netflix', today: TODAY });
+      const composedMiss = searchWarrantyItems({ typeId: laptop.id, q: 'netflix', today: TODAY }, HOUSEHOLD);
       expect(composedMiss.total).toBe(0);
 
-      const composedStatusMiss = searchWarrantyItems({ typeId: streaming.id, status: 'expired', today: TODAY });
+      const composedStatusMiss = searchWarrantyItems({ typeId: streaming.id, status: 'expired', today: TODAY }, HOUSEHOLD);
       expect(composedStatusMiss.total).toBe(0);
     });
   });
@@ -349,8 +354,8 @@ describe('expiringSoonItems (MUST-10.5)', () => {
         priceCents: null, ownerUserId: owner, transactionId: null, typeId: null, notes: null,
       });
     }
-    expect(expiringSoonItems(5, null, TODAY)).toHaveLength(5);
-    expect(expiringSoonItems(5, 999_999, TODAY)).toHaveLength(0);
+    expect(expiringSoonItems(5, null, TODAY, HOUSEHOLD)).toHaveLength(5);
+    expect(expiringSoonItems(5, 999_999, TODAY, HOUSEHOLD)).toHaveLength(0);
   });
 
   // v1.3.0 user request, task B regression: an open-ended item (isLifetime) must never
@@ -374,11 +379,11 @@ describe('expiringSoonItems (MUST-10.5)', () => {
       billingCycle: 'monthly', billingAmountCents: 999,
     });
 
-    expect(expiringSoonItems(50, null, TODAY).map((r) => r.id)).not.toContain(openEndedId);
-    const expiring = searchWarrantyItems({ status: 'expiring', today: TODAY });
+    expect(expiringSoonItems(50, null, TODAY, HOUSEHOLD).map((r) => r.id)).not.toContain(openEndedId);
+    const expiring = searchWarrantyItems({ status: 'expiring', today: TODAY }, HOUSEHOLD);
     expect(expiring.rows.map((r) => r.id)).not.toContain(openEndedId);
 
-    const own = searchWarrantyItems({ status: 'lifetime', today: TODAY });
+    const own = searchWarrantyItems({ status: 'lifetime', today: TODAY }, HOUSEHOLD);
     expect(own.rows.map((r) => r.id)).toContain(openEndedId);
     expect(own.rows.find((r) => r.id === openEndedId)!.expiryDate).toBeNull();
   });
@@ -397,7 +402,7 @@ describe('billing cycle and amount surface on list rows', () => {
       priceCents: null, ownerUserId: owner, transactionId: null, typeId: sub.id, notes: null,
       billingCycle: 'monthly', billingAmountCents: 1599,
     });
-    const row = searchWarrantyItems({ today: TODAY }).rows.find((r) => r.id === id)!;
+    const row = searchWarrantyItems({ today: TODAY }, HOUSEHOLD).rows.find((r) => r.id === id)!;
     expect(row.billingCycle).toBe('monthly');
     expect(row.billingAmountCents).toBe(1599);
   });
@@ -409,7 +414,7 @@ describe('billing cycle and amount surface on list rows', () => {
       purchaseDate: '2026-08-16', warrantyMonths: null, isLifetime: false,
       priceCents: null, ownerUserId: owner, transactionId: null, typeId: null, notes: null,
     });
-    const row = searchWarrantyItems({ today: TODAY }).rows.find((r) => r.id === id)!;
+    const row = searchWarrantyItems({ today: TODAY }, HOUSEHOLD).rows.find((r) => r.id === id)!;
     expect(row.billingCycle).toBeNull();
     expect(row.billingAmountCents).toBeNull();
   });
@@ -429,7 +434,7 @@ describe('loan money surfaces on list rows', () => {
       principalCents: 2500000, interestRateBps: 549, currentBalanceCents: 2000000,
       balanceUpdatedAt: '2026-08-16T00:00:00.000Z',
     });
-    const row = searchWarrantyItems({ today: TODAY }).rows.find((r) => r.id === id)!;
+    const row = searchWarrantyItems({ today: TODAY }, HOUSEHOLD).rows.find((r) => r.id === id)!;
     expect(row.principalCents).toBe(2500000);
     expect(row.interestRateBps).toBe(549);
     expect(row.currentBalanceCents).toBe(2000000);
@@ -443,7 +448,7 @@ describe('loan money surfaces on list rows', () => {
       purchaseDate: '2026-08-16', warrantyMonths: null, isLifetime: false,
       priceCents: null, ownerUserId: owner, transactionId: null, typeId: null, notes: null,
     });
-    const row = searchWarrantyItems({ today: TODAY }).rows.find((r) => r.id === id)!;
+    const row = searchWarrantyItems({ today: TODAY }, HOUSEHOLD).rows.find((r) => r.id === id)!;
     expect(row.principalCents).toBeNull();
     expect(row.interestRateBps).toBeNull();
     expect(row.currentBalanceCents).toBeNull();

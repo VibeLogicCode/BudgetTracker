@@ -3,6 +3,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '@/db/client';
 import { users, warrantyItemTypes, warrantyItems, warrantyReceipts } from '@/db/schema';
+import { ownerScope, type Viewer } from '@/lib/auth/viewer';
 import { nowIso } from '@/lib/clock';
 import { isIsoDate } from '@/lib/dates';
 import { computeExpiryDate } from '@/lib/warranty/expiry';
@@ -86,6 +87,12 @@ export interface WarrantyItemRow {
   interestRateBps: number | null;
   currentBalanceCents: number | null;
   balanceUpdatedAt: string | null;
+  /**
+   * v1.13.0 ruling R11 / micro-ruling M9. The read-side link between a bill and a budget
+   * category. NULL means "not linked", which is every row before v1.13.0. Set only through
+   * setBudgetCategory(), never through WarrantyInput -- see that function's docblock.
+   */
+  budgetCategoryId: number | null;
 }
 
 export interface WarrantyReceiptRow {
@@ -281,6 +288,7 @@ const ITEM_COLUMNS = {
   interestRateBps: warrantyItems.interestRateBps,
   currentBalanceCents: warrantyItems.currentBalanceCents,
   balanceUpdatedAt: warrantyItems.balanceUpdatedAt,
+  budgetCategoryId: warrantyItems.budgetCategoryId,
 };
 
 /**
@@ -353,7 +361,17 @@ function assertBalanceAnchorPairing(currentBalanceCents: number | null, balanceU
   if ((currentBalanceCents === null) !== (balanceUpdatedAt === null)) throw new Error(BALANCE_ANCHOR_ERROR);
 }
 
-export function getWarrantyItem(id: number): WarrantyItemRow | null {
+/**
+ * v1.13.0 ruling R2/R3: `viewer` is REQUIRED, and null for another owner id. That null is what turns
+ * src/app/(app)/warranties/[id]/page.tsx into a notFound() with no extra branch on the page -- the
+ * review's confirmed-exploitable finding (SEC-1) closes here, in the query, rather than in a check a
+ * future page could forget to copy.
+ */
+export function getWarrantyItem(id: number, viewer: Viewer): WarrantyItemRow | null {
+  const scope = ownerScope(viewer);
+  const where = scope === null
+    ? eq(warrantyItems.id, id)
+    : and(eq(warrantyItems.id, id), eq(warrantyItems.ownerUserId, scope));
   const row = getDb()
     .select(ITEM_COLUMNS)
     .from(warrantyItems)
@@ -361,9 +379,23 @@ export function getWarrantyItem(id: number): WarrantyItemRow | null {
     // LEFT, not INNER: a typeId of null (or a type that got deleted, though that path is
     // blocked at the app layer) must not make the item itself disappear (spec §19.3).
     .leftJoin(warrantyItemTypes, eq(warrantyItemTypes.id, warrantyItems.typeId))
-    .where(eq(warrantyItems.id, id))
+    .where(where)
     .get();
   return row ? toItemRow(row) : null;
+}
+
+/**
+ * v1.13.0 ruling R11 / micro-ruling M9. The read-side link between a bill and a budget category.
+ * Deliberately its own tiny writer rather than a field on updateWarrantyItem: it changes no limit, no
+ * rollover and no total, and folding it into the big item update would invite a future reader to
+ * think it does.
+ */
+export function setBudgetCategory(itemId: number, categoryId: number | null): void {
+  getDb()
+    .update(warrantyItems)
+    .set({ budgetCategoryId: categoryId, updatedAt: nowIso() })
+    .where(eq(warrantyItems.id, itemId))
+    .run();
 }
 
 /**

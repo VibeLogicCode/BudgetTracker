@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { sql } from 'drizzle-orm';
 import { createSeededTestDb, insertTestUser, type TestDb } from '../../helpers/db';
+import type { Viewer } from '@/lib/auth/viewer';
 import {
   BALANCE_ANCHOR_ERROR,
   BILLING_KIND_ERROR,
@@ -38,6 +39,8 @@ let ownerId: number;
 
 const TODAY = '2026-08-16';
 const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(64)]);
+/** This suite is entirely about the item shape, not visibility -- every read here is household-wide. */
+const HOUSEHOLD: Viewer = { id: 0, role: 'admin', visibility: 'household' };
 
 beforeEach(() => {
   dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-warranty-items-'));
@@ -213,24 +216,24 @@ describe('warrantyInputSchema', () => {
 describe('createWarrantyItem', () => {
   it('computes and stores expiry_date at write time (MUST-3.6)', () => {
     const id = createWarrantyItem(input({ purchaseDate: '2026-01-31', warrantyMonths: 1 }));
-    expect(getWarrantyItem(id)?.expiryDate).toBe('2026-02-28');
+    expect(getWarrantyItem(id, HOUSEHOLD)?.expiryDate).toBe('2026-02-28');
   });
 
   it('stores null expiry for lifetime and for an unknown term', () => {
     const lifetime = createWarrantyItem(input({ isLifetime: true, warrantyMonths: null }));
-    expect(getWarrantyItem(lifetime)?.expiryDate).toBeNull();
-    expect(getWarrantyItem(lifetime)?.isLifetime).toBe(true);
+    expect(getWarrantyItem(lifetime, HOUSEHOLD)?.expiryDate).toBeNull();
+    expect(getWarrantyItem(lifetime, HOUSEHOLD)?.isLifetime).toBe(true);
     const unknown = createWarrantyItem(input({ warrantyMonths: null }));
-    expect(getWarrantyItem(unknown)?.expiryDate).toBeNull();
+    expect(getWarrantyItem(unknown, HOUSEHOLD)?.expiryDate).toBeNull();
   });
 
   it('joins the owner name for display', () => {
     const id = createWarrantyItem(input());
-    expect(getWarrantyItem(id)?.ownerName).toBe('Alice');
+    expect(getWarrantyItem(id, HOUSEHOLD)?.ownerName).toBe('Alice');
   });
 
   it('returns null for an unknown id', () => {
-    expect(getWarrantyItem(999)).toBeNull();
+    expect(getWarrantyItem(999, HOUSEHOLD)).toBeNull();
   });
 });
 
@@ -239,7 +242,7 @@ describe('billing cycle and amount', () => {
   it('round-trips billingCycle and billingAmountCents on create for a subscription type', () => {
     const sub = createItemType('Streaming Billing', 'subscription');
     const id = createWarrantyItem(input({ typeId: sub.id, billingCycle: 'monthly', billingAmountCents: 1599 }));
-    const row = getWarrantyItem(id)!;
+    const row = getWarrantyItem(id, HOUSEHOLD)!;
     expect(row.billingCycle).toBe('monthly');
     expect(row.billingAmountCents).toBe(1599);
   });
@@ -247,14 +250,14 @@ describe('billing cycle and amount', () => {
   it('round-trips billingCycle and billingAmountCents on create for a contract type', () => {
     const contract = createItemType('Gym Billing', 'contract');
     const id = createWarrantyItem(input({ typeId: contract.id, billingCycle: 'annual', billingAmountCents: 49999 }));
-    const row = getWarrantyItem(id)!;
+    const row = getWarrantyItem(id, HOUSEHOLD)!;
     expect(row.billingCycle).toBe('annual');
     expect(row.billingAmountCents).toBe(49999);
   });
 
   it('defaults billingCycle/billingAmountCents to null when omitted', () => {
     const id = createWarrantyItem(input());
-    const row = getWarrantyItem(id)!;
+    const row = getWarrantyItem(id, HOUSEHOLD)!;
     expect(row.billingCycle).toBeNull();
     expect(row.billingAmountCents).toBeNull();
   });
@@ -263,7 +266,7 @@ describe('billing cycle and amount', () => {
     const sub = createItemType('Streaming Billing Update', 'subscription');
     const id = createWarrantyItem(input({ typeId: sub.id, billingCycle: 'monthly', billingAmountCents: 999 }));
     updateWarrantyItem(id, input({ typeId: sub.id, billingCycle: 'annual', billingAmountCents: 9999 }));
-    const row = getWarrantyItem(id)!;
+    const row = getWarrantyItem(id, HOUSEHOLD)!;
     expect(row.billingCycle).toBe('annual');
     expect(row.billingAmountCents).toBe(9999);
   });
@@ -272,7 +275,7 @@ describe('billing cycle and amount', () => {
     const sub = createItemType('Streaming Billing Clear', 'subscription');
     const id = createWarrantyItem(input({ typeId: sub.id, billingCycle: 'monthly', billingAmountCents: 999 }));
     updateWarrantyItem(id, input({ typeId: sub.id, billingCycle: null, billingAmountCents: null }));
-    const row = getWarrantyItem(id)!;
+    const row = getWarrantyItem(id, HOUSEHOLD)!;
     expect(row.billingCycle).toBeNull();
     expect(row.billingAmountCents).toBeNull();
   });
@@ -292,7 +295,7 @@ describe('billing cycle and amount', () => {
     const id = createWarrantyItem(
       input({ typeId: loan.id, billingCycle: 'monthly', billingAmountCents: 100 }),
     );
-    const row = getWarrantyItem(id)!;
+    const row = getWarrantyItem(id, HOUSEHOLD)!;
     expect(row.billingCycle).toBe('monthly');
     expect(row.billingAmountCents).toBe(100);
   });
@@ -308,13 +311,13 @@ describe('billing cycle and amount', () => {
       BILLING_KIND_ERROR,
     );
     // Nothing was written: the item is untouched.
-    expect(getWarrantyItem(id)!.billingAmountCents).toBeNull();
+    expect(getWarrantyItem(id, HOUSEHOLD)!.billingAmountCents).toBeNull();
   });
 
   it('allows a subscription/contract item to have no billing set at all', () => {
     const sub = createItemType('Streaming No Billing', 'subscription');
     const id = createWarrantyItem(input({ typeId: sub.id }));
-    const row = getWarrantyItem(id)!;
+    const row = getWarrantyItem(id, HOUSEHOLD)!;
     expect(row.billingCycle).toBeNull();
     expect(row.billingAmountCents).toBeNull();
   });
@@ -357,7 +360,7 @@ describe('MUST-12.1 / MUST-12.2 / MUST-11.7: loan money on an item', () => {
   it('MUST-14.4: the rate round-trips through basis points and 100.01% is rejected in SQL', () => {
     const loanType = createItemType('Car loan 3', 'loan');
     const id = createWarrantyItem({ ...input(), typeId: loanType.id, interestRateBps: 549 });
-    expect(getWarrantyItem(id)?.interestRateBps).toBe(549);
+    expect(getWarrantyItem(id, HOUSEHOLD)?.interestRateBps).toBe(549);
     expect(() => createWarrantyItem({ ...input(), typeId: loanType.id, interestRateBps: 1_000_001 })).toThrow();
   });
 });
@@ -366,7 +369,7 @@ describe('item types (delta T6)', () => {
   it('writes type_id and surfaces typeName/isSubscription true for a subscription type', () => {
     const sub = createItemType('Streaming Items', 'subscription');
     const id = createWarrantyItem(input({ typeId: sub.id }));
-    const row = getWarrantyItem(id)!;
+    const row = getWarrantyItem(id, HOUSEHOLD)!;
     expect(row.typeId).toBe(sub.id);
     expect(row.typeName).toBe('Streaming Items');
     expect(row.isSubscription).toBe(true);
@@ -374,7 +377,7 @@ describe('item types (delta T6)', () => {
 
   it('an untyped item surfaces typeName null and isSubscription false, and is still listed', () => {
     const id = createWarrantyItem(input({ typeId: null }));
-    const row = getWarrantyItem(id)!;
+    const row = getWarrantyItem(id, HOUSEHOLD)!;
     expect(row.typeId).toBeNull();
     expect(row.typeName).toBeNull();
     expect(row.isSubscription).toBe(false);
@@ -384,15 +387,15 @@ describe('item types (delta T6)', () => {
     const loan = createItemType('Car Loan Items', 'loan');
     const typedId = createWarrantyItem(input({ typeId: loan.id }));
     const untypedId = createWarrantyItem(input({ typeId: null }));
-    expect(getWarrantyItem(typedId)!.kind).toBe('loan');
-    expect(getWarrantyItem(untypedId)!.kind).toBe('warranty');
+    expect(getWarrantyItem(typedId, HOUSEHOLD)!.kind).toBe('loan');
+    expect(getWarrantyItem(untypedId, HOUSEHOLD)!.kind).toBe('warranty');
   });
 
   it('updateWarrantyItem writes a new type_id', () => {
     const type = createItemType('Laptop Items', 'warranty');
     const id = createWarrantyItem(input({ typeId: null }));
     updateWarrantyItem(id, input({ typeId: type.id }));
-    const row = getWarrantyItem(id)!;
+    const row = getWarrantyItem(id, HOUSEHOLD)!;
     expect(row.typeId).toBe(type.id);
     expect(row.typeName).toBe('Laptop Items');
     expect(row.isSubscription).toBe(false);
@@ -405,7 +408,7 @@ describe('item types (delta T6)', () => {
       sql`select count(*) as c from warranty_search where warranty_search match ${'"Probe"'}`,
     );
     renameItemType(type.id, 'Gizmo Items');
-    expect(getWarrantyItem(id)?.typeName).toBe('Gizmo Items');
+    expect(getWarrantyItem(id, HOUSEHOLD)?.typeName).toBe('Gizmo Items');
     const after = current!.db.get<{ c: number }>(
       sql`select count(*) as c from warranty_search where warranty_search match ${'"Probe"'}`,
     );
@@ -417,15 +420,15 @@ describe('updateWarrantyItem', () => {
   it('recomputes expiry in the same write when the term changes', () => {
     const id = createWarrantyItem(input({ purchaseDate: '2026-08-16', warrantyMonths: 24 }));
     updateWarrantyItem(id, input({ purchaseDate: '2026-08-16', warrantyMonths: 12 }));
-    expect(getWarrantyItem(id)?.expiryDate).toBe('2027-08-16');
+    expect(getWarrantyItem(id, HOUSEHOLD)?.expiryDate).toBe('2027-08-16');
     updateWarrantyItem(id, input({ purchaseDate: '2026-03-31', warrantyMonths: 1 }));
-    expect(getWarrantyItem(id)?.expiryDate).toBe('2026-04-30');
+    expect(getWarrantyItem(id, HOUSEHOLD)?.expiryDate).toBe('2026-04-30');
   });
 
   it('clears months and expiry when switched to lifetime', () => {
     const id = createWarrantyItem(input());
     updateWarrantyItem(id, input({ isLifetime: true, warrantyMonths: null }));
-    const row = getWarrantyItem(id)!;
+    const row = getWarrantyItem(id, HOUSEHOLD)!;
     expect(row.isLifetime).toBe(true);
     expect(row.warrantyMonths).toBeNull();
     expect(row.expiryDate).toBeNull();
@@ -434,7 +437,7 @@ describe('updateWarrantyItem', () => {
   it('bumps updated_at and returns false for an unknown id', () => {
     const id = createWarrantyItem(input(), [], '2026-08-16T00:00:00.000Z');
     updateWarrantyItem(id, input({ name: 'Dishwasher' }), '2026-08-17T00:00:00.000Z');
-    const row = getWarrantyItem(id)!;
+    const row = getWarrantyItem(id, HOUSEHOLD)!;
     expect(row.name).toBe('Dishwasher');
     expect(row.updatedAt).toBe('2026-08-17T00:00:00.000Z');
     expect(row.createdAt).toBe('2026-08-16T00:00:00.000Z');
@@ -477,7 +480,7 @@ describe('attachStagedReceipts (MUST-6.8)', () => {
   it('skips a staging id whose file has already been purged, without failing the save', () => {
     const id = createWarrantyItem(input(), [ref('11111111-2222-3333-4444-555555555555')]);
     expect(listWarrantyReceipts(id)).toHaveLength(0);
-    expect(getWarrantyItem(id)).not.toBeNull();
+    expect(getWarrantyItem(id, HOUSEHOLD)).not.toBeNull();
   });
 
   it('skips a staged file that no longer sniffs to an accepted type', () => {
@@ -508,7 +511,7 @@ describe('commit-time re-validation (M4 / M5)', () => {
     fs.writeFileSync(findStagedReceipt(stagingId)!.path, oversized);
     const id = createWarrantyItem(input(), [ref(stagingId)]);
     // The item itself still saves; only this one receipt is skipped.
-    expect(getWarrantyItem(id)).not.toBeNull();
+    expect(getWarrantyItem(id, HOUSEHOLD)).not.toBeNull();
     expect(listWarrantyReceipts(id)).toHaveLength(0);
   });
 
@@ -621,7 +624,7 @@ describe('deletion (MUST-4.8)', () => {
     expect(stored).toHaveLength(2);
 
     expect(deleteWarrantyItem(id)).toBe(true);
-    expect(getWarrantyItem(id)).toBeNull();
+    expect(getWarrantyItem(id, HOUSEHOLD)).toBeNull();
     for (const name of stored) expect(receiptFileExists(name)).toBe(false);
     const count = current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_search`);
     expect(count.c).toBe(0);

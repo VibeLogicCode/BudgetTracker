@@ -1,4 +1,5 @@
 import { getSqlite } from '@/db/client';
+import { ownerScope, type Viewer } from '@/lib/auth/viewer';
 import { addDaysIso, todayIso } from '@/lib/dates';
 import {
   EXPIRING_SOON_DAYS,
@@ -143,6 +144,7 @@ interface RawRow {
   interest_rate_bps: number | null;
   current_balance_cents: number | null;
   balance_updated_at: string | null;
+  budget_category_id: number | null;
   status: WarrantyStatus;
   receipt_count: number;
 }
@@ -178,12 +180,13 @@ function toListItem(row: RawRow): WarrantyListItem {
     interestRateBps: row.interest_rate_bps,
     currentBalanceCents: row.current_balance_cents,
     balanceUpdatedAt: row.balance_updated_at,
+    budgetCategoryId: row.budget_category_id,
     status: row.status,
     receiptCount: row.receipt_count,
   };
 }
 
-export function searchWarrantyItems(filter: WarrantySearchFilter = {}): WarrantySearchResult {
+export function searchWarrantyItems(filter: WarrantySearchFilter, viewer: Viewer): WarrantySearchResult {
   const today = filter.today ?? todayIso();
   const soon = addDaysIso(today, EXPIRING_SOON_DAYS);
   // IMPORTANT 2 (defensive SQL-boundary guards): `page`/`sort` ultimately trace back to
@@ -217,6 +220,14 @@ export function searchWarrantyItems(filter: WarrantySearchFilter = {}): Warranty
   if (filter.ownerUserId != null) {
     where.push('i.owner_user_id = ?');
     whereParams.push(filter.ownerUserId);
+  }
+  // v1.13.0 ruling R2. Pushed IN ADDITION to the caller's own owner filter, never instead of it, so
+  // a self viewer who asks for somebody else gets an unsatisfiable AND rather than their own rows
+  // relabelled -- the same rule buildWhere follows in src/lib/transactions.ts.
+  const scope = ownerScope(viewer);
+  if (scope !== null) {
+    where.push('i.owner_user_id = ?');
+    whereParams.push(scope);
   }
   if (filter.status != null) {
     where.push(`${STATUS_CASE_SQL} = ?`);
@@ -276,8 +287,9 @@ export function searchWarrantyItems(filter: WarrantySearchFilter = {}): Warranty
  */
 export function expiringSoonItems(
   limit: number,
-  ownerUserId: number | null = null,
-  today: string = todayIso(),
+  ownerUserId: number | null,
+  today: string,
+  viewer: Viewer,
 ): WarrantyListItem[] {
-  return searchWarrantyItems({ status: 'expiring', ownerUserId, sort: 'expiry', today }).rows.slice(0, limit);
+  return searchWarrantyItems({ status: 'expiring', ownerUserId, sort: 'expiry', today }, viewer).rows.slice(0, limit);
 }

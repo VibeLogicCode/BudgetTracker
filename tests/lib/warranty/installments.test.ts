@@ -1,16 +1,24 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { createTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../helpers/db';
+import type { Viewer } from '@/lib/auth/viewer';
+import { getTransaction } from '@/lib/transactions';
 import { INSTALLMENT_KIND_ERROR } from '@/lib/warranty/constants';
+import { setBudgetCategory } from '@/lib/warranty/items';
 import {
   addInstallment,
+  findInstallmentItem,
   installmentStateFor,
   listInstallments,
   markInstallmentPaid,
+  recordInstallmentPayment,
   removeInstallment,
   unmarkInstallmentPaid,
   unpaidInstallments,
 } from '@/lib/warranty/installments';
+
+/** This suite is entirely about the installment/payment mechanics, not visibility. */
+const HOUSEHOLD: Viewer = { id: 0, role: 'admin', visibility: 'household' };
 
 const NOW = '2026-08-24T12:00:00.000Z';
 const TODAY = '2026-08-24';
@@ -294,5 +302,99 @@ describe('v1.12.1: unmark records the suppression, and remove is guarded (item B
     const { id } = setupRuleMarked();
     unmarkInstallmentPaid(id, '2026-06-21T00:00:00.000Z');
     expect(removeInstallment(id)).toBe(true);
+  });
+});
+
+function categoryIdByName(name: string): number {
+  const row = current!.sqlite.prepare('insert into categories (name) values (?) returning id').get(name) as {
+    id: number;
+  };
+  return row.id;
+}
+
+function countTransactions(): number {
+  return (current!.sqlite.prepare('select count(*) as n from transactions').get() as { n: number }).n;
+}
+
+function setupBillForPayment(): {
+  itemId: number;
+  installmentId: number;
+  accountId: number;
+  userId: number;
+  propertyTaxCategoryId: number;
+} {
+  const { userId } = setup();
+  const itemId = billItem(userId, 'Property tax');
+  const propertyTaxCategoryId = categoryIdByName('Property Tax');
+  setBudgetCategory(itemId, propertyTaxCategoryId);
+  const accountId = insertTestAccount(current!.db, { name: 'Chequing' });
+  const installmentId = addInstallment({ itemId, dueDate: '2026-06-30', amountCents: 180_000, at: NOW });
+  return { itemId, installmentId, accountId, userId, propertyTaxCategoryId };
+}
+
+describe('recordInstallmentPayment (ruling R8)', () => {
+  it('writes one transaction and marks the installment, in one step', () => {
+    const { itemId, installmentId, accountId, userId, propertyTaxCategoryId } = setupBillForPayment();
+
+    const result = recordInstallmentPayment({ installmentId, accountId, userId, today: '2026-08-27' });
+    expect(result).toEqual({ ok: true, transactionId: expect.any(Number), installmentId });
+
+    const txn = getTransaction((result as { transactionId: number }).transactionId, HOUSEHOLD);
+    expect(txn?.amountCents).toBe(-180000);
+    expect(txn?.date).toBe('2026-08-27');
+    expect(txn?.rawDescription).toBe('Property tax');
+    expect(txn?.categoryId).toBe(propertyTaxCategoryId);
+
+    const row = listInstallments(itemId, '2026-08-27', 30).find((r) => r.id === installmentId);
+    expect(row?.paidAt).not.toBeNull();
+    expect(row?.paidTxnId).toBe((result as { transactionId: number }).transactionId);
+  });
+
+  it('a second click writes nothing and says so', () => {
+    const { installmentId, accountId, userId } = setupBillForPayment();
+    recordInstallmentPayment({ installmentId, accountId, userId, today: '2026-08-27' });
+    const before = countTransactions();
+    expect(recordInstallmentPayment({ installmentId, accountId, userId, today: '2026-08-27' })).toEqual({
+      ok: false,
+      reason: 'already_paid',
+    });
+    expect(countTransactions()).toBe(before);
+  });
+
+  it('leaves the category NULL when the bill is not linked to one', () => {
+    const { itemId, installmentId, accountId, userId } = setupBillForPayment();
+    setBudgetCategory(itemId, null);
+    const result = recordInstallmentPayment({ installmentId, accountId, userId, today: '2026-08-27' });
+    expect(getTransaction((result as { transactionId: number }).transactionId, HOUSEHOLD)?.categoryId).toBeNull();
+  });
+
+  it('refuses when the installment is gone', () => {
+    const { accountId, userId } = setupBillForPayment();
+    expect(recordInstallmentPayment({ installmentId: 999999, accountId, userId, today: '2026-08-27' })).toEqual({
+      ok: false,
+      reason: 'gone',
+    });
+  });
+
+  it('refuses when the account id is not a positive integer', () => {
+    const { installmentId, userId } = setupBillForPayment();
+    expect(recordInstallmentPayment({ installmentId, accountId: 0, userId, today: '2026-08-27' })).toEqual({
+      ok: false,
+      reason: 'no_account',
+    });
+  });
+});
+
+describe('findInstallmentItem', () => {
+  it('returns the item id and owner for an installment that exists', () => {
+    const { userId } = setup();
+    const itemId = billItem(userId);
+    const installmentId = addInstallment({ itemId, dueDate: '2026-06-30', amountCents: 100, at: NOW });
+    expect(findInstallmentItem(installmentId)).toEqual({ itemId, ownerUserId: userId });
+  });
+
+  it('returns null for an installment that does not exist', () => {
+    setup();
+    expect(findInstallmentItem(999999)).toBeNull();
   });
 });

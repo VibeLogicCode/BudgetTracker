@@ -3,6 +3,7 @@ import { getDb } from '@/db/client';
 import { billInstallments, transactions, warrantyItemTypes, warrantyItems } from '@/db/schema';
 import { nowIso } from '@/lib/clock';
 import { addDaysIso, isIsoDate } from '@/lib/dates';
+import { createManualTransaction } from '@/lib/transactions';
 import { MIN_PURCHASE_DATE } from '@/lib/warranty/items';
 import {
   INSTALLMENT_KIND_ERROR,
@@ -302,4 +303,90 @@ export function unpaidInstallments(input: {
     .orderBy(asc(billInstallments.dueDate), asc(billInstallments.id))
     .all()
     .map((row) => ({ ...row, overdue: row.dueDate < input.today }));
+}
+
+export type RecordPaymentResult =
+  | { ok: true; transactionId: number; installmentId: number }
+  | { ok: false; reason: 'gone' | 'already_paid' | 'no_account' };
+
+/**
+ * The ownership answer AND the revalidate path, in one query. Ruling R3's check on the Record-payment
+ * action (Task 11) needs the owner; its revalidatePath needs the item id; two lookups for two fields
+ * of the same row is a round trip nobody needs.
+ */
+export function findInstallmentItem(installmentId: number): { itemId: number; ownerUserId: number } | null {
+  const row = getDb()
+    .select({ itemId: warrantyItems.id, ownerUserId: warrantyItems.ownerUserId })
+    .from(billInstallments)
+    .innerJoin(warrantyItems, eq(warrantyItems.id, billInstallments.itemId))
+    .where(eq(billInstallments.id, installmentId))
+    .get();
+  return row ?? null;
+}
+
+/**
+ * v1.13.0 ruling R8: the bridge from a bill that is due to a transaction that happened. Not a
+ * scheduler -- a person presses this after the money actually moved, so the app never invents a
+ * transaction the bank never made.
+ *
+ * ONE-LINK-PER-TRANSACTION IS STRUCTURAL HERE, NOT CHECKED. The transaction is created inside this
+ * call, so it can carry no prior loan_payments or bill_installments link, and
+ * bill_installments_txn_uq (drizzle/0011) makes a second installment against that id impossible for
+ * ever, whatever re-runs.
+ *
+ * THE ORDER MATTERS. createManualTransaction runs applyPaymentMatchers on the new row
+ * (src/lib/transactions.ts), and a merchant rule on this same bill could mark the EARLIEST unpaid
+ * installment -- which may not be the one the person pressed. So the targeted mark runs AFTER that
+ * call and is conditional on paid_at IS NULL, the same guard markEarliestUnpaid uses. If the matcher
+ * got there first, this returns already_paid: the payment IS recorded and the schedule IS marked,
+ * just not by this button, and saying so is more honest than marking a second row.
+ */
+export function recordInstallmentPayment(input: {
+  installmentId: number;
+  accountId: number;
+  userId: number;
+  today: string;
+}): RecordPaymentResult {
+  const db = getDb();
+  const target = db
+    .select({
+      id: billInstallments.id,
+      itemId: billInstallments.itemId,
+      amountCents: billInstallments.amountCents,
+      paidAt: billInstallments.paidAt,
+      itemName: warrantyItems.name,
+      budgetCategoryId: warrantyItems.budgetCategoryId,
+      ownerUserId: warrantyItems.ownerUserId,
+    })
+    .from(billInstallments)
+    .innerJoin(warrantyItems, eq(warrantyItems.id, billInstallments.itemId))
+    .where(eq(billInstallments.id, input.installmentId))
+    .get();
+
+  if (target === undefined) return { ok: false, reason: 'gone' };
+  if (target.paidAt !== null) return { ok: false, reason: 'already_paid' };
+  if (!Number.isInteger(input.accountId) || input.accountId <= 0) return { ok: false, reason: 'no_account' };
+
+  return db.transaction((tx) => {
+    const transactionId = createManualTransaction({
+      accountId: input.accountId,
+      date: input.today,
+      description: target.itemName,
+      // A payment is money OUT. The installment's amount_cents CHECK guarantees it is positive.
+      amountCents: -target.amountCents,
+      categoryId: target.budgetCategoryId,
+      attributedUserId: target.ownerUserId,
+      notes: null,
+      userId: input.userId,
+    });
+
+    const marked = tx
+      .update(billInstallments)
+      .set({ paidAt: nowIso(), paidTxnId: transactionId })
+      .where(and(eq(billInstallments.id, input.installmentId), isNull(billInstallments.paidAt)))
+      .run();
+
+    if (marked.changes === 0) return { ok: false, reason: 'already_paid' } as const;
+    return { ok: true, transactionId, installmentId: input.installmentId } as const;
+  });
 }
