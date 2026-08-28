@@ -92,7 +92,12 @@ describe('MUST-3.2: the series is budgetProgress, row for row', () => {
     );
   });
 
-  it('rolls an archived child into its top-level parent and gives it no row of its own', () => {
+  // v1.12.1 (item S / MON-1): this used to assert unconditionally that an archived child never
+  // gets its own row, pinning budgetProgress()'s OLD rule. budgetProgress() now gives an
+  // archived child with real spend a read-only row of its own (rollup()'s docblock explains why
+  // categorySeries only mirrors the SPEND half of that rule), so this is split in two: spend
+  // keeps the child visible, no spend anywhere in the window still rolls it up silently.
+  it('rolls an archived child into its top-level parent, keeping it as its own row only while it carries spend', () => {
     const { db, spend, child } = setup();
     const food = categoryIdByName(db, 'Food');
     const groceries = categoryIdByName(db, 'Groceries');
@@ -103,6 +108,18 @@ describe('MUST-3.2: the series is budgetProgress, row for row', () => {
     const series = categorySeries({ months: ['2026-07'], scope: 'household', userId: null });
     expect(pick(series, food)?.monthlyCents).toEqual([35000]);
     expect(pick(series, groceries)?.monthlyCents).toEqual([30000]);
+    expect(pick(series, gone)?.monthlyCents).toEqual([5000]);
+  });
+
+  it('drops an archived child with no spend anywhere in the window, rolling it into the parent with no row of its own', () => {
+    const { db, spend, child } = setup();
+    const food = categoryIdByName(db, 'Food');
+    const groceries = categoryIdByName(db, 'Groceries');
+    const gone = child('Corner Store', food, { isArchived: true });
+    spend({ categoryId: groceries, amountCents: -30000, date: '2026-07-05' });
+
+    const series = categorySeries({ months: ['2026-07'], scope: 'household', userId: null });
+    expect(pick(series, food)?.monthlyCents).toEqual([30000]);
     expect(pick(series, gone)).toBeUndefined();
   });
 

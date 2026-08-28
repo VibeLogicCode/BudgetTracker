@@ -96,8 +96,9 @@ function cells(
  *   - income is filtered out FIRST, so an income child never changes a spend parent's total;
  *   - a top-level category's value is its own cell plus every DIRECT child's cell, archived
  *     children included;
- *   - a non-archived child is its own row carrying only its own cell;
- *   - an archived child is never its own row, it only rolls up;
+ *   - a child is its own row carrying only its own cell, UNLESS it is archived and carries no
+ *     spend anywhere in the window, in which case it only rolls up (v1.12.1, item S / MON-1 --
+ *     see below);
  *   - an archived top-level category surfaces only when its OWN cell is non-zero, which over
  *     a window means non-zero in at least one month of it;
  *   - nothing rolls up more than one level, because budgetProgress does not either.
@@ -106,6 +107,20 @@ function cells(
  * children), which is exactly the set flatten(budgetProgress(...)) produces and therefore
  * exactly the set the Budgets page draws a row for. A suggestion for anything else could
  * never be seen or applied.
+ *
+ * v1.12.1 (item S / MON-1, ruling P3): budgetProgress()'s archived-child rule changed from a
+ * blanket "never its own row" to "surfaces when it still carries a resolved LIMIT or non-zero
+ * SPEND this month, dropped when it carries neither" (src/lib/budgets.ts). Only the SPEND half
+ * of that rule has an analog here: CategorySeries has no `limitCents` field and never will --
+ * this module predicts spend, it does not resolve budgets -- and a multi-month window (the
+ * common case; only the MUST-3.2 test ever calls this with a single month) has no one "current
+ * month" to resolve a limit against the way budgetProgress's single `month` argument does. So
+ * an archived child surfaces here whenever ANY month in the window carries real spend, and
+ * still rolls up silently, with no row of its own, when the whole window is zero -- which is
+ * exactly budgetProgress()'s outcome on every fixture MUST-3.2 pins, because every one of them
+ * that gives an archived child a limit also gives it spend. `suggestionsFor` skips every
+ * archived row regardless (controller ruling, Task 5 review), so this divergence can never
+ * surface a suggestion budgetProgress wouldn't also show a limit for.
  */
 function rollup(months: string[], byCategory: Map<number, Map<string, number>>): CategorySeries[] {
   const all = listCategories({ includeArchived: true }).filter((category) => !category.isIncome);
@@ -126,13 +141,15 @@ function rollup(months: string[], byCategory: Map<number, Map<string, number>>):
         (month, index) => own[index] + children.reduce((sum, child) => sum + cell(child.id, month), 0),
       ),
     });
-    for (const child of children.filter((category) => !category.isArchived)) {
+    for (const child of children) {
+      const childMonthly = months.map((month) => cell(child.id, month));
+      if (child.isArchived && childMonthly.every((cents) => cents === 0)) continue;
       out.push({
         categoryId: child.id,
         categoryName: child.name,
         parentId: parent.id,
-        isArchived: false,
-        monthlyCents: months.map((month) => cell(child.id, month)),
+        isArchived: child.isArchived,
+        monthlyCents: childMonthly,
       });
     }
   }
