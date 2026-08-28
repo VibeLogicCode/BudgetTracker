@@ -22,7 +22,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   if (mustChangePassword(user.id)) redirect('/change-password');
   const reviewCount = reviewQueueCount();
   return (
-    <AppShell user={{ name: user.name, role: user.role }} reviewCount={reviewCount} version={APP_VERSION}>
+    <AppShell
+      user={{ id: user.id, name: user.name, role: user.role, visibility: user.visibility }}
+      reviewCount={reviewCount}
+      version={APP_VERSION}
+    >
       {children}
     </AppShell>
   );

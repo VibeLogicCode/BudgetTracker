@@ -11,6 +11,7 @@ import {
   WarrantiesIcon,
   type IconProps,
 } from '@/components/icons';
+import type { Viewer } from '@/lib/auth/viewer';
 
 export interface NavItem {
   href: string;
@@ -50,6 +51,28 @@ export const NAV: NavItem[] = [
   { href: '/settings', label: 'Settings', Icon: SettingsIcon },
   { href: '/help', label: 'Help', Icon: InfoIcon },
 ];
+
+/**
+ * v1.13.0 micro-ruling M6. NAV above is DELIBERATELY not filtered in place: guard 2 of
+ * tests/ops/onboarding-coverage.test.ts greps the help page for every NAV href, and a nav that
+ * shrinks per viewer would make that guard depend on who is asking. The filter lives here instead.
+ *
+ * A self viewer loses:
+ *   Import   -- listAccounts returns only accounts they own, so the picker would be empty or wrong.
+ *   Review   -- the categorization queue is household-wide by construction; there is no personal one.
+ *   Settings -- every page under it is either admin-only or a household-global list. Their own
+ *               notification preferences move nowhere: /settings/notifications is still reachable by
+ *               URL and still per-user, it is just not signposted for an account that has no other
+ *               reason to visit Settings.
+ * Reports STAYS: ruling R2 forbids household totals, and Task 6 force-scopes every aggregate, so
+ * what a self viewer sees there is their own spending, which is worth having.
+ */
+const SELF_HIDDEN_HREFS = new Set(['/import', '/review', '/settings']);
+
+export function visibleNav(viewer: Viewer): NavItem[] {
+  if (viewer.visibility !== 'self' || viewer.role === 'admin') return NAV;
+  return NAV.filter((item) => !SELF_HIDDEN_HREFS.has(item.href));
+}
 
 /**
  * Longest prefix wins, so /settings/backups still lights up Settings and

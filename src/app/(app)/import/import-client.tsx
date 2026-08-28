@@ -12,7 +12,7 @@ import { Notice } from '@/components/ui/Notice';
 import { PageGuide } from '@/components/ui/PageGuide';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { TableWrap } from '@/components/ui/Table';
-import { Field, selectClass } from '@/components/ui/form';
+import { Field, hintClass, selectClass } from '@/components/ui/form';
 import type { ImportMapping } from '@/lib/import/mapping';
 import type { CardValueSummary, PreviewResult } from '@/lib/import/preview';
 import type { ImportHistoryRow } from '@/lib/import/commit';
@@ -512,7 +512,21 @@ export function ImportClient({
                   ))}
                 </select>
               </Field>
-              <input type="file" name="file" accept=".csv,text/csv" required className={`${fileInputClass} py-2`} />
+              <div className="flex flex-col gap-1">
+                {/* Ruling R9/T9: an OFX/QFX file skips the CSV mapping step entirely -- flow.ts
+                    detects it by content, not by this accept attribute, which only shortens the
+                    file picker's own filter. */}
+                <input
+                  type="file"
+                  name="file"
+                  accept=".csv,.ofx,.qfx,text/csv"
+                  required
+                  className={`${fileInputClass} py-2`}
+                />
+                <span className={hintClass}>
+                  A CSV export, or an OFX/QFX file from your bank&rsquo;s &ldquo;download for Quicken&rdquo; option.
+                </span>
+              </div>
               <SubmitButton>Preview</SubmitButton>
             </form>
           </CardBody>

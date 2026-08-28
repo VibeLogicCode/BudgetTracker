@@ -13,7 +13,7 @@ afterEach(() => {
   document.body.style.overflow = '';
 });
 
-const user = { name: 'Ada Lovelace', role: 'member' as const };
+const user = { id: 1, name: 'Ada Lovelace', role: 'member' as const, visibility: 'household' as const };
 
 describe('AppShell mobile menu (regression: opened off-screen at the document top when scrolled)', () => {
   it('anchors the panel to the viewport, not the document, so it stays visible however far the page has scrolled', () => {

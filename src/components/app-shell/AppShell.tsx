@@ -5,11 +5,15 @@ import { usePathname } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { ChevronDownIcon, CloseIcon, LogoMark, MenuIcon, SettingsIcon, SignOutIcon } from '@/components/icons';
 import { ThemeToggle } from '@/components/theme/theme-toggle';
-import { activeNavItem, NAV, type NavItem } from './nav';
+import { activeNavItem, visibleNav, type NavItem } from './nav';
 
 export interface ShellUser {
+  /** v1.13.0 micro-ruling M6: ShellUser is now Viewer-shaped (id/role/visibility) so it can be
+   *  handed straight to visibleNav() below. */
+  id: number;
   name: string;
   role: 'admin' | 'member';
+  visibility: 'household' | 'self';
 }
 
 /**
@@ -36,6 +40,7 @@ export function AppShell({
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
   const current = activeNavItem(pathname);
+  const items = visibleNav(user);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const menuPanelRef = useRef<HTMLDivElement>(null);
 
@@ -100,7 +105,7 @@ export function AppShell({
           <span className="text-[0.9375rem] font-semibold tracking-tight">Budget Tracker</span>
         </Link>
         <nav aria-label="Sections" className="flex-1 overflow-y-auto px-3 pb-4">
-          <NavList items={NAV} pathname={pathname} reviewCount={reviewCount} rail />
+          <NavList items={items} pathname={pathname} reviewCount={reviewCount} rail />
         </nav>
       </aside>
 
@@ -143,7 +148,7 @@ export function AppShell({
           >
             <nav aria-label="Sections">
               <NavList
-                items={NAV}
+                items={items}
                 pathname={pathname}
                 reviewCount={reviewCount}
                 onNavigate={() => setMenuOpen(false)}

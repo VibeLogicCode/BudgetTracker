@@ -1,5 +1,7 @@
+import { redirect } from 'next/navigation';
 import { requireUser } from '@/lib/auth/session';
-import { listAccounts } from '@/lib/accounts';
+import { isSelfScoped } from '@/lib/auth/viewer';
+import { acceptsTransactions, listAccounts } from '@/lib/accounts';
 import { listUsers } from '@/lib/auth/users';
 import { hasReadableMapping, listProfiles } from '@/lib/import/presets';
 import { listImportHistory } from '@/lib/import/commit';
@@ -9,8 +11,13 @@ import { ImportClient } from './import-client';
 export const dynamic = 'force-dynamic';
 
 export default async function ImportPage() {
-  await requireUser();
-  const allAccounts = listAccounts();
+  const user = await requireUser();
+  // Controller ruling: nav hiding alone is insufficient -- the review-queue/import-account
+  // queries this page touches are unscoped, so a self viewer must be refused server-side too.
+  if (isSelfScoped(user)) redirect('/dashboard');
+  // Ruling R10: an asset account takes no transactions and no imports, so it is never an
+  // import target.
+  const allAccounts = listAccounts({}, user).filter((a) => acceptsTransactions(a.type));
   const csvAccounts = allAccounts.filter((a) => !isSimplefinManaged(a.id));
   const managed = allAccounts.filter((a) => isSimplefinManaged(a.id));
   return (
