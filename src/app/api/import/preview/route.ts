@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { CsrfError, assertSameOrigin } from '@/lib/auth/csrf';
 import { userFromRequest } from '@/lib/auth/session';
 import { isSelfScoped } from '@/lib/auth/viewer';
-import { getAccount } from '@/lib/accounts';
+import { acceptsTransactions, getAccount } from '@/lib/accounts';
 import { importMappingSchema } from '@/lib/import/mapping';
 import { getProfile } from '@/lib/import/presets';
 import { buildPreview } from '@/lib/import/preview';
@@ -54,6 +54,18 @@ export async function POST(request: Request): Promise<Response> {
     // BEFORE buffering/staging (review finding 4) — an oversized file must
     // never land on disk.
     if (file.size > MAX_FILE_BYTES) return tooLarge();
+    // v1.13.1 ruling R10 (item BQ): an asset account's refusal (the canonical check further
+    // below, shared with the JSON re-preview path) must never leave a staged file behind for
+    // an upload that was never going to be committable -- so it is checked again here, early
+    // enough to skip staging, for whatever account the form names. An account that does not
+    // resolve at all falls through to staging and the ordinary 404 below, unchanged from
+    // before this item.
+    const earlyAccountId = form.get('accountId');
+    const earlyAccount =
+      typeof earlyAccountId === 'string' && /^\d+$/.test(earlyAccountId) ? getAccount(Number(earlyAccountId)) : null;
+    if (earlyAccount && !acceptsTransactions(earlyAccount.type)) {
+      return Response.json({ error: 'That account only holds a balance you type in.' }, { status: 400 });
+    }
     const buf = Buffer.from(await file.arrayBuffer());
     const stagingId = writeStagedFile(buf);
     payload = {
@@ -71,6 +83,12 @@ export async function POST(request: Request): Promise<Response> {
 
   const account = getAccount(parsed.data.accountId);
   if (!account) return Response.json({ error: 'Unknown account' }, { status: 404 });
+  // v1.13.1 ruling R10 (item BQ): commit (api/import/commit/route.ts:49), the SimpleFIN link
+  // (api/simplefin/link/route.ts:46) and commitStagedImport (lib/import/flow.ts:49) all refuse an
+  // asset account with this exact sentence; preview accepted one and only failed at commit.
+  if (!acceptsTransactions(account.type)) {
+    return Response.json({ error: 'That account only holds a balance you type in.' }, { status: 400 });
+  }
   const profile = getProfile(parsed.data.profileId);
   if (!profile) return Response.json({ error: 'Unknown import profile' }, { status: 404 });
   const mapping = parsed.data.mapping ?? profile.mapping;

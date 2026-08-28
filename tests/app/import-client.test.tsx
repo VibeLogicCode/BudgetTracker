@@ -256,6 +256,10 @@ function previewBody(over: Record<string, unknown> = {}) {
     errorCount: 0,
     skipped: 0,
     truncated: false,
+    // Item BP: every real preview carries this now, and import-client.tsx uses it to decide
+    // whether to render the CSV mapping editor -- so a fixture that omits it would silently
+    // hide the editor from every test in this file that doesn't pass its own override.
+    source: 'csv',
     ...over,
   };
 }
@@ -873,5 +877,45 @@ describe('ImportClient — F1: a saved assignment updates the row immediately in
 
     await waitFor(() => expect(queryByText(/Boom/i)).toBeTruthy());
     expect(queryByText(/Unassigned/i)).toBeTruthy();
+  });
+});
+
+describe('ImportClient — no CSV mapping editor for an OFX preview (item BP)', () => {
+  async function renderWithPreview(over: Record<string, unknown>) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, json: async () => previewBody(over) })),
+    );
+    const view = render(
+      <ImportClient
+        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
+        profiles={PROFILES}
+        history={[]}
+        simplefinManaged={[]}
+      />,
+    );
+    fireEvent.submit(view.container.querySelector('form')!);
+    await waitFor(() => expect(view.container.textContent).toContain('Preview —'));
+    return view;
+  }
+
+  it('renders no mapping editor and no date-format banner for an OFX preview', async () => {
+    const { queryByText } = await renderWithPreview({
+      source: 'ofx',
+      dateFormatDetection: { candidates: [], status: 'none', detected: null },
+      columnOptions: [],
+    });
+    // The banner told people their dates were unreadable over a file whose dates parsed fine,
+    // beside controls that preview and commit both ignore for OFX (ruling R9).
+    expect(queryByText(/Could not recognize this column's date format/)).toBeNull();
+    expect(queryByText(/Date column/)).toBeNull();
+  });
+
+  it('still renders both for a CSV preview whose dates did not parse', async () => {
+    const { getByText } = await renderWithPreview({
+      source: 'csv',
+      dateFormatDetection: { candidates: [], status: 'none', detected: null },
+    });
+    expect(getByText(/Could not recognize this column's date format/)).toBeTruthy();
   });
 });

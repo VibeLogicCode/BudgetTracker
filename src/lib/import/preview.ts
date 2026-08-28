@@ -64,6 +64,15 @@ export interface PreviewResult {
   skipped: number;
   truncated: boolean;
   /**
+   * Which reader produced this preview. v1.13.1 (item BP, ruling P18): the client had no way to
+   * ask, so it rendered the CSV mapping editor over an OFX file -- whose controls preview and
+   * commit both ignore (ruling R9) -- and MappingEditor turned dateFormatDetection.status
+   * 'none' into a "could not recognize this column's date format" warning about dates that
+   * parsed perfectly. Inferring it from columnOptions.length and that status would encode two
+   * unrelated implementation details into a UI condition; one field says it outright.
+   */
+  source: 'csv' | 'ofx';
+  /**
    * What the date column looks like independent of mapping.dateFormat — informational only.
    * mapping.dateFormat, above, is always what actually
    * parsed `rows`/`errors`; detection never overrides an explicit choice, it only tells the
@@ -183,6 +192,7 @@ export function buildPreview(input: {
     // entirely, so there is no mapping.skipRules to apply against it either).
     skipped: csv?.skipped ?? 0,
     truncated: hashed.length > PREVIEW_ROW_LIMIT,
+    source: ofx ? 'ofx' : 'csv',
     // Both informational-only, and both meaningless for OFX: its dates are always the fixed
     // OFX YYYYMMDD shape (parseOfx's own toIsoDate), never mapping.dateFormat, and its cells are
     // [DTPOSTED, NAME, TRNAMT, FITID] rather than the file's real CSV columns, so re-reading the

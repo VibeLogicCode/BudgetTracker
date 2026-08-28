@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createSeededTestDb, insertTestUser, type TestDb } from '../helpers/db';
+import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
 import { POST as previewRoute } from '@/app/api/import/preview/route';
 import { POST as commitRoute } from '@/app/api/import/commit/route';
 import { POST as undoRoute } from '@/app/api/import/undo/route';
@@ -185,6 +185,22 @@ describe('POST /api/import/preview', () => {
 
     const response = await previewRoute(uploadRequestAs(kidToken));
     expect(response.status).toBe(403);
+    const tmp = path.join(tempDir, 'tmp');
+    expect(fs.existsSync(tmp) ? fs.readdirSync(tmp) : []).toHaveLength(0);
+  });
+
+  it('400s an asset account, the same refusal commit already makes (item BQ)', async () => {
+    const assetId = insertTestAccount(current!.db, { name: 'House', type: 'asset', ownerUserId: null });
+    const form = new FormData();
+    form.append('file', new File([fixture('td-chequing.csv')], 'td-chequing.csv', { type: 'text/csv' }));
+    form.append('accountId', String(assetId));
+    form.append('profileId', String(profileId));
+    const response = await previewRoute(
+      new Request('http://nas.local:3000/api/import/preview', { method: 'POST', headers: headers(), body: form }),
+    );
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toBe('That account only holds a balance you type in.');
+    // Nothing staged: the refusal lands before the file is written.
     const tmp = path.join(tempDir, 'tmp');
     expect(fs.existsSync(tmp) ? fs.readdirSync(tmp) : []).toHaveLength(0);
   });

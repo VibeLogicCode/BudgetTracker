@@ -549,13 +549,22 @@ export function ImportClient({
             description="Wrong columns? Fix the mapping and the preview re-reads the same file."
           />
           <CardBody className="flex flex-col gap-4">
-            <MappingEditor
-              mapping={mapping}
-              onChange={(next) => void rePreview(next)}
-              dateFormatDetection={preview.dateFormatDetection}
-              busy={busy}
-              cardColumnOptions={preview.columnOptions}
-            />
+            {preview.source === 'csv' ? (
+              <MappingEditor
+                mapping={mapping}
+                onChange={(next) => void rePreview(next)}
+                dateFormatDetection={preview.dateFormatDetection}
+                busy={busy}
+                cardColumnOptions={preview.columnOptions}
+              />
+            ) : (
+              // Item BP: an OFX file carries its own columns (DTPOSTED / NAME / TRNAMT / FITID),
+              // so there is nothing to map and every control in the editor was inert.
+              <p className="text-sm text-muted">
+                This file carries its own columns, so there is nothing to map — check the rows
+                below and commit.
+              </p>
+            )}
 
             {mapping.cardCol !== null && preview.cardValues ? (
               <div className="rounded-lg border border-line bg-surface-2/50 p-4">

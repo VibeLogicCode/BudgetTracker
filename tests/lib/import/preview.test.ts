@@ -48,7 +48,7 @@ describe('buildPreview', () => {
     const { accountId, stagingId } = setup();
     const preview = buildPreview({ stagingId, filename: 'td.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Chequing/Debit') });
 
-    expect(preview).toMatchObject({ stagingId, filename: 'td.csv', accountId, encoding: 'utf-8', totalRows: 9, duplicateCount: 0, errorCount: 0, skipped: 0, truncated: false });
+    expect(preview).toMatchObject({ stagingId, filename: 'td.csv', accountId, encoding: 'utf-8', totalRows: 9, duplicateCount: 0, errorCount: 0, skipped: 0, truncated: false, source: 'csv' });
     expect(preview.rows).toHaveLength(9);
     expect(preview.rows[0]).toMatchObject({
       rowIndex: 0,
@@ -431,6 +431,24 @@ NEWFILEUID:NONE
 
       expect(preview.duplicateCount).toBe(3);
       expect(preview.rows.every((r) => r.isDuplicate)).toBe(true);
+    });
+
+    it('reports the source so the client can stop offering a CSV mapping (item BP)', () => {
+      const { accountId } = setupOfx();
+      const stagingId = writeStagedFile(Buffer.from(OFX, 'utf8'));
+      const preview = buildPreview({
+        stagingId,
+        filename: 'statement.ofx',
+        accountId,
+        profileId: null,
+        mapping: getBuiltinPreset('TD Chequing/Debit'),
+      });
+
+      expect(preview.source).toBe('ofx');
+      // The two fields the client was inferring OFX from remain what they were -- source
+      // replaces the inference, it does not change the data.
+      expect(preview.dateFormatDetection.status).toBe('none');
+      expect(preview.columnOptions).toEqual([]);
     });
   });
 });
