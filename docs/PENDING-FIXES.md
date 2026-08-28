@@ -1557,3 +1557,18 @@ Status: OPEN — from the v1.13.0 final re-review. `import-client.tsx:552-557` s
 
 **BQ. /api/import/preview does not refuse asset accounts.**
 Status: OPEN — from the v1.13.0 final re-review. Commit and SimpleFIN link refuse `asset` accounts (v1.13.0); preview still accepts one and only fails at commit. Read-only, harmless, asymmetric. Fix: same `acceptsTransactions` refusal in the preview route. Effort: S.
+
+## v1.13.1 leftovers (found during the build review, deliberately not fixed mid-release)
+
+**BT. `stale.ts`'s `viewerFor` has the same null-fallback-to-household defect as BK, explicitly
+outside BK's scope.** `src/lib/notify/evaluate/stale.ts`'s `viewerFor` (~line 19) falls back to
+`{ role: 'admin', visibility: 'household' }` when the recipient's own user row is gone by the time
+the evaluator runs — the same shape BK already names for `digest.ts` and `monthly.ts`, but BK's fix
+was scoped to those two files only. Because `evaluateStaleImport` calls
+`isSelfScoped(viewerFor(input.userId))` (~line 52) to decide whether to skip a self-scoped
+recipient, a vanished self-scoped user's row reads as household-scoped instead, and the guard that
+exists specifically to keep a self viewer from being nagged about accounts they cannot see silently
+does not fire for that one case. Evidence: `src/lib/notify/evaluate/stale.ts:19-22,51-52`. Fix:
+return `null` from `viewerFor` when the row is gone and skip (return 0) rather than falling back to
+a household-scoped viewer, mirroring the fix `digest.ts`/`monthly.ts` get for BK. Effort: S, ~15
+min. No personal data.
