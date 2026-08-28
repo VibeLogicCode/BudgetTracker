@@ -16,6 +16,7 @@ vi.mock('@/app/(app)/transactions/actions', () => ({
   assignToLoanAction: vi.fn(async () => ({})),
   unassignFromLoanAction: vi.fn(async () => ({})),
   saveSplitsAction: vi.fn(async () => ({})),
+  saveNoteAction: vi.fn(async () => ({})),
 }));
 
 afterEach(() => cleanup());
@@ -517,5 +518,109 @@ describe('v1.12.1: the number pad opens for the manual-entry amount (item Y / UX
     );
     const amount = document.querySelector('input[name="amount"]') as HTMLInputElement | null;
     expect(amount?.getAttribute('inputmode')).toBe('decimal');
+  });
+});
+
+describe('v1.13.0 ruling R7: QuickAddTransaction sits at the top of the page', () => {
+  it('renders the #quick-add anchor above the filter bar', () => {
+    const { container } = render(
+      <TransactionsClient
+        page={pageWithRow()}
+        accounts={[{ id: 1, name: 'Joint Chequing' }]}
+        categories={[]}
+        people={[]}
+        today="2026-03-02"
+        defaultAccountId={1}
+      />,
+    );
+    const anchor = container.querySelector('#quick-add');
+    const filterForm = container.querySelector('form[method="get"]');
+    expect(anchor).toBeTruthy();
+    expect(filterForm).toBeTruthy();
+    // Node.compareDocumentPosition: DOCUMENT_POSITION_FOLLOWING (4) means `filterForm` comes
+    // after `anchor` in the tree, i.e. quick-add really is above the filter bar, not just
+    // present somewhere on the page.
+    expect(anchor!.compareDocumentPosition(filterForm!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});
+
+describe('v1.13.0 ruling R13: the Note… row action', () => {
+  it('opens an inline sub-row prefilled with the existing note, spanning every column', () => {
+    const { container } = render(
+      <TransactionsClient
+        page={pageWithRow({ id: 5, notes: 'paid in cash' })}
+        accounts={[]}
+        categories={[]}
+        people={[]}
+        today="2026-03-02"
+      />,
+    );
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Note…' }));
+
+    const textarea = screen.getByLabelText(/Note for TIM HORTONS/) as HTMLTextAreaElement;
+    expect(textarea.value).toBe('paid in cash');
+    const cell = textarea.closest('td') as HTMLTableCellElement;
+    expect(cell.colSpan).toBeGreaterThan(1);
+  });
+
+  it('submits the note through saveNoteAction with the transaction id, and closes the sub-row', async () => {
+    const { saveNoteAction } = await import('@/app/(app)/transactions/actions');
+    render(
+      <TransactionsClient page={pageWithRow({ id: 5, notes: null })} accounts={[]} categories={[]} people={[]} today="2026-03-02" />,
+    );
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Note…' }));
+
+    const textarea = screen.getByLabelText(/Note for TIM HORTONS/) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: 'split with Bob' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save note' }));
+
+    await waitFor(() => expect(saveNoteAction).toHaveBeenCalled());
+    const sent = (saveNoteAction as ReturnType<typeof vi.fn>).mock.calls[0][1] as FormData;
+    expect(sent.get('transactionId')).toBe('5');
+    expect(sent.get('notes')).toBe('split with Bob');
+    expect(screen.queryByLabelText(/Note for TIM HORTONS/)).toBeNull();
+  });
+
+  it('Cancel closes the sub-row without submitting', () => {
+    render(
+      <TransactionsClient page={pageWithRow({ id: 5 })} accounts={[]} categories={[]} people={[]} today="2026-03-02" />,
+    );
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Note…' }));
+    expect(screen.getByRole('button', { name: 'Save note' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('button', { name: 'Save note' })).toBeNull();
+  });
+});
+
+describe('v1.13.0 ruling R2: a self-scoped viewer never sees the person filter pill', () => {
+  it('hides the Person filter select when selfScoped is true', () => {
+    const { container } = render(
+      <TransactionsClient
+        page={pageWithRow()}
+        accounts={[]}
+        categories={[]}
+        people={[{ id: 1, name: 'Alice' }]}
+        today="2026-03-02"
+        selfScoped
+      />,
+    );
+    expect(container.querySelector('form[method="get"] select[name="person"]')).toBeNull();
+  });
+
+  it('shows it for a household-scoped viewer (the default)', () => {
+    const { container } = render(
+      <TransactionsClient
+        page={pageWithRow()}
+        accounts={[]}
+        categories={[]}
+        people={[{ id: 1, name: 'Alice' }]}
+        today="2026-03-02"
+      />,
+    );
+    expect(container.querySelector('form[method="get"] select[name="person"]')).toBeTruthy();
   });
 });

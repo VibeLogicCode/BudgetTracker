@@ -30,5 +30,12 @@ export default function manifest(): MetadataRoute.Manifest {
       { src: '/icons/maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
       { src: '/icons/apple-touch-icon.png', sizes: '180x180', type: 'image/png', purpose: 'any' },
     ],
+    /**
+     * v1.13.0 ruling R7. A home-screen long-press lands on the quick-add form instead of the
+     * dashboard. One entry, not a menu: the manifest's own docblock records ruling 9 (no service
+     * worker, no offline caching), and a shortcut list is a navigation surface that has to be kept
+     * in step with the nav for ever.
+     */
+    shortcuts: [{ name: 'Add a transaction', short_name: 'Add', url: '/transactions#quick-add' }],
   };
 }

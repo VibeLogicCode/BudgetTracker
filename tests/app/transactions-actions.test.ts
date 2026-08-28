@@ -111,7 +111,9 @@ function seedLoanAndSpend(balanceCents: number, amountCents: number): { itemId: 
 }
 
 function balanceOf(itemId: number): number | null {
-  return getWarrantyItem(itemId)!.currentBalanceCents;
+  // SessionUser gained `visibility` (v1.13.0 ruling R2); currentUser here is a bare mock shape
+  // for the requireUser() mock, so a household-scoped Viewer literal is built inline instead.
+  return getWarrantyItem(itemId, { id: currentUser.id, role: currentUser.role, visibility: 'household' })!.currentBalanceCents;
 }
 
 describe('setAttributionAction — missing input validation (finding 2)', () => {

@@ -7,7 +7,7 @@ import { formatCents } from '@/lib/money';
 import { getSplits } from '@/lib/splits';
 import type { SessionUser } from '@/lib/auth/session';
 
-let currentUser: SessionUser = { id: 1, name: 'Admin', username: 'admin', role: 'admin' };
+let currentUser: SessionUser = { id: 1, name: 'Admin', username: 'admin', role: 'admin', visibility: 'household' };
 const sameOrigin = vi.hoisted(() => ({ value: true }));
 
 vi.mock('@/lib/auth/session', () => ({
@@ -45,7 +45,7 @@ function formData(fields: Record<string, string>): FormData {
 function setup() {
   current = createSeededTestDb();
   const adminId = insertTestUser(current.db, { name: 'Admin', username: 'admin', role: 'admin' });
-  currentUser = { id: adminId, name: 'Admin', username: 'admin', role: 'admin' };
+  currentUser = { id: adminId, name: 'Admin', username: 'admin', role: 'admin', visibility: 'household' };
   return { db: current.db, sqlite: current.sqlite, adminId };
 }
 
@@ -157,7 +157,7 @@ describe('saveSplitsAction', () => {
     const groceries = categoryIdByName(db, 'Groceries');
     const coffee = categoryIdByName(db, 'Coffee');
 
-    currentUser = { id: other, name: 'Other', username: 'other', role: 'member' };
+    currentUser = { id: other, name: 'Other', username: 'other', role: 'member', visibility: 'household' };
     const result = await saveSplitsAction(
       {},
       formData({
@@ -181,7 +181,7 @@ describe('saveSplitsAction', () => {
     const groceries = categoryIdByName(db, 'Groceries');
     const coffee = categoryIdByName(db, 'Coffee');
 
-    currentUser = { id: owner, name: 'Owner', username: 'owner', role: 'member' };
+    currentUser = { id: owner, name: 'Owner', username: 'owner', role: 'member', visibility: 'household' };
     const result = await saveSplitsAction(
       {},
       formData({

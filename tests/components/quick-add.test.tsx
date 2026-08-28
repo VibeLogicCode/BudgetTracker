@@ -1,0 +1,82 @@
+// @vitest-environment jsdom
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { render, cleanup, screen } from '@testing-library/react';
+import { QuickAddTransaction } from '@/components/QuickAddTransaction';
+
+vi.mock('@/app/(app)/transactions/actions', () => ({
+  manualEntryAction: vi.fn(async () => ({ message: 'Transaction added.' })),
+}));
+
+afterEach(() => cleanup());
+
+/**
+ * Sets an <input>'s value through the NATIVE value setter rather than the plain `el.value = x`
+ * assignment, then dispatches a real 'input' event. React 19 wraps the DOM property setter with
+ * its own tracker so it can tell a real user keystroke apart from a programmatic set; a bare
+ * `el.value = x` goes through that same wrapped setter, which updates the tracker's own record of
+ * "last known value" as a side effect -- so the dispatched event that follows looks like a no-op
+ * change and React's onInput handler never runs. Reaching the *native* setter first (the one
+ * React itself wraps) is the standard workaround.
+ */
+function setNativeInputValue(input: HTMLInputElement, value: string): void {
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!;
+  setter.call(input, value);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+const props = {
+  accounts: [
+    { id: 1, name: 'Chequing' },
+    { id: 2, name: 'Pocket money' },
+  ],
+  categories: [{ id: 3, name: 'Groceries', parentId: null, sortOrder: 0, isArchived: false }],
+  people: [{ id: 1, name: 'Person One' }],
+  today: '2026-08-27',
+  defaultAccountId: 2,
+  variant: 'page' as const,
+};
+
+describe('QuickAddTransaction (ruling R7)', () => {
+  it('preselects the account this person used last', () => {
+    render(<QuickAddTransaction {...props} />);
+    expect((screen.getByLabelText('Account') as HTMLSelectElement).value).toBe('2');
+  });
+
+  it('falls back to the cash option when there is no last account', () => {
+    render(<QuickAddTransaction {...props} defaultAccountId={null} />);
+    expect((screen.getByLabelText('Account') as HTMLSelectElement).value).toBe('cash');
+  });
+
+  it('defaults the date to today', () => {
+    render(<QuickAddTransaction {...props} />);
+    expect((screen.getByLabelText('Date') as HTMLInputElement).value).toBe('2026-08-27');
+  });
+
+  it('carries the #quick-add anchor on the page variant and not on the card variant', () => {
+    const { container, rerender } = render(<QuickAddTransaction {...props} />);
+    expect(container.querySelector('#quick-add')).not.toBeNull();
+    rerender(<QuickAddTransaction {...props} variant="card" />);
+    expect(container.querySelector('#quick-add')).toBeNull();
+  });
+
+  it('sends direction=income only when the amount is typed with a leading plus', () => {
+    render(<QuickAddTransaction {...props} />);
+    const direction = document.querySelector('input[name="direction"]') as HTMLInputElement;
+    // exact: false -- Field puts its `hint` text inside the same wrapping <label> as the
+    // control (docs/PENDING-FIXES.md item J, a known and separately-tracked defect this task
+    // does not fix), so the Amount field's accessible label text is actually "AmountStart with
+    // + for money in", not "Amount" alone.
+    const amount = screen.getByLabelText('Amount', { exact: false }) as HTMLInputElement;
+    setNativeInputValue(amount, '12.34');
+    expect(direction.value).toBe('spend');
+    setNativeInputValue(amount, '+12.34');
+    expect(direction.value).toBe('income');
+  });
+
+  it('lists only the accounts it was given (asset accounts are filtered out upstream, ruling R10)', () => {
+    render(<QuickAddTransaction {...props} />);
+    const select = screen.getByLabelText('Account') as HTMLSelectElement;
+    const values = Array.from(select.options).map((option) => option.value);
+    expect(values).toEqual(['cash', '1', '2']);
+  });
+});

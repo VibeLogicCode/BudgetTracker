@@ -1,8 +1,9 @@
 'use client';
 
 import Link from 'next/link';
-import { useActionState, useState } from 'react';
+import { Fragment, useActionState, useState } from 'react';
 import { FormError } from '@/components/FormError';
+import { QuickAddTransaction } from '@/components/QuickAddTransaction';
 import { SubmitButton } from '@/components/SubmitButton';
 import { TransactionsIcon } from '@/components/icons';
 import { Card, CardBody, CardFooter, CardHeader } from '@/components/ui/Card';
@@ -26,14 +27,19 @@ import {
   assignToLoanAction,
   bulkCategorizeAction,
   bulkTransferAction,
-  manualEntryAction,
   renameTransactionAction,
+  saveNoteAction,
   saveSplitsAction,
   setAttributionAction,
   setCategoryAction,
   unassignFromLoanAction,
   type ActionState,
 } from './actions';
+
+// The table's own <colgroup> below carries one <col> per column: checkbox, date, account,
+// description, amount, category, person, kebab. The note sub-row spans all of them, read off
+// here rather than hardcoded a second time at the point of use.
+const COLUMN_COUNT = 8;
 
 interface Option { id: number; name: string; parentId?: number | null; isArchived?: boolean }
 interface LoanOption { id: number; name: string }
@@ -69,6 +75,8 @@ export function TransactionsClient({
   loanOptions = [],
   loanLinks = {},
   splits = {},
+  defaultAccountId = null,
+  selfScoped = false,
 }: {
   page: TransactionPage;
   accounts: Option[];
@@ -82,11 +90,18 @@ export function TransactionsClient({
   /** v1.7.0 Task 4: existing splits for the rows on this page, keyed by transaction id. A
    *  row absent from this map (or mapped to an empty array) has never been split. */
   splits?: Record<number, SplitRow[]>;
+  /** v1.13.0 ruling R7: quick-add's own default account for this person (users.last_account_id). */
+  defaultAccountId?: number | null;
+  /** v1.13.0 ruling R2: a self viewer's own id already forces the person filter server-side
+   *  (page.tsx), so the pill that would let them ask for someone else is not rendered at all. */
+  selfScoped?: boolean;
 }) {
   const [selected, setSelected] = useState<number[]>([]);
   const [renaming, setRenaming] = useState<{ id: number; current: string; merchant: string } | null>(null);
   const [splitting, setSplitting] = useState<{ id: number; amountCents: number; parts: SplitPartDraft[] } | null>(null);
-  const [manualState, manualAction] = useActionState(manualEntryAction, initial);
+  // Mirrors `renaming` exactly (ruling R13): one nullable slot of state, so opening the note
+  // sub-row on a different row always replaces whichever one was already open.
+  const [noting, setNoting] = useState<{ id: number; current: string } | null>(null);
   const [attrState, attrAction] = useActionState(setAttributionAction, initial);
   const [bulkCatState, bulkCatAction] = useActionState(bulkCategorizeAction, initial);
   const [bulkTfrState, bulkTfrAction] = useActionState(bulkTransferAction, initial);
@@ -100,6 +115,7 @@ export function TransactionsClient({
     initial,
   );
   const [splitState, splitAction] = useActionState(saveSplitsAction, initial);
+  const [noteState, noteAction] = useActionState(saveNoteAction, initial);
 
   const label = (id: number | null) => {
     if (id === null) return 'Uncategorized';
@@ -131,12 +147,16 @@ export function TransactionsClient({
   // one (ruling 1: attribution is whole-transaction) -- this count only powers a cheap
   // heads-up in the toolbar below, never a disabled checkbox.
   const selectedSplitCount = selected.filter((id) => (splits[id] ?? []).length > 0).length;
+  // manualEntryAction's own message/error surfaces inside QuickAddTransaction now (it owns its
+  // own useActionState instance), so this banner no longer merges it in. noteState IS merged in,
+  // the same as renaming/splitting: the sub-row's own form closes on submit (setNoting(null)),
+  // before the action settles, so the top banner is the only place its result is ever seen.
   const notice =
-    manualState.message ?? attrState.message ?? bulkCatState.message ?? bulkTfrState.message ??
-    renameState.message ?? assignState.message ?? unassignState.message ?? splitState.message;
+    attrState.message ?? bulkCatState.message ?? bulkTfrState.message ??
+    renameState.message ?? assignState.message ?? unassignState.message ?? splitState.message ?? noteState.message;
   const error =
-    manualState.error ?? attrState.error ?? bulkCatState.error ?? bulkTfrState.error ??
-    renameState.error ?? assignState.error ?? unassignState.error ?? splitState.error;
+    attrState.error ?? bulkCatState.error ?? bulkTfrState.error ??
+    renameState.error ?? assignState.error ?? unassignState.error ?? splitState.error ?? noteState.error;
 
   // Opens this row's split editor, prefilled from its existing parts (or two blank parts for
   // a fresh split) -- the same "one editor, one nullable slot of state" shape `renaming` uses,
@@ -211,6 +231,15 @@ export function TransactionsClient({
           corrected file in again.
         </p>
       </PageGuide>
+
+      <QuickAddTransaction
+        variant="page"
+        accounts={accounts}
+        categories={categories}
+        people={people}
+        today={today}
+        defaultAccountId={defaultAccountId}
+      />
 
       <FormError message={error} />
       {notice ? <Notice tone="success">{notice}</Notice> : null}
@@ -350,15 +379,20 @@ export function TransactionsClient({
                 ))}
               </select>
             </Field>
-            <Field label="Person">
-              <select name="person" className={selectClass}>
-                <option value="">Everyone</option>
-                <option value="unattributed">Household/unattributed</option>
-                {people.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-            </Field>
+            {/* Ruling R2: for a self viewer the person filter is already forced to their own id
+                server-side (page.tsx's readFilter), so the pill that would let them ask for
+                somebody else is not rendered at all rather than shown-but-ineffective. */}
+            {selfScoped ? null : (
+              <Field label="Person">
+                <select name="person" className={selectClass}>
+                  <option value="">Everyone</option>
+                  <option value="unattributed">Household/unattributed</option>
+                  {people.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+              </Field>
+            )}
             <DateRangePicker
               allowAny
               value={range?.preset ?? ''}
@@ -463,7 +497,8 @@ export function TransactionsClient({
           </thead>
           <tbody>
             {page.rows.map((row) => (
-              <tr key={row.id}>
+              <Fragment key={row.id}>
+              <tr>
                 <td>
                   <input
                     type="checkbox"
@@ -562,6 +597,11 @@ export function TransactionsClient({
                     >
                       Rename…
                     </RowMenuButton>
+                    {/* Ruling R13: the row's notes column existed since v1.0.0 but had no way in
+                        -- saveNoteAction (./actions.ts) was dead code until this menu item. */}
+                    <RowMenuButton onSelect={() => setNoting({ id: row.id, current: row.notes ?? '' })}>
+                      Note…
+                    </RowMenuButton>
                     {row.isTransfer ? null : (
                       <>
                         <RowMenuButton onSelect={() => openSplitEditor(row)}>Split…</RowMenuButton>
@@ -594,6 +634,33 @@ export function TransactionsClient({
                   </RowMenu>
                 </td>
               </tr>
+              {noting?.id === row.id ? (
+                <tr>
+                  {/* Ruling R13: an inline sub-row, not a dialog -- the note is about the row
+                      above it, and a modal would hide the charge the note is explaining. NOT an
+                      auto-save (v1.11.0's rule): a free-text field that saves on blur loses a
+                      half-typed sentence, which is the one thing a note must never do. */}
+                  <td colSpan={COLUMN_COUNT}>
+                    <form
+                      action={noteAction}
+                      onSubmit={() => setNoting(null)}
+                      className="flex flex-col gap-2 py-2"
+                    >
+                      <input type="hidden" name="transactionId" value={row.id} />
+                      <Field label={`Note for ${row.displayDescription ?? row.rawDescription}`}>
+                        <textarea name="notes" defaultValue={noting.current} rows={2} className={inputClass} />
+                      </Field>
+                      <div className="flex gap-2">
+                        <SubmitButton className="w-fit">Save note</SubmitButton>
+                        <button type="button" className="btn btn--ghost btn--sm" onClick={() => setNoting(null)}>
+                          Cancel
+                        </button>
+                      </div>
+                    </form>
+                  </td>
+                </tr>
+              ) : null}
+              </Fragment>
             ))}
           </tbody>
         </TableWrap>
@@ -613,56 +680,6 @@ export function TransactionsClient({
         <CardFooter>
           Page {page.page} of {page.pageCount} — {page.total} transactions
         </CardFooter>
-      </Card>
-
-      <Card as="div" className="max-w-2xl">
-        <CardHeader title="Add a transaction" description="For cash and anything the bank will never send you." />
-        <CardBody>
-          <form action={manualAction} className="flex flex-col gap-4">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="Date">
-                <input type="date" name="date" defaultValue={today} required className={inputClass} />
-              </Field>
-              <Field label="Account">
-                <select name="accountId" className={selectClass}>
-                  <option value="cash">My cash</option>
-                  {accounts.map((a) => (
-                    <option key={a.id} value={a.id}>{a.name}</option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="Description" className="sm:col-span-2">
-                <input name="description" required className={inputClass} />
-              </Field>
-              <Field label="Amount">
-                <input name="amount" inputMode="decimal" placeholder="12.34" required className={inputClass} />
-              </Field>
-              <Field label="Direction">
-                <select name="direction" className={selectClass}>
-                  <option value="spend">Money out</option>
-                  <option value="income">Money in</option>
-                </select>
-              </Field>
-              <Field label="Category">
-                <select name="categoryId" className={selectClass}>
-                  <option value="">Leave to the categorizer</option>
-                  {groupedCategories.map((opt) => (
-                    <option key={opt.id} value={opt.id}>{'\u00A0\u00A0'.repeat(opt.depth) + opt.label}</option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="Person">
-                <select name="attributedUserId" className={selectClass}>
-                  <option value="">Account default</option>
-                  {people.map((p) => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
-                  ))}
-                </select>
-              </Field>
-            </div>
-            <SubmitButton className="w-fit">Add transaction</SubmitButton>
-          </form>
-        </CardBody>
       </Card>
     </div>
   );

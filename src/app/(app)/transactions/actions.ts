@@ -5,7 +5,8 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { isSameOrigin } from '@/lib/auth/csrf';
 import { requireUser } from '@/lib/auth/session';
-import { getOrCreateCashAccount } from '@/lib/accounts';
+import { acceptsTransactions, getAccount, getOrCreateCashAccount } from '@/lib/accounts';
+import { setLastAccountId } from '@/lib/auth/users';
 import { assignTransactionToLoan, loanLinksForTransactions, unassignTransactionFromLoan } from '@/lib/loans';
 import { formatCents, parseAmountToCents } from '@/lib/money';
 import { setTransactionSplits } from '@/lib/splits';
@@ -20,6 +21,7 @@ import {
   updateTransactionNotes,
 } from '@/lib/transactions';
 import { clearCategory, confirmCategory, setTransactionDisplayName, upsertRenameRule } from '@/lib/categorize/engine';
+import { ruleOwnedError } from '@/lib/categorize/rules';
 
 export interface ActionState {
   error?: string;
@@ -61,12 +63,20 @@ export async function manualEntryAction(_prev: ActionState, formData: FormData):
 
   const accountRaw = String(formData.get('accountId') ?? '');
   const accountId = accountRaw === 'cash' ? getOrCreateCashAccount(user.id, user.name) : Number(accountRaw);
+  const account = getAccount(accountId);
+  if (!account) return { error: 'Choose an account.' };
+  // Ruling R10: an asset account holds a typed balance and nothing else. The picker already
+  // filters them out (page.tsx / QuickAddTransaction only ever list accounts that
+  // acceptsTransactions()); this is the second gate, because a select is a suggestion and a POST
+  // is a fact.
+  if (!acceptsTransactions(account.type)) return { error: 'That account only holds a balance you type in.' };
 
   const date = String(formData.get('date') ?? '');
   if (!isIsoDate(date)) return { error: 'Date must be YYYY-MM-DD.' };
 
   const categoryRaw = String(formData.get('categoryId') ?? '');
   const attributedRaw = String(formData.get('attributedUserId') ?? '');
+  const rawNote = String(formData.get('notes') ?? '').trim();
 
   try {
     createManualTransaction({
@@ -76,13 +86,21 @@ export async function manualEntryAction(_prev: ActionState, formData: FormData):
       amountCents: signed,
       categoryId: categoryRaw === '' ? null : Number(categoryRaw),
       attributedUserId: attributedRaw === '' ? null : Number(attributedRaw),
-      notes: null,
+      // Ruling R13: the column, the action and the help page's promise all existed; only this
+      // line was missing. It was `notes: null` from v1.0.0 to v1.12.1. Quick-add itself never
+      // shows a notes field (R7's six-control budget has no room), so this is always '' there
+      // and null here -- the note sub-row in the kebab is where a note actually gets typed.
+      notes: rawNote.length === 0 ? null : rawNote,
       userId: user.id,
     });
   } catch (error) {
     return { error: error instanceof Error ? error.message : 'Could not save the transaction.' };
   }
+  // Ruling R7 / micro-ruling M5: remembered per person, so the next quick-add starts where this
+  // one finished. Written after the transaction, so a failed write never moves the default.
+  setLastAccountId(user.id, accountId);
   revalidatePath('/transactions');
+  revalidatePath('/dashboard');
   return { message: 'Transaction added.' };
 }
 
@@ -115,7 +133,20 @@ export async function setCategoryAction(_prev: ActionState, formData: FormData):
     // action's own confirming sentence ("Category set and rule created.") never reached the
     // screen, because AutoSave reads only result.error. /review keeps the teaching behaviour:
     // that screen is ABOUT the categorizer, and its button says so.
-    confirmCategory({ transactionId, categoryId: Number(raw), userId: user.id, createRule: false });
+    //
+    // v1.13.0 ruling R4: actorRole threaded through so a member can never silently overwrite a
+    // rule someone else in the household owns -- confirmCategory refuses (`owned_by_another`)
+    // rather than overwrite, and reports the sentence ruleOwnedError provides instead of the
+    // usual "Category updated."
+    const result = confirmCategory({ transactionId, categoryId: Number(raw), userId: user.id, createRule: false, actorRole: user.role });
+    if (!result.ok) {
+      return {
+        error:
+          result.reason === 'owned_by_another'
+            ? ruleOwnedError(result.ownerName)
+            : 'This transaction is split — clear its split first, then change its category.',
+      };
+    }
   }
 
   revalidatePath('/transactions');
@@ -175,12 +206,12 @@ export async function bulkTransferAction(_prev: ActionState, formData: FormData)
 export async function saveNoteAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
 
-  await requireUser();
+  const user = await requireUser();
   const parsed = z.object({ transactionId: z.coerce.number().int().positive() }).safeParse({
     transactionId: formData.get('transactionId'),
   });
   if (!parsed.success) return { error: 'Invalid request.' };
-  if (!getTransaction(parsed.data.transactionId)) return { error: 'That transaction no longer exists.' };
+  if (!getTransaction(parsed.data.transactionId, user)) return { error: 'That transaction no longer exists.' };
 
   const note = String(formData.get('notes') ?? '').trim();
   updateTransactionNotes(parsed.data.transactionId, note.length === 0 ? null : note);
@@ -202,7 +233,7 @@ export async function renameTransactionAction(_prev: ActionState, formData: Form
   const transactionId = Number(formData.get('transactionId'));
   if (!Number.isInteger(transactionId) || transactionId <= 0) return { error: 'Invalid request.' };
 
-  const row = getTransaction(transactionId);
+  const row = getTransaction(transactionId, user);
   if (!row) return { error: 'That transaction no longer exists.' };
 
   const parsed = z
@@ -227,12 +258,17 @@ export async function renameTransactionAction(_prev: ActionState, formData: Form
   if (row.normalizedMerchant.length === 0) {
     return { error: 'This transaction has no merchant to match on — use "this transaction only".' };
   }
+  // v1.13.0 ruling R4: actorRole threaded through, and a refusal (someone else in the household
+  // owns this merchant's rename rule) is surfaced with ruleOwnedError -- the row is left exactly
+  // as it was, no rule written, nothing bulk-applied.
   const result = upsertRenameRule({
     pattern: row.normalizedMerchant,
     matchType: 'exact',
     renameTo: parsed.data.displayName,
     userId: user.id,
+    actorRole: user.role,
   });
+  if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
   revalidatePath('/transactions');
   revalidatePath('/review');
   revalidatePath('/settings/managers');
@@ -257,7 +293,7 @@ const loanLinkSchema = z.object({
  */
 export async function assignToLoanAction(formData: FormData): Promise<ActionState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
-  await requireUser();
+  const user = await requireUser();
 
   // F12 fix-round: checked BEFORE the generic schema parse so an omitted/blank selection (the
   // client now also guards this with `required`, but a stripped or hand-crafted request can
@@ -287,7 +323,7 @@ export async function assignToLoanAction(formData: FormData): Promise<ActionStat
   // combined payment; silence would hide a typo. This still takes priority over the F2 honest
   // amount-and-direction copy below -- a person linking a SECOND loan to the same money needs
   // to know that first, regardless of what happened to either loan's own balance.
-  const txn = getTransaction(parsed.data.transactionId);
+  const txn = getTransaction(parsed.data.transactionId, user);
   const links = loanLinksForTransactions([parsed.data.transactionId]).get(parsed.data.transactionId) ?? [];
   const totalLinked = links.reduce((sum, link) => sum + link.amountCents, 0);
   if (txn !== null && totalLinked > Math.abs(txn.amountCents)) {
@@ -301,7 +337,7 @@ export async function assignToLoanAction(formData: FormData): Promise<ActionStat
   // figure assignTransactionToLoan moved (or didn't).
   const isPayment = txn !== null && txn.amountCents < 0;
   if (result.appliedCents === 0) {
-    const item = getWarrantyItem(parsed.data.itemId);
+    const item = getWarrantyItem(parsed.data.itemId, user);
     return {
       message:
         item !== null && item.currentBalanceCents === null
@@ -310,7 +346,7 @@ export async function assignToLoanAction(formData: FormData): Promise<ActionStat
     };
   }
   if (isPayment) {
-    const item = getWarrantyItem(parsed.data.itemId);
+    const item = getWarrantyItem(parsed.data.itemId, user);
     if (item !== null && item.currentBalanceCents === 0) {
       return { message: `Assigned. ${formatCents(result.appliedCents)} came off; the balance is now $0.00.` };
     }
@@ -321,7 +357,7 @@ export async function assignToLoanAction(formData: FormData): Promise<ActionStat
 
 export async function unassignFromLoanAction(formData: FormData): Promise<ActionState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
-  await requireUser();
+  const user = await requireUser();
   const parsed = loanLinkSchema.safeParse({
     transactionId: formData.get('transactionId'),
     itemId: formData.get('itemId'),
@@ -330,7 +366,7 @@ export async function unassignFromLoanAction(formData: FormData): Promise<Action
 
   // Read BEFORE unassigning: amount_cents is immutable (src/db/schema.ts), so this still
   // reflects the link's direction after the loan_payments row is gone (NEW-3).
-  const txn = getTransaction(parsed.data.transactionId);
+  const txn = getTransaction(parsed.data.transactionId, user);
 
   let unassigned: boolean;
   let appliedCents = 0;
@@ -405,7 +441,7 @@ export async function saveSplitsAction(_prev: ActionState, formData: FormData): 
   const txnIdParsed = z.coerce.number().int().positive().safeParse(formData.get('txnId'));
   if (!txnIdParsed.success) return { error: 'Invalid request.' };
 
-  const row = getTransaction(txnIdParsed.data);
+  const row = getTransaction(txnIdParsed.data, user);
   if (!row) return { error: 'That transaction no longer exists.' };
 
   let rawParts: unknown;

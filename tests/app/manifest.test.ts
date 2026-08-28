@@ -67,4 +67,10 @@ describe('src/app/manifest.ts (GET /manifest.webmanifest)', () => {
       expect(fs.existsSync(onDisk), `${icon.src} is listed in the manifest but missing from public/`).toBe(true);
     }
   });
+
+  it('v1.13.0 ruling R7: exactly one shortcut, pointing at the quick-add anchor', () => {
+    expect(manifest().shortcuts).toEqual([
+      { name: 'Add a transaction', short_name: 'Add', url: '/transactions#quick-add' },
+    ]);
+  });
 });
