@@ -8,9 +8,14 @@ import { createWarrantyItem, getWarrantyItem } from '@/lib/warranty/items';
 import { createItemType } from '@/lib/warranty/types';
 import { setTransactionSplits } from '@/lib/splits';
 import { confirmCategory } from '@/lib/categorize/engine';
-import { upsertRuleFromCorrection } from '@/lib/categorize/rules';
+import { ruleOwnedError, upsertRuleFromCorrection } from '@/lib/categorize/rules';
 
-let currentUser = { id: 1, name: 'Alice', username: 'alice', role: 'admin' as const };
+let currentUser: { id: number; name: string; username: string; role: 'admin' | 'member' } = {
+  id: 1,
+  name: 'Alice',
+  username: 'alice',
+  role: 'admin',
+};
 // v1.3.1: toggleable so the loan actions' cross-origin-first test can flip it, same idiom as
 // tests/app/update-actions.test.ts.
 const sameOrigin = vi.hoisted(() => ({ value: true }));
@@ -35,6 +40,8 @@ import {
   assignToLoanAction,
   bulkCategorizeAction,
   bulkTransferAction,
+  manualEntryAction,
+  renameTransactionAction,
   saveNoteAction,
   setAttributionAction,
   setCategoryAction,
@@ -73,6 +80,21 @@ function setup() {
     return row.id;
   };
   return { db: current.db, sqlite: current.sqlite, userId, accountId, addTxn };
+}
+
+/**
+ * insertTestAccount's own type union (tests/helpers/db.ts) is 'chequing' | 'credit' | 'cash' --
+ * it predates ruling R10's five-value AccountType, and widening it is out of this task's file
+ * scope (a shared helper, not one of this task's named files). The `type` column itself has
+ * never carried a SQL CHECK (src/db/schema.ts), so a direct insert works exactly like
+ * addTxn's own raw-SQL pattern above.
+ */
+function insertAssetAccount(name = 'Family Home'): number {
+  const row = current!.db.get<{ id: number }>(sql`
+    insert into accounts (name, institution, type, owner_user_id, is_active, created_at)
+    values (${name}, '', 'asset', null, 1, ${nowIso()})
+    returning id`);
+  return row.id;
 }
 
 /** A loan-kind item, seeded directly through the data layer. */
@@ -557,5 +579,141 @@ describe('v1.12.1: a row edit on /transactions edits ONE row (item U / UX-2, rul
 
     expect(db.get<{ n: number }>(sql`select count(*) as n from merchant_rules where pattern = 'CITY GROCER'`).n).toBe(1);
     expect(db.get<{ c: number | null }>(sql`select category_id as c from transactions where id = ${txnId}`).c).toBeNull();
+  });
+});
+
+/**
+ * Controller fix round 1: this task's own report flagged these three as missing. Each proves
+ * RED by hand-reverting the guard it covers (see task-10-fix-report.md for the transcripts).
+ */
+describe('manualEntryAction — ruling R10: an asset account refuses transactions', () => {
+  it('returns {error} inline and inserts no transaction row', async () => {
+    const { sqlite } = setup();
+    const assetAccountId = insertAssetAccount();
+    const before = (sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c;
+
+    const result = await manualEntryAction(
+      {},
+      formData({
+        amount: '12.34',
+        direction: 'spend',
+        accountId: String(assetAccountId),
+        date: '2026-03-02',
+        description: 'Quarterly balance check',
+      }),
+    );
+
+    expect(result.error).toBe('That account only holds a balance you type in.');
+    expect(result.message).toBeUndefined();
+    const after = (sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c;
+    expect(after).toBe(before);
+  });
+});
+
+describe('manualEntryAction — ruling R7: lastAccountId', () => {
+  it('a successful quick-add stamps the users row with the account it used', async () => {
+    const { sqlite, userId, accountId } = setup();
+    const before = sqlite.prepare('select last_account_id as v from users where id = ?').get(userId) as {
+      v: number | null;
+    };
+    expect(before.v).toBeNull();
+
+    const result = await manualEntryAction(
+      {},
+      formData({ amount: '12.34', direction: 'spend', accountId: String(accountId), date: '2026-03-02', description: 'Coffee' }),
+    );
+
+    expect(result.message).toBeTruthy();
+    const after = sqlite.prepare('select last_account_id as v from users where id = ?').get(userId) as {
+      v: number | null;
+    };
+    expect(after.v).toBe(accountId);
+  });
+
+  it('a failed quick-add (bad amount) leaves it untouched', async () => {
+    const { sqlite, userId } = setup();
+
+    const result = await manualEntryAction(
+      {},
+      formData({ amount: 'not-a-number', direction: 'spend', accountId: 'cash', date: '2026-03-02', description: 'Coffee' }),
+    );
+
+    expect(result.error).toBeTruthy();
+    const after = sqlite.prepare('select last_account_id as v from users where id = ?').get(userId) as {
+      v: number | null;
+    };
+    expect(after.v).toBeNull();
+  });
+});
+
+describe("renameTransactionAction — ruling R4: a member cannot overwrite another user's rule", () => {
+  it("refuses a member's 'all matching' rename with ruleOwnedError, leaving the rule and the row unchanged", async () => {
+    const { db, sqlite, addTxn } = setup();
+    const ownerId = ctx!.userId; // 'Alice', admin, seeded by setup()
+    const memberId = insertTestUser(db, { name: 'Bob', username: 'bob', role: 'member' });
+
+    // The owner creates the rename rule first, as an admin (createdBy is recorded).
+    upsertRuleFromCorrection({
+      pattern: normalizeMerchant('CITY GROCER'),
+      matchType: 'exact',
+      ruleKind: 'rename',
+      categoryId: null,
+      renameTo: 'City Grocer Co-op',
+      createdBy: ownerId,
+      actorRole: 'admin',
+      at: new Date('2026-08-01T00:00:00.000Z'),
+    });
+
+    const txnId = addTxn('CITY GROCER', -4000);
+    currentUser = { id: memberId, name: 'Bob', username: 'bob', role: 'member' };
+
+    const result = await renameTransactionAction(
+      {},
+      formData({ transactionId: String(txnId), displayName: 'Somebody Else Grocer', scope: 'all' }),
+    );
+
+    expect(result.error).toBe(ruleOwnedError('Alice'));
+    expect(result.message).toBeUndefined();
+
+    const rule = sqlite
+      .prepare('select rename_to as renameTo, created_by as createdBy from merchant_rules where pattern = ?')
+      .get(normalizeMerchant('CITY GROCER')) as { renameTo: string; createdBy: number };
+    expect(rule.renameTo).toBe('City Grocer Co-op');
+    expect(rule.createdBy).toBe(ownerId);
+
+    const row = sqlite
+      .prepare('select display_description as d, display_source as s from transactions where id = ?')
+      .get(txnId) as { d: string | null; s: string | null };
+    expect(row.d).toBeNull();
+    expect(row.s).toBeNull();
+  });
+
+  it('an admin CAN overwrite the same rule', async () => {
+    const { sqlite, addTxn } = setup();
+    const ownerId = ctx!.userId;
+    upsertRuleFromCorrection({
+      pattern: normalizeMerchant('CITY GROCER'),
+      matchType: 'exact',
+      ruleKind: 'rename',
+      categoryId: null,
+      renameTo: 'City Grocer Co-op',
+      createdBy: ownerId,
+      actorRole: 'admin',
+      at: new Date('2026-08-01T00:00:00.000Z'),
+    });
+    const txnId = addTxn('CITY GROCER', -4000);
+    // currentUser is already the admin `setup()` created.
+
+    const result = await renameTransactionAction(
+      {},
+      formData({ transactionId: String(txnId), displayName: 'City Grocer (renamed)', scope: 'all' }),
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.message).toBeTruthy();
+    const rule = sqlite
+      .prepare('select rename_to as renameTo from merchant_rules where pattern = ?')
+      .get(normalizeMerchant('CITY GROCER')) as { renameTo: string };
+    expect(rule.renameTo).toBe('City Grocer (renamed)');
   });
 });
