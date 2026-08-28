@@ -2461,3 +2461,12 @@ git add src/lib/warranty/constants.ts src/lib/loans.ts src/app/\(app\)/transacti
 - `src/lib/loans.ts` still contains no literal `'lent'`.
 - `src/app/(app)/help/content.tsx` and `CHANGELOG.md` are untouched by this task, and
   `tests/app/help.test.tsx` passes unedited.
+
+**Deviation (shipped, review round).** Owner resolution and `canActOnOwner` live in exactly one
+place -- `createLoanFromTransaction` (`src/lib/loans.ts`) -- and are never duplicated in
+`createLoanFromTransactionAction`; the action only parses the form and calls the lib function with
+the signed-in viewer, per ruling A12. And a correction to this doc's own guard-strategy claim
+above (Step 6): `.btn` / `SubmitButton` carry **no** phone-height floor of their own -- only
+`.field-control` does (`src/app/globals.css`'s `min-height: 2.75rem` rule is scoped to that class
+alone). "Both controls must carry it" in the sub-row test (Step 6) means the name `<input>` and the
+direction `<select>`, not the `SubmitButton` beside them.
