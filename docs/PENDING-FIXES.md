@@ -1394,3 +1394,22 @@ or before it. Effort: S.
 healthcheck is correctly public, but returns `version` on every 200 response. Evidence:
 `src/app/api/health/route.ts:62`. Fix: drop `version` from the 200 response, keep it only on 503
 responses where its stated purpose actually applies. Effort: S.
+
+**BH. Bill kind undiscoverable: nothing seeds or hints at a Bill item type.**
+Status: OPEN — owner report 2026-08-27, first use of v1.12.0. Proposed release: v1.12.1.
+
+What: v1.12.0 added the `bill` kind but seeds no item type of that kind, and `/warranties/new`
+offers only existing types. An owner looking for "Bill" on the New item page finds nothing and has
+no pointer to Settings → Item types. Same gap exists for every kind, but Bill is the one a new
+release advertised.
+
+Evidence: `drizzle/0011_bill_installments.sql:116` copies existing types only, no INSERT of a
+seed row; `src/app/(app)/warranties/new/new-warranty-client.tsx` renders the type select from
+the caller's list with no empty-kind hint.
+
+Fix: On `/warranties/new`, when no active item type of kind `bill` exists, render a one-line hint
+under the type select: "Tracking a bill with due dates? First add an item type with kind Bill
+under Settings → Item types." (admins get the link; members get the sentence). Do NOT seed a row
+into a user-managed table. Add the same sentence to the Contracts & coverage page guide and the
+help page's Bills section. Test: render with a type list lacking `bill` → hint present; with one
+→ absent. Effort: S.
