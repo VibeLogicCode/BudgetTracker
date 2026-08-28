@@ -25,8 +25,14 @@ afterEach(() => cleanup());
 // items only once opened -- so any test that used to find "Create warranty", "Split…" or a
 // loan link/select directly in the DOM must open the row's menu first, the same way a person
 // would click the ⋯ button before seeing them.
+//
+// v1.13.1 (item M): the kebab's accessible name now carries the row's date and amount too
+// (`Actions for TIM HORTONS on 2026-08-03, -$4.12`), so an exact-string match no longer finds
+// it. The 16 existing call sites below still pass just `Actions for <description>`, so this
+// matches on that as a PREFIX instead of the whole name.
 function openRowMenu(name: string) {
-  fireEvent.click(screen.getByRole('button', { name }));
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  fireEvent.click(screen.getByRole('button', { name: new RegExp(`^${escaped}`) }));
 }
 
 function pageWithRow(overrides: Partial<TransactionRow> = {}): TransactionPage {
@@ -393,10 +399,10 @@ describe('Split editor (v1.7.0 Task 4)', () => {
       />,
     );
 
-    // Both rows share the same rawDescription (twoRowPage doesn't override it), so their
-    // kebabs share one accessible name -- getAllByRole plus index stands in for "row 1's
-    // kebab" and "row 2's kebab".
-    const kebabs = screen.getAllByRole('button', { name: 'Actions for TIM HORTONS' });
+    // Both rows share the same rawDescription (twoRowPage doesn't override it) -- and, since
+    // item M, their accessible names now diverge by amount, which is exactly what this
+    // getAllByRole + a shared-prefix regex is for: "row 1's kebab" and "row 2's kebab".
+    const kebabs = screen.getAllByRole('button', { name: /^Actions for TIM HORTONS/ });
 
     fireEvent.click(kebabs[0]);
     fireEvent.click(screen.getByRole('menuitem', { name: 'Split…' }));
@@ -622,5 +628,72 @@ describe('v1.13.0 ruling R2: a self-scoped viewer never sees the person filter p
       />,
     );
     expect(container.querySelector('form[method="get"] select[name="person"]')).toBeTruthy();
+  });
+});
+
+describe('TransactionsClient — two identical charges are tellable apart (item M)', () => {
+  it('puts the row date and amount in the kebab name', () => {
+    const page: TransactionPage = {
+      total: 2,
+      page: 1,
+      pageSize: 50,
+      pageCount: 1,
+      rows: [
+        pageWithRow({ id: 1, date: '2026-08-03', amountCents: -412 }).rows[0],
+        pageWithRow({ id: 2, date: '2026-08-03', amountCents: -1099 }).rows[0],
+      ],
+    };
+    render(<TransactionsClient page={page} accounts={[]} categories={[]} people={[]} today="2026-08-16" />);
+    // Sighted users disambiguate by position, amount and date; none of that was in the name.
+    expect(screen.getByRole('button', { name: 'Actions for TIM HORTONS on 2026-08-03, -$4.12' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Actions for TIM HORTONS on 2026-08-03, -$10.99' })).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: /^Actions for TIM HORTONS/ })).toHaveLength(2);
+  });
+});
+
+describe('TransactionsClient — a self viewer gets no attribution controls (item BO)', () => {
+  it('renders no bulk Attribute form and no per-row person select', () => {
+    render(
+      <TransactionsClient
+        page={pageWithRow({ id: 1 })}
+        accounts={[]}
+        categories={[]}
+        people={[]}
+        today="2026-03-02"
+        selfScoped
+      />,
+    );
+    fireEvent.click(screen.getByLabelText('Select transaction 1'));
+    expect(screen.queryByRole('button', { name: 'Attribute' })).toBeNull();
+    expect(screen.queryByLabelText('Person for transaction 1')).toBeNull();
+    // Not rendered rather than shown-but-ineffective -- this file's own rule at :382-384.
+    expect(screen.queryByLabelText('Person for the selected transactions')).toBeNull();
+  });
+
+  it('still shows who the row belongs to', () => {
+    render(
+      <TransactionsClient
+        page={pageWithRow({ id: 1, attributedUserId: 7, attributedUserName: 'Alice' })}
+        accounts={[]}
+        categories={[]}
+        people={[]}
+        today="2026-03-02"
+        selfScoped
+      />,
+    );
+    expect(screen.getByText('Alice')).toBeTruthy();
+  });
+
+  it('keeps both controls for a household viewer', () => {
+    render(
+      <TransactionsClient
+        page={pageWithRow({ id: 1 })}
+        accounts={[]}
+        categories={[]}
+        people={[{ id: 7, name: 'Alice' }]}
+        today="2026-03-02"
+      />,
+    );
+    expect(screen.getByLabelText('Person for transaction 1')).toBeTruthy();
   });
 });

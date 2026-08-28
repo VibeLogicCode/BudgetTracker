@@ -437,16 +437,21 @@ export function TransactionsClient({
             </label>
             <SubmitButton>Categorize</SubmitButton>
           </form>
-          <form action={attrAction} className="flex flex-wrap items-center gap-2">
-            <input type="hidden" name="ids" value={selected.join(',')} />
-            <select name="attributedUserId" aria-label="Person for the selected transactions" className={selectClass}>
-              <option value="">Household/unattributed</option>
-              {people.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-            <SubmitButton>Attribute</SubmitButton>
-          </form>
+          {/* Item BO: for a self viewer every choice here returns NOT_YOURS_ERROR, so it is not
+              rendered at all rather than shown-but-ineffective -- the same rule as the person
+              filter at :382-384. */}
+          {selfScoped ? null : (
+            <form action={attrAction} className="flex flex-wrap items-center gap-2">
+              <input type="hidden" name="ids" value={selected.join(',')} />
+              <select name="attributedUserId" aria-label="Person for the selected transactions" className={selectClass}>
+                <option value="">Household/unattributed</option>
+                {people.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+              <SubmitButton>Attribute</SubmitButton>
+            </form>
+          )}
           <form action={bulkTfrAction} className="flex items-center gap-2">
             <input type="hidden" name="ids" value={selected.join(',')} />
             <input type="hidden" name="isTransfer" value="1" />
@@ -564,28 +569,42 @@ export function TransactionsClient({
                   )}
                 </td>
                 <td>
-                  <AutoSaveSelect
-                    name="attributedUserId"
-                    defaultValue={row.attributedUserId === null ? '' : String(row.attributedUserId)}
-                    options={[
-                      { value: '', label: 'Household' },
-                      ...people.map((person) => ({ value: String(person.id), label: person.name })),
-                    ]}
-                    fields={{ ids: String(row.id) }}
-                    action={saveAttribution}
-                    ariaLabel={`Person for transaction ${row.id}`}
-                  />
+                  {selfScoped ? (
+                    // Item BO: plain text, not nothing -- the column keeps its width and the row
+                    // keeps its meaning. The <AutoSaveSelect below stays in this file on purpose:
+                    // it is a conditional render, and tests/ops/row-controls.test.ts counts the
+                    // token.
+                    <span className="text-muted">{row.attributedUserName ?? 'Household'}</span>
+                  ) : (
+                    <AutoSaveSelect
+                      name="attributedUserId"
+                      defaultValue={row.attributedUserId === null ? '' : String(row.attributedUserId)}
+                      options={[
+                        { value: '', label: 'Household' },
+                        ...people.map((person) => ({ value: String(person.id), label: person.name })),
+                      ]}
+                      fields={{ ids: String(row.id) }}
+                      action={saveAttribution}
+                      ariaLabel={`Person for transaction ${row.id}`}
+                    />
+                  )}
                 </td>
                 {/* One menu instead of a link, a button and a select-with-button. The label
                     names the ROW, not the column: "Actions" repeated identically down a table
                     tells a screen reader nothing about which row it is on.
+                    v1.13.1 (item M): the description alone was not enough either -- two identical
+                    coffee-shop charges on one statement produced two buttons with the same name
+                    and nothing else to tell them apart. Date AND amount, because the named
+                    collision case is usually same-merchant AND same-date.
                     MUST-11.1/11.2: a purchase can carry a warranty, a transfer cannot.
                     MUST-11.3: the URL carries ONLY the id; the add page derives the rest.
                     MUST-14.8: a transfer never carries a loan control. MUST-14.10 stays
                     reachable because assign items are always offered alongside existing links,
                     never replaced by them. */}
                 <td className="text-right">
-                  <RowMenu label={`Actions for ${row.displayDescription ?? row.rawDescription}`}>
+                  <RowMenu
+                    label={`Actions for ${row.displayDescription ?? row.rawDescription} on ${row.date}, ${formatCents(row.amountCents)}`}
+                  >
                     <RowMenuButton
                       onSelect={() =>
                         setRenaming({

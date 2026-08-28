@@ -79,4 +79,16 @@ describe('QuickAddTransaction (ruling R7)', () => {
     const values = Array.from(select.options).map((option) => option.value);
     expect(values).toEqual(['cash', '1', '2']);
   });
+
+  it('renders no Person field when there is nobody to attribute to (item BO)', () => {
+    render(<QuickAddTransaction {...props} people={[]} />);
+    // With people: [] the select degenerated to a lone "Account default" option -- a control
+    // that cannot do anything, which is what item BO is about.
+    expect(screen.queryByLabelText('Person')).toBeNull();
+  });
+
+  it('still renders it for a household viewer', () => {
+    render(<QuickAddTransaction {...props} />);
+    expect(screen.getByLabelText('Person')).toBeTruthy();
+  });
 });

@@ -89,16 +89,21 @@ export function QuickAddTransaction({
           ))}
         </select>
       </Field>
-      <Field label="Person" className="sm:col-span-1">
-        <select name="attributedUserId" className={selectClass}>
-          <option value="">Account default</option>
-          {people.map((person) => (
-            <option key={person.id} value={person.id}>
-              {person.name}
-            </option>
-          ))}
-        </select>
-      </Field>
+      {people.length > 0 ? (
+        // Item BO: /transactions passes people: [] for a self viewer, which left this select
+        // with a lone "Account default" option -- a control that cannot do anything. No new
+        // prop: an empty roster is exactly the condition.
+        <Field label="Person" className="sm:col-span-1">
+          <select name="attributedUserId" className={selectClass}>
+            <option value="">Account default</option>
+            {people.map((person) => (
+              <option key={person.id} value={person.id}>
+                {person.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+      ) : null}
       <input type="hidden" name="notes" value="" />
       <div className="sm:col-span-6">
         <SubmitButton className="w-fit">Add</SubmitButton>

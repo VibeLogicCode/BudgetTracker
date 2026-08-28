@@ -87,7 +87,10 @@ export default async function TransactionsPage({
       // Ruling R5: every attribution picker reads the same list -- active people, login or not.
       // This is also the fix for the pre-v1.13.0 inconsistency where this page listed deactivated
       // members and budgets/page.tsx did not.
-      people={listAttributablePeople().map((person) => ({ id: person.id, name: person.name }))}
+      // v1.13.1 (item BO): except for a self viewer, who gets none. Every attribution choice is
+      // refused for them server-side, so the names were travelling into the client for controls
+      // that could never work.
+      people={isSelfScoped(viewer) ? [] : listAttributablePeople().map((person) => ({ id: person.id, name: person.name }))}
       today={today}
       range={range}
       // Ruling R2: the pill/select that would let a self viewer pick someone else is not
