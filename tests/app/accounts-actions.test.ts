@@ -385,6 +385,29 @@ describe('updateAccountAction — manual balance entry (spec 2026-08-22 v1.7.0 T
     expect(snapshotRows()).toEqual([]);
   });
 
+  it('v1.12.1 (MON-4 follow-up): a hand-typed balance is not silently dropped -- the message says so when a bank statement already covers that day', async () => {
+    const { db } = setup();
+    const id = insertTestAccount(db, { name: 'Joint Chequing' });
+    // A csv snapshot outranks manual (SNAPSHOT_SOURCE_RANK) -- write one first for the same
+    // day, then attempt the exact write the accounts form makes.
+    current!.sqlite
+      .prepare(
+        `insert into account_balance_snapshots (account_id, date, balance_cents, source, created_at)
+         values (?, '2026-08-20', 500000, 'csv', '2026-08-20T00:00:00.000Z')`,
+      )
+      .run(id);
+
+    const result = await updateAccountAction(
+      {},
+      formData({ accountId: String(id), name: 'Joint Chequing', owner: '', profile: '', balance: '100.00', asOfDate: '2026-08-20' }),
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.message).toMatch(/kept the figure from the bank statement/i);
+    // The bank figure survives untouched -- the whole point of the message being honest.
+    expect(snapshotRows()).toEqual([{ account_id: id, date: '2026-08-20', balance_cents: 500000, source: 'csv' }]);
+  });
+
   it('rejects a non-admin caller even when a balance is supplied', async () => {
     const { db } = setup();
     const id = insertTestAccount(db, { name: 'Joint Chequing' });

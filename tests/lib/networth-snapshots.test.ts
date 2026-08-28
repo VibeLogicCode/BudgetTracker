@@ -232,6 +232,41 @@ describe('v1.12.1: source authority is implemented, not just documented (item BB
   });
 });
 
+describe('v1.12.1: recordBalanceSnapshot reports whether the write actually landed (MON-4 follow-up)', () => {
+  it('returns applied: true on a first insert', () => {
+    const { accountId } = setup();
+    expect(recordBalanceSnapshot({ accountId, date: '2026-08-20', balanceCents: 100, source: 'manual' })).toEqual({
+      applied: true,
+    });
+  });
+
+  it('returns applied: true on an equal-rank overwrite', () => {
+    const { accountId } = setup();
+    recordBalanceSnapshot({ accountId, date: '2026-08-20', balanceCents: 100, source: 'simplefin' });
+    expect(recordBalanceSnapshot({ accountId, date: '2026-08-20', balanceCents: 200, source: 'simplefin' })).toEqual({
+      applied: true,
+    });
+  });
+
+  it('returns applied: true on a higher-rank overwrite', () => {
+    const { accountId } = setup();
+    recordBalanceSnapshot({ accountId, date: '2026-08-20', balanceCents: 100, source: 'csv' });
+    expect(recordBalanceSnapshot({ accountId, date: '2026-08-20', balanceCents: 200, source: 'simplefin' })).toEqual({
+      applied: true,
+    });
+  });
+
+  it('returns applied: false when a lower-rank write is silently outranked', () => {
+    const { accountId } = setup();
+    recordBalanceSnapshot({ accountId, date: '2026-08-20', balanceCents: 100, source: 'csv' });
+    expect(recordBalanceSnapshot({ accountId, date: '2026-08-20', balanceCents: 999, source: 'manual' })).toEqual({
+      applied: false,
+    });
+    // And the figure genuinely was not saved -- applied: false is not a lie.
+    expect(snapshotAt(accountId, '2026-08-20').balanceCents).toBe(100);
+  });
+});
+
 describe('v1.12.1: csv snapshots can be deleted (item AE / MON-5)', () => {
   it('deletes only csv rows, only on the named account and dates', () => {
     const { accountId, otherAccountId } = setupTwoAccounts();

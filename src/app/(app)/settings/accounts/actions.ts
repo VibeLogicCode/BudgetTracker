@@ -216,7 +216,23 @@ export async function updateAccountAction(_prev: AccountsFormState, formData: Fo
     // states nothing in the lib layer normalizes a sign, and moving the negation there would make
     // that no longer true.
     const signedBalanceCents = account.type === 'credit' ? -balanceCents : balanceCents;
-    recordBalanceSnapshot({ accountId: parsed.data.accountId, date: asOfDate, balanceCents: signedBalanceCents, source: 'manual' });
+    const { applied } = recordBalanceSnapshot({
+      accountId: parsed.data.accountId,
+      date: asOfDate,
+      balanceCents: signedBalanceCents,
+      source: 'manual',
+    });
+    // v1.12.1 (item BB / MON-4 follow-up): a typed balance for a date a csv/simplefin snapshot
+    // already covers is now silently outranked -- see recordBalanceSnapshot's own docblock and
+    // SNAPSHOT_SOURCE_RANK. Reporting the name-change success message unconditionally after
+    // that told the person their figure was saved when it was not; this is the honest half of
+    // that fix, on the one caller that lets a person type a balance by hand.
+    if (!applied) {
+      revalidateProfileRoutes();
+      return {
+        message: `${parsed.data.name} updated. Kept the figure from the bank statement for that day; your typed balance was not saved.`,
+      };
+    }
   }
 
   revalidateProfileRoutes();

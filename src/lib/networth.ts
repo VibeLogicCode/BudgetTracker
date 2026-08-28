@@ -65,6 +65,18 @@ export const SNAPSHOT_SOURCE_RANK: Readonly<Record<'manual' | 'csv' | 'simplefin
   simplefin: 3,
 };
 
+export interface RecordSnapshotResult {
+  /**
+   * v1.12.1 (item BB / MON-4 follow-up). false exactly when the rank guard below left the row
+   * untouched -- a lower-rank write (a hand-typed correction arriving after a bank statement
+   * already set the day) that the upsert silently dropped. True on a fresh insert and on an
+   * equal-or-higher-rank overwrite. `result.changes` is the honest signal for this: the rank
+   * guard's `setWhere` failing is exactly the case SQLite's upsert treats as "no update, no
+   * failure, row left alone", which reports back as zero rows changed.
+   */
+  applied: boolean;
+}
+
 /**
  * Upserts on (accountId, date) via the `account_balance_snapshots_uq` unique index: a second
  * write for the same account and day REPLACES that day's balance instead of inserting a
@@ -76,12 +88,18 @@ export const SNAPSHOT_SOURCE_RANK: Readonly<Record<'manual' | 'csv' | 'simplefin
  * a malformed date reach SQLite as an un-indexable string or a dangling account id violate the
  * FK with a raw constraint error -- the same shape of guard renameAccount/setAccountOwner's
  * callers apply in src/app/(app)/settings/accounts/actions.ts.
+ *
+ * Returns whether the write actually landed (v1.12.1 follow-up, item BB / MON-4). Every
+ * existing caller predates this and keeps compiling unchanged -- they are free to ignore the
+ * return value -- but a caller that needs to tell its own user the truth (updateAccountAction,
+ * below) can no longer report success when the rank guard silently discarded a lower-rank
+ * write.
  */
-export function recordBalanceSnapshot(input: RecordSnapshotInput): void {
+export function recordBalanceSnapshot(input: RecordSnapshotInput): RecordSnapshotResult {
   if (!isIsoDate(input.date)) throw new Error('Snapshot date must be YYYY-MM-DD.');
   if (!getAccount(input.accountId)) throw new Error('That account no longer exists.');
 
-  getDb()
+  const result = getDb()
     .insert(accountBalanceSnapshots)
     .values({
       accountId: input.accountId,
@@ -106,6 +124,8 @@ export function recordBalanceSnapshot(input: RecordSnapshotInput): void {
                      end) <= ${SNAPSHOT_SOURCE_RANK[input.source]}`,
     })
     .run();
+
+  return { applied: Number(result.changes ?? 0) > 0 };
 }
 
 /**
