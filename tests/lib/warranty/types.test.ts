@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { createTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../helpers/db';
+import type { Viewer } from '@/lib/auth/viewer';
 import { getWarrantyItem } from '@/lib/warranty/items';
 import {
   ItemTypeInUseError,
@@ -22,6 +23,8 @@ afterEach(() => {
 });
 
 const ISO = '2026-08-16T12:00:00.000Z';
+/** This suite is entirely about item-type mechanics, not visibility -- every read here is household-wide. */
+const HOUSEHOLD: Viewer = { id: 0, role: 'admin', visibility: 'household' };
 
 function setup(): { userId: number } {
   current = createTestDb();
@@ -279,7 +282,7 @@ describe('MUST-12.5 / MUST-12.6: what a kind flip clears', () => {
     setup();
     const { typeId, itemId, txnId } = seedLoanWithRuleAndPayment();
     setItemTypeKind(typeId, 'warranty');
-    const item = getWarrantyItem(itemId)!;
+    const item = getWarrantyItem(itemId, HOUSEHOLD)!;
     expect([item.principalCents, item.interestRateBps, item.currentBalanceCents, item.balanceUpdatedAt]).toEqual([
       null,
       null,
@@ -298,7 +301,7 @@ describe('MUST-12.5 / MUST-12.6: what a kind flip clears', () => {
     setup();
     const { typeId, itemId } = seedLoanWithRuleAndPayment();
     setItemTypeKind(typeId, 'subscription');
-    const item = getWarrantyItem(itemId)!;
+    const item = getWarrantyItem(itemId, HOUSEHOLD)!;
     expect(item.billingCycle).toBe('monthly');
     expect(item.billingAmountCents).toBe(45000);
     expect(item.currentBalanceCents).toBeNull();
@@ -389,7 +392,7 @@ describe('flipping a type to and from bill', () => {
 
     setItemTypeKind(typeId, 'bill');
 
-    const after = getWarrantyItem(itemId)!;
+    const after = getWarrantyItem(itemId, HOUSEHOLD)!;
     expect(after.kind).toBe('bill');
     expect(after.billingCycle).toBeNull();
     expect(after.billingAmountCents).toBeNull();
