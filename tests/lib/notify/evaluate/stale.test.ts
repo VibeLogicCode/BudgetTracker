@@ -22,8 +22,9 @@ afterEach(() => {
   t.cleanup();
 });
 
-function emailUser(): number {
-  const userId = insertTestUser(t.db, { username: `u${Math.random().toString(36).slice(2, 8)}` });
+function emailUser(over: Partial<{ role: 'admin' | 'member'; visibility: 'household' | 'self' }> = {}): number {
+  const userId = insertTestUser(t.db, { username: `u${Math.random().toString(36).slice(2, 8)}`, role: over.role ?? 'admin' });
+  if (over.visibility) t.db.run(sql`update users set visibility = ${over.visibility} where id = ${userId}`);
   saveSmtp({
     preset: 'brevo',
     host: 'h',
@@ -162,5 +163,26 @@ describe('ruling R14: the stale-import alert names the account', () => {
   it('an inactive account never fires, and an install with no imports still fires nothing', () => {
     setAccountActive(accountB, false);
     expect(evaluateStaleImport({ userId, now: new Date('2026-08-27T09:00:00Z'), tz: 'America/Toronto' })).toBe(0);
+  });
+});
+
+// v1.13.0 whole-branch review, item I5. evaluateStaleImport took no viewer at all and queried
+// every account in the install unconditionally, so a self-visibility recipient was told about
+// (and could be emailed the name of) an account they cannot see on any page in the app --
+// household data reaching a self viewer through the ONE channel that isn't a page render.
+describe('ruling R2 (item I5): a self-scoped recipient never gets stale_import, even with a genuinely stale account', () => {
+  it('returns 0 and enqueues nothing for a self-scoped (member, visibility self) recipient', () => {
+    const userId = emailUser({ role: 'member', visibility: 'self' });
+    saveUserSettings(userId, { ...DEFAULT_USER_SETTINGS, staleImportWeeks: 3 });
+    importAt(userId, '2026-07-01T12:00:00.000Z'); // 47 days before 'now' below -- genuinely stale
+    expect(evaluateStaleImport({ userId, now: new Date('2026-08-17T12:00:00Z'), tz: TZ })).toBe(0);
+    expect(keys()).toEqual([]);
+  });
+
+  it('the same stale account still fires for a household recipient (regression guard)', () => {
+    const userId = emailUser();
+    saveUserSettings(userId, { ...DEFAULT_USER_SETTINGS, staleImportWeeks: 3 });
+    importAt(userId, '2026-07-01T12:00:00.000Z');
+    expect(evaluateStaleImport({ userId, now: new Date('2026-08-17T12:00:00Z'), tz: TZ })).toBe(1);
   });
 });
