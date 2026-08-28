@@ -426,7 +426,7 @@ describe('loanSignedDelta (spec BU, ruling P4)', () => {
   });
 
   it('labels are written in the household’s voice and cover every value', () => {
-    expect(LOAN_DIRECTIONS.map((d) => LOAN_DIRECTION_LABELS[d])).toEqual(['We owe this', 'Owed to us']);
+    expect(LOAN_DIRECTIONS.map((d) => LOAN_DIRECTION_LABELS[d])).toEqual(['Borrowed — we owe them', 'Lent out — they owe us']);
     expect(isLoanDirection('owed')).toBe(true);
     expect(isLoanDirection('lent')).toBe(true);
     expect(isLoanDirection('given')).toBe(false);

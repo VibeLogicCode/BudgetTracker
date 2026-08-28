@@ -136,7 +136,7 @@ describe('DashboardPage (ruling R2)', () => {
     const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
     render(await DashboardPage({ searchParams: Promise.resolve({}) }));
 
-    expect(screen.getByText('Loans')).toBeTruthy();
+    expect(screen.getByText('What we owe')).toBeTruthy();
     expect(screen.getByText('Who owes us')).toBeTruthy();
     expect(screen.getByText('Civic')).toBeTruthy();
     expect(screen.getByText('Loan to a friend')).toBeTruthy();
@@ -156,7 +156,7 @@ describe('DashboardPage (ruling R2)', () => {
 
     expect(screen.getByText('Owed to you')).toBeTruthy();
     expect(screen.queryByText('Who owes us')).toBeNull();
-    expect(screen.queryByText('Loans')).toBeNull();
+    expect(screen.queryByText('What we owe')).toBeNull();
     expect(screen.getByText('Loan to a friend')).toBeTruthy();
     // The other household member's owed loan is never in this viewer's rows at all.
     expect(screen.queryByText('Adult owed loan')).toBeNull();

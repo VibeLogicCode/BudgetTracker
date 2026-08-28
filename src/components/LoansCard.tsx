@@ -29,8 +29,8 @@ export function LoansCard({ loans, totalOwedCents }: { loans: LoanSummary[]; tot
   return (
     <Card>
       <CardHeader
-        title="Loans"
-        description="What the household still owes."
+        title="What we owe"
+        description="Loans the household is paying back."
         action={
           <span className="flex items-center gap-2">
             {hasUntrackedBalance ? (

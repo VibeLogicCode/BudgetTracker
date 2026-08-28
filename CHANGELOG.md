@@ -42,19 +42,22 @@ it will retry.
 
 - **A loan can now point either way.** Every loan kept its old meaning — a debt the household
   owes — and that stays the default, unchanged. A new **Direction** control on the loan form
-  offers a second choice, **Owed to us**, for money you lent someone: money leaving the account
-  now adds to what they owe you, and money coming back takes it off again.
+  offers a second choice, **Lent out — they owe us**, for money you lent someone: money leaving
+  the account now adds to what they owe you, and money coming back takes it off again.
 - **A "Who owes us" card on the Dashboard**, listing anyone who owes the household money and
   hiding itself when nobody does. A member who only sees their own records sees it titled **Owed
   to you**, listing only their own loans.
 - **A second line on the Reports debt chart**, plotting what the household has lent out
   separately from what it owes, with a legend once a lent loan has a balance.
+- **Transactions → row menu → "Assign to new loan…"** creates the loan (name + direction) and
+  assigns that row as its first entry, so lending to a friend never needs a detour through
+  Warranties & bills.
 
 ### Changed
 
 - **Money you have lent out no longer counts toward the household debt total or the debt side of
-  net worth.** It stays out of the "What the household still owes" figure and out of net worth's
-  debt line, because money owed to the household is not a debt the household owes. Someone whose
+  net worth.** It stays out of the "What we owe" figure and out of net worth's debt line, because
+  money owed to the household is not a debt the household owes. Someone whose
   net worth figure moves after this update is entitled to know why, and this is the one number
   this release changes without being asked.
 

@@ -263,7 +263,7 @@ describe('version and changelog', () => {
     expect(entry).toMatch(/all-or-nothing/i);
     expect(entry).toMatch(/roll back/i);
     // The headline claims, asserted as claims and not just as a version number.
-    expect(entry).toMatch(/Owed to us/);
+    expect(entry).toMatch(/Lent out — they owe us/);
     expect(entry).toMatch(/Who owes us/);
     expect(entry).toMatch(/net worth/i);
     expect(entry).toMatch(/Review page/);

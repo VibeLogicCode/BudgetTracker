@@ -180,8 +180,8 @@ export default async function DashboardPage({
             The pills beside the greeting scope the spending figures to one household member, or to
             everyone. Loans, net worth and upcoming bills stay household-wide whichever pill is
             chosen, because a balance owed is not attributed to a person the way a transaction is.
-            A loan can point either way: the Loans card is what the household still owes, and
-            &quot;Who owes us&quot; is money the household has lent out and not been repaid.
+            A loan can point either way: &quot;What we owe&quot; is what the household still owes,
+            and &quot;Who owes us&quot; is money the household has lent out and not been repaid.
           </p>
         )}
         <p>

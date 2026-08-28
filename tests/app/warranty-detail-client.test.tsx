@@ -603,7 +603,7 @@ describe('the Direction control on the edit form (spec BU, ruling P16)', () => {
     renderDetail({ item: item({ typeId: 3, typeName: 'Car loan', kind: 'loan', loanDirection: 'lent' }) });
     fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
     const select = screen.getByLabelText('Direction') as HTMLSelectElement;
-    expect([...select.options].map((option) => option.textContent)).toEqual(['We owe this', 'Owed to us']);
+    expect([...select.options].map((option) => option.textContent)).toEqual(['Borrowed — we owe them', 'Lent out — they owe us']);
     expect(select.value).toBe('lent');
     // There is no "Not set": the column is NOT NULL and 'owed' is its default (ruling P1).
     expect([...select.options].map((option) => option.value)).toEqual(['owed', 'lent']);
@@ -632,7 +632,7 @@ describe('the Direction detail row (spec BU)', () => {
   it('shows a Direction row for a loan and reads it back in words', () => {
     renderDetail({ item: item({ typeId: 3, typeName: 'Car loan', kind: 'loan', loanDirection: 'lent' }) });
     expect(screen.getByText('Direction')).toBeTruthy();
-    expect(screen.getByText('Owed to us')).toBeTruthy();
+    expect(screen.getByText('Lent out — they owe us')).toBeTruthy();
   });
 
   it('hides the Direction row for a non-loan item that carries the default', () => {

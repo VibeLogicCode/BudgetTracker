@@ -351,11 +351,18 @@ export const HELP_SECTIONS: HelpSection[] = [
           Reports say anything.
         </P>
         <P>
-          A loan can point either way. <B>We owe this</B> is the usual one — money leaving the
-          account pays it down. <B>Owed to us</B> is for money you lent someone: money leaving
-          the account adds to what they owe you, and money coming back takes it off again. Loans
-          you lent out are kept out of the debt figures and get their own card on the Dashboard
-          and their own line on the debt report.
+          A loan can point either way. <B>Borrowed — we owe them</B> is the usual one — money
+          leaving the account pays it down. <B>Lent out — they owe us</B> is for money you lent
+          someone: money leaving the account adds to what they owe you, and money coming back
+          takes it off again. Loans you lent out are kept out of the debt figures and get their
+          own card on the Dashboard and their own line on the debt report.
+        </P>
+        <P>
+          You don&rsquo;t have to start on this page to record a loan. From the Transactions
+          page, a row&rsquo;s menu offers <B>Assign to &ldquo;&lt;loan&gt;&rdquo;</B> for an
+          existing loan — money out on a loan you lent out adds to what they owe, money in
+          reduces it — and <B>Assign to new loan…</B>, which creates the loan right there and
+          assigns that row as its first entry.
         </P>
         <P>
           A <B>bill</B> is the one kind that carries its own list of due dates rather than a

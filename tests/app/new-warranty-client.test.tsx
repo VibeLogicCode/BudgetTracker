@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, cleanup, screen, fireEvent } from '@testing-library/react';
 import { NewWarrantyClient } from '@/app/(app)/warranties/new/new-warranty-client';
-import type { ItemKind } from '@/lib/warranty/constants';
+import { LOAN_DIRECTION_LABELS, type ItemKind } from '@/lib/warranty/constants';
 
 vi.mock('@/app/(app)/warranties/actions', () => ({
   createWarrantyAction: vi.fn(async () => ({})),
@@ -238,7 +238,7 @@ describe('the loan hints follow the selected Direction (review C)', () => {
     expect(screen.getByText("Today's balance. Payments you link will take it down from here.")).toBeTruthy();
   });
 
-  it('flips to the lent frame when Direction is set to Owed to us', () => {
+  it('flips to the lent frame when Direction is set to Lent out — they owe us', () => {
     const { container } = renderForm();
     fireEvent.change(container.querySelector('select[name="typeId"]')!, { target: { value: '3' } });
     fireEvent.change(screen.getByLabelText('Direction'), { target: { value: 'lent' } });
@@ -261,11 +261,14 @@ describe('the Direction control (spec BU, ruling P16)', () => {
     expect(screen.queryByLabelText('Direction')).toBeNull();
   });
 
-  it('offers exactly the two directions for a loan, defaulting to "We owe this"', () => {
+  it('offers exactly the two directions for a loan, defaulting to "Borrowed — we owe them"', () => {
     const { container } = renderForm();
     fireEvent.change(container.querySelector('select[name="typeId"]')!, { target: { value: '3' } }); // Car loan
     const select = screen.getByLabelText('Direction') as HTMLSelectElement;
-    expect([...select.options].map((option) => option.textContent)).toEqual(['We owe this', 'Owed to us']);
+    expect([...select.options].map((option) => option.textContent)).toEqual([
+      LOAN_DIRECTION_LABELS.owed,
+      LOAN_DIRECTION_LABELS.lent,
+    ]);
     expect(select.value).toBe('owed');
     // There is no "Not set": the column is NOT NULL and 'owed' is its default (ruling P1).
     expect([...select.options].map((option) => option.value)).toEqual(['owed', 'lent']);
@@ -277,7 +280,7 @@ describe('the Direction control (spec BU, ruling P16)', () => {
     expect((screen.getByLabelText('Direction') as HTMLSelectElement).name).toBe('loanDirection');
   });
 
-  it('resets to "We owe this" when the kind switches away from loan and back', () => {
+  it('resets to "Borrowed — we owe them" when the kind switches away from loan and back', () => {
     const { container } = renderForm();
     fireEvent.change(container.querySelector('select[name="typeId"]')!, { target: { value: '3' } });
     fireEvent.change(screen.getByLabelText('Direction'), { target: { value: 'lent' } });

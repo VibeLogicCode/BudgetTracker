@@ -170,10 +170,16 @@ describe('the help page explains loan direction (spec BU)', () => {
   it('explains that a loan can point either way', () => {
     const text = all();
     expect(text).toContain('A loan can point either way');
-    expect(text).toContain('We owe this');
-    expect(text).toContain('Owed to us');
+    expect(text).toContain('Borrowed — we owe them');
+    expect(text).toContain('Lent out — they owe us');
     // Rulings A1/A2 for this file: mechanics only. No figures, no advice.
     expect(text).not.toMatch(/you should|we recommend/i);
+  });
+
+  it('explains the Transactions row menu can assign a row to an existing or a new loan', () => {
+    const text = all();
+    expect(text).toContain('Assign to');
+    expect(text).toContain('Assign to new loan…');
   });
 });
 
