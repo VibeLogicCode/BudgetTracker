@@ -1612,3 +1612,30 @@ does not fire for that one case. Evidence: `src/lib/notify/evaluate/stale.ts:19-
 return `null` from `viewerFor` when the row is gone and skip (return 0) rather than falling back to
 a household-scoped viewer, mirroring the fix `digest.ts`/`monthly.ts` get for BK. Effort: S, ~15
 min. No personal data.
+
+## Owner feature requests after v1.13.3 (2026-08-28, not started)
+
+## BU. Loans with direction "lent" — money someone owes the household
+
+**Asked 2026-08-28** while categorising an e-transfer to a friend. Today a **Loan** item models only
+a debt the household owes (`src/lib/loans.ts`): the sign of the assigned transaction decides the
+direction at read time, money OUT is a payment and the balance goes DOWN. A loan *to* a friend is the
+mirror image, so assigning the outgoing e-transfer to a Loan item zeroes it immediately. Splits
+(`transaction_splits`: category + amount + note) carry no person either, so there is no "owed by"
+anywhere in the app. Workarounds given to the owner: an **Asset** account "Owed by <name>" with the
+e-transfer flagged as a transfer, or a spend category "Loans to friends" that nets out on repayment.
+
+**Feature.** One nullable column `warranty_items.loan_direction text check in ('owed','lent')`
+(default `'owed'`, so every existing loan keeps its meaning). For a `lent` loan the sign
+convention flips: money OUT (the e-transfer) raises the balance, money IN (the repayment) lowers
+it. `debtOverTime()` and the loan card read the direction from the item, still deriving each
+payment's sign from the immutable `transactions.amount_cents` (MUST-13.1/13.2 untouched: no interest
+maths, loan-linked rows stay in their category and budgets — a `lent` row's category should be
+something like "Loans to friends" so it is visible spending until repaid, exactly as today).
+Dashboard gains a **"Who owes us"** card (hides at zero; a `self` viewer sees only their own items);
+Reports' debt-over-time excludes `lent` items from the household-debt line and shows them as their
+own series. Edit/new item forms show a two-option Direction control only for kind `loan`. Help page
+gets one paragraph.
+
+**Effort:** ~1.5 h in the agent pipeline (migration 0014 additive; `loans.ts` sign flip behind one
+helper with tests for both directions; dashboard card; reports series; forms; help). No personal data.
