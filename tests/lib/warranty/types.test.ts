@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { createTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../helpers/db';
 import type { Viewer } from '@/lib/auth/viewer';
-import { getWarrantyItem } from '@/lib/warranty/items';
+import { createWarrantyItem, getWarrantyItem } from '@/lib/warranty/items';
 import {
   ItemTypeInUseError,
   createItemType,
@@ -306,6 +306,32 @@ describe('MUST-12.5 / MUST-12.6: what a kind flip clears', () => {
     expect(item.billingAmountCents).toBe(45000);
     expect(item.currentBalanceCents).toBeNull();
     expect(current!.sqlite.prepare('select count(*) as n from loan_matcher_rules').get()).toEqual({ n: 0 });
+  });
+
+  it('a type moving away from loan resets its items to direction owed (MUST-12.5, ruling P3)', () => {
+    const { userId } = setup();
+    const loan = createItemType('Car Loan Direction Flip', 'loan');
+    const itemId = createWarrantyItem({
+      name: 'Loan to a friend',
+      vendor: null,
+      model: null,
+      serial: null,
+      purchaseDate: '2026-08-16',
+      warrantyMonths: null,
+      isLifetime: true,
+      priceCents: null,
+      ownerUserId: userId,
+      transactionId: null,
+      typeId: loan.id,
+      notes: null,
+      loanDirection: 'lent',
+    });
+    setItemTypeKind(loan.id, 'warranty');
+    const row = getWarrantyItem(itemId, HOUSEHOLD);
+    expect(row?.loanDirection).toBe('owed');
+    // The four money columns are cleared by the same .set() -- unchanged behaviour, asserted
+    // here so a future edit cannot drop one of the five.
+    expect(row?.currentBalanceCents).toBeNull();
   });
 });
 

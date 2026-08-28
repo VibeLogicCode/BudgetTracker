@@ -99,6 +99,13 @@
       "when": 1756339200000,
       "tag": "0013_household_scope",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1756425600000,
+      "tag": "0014_loan_direction",
+      "breakpoints": true
     }
   ]
 }

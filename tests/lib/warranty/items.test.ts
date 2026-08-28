@@ -31,6 +31,7 @@ import { drainOcrQueue, ocrQueueDepth, resetOcrQueueForTests } from '@/lib/warra
 import { setOcrEngineForTests } from '@/lib/warranty/ocr/engine';
 import { createItemType, renameItemType } from '@/lib/warranty/types';
 import { MAX_RECEIPT_BYTES } from '@/lib/warranty/receipts';
+import { LOAN_DIRECTION_KIND_ERROR } from '@/lib/warranty/constants';
 
 let current: TestDb | null = null;
 let dataDir: string;
@@ -362,6 +363,37 @@ describe('MUST-12.1 / MUST-12.2 / MUST-11.7: loan money on an item', () => {
     const id = createWarrantyItem({ ...input(), typeId: loanType.id, interestRateBps: 549 });
     expect(getWarrantyItem(id, HOUSEHOLD)?.interestRateBps).toBe(549);
     expect(() => createWarrantyItem({ ...input(), typeId: loanType.id, interestRateBps: 1_000_001 })).toThrow();
+  });
+});
+
+describe('loan_direction round trip (spec BU, ruling P3)', () => {
+  it('defaults to owed when the input omits it entirely', () => {
+    const loanType = createItemType('Loan Direction Default', 'loan');
+    const id = createWarrantyItem(input({ typeId: loanType.id }));
+    expect(getWarrantyItem(id, HOUSEHOLD)?.loanDirection).toBe('owed');
+  });
+
+  it('stores and reads back lent for a loan, and updates back to owed', () => {
+    const loanType = createItemType('Loan Direction Round Trip', 'loan');
+    const id = createWarrantyItem(input({ typeId: loanType.id, loanDirection: 'lent', name: 'Loan to a friend' }));
+    expect(getWarrantyItem(id, HOUSEHOLD)?.loanDirection).toBe('lent');
+    updateWarrantyItem(id, input({ typeId: loanType.id, loanDirection: 'owed', name: 'Loan to a friend' }));
+    expect(getWarrantyItem(id, HOUSEHOLD)?.loanDirection).toBe('owed');
+  });
+
+  it('refuses lent on an item whose kind is not loan', () => {
+    // Ruling P3: 'owed' is the honest value for an item that is not a loan at all, so writing
+    // 'lent' onto one is a refusal, not a silent coercion -- the same shape LOAN_KIND_ERROR has.
+    const warrantyType = createItemType('Loan Direction Not A Loan', 'warranty');
+    expect(() =>
+      createWarrantyItem(input({ typeId: warrantyType.id, loanDirection: 'lent' })),
+    ).toThrow(LOAN_DIRECTION_KIND_ERROR);
+  });
+
+  it('accepts an explicit owed on a non-loan item (it is the default, not a loan field)', () => {
+    const warrantyType = createItemType('Loan Direction Explicit Owed', 'warranty');
+    const id = createWarrantyItem(input({ typeId: warrantyType.id, loanDirection: 'owed' }));
+    expect(getWarrantyItem(id, HOUSEHOLD)?.loanDirection).toBe('owed');
   });
 });
 

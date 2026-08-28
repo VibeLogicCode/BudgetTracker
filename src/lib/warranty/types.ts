@@ -194,6 +194,11 @@ export function setItemTypeKind(id: number, kind: ItemKind): ItemType {
      * bill_installments row is a date and an amount a person typed by hand, and dropping it
      * because somebody changed a Settings-page dropdown is silent data loss. Every reader joins
      * on kind = 'bill', so kept rows go quiet and come back if the type is flipped back.
+     *
+     * v1.14.0 (ruling P3): the same branch also resets loan_direction to 'owed'. A non-loan
+     * item carries 'owed' forever -- the same claim assertLoanDirectionMatchesKind() enforces
+     * on write -- so a type moving away from 'loan' must not leave a stale 'lent' behind for a
+     * kind that no longer admits the four money columns beside it.
      */
     if (!loanFieldsAllowedForKind(cleanKind)) {
       const itemIds = tx
@@ -204,7 +209,15 @@ export function setItemTypeKind(id: number, kind: ItemKind): ItemType {
         .map((row) => row.id);
       if (itemIds.length > 0) {
         tx.update(warrantyItems)
-          .set({ principalCents: null, interestRateBps: null, currentBalanceCents: null, balanceUpdatedAt: null })
+          .set({
+            principalCents: null,
+            interestRateBps: null,
+            currentBalanceCents: null,
+            balanceUpdatedAt: null,
+            // v1.14.0, ruling P3: a non-loan item always carries 'owed' -- cleared in the same
+            // .set() as the four money columns above, since both are "this is no longer a loan".
+            loanDirection: 'owed',
+          })
           .where(inArray(warrantyItems.id, itemIds))
           .run();
         tx.delete(loanMatcherRules).where(inArray(loanMatcherRules.itemId, itemIds)).run();

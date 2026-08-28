@@ -21,8 +21,11 @@ import {
   billingAllowedForKind,
   BILLING_CYCLES,
   loanFieldsAllowedForKind,
+  LOAN_DIRECTIONS,
+  LOAN_DIRECTION_KIND_ERROR,
   type BillingCycle,
   type ItemKind,
+  type LoanDirection,
 } from '@/lib/warranty/constants';
 import { findItemType } from '@/lib/warranty/types';
 
@@ -93,6 +96,12 @@ export interface WarrantyItemRow {
    * setBudgetCategory(), never through WarrantyInput -- see that function's docblock.
    */
   budgetCategoryId: number | null;
+  /**
+   * v1.14.0 (spec BU, ruling P3). Which way a loan points -- 'owed' (the household owes this,
+   * every row before v1.14.0) or 'lent' (owed to the household). Always present, never NULL:
+   * every non-loan item carries 'owed' forever, same as the column's own DEFAULT.
+   */
+  loanDirection: LoanDirection;
 }
 
 export interface WarrantyReceiptRow {
@@ -146,6 +155,12 @@ export interface WarrantyInput {
   interestRateBps?: number | null;
   currentBalanceCents?: number | null;
   balanceUpdatedAt?: string | null;
+  /**
+   * v1.14.0: optional -- omitted defaults to 'owed', same as every pre-v1.14.0 caller and
+   * every non-loan item. Whether 'lent' is ALLOWED for this item's kind needs a DB lookup
+   * (assertLoanDirectionMatchesKind, below) and so cannot live in this shape alone.
+   */
+  loanDirection?: LoanDirection;
 }
 
 /**
@@ -214,6 +229,9 @@ export function warrantyInputSchema(today: string) {
         .enum(BILLING_CYCLES, { errorMap: () => ({ message: 'Billing must be Monthly or Annual.' }) })
         .nullable()
         .optional(),
+      // Shape only, exactly like billingCycle above: whether 'lent' is ALLOWED for this item's
+      // kind needs a DB lookup and therefore lives in the writers, not in a synchronous schema.
+      loanDirection: z.enum(LOAN_DIRECTIONS).default('owed'),
       // review fix: 0 is a legal amount (a free subscription) -- `.nonnegative()` accepts it,
       // so the message must not claim the rule is stricter than that.
       billingAmountCents: z
@@ -289,6 +307,7 @@ const ITEM_COLUMNS = {
   currentBalanceCents: warrantyItems.currentBalanceCents,
   balanceUpdatedAt: warrantyItems.balanceUpdatedAt,
   budgetCategoryId: warrantyItems.budgetCategoryId,
+  loanDirection: warrantyItems.loanDirection,
 };
 
 /**
@@ -348,6 +367,16 @@ function assertLoanFieldsMatchKind(
     values.balanceUpdatedAt === null;
   if (empty) return;
   if (!loanFieldsAllowedForKind(kindForTypeId(typeId))) throw new Error(LOAN_KIND_ERROR);
+}
+
+/**
+ * Ruling P3. 'owed' is the value every non-loan row carries forever, so only 'lent' is a
+ * cross-table claim worth refusing. Deliberately NOT folded into assertLoanFieldsMatchKind:
+ * that one asks "are all four money columns absent?", and direction is never absent.
+ */
+function assertLoanDirectionMatchesKind(typeId: number | null, direction: LoanDirection): void {
+  if (direction === 'owed') return;
+  if (!loanFieldsAllowedForKind(kindForTypeId(typeId))) throw new Error(LOAN_DIRECTION_KIND_ERROR);
 }
 
 /**
@@ -415,9 +444,11 @@ export function createWarrantyItem(
   const interestRateBps = input.interestRateBps ?? null;
   const currentBalanceCents = input.currentBalanceCents ?? null;
   const balanceUpdatedAt = input.balanceUpdatedAt ?? null;
+  const loanDirection = input.loanDirection ?? 'owed';
   assertBillingMatchesKind(input.typeId, billingCycle, billingAmountCents);
   assertLoanFieldsMatchKind(input.typeId, { principalCents, interestRateBps, currentBalanceCents, balanceUpdatedAt });
   assertBalanceAnchorPairing(currentBalanceCents, balanceUpdatedAt);
+  assertLoanDirectionMatchesKind(input.typeId, loanDirection);
 
   const db = getDb();
   const expiryDate = computeExpiryDate(input);
@@ -444,6 +475,7 @@ export function createWarrantyItem(
           interestRateBps,
           currentBalanceCents,
           balanceUpdatedAt,
+          loanDirection,
           expiryDate,
           createdAt: at,
           updatedAt: at,
@@ -474,9 +506,11 @@ export function updateWarrantyItem(id: number, input: WarrantyInput, at: string 
   const interestRateBps = input.interestRateBps ?? null;
   const currentBalanceCents = input.currentBalanceCents ?? null;
   const balanceUpdatedAt = input.balanceUpdatedAt ?? null;
+  const loanDirection = input.loanDirection ?? 'owed';
   assertBillingMatchesKind(input.typeId, billingCycle, billingAmountCents);
   assertLoanFieldsMatchKind(input.typeId, { principalCents, interestRateBps, currentBalanceCents, balanceUpdatedAt });
   assertBalanceAnchorPairing(currentBalanceCents, balanceUpdatedAt);
+  assertLoanDirectionMatchesKind(input.typeId, loanDirection);
 
   const result = getDb()
     .update(warrantyItems)
@@ -488,6 +522,7 @@ export function updateWarrantyItem(id: number, input: WarrantyInput, at: string 
       interestRateBps,
       currentBalanceCents,
       balanceUpdatedAt,
+      loanDirection,
       expiryDate: computeExpiryDate(input),
       updatedAt: at,
     })

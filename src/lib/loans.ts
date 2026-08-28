@@ -6,7 +6,7 @@ import { nowIso } from '@/lib/clock';
 import { addDaysIso, addMonths, addMonthsClamped, daysBetweenIso, monthEnd, monthOf, monthRange, todayIso } from '@/lib/dates';
 import type { RateVerdict } from '@/lib/notify/ratelimit';
 import { meanCents } from '@/lib/predict/stats';
-import type { BillingCycle } from '@/lib/warranty/constants';
+import type { BillingCycle, LoanDirection } from '@/lib/warranty/constants';
 
 /**
  * Loan money-tracking (spec 2026-08-17 §13).
@@ -955,6 +955,13 @@ export interface LoanSummary {
   balanceUpdatedAt: string | null;
   billingCycle: BillingCycle | null;
   billingAmountCents: number | null;
+  /**
+   * v1.14.0 (spec BU, ruling P14): shape declared here in T1 -- selected from the column but
+   * carrying no behaviour yet. 'owed' is a debt the household owes (every loan before this
+   * release); 'lent' is money someone owes the household. Lane A's Task 2/3 are the ones that
+   * make link(), the reversal paths and debtOverTime actually read it.
+   */
+  loanDirection: LoanDirection;
   startDate: string;
   expiryDate: string | null;
   isLifetime: boolean;
@@ -989,6 +996,7 @@ export function listLoans(today: string, viewer: Viewer): LoanSummary[] {
       balanceUpdatedAt: warrantyItems.balanceUpdatedAt,
       billingCycle: warrantyItems.billingCycle,
       billingAmountCents: warrantyItems.billingAmountCents,
+      loanDirection: warrantyItems.loanDirection,
       startDate: warrantyItems.purchaseDate,
       expiryDate: warrantyItems.expiryDate,
       isLifetime: warrantyItems.isLifetime,
@@ -1040,6 +1048,16 @@ export function loansTotalOwedCents(): number {
 export interface DebtPoint {
   month: string;
   owedCents: number | null;
+  /**
+   * v1.14.0 (spec BU, ruling P14). The same reconstruction over direction 'lent' loans, as its
+   * own series -- same null semantics, computed independently -- one unknown lent loan must not
+   * break the household-debt line and vice versa.
+   *
+   * v1.14.0 shape-first (plan T1): declared here so the dashboard/report lane and the maths
+   * lane are type-independent. The second accumulator lands in the same fold below; until it
+   * does, null is the honest value -- no lent loan can exist before the item forms ship.
+   */
+  lentCents: number | null;
 }
 
 /**
@@ -1108,7 +1126,7 @@ export function debtOverTime(months: number, opts: { endMonth?: string; today?: 
     .innerJoin(warrantyItemTypes, eq(warrantyItemTypes.id, warrantyItems.typeId))
     .where(eq(warrantyItemTypes.kind, 'loan'))
     .all();
-  if (loans.length === 0) return keys.map((month) => ({ month, owedCents: null }));
+  if (loans.length === 0) return keys.map((month) => ({ month, owedCents: null, lentCents: null }));
 
   const applied = getDb()
     .select({
@@ -1136,7 +1154,7 @@ export function debtOverTime(months: number, opts: { endMonth?: string; today?: 
     for (const loan of loans) {
       if (end < loan.createdAt.slice(0, 10)) continue;
       if (loan.balanceCents === null || loan.anchorAt === null) continue;
-      if (end < loan.anchorAt.slice(0, 10)) return { month, owedCents: null };
+      if (end < loan.anchorAt.slice(0, 10)) return { month, owedCents: null, lentCents: null };
       let owed = loan.balanceCents;
       for (const [paymentMonth, cents] of byItem.get(loan.itemId) ?? []) {
         // "created_at > E" is the whole of every LATER month, since E is a month end.
@@ -1144,6 +1162,9 @@ export function debtOverTime(months: number, opts: { endMonth?: string; today?: 
       }
       total += owed;
     }
-    return { month, owedCents: total };
+    // v1.14.0 shape-first (plan T1): declared here so the dashboard/report lane and the maths
+    // lane are type-independent. The second accumulator lands in the same fold below; until it
+    // does, null is the honest value -- no lent loan can exist before the item forms ship.
+    return { month, owedCents: total, lentCents: null };
   });
 }

@@ -264,6 +264,48 @@ export const BILLING_CYCLE_LABELS: Record<BillingCycle, string> = {
 };
 
 /**
+ * v1.14.0 (spec BU, ruling P4). Which way a loan points. 'owed' is a debt the household owes --
+ * every loan before this release, and every non-loan item forever. 'lent' is money someone owes
+ * the household. Kept here (not loans.ts) for the same client-safety reason as everything else in
+ * this file -- the item forms are client components and need the enum, the labels and the one
+ * helper that owns the sign flip without dragging in @/db (tests/ops/client-bundle.test.ts).
+ */
+export const LOAN_DIRECTIONS = ['owed', 'lent'] as const;
+export type LoanDirection = (typeof LOAN_DIRECTIONS)[number];
+
+export function isLoanDirection(value: string): value is LoanDirection {
+  return (LOAN_DIRECTIONS as readonly string[]).includes(value);
+}
+
+/**
+ * The transaction's amount re-expressed in the loan's own frame. NEGATIVE always means "this
+ * balance goes DOWN", whichever way the loan points. This is NOT the delta finally applied --
+ * link() still clamps a repayment at the outstanding balance -- it is the SIGN and the
+ * MAGNITUDE the clamp then works from.
+ *
+ *   owed, -100  ->  -100   money out pays the debt down      (today's behaviour, unchanged)
+ *   owed, +100  ->  +100   money in is a disbursement        (today's behaviour, unchanged)
+ *   lent, -100  ->  +100   money out lends more; they owe us more
+ *   lent, +100  ->  -100   money in is a repayment
+ */
+export function loanSignedDelta(direction: LoanDirection, amountCents: number): number {
+  // `|| 0` only ever fires on amountCents === 0: JS negation of 0 is -0, and Object.is(-0, 0)
+  // is false, which would make a zero-amount transaction compare unequal to plain 0 downstream.
+  return direction === 'lent' ? -amountCents || 0 : amountCents;
+}
+
+/** Sugar for loanSignedDelta(direction, amountCents) < 0. */
+export function isLoanRepayment(direction: LoanDirection, amountCents: number): boolean {
+  return loanSignedDelta(direction, amountCents) < 0;
+}
+
+/** Plain-language, in the voice of the household. Used by both item forms and the detail row. */
+export const LOAN_DIRECTION_LABELS: Record<LoanDirection, string> = {
+  owed: 'We owe this',
+  lent: 'Owed to us',
+};
+
+/**
  * v1.3.1: widened to include 'loan'. A loan's billing pair is its regular PAYMENT
  * (see BILLING_WORDING) -- the amount and the cadence, not an interest calculation.
  *
@@ -427,6 +469,13 @@ export const MATCHING_KIND_ERROR = 'Payment matching only applies to loans and b
 
 /** v1.12.0: refused by addInstallment() in the data layer and by addInstallmentAction. */
 export const INSTALLMENT_KIND_ERROR = 'A due-date schedule only applies to bills.';
+
+/**
+ * v1.14.0 (spec BU, ruling P3). Refused by assertLoanDirectionMatchesKind() in
+ * src/lib/warranty/items.ts, beside LOAN_KIND_ERROR's precedent -- 'owed' is the value every
+ * non-loan row carries forever, so only writing 'lent' onto one is worth refusing.
+ */
+export const LOAN_DIRECTION_KIND_ERROR = 'Only a loan can be owed to us.';
 
 /**
  * The sentence above the Payment matching rules table. Both arms keep MUST-14.6's budget

@@ -38,6 +38,11 @@ import {
   MATCHING_KIND_ERROR,
   matchingBlurbForKind,
   INSTALLMENT_STATES,
+  LOAN_DIRECTIONS,
+  LOAN_DIRECTION_LABELS,
+  isLoanDirection,
+  loanSignedDelta,
+  isLoanRepayment,
 } from '@/lib/warranty/constants';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -397,5 +402,33 @@ describe('billScheduleLabel (item Q, ruling P4)', () => {
 
   it('renders no amount (ruling P4: dates and counts only)', () => {
     expect(billScheduleLabel('2026-09-30', 3)).not.toMatch(/\$|\d+\.\d\d/);
+  });
+});
+
+describe('loanSignedDelta (spec BU, ruling P4)', () => {
+  it('is the identity for an owed loan, so today’s behaviour is unchanged by construction', () => {
+    expect(loanSignedDelta('owed', -50_000)).toBe(-50_000);
+    expect(loanSignedDelta('owed', 50_000)).toBe(50_000);
+    expect(loanSignedDelta('owed', 0)).toBe(0);
+  });
+
+  it('negates for a lent loan: money out lends more, money in repays', () => {
+    expect(loanSignedDelta('lent', -50_000)).toBe(50_000);
+    expect(loanSignedDelta('lent', 50_000)).toBe(-50_000);
+    expect(loanSignedDelta('lent', 0)).toBe(0);
+  });
+
+  it('isLoanRepayment reads "this balance goes down" in either frame', () => {
+    expect(isLoanRepayment('owed', -50_000)).toBe(true);
+    expect(isLoanRepayment('owed', 50_000)).toBe(false);
+    expect(isLoanRepayment('lent', -50_000)).toBe(false);
+    expect(isLoanRepayment('lent', 50_000)).toBe(true);
+  });
+
+  it('labels are written in the household’s voice and cover every value', () => {
+    expect(LOAN_DIRECTIONS.map((d) => LOAN_DIRECTION_LABELS[d])).toEqual(['We owe this', 'Owed to us']);
+    expect(isLoanDirection('owed')).toBe(true);
+    expect(isLoanDirection('lent')).toBe(true);
+    expect(isLoanDirection('given')).toBe(false);
   });
 });

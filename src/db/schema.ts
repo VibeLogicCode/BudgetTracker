@@ -608,6 +608,23 @@ export const warrantyItems = sqliteTable(
      * which is every row before v1.13.0.
      */
     budgetCategoryId: integer('budget_category_id').references(() => categories.id),
+    /**
+     * v1.14.0, added by drizzle/0014_loan_direction.sql (spec
+     * docs/superpowers/specs/2026-08-28-loans-lent-direction-design.md, item BU). Which way a
+     * loan points. 'owed' is a debt the household owes -- every row before v1.14.0, and every
+     * non-loan row forever. 'lent' is money someone owes the household, and it FLIPS the sign
+     * convention: money OUT raises the balance, money IN lowers it.
+     *
+     * NOT NULL with a default, like users.visibility (0013) and unlike the four money columns
+     * above: there is no third state, and 'owed' is the honest value for an item that is not a
+     * loan at all. The rule that only a kind='loan' item may carry 'lent' is a CROSS-TABLE rule
+     * a CHECK cannot see, so it lives in src/lib/warranty/items.ts beside
+     * assertLoanFieldsMatchKind (planner ruling P3).
+     *
+     * NOT represented here -- SQL only:
+     *   - CHECK (loan_direction IN ('owed','lent'))
+     */
+    loanDirection: text('loan_direction', { enum: ['owed', 'lent'] }).notNull().default('owed'),
   },
   (t) => [
     index('warranty_items_expiry_idx').on(t.expiryDate),
