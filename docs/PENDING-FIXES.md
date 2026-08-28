@@ -1293,6 +1293,21 @@ Effort: M · Proposed release: v1.14.0
 One item each, kept brief. Status for all: OPEN — from 2026-08-27 fresh-eyes review; see
 docs/reviews/2026-08-27-fresh-eyes-review.md at the id named in each title.
 
+**Owner re-scope (2026-08-27):** "no harm in completing them" — every item in this section moves
+into v1.12.1 alongside S–AE, so v1.12.1 is now S–AE plus AT, AU, AV, AW, AX, AY, AZ, BA, BB, BC, BD,
+BE, BF, BG (26 items). Two rulings taken with it:
+
+- **BD (MON-7) — installment selection ruling:** a rule-matched bill payment marks the unpaid
+  installment whose `due_date` is nearest the transaction date when that distance is ≤ 45 days;
+  otherwise fall back to the earliest unpaid installment (today's behaviour). No amount check.
+- **AT (UX-5) — timing ruling:** fix inside v1.12.1, not later. v1.12.1 already opens
+  `AutoSave.tsx` for V (try/catch); one review covers both. Shape: remount the control when the
+  server value changes (React `key` derived from the server value at each call site, or an
+  effect that resyncs state when the `defaultValue` prop changes).
+
+AS (per-user export/delete) is DROPPED: it existed for "a friend leaves the shared instance", and
+the one-family-per-instance ruling removed that case.
+
 **AT. UX-5 — concurrent edits: the loser's screen keeps showing their own stale value.** Auto-save
 controls seed state from props once and never resync, so when two people edit the same row the
 server takes the last write but the loser's browser goes on showing their own value indefinitely.
