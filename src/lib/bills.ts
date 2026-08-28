@@ -177,6 +177,16 @@ export function upcomingBills(input: {
  * household one. Leaving it household would put the family's total on a child's dashboard
  * through the Coming-up card, which ruling R2 forbids -- and it would do so through the one
  * figure on that card nobody would think to check.
+ *
+ * Ruling R10 (savings excluded from safe-to-spend) holds here BY CONSTRUCTION, not by any
+ * filter in this function: every figure above comes from budgetTotals()/budgetProgress(), which
+ * are budget-based (category limits and category spend) and never read an account or its
+ * balance at all -- a savings account's balance simply never enters this computation. Any
+ * FUTURE figure added to this return value that is balance-based (an account total, a payoff
+ * projection, anything read from src/lib/accounts.ts or src/lib/networth.ts) MUST gate itself
+ * through countsTowardSafeToSpend() (src/lib/accounts.ts) the same way the net-worth/dashboard
+ * balance readers already do -- do not assume this function's current silence on accounts means
+ * the rule does not apply.
  */
 export function safeToSpend(input: {
   month: string;
@@ -268,14 +278,15 @@ export function sinkingFundsFor(input: {
   for (const row of rows) {
     if (row.categoryId === null) continue;
     if (out.has(row.categoryId)) continue;
-    if (!carryByCategory.has(row.categoryId)) continue;
+    const carriedCents = carryByCategory.get(row.categoryId);
+    if (carriedCents === undefined) continue;
     out.set(row.categoryId, {
       categoryId: row.categoryId,
       itemId: row.itemId,
       itemName: row.itemName,
       dueDate: row.dueDate,
       targetCents: row.amountCents,
-      carriedCents: carryByCategory.get(row.categoryId) ?? 0,
+      carriedCents,
     });
   }
   return out;

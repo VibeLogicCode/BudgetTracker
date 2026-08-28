@@ -11,7 +11,7 @@ import {
   unusualVerdict,
   type SpendRow,
 } from '@/lib/predict/anomalies';
-import { DUPLICATE_LOOKBACK_DAYS, UNUSUAL_BASELINE_DAYS, UNUSUAL_LOOKBACK_DAYS } from '@/lib/predict/constants';
+import { DUPLICATE_LOOKBACK_DAYS, DUPLICATE_WINDOW_DAYS, UNUSUAL_BASELINE_DAYS, UNUSUAL_LOOKBACK_DAYS } from '@/lib/predict/constants';
 
 /**
  * v1.13.0 ruling R6 (item AJ / PROD-2). The maths already existed and was tested; it was
@@ -110,8 +110,13 @@ export function householdInsights(input: { today: string; viewer: Viewer }): Ins
     });
   }
 
-  const duplicateStart = addDaysIso(today, -DUPLICATE_LOOKBACK_DAYS);
-  for (const pair of findDuplicates({ rows: slice.filter((row) => row.date >= duplicateStart), today })) {
+  // Wider than the 14-day lookback so a duplicate pair straddling the boundary keeps its
+  // earlier half -- same reasoning as src/lib/notify/evaluate/anomalies.ts's own sliceStart: a
+  // superset here is strictly safer, and findDuplicates() itself still enforces (a) the later
+  // charge lands within DUPLICATE_LOOKBACK_DAYS of today and (b) the pair's gap is within
+  // DUPLICATE_WINDOW_DAYS, so no out-of-window pair can slip through despite the wider input.
+  const duplicateSliceStart = addDaysIso(today, -(DUPLICATE_LOOKBACK_DAYS + DUPLICATE_WINDOW_DAYS));
+  for (const pair of findDuplicates({ rows: slice.filter((row) => row.date >= duplicateSliceStart), today })) {
     rows.push({
       kind: 'duplicate',
       // The SECOND (higher-id) charge: it is the one a person would question, and the one

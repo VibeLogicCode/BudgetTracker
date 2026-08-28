@@ -67,6 +67,19 @@ describe('householdInsights (ruling R6)', () => {
     expect(rows.filter((row) => row.kind === 'duplicate').map((row) => row.transactionId)).toEqual([second]);
   });
 
+  it('still flags a duplicate whose earlier charge sits 16 days back, past the 14-day lookback (fix round 1, finding 1)', async () => {
+    await seed();
+    for (let n = 1; n <= 12; n += 1) spend(`2025-${String(n).padStart(2, '0')}-05`, 'GROCERY STORE', 4200);
+    // Earlier charge is 16 days before `today` -- outside the 14-day lookback on its own -- and
+    // the later charge is only 2 days after it (2026-08-13, 14 days back), well inside
+    // DUPLICATE_WINDOW_DAYS. Before the fix, the pre-findDuplicates filter dropped the earlier
+    // row entirely (its date < today-14), so this pair was never seen at all.
+    spend('2026-08-11', 'CITY TAX OFFICE', 6500);
+    const later = spend('2026-08-13', 'CITY TAX OFFICE', 6500);
+    const rows = householdInsights({ today: TODAY, viewer: adult() });
+    expect(rows.filter((row) => row.kind === 'duplicate').map((row) => row.transactionId)).toEqual([later]);
+  });
+
   it('a self viewer sees only rows from their own transactions', async () => {
     await seed();
     for (let n = 1; n <= 12; n += 1) spend(`2025-${String(n).padStart(2, '0')}-05`, 'GROCERY STORE', 4200);
