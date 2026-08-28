@@ -147,6 +147,16 @@ describe('Guard 1 (spec 2026-08-23, Component 6): every EmptyState offers an act
   });
 });
 
+/**
+ * Whole-path-segment match for `href` inside `content`: neither edge of the match may sit
+ * adjacent to a word character, `-`, or `/`, so `/settings/goals` does not satisfy `/goals`
+ * (leading boundary) any more than `/settings` used to satisfy `/settings` by matching inside
+ * `/settings/accounts` (trailing boundary, ruling P20's original fix). Shared by the guard and
+ * its own self-check so the two cannot drift into testing different regexes.
+ */
+const documented = (href: string, content: string) =>
+  new RegExp(`(?<![\\w-])${href.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w\\-/])`).test(content);
+
 describe('Guard 2 (ruling A7): every nav section is documented in the help page', () => {
   it('guards every NAV entry except the stated exemption', () => {
     expect(guardedNav.length).toBe(NAV.length - GUIDE_EXEMPT_HREFS.length);
@@ -159,17 +169,20 @@ describe('Guard 2 (ruling A7): every nav section is documented in the help page'
     // times over by /settings/accounts and friends -- and a future /report or /budget route
     // would have been silently satisfied by the already-documented /reports or /budgets, which
     // is the one failure this guard exists to prevent.
-    const documented = (href: string) =>
-      new RegExp(`${href.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-/])`).test(content);
-    const undocumented = guardedNav.filter((item) => !documented(item.href));
+    const undocumented = guardedNav.filter((item) => !documented(item.href, content));
     expect(undocumented.map((item) => `${item.href} (${item.label})`)).toEqual([]);
   });
 
   it('does not accept a strict prefix as documentation (the failure this guard is for)', () => {
-    const documented = (href: string, content: string) =>
-      new RegExp(`${href.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-/])`).test(content);
     expect(documented('/report', '<Where path="/reports">Reports —</Where>')).toBe(false);
     expect(documented('/reports', '<Where path="/reports">Reports —</Where>')).toBe(true);
+  });
+
+  it('does not accept a strict suffix as documentation either (the leading-boundary case)', () => {
+    // /settings/goals contains /goals as a trailing segment; without the leading boundary
+    // (?<![\w-]) that would satisfy a NAV entry for /goals that is documented nowhere.
+    expect(documented('/goals', '/settings/goals')).toBe(false);
+    expect(documented('/goals', '<Where path="/goals">Goals —</Where>')).toBe(true);
   });
 });
 

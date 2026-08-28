@@ -170,9 +170,11 @@ export async function setCanSignInAction(_prev: UsersFormState, formData: FormDa
   // entirely when not) -- the same "absent means off" rule an unchecked HTML checkbox has
   // always followed.
   const raw = formData.get('canSignIn');
+  if (raw !== null && raw !== '0' && raw !== '1' && raw !== 'on') return { error: 'Invalid request.' };
   const canSignIn = raw === '1' || raw === 'on';
   try {
     setUserCanSignIn(userIdParsed.data, canSignIn);
+    if (!canSignIn) destroyAllSessionsForUser(userIdParsed.data);
   } catch (error) {
     return { error: error instanceof Error ? error.message : 'Could not update the user.' };
   }

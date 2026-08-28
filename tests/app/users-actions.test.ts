@@ -173,6 +173,57 @@ describe('setCanSignInAction (item BI)', () => {
     expect(listUsers().find((u) => u.id === bob.id)?.canSignIn).toBe(true);
   });
 
+  it('accepts AutoSaveCheckbox\'s native "on" shape', async () => {
+    current = createTestDb();
+    const bob = await createUser({ name: 'Bob', username: 'bob', password: 'correct horse battery', role: 'member' });
+    await setCanSignInAction({}, formData({ userId: String(bob.id), canSignIn: '0' }));
+    const result = await setCanSignInAction({}, formData({ userId: String(bob.id), canSignIn: 'on' }));
+    expect(result.error).toBeUndefined();
+    expect(listUsers().find((u) => u.id === bob.id)?.canSignIn).toBe(true);
+  });
+
+  it('treats an absent canSignIn field as off, the unchecked-checkbox convention', async () => {
+    current = createTestDb();
+    const bob = await createUser({ name: 'Bob', username: 'bob', password: 'correct horse battery', role: 'member' });
+    const fd = new FormData();
+    fd.set('userId', String(bob.id));
+    const result = await setCanSignInAction({}, fd);
+    expect(result.error).toBeUndefined();
+    expect(listUsers().find((u) => u.id === bob.id)?.canSignIn).toBe(false);
+  });
+
+  it('refuses a malformed canSignIn value instead of silently coercing it to off', async () => {
+    current = createTestDb();
+    const bob = await createUser({ name: 'Bob', username: 'bob', password: 'correct horse battery', role: 'member' });
+    const result = await setCanSignInAction({}, formData({ userId: String(bob.id), canSignIn: 'true' }));
+    expect(result.error).toBe('Invalid request.');
+    expect(listUsers().find((u) => u.id === bob.id)?.canSignIn).toBe(true);
+  });
+
+  it('destroys every session when a person is switched off', async () => {
+    current = createTestDb();
+    const bob = await createUser({ name: 'Bob', username: 'bob', password: 'correct horse battery', role: 'member' });
+    createSession(bob.id);
+    createSession(bob.id);
+    expect(sessionCount(bob.id)).toBe(2);
+
+    const result = await setCanSignInAction({}, formData({ userId: String(bob.id), canSignIn: '0' }));
+    expect(result.error).toBeUndefined();
+    expect(sessionCount(bob.id)).toBe(0);
+  });
+
+  it('does not touch sessions when a person is switched back on', async () => {
+    current = createTestDb();
+    const bob = await createUser({ name: 'Bob', username: 'bob', password: 'correct horse battery', role: 'member' });
+    await setCanSignInAction({}, formData({ userId: String(bob.id), canSignIn: '0' }));
+    createSession(bob.id);
+    expect(sessionCount(bob.id)).toBe(1);
+
+    const result = await setCanSignInAction({}, formData({ userId: String(bob.id), canSignIn: '1' }));
+    expect(result.error).toBeUndefined();
+    expect(sessionCount(bob.id)).toBe(1);
+  });
+
   it('refuses to lock an admin out, in the library\'s own words', async () => {
     current = createTestDb();
     const root = await createUser({ name: 'Root', username: 'root', password: 'correct horse battery', role: 'admin' });

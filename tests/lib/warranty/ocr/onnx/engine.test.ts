@@ -113,7 +113,7 @@ describe('onnxOcrEngine (MUST-4.1, MUST-4.2)', () => {
 
       const pdf = path.join(dir, 'not-a-pdf.pdf');
       fs.writeFileSync(pdf, Buffer.from('not really a pdf'));
-      await expect(onnxOcrEngine.recognize(pdf, 'application/pdf')).rejects.toThrow();
+      await expect(onnxOcrEngine.recognize(pdf, 'application/pdf')).rejects.toThrow('Invalid PDF structure.');
       expect(touched).toBe(0);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
