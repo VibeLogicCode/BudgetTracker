@@ -557,6 +557,38 @@ describe('MUST-14.1 / MUST-14.3 / MUST-14.5 / MUST-14.6 / MUST-12.3: the loan su
   });
 });
 
+// v1.14.0 fix round (review C, item 1): same backwards-hint bug as the new form, in the edit
+// form. Both hints, and the balance field's label, follow the edit form's CURRENT Direction
+// value rather than assuming 'owed'.
+describe("the edit form's loan hints follow the current Direction (review C)", () => {
+  it('reads in the owed frame for an owed loan', () => {
+    renderDetail({ item: item({ typeId: 3, typeName: 'Car loan', kind: 'loan', loanDirection: 'owed' }) });
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    expect(screen.getByText('What you borrowed. Used for the payoff bar.')).toBeTruthy();
+    expect(screen.getByText('Balance still owed')).toBeTruthy();
+    expect(screen.getByText("Today's balance. Payments you link will take it down from here.")).toBeTruthy();
+  });
+
+  it('reads in the lent frame for a lent loan', () => {
+    renderDetail({ item: item({ typeId: 3, typeName: 'Car loan', kind: 'loan', loanDirection: 'lent' }) });
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    expect(screen.getByText('What you lent out. Used for the payoff bar.')).toBeTruthy();
+    expect(screen.getByText('Balance still owed to you')).toBeTruthy();
+    expect(
+      screen.getByText("Today's balance. Repayments you link will take it down; further advances raise it."),
+    ).toBeTruthy();
+    expect(screen.queryByText('Balance still owed')).toBeNull();
+  });
+
+  it('flips live when Direction is changed on the open form', () => {
+    renderDetail({ item: item({ typeId: 3, typeName: 'Car loan', kind: 'loan', loanDirection: 'owed' }) });
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    fireEvent.change(screen.getByLabelText('Direction'), { target: { value: 'lent' } });
+    expect(screen.getByText('What you lent out. Used for the payoff bar.')).toBeTruthy();
+    expect(screen.getByText('Balance still owed to you')).toBeTruthy();
+  });
+});
+
 // v1.14.0 (spec BU, ruling P16): the edit form's Direction control reuses
 // loanFieldsAllowedForKind as its gate, same as the loan money fields above -- no second
 // kind === 'loan' predicate.
@@ -581,6 +613,16 @@ describe('the Direction control on the edit form (spec BU, ruling P16)', () => {
     renderDetail({ item: item({ typeId: 3, typeName: 'Car loan', kind: 'loan' }) });
     fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
     expect((screen.getByLabelText('Direction') as HTMLSelectElement).name).toBe('loanDirection');
+  });
+
+  // v1.14.0 fix round (review C, item 2): the gate used to be loanApplicable alone, unlike the
+  // detail row's `loanFieldsAllowedForKind(kind) || item.loanDirection !== 'owed'` a few tests
+  // down. A non-loan item that somehow carries 'lent' (a data anomaly, or a kind changed
+  // elsewhere) must still show the control instead of the edit form silently hiding it.
+  it('is shown for a non-loan item that carries a non-default direction', () => {
+    renderDetail({ item: item({ typeId: 1, typeName: 'Appliance', kind: 'warranty', loanDirection: 'lent' }) });
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    expect(screen.queryByLabelText('Direction')).not.toBeNull();
   });
 });
 

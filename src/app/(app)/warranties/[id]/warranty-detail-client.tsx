@@ -66,6 +66,26 @@ import {
 
 const initial: WarrantyActionState = {};
 
+// v1.14.0 fix round (review C, item 1): the loan hints below were written in the frame of a
+// debt the household owes ("what you borrowed") and read backwards for a 'lent' loan, where the
+// household is the one owed money. Both hints, and the balance field's own label, follow the
+// edit form's CURRENT Direction value instead of assuming 'owed'.
+function principalHintForDirection(direction: string): string {
+  return direction === 'lent'
+    ? 'What you lent out. Used for the payoff bar.'
+    : 'What you borrowed. Used for the payoff bar.';
+}
+
+function balanceLabelForDirection(direction: string): string {
+  return direction === 'lent' ? 'Balance still owed to you' : 'Balance still owed';
+}
+
+function balanceHintForDirection(direction: string): string {
+  return direction === 'lent'
+    ? "Today's balance. Repayments you link will take it down; further advances raise it."
+    : "Today's balance. Payments you link will take it down from here.";
+}
+
 const OCR_CHIP: Record<WarrantyReceiptRow['ocrStatus'], string> = {
   pending: 'Reading…',
   done: 'Read',
@@ -971,27 +991,34 @@ function EditForm({
               </>
             ) : null}
 
+            {/* v1.14.0 (spec BU, ruling P16), fix round (review C, item 2): gated on the same
+                "gate OR held value" OR-arm as the detail row a few hundred lines up
+                (loanFieldsAllowedForKind(kind) || item.loanDirection !== 'owed'), not on
+                loanApplicable alone. A non-loan item that somehow carries 'lent' -- a data
+                anomaly, or a kind changed elsewhere -- must still show its Direction here, or
+                submitting this form with the field absent silently posts the column's own
+                default and rewrites 'lent' to 'owed' on save. */}
+            {loanApplicable || item.loanDirection !== 'owed' ? (
+              <Field label="Direction" hint="Which way this loan points.">
+                <select
+                  name="loanDirection"
+                  value={loanDirection}
+                  onChange={(e) => setLoanDirection(e.target.value)}
+                  className={selectClass}
+                >
+                  {LOAN_DIRECTIONS.map((direction) => (
+                    <option key={direction} value={direction}>{LOAN_DIRECTION_LABELS[direction]}</option>
+                  ))}
+                </select>
+              </Field>
+            ) : null}
+
             {/* MUST-14.1: rendered exactly when the SELECTED type's kind is 'loan'. Hidden
                 entirely otherwise, so an absent field posts as blank -> null, the same
                 mechanism every other optional field on this form uses. */}
             {loanApplicable ? (
               <>
-                {/* v1.14.0 (spec BU, ruling P16). First field in the block, so a reader picks
-                    the direction before typing amounts. Reuses loanFieldsAllowedForKind as its
-                    gate, exactly like the fields below -- no second predicate. */}
-                <Field label="Direction" hint="Which way this loan points.">
-                  <select
-                    name="loanDirection"
-                    value={loanDirection}
-                    onChange={(e) => setLoanDirection(e.target.value)}
-                    className={selectClass}
-                  >
-                    {LOAN_DIRECTIONS.map((direction) => (
-                      <option key={direction} value={direction}>{LOAN_DIRECTION_LABELS[direction]}</option>
-                    ))}
-                  </select>
-                </Field>
-                <Field label="Original amount" hint="What you borrowed. Used for the payoff bar.">
+                <Field label="Original amount" hint={principalHintForDirection(loanDirection)}>
                   <input
                     name="principal"
                     inputMode="decimal"
@@ -1014,7 +1041,7 @@ function EditForm({
                     <span className="text-sm text-muted">%</span>
                   </span>
                 </Field>
-                <Field label="Balance still owed" hint="Today's balance. Payments you link will take it down from here.">
+                <Field label={balanceLabelForDirection(loanDirection)} hint={balanceHintForDirection(loanDirection)}>
                   <input
                     name="currentBalance"
                     inputMode="decimal"

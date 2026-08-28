@@ -390,6 +390,15 @@
     transition: border-color 120ms ease, box-shadow 120ms ease;
   }
 
+  /* Fix round (review C, item 5): the 44px tap-target ruling (min-h-11 sm:min-h-0) applied
+     everywhere else, but never to .field-control itself -- padding alone lands it around 36px
+     on a phone. Mobile only, so a desktop control is unaffected. */
+  @media (max-width: 639.98px) {
+    .field-control {
+      min-height: 2.75rem;
+    }
+  }
+
   .field-control::placeholder {
     color: var(--subtle);
   }

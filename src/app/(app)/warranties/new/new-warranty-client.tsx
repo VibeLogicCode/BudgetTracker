@@ -42,6 +42,26 @@ function centsToInput(cents: number | undefined): string {
   return cents === undefined ? '' : (cents / 100).toFixed(2);
 }
 
+// v1.14.0 fix round (review C, item 1): the loan hints below were written in the frame of a
+// debt the household owes ("what you borrowed") and read backwards for a 'lent' loan, where the
+// household is the one owed money. Both hints, and the balance field's own label, follow the
+// live Direction selection instead of assuming 'owed'.
+function principalHintForDirection(direction: string): string {
+  return direction === 'lent'
+    ? 'What you lent out. Used for the payoff bar.'
+    : 'What you borrowed. Used for the payoff bar.';
+}
+
+function balanceLabelForDirection(direction: string): string {
+  return direction === 'lent' ? 'Balance still owed to you' : 'Balance still owed';
+}
+
+function balanceHintForDirection(direction: string): string {
+  return direction === 'lent'
+    ? "Today's balance. Repayments you link will take it down; further advances raise it."
+    : "Today's balance. Payments you link will take it down from here.";
+}
+
 export function NewWarrantyClient({
   people,
   types,
@@ -392,7 +412,7 @@ export function NewWarrantyClient({
                       ))}
                     </select>
                   </Field>
-                  <Field label="Original amount" hint="What you borrowed. Used for the payoff bar.">
+                  <Field label="Original amount" hint={principalHintForDirection(loanDirection)}>
                     <input
                       name="principal"
                       inputMode="decimal"
@@ -415,7 +435,7 @@ export function NewWarrantyClient({
                       <span className="text-sm text-muted">%</span>
                     </span>
                   </Field>
-                  <Field label="Balance still owed" hint="Today's balance. Payments you link will take it down from here.">
+                  <Field label={balanceLabelForDirection(loanDirection)} hint={balanceHintForDirection(loanDirection)}>
                     <input
                       name="currentBalance"
                       inputMode="decimal"

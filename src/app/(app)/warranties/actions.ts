@@ -53,6 +53,7 @@ import {
   MATCHING_KIND_ERROR,
   installmentsAllowedForKind,
   matchingAllowedForKind,
+  LOAN_DIRECTION_LABELS,
   type BillingCycle,
   type ItemKind,
   type LoanDirection,
@@ -144,11 +145,18 @@ function readBillingCycle(formData: FormData): BillingCycle | null {
   return raw;
 }
 
-/** v1.14.0 (spec BU). Same shape as readBillingCycle above: '' means "no seed" -> the default. */
+/**
+ * v1.14.0 (spec BU). Same shape as readBillingCycle above: '' means "no seed" -> the default.
+ * Fix round (review C, item 4): the refusal message used to re-type the two direction labels
+ * as a literal, a second place carrying wording LOAN_DIRECTION_LABELS already owns. Interpolated
+ * instead, so the two spellings cannot drift apart.
+ */
 function readLoanDirection(formData: FormData): LoanDirection {
   const raw = str(formData, 'loanDirection').trim();
   if (raw === '') return 'owed';
-  if (!isLoanDirection(raw)) throw new Error('Direction must be "We owe this" or "Owed to us".');
+  if (!isLoanDirection(raw)) {
+    throw new Error(`Direction must be "${LOAN_DIRECTION_LABELS.owed}" or "${LOAN_DIRECTION_LABELS.lent}".`);
+  }
   return raw;
 }
 

@@ -48,7 +48,7 @@ it will retry.
   hiding itself when nobody does. A member who only sees their own records sees it titled **Owed
   to you**, listing only their own loans.
 - **A second line on the Reports debt chart**, plotting what the household has lent out
-  separately from what it owes, with a legend once both lines have something to show.
+  separately from what it owes, with a legend once a lent loan has a balance.
 
 ### Changed
 

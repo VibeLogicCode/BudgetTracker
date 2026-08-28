@@ -226,6 +226,32 @@ describe('MUST-14.1 / MUST-12.3: the loan surfaces', () => {
   });
 });
 
+// v1.14.0 fix round (review C, item 1): the loan hints were written in the frame of a debt the
+// household owes ("what you borrowed") and read backwards for a 'lent' loan. Both hints, and the
+// balance field's own label, now follow the live Direction selection instead of assuming 'owed'.
+describe('the loan hints follow the selected Direction (review C)', () => {
+  it('reads in the owed frame by default', () => {
+    const { container } = renderForm();
+    fireEvent.change(container.querySelector('select[name="typeId"]')!, { target: { value: '3' } }); // Car loan
+    expect(screen.getByText('What you borrowed. Used for the payoff bar.')).toBeTruthy();
+    expect(screen.getByText('Balance still owed')).toBeTruthy();
+    expect(screen.getByText("Today's balance. Payments you link will take it down from here.")).toBeTruthy();
+  });
+
+  it('flips to the lent frame when Direction is set to Owed to us', () => {
+    const { container } = renderForm();
+    fireEvent.change(container.querySelector('select[name="typeId"]')!, { target: { value: '3' } });
+    fireEvent.change(screen.getByLabelText('Direction'), { target: { value: 'lent' } });
+    expect(screen.getByText('What you lent out. Used for the payoff bar.')).toBeTruthy();
+    expect(screen.getByText('Balance still owed to you')).toBeTruthy();
+    expect(
+      screen.getByText("Today's balance. Repayments you link will take it down; further advances raise it."),
+    ).toBeTruthy();
+    // The label change is a REPLACEMENT, not an addition -- the old label must not linger.
+    expect(screen.queryByText('Balance still owed')).toBeNull();
+  });
+});
+
 // v1.14.0 (spec BU, ruling P16): the Direction control reuses loanFieldsAllowedForKind as its
 // gate -- no second kind === 'loan' predicate -- and defaults to 'owed', the column's own
 // default, so an untouched form posts exactly what a pre-1.14.0 form always posted.
