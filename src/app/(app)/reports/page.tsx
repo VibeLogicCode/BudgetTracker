@@ -132,6 +132,13 @@ export default async function ReportsPage({
       ? []
       : taxYearReport(selectedTaxYear).map((row) => ({ ...row, parentId: categoryParentById.get(row.categoryId) ?? null }));
 
+  // v1.14.0 (ruling P12): ONE read, two flags. hasLoans keeps its exact meaning -- any loan with
+  // a tracked balance, either direction -- so the card's visibility does not change for any
+  // existing install; hasLent decides only whether a second LINE and a legend appear.
+  const loansForFlags = showHouseholdTotals ? listLoans(today, viewer) : [];
+  const hasLoans = loansForFlags.some((loan) => loan.currentBalanceCents !== null);
+  const hasLent = loansForFlags.some((loan) => loan.loanDirection !== 'owed' && loan.currentBalanceCents !== null);
+
   return (
     <ReportsClient
       range={range}
@@ -150,7 +157,8 @@ export default async function ReportsPage({
       )}
       split={personSpendSplit({ from, to }, viewer)}
       debt={showHouseholdTotals ? debtOverTime(24) : []}
-      hasLoans={showHouseholdTotals ? listLoans(today, viewer).some((loan) => loan.currentBalanceCents !== null) : false}
+      hasLoans={hasLoans}
+      hasLent={hasLent}
       // Same fixed trailing-24-month window as the Debt over time card above, deliberately
       // independent of the date-range picker at the top of the page (a net worth trend, like a
       // debt trend, is a "how did we get here" widget, not a "for this custom range" one).

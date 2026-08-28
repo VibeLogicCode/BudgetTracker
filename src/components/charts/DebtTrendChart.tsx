@@ -1,6 +1,6 @@
 'use client';
 
-import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import type { DebtPoint } from '@/lib/loans';
 import { AXIS_TICK, CHART_GRID, TOOLTIP_CURSOR, tooltipStyles } from './chart-theme';
 
@@ -8,7 +8,7 @@ import { AXIS_TICK, CHART_GRID, TOOLTIP_CURSOR, tooltipStyles } from './chart-th
  * The codebase's first line chart, modelled on CashflowChart's skeleton: same h-64, same
  * cents-to-dollars mapping, same theme imports, so it follows the theme toggle with no JS.
  *
- * The single series is var(--negative-solid) -- this is money owed -- and connectNulls is
+ * The Owed series is var(--negative-solid) -- this is money owed -- and connectNulls is
  * FALSE so a gap in the data reads as a gap (MUST-15.7). A line that bridged an unknown month
  * would be inventing the very thing the reconstruction refuses to invent.
  *
@@ -18,11 +18,19 @@ import { AXIS_TICK, CHART_GRID, TOOLTIP_CURSOR, tooltipStyles } from './chart-th
  * caller (reports-client.tsx) now keeps the fewer-than-two-points case out of this component
  * entirely, but two non-adjacent non-null points elsewhere in the series would still each be
  * an invisible segment without a dot to mark them.
+ *
+ * v1.14.0 (spec BU, rulings P5, P12): a second, optional series -- Lent, money owed TO the
+ * household, and therefore the already-positive token (var(--positive-solid)) rather than a
+ * mirrored dip below zero. It is drawn only when `showLent` is true (a lent loan with a
+ * balance exists), same connectNulls={false} and dot treatment as Owed. The `<Legend>` exists
+ * only because there are now two lines to tell apart -- a legend over a single line is noise,
+ * so it too is conditional on `showLent`.
  */
-export function DebtTrendChart({ data }: { data: DebtPoint[] }) {
+export function DebtTrendChart({ data, showLent }: { data: DebtPoint[]; showLent: boolean }) {
   const series = data.map((point) => ({
     month: point.month,
     Owed: point.owedCents === null ? null : point.owedCents / 100,
+    Lent: point.lentCents === null ? null : point.lentCents / 100,
   }));
   return (
     <div className="h-64 w-full">
@@ -40,6 +48,7 @@ export function DebtTrendChart({ data }: { data: DebtPoint[] }) {
             cursor={{ ...TOOLTIP_CURSOR, stroke: 'var(--line-strong)' }}
             {...tooltipStyles()}
           />
+          {showLent ? <Legend wrapperStyle={{ fontSize: 12, color: 'var(--muted)', paddingTop: 8 }} /> : null}
           <Line
             type="monotone"
             dataKey="Owed"
@@ -48,6 +57,16 @@ export function DebtTrendChart({ data }: { data: DebtPoint[] }) {
             dot={{ r: 2, fill: 'var(--negative-solid)', strokeWidth: 0 }}
             connectNulls={false}
           />
+          {showLent ? (
+            <Line
+              type="monotone"
+              dataKey="Lent"
+              stroke="var(--positive-solid)"
+              strokeWidth={2}
+              dot={{ r: 2, fill: 'var(--positive-solid)', strokeWidth: 0 }}
+              connectNulls={false}
+            />
+          ) : null}
         </LineChart>
       </ResponsiveContainer>
     </div>

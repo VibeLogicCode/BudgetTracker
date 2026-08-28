@@ -46,6 +46,7 @@ function baseProps(overrides: { taxYears?: number[]; taxYear?: number | null; ta
     split: [],
     debt: [],
     hasLoans: false,
+    hasLent: false,
     netWorth: [],
     baselines: [],
     baselineMonthsUsed: 0,
@@ -351,6 +352,47 @@ describe('ReportsClient — Net worth card', () => {
     const card = within(netWorthCard(container));
     expect(card.queryByText(/no balance/)).toBeNull();
     expect(card.queryByText(/reported a balance/)).toBeNull();
+  });
+});
+
+describe('ReportsClient — the debt card carries both series (rulings P12, P14)', () => {
+  const twoSeries = [
+    { month: '2026-06', owedCents: 200_000, lentCents: 50_000 },
+    { month: '2026-07', owedCents: 190_000, lentCents: 50_000 },
+    { month: '2026-08', owedCents: 180_000, lentCents: 30_000 },
+  ];
+
+  it('names both lines in the card description when a lent loan has a balance', () => {
+    const { container } = render(<ReportsClient {...baseProps()} debt={twoSeries} hasLoans hasLent />);
+    expect(container.textContent).toContain('what it has lent out');
+  });
+
+  it('says nothing about lending when the household has lent nothing', () => {
+    const { container } = render(
+      <ReportsClient
+        {...baseProps()}
+        debt={twoSeries.map((p) => ({ ...p, lentCents: null }))}
+        hasLoans
+        hasLent={false}
+      />,
+    );
+    expect(container.textContent).not.toContain('lent out');
+  });
+
+  it('the card is still hidden from a self viewer, whichever series exist (ruling R2)', () => {
+    const { container } = render(
+      <ReportsClient {...baseProps()} debt={twoSeries} hasLoans hasLent showHouseholdTotals={false} />,
+    );
+    expect(container.textContent).not.toContain('Debt over time');
+  });
+
+  it('the empty state is still driven by the OWED series alone', () => {
+    // A household with one lent loan and no debt history has nothing to draw on the debt line,
+    // and that is what the "Not enough history yet" state is about -- ruling P12 keeps the gate.
+    const { container } = render(
+      <ReportsClient {...baseProps()} debt={twoSeries.map((p) => ({ ...p, owedCents: null }))} hasLoans hasLent />,
+    );
+    expect(container.textContent).toContain('Not enough history yet');
   });
 });
 

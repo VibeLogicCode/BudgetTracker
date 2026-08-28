@@ -56,6 +56,7 @@ export function ReportsClient({
   split,
   debt,
   hasLoans,
+  hasLent,
   netWorth,
   baselines,
   baselineMonthsUsed,
@@ -79,6 +80,11 @@ export function ReportsClient({
   split: PersonSplitRow[];
   debt: DebtPoint[];
   hasLoans: boolean;
+  /** v1.14.0 (spec BU, ruling P12): true when at least one loan with a tracked balance points
+   *  'lent' -- decides only whether the debt chart draws a second line and shows a legend, and
+   *  whether the card's description mentions lending. It does NOT gate the card itself: that is
+   *  still hasLoans alone, unchanged, so an all-owed household sees exactly what it always has. */
+  hasLent: boolean;
   netWorth: NetWorthPoint[];
   baselines: BaselineRow[];
   baselineMonthsUsed: number;
@@ -629,7 +635,14 @@ export function ReportsClient({
           genuinely has no loans yet". */}
       {!showHouseholdTotals || !hasLoans ? null : (
         <Card>
-          <CardHeader title="Debt over time" description="Total owed across every loan with a balance." />
+          <CardHeader
+            title="Debt over time"
+            description={
+              hasLent
+                ? 'What the household owes, and what it has lent out, as separate lines.'
+                : 'Total owed across every loan with a balance.'
+            }
+          />
           {/* Review fix-round: gated on "fewer than two" rather than "every point null" -- a
               single non-null point (the common first-run shape, one anchor amid 23 NULLs)
               draws no visible line either, so it belongs here rather than in a chart with
@@ -649,7 +662,7 @@ export function ReportsClient({
             </EmptyState>
           ) : (
             <CardBody className="flex flex-col gap-3">
-              <DebtTrendChart data={debt} />
+              <DebtTrendChart data={debt} showLent={hasLent} />
               {/* MUST-15.6: always visible, because a reader is entitled to know where a line comes from. */}
               <p className="text-sm text-muted">
                 The line starts when you first recorded a balance for each loan, and is reconstructed by adding back the

@@ -219,4 +219,71 @@ describe('ReportsPage (ruling R2)', () => {
 
     expect(screen.getByRole('heading', { name: 'Category baselines' })).toBeTruthy();
   });
+
+  // v1.14.0 (spec BU, ruling P12): hasLoans and hasLent both come from ONE listLoans call, and
+  // hasLoans keeps its exact pre-1.14.0 meaning -- any loan with a tracked balance, either
+  // direction -- so a household whose only tracked loan is lent still gets the debt card.
+  it('hasLoans and hasLent both reflect one listLoans() read (ruling P12)', async () => {
+    const { adultId } = await setup();
+    const loanType = t!.sqlite
+      .prepare(`insert into warranty_item_types (name, is_subscription, kind, created_at) values ('Personal loan', 0, 'loan', ?) returning id`)
+      .get(today) as { id: number };
+    t!.sqlite
+      .prepare(
+        `insert into warranty_items
+           (name, purchase_date, is_lifetime, owner_user_id, type_id, current_balance_cents, balance_updated_at, loan_direction, created_at, updated_at)
+         values ('Loan to a friend', '2024-01-15', 0, ?, ?, 50000, ?, 'lent', ?, ?)`,
+      )
+      .run(adultId, loanType.id, today, today, today);
+    currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    const { default: ReportsPage } = await import('@/app/(app)/reports/page');
+    render(await ReportsPage({ searchParams: Promise.resolve({}) }));
+
+    // setup() already seeded one owed loan (Civic) with a tracked balance, so both flags are
+    // true here -- both loans, one of each direction, from the single read. hasLent shows up
+    // in the card's own description (recharts renders nothing in jsdom at 0x0, so the chart's
+    // legend itself is not a reachable assertion here -- see DebtTrendChart's own tests).
+    expect(screen.getByRole('heading', { name: 'Debt over time' })).toBeTruthy();
+    expect(screen.getByText('What the household owes, and what it has lent out, as separate lines.')).toBeTruthy();
+  });
+
+  it('a household with only an owed loan keeps the pre-1.14.0 card description', async () => {
+    const { adultId } = await setup();
+    currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    const { default: ReportsPage } = await import('@/app/(app)/reports/page');
+    render(await ReportsPage({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.getByRole('heading', { name: 'Debt over time' })).toBeTruthy();
+    expect(screen.getByText('Total owed across every loan with a balance.')).toBeTruthy();
+  });
+
+  it('hasLoans stays true for a household whose only tracked loan is lent (ruling P12)', async () => {
+    t = createTestDb();
+    const adult = await createUser({ name: 'Adult', username: 'adult', password: 'correct horse battery', role: 'admin' });
+    const loanType = t.sqlite
+      .prepare(`insert into warranty_item_types (name, is_subscription, kind, created_at) values ('Personal loan', 0, 'loan', ?) returning id`)
+      .get(today) as { id: number };
+    t.sqlite
+      .prepare(
+        `insert into warranty_items
+           (name, purchase_date, is_lifetime, owner_user_id, type_id, current_balance_cents, balance_updated_at, loan_direction, created_at, updated_at)
+         values ('Loan to a friend', '2024-01-15', 0, ?, ?, 50000, ?, 'lent', ?, ?)`,
+      )
+      .run(adult.id, loanType.id, today, today, today);
+    currentUser.value = { id: adult.id, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    const { default: ReportsPage } = await import('@/app/(app)/reports/page');
+    render(await ReportsPage({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.getByRole('heading', { name: 'Debt over time' })).toBeTruthy();
+  });
+
+  it('a household with no loans at all gets no debt card', async () => {
+    t = createTestDb();
+    const adult = await createUser({ name: 'Adult', username: 'adult', password: 'correct horse battery', role: 'admin' });
+    currentUser.value = { id: adult.id, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    const { default: ReportsPage } = await import('@/app/(app)/reports/page');
+    render(await ReportsPage({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.queryByRole('heading', { name: 'Debt over time' })).toBeNull();
+  });
 });
