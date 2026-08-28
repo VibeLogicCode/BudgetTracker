@@ -325,6 +325,66 @@ describe('ImportClient — polish item 8: the undo button is busy-guarded', () =
   });
 });
 
+describe('ImportClient — undo reports every table it touched (item AE / MON-5 follow-up)', () => {
+  it('appends the balance-figure count to the undo summary when snapshots were removed', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        // lookup call
+        .mockImplementationOnce(async () => ({ ok: true, json: async () => ({ importId: 77, willDelete: 3, willKeep: 1 }) }))
+        // confirmed undo call
+        .mockImplementationOnce(async () => ({
+          ok: true,
+          json: async () => ({ deleted: 3, kept: 1, loanLinksReversed: 0, snapshotsDeleted: 2 }),
+        })),
+    );
+
+    const { getByText } = render(
+      <ImportClient
+        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
+        profiles={PROFILES}
+        history={HISTORY}
+        simplefinManaged={[]}
+      />,
+    );
+
+    fireEvent.click(getByText('Undo'));
+
+    await waitFor(() => expect(getByText(/Undo complete/)).toBeTruthy());
+    expect(getByText(/3 deleted, 1 kept, and 2 balance figures removed\./)).toBeTruthy();
+  });
+
+  it('says nothing extra when no snapshot was removed', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockImplementationOnce(async () => ({ ok: true, json: async () => ({ importId: 77, willDelete: 3, willKeep: 1 }) }))
+        .mockImplementationOnce(async () => ({
+          ok: true,
+          json: async () => ({ deleted: 3, kept: 1, loanLinksReversed: 0, snapshotsDeleted: 0 }),
+        })),
+    );
+
+    const { getByText, queryByText } = render(
+      <ImportClient
+        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
+        profiles={PROFILES}
+        history={HISTORY}
+        simplefinManaged={[]}
+      />,
+    );
+
+    fireEvent.click(getByText('Undo'));
+
+    await waitFor(() => expect(getByText(/Undo complete: 3 deleted, 1 kept\./)).toBeTruthy());
+    expect(queryByText(/balance figure/)).toBeNull();
+  });
+});
+
 describe('ImportClient — the Preview and Import buttons are busy-guarded', () => {
   it('disables Preview for as long as the upload is in flight (useFormStatus, not a local flag)', async () => {
     const pending: { release?: (value: unknown) => void } = {};

@@ -335,7 +335,14 @@ export function ImportClient({
         setError(result.error ?? 'Undo failed.');
         return;
       }
-      setSummary(`Undo complete: ${result.deleted} deleted, ${result.kept} kept.`);
+      // v1.12.1 (item AE / MON-5 follow-up): snapshotsDeleted was computed and returned but never
+      // rendered anywhere -- the docblock in src/lib/import/commit.ts claimed it was "reported"
+      // when only deleted/kept ever reached the screen. This clause is the fix; 0 says nothing
+      // extra, the same convention loanLinksReversed and the skipped-rows count elsewhere follow.
+      setSummary(
+        `Undo complete: ${result.deleted} deleted, ${result.kept} kept` +
+          (result.snapshotsDeleted > 0 ? `, and ${result.snapshotsDeleted} balance ${result.snapshotsDeleted === 1 ? 'figure' : 'figures'} removed.` : '.'),
+      );
       setHistoryRows((rows) => rows.filter((row) => row.id !== importId));
     } finally {
       setBusy(false);

@@ -52,6 +52,10 @@ describe('migration 0012 — two additive columns, no rebuild', () => {
     current = createTestDb();
     // The three bill_installments CHECKs from 0011 survive an ALTER TABLE ADD COLUMN only
     // because nothing was recreated. Assert one of each rather than trusting that.
+    // item_id 1 does not exist in this fresh, unseeded db, so a bare toThrow() here would pass
+    // just as well on the FOREIGN KEY failing as on the CHECK this test actually means to pin --
+    // both throw, and toThrow() alone cannot tell them apart. Asserting the message names the
+    // CHECK specifically closes that gap.
     const insertItemless = () =>
       current!.sqlite
         .prepare(
@@ -59,7 +63,7 @@ describe('migration 0012 — two additive columns, no rebuild', () => {
            values (1, '2026-06-15', -1, '2026-08-27T00:00:00.000Z')`,
         )
         .run();
-    expect(insertItemless).toThrow();
+    expect(insertItemless).toThrow(/CHECK constraint failed/i);
     const indexes = current.sqlite.prepare(`pragma index_list(bill_installments)`).all() as { name: string }[];
     expect(indexes.map((i) => i.name)).toContain('bill_installments_txn_uq');
     const userIndexes = current.sqlite.prepare(`pragma index_list(users)`).all() as { name: string }[];

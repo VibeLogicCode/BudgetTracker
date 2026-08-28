@@ -195,6 +195,12 @@ describe('AutoSaveTextInput', () => {
 
 describe('v1.12.1: a thrown action is not a silent failure (item V / UX-3)', () => {
   it('shows the generic sentence, sets the error status and reverts the select', async () => {
+    // v1.12.1 (test hygiene fix round 2). The hook's own catch block deliberately logs the
+    // thrown error (useAutoSave in AutoSave.tsx, `console.error('[auto-save] action threw', ...)`)
+    // so a driver failure is not lost entirely -- but an unstubbed console.error prints straight
+    // into this test's own output. Stub it, then assert it fired exactly once with the
+    // '[auto-save]' prefix: the logging is real behaviour to prove, not noise to suppress.
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
     const action = vi.fn(async (_formData: FormData) => {
       throw new Error('SQLITE_BUSY: database is locked');
     });
@@ -217,6 +223,10 @@ describe('v1.12.1: a thrown action is not a silent failure (item V / UX-3)', () 
     // driver error string in a table cell helps nobody.
     expect(screen.queryByText(/SQLITE_BUSY/)).toBeNull();
     expect((screen.getByLabelText('Category for transaction 42') as HTMLSelectElement).value).toBe('2');
+
+    expect(consoleError).toHaveBeenCalledTimes(1);
+    expect(consoleError.mock.calls[0][0]).toBe('[auto-save] action threw');
+    consoleError.mockRestore();
   });
 });
 

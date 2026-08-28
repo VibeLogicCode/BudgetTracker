@@ -31,16 +31,6 @@ const initial: BudgetActionState = {};
 const saveLimit = (formData: FormData) => setLimitAction({}, formData);
 const saveRollover = (formData: FormData) => setRolloverAction({}, formData);
 
-/**
- * v1.12.1 (item X / UX-4). The deliberate half of the pair: AutoSaveTextInput now treats an
- * emptied field as a no-op, so "clear this budget from this month forward" needs a control of its
- * own. Same action, same four fields, an explicitly empty `amount` -- setLimitAction's blank
- * branch is unchanged and still the only path to clearBudget.
- */
-const clearLimit = (formData: FormData) => {
-  void setLimitAction({}, formData);
-};
-
 /** Everything a row needs from the predictions, resolved once per section. */
 interface RowPredictions {
   suggestionOf: Map<number, CategorySuggestion>;
@@ -81,6 +71,19 @@ function Row({
 }) {
   const suggestion = predict?.suggestionOf.get(row.categoryId) ?? null;
   const projection = predict?.projectionOf.get(row.categoryId) ?? null;
+
+  // v1.12.1 (item X / UX-4, fix round 2). Clearing used to fire-and-forget the result of
+  // setLimitAction (`void setLimitAction(...)`): a failure -- cross-origin rejection, someone
+  // else's personal budget -- vanished with no message and the row looked cleared when it was
+  // not. This reads the result and renders it inline beside the button, the same way
+  // AutoSaveTextInput's own ErrorLine renders a failed save next to its control. Success needs
+  // no message: the row re-rendering with `baseLimitCents: null` (and the clear button gone)
+  // already says so.
+  const [clearError, setClearError] = useState<string | null>(null);
+  const clearLimit = async (formData: FormData) => {
+    const result = await setLimitAction({}, formData);
+    setClearError(result.error ?? null);
+  };
 
   return (
     <>
@@ -141,6 +144,11 @@ function Row({
                   >
                     clear
                   </button>
+                  {clearError ? (
+                    <span role="alert" className="ml-1.5 text-xs font-medium text-negative-soft-fg">
+                      {clearError}
+                    </span>
+                  ) : null}
                 </form>
               ) : null}
               {row.baseLimitCents !== null && row.carryCents > 0 ? (

@@ -177,7 +177,15 @@ describe('v1.12.1: safe-area insets for an installed home-screen app (item AY / 
   it('main clears the rounded corners on both sides', () => {
     const { container } = renderShell();
     const main = container.querySelector('main')?.className ?? '';
-    expect(main).toContain('pl-[env(safe-area-inset-left)]');
-    expect(main).toContain('pr-[env(safe-area-inset-right)]');
+    expect(main).toContain('pl-[max(1rem,env(safe-area-inset-left))]');
+    expect(main).toContain('pr-[max(1rem,env(safe-area-inset-right))]');
+  });
+
+  it('regression (fix round 2): no bare pl-[env(...)]/pr-[env(...)] alongside a shadowed px-4 -- Tailwind v4 orders px-* before pl-*/pr-*, so a separate px-4 loses the padding below sm: on any device without a notch on that axis', () => {
+    const { container } = renderShell();
+    const main = container.querySelector('main')?.className ?? '';
+    expect(main).not.toContain('px-4');
+    expect(main).not.toContain('pl-[env(safe-area-inset-left)]');
+    expect(main).not.toContain('pr-[env(safe-area-inset-right)]');
   });
 });

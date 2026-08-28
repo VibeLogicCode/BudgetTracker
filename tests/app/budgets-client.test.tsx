@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, cleanup, screen } from '@testing-library/react';
+import { render, cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
 import { BudgetsClient } from '@/app/(app)/budgets/budgets-client';
 import { sectionFrom } from '@/app/(app)/budgets/page';
 import type { BudgetRow } from '@/lib/budgets';
@@ -382,5 +382,19 @@ describe('v1.12.1: clearing a budget is a deliberate button (item X / UX-4)', ()
     expect((form?.querySelector('input[name="amount"]') as HTMLInputElement | null)?.value).toBe('');
     expect((form?.querySelector('input[name="categoryId"]') as HTMLInputElement | null)?.value).toBeTruthy();
     expect((form?.querySelector('input[name="month"]') as HTMLInputElement | null)?.value).toBeTruthy();
+  });
+
+  it('fix round 2: a failing clear surfaces the server error inline, next to the button, instead of vanishing (`void setLimitAction(...)` used to discard it)', async () => {
+    const { setLimitAction } = await import('@/app/(app)/budgets/actions');
+    vi.mocked(setLimitAction).mockResolvedValueOnce({ error: 'You can only edit your own personal budgets.' });
+    renderClient({ limitCents: 60000 });
+
+    const button = screen.getByRole('button', { name: /Clear the budget for Groceries/ });
+    fireEvent.submit(button.closest('form')!);
+
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('You can only edit your own personal budgets.'));
+    // The row itself is untouched by this render-only failure -- nothing else on the page
+    // claims a message it did not earn.
+    expect(screen.queryByText('Budget cleared from this month forward.')).toBeNull();
   });
 });

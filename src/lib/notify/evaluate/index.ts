@@ -74,7 +74,8 @@ function digestAlreadySent(userId: number, slotDate: string): boolean {
  *   coming_due, stale_import  → the user's DAILY slot
  *   weekly_digest             → the user's WEEKLY slot
  *   budget_threshold/exceeded → EVERY tick, fingerprint-guarded (§6.5)
- *   backup_failed, new_signin, restore_outcome → immediate (§6.6), never here
+ *   backup_failed, new_signin, restore_outcome,
+ *   password_changed, mfa_disabled          → immediate (§6.6), never here
  *
  * MUST-6.7: a slot outside its catch-up window is skipped, logging exactly one line PER
  * SLOT (see logSlotSkipOnce) rather than once per five-minute tick for as long as the

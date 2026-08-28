@@ -89,9 +89,10 @@ function cells(
 /**
  * MUST-3.2 and MUST-4.9: this MIRRORS budgetProgress() row for row.
  *
- * src/lib/budgets.ts is not changed by this release (spec section 2.2), so its rollup cannot
- * be exported and reused; it is reproduced here and pinned by a test that compares the two on
- * the seeded tree for a single month. Every rule below is budgetProgress()'s rule:
+ * budgetProgress()'s own rollup was not exported for reuse here (spec section 2.2, the original
+ * 2026-08-22 v1.7.0 spec this module was written against), so it is reproduced here and pinned
+ * by a test that compares the two on the seeded tree for a single month. Every rule below is
+ * budgetProgress()'s rule:
  *
  *   - income is filtered out FIRST, so an income child never changes a spend parent's total;
  *   - a top-level category's value is its own cell plus every DIRECT child's cell, archived

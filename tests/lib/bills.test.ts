@@ -237,8 +237,10 @@ describe('safeToSpend', () => {
     const food = categoryIdByName(db, 'Food');
     const groceries = categoryIdByName(db, 'Groceries');
     const restaurants = categoryIdByName(db, 'Restaurants');
-    // Budget lives on the top-level parent; budgetTotals only sums top-level rows
-    // (children are already rolled into the parent by budgetProgress).
+    // Budget lives on the top-level parent. Per P3's rule: a parent's own explicit limit
+    // supersedes its children's (a parent with a limit set is measured on its own total,
+    // not a sum of child limits); only an unlimited parent falls back to summing its
+    // children's limits instead.
     upsertBudget({ scope: 'household', userId: null, categoryId: food, month: '2026-03', amountCents: 50000 });
     spend({ categoryId: groceries, amountCents: -30000, date: '2026-03-10' });
     spend({ categoryId: restaurants, amountCents: -10000, date: '2026-03-12' });

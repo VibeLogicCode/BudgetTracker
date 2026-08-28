@@ -152,7 +152,17 @@ export function AppShell({
           </div>
         ) : null}
 
-        <main id="main" className="mx-auto w-full max-w-6xl flex-1 px-4 py-7 pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)] sm:px-6 sm:py-9 lg:px-8">
+        {/* v1.12.1 fix round 2 (item AY / UX-11 regression): Tailwind v4 orders utilities by
+            insertion, and `px-4` was written AFTER the `pl-*`/`pr-*` pair below, so under `sm:`
+            it lost that ordering fight and `px-4` won -- but below `sm:` there was no `px-4` to
+            lose to, only the bare inset values, which are 0px on any device without a notch on
+            that axis. Every phone without a physical notch rendered flush to the screen edge.
+            `max(1rem, env(...))` folds the base padding and the inset into ONE value per side,
+            so there is no second utility for a cascade order to ever get wrong again. */}
+        <main
+          id="main"
+          className="mx-auto w-full max-w-6xl flex-1 py-7 pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] sm:px-6 sm:py-9 lg:px-8"
+        >
           {children}
         </main>
 
