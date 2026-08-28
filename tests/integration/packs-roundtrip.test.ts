@@ -3,7 +3,7 @@ import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser
 import { exportProfilesPack, exportRulesPack, importProfilesPack, importRulesPack, previewRulesPackImport } from '@/lib/packs';
 import { listRules, upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { createCategory, listCategories } from '@/lib/categories';
-import { createProfile, getBuiltinPreset, getProfileByName, listProfiles } from '@/lib/import/presets';
+import { BUILTIN_PRESET_NAMES, createProfile, getBuiltinPreset, getProfileByName, listProfiles } from '@/lib/import/presets';
 import { upsertAccountCardPerson } from '@/lib/import/card-people';
 import { buildContext, categorizeTransaction } from '@/lib/categorize/engine';
 import { normalizeMerchant } from '@/lib/categorize/normalize';
@@ -135,14 +135,11 @@ describe('profiles pack round trip onto a fresh database', () => {
     current = createSeededTestDb();
 
     const result = importProfilesPack(profiles);
-    expect(result.added.map((a) => a.name)).toEqual([
-      'TD Chequing/Debit (2)',
-      'TD Visa (2)',
-      'Scotiabank Chequing/Debit (2)',
-      'Amex Canada (2)',
-      'Tangerine Chequing',
-    ]);
-    expect(listProfiles()).toHaveLength(9);
+    // v1.13.0 Task 9 grew the built-in count from 4 to 7 -- derived rather than a literal. Every
+    // built-in collides with the fresh database's own seeded set and is renamed; Tangerine
+    // Chequing is the one custom profile and lands as-is.
+    expect(result.added.map((a) => a.name)).toEqual([...BUILTIN_PRESET_NAMES.map((name) => `${name} (2)`), 'Tangerine Chequing']);
+    expect(listProfiles()).toHaveLength(BUILTIN_PRESET_NAMES.length * 2 + 1);
 
     const tangerine = getProfileByName('Tangerine Chequing')!;
     expect(tangerine.isBuiltin).toBe(false);

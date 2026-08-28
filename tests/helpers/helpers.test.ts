@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { createSeededTestDb, insertTestUser, insertTestAccount, categoryIdByName, type TestDb } from './db';
+import { BUILTIN_PRESET_NAMES } from '@/lib/import/presets';
 
 // Task 3+ consume createSeededTestDb/insertTestUser/insertTestAccount/categoryIdByName
 // immediately and verbatim. This file proves their db.get<T>(sql`INSERT ... RETURNING id`)
@@ -20,7 +21,8 @@ describe('test db helpers', () => {
     const categoryCount = current.sqlite.prepare('select count(*) as c from categories').get() as { c: number };
     const profileCount = current.sqlite.prepare('select count(*) as c from import_profiles').get() as { c: number };
     expect(categoryCount.c).toBe(37);
-    expect(profileCount.c).toBe(4);
+    // v1.13.0 Task 9 grew the built-in preset count from 4 to 7 -- derived rather than a literal.
+    expect(profileCount.c).toBe(BUILTIN_PRESET_NAMES.length);
   });
 
   it('insertTestUser inserts a row and returns a usable id', () => {

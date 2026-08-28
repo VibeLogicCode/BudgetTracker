@@ -63,7 +63,7 @@ export function insertTestAccount(
   over: Partial<{
     name: string;
     institution: string;
-    type: 'chequing' | 'credit' | 'cash';
+    type: 'chequing' | 'credit' | 'cash' | 'savings' | 'asset';
     ownerUserId: number | null;
     importProfileId: number | null;
   }> = {},

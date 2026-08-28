@@ -6,7 +6,7 @@ import { GET as profilesExport } from '@/app/api/packs/profiles/export/route';
 import { POST as profilesImport } from '@/app/api/packs/profiles/import/route';
 import { createSession, SESSION_COOKIE_NAME } from '@/lib/auth/session';
 import { upsertRuleFromCorrection, listRules } from '@/lib/categorize/rules';
-import { listProfiles } from '@/lib/import/presets';
+import { BUILTIN_PRESET_NAMES, listProfiles } from '@/lib/import/presets';
 import { MAX_FILE_BYTES } from '@/lib/import/parse';
 
 let current: TestDb | null = null;
@@ -187,16 +187,17 @@ describe('profiles pack routes', () => {
     const exported = await profilesExport(new Request('http://nas.local:3000/api/packs/profiles/export', { headers: headers(adminToken) }));
     expect(exported.status).toBe(200);
     const body = await exported.text();
-    expect(JSON.parse(body).profiles).toHaveLength(4);
+    // v1.13.0 Task 9 grew the built-in count from 4 to 7 -- derived rather than a literal.
+    expect(JSON.parse(body).profiles).toHaveLength(BUILTIN_PRESET_NAMES.length);
 
     const preview = await profilesImport(uploadRequest('http://nas.local:3000/api/packs/profiles/import', body, adminToken));
-    expect(await preview.json()).toMatchObject({ applied: false, totalProfiles: 4 });
-    expect(listProfiles()).toHaveLength(4);
+    expect(await preview.json()).toMatchObject({ applied: false, totalProfiles: BUILTIN_PRESET_NAMES.length });
+    expect(listProfiles()).toHaveLength(BUILTIN_PRESET_NAMES.length);
 
     const applied = await profilesImport(uploadRequest('http://nas.local:3000/api/packs/profiles/import', body, adminToken, { mode: 'apply' }));
     const result = (await applied.json()) as { added: { name: string }[] };
-    expect(result.added.map((a) => a.name)).toEqual(['TD Chequing/Debit (2)', 'TD Visa (2)', 'Scotiabank Chequing/Debit (2)', 'Amex Canada (2)']);
-    expect(listProfiles()).toHaveLength(8);
+    expect(result.added.map((a) => a.name)).toEqual(BUILTIN_PRESET_NAMES.map((name) => `${name} (2)`));
+    expect(listProfiles()).toHaveLength(BUILTIN_PRESET_NAMES.length * 2);
   });
 
   it('403s a member on export and import', async () => {

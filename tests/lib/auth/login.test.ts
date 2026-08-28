@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { createTestDb, type TestDb } from '../../helpers/db';
 import { attemptLogin, isSetupRequired, runSetup, GENERIC_LOGIN_ERROR } from '@/lib/auth/login';
 import { createPersonWithoutLogin, createUser, findUserByUsername, setUserActive, countUsers } from '@/lib/auth/users';
+import { BUILTIN_PRESET_NAMES } from '@/lib/import/presets';
 import { validateSession } from '@/lib/auth/session';
 import * as ratelimit from '@/lib/auth/ratelimit';
 import { currentTotpToken, enableTotpForUser, generateRecoveryCodes, generateTotpSecret, storeRecoveryCodes, countUnusedRecoveryCodes } from '@/lib/auth/totp';
@@ -46,7 +47,8 @@ describe('setup wizard', () => {
     const categories = current.sqlite.prepare('select count(*) as c from categories').get() as { c: number };
     const profiles = current.sqlite.prepare('select count(*) as c from import_profiles').get() as { c: number };
     expect(categories.c).toBe(37);
-    expect(profiles.c).toBe(4);
+    // v1.13.0 Task 9 grew the built-in preset count from 4 to 7 -- derived rather than a literal.
+    expect(profiles.c).toBe(BUILTIN_PRESET_NAMES.length);
   });
 
   it('refuses to run twice', async () => {

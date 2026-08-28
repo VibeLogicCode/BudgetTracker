@@ -48,10 +48,11 @@ describe('seed', () => {
     expect(depth3.c).toBe(0);
   });
 
-  it('inserts the 4 built-in profiles with valid mappings', () => {
+  it('inserts the built-in profiles with valid mappings', () => {
     current = createTestDb();
     const inserted = seedImportProfiles(current.db);
-    expect(inserted).toBe(4);
+    // v1.13.0 Task 9 grew the built-in preset count from 4 to 7 -- derived rather than a literal.
+    expect(inserted).toBe(BUILTIN_PRESET_NAMES.length);
     const rows = current.sqlite.prepare('select name, is_builtin, mapping from import_profiles order by id').all() as {
       name: string;
       is_builtin: number;
@@ -71,6 +72,7 @@ describe('seed', () => {
     seedDatabase(current.db);
     const after = current.db.get<{ c: number }>(sql`select (select count(*) from categories) + (select count(*) from import_profiles) as c`);
     expect(after.c).toBe(before.c);
-    expect(after.c).toBe(41);
+    // 37 categories + BUILTIN_PRESET_NAMES.length profiles (v1.13.0 Task 9 grew that from 4 to 7).
+    expect(after.c).toBe(37 + BUILTIN_PRESET_NAMES.length);
   });
 });

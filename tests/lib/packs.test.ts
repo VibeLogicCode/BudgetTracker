@@ -18,7 +18,7 @@ import {
 } from '@/lib/packs';
 import { listRules, upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { listCategories } from '@/lib/categories';
-import { getBuiltinPreset, getProfileByName, listProfiles } from '@/lib/import/presets';
+import { BUILTIN_PRESET_NAMES, getBuiltinPreset, getProfileByName, listProfiles } from '@/lib/import/presets';
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -479,7 +479,8 @@ describe('profiles pack', () => {
     setup();
     const pack = exportProfilesPack({ at: new Date('2026-08-15T12:00:00.000Z') });
     expect(pack.format).toBe(PROFILES_PACK_FORMAT);
-    expect(pack.profiles).toHaveLength(4);
+    // v1.13.0 Task 9 grew the built-in count from 4 to 7 -- derived rather than a literal.
+    expect(pack.profiles).toHaveLength(BUILTIN_PRESET_NAMES.length);
     for (const profile of pack.profiles) {
       expect(Object.keys(profile).sort()).toEqual(['institution', 'mapping', 'name']);
     }
@@ -490,7 +491,7 @@ describe('profiles pack', () => {
   it('can export a chosen subset, and previews what would go', () => {
     setup();
     const rows = previewProfilesPackExport();
-    expect(rows).toHaveLength(4);
+    expect(rows).toHaveLength(BUILTIN_PRESET_NAMES.length);
     expect(rows[0]).toMatchObject({ isBuiltin: true });
     const amex = rows.find((r) => r.name === 'Amex Canada')!;
     const pack = exportProfilesPack({ profileIds: [amex.profileId] });
@@ -516,7 +517,7 @@ describe('profiles pack', () => {
     ]);
     expect(getProfileByName('TD Visa (2)')?.isBuiltin).toBe(false);
     expect(getProfileByName('TD Visa')?.isBuiltin).toBe(true); // the built-in is untouched
-    expect(listProfiles()).toHaveLength(6);
+    expect(listProfiles()).toHaveLength(BUILTIN_PRESET_NAMES.length + 2);
   });
 
   it('keeps counting up when (2) is also taken', () => {
