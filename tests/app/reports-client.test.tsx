@@ -66,6 +66,11 @@ function baseProps(overrides: { taxYears?: number[]; taxYear?: number | null; ta
     // The "Net worth card" describe block below depends on this being true to exercise that
     // card's own empty/populated states at all.
     showHouseholdTotals: true,
+    // v1.13.0 ruling R2 (fix round 2): same reasoning as showPersonSplit/showHouseholdTotals
+    // above -- every fixture here predates the self-viewer export-link exclusion, so it
+    // keeps the pre-existing (household-viewer) behavior of offering Export CSV unless a
+    // test overrides it.
+    showExport: true,
   };
 }
 

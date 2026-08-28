@@ -103,6 +103,36 @@ describe('ReportsPage (ruling R2)', () => {
     expect(container.textContent).toContain('$12.00');
   });
 
+  // v1.13.0 ruling R2 (fix round 2, controller directive): listUsers() names every household
+  // member -- an RSC payload prop reaches the browser even when the client component never
+  // renders it, so `people` itself must carry no other member's name for a self viewer, not
+  // merely have its <select> hidden. This is the DOM-visible proxy for that: if `people` ever
+  // leaked into this render (a future Field un-hiding it, a stray option list, anything), the
+  // other member's name would show up somewhere in the tree, and this test would catch it.
+  it('a self viewer render carries no other household members name', async () => {
+    const { childId } = await setup();
+    currentUser.value = { id: childId, name: 'Kid', username: 'kid', role: 'member', visibility: 'self' };
+    const { default: ReportsPage } = await import('@/app/(app)/reports/page');
+    const { container } = render(await ReportsPage({ searchParams: Promise.resolve({}) }));
+
+    expect(container.textContent).not.toContain('Adult');
+  });
+
+  // Ruling R2 (fix round 2): "no export links offered" -- the top Export CSV control must not
+  // appear at all for a self viewer, independent of Task 14's server-side route refusal.
+  it('a self viewer sees no Export CSV link', async () => {
+    const { childId } = await setup();
+    currentUser.value = { id: childId, name: 'Kid', username: 'kid', role: 'member', visibility: 'self' };
+    const { default: ReportsPage } = await import('@/app/(app)/reports/page');
+    const { container } = render(await ReportsPage({ searchParams: Promise.resolve({}) }));
+
+    // getByRole('link', ...), not a plain text search -- "Export CSV" also appears in the
+    // PageGuide's descriptive prose (unconditionally, for every viewer), which is not itself
+    // an offered control and is not what ruling R2's "no export links offered" is about.
+    expect(container.querySelector('a[href^="/api/reports/export"]')).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Export CSV' })).toBeNull();
+  });
+
   it('a household viewer keeps the Person picker and the "Who spent it" card', async () => {
     const { adultId } = await setup();
     currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
@@ -114,6 +144,20 @@ describe('ReportsPage (ruling R2)', () => {
     // Both members' spending shows up, unscoped.
     expect(container.textContent).toContain('$50.00');
     expect(container.textContent).toContain('$12.00');
+  });
+
+  // Fix round 2's positive mirror: a household viewer keeps both the other member's name (in
+  // the Person picker's own options) and the Export CSV link.
+  it('a household viewer render carries every members name and the Export CSV link', async () => {
+    const { adultId } = await setup();
+    currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    const { default: ReportsPage } = await import('@/app/(app)/reports/page');
+    const { container } = render(await ReportsPage({ searchParams: Promise.resolve({}) }));
+
+    expect(container.textContent).toContain('Adult');
+    expect(container.textContent).toContain('Kid');
+    expect(container.querySelector('a[href^="/api/reports/export"]')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Export CSV' })).toBeTruthy();
   });
 
   // v1.13.0 ruling R2 (fix round 1, controller directive): R2 binds every page, not just the

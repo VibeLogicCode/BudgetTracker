@@ -129,7 +129,12 @@ export default async function ReportsPage({
       range={range}
       today={today}
       person={person === null ? '' : String(person)}
-      people={listUsers().map((u) => ({ id: u.id, name: u.name }))}
+      // v1.13.0 ruling R2 (fix round 2). listUsers() names every household member -- an
+      // RSC payload prop reaches the browser even when the client component never renders
+      // it, so a self viewer (whose Person <select> is hidden entirely via showPersonSplit)
+      // must not receive the other names at all, not merely be shown a select that omits
+      // them. Same principle as suggestionsFor/netWorthOverTime/debtOverTime/taxYears above.
+      people={showHouseholdTotals ? listUsers().map((u) => ({ id: u.id, name: u.name })) : []}
       breakdown={categoryBreakdown({ from, to, attributedUserId: person, rollup: true }, viewer)}
       monthOverMonth={categoryMonthOverMonth(
         { fromMonth: from.slice(0, 7), toMonth: to.slice(0, 7), attributedUserId: person, limit: 10 },
@@ -157,6 +162,10 @@ export default async function ReportsPage({
       // Ruling R2 (fix round 1): net worth, debt-over-time and the tax-year card are all
       // dropped entirely for a self viewer, not shown as a scoped-to-zero/empty-state version.
       showHouseholdTotals={showHouseholdTotals}
+      // Ruling R2 (fix round 2): the top "Export CSV" control is not offered to a self
+      // viewer at all -- Task 14 gates /api/reports/export server-side for them, but the
+      // ruling was "no export links offered", not merely "the route refuses them".
+      showExport={!isSelfScoped(viewer)}
     />
   );
 }

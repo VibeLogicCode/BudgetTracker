@@ -68,6 +68,7 @@ export function ReportsClient({
   taxRows,
   showPersonSplit,
   showHouseholdTotals,
+  showExport,
 }: {
   range: ResolvedRange;
   today: string;
@@ -107,6 +108,11 @@ export function ReportsClient({
    *  dashboard, and reads categorically ("NO account balances, NO net worth, NO reports of
    *  household totals"), not "scoped to the viewer's own accounts". */
   showHouseholdTotals: boolean;
+  /** v1.13.0 ruling R2 (fix round 2, controller directive): false for a self viewer -- the
+   *  top "Export CSV" control is not OFFERED at all, not merely refused server-side. Task
+   *  14 gates /api/reports/export for a self viewer, but the ruling reads "no export links
+   *  offered", so the control itself must not appear. */
+  showExport: boolean;
 }) {
   const exportHref = `/api/reports/export?${new URLSearchParams({
     ...rangeParams(range),
@@ -132,9 +138,11 @@ export function ReportsClient({
         title="Reports"
         description="Where the money went over a stretch of time, by category and by person."
         actions={
-          <a href={exportHref} className="btn btn--secondary">
-            Export CSV
-          </a>
+          showExport ? (
+            <a href={exportHref} className="btn btn--secondary">
+              Export CSV
+            </a>
+          ) : undefined
         }
       />
 
