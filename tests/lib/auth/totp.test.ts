@@ -7,8 +7,10 @@ import {
   RECOVERY_CODE_COUNT,
   RECOVERY_CODE_LENGTH,
   TOTP_HKDF_INFO,
+  TOTP_STEP_SECONDS,
   clearTotpEnrollment,
   consumeRecoveryCode,
+  consumeTotpCounter,
   countUnusedRecoveryCodes,
   currentTotpToken,
   decryptTotpSecret,
@@ -24,6 +26,7 @@ import {
   totpKeyUri,
   totpQrDataUri,
   verifyTotp,
+  verifyTotpCounter,
 } from '@/lib/auth/totp';
 
 let current: TestDb | null = null;
@@ -249,5 +252,59 @@ describe('enrollment lifecycle', () => {
     expect(row.totp_secret_encrypted).toBeNull();
     expect(countUnusedRecoveryCodes(userId)).toBe(0);
     expect(getTotpSecretForUser(userId)).toBeNull();
+  });
+});
+
+describe('v1.12.1: a code can be spent once (item BF / SEC-10)', () => {
+  function setupUser(): { userId: number; db: TestDb['db'] } {
+    current = createTestDb();
+    const userId = insertTestUser(current.db);
+    return { userId, db: current.db };
+  }
+
+  it('verifyTotpCounter returns the step counter of the accepted code', () => {
+    const secret = generateTotpSecret();
+    const at = new Date('2026-08-27T12:00:15.000Z');
+    const token = currentTotpToken(secret, at);
+
+    const counter = verifyTotpCounter(secret, token, at);
+    expect(counter).toBe(Math.floor(at.getTime() / 1000 / TOTP_STEP_SECONDS));
+  });
+
+  it('verifyTotpCounter returns the NEIGHBOURING counter for a code from the previous step', () => {
+    const secret = generateTotpSecret();
+    const generatedAt = new Date('2026-08-27T12:00:15.000Z');
+    const checkedAt = new Date('2026-08-27T12:00:45.000Z');
+    const token = currentTotpToken(secret, generatedAt);
+
+    expect(verifyTotpCounter(secret, token, checkedAt)).toBe(
+      Math.floor(generatedAt.getTime() / 1000 / TOTP_STEP_SECONDS),
+    );
+  });
+
+  it('verifyTotpCounter returns null for a code that does not verify, and for a malformed one', () => {
+    const secret = generateTotpSecret();
+    const at = new Date('2026-08-27T12:00:15.000Z');
+    expect(verifyTotpCounter(secret, '000000', new Date('2027-01-01T00:00:00.000Z'))).toBeNull();
+    expect(verifyTotpCounter(secret, 'not-a-code', at)).toBeNull();
+  });
+
+  it('consumeTotpCounter accepts a counter once and refuses it, and anything older, afterwards', () => {
+    const { userId } = setupUser();
+    expect(consumeTotpCounter(userId, 58231001)).toBe(true);
+    // The replay: same code, same window, seconds later.
+    expect(consumeTotpCounter(userId, 58231001)).toBe(false);
+    // And the step before it, which is inside the same +/-1 window.
+    expect(consumeTotpCounter(userId, 58231000)).toBe(false);
+    // The next step is fine.
+    expect(consumeTotpCounter(userId, 58231002)).toBe(true);
+  });
+
+  it('consumeTotpCounter accepts the first ever code, when the column is still NULL', () => {
+    const { userId, db } = setupUser();
+    expect(
+      db.get<{ c: number | null }>(sql`select totp_last_counter as c from users where id = ${userId}`).c,
+    ).toBeNull();
+    expect(consumeTotpCounter(userId, 1)).toBe(true);
   });
 });

@@ -5,7 +5,7 @@ import { raiseNewSignin } from '@/lib/notify/raise';
 import { createSession, type SessionUser } from './session';
 import { hashPassword, verifyPassword } from './password';
 import { checkLockout, recordLoginAttempt } from './ratelimit';
-import { consumeRecoveryCode, getTotpSecretForUser, verifyTotp } from './totp';
+import { consumeRecoveryCode, consumeTotpCounter, getTotpSecretForUser, verifyTotpCounter } from './totp';
 import { countUsers, createFirstAdmin, findUserByUsername } from './users';
 
 export const GENERIC_LOGIN_ERROR = 'Incorrect username or password.';
@@ -107,7 +107,19 @@ export async function attemptLogin(input: {
         console.error('[auth] failed to decrypt TOTP secret during login', { userId: user.id, error });
         return fail();
       }
-      if (!secret || !verifyTotp(secret, input.totpCode, at)) return fail();
+      if (!secret) return fail();
+      // v1.12.1 (item BF / SEC-10). Verify, then SPEND. A code stays cryptographically valid for
+      // its full +/-1 window (~90 s), and until now nothing recorded that one had been used, so
+      // anyone who observed a code inside that window could replay it on a second login. The
+      // password is still required, so this only mattered once the password was already known --
+      // which is precisely the phishing-relay and shoulder-surf case a second factor exists for.
+      //
+      // A refused counter takes the same fail() path as a wrong code, deliberately: it counts
+      // toward both lockout layers (recordLoginAttempt), and it tells the person nothing about
+      // WHY, which is the same courtesy every other branch here extends to an attacker.
+      const counter = verifyTotpCounter(secret, input.totpCode, at);
+      if (counter === null) return fail();
+      if (!consumeTotpCounter(user.id, counter)) return fail();
     } else if (!consumeRecoveryCode(user.id, input.recoveryCode ?? '', at)) {
       return fail();
     }

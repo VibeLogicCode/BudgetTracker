@@ -1,7 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes, randomInt } from 'node:crypto';
 import { authenticator } from 'otplib';
 import QRCode from 'qrcode';
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, eq, isNull, lt, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { totpRecoveryCodes, users } from '@/db/schema';
 import { nowIso } from '@/lib/clock';
@@ -16,10 +16,19 @@ const IV_BYTES = 12;
 const TAG_BYTES = 16;
 const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 
-// otplib defaults: SHA-1, 6 digits, 30 s step. Spec requires +/-1 step tolerance.
-// A module-local clone avoids mutating otplib's shared singleton (`authenticator.options = ...`
-// would silently widen the replay window for any other module that touches the default instance).
+/**
+ * otplib defaults: SHA-1, 6 digits, 30 s step. Spec requires +/-1 step tolerance.
+ * A module-local clone avoids mutating otplib's shared singleton (`authenticator.options = ...`
+ * would silently widen the replay window for any other module that touches the default instance).
+ */
 const totp = authenticator.clone({ window: 1 });
+
+/**
+ * The step, spelled out, because v1.12.1 does counter arithmetic against it and a magic 30 in two
+ * places is a 30 that can disagree with itself. It matches the clone above -- otplib's default and
+ * RFC 6238's -- and changing one without the other would make every stored counter wrong.
+ */
+export const TOTP_STEP_SECONDS = 30;
 
 export function deriveTotpKey(secretKey: string = readEnv().secretKey): Buffer {
   // Salt is empty by design: SECRET_KEY is already high-entropy and per-install.
@@ -76,6 +85,58 @@ export function verifyTotp(secret: string, token: string, at?: Date): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Like verifyTotp, but returns WHICH time step the accepted code belongs to -- or null if it does
+ * not verify at all.
+ *
+ * v1.12.1 (item BF / SEC-10). `window: 1` means a code is accepted for roughly 90 seconds and
+ * nothing recorded that one had been spent, so a code observed in that window -- shoulder-surfed,
+ * screenshotted into a chat, relayed by a phishing page -- could be replayed on a second login.
+ * Recovery codes were already single-use, via an atomic conditional UPDATE (consumeRecoveryCode
+ * below), which is the pattern this pair copies: verify here, spend in consumeTotpCounter.
+ *
+ * checkDelta is otplib's own API for this (@otplib/core's Authenticator) and returns the offset in
+ * steps -- -1, 0 or 1 under `window: 1` -- so the counter is the current step plus that offset.
+ * Deriving it by re-generating three candidate tokens and comparing would be the same arithmetic
+ * with a hand-rolled comparison in the middle of it.
+ *
+ * Pure: no database read, no write. The spending is a separate call, so a caller cannot
+ * accidentally consume a counter while merely checking one.
+ */
+export function verifyTotpCounter(secret: string, token: string, at?: Date): number | null {
+  const cleaned = token.replace(/\s+/g, '');
+  if (!/^\d{6,8}$/.test(cleaned)) return null;
+  try {
+    const delta = totpAt(at).checkDelta(cleaned, secret);
+    if (delta === null) return null;
+    const epochMs = at ? at.getTime() : Date.now();
+    return Math.floor(epochMs / 1000 / TOTP_STEP_SECONDS) + delta;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Records a TOTP counter as spent, atomically. Returns false when it -- or a later one -- was
+ * already recorded, which is a replay.
+ *
+ * The conditional UPDATE is the whole guard, exactly as it is in consumeRecoveryCode: two logins
+ * racing with the same code both reach this, SQLite serialises the writes, and only one of them
+ * sees changes === 1. Doing it as a read-then-write would leave that race open.
+ *
+ * NULL means nothing has been accepted yet -- true for every row that existed before migration
+ * 0012 and for anyone who has never enrolled -- so the first code any user presents is always
+ * accepted and no backfill is needed.
+ */
+export function consumeTotpCounter(userId: number, counter: number): boolean {
+  const result = getDb()
+    .update(users)
+    .set({ totpLastCounter: counter })
+    .where(and(eq(users.id, userId), or(isNull(users.totpLastCounter), lt(users.totpLastCounter, counter))))
+    .run();
+  return Number(result.changes ?? 0) === 1;
 }
 
 export function generateRecoveryCodes(count: number = RECOVERY_CODE_COUNT): string[] {

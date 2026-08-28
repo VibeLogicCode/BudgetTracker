@@ -294,6 +294,67 @@ describe('MUST-14.4: a successful login raises new_signin', () => {
   });
 });
 
+describe('v1.12.1: the same TOTP code cannot sign in twice (item BF / SEC-10)', () => {
+  async function setupTotpUser() {
+    current = createTestDb();
+    const alice = await seedAlice();
+    const secret = generateTotpSecret();
+    enableTotpForUser(alice.id, secret);
+    const codes = generateRecoveryCodes();
+    storeRecoveryCodes(alice.id, codes);
+    return { username: 'alice', password: PASSWORD, secret, recoveryCode: codes[0] };
+  }
+
+  it('accepts a code once and refuses the replay, which still counts as a failed attempt', async () => {
+    const { username, password, secret } = await setupTotpUser();
+    const at = new Date('2026-08-27T12:00:15.000Z');
+    const code = currentTotpToken(secret, at);
+
+    const first = await attemptLogin({ username, password, totpCode: code, ip: 'unknown', userAgent: null, at });
+    expect(first.status).toBe('ok');
+
+    const second = await attemptLogin({ username, password, totpCode: code, ip: 'unknown', userAgent: null, at });
+    expect(second.status).toBe('invalid');
+  });
+
+  it('accepts the NEXT code straight after', async () => {
+    const { username, password, secret } = await setupTotpUser();
+    const first = new Date('2026-08-27T12:00:15.000Z');
+    const next = new Date('2026-08-27T12:00:45.000Z');
+
+    await attemptLogin({
+      username,
+      password,
+      totpCode: currentTotpToken(secret, first),
+      ip: 'unknown',
+      userAgent: null,
+      at: first,
+    });
+    const second = await attemptLogin({
+      username,
+      password,
+      totpCode: currentTotpToken(secret, next),
+      ip: 'unknown',
+      userAgent: null,
+      at: next,
+    });
+    expect(second.status).toBe('ok');
+  });
+
+  it('a recovery code still works and is unaffected by the counter', async () => {
+    const { username, password, recoveryCode } = await setupTotpUser();
+    const result = await attemptLogin({
+      username,
+      password,
+      recoveryCode,
+      ip: 'unknown',
+      userAgent: null,
+      at: new Date('2026-08-27T12:00:15.000Z'),
+    });
+    expect(result.status).toBe('ok');
+  });
+});
+
 describe('MUST-14.4: a throwing raiseNewSignin does not fail the login', () => {
   it('a throwing raiseNewSignin still returns { status: "ok" }', async () => {
     current = createTestDb();
