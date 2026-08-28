@@ -7,7 +7,7 @@ import { createAccount } from '@/lib/accounts';
 import { buildPreview } from '@/lib/import/preview';
 import { commitStagedImport } from '@/lib/import/flow';
 import { stagedFilePath, writeStagedFile } from '@/lib/import/staging';
-import { getBuiltinPreset, getProfileByName, listProfiles } from '@/lib/import/presets';
+import { BUILTIN_PRESET_NAMES, getBuiltinPreset, getProfileByName, listProfiles } from '@/lib/import/presets';
 import { listImportHistory, previewUndoImport, undoImport } from '@/lib/import/commit';
 import { confirmCategory, reviewQueueCount } from '@/lib/categorize/engine';
 import { getVocabSize } from '@/lib/categorize/bayes';
@@ -73,7 +73,10 @@ describe('upload → preview → commit', () => {
 
     const result = commitStagedImport({ stagingId, filename: 'td.csv', accountId, profileId, mapping: edited, userId });
     expect(result.profileId).not.toBe(profileId);
-    expect(listProfiles()).toHaveLength(5);
+    // Every built-in (v1.13.0 Task 9 grew this from 4 to 7) plus the one fork this edit just
+    // created -- derived from BUILTIN_PRESET_NAMES rather than a literal, since the intent here
+    // is "one new profile exists", not a specific magic number.
+    expect(listProfiles()).toHaveLength(BUILTIN_PRESET_NAMES.length + 1);
     const account = sqlite.prepare('select import_profile_id from accounts where id = ?').get(accountId) as { import_profile_id: number };
     expect(account.import_profile_id).toBe(result.profileId);
     // The shared built-in is untouched.

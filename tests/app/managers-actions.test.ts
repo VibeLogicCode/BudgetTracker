@@ -29,7 +29,7 @@ import {
   setProfileActiveAction,
 } from '@/app/(app)/settings/managers/actions';
 import { CATEGORY_RENDERING_ROUTES, PROFILE_RENDERING_ROUTES } from '@/app/(app)/settings/managers/revalidation-routes';
-import { createProfile, getBuiltinPreset, getProfile, getProfileByName, listProfiles } from '@/lib/import/presets';
+import { BUILTIN_PRESET_NAMES, createProfile, getBuiltinPreset, getProfile, getProfileByName, listProfiles } from '@/lib/import/presets';
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -85,7 +85,10 @@ describe('deleteProfileAction (a mapping could not previously be deleted by anyo
     const builtin = getProfileByName('TD Visa')!;
     const result = await deleteProfileAction({}, formData({ profileId: String(builtin.id) }));
     expect(result.error).toMatch(/built-in/i);
-    expect(listProfiles()).toHaveLength(4);
+    // Nothing was deleted, so the seeded count is still every built-in (v1.13.0 Task 9 grew
+    // this from 4 to 7) -- derived from BUILTIN_PRESET_NAMES rather than a literal, since the
+    // assertion's intent is "no built-in was removed", not a specific magic number.
+    expect(listProfiles()).toHaveLength(BUILTIN_PRESET_NAMES.length);
   });
 
   it('deletes an unused custom profile and revalidates the managers page', async () => {
