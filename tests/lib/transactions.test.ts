@@ -16,7 +16,7 @@ import {
   updateTransactionNotes,
 } from '@/lib/transactions';
 import { normalizeMerchant } from '@/lib/categorize/normalize';
-import { listRules } from '@/lib/categorize/rules';
+import { listRules, upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { setTransactionDisplayName, upsertRenameRule } from '@/lib/categorize/engine';
 import { nowIso } from '@/lib/clock';
 
@@ -161,6 +161,7 @@ describe('createManualTransaction', () => {
       categoryId: null,
       attributedUserId: alice,
       userId: alice,
+      actorRole: 'admin',
     });
     const row = sqlite.prepare('select dedup_hash, import_id, created_by, attributed_user_id, normalized_merchant, categorization_source from transactions where id = ?').get(id) as Record<string, unknown>;
     expect(row).toMatchObject({ dedup_hash: null, import_id: null, created_by: alice, attributed_user_id: alice, normalized_merchant: 'FARMERS MARKET' });
@@ -169,7 +170,7 @@ describe('createManualTransaction', () => {
   it('lets two identical manual entries coexist', () => {
     const { alice, joint } = setup();
     const make = () =>
-      createManualTransaction({ accountId: joint, date: '2026-03-02', description: 'Coffee', amountCents: -500, categoryId: null, attributedUserId: alice, userId: alice });
+      createManualTransaction({ accountId: joint, date: '2026-03-02', description: 'Coffee', amountCents: -500, categoryId: null, attributedUserId: alice, userId: alice, actorRole: 'admin' });
     const first = make();
     const second = make();
     expect(second).not.toBe(first);
@@ -178,15 +179,15 @@ describe('createManualTransaction', () => {
 
   it('defaults attribution to the account owner when none is given', () => {
     const { sqlite, alice, aliceVisa, joint } = setup();
-    const personal = createManualTransaction({ accountId: aliceVisa, date: '2026-03-02', description: 'Coffee', amountCents: -500, categoryId: null, attributedUserId: null, userId: alice });
-    const shared = createManualTransaction({ accountId: joint, date: '2026-03-02', description: 'Coffee', amountCents: -500, categoryId: null, attributedUserId: null, userId: alice });
+    const personal = createManualTransaction({ accountId: aliceVisa, date: '2026-03-02', description: 'Coffee', amountCents: -500, categoryId: null, attributedUserId: null, userId: alice, actorRole: 'admin' });
+    const shared = createManualTransaction({ accountId: joint, date: '2026-03-02', description: 'Coffee', amountCents: -500, categoryId: null, attributedUserId: null, userId: alice, actorRole: 'admin' });
     expect((sqlite.prepare('select attributed_user_id as a from transactions where id = ?').get(personal) as { a: number | null }).a).toBe(alice);
     expect((sqlite.prepare('select attributed_user_id as a from transactions where id = ?').get(shared) as { a: number | null }).a).toBeNull();
   });
 
   it('runs the engine on the new row', () => {
     const { db, sqlite, alice, joint } = setup();
-    const id = createManualTransaction({ accountId: joint, date: '2026-03-02', description: 'PAYMENT - THANK YOU', amountCents: 50000, categoryId: null, attributedUserId: null, userId: alice });
+    const id = createManualTransaction({ accountId: joint, date: '2026-03-02', description: 'PAYMENT - THANK YOU', amountCents: 50000, categoryId: null, attributedUserId: null, userId: alice, actorRole: 'admin' });
     expect((sqlite.prepare('select is_transfer from transactions where id = ?').get(id) as { is_transfer: number }).is_transfer).toBe(1);
     expect(db).toBeDefined();
   });
@@ -194,7 +195,7 @@ describe('createManualTransaction', () => {
   it('treats an explicit category as a confirmation that trains Bayes and makes a rule', () => {
     const { db, sqlite, alice, joint } = setup();
     const coffee = categoryIdByName(db, 'Coffee');
-    const id = createManualTransaction({ accountId: joint, date: '2026-03-02', description: 'Tim Hortons', amountCents: -485, categoryId: coffee, attributedUserId: alice, userId: alice });
+    const id = createManualTransaction({ accountId: joint, date: '2026-03-02', description: 'Tim Hortons', amountCents: -485, categoryId: coffee, attributedUserId: alice, userId: alice, actorRole: 'admin' });
     const row = sqlite.prepare('select category_id, categorization_source from transactions where id = ?').get(id) as { category_id: number; categorization_source: string };
     expect(row).toEqual({ category_id: coffee, categorization_source: 'manual' });
     expect(listRules('category').map((r) => r.pattern)).toEqual(['TIM HORTONS']);
@@ -211,6 +212,7 @@ describe('createManualTransaction', () => {
       categoryId: coffee,
       attributedUserId: alice,
       userId: alice,
+      actorRole: 'admin',
     });
     const row = sqlite
       .prepare('select is_transfer, category_id, categorization_source from transactions where id = ?')
@@ -235,6 +237,7 @@ describe('createManualTransaction', () => {
       categoryId: coffee,
       attributedUserId: alice,
       userId: alice,
+      actorRole: 'admin',
     });
     const row = sqlite
       .prepare('select display_description, display_source, category_id from transactions where id = ?')
@@ -248,6 +251,78 @@ describe('createManualTransaction', () => {
     expect(manualTransactionSchema.safeParse({ accountId: 1, date: '2026-13-40', description: 'x', amountCents: -1, categoryId: null, attributedUserId: null }).success).toBe(false);
     expect(manualTransactionSchema.safeParse({ accountId: 1, date: '2026-03-02', description: '', amountCents: -1, categoryId: null, attributedUserId: null }).success).toBe(false);
     expect(manualTransactionSchema.safeParse({ accountId: 1, date: '2026-03-02', description: 'x', amountCents: 0, categoryId: null, attributedUserId: null }).success).toBe(true);
+  });
+
+  // v1.13.0 whole-branch review, item I4. confirmCategory was previously called with
+  // actorRole: 'admin' hardcoded and createRule defaulting on, so ANY caller's quick-add --
+  // including a member's -- would silently overwrite a merchant rule someone else in the
+  // household owns, bypassing ruling R4 entirely for this one write path.
+  describe('ruling R4 (item I4): actorRole threaded through, so a member cannot silently overwrite a foreign-owned rule', () => {
+    it("refuses a member's quick-add over a foreign-owned rule, and inserts no row at all", () => {
+      const { db, sqlite, alice, joint } = setup();
+      const charlie = insertTestUser(db, { name: 'Charlie', username: 'charlie', role: 'member' });
+      const coffee = categoryIdByName(db, 'Coffee');
+      const groceries = categoryIdByName(db, 'Groceries');
+      // Alice (admin) owns the TIM HORTONS -> Coffee rule.
+      upsertRuleFromCorrection({
+        pattern: normalizeMerchant('TIM HORTONS'),
+        matchType: 'exact',
+        ruleKind: 'category',
+        categoryId: coffee,
+        createdBy: alice,
+        actorRole: 'admin',
+      });
+      const before = (sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c;
+
+      expect(() =>
+        createManualTransaction({
+          accountId: joint,
+          date: '2026-03-02',
+          description: 'Tim Hortons',
+          amountCents: -485,
+          categoryId: groceries,
+          attributedUserId: charlie,
+          userId: charlie,
+          actorRole: 'member',
+        }),
+      ).toThrow('Alice set up this rule. Ask an admin to change it under Settings → Categories & rules.');
+
+      // No row inserted -- the whole write rolled back, not merely left uncategorized.
+      const after = (sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c;
+      expect(after).toBe(before);
+      // The rule itself is untouched.
+      expect(listRules('category').find((r) => r.pattern === normalizeMerchant('TIM HORTONS'))?.categoryId).toBe(coffee);
+    });
+
+    it('an admin CAN overwrite the same rule via quick-add', () => {
+      const { db, sqlite, alice, joint } = setup();
+      const charlie = insertTestUser(db, { name: 'Charlie', username: 'charlie', role: 'member' });
+      const coffee = categoryIdByName(db, 'Coffee');
+      const groceries = categoryIdByName(db, 'Groceries');
+      upsertRuleFromCorrection({
+        pattern: normalizeMerchant('TIM HORTONS'),
+        matchType: 'exact',
+        ruleKind: 'category',
+        categoryId: coffee,
+        createdBy: alice,
+        actorRole: 'admin',
+      });
+
+      const id = createManualTransaction({
+        accountId: joint,
+        date: '2026-03-02',
+        description: 'Tim Hortons',
+        amountCents: -485,
+        categoryId: groceries,
+        attributedUserId: charlie,
+        userId: charlie,
+        actorRole: 'admin',
+      });
+
+      const row = sqlite.prepare('select category_id as c from transactions where id = ?').get(id) as { c: number | null };
+      expect(row.c).toBe(groceries);
+      expect(listRules('category').find((r) => r.pattern === normalizeMerchant('TIM HORTONS'))?.categoryId).toBe(groceries);
+    });
   });
 });
 

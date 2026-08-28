@@ -6,9 +6,25 @@ import { getAccount } from '@/lib/accounts';
 import { ownerScope, type Viewer } from '@/lib/auth/viewer';
 import { REVIEW_WHERE, confirmCategory, runEngine, setTransferFlag } from '@/lib/categorize/engine';
 import { normalizeMerchant } from '@/lib/categorize/normalize';
+import { ruleOwnedError } from '@/lib/categorize/rules';
 import { nowIso } from '@/lib/clock';
 import { isIsoDate } from '@/lib/dates';
 import { applyPaymentMatchers } from '@/lib/loans';
+
+/**
+ * v1.13.0 ruling R4 (item I4). Thrown by createManualTransaction when the row's own category
+ * would silently overwrite a merchant rule someone else in the household owns -- confirmCategory
+ * refuses (`owned_by_another`) rather than write it. A plain thrown Error is enough for the
+ * common caller (manualEntryAction already turns any thrown Error's `.message` into `{ error }`),
+ * but a typed subclass lets a caller that needs to tell this refusal apart from any other failure
+ * (recordInstallmentPayment, src/lib/warranty/installments.ts) catch it by type instead of
+ * matching message text.
+ */
+export class RuleOwnedRefusal extends Error {
+  constructor(readonly ownerName: string) {
+    super(ruleOwnedError(ownerName));
+  }
+}
 
 export interface TransactionFilter {
   accountId?: number | null;
@@ -205,6 +221,14 @@ export function createManualTransaction(input: {
   attributedUserId: number | null;
   notes?: string | null;
   userId: number;
+  /**
+   * v1.13.0 ruling R4 (item I4). The ACTOR's role, threaded to confirmCategory below exactly
+   * the way transactions/actions.ts already threads it for setCategoryAction/bulkCategorizeAction
+   * -- without this, a member's quick-add (createRule defaults ON here) could silently overwrite
+   * a merchant rule someone else in the household owns. Required, not optional, so a forgotten
+   * call site fails to compile instead of silently defaulting to admin.
+   */
+  actorRole: 'admin' | 'member';
 }): number {
   const parsed = manualTransactionSchema.parse({
     accountId: input.accountId,
@@ -219,53 +243,70 @@ export function createManualTransaction(input: {
   const account = getAccount(parsed.accountId);
   if (!account) throw new Error(`No account ${parsed.accountId}`);
   const timestamp = nowIso();
+  const db = getDb();
 
-  const row = getDb()
-    .insert(transactions)
-    .values({
-      accountId: parsed.accountId,
-      importId: null,
-      attributedUserId: parsed.attributedUserId ?? account.ownerUserId ?? null,
-      date: parsed.date,
-      rawDescription: parsed.description,
-      normalizedMerchant: normalizeMerchant(parsed.description),
-      amountCents: parsed.amountCents,
-      categoryId: null,
-      categorizationSource: 'none',
-      confidence: null,
-      isTransfer: false,
-      notes: parsed.notes ?? null,
-      // Manual entries are exempt from dedup: two identical $5 coffees are legitimate.
-      dedupHash: null,
-      hashVersion: 1,
-      createdBy: input.userId,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    })
-    .returning({ id: transactions.id })
-    .get();
+  // v1.13.0 ruling R4 (item I4): the insert, the engine run and the category confirm are all
+  // one db.transaction() so a rule-ownership refusal below can roll the ROW ITSELF back, not
+  // just skip setting its category -- "no row" is what a refused quick-add must leave behind,
+  // not an uncategorized one. Same pattern bulkSetCategory (this file) and recordInstallmentPayment
+  // (src/lib/warranty/installments.ts) already use for the same reason.
+  return db.transaction(() => {
+    const row = db
+      .insert(transactions)
+      .values({
+        accountId: parsed.accountId,
+        importId: null,
+        attributedUserId: parsed.attributedUserId ?? account.ownerUserId ?? null,
+        date: parsed.date,
+        rawDescription: parsed.description,
+        normalizedMerchant: normalizeMerchant(parsed.description),
+        amountCents: parsed.amountCents,
+        categoryId: null,
+        categorizationSource: 'none',
+        confidence: null,
+        isTransfer: false,
+        notes: parsed.notes ?? null,
+        // Manual entries are exempt from dedup: two identical $5 coffees are legitimate.
+        dedupHash: null,
+        hashVersion: 1,
+        createdBy: input.userId,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      })
+      .returning({ id: transactions.id })
+      .get();
 
-  // The engine runs on manual entries too, always. A hand-typed "TD VISA PAYMENT" is
-  // just as much a transfer as an imported one, and rename rules should apply to the
-  // display name either way. Previously a manual entry that arrived WITH a category
-  // skipped the engine entirely, so it could never be flagged as a transfer.
-  //
-  // Order matters: runEngine's eligibility filter only touches rows that are
-  // uncategorized or Bayes-guessed, so it has to see this row before confirmCategory
-  // stamps source='manual' on it. confirmCategory then overwrites whatever the engine
-  // guessed with the user's explicit choice, and never touches is_transfer or the
-  // display columns, so the manual category survives and the transfer flag sticks.
-  runEngine([row.id]);
-  if (parsed.categoryId !== null) {
-    // actorRole: 'admin' -- createManualTransaction does not yet take its own caller's role
-    // (Wave C threads that through src/app/(app)/transactions/actions.ts, which this task does
-    // not touch); this reproduces the pre-R4 behaviour of an unconditional overwrite, unchanged.
-    confirmCategory({ transactionId: row.id, categoryId: parsed.categoryId, userId: input.userId, actorRole: 'admin' });
-  }
-  // MUST-13.7: a hand-typed loan payment is a loan payment. Runs after confirmCategory so
-  // the row is in its final state, and is cheap when no loan rules exist.
-  applyPaymentMatchers([row.id]);
-  return row.id;
+    // The engine runs on manual entries too, always. A hand-typed "TD VISA PAYMENT" is
+    // just as much a transfer as an imported one, and rename rules should apply to the
+    // display name either way. Previously a manual entry that arrived WITH a category
+    // skipped the engine entirely, so it could never be flagged as a transfer.
+    //
+    // Order matters: runEngine's eligibility filter only touches rows that are
+    // uncategorized or Bayes-guessed, so it has to see this row before confirmCategory
+    // stamps source='manual' on it. confirmCategory then overwrites whatever the engine
+    // guessed with the user's explicit choice, and never touches is_transfer or the
+    // display columns, so the manual category survives and the transfer flag sticks.
+    runEngine([row.id]);
+    if (parsed.categoryId !== null) {
+      const result = confirmCategory({
+        transactionId: row.id,
+        categoryId: parsed.categoryId,
+        userId: input.userId,
+        actorRole: input.actorRole,
+      });
+      if (!result.ok) {
+        if (result.reason === 'owned_by_another') throw new RuleOwnedRefusal(result.ownerName);
+        // 'has_splits' is unreachable for a row this function just inserted (it has no splits
+        // yet) -- handled rather than silently ignored, so a future change to confirmCategory's
+        // guard cannot silently drop this branch on the floor.
+        throw new Error('Could not set the category.');
+      }
+    }
+    // MUST-13.7: a hand-typed loan payment is a loan payment. Runs after confirmCategory so
+    // the row is in its final state, and is cheap when no loan rules exist.
+    applyPaymentMatchers([row.id]);
+    return row.id;
+  });
 }
 
 export function updateTransactionNotes(id: number, notes: string | null): void {

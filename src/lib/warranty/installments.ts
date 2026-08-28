@@ -4,7 +4,7 @@ import { billInstallments, transactions, warrantyItemTypes, warrantyItems } from
 import { nowIso } from '@/lib/clock';
 import { addDaysIso, isIsoDate } from '@/lib/dates';
 import { paymentLinksForTransaction } from '@/lib/loans';
-import { createManualTransaction } from '@/lib/transactions';
+import { createManualTransaction, RuleOwnedRefusal } from '@/lib/transactions';
 import { MIN_PURCHASE_DATE } from '@/lib/warranty/items';
 import {
   INSTALLMENT_KIND_ERROR,
@@ -308,7 +308,12 @@ export function unpaidInstallments(input: {
 
 export type RecordPaymentResult =
   | { ok: true; transactionId: number; installmentId: number }
-  | { ok: false; reason: 'gone' | 'already_paid' | 'no_account' | 'linked_elsewhere' };
+  | { ok: false; reason: 'gone' | 'already_paid' | 'no_account' | 'linked_elsewhere' }
+  // v1.13.0 ruling R4 (item I4): createManualTransaction (below) can refuse when this bill's
+  // budgetCategoryId's merchant rule is owned by someone else in the household and the actor is
+  // a member -- carries the ready-to-show sentence rather than a bare reason, since (unlike the
+  // other refusals above) there is no fixed one-liner the action could supply on its own.
+  | { ok: false; reason: 'rule_owned'; error: string };
 
 /**
  * The ownership answer AND the revalidate path, in one query. Ruling R3's check on the Record-payment
@@ -379,6 +384,9 @@ export function recordInstallmentPayment(input: {
   accountId: number;
   userId: number;
   today: string;
+  /** v1.13.0 ruling R4 (item I4): the ACTOR's role, threaded to createManualTransaction below --
+   *  see that function's own doc comment. */
+  actorRole: 'admin' | 'member';
 }): RecordPaymentResult {
   const db = getDb();
   const target = db
@@ -412,6 +420,7 @@ export function recordInstallmentPayment(input: {
         attributedUserId: target.ownerUserId,
         notes: null,
         userId: input.userId,
+        actorRole: input.actorRole,
       });
 
       const links = paymentLinksForTransaction(transactionId);
@@ -452,6 +461,7 @@ export function recordInstallmentPayment(input: {
     });
   } catch (error) {
     if (error instanceof LinkedElsewhereRollback) return { ok: false, reason: 'linked_elsewhere' };
+    if (error instanceof RuleOwnedRefusal) return { ok: false, reason: 'rule_owned', error: error.message };
     throw error;
   }
 }

@@ -184,4 +184,16 @@ describe('setBillCategoryAction (ruling R11)', () => {
     const result = await setBillCategoryAction({}, formData({ itemId: String(itemId), categoryId: String(propertyTaxCategoryId) }));
     expect(result.error).toBe(CROSS_ORIGIN_ERROR);
   });
+
+  // v1.13.0 whole-branch review, item M-a. A categoryId that parses fine but names no real row
+  // (deleted between page load and submit, or hand-crafted) used to reach setBudgetCategory
+  // unchecked and throw a raw foreign-key error instead of a normal form message.
+  it('returns {error} for a categoryId that names no real category, instead of throwing', async () => {
+    const before = getWarrantyItem(itemId, currentUser)?.budgetCategoryId ?? null;
+    const result = await setBillCategoryAction({}, formData({ itemId: String(itemId), categoryId: '999999' }));
+
+    expect(result.error).toBe('That category no longer exists.');
+    expect(result.message).toBeUndefined();
+    expect(getWarrantyItem(itemId, currentUser)?.budgetCategoryId).toBe(before);
+  });
 });

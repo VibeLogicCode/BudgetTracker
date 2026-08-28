@@ -336,7 +336,7 @@ describe('recordInstallmentPayment (ruling R8)', () => {
   it('writes one transaction and marks the installment, in one step', () => {
     const { itemId, installmentId, accountId, userId, propertyTaxCategoryId } = setupBillForPayment();
 
-    const result = recordInstallmentPayment({ installmentId, accountId, userId, today: '2026-08-27' });
+    const result = recordInstallmentPayment({ installmentId, accountId, userId, today: '2026-08-27', actorRole: 'admin' });
     expect(result).toEqual({ ok: true, transactionId: expect.any(Number), installmentId });
 
     const txn = getTransaction((result as { transactionId: number }).transactionId, HOUSEHOLD);
@@ -352,9 +352,9 @@ describe('recordInstallmentPayment (ruling R8)', () => {
 
   it('a second click writes nothing and says so', () => {
     const { installmentId, accountId, userId } = setupBillForPayment();
-    recordInstallmentPayment({ installmentId, accountId, userId, today: '2026-08-27' });
+    recordInstallmentPayment({ installmentId, accountId, userId, today: '2026-08-27', actorRole: 'admin' });
     const before = countTransactions();
-    expect(recordInstallmentPayment({ installmentId, accountId, userId, today: '2026-08-27' })).toEqual({
+    expect(recordInstallmentPayment({ installmentId, accountId, userId, today: '2026-08-27', actorRole: 'admin' })).toEqual({
       ok: false,
       reason: 'already_paid',
     });
@@ -364,13 +364,13 @@ describe('recordInstallmentPayment (ruling R8)', () => {
   it('leaves the category NULL when the bill is not linked to one', () => {
     const { itemId, installmentId, accountId, userId } = setupBillForPayment();
     setBudgetCategory(itemId, null);
-    const result = recordInstallmentPayment({ installmentId, accountId, userId, today: '2026-08-27' });
+    const result = recordInstallmentPayment({ installmentId, accountId, userId, today: '2026-08-27', actorRole: 'admin' });
     expect(getTransaction((result as { transactionId: number }).transactionId, HOUSEHOLD)?.categoryId).toBeNull();
   });
 
   it('refuses when the installment is gone', () => {
     const { accountId, userId } = setupBillForPayment();
-    expect(recordInstallmentPayment({ installmentId: 999999, accountId, userId, today: '2026-08-27' })).toEqual({
+    expect(recordInstallmentPayment({ installmentId: 999999, accountId, userId, today: '2026-08-27', actorRole: 'admin' })).toEqual({
       ok: false,
       reason: 'gone',
     });
@@ -378,7 +378,7 @@ describe('recordInstallmentPayment (ruling R8)', () => {
 
   it('refuses when the account id is not a positive integer', () => {
     const { installmentId, userId } = setupBillForPayment();
-    expect(recordInstallmentPayment({ installmentId, accountId: 0, userId, today: '2026-08-27' })).toEqual({
+    expect(recordInstallmentPayment({ installmentId, accountId: 0, userId, today: '2026-08-27', actorRole: 'admin' })).toEqual({
       ok: false,
       reason: 'no_account',
     });
@@ -441,7 +441,7 @@ describe('recordInstallmentPayment vs the merchant matcher (fix round 2)', () =>
     const laterId = addInstallment({ itemId, dueDate: '2026-11-30', amountCents: 60_000, at: NOW });
     ruleRow(itemId, 'CABLE BILL');
 
-    const result = recordInstallmentPayment({ installmentId: laterId, accountId, userId, today: '2026-08-27' });
+    const result = recordInstallmentPayment({ installmentId: laterId, accountId, userId, today: '2026-08-27', actorRole: 'admin' });
     expect(result.ok).toBe(true);
     const transactionId = (result as { transactionId: number }).transactionId;
 
@@ -469,7 +469,7 @@ describe('recordInstallmentPayment vs the merchant matcher (fix round 2)', () =>
     ruleRow(itemId, 'CABLE BILL');
 
     const before = countTransactions();
-    const result = recordInstallmentPayment({ installmentId, accountId, userId, today: '2026-08-27' });
+    const result = recordInstallmentPayment({ installmentId, accountId, userId, today: '2026-08-27', actorRole: 'admin' });
     expect(result.ok).toBe(true);
     const transactionId = (result as { transactionId: number }).transactionId;
     // The matcher marked it first (paid_txn_id = transactionId already), and this function's own
@@ -499,7 +499,7 @@ describe('recordInstallmentPayment vs the merchant matcher (fix round 2)', () =>
     ruleRow(loanItemId.id, 'CABLE');
 
     const before = countTransactions();
-    const result = recordInstallmentPayment({ installmentId, accountId, userId, today: '2026-08-27' });
+    const result = recordInstallmentPayment({ installmentId, accountId, userId, today: '2026-08-27', actorRole: 'admin' });
     expect(result).toEqual({ ok: false, reason: 'linked_elsewhere' });
 
     // Rolled back entirely: no new transaction row, and the bill installment is untouched.

@@ -12,6 +12,7 @@ import { todayIso } from '@/lib/dates';
 import { readEnv } from '@/lib/env';
 import { getWarrantyItem, setBudgetCategory } from '@/lib/warranty/items';
 import { findInstallmentItem, recordInstallmentPayment } from '@/lib/warranty/installments';
+import { listCategories } from '@/lib/categories';
 
 /**
  * v1.13.0 rulings R8 and R11. Its own 'use server' file rather than an addition to
@@ -71,6 +72,9 @@ export async function recordBillPaymentAction(
     accountId,
     userId: user.id,
     today: todayIso(new Date(), readEnv().tz),
+    // v1.13.0 ruling R4 (item I4): the ACTOR's role, not an implicit admin -- see
+    // createManualTransaction's own doc comment (src/lib/transactions.ts).
+    actorRole: user.role,
   });
 
   if (!result.ok) {
@@ -83,6 +87,7 @@ export async function recordBillPaymentAction(
       // so the whole payment was rolled back rather than double-counted against a loan.
       return { error: 'That payment matched an existing loan rule instead of this bill, so nothing was recorded.' };
     }
+    if (result.reason === 'rule_owned') return { error: result.error };
     // The matcher may have marked it from an imported transaction between the page load and the
     // click. Saying so is more honest than marking a second row (spec, item AN).
     return { error: 'That installment is already marked paid.' };
@@ -116,6 +121,14 @@ export async function setBillCategoryAction(
   const categoryId = raw === '' ? null : Number(raw);
   if (categoryId !== null && (!Number.isInteger(categoryId) || categoryId <= 0)) {
     return { error: 'Invalid request.' };
+  }
+  // M-a (v1.13.0 whole-branch review): a categoryId that parses fine but names no real row
+  // (deleted between page load and submit, or simply hand-crafted) used to reach setBudgetCategory
+  // unchecked and throw a raw foreign-key error instead of a normal form message. Archived
+  // categories are still valid targets here -- a bill can stay linked to a category someone later
+  // archived, the same as every other budget-category reference in this codebase.
+  if (categoryId !== null && !listCategories({ includeArchived: true }).some((category) => category.id === categoryId)) {
+    return { error: 'That category no longer exists.' };
   }
 
   setBudgetCategory(parsed.data, categoryId);

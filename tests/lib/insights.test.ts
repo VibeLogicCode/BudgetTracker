@@ -38,6 +38,7 @@ describe('householdInsights (ruling R6)', () => {
       categoryId: null,
       attributedUserId: person,
       userId: adultId,
+      actorRole: 'admin',
     });
 
   it('says nothing at all on a household with too little history', async () => {

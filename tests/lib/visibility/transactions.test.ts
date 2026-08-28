@@ -30,10 +30,12 @@ describe('ruling R2: listTransactions and getTransaction take a viewer', () => {
     adultTxn = createManualTransaction({
       accountId, date: '2026-08-10', description: 'GROCERY STORE', amountCents: -4210,
       categoryId: null, attributedUserId: adultId, userId: adultId,
+      actorRole: 'admin',
     });
     childTxn = createManualTransaction({
       accountId, date: '2026-08-11', description: 'CORNER SHOP', amountCents: -500,
       categoryId: null, attributedUserId: childId, userId: adultId,
+      actorRole: 'admin',
     });
   };
 
