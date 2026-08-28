@@ -66,13 +66,16 @@ describe('deleteRuleAction — missing input validation (finding 2)', () => {
   it('still deletes a real rule', async () => {
     const { db, userId } = setup();
     const coffee = categoryIdByName(db, 'Coffee');
-    const ruleId = upsertRuleFromCorrection({
+    const upserted = upsertRuleFromCorrection({
       pattern: 'TIM HORTONS',
       matchType: 'exact',
       ruleKind: 'category',
       categoryId: coffee,
       createdBy: userId,
+      actorRole: 'admin',
     });
+    if (!upserted.ok) throw new Error('unexpected refusal');
+    const ruleId = upserted.ruleId;
     const result = await deleteRuleAction({}, formData({ ruleId: String(ruleId) }));
     expect(result.message).toBeTruthy();
     expect(listRules().find((r) => r.id === ruleId)).toBeUndefined();

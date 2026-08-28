@@ -124,7 +124,7 @@ describe('overlapping second import then undo of the first', () => {
 
     const groceries = categoryIdByName(db, 'Groceries');
     const ids = (current!.sqlite.prepare('select id from transactions order by id').all() as { id: number }[]).map((r) => r.id);
-    confirmCategory({ transactionId: ids[0], categoryId: groceries, userId });
+    confirmCategory({ transactionId: ids[0], categoryId: groceries, userId, actorRole: 'admin' });
     expect(getVocabSize()).toBeGreaterThan(0);
 
     undoImport(result.importId);

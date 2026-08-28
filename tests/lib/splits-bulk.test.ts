@@ -118,7 +118,7 @@ describe('setTransferFlag refuses a split transaction (defect 1 fix, manual coun
     expect(spentAt(groceries)).toBe(7000);
     expect(spentAt(gas)).toBe(3000);
 
-    expect(setTransferFlag({ transactionId: id, isTransfer: true, userId: alice })).toBe(false);
+    expect(setTransferFlag({ transactionId: id, isTransfer: true, userId: alice, actorRole: 'admin' }).ok).toBe(false);
 
     expect(readTxn(id).is_transfer).toBe(0);
     expect(listRules('transfer')).toHaveLength(0);
@@ -129,7 +129,7 @@ describe('setTransferFlag refuses a split transaction (defect 1 fix, manual coun
   it('an unsplit control transaction can still be flagged a transfer normally', () => {
     const { alice, add, readTxn } = setup();
     const id = add({ description: 'CONTROL MERCHANT' });
-    expect(setTransferFlag({ transactionId: id, isTransfer: true, userId: alice })).toBe(true);
+    expect(setTransferFlag({ transactionId: id, isTransfer: true, userId: alice, actorRole: 'admin' }).ok).toBe(true);
     expect(readTxn(id).is_transfer).toBe(1);
     expect(listRules('transfer')).toHaveLength(1);
   });
@@ -145,7 +145,7 @@ describe('confirmCategory refuses a split transaction (defect 2 fix, manual coun
     splitSeventyThirty(id, groceries, gas, alice);
     const before = readTxn(id);
 
-    expect(confirmCategory({ transactionId: id, categoryId: coffee, userId: alice })).toBe(false);
+    expect(confirmCategory({ transactionId: id, categoryId: coffee, userId: alice, actorRole: 'admin' }).ok).toBe(false);
 
     expect(readTxn(id)).toEqual(before);
     expect(listRules('category')).toHaveLength(0);
@@ -156,7 +156,7 @@ describe('confirmCategory refuses a split transaction (defect 2 fix, manual coun
     const { db, alice, add } = setup();
     const coffee = categoryIdByName(db, 'Coffee');
     const id = add({ description: 'CONTROL MERCHANT' });
-    expect(confirmCategory({ transactionId: id, categoryId: coffee, userId: alice })).toBe(true);
+    expect(confirmCategory({ transactionId: id, categoryId: coffee, userId: alice, actorRole: 'admin' }).ok).toBe(true);
     expect(listRules('category')).toHaveLength(1);
   });
 });
@@ -176,7 +176,7 @@ describe('clearCategory refuses a split transaction (defect 3 fix, the third sib
     const gas = categoryIdByName(db, 'Gas');
     const merchant = 'ACME SPLIT MERCHANT';
     const t1 = add({ description: merchant });
-    expect(confirmCategory({ transactionId: t1, categoryId: groceries, userId: alice })).toBe(true);
+    expect(confirmCategory({ transactionId: t1, categoryId: groceries, userId: alice, actorRole: 'admin' }).ok).toBe(true);
     const t2 = add({ description: merchant });
     current!.db.run(sql`update transactions set category_id = ${groceries}, categorization_source = 'bayes' where id = ${t2}`);
     splitSeventyThirty(t2, groceries, gas, alice);
@@ -236,7 +236,7 @@ describe('clearCategory refuses a split transaction (defect 3 fix, the third sib
     const { db, alice, add, readTxn } = setup();
     const coffee = categoryIdByName(db, 'Coffee');
     const id = add({ description: 'CONTROL MERCHANT' });
-    expect(confirmCategory({ transactionId: id, categoryId: coffee, userId: alice })).toBe(true);
+    expect(confirmCategory({ transactionId: id, categoryId: coffee, userId: alice, actorRole: 'admin' }).ok).toBe(true);
 
     // deleteRule: true — this test is about the engine's own delete path, not ruling P5.
     expect(clearCategory({ transactionId: id, userId: alice, deleteRule: true })).toBe(true);

@@ -87,7 +87,7 @@ describe('buildPreview', () => {
   it('predicts a category per row without writing anything', () => {
     const { db, accountId, stagingId, sqlite } = setup();
     const coffee = categoryIdByName(db, 'Coffee');
-    upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: null });
+    upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: null, actorRole: 'admin' });
 
     const preview = buildPreview({ stagingId, filename: 'td.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Chequing/Debit') });
     expect(preview.rows[0]).toMatchObject({ predictedCategoryId: coffee, predictedCategoryName: 'Coffee', predictedSource: 'rule' });

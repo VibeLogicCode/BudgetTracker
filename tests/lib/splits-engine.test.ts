@@ -122,7 +122,7 @@ describe('rerunEngine never touches a split transaction, even one a transfer rul
     // CARD_PAYMENT_PATTERNS (verified: no listed pattern is a substring of it), so the ONLY
     // thing that can flag it a transfer is this learned rule -- the test must prove the
     // protection actually engages, not assume detectTransfer would ever match anything here.
-    upsertRuleFromCorrection({ pattern: merchant, matchType: 'exact', ruleKind: 'transfer', categoryId: null, createdBy: alice });
+    upsertRuleFromCorrection({ pattern: merchant, matchType: 'exact', ruleKind: 'transfer', categoryId: null, createdBy: alice, actorRole: 'admin' });
 
     const target = add({ description, amountCents: -10000, categoryId: null, source: 'none' });
     const control = add({ description, amountCents: -5000, categoryId: null, source: 'none' });
@@ -187,7 +187,7 @@ function setupSplitWithNullParentCategory() {
   const description = 'ACME SPLIT TRANSFER MERCHANT';
   const merchant = normalizeMerchant(description);
   // A rule this uncategorized-before-split row's merchant would otherwise match.
-  upsertRuleFromCorrection({ pattern: merchant, matchType: 'exact', ruleKind: 'transfer', categoryId: null, createdBy: alice });
+  upsertRuleFromCorrection({ pattern: merchant, matchType: 'exact', ruleKind: 'transfer', categoryId: null, createdBy: alice, actorRole: 'admin' });
 
   const txnId = add({ description, amountCents: -10000, categoryId: null, source: 'none' });
   splitInTwo(txnId, groceries, coffee);

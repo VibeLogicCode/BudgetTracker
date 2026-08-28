@@ -478,7 +478,7 @@ describe('setCategoryAction: clearing a category on a split transaction is refus
     const groceries = categoryIdByName(db, 'Groceries');
     const gas = categoryIdByName(db, 'Gas');
     const id = addTxn('ACME SPLIT MERCHANT', -10000);
-    expect(confirmCategory({ transactionId: id, categoryId: groceries, userId })).toBe(true);
+    expect(confirmCategory({ transactionId: id, categoryId: groceries, userId, actorRole: 'admin' }).ok).toBe(true);
     setTransactionSplits({
       txnId: id,
       parts: [
@@ -508,7 +508,7 @@ describe('setCategoryAction: clearing a category on a split transaction is refus
     const { db, sqlite, userId, addTxn } = setup();
     const groceries = categoryIdByName(db, 'Groceries');
     const id = addTxn('CONTROL MERCHANT');
-    expect(confirmCategory({ transactionId: id, categoryId: groceries, userId })).toBe(true);
+    expect(confirmCategory({ transactionId: id, categoryId: groceries, userId, actorRole: 'admin' }).ok).toBe(true);
 
     const result = await setCategoryAction({}, formData({ transactionId: String(id), categoryId: '' }));
 
@@ -547,6 +547,7 @@ describe('v1.12.1: a row edit on /transactions edits ONE row (item U / UX-2, rul
       ruleKind: 'category',
       categoryId: groceries,
       createdBy: userId,
+      actorRole: 'admin',
       at: new Date('2026-08-01T00:00:00.000Z'),
     });
 

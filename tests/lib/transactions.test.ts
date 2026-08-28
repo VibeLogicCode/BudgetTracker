@@ -226,7 +226,7 @@ describe('createManualTransaction', () => {
   it('applies rename rules to a manual entry that arrives with a category', () => {
     const { db, sqlite, alice, joint } = setup();
     const coffee = categoryIdByName(db, 'Coffee');
-    upsertRenameRule({ pattern: 'TIM HORTONS', matchType: 'exact', renameTo: 'Morning coffee', userId: alice });
+    upsertRenameRule({ pattern: 'TIM HORTONS', matchType: 'exact', renameTo: 'Morning coffee', userId: alice, actorRole: 'admin' });
     const id = createManualTransaction({
       accountId: joint,
       date: '2026-03-02',
@@ -337,7 +337,7 @@ describe('display names (spec v1.4)', () => {
     const ruled = add({ description: 'POS PURCHASE MCDONALDS #4821 TORONTO ON' });
     const manual = add({ description: 'POS PURCHASE MCDONALDS #1099 OAKVILLE ON' });
 
-    upsertRenameRule({ pattern: 'MCDONALDS', matchType: 'exact', renameTo: "McDonald's", userId: alice });
+    upsertRenameRule({ pattern: 'MCDONALDS', matchType: 'exact', renameTo: "McDonald's", userId: alice, actorRole: 'admin' });
     setTransactionDisplayName({ transactionId: manual, displayDescription: 'Lunch with Bob', userId: alice });
 
     expect(getTransaction(ruled, VIEWER)).toMatchObject({ displayDescription: "McDonald's", displaySource: 'rename' });

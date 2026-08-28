@@ -210,7 +210,7 @@ describe('Bayes reversal through the real wiring', () => {
 
     const result = commitImport({ accountId, profileId: null, filename: 'td.csv', importedBy: userId, rows: hashed, errors: [] });
     const first = result.insertedTransactionIds[0];
-    confirmCategory({ transactionId: first, categoryId: groceries, userId });
+    confirmCategory({ transactionId: first, categoryId: groceries, userId, actorRole: 'admin' });
 
     const before = current!.sqlite.prepare('select count(*) as c from bayes_tokens').get() as { c: number };
     expect(before.c).toBeGreaterThan(0);

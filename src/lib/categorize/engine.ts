@@ -56,6 +56,27 @@ export interface CategorizeContext {
   rules: MerchantRuleRecord[];
 }
 
+/**
+ * v1.13.0 ruling R4, fix round 1 (reviewer finding: R4 was unimplemented for three of the four
+ * rule-writing entry points). Shared by confirmCategory and setTransferFlag, which each write at
+ * most one transaction row and, on some paths, learn or refuse a merchant rule.
+ *
+ * `has_splits` is this function family's pre-R4 `false` (a split row is never touched -- see each
+ * function's own docblock for why). `owned_by_another` is R4's refusal. Both leave every row and
+ * every rule exactly as they were: ownership is always resolved BEFORE any row write below, never
+ * after, so a refusal can never half-apply a category or a transfer flag alongside a rule nobody
+ * agreed to.
+ */
+export type RuleGuardedWriteResult =
+  | { ok: true }
+  | { ok: false; reason: 'has_splits' }
+  | { ok: false; reason: 'owned_by_another'; ownerName: string };
+
+/** applyCategoryToMatching's own shape: success also reports how many rows it touched. */
+export type CategoryMatchResult =
+  | { ok: true; count: number }
+  | { ok: false; reason: 'owned_by_another'; ownerName: string };
+
 export function buildContext(): CategorizeContext {
   return { rules: listRules() };
 }
@@ -277,26 +298,35 @@ function transactionHasSplits(transactionId: number): boolean {
  * upserts an exact merchant rule, and updates token counts, decrementing the
  * previous category on a recategorization.
  *
- * Returns false, and does NOTHING (no category write, no rule, no Bayes training), for a
- * transaction that has splits. Spec ruling 2a: a split row is categorized BY ITS PARTS
- * (transaction_splits, see src/lib/splits.ts), never by the parent's own category_id, so
- * overwriting that column here would misrepresent what the transaction "is" AND poison the
- * categorizer -- this function trains Bayes and writes an exact merchant rule from whatever
- * ONE category it is given, which would then mis-categorize every OTHER, unsplit transaction
- * from this merchant on a signal that was only ever true for one arbitrarily-chosen part of
- * this one. Task 2b (v1.7.0) closed this same hole for the AUTOMATIC engine path
- * (ELIGIBLE/REVIEW_WHERE, below); this closes it for the MANUAL confirm path -- the per-row
- * and bulk "Categorize" actions -- which those predicates never touched. Callers that
- * bulk-confirm must check this return value and report the skip; see bulkSetCategory in
- * src/lib/transactions.ts.
+ * Returns `{ ok: false, reason: 'has_splits' }`, and does NOTHING (no category write, no rule, no
+ * Bayes training), for a transaction that has splits. Spec ruling 2a: a split row is categorized
+ * BY ITS PARTS (transaction_splits, see src/lib/splits.ts), never by the parent's own category_id,
+ * so overwriting that column here would misrepresent what the transaction "is" AND poison the
+ * categorizer -- this function trains Bayes and writes an exact merchant rule from whatever ONE
+ * category it is given, which would then mis-categorize every OTHER, unsplit transaction from
+ * this merchant on a signal that was only ever true for one arbitrarily-chosen part of this one.
+ * Task 2b (v1.7.0) closed this same hole for the AUTOMATIC engine path (ELIGIBLE/REVIEW_WHERE,
+ * below); this closes it for the MANUAL confirm path -- the per-row and bulk "Categorize" actions
+ * -- which those predicates never touched. Callers that bulk-confirm must check this return value
+ * and report the skip; see bulkSetCategory in src/lib/transactions.ts.
+ *
+ * v1.13.0 ruling R4, fix round 1 (item AH / SEC-6). Returns `{ ok: false, reason:
+ * 'owned_by_another', ownerName }`, and does NOTHING (same "nothing written" guarantee as the
+ * has_splits case above), when `actorRole` is `'member'` and this merchant's exact category rule
+ * was created by somebody else. The ownership check runs BEFORE the transaction row is touched at
+ * all -- untraining the old category, writing the new one and training it are all downstream of a
+ * successful rule write, never upstream of it -- so a refusal can never leave a half-applied
+ * category sitting on a rule nobody agreed to.
  */
 export function confirmCategory(input: {
   transactionId: number;
   categoryId: number;
   userId: number;
   createRule?: boolean;
+  /** The ACTOR's role, not the rule's. An admin may write over anyone's rule. */
+  actorRole: 'admin' | 'member';
   at?: Date;
-}): boolean {
+}): RuleGuardedWriteResult {
   const db = getDb();
   const at = input.at ?? new Date();
   const row = db
@@ -309,29 +339,45 @@ export function confirmCategory(input: {
     .where(eq(transactions.id, input.transactionId))
     .get();
   if (!row) throw new Error(`No transaction ${input.transactionId}`);
-  if (transactionHasSplits(input.transactionId)) return false;
+  if (transactionHasSplits(input.transactionId)) return { ok: false, reason: 'has_splits' };
 
   const tokens = tokenize(row.normalizedMerchant);
 
+  if (row.source === 'manual' && row.categoryId !== null && row.categoryId === input.categoryId) {
+    // Already confirmed to the same category: nothing to retrain, and nothing about the rule
+    // changes either, so there is nothing for R4 to check.
+    //
+    // MUST-13.8: the matcher call sits on THIS path too. A transaction confirmed before a
+    // loan rule existed could otherwise never be picked up by re-confirming it -- which is
+    // exactly what a person does when they notice a payment did not get assigned. It is
+    // cheap: applyPaymentMatchers bails on its first query when no loan rules exist.
+    //
+    // The cost is worth stating rather than hiding: bulkCategorizeAction loops
+    // confirmCategory, so a 50-row bulk confirm makes 50 applyPaymentMatchers calls and, on a
+    // household with no loans, 50 single-row indexed reads against an empty join. That is
+    // a bounded, sub-millisecond cost on a user-initiated action, and it buys the property
+    // that a person can always fix a missed assignment by re-confirming the row. Batching
+    // it into the action layer would put a fifth caller in a sixth place and is the change
+    // to make if that cost ever shows up in a profile.
+    applyPaymentMatchers([input.transactionId], at);
+    return { ok: true };
+  }
+
+  // R4 ownership check FIRST: resolved (and can refuse) before anything else below is touched.
+  if (input.createRule !== false && row.normalizedMerchant.length > 0) {
+    const upserted = upsertRuleFromCorrection({
+      pattern: row.normalizedMerchant,
+      matchType: 'exact',
+      ruleKind: 'category',
+      categoryId: input.categoryId,
+      createdBy: input.userId,
+      actorRole: input.actorRole,
+      at,
+    });
+    if (!upserted.ok) return { ok: false, reason: 'owned_by_another', ownerName: upserted.ownerName };
+  }
+
   if (row.source === 'manual' && row.categoryId !== null) {
-    if (row.categoryId === input.categoryId) {
-      // Already confirmed to the same category: nothing to retrain.
-      //
-      // MUST-13.8: the matcher call sits on THIS path too. A transaction confirmed before a
-      // loan rule existed could otherwise never be picked up by re-confirming it -- which is
-      // exactly what a person does when they notice a payment did not get assigned. It is
-      // cheap: applyPaymentMatchers bails on its first query when no loan rules exist.
-      //
-      // The cost is worth stating rather than hiding: bulkCategorizeAction loops
-      // confirmCategory, so a 50-row bulk confirm makes 50 applyPaymentMatchers calls and, on a
-      // household with no loans, 50 single-row indexed reads against an empty join. That is
-      // a bounded, sub-millisecond cost on a user-initiated action, and it buys the property
-      // that a person can always fix a missed assignment by re-confirming the row. Batching
-      // it into the action layer would put a fifth caller in a sixth place and is the change
-      // to make if that cost ever shows up in a profile.
-      applyPaymentMatchers([input.transactionId], at);
-      return true;
-    }
     untrain(tokens, row.categoryId);
   }
 
@@ -345,25 +391,9 @@ export function confirmCategory(input: {
     .where(eq(transactions.id, input.transactionId))
     .run();
 
-  if (input.createRule !== false && row.normalizedMerchant.length > 0) {
-    // v1.13.0 ruling R4 (item AH / SEC-6): confirmCategory does not yet take its own caller's
-    // actorRole (that lands with the specific action that needs it -- see upsertRenameRule below
-    // for the one Task 8 threads end to end). 'admin' here reproduces this function's UNCHANGED
-    // pre-R4 behaviour: unconditional overwrite, exactly as every existing caller already expects.
-    upsertRuleFromCorrection({
-      pattern: row.normalizedMerchant,
-      matchType: 'exact',
-      ruleKind: 'category',
-      categoryId: input.categoryId,
-      createdBy: input.userId,
-      actorRole: 'admin',
-      at,
-    });
-  }
-
   train(tokens, input.categoryId);
   applyPaymentMatchers([input.transactionId], at);
-  return true;
+  return { ok: true };
 }
 
 /**
@@ -439,21 +469,34 @@ export function clearCategory(input: {
 }
 
 /**
- * Returns false, and does NOTHING (no is_transfer write, no rule created or removed), for a
- * transaction that has splits. Spec ruling 2a: a split's parts ARE its categorization, and
- * setTransactionSplits already refuses to split a transfer in the first place (a transfer has
- * no "category" to divide) -- so a split row should never legitimately reach is_transfer = 1.
- * Without this guard, flagging one a transfer anyway silently drops every one of its split
- * parts out of every report and budget (all of which exclude transfers, per
+ * Returns `{ ok: false, reason: 'has_splits' }`, and does NOTHING (no is_transfer write, no rule
+ * created or removed), for a transaction that has splits. Spec ruling 2a: a split's parts ARE its
+ * categorization, and setTransactionSplits already refuses to split a transfer in the first place
+ * (a transfer has no "category" to divide) -- so a split row should never legitimately reach
+ * is_transfer = 1. Without this guard, flagging one a transfer anyway silently drops every one of
+ * its split parts out of every report and budget (all of which exclude transfers, per
  * categoryBreakdown/categorySpend and friends), while the row keeps displaying its own
- * "Split - N parts" badge -- the money is gone with no visible sign why. Worse, marking it
- * also upserts a merchant rule, so the NEXT unsplit transaction from the same merchant would
- * be auto-flagged a transfer on the next import too. Task 2b (v1.7.0) closed the
- * automatic-engine side of this (ELIGIBLE/REVIEW_WHERE, above); this closes the manual "Mark
- * transfer" side, which those predicates never touched. Callers that bulk-flag must check
- * this return value and report the skip; see bulkSetTransfer in src/lib/transactions.ts.
+ * "Split - N parts" badge -- the money is gone with no visible sign why. Worse, marking it also
+ * upserts a merchant rule, so the NEXT unsplit transaction from the same merchant would be
+ * auto-flagged a transfer on the next import too. Task 2b (v1.7.0) closed the automatic-engine
+ * side of this (ELIGIBLE/REVIEW_WHERE, above); this closes the manual "Mark transfer" side, which
+ * those predicates never touched. Callers that bulk-flag must check this return value and report
+ * the skip; see bulkSetTransfer in src/lib/transactions.ts.
+ *
+ * v1.13.0 ruling R4, fix round 1 (item AH / SEC-6). Returns `{ ok: false, reason:
+ * 'owned_by_another', ownerName }`, and does NOTHING (is_transfer untouched), when `actorRole` is
+ * `'member'` and the transfer/not_transfer rule this flip would learn was created by somebody
+ * else. Whichever rule the flip needs is resolved -- and can refuse -- BEFORE is_transfer is ever
+ * written, so a refusal never leaves the flag flipped alongside a rule nobody agreed to.
  */
-export function setTransferFlag(input: { transactionId: number; isTransfer: boolean; userId: number; at?: Date }): boolean {
+export function setTransferFlag(input: {
+  transactionId: number;
+  isTransfer: boolean;
+  userId: number;
+  /** The ACTOR's role, not the rule's. An admin may write over anyone's rule. */
+  actorRole: 'admin' | 'member';
+  at?: Date;
+}): RuleGuardedWriteResult {
   const db = getDb();
   const at = input.at ?? new Date();
   const row = db
@@ -462,7 +505,40 @@ export function setTransferFlag(input: { transactionId: number; isTransfer: bool
     .where(eq(transactions.id, input.transactionId))
     .get();
   if (!row) throw new Error(`No transaction ${input.transactionId}`);
-  if (transactionHasSplits(input.transactionId)) return false;
+  if (transactionHasSplits(input.transactionId)) return { ok: false, reason: 'has_splits' };
+
+  const matchesCardPattern = CARD_PAYMENT_PATTERNS.some((pattern) => row.normalizedMerchant.includes(pattern));
+
+  // R4 ownership check FIRST: whichever rule this flip would learn is resolved -- and can
+  // refuse -- before is_transfer itself is ever written.
+  if (input.isTransfer) {
+    // EXACT match only: a contains rule learned from an e-transfer description
+    // would over-match every unrelated e-transfer.
+    const upserted = upsertRuleFromCorrection({
+      pattern: row.normalizedMerchant,
+      matchType: 'exact',
+      ruleKind: 'transfer',
+      categoryId: null,
+      createdBy: input.userId,
+      actorRole: input.actorRole,
+      at,
+    });
+    if (!upserted.ok) return { ok: false, reason: 'owned_by_another', ownerName: upserted.ownerName };
+  } else if (matchesCardPattern) {
+    // The card-payment pattern list would re-catch this merchant on the very
+    // next runEngine/rerun. Merely deleting a (nonexistent) transfer rule would
+    // not stop that, so teach an exact 'not_transfer' override instead.
+    const upserted = upsertRuleFromCorrection({
+      pattern: row.normalizedMerchant,
+      matchType: 'exact',
+      ruleKind: 'not_transfer',
+      categoryId: null,
+      createdBy: input.userId,
+      actorRole: input.actorRole,
+      at,
+    });
+    if (!upserted.ok) return { ok: false, reason: 'owned_by_another', ownerName: upserted.ownerName };
+  }
 
   db.update(transactions)
     .set({ isTransfer: input.isTransfer, updatedAt: nowIso(at) })
@@ -470,51 +546,36 @@ export function setTransferFlag(input: { transactionId: number; isTransfer: bool
     .run();
 
   if (input.isTransfer) {
-    // EXACT match only: a contains rule learned from an e-transfer description
-    // would over-match every unrelated e-transfer.
-    // actorRole: 'admin' reproduces this function's pre-R4 behaviour (see the identical note on
-    // confirmCategory, above) -- unconditional overwrite, unchanged.
-    upsertRuleFromCorrection({
-      pattern: row.normalizedMerchant,
-      matchType: 'exact',
-      ruleKind: 'transfer',
-      categoryId: null,
-      createdBy: input.userId,
-      actorRole: 'admin',
-      at,
-    });
     // Re-flagging as a transfer must undo any earlier "not a transfer" override
     // on this exact merchant, or detectTransfer's not_transfer check (which runs
     // first) would keep silently vetoing this very rule on every future re-run.
     deleteExactRule(row.normalizedMerchant, 'not_transfer');
-  } else if (CARD_PAYMENT_PATTERNS.some((pattern) => row.normalizedMerchant.includes(pattern))) {
-    // The card-payment pattern list would re-catch this merchant on the very
-    // next runEngine/rerun. Merely deleting a (nonexistent) transfer rule would
-    // not stop that, so teach an exact 'not_transfer' override instead.
-    upsertRuleFromCorrection({
-      pattern: row.normalizedMerchant,
-      matchType: 'exact',
-      ruleKind: 'not_transfer',
-      categoryId: null,
-      createdBy: input.userId,
-      actorRole: 'admin',
-      at,
-    });
-  } else {
+  } else if (!matchesCardPattern) {
     // Only a learned transfer rule (or a purely manual flag) could have flagged
     // this row — today's behaviour is unchanged: remove that rule.
     deleteExactRule(row.normalizedMerchant, 'transfer');
   }
-  return true;
+  return { ok: true };
 }
 
-/** "Apply category to all N matching transactions + create rule" (bulk action). */
+/**
+ * "Apply category to all N matching transactions + create rule" (bulk action).
+ *
+ * v1.13.0 ruling R4, fix round 1 (item AH / SEC-6). Returns `{ ok: false, reason:
+ * 'owned_by_another', ownerName }` and touches NO row at all when `actorRole` is `'member'` and
+ * this merchant's exact category rule was created by somebody else. The rule is resolved -- and
+ * can refuse -- BEFORE the loop over matching transaction ids even starts, so a refusal can never
+ * leave some rows categorized against a rule the household never agreed to and others not (a
+ * half-applied bulk action would be worse than an all-or-nothing refusal).
+ */
 export function applyCategoryToMatching(input: {
   normalizedMerchant: string;
   categoryId: number;
   userId: number;
+  /** The ACTOR's role, not the rule's. An admin may write over anyone's rule. */
+  actorRole: 'admin' | 'member';
   at?: Date;
-}): number {
+}): CategoryMatchResult {
   const ids = getDb()
     .select({ id: transactions.id })
     .from(transactions)
@@ -528,23 +589,34 @@ export function applyCategoryToMatching(input: {
     .all()
     .map((row) => row.id);
 
+  if (ids.length === 0) return { ok: true, count: 0 };
+
+  // R4 ownership check FIRST: resolved -- and can refuse -- before any of the matching rows
+  // below are touched.
+  const upserted = upsertRuleFromCorrection({
+    pattern: input.normalizedMerchant,
+    matchType: 'exact',
+    ruleKind: 'category',
+    categoryId: input.categoryId,
+    createdBy: input.userId,
+    actorRole: input.actorRole,
+    at: input.at,
+  });
+  if (!upserted.ok) return { ok: false, reason: 'owned_by_another', ownerName: upserted.ownerName };
+
   for (const id of ids) {
-    confirmCategory({ transactionId: id, categoryId: input.categoryId, userId: input.userId, createRule: false, at: input.at });
-  }
-  if (ids.length > 0) {
-    // actorRole: 'admin' reproduces this function's pre-R4 behaviour (see the identical note on
-    // confirmCategory, above) -- unconditional overwrite, unchanged.
-    upsertRuleFromCorrection({
-      pattern: input.normalizedMerchant,
-      matchType: 'exact',
-      ruleKind: 'category',
+    // createRule: false -- the rule for this merchant was just resolved above, once, for the
+    // whole batch; confirmCategory must not attempt (and re-check ownership on) it again per row.
+    confirmCategory({
+      transactionId: id,
       categoryId: input.categoryId,
-      createdBy: input.userId,
-      actorRole: 'admin',
+      userId: input.userId,
+      createRule: false,
+      actorRole: input.actorRole,
       at: input.at,
     });
   }
-  return ids.length;
+  return { ok: true, count: ids.length };
 }
 
 /**

@@ -227,7 +227,7 @@ describe('the learning loop', () => {
     const coffee = categoryIdByName(db, 'Coffee');
     const id = add('POS PURCHASE TIM HORTONS #4821 TORONTO ON');
 
-    confirmCategory({ transactionId: id, categoryId: coffee, userId });
+    confirmCategory({ transactionId: id, categoryId: coffee, userId, actorRole: 'admin' });
 
     expect(readTxn(sqlite, id)).toMatchObject({ category_id: coffee, categorization_source: 'manual', confidence: null });
     const rules = listRules('category');
@@ -243,8 +243,8 @@ describe('the learning loop', () => {
     const restaurants = categoryIdByName(db, 'Restaurants');
     const id = add('POS PURCHASE TIM HORTONS #4821 TORONTO ON');
 
-    confirmCategory({ transactionId: id, categoryId: coffee, userId });
-    confirmCategory({ transactionId: id, categoryId: restaurants, userId });
+    confirmCategory({ transactionId: id, categoryId: coffee, userId, actorRole: 'admin' });
+    confirmCategory({ transactionId: id, categoryId: restaurants, userId, actorRole: 'admin' });
 
     expect((sqlite.prepare('select count(*) as c from bayes_tokens where category_id = ?').get(coffee) as { c: number }).c).toBe(0);
     expect((sqlite.prepare('select count(*) as c from bayes_tokens where category_id = ?').get(restaurants) as { c: number }).c).toBe(2);
@@ -263,7 +263,7 @@ describe('the learning loop', () => {
     runEngine([id]);
     expect(readTxn(sqlite, id).categorization_source).toBe('bayes');
 
-    confirmCategory({ transactionId: id, categoryId: coffee, userId });
+    confirmCategory({ transactionId: id, categoryId: coffee, userId, actorRole: 'admin' });
     expect(readTxn(sqlite, id)).toMatchObject({ categorization_source: 'manual', category_id: coffee, confidence: null });
     // The accepted row leaves the review queue permanently.
     expect(reviewQueueIds()).not.toContain(id);
@@ -273,7 +273,7 @@ describe('the learning loop', () => {
     const { db, add, userId } = setup();
     const coffee = categoryIdByName(db, 'Coffee');
     const id = add('ONE OFF PURCHASE');
-    confirmCategory({ transactionId: id, categoryId: coffee, userId, createRule: false });
+    confirmCategory({ transactionId: id, categoryId: coffee, userId, createRule: false, actorRole: 'admin' });
     expect(listRules('category')).toHaveLength(0);
   });
 
@@ -287,7 +287,7 @@ describe('the learning loop', () => {
     const { db, sqlite, add, userId } = setup();
     const coffee = categoryIdByName(db, 'Coffee');
     const id = add('POS PURCHASE TIM HORTONS #4821 TORONTO ON');
-    expect(confirmCategory({ transactionId: id, categoryId: coffee, userId })).toBe(true);
+    expect(confirmCategory({ transactionId: id, categoryId: coffee, userId, actorRole: 'admin' }).ok).toBe(true);
     expect(
       sqlite.prepare('select doc_count as docCount, token_total as tokenTotal from bayes_category_totals where category_id = ?').get(coffee),
     ).toEqual({ docCount: 1, tokenTotal: 2 });
@@ -308,7 +308,7 @@ describe('the learning loop', () => {
     const b = add('POS PURCHASE TIM HORTONS #4821 TORONTO ON', -600, '2026-03-05');
     const c = add('LOBLAWS #1042 BURLINGTON ON');
 
-    expect(applyCategoryToMatching({ normalizedMerchant: 'TIM HORTONS', categoryId: coffee, userId })).toBe(2);
+    expect(applyCategoryToMatching({ normalizedMerchant: 'TIM HORTONS', categoryId: coffee, userId, actorRole: 'admin' })).toMatchObject({ ok: true, count: 2 });
     expect(readTxn(sqlite, a).categorization_source).toBe('manual');
     expect(readTxn(sqlite, b).categorization_source).toBe('manual');
     expect(readTxn(sqlite, c).categorization_source).toBe('none');
@@ -320,7 +320,7 @@ describe('transfer toggling', () => {
   it('turning the flag on teaches an EXACT transfer rule', () => {
     const { sqlite, add, userId } = setup();
     const id = add('E-TRANSFER SENT J DOE');
-    setTransferFlag({ transactionId: id, isTransfer: true, userId });
+    setTransferFlag({ transactionId: id, isTransfer: true, userId, actorRole: 'admin' });
     expect(readTxn(sqlite, id).is_transfer).toBe(1);
     const rules = listRules('transfer');
     expect(rules).toHaveLength(1);
@@ -330,8 +330,8 @@ describe('transfer toggling', () => {
   it('turning it off removes the learned rule', () => {
     const { sqlite, add, userId } = setup();
     const id = add('E-TRANSFER SENT J DOE');
-    setTransferFlag({ transactionId: id, isTransfer: true, userId });
-    setTransferFlag({ transactionId: id, isTransfer: false, userId });
+    setTransferFlag({ transactionId: id, isTransfer: true, userId, actorRole: 'admin' });
+    setTransferFlag({ transactionId: id, isTransfer: false, userId, actorRole: 'admin' });
     expect(readTxn(sqlite, id).is_transfer).toBe(0);
     expect(listRules('transfer')).toHaveLength(0);
   });
@@ -342,7 +342,7 @@ describe('transfer toggling', () => {
     runEngine([id]);
     expect(readTxn(sqlite, id).is_transfer).toBe(1);
 
-    setTransferFlag({ transactionId: id, isTransfer: false, userId });
+    setTransferFlag({ transactionId: id, isTransfer: false, userId, actorRole: 'admin' });
     expect(readTxn(sqlite, id).is_transfer).toBe(0);
     const rules = listRules('not_transfer');
     expect(rules).toHaveLength(1);
@@ -357,10 +357,10 @@ describe('transfer toggling', () => {
     const { sqlite, add, userId } = setup();
     const id = add('PAYMENT - THANK YOU', 50000);
     runEngine([id]);
-    setTransferFlag({ transactionId: id, isTransfer: false, userId });
+    setTransferFlag({ transactionId: id, isTransfer: false, userId, actorRole: 'admin' });
     expect(listRules('not_transfer')).toHaveLength(1);
 
-    setTransferFlag({ transactionId: id, isTransfer: true, userId });
+    setTransferFlag({ transactionId: id, isTransfer: true, userId, actorRole: 'admin' });
     expect(readTxn(sqlite, id).is_transfer).toBe(1);
     expect(listRules('not_transfer')).toHaveLength(0);
     expect(detectTransfer('PAYMENT - THANK YOU', buildContext())).toBe(true);
@@ -561,7 +561,7 @@ describe('v1.12.1: clearCategory only deletes a rule when told to (item U, rulin
     const { db, sqlite, add, userId } = setup();
     const coffee = categoryIdByName(db, 'Coffee');
     const id = add('POS PURCHASE TIM HORTONS #4821 TORONTO ON');
-    expect(confirmCategory({ transactionId: id, categoryId: coffee, userId })).toBe(true);
+    expect(confirmCategory({ transactionId: id, categoryId: coffee, userId, actorRole: 'admin' }).ok).toBe(true);
     return { db, sqlite, id, userId };
   }
 
@@ -579,5 +579,163 @@ describe('v1.12.1: clearCategory only deletes a rule when told to (item U, rulin
     const { db, id, userId } = setupConfirmed();
     expect(clearCategory({ transactionId: id, userId, deleteRule: true })).toBe(true);
     expect(db.get<{ n: number }>(sql`select count(*) as n from merchant_rules`).n).toBe(0);
+  });
+});
+
+/**
+ * v1.13.0 ruling R4, fix round 1 (item AH / SEC-6). The reviewer's finding: confirmCategory,
+ * setTransferFlag and applyCategoryToMatching each learn/refuse a merchant rule internally, but
+ * only upsertRenameRule (Task 8's original scope) actually threaded a real actorRole through to
+ * upsertRuleFromCorrection -- these three hard-coded 'admin' and so silently ignored R4 for
+ * every member-facing writer that reaches them (acceptGuessAction, fixCategoryAction,
+ * applyToAllMatchingAction, markTransferAction). This block is the executable proof that is
+ * fixed: a member refused against a foreign-owned rule, an admin unrestricted, and a member
+ * updating their own rule -- for all three functions -- with the transaction row(s) provably
+ * untouched on refusal.
+ */
+describe('ruling R4, fix round 1: confirmCategory / setTransferFlag / applyCategoryToMatching honour rule ownership', () => {
+  function setupTwoUsers() {
+    current = createSeededTestDb();
+    const adminId = insertTestUser(current.db, { name: 'Admin Owner', username: 'admin-owner', role: 'admin' });
+    const memberId = insertTestUser(current.db, { name: 'Member Other', username: 'member-other', role: 'member' });
+    const accountId = insertTestAccount(current.db);
+    const add = (rawDescription: string, amountCents = -1000, date = '2026-03-02') => {
+      const row = current!.db.get<{ id: number }>(sql`
+        insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, categorization_source, created_by, created_at, updated_at)
+        values (${accountId}, ${date}, ${rawDescription}, ${normalizeMerchant(rawDescription)}, ${amountCents}, 'none', ${adminId}, ${nowIso()}, ${nowIso()})
+        returning id`);
+      return row.id;
+    };
+    return { db: current.db, sqlite: current.sqlite, adminId, memberId, add };
+  }
+
+  describe('confirmCategory', () => {
+    it('a member cannot overwrite an admin-owned category rule; the row and the rule stay untouched', () => {
+      const { db, sqlite, adminId, memberId, add } = setupTwoUsers();
+      const coffee = categoryIdByName(db, 'Coffee');
+      const groceries = categoryIdByName(db, 'Groceries');
+      const first = add('POS PURCHASE TIM HORTONS #4821 TORONTO ON');
+      expect(confirmCategory({ transactionId: first, categoryId: coffee, userId: adminId, actorRole: 'admin' }).ok).toBe(true);
+
+      const second = add('POS PURCHASE TIM HORTONS #4821 TORONTO ON', -500, '2026-03-03');
+      const result = confirmCategory({ transactionId: second, categoryId: groceries, userId: memberId, actorRole: 'member' });
+      expect(result).toEqual({ ok: false, reason: 'owned_by_another', ownerName: 'Admin Owner' });
+
+      expect(readTxn(sqlite, second)).toMatchObject({ category_id: null, categorization_source: 'none' });
+      expect(readTxn(sqlite, first)).toMatchObject({ category_id: coffee, categorization_source: 'manual' });
+      expect(listRules('category').find((r) => r.pattern === 'TIM HORTONS')?.categoryId).toBe(coffee);
+    });
+
+    it('an admin can overwrite anyone\'s rule', () => {
+      const { db, sqlite, adminId, memberId, add } = setupTwoUsers();
+      const coffee = categoryIdByName(db, 'Coffee');
+      const groceries = categoryIdByName(db, 'Groceries');
+      const first = add('POS PURCHASE TIM HORTONS #4821 TORONTO ON');
+      expect(confirmCategory({ transactionId: first, categoryId: coffee, userId: memberId, actorRole: 'member' }).ok).toBe(true);
+
+      const second = add('POS PURCHASE TIM HORTONS #4821 TORONTO ON', -500, '2026-03-03');
+      expect(confirmCategory({ transactionId: second, categoryId: groceries, userId: adminId, actorRole: 'admin' }).ok).toBe(true);
+      expect(readTxn(sqlite, second).category_id).toBe(groceries);
+    });
+
+    it('a member can update a rule they own themselves', () => {
+      const { db, sqlite, memberId, add } = setupTwoUsers();
+      const coffee = categoryIdByName(db, 'Coffee');
+      const groceries = categoryIdByName(db, 'Groceries');
+      const first = add('POS PURCHASE TIM HORTONS #4821 TORONTO ON');
+      expect(confirmCategory({ transactionId: first, categoryId: coffee, userId: memberId, actorRole: 'member' }).ok).toBe(true);
+
+      const second = add('POS PURCHASE TIM HORTONS #4821 TORONTO ON', -500, '2026-03-03');
+      expect(confirmCategory({ transactionId: second, categoryId: groceries, userId: memberId, actorRole: 'member' }).ok).toBe(true);
+      expect(readTxn(sqlite, second).category_id).toBe(groceries);
+    });
+  });
+
+  describe('setTransferFlag', () => {
+    it('a member cannot overwrite an admin-owned transfer rule; is_transfer stays untouched', () => {
+      const { sqlite, adminId, memberId, add } = setupTwoUsers();
+      const first = add('ACME PAYROLL CO', -500, '2026-03-02');
+      expect(setTransferFlag({ transactionId: first, isTransfer: true, userId: adminId, actorRole: 'admin' }).ok).toBe(true);
+
+      const second = add('ACME PAYROLL CO', -500, '2026-03-03');
+      const result = setTransferFlag({ transactionId: second, isTransfer: true, userId: memberId, actorRole: 'member' });
+      expect(result).toEqual({ ok: false, reason: 'owned_by_another', ownerName: 'Admin Owner' });
+
+      expect(readTxn(sqlite, second).is_transfer).toBe(0);
+      expect(readTxn(sqlite, first).is_transfer).toBe(1);
+      expect(listRules('transfer')).toHaveLength(1);
+    });
+
+    it('an admin can overwrite anyone\'s transfer rule', () => {
+      const { sqlite, adminId, memberId, add } = setupTwoUsers();
+      const first = add('ACME PAYROLL CO', -500, '2026-03-02');
+      expect(setTransferFlag({ transactionId: first, isTransfer: true, userId: memberId, actorRole: 'member' }).ok).toBe(true);
+
+      const second = add('ACME PAYROLL CO', -500, '2026-03-03');
+      expect(setTransferFlag({ transactionId: second, isTransfer: true, userId: adminId, actorRole: 'admin' }).ok).toBe(true);
+      expect(readTxn(sqlite, second).is_transfer).toBe(1);
+    });
+
+    it('a member can update a transfer rule they own themselves', () => {
+      const { sqlite, memberId, add } = setupTwoUsers();
+      const first = add('ACME PAYROLL CO', -500, '2026-03-02');
+      expect(setTransferFlag({ transactionId: first, isTransfer: true, userId: memberId, actorRole: 'member' }).ok).toBe(true);
+
+      const second = add('ACME PAYROLL CO', -500, '2026-03-03');
+      expect(setTransferFlag({ transactionId: second, isTransfer: true, userId: memberId, actorRole: 'member' }).ok).toBe(true);
+      expect(readTxn(sqlite, second).is_transfer).toBe(1);
+    });
+  });
+
+  describe('applyCategoryToMatching', () => {
+    it('a member cannot overwrite an admin-owned rule; NOT ONE matching row is touched', () => {
+      const { db, sqlite, adminId, memberId, add } = setupTwoUsers();
+      const coffee = categoryIdByName(db, 'Coffee');
+      const groceries = categoryIdByName(db, 'Groceries');
+      // The admin owns this exact rule already, e.g. from Settings -> Rules. Seeded directly
+      // (rather than through a matching transaction) so the count assertions below are exact.
+      upsertRuleFromCorrection({
+        pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: adminId, actorRole: 'admin',
+      });
+
+      const a = add('TIM HORTONS', -700, '2026-03-04');
+      const b = add('TIM HORTONS', -800, '2026-03-05');
+      const result = applyCategoryToMatching({ normalizedMerchant: 'TIM HORTONS', categoryId: groceries, userId: memberId, actorRole: 'member' });
+      expect(result).toEqual({ ok: false, reason: 'owned_by_another', ownerName: 'Admin Owner' });
+
+      expect(readTxn(sqlite, a).category_id).toBeNull();
+      expect(readTxn(sqlite, b).category_id).toBeNull();
+      expect(listRules('category').find((r) => r.pattern === 'TIM HORTONS')?.categoryId).toBe(coffee);
+    });
+
+    it('an admin can overwrite anyone\'s rule and applies to every matching row', () => {
+      const { db, sqlite, adminId, memberId, add } = setupTwoUsers();
+      const coffee = categoryIdByName(db, 'Coffee');
+      const groceries = categoryIdByName(db, 'Groceries');
+      upsertRuleFromCorrection({
+        pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: memberId, actorRole: 'member',
+      });
+
+      const a = add('TIM HORTONS', -700, '2026-03-04');
+      const b = add('TIM HORTONS', -800, '2026-03-05');
+      const result = applyCategoryToMatching({ normalizedMerchant: 'TIM HORTONS', categoryId: groceries, userId: adminId, actorRole: 'admin' });
+      expect(result).toEqual({ ok: true, count: 2 });
+      expect(readTxn(sqlite, a).category_id).toBe(groceries);
+      expect(readTxn(sqlite, b).category_id).toBe(groceries);
+    });
+
+    it('a member can apply-to-all against a rule they own themselves', () => {
+      const { db, sqlite, memberId, add } = setupTwoUsers();
+      const coffee = categoryIdByName(db, 'Coffee');
+      const groceries = categoryIdByName(db, 'Groceries');
+      upsertRuleFromCorrection({
+        pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: memberId, actorRole: 'member',
+      });
+
+      const a = add('TIM HORTONS', -700, '2026-03-04');
+      const result = applyCategoryToMatching({ normalizedMerchant: 'TIM HORTONS', categoryId: groceries, userId: memberId, actorRole: 'member' });
+      expect(result).toEqual({ ok: true, count: 1 });
+      expect(readTxn(sqlite, a).category_id).toBe(groceries);
+    });
   });
 });

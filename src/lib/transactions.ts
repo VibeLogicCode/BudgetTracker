@@ -257,7 +257,10 @@ export function createManualTransaction(input: {
   // display columns, so the manual category survives and the transfer flag sticks.
   runEngine([row.id]);
   if (parsed.categoryId !== null) {
-    confirmCategory({ transactionId: row.id, categoryId: parsed.categoryId, userId: input.userId });
+    // actorRole: 'admin' -- createManualTransaction does not yet take its own caller's role
+    // (Wave C threads that through src/app/(app)/transactions/actions.ts, which this task does
+    // not touch); this reproduces the pre-R4 behaviour of an unconditional overwrite, unchanged.
+    confirmCategory({ transactionId: row.id, categoryId: parsed.categoryId, userId: input.userId, actorRole: 'admin' });
   }
   // MUST-13.7: a hand-typed loan payment is a loan payment. Runs after confirmCategory so
   // the row is in its final state, and is cheap when no loan rules exist.
@@ -295,11 +298,16 @@ export interface BulkResult {
   skipped: number;
 }
 
+// actorRole: 'admin' at both call sites below -- bulkSetCategory/bulkSetTransfer do not yet take
+// their own caller's role (Wave C threads that through src/app/(app)/transactions/actions.ts,
+// which this task does not touch); this reproduces the pre-R4 behaviour of an unconditional
+// overwrite, unchanged. `.ok` replaces the old bare-boolean truthiness check.
 export function bulkSetCategory(ids: number[], categoryId: number, userId: number, createRules: boolean): BulkResult {
   let changed = 0;
   let skipped = 0;
   for (const id of ids) {
-    if (confirmCategory({ transactionId: id, categoryId, userId, createRule: createRules })) changed += 1;
+    const result = confirmCategory({ transactionId: id, categoryId, userId, createRule: createRules, actorRole: 'admin' });
+    if (result.ok) changed += 1;
     else skipped += 1;
   }
   return { changed, skipped };
@@ -309,7 +317,8 @@ export function bulkSetTransfer(ids: number[], isTransfer: boolean, userId: numb
   let changed = 0;
   let skipped = 0;
   for (const id of ids) {
-    if (setTransferFlag({ transactionId: id, isTransfer, userId })) changed += 1;
+    const result = setTransferFlag({ transactionId: id, isTransfer, userId, actorRole: 'admin' });
+    if (result.ok) changed += 1;
     else skipped += 1;
   }
   return { changed, skipped };
