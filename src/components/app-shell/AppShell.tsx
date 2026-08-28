@@ -105,7 +105,7 @@ export function AppShell({
       </aside>
 
       <div className="flex min-h-screen flex-col lg:pl-64">
-        <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center gap-2 border-b border-line bg-canvas/85 px-4 backdrop-blur-md sm:px-6 lg:px-8">
+        <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center gap-2 border-b border-line bg-canvas/85 px-4 pt-[env(safe-area-inset-top)] backdrop-blur-md sm:px-6 lg:px-8">
           <button
             ref={menuButtonRef}
             type="button"
@@ -152,7 +152,7 @@ export function AppShell({
           </div>
         ) : null}
 
-        <main id="main" className="mx-auto w-full max-w-6xl flex-1 px-4 py-7 sm:px-6 sm:py-9 lg:px-8">
+        <main id="main" className="mx-auto w-full max-w-6xl flex-1 px-4 py-7 pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)] sm:px-6 sm:py-9 lg:px-8">
           {children}
         </main>
 
@@ -163,7 +163,7 @@ export function AppShell({
             rail is navigation is exactly the reader who needs the handbook, and the footer
             is the one thing on every page that survives the phone layout collapsing the
             rail behind a menu button. */}
-        <footer className="mx-auto w-full max-w-6xl px-4 pb-8 text-xs text-subtle sm:px-6 lg:px-8">
+        <footer className="mx-auto w-full max-w-6xl px-4 pb-[calc(2rem+env(safe-area-inset-bottom))] text-xs text-subtle sm:px-6 lg:px-8">
           Budget Tracker v{version} ·{' '}
           <Link className="text-accent-text underline underline-offset-2" href="/settings">
             what&rsquo;s new

@@ -152,3 +152,32 @@ describe('Help is reachable from the shell', () => {
     expect(footer.querySelector('a[href="/settings"]')).toBeTruthy();
   });
 });
+
+// This file has no shared render helper elsewhere; every other test above mounts AppShell
+// inline. renderShell() is a local convenience for this describe block only.
+function renderShell() {
+  return render(
+    <AppShell user={user} reviewCount={0} version="1.2.3">
+      <p>content</p>
+    </AppShell>,
+  );
+}
+
+describe('v1.12.1: safe-area insets for an installed home-screen app (item AY / UX-11)', () => {
+  it('the sticky header clears the status bar', () => {
+    const { container } = renderShell();
+    expect(container.querySelector('header')?.className).toContain('pt-[env(safe-area-inset-top)]');
+  });
+
+  it('the footer clears the home indicator', () => {
+    const { container } = renderShell();
+    expect(container.querySelector('footer')?.className).toContain('env(safe-area-inset-bottom)');
+  });
+
+  it('main clears the rounded corners on both sides', () => {
+    const { container } = renderShell();
+    const main = container.querySelector('main')?.className ?? '';
+    expect(main).toContain('pl-[env(safe-area-inset-left)]');
+    expect(main).toContain('pr-[env(safe-area-inset-right)]');
+  });
+});

@@ -20,8 +20,17 @@ export const metadata: Metadata = {
   },
 };
 
-/** Both themes are real, so the browser chrome should track whichever is on. */
+/**
+ * Both themes are real, so the browser chrome should track whichever is on.
+ *
+ * v1.12.1 (item AY / UX-11): `viewportFit: 'cover'` is the half of the safe-area fix that lives
+ * here. The manifest declares display: standalone and the root layout sets appleWebApp, so adding
+ * this app to an iPhone home screen launches it chromeless -- and without viewport-fit=cover, iOS
+ * letterboxes it instead of handing the app the insets. The other half is the env(safe-area-inset-*)
+ * padding on the header, main and footer in AppShell.tsx; neither half works alone.
+ */
 export const viewport: Viewport = {
+  viewportFit: 'cover',
   themeColor: [
     { media: '(prefers-color-scheme: light)', color: '#f5f5fa' },
     { media: '(prefers-color-scheme: dark)', color: '#0e0f17' },
