@@ -398,3 +398,113 @@ describe('findInstallmentItem', () => {
     expect(findInstallmentItem(999999)).toBeNull();
   });
 });
+
+describe('recordInstallmentPayment vs the merchant matcher (fix round 2)', () => {
+  function ruleRow(itemId: number, merchantContains: string): void {
+    current!.sqlite
+      .prepare(
+        `insert into loan_matcher_rules (item_id, merchant_contains, account_id, enabled, created_at, updated_at)
+         values (?, ?, NULL, 1, ?, ?)`,
+      )
+      .run(itemId, merchantContains, NOW, NOW);
+  }
+
+  function paidTxnIdOf(installmentId: number): number | null {
+    const row = current!.sqlite
+      .prepare('select paid_txn_id as paidTxnId from bill_installments where id = ?')
+      .get(installmentId) as { paidTxnId: number | null };
+    return row.paidTxnId;
+  }
+
+  function unlinkedAtOf(installmentId: number): string | null {
+    const row = current!.sqlite
+      .prepare('select unlinked_at as unlinkedAt from bill_installments where id = ?')
+      .get(installmentId) as { unlinkedAt: string | null };
+    return row.unlinkedAt;
+  }
+
+  function linkCountFor(transactionId: number): number {
+    const row = current!.sqlite
+      .prepare('select count(*) as n from bill_installments where paid_txn_id = ?')
+      .get(transactionId) as { n: number };
+    return row.n;
+  }
+
+  it('(a) the matcher grabs the nearer-due installment; the person\'s explicit request still wins', () => {
+    const { userId } = setup();
+    const itemId = billItem(userId, 'Cable Bill');
+    const accountId = insertTestAccount(current!.db, { name: 'Chequing' });
+    // Nearest to the transaction date (2026-08-27): 2 days away, well inside the matcher's
+    // 45-day window -- this is the row markMatchingUnpaid picks on its own.
+    const earlierId = addInstallment({ itemId, dueDate: '2026-08-25', amountCents: 50_000, at: NOW });
+    // The one the person actually pressed "record payment" on -- paying ahead, months out.
+    const laterId = addInstallment({ itemId, dueDate: '2026-11-30', amountCents: 60_000, at: NOW });
+    ruleRow(itemId, 'CABLE BILL');
+
+    const result = recordInstallmentPayment({ installmentId: laterId, accountId, userId, today: '2026-08-27' });
+    expect(result.ok).toBe(true);
+    const transactionId = (result as { transactionId: number }).transactionId;
+
+    const rows = listInstallments(itemId, '2026-08-27', 30);
+    const later = rows.find((r) => r.id === laterId)!;
+    const earlier = rows.find((r) => r.id === earlierId)!;
+
+    // The requested (later) one is paid, linked to the transaction the person just recorded.
+    expect(later.paidAt).not.toBeNull();
+    expect(later.paidTxnId).toBe(transactionId);
+    // The earlier one -- the matcher's own guess -- is back to a perfectly ordinary unpaid row:
+    // not paid, not linked, and NOT unlinked_at-stamped (this was never a person's un-mark).
+    expect(earlier.paidAt).toBeNull();
+    expect(earlier.paidTxnId).toBeNull();
+    expect(unlinkedAtOf(earlierId)).toBeNull();
+    // Exactly one link exists for this transaction, table-wide.
+    expect(linkCountFor(transactionId)).toBe(1);
+  });
+
+  it('(b) the matcher picks the very row the person requested -- reports ok, marks nothing twice', () => {
+    const { userId } = setup();
+    const itemId = billItem(userId, 'Cable Bill');
+    const accountId = insertTestAccount(current!.db, { name: 'Chequing' });
+    const installmentId = addInstallment({ itemId, dueDate: '2026-08-25', amountCents: 50_000, at: NOW });
+    ruleRow(itemId, 'CABLE BILL');
+
+    const before = countTransactions();
+    const result = recordInstallmentPayment({ installmentId, accountId, userId, today: '2026-08-27' });
+    expect(result.ok).toBe(true);
+    const transactionId = (result as { transactionId: number }).transactionId;
+    // The matcher marked it first (paid_txn_id = transactionId already), and this function's own
+    // targeted UPDATE never had to run a second time -- exactly one transaction, exactly one link.
+    expect(countTransactions()).toBe(before + 1);
+    expect(paidTxnIdOf(installmentId)).toBe(transactionId);
+    expect(linkCountFor(transactionId)).toBe(1);
+  });
+
+  it('(c) a loan rule collision rolls the whole thing back -- no transaction row remains', () => {
+    const { userId } = setup();
+    const itemId = billItem(userId, 'Cable Bill');
+    const accountId = insertTestAccount(current!.db, { name: 'Chequing' });
+    const installmentId = addInstallment({ itemId, dueDate: '2026-08-25', amountCents: 50_000, at: NOW });
+
+    // An unrelated LOAN whose rule also matches this same merchant string -- ruling B11's
+    // exclusivity means only one of a loan/bill pair of rules can ever claim one transaction; a
+    // loan rule with the smaller id wins the race here.
+    const loanTypeId = typeOfKind('loan', 'Loan Rule Test Type');
+    const loanItemId = current!.sqlite
+      .prepare(
+        `insert into warranty_items
+          (name, purchase_date, is_lifetime, owner_user_id, type_id, current_balance_cents, balance_updated_at, created_at, updated_at)
+         values (?, '2024-01-15', 0, ?, ?, ?, ?, ?, ?) returning id`,
+      )
+      .get('Car Loan', userId, loanTypeId, 500_000, NOW, NOW, NOW) as { id: number };
+    ruleRow(loanItemId.id, 'CABLE');
+
+    const before = countTransactions();
+    const result = recordInstallmentPayment({ installmentId, accountId, userId, today: '2026-08-27' });
+    expect(result).toEqual({ ok: false, reason: 'linked_elsewhere' });
+
+    // Rolled back entirely: no new transaction row, and the bill installment is untouched.
+    expect(countTransactions()).toBe(before);
+    expect(paidTxnIdOf(installmentId)).toBeNull();
+    expect(listInstallments(itemId, '2026-08-27', 30).find((r) => r.id === installmentId)?.paidAt).toBeNull();
+  });
+});

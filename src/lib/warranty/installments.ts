@@ -3,6 +3,7 @@ import { getDb } from '@/db/client';
 import { billInstallments, transactions, warrantyItemTypes, warrantyItems } from '@/db/schema';
 import { nowIso } from '@/lib/clock';
 import { addDaysIso, isIsoDate } from '@/lib/dates';
+import { paymentLinksForTransaction } from '@/lib/loans';
 import { createManualTransaction } from '@/lib/transactions';
 import { MIN_PURCHASE_DATE } from '@/lib/warranty/items';
 import {
@@ -307,7 +308,7 @@ export function unpaidInstallments(input: {
 
 export type RecordPaymentResult =
   | { ok: true; transactionId: number; installmentId: number }
-  | { ok: false; reason: 'gone' | 'already_paid' | 'no_account' };
+  | { ok: false; reason: 'gone' | 'already_paid' | 'no_account' | 'linked_elsewhere' };
 
 /**
  * The ownership answer AND the revalidate path, in one query. Ruling R3's check on the Record-payment
@@ -325,6 +326,14 @@ export function findInstallmentItem(installmentId: number): { itemId: number; ow
 }
 
 /**
+ * Internal control-flow signal only -- never exported, never reaches a caller. Thrown inside
+ * recordInstallmentPayment's db.transaction() to unwind and roll back when a loan rule (not a bill
+ * rule) has already claimed the new transaction; caught immediately below and turned into the typed
+ * `linked_elsewhere` result.
+ */
+class LinkedElsewhereRollback extends Error {}
+
+/**
  * v1.13.0 ruling R8: the bridge from a bill that is due to a transaction that happened. Not a
  * scheduler -- a person presses this after the money actually moved, so the app never invents a
  * transaction the bank never made.
@@ -334,12 +343,36 @@ export function findInstallmentItem(installmentId: number): { itemId: number; ow
  * bill_installments_txn_uq (drizzle/0011) makes a second installment against that id impossible for
  * ever, whatever re-runs.
  *
- * THE ORDER MATTERS. createManualTransaction runs applyPaymentMatchers on the new row
- * (src/lib/transactions.ts), and a merchant rule on this same bill could mark the EARLIEST unpaid
- * installment -- which may not be the one the person pressed. So the targeted mark runs AFTER that
- * call and is conditional on paid_at IS NULL, the same guard markEarliestUnpaid uses. If the matcher
- * got there first, this returns already_paid: the payment IS recorded and the schedule IS marked,
- * just not by this button, and saying so is more honest than marking a second row.
+ * THE ORDER MATTERS, and so does what runs AFTER createManualTransaction, not just that something
+ * does. createManualTransaction runs applyPaymentMatchers on the new row (src/lib/transactions.ts),
+ * and a merchant rule on this same bill matches on MERCHANT, not on installment id -- so with two or
+ * more unpaid installments outstanding it can mark a DIFFERENT one than the row the person pressed
+ * (the nearest-due one, per markEarliestUnpaid). Left alone, that is worse than a silent
+ * disagreement: bill_installments_txn_uq is unique on paid_txn_id table-wide, so this function's own
+ * targeted UPDATE would then collide with the matcher's row and throw a raw UNIQUE constraint error
+ * instead of returning a typed result.
+ *
+ * Fix round 2 (reviewer finding): the person's explicit press is what "record payment" MEANS here,
+ * so it wins over whatever the matcher guessed, every time. After createManualTransaction (still
+ * inside the same db.transaction, so nothing here is visible until all of it commits):
+ *   1. paymentLinksForTransaction(transactionId) answers the cross-kind question CHEAPLY (two
+ *      COUNT(*)s, the same helper alreadyLinked()'s callers already share) -- ruling B11's
+ *      exclusivity guarantees a loan rule and a bill rule cannot both have matched this same
+ *      transaction, so links.loans > 0 here means a LOAN matcher took it, not a bill one. That is a
+ *      genuine rule collision across kinds, not this function's problem to silently paper over, so
+ *      it throws (rolling the whole transaction back -- the manual transaction row itself is
+ *      undone, not just the installment) and reports linked_elsewhere.
+ *   2. Otherwise, a direct lookup on bill_installments.paid_txn_id (unique, so at most one row) says
+ *      whether a BILL rule marked this transaction, and if so, which installment:
+ *        - no row: the matcher didn't touch this bill at all (no rule, or no match) -- proceed to
+ *          the targeted mark exactly as before.
+ *        - the SAME row the person pressed: the matcher already recorded exactly what was asked for.
+ *          Nothing left to do; report ok with the row the matcher (not this function) marked.
+ *        - a DIFFERENT row: the matcher guessed wrong. That row's paid_at/paid_txn_id are cleared --
+ *          WITHOUT touching unlinked_at, because this is not a person's deliberate un-mark (the
+ *          suppression unmarkInstallmentPaid protects against a rule re-marking); it must stay a
+ *          perfectly ordinary unpaid row a rule can pick up again next time, on this transaction or
+ *          the next. Then the targeted mark below runs exactly as before, now unobstructed.
  */
 export function recordInstallmentPayment(input: {
   installmentId: number;
@@ -367,26 +400,58 @@ export function recordInstallmentPayment(input: {
   if (target.paidAt !== null) return { ok: false, reason: 'already_paid' };
   if (!Number.isInteger(input.accountId) || input.accountId <= 0) return { ok: false, reason: 'no_account' };
 
-  return db.transaction((tx) => {
-    const transactionId = createManualTransaction({
-      accountId: input.accountId,
-      date: input.today,
-      description: target.itemName,
-      // A payment is money OUT. The installment's amount_cents CHECK guarantees it is positive.
-      amountCents: -target.amountCents,
-      categoryId: target.budgetCategoryId,
-      attributedUserId: target.ownerUserId,
-      notes: null,
-      userId: input.userId,
+  try {
+    return db.transaction((tx) => {
+      const transactionId = createManualTransaction({
+        accountId: input.accountId,
+        date: input.today,
+        description: target.itemName,
+        // A payment is money OUT. The installment's amount_cents CHECK guarantees it is positive.
+        amountCents: -target.amountCents,
+        categoryId: target.budgetCategoryId,
+        attributedUserId: target.ownerUserId,
+        notes: null,
+        userId: input.userId,
+      });
+
+      const links = paymentLinksForTransaction(transactionId);
+      // A loan rule took this transaction (ruling B11's exclusivity means a bill rule cannot have
+      // matched it too) -- roll back rather than let the person's press double-count against a
+      // loan's balance as well.
+      if (links.loans > 0) throw new LinkedElsewhereRollback();
+
+      if (links.bills > 0) {
+        const linked = tx
+          .select({ id: billInstallments.id })
+          .from(billInstallments)
+          .where(eq(billInstallments.paidTxnId, transactionId))
+          .get();
+        if (linked !== undefined && linked.id === input.installmentId) {
+          // The matcher already marked exactly the row the person pressed for.
+          return { ok: true, transactionId, installmentId: input.installmentId } as const;
+        }
+        if (linked !== undefined) {
+          // The matcher guessed a different installment on the merchant match. Clear it -- but
+          // NOT unlinked_at, which is reserved for a person's own un-mark (see this module's other
+          // v1.12.1 docblocks) -- so it stays an ordinary unpaid row a rule can pick up again.
+          tx.update(billInstallments)
+            .set({ paidAt: null, paidTxnId: null })
+            .where(eq(billInstallments.id, linked.id))
+            .run();
+        }
+      }
+
+      const marked = tx
+        .update(billInstallments)
+        .set({ paidAt: nowIso(), paidTxnId: transactionId })
+        .where(and(eq(billInstallments.id, input.installmentId), isNull(billInstallments.paidAt)))
+        .run();
+
+      if (marked.changes === 0) return { ok: false, reason: 'already_paid' } as const;
+      return { ok: true, transactionId, installmentId: input.installmentId } as const;
     });
-
-    const marked = tx
-      .update(billInstallments)
-      .set({ paidAt: nowIso(), paidTxnId: transactionId })
-      .where(and(eq(billInstallments.id, input.installmentId), isNull(billInstallments.paidAt)))
-      .run();
-
-    if (marked.changes === 0) return { ok: false, reason: 'already_paid' } as const;
-    return { ok: true, transactionId, installmentId: input.installmentId } as const;
-  });
+  } catch (error) {
+    if (error instanceof LinkedElsewhereRollback) return { ok: false, reason: 'linked_elsewhere' };
+    throw error;
+  }
 }
