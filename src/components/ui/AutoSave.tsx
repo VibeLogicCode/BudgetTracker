@@ -162,10 +162,12 @@ function StatusSlot({ pending, status }: { pending: boolean; status: AutoSaveSta
  * `document.documentElement.scrollWidth` on a table with one of these per row (the same
  * horizontal-scroll bug AutoSaveCheckbox's docblock records for the labelHidden text span).
  */
-function LiveStatus({ status }: { status: AutoSaveStatus }) {
+function LiveStatus({ pending, status }: { pending: boolean; status: AutoSaveStatus }) {
+  // Blank while a save is in flight so that a second save landing inside the 2 s "Saved"
+  // tick still changes the region's text -- an unchanged live region is not re-announced.
   return (
     <span className="sr-only" aria-live="polite">
-      {status === 'saved' ? 'Saved' : ''}
+      {!pending && status === 'saved' ? 'Saved' : ''}
     </span>
   );
 }
@@ -258,7 +260,7 @@ export function AutoSaveSelect({
         </select>
         <StatusSlot pending={pending} status={status} />
       </span>
-      <LiveStatus status={status} />
+      <LiveStatus pending={pending} status={status} />
       <ErrorLine error={error} />
     </span>
   );
@@ -332,7 +334,7 @@ export function AutoSaveCheckbox({
         <span className={labelHidden ? 'sr-only' : undefined}>{label}</span>
         <StatusSlot pending={pending} status={status} />
       </label>
-      <LiveStatus status={status} />
+      <LiveStatus pending={pending} status={status} />
       <ErrorLine error={error} />
     </span>
   );
@@ -463,7 +465,7 @@ export function AutoSaveTextInput({
         />
         <StatusSlot pending={pending} status={status} />
       </span>
-      <LiveStatus status={status} />
+      <LiveStatus pending={pending} status={status} />
       <ErrorLine error={error} />
     </span>
   );

@@ -417,6 +417,26 @@ describe('AutoSave announces success, not only failure (item L, ruling P8)', () 
     expect(liveRegion()?.textContent).toBe('Saved');
   });
 
+  it('blanks while a second save is in flight so the next "Saved" is re-announced', async () => {
+    // A live region whose text does not change is not announced again. A second save that
+    // lands inside the 2 s "Saved" tick must therefore pass through '' before saying "Saved".
+    let release: () => void = () => {};
+    let calls = 0;
+    const action = async () => {
+      calls += 1;
+      if (calls === 1) return {};
+      await new Promise<void>((resolve) => { release = resolve; });
+      return {};
+    };
+    render(<AutoSaveSelect name="x" defaultValue="a" options={[{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }, { value: 'c', label: 'C' }]} fields={{}} action={action} ariaLabel="Pick one" />);
+    fireEvent.change(screen.getByLabelText('Pick one'), { target: { value: 'b' } });
+    await waitFor(() => expect(liveRegion()?.textContent).toBe('Saved'));
+    fireEvent.change(screen.getByLabelText('Pick one'), { target: { value: 'c' } });
+    await waitFor(() => expect(liveRegion()?.textContent).toBe(''));
+    release();
+    await waitFor(() => expect(liveRegion()?.textContent).toBe('Saved'));
+  });
+
   it('says nothing on a refusal - role="alert" already carries the server\'s words', async () => {
     render(<AutoSaveSelect name="x" defaultValue="a" options={[{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }]} fields={{}} action={async () => ({ error: 'Nope.' })} ariaLabel="Pick one" />);
     fireEvent.change(screen.getByLabelText('Pick one'), { target: { value: 'b' } });
