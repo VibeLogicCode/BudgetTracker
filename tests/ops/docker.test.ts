@@ -245,9 +245,32 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.13.0 release', () => {
+  it('MUST-7.1: the 1.13.1 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.13.0');
+    expect(pkg.version).toBe('1.13.1');
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toMatch(/^## \[1\.13\.1\] - 2026-08-28$/m);
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.13.1]'));
+    const entry = changelog.slice(changelog.indexOf('## [1.13.1]'), changelog.indexOf('## [1.13.0]'));
+    expect(entry).toMatch(/### Fixed/);
+    expect(entry).toMatch(/### Security/);
+    expect(entry).toMatch(/### Changed/);
+    // A reader coming from 1.13.0 is expecting a schema warning. Saying there is none is the
+    // information; omitting the paragraph is not.
+    expect(entry).toMatch(/changes no tables at all/i);
+    // The headline claims, asserted as claims and not just as a version number.
+    expect(entry).toMatch(/Check now/);
+    expect(entry).toMatch(/Sign-in\s+column/);
+    expect(entry).toMatch(/next due date, or an\s+overdue count/i);
+    expect(entry).toMatch(/\+N more due/);
+    expect(entry).toMatch(/no ownership check at all/i);
+    expect(entry).toMatch(/skipped rather than sent household-wide/i);
+    expect(entry).toMatch(/no longer carry the household roster/i);
+  });
+
+  it('MUST-7.1: the 1.13.0 release is still recorded intact (append-only discipline)', () => {
+    const pkg = JSON.parse(read('package.json')) as { version: string };
+    expect(pkg.version).not.toBe('1.13.0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.13\.0\] - 2026-08-27$/m);
     expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.13.0]'));

@@ -21,6 +21,82 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.13.1] - 2026-08-28
+
+**Before updating:** this release changes no tables at all — it is the smallest kind of update
+this app has. You do not need a backup for the migration's sake because there is no migration;
+take one anyway if it is easy, because it is the only way back to 1.13.0.
+
+### Fixed
+
+- **Settings → Updates tells you what it found.** Pressing **Check now** used to grey the button
+  out, settle, and leave the card looking exactly as it did — you had to refresh the page to find
+  out whether an update existed. It now updates in place, and when you are already on the newest
+  version it says so instead of looking identical to a button that did nothing.
+- **An admin can turn a person's sign-in off and back on.** Settings → Users has a new Sign-in
+  column. Turning it off leaves the person in every attribution menu — their share of the spending
+  still counts — signs them out of every existing session, and takes away their login. An admin's
+  own sign-in cannot be turned off; make them a member first. A malformed request is refused
+  outright rather than silently treated as "turn it off."
+- **A bill shows its schedule on the Contracts & Coverage list.** A bill three weeks overdue used
+  to read "Ongoing" on the one page most people navigate to. It now shows the next due date, or an
+  overdue count, in the same column.
+- **A bill's detail page stops showing four blanks.** Vendor, Model, Serial number and Price are
+  fields a bill can never hold, and the card rendered an em-dash for each of them above the
+  installments. They are hidden now — unless the item actually has a value stored, in which case it
+  stays on screen rather than being quietly dropped.
+- **Two more tables hold their width before a long value breaks them.** The merchant-rules table
+  in Settings → Rules and the Warranties & bills list were one long pattern or item name away from
+  squeezing a button off the edge of the card. Both now reserve the space their columns need.
+- **The dashboard's Coming-up card has a limit.** A household several bills behind got a wall of
+  rows instead of a card, and an installment missed years ago counted exactly as much as one missed
+  last week. It now shows the eight nearest with a "+N more due" link, points you at the Warranties
+  & bills page instead of claiming nothing is due when everything unpaid is simply older than that,
+  and stops counting anything more than 90 days overdue.
+- **The Reports page's "Who spent it" card can actually show it has nothing to show.** The card's
+  empty state existed but could never appear, because the underlying figures always included a
+  zero placeholder row. It now recognises "every row is zero" as the same thing as "nothing to
+  split" and shows the empty state instead of a lone unattributed zero.
+- **Import refuses an account it cannot import into, at the preview, however the account id is
+  written.** Choosing an asset account — a house, a TFSA — used to preview happily and only fail
+  when you pressed commit; a stray "+" in front of the account id could also slip past the
+  preview's own refusal. Both now agree with each other and with the final check.
+- **An OFX or QFX file no longer shows a column-mapping editor.** Those files carry their own
+  columns, so every control in that panel was ignored, and the warning about an unreadable date
+  column was about dates that had parsed perfectly.
+
+### Security
+
+- **Re-flagging a transfer can no longer delete somebody else's rule.** Marking a transaction as a
+  transfer (or un-marking it) tidies up the opposite rule for that merchant. That tidy-up ran with
+  no ownership check at all, so a member could remove a rule an admin had set up. It now refuses
+  the whole action and changes nothing, the same way every other rule edit already does.
+- **A scheduled digest is skipped rather than sent household-wide.** If a person's account was
+  deleted in the same window their weekly or monthly digest fired, that one message was built with
+  a household-wide view — even for someone who is only supposed to see their own records. It is now
+  not sent at all.
+- **A child's Transactions, Dashboard and Goals pages no longer carry the household roster.** The
+  names of everyone in the household were being sent to the browser to fill in attribution menus
+  and an "Owner" picker that refused every choice but the child's own. Those controls, and the
+  names behind them, are gone for that account now.
+
+### Changed
+
+- **Screen readers are told when an auto-saving field saved, and that announcement no longer talks
+  over the control's own name.** A refused save was announced and a successful one was not, which
+  was the wrong way round; the fix for that briefly made a checkbox's accessible name run together
+  with the word "Saved" — the announcement now lives beside the control instead of inside its
+  label.
+- **Field hints stop being read as part of the field's name.** A hint under an input was being
+  read as though it were the label, so "Original amount" was announced as "Original amount What you
+  borrowed. Used for the payoff bar." every time.
+- **Row menus on Transactions name their row unambiguously.** Two identical charges on the same
+  statement produced two menu buttons a screen reader could not tell apart; the button now carries
+  the row's date and amount too.
+- **The Reports page stops describing things that are not on it.** For an account that only sees
+  its own records, the page's own explanation used to promise an Export CSV button, a per-person
+  split card, and a household net-worth figure that were correctly absent.
+
 ## [1.13.0] - 2026-08-27
 
 **Before updating:** this release adds columns to four tables and creates one new table

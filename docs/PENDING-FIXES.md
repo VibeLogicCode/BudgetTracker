@@ -457,14 +457,14 @@ measurement of the image.
 
 ## v1.10.0 leftovers (found by the onboarding work, deliberately not fixed mid-release)
 
-**A. `personSpendSplit` has an unreachable empty state (~10 min).** In
+**A. `personSpendSplit` has an unreachable empty state (~10 min) — SHIPPED in v1.13.1.** In
 `src/app/(app)/reports/reports-client.tsx` the "Nothing to split yet" `EmptyState` is gated on
 `split.length === 0`, but `personSpendSplit` unconditionally pushes an "unattributed" row even at
 zero, so the array is never empty. The empty state was given an action for consistency with the
 guard, but the branch looks dead. Either the push is wrong or the empty state should go — read
 `personSpendSplit` and decide which, rather than deleting the branch on the strength of this note.
 
-**B. Guard 2 matches href prefixes (~15 min, only if a singular route is ever added).**
+**B. Guard 2 matches href prefixes (~15 min, only if a singular route is ever added) — SHIPPED in v1.13.1.**
 `tests/ops/onboarding-coverage.test.ts` guard 2 asserts each `NAV` href appears in the help
 content as a substring. `/settings` currently matches six times because `/settings/accounts`,
 `/settings/backups` and friends contain it. Harmless today. It would silently accept a future
@@ -472,17 +472,25 @@ content as a substring. `/settings` currently matches six times because `/settin
 would pass while that route went undocumented, which is the one failure this guard exists to
 prevent. Fix by matching the href as a whole path segment rather than a bare substring.
 
-**C. Guard 3 searches every local module a page imports (~15 min).** For `/settings` that is four
+**C. Guard 3 searches every local module a page imports (~15 min) — CLOSED 2026-08-28 in v1.13.1.** For `/settings` that is four
 files, so a stray `<PageGuide` in a sibling panel would satisfy the route even if the page itself
 lost its own. Tightening it means naming which file counts, which is what ruling A7 forbids, so
 the broad version shipped and the failure message prints the searched set. Revisit only if a false
 pass actually happens.
 
-**D. Budgets and Settings guide panels use a derived-but-approximate `empty` (no action needed).**
+CLOSED 2026-08-28 in v1.13.1: its only available fix is what ruling A7 forbids, and no false pass
+has happened. See `docs/superpowers/specs/2026-08-28-v1-13-1-backlog-sweep-design.md` (ruling P1).
+
+**D. Budgets and Settings guide panels use a derived-but-approximate `empty` (no action needed) — CLOSED 2026-08-28 in v1.13.1.**
 Neither page has an `EmptyState` to borrow a condition from. Budgets uses
 `householdTotals.budgetedLimitCents === 0` — nobody has set a limit anywhere — which is the honest
 equivalent. Settings passes `empty={false}` because an index of links renders identically on a
 full and a virgin database. Recorded so a future reader does not mistake either for an oversight.
+
+CLOSED 2026-08-28 in v1.13.1: this is a note, not a defect — `PageGuide` lost its `empty` prop
+entirely in v1.12.0 (item N), so the condition this item describes no longer exists in the
+component's API at all. See `docs/superpowers/specs/2026-08-28-v1-13-1-backlog-sweep-design.md`
+(ruling P1).
 
 **E. `ocr-engine.test.ts` teardown could not delete its temp directory on Windows (FIXED in
 v1.10.0).** Found during the v1.10.0 release run and unrelated to it. A full-suite run reported
@@ -503,7 +511,7 @@ never the problem. The line number in the stack -- a teardown hook, not the test
 settled it. A named test in a vitest failure is not necessarily the code that threw.
 
 **F. `[vitest-worker]: Timeout calling "onTaskUpdate"` makes a fully passing local suite exit 1
-(~30 min, local only).** As of v1.10.0 the suite is 249 files / 3750 tests, and every local full
+(~30 min, local only) — CLOSED 2026-08-28 in v1.13.1.** As of v1.10.0 the suite is 249 files / 3750 tests, and every local full
 run reports all files passed, all tests passed, **and** one unhandled error, which sets exit 1. The
 stack is entirely inside `node_modules/vitest/dist/chunks/rpc.*.js` -- not one application frame.
 It is the worker missing its RPC deadline while reporting task updates, not a test result.
@@ -517,6 +525,12 @@ health.**
 If it becomes worth fixing: raise the worker RPC timeout, or reduce reporter chatter by pinning a
 `pool`/`maxWorkers` in `vitest.config.ts`. **Do not chase it as a product bug** -- and do not
 "resolve" it by ignoring exit codes locally, because that would also hide a real failure.
+
+CLOSED 2026-08-28 in v1.13.1: `pool: 'forks'` is already pinned (`vitest.config.ts:18`), and a
+worker RPC timeout raised to mask a OneDrive filter-driver stall cannot be verified from the
+machine that has the stall — the standing rule stays in force: read the pass/fail counts, not the
+exit code, and treat CI as the gate. See
+`docs/superpowers/specs/2026-08-28-v1-13-1-backlog-sweep-design.md` (ruling P1).
 
 ---
 
@@ -596,7 +610,7 @@ The defect is in the extractor, and no change of engine reaches it.
 
 ---
 
-## H. Settings -> Updates needs a page refresh to show the result (~1h, not started)
+## H. Settings -> Updates needs a page refresh to show the result (~1h) — SHIPPED in v1.13.1
 
 Reported 2026-08-24. Press **Check now** in Settings -> Updates: the button greys out, then
 settles, but whether an update is available only appears after refreshing the page.
@@ -647,7 +661,7 @@ looks identical is indistinguishable from a control that did nothing.
 
 ---
 
-## I. Tables that fit today only because the data happens to be short (~20 min each)
+## I. Tables that fit today only because the data happens to be short (~20 min each) — SHIPPED in v1.13.1
 
 From the v1.10.1 audit. Every table in the app was checked against the ~1086px content width.
 Four were broken and are fixed (transactions, budgets, settings→accounts, import history). Two
@@ -672,7 +686,7 @@ Also noted and deliberately left alone: `reports/reports-client.tsx`'s month-ove
 a column per month and will exceed any fixed width over a long range. It has no control to starve
 and scrolling a matrix sideways is the intended way to read one.
 
-## J. `Field` puts its hint inside the `<label>`, so hints become part of the accessible name (~30 min)
+## J. `Field` puts its hint inside the `<label>`, so hints become part of the accessible name (~30 min) — SHIPPED in v1.13.1
 
 Found while writing the v1.10.2 tests. `src/components/ui/form.tsx`'s `Field` renders as a `<label>`
 wrapper when no `htmlFor` is given, and the `hint` sits inside it — so the input's accessible name
@@ -687,7 +701,7 @@ Consequence to know about meanwhile: `getByLabelText('Original amount')` does no
 fields, and a test has to use a regex. That is a symptom, not the bug — do not "fix" it by loosening
 the tests.
 
-**K. A second load-sensitive OCR test (~30 min).** `tests/lib/warranty/ocr/onnx/engine.test.ts`
+**K. A second load-sensitive OCR test (~30 min) — SHIPPED in v1.13.1.** `tests/lib/warranty/ocr/onnx/engine.test.ts`
 > "runs no inference at all for a PDF" hit the 20s `testTimeout` in one full-suite run during the
 v1.10.3 release and passed 7/7 in isolation immediately after. Same family as item E, different
 file and a different mechanism: E was a Windows handle in teardown, this is a genuine wall-clock
@@ -703,7 +717,7 @@ each test.**
 
 ## v1.11.0 leftovers (found during the row-controls redesign fix wave, deliberately not fixed mid-release)
 
-**L. Auto-save success is silent to assistive tech (~20 min).** `StatusSlot` in
+**L. Auto-save success is silent to assistive tech (~20 min) — SHIPPED in v1.13.1.** `StatusSlot` in
 `src/components/ui/AutoSave.tsx` renders the pending spinner and the "saved" tick with
 `aria-hidden="true"`, on the reasoning that a purely visual tick beside a control someone is
 looking at needs no announcement. That reasoning only covers sight: a screen-reader user who
@@ -715,7 +729,7 @@ distinct from the hidden decorative icon) so "Saved" is announced without interr
 the user does next; keep it terse so it doesn't turn into chatter on a control someone edits
 repeatedly.
 
-**M. Kebab accessible names collide for identical transaction descriptions (~15 min).** Each row's
+**M. Kebab accessible names collide for identical transaction descriptions (~15 min) — SHIPPED in v1.13.1.** Each row's
 `RowMenuButton` on `/transactions` derives its accessible name from the row's description (see
 `transactions-client.tsx`'s per-row `RowMenu`), so two transactions with the same merchant text on
 the same statement — a common case, e.g. two identical coffee-shop charges — produce two "⋯" buttons
@@ -759,7 +773,7 @@ wrong day is worse than none.
 ## v1.12.0 leftovers (found during the final whole-branch review, deliberately not fixed mid-release)
 
 **P. The Coming-up card has no row cap and, with `includeOverdue`, no lower date bound (~20
-min).** `ComingUpCard` (`src/components/ComingUpCard.tsx`) renders every row `unpaidInstallments()`
+min) — SHIPPED in v1.13.1.** `ComingUpCard` (`src/components/ComingUpCard.tsx`) renders every row `unpaidInstallments()`
 returns for the window; unlike the notification evaluator, it has nothing resembling
 `MAX_NEW_ROWS_PER_USER_PER_EVALUATION` to stop at. A household that falls far behind on a bill —
 or several — gets a wall of rows instead of a card, and because `includeOverdue` carries no lower
@@ -770,7 +784,7 @@ other cards in this app already use for overflow) and give overdue rows a lower 
 own — most-overdue-first with a cutoff, not literally everything ever missed.
 
 **Q. The `/warranties` list row for a Bill shows "Ongoing" and nothing about its installments
-(in-spec; ~30 min).** `warranties-client.tsx`'s row rendering has no bill-specific case, so a
+(in-spec; ~30 min) — SHIPPED in v1.13.1.** `warranties-client.tsx`'s row rendering has no bill-specific case, so a
 Bill-kind item's row falls through to the same "Ongoing" status text a lifetime warranty gets —
 correct per the design spec, which scoped the schedule UI to the item's own detail page, but it
 means a bill that is three weeks overdue is silent on the one page most people actually navigate
@@ -778,7 +792,7 @@ to. Obvious v1.12.1 candidate: surface the earliest unpaid due date, or an overd
 row the same way the loan row already surfaces its balance.
 
 **R. The bill detail header card renders Vendor / Model / Serial / Price as "—" rows for a kind
-that cannot carry them (~15 min).** `warranty-detail-client.tsx`'s header card is shared across all
+that cannot carry them (~15 min) — SHIPPED in v1.13.1.** `warranty-detail-client.tsx`'s header card is shared across all
 five kinds and shows every product field regardless of whether the current kind's gates
 (`productFieldsAllowedForKind` et al. in `src/lib/warranty/constants.ts`) allow it to be set. For a
 Bill, none of those fields can ever hold a value, so the card is four guaranteed em-dashes above
@@ -1481,9 +1495,10 @@ help page's Bills section. Test: render with a type list lacking `bill` → hint
 
 ## v1.13.0 leftovers (found during the build review, deliberately not fixed mid-release)
 
-Status for all six below: OPEN — from v1.13.0 build review.
+Status for all nine below: SHIPPED in v1.13.1 — see
+docs/superpowers/specs/2026-08-28-v1-13-1-backlog-sweep-design.md.
 
-**BI. No `can_sign_in` toggle in the users UI.** `setUserCanSignIn` exists in the users library
+**BI. No `can_sign_in` toggle in the users UI — SHIPPED in v1.13.1.** `setUserCanSignIn` exists in the users library
 but has no server action and no control anywhere in `users-manager.tsx`, so an admin can create a
 no-login person at signup time (`createPersonWithoutLogin`) but cannot convert an existing member
 into one, or back, without editing the database directly. Evidence: `src/lib/auth/users.ts:265-269`
@@ -1491,7 +1506,7 @@ into one, or back, without editing the database directly. Evidence: `src/lib/aut
 `setActiveAction` and a control beside each row, refusing to flip the last signed-in admin the same
 way `setUserCanSignIn` already refuses to disable an admin's own sign-in. Effort: S.
 
-**BJ. `setTransferFlag`'s housekeeping rule delete is not ownership-gated.** Ruling R4 gates the
+**BJ. `setTransferFlag`'s housekeeping rule delete is not ownership-gated — SHIPPED in v1.13.1.** Ruling R4 gates the
 rule this action WRITES — `upsertRuleFromCorrection` checks `actorRole` and refuses to overwrite
 another user's rule — but the opposite-kind rule it then removes as housekeeping is deleted
 unconditionally. A member re-flagging one transaction can delete an admin-authored `not_transfer`
@@ -1506,7 +1521,7 @@ already refuse for the rule they write. An "optional owner check" that still del
 is not this fix; every sibling R4 writer's refusal leaves every row and every rule untouched, and
 this one must too. Effort: S.
 
-**BK. `viewerFor`'s null-fallback defaults to household scope.** Both
+**BK. `viewerFor`'s null-fallback defaults to household scope — SHIPPED in v1.13.1.** Both
 `src/lib/notify/evaluate/digest.ts:27-30` and `src/lib/notify/evaluate/monthly.ts:30-33` build a
 viewer from the recipient's own user row and, if that row is gone by the time the scheduled job
 runs (a deleted account mid-batch), fall back to `{ role: 'admin', visibility: 'household' }`
@@ -1517,7 +1532,7 @@ only their own. Evidence: the two `viewerFor` functions cited above, both docume
 rationale. Fix: skip sending (return 0) rather than falling back to a household-scoped viewer when
 the recipient's own row cannot be found — silence is safer here than an over-scoped send. Effort: S.
 
-**BL. `allTransactionsVisible` is an O(n) `getTransaction` call per bulk action.** Every bulk
+**BL. `allTransactionsVisible` is an O(n) `getTransaction` call per bulk action — SHIPPED in v1.13.1.** Every bulk
 transaction action on `/transactions` (categorize, transfer-flag, delete) calls
 `allTransactionsVisible`, which loops the selected ids and calls `getTransaction` once per id
 purely to check ownership before the bulk write proceeds — correct, but a full row fetch for a
@@ -1527,7 +1542,7 @@ Evidence: `src/app/(app)/transactions/actions.ts:50-53` (`allTransactionsVisible
 "owners for these ids" query fetching only the id/owner columns in one round trip, and have
 `allTransactionsVisible` use that instead of one full row fetch per id. Effort: S.
 
-**BM. PageGuide prose still promises Export CSV to a self viewer.** Ruling R2 (fix round 2)
+**BM. PageGuide prose still promises Export CSV to a self viewer — SHIPPED in v1.13.1.** Ruling R2 (fix round 2)
 correctly drops the Export CSV BUTTON for a self viewer (`showExport`,
 `reports-client.tsx:111-115`), but the PageGuide paragraph directly below it is unconditional
 prose: "Export CSV gives you the same rows in a spreadsheet" — so a child reading the guide is
@@ -1536,7 +1551,7 @@ told about a control that is not on the page for them. Evidence:
 Fix: gate that sentence on `showExport` the same way the header action already is, or rephrase it
 to not name a control that may be absent. Effort: S.
 
-**BN. `linked_elsewhere` untested at the action level; asset-skip in `accountForPayment` untested.**
+**BN. `linked_elsewhere` untested at the action level; asset-skip in `accountForPayment` untested — SHIPPED in v1.13.1.**
 `recordInstallmentPayment`'s `linked_elsewhere` refusal (when the transaction already paid a loan)
 and bill payment's asset-account skip are both exercised at the library level
 (`src/lib/warranty/installments.ts`), but neither has a test that goes through the actual server
@@ -1549,16 +1564,34 @@ it. Evidence: `src/app/(app)/bills/actions.ts:37-64,81`; `src/lib/warranty/insta
 asserting the action surfaces `linked_elsewhere` as a user-facing refusal, and one asserting an
 asset account is skipped when `accountForPayment` resolves the payment's account. Effort: S.
 
-**BO. /transactions still serializes the household people roster to a self viewer.**
-Status: OPEN — from the v1.13.0 final re-review. `src/app/(app)/transactions/page.tsx:90` passes `listAttributablePeople()` (ids + names) into the client for every viewer; for a `self` viewer the attribution selects are inert (every choice returns NOT_YOURS_ERROR) but the names still travel. Fix: `people = isSelfScoped(user) ? [] : …` and hide the bulk-attribute and per-row attribution selects for self viewers (the file's own rule at :383: not rendered rather than shown-but-ineffective). Effort: S.
+**BO. /transactions still serializes the household people roster to a self viewer — SHIPPED in v1.13.1.**
+Status: SHIPPED in v1.13.1 — see docs/superpowers/specs/2026-08-28-v1-13-1-backlog-sweep-design.md. `src/app/(app)/transactions/page.tsx:90` passes `listAttributablePeople()` (ids + names) into the client for every viewer; for a `self` viewer the attribution selects are inert (every choice returns NOT_YOURS_ERROR) but the names still travel. Fix: `people = isSelfScoped(user) ? [] : …` and hide the bulk-attribute and per-row attribution selects for self viewers (the file's own rule at :383: not rendered rather than shown-but-ineffective). Effort: S.
 
-**BP. OFX/QFX import still renders the CSV mapping editor.**
-Status: OPEN — from the v1.13.0 final re-review. `import-client.tsx:552-557` shows `MappingEditor` for an `.ofx`/`.qfx` file and `dateFormatDetection: {status:'none'}` trips its "Could not recognize this column's date format" banner; controls are inert (preview and commit ignore the mapping for OFX). Fix: hide the editor and banner when the preview reports an OFX source. Effort: S.
+**BP. OFX/QFX import still renders the CSV mapping editor — SHIPPED in v1.13.1.**
+Status: SHIPPED in v1.13.1 — see docs/superpowers/specs/2026-08-28-v1-13-1-backlog-sweep-design.md. `import-client.tsx:552-557` shows `MappingEditor` for an `.ofx`/`.qfx` file and `dateFormatDetection: {status:'none'}` trips its "Could not recognize this column's date format" banner; controls are inert (preview and commit ignore the mapping for OFX). Fix: hide the editor and banner when the preview reports an OFX source. Effort: S.
 
-**BQ. /api/import/preview does not refuse asset accounts.**
-Status: OPEN — from the v1.13.0 final re-review. Commit and SimpleFIN link refuse `asset` accounts (v1.13.0); preview still accepts one and only fails at commit. Read-only, harmless, asymmetric. Fix: same `acceptsTransactions` refusal in the preview route. Effort: S.
+**BQ. /api/import/preview does not refuse asset accounts — SHIPPED in v1.13.1.**
+Status: SHIPPED in v1.13.1 — see docs/superpowers/specs/2026-08-28-v1-13-1-backlog-sweep-design.md. Commit and SimpleFIN link refuse `asset` accounts (v1.13.0); preview now agrees, refusing at the preview and matching the coercion `bodySchema` uses so no spelling of the account id slips past. Fix: same `acceptsTransactions` refusal in the preview route, using `z.coerce.number().int().positive()` in the early multipart check too. Effort: S.
 
 ## v1.13.1 leftovers (found during the build review, deliberately not fixed mid-release)
+
+**BR. `/dashboard` and `/goals` no longer serialize the household roster to a self viewer —
+CLOSED 2026-08-28 in v1.13.1 (commit 21930b2).** Ruling P17 scoped this out of the v1.13.1 plan
+("BO names `/transactions` only... Out of scope. Recorded as new backlog item BR rather than
+fixed here"), but the same fix landed anyway in the release's own review pass. `dashboard/page.tsx`
+reached `listAttributablePeople()` for `QuickAddTransaction` without the self-scoped gate the rest
+of the file uses, so a self viewer's RSC payload carried the whole roster even though nothing
+rendered it; `goals/page.tsx`'s "Owner" dropdown listed every household member's name as a visible
+`<option>` for a self viewer even though `canActOnOwner` already refuses any owner but
+themselves/shared server-side. Both now match the fix item BO already shipped for `/transactions`.
+
+**BS. `Field`'s implicit-label branch still has no `aria-describedby`.**
+Status: OPEN — from the v1.13.1 planning pass (ruling P7). Item J moved the hint out of the
+`<label>`, so a hint is no longer part of the accessible name anywhere; but 17 call sites pass a
+`hint` with no `htmlFor`, and `src/components/ui/form.tsx` has no `'use client'` directive and is
+rendered from server components, so `useId()` is unavailable and no id can be generated for those.
+The fix is to give those 17 call sites an `htmlFor` and their inputs an `id`, at which point the
+existing `${htmlFor}-hint` wiring covers them. Effort: M, mechanical, spread across nine files.
 
 **BT. `stale.ts`'s `viewerFor` has the same null-fallback-to-household defect as BK, explicitly
 outside BK's scope.** `src/lib/notify/evaluate/stale.ts`'s `viewerFor` (~line 19) falls back to
