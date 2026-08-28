@@ -204,6 +204,46 @@ describe('POST /api/import/preview', () => {
     const tmp = path.join(tempDir, 'tmp');
     expect(fs.existsSync(tmp) ? fs.readdirSync(tmp) : []).toHaveLength(0);
   });
+
+  // v1.13.1 fix round (item 3): the early multipart asset-account check used /^\d+$/, while
+  // bodySchema uses z.coerce.number().int().positive() -- "+<id>" passes Number() coercion but
+  // fails /^\d+$/, so it slipped past the early refusal, got staged anyway, and was only caught
+  // by the canonical check afterwards. This asserts the early check now matches the coercion:
+  // 400, and nothing staged.
+  it('400s a "+<id>" asset accountId on the early multipart check too, staging nothing (item 3)', async () => {
+    const assetId = insertTestAccount(current!.db, { name: 'House', type: 'asset', ownerUserId: null });
+    const form = new FormData();
+    form.append('file', new File([fixture('td-chequing.csv')], 'td-chequing.csv', { type: 'text/csv' }));
+    form.append('accountId', `+${assetId}`);
+    form.append('profileId', String(profileId));
+    const response = await previewRoute(
+      new Request('http://nas.local:3000/api/import/preview', { method: 'POST', headers: headers(), body: form }),
+    );
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toBe('That account only holds a balance you type in.');
+    const tmp = path.join(tempDir, 'tmp');
+    expect(fs.existsSync(tmp) ? fs.readdirSync(tmp) : []).toHaveLength(0);
+  });
+
+  // v1.13.1 fix round (item 4): the JSON-body re-preview path (a saved stagingId + a changed
+  // accountId, no file re-upload) only ever hits the canonical check at ~89-91 -- there is no
+  // multipart form here for the early check to run against. Asserts that path independently.
+  it('400s a JSON-body re-preview naming an asset account, the same refusal (item 4)', async () => {
+    const assetId = insertTestAccount(current!.db, { name: 'House', type: 'asset', ownerUserId: null });
+    const previewResponse = await previewRoute(uploadRequest());
+    const preview = (await previewResponse.json()) as { stagingId: string };
+
+    const response = await previewRoute(
+      jsonRequest('http://nas.local:3000/api/import/preview', {
+        stagingId: preview.stagingId,
+        filename: 'td-chequing.csv',
+        accountId: assetId,
+        profileId,
+      }),
+    );
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toBe('That account only holds a balance you type in.');
+  });
 });
 
 describe('POST /api/import/commit and /api/import/undo', () => {

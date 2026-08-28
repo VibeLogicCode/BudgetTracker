@@ -62,7 +62,10 @@ export default async function DashboardPage({
   );
   const goals = listGoals({}, viewer);
   const reviewCount = reviewQueueCount();
-  const people = listAttributablePeople();
+  // v1.13.1 review A: a self viewer must never receive the household roster -- not shown, not
+  // sent. Every other use of `people` below is already behind `selfScoped ? undefined : (...)`
+  // except the QuickAddTransaction prop, which this gate now covers too.
+  const people = selfScoped ? [] : listAttributablePeople();
   // Nothing can be imported until at least one account exists, and a fresh
   // install has none. Say so here rather than letting the Import page
   // dead-end. Asset accounts don't accept transactions (ruling: asset accounts refuse

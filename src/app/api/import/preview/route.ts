@@ -60,9 +60,12 @@ export async function POST(request: Request): Promise<Response> {
     // enough to skip staging, for whatever account the form names. An account that does not
     // resolve at all falls through to staging and the ordinary 404 below, unchanged from
     // before this item.
-    const earlyAccountId = form.get('accountId');
-    const earlyAccount =
-      typeof earlyAccountId === 'string' && /^\d+$/.test(earlyAccountId) ? getAccount(Number(earlyAccountId)) : null;
+    // v1.13.1 fix round (item 3): this must accept exactly what bodySchema's
+    // z.coerce.number().int().positive() accepts below, or values like "+12" or "12.0" skip
+    // this early refusal, get staged anyway, and only get caught by the canonical check after
+    // the file is already on disk.
+    const earlyAccountIdParsed = z.coerce.number().int().positive().safeParse(form.get('accountId'));
+    const earlyAccount = earlyAccountIdParsed.success ? getAccount(earlyAccountIdParsed.data) : null;
     if (earlyAccount && !acceptsTransactions(earlyAccount.type)) {
       return Response.json({ error: 'That account only holds a balance you type in.' }, { status: 400 });
     }

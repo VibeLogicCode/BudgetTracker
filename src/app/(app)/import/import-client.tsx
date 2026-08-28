@@ -546,7 +546,14 @@ export function ImportClient({
                 {preview.skipped > 0 ? ` ${preview.skipped} skipped by profile rules,` : ''} encoding {preview.encoding}
               </StepTitle>
             }
-            description="Wrong columns? Fix the mapping and the preview re-reads the same file."
+            // v1.13.1 fix round (item 5): an OFX preview has no mapping editor at all -- see
+            // the ternary just below -- so telling that viewer to "fix the mapping" pointed at
+            // a control that was never there.
+            description={
+              preview.source === 'csv'
+                ? 'Wrong columns? Fix the mapping and the preview re-reads the same file.'
+                : 'Check the rows below and commit.'
+            }
           />
           <CardBody className="flex flex-col gap-4">
             {preview.source === 'csv' ? (

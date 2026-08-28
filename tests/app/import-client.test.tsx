@@ -918,4 +918,23 @@ describe('ImportClient — no CSV mapping editor for an OFX preview (item BP)', 
     });
     expect(getByText(/Could not recognize this column's date format/)).toBeTruthy();
   });
+
+  // v1.13.1 fix round (item 5): the Preview card's description told an OFX viewer to "fix the
+  // mapping", but an OFX preview has no mapping editor at all -- there is nothing to fix.
+  it('does not tell an OFX viewer to fix the mapping', async () => {
+    const { container } = await renderWithPreview({
+      source: 'ofx',
+      dateFormatDetection: { candidates: [], status: 'none', detected: null },
+      columnOptions: [],
+    });
+    expect(container.textContent).not.toContain('Fix the mapping');
+  });
+
+  it('still tells a CSV viewer to fix the mapping', async () => {
+    const { container } = await renderWithPreview({
+      source: 'csv',
+      dateFormatDetection: { candidates: [], status: 'none', detected: null },
+    });
+    expect(container.textContent).toContain('Fix the mapping');
+  });
 });

@@ -139,4 +139,17 @@ describe('DashboardPage (ruling R2)', () => {
       expect(Object.keys(person).sort()).toEqual(['id', 'name']);
     }
   });
+
+  // v1.13.1 review A: DashboardPage passed listAttributablePeople() into QuickAddTransaction
+  // without the selfScoped gate the rest of the file uses -- a self viewer's RSC payload
+  // carried the whole household roster even though nothing on the page renders it.
+  it('does not hand a self viewer the household roster via QuickAddTransaction', async () => {
+    const { childId } = await setup();
+    currentUser.value = { id: childId, name: 'Kid', username: 'kid', role: 'member', visibility: 'self' };
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+
+    const people = capturedQuickAddProps.people as Array<Record<string, unknown>>;
+    expect(people).toEqual([]);
+  });
 });
