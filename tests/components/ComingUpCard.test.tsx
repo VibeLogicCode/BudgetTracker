@@ -138,6 +138,9 @@ describe('ComingUpCard record-payment button', () => {
     hasBudgetedLimits: true,
     monthEndDate: '2026-09-30',
     today: TODAY,
+    // The three tests right below all supply their own canRecord; the nested "caps its rows"
+    // describe does not (it is not testing the record-payment button), so this default covers it.
+    canRecord: false,
   };
 
   function bill(over: Partial<UpcomingBill> & { dueDate: string; amountCents: number }): UpcomingBill {
