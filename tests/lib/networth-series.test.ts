@@ -3,8 +3,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it, expect, afterEach } from 'vitest';
 import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
+import type { Viewer } from '@/lib/auth/viewer';
 import { addDaysIso, monthEnd } from '@/lib/dates';
 import { netWorthHint, netWorthOverTime, recordBalanceSnapshot } from '@/lib/networth';
+
+/** A household admin sees every account -- every pre-v1.13.0 assertion in this file expects that. */
+const household: Viewer = { id: 1, role: 'admin', visibility: 'household' };
 
 /**
  * netWorthOverTime (spec 2026-08-22, v1.7.0, Task 7). Consumes the snapshot capture from
@@ -48,7 +52,7 @@ describe('netWorthOverTime: carry-forward', () => {
     const accountId = insertTestAccount(current.db);
     recordBalanceSnapshot({ accountId, date: '2026-01-15', balanceCents: 500_000, source: 'manual' });
 
-    const series = netWorthOverTime(3, { endMonth: '2026-03', today: '2026-03-18' });
+    const series = netWorthOverTime(3, { endMonth: '2026-03', today: '2026-03-18', viewer: household });
 
     expect(series.map((p) => p.month)).toEqual(['2026-01', '2026-02', '2026-03']);
     for (const point of series) {
@@ -67,7 +71,7 @@ describe('netWorthOverTime: accountsMissing', () => {
     recordBalanceSnapshot({ accountId: a, date: '2026-06-10', balanceCents: 100_000, source: 'manual' });
     recordBalanceSnapshot({ accountId: b, date: '2026-08-05', balanceCents: 200_000, source: 'manual' });
 
-    const series = netWorthOverTime(3, { endMonth: '2026-08', today: '2026-08-18' });
+    const series = netWorthOverTime(3, { endMonth: '2026-08', today: '2026-08-18', viewer: household });
     expect(series.map((p) => p.month)).toEqual(['2026-06', '2026-07', '2026-08']);
 
     expect(series.find((p) => p.month === '2026-06')!.accountsMissing).toBe(1);
@@ -95,7 +99,7 @@ describe('netWorthOverTime: accountsStale', () => {
     const accountId = insertTestAccount(current.db);
     recordBalanceSnapshot({ accountId, date: '2025-10-15', balanceCents: 500_000, source: 'manual' });
 
-    const series = netWorthOverTime(1, { endMonth: '2026-08', today: '2026-08-22' });
+    const series = netWorthOverTime(1, { endMonth: '2026-08', today: '2026-08-22', viewer: household });
 
     expect(series).toHaveLength(1);
     // This is the exact defect: accountsMissing is correctly 0 because a snapshot exists, but
@@ -112,7 +116,7 @@ describe('netWorthOverTime: accountsStale', () => {
     // 30 days before the August month end -- comfortably inside the 45-day slack.
     recordBalanceSnapshot({ accountId, date: addDaysIso(monthEnd('2026-08'), -30), balanceCents: 100_000, source: 'manual' });
 
-    const series = netWorthOverTime(1, { endMonth: '2026-08', today: '2026-08-22' });
+    const series = netWorthOverTime(1, { endMonth: '2026-08', today: '2026-08-22', viewer: household });
 
     expect(series[0].accountsMissing).toBe(0);
     expect(series[0].accountsStale).toBe(0);
@@ -124,7 +128,7 @@ describe('netWorthOverTime: accountsStale', () => {
     insertTestAccount(current.db, { name: 'Never snapshotted' });
     recordBalanceSnapshot({ accountId: withSnapshot, date: '2026-08-01', balanceCents: 100_000, source: 'manual' });
 
-    const series = netWorthOverTime(1, { endMonth: '2026-08', today: '2026-08-22' });
+    const series = netWorthOverTime(1, { endMonth: '2026-08', today: '2026-08-22', viewer: household });
 
     expect(series[0].accountsMissing).toBe(1);
     expect(series[0].accountsStale).toBe(0);
@@ -138,7 +142,7 @@ describe('netWorthOverTime: accountsStale', () => {
     recordBalanceSnapshot({ accountId: onBoundary, date: addDaysIso(end, -45), balanceCents: 10_000, source: 'manual' });
     recordBalanceSnapshot({ accountId: pastBoundary, date: addDaysIso(end, -46), balanceCents: 10_000, source: 'manual' });
 
-    const series = netWorthOverTime(1, { endMonth: '2026-08', today: '2026-08-22' });
+    const series = netWorthOverTime(1, { endMonth: '2026-08', today: '2026-08-22', viewer: household });
 
     expect(series[0].accountsMissing).toBe(0);
     expect(series[0].accountsStale).toBe(1); // only the 46-day-old account
@@ -149,7 +153,7 @@ describe('netWorthOverTime: accountsStale', () => {
     const accountId = insertTestAccount(current.db);
     recordBalanceSnapshot({ accountId, date: '2026-01-20', balanceCents: 100_000, source: 'manual' });
 
-    const series = netWorthOverTime(3, { endMonth: '2026-03', today: '2026-03-25' });
+    const series = netWorthOverTime(3, { endMonth: '2026-03', today: '2026-03-25', viewer: household });
 
     expect(series.map((p) => p.month)).toEqual(['2026-01', '2026-02', '2026-03']);
     expect(series.find((p) => p.month === '2026-01')!.accountsStale).toBe(0); // 11 days old
@@ -164,7 +168,7 @@ describe('netWorthOverTime: signed balances', () => {
     const accountId = insertTestAccount(current.db, { type: 'credit' });
     recordBalanceSnapshot({ accountId, date: '2026-08-01', balanceCents: -75_000, source: 'simplefin' });
 
-    const series = netWorthOverTime(1, { endMonth: '2026-08', today: '2026-08-18' });
+    const series = netWorthOverTime(1, { endMonth: '2026-08', today: '2026-08-18', viewer: household });
 
     expect(series).toHaveLength(1);
     expect(series[0].assetsCents).toBe(0);
@@ -184,7 +188,7 @@ describe('netWorthOverTime: loan inclusion', () => {
     recordBalanceSnapshot({ accountId, date: '2020-06-01', balanceCents: 0, source: 'manual' });
     seedLoan(current, userId, 450_000);
 
-    const series = netWorthOverTime(1, { endMonth: '2026-08', today: '2026-08-18' });
+    const series = netWorthOverTime(1, { endMonth: '2026-08', today: '2026-08-18', viewer: household });
 
     expect(series).toHaveLength(1);
     expect(series[0].assetsCents).toBe(0);
@@ -196,13 +200,13 @@ describe('netWorthOverTime: loan inclusion', () => {
 describe('netWorthOverTime: empty cases', () => {
   it('returns [] when there are no accounts at all', () => {
     current = createSeededTestDb();
-    expect(netWorthOverTime(3, { endMonth: '2026-08', today: '2026-08-18' })).toEqual([]);
+    expect(netWorthOverTime(3, { endMonth: '2026-08', today: '2026-08-18', viewer: household })).toEqual([]);
   });
 
   it('returns [] when an account exists but has never received a snapshot', () => {
     current = createSeededTestDb();
     insertTestAccount(current.db);
-    expect(netWorthOverTime(3, { endMonth: '2026-08', today: '2026-08-18' })).toEqual([]);
+    expect(netWorthOverTime(3, { endMonth: '2026-08', today: '2026-08-18', viewer: household })).toEqual([]);
   });
 });
 
@@ -212,7 +216,7 @@ describe('netWorthOverTime: leading months are omitted, never fabricated', () =>
     const accountId = insertTestAccount(current.db);
     recordBalanceSnapshot({ accountId, date: '2026-07-20', balanceCents: 100_000, source: 'manual' });
 
-    const series = netWorthOverTime(6, { endMonth: '2026-08', today: '2026-08-18' });
+    const series = netWorthOverTime(6, { endMonth: '2026-08', today: '2026-08-18', viewer: household });
 
     // The window is 2026-03..2026-08; only July (which contains the first snapshot) and
     // August survive -- March through June are never fabricated.
@@ -231,7 +235,7 @@ describe('netWorthOverTime: inactive accounts', () => {
     recordBalanceSnapshot({ accountId: inactive, date: '2020-01-01', balanceCents: 999_999_999, source: 'manual' });
     deactivateAccount(current, inactive);
 
-    const series = netWorthOverTime(1, { endMonth: '2026-08', today: '2026-08-18' });
+    const series = netWorthOverTime(1, { endMonth: '2026-08', today: '2026-08-18', viewer: household });
 
     expect(series).toHaveLength(1);
     expect(series[0].assetsCents).toBe(100_000);
@@ -250,7 +254,7 @@ describe('netWorthOverTime: exact arithmetic', () => {
     recordBalanceSnapshot({ accountId: credit, date: '2026-08-01', balanceCents: -125_000, source: 'simplefin' });
     seedLoan(current, userId, 300_000);
 
-    const series = netWorthOverTime(1, { endMonth: '2026-08', today: '2026-08-18' });
+    const series = netWorthOverTime(1, { endMonth: '2026-08', today: '2026-08-18', viewer: household });
 
     expect(series).toHaveLength(1);
     const point = series[0];
@@ -268,8 +272,8 @@ describe('netWorthOverTime: clock-free', () => {
     const accountId = insertTestAccount(current.db);
     recordBalanceSnapshot({ accountId, date: '2026-08-01', balanceCents: 42_000, source: 'manual' });
 
-    const first = netWorthOverTime(4, { endMonth: '2026-08', today: '2026-08-18' });
-    const second = netWorthOverTime(4, { endMonth: '2026-08', today: '2026-08-18' });
+    const first = netWorthOverTime(4, { endMonth: '2026-08', today: '2026-08-18', viewer: household });
+    const second = netWorthOverTime(4, { endMonth: '2026-08', today: '2026-08-18', viewer: household });
 
     expect(second).toEqual(first);
   });

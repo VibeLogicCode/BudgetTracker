@@ -12,6 +12,7 @@ import {
   listContributions,
   listGoals,
 } from '@/lib/goals';
+import type { Viewer } from '@/lib/auth/viewer';
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -20,6 +21,8 @@ afterEach(() => {
 });
 
 const TODAY = '2026-08-15';
+/** A household admin sees everything -- every pre-v1.13.0 assertion in this file expects that. */
+const household: Viewer = { id: 1, role: 'admin', visibility: 'household' };
 
 describe('computePace — the happy path', () => {
   it('divides the remainder over the whole months until the target date', () => {
@@ -168,7 +171,7 @@ describe('goal storage', () => {
     const shared = createGoal({ name: 'Emergency fund', ownerUserId: null, targetCents: 1000000, targetDate: null });
     const personal = createGoal({ name: 'New bike', ownerUserId: alice, targetCents: 150000, targetDate: '2026-12-01' });
 
-    const list = listGoals({ today: TODAY });
+    const list = listGoals({ today: TODAY }, household);
     expect(list.map((g) => g.id)).toEqual([shared, personal]);
     expect(list.find((g) => g.id === shared)).toMatchObject({ ownerUserId: null, ownerName: null });
     expect(list.find((g) => g.id === personal)).toMatchObject({ ownerUserId: alice, ownerName: 'Alice' });
@@ -180,12 +183,12 @@ describe('goal storage', () => {
     addContribution({ goalId, userId: alice, amountCents: 30000, date: '2026-07-05' });
     addContribution({ goalId, userId: bob, amountCents: 30000, date: '2026-08-05', note: 'bonus' });
 
-    const goal = getGoal(goalId, TODAY)!;
+    const goal = getGoal(goalId, household, TODAY)!;
     expect(goal.savedCents).toBe(60000);
     expect(goal.pace.remainingCents).toBe(40000);
     expect(goal.pace.requiredMonthlyCents).toBe(10000);
 
-    const contributions = listContributions(goalId);
+    const contributions = listContributions(goalId, household);
     expect(contributions).toHaveLength(2);
     expect(contributions[0]).toMatchObject({ userName: 'Bob', amountCents: 30000, note: 'bonus' });
     expect(contributions[1]).toMatchObject({ userName: 'Alice', note: null });
@@ -195,19 +198,19 @@ describe('goal storage', () => {
     const { alice } = setup();
     const goalId = createGoal({ name: 'Old goal', ownerUserId: alice, targetCents: 5000, targetDate: null });
     archiveGoal(goalId, true);
-    expect(listGoals({ today: TODAY })).toHaveLength(0);
-    expect(listGoals({ includeArchived: true, today: TODAY })).toHaveLength(1);
+    expect(listGoals({ today: TODAY }, household)).toHaveLength(0);
+    expect(listGoals({ includeArchived: true, today: TODAY }, household)).toHaveLength(1);
     archiveGoal(goalId, false);
-    expect(listGoals({ today: TODAY })).toHaveLength(1);
+    expect(listGoals({ today: TODAY }, household)).toHaveLength(1);
   });
 
   it('deletes a contribution and reduces savedCents', () => {
     const { alice } = setup();
     const goalId = createGoal({ name: 'Trip', ownerUserId: null, targetCents: 100000, targetDate: null });
     const contributionId = addContribution({ goalId, userId: alice, amountCents: 30000, date: '2026-08-05' });
-    expect(getGoal(goalId, TODAY)!.savedCents).toBe(30000);
+    expect(getGoal(goalId, household, TODAY)!.savedCents).toBe(30000);
     deleteContribution(contributionId);
-    expect(getGoal(goalId, TODAY)!.savedCents).toBe(0);
+    expect(getGoal(goalId, household, TODAY)!.savedCents).toBe(0);
   });
 
   it('validates its input with zod', () => {
@@ -221,6 +224,6 @@ describe('goal storage', () => {
 
   it('returns null for an unknown goal', () => {
     setup();
-    expect(getGoal(4242, TODAY)).toBeNull();
+    expect(getGoal(4242, household, TODAY)).toBeNull();
   });
 });

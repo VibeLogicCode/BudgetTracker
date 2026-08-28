@@ -1,10 +1,15 @@
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '@/db/client';
 import { accounts } from '@/db/schema';
+import { ownerScope, type Viewer } from '@/lib/auth/viewer';
 import { nowIso } from '@/lib/clock';
 
-export type AccountType = 'chequing' | 'credit' | 'cash';
+/**
+ * v1.13.0 ruling R10. Five values, up from three. This column has never carried a SQL CHECK
+ * (drizzle/0000_init.sql:59), so widening it took no migration -- micro-ruling M2.
+ */
+export type AccountType = 'chequing' | 'credit' | 'cash' | 'savings' | 'asset';
 
 export interface AccountRecord {
   id: number;
@@ -17,27 +22,59 @@ export interface AccountRecord {
   createdAt: string;
 }
 
+/**
+ * Ruling R10: an asset (a house, a TFSA, an RRSP) holds a balance a person types in once a quarter.
+ * It takes no transactions and no imports, so it is filtered out of every account picker that leads
+ * to a write. It is NOT filtered out of net worth -- being in net worth is the whole reason it
+ * exists.
+ */
+export function acceptsTransactions(type: AccountType): boolean {
+  return type !== 'asset';
+}
+
+/**
+ * Ruling R10: savings behaves like chequing for balances and transactions but is deliberately left
+ * out of safe-to-spend -- money set aside is not money available this month, and folding it in is
+ * how a safe-to-spend figure starts lying. Credit was never in it either.
+ */
+export function countsTowardSafeToSpend(type: AccountType): boolean {
+  return type === 'chequing' || type === 'cash';
+}
+
 export const createAccountSchema = z.object({
   name: z.string().trim().min(1, 'Account name is required').max(80),
   // Optional: a cash jar or a credit union nobody has a tidy name for still
   // deserves an account row. The column is NOT NULL, so it stores '' when the
   // family leaves it blank rather than refusing the whole account.
   institution: z.string().trim().max(80).default(''),
-  type: z.enum(['chequing', 'credit', 'cash']),
+  type: z.enum(['chequing', 'credit', 'cash', 'savings', 'asset']),
   ownerUserId: z.number().int().positive().nullable(),
   importProfileId: z.number().int().positive().nullable().optional(),
 });
 
 export const renameAccountSchema = z.string().trim().min(1, 'Account name is required').max(80);
 
-export function listAccounts(opts: { includeInactive?: boolean } = {}): AccountRecord[] {
+/**
+ * v1.13.0 ruling R2: `viewer` is REQUIRED. A self viewer sees only accounts they own -- including
+ * NOT the joint account, because an un-owned account is the household's shared money and R2 says a
+ * self user sees no account balances that are not theirs.
+ */
+export function listAccounts(opts: { includeInactive?: boolean }, viewer: Viewer): AccountRecord[] {
+  const scope = ownerScope(viewer);
+  const clauses: SQL[] = [];
+  if (!opts.includeInactive) clauses.push(eq(accounts.isActive, true));
+  if (scope !== null) clauses.push(eq(accounts.ownerUserId, scope));
   const query = getDb().select().from(accounts);
-  const rows = opts.includeInactive
-    ? query.orderBy(asc(accounts.id)).all()
-    : query.where(eq(accounts.isActive, true)).orderBy(asc(accounts.id)).all();
-  return rows;
+  return (clauses.length === 0 ? query : query.where(and(...clauses))).orderBy(asc(accounts.id)).all();
 }
 
+/**
+ * NO viewer parameter, on purpose (micro-ruling M3). This is an internal resolver, not a read model:
+ * createManualTransaction (src/lib/transactions.ts), commitImport (src/lib/import/commit.ts) and
+ * commitStagedImport (src/lib/import/flow.ts) all call it with an id they produced themselves and
+ * have no viewer to pass. No page or route resolves a user-supplied account id through it.
+ * tests/ops/visibility-invariants.test.ts names it on the exempt list with this reason.
+ */
 export function getAccount(id: number): AccountRecord | null {
   return getDb().select().from(accounts).where(eq(accounts.id, id)).get() ?? null;
 }

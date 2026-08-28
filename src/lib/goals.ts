@@ -1,7 +1,8 @@
-import { asc, desc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull, or, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '@/db/client';
 import { goalContributions, goals, users } from '@/db/schema';
+import { ownerScope, type Viewer } from '@/lib/auth/viewer';
 import { nowIso } from '@/lib/clock';
 import { addMonths, isIsoDate, monthOf, monthsBetween, todayIso, wholeMonthsUntil } from '@/lib/dates';
 
@@ -170,7 +171,12 @@ export function addContribution(input: {
   return row.id;
 }
 
-export function listContributions(goalId: number): ContributionRecord[] {
+/**
+ * Empty for a goal the viewer cannot see. Contributions carry a contributor name and an amount, so
+ * returning them for a goal the viewer is not allowed to open would leak exactly what R2 protects.
+ */
+export function listContributions(goalId: number, viewer: Viewer): ContributionRecord[] {
+  if (getGoal(goalId, viewer) === null) return [];
   return getDb()
     .select({
       id: goalContributions.id,
@@ -214,14 +220,29 @@ function attachProgress(record: GoalRecord, today: string): GoalWithProgress {
   return { ...record, savedCents: pace.savedCents, pace };
 }
 
-export function listGoals(opts: { includeArchived?: boolean; today?: string } = {}): GoalWithProgress[] {
+/**
+ * v1.13.0 ruling R2. A self viewer sees goals they own AND shared (null-owner) goals: a shared goal
+ * has no other person's name on it, and "the holiday we are all saving for" is exactly the kind of
+ * thing a child is part of. Their own goal and the family's, and nothing else.
+ */
+function visibleGoalCondition(viewer: Viewer): SQL | undefined {
+  const scope = ownerScope(viewer);
+  if (scope === null) return undefined;
+  return or(eq(goals.ownerUserId, scope), isNull(goals.ownerUserId));
+}
+
+export function listGoals(opts: { includeArchived?: boolean; today?: string }, viewer: Viewer): GoalWithProgress[] {
   const today = opts.today ?? todayIso();
-  const rows = baseGoals().orderBy(asc(goals.id)).all();
+  const where = visibleGoalCondition(viewer);
+  const query = baseGoals();
+  const rows = (where ? query.where(where) : query).orderBy(asc(goals.id)).all();
   return rows.filter((row) => opts.includeArchived || !row.archived).map((row) => attachProgress(row, today));
 }
 
-export function getGoal(goalId: number, today?: string): GoalWithProgress | null {
-  const row = baseGoals().where(eq(goals.id, goalId)).get();
+export function getGoal(goalId: number, viewer: Viewer, today?: string): GoalWithProgress | null {
+  const visible = visibleGoalCondition(viewer);
+  const where = visible ? and(eq(goals.id, goalId), visible) : eq(goals.id, goalId);
+  const row = baseGoals().where(where).get();
   if (!row) return null;
   return attachProgress(row, today ?? todayIso());
 }
@@ -234,7 +255,7 @@ export function deleteContribution(contributionId: number): void {
   getDb().delete(goalContributions).where(eq(goalContributions.id, contributionId)).run();
 }
 
-/** Exported for the dashboard's goal cards: total saved across active goals. */
-export function totalSavedAcrossGoals(today?: string): number {
-  return listGoals({ today }).reduce((sum, goal) => sum + goal.savedCents, 0);
+/** Exported for the dashboard's goal cards: total saved across the goals this viewer can see. */
+export function totalSavedAcrossGoals(viewer: Viewer, today?: string): number {
+  return listGoals({ today }, viewer).reduce((sum, goal) => sum + goal.savedCents, 0);
 }

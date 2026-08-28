@@ -3,6 +3,7 @@ import { getDb } from '@/db/client';
 import { accountBalanceSnapshots } from '@/db/schema';
 import { getAccount, listAccounts } from '@/lib/accounts';
 import { balancesAsOf } from '@/lib/balance';
+import type { Viewer } from '@/lib/auth/viewer';
 import { nowIso } from '@/lib/clock';
 import { addMonths, daysBetweenIso, isIsoDate, monthEnd, monthOf, monthRange, todayIso } from '@/lib/dates';
 import { debtOverTime } from '@/lib/loans';
@@ -289,13 +290,13 @@ export { STALE_SNAPSHOT_DAYS };
  * than years of daily granularity) O(months) query pairs is not a real cost. debtOverTime is
  * the one other query this function makes, and only once, not per month.
  */
-export function netWorthOverTime(months: number, opts: { endMonth?: string; today?: string } = {}): NetWorthPoint[] {
+export function netWorthOverTime(months: number, opts: { endMonth?: string; today?: string; viewer: Viewer }): NetWorthPoint[] {
   const today = opts.today ?? todayIso();
   const endMonth = opts.endMonth ?? monthOf(today);
   const keys = monthRange(addMonths(endMonth, -(months - 1)), endMonth);
   const windowEndDate = monthEnd(endMonth);
 
-  const activeAccountIds = listAccounts().map((account) => account.id);
+  const activeAccountIds = listAccounts({}, opts.viewer).map((account) => account.id);
   if (activeAccountIds.length === 0) return [];
 
   // Only bound to decide whether ANY active account has a snapshot at all inside the window --

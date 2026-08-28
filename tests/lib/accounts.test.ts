@@ -10,12 +10,16 @@ import {
   setAccountActive,
   setAccountOwner,
 } from '@/lib/accounts';
+import type { Viewer } from '@/lib/auth/viewer';
 
 let current: TestDb | null = null;
 afterEach(() => {
   current?.cleanup();
   current = null;
 });
+
+/** A household admin sees everything -- every pre-v1.13.0 assertion in this file expects that. */
+const household: Viewer = { id: 1, role: 'admin', visibility: 'household' };
 
 describe('accounts', () => {
   it('creates and lists accounts, hiding inactive ones by default', () => {
@@ -24,17 +28,20 @@ describe('accounts', () => {
     const joint = createAccount({ name: 'Joint Chequing', institution: 'TD Canada Trust', type: 'chequing', ownerUserId: null });
     const personal = createAccount({ name: 'Alice Visa', institution: 'TD Canada Trust', type: 'credit', ownerUserId: alice });
 
-    expect(listAccounts().map((a) => a.id)).toEqual([joint, personal]);
+    expect(listAccounts({}, household).map((a) => a.id)).toEqual([joint, personal]);
     expect(getAccount(joint)).toMatchObject({ name: 'Joint Chequing', ownerUserId: null, isActive: true });
     setAccountActive(personal, false);
-    expect(listAccounts().map((a) => a.id)).toEqual([joint]);
-    expect(listAccounts({ includeInactive: true })).toHaveLength(2);
+    expect(listAccounts({}, household).map((a) => a.id)).toEqual([joint]);
+    expect(listAccounts({ includeInactive: true }, household)).toHaveLength(2);
   });
 
   it('validates input', () => {
     expect(createAccountSchema.safeParse({ name: '', institution: 'TD', type: 'chequing', ownerUserId: null }).success).toBe(false);
-    expect(createAccountSchema.safeParse({ name: 'X', institution: 'TD', type: 'savings', ownerUserId: null }).success).toBe(false);
+    expect(createAccountSchema.safeParse({ name: 'X', institution: 'TD', type: 'bogus', ownerUserId: null }).success).toBe(false);
     expect(createAccountSchema.safeParse({ name: 'X', institution: 'TD', type: 'cash', ownerUserId: null }).success).toBe(true);
+    // v1.13.0 ruling R10: two more types, both valid now.
+    expect(createAccountSchema.safeParse({ name: 'X', institution: 'TD', type: 'savings', ownerUserId: null }).success).toBe(true);
+    expect(createAccountSchema.safeParse({ name: 'X', institution: 'TD', type: 'asset', ownerUserId: null }).success).toBe(true);
   });
 
   it('treats institution as optional — a cash jar has no bank', () => {
@@ -70,6 +77,6 @@ describe('accounts', () => {
     const second = getOrCreateCashAccount(alice, 'Alice');
     expect(second).toBe(first);
     expect(getAccount(first)).toMatchObject({ name: 'Alice Cash', type: 'cash', ownerUserId: alice });
-    expect(listAccounts()).toHaveLength(1);
+    expect(listAccounts({}, household)).toHaveLength(1);
   });
 });

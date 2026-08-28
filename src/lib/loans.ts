@@ -1,6 +1,7 @@
 import { and, asc, eq, gte, inArray, isNull, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { billInstallments, loanMatcherRules, loanPayments, transactions, users, warrantyItemTypes, warrantyItems } from '@/db/schema';
+import { ownerScope, type Viewer } from '@/lib/auth/viewer';
 import { nowIso } from '@/lib/clock';
 import { addDaysIso, addMonths, addMonthsClamped, daysBetweenIso, monthEnd, monthOf, monthRange, todayIso } from '@/lib/dates';
 import type { RateVerdict } from '@/lib/notify/ratelimit';
@@ -966,7 +967,16 @@ export interface LoanSummary {
   payoffProjection?: PayoffProjection | null;
 }
 
-export function listLoans(today: string = todayIso()): LoanSummary[] {
+/**
+ * v1.13.0 ruling R2: `viewer` is REQUIRED. A loan's balance and interest rate are the most private
+ * numbers in the app, and until now every member could read every one of them.
+ *
+ * Nothing else in this file takes a viewer. applyPaymentMatchers, link(), markEarliestUnpaid and the
+ * reversal helpers are background machinery run by an import or a scheduler, not by a person looking
+ * at a screen -- there is no viewer to pass and no screen to protect.
+ */
+export function listLoans(today: string, viewer: Viewer): LoanSummary[] {
+  const scope = ownerScope(viewer);
   const rows = getDb()
     .select({
       itemId: warrantyItems.id,
@@ -990,7 +1000,11 @@ export function listLoans(today: string = todayIso()): LoanSummary[] {
     .from(warrantyItems)
     .innerJoin(warrantyItemTypes, eq(warrantyItemTypes.id, warrantyItems.typeId))
     .innerJoin(users, eq(users.id, warrantyItems.ownerUserId))
-    .where(eq(warrantyItemTypes.kind, 'loan'))
+    .where(
+      scope === null
+        ? eq(warrantyItemTypes.kind, 'loan')
+        : and(eq(warrantyItemTypes.kind, 'loan'), eq(warrantyItems.ownerUserId, scope)),
+    )
     .orderBy(asc(warrantyItems.name), asc(warrantyItems.id))
     .all();
 
@@ -1009,8 +1023,16 @@ export function listLoans(today: string = todayIso()): LoanSummary[] {
   }));
 }
 
+/**
+ * Whole-household total, same reasoning as netWorthOverTime and safeToSpend: a loan total has no
+ * per-person attribution to restrict (dashboard/page.tsx's own comment on the `listLoans` call it
+ * makes directly says the same thing). Not in this task's exported-viewer interface list, so this
+ * stays viewer-free; the placeholder viewer below is 'household' visibility, which ownerScope
+ * (src/lib/auth/viewer.ts) resolves to null -- no restriction -- without ever reading its id.
+ */
 export function loansTotalOwedCents(): number {
-  return listLoans().reduce((sum, loan) => sum + (loan.currentBalanceCents ?? 0), 0);
+  const householdWide: Viewer = { id: 0, role: 'admin', visibility: 'household' };
+  return listLoans(todayIso(), householdWide).reduce((sum, loan) => sum + (loan.currentBalanceCents ?? 0), 0);
 }
 
 // ---------------------------------------------------------------- read model (debt over time)
