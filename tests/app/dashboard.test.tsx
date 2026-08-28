@@ -44,6 +44,23 @@ vi.mock('@/lib/auth/session', () => ({
   requireUser: async () => currentUser.value,
 }));
 
+// v1.13.0 whole-branch review, item I2. DashboardPage used to pass `people` (straight off
+// listAttributablePeople(), a full UserRecord -- id, name, username, role, totpEnabled,
+// isActive, mustChangePassword, createdAt, visibility, canSignIn, lastAccountId) into
+// QuickAddTransaction, whose own declared prop type is just `{ id, name }[]`. Structural typing
+// let every extra field ride along into the RSC payload anyway. QuickAddTransaction is stubbed
+// here to capture exactly the `people` value DashboardPage handed it, so the test below can
+// assert on the ACTUAL serialized shape rather than on whether the extra fields happen to be
+// rendered anywhere in the DOM (they never were, even before the fix -- the leak is in the
+// payload, not the render).
+const capturedQuickAddProps = vi.hoisted(() => ({ people: null as unknown }));
+vi.mock('@/components/QuickAddTransaction', () => ({
+  QuickAddTransaction: (props: { people: unknown }) => {
+    capturedQuickAddProps.people = props.people;
+    return null;
+  },
+}));
+
 afterEach(cleanup);
 
 describe('DashboardPage (ruling R2)', () => {
@@ -69,6 +86,7 @@ describe('DashboardPage (ruling R2)', () => {
       categoryId: null,
       attributedUserId: adult.id,
       userId: adult.id,
+      actorRole: 'admin',
     });
     createManualTransaction({
       accountId,
@@ -78,6 +96,7 @@ describe('DashboardPage (ruling R2)', () => {
       categoryId: null,
       attributedUserId: child.id,
       userId: adult.id,
+      actorRole: 'admin',
     });
     return { adultId: adult.id, childId: child.id };
   }
@@ -105,5 +124,19 @@ describe('DashboardPage (ruling R2)', () => {
     expect(screen.getByText('Net worth')).toBeTruthy();
     expect(screen.getByText('Top merchants')).toBeTruthy();
     expect(screen.getByRole('navigation', { name: 'Whose money to show' })).toBeTruthy();
+  });
+
+  // v1.13.0 whole-branch review, item I2.
+  it("passes QuickAddTransaction only { id, name } per person -- no username, no totpEnabled, no other UserRecord field", async () => {
+    const { adultId } = await setup();
+    currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+
+    const people = capturedQuickAddProps.people as Array<Record<string, unknown>>;
+    expect(people.length).toBeGreaterThan(0);
+    for (const person of people) {
+      expect(Object.keys(person).sort()).toEqual(['id', 'name']);
+    }
   });
 });

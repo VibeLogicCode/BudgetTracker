@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation';
 import { requireUser } from '@/lib/auth/session';
+import { isSelfScoped } from '@/lib/auth/viewer';
 import { mustChangePassword } from '@/lib/auth/users';
 import { reviewQueueCount } from '@/lib/categorize/engine';
 import { APP_VERSION } from '@/lib/version';
@@ -20,7 +21,12 @@ export const dynamic = 'force-dynamic';
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await requireUser();
   if (mustChangePassword(user.id)) redirect('/change-password');
-  const reviewCount = reviewQueueCount();
+  // v1.13.0 ruling R2 (item I1): reviewQueueCount() is a household-wide figure with no owner
+  // scoping of its own (src/lib/categorize/engine.ts) -- computing it unconditionally serialized
+  // a household total into AppShell's props even for a self viewer, whose nav never renders the
+  // review badge at all. Same "no household figure leaves this file, even unrendered" reasoning
+  // already applied to budgets/page.tsx and reports/page.tsx.
+  const reviewCount = isSelfScoped(user) ? 0 : reviewQueueCount();
   return (
     <AppShell
       user={{ id: user.id, name: user.name, role: user.role, visibility: user.visibility }}

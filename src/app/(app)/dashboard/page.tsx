@@ -177,7 +177,13 @@ export default async function DashboardPage({
         variant="card"
         accounts={accounts}
         categories={categories}
-        people={people}
+        // v1.13.0 (item I2): `people` above is listAttributablePeople()'s full UserRecord —
+        // username, totpEnabled and every other private field included. QuickAddTransaction's
+        // own prop type is structurally just `{ id, name }[]`, so TypeScript let the extra
+        // fields ride along into the RSC payload unnoticed. Trimmed to exactly what the client
+        // component declares, the same way transactions/page.tsx already does for its own
+        // `people` prop.
+        people={people.map((p) => ({ id: p.id, name: p.name }))}
         today={today}
         defaultAccountId={lastAccountId}
       />
