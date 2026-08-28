@@ -1,12 +1,38 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
-import { latestSnapshots, recordBalanceSnapshot } from '@/lib/networth';
+import { deleteCsvSnapshotsForAccountDates, latestSnapshots, recordBalanceSnapshot } from '@/lib/networth';
 
 let current: TestDb | null = null;
 afterEach(() => {
   current?.cleanup();
   current = null;
 });
+
+/** Fresh seeded db plus one account -- the fixture v1.12.1's own describe blocks below reuse. */
+function setup(): { accountId: number } {
+  current = createSeededTestDb();
+  const accountId = insertTestAccount(current.db);
+  return { accountId };
+}
+
+/** Same, but two accounts, for tests asserting one account's delete leaves the other alone. */
+function setupTwoAccounts(): { accountId: number; otherAccountId: number } {
+  current = createSeededTestDb();
+  const accountId = insertTestAccount(current.db, { name: 'Account A' });
+  const otherAccountId = insertTestAccount(current.db, { name: 'Account B' });
+  return { accountId, otherAccountId };
+}
+
+/**
+ * Reads one account_balance_snapshots row back by (account_id, date). Typed as always-present --
+ * every call site in this file reads a date it just wrote -- unlike commit.test.ts's own
+ * snapshotAt, which also asserts absence after undo and stays optional for that reason.
+ */
+function snapshotAt(accountId: number, date: string): { balanceCents: number; source: string } {
+  return current!.sqlite
+    .prepare('select balance_cents as balanceCents, source from account_balance_snapshots where account_id = ? and date = ?')
+    .get(accountId, date) as { balanceCents: number; source: string };
+}
 
 describe('recordBalanceSnapshot (spec 2026-08-22 v1.7.0 Task 6)', () => {
   it('inserts the first snapshot for an account and date', () => {
@@ -25,13 +51,17 @@ describe('recordBalanceSnapshot (spec 2026-08-22 v1.7.0 Task 6)', () => {
     current = createSeededTestDb();
     const accountId = insertTestAccount(current.db);
 
-    recordBalanceSnapshot({ accountId, date: '2026-08-15', balanceCents: 100000, source: 'simplefin' });
-    recordBalanceSnapshot({ accountId, date: '2026-08-15', balanceCents: 150000, source: 'manual' });
+    // v1.12.1 (item BB / MON-4): 'manual' then 'simplefin', not the reverse -- source authority
+    // is now enforced (see the describe block below this one), and a downgrade write would no
+    // longer replace the row this test is checking for. An upgrade still does, which is all this
+    // test is about: one row survives, not two.
+    recordBalanceSnapshot({ accountId, date: '2026-08-15', balanceCents: 100000, source: 'manual' });
+    recordBalanceSnapshot({ accountId, date: '2026-08-15', balanceCents: 150000, source: 'simplefin' });
 
     const rows = current.sqlite
       .prepare('select balance_cents, source from account_balance_snapshots where account_id = ?')
       .all(accountId) as { balance_cents: number; source: string }[];
-    expect(rows).toEqual([{ balance_cents: 150000, source: 'manual' }]);
+    expect(rows).toEqual([{ balance_cents: 150000, source: 'simplefin' }]);
   });
 
   it('a write for a different date on the same account adds a second row (history is kept across days)', () => {
@@ -162,5 +192,63 @@ describe('latestSnapshots (spec 2026-08-22 v1.7.0 Task 6)', () => {
       recordBalanceSnapshot({ accountId, date, balanceCents: 1000, source: 'simplefin' });
     }
     expect(latestSnapshots('2026-08-31')).toHaveLength(1);
+  });
+});
+
+describe('v1.12.1: source authority is implemented, not just documented (item BB / MON-4)', () => {
+  it('a hand-typed correction does not overwrite the bank statement figure', () => {
+    const { accountId } = setup();
+    recordBalanceSnapshot({ accountId, date: '2026-08-20', balanceCents: 341218, source: 'csv' });
+    recordBalanceSnapshot({ accountId, date: '2026-08-20', balanceCents: 310244, source: 'manual' });
+
+    const row = snapshotAt(accountId, '2026-08-20');
+    expect(row.balanceCents).toBe(341218);
+    expect(row.source).toBe('csv');
+  });
+
+  it('a statement figure does overwrite a hand-typed one', () => {
+    const { accountId } = setup();
+    recordBalanceSnapshot({ accountId, date: '2026-08-20', balanceCents: 310244, source: 'manual' });
+    recordBalanceSnapshot({ accountId, date: '2026-08-20', balanceCents: 341218, source: 'csv' });
+
+    expect(snapshotAt(accountId, '2026-08-20').balanceCents).toBe(341218);
+  });
+
+  it('simplefin outranks csv, and equal rank is still last-write', () => {
+    const { accountId } = setup();
+    recordBalanceSnapshot({ accountId, date: '2026-08-20', balanceCents: 100, source: 'csv' });
+    recordBalanceSnapshot({ accountId, date: '2026-08-20', balanceCents: 200, source: 'simplefin' });
+    expect(snapshotAt(accountId, '2026-08-20').balanceCents).toBe(200);
+
+    // Equal rank must stay last-write, or re-importing a corrected statement could never fix a day.
+    recordBalanceSnapshot({ accountId, date: '2026-08-20', balanceCents: 300, source: 'simplefin' });
+    expect(snapshotAt(accountId, '2026-08-20').balanceCents).toBe(300);
+  });
+
+  it('a first write of any source still inserts', () => {
+    const { accountId } = setup();
+    recordBalanceSnapshot({ accountId, date: '2026-08-21', balanceCents: 500, source: 'manual' });
+    expect(snapshotAt(accountId, '2026-08-21').balanceCents).toBe(500);
+  });
+});
+
+describe('v1.12.1: csv snapshots can be deleted (item AE / MON-5)', () => {
+  it('deletes only csv rows, only on the named account and dates', () => {
+    const { accountId, otherAccountId } = setupTwoAccounts();
+    recordBalanceSnapshot({ accountId, date: '2026-08-30', balanceCents: 1, source: 'csv' });
+    recordBalanceSnapshot({ accountId, date: '2026-08-31', balanceCents: 2, source: 'csv' });
+    recordBalanceSnapshot({ accountId, date: '2026-09-01', balanceCents: 3, source: 'manual' });
+    recordBalanceSnapshot({ accountId: otherAccountId, date: '2026-08-31', balanceCents: 4, source: 'csv' });
+
+    const deleted = deleteCsvSnapshotsForAccountDates(accountId, ['2026-08-30', '2026-08-31', '2026-09-01']);
+
+    expect(deleted).toBe(2);
+    expect(snapshotAt(accountId, '2026-09-01').balanceCents).toBe(3);
+    expect(snapshotAt(otherAccountId, '2026-08-31').balanceCents).toBe(4);
+  });
+
+  it('an empty date list deletes nothing and runs no query', () => {
+    const { accountId } = setup();
+    expect(deleteCsvSnapshotsForAccountDates(accountId, [])).toBe(0);
   });
 });

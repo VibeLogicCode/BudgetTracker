@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../helpers/db';
 import { upsertAccountCardPerson } from '@/lib/import/card-people';
-import { commitImport, listImportHistory } from '@/lib/import/commit';
+import { commitImport, listImportHistory, undoImport } from '@/lib/import/commit';
 import { computeRowHashes, DEDUP_HASH_VERSION } from '@/lib/import/dedup';
 import { parseCsv } from '@/lib/import/parse';
 import { getBuiltinPreset } from '@/lib/import/presets';
@@ -517,5 +517,84 @@ describe('commitImport — csv balance snapshots (Task 3, spec 2026-08-23 v1.8.0
     commitImport({ accountId, profileId: null, filename: 'td.csv', importedBy: userId, rows: hashed, errors: parsed.errors, dateOrder: parsed.dateOrder });
 
     expect(snapshotsFor(otherAccountId)).toEqual([]);
+  });
+});
+
+describe('v1.12.1: undo removes the balance snapshots that import wrote (item AE / MON-5)', () => {
+  /**
+   * One row (2026-03-02, balance 243122) so `statementDate` names an unambiguous single date --
+   * the same slice-to-one-row shape as the "records the snapshot for a date whose transactions
+   * were all duplicates" test above, reused here as a fixture rather than re-derived per test.
+   */
+  function commitOneImportWithBalances() {
+    current = createSeededTestDb();
+    const userId = insertTestUser(current.db);
+    const accountId = insertTestAccount(current.db);
+    const parsed = parseCsv(fixture('td-chequing.csv'), getBuiltinPreset('TD Chequing/Debit'));
+    const hashed = computeRowHashes(accountId, parsed.rows);
+    const firstRowOnly = hashed.slice(0, 1); // 2026-03-02 only
+    const result = commitImport({
+      accountId,
+      profileId: null,
+      filename: 'td.csv',
+      importedBy: userId,
+      rows: firstRowOnly,
+      errors: [],
+      dateOrder: 'oldest_first',
+    });
+    return { accountId, importId: result.importId, statementDate: '2026-03-02' };
+  }
+
+  /** Same fixture, but with balanceCol stripped from the mapping -- no csv snapshot is ever written. */
+  function commitOneImportWithoutBalances() {
+    current = createSeededTestDb();
+    const userId = insertTestUser(current.db);
+    const accountId = insertTestAccount(current.db);
+    const mapping = { ...getBuiltinPreset('TD Chequing/Debit'), balanceCol: null };
+    const parsed = parseCsv(fixture('td-chequing.csv'), mapping);
+    const hashed = computeRowHashes(accountId, parsed.rows);
+    const result = commitImport({
+      accountId,
+      profileId: null,
+      filename: 'td.csv',
+      importedBy: userId,
+      rows: hashed,
+      errors: parsed.errors,
+      dateOrder: parsed.dateOrder,
+    });
+    return { accountId, importId: result.importId };
+  }
+
+  function snapshotAt(accountId: number, date: string): { balanceCents: number; source: string } | undefined {
+    return current!.sqlite
+      .prepare('select balance_cents as balanceCents, source from account_balance_snapshots where account_id = ? and date = ?')
+      .get(accountId, date) as { balanceCents: number; source: string } | undefined;
+  }
+
+  it('deletes the csv snapshot and reports the count', () => {
+    const { accountId, importId, statementDate } = commitOneImportWithBalances();
+    expect(snapshotAt(accountId, statementDate)).toBeDefined();
+
+    const result = undoImport(importId);
+
+    expect(result.snapshotsDeleted).toBe(1);
+    expect(snapshotAt(accountId, statementDate)).toBeUndefined();
+  });
+
+  it('leaves a hand-typed snapshot on the same day alone', () => {
+    const { accountId, importId, statementDate } = commitOneImportWithBalances();
+    // An admin corrected a DIFFERENT account's day by hand; and on this account, a manual row on a
+    // day the import did not touch.
+    recordBalanceSnapshot({ accountId, date: '2020-01-01', balanceCents: 999, source: 'manual' });
+
+    undoImport(importId);
+
+    expect(snapshotAt(accountId, '2020-01-01')?.balanceCents).toBe(999);
+    expect(snapshotAt(accountId, statementDate)).toBeUndefined();
+  });
+
+  it('reports zero when the import wrote no balances at all', () => {
+    const { importId } = commitOneImportWithoutBalances();
+    expect(undoImport(importId).snapshotsDeleted).toBe(0);
   });
 });

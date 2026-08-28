@@ -3,7 +3,7 @@ import { getDb } from '@/db/client';
 import { accounts, imports, transactionImports, transactions, users } from '@/db/schema';
 import { nowIso } from '@/lib/clock';
 import { reverseInstallmentLinksForTransactions, reverseLoanLinksForTransactions } from '@/lib/loans';
-import { recordBalanceSnapshot } from '@/lib/networth';
+import { deleteCsvSnapshotsForAccountDates, recordBalanceSnapshot } from '@/lib/networth';
 import { listAccountCardPeople } from './card-people';
 import { findExistingByHashes, type HashedRow } from './dedup';
 import { getImportHooks } from './hooks';
@@ -385,6 +385,12 @@ export interface UndoResult {
   deleted: number;
   kept: number;
   loanLinksReversed: number;
+  /**
+   * v1.12.1 (item AE / MON-5): how many source='csv' balance snapshots this undo removed. Reported
+   * rather than silent for the same reason loanLinksReversed is -- an undo that quietly reaches
+   * into a second table should say so.
+   */
+  snapshotsDeleted: number;
 }
 
 export function undoImport(importId: number): UndoResult {
@@ -394,6 +400,7 @@ export function undoImport(importId: number): UndoResult {
 
   return db.transaction((tx) => {
     let loanRowsReversed = 0;
+    let snapshotsDeleted = 0;
     if (sole.length > 0) {
       // Reverse Bayes training for rows that had reached the confirmed state.
       const confirmed = tx
@@ -420,6 +427,31 @@ export function undoImport(importId: number): UndoResult {
       // transaction that no longer exists.
       reverseInstallmentLinksForTransactions(sole);
 
+      // v1.12.1 (item AE / MON-5, ruling P8). Third in the same list and for the third time the
+      // same argument: there is no cascade from transactions to account_balance_snapshots at all,
+      // so an undo used to leave the account anchored on whatever balance the statement asserted
+      // -- and for an import into the wrong account, that is a foreign bank's figure, authoritative
+      // for ever (balancesAsOf reads the newest snapshot at or before a date). The dates come from
+      // the rows being deleted, and the account from the import row itself.
+      const importRow = tx
+        .select({ accountId: imports.accountId })
+        .from(imports)
+        .where(eq(imports.id, importId))
+        .get();
+      if (importRow !== undefined) {
+        const dates = [
+          ...new Set(
+            tx
+              .select({ date: transactions.date })
+              .from(transactions)
+              .where(inArray(transactions.id, sole))
+              .all()
+              .map((row) => row.date),
+          ),
+        ];
+        snapshotsDeleted = deleteCsvSnapshotsForAccountDates(importRow.accountId, dates);
+      }
+
       // transaction_imports rows cascade away with the transaction.
       tx.delete(transactions).where(inArray(transactions.id, sole)).run();
     }
@@ -430,6 +462,6 @@ export function undoImport(importId: number): UndoResult {
     // import gets it set to NULL (onDelete: 'set null') — and ONLY when that row's
     // import_id actually was this import, not whichever import happened to share it.
     tx.delete(imports).where(eq(imports.id, importId)).run();
-    return { deleted: sole.length, kept: shared.length, loanLinksReversed: loanRowsReversed };
+    return { deleted: sole.length, kept: shared.length, loanLinksReversed: loanRowsReversed, snapshotsDeleted };
   });
 }

@@ -1,4 +1,4 @@
-import { and, inArray, lte, sql } from 'drizzle-orm';
+import { and, eq, inArray, lte, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { accountBalanceSnapshots } from '@/db/schema';
 import { getAccount, listAccounts } from '@/lib/accounts';
@@ -49,6 +49,23 @@ export interface RecordSnapshotInput {
 }
 
 /**
+ * Ruling R3's source authority, as one exported constant instead of a claim in three docblocks.
+ *
+ * v1.12.1 (item BB / MON-4). This ordering was written down in this file's own type doc, in
+ * src/db/schema.ts and in drizzle/0010_balances.sql -- which exists SPECIFICALLY so 'csv' is a
+ * distinct value from 'manual' and the ranking is expressible -- and was implemented in none of
+ * them: the upsert below used to set { balanceCents, source } unconditionally, so the last writer
+ * won regardless of rank. Every balance in the app anchors on these rows (Settings > Accounts, net
+ * worth over time, reconciliation), so the wrong anchor propagated everywhere, and a re-import
+ * ping-ponged it with a hand-typed correction with no rule and no warning.
+ */
+export const SNAPSHOT_SOURCE_RANK: Readonly<Record<'manual' | 'csv' | 'simplefin', number>> = {
+  manual: 1,
+  csv: 2,
+  simplefin: 3,
+};
+
+/**
  * Upserts on (accountId, date) via the `account_balance_snapshots_uq` unique index: a second
  * write for the same account and day REPLACES that day's balance instead of inserting a
  * second row, exactly as the schema doc comment on accountBalanceSnapshots promises. Losing
@@ -79,8 +96,46 @@ export function recordBalanceSnapshot(input: RecordSnapshotInput): void {
       // upsertAccountCardPerson/notify's config upserts: the row's original createdAt survives
       // a same-day replace, only the balance and its source move.
       set: { balanceCents: input.balanceCents, source: input.source },
+      // v1.12.1 (item BB / MON-4): the rank, enforced. `>=` and not `>`, so an equal-rank write is
+      // still last-write -- re-importing a corrected statement has to be able to fix a day, and a
+      // second SimpleFIN sync has to be able to move a balance the first one set.
+      setWhere: sql`(case ${accountBalanceSnapshots.source}
+                       when 'simplefin' then ${SNAPSHOT_SOURCE_RANK.simplefin}
+                       when 'csv' then ${SNAPSHOT_SOURCE_RANK.csv}
+                       else ${SNAPSHOT_SOURCE_RANK.manual}
+                     end) <= ${SNAPSHOT_SOURCE_RANK[input.source]}`,
     })
     .run();
+}
+
+/**
+ * The ONLY delete path against account_balance_snapshots in src/, and it is deliberately narrow.
+ *
+ * v1.12.1 (item AE / MON-5, ruling P8). commitImport writes one source='csv' snapshot per statement
+ * date; undoImport reversed Bayes training, loan balances and installment links -- everything a
+ * cascade cannot restore -- and left the snapshots, because there was no way to remove one. So
+ * undoing an import into the WRONG account could not reverse the most consequential thing that
+ * import did: balancesAsOf anchors on the newest snapshot at or before a date, so the foreign
+ * bank's figure stayed authoritative for ever and every later transaction summed forward from it.
+ *
+ * source='csv' only: a hand-typed correction on the same day is somebody's decision and is not an
+ * import's to delete. No per-date survivorship check (ruling P8): if two imports covered a day they
+ * asserted the same bank's figure anyway, and losing an anchor is recoverable by re-importing while
+ * keeping a wrong one is not -- balancesAsOf simply falls back to the previous snapshot.
+ */
+export function deleteCsvSnapshotsForAccountDates(accountId: number, dates: string[]): number {
+  if (dates.length === 0) return 0;
+  const result = getDb()
+    .delete(accountBalanceSnapshots)
+    .where(
+      and(
+        eq(accountBalanceSnapshots.accountId, accountId),
+        eq(accountBalanceSnapshots.source, 'csv'),
+        inArray(accountBalanceSnapshots.date, dates),
+      ),
+    )
+    .run();
+  return Number(result.changes ?? 0);
 }
 
 export interface LatestSnapshot {
