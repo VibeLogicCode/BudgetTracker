@@ -36,8 +36,15 @@ import {
   disableTotpAction,
 } from '@/app/(app)/settings/actions';
 import { SESSION_COOKIE_NAME, createSession } from '@/lib/auth/session';
-import { createUser } from '@/lib/auth/users';
-import { consumeTotpCounter, currentTotpToken, enableTotpForUser, generateTotpSecret, verifyTotpCounter } from '@/lib/auth/totp';
+import { createUser, findUserById } from '@/lib/auth/users';
+import {
+  consumeTotpCounter,
+  countUnusedRecoveryCodes,
+  currentTotpToken,
+  enableTotpForUser,
+  generateTotpSecret,
+  verifyTotpCounter,
+} from '@/lib/auth/totp';
 
 /** actions.ts's own private PENDING_TOTP_COOKIE name -- stable, not exported. */
 const PENDING_TOTP_COOKIE = 'bt_pending_totp';
@@ -133,6 +140,11 @@ describe('confirmTotpEnrollmentAction — v1.12.1 SEC-10 verify-then-spend, carr
 
     const result = await withSession(token, () => confirmTotpEnrollmentAction({}, formData({ code })));
     expect(result.error).toMatch(/already used/i);
+    // Task 14 fix round 1: enableTotpForUser used to run BEFORE the counter was consumed, so a
+    // refused replay still left MFA switched on with zero recovery codes generated. Neither may
+    // happen on a refusal.
+    expect(findUserById(userId)?.totpEnabled).toBe(false);
+    expect(countUnusedRecoveryCodes(userId)).toBe(0);
   });
 });
 

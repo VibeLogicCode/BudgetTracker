@@ -13,6 +13,6 @@ export const dynamic = 'force-dynamic';
  */
 export default async function SetupAccountsPage() {
   const admin = await requireAdmin();
-  if (listAccounts({ includeInactive: true }).length > 0) redirect('/dashboard');
+  if (listAccounts({ includeInactive: true }, admin).length > 0) redirect('/dashboard');
   return <AccountsStep admin={{ id: admin.id, name: admin.name }} />;
 }

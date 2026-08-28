@@ -133,14 +133,21 @@ export async function confirmTotpEnrollmentAction(_prev: ProfileFormState, formD
   // v1.12.1 (item BF / SEC-10), carried into v1.13.0: verify-then-spend, the same pair
   // login's own MFA challenge uses, so the code shown during enrollment cannot be observed
   // (screenshotted, shoulder-surfed) and replayed a second time.
+  //
+  // Task 14 fix round 1: verify and CONSUME the counter before anything is written. The
+  // previous order called enableTotpForUser() first, so a refused replay (consumeTotpCounter
+  // returning false) still left MFA switched on with zero recovery codes generated -- a
+  // half-applied enrollment that locked the account's second factor to a state nothing else in
+  // this flow ever produces. Nothing below this point runs unless the counter was actually
+  // spent successfully.
   const counter = verifyTotpCounter(secret, parsed.data.code);
   if (counter === null) {
     return { error: 'That code did not match. Try the next one your app shows.' };
   }
-  enableTotpForUser(user.id, secret);
   if (!consumeTotpCounter(user.id, counter)) {
     return { error: 'That code was already used. Try the next one your app shows.' };
   }
+  enableTotpForUser(user.id, secret);
   await clearPendingTotpSecret();
   const codes = generateRecoveryCodes();
   storeRecoveryCodes(user.id, codes);

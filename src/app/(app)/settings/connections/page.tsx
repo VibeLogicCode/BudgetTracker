@@ -15,7 +15,7 @@ import { ConnectionsClient } from './connections-client';
 export const dynamic = 'force-dynamic';
 
 export default async function ConnectionsPage() {
-  await requireAdmin();
+  const user = await requireAdmin();
   const connection = getConnection();
   const storedAutoSync = getSetting(SETTING_AUTO_SYNC);
   const autoSync = storedAutoSync !== null && isAutoSyncInterval(storedAutoSync) ? storedAutoSync : null;
@@ -23,7 +23,9 @@ export default async function ConnectionsPage() {
     <ConnectionsClient
       connection={connection}
       links={listLinks()}
-      accounts={listAccounts().map((a) => ({ id: a.id, name: a.name }))}
+      // This page is requireAdmin()-only, so the viewer is always household-scoped --
+      // passed through anyway because listAccounts now requires one (ruling R2).
+      accounts={listAccounts({}, user).map((a) => ({ id: a.id, name: a.name }))}
       remainingRequests={connection ? remainingRequestsToday() : DAILY_REQUEST_LIMIT}
       dailyLimit={DAILY_REQUEST_LIMIT}
       autoSync={autoSync}

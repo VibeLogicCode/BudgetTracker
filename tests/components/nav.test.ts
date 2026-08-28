@@ -4,7 +4,7 @@ import type { Viewer } from '@/lib/auth/viewer';
 
 const household: Viewer = { id: 1, role: 'member', visibility: 'household' };
 const child: Viewer = { id: 5, role: 'member', visibility: 'self' };
-const admin: Viewer = { id: 1, role: 'admin', visibility: 'household' };
+const admin: Viewer = { id: 1, role: 'admin', visibility: 'self' };
 
 describe('visibleNav (micro-ruling M6)', () => {
   it('a household member sees the whole nav, byte-identical to before v1.13.0', () => {

@@ -109,21 +109,25 @@ describe('markTransferAction — missing input validation (finding 2)', () => {
 });
 
 describe('v1.13.0 controller ruling: self viewers are refused server-side, not just kept off the nav', () => {
-  it('refuses a self-scoped viewer on fixCategoryAction', async () => {
-    const { db, addTxn } = setup();
+  it('refuses a self-scoped viewer on fixCategoryAction, and leaves the row untouched', async () => {
+    const { db, sqlite, addTxn } = setup();
     const coffee = categoryIdByName(db, 'Coffee');
     const id = addTxn();
     currentUser = { ...currentUser, role: 'member', visibility: 'self' };
     const result = await fixCategoryAction({}, formData({ transactionId: String(id), categoryId: String(coffee) }));
     expect(result.error).toBeTruthy();
+    const row = sqlite.prepare('select category_id from transactions where id = ?').get(id) as { category_id: number | null };
+    expect(row.category_id).toBeNull();
   });
 
-  it('refuses a self-scoped viewer on markTransferAction', async () => {
-    const { addTxn } = setup();
+  it('refuses a self-scoped viewer on markTransferAction, and leaves the row untouched', async () => {
+    const { sqlite, addTxn } = setup();
     const id = addTxn();
     currentUser = { ...currentUser, role: 'member', visibility: 'self' };
     const result = await markTransferAction({}, formData({ transactionId: String(id) }));
     expect(result.error).toBeTruthy();
+    const row = sqlite.prepare('select is_transfer from transactions where id = ?').get(id) as { is_transfer: number };
+    expect(row.is_transfer).toBe(0);
   });
 });
 

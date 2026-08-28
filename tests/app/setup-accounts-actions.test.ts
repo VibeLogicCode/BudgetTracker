@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { createSeededTestDb, insertTestUser, type TestDb } from '../helpers/db';
 
-let currentUser = { id: 1, name: 'Admin', username: 'admin', role: 'admin' as const };
+let currentUser = { id: 1, name: 'Admin', username: 'admin', role: 'admin' as const, visibility: 'household' as const };
 let requestHeaders = new Headers({ origin: 'http://nas.local:3000', host: 'nas.local:3000' });
 
 vi.mock('@/lib/auth/session', () => ({
@@ -30,7 +30,7 @@ beforeEach(() => {
   redirected.length = 0;
   current = createSeededTestDb();
   const adminId = insertTestUser(current.db, { name: 'Admin', username: 'admin', role: 'admin' });
-  currentUser = { id: adminId, name: 'Admin', username: 'admin', role: 'admin' };
+  currentUser = { id: adminId, name: 'Admin', username: 'admin', role: 'admin', visibility: 'household' };
 });
 
 afterEach(() => {
@@ -54,28 +54,28 @@ describe('saveSetupAccountsAction (optional first-run accounts step)', () => {
     ).rejects.toThrow(/NEXT_REDIRECT/);
 
     expect(redirected).toEqual(['/dashboard']);
-    expect(listAccounts().map((a) => a.name)).toEqual(['Joint Chequing', 'Joint Visa']);
-    expect(listAccounts().every((a) => a.ownerUserId === null)).toBe(true);
+    expect(listAccounts({}, currentUser).map((a) => a.name)).toEqual(['Joint Chequing', 'Joint Visa']);
+    expect(listAccounts({}, currentUser).every((a) => a.ownerUserId === null)).toBe(true);
   });
 
   it('records the admin as owner when they pick themselves', async () => {
     await expect(
       saveSetupAccountsAction({}, payload([{ name: 'My Visa', type: 'credit', owner: String(currentUser.id) }])),
     ).rejects.toThrow(/NEXT_REDIRECT/);
-    expect(listAccounts()[0].ownerUserId).toBe(currentUser.id);
+    expect(listAccounts({}, currentUser)[0].ownerUserId).toBe(currentUser.id);
   });
 
   it('falls back to Joint for an owner id that is not the admin (nobody else exists yet)', async () => {
     await expect(
       saveSetupAccountsAction({}, payload([{ name: 'Forged', type: 'chequing', owner: '9999' }])),
     ).rejects.toThrow(/NEXT_REDIRECT/);
-    expect(listAccounts()[0].ownerUserId).toBeNull();
+    expect(listAccounts({}, currentUser)[0].ownerUserId).toBeNull();
   });
 
   it('skipping (an empty list) creates nothing and still moves on', async () => {
     await expect(saveSetupAccountsAction({}, payload([]))).rejects.toThrow(/NEXT_REDIRECT/);
     expect(redirected).toEqual(['/dashboard']);
-    expect(listAccounts()).toHaveLength(0);
+    expect(listAccounts({}, currentUser)).toHaveLength(0);
   });
 
   it('refuses a nameless row instead of creating half the list', async () => {
@@ -84,7 +84,7 @@ describe('saveSetupAccountsAction (optional first-run accounts step)', () => {
       { name: '   ', type: 'chequing', owner: '' },
     ]));
     expect(result.error).toMatch(/name/i);
-    expect(listAccounts()).toHaveLength(0);
+    expect(listAccounts({}, currentUser)).toHaveLength(0);
     expect(redirected).toEqual([]);
   });
 
@@ -92,6 +92,6 @@ describe('saveSetupAccountsAction (optional first-run accounts step)', () => {
     requestHeaders = new Headers({ origin: 'http://evil.example', host: 'nas.local:3000' });
     const result = await saveSetupAccountsAction({}, payload([{ name: 'Attacker', type: 'chequing', owner: '' }]));
     expect(result.error).toBe('Cross-origin request rejected');
-    expect(listAccounts()).toHaveLength(0);
+    expect(listAccounts({}, currentUser)).toHaveLength(0);
   });
 });

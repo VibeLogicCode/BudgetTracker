@@ -16,7 +16,7 @@ import { createSeededTestDb, insertTestUser, type TestDb } from '../helpers/db';
  * not.
  */
 
-let currentUser = { id: 1, name: 'Admin', username: 'admin', role: 'admin' as const };
+let currentUser = { id: 1, name: 'Admin', username: 'admin', role: 'admin' as const, visibility: 'household' as const };
 const sameOriginHeaders = new Headers({ origin: 'http://nas.local:3000', host: 'nas.local:3000' });
 
 // Partial mock: only requireAdmin (which needs a cookie store) is faked. The
@@ -55,7 +55,7 @@ beforeEach(() => {
   process.env.DATA_DIR = tempDir;
   current = createSeededTestDb();
   const adminId = insertTestUser(current.db, { name: 'Admin', username: 'admin', role: 'admin' });
-  currentUser = { id: adminId, name: 'Admin', username: 'admin', role: 'admin' };
+  currentUser = { id: adminId, name: 'Admin', username: 'admin', role: 'admin', visibility: 'household' };
   token = createSession(adminId).token;
   profileId = getProfileByName('TD Chequing/Debit')!.id;
 });
@@ -88,7 +88,7 @@ function uploadRequest(accountId: number | string) {
 
 describe('fresh install: create an account through the UI action, then import into it', () => {
   it('starts with nothing importable — the state that made the import page a dead end', async () => {
-    expect(listAccounts()).toHaveLength(0);
+    expect(listAccounts({}, currentUser)).toHaveLength(0);
     // What the Import page used to send with no accounts to choose from: a
     // zod failure the family could do nothing about (I5). The page now shows
     // an empty state pointing at /settings/accounts instead of ever sending this.
@@ -104,7 +104,7 @@ describe('fresh install: create an account through the UI action, then import in
     expect(created.error).toBeUndefined();
 
     // 1. The account the action created is the one the pickers list.
-    const accounts = listAccounts();
+    const accounts = listAccounts({}, currentUser);
     expect(accounts).toHaveLength(1);
     expect(accounts[0]).toMatchObject({ name: 'Joint Chequing', isActive: true });
 
@@ -118,12 +118,12 @@ describe('fresh install: create an account through the UI action, then import in
 
   it('a deactivated account drops out of the pickers but the id still resolves for history', async () => {
     await createAccountAction({}, formData({ name: 'Old Visa', institution: 'TD', type: 'credit', owner: '' }));
-    const id = listAccounts()[0].id;
+    const id = listAccounts({}, currentUser)[0].id;
 
     const { setAccountActiveAction } = await import('@/app/(app)/settings/accounts/actions');
     await setAccountActiveAction({}, formData({ accountId: String(id), active: '0' }));
 
-    expect(listAccounts()).toHaveLength(0);
-    expect(listAccounts({ includeInactive: true })).toHaveLength(1);
+    expect(listAccounts({}, currentUser)).toHaveLength(0);
+    expect(listAccounts({ includeInactive: true }, currentUser)).toHaveLength(1);
   });
 });
