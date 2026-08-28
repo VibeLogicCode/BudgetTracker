@@ -23,10 +23,12 @@ import type { LoanLink } from '@/lib/loans';
 import { formatCents, parseAmountToCents, sumCents } from '@/lib/money';
 import type { SplitRow } from '@/lib/splits';
 import type { TransactionPage, TransactionRow } from '@/lib/transactions';
+import { LOAN_DIRECTIONS, LOAN_DIRECTION_LABELS } from '@/lib/warranty/constants';
 import {
   assignToLoanAction,
   bulkCategorizeAction,
   bulkTransferAction,
+  createLoanFromTransactionAction,
   renameTransactionAction,
   saveNoteAction,
   saveSplitsAction,
@@ -102,6 +104,9 @@ export function TransactionsClient({
   // Mirrors `renaming` exactly (ruling R13): one nullable slot of state, so opening the note
   // sub-row on a different row always replaces whichever one was already open.
   const [noting, setNoting] = useState<{ id: number; current: string } | null>(null);
+  // Addendum A, ruling A1: mirrors `noting` exactly -- one nullable slot, so opening the
+  // "Assign to new loan…" sub-row on a different row always replaces whichever one was open.
+  const [newLoan, setNewLoan] = useState<{ id: number } | null>(null);
   const [attrState, attrAction] = useActionState(setAttributionAction, initial);
   const [bulkCatState, bulkCatAction] = useActionState(bulkCategorizeAction, initial);
   const [bulkTfrState, bulkTfrAction] = useActionState(bulkTransferAction, initial);
@@ -116,6 +121,7 @@ export function TransactionsClient({
   );
   const [splitState, splitAction] = useActionState(saveSplitsAction, initial);
   const [noteState, noteAction] = useActionState(saveNoteAction, initial);
+  const [newLoanState, newLoanAction] = useActionState(createLoanFromTransactionAction, initial);
 
   const label = (id: number | null) => {
     if (id === null) return 'Uncategorized';
@@ -153,10 +159,12 @@ export function TransactionsClient({
   // before the action settles, so the top banner is the only place its result is ever seen.
   const notice =
     attrState.message ?? bulkCatState.message ?? bulkTfrState.message ??
-    renameState.message ?? assignState.message ?? unassignState.message ?? splitState.message ?? noteState.message;
+    renameState.message ?? assignState.message ?? unassignState.message ?? splitState.message ?? noteState.message ??
+    newLoanState.message;
   const error =
     attrState.error ?? bulkCatState.error ?? bulkTfrState.error ??
-    renameState.error ?? assignState.error ?? unassignState.error ?? splitState.error ?? noteState.error;
+    renameState.error ?? assignState.error ?? unassignState.error ?? splitState.error ?? noteState.error ??
+    newLoanState.error;
 
   // Opens this row's split editor, prefilled from its existing parts (or two blank parts for
   // a fresh split) -- the same "one editor, one nullable slot of state" shape `renaming` uses,
@@ -655,6 +663,11 @@ export function TransactionsClient({
                             {`Assign to ${loan.name}`}
                           </RowMenuForm>
                         ))}
+                    {/* Addendum A, ruling A1: last in this block so the existing
+                        "Assign to <loan>" items keep their order. */}
+                    {row.isTransfer ? null : (
+                      <RowMenuButton onSelect={() => setNewLoan({ id: row.id })}>Assign to new loan…</RowMenuButton>
+                    )}
                   </RowMenu>
                 </td>
               </tr>
@@ -677,6 +690,36 @@ export function TransactionsClient({
                       <div className="flex gap-2">
                         <SubmitButton className="w-fit">Save note</SubmitButton>
                         <button type="button" className="btn btn--ghost btn--sm" onClick={() => setNoting(null)}>
+                          Cancel
+                        </button>
+                      </div>
+                    </form>
+                  </td>
+                </tr>
+              ) : null}
+              {newLoan?.id === row.id ? (
+                <tr>
+                  <td colSpan={COLUMN_COUNT}>
+                    <form
+                      action={newLoanAction}
+                      onSubmit={() => setNewLoan(null)}
+                      className="flex flex-col gap-2 py-2"
+                      data-testid="new-loan-form"
+                    >
+                      <input type="hidden" name="transactionId" value={row.id} />
+                      <Field label="Loan name" hint="Who the loan is with — a name you will recognise later.">
+                        <input name="loanName" autoFocus className={inputClass} />
+                      </Field>
+                      <Field label="Direction">
+                        <select name="loanDirection" defaultValue="lent" className={selectClass}>
+                          {LOAN_DIRECTIONS.map((direction) => (
+                            <option key={direction} value={direction}>{LOAN_DIRECTION_LABELS[direction]}</option>
+                          ))}
+                        </select>
+                      </Field>
+                      <div className="flex gap-2">
+                        <SubmitButton className="w-fit">Create loan</SubmitButton>
+                        <button type="button" className="btn btn--ghost btn--sm" onClick={() => setNewLoan(null)}>
                           Cancel
                         </button>
                       </div>

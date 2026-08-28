@@ -17,6 +17,7 @@ vi.mock('@/app/(app)/transactions/actions', () => ({
   unassignFromLoanAction: vi.fn(async () => ({})),
   saveSplitsAction: vi.fn(async () => ({})),
   saveNoteAction: vi.fn(async () => ({})),
+  createLoanFromTransactionAction: vi.fn(async () => ({})),
 }));
 
 afterEach(() => cleanup());
@@ -183,10 +184,13 @@ describe('MUST-14.8 / MUST-14.9: the row control', () => {
   };
   const transferOnlyProps = { ...baseProps, page: pageWithRow({ isTransfer: true }) };
 
-  it('with no loans, the assign control is absent entirely', () => {
+  it('with no loans, the assign-to-an-existing-loan control is absent entirely', () => {
+    // Addendum A: "Assign to new loan…" is now offered even with no loans (it creates one) --
+    // only the per-loan "Assign to <loan>" items are gated on loanOptions being non-empty, so
+    // this excludes that one item by name rather than reverting to a bare /Assign to/ match.
     render(<TransactionsClient {...baseProps} loanOptions={[]} loanLinks={{}} />);
     openRowMenu('Actions for TIM HORTONS');
-    expect(screen.queryByText(/Assign to/)).toBeNull();
+    expect(screen.queryByText(/^Assign to(?! new loan)/)).toBeNull();
   });
 
   it('a linked row shows Unassign and keeps the assign item reachable (F4 fix-round)', () => {
@@ -717,5 +721,85 @@ describe('TransactionsClient — a self viewer gets no attribution controls (ite
       />,
     );
     expect(screen.getByLabelText('Person for transaction 1')).toBeTruthy();
+  });
+});
+
+describe('Assign to new loan — Addendum A', () => {
+  const baseProps = {
+    page: pageWithRow(),
+    accounts: [{ id: 1, name: 'Joint Chequing' }],
+    categories: [],
+    people: [],
+    today: '2026-03-02',
+  };
+  const transferOnlyProps = { ...baseProps, page: pageWithRow({ isTransfer: true }) };
+  const twoRowProps = {
+    ...baseProps,
+    page: {
+      total: 2,
+      page: 1,
+      pageSize: 50,
+      pageCount: 1,
+      rows: [
+        pageWithRow({ id: 1 }).rows[0],
+        pageWithRow({ id: 2, rawDescription: 'SECOND ROW', normalizedMerchant: 'SECOND ROW' }).rows[0],
+      ],
+    },
+  };
+
+  it('is offered on a normal row even when the household has no loans yet', () => {
+    render(<TransactionsClient {...baseProps} loanOptions={[]} loanLinks={{}} />);
+    openRowMenu('Actions for TIM HORTONS');
+    expect(screen.getByRole('menuitem', { name: 'Assign to new loan…' })).toBeTruthy();
+  });
+
+  it('is not offered on a transfer (MUST-14.8, ruling A13)', () => {
+    render(<TransactionsClient {...transferOnlyProps} loanOptions={[]} loanLinks={{}} />);
+    openRowMenu('Actions for TIM HORTONS');
+    expect(screen.queryByRole('menuitem', { name: 'Assign to new loan…' })).toBeNull();
+  });
+
+  it('opens an inline sub-row with a name box and a direction select, defaulting to lent', () => {
+    render(<TransactionsClient {...baseProps} loanOptions={[]} loanLinks={{}} />);
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to new loan…' }));
+    const name = screen.getByLabelText('Loan name') as HTMLInputElement;
+    const direction = screen.getByLabelText('Direction') as HTMLSelectElement;
+    expect(name.name).toBe('loanName');
+    expect(direction.name).toBe('loanDirection');
+    expect(direction.value).toBe('lent');
+    expect([...direction.options].map((option) => option.textContent)).toEqual([
+      'Borrowed — we owe them',
+      'Lent out — they owe us',
+    ]);
+    // The 44px floor lives in the shared control class, not in hand-rolled utilities
+    // (Addendum A, guard strategy): both controls must carry it.
+    expect(name.className).toContain('field-control');
+    expect(direction.className).toContain('field-control');
+  });
+
+  it('submits the transaction id, the name and the direction', async () => {
+    const { createLoanFromTransactionAction } = await import('@/app/(app)/transactions/actions');
+    const spy = vi.mocked(createLoanFromTransactionAction);
+    spy.mockClear();
+    const { container } = render(<TransactionsClient {...baseProps} loanOptions={[]} loanLinks={{}} />);
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to new loan…' }));
+    fireEvent.change(screen.getByLabelText('Loan name'), { target: { value: 'Loan to Sam' } });
+    fireEvent.submit(container.querySelector('form[data-testid="new-loan-form"]') as HTMLFormElement);
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    const submitted = spy.mock.calls.at(-1)![1] as FormData;
+    expect(submitted.get('transactionId')).toBe('1');
+    expect(submitted.get('loanName')).toBe('Loan to Sam');
+    expect(submitted.get('loanDirection')).toBe('lent');
+  });
+
+  it('opening it on a second row replaces the first, like the note editor', () => {
+    render(<TransactionsClient {...twoRowProps} loanOptions={[]} loanLinks={{}} />);
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to new loan…' }));
+    openRowMenu('Actions for SECOND ROW');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to new loan…' }));
+    expect(screen.getAllByLabelText('Loan name')).toHaveLength(1);
   });
 });
