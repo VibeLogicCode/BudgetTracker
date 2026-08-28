@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../helpers/db';
 import { applyPaymentMatchers, assignTransactionToLoan, saveLoanRule } from '@/lib/loans';
 import { addInstallment } from '@/lib/warranty/installments';
+import { setupLoanTest } from './fixtures';
 
 const NOW = '2026-06-01T12:00:00.000Z';
 
@@ -91,5 +92,47 @@ describe('a transaction cannot pay a bill and a loan (item T / MON-2, ruling P4)
     const { unrelatedTxnId, loanItemId, secondLoanItemId } = setup();
     assignTransactionToLoan({ txnId: unrelatedTxnId, itemId: loanItemId });
     expect(assignTransactionToLoan({ txnId: unrelatedTxnId, itemId: secondLoanItemId }).linked).toBe(true);
+  });
+});
+
+describe('assignTransactionToLoan on a lent loan (spec BU)', () => {
+  let ctx: ReturnType<typeof setupLoanTest>;
+  afterEach(() => ctx?.t.cleanup());
+
+  it('money OUT raises the balance and money IN lowers it', () => {
+    ctx = setupLoanTest();
+    const { itemId } = ctx.seedLoan({ name: 'Loan to a friend', balanceCents: 0, direction: 'lent' });
+
+    const advance = ctx.spend('E TRANSFER', -50_000);
+    expect(assignTransactionToLoan({ txnId: advance, itemId })).toEqual({ linked: true, appliedCents: 50_000 });
+    expect(ctx.balanceOf(itemId)).toBe(50_000);
+
+    const repayment = ctx.spend('E TRANSFER', 20_000);
+    expect(assignTransactionToLoan({ txnId: repayment, itemId })).toEqual({ linked: true, appliedCents: 20_000 });
+    expect(ctx.balanceOf(itemId)).toBe(30_000);
+  });
+
+  it('a repayment larger than the outstanding balance clamps at zero, never below', () => {
+    ctx = setupLoanTest();
+    const { itemId } = ctx.seedLoan({ balanceCents: 30_000, direction: 'lent' });
+    const repayment = ctx.spend('E TRANSFER', 50_000);
+    expect(assignTransactionToLoan({ txnId: repayment, itemId })).toEqual({ linked: true, appliedCents: 30_000 });
+    expect(ctx.balanceOf(itemId)).toBe(0);
+  });
+
+  it('an UNKNOWN balance still applies nothing in either direction (NEW-2, unchanged)', () => {
+    ctx = setupLoanTest();
+    const { itemId } = ctx.seedLoan({ balanceCents: null, direction: 'lent' });
+    const advance = ctx.spend('E TRANSFER', -50_000);
+    expect(assignTransactionToLoan({ txnId: advance, itemId })).toEqual({ linked: true, appliedCents: 0 });
+    expect(ctx.balanceOf(itemId)).toBeNull();
+  });
+
+  it('an owed loan is untouched: money OUT still pays it down', () => {
+    ctx = setupLoanTest();
+    const { itemId } = ctx.seedLoan({ balanceCents: 200_000 });
+    const payment = ctx.spend('CAR LOAN', -50_000);
+    expect(assignTransactionToLoan({ txnId: payment, itemId })).toEqual({ linked: true, appliedCents: 50_000 });
+    expect(ctx.balanceOf(itemId)).toBe(150_000);
   });
 });

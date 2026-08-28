@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../helpers/db';
 import { applyPaymentMatchers, reverseInstallmentLinksForTransactions, saveLoanRule } from '@/lib/loans';
+import { setupLoanTest } from './fixtures';
 import { addInstallment, listInstallments, markInstallmentPaid, unmarkInstallmentPaid } from '@/lib/warranty/installments';
 
 const NOW = '2026-08-24T12:00:00.000Z';
@@ -385,5 +386,35 @@ describe('un-marking an installment sticks (item BA / MON-3, ruling P1)', () => 
 
     // June is suppressed, so the September payment takes September, not June.
     expect(paidIdOf(db)).toBe(installments.september);
+  });
+});
+
+describe('applyPaymentMatchers on a lent loan (spec BU)', () => {
+  let ctx: ReturnType<typeof setupLoanTest>;
+  afterEach(() => ctx?.t.cleanup());
+
+  it('two matched advances on a lent loan accumulate, they do not cancel (ruling P8)', () => {
+    // The defect this pins: applyPaymentMatchers keeps a running balance per item and used to
+    // SUBTRACT every applied amount, which is only right for an owed loan. On a lent loan the
+    // first advance raises the balance, and the second must be clamped against the RAISED figure.
+    ctx = setupLoanTest();
+    const { itemId } = ctx.seedLoan({ name: 'Loan to a friend', balanceCents: 0, direction: 'lent' });
+    saveLoanRule({ itemId, merchantContains: 'E TRANSFER', accountId: null, enabled: true });
+    const first = ctx.spend('E TRANSFER', -20_000);
+    const second = ctx.spend('E TRANSFER', -30_000);
+
+    expect(applyPaymentMatchers([first, second])).toBe(2);
+    expect(ctx.balanceOf(itemId)).toBe(50_000);
+  });
+
+  it('a rule still only ever matches OUTGOING money, in either direction (ruling P8)', () => {
+    // An incoming repayment on a lent loan is manual-assign only in v1.14.0: the >= 0 skip is
+    // shared with the bill-installment branch and widening it is not this release's job.
+    ctx = setupLoanTest();
+    const { itemId } = ctx.seedLoan({ balanceCents: 50_000, direction: 'lent' });
+    saveLoanRule({ itemId, merchantContains: 'E TRANSFER', accountId: null, enabled: true });
+    const repayment = ctx.spend('E TRANSFER', 20_000);
+    expect(applyPaymentMatchers([repayment])).toBe(0);
+    expect(ctx.balanceOf(itemId)).toBe(50_000);
   });
 });

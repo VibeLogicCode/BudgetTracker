@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { applyPaymentMatchers, listLoans, loansTotalOwedCents, saveLoanRule } from '@/lib/loans';
+import { applyPaymentMatchers, assignTransactionToLoan, listLoans, loansTotalOwedCents, payoffProjection, saveLoanRule } from '@/lib/loans';
 import type { Viewer } from '@/lib/auth/viewer';
 import { todayIso } from '@/lib/dates';
 import { setupLoanTest, type LoanTestContext } from './fixtures';
@@ -176,5 +176,36 @@ describe('loansTotalOwedCents', () => {
 
   it('is zero with no loans at all', () => {
     expect(loansTotalOwedCents()).toBe(0);
+  });
+});
+
+describe('direction on the read model (rulings P6, P9, P10)', () => {
+  it('listLoans reports each loan’s direction', () => {
+    ctx.seedLoan({ name: 'Civic', balanceCents: 200_000 });
+    ctx.seedLoan({ name: 'Loan to a friend', balanceCents: 50_000, direction: 'lent' });
+    const rows = listLoans('2026-08-18', household);
+    expect(rows.map((row) => [row.name, row.loanDirection])).toEqual([
+      ['Civic', 'owed'],
+      ['Loan to a friend', 'lent'],
+    ]);
+  });
+
+  it('loansTotalOwedCents counts owed loans only — money lent out is not a debt', () => {
+    ctx.seedLoan({ balanceCents: 200_000 });
+    ctx.seedLoan({ balanceCents: 50_000, direction: 'lent' });
+    expect(loansTotalOwedCents()).toBe(200_000);
+  });
+
+  it('payoffProjection is null for a lent loan (ruling P9)', () => {
+    const { itemId } = ctx.seedLoan({ balanceCents: 50_000, principalCents: 80_000, direction: 'lent' });
+    const advance = ctx.spend('E TRANSFER', -10_000, { date: '2026-07-01' });
+    assignTransactionToLoan({ txnId: advance, itemId });
+    expect(payoffProjection(itemId, '2026-08-18')).toBeNull();
+  });
+
+  it('payoffFraction is kept, and reads as "fraction repaid" (ruling P10)', () => {
+    ctx.seedLoan({ name: 'Loan to a friend', balanceCents: 20_000, principalCents: 80_000, direction: 'lent' });
+    const row = listLoans('2026-08-18', household).find((r) => r.name === 'Loan to a friend');
+    expect(row?.payoffFraction).toBeCloseTo(0.75, 5);
   });
 });

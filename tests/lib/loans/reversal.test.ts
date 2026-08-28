@@ -2,7 +2,14 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { commitImport, undoImport, type CommitResult } from '@/lib/import/commit';
 import { computeRowHashes } from '@/lib/import/dedup';
 import type { CandidateRow } from '@/lib/import/parse';
-import { applyPaymentMatchers, assignTransactionToLoan, loanLinksForTransactions, saveLoanRule, unassignTransactionFromLoan } from '@/lib/loans';
+import {
+  applyPaymentMatchers,
+  assignTransactionToLoan,
+  loanLinksForTransactions,
+  reverseLoanLinksForTransactions,
+  saveLoanRule,
+  unassignTransactionFromLoan,
+} from '@/lib/loans';
 import { setupLoanTest, type LoanTestContext } from './fixtures';
 
 let ctx: LoanTestContext;
@@ -293,6 +300,48 @@ describe('NEW-2 fix-round: an unknown balance cannot be moved in either directio
     const { itemId } = ctx.seedLoan({ balanceCents: null });
     const txnId = ctx.spend('HONDA FIN SVC', -45_000);
     expect(assignTransactionToLoan({ txnId, itemId })).toEqual({ linked: true, appliedCents: 0 });
+    expect(ctx.balanceOf(itemId)).toBeNull();
+  });
+});
+
+describe('reversal on a lent loan (spec BU)', () => {
+  it('unassigning an advance takes the balance back down', () => {
+    const { itemId } = ctx.seedLoan({ balanceCents: 0, direction: 'lent' });
+    const advance = ctx.spend('E TRANSFER', -50_000);
+    assignTransactionToLoan({ txnId: advance, itemId });
+    expect(ctx.balanceOf(itemId)).toBe(50_000);
+
+    expect(unassignTransactionFromLoan({ txnId: advance, itemId })).toBe(true);
+    expect(ctx.balanceOf(itemId)).toBe(0);
+  });
+
+  it('unassigning a repayment puts it back on', () => {
+    const { itemId } = ctx.seedLoan({ balanceCents: 50_000, direction: 'lent' });
+    const repayment = ctx.spend('E TRANSFER', 20_000);
+    assignTransactionToLoan({ txnId: repayment, itemId });
+    expect(ctx.balanceOf(itemId)).toBe(30_000);
+
+    unassignTransactionFromLoan({ txnId: repayment, itemId });
+    expect(ctx.balanceOf(itemId)).toBe(50_000);
+  });
+
+  it('reverseLoanLinksForTransactions restores both signs in one batch', () => {
+    const { itemId } = ctx.seedLoan({ balanceCents: 0, direction: 'lent' });
+    const advance = ctx.spend('E TRANSFER', -80_000);
+    const repayment = ctx.spend('E TRANSFER', 30_000);
+    assignTransactionToLoan({ txnId: advance, itemId });
+    assignTransactionToLoan({ txnId: repayment, itemId });
+    expect(ctx.balanceOf(itemId)).toBe(50_000);
+
+    expect(reverseLoanLinksForTransactions([advance, repayment])).toBe(2);
+    expect(ctx.balanceOf(itemId)).toBe(0);
+  });
+
+  it('a NULL balance stays NULL through a reversal (F2 guard, unchanged)', () => {
+    const { itemId } = ctx.seedLoan({ balanceCents: null, direction: 'lent' });
+    const advance = ctx.spend('E TRANSFER', -50_000);
+    assignTransactionToLoan({ txnId: advance, itemId });
+    unassignTransactionFromLoan({ txnId: advance, itemId });
     expect(ctx.balanceOf(itemId)).toBeNull();
   });
 });

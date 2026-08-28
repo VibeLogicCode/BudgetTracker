@@ -6,7 +6,7 @@ import { nowIso } from '@/lib/clock';
 import { addDaysIso, addMonths, addMonthsClamped, daysBetweenIso, monthEnd, monthOf, monthRange, todayIso } from '@/lib/dates';
 import type { RateVerdict } from '@/lib/notify/ratelimit';
 import { meanCents } from '@/lib/predict/stats';
-import type { BillingCycle, LoanDirection } from '@/lib/warranty/constants';
+import { isLoanRepayment, loanSignedDelta, type BillingCycle, type LoanDirection } from '@/lib/warranty/constants';
 
 /**
  * Loan money-tracking (spec 2026-08-17 §13).
@@ -191,6 +191,9 @@ interface ActiveRule {
   /** NULL for a bill, and for a loan whose balance was never anchored. */
   balanceCents: number | null;
   kind: 'loan' | 'bill';
+  /** v1.14.0 (spec BU). 'owed' for every bill row -- a bill has no direction of its own, and
+   *  loanFieldsAllowedForKind gates 'lent' to loan-kind items only (ruling P3). */
+  direction: LoanDirection;
 }
 
 /**
@@ -211,6 +214,7 @@ function activeRules(tx: ReturnType<typeof getDb>): ActiveRule[] {
       accountId: loanMatcherRules.accountId,
       balanceCents: sql<number | null>`${warrantyItems.currentBalanceCents}`,
       kind: sql<'loan' | 'bill'>`${warrantyItemTypes.kind}`,
+      direction: warrantyItems.loanDirection,
     })
     .from(loanMatcherRules)
     .innerJoin(warrantyItems, eq(warrantyItems.id, loanMatcherRules.itemId))
@@ -232,10 +236,17 @@ function activeRules(tx: ReturnType<typeof getDb>): ActiveRule[] {
  * "decide to apply" and "record that we applied" is impossible.
  *
  * F1 fix-round (sign-aware apply): `signedAmountCents` carries the transaction's real sign.
- * A NEGATIVE transaction is a PAYMENT (money left the household) and DECREMENTS the
- * balance, clamped at zero exactly as before (MUST-11.14 / MUST-13.6). A POSITIVE
- * transaction is a DISBURSEMENT or an adjustment (money arrived) and INCREMENTS the
- * balance by its full magnitude; there is no ceiling to clamp against on that side.
+ * A NEGATIVE **signed delta in the loan's own frame** (see loanSignedDelta, v1.14.0 below) is a
+ * REPAYMENT and DECREMENTS the balance, clamped at zero exactly as before
+ * (MUST-11.14 / MUST-13.6). A POSITIVE one GROWS the balance by its full magnitude; there is no
+ * ceiling to clamp against on that side.
+ *
+ * v1.14.0 (spec BU, ruling P4): `input.direction` re-expresses `signedAmountCents` into the
+ * loan's own frame via `loanSignedDelta` before any of the above is decided. For an `owed` loan
+ * (every loan before this release) `loanSignedDelta` is the identity, so this paragraph and
+ * every line below it describe EXACTLY today's behaviour, unchanged. For a `lent` loan the frame
+ * is flipped: money OUT (a negative transaction) GROWS what is owed to the household, and money
+ * IN (a positive transaction) is a REPAYMENT that shrinks it.
  *
  * `applied_cents` always stores the UNSIGNED size of the move (never negative, so the
  * existing `applied_cents >= 0 AND applied_cents <= amount_cents` CHECK in drizzle/0007
@@ -255,15 +266,26 @@ function activeRules(tx: ReturnType<typeof getDb>): ActiveRule[] {
  */
 function link(
   tx: ReturnType<typeof getDb>,
-  input: { txnId: number; itemId: number; signedAmountCents: number; balanceCents: number | null; source: 'rule' | 'manual'; at: string },
+  input: {
+    txnId: number;
+    itemId: number;
+    signedAmountCents: number;
+    balanceCents: number | null;
+    source: 'rule' | 'manual';
+    at: string;
+    direction: LoanDirection;
+  },
 ): number | null {
   const magnitude = Math.abs(input.signedAmountCents);
-  const isPayment = input.signedAmountCents < 0;
-  // Payments clamp at zero; disbursements/adjustments apply in full (no ceiling exists for
-  // how much can be added back onto an outstanding balance) -- except when the balance is
-  // unknown, in which case neither direction applies anything (NEW-2).
-  const applied = input.balanceCents === null ? 0 : isPayment ? Math.max(0, Math.min(magnitude, input.balanceCents)) : magnitude;
-  const delta = isPayment ? -applied : applied;
+  // v1.14.0 (spec BU, ruling P4): the loan's own frame, not the account's. For an owed loan
+  // loanSignedDelta is the identity and every line below is byte-for-byte what it was.
+  const signed = loanSignedDelta(input.direction, input.signedAmountCents);
+  const isRepayment = signed < 0;
+  // Repayments clamp at zero; growth applies in full (no ceiling exists for how much can be
+  // added back onto an outstanding balance) -- except when the balance is unknown, in which
+  // case neither direction applies anything (NEW-2).
+  const applied = input.balanceCents === null ? 0 : isRepayment ? Math.max(0, Math.min(magnitude, input.balanceCents)) : magnitude;
+  const delta = isRepayment ? -applied : applied;
   const result = tx
     .insert(loanPayments)
     .values({
@@ -499,6 +521,9 @@ export function applyPaymentMatchers(txnIds: number[], at: Date = new Date(), re
       const rules = activeRules(tx);
       if (rules.length === 0) return 0; // the loans-side dormancy bail
       const balances = new Map(rules.map((rule) => [rule.itemId, rule.balanceCents]));
+      // v1.14.0 (spec BU, ruling P4): the running balance below moves the way the LOAN moves,
+      // not the way the account does, so the sign flip needs each item's own direction on hand.
+      const directions = new Map(rules.map((rule) => [rule.itemId, rule.direction]));
       const linked = alreadyLinked(tx, txnIds);
 
       let created = 0;
@@ -525,6 +550,7 @@ export function applyPaymentMatchers(txnIds: number[], at: Date = new Date(), re
           continue;
         }
 
+        const direction = directions.get(match.itemId) ?? 'owed';
         const applied = link(tx, {
           txnId: txn.id,
           itemId: match.itemId,
@@ -532,9 +558,14 @@ export function applyPaymentMatchers(txnIds: number[], at: Date = new Date(), re
           balanceCents: balances.get(match.itemId) ?? 0,
           source: 'rule',
           at: stamp,
+          direction,
         });
         if (applied === null) continue;
-        balances.set(match.itemId, (balances.get(match.itemId) ?? 0) - applied);
+        // v1.14.0: the running balance moves the way the LOAN moves, not the way the account
+        // does -- so a second matched advance on a lent loan clamps against the balance the
+        // first one already raised, not against a balance the first one wrongly shrank.
+        const moved = isLoanRepayment(direction, txn.amountCents) ? -applied : applied;
+        balances.set(match.itemId, (balances.get(match.itemId) ?? 0) + moved);
         linked.add(txn.id);
         created += 1;
       }
@@ -598,8 +629,10 @@ export function backfillLoanRule(
       let linked = 0;
       let appliedTotal = 0;
       for (const row of rows) {
-        // The query above already filters to amount_cents < 0 (payments only, same rule as
-        // applyPaymentMatchers), so row.amountCents is always negative here.
+        // The query above already filters to amount_cents < 0 (an outgoing transaction, same
+        // rule as applyPaymentMatchers -- ruling P8), so row.amountCents is always negative
+        // here. Ruling P4: pass the loan's OWN direction through link(), and move the running
+        // balance the way the loan moves, not the way the account does.
         const applied = link(tx, {
           txnId: row.id,
           itemId: rule.itemId,
@@ -607,9 +640,10 @@ export function backfillLoanRule(
           balanceCents: balance,
           source: 'rule',
           at: stamp,
+          direction: rule.direction,
         });
         if (applied === null) continue;
-        balance -= applied;
+        balance += isLoanRepayment(rule.direction, row.amountCents) ? -applied : applied;
         appliedTotal += applied;
         linked += 1;
       }
@@ -643,7 +677,7 @@ export function assignTransactionToLoan(input: { txnId: number; itemId: number; 
     if (!txn) throw new Error('That transaction no longer exists.');
 
     const item = tx
-      .select({ balance: warrantyItems.currentBalanceCents })
+      .select({ balance: warrantyItems.currentBalanceCents, direction: warrantyItems.loanDirection })
       .from(warrantyItems)
       .where(eq(warrantyItems.id, input.itemId))
       .get();
@@ -662,7 +696,9 @@ export function assignTransactionToLoan(input: { txnId: number; itemId: number; 
 
     if (txn.amountCents === 0) throw new Error('A zero-amount transaction cannot be a loan payment.');
     // F1 ruling: manual assign supports BOTH signs. A negative txn decrements the balance
-    // (a payment), a positive one increments it (a disbursement or an adjustment).
+    // (a payment), a positive one increments it (a disbursement or an adjustment) -- for an
+    // OWED loan. v1.14.0 (ruling P8): this is the ONLY path an incoming repayment on a LENT
+    // loan can take today -- applyPaymentMatchers' rules only ever match outgoing money.
     // NEW-2 fix-round: item.balance is passed through UNCOALESCED -- `?? 0` here used to
     // treat "unknown balance" as "zero balance", see link()'s docblock.
     const applied = link(tx, {
@@ -672,6 +708,7 @@ export function assignTransactionToLoan(input: { txnId: number; itemId: number; 
       balanceCents: item.balance,
       source: 'manual',
       at: stamp,
+      direction: item.direction,
     });
     return applied === null ? { linked: false, appliedCents: 0 } : { linked: true, appliedCents: applied };
   });
@@ -703,9 +740,14 @@ export function assignTransactionToLoan(input: { txnId: number; itemId: number; 
 export function unassignTransactionFromLoan(input: { txnId: number; itemId: number }): boolean {
   return getDb().transaction((tx) => {
     const row = tx
-      .select({ appliedCents: loanPayments.appliedCents, txnAmountCents: transactions.amountCents })
+      .select({
+        appliedCents: loanPayments.appliedCents,
+        txnAmountCents: transactions.amountCents,
+        direction: warrantyItems.loanDirection,
+      })
       .from(loanPayments)
       .innerJoin(transactions, eq(transactions.id, loanPayments.txnId))
+      .innerJoin(warrantyItems, eq(warrantyItems.id, loanPayments.itemId))
       .where(and(eq(loanPayments.txnId, input.txnId), eq(loanPayments.itemId, input.itemId)))
       .get();
     if (!row) return false;
@@ -713,7 +755,8 @@ export function unassignTransactionFromLoan(input: { txnId: number; itemId: numb
       .where(and(eq(loanPayments.txnId, input.txnId), eq(loanPayments.itemId, input.itemId)))
       .run();
     if (row.appliedCents > 0) {
-      const restore = row.txnAmountCents < 0 ? row.appliedCents : -row.appliedCents;
+      // v1.14.0 (ruling P4): recovered from the loan's own frame, not the account's.
+      const restore = isLoanRepayment(row.direction, row.txnAmountCents) ? row.appliedCents : -row.appliedCents;
       tx.update(warrantyItems)
         .set({ currentBalanceCents: sql`max(0, ${warrantyItems.currentBalanceCents} + ${restore})` })
         .where(and(eq(warrantyItems.id, input.itemId), sql`${warrantyItems.currentBalanceCents} is not null`))
@@ -745,13 +788,19 @@ export function unassignTransactionFromLoan(input: { txnId: number; itemId: numb
 export function reverseLoanLinksForTransactions(txnIds: number[]): number {
   if (txnIds.length === 0) return 0;
   const db = getDb();
-  const rows: { itemId: number; appliedCents: number; txnAmountCents: number }[] = [];
+  const rows: { itemId: number; appliedCents: number; txnAmountCents: number; direction: LoanDirection }[] = [];
   for (const chunk of chunkIds(txnIds)) {
     rows.push(
       ...db
-        .select({ itemId: loanPayments.itemId, appliedCents: loanPayments.appliedCents, txnAmountCents: transactions.amountCents })
+        .select({
+          itemId: loanPayments.itemId,
+          appliedCents: loanPayments.appliedCents,
+          txnAmountCents: transactions.amountCents,
+          direction: warrantyItems.loanDirection,
+        })
         .from(loanPayments)
         .innerJoin(transactions, eq(transactions.id, loanPayments.txnId))
+        .innerJoin(warrantyItems, eq(warrantyItems.id, loanPayments.itemId))
         .where(inArray(loanPayments.txnId, chunk))
         .all(),
     );
@@ -760,7 +809,8 @@ export function reverseLoanLinksForTransactions(txnIds: number[]): number {
 
   const byItem = new Map<number, number>();
   for (const row of rows) {
-    const restore = row.txnAmountCents < 0 ? row.appliedCents : -row.appliedCents;
+    // v1.14.0 (ruling P4): recovered from the loan's own frame, not the account's.
+    const restore = isLoanRepayment(row.direction, row.txnAmountCents) ? row.appliedCents : -row.appliedCents;
     byItem.set(row.itemId, (byItem.get(row.itemId) ?? 0) + restore);
   }
   for (const [itemId, restore] of byItem) {
@@ -904,12 +954,17 @@ export interface PayoffProjection {
  */
 export function payoffProjection(itemId: number, today: string): PayoffProjection | null {
   const item = getDb()
-    .select({ balanceCents: warrantyItems.currentBalanceCents })
+    .select({ balanceCents: warrantyItems.currentBalanceCents, direction: warrantyItems.loanDirection })
     .from(warrantyItems)
     .where(eq(warrantyItems.id, itemId))
     .get();
   const balanceCents = item?.balanceCents ?? null;
   if (balanceCents === null || balanceCents === 0) return null;
+  // Ruling P9: the query below sums applied cents over transactions with amount_cents < 0,
+  // which for a LENT loan is the balance GROWING. A projection built from that would read
+  // advances as repayments and print a payoff month that means nothing, so there is no
+  // projection to make.
+  if (item?.direction !== 'owed') return null;
 
   const thisMonth = monthOf(today);
   const months = monthRange(addMonths(thisMonth, -6), addMonths(thisMonth, -1));
@@ -1040,7 +1095,12 @@ export function listLoans(today: string, viewer: Viewer): LoanSummary[] {
  */
 export function loansTotalOwedCents(): number {
   const householdWide: Viewer = { id: 0, role: 'admin', visibility: 'household' };
-  return listLoans(todayIso(), householdWide).reduce((sum, loan) => sum + (loan.currentBalanceCents ?? 0), 0);
+  // v1.14.0 (spec BU, ruling P6): money someone owes the household is not a debt the household
+  // owes, so a 'lent' loan does not belong in this total -- src/lib/networth.ts reads this
+  // function and correctly stops counting lent loans without being edited itself.
+  return listLoans(todayIso(), householdWide)
+    .filter((loan) => loan.loanDirection === 'owed')
+    .reduce((sum, loan) => sum + (loan.currentBalanceCents ?? 0), 0);
 }
 
 // ---------------------------------------------------------------- read model (debt over time)

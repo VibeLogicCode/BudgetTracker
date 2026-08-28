@@ -8,7 +8,14 @@ export interface LoanTestContext {
   userId: number;
   accountId: number;
   typeId: number;
-  seedLoan(over?: { name?: string; balanceCents?: number | null; principalCents?: number | null }): { itemId: number; accountId: number };
+  seedLoan(over?: {
+    name?: string;
+    balanceCents?: number | null;
+    principalCents?: number | null;
+    /** v1.14.0. Omitted => the INSERT does not name loan_direction at all, so the row takes
+     *  the column DEFAULT exactly as every pre-migration row does. */
+    direction?: 'owed' | 'lent';
+  }): { itemId: number; accountId: number };
   spend(
     merchant: string,
     amountCents: number,
@@ -27,18 +34,46 @@ export function setupLoanTest(): LoanTestContext {
   const typeId = type.id;
 
   function seedLoan(
-    over: { name?: string; balanceCents?: number | null; principalCents?: number | null } = {},
+    over: {
+      name?: string;
+      balanceCents?: number | null;
+      principalCents?: number | null;
+      direction?: 'owed' | 'lent';
+    } = {},
   ): { itemId: number; accountId: number } {
     const balance = over.balanceCents === undefined ? 2_000_000 : over.balanceCents;
-    const row = t.sqlite
-      .prepare(
-        `insert into warranty_items
-           (name, purchase_date, is_lifetime, owner_user_id, type_id, principal_cents, current_balance_cents, balance_updated_at, created_at, updated_at)
-         values (?, '2024-01-15', 0, ?, ?, ?, ?, ?, ?, ?) returning id`,
-      )
-      .get(over.name ?? 'Civic', userId, typeId, over.principalCents ?? null, balance, balance === null ? null : NOW, NOW, NOW) as {
-      id: number;
-    };
+    // Two prepared statements, chosen on over.direction === undefined, rather than one
+    // statement with a defaulted parameter: the default path must NOT name loan_direction at
+    // all, so the row takes the column's own DEFAULT exactly as every pre-migration row does
+    // (this is what Task 3's byte-identical proof rests on).
+    const row =
+      over.direction === undefined
+        ? (t.sqlite
+            .prepare(
+              `insert into warranty_items
+                 (name, purchase_date, is_lifetime, owner_user_id, type_id, principal_cents, current_balance_cents, balance_updated_at, created_at, updated_at)
+               values (?, '2024-01-15', 0, ?, ?, ?, ?, ?, ?, ?) returning id`,
+            )
+            .get(over.name ?? 'Civic', userId, typeId, over.principalCents ?? null, balance, balance === null ? null : NOW, NOW, NOW) as {
+            id: number;
+          })
+        : (t.sqlite
+            .prepare(
+              `insert into warranty_items
+                 (name, purchase_date, is_lifetime, owner_user_id, type_id, principal_cents, current_balance_cents, balance_updated_at, loan_direction, created_at, updated_at)
+               values (?, '2024-01-15', 0, ?, ?, ?, ?, ?, ?, ?, ?) returning id`,
+            )
+            .get(
+              over.name ?? 'Civic',
+              userId,
+              typeId,
+              over.principalCents ?? null,
+              balance,
+              balance === null ? null : NOW,
+              over.direction,
+              NOW,
+              NOW,
+            ) as { id: number });
     return { itemId: row.id, accountId };
   }
 

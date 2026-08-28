@@ -61,4 +61,14 @@ describe('MUST-13.9 / MUST-13.10 / MUST-14.12: the backfill', () => {
     expect(checkLoanBackfill().allowed).toBe(true);
     setLoanRateLimitClockForTests(null);
   });
+
+  it('accumulates advances on a lent loan (the running balance is signed)', () => {
+    const { itemId } = ctx.seedLoan({ balanceCents: 0, direction: 'lent' });
+    const ruleId = saveLoanRule({ itemId, merchantContains: 'E TRANSFER', accountId: null, enabled: true });
+    ctx.spend('E TRANSFER', -20_000, { date: '2026-07-01' });
+    ctx.spend('E TRANSFER', -30_000, { date: '2026-07-15' });
+
+    expect(backfillLoanRule(ruleId, { at: new Date('2026-08-18T12:00:00Z') })).toEqual({ linked: 2, appliedCents: 50_000 });
+    expect(ctx.balanceOf(itemId)).toBe(50_000);
+  });
 });
