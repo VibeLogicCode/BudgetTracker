@@ -8,7 +8,7 @@ import { createWarrantyItem, getWarrantyItem } from '@/lib/warranty/items';
 import { createItemType } from '@/lib/warranty/types';
 import { setTransactionSplits } from '@/lib/splits';
 import { confirmCategory } from '@/lib/categorize/engine';
-import { ruleOwnedError, upsertRuleFromCorrection } from '@/lib/categorize/rules';
+import { listRules, ruleOwnedError, upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { NOT_YOURS_ERROR } from '@/lib/auth/viewer';
 
 let currentUser: {
@@ -47,6 +47,8 @@ vi.mock('next/cache', () => ({
 
 import { CROSS_ORIGIN_ERROR } from '@/lib/auth/csrf';
 import {
+  acceptGuessAction,
+  applyToAllMatchingAction,
   assignToLoanAction,
   bulkCategorizeAction,
   bulkTransferAction,
@@ -56,6 +58,7 @@ import {
   saveNoteAction,
   setAttributionAction,
   setCategoryAction,
+  setRowTransferAction,
   unassignFromLoanAction,
 } from '@/app/(app)/transactions/actions';
 
@@ -1286,5 +1289,248 @@ describe('createLoanFromTransactionAction — scope (rulings A10, A12)', () => {
       .prepare('select owner_user_id as o from warranty_items order by id desc limit 1')
       .get() as { o: number };
     expect(owner.o).toBe(otherId);
+  });
+});
+
+/** A row with a category already on it (a bayes guess, or a plain confirmed category). */
+function addTxnWithCategory(description: string, categoryId: number, source: 'bayes' | 'manual' = 'bayes'): number {
+  const { accountId, userId } = ctx!;
+  const row = current!.db.get<{ id: number }>(sql`
+    insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, category_id, categorization_source, created_by, created_at, updated_at)
+    values (${accountId}, '2026-03-02', ${description}, ${normalizeMerchant(description)}, -500, ${categoryId}, ${source}, ${userId}, ${nowIso()}, ${nowIso()})
+    returning id`);
+  return row.id;
+}
+
+/**
+ * v1.14.1 -- these three actions were ported from src/app/(app)/review/actions.ts (deleted by
+ * Lane 2 once the transactions page absorbs the queue). Their guards, refusal messages and
+ * actorRole arguments are byte-identical to the review-page originals; only the wiring (rename,
+ * ActionState shape, revalidatePath target, and setRowTransferAction's new isTransfer field)
+ * changed.
+ */
+describe('acceptGuessAction (ported from review/actions.ts)', () => {
+  it('confirms the guessed category and reports it accepted', async () => {
+    const { db, sqlite, addTxn } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const id = addTxnWithCategory('TIM HORTONS', coffee, 'bayes');
+    const result = await acceptGuessAction({}, formData({ transactionId: String(id) }));
+    expect(result.message).toBe('Accepted.');
+    const row = sqlite.prepare('select category_id, categorization_source from transactions where id = ?').get(id) as {
+      category_id: number;
+      categorization_source: string;
+    };
+    expect(row).toEqual({ category_id: coffee, categorization_source: 'manual' });
+    expect(addTxn).toBeTypeOf('function');
+  });
+
+  it('errors when the row has no guess to accept', async () => {
+    const { addTxn } = setup();
+    const id = addTxn();
+    const result = await acceptGuessAction({}, formData({ transactionId: String(id) }));
+    expect(result.error).toBe('There is no guess to accept on that row.');
+  });
+
+  it('checks the origin before anything else', async () => {
+    setup();
+    sameOrigin.value = false;
+    const result = await acceptGuessAction({}, formData({ transactionId: '1' }));
+    expect(result.error).toBe(CROSS_ORIGIN_ERROR);
+  });
+
+  it('refuses a self-scoped viewer, byte-identical to the review-page guard', async () => {
+    const { db, sqlite, addTxn } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const id = addTxnWithCategory('TIM HORTONS', coffee, 'bayes');
+    currentUser = { ...currentUser, role: 'member', visibility: 'self' };
+    const result = await acceptGuessAction({}, formData({ transactionId: String(id) }));
+    expect(result.error).toBe('Review is not available on this account.');
+    const row = sqlite.prepare('select categorization_source as s from transactions where id = ?').get(id) as { s: string };
+    expect(row.s).toBe('bayes');
+    expect(addTxn).toBeTypeOf('function');
+  });
+
+  it('surfaces a rule-ownership refusal the same way confirmCategory reports it elsewhere', async () => {
+    const { db, sqlite, userId, addTxn } = setup();
+    const bob = insertTestUser(db, { name: 'Bob', username: 'bob', role: 'member' });
+    const coffee = categoryIdByName(db, 'Coffee');
+    const groceries = categoryIdByName(db, 'Groceries');
+    upsertRuleFromCorrection({
+      pattern: normalizeMerchant('SOMEBODY ELSES RULE'),
+      matchType: 'exact',
+      ruleKind: 'category',
+      categoryId: groceries,
+      createdBy: bob,
+      actorRole: 'member',
+    });
+    const id = addTxnWithCategory('SOMEBODY ELSES RULE', coffee, 'bayes');
+    currentUser = { ...currentUser, role: 'member' };
+    const result = await acceptGuessAction({}, formData({ transactionId: String(id) }));
+    expect(result.error).toBe(ruleOwnedError('Bob'));
+    const row = sqlite.prepare('select category_id as c from transactions where id = ?').get(id) as { c: number };
+    expect(row.c).toBe(coffee);
+    expect(userId).toBeGreaterThan(0);
+    expect(addTxn).toBeTypeOf('function');
+  });
+});
+
+describe('applyToAllMatchingAction (ported from review/actions.ts)', () => {
+  it('applies the category to every other matching row and creates a rule', async () => {
+    const { db, sqlite, addTxn } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const a = addTxn('TIM HORTONS');
+    const b = addTxn('TIM HORTONS');
+    const result = await applyToAllMatchingAction(
+      {},
+      formData({ normalizedMerchant: normalizeMerchant('TIM HORTONS'), categoryId: String(coffee) }),
+    );
+    expect(result.message).toBe('Applied to 2 transactions and created a rule.');
+    const rows = sqlite.prepare('select category_id as c from transactions where id in (?, ?)').all(a, b) as { c: number }[];
+    expect(rows.every((r) => r.c === coffee)).toBe(true);
+  });
+
+  it('errors when no category was picked', async () => {
+    setup();
+    const result = await applyToAllMatchingAction({}, formData({ normalizedMerchant: 'TIM HORTONS', categoryId: '' }));
+    expect(result.error).toBe('Pick a category.');
+  });
+
+  it('checks the origin before anything else', async () => {
+    setup();
+    sameOrigin.value = false;
+    const result = await applyToAllMatchingAction({}, formData({ normalizedMerchant: 'X', categoryId: '1' }));
+    expect(result.error).toBe(CROSS_ORIGIN_ERROR);
+  });
+
+  it('refuses a self-scoped viewer, byte-identical to the review-page guard', async () => {
+    const { db } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    currentUser = { ...currentUser, role: 'member', visibility: 'self' };
+    const result = await applyToAllMatchingAction(
+      {},
+      formData({ normalizedMerchant: normalizeMerchant('TIM HORTONS'), categoryId: String(coffee) }),
+    );
+    expect(result.error).toBe('Review is not available on this account.');
+  });
+
+  it('refuses a rule-ownership conflict and writes nothing', async () => {
+    const { db, sqlite, addTxn } = setup();
+    const bob = insertTestUser(db, { name: 'Bob', username: 'bob', role: 'member' });
+    const coffee = categoryIdByName(db, 'Coffee');
+    const groceries = categoryIdByName(db, 'Groceries');
+    upsertRuleFromCorrection({
+      pattern: normalizeMerchant('OWNER MERCHANT'),
+      matchType: 'exact',
+      ruleKind: 'category',
+      categoryId: groceries,
+      createdBy: bob,
+      actorRole: 'member',
+    });
+    const id = addTxn('OWNER MERCHANT');
+    currentUser = { ...currentUser, role: 'member' };
+    const result = await applyToAllMatchingAction(
+      {},
+      formData({ normalizedMerchant: normalizeMerchant('OWNER MERCHANT'), categoryId: String(coffee) }),
+    );
+    expect(result.error).toBe(ruleOwnedError('Bob'));
+    const row = sqlite.prepare('select category_id as c from transactions where id = ?').get(id) as { c: number | null };
+    expect(row.c).toBeNull();
+  });
+});
+
+describe('setRowTransferAction (ported from review/actions.ts, renamed, both directions -- ruling R4)', () => {
+  it('marks a row a transfer and learns an exact rule', async () => {
+    const { sqlite, addTxn } = setup();
+    const id = addTxn('E-TRANSFER SENT J DOE');
+    const result = await setRowTransferAction({}, formData({ transactionId: String(id), isTransfer: '1' }));
+    expect(result.message).toBeTruthy();
+    const row = sqlite.prepare('select is_transfer from transactions where id = ?').get(id) as { is_transfer: number };
+    expect(row.is_transfer).toBe(1);
+  });
+
+  it('un-marks a transfer back to not-a-transfer', async () => {
+    const { sqlite, addTxn } = setup();
+    const id = addTxn('E-TRANSFER SENT J DOE');
+    await setRowTransferAction({}, formData({ transactionId: String(id), isTransfer: '1' }));
+    const result = await setRowTransferAction({}, formData({ transactionId: String(id), isTransfer: '0' }));
+    expect(result.message).toBeTruthy();
+    const row = sqlite.prepare('select is_transfer from transactions where id = ?').get(id) as { is_transfer: number };
+    expect(row.is_transfer).toBe(0);
+  });
+
+  it('returns a clean error for a non-numeric transactionId instead of throwing', async () => {
+    setup();
+    await expect(setRowTransferAction({}, formData({ transactionId: 'nope', isTransfer: '1' }))).resolves.toMatchObject({
+      error: expect.any(String),
+    });
+  });
+
+  it('checks the origin before anything else', async () => {
+    setup();
+    sameOrigin.value = false;
+    const result = await setRowTransferAction({}, formData({ transactionId: '1', isTransfer: '1' }));
+    expect(result.error).toBe(CROSS_ORIGIN_ERROR);
+  });
+
+  it('refuses a self-scoped viewer, byte-identical to the review-page guard', async () => {
+    const { sqlite, addTxn } = setup();
+    const id = addTxn();
+    currentUser = { ...currentUser, role: 'member', visibility: 'self' };
+    const result = await setRowTransferAction({}, formData({ transactionId: String(id), isTransfer: '1' }));
+    expect(result.error).toBe('Review is not available on this account.');
+    const row = sqlite.prepare('select is_transfer from transactions where id = ?').get(id) as { is_transfer: number };
+    expect(row.is_transfer).toBe(0);
+  });
+
+  it('surfaces the rule-ownership refusal as the row error and writes nothing', async () => {
+    const { db, sqlite, addTxn } = setup();
+    const bob = insertTestUser(db, { name: 'Bob', username: 'bob', role: 'member' });
+    upsertRuleFromCorrection({
+      pattern: normalizeMerchant('E-TRANSFER OWNER'),
+      matchType: 'exact',
+      ruleKind: 'transfer',
+      categoryId: null,
+      createdBy: bob,
+      actorRole: 'member',
+    });
+    const id = addTxn('E-TRANSFER OWNER');
+    currentUser = { ...currentUser, role: 'member' };
+    const result = await setRowTransferAction({}, formData({ transactionId: String(id), isTransfer: '1' }));
+    expect(result.error).toBe(ruleOwnedError('Bob'));
+    const row = sqlite.prepare('select is_transfer from transactions where id = ?').get(id) as { is_transfer: number };
+    expect(row.is_transfer).toBe(0);
+  });
+});
+
+/**
+ * v1.14.1 ruling R3: setCategoryAction's category-pick branch now reads a `teach` field. `'1'`
+ * means the row's own pick doubles as the categorizer's confirmation (createRule: true, as
+ * /review's fixCategoryAction always did); anything else (absent, '0', or garbage) keeps today's
+ * createRule: false -- a plain per-row edit, no household rule.
+ */
+describe("setCategoryAction: ruling R3 -- teach='1' creates a rule, anything else does not", () => {
+  it("teach='1' creates a merchant rule for this category, same as accepting a guess", async () => {
+    const { db, addTxn } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const id = addTxn('TEACH MERCHANT');
+    const result = await setCategoryAction({}, formData({ transactionId: String(id), categoryId: String(coffee), teach: '1' }));
+    expect(result.message).toBe('Category updated.');
+    expect(listRules('category').map((r) => r.pattern)).toContain(normalizeMerchant('TEACH MERCHANT'));
+  });
+
+  it('teach absent creates no rule (today\'s behaviour, unchanged)', async () => {
+    const { db, addTxn } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const id = addTxn('NO TEACH MERCHANT');
+    await setCategoryAction({}, formData({ transactionId: String(id), categoryId: String(coffee) }));
+    expect(listRules('category').map((r) => r.pattern)).not.toContain(normalizeMerchant('NO TEACH MERCHANT'));
+  });
+
+  it("teach='0' (or any other value) creates no rule either", async () => {
+    const { db, addTxn } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const id = addTxn('GARBAGE TEACH MERCHANT');
+    await setCategoryAction({}, formData({ transactionId: String(id), categoryId: String(coffee), teach: 'garbage' }));
+    expect(listRules('category').map((r) => r.pattern)).not.toContain(normalizeMerchant('GARBAGE TEACH MERCHANT'));
   });
 });

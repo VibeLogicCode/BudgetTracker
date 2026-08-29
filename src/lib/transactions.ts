@@ -35,6 +35,15 @@ export interface TransactionFilter {
   search?: string | null;
   uncategorizedOnly?: boolean;
   includeTransfers?: boolean;
+  /**
+   * v1.14.1 ruling R1. `?review=1` is a filter, not a page: this pushes engine.ts's own
+   * REVIEW_WHERE into buildWhere (never restated here) and flips listTransactions to oldest-first
+   * order, same as listReviewQueue below always has. Ruling R2 (a self viewer never sees the
+   * household-wide queue) is enforced by the CALLER forcing this false, not here -- buildWhere's
+   * ownerScope clause below is unconditional regardless, so even an unforced call still narrows to
+   * the viewer's own rows.
+   */
+  reviewOnly?: boolean;
   page?: number;
   pageSize?: number;
 }
@@ -165,6 +174,11 @@ function buildWhere(filter: TransactionFilter, viewer: Viewer): SQL | undefined 
 
   if (filter.uncategorizedOnly) clauses.push(isNull(transactions.categoryId));
   if (filter.includeTransfers === false) clauses.push(eq(transactions.isTransfer, false));
+  // Ruling R1: the queue definition lives in engine.ts and is imported, never restated. and()'s
+  // return type is `SQL | undefined` regardless of argument count -- REVIEW_WHERE is built from
+  // three fixed clauses and is never actually undefined at runtime, but the guard keeps this
+  // array's element type honest.
+  if (filter.reviewOnly && REVIEW_WHERE) clauses.push(REVIEW_WHERE);
 
   if (clauses.length === 0) return undefined;
   return and(...clauses);
@@ -188,8 +202,10 @@ export function listTransactions(filter: TransactionFilter, viewer: Viewer): Tra
   const total = totalRow?.c ?? 0;
 
   const query = baseQuery();
+  // Ruling R1: oldest-first while working the queue, same order listReviewQueue always used;
+  // newest-first (unchanged) otherwise.
   const rows = (where ? query.where(where) : query)
-    .orderBy(desc(transactions.date), desc(transactions.id))
+    .orderBy(...(filter.reviewOnly ? [asc(transactions.date), asc(transactions.id)] : [desc(transactions.date), desc(transactions.id)]))
     .limit(pageSize)
     .offset((page - 1) * pageSize)
     .all();

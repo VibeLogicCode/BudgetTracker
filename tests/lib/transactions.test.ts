@@ -374,6 +374,43 @@ describe('bulk actions', () => {
   });
 });
 
+/**
+ * v1.14.1 ruling R1. `?review=1` is a filter, not a page: reviewOnly pushes engine.ts's own
+ * REVIEW_WHERE into buildWhere rather than restating the queue definition here, and flips the
+ * order to oldest-first. listReviewQueue (below) stays as the byte-for-byte proof the two agree.
+ */
+describe('listTransactions reviewOnly (ruling R1)', () => {
+  it('returns exactly the rows listReviewQueue returns, in the same oldest-first order', () => {
+    const { db, add } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const older = add({ date: '2026-03-01', description: 'SHOP A' });
+    const bayesRow = add({ date: '2026-03-05', description: 'SHOP B', categoryId: groceries, source: 'bayes' });
+    add({ date: '2026-03-06', description: 'SHOP C', categoryId: groceries, source: 'manual' });
+    add({ date: '2026-03-07', description: 'PAYMENT - THANK YOU', isTransfer: true });
+
+    const page = listTransactions({ reviewOnly: true }, VIEWER);
+    expect(page.rows.map((r) => r.id)).toEqual([older, bayesRow]);
+    expect(page.rows.map((r) => r.id)).toEqual(listReviewQueue().map((r) => r.id));
+  });
+
+  it("still honours a self viewer's owner scope on top of the review filter", () => {
+    const { alice, bob, add } = setup();
+    const aliceOwn = add({ date: '2026-03-01', description: 'ALICE SHOP', attributedUserId: alice });
+    add({ date: '2026-03-02', description: 'BOB SHOP', attributedUserId: bob });
+
+    const selfViewer: Viewer = { id: alice, role: 'member', visibility: 'self' };
+    const page = listTransactions({ reviewOnly: true }, selfViewer);
+    expect(page.rows.map((r) => r.id)).toEqual([aliceOwn]);
+  });
+
+  it('defaults to newest-first when reviewOnly is not set (unchanged behaviour)', () => {
+    const { add } = setup();
+    const first = add({ date: '2026-03-01', description: 'SHOP A' });
+    const second = add({ date: '2026-03-02', description: 'SHOP B' });
+    expect(listTransactions({}, VIEWER).rows.map((r) => r.id)).toEqual([second, first]);
+  });
+});
+
 describe('review queue and merchant counting', () => {
   it('returns uncategorized and unconfirmed bayes rows oldest first', () => {
     const { db, add } = setup();

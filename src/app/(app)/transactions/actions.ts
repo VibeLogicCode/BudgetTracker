@@ -5,7 +5,7 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { isSameOrigin } from '@/lib/auth/csrf';
 import { requireUser, type SessionUser } from '@/lib/auth/session';
-import { NOT_YOURS_ERROR, ownerScope } from '@/lib/auth/viewer';
+import { isSelfScoped, NOT_YOURS_ERROR, ownerScope } from '@/lib/auth/viewer';
 import { acceptsTransactions, getAccount, getOrCreateCashAccount, listAccounts } from '@/lib/accounts';
 import { setLastAccountId } from '@/lib/auth/users';
 import {
@@ -29,7 +29,16 @@ import {
   transactionOwners,
   updateTransactionNotes,
 } from '@/lib/transactions';
-import { clearCategory, confirmCategory, setTransactionDisplayName, upsertRenameRule } from '@/lib/categorize/engine';
+import {
+  applyCategoryToMatching,
+  clearCategory,
+  confirmCategory,
+  setTransactionDisplayName,
+  setTransferFlag,
+  upsertRenameRule,
+  type CategoryMatchResult,
+  type RuleGuardedWriteResult,
+} from '@/lib/categorize/engine';
 import { ruleOwnedError } from '@/lib/categorize/rules';
 
 export interface ActionState {
@@ -77,6 +86,23 @@ function allTransactionsVisible(ids: number[], viewer: SessionUser): boolean {
  * changed when a split one quietly was not, so both bulk actions below report the skip in
  * plain language instead.
  */
+/**
+ * v1.14.1: this file's own split-refusal wording for a row edit differs from /review's
+ * ('This transaction is split — clear its split first, then change its category.' vs. this
+ * constant) -- the two are separate sentences for separate actions, and porting one must not
+ * quietly rewrite the other. This helper and SPLIT_ROW_ERROR are review/actions.ts's own
+ * guardedWriteError/SPLIT_ROW_ERROR, moved verbatim for the three actions ported below.
+ */
+const SPLIT_ROW_ERROR = 'That transaction has splits and cannot be recategorized this way.';
+
+function guardedWriteError(result: RuleGuardedWriteResult | CategoryMatchResult): string {
+  return result.ok
+    ? ''
+    : result.reason === 'owned_by_another'
+      ? ruleOwnedError(result.ownerName)
+      : SPLIT_ROW_ERROR;
+}
+
 function splitSkipSentence(skipped: number): string | null {
   if (skipped <= 0) return null;
   const noun = skipped === 1 ? 'transaction' : 'transactions';
@@ -182,17 +208,20 @@ export async function setCategoryAction(_prev: ActionState, formData: FormData):
       return { error: 'This transaction is split — clear its split first, then change its category.' };
     }
   } else {
-    // createRule: false -- ruling R4. This select tags THIS row. It used to create or overwrite a
-    // household-wide exact merchant rule that files every future import for everyone, and the
-    // action's own confirming sentence ("Category set and rule created.") never reached the
-    // screen, because AutoSave reads only result.error. /review keeps the teaching behaviour:
-    // that screen is ABOUT the categorizer, and its button says so.
+    // v1.14.1 ruling R3: a category pick means two different things, and the FORM decides which.
+    // Plain per-row edit (teach absent, or any value but '1'): createRule: false, ruling R4's
+    // existing behaviour, unchanged -- this select tags THIS row only and does not create or
+    // overwrite a household-wide exact merchant rule that files every future import for everyone.
+    // Review mode (the row sends teach=1): createRule: true -- the pick doubles as the
+    // categorizer's own confirmation, exactly what /review's fixCategoryAction always did before
+    // this action absorbed it.
     //
     // v1.13.0 ruling R4: actorRole threaded through so a member can never silently overwrite a
     // rule someone else in the household owns -- confirmCategory refuses (`owned_by_another`)
     // rather than overwrite, and reports the sentence ruleOwnedError provides instead of the
     // usual "Category updated."
-    const result = confirmCategory({ transactionId, categoryId: Number(raw), userId: user.id, createRule: false, actorRole: user.role });
+    const teach = formData.get('teach') === '1';
+    const result = confirmCategory({ transactionId, categoryId: Number(raw), userId: user.id, createRule: teach, actorRole: user.role });
     if (!result.ok) {
       return {
         error:
@@ -206,6 +235,80 @@ export async function setCategoryAction(_prev: ActionState, formData: FormData):
   revalidatePath('/transactions');
   revalidatePath('/review');
   return { message: 'Category updated.' };
+}
+
+/**
+ * v1.14.1: ported from src/app/(app)/review/actions.ts (Lane 2 deletes that file once every row
+ * everywhere renders through this page). Guards, refusal messages and actorRole argument are
+ * byte-identical to the review-page original -- only revalidatePath('/review') became
+ * revalidatePath('/transactions') here; the row-editing guard above (household-only, review is
+ * unscoped by construction) is unchanged, since this remains a review-mode-only kebab item
+ * (inventory item 5).
+ */
+export async function acceptGuessAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  const user = await requireUser();
+  if (isSelfScoped(user)) return { error: 'Review is not available on this account.' };
+
+  const transactionId = Number(formData.get('transactionId'));
+  const row = getTransaction(transactionId, user);
+  if (!row || row.categoryId === null) return { error: 'There is no guess to accept on that row.' };
+  const result = confirmCategory({ transactionId, categoryId: row.categoryId, userId: user.id, actorRole: user.role });
+  if (!result.ok) return { error: guardedWriteError(result) };
+  revalidatePath('/transactions');
+  return { message: 'Accepted.' };
+}
+
+/**
+ * v1.14.1: ported from src/app/(app)/review/actions.ts, byte-identical guards and messages
+ * (inventory item 7, review-mode-only kebab item).
+ */
+export async function applyToAllMatchingAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  const user = await requireUser();
+  if (isSelfScoped(user)) return { error: 'Review is not available on this account.' };
+
+  const normalizedMerchant = String(formData.get('normalizedMerchant') ?? '');
+  const categoryId = Number(formData.get('categoryId'));
+  if (normalizedMerchant.length === 0 || !Number.isInteger(categoryId) || categoryId <= 0) return { error: 'Pick a category.' };
+  const result = applyCategoryToMatching({ normalizedMerchant, categoryId, userId: user.id, actorRole: user.role });
+  if (!result.ok) return { error: guardedWriteError(result) };
+  revalidatePath('/transactions');
+  return { message: `Applied to ${result.count} transactions and created a rule.` };
+}
+
+/**
+ * v1.14.1: ported from review/actions.ts's markTransferAction and renamed -- ruling R4 offers
+ * this on EVERY row, not just review mode, so it now reads an `isTransfer` field instead of
+ * hardcoding `true`, and works both ways ("Mark as transfer" / "Not a transfer"). Every other
+ * guard, the refusal messages, and the actorRole argument are byte-identical to the original.
+ */
+export async function setRowTransferAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  const user = await requireUser();
+  if (isSelfScoped(user)) return { error: 'Review is not available on this account.' };
+
+  const parsed = z.object({ transactionId: z.coerce.number().int().positive() }).safeParse({
+    transactionId: formData.get('transactionId'),
+  });
+  if (!parsed.success) return { error: 'Invalid request.' };
+  const isTransfer = formData.get('isTransfer') === '1';
+  try {
+    const result = setTransferFlag({
+      transactionId: parsed.data.transactionId,
+      isTransfer,
+      userId: user.id,
+      actorRole: user.role,
+    });
+    if (!result.ok) return { error: guardedWriteError(result) };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : 'Could not update that transaction.' };
+  }
+  revalidatePath('/transactions');
+  return { message: isTransfer ? 'Marked as a transfer and learned an exact rule.' : 'Marked as not a transfer.' };
 }
 
 // '' means "household/unattributed"; anything else must be a positive integer user id.
