@@ -194,7 +194,11 @@ export const HELP_SECTIONS: HelpSection[] = [
     title: 'Review',
     body: (
       <>
-        <Where path="/review">third in the menu, with a count beside it when it is not empty —</Where>
+        <Where path="/transactions?review=1">
+          third in the menu, with a count beside it when it is not empty — a filter on
+          Transactions rather than a second page. The old address, <code>/review</code>, still
+          works and lands you on the same filtered view —
+        </Where>
         <P>
           Two kinds of row wait here: the ones with no category at all, and the ones the app
           guessed at from the pattern of your past choices without anybody confirming the guess.

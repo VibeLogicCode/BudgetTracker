@@ -37,7 +37,12 @@ export interface NavItem {
 export const NAV: NavItem[] = [
   { href: '/dashboard', label: 'Dashboard', Icon: DashboardIcon },
   { href: '/transactions', label: 'Transactions', Icon: TransactionsIcon },
-  { href: '/review', label: 'Review', Icon: ReviewIcon },
+  // Review round (fold /review in): ruling R7 keeps this entry, its label, its icon and its
+  // count badge -- only the href changes, from the second page it used to be to the filter that
+  // replaced it. `/review` itself still exists and still works (ruling R6, review/page.tsx is
+  // now a bare redirect to this same href), so a bookmark or a typed-in address is unaffected;
+  // this is only the link the app itself renders.
+  { href: '/transactions?review=1', label: 'Review', Icon: ReviewIcon },
   { href: '/import', label: 'Import', Icon: ImportIcon },
   { href: '/budgets', label: 'Budgets', Icon: BudgetsIcon },
   { href: '/goals', label: 'Goals', Icon: GoalsIcon },
@@ -67,7 +72,7 @@ export const NAV: NavItem[] = [
  * Reports STAYS: ruling R2 forbids household totals, and Task 6 force-scopes every aggregate, so
  * what a self viewer sees there is their own spending, which is worth having.
  */
-const SELF_HIDDEN_HREFS = new Set(['/import', '/review', '/settings']);
+const SELF_HIDDEN_HREFS = new Set(['/import', '/transactions?review=1', '/settings']);
 
 export function visibleNav(viewer: Viewer): NavItem[] {
   if (viewer.visibility !== 'self' || viewer.role === 'admin') return NAV;

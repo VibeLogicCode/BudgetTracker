@@ -224,7 +224,10 @@ export default async function DashboardPage({
       ) : null}
 
       {reviewCount > 0 ? (
-        <CalloutLink href="/review" tone="warning">
+        // Review round (fold /review in): the review queue is now `?review=1` on Transactions
+        // rather than a second page (ruling R1) -- this callout is the dashboard's own link to
+        // it, repointed the same way the nav item was.
+        <CalloutLink href="/transactions?review=1" tone="warning">
           {reviewCount} transactions need review
         </CalloutLink>
       ) : null}

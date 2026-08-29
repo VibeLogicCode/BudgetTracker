@@ -391,7 +391,10 @@ export function ImportClient({
       {summary ? (
         <Notice tone="success">
           {summary}{' '}
-          <a className="font-semibold underline underline-offset-2" href="/review">Go to the review queue</a>
+          {/* Review round (fold /review in): the review queue is `?review=1` on Transactions now
+              (ruling R1), not a second page -- repointed the same way the nav item and the
+              dashboard callout were. */}
+          <a className="font-semibold underline underline-offset-2" href="/transactions?review=1">Go to the review queue</a>
         </Notice>
       ) : null}
 

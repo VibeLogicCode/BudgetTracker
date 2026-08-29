@@ -4,8 +4,9 @@ import { acceptsTransactions, listAccounts } from '@/lib/accounts';
 import { listCategories } from '@/lib/categories';
 import { findUserById, listAttributablePeople } from '@/lib/auth/users';
 import { loanLinksForTransactions, listLoans } from '@/lib/loans';
+import { reviewQueueCount } from '@/lib/categorize/engine';
 import { splitsForTransactions } from '@/lib/splits';
-import { listTransactions, type TransactionFilter } from '@/lib/transactions';
+import { countMatchingMerchant, listTransactions, type TransactionFilter } from '@/lib/transactions';
 import { todayIso } from '@/lib/dates';
 import { resolveRange, type ResolvedRange } from '@/lib/date-range';
 import { readEnv } from '@/lib/env';
@@ -20,6 +21,10 @@ function readFilter(
    *  the same `ownerScope(viewer) ?? urlValue` idiom dashboard/page.tsx and reports/page.tsx already
    *  use, so a self viewer's own id always wins over whatever a hand-edited `?person=` says. */
   selfOwnerId: number | null,
+  /** Ruling R1/R2: already forced to `false` for a self viewer by the caller -- listReviewQueue's
+   *  replacement (`reviewOnly` on the filter) is household-wide by construction, same as the page
+   *  it replaces, so this function never has to know WHY it is false, only what to do with it. */
+  reviewMode: boolean,
 ): TransactionFilter {
   const one = (key: string) => {
     const value = params[key];
@@ -49,6 +54,7 @@ function readFilter(
     includeTransfers: one('transfers') !== '0',
     page: num('page') ?? 1,
     pageSize: 50,
+    reviewOnly: reviewMode,
   };
 }
 
@@ -67,11 +73,31 @@ export default async function TransactionsPage({
   // MUST-13.5: fallback null, because Transactions is the page people open to find a charge
   // from March and giving it a default range would hide exactly those rows.
   const range = resolveRange({ preset: one('range'), from: one('from'), to: one('to'), today, fallback: null });
-  const filter = readFilter(params, range, ownerScope(viewer));
+  // Ruling R2: the review queue is household-wide by construction (same as the /review page it
+  // replaces), so a self viewer's `?review=1` is silently ignored rather than refused -- they
+  // just get their own ordinary transactions list, the same courtesy a hand-edited `?person=`
+  // already gets above.
+  const selfScopedViewer = isSelfScoped(viewer);
+  const reviewMode = one('review') === '1' && !selfScopedViewer;
+  const filter = readFilter(params, range, ownerScope(viewer), reviewMode);
   const page = listTransactions(filter, viewer);
+  // Ruling: cheap even when nobody is looking at it -- one count(*) behind REVIEW_WHERE, the
+  // same query the nav badge already runs. Always computed, never gated on reviewMode, so the
+  // "Needs review (N)" chip stays accurate when a filtered view happens to be review-empty.
+  const reviewCount = reviewQueueCount();
+  // Review-mode-only (ruling: matchingCount is computed for review-mode rows only, Lane 1's own
+  // docblock on the filter). A plain object keyed by id, the same shape loanLinks/splits below
+  // already use for "extra data about this page's rows, not carried on TransactionRow itself".
+  const matchingCounts: Record<number, number> = {};
+  if (reviewMode) {
+    for (const row of page.rows) matchingCounts[row.id] = countMatchingMerchant(row.normalizedMerchant);
+  }
   return (
     <TransactionsClient
       page={page}
+      reviewMode={reviewMode}
+      reviewCount={reviewCount}
+      matchingCounts={matchingCounts}
       // Ruling R10: an asset account holds a typed balance and takes no transactions/imports, so
       // it is filtered out of every account picker on this page -- the filter select, quick-add
       // and (formerly) the bottom manual-entry form all shared this one `accounts` prop, so

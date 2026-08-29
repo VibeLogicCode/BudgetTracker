@@ -1,24 +1,15 @@
 import { redirect } from 'next/navigation';
-import { requireUser } from '@/lib/auth/session';
-import { isSelfScoped } from '@/lib/auth/viewer';
-import { listCategories } from '@/lib/categories';
-import { countMatchingMerchant, listReviewQueue } from '@/lib/transactions';
-import { reviewQueueCount } from '@/lib/categorize/engine';
-import { ReviewClient } from './review-client';
 
-export const dynamic = 'force-dynamic';
-
-export default async function ReviewPage() {
-  const user = await requireUser();
-  // Controller ruling: listReviewQueue is household-wide by construction and unscoped, so hiding
-  // Review from a self viewer's nav is not enough -- the page itself must refuse them.
-  if (isSelfScoped(user)) redirect('/dashboard');
-  const rows = listReviewQueue(100, 0);
-  return (
-    <ReviewClient
-      total={reviewQueueCount()}
-      rows={rows.map((row) => ({ ...row, matchingCount: countMatchingMerchant(row.normalizedMerchant) }))}
-      categories={listCategories()}
-    />
-  );
+/**
+ * Review round (fold /review in): the review queue is a filter on Transactions now (ruling R1),
+ * not a second page. This route stays (ruling R6) so a bookmark, the dashboard callout, the
+ * import link and a hand-typed address all keep working -- it does nothing but redirect.
+ *
+ * Deliberately no auth check here: `/transactions?review=1` handles the self-viewer refusal
+ * itself (ruling R2, page.tsx forces `reviewOnly` off for one), so a self viewer who lands on
+ * this old address simply gets their own ordinary transactions list, the same as anyone who
+ * types the new address by hand.
+ */
+export default function ReviewPage() {
+  redirect('/transactions?review=1');
 }

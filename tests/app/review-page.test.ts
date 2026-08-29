@@ -1,25 +1,12 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { createSeededTestDb, insertTestUser, type TestDb } from '../helpers/db';
 
 /**
- * v1.13.0 controller ruling: hiding Review from a self viewer's nav (micro-ruling M6) is not
- * enough on its own -- listReviewQueue is household-wide by construction and unscoped, so the
- * page itself must refuse a self viewer server-side.
+ * Review round (fold /review in): the review queue is a filter on Transactions now (ruling R1),
+ * so this route does nothing but redirect (ruling R6) -- no auth check, no queue read, nothing
+ * else. The old self-viewer-refusal test this file used to carry moved with the behaviour it
+ * was testing: `/transactions?review=1` forces `reviewOnly` off for a self viewer server-side
+ * (ruling R2), which is `tests/app/transactions-page.test.tsx`'s job now, not this one's.
  */
-const currentUser = vi.hoisted(() => ({
-  value: {
-    id: 0,
-    name: '',
-    username: '',
-    role: 'admin' as 'admin' | 'member',
-    visibility: 'household' as 'household' | 'self',
-  },
-}));
-
-vi.mock('@/lib/auth/session', () => ({
-  requireUser: async () => currentUser.value,
-}));
-
 const redirected: string[] = [];
 vi.mock('next/navigation', () => ({
   redirect: (url: string) => {
@@ -28,30 +15,14 @@ vi.mock('next/navigation', () => ({
   },
 }));
 
-let current: TestDb | null = null;
 afterEach(() => {
-  current?.cleanup();
-  current = null;
   redirected.length = 0;
 });
 
 describe('ReviewPage', () => {
-  it('redirects a self-scoped viewer to /dashboard', async () => {
-    current = createSeededTestDb();
-    const kid = insertTestUser(current.db, { name: 'Kid', username: 'kid', role: 'member' });
-    currentUser.value = { id: kid, name: 'Kid', username: 'kid', role: 'member', visibility: 'self' };
-
+  it('redirects to /transactions?review=1, unconditionally', async () => {
     const { default: ReviewPage } = await import('@/app/(app)/review/page');
-    await expect(ReviewPage()).rejects.toThrow('NEXT_REDIRECT:/dashboard');
-  });
-
-  it('does not redirect a household viewer', async () => {
-    current = createSeededTestDb();
-    const admin = insertTestUser(current.db, { name: 'Admin', username: 'admin', role: 'admin' });
-    currentUser.value = { id: admin, name: 'Admin', username: 'admin', role: 'admin', visibility: 'household' };
-
-    const { default: ReviewPage } = await import('@/app/(app)/review/page');
-    await expect(ReviewPage()).resolves.toBeTruthy();
-    expect(redirected).toEqual([]);
+    expect(() => ReviewPage()).toThrow('NEXT_REDIRECT:/transactions?review=1');
+    expect(redirected).toEqual(['/transactions?review=1']);
   });
 });

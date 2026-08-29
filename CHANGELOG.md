@@ -21,6 +21,33 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.14.1] - 2026-08-29
+
+No migration. Nothing in the database changes shape.
+
+### Changed
+
+- **The review queue is a filter on Transactions now, not a second page.** `?review=1` on
+  Transactions narrows the list to exactly what `/review` used to show — oldest first, uncategorized
+  or an unconfirmed guess, transfers and split rows excluded — and renders it as a card list instead
+  of the table. Every feature Transactions has gained since the queue was last touched (splits,
+  notes, per-person attribution, loans, renaming) is automatically available while reviewing, because
+  it is the same page. The **Review** entry in the menu keeps its label, its icon and its count
+  badge; only where it points has changed. The old `/review` address still works — it redirects
+  here — so a bookmark, the dashboard's "N transactions need review" callout and the link at the end
+  of an import all keep working with no change on your part.
+- **Accepting a guess or picking a category still teaches the categorizer while reviewing**, exactly
+  as before: the merchant is remembered and future imports arrive already sorted. Outside the
+  review filter, picking a category continues to tag only that one row, unchanged from how
+  Transactions has always worked.
+
+### Added
+
+- **Every transaction row can be marked (or un-marked) a transfer from its own menu**, not only
+  from the bulk toolbar or while reviewing. "Mark as transfer" and "Not a transfer" sit alongside
+  Rename…, Note…, Split… and the loan actions on every row, and it learns the same exact rule the
+  bulk control and the old review queue already did.
+
 ## [1.14.0] - 2026-08-28
 
 **Before updating:** this release adds one column to one table (`warranty_items`). Nothing is

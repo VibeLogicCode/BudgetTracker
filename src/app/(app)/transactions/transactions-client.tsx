@@ -5,7 +5,7 @@ import { Fragment, useActionState, useEffect, useState } from 'react';
 import { FormError } from '@/components/FormError';
 import { QuickAddTransaction } from '@/components/QuickAddTransaction';
 import { SubmitButton } from '@/components/SubmitButton';
-import { TransactionsIcon } from '@/components/icons';
+import { CheckIcon, TransactionsIcon } from '@/components/icons';
 import { Card, CardBody, CardFooter, CardHeader } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Money } from '@/components/ui/Money';
@@ -25,6 +25,8 @@ import type { SplitRow } from '@/lib/splits';
 import type { TransactionPage, TransactionRow } from '@/lib/transactions';
 import { LOAN_DIRECTIONS, LOAN_DIRECTION_LABELS } from '@/lib/warranty/constants';
 import {
+  acceptGuessAction,
+  applyToAllMatchingAction,
   assignToLoanAction,
   bulkCategorizeAction,
   bulkTransferAction,
@@ -34,6 +36,7 @@ import {
   saveSplitsAction,
   setAttributionAction,
   setCategoryAction,
+  setRowTransferAction,
   unassignFromLoanAction,
   type ActionState,
 } from './actions';
@@ -60,6 +63,15 @@ const blankSplitPart = (): SplitPartDraft => ({ categoryId: '', amount: '', note
 const initial: ActionState = {};
 
 /**
+ * Review round (fold /review in): the card list's own "This transaction only" and "apply to
+ * all" selects, ported byte-for-byte from review-client.tsx's `pickerClass` -- dense enough to
+ * sit alongside the row's kebab without shouting, with the same explicit `min-h-11 sm:min-h-0`
+ * floor AUTO_SAVE_CONTROL uses (`field-control`'s own padding/line-height alone clear only
+ * ~38px, short of the 44px these need on the phones this household uses).
+ */
+const REVIEW_PICKER_CLASS = 'field-control w-auto max-w-[12rem] px-2 py-1 text-xs min-h-11 sm:min-h-0';
+
+/**
  * The auto-save controls take `(formData) => Promise<{ error?: string }>`. Both actions are
  * declared `(prevState, formData)` for useActionState, so the first argument is bound here --
  * once, at module level, rather than in a closure whose identity changes on every render.
@@ -79,6 +91,9 @@ export function TransactionsClient({
   splits = {},
   defaultAccountId = null,
   selfScoped = false,
+  reviewMode = false,
+  reviewCount = 0,
+  matchingCounts = {},
 }: {
   page: TransactionPage;
   accounts: Option[];
@@ -97,6 +112,22 @@ export function TransactionsClient({
   /** v1.13.0 ruling R2: a self viewer's own id already forces the person filter server-side
    *  (page.tsx), so the pill that would let them ask for someone else is not rendered at all. */
   selfScoped?: boolean;
+  /**
+   * Review round (fold /review in): true when `?review=1` narrowed this page to the review
+   * queue -- always `false` for a self viewer (ruling R2, forced server-side in page.tsx, never
+   * re-derived here). Swaps the table for the card list (ruling R5), turns on the review-only
+   * kebab items ("Accept <category>", "Apply a category to all N…"), the review teaching
+   * PageGuide and the review empty state.
+   */
+  reviewMode?: boolean;
+  /** reviewQueueCount(), for the "Needs review (N)" chip -- always passed, even when
+   *  `reviewMode` is false or the viewer is self-scoped; the CLIENT decides whether to render
+   *  the chip (never for a self viewer, ruling R2), not the caller. */
+  reviewCount?: number;
+  /** Review-mode-only, keyed by transaction id: how many OTHER transactions share this row's
+   *  merchant (Lane 1's countMatchingMerchant). Empty outside review mode -- the "Apply a
+   *  category to all N matching…" kebab item never appears for a table row. */
+  matchingCounts?: Record<number, number>;
 }) {
   const [selected, setSelected] = useState<number[]>([]);
   const [renaming, setRenaming] = useState<{ id: number; current: string; merchant: string } | null>(null);
@@ -128,6 +159,15 @@ export function TransactionsClient({
   const [splitState, splitAction] = useActionState(saveSplitsAction, initial);
   const [noteState, noteAction] = useActionState(saveNoteAction, initial);
   const [newLoanState, newLoanAction] = useActionState(createLoanFromTransactionAction, initial);
+  // Review round (fold /review in): ruling R4's per-row transfer toggle, offered on every row in
+  // both modes.
+  const [rowTransferState, rowTransferAction] = useActionState(setRowTransferAction, initial);
+  // Review-mode-only actions (inventory #5/#7).
+  const [acceptState, acceptAction] = useActionState(acceptGuessAction, initial);
+  const [applyAllState, applyAllAction] = useActionState(applyToAllMatchingAction, initial);
+  // One nullable slot of state, the same shape `noting`/`newLoan` already use: opening the
+  // "Apply a category to all N…" editor on a different row replaces whichever one was open.
+  const [applyAllRow, setApplyAllRow] = useState<number | null>(null);
 
   const label = (id: number | null) => {
     if (id === null) return 'Uncategorized';
@@ -168,14 +208,21 @@ export function TransactionsClient({
   // this page, so its own message/error can still be the freshest thing that happened by the
   // time this renders again -- putting it last let a STALE message from an earlier, unrelated
   // action (assignState, say) mask a fresh create's own result.
+  // Review round (fold /review in): applyAllState goes right after newLoanState, for the same
+  // reason -- its own inline editor (below) must stay open on a refusal and show ITS OWN fresh
+  // error, which a stale message further down this chain could otherwise mask. acceptState and
+  // rowTransferState are plain one-off actions with no editor of their own, so they join the
+  // rest of that set at the end, the same as assignState/unassignState.
   const notice =
-    newLoanState.message ??
+    newLoanState.message ?? applyAllState.message ??
     attrState.message ?? bulkCatState.message ?? bulkTfrState.message ??
-    renameState.message ?? assignState.message ?? unassignState.message ?? splitState.message ?? noteState.message;
+    renameState.message ?? assignState.message ?? unassignState.message ?? splitState.message ?? noteState.message ??
+    acceptState.message ?? rowTransferState.message;
   const error =
-    newLoanState.error ??
+    newLoanState.error ?? applyAllState.error ??
     attrState.error ?? bulkCatState.error ?? bulkTfrState.error ??
-    renameState.error ?? assignState.error ?? unassignState.error ?? splitState.error ?? noteState.error;
+    renameState.error ?? assignState.error ?? unassignState.error ?? splitState.error ?? noteState.error ??
+    acceptState.error ?? rowTransferState.error;
 
   // Review round: unlike renaming/noting/splitting (which close their own <form onSubmit> right
   // away, before the action even settles), the new-loan editor must stay open on a REFUSAL --
@@ -191,6 +238,16 @@ export function TransactionsClient({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [newLoanState]);
+
+  // Same idiom as newLoan above: the "Apply a category to all N…" editor stays open on a
+  // refusal (a rule someone else in the household owns) so its own inline error is visible
+  // where the person is looking, and closes only on the action's own success.
+  useEffect(() => {
+    if (applyAllState.message && !applyAllState.error) {
+      setApplyAllRow(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [applyAllState]);
 
   // Opens this row's split editor, prefilled from its existing parts (or two blank parts for
   // a fresh split) -- the same "one editor, one nullable slot of state" shape `renaming` uses,
@@ -241,30 +298,147 @@ export function TransactionsClient({
   }));
   const splitRemainderCents = splitting ? splitting.amountCents - sumCents(activeSplitParts.map(draftPartCents)) : 0;
 
+  /**
+   * Review round (fold /review in): the ONE row menu, shared by the table row (`<tr>`) and the
+   * review card list (`<li>`) below -- the Goal this release is built around ("every feature
+   * built for Transactions is automatically available while reviewing") is exactly what a
+   * second, hand-maintained copy of this menu would quietly stop being true for. Rename…,
+   * Note…, Split…, Create warranty and every loan item are unchanged from the table's own menu;
+   * the transfer toggle (ruling R4) is new on every row in both modes; Accept/Apply-to-all are
+   * new and review-mode-only (inventory #5/#7).
+   */
+  function rowMenu(row: TransactionRow) {
+    const matchingCount = matchingCounts[row.id] ?? 0;
+    return (
+      <RowMenu
+        label={`Actions for ${row.displayDescription ?? row.rawDescription} on ${row.date}, ${formatCents(row.amountCents)}`}
+      >
+        <RowMenuButton
+          onSelect={() =>
+            setRenaming({
+              id: row.id,
+              current: row.displayDescription ?? row.rawDescription,
+              merchant: row.normalizedMerchant,
+            })
+          }
+        >
+          Rename…
+        </RowMenuButton>
+        <RowMenuButton onSelect={() => setNoting({ id: row.id, current: row.notes ?? '' })}>
+          Note…
+        </RowMenuButton>
+        {/* Ruling R4: offered on EVERY row, both directions -- not gated on reviewMode, and not
+            gated on row.isTransfer either, since it is the control that flips that very flag.
+            setRowTransferAction (Lane 1) reads `isTransfer` off the form, so this one item works
+            both ways depending on the row's current state. */}
+        <RowMenuForm
+          action={rowTransferAction}
+          fields={{ transactionId: String(row.id), isTransfer: row.isTransfer ? '0' : '1' }}
+        >
+          {row.isTransfer ? 'Not a transfer' : 'Mark as transfer'}
+        </RowMenuForm>
+        {row.isTransfer ? null : (
+          <>
+            <RowMenuButton onSelect={() => openSplitEditor(row)}>Split…</RowMenuButton>
+            <RowMenuLink href={`/warranties/new?transactionId=${row.id}`}>Create warranty</RowMenuLink>
+          </>
+        )}
+        {row.isTransfer
+          ? null
+          : (loanLinks[row.id] ?? []).map((link) => (
+              <RowMenuForm
+                key={`unassign-${link.id}`}
+                action={unassignLoan}
+                fields={{ transactionId: String(row.id), itemId: String(link.itemId) }}
+                confirm={`Unassign this transaction from ${link.itemName}? That loan's balance moves back to what it was.`}
+              >
+                {`Unassign from ${link.itemName}`}
+              </RowMenuForm>
+            ))}
+        {row.isTransfer
+          ? null
+          : loanOptions.map((loan) => (
+              <RowMenuForm
+                key={`assign-${loan.id}`}
+                action={assignLoan}
+                fields={{ transactionId: String(row.id), itemId: String(loan.id) }}
+              >
+                {`Assign to ${loan.name}`}
+              </RowMenuForm>
+            ))}
+        {row.isTransfer ? null : (
+          <RowMenuButton onSelect={() => setNewLoan({ id: row.id, name: '' })}>Assign to new loan…</RowMenuButton>
+        )}
+        {/* Review-mode-only, inventory #5: only when the categorizer itself guessed this row and
+            nobody has confirmed it yet. */}
+        {reviewMode && row.source === 'bayes' && row.categoryId !== null ? (
+          <RowMenuForm action={acceptAction} fields={{ transactionId: String(row.id) }}>
+            {`Accept ${row.categoryName}`}
+          </RowMenuForm>
+        ) : null}
+        {/* Review-mode-only, inventory #7: only when other rows actually share this merchant --
+            same gate the old review page's own "apply to all" group used. */}
+        {reviewMode && matchingCount > 1 ? (
+          <RowMenuButton onSelect={() => setApplyAllRow(row.id)}>
+            {`Apply a category to all ${matchingCount} matching…`}
+          </RowMenuButton>
+        ) : null}
+      </RowMenu>
+    );
+  }
+
   return (
     // data-page-width: this table needs more than the shell's 6xl reading cap (see globals.css).
     <div data-page-width="wide" className="flex flex-col gap-6">
       <PageHeader title="Transactions" description="Every line from every account, with what it was spent on." />
 
-      <PageGuide>
-        <p>
-          Every line from every imported statement lands here. The filters above compose rather
-          than replace one another, so a date range, an account, a category, a person and a
-          search term all narrow the same list at once — and the address bar keeps whatever you
-          picked, so a filtered view can be bookmarked or shared.
-        </p>
-        <p>
-          One charge can belong to more than one category. Open a row and split it into parts,
-          and each part counts towards its own category in Budgets and Reports instead of the
-          whole amount landing on the first one.
-        </p>
-        <p>
-          An imported amount is fixed here. You can rename the merchant, change the category,
-          attribute the row to a person or mark it a transfer, but the figure itself comes from
-          the statement — if that is wrong, undo the import on the Import page and bring the
-          corrected file in again.
-        </p>
-      </PageGuide>
+      {/* Review round (fold /review in): review mode gets the review page's own three teaching
+          paragraphs instead of the ordinary Transactions guide -- ported verbatim from
+          review-client.tsx, only "this screen" -> "this filter" since it is no longer a
+          separate page. Guard 3 (tests/ops/onboarding-coverage.test.ts) only greps this file's
+          SOURCE for the literal `<PageGuide`, so having exactly one branch of a conditional
+          render it still satisfies that guard. */}
+      {reviewMode ? (
+        <PageGuide>
+          <p>
+            Every import runs each new transaction past the categorizer. Anything it could not
+            place with confidence waits here instead of being filed under a guess, so this filter
+            is the one place where a wrong category is a decision you made rather than one the
+            app made quietly.
+          </p>
+          <p>
+            Accepting a guess or correcting it does two things: it files that transaction, and it
+            teaches the categorizer what that merchant is. The same merchant arrives already
+            sorted next time. The count beside a row is every transaction with that merchant,
+            plus future imports, and offers to apply your choice to all of them at once.
+          </p>
+          <p>
+            This queue is not a one-time setup step. It empties, then refills the next time you
+            import a statement, so clearing it is part of the monthly routine rather than
+            something you finish once.
+          </p>
+        </PageGuide>
+      ) : (
+        <PageGuide>
+          <p>
+            Every line from every imported statement lands here. The filters above compose rather
+            than replace one another, so a date range, an account, a category, a person and a
+            search term all narrow the same list at once — and the address bar keeps whatever you
+            picked, so a filtered view can be bookmarked or shared.
+          </p>
+          <p>
+            One charge can belong to more than one category. Open a row and split it into parts,
+            and each part counts towards its own category in Budgets and Reports instead of the
+            whole amount landing on the first one.
+          </p>
+          <p>
+            An imported amount is fixed here. You can rename the merchant, change the category,
+            attribute the row to a person or mark it a transfer, but the figure itself comes from
+            the statement — if that is wrong, undo the import on the Import page and bring the
+            corrected file in again.
+          </p>
+        </PageGuide>
+      )}
 
       <QuickAddTransaction
         variant="page"
@@ -396,6 +570,12 @@ export function TransactionsClient({
       <Card as="div">
         <CardBody className="pt-5">
           <form method="get" className="flex flex-wrap items-end gap-3">
+            {/* Ruling R1: `review=1` is a filter like any other on this form, so re-submitting
+                it (changing the account, say) must not silently drop out of the review queue --
+                carried forward as a hidden field rather than a visible control, the same way
+                every OTHER already-applied value on this GET form has no widget of its own
+                either. */}
+            {reviewMode ? <input type="hidden" name="review" value="1" /> : null}
             <Field label="Account">
               <select name="account" className={selectClass}>
                 <option value="">All</option>
@@ -446,6 +626,22 @@ export function TransactionsClient({
               </label>
             </div>
             <button type="submit" className="btn btn--primary">Filter</button>
+            {/* Inventory #3 / ruling R2: the review page's own "N waiting" eyebrow, repointed as
+                a filter chip on this page instead of a second page's header. Hidden entirely for
+                a self viewer -- the queue is household-wide by construction, and `reviewMode` is
+                already forced `false` for one server-side (page.tsx), so a self viewer clicking
+                this (were it shown) would just get their own ordinary list back, not a refusal.
+                Shown once in review mode too (even if reviewCount has since dropped to 0), so the
+                one control that got a person INTO the filter is also the one that gets them back
+                OUT of it. */}
+            {!selfScoped && (reviewCount > 0 || reviewMode) ? (
+              <Link
+                href={reviewMode ? '/transactions' : '/transactions?review=1'}
+                className={`badge ${reviewMode ? 'badge--amber' : 'badge--slate'} min-h-11 items-center px-3 sm:min-h-0`}
+              >
+                Needs review ({reviewCount})
+              </Link>
+            ) : null}
           </form>
         </CardBody>
       </Card>
@@ -494,6 +690,149 @@ export function TransactionsClient({
         </div>
       ) : null}
 
+      {/* Ruling R5: review mode renders the card list INSTEAD of the table -- never both, which
+          would give every control two DOM nodes and break label-based queries across the
+          suite. */}
+      {reviewMode ? (
+        page.rows.length === 0 ? (
+          <Card>
+            <EmptyState
+              icon={CheckIcon}
+              title="Nothing to review. Everything is categorized."
+              action={
+                <>
+                  <Link href="/transactions" className="btn btn--primary btn--sm">
+                    See what was categorized
+                  </Link>
+                  <Link href="/import" className="btn btn--secondary btn--sm">
+                    Bring in more
+                  </Link>
+                </>
+              }
+            >
+              New imports land here whenever the categorizer is unsure.
+            </EmptyState>
+          </Card>
+        ) : (
+          <>
+            <ul className="flex flex-col gap-3">
+              {page.rows.map((row) => {
+                const matchingCount = matchingCounts[row.id] ?? 0;
+                return (
+                  <li key={row.id} className="card flex flex-col gap-3 p-4">
+                    <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                      <span className="text-sm">
+                        {/* Renaming happens from the row menu, same as the table row -- the
+                            title stays the only place the bank's own text is visible once a
+                            row has been renamed. */}
+                        <strong
+                          className="font-semibold text-ink"
+                          title={row.displayDescription ? `Bank text: ${row.rawDescription}` : undefined}
+                        >
+                          {row.displayDescription ?? row.normalizedMerchant}
+                        </strong>
+                        {/* v1.13.3 / fix round on 5439851: a raw description that is identical to
+                            the already-normalized merchant name (on the same NFC-normalized,
+                            trimmed, collapsed-whitespace, uppercased footing normalizeMerchant
+                            itself uses -- src/lib/categorize/normalize.ts) adds nothing, so it is
+                            shown only when it says something different. Ported verbatim from
+                            review-client.tsx. */}
+                        {row.normalizedMerchant !==
+                        row.rawDescription.trim().replace(/\s+/g, ' ').normalize('NFC').toUpperCase() ? (
+                          <>
+                            {' '}
+                            <span className="text-muted">— {row.rawDescription}</span>
+                          </>
+                        ) : null}
+                        {row.displaySource === 'manual' ? <span className="badge badge--blue ml-1.5">renamed</span> : null}
+                        {row.displaySource === 'rename' ? <span className="badge badge--blue ml-1.5">rule</span> : null}
+                      </span>
+                      <Money cents={row.amountCents} className="text-base font-semibold" />
+                    </div>
+                    <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-subtle">
+                      <span className="tabnum">{row.date}</span>
+                      <span aria-hidden="true">·</span>
+                      <span>{row.accountName}</span>
+                      <span aria-hidden="true">·</span>
+                      {row.source === 'bayes' && row.categoryName ? (
+                        <span className="badge badge--amber">
+                          guessed {row.categoryName} (margin {row.confidence?.toFixed(2)})
+                        </span>
+                      ) : (
+                        <span className="badge badge--slate">uncategorized</span>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 border-t border-line pt-3">
+                      {/* v1.13.3: the "Set" button is gone -- picking a category IS the decision.
+                          The placeholder is `disabled` so it can only ever be the starting state.
+                          Ruling R3: `teach: '1'` is the whole difference from the table's own
+                          per-row select -- in review mode a category pick teaches the
+                          categorizer (createRule: true server-side); outside it, it does not. */}
+                      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-1.5">
+                        <span className="text-xs font-medium text-muted">This transaction only</span>
+                        <AutoSaveSelect
+                          name="categoryId"
+                          defaultValue={row.categoryId === null ? '' : String(row.categoryId)}
+                          options={[
+                            { value: '', label: 'Choose for this one…', disabled: true },
+                            ...groupedCategories.map((opt) => ({
+                              value: String(opt.id),
+                              label: '  '.repeat(opt.depth) + opt.label,
+                            })),
+                          ]}
+                          fields={{ transactionId: String(row.id), teach: '1' }}
+                          action={saveCategory}
+                          ariaLabel={`Category for ${row.normalizedMerchant} — this transaction only`}
+                          className={REVIEW_PICKER_CLASS}
+                        />
+                      </div>
+                      {rowMenu(row)}
+                    </div>
+                    {applyAllRow === row.id ? (
+                      <div className="flex flex-col gap-1.5 rounded-lg border border-line p-3">
+                        <p className="text-xs font-semibold text-ink">
+                          Every &quot;{row.normalizedMerchant}&quot; — {matchingCount} transactions, plus future imports
+                        </p>
+                        <p className="text-xs text-muted">
+                          Only for merchants that are always one category (coffee shop, streaming).
+                          Walmart, Amazon, e-transfers: use the select above.
+                        </p>
+                        {/* Shown inline, under the editor a refusal leaves open, not only through
+                            the top banner (that still gets it too, via `error` above) -- the
+                            same idiom the new-loan editor already uses. */}
+                        <FormError message={applyAllState.error} />
+                        <form action={applyAllAction} className="flex flex-col gap-1.5 sm:flex-row sm:items-center">
+                          <input type="hidden" name="normalizedMerchant" value={row.normalizedMerchant} />
+                          <select
+                            name="categoryId"
+                            defaultValue={row.categoryId ?? ''}
+                            aria-label={`Category for all ${matchingCount} matching ${row.normalizedMerchant} — every transaction`}
+                            className={REVIEW_PICKER_CLASS}
+                          >
+                            <option value="">Choose for all {matchingCount}…</option>
+                            {groupedCategories.map((opt) => (
+                              <option key={opt.id} value={opt.id}>{'  '.repeat(opt.depth) + opt.label}</option>
+                            ))}
+                          </select>
+                          <SubmitButton variant="secondary" size="sm" className="w-fit">
+                            Apply to all {matchingCount} matching + create rule
+                          </SubmitButton>
+                          <button type="button" className="btn btn--ghost btn--sm" onClick={() => setApplyAllRow(null)}>
+                            Cancel
+                          </button>
+                        </form>
+                      </div>
+                    ) : null}
+                  </li>
+                );
+              })}
+            </ul>
+            <p className="text-sm text-muted">
+              Page {page.page} of {page.pageCount} — {page.total} transactions
+            </p>
+          </>
+        )
+      ) : (
       <Card as="div">
         {/* minWidth is the colgroup's own total (3+7+9+15+7+13+11+3 = 68rem). Without it this
             table could not exceed its container, so the scroll container had nothing to scroll
@@ -635,67 +974,9 @@ export function TransactionsClient({
                     MUST-14.8: a transfer never carries a loan control. MUST-14.10 stays
                     reachable because assign items are always offered alongside existing links,
                     never replaced by them. */}
-                <td className="text-right">
-                  <RowMenu
-                    label={`Actions for ${row.displayDescription ?? row.rawDescription} on ${row.date}, ${formatCents(row.amountCents)}`}
-                  >
-                    <RowMenuButton
-                      onSelect={() =>
-                        setRenaming({
-                          id: row.id,
-                          current: row.displayDescription ?? row.rawDescription,
-                          merchant: row.normalizedMerchant,
-                        })
-                      }
-                    >
-                      Rename…
-                    </RowMenuButton>
-                    {/* Ruling R13: the row's notes column existed since v1.0.0 but had no way in
-                        -- saveNoteAction (./actions.ts) was dead code until this menu item. */}
-                    <RowMenuButton onSelect={() => setNoting({ id: row.id, current: row.notes ?? '' })}>
-                      Note…
-                    </RowMenuButton>
-                    {row.isTransfer ? null : (
-                      <>
-                        <RowMenuButton onSelect={() => openSplitEditor(row)}>Split…</RowMenuButton>
-                        <RowMenuLink href={`/warranties/new?transactionId=${row.id}`}>Create warranty</RowMenuLink>
-                      </>
-                    )}
-                    {row.isTransfer
-                      ? null
-                      : (loanLinks[row.id] ?? []).map((link) => (
-                          // v1.14.0 (ruling P15): "moves back up" was only ever true for a loan
-                          // the household owes -- a lent loan's balance moves back DOWN. Rather
-                          // than plumb a direction through LoanLink and
-                          // loanLinksForTransactions for one sentence, this says what is true
-                          // in both frames.
-                          <RowMenuForm
-                            key={`unassign-${link.id}`}
-                            action={unassignLoan}
-                            fields={{ transactionId: String(row.id), itemId: String(link.itemId) }}
-                            confirm={`Unassign this transaction from ${link.itemName}? That loan's balance moves back to what it was.`}
-                          >
-                            {`Unassign from ${link.itemName}`}
-                          </RowMenuForm>
-                        ))}
-                    {row.isTransfer
-                      ? null
-                      : loanOptions.map((loan) => (
-                          <RowMenuForm
-                            key={`assign-${loan.id}`}
-                            action={assignLoan}
-                            fields={{ transactionId: String(row.id), itemId: String(loan.id) }}
-                          >
-                            {`Assign to ${loan.name}`}
-                          </RowMenuForm>
-                        ))}
-                    {/* Addendum A, ruling A1: last in this block so the existing
-                        "Assign to <loan>" items keep their order. */}
-                    {row.isTransfer ? null : (
-                      <RowMenuButton onSelect={() => setNewLoan({ id: row.id, name: '' })}>Assign to new loan…</RowMenuButton>
-                    )}
-                  </RowMenu>
-                </td>
+                {/* The shared `rowMenu()` above -- byte-identical to what this cell used to
+                    render inline, plus the transfer toggle (ruling R4) every row gets now. */}
+                <td className="text-right">{rowMenu(row)}</td>
               </tr>
               {noting?.id === row.id ? (
                 <tr>
@@ -785,6 +1066,7 @@ export function TransactionsClient({
           Page {page.page} of {page.pageCount} — {page.total} transactions
         </CardFooter>
       </Card>
+      )}
     </div>
   );
 }

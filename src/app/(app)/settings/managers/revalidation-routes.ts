@@ -8,7 +8,10 @@
  *   - /budgets            -- budgetProgress() rows, keyed by category, incl. nested children.
  *   - /dashboard          -- the "this month's budgets" table (budgetProgress() again) and
  *                            the account-setup callout's category-driven copy.
- *   - /review             -- the category picker offered for each queued transaction.
+ * Review round (fold /review in): `/review` is gone from this list -- it is now `?review=1` on
+ * `/transactions` (ruling R1), which already revalidates the category picker for every queued
+ * row (review or not) as the same route. `/review` itself still exists as a route (ruling R6,
+ * a bare redirect), but a redirect renders no category of its own to go stale.
  * A category mutation (create, rename, archive) must revalidate every one of these or Next's
  * client router cache serves the pre-mutation page for up to ~30s. Every category mutation
  * in actions.ts loops over this SAME constant -- and the test in
@@ -29,7 +32,6 @@ export const CATEGORY_RENDERING_ROUTES = [
   '/reports',
   '/budgets',
   '/dashboard',
-  '/review',
 ] as const;
 
 /**
