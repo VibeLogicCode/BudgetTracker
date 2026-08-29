@@ -13,6 +13,13 @@ import {
 } from '@/components/icons';
 import type { Viewer } from '@/lib/auth/viewer';
 
+/**
+ * The one place the review filter's link is written down. NAV, the self-viewer filter below and
+ * AppShell's count badge all read it, so the entry, what it hides for a kid and what the badge
+ * attaches to can never drift apart the way they did when three files each spelled `/review`.
+ */
+export const REVIEW_NAV_HREF = '/transactions?review=1';
+
 export interface NavItem {
   href: string;
   label: string;
@@ -42,7 +49,7 @@ export const NAV: NavItem[] = [
   // replaced it. `/review` itself still exists and still works (ruling R6, review/page.tsx is
   // now a bare redirect to this same href), so a bookmark or a typed-in address is unaffected;
   // this is only the link the app itself renders.
-  { href: '/transactions?review=1', label: 'Review', Icon: ReviewIcon },
+  { href: REVIEW_NAV_HREF, label: 'Review', Icon: ReviewIcon },
   { href: '/import', label: 'Import', Icon: ImportIcon },
   { href: '/budgets', label: 'Budgets', Icon: BudgetsIcon },
   { href: '/goals', label: 'Goals', Icon: GoalsIcon },
@@ -72,7 +79,7 @@ export const NAV: NavItem[] = [
  * Reports STAYS: ruling R2 forbids household totals, and Task 6 force-scopes every aggregate, so
  * what a self viewer sees there is their own spending, which is worth having.
  */
-const SELF_HIDDEN_HREFS = new Set(['/import', '/transactions?review=1', '/settings']);
+const SELF_HIDDEN_HREFS = new Set(['/import', REVIEW_NAV_HREF, '/settings']);
 
 export function visibleNav(viewer: Viewer): NavItem[] {
   if (viewer.visibility !== 'self' || viewer.role === 'admin') return NAV;
@@ -86,6 +93,9 @@ export function visibleNav(viewer: Viewer): NavItem[] {
 export function activeNavItem(pathname: string): NavItem | undefined {
   let best: NavItem | undefined;
   for (const item of NAV) {
+    // A query-string href (the review filter) can never equal a pathname; highlighting it is
+    // AppShell's job, which is the only caller that can see the search params.
+    if (item.href.includes('?')) continue;
     if (pathname === item.href || pathname.startsWith(`${item.href}/`)) {
       if (!best || item.href.length > best.href.length) best = item;
     }

@@ -4,13 +4,55 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { AppShell } from '@/components/app-shell/AppShell';
 import { activeNavItem, NAV } from '@/components/app-shell/nav';
 
+/** v1.14.1: AppShell now reads the query string too -- the review entry is a filter on
+ *  /transactions, so only `?review=1` tells it apart from the plain list. Both are mutable so a
+ *  test can put the shell on the review filter. */
+const nav = { pathname: '/dashboard', search: '' };
 vi.mock('next/navigation', () => ({
-  usePathname: () => '/dashboard',
+  usePathname: () => nav.pathname,
+  useSearchParams: () => new URLSearchParams(nav.search),
 }));
 
 afterEach(() => {
   cleanup();
   document.body.style.overflow = '';
+  nav.pathname = '/dashboard';
+  nav.search = '';
+});
+
+describe('the Review nav entry after the queue became a filter (v1.14.1, rulings R6/R7)', () => {
+  it('carries the waiting count as a badge even though its href is a query string', () => {
+    render(
+      <AppShell user={user} reviewCount={4} version="1.2.3">
+        <p>child</p>
+      </AppShell>,
+    );
+    expect(screen.getAllByLabelText('4 to review').length).toBeGreaterThan(0);
+  });
+
+  it('marks Review current on the filter, and Transactions current without it', () => {
+    nav.pathname = '/transactions';
+    nav.search = '?review=1';
+    const { unmount } = render(
+      <AppShell user={user} reviewCount={0} version="1.2.3">
+        <p>child</p>
+      </AppShell>,
+    );
+    const current = screen.getAllByRole('link', { current: 'page' }).map((el) => el.textContent);
+    expect(current).toContain('Review');
+    expect(current).not.toContain('Transactions');
+    unmount();
+
+    nav.search = '';
+    render(
+      <AppShell user={user} reviewCount={0} version="1.2.3">
+        <p>child</p>
+      </AppShell>,
+    );
+    const plain = screen.getAllByRole('link', { current: 'page' }).map((el) => el.textContent);
+    expect(plain).toContain('Transactions');
+    expect(plain).not.toContain('Review');
+  });
 });
 
 const user = { id: 1, name: 'Ada Lovelace', role: 'member' as const, visibility: 'household' as const };

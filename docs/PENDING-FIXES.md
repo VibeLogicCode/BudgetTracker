@@ -1656,3 +1656,24 @@ Status: SHIPPED in v1.14.0 (commits `5439851`, `5d1f5b0`). The per-row category 
 transaction only" / "Every <merchant> — N transactions, plus future imports") and a hint;
 duplicated row titles collapse; child categories keep their indent in every dropdown. No backlog
 letter existed for this before it shipped; recorded here as a shipped note.
+
+## BW. Every table should fall back to a card layout on a phone (2026-08-29, not started)
+
+**Found while folding the review queue into Transactions (v1.14.1).** The review queue's card list
+is the layout the owner finds usable on a phone; the Transactions table is a fixed 8-column table
+inside a horizontally scrolling wrapper, and so are Warranties, Accounts, Budgets and the Settings
+managers. v1.14.1 gave review mode the card layout because it renders INSTEAD of the table there
+(ruling R5), which needed no duplication.
+
+**Why it is not a quick win.** The usual answer -- render a card list and a table from the same
+rows and hide one with `sm:hidden` / `hidden sm:table` -- puts every row's controls in the DOM
+twice. 25 test files query controls by label or role, so each of those queries would start matching
+two elements, and the ops guards that scan row markup (`tests/ops/row-controls.test.ts`,
+`tests/ops/table-layout.test.ts`) would have to learn about the duplicate.
+
+**The right fix** is one responsive row component per table that renders a `<tr>` at `sm` and above
+and a card below it, from a single set of controls -- so the markup switches rather than doubling.
+Do Transactions first (it is the page the household lives in), then Warranties, then the rest.
+
+**Effort:** about 3-4 h for Transactions alone including the guard and test updates; roughly the
+same again for the remaining tables. No migration. No personal data.

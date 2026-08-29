@@ -103,7 +103,10 @@ function emptyStatesWithoutAction(): string[] {
  * need this test edited.
  */
 function guideCandidates(href: string): string[] {
-  const dir = `src/app/(app)${href}`;
+  // v1.14.1: a NAV href may now carry a query string (`/transactions?review=1`, the filter that
+  // replaced the /review page). The guide it must carry is the one on the page the path names,
+  // so resolve the path half and let the filter inherit its page's guide.
+  const dir = `src/app/(app)${href.split('?')[0]}`;
   const pageFile = `${dir}/page.tsx`;
   if (!exists(pageFile)) return [];
   const files = [pageFile];
