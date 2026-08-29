@@ -282,19 +282,25 @@ export async function applyToAllMatchingAction(_prev: ActionState, formData: For
 /**
  * v1.14.1: ported from review/actions.ts's markTransferAction and renamed -- ruling R4 offers
  * this on EVERY row, not just review mode, so it now reads an `isTransfer` field instead of
- * hardcoding `true`, and works both ways ("Mark as transfer" / "Not a transfer"). Every other
- * guard, the refusal messages, and the actorRole argument are byte-identical to the original.
+ * hardcoding `true`, and works both ways ("Mark as transfer" / "Not a transfer").
+ *
+ * The ONE guard that could not come across byte-identical is the viewer check. The original
+ * refused every self-scoped viewer outright ("Review is not available on this account.") because
+ * it only ever ran on /review, a household-only page. As a per-row control on every row that
+ * refusal is both wrong and confusing: bulkTransferAction (below) already lets a self viewer flip
+ * their OWN rows, scoped by allTransactionsVisible. This mirrors that model exactly -- same
+ * visibility check, same NOT_YOURS_ERROR -- so the two transfer paths cannot disagree about who
+ * may do what. setTransferFlag's rule-ownership refusal is unchanged and still applies on top.
  */
 export async function setRowTransferAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
 
   const user = await requireUser();
-  if (isSelfScoped(user)) return { error: 'Review is not available on this account.' };
-
   const parsed = z.object({ transactionId: z.coerce.number().int().positive() }).safeParse({
     transactionId: formData.get('transactionId'),
   });
   if (!parsed.success) return { error: 'Invalid request.' };
+  if (!allTransactionsVisible([parsed.data.transactionId], user)) return { error: NOT_YOURS_ERROR };
   const isTransfer = formData.get('isTransfer') === '1';
   try {
     const result = setTransferFlag({

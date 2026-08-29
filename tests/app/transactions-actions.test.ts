@@ -1472,14 +1472,33 @@ describe('setRowTransferAction (ported from review/actions.ts, renamed, both dir
     expect(result.error).toBe(CROSS_ORIGIN_ERROR);
   });
 
-  it('refuses a self-scoped viewer, byte-identical to the review-page guard', async () => {
+  /**
+   * v1.14.1 fix round: the ported guard refused every self-scoped viewer with the review page's
+   * own sentence. As a per-row control offered on EVERY row that was both wrong and confusing --
+   * bulkTransferAction already lets a self viewer flip their own rows. These two pin the model
+   * this action now shares with it: scoped by visibility, not by a blanket refusal.
+   */
+  it('refuses a self-scoped viewer a row that is not theirs, and writes nothing', async () => {
     const { sqlite, addTxn } = setup();
     const id = addTxn();
     currentUser = { ...currentUser, role: 'member', visibility: 'self' };
     const result = await setRowTransferAction({}, formData({ transactionId: String(id), isTransfer: '1' }));
-    expect(result.error).toBe('Review is not available on this account.');
+    expect(result.error).toBe(NOT_YOURS_ERROR);
     const row = sqlite.prepare('select is_transfer from transactions where id = ?').get(id) as { is_transfer: number };
     expect(row.is_transfer).toBe(0);
+  });
+
+  it('lets a self-scoped viewer flip a row attributed to them, exactly as the bulk toolbar does', async () => {
+    const { db, sqlite, accountId, userId } = setup();
+    const own = db.get<{ id: number }>(sql`
+      insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, attributed_user_id, created_by, created_at, updated_at)
+      values (${accountId}, '2026-03-02', 'E-TRANSFER OWN', ${normalizeMerchant('E-TRANSFER OWN')}, -2500, ${userId}, ${userId}, ${nowIso()}, ${nowIso()})
+      returning id`).id;
+    currentUser = { ...currentUser, role: 'member', visibility: 'self' };
+    const result = await setRowTransferAction({}, formData({ transactionId: String(own), isTransfer: '1' }));
+    expect(result.error).toBeUndefined();
+    const row = sqlite.prepare('select is_transfer from transactions where id = ?').get(own) as { is_transfer: number };
+    expect(row.is_transfer).toBe(1);
   });
 
   it('surfaces the rule-ownership refusal as the row error and writes nothing', async () => {
