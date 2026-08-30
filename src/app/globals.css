@@ -649,20 +649,30 @@
       align-items: center;
       justify-content: space-between;
       gap: 0.75rem;
-      padding: 0;
+      /* Without a rule here the 200px of dead space between a short label and its value on a
+         390px screen reads as a gap between unrelated cards, not a row of the same one. A
+         hairline plus a real 2.5rem-ish row height (0.5rem padding above and below a line of
+         text) turns the run of cells back into a list. */
+      padding-block: 0.5rem;
+      border-top: 1px solid var(--line);
       border-bottom: 0;
       min-height: 1.75rem;
       text-align: left;
     }
 
+    /* v1.16.0: this was a straight copy of the desktop <thead> treatment -- 0.6875rem, uppercase,
+       wide tracking. Correct set once atop a column; printed five times down one card, in a
+       column only 0.75rem wide itself, it reads as five headlines shouting over their own
+       values. Desktop's own header rule is a different selector (`.data-table thead th`) and is
+       untouched by this. */
     .data-table--stack tbody td::before {
       content: attr(data-label);
       flex: 0 0 auto;
       color: var(--subtle);
-      font-size: 0.6875rem;
-      font-weight: 600;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
+      font-size: 0.75rem;
+      font-weight: 500;
+      letter-spacing: normal;
+      text-transform: none;
     }
 
     /* An empty label would still print an empty box and eat the gap. */
@@ -671,14 +681,25 @@
     }
 
     /* Row 1: identity and money, placed explicitly so the DOM order of the columns (checkbox,
-       date, account, description, amount, ...) does not decide what a person sees first. */
+       date, account, description, amount, ...) does not decide what a person sees first.
+       `border-top: 0` on all three: the hairline above belongs to a cell in DOM-order flow below
+       row 1, and these three sit on row 1 by explicit grid placement instead, so the border-top
+       every other cell gets from the base rule above would draw a line across the card's own top
+       edge -- the border the outer `tr` already draws -- rather than between two rows of text. */
     .data-table--stack tbody td.cell-stack-lead {
       grid-column: 1;
       grid-row: 1;
       justify-content: flex-start;
       min-height: 0;
+      border-top: 0;
     }
 
+    /* The headline IS what the card is about -- the category, the description, the item name.
+       Printing its `data-label` in front of the value (change above shrank the label, but did
+       not add a gap) is how every card in the app read `CATEGORYHousing` / `FILEreceipts.csv` --
+       an inline `::before` immediately before a `display: block` value, no space between them.
+       Naming a value that self-evidently is the thing the row is about is noise even once
+       spacing is fixed, so the label is suppressed outright rather than given a gap. */
     .data-table--stack tbody td.cell-stack-headline {
       grid-column: 2;
       grid-row: 1;
@@ -688,6 +709,40 @@
       font-weight: 600;
       color: var(--ink);
       line-height: 1.35;
+      border-top: 0;
+    }
+
+    .data-table--stack tbody td.cell-stack-headline::before {
+      display: none;
+    }
+
+    /* A cell that belongs under the headline as small muted context -- a date, an account name --
+       rather than as its own labelled row. Column 2 lines it up directly under the headline text
+       (column 1 is the lead cell's, usually a checkbox); row 2 puts it immediately below on the
+       very next line, the way a heading and its byline sit together elsewhere in this app. No
+       label and no hairline: this is a sub-line of row 1, not a new row of the list. */
+    /* Context rather than data: the date a row happened, the account it happened in. It reads as
+       a caption under the headline instead of earning a labelled row of its own with a hairline
+       above it and its value pinned to the far edge.
+
+       Deliberately NOT placed at an explicit `grid-row: 2`, which is the obvious way to write
+       this and is wrong: a row can carry two meta cells (transactions puts both a date and an
+       account here), and two items placed at the same explicit row and column stack on top of
+       each other rather than sitting side by side. Auto placement gives each one its own line
+       directly under the headline, because these cells come early in the DOM order of every
+       table that uses them. */
+    .data-table--stack tbody td.cell-stack-meta {
+      grid-column: 1 / -1;
+      border-top: 0;
+      min-height: 0;
+      padding-block: 0.0625rem;
+      justify-content: flex-start;
+      font-size: 0.75rem;
+      color: var(--subtle);
+    }
+
+    .data-table--stack tbody td.cell-stack-meta::before {
+      display: none;
     }
 
     .data-table--stack tbody td.cell-stack-amount {
@@ -698,6 +753,7 @@
       font-weight: 600;
       white-space: nowrap;
       min-height: 0;
+      border-top: 0;
     }
 
     /* A value that repeats identically down the column -- and is already a filter -- is worth
@@ -711,6 +767,17 @@
       justify-content: flex-end;
     }
 
+    /* The kebab trigger draws no border of its own -- correct at 32px sitting beside other icon
+       buttons in a desktop row, but at 44px alone in a card's whitespace it reads as three grey
+       dots floating with nothing around them. Given here rather than in RowMenu.tsx so every
+       stacked table picks it up for free. Size is untouched: 44px was already the right target,
+       only the affordance was missing. */
+    .data-table--stack tbody td.cell-stack-actions button {
+      border: 1px solid var(--line);
+      border-radius: var(--radius-md);
+      background: var(--surface);
+    }
+
     /* Clipping to an ellipsis is a desktop compromise for a fixed column width. In a card the
        row has all the width it needs, so the full value wraps instead of hiding. */
     .data-table--stack tbody td.cell-truncate {
@@ -722,6 +789,38 @@
     /* Controls inside a card get the full width rather than a column's share. */
     .data-table--stack tbody td .field-control {
       max-width: 100%;
+    }
+
+    /* A cell whose value is a form control cannot stay a label-left/value-right row: a <select>
+       or a number input would hang off the right edge of the card with the label stranded
+       opposite it. Stack the label above and let the control claim the row's full width instead.
+       A checkbox is deliberately excluded -- "[ ] Roll over unspent" reads correctly inline, and
+       forcing it onto its own line would look broken rather than fixed. This is a :has() selector
+       rather than a class so no page markup has to change for it; the stylesheet already leans on
+       :has() elsewhere (`main:has(...)`, `div:has(> .data-table--stack)`), and a browser without
+       it simply keeps today's layout. */
+    .data-table--stack tbody td:has(select, textarea, input:not([type='checkbox'])) {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .data-table--stack tbody td:has(select, textarea, input:not([type='checkbox'])) select,
+    .data-table--stack tbody td:has(select, textarea, input:not([type='checkbox'])) textarea,
+    .data-table--stack tbody td:has(select, textarea, input:not([type='checkbox']))
+      input:not([type='checkbox']) {
+      width: 100%;
+    }
+
+    /* Opt-in twin of the :has() rule above, for a cell whose content is neither text nor a form
+       control -- a progress bar, for instance -- so there is no <select>/<textarea>/<input> for
+       :has() to match. Same treatment: label above, content spanning the full card width. */
+    .data-table--stack tbody td.cell-stack-block {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .data-table--stack tbody td.cell-stack-block > * {
+      width: 100%;
     }
 
     /* A cell that spans the whole table is not a label/value pair. It is a sub-row holding an
