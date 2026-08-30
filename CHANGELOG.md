@@ -21,6 +21,52 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.16.0] - 2026-08-30
+
+No migration. Nothing in the database changes shape — the new Linked transactions card reads two
+tables that already existed and are already indexed.
+
+### Added
+
+- **An item page now shows the transactions linked to it.** Open a loan, a warranty or a contract
+  and there is a **Linked transactions** card listing every transaction applied to it: date,
+  merchant, account, the amount, how much of it went to this item, and whether the link was made by
+  a payment rule or by hand. Each row unlinks from its own menu. Until now the page told you
+  "Payments linked: 2" and made you go and find them; a loan showing a $0.00 balance gave you no way
+  to see what had cleared it.
+
+### Changed
+
+- **Phone cards read as a labelled list instead of a spec sheet.** The first line of every card was
+  printing its own column name against the value — `CATEGORYHousing`, `DESCRIPTIONpayroll deposit` —
+  because the headline cell rendered its label inline. The headline now shows the value alone; the
+  remaining labels are quieter and sentence-cased; each row is separated by a hairline instead of a
+  gap of dead space; a dropdown or a number input sits full width under its own label rather than
+  hanging off the right edge; a progress bar spans the card; and the row menu is a bordered button
+  instead of three grey dots floating in whitespace.
+- **A date or an account name reads as a caption** under the merchant, rather than claiming a
+  labelled row of its own. On Transactions the account is back on the phone — 1.15.0 hid it
+  outright.
+- **Quick add folds away on the dashboard too**, matching Transactions. Content is always visible;
+  a form that creates something sits behind a button. The same now applies to the **Add rule** form
+  on a loan's Payment matching card and the **Add receipt** picker — the rules and receipts you
+  already have stay on the page, only the empty form folds.
+- **The review queue is one column.** The page header and filters ran to the full width of a monitor
+  while the cards below were capped, so the edges did not line up. Everything now shares one measure.
+- **Contracts & Coverage stops scrolling sideways.** Its table asked for 85rem inside a 72rem page,
+  so every desktop showed a horizontal scrollbar and hid the last two columns — at any window size,
+  even with one row in the table. Vendor moves under the item name (it was empty on every loan and
+  every contract), the remaining columns are sized to their content, and the page now uses the wide
+  shell that Transactions and Reports already use.
+- **"Purchase date" is no longer the wording for a loan.** The shared column reads **Started**, and
+  the item's own page names it for what it is: *Purchased* for a warranty, *Lent on* or *Borrowed
+  on* for a loan, *Starts* for a contract or a bill.
+- **"Term unknown" is now "No end date."** It was never an error — it means no end date was
+  recorded, which is the ordinary state of a loan between friends.
+- **Empty optional fields stop rendering** on an item page. A loan was printing an em-dash for
+  Vendor, Payoff date, Payment and Notes: four dead cells out of ten. The Edit card is still how you
+  fill them in.
+
 ## [1.15.0] - 2026-08-29
 
 No migration. Nothing in the database changes shape, and nothing about a laptop's layout changes
