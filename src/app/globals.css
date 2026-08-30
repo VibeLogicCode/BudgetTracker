@@ -590,6 +590,141 @@
     background: color-mix(in srgb, var(--surface-2) 60%, transparent);
   }
 
+  /* ----- One row, two shapes (v1.15.0) -----
+     Below `sm` a `responsive` TableWrap stops being a table and becomes a list of cards, using
+     the SAME DOM: the header row is hidden and each <td> reprints its column name from
+     `data-label`. The alternative -- rendering a card list beside the table -- gives every
+     control two nodes in the document and breaks label-based queries across the test suite,
+     which is why v1.14.1 ruling R5 refused it and why this is done in CSS. */
+  @media (max-width: 639.98px) {
+    .data-table--stack,
+    .data-table--stack thead,
+    .data-table--stack tbody,
+    .data-table--stack tr,
+    .data-table--stack td {
+      display: block;
+    }
+
+    /* `minWidth` is an inline style on the <table> (see TableWrap) and inline beats a class, so
+       the stacked table can only shed the horizontal scroll with !important. Without this the
+       card list would still sit inside a 68rem box and scroll sideways -- the exact bug being
+       fixed. */
+    .data-table--stack {
+      min-width: 0 !important;
+      table-layout: auto;
+      font-size: 0.875rem;
+    }
+
+    /* Column names move into the cells, so the header row is dead weight. */
+    .data-table--stack thead {
+      display: none;
+    }
+
+    .data-table--stack tbody tr {
+      display: grid;
+      /* lead (a checkbox, or nothing) | headline | amount. `auto` collapses to zero when a table
+         has no lead cell, so one rule covers both shapes. */
+      grid-template-columns: auto 1fr auto;
+      align-items: center;
+      gap: 0.375rem 0.5rem;
+      padding: 0.875rem 1rem;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      background: var(--surface);
+    }
+
+    .data-table--stack tbody tr + tr {
+      margin-top: 0.625rem;
+    }
+
+    /* Hover tinting is a pointer affordance; on a card list it just looks like a stuck row. */
+    .data-table--stack tbody tr:hover td {
+      background: transparent;
+    }
+
+    .data-table--stack tbody td {
+      /* Every cell that is not on row 1 is a full-width label/value line. */
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0;
+      border-bottom: 0;
+      min-height: 1.75rem;
+      text-align: left;
+    }
+
+    .data-table--stack tbody td::before {
+      content: attr(data-label);
+      flex: 0 0 auto;
+      color: var(--subtle);
+      font-size: 0.6875rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    /* An empty label would still print an empty box and eat the gap. */
+    .data-table--stack tbody td[data-label='']::before {
+      display: none;
+    }
+
+    /* Row 1: identity and money, placed explicitly so the DOM order of the columns (checkbox,
+       date, account, description, amount, ...) does not decide what a person sees first. */
+    .data-table--stack tbody td.cell-stack-lead {
+      grid-column: 1;
+      grid-row: 1;
+      justify-content: flex-start;
+      min-height: 0;
+    }
+
+    .data-table--stack tbody td.cell-stack-headline {
+      grid-column: 2;
+      grid-row: 1;
+      display: block;
+      min-width: 0;
+      font-size: 0.9375rem;
+      font-weight: 600;
+      color: var(--ink);
+      line-height: 1.35;
+    }
+
+    .data-table--stack tbody td.cell-stack-amount {
+      grid-column: 3;
+      grid-row: 1;
+      justify-content: flex-end;
+      font-size: 0.9375rem;
+      font-weight: 600;
+      white-space: nowrap;
+      min-height: 0;
+    }
+
+    /* A value that repeats identically down the column -- and is already a filter -- is worth
+       less than the width it costs on a 390px screen. */
+    .data-table--stack tbody td.cell-stack-hide {
+      display: none;
+    }
+
+    /* A cell holding the row menu or a pair of buttons: no label, hard right. */
+    .data-table--stack tbody td.cell-stack-actions {
+      justify-content: flex-end;
+    }
+
+    /* Clipping to an ellipsis is a desktop compromise for a fixed column width. In a card the
+       row has all the width it needs, so the full value wraps instead of hiding. */
+    .data-table--stack tbody td.cell-truncate {
+      overflow: visible;
+      text-overflow: clip;
+      white-space: normal;
+    }
+
+    /* Controls inside a card get the full width rather than a column's share. */
+    .data-table--stack tbody td .field-control {
+      max-width: 100%;
+    }
+  }
+
   /* ----- Ambient wash behind the signed-out pages ----- */
   .auth-wash {
     background-image:

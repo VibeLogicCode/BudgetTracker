@@ -12,6 +12,7 @@ export function TableWrap({
   bare = false,
   fixed = false,
   minWidth,
+  responsive = false,
 }: {
   children: React.ReactNode;
   /** Extra classes for the scroll container. */
@@ -49,14 +50,37 @@ export function TableWrap({
    * sum of the <col> widths.
    */
   minWidth?: string;
+  /**
+   * Below `sm`, restyle this table into a list of cards -- same DOM, no second render path.
+   * Adds `data-table--stack` to the <table>; `globals.css` does the rest with a media query
+   * that hides `thead`, turns each `tr` into a card, and reprints every `<td>`'s column name
+   * from its `data-label` attribute (see `AmountCell` and the `cell-stack-*` classes).
+   *
+   * The alternative -- branching the render to a bespoke card list on phones, the way the
+   * review queue does -- was refused by v1.14.1 ruling R5: two DOM trees means every checkbox,
+   * button and input a page renders exists twice in the document, which doubles the matches
+   * for the label/role queries roughly 25 test files depend on (`getByLabelText`, `getByRole`
+   * with a `name`) and makes them ambiguous instead of wrong. One tree that CSS reflows keeps
+   * every query pointed at exactly one node, on every width, for free.
+   *
+   * Composes with `fixed` and `minWidth` -- both stay desktop concerns. `minWidth` sets an
+   * inline style, which the stacked layout must override with `!important` to drop the
+   * sideways scroll (see the `.data-table--stack` rule in globals.css); `fixed`'s <colgroup>
+   * widths simply stop mattering once `display: grid` takes over the row below `sm`.
+   */
+  responsive?: boolean;
 }) {
   const shell = bare ? '' : 'rounded-lg border border-line bg-surface shadow-card';
+  const tableClass = [
+    'data-table',
+    fixed ? 'data-table--fixed' : '',
+    responsive ? 'data-table--stack' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
   return (
     <div className={`w-full overflow-x-auto ${shell} ${className}`}>
-      <table
-        className={fixed ? 'data-table data-table--fixed' : 'data-table'}
-        style={minWidth ? { minWidth } : undefined}
-      >
+      <table className={tableClass} style={minWidth ? { minWidth } : undefined}>
         {children}
       </table>
     </div>
@@ -64,6 +88,25 @@ export function TableWrap({
 }
 
 /** Right-aligned, tabular-figure cell for amounts. */
-export function AmountCell({ children, className = '' }: { children: React.ReactNode; className?: string }) {
-  return <td className={`money text-right ${className}`}>{children}</td>;
+export function AmountCell({
+  children,
+  className = '',
+  'data-label': dataLabel,
+}: {
+  children: React.ReactNode;
+  className?: string;
+  /**
+   * The column header text, reprinted by `.data-table--stack td::before` (globals.css) when
+   * this cell's table stacks into cards below `sm`. Plumbed through explicitly rather than by
+   * spreading arbitrary props -- this component has exactly one caller-facing extra attribute
+   * to carry, and a spread would let any prop reach the `<td>` unreviewed, including ones that
+   * silently shadow `className` or `children`.
+   */
+  'data-label'?: string;
+}) {
+  return (
+    <td className={`money text-right ${className}`} data-label={dataLabel}>
+      {children}
+    </td>
+  );
 }

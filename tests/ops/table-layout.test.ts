@@ -94,3 +94,47 @@ describe('table cells never truncate silently', () => {
     expect(uses.length).toBeGreaterThan(0);
   });
 });
+
+/**
+ * The guard for the v1.15.0 responsive-table work (ruling S2).
+ *
+ * Below `sm`, a `responsive` TableWrap hides its `<thead>` and reprints each column's name from
+ * the `<td>`'s `data-label` attribute instead (see `.data-table--stack` in globals.css). A `<td>`
+ * with no `data-label` does not fall back to anything -- it prints a bare value on a phone with
+ * nothing beside it to say what that value is, which is the same "data with no idea what it
+ * means" defect the truncation guard above exists for, just triggered by going responsive
+ * instead of by going narrow.
+ *
+ * This is a FLOOR (`data-label=` count >= `<th scope="col">` count), not an exact count, for the
+ * same reason the fixed/minWidth guard above is grep rather than a render test: several pages
+ * render more than one table per file, and some of those tables are not `responsive` at all, so
+ * an exact match between one table's headers and the whole file's labels would report failures
+ * that are not real. A floor still catches the actual bug -- a responsive table added without
+ * labelling its cells -- because that file's `data-label=` count stays at whatever the OTHER
+ * tables in it already contribute, which is below the new header count.
+ *
+ * NOTE for whoever runs this next: lanes 2-4 of the v1.15.0 plan are landing `responsive` on
+ * their own tables concurrently with this guard being written. Until every lane has added its
+ * `data-label`s, this test can fail on files this lane does not own -- that is expected mid-
+ * migration, not a bug in the guard. Fix it by finishing the labelling in that file, not by
+ * loosening this check.
+ */
+describe('a responsive table labels every cell (ruling S2)', () => {
+  it('every file with a responsive TableWrap has at least as many data-label= as <th scope="col">', () => {
+    const bad: string[] = [];
+    for (const rel of tsxFiles('src')) {
+      const source = fs.readFileSync(path.join(root, rel), 'utf8');
+      const isResponsive = [...source.matchAll(/<TableWrap[^>]*>/g)].some((match) =>
+        /\bresponsive\b/.test(match[0]),
+      );
+      if (!isResponsive) continue;
+
+      const labelCount = (source.match(/data-label=/g) ?? []).length;
+      const headerCount = (source.match(/<th scope="col"/g) ?? []).length;
+      if (labelCount < headerCount) {
+        bad.push(`${rel}: ${labelCount} data-label= vs ${headerCount} <th scope="col">`);
+      }
+    }
+    expect(bad).toEqual([]);
+  });
+});
