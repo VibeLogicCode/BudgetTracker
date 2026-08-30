@@ -4,6 +4,10 @@
  *
  * `padded={false}` is for cards whose child bleeds to the edge — a table or a
  * chart — so the border radius clips it instead of floating inside a gutter.
+ *
+ * Padding tightened from `p-5 sm:p-6` to `p-4 sm:p-5` (the owner's "too much wasted space"
+ * complaint) across every sub-component below; `.card` itself (globals.css) dropped its
+ * box-shadow in the same pass, so a card's edge is carried by the hairline border alone.
  */
 export function Card({
   children,
@@ -29,7 +33,7 @@ export function CardHeader({
   className?: string;
 }) {
   return (
-    <div className={`flex flex-wrap items-start justify-between gap-3 px-5 pt-5 pb-4 sm:px-6 ${className}`}>
+    <div className={`flex flex-wrap items-start justify-between gap-3 px-4 pt-4 pb-4 sm:px-5 ${className}`}>
       <div className="flex flex-col gap-1">
         <h2 className="text-base font-semibold text-ink">{title}</h2>
         {description ? <p className="text-sm text-muted">{description}</p> : null}
@@ -48,12 +52,12 @@ export function CardBody({
   className?: string;
   padded?: boolean;
 }) {
-  return <div className={`${padded ? 'px-5 pb-5 sm:px-6 sm:pb-6' : ''} ${className}`}>{children}</div>;
+  return <div className={`${padded ? 'px-4 pb-4 sm:px-5 sm:pb-5' : ''} ${className}`}>{children}</div>;
 }
 
 export function CardFooter({ children, className = '' }: { children: React.ReactNode; className?: string }) {
   return (
-    <div className={`border-t border-line bg-surface-2/60 px-5 py-3 text-sm text-muted sm:px-6 ${className}`}>
+    <div className={`border-t border-line bg-surface-2/60 px-4 py-3 text-sm text-muted sm:px-5 ${className}`}>
       {children}
     </div>
   );
