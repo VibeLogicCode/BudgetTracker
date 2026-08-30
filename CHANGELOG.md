@@ -21,6 +21,38 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.19.0] - 2026-08-30
+
+No migration. Every page changed how it looks; nothing changed what it stores.
+
+### Changed
+
+- **The whole app is built from one set of components now.** One card, one progress bar, one pill,
+  one list row, one section header, one icon set — so a budget, a goal, an account and a loan are
+  the same object wherever you meet them, instead of each page having invented its own. Cards lost
+  their drop shadow and tightened their padding, which is most of the empty space the app used to
+  waste.
+- **Budgets is a grid of cards at every size.** One card per category: how much is spent, how much
+  was budgeted, a bar, and whether you are under or over. Open a card for its sub-categories, open a
+  sub-category for the transactions behind it — the first time the app has shown *why* a category
+  is over without leaving the page. Setting limits moves behind **Edit limits**, so the page reads
+  cleanly and still fills in fast once a month. Goals now use the same card.
+- **Transactions groups by day.** Each day gets a heading, with money in, money out and net for what
+  you are looking at across the top. Categories became chips you tap instead of a dropdown — they
+  wrap rather than scroll sideways, and picking one keeps every other filter you had set.
+- **The review queue can be finished.** It shows `4 of 12 confirmed`, gives every guessed row a
+  confirm button, and adds **Accept all suggestions** for when the categorizer got them all right.
+  A row with no category cannot be confirmed.
+- **Dashboard tiles say which way things moved** — `+2.4% vs last month`, coloured by whether that
+  is good news, so a rise in spending is never green. Anything with a deadline shows the days left,
+  amber inside a week.
+- **Every page header lines up.** The month navigation and the person pills were centred under the
+  title, and being different widths, neither edge matched. Both now share one edge.
+- **Quick add is a button, not a card** — on the dashboard as well as on Transactions.
+- **Settings → Accounts is a card per account.** Its table needed nine columns and a minimum width
+  wider than the page, so it scrolled sideways on every screen. Contracts & Coverage keeps its
+  table on purpose: it is sorted by what expires soonest, and that is a column you scan.
+
 ## [1.18.0] - 2026-08-30
 
 No migration this time — 1.17.0 had one, this one changes nothing in the database.

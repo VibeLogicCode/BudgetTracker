@@ -245,9 +245,22 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.18.0 release', () => {
+  it('MUST-7.1: the 1.19.0 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.18.0');
+    expect(pkg.version).toBe('1.19.0');
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toMatch(/^## \[1\.19\.0\] - 2026-08-30$/m);
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.19.0]'));
+    expect(changelog.indexOf('## [1.19.0]')).toBeLessThan(changelog.indexOf('## [1.18.0]'));
+    const entry = changelog.slice(changelog.indexOf('## [1.19.0]'), changelog.indexOf('## [1.18.0]'));
+    expect(entry).toMatch(/No migration/i);
+    expect(entry).toMatch(/one set of components/i);
+    expect(entry).toMatch(/Accept all suggestions/);
+  });
+
+  it('MUST-7.1: the 1.18.0 release is still recorded intact (append-only discipline)', () => {
+    const pkg = JSON.parse(read('package.json')) as { version: string };
+    expect(pkg.version).not.toBe('1.18.0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.18\.0\] - 2026-08-30$/m);
     expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.18.0]'));
