@@ -68,6 +68,10 @@ describe('WarrantiesClient', () => {
     const tbodyText = container.querySelector('tbody')?.textContent;
     expect(tbodyText).toContain('Active');
     expect(tbodyText).toContain('Alice');
+    // v1.15.0 (responsive rows): the item name is the row's identity, so it carries
+    // cell-stack-headline for the phone-card layout.
+    const headlineCell = container.querySelector('tbody tr td:first-child');
+    expect(headlineCell?.className).toContain('cell-stack-headline');
   });
 
   it('shows the expiring badge with a day count', () => {

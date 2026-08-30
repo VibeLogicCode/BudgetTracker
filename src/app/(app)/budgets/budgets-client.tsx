@@ -94,14 +94,22 @@ function Row({
   return (
     <>
       <tr className={depth === 0 ? 'bg-surface-2' : undefined}>
-        <td style={{ paddingLeft: `${16 + depth * 20}px` }} className={depth === 0 ? 'font-medium text-ink' : 'text-muted'}>
+        {/* v1.15.0 (responsive rows): this cell is BOTH the tree indent (the inline
+            paddingLeft that v1.13.2 fixed the ordering/nesting of) and the phone card's
+            headline -- a child row's indent must keep working exactly as it does in the
+            table, so cell-stack-headline goes on this same <td>, not a new one. */}
+        <td
+          style={{ paddingLeft: `${16 + depth * 20}px` }}
+          className={`${depth === 0 ? 'font-medium text-ink' : 'text-muted'} cell-stack-headline`}
+          data-label="Category"
+        >
           {row.categoryName}
           {row.isArchived ? <span className="ml-1.5 text-xs text-subtle">(archived)</span> : null}
         </td>
         {/* No width class on this cell or the progress one any more: the colgroup owns the
             widths under fixed layout, and a `w-44` here only reads as if it still decided
             something. */}
-        <td>
+        <td data-label="Limit">
           {row.isArchived || !editable ? (
             // Two reasons a limit is not editable here. Archived categories can no longer
             // be actively budgeted (spec section 3) — the row is a read-only record of the
@@ -213,15 +221,18 @@ function Row({
             </span>
           ) : null}
         </td>
-        <td className="text-right"><Money cents={row.spentCents} plain /></td>
-        <td className="text-right">
+        <td className="text-right" data-label="Net spent"><Money cents={row.spentCents} plain /></td>
+        {/* Remaining, not Net spent, is the money-column call: it is the number a member
+            actually scans for -- how much is left to spend -- so it is the one carried into
+            row 1 of the phone card. */}
+        <td className="text-right cell-stack-amount" data-label="Remaining">
           {row.remainingCents === null ? (
             <span className="text-subtle">—</span>
           ) : (
             <Money cents={row.remainingCents} />
           )}
         </td>
-        <td>
+        <td data-label="Progress and pace">
           <BudgetProgressBar limitCents={row.limitCents} spentCents={row.spentCents} label={row.categoryName} />
           {projection !== null && predict !== null ? (
             <p
@@ -268,7 +279,7 @@ function Row({
  */
 function BudgetTable({ children, paceTitle }: { children: React.ReactNode; paceTitle?: string }) {
   return (
-    <TableWrap bare fixed minWidth="56rem">
+    <TableWrap bare fixed minWidth="56rem" responsive>
       <colgroup>
         {/* Deepest label plus its indent (16px + 20px per level, see Row). Longer names wrap
             rather than truncate, so nothing is hidden. */}

@@ -551,7 +551,7 @@ export function WarrantyDetailClient({
               <>
                 {/* Not `fixed`, so tests/ops/table-layout.test.ts's fixed-implies-minWidth pairing
                     does not apply -- same shape as the loan rules table directly below. */}
-                <TableWrap bare>
+                <TableWrap bare responsive>
                   <thead>
                     <tr>
                       <th scope="col">Due date</th>
@@ -563,11 +563,17 @@ export function WarrantyDetailClient({
                   <tbody>
                     {installments.map((row) => (
                       <tr key={row.id}>
-                        <td className={row.state === 'overdue' ? 'font-medium text-danger' : 'font-medium text-ink'}>
+                        {/* v1.15.0 (responsive rows): there is no merchant/name on an
+                            installment row -- the due date is what tells one row from
+                            another, so it is the headline rather than the amount. */}
+                        <td
+                          className={`${row.state === 'overdue' ? 'font-medium text-danger' : 'font-medium text-ink'} cell-stack-headline`}
+                          data-label="Due date"
+                        >
                           {row.dueDate}
                         </td>
-                        <td className="money">{formatCents(row.amountCents)}</td>
-                        <td>
+                        <td className="money cell-stack-amount" data-label="Amount">{formatCents(row.amountCents)}</td>
+                        <td data-label="Status">
                           <span className={INSTALLMENT_BADGE[row.state]}>{installmentStateLabel(row.state)}</span>
                           {row.paidTxn === null ? null : (
                             <span className="mt-1 block text-xs text-muted">
@@ -590,7 +596,7 @@ export function WarrantyDetailClient({
                             </span>
                           )}
                         </td>
-                        <td className="text-right">
+                        <td className="text-right cell-stack-actions" data-label="">
                           {/* Ruling B9: two actions collapse into one kebab, and the accessible
                               name carries the amount AND the date -- a repeated single field is
                               the defect PENDING-FIXES item M records. */}
@@ -680,7 +686,7 @@ export function WarrantyDetailClient({
             <p className="text-sm text-muted">{matchingBlurbForKind(item.kind)}</p>
             {rules.length === 0 ? null : (
               <>
-                <TableWrap bare>
+                <TableWrap bare responsive>
                   <thead>
                     <tr>
                       <th scope="col">Merchant contains</th>
@@ -691,11 +697,14 @@ export function WarrantyDetailClient({
                   <tbody>
                     {rules.map((rule) => (
                       <tr key={rule.id}>
-                        <td className="font-medium text-ink">{rule.merchantContains}</td>
-                        <td className="text-muted">
+                        {/* v1.15.0 (responsive rows): the merchant fragment is what tells one
+                            rule apart from another -- this table has no money column at all,
+                            so there is no cell-stack-amount here. */}
+                        <td className="font-medium text-ink cell-stack-headline" data-label="Merchant contains">{rule.merchantContains}</td>
+                        <td className="text-muted" data-label="Account">
                           {rule.accountId === null ? 'Any account' : (accounts.find((a) => a.id === rule.accountId)?.name ?? 'Any account')}
                         </td>
-                        <td className="text-right">
+                        <td className="text-right cell-stack-actions" data-label="">
                           <form action={removeRule}>
                             <input type="hidden" name="id" value={rule.id} />
                             <input type="hidden" name="itemId" value={item.id} />

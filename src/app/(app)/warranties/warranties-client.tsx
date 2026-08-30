@@ -200,7 +200,7 @@ export function WarrantiesClient({
           /* Item I (ruling P3). minWidth is the colgroup's own total (14+9+9+7+13+8+9+7+9 = 85rem).
              Without it .data-table's width:100% means the overflow-x-auto wrapper has nothing to
              scroll and the browser crushes every column instead -- see TableWrap's minWidth docblock. */
-          <TableWrap bare fixed minWidth="85rem">
+          <TableWrap bare fixed minWidth="85rem" responsive>
             <colgroup>
               {/* The item name, the one column people scan. Left unsized it took whatever the other
                   eight left over, which on a long name meant a vertical column of characters. */}
@@ -238,26 +238,28 @@ export function WarrantiesClient({
             <tbody>
               {result.rows.map((row) => (
                 <tr key={row.id}>
-                  <td>
+                  {/* v1.15.0 (responsive rows): the item name is what tells one row from
+                      another on this page, so it is the phone card's headline. */}
+                  <td className="cell-stack-headline" data-label="Item">
                     <Link href={`/warranties/${row.id}`} className="font-medium text-ink hover:text-accent-text">{row.name}</Link>
                     {row.model ? <div className="text-xs text-subtle">{row.model}</div> : null}
                   </td>
-                  <td>
+                  <td data-label="Type">
                     {row.typeName ? (
                       <span className="badge badge--slate">{row.typeName}</span>
                     ) : (
                       <span className="text-subtle">—</span>
                     )}
                   </td>
-                  <td className="text-muted">{row.vendor ?? '—'}</td>
-                  <td className="tabnum whitespace-nowrap text-muted">{row.purchaseDate}</td>
+                  <td className="text-muted" data-label="Vendor">{row.vendor ?? '—'}</td>
+                  <td className="tabnum whitespace-nowrap text-muted" data-label="Purchase date">{row.purchaseDate}</td>
                   {/* Delta T9, generalized to `kind` in v1.2.2 Task 2: expiryPhraseForKind()
                       supplies the expires/cancel by/ends on/paid off by verb -- no component
                       hard-codes any of them (MUST-19.11). v1.3.0 fix: an open-ended item
                       (isLifetime) has no expiry_date -- that used to render as a bare em dash
                       here, indistinguishable from "no data". Show the per-kind open-ended word
                       instead. */}
-                  <td className="whitespace-nowrap text-muted">
+                  <td className="whitespace-nowrap text-muted" data-label="Expiry">
                     {/* Item Q: a bill has no expiry, it has a schedule. Every other kind falls through
                         unchanged -- this is one arm added ahead of the existing three, not a rewrite. */}
                     {row.kind === 'bill'
@@ -271,17 +273,21 @@ export function WarrantiesClient({
                           ? '—'
                           : expiryPhraseForKind(row.kind, row.expiryDate)}
                   </td>
-                  <td>
+                  <td data-label="Status">
                     <StatusBadge status={row.status} expiryDate={row.expiryDate} today={today} kind={row.kind} />
                   </td>
-                  <td className="whitespace-nowrap text-muted">{row.ownerName}</td>
-                  <td className="text-right">
+                  <td className="whitespace-nowrap text-muted" data-label="Owner">{row.ownerName}</td>
+                  {/* Price, not Billing, is the money-column call: every warranty row (the
+                      bulk of this table) carries a price, while Billing is populated only for
+                      the subscription/loan minority -- the figure worth putting beside the
+                      headline is the one that is actually there to scan. */}
+                  <td className="text-right cell-stack-amount" data-label="Price">
                     {row.priceCents === null ? <span className="text-subtle">—</span> : <Money cents={row.priceCents} plain />}
                   </td>
                   {/* review fix: cycle and amount are a validated pair (BILLING_PAIR_ERROR) --
                       show the value only when BOTH are set, matching the detail page. Showing
                       the amount alone used to silently drop a cycle the member actually chose. */}
-                  <td className="whitespace-nowrap text-right text-muted">
+                  <td className="whitespace-nowrap text-right text-muted" data-label="Billing">
                     {row.billingCycle !== null && row.billingAmountCents !== null ? (
                       <>
                         <Money cents={row.billingAmountCents} plain /> {billingCycleSuffixForKind(row.kind, row.billingCycle)}

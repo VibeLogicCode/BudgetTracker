@@ -271,7 +271,7 @@ export function ReportsClient({
               A category needs a median spend above the suggestion floor, and this household's does not clear it yet.
             </EmptyState>
           ) : (
-            <TableWrap bare>
+            <TableWrap bare responsive>
               <thead>
                 <tr>
                   <th>Category</th>
@@ -284,14 +284,14 @@ export function ReportsClient({
               <tbody>
                 {baselines.map((row) => (
                   <tr key={row.categoryId}>
-                    <td>{row.categoryName}</td>
-                    <AmountCell>
+                    <td className="cell-stack-headline" data-label="Category">{row.categoryName}</td>
+                    <AmountCell data-label="Median">
                       <Money cents={row.suggestion.medianCents} plain />
                     </AmountCell>
-                    <AmountCell>
+                    <AmountCell data-label="Average">
                       <Money cents={row.suggestion.meanCents} plain />
                     </AmountCell>
-                    <td>
+                    <td data-label="Trend">
                       <span className="flex items-center gap-1.5 text-xs text-muted">
                         {row.suggestion.trend.direction === 'rising' ? <TrendUpIcon className="h-4 w-4" /> : null}
                         {row.suggestion.trend.direction === 'falling' ? <TrendDownIcon className="h-4 w-4" /> : null}
@@ -301,7 +301,10 @@ export function ReportsClient({
                           : `${row.suggestion.trend.direction === 'rising' ? 'Rising' : row.suggestion.trend.direction === 'falling' ? 'Falling' : 'Flat'} ${formatCents(Math.abs(row.suggestion.trend.deltaCents), { currency: true })}`}
                       </span>
                     </td>
-                    <AmountCell>
+                    {/* Suggested, not Median or Average, is the amount call: it is the figure
+                        this card exists to hand off to the "Use $X" button on Budgets, so it
+                        is the one worth a glance in row 1 of the phone card. */}
+                    <AmountCell data-label="Suggested" className="cell-stack-amount">
                       <Money cents={row.suggestion.suggestedCents} plain />
                     </AmountCell>
                   </tr>
@@ -367,7 +370,7 @@ export function ReportsClient({
             }
           />
         ) : (
-          <TableWrap bare>
+          <TableWrap bare responsive>
             <thead>
               <tr>
                 <th scope="col">Category</th>
@@ -380,13 +383,16 @@ export function ReportsClient({
             <tbody>
               {monthOverMonth.rows.map((row) => (
                 <tr key={row.categoryId}>
-                  <td className="whitespace-nowrap font-medium text-ink">{row.categoryName}</td>
+                  <td className="whitespace-nowrap font-medium text-ink cell-stack-headline" data-label="Category">{row.categoryName}</td>
                   {monthOverMonth.months.map((month) => (
-                    <td key={month} className="text-right text-muted">
+                    <td key={month} className="text-right text-muted" data-label={month}>
                       {formatOrDash(row.byMonth[month] ?? 0)}
                     </td>
                   ))}
-                  <td className="text-right font-semibold">
+                  {/* Total, not any one month, is the amount call: the month columns vary in
+                      count from one range to the next, and the total is the one figure every
+                      render of this card actually has. */}
+                  <td className="text-right font-semibold cell-stack-amount" data-label="Total">
                     <Money cents={row.totalCents} plain />
                   </td>
                 </tr>
@@ -412,7 +418,7 @@ export function ReportsClient({
             }
           />
         ) : (
-          <TableWrap bare>
+          <TableWrap bare responsive>
             <thead>
               <tr>
                 <th scope="col">Category</th>
@@ -425,11 +431,13 @@ export function ReportsClient({
             <tbody>
               {yoy.map((row) => (
                 <tr key={row.categoryId}>
-                  <td className="whitespace-nowrap font-medium text-ink">{row.categoryName}</td>
-                  <td className="text-right">{formatOrDash(row.thisMonthCents)}</td>
-                  <td className="text-right text-muted">{formatOrDash(row.lastMonthCents)}</td>
-                  <td className="text-right text-muted">{formatOrDash(row.lastYearCents)}</td>
-                  <td>{yoyChange(row.thisMonthCents, row.lastYearCents)}</td>
+                  <td className="whitespace-nowrap font-medium text-ink cell-stack-headline" data-label="Category">{row.categoryName}</td>
+                  {/* This month, not Last month or Last year, is the amount call: it is
+                      today's figure, the one the other two columns exist to compare against. */}
+                  <td className="text-right cell-stack-amount" data-label="This month">{formatOrDash(row.thisMonthCents)}</td>
+                  <td className="text-right text-muted" data-label="Last month">{formatOrDash(row.lastMonthCents)}</td>
+                  <td className="text-right text-muted" data-label="Last year">{formatOrDash(row.lastYearCents)}</td>
+                  <td data-label="Change">{yoyChange(row.thisMonthCents, row.lastYearCents)}</td>
                 </tr>
               ))}
             </tbody>
@@ -487,7 +495,7 @@ export function ReportsClient({
             Widen the dates, or import the statements that cover them.
           </EmptyState>
         ) : (
-          <TableWrap bare>
+          <TableWrap bare responsive>
             <thead>
               <tr>
                 <th scope="col">Merchant</th>
@@ -498,9 +506,9 @@ export function ReportsClient({
             <tbody>
               {merchants.map((row) => (
                 <tr key={row.normalizedMerchant}>
-                  <td className="whitespace-nowrap font-medium text-ink">{row.normalizedMerchant}</td>
-                  <td className="text-right text-muted">{row.count}</td>
-                  <AmountCell>
+                  <td className="whitespace-nowrap font-medium text-ink cell-stack-headline" data-label="Merchant">{row.normalizedMerchant}</td>
+                  <td className="text-right text-muted" data-label="Charges">{row.count}</td>
+                  <AmountCell data-label="Net spent" className="cell-stack-amount">
                     <Money cents={row.spentCents} plain />
                   </AmountCell>
                 </tr>
@@ -577,7 +585,7 @@ export function ReportsClient({
             </EmptyState>
           ) : (
             <>
-              <TableWrap bare>
+              <TableWrap bare responsive>
                 <thead>
                   <tr>
                     <th scope="col">Category</th>
@@ -589,24 +597,31 @@ export function ReportsClient({
                   {taxOrdered.flatMap(({ row, nested }) =>
                     row.byUser.map((personRow) => (
                       <tr key={`${row.categoryId}-${personRow.userId ?? 'unattributed'}`}>
+                        {/* v1.15.0 (responsive rows): same tree shape as Budgets -- the
+                            nested-child indent (paddingLeft) and the phone card's headline
+                            share this one cell, so a nested row keeps its indent on screen. */}
                         <td
                           style={{ paddingLeft: nested ? '36px' : '16px' }}
-                          className={nested ? 'text-muted' : 'font-medium text-ink'}
+                          className={`${nested ? 'text-muted' : 'font-medium text-ink'} cell-stack-headline`}
+                          data-label="Category"
                         >
                           {row.categoryName}
                         </td>
-                        <td className="text-muted">{personRow.label}</td>
-                        <AmountCell>
+                        <td className="text-muted" data-label="Person">{personRow.label}</td>
+                        <AmountCell data-label="Amount" className="cell-stack-amount">
                           <Money cents={personRow.cents} plain />
                         </AmountCell>
                       </tr>
                     )),
                   )}
                   <tr>
-                    <td colSpan={2} className="font-semibold text-ink">
+                    {/* This summary row's first cell spans Category+Person -- it is not any
+                        one column's value, so it gets no label, the same rule a colSpan
+                        sub-row follows everywhere else in this release. */}
+                    <td colSpan={2} className="font-semibold text-ink" data-label="">
                       Total
                     </td>
-                    <AmountCell className="font-semibold">
+                    <AmountCell className="font-semibold cell-stack-amount" data-label="Amount">
                       <Money cents={taxGrandTotalCents} plain />
                     </AmountCell>
                   </tr>

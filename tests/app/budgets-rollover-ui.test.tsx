@@ -245,6 +245,9 @@ describe('rollover toggle — reflects on/off state and submits the right fields
     const coffeeRow = rows.find((r) => r.textContent?.includes('Coffee'));
     expect((groceriesRow?.querySelector('input[name="enabled"]') as HTMLInputElement).checked).toBe(true);
     expect((coffeeRow?.querySelector('input[name="enabled"]') as HTMLInputElement).checked).toBe(false);
+    // v1.15.0 (responsive rows, ruling S3): a child row's indent lives on the same cell that
+    // is the phone card's headline, so nesting one level deep must not lose the class.
+    expect(groceriesRow?.querySelector('td:first-child')?.className).toContain('cell-stack-headline');
   });
 });
 

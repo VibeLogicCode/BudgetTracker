@@ -134,6 +134,9 @@ describe('ReportsClient — Tax year card', () => {
     const card = within(taxCard(container));
 
     expect(card.getAllByText('Groceries')).toHaveLength(2); // one row per person
+    // v1.15.0 (responsive rows): the category cell carries the tree's indent AND is the
+    // phone card's headline (same rule as Budgets' Row component).
+    expect(card.getAllByText('Groceries')[0].className).toContain('cell-stack-headline');
     expect(card.getByText('Alice')).toBeTruthy();
     expect(card.getByText(UNATTRIBUTED_LABEL)).toBeTruthy();
     expect(card.getByText('$40.00')).toBeTruthy();

@@ -124,6 +124,10 @@ describe('BudgetsClient — review finding 2: archived rows are read-only', () =
     const input = container.querySelector('input[name="amount"]') as HTMLInputElement;
     expect(input).toBeTruthy();
     expect(input.defaultValue).toBe('200.00');
+    // v1.15.0 (responsive rows, ruling S3): the category cell is both the tree's indent and
+    // the phone card's headline, so it must carry cell-stack-headline.
+    const headlineCell = container.querySelector('tbody tr td:first-child');
+    expect(headlineCell?.className).toContain('cell-stack-headline');
   });
 });
 

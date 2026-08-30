@@ -483,6 +483,9 @@ describe('MUST-14.1 / MUST-14.3 / MUST-14.5 / MUST-14.6 / MUST-12.3: the loan su
       accounts: [{ id: 9, name: 'Joint Chequing' }],
     });
     expect(screen.getByText('HONDA FIN')).toBeTruthy();
+    // v1.15.0 (responsive rows): the merchant fragment is this row's identity, so its cell
+    // is the phone card's headline.
+    expect(screen.getByText('HONDA FIN').className).toContain('cell-stack-headline');
     // "Any account" appears twice -- the rule row's own cell, and the Add-rule form's
     // account <select>'s default option -- so this is an AllBy, not a plain getByText.
     expect(screen.getAllByText('Any account').length).toBeGreaterThanOrEqual(2);
