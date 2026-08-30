@@ -86,7 +86,7 @@ const initial: ActionState = {};
  * width class".
  */
 function ReviewWidth({ active, children }: { active: boolean; children: React.ReactNode }) {
-  return active ? <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">{children}</div> : <>{children}</>;
+  return active ? <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 sm:gap-5">{children}</div> : <>{children}</>;
 }
 
 /**

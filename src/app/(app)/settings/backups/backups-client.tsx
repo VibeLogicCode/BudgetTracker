@@ -118,7 +118,7 @@ export function BackupsClient({
   // the page is worth rendering, let alone clicking.
   if (restoreState.restarting) {
     return (
-      <div className="flex flex-col gap-6">
+      <div className="flex flex-col gap-4 sm:gap-5">
         <PageHeader eyebrow="Settings" title="Backups" />
         <Notice tone="info" role="status">
           {restoreState.message}
@@ -139,7 +139,7 @@ export function BackupsClient({
   const stagedElsewhere = restore.staged !== null;
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4 sm:gap-5">
       <PageHeader
         eyebrow="Settings"
         title="Backups"

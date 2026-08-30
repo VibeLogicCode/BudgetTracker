@@ -25,7 +25,7 @@ export default async function HelpPage() {
   const sections = [HELP_ROUTINE, ...HELP_SECTIONS];
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4 sm:gap-5">
       <PageHeader
         title="Help"
         description="What each screen is for, in the order you meet them, plus the parts of the app that no screen advertises."

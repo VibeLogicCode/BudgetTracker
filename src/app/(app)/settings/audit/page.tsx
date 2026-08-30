@@ -24,7 +24,7 @@ export default async function AuditPage() {
   await requireAdmin();
   const rows = listAudit();
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4 sm:gap-5">
       <PageHeader
         eyebrow="Settings"
         title="Audit log"

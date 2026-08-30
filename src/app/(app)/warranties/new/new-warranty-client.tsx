@@ -192,7 +192,7 @@ export function NewWarrantyClient({
     ) : null;
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4 sm:gap-5">
       <PageHeader
         eyebrow="Contracts & Coverage"
         title="Add item"

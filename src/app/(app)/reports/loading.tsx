@@ -11,7 +11,7 @@ import { Card, CardBody } from '@/components/ui/Card';
  */
 export default function ReportsLoading() {
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4 sm:gap-5">
       <p role="status" className="sr-only">
         Loading your reports…
       </p>

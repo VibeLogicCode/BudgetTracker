@@ -521,27 +521,6 @@
     border-radius: var(--radius-lg);
   }
 
-  /* ----- Page-level stack rhythm (shell tightening, continued) -----
-     Every page under src/app/(app)/ opens with its own `<div className="flex flex-col gap-6">`
-     wrapping that page's cards -- there is no shared PageStack component to edit instead, it is
-     the same three tokens copied onto ~25 pages. Lane 0 (this file) is expressly forbidden from
-     touching any page file itself, since four other lanes are converting those files
-     concurrently, so the only place left to land "the page stack tightens too" is here: a plain
-     rule targeting the utility class by name, generalising the `.lg\:pl-64` override the print
-     stylesheet already uses below. Equal specificity to Tailwind's own generated utility, and
-     declared AFTER `@import "tailwindcss"` (line 1 of this file), wins the cascade on source
-     order alone -- the `!important` is not load-bearing today, kept only so a future reordering
-     of this file cannot silently lose the override. */
-  .gap-6 {
-    gap: 1rem !important;
-  }
-
-  @media (min-width: 640px) {
-    .gap-6 {
-      gap: 1.25rem !important;
-    }
-  }
-
   .data-table {
     width: 100%;
     border-collapse: separate;

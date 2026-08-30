@@ -21,7 +21,7 @@ export function AuthCard({
   width?: 'sm' | 'lg';
 }) {
   return (
-    <div className={`flex w-full flex-col gap-6 ${width === 'lg' ? 'max-w-2xl' : 'max-w-sm'}`}>
+    <div className={`flex w-full flex-col gap-4 sm:gap-5 ${width === 'lg' ? 'max-w-2xl' : 'max-w-sm'}`}>
       <div className="flex items-center gap-3">
         <LogoMark className="h-10 w-10" />
         <span className="text-lg font-semibold tracking-tight text-ink">Budget Tracker</span>

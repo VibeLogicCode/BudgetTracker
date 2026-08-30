@@ -57,7 +57,7 @@ export function WizardClient({ starterMapping }: { starterMapping: ImportMapping
   }, [rows, mapping.hasHeader, mapping.headerRows, mapping.dateCol]);
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4 sm:gap-5">
       <PageHeader
         eyebrow="Import"
         title="Add a bank"

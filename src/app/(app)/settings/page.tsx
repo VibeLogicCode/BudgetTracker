@@ -47,7 +47,7 @@ export default async function SettingsPage() {
   const recoveryLeft = countUnusedRecoveryCodes(user.id);
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4 sm:gap-5">
       <PageHeader title="Settings" description="Your account, and — for admins — how the household's data is managed." />
 
       <PageGuide>

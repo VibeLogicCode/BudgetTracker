@@ -78,7 +78,7 @@ export default async function NotificationsPage() {
   };
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4 sm:gap-5">
       <PageHeader title="Notifications" description="Nothing is sent anywhere until you set up a channel below." />
       <NotificationsClient {...data} />
     </div>

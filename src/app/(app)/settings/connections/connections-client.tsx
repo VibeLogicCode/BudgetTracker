@@ -146,7 +146,7 @@ export function ConnectionsClient({
   const autoSyncLabel = autoSyncOptions.find((option) => option.value === autoSync)?.label ?? autoSync ?? '';
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4 sm:gap-5">
       <PageHeader
         eyebrow="Settings"
         title="Connections"
