@@ -1,5 +1,7 @@
 import Link from 'next/link';
 import { Card, CardHeader } from '@/components/ui/Card';
+import { ListRow } from '@/components/ui/ListRow';
+import { Pill } from '@/components/ui/Pill';
 import type { InsightKind, InsightRow } from '@/lib/insights';
 
 /**
@@ -26,28 +28,37 @@ export function NeedsALookCard({ rows }: { rows: InsightRow[] }) {
         title="Needs a look"
         description="Charges that stand out this month. Nothing here is a problem on its own."
       />
+      {/* Ruling D1: ListRow (Lane 0). The kind label moves from `.badge` to the shared Pill --
+          this is the newer, semantic-tone vocabulary (see Pill.tsx's own docblock), and a second
+          badge system next to it is the exact thing ruling D1 exists to prevent. `tone="neutral"`
+          on purpose: the card's own description says "Nothing here is a problem on its own", so a
+          warning-toned pill would contradict the copy sitting right above it. */}
       <ul className="border-t border-line text-sm">
         {rows.map((row) => (
-          <li
+          <ListRow
             key={`${row.kind}-${row.transactionId}`}
-            className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-b border-line px-5 py-2.5 last:border-b-0 sm:px-6"
-          >
-            <span className="min-w-0">
-              <span className="badge">{KIND_LABEL[row.kind]}</span>{' '}
-              <span className="text-ink">{row.sentence}</span>
-            </span>
-            {/* A search link, not /transactions/<id>: there is no per-transaction page, and the
-                merchant search lands on the charge WITH its neighbours, which is what somebody
-                checking a duplicate actually wants to see. URLSearchParams (not
-                encodeURIComponent) so a space becomes `+`, matching the query-string convention
-                the rest of the app's links already use. */}
-            <Link
-              href={`/transactions?${new URLSearchParams({ q: row.merchant }).toString()}`}
-              className="text-accent-text shrink-0"
-            >
-              Look
-            </Link>
-          </li>
+            title={
+              <>
+                <Pill tone="neutral" className="mr-1.5">
+                  {KIND_LABEL[row.kind]}
+                </Pill>
+                {row.sentence}
+              </>
+            }
+            trailing={
+              // A search link, not /transactions/<id>: there is no per-transaction page, and the
+              // merchant search lands on the charge WITH its neighbours, which is what somebody
+              // checking a duplicate actually wants to see. URLSearchParams (not
+              // encodeURIComponent) so a space becomes `+`, matching the query-string convention
+              // the rest of the app's links already use.
+              <Link
+                href={`/transactions?${new URLSearchParams({ q: row.merchant }).toString()}`}
+                className="text-accent-text"
+              >
+                Look
+              </Link>
+            }
+          />
         ))}
       </ul>
     </Card>

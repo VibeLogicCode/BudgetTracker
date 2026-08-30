@@ -7,7 +7,7 @@ import { safeToSpend, upcomingBills } from '@/lib/bills';
 import { budgetProgress, budgetTotals } from '@/lib/budgets';
 import { listCategories } from '@/lib/categories';
 import { reviewQueueCount } from '@/lib/categorize/engine';
-import { currentMonth, isMonthKey, monthEnd, monthLabel, monthStart, todayIso } from '@/lib/dates';
+import { addMonths, currentMonth, isMonthKey, monthEnd, monthLabel, monthStart, todayIso } from '@/lib/dates';
 import { listGoals } from '@/lib/goals';
 import { householdInsights } from '@/lib/insights';
 import { listLoans } from '@/lib/loans';
@@ -18,23 +18,52 @@ import { cashRunway, type CashRunway } from '@/lib/runway';
 import { savingsProgress, type SavingsProgress } from '@/lib/savings-target';
 import { expiringSoonItems } from '@/lib/warranty/search';
 import { formatCents } from '@/lib/money';
-import { BudgetProgressBar } from '@/components/BudgetProgressBar';
 import { ComingUpCard } from '@/components/ComingUpCard';
 import { GettingStartedCard } from '@/components/GettingStartedCard';
 import { GoalCard } from '@/components/GoalCard';
 import { LoansCard } from '@/components/LoansCard';
 import { WhoOwesUsCard } from '@/components/WhoOwesUsCard';
 import { NeedsALookCard } from '@/components/NeedsALookCard';
-import { QuickAddTransaction } from '@/components/QuickAddTransaction';
+import { QuickAddTransaction, QuickAddTrigger } from '@/components/QuickAddTransaction';
 import { CashflowChart } from '@/components/charts/CashflowChart';
 import { AlertIcon, ArrowRightIcon, InfoIcon } from '@/components/icons';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { MonthNav } from '@/components/ui/MonthNav';
 import { PageGuide } from '@/components/ui/PageGuide';
 import { PageHeader } from '@/components/ui/PageHeader';
-import { StatTile } from '@/components/ui/StatTile';
+import { ProgressBar } from '@/components/ui/ProgressBar';
+import { SectionHeader } from '@/components/ui/SectionHeader';
+import { StatTile, type DeltaTone } from '@/components/ui/StatTile';
 import { TableWrap } from '@/components/ui/Table';
 import { ExpiringSoonCard, EXPIRING_WIDGET_LIMIT } from '@/components/warranty/ExpiringSoonCard';
+
+/**
+ * Item 1 (2026-08-30 plan): "+2.4% vs last month", derived from whatever prior-period figure
+ * the tile already has a twin query for (see prevMonthCashflow/prevTotals/netWorthPrev below --
+ * none of this widens what the page COMPUTES for its headline values, only what it fetches
+ * ALONGSIDE them to describe a trend). `prev === 0` returns null rather than a fabricated
+ * percentage (a household with $0 spent last month dividing by zero is not "infinite percent
+ * more", it is nothing to compare against) -- callers render no delta at all in that case, which
+ * ruling calls out as strictly better than a wrong one.
+ */
+function deltaPct(curr: number, prev: number): number | null {
+  if (prev === 0) return null;
+  return ((curr - prev) / Math.abs(prev)) * 100;
+}
+
+/**
+ * The one place sign and tone are reconciled (item 1's own warning: "getting that backwards is
+ * worse than shipping no delta at all"). `goodWhenUp` names what kind of figure this is -- money
+ * IN going up is good news (spending going up is bad news) -- rather than the tone ever being
+ * guessed from the number's arithmetic sign alone.
+ */
+function deltaProps(curr: number, prev: number, goodWhenUp: boolean): { delta?: string; deltaTone?: DeltaTone } {
+  const pct = deltaPct(curr, prev);
+  if (pct === null) return {};
+  const sign = pct > 0 ? '+' : '';
+  const tone: DeltaTone = pct === 0 ? 'default' : (pct > 0) === goodWhenUp ? 'positive' : 'negative';
+  return { delta: `${sign}${pct.toFixed(1)}% vs last month`, deltaTone: tone };
+}
 
 export const dynamic = 'force-dynamic';
 
@@ -75,6 +104,13 @@ export default async function DashboardPage({
   // dedicated one-month query, not a lookup into `trend`, which cashflowTrend already supports
   // (Lane 1's own note: "every function the page calls already takes a month or a range").
   const monthCashflow = cashflowTrend(1, { endMonth: month, attributedUserId: scopeUserId }, viewer)[0] ?? null;
+  // Item 1: the prior-period twin of `rows`/`totals`/`monthCashflow` above, purely to power each
+  // tile's "vs last month" delta -- same functions, same scoping, one month earlier than whatever
+  // is being VIEWED (not calendar-"last month" when a past month is being drilled into).
+  const prevMonth = addMonths(month, -1);
+  const prevRows = scopeUserId === null ? budgetProgress(prevMonth) : budgetProgress(prevMonth, 'personal', scopeUserId);
+  const prevTotals = budgetTotals(prevRows);
+  const prevMonthCashflow = cashflowTrend(1, { endMonth: prevMonth, attributedUserId: scopeUserId }, viewer)[0] ?? null;
   const merchants = topMerchants(
     { from: monthStart(month), to: monthEnd(month), limit: 8, attributedUserId: scopeUserId },
     viewer,
@@ -132,8 +168,16 @@ export default async function DashboardPage({
    * Ruling R2: NO net worth for a self viewer. Net worth is the household's balance sheet --
    * accounts and loans have no per-person attribution the way a transaction does -- so there
    * is no honest scoped version of it to render. The query is not even run.
+   *
+   * Item 1: widened from 1 month to 2 -- purely to get last month's point for the tile's own
+   * delta, the same one-more-point pattern prevMonthCashflow uses above. netWorthOverTime OMITS
+   * (not zero-fills) a month before the household's first snapshot, so the array can still come
+   * back with only one entry; `netWorthPrev` stays null in that case rather than assuming a
+   * second element exists.
    */
-  const netWorthLatest = selfScoped ? null : netWorthOverTime(1, { today, viewer }).at(0) ?? null;
+  const netWorthPoints = selfScoped ? [] : netWorthOverTime(2, { today, viewer });
+  const netWorthLatest = netWorthPoints.at(-1) ?? null;
+  const netWorthPrev = netWorthPoints.length >= 2 ? netWorthPoints.at(-2)! : null;
 
   // Task 9: upcoming bills + safe-to-spend. Ruling M8: for a self viewer these read the
   // PERSONAL budget scope (see safeToSpend's own doc comment), so unlike net worth and loans
@@ -162,7 +206,7 @@ export default async function DashboardPage({
   const lastAccountId = findUserById(viewer.id)?.lastAccountId ?? null;
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4 sm:gap-5">
       {/* Ruling U1 (2026-08-30 plan): no `eyebrow` here anymore -- the MonthNav pill below is
           now the one place the month is stated, and it is also the control that changes it.
           Restating it a second time above the greeting was the defect this lane fixes. */}
@@ -179,7 +223,13 @@ export default async function DashboardPage({
               : 'Everything the household spent and brought in.'
         }
         actions={
-          <div className="flex flex-col items-end gap-2">
+          <>
+            {/* Item 6: "Add a transaction" now lives in this row (PageHeader's own item 5 fix
+                is what makes that a row worth adding it to -- see PageHeader.tsx). Its own toggle
+                state is the #quick-add hash, not React state, because the form it opens is a
+                completely different part of the tree (see QuickAddTransaction.tsx's
+                useQuickAddHash for why). */}
+            <QuickAddTrigger />
             {/* Ruling T7: the dashboard follows `?month=`, same as Budgets -- see MonthNav's own
                 docblock for why this needs no client-side router. `person=` is carried along
                 only when it is actually a household viewer's own choice: a self viewer's own id
@@ -206,7 +256,7 @@ export default async function DashboardPage({
                 ))}
               </nav>
             )}
-          </div>
+          </>
         }
       />
 
@@ -253,11 +303,10 @@ export default async function DashboardPage({
       </PageGuide>
 
       {/* Task 10 (ruling R7): the same position it holds on /transactions, so the two surfaces
-          are one habit. v1.16.0 Lane C item 1: `collapsible` now folds this card behind an
-          "Add a transaction" button too -- the plan's own rule ("Content is always visible. A
-          form that CREATES something sits behind a button.") applies here exactly as it did to
-          Transactions' own Quick add (ruling S6), and this was the largest block on the
-          dashboard's card while being the least-used control on it. */}
+          are one habit. v1.16.0 Lane C item 1 folded this behind a disclosure; item 6 (2026-08-30
+          plan) went one step further and removed the card around it entirely -- the button that
+          opens it now lives up in PageHeader's own actions row (QuickAddTrigger, just above),
+          so this call renders nothing but the bare form itself, when open. */}
       <QuickAddTransaction
         variant="card"
         collapsible
@@ -316,22 +365,35 @@ export default async function DashboardPage({
               ? `${formatCents(totals.budgetedSpentCents)} of ${formatCents(totals.budgetedLimitCents)} budgeted`
               : 'No category limits set yet'
           }
+          // Item 1: spending UP is bad news, so goodWhenUp is false here -- the one tile in this
+          // grid where a positive arithmetic move is the negative-toned one.
+          {...deltaProps(totals.totalSpentCents, prevTotals.totalSpentCents, false)}
           footer={
             totals.budgetedLimitCents > 0 ? (
-              <BudgetProgressBar
-                limitCents={totals.budgetedLimitCents}
-                spentCents={totals.budgetedSpentCents}
+              <ProgressBar
+                pct={Math.round((totals.budgetedSpentCents / totals.budgetedLimitCents) * 100)}
                 label="Budgeted spend this month"
               />
             ) : null
           }
         />
-        <StatTile label="Money in" value={formatCents(incomeCents)} tone="positive" hint="Transfers excluded" />
+        <StatTile
+          label="Money in"
+          value={formatCents(incomeCents)}
+          tone="positive"
+          hint="Transfers excluded"
+          {...deltaProps(incomeCents, prevMonthCashflow?.incomeCents ?? 0, true)}
+        />
         <StatTile
           label="Net this month"
           value={formatCents(netCents, { showSign: true })}
           tone={netCents < 0 ? 'negative' : 'positive'}
           hint={netCents < 0 ? 'Spending outran income' : 'Kept, after everything went out'}
+          {...deltaProps(
+            netCents,
+            prevMonthCashflow?.netCents ?? (prevMonthCashflow?.incomeCents ?? 0) - prevTotals.totalSpentCents,
+            true,
+          )}
         />
         {/* Task 7: self-hiding, in the manner of LoansCard -- rendered unconditionally, absent
             when there is no balance on file yet to compute it from. Adversarial-review fix
@@ -355,6 +417,11 @@ export default async function DashboardPage({
                 {!isCurrentMonth ? ' · as of today' : ''}
               </>
             }
+            // Item 1: only when there IS a prior point -- netWorthPrev is null (rather than 0)
+            // when the household's own history does not reach back that far yet, and deltaProps
+            // treats a genuine 0 prior balance differently (that still renders a delta) from "no
+            // prior data" (which must not).
+            {...(netWorthPrev !== null ? deltaProps(netWorthLatest.netCents, netWorthPrev.netCents, true) : {})}
           />
         )}
         {/* Lane 3 item 4: ruling T3 makes both of these household-only, same gate as Net worth
@@ -395,13 +462,13 @@ export default async function DashboardPage({
 
       {/* Task 9 / ruling T7: "Safe to spend is hidden entirely for a past month" -- this card's
           own footer sentence blends the (always-current) upcoming-bills list with month-scoped
-          safeToSpend figures, and ComingUpCard.tsx is outside this lane's file set (Lane 3's
-          allowed files stop at budgets-client.tsx/page.tsx/actions.ts, dashboard/page.tsx and
-          MonthNav.tsx), so its two concerns cannot be split apart here. Hiding the whole card
-          for any month other than the current one is the closest honest reading of "hidden
-          entirely" available without touching a file outside that set -- "how much can we still
-          spend" has no meaning for a month that is not the one in progress, in either
-          direction. */}
+          safeToSpend figures, and the two are not separable within the card (there is one footer
+          sentence, not two). Hiding the whole card for any month other than the current one is
+          the closest honest reading of "hidden entirely" -- "how much can we still spend" has no
+          meaning for a month that is not the one in progress, in either direction. This lane's
+          own conversion of ComingUpCard.tsx (item 3's days-remaining pill, its rows to ListRow)
+          does not touch this gate: what the card computes and when it renders is unchanged, only
+          how each row reads. */}
       {isCurrentMonth ? (
         <ComingUpCard
           bills={bills}
@@ -455,7 +522,26 @@ export default async function DashboardPage({
                       on this widget, so it is the phone card's headline. */}
                   <td className="font-medium text-ink cell-stack-headline" data-label="Category">{row.categoryName}</td>
                   <td data-label="Progress">
-                    <BudgetProgressBar limitCents={row.limitCents} spentCents={row.spentCents} label={row.categoryName} />
+                    {/* Ruling D1: the shared ProgressBar (Lane 0) rather than a second hand-rolled
+                        bar -- BudgetProgressBar.tsx itself stays (Budgets still uses it), but this
+                        page's own two bars (this one, the StatTile footer above) read from the
+                        one bar component every other page is converting to. Its D5 threshold
+                        scale is identical to BudgetProgressBar's own (< 80 calm, 80-100 warning,
+                        > 100 over), so `tone` is left to auto-derive from `pct` here. */}
+                    {row.limitCents === null ? (
+                      <span className="text-xs text-subtle">No budget</span>
+                    ) : (
+                      <ProgressBar
+                        pct={
+                          row.limitCents === 0
+                            ? row.spentCents > 0
+                              ? 100
+                              : 0
+                            : Math.round((row.spentCents / row.limitCents) * 100)
+                        }
+                        label={`${row.categoryName} budget used`}
+                      />
+                    )}
                   </td>
                   {/* Spent is the one money figure this widget carries, so it is the phone
                       card's amount slot. */}
@@ -517,7 +603,22 @@ export default async function DashboardPage({
 
       {goals.length > 0 ? (
         <section className="flex flex-col gap-3">
-          <h2 className="text-base font-semibold text-ink">Goals</h2>
+          {/* Item 2: this bare <h2> never had a shared header at all before this release --
+              exactly SectionHeader's own reason to exist ("what CardHeader is for a single card,
+              this is for a whole section of them"). GoalCard itself is Lane 1's file (goals-client
+              .tsx converts it to a MetricCard wrapper), so item 4 ("Goals on the dashboard render
+              the same MetricCard as the Goals page") falls out for free here -- this section
+              already renders the SAME GoalCard the Goals page does; only this heading was ever
+              this lane's own. */}
+          <SectionHeader
+            title="Goals"
+            action={
+              <Link href="/goals" className="btn btn--ghost btn--sm text-accent-text hover:text-accent-text">
+                Add goal
+                <ArrowRightIcon className="h-4 w-4" />
+              </Link>
+            }
+          />
           {/* Ruling T7: goals are always "as of today" (listGoals takes no month at all), so
               this note only earns its place when the page is actually showing a different one. */}
           {!isCurrentMonth ? (

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, cleanup, screen, fireEvent } from '@testing-library/react';
-import { QuickAddTransaction } from '@/components/QuickAddTransaction';
+import { QuickAddTransaction, QuickAddTrigger } from '@/components/QuickAddTransaction';
 
 vi.mock('@/app/(app)/transactions/actions', () => ({
   manualEntryAction: vi.fn(async () => ({ message: 'Transaction added.' })),
@@ -153,8 +153,18 @@ describe('QuickAddTransaction (ruling S6): the collapsible disclosure', () => {
     expect(screen.getByRole('button', { name: 'Add a transaction' })).toBeTruthy();
   });
 
-  it('with collapsible and variant="card", also starts closed behind the same toggle (v1.16.0 Lane C item 1)', () => {
-    render(<QuickAddTransaction {...props} variant="card" collapsible />);
+  // Item 6 (2026-08-30 plan): the card variant no longer holds its own toggle -- the button that
+  // opens it (QuickAddTrigger) now lives in PageHeader's actions row, a different part of the
+  // tree than this form. dashboard/page.tsx renders both; this test does the same, side by side,
+  // to prove the two agree on open/closed via the shared #quick-add hash rather than one owning
+  // the other's React state.
+  it('with collapsible and variant="card", QuickAddTrigger (rendered separately) opens it via the shared #quick-add hash', () => {
+    render(
+      <>
+        <QuickAddTrigger />
+        <QuickAddTransaction {...props} variant="card" collapsible />
+      </>,
+    );
     const toggle = screen.getByRole('button', { name: 'Add a transaction' });
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     expect(screen.queryByLabelText('Description')).toBeNull();
@@ -162,6 +172,20 @@ describe('QuickAddTransaction (ruling S6): the collapsible disclosure', () => {
     fireEvent.click(toggle);
     expect(screen.getByRole('button', { name: 'Close' }).getAttribute('aria-expanded')).toBe('true');
     expect(screen.getByLabelText('Description', { exact: false })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(screen.getByRole('button', { name: 'Add a transaction' })).toBeTruthy();
+    expect(screen.queryByLabelText('Description')).toBeNull();
+  });
+
+  // The card variant renders no button of its own any more -- QuickAddTrigger is the only thing
+  // that opens it (previous test). Rendered alone, it can only ever be closed (no dashboard/
+  // page.tsx present to have already set the hash), which is exactly the safe default while
+  // there is nothing to open it.
+  it('with collapsible and variant="card" rendered alone (no trigger mounted), it stays closed', () => {
+    render(<QuickAddTransaction {...props} variant="card" collapsible />);
+    expect(screen.queryByRole('button')).toBeNull();
+    expect(screen.queryByLabelText('Description')).toBeNull();
   });
 
   it('without collapsible, the card variant stays exactly as it was before this ruling -- the form is always mounted, with no toggle', () => {

@@ -16,6 +16,64 @@ import { categoryOptionGroups, type CategoryLike } from '@/lib/category-order';
 
 const initial: { error?: string; message?: string } = {};
 
+/** The hash both QuickAddTrigger (the header button, below) and this component's own dashboard
+ *  panel treat as "open" -- see useQuickAddHash's own comment for why a URL fragment, not React
+ *  state, is what the two agree on. */
+const DASHBOARD_QUICK_ADD_ID = 'quick-add';
+
+/**
+ * Item 6 (2026-08-30 plan): the dashboard's Quick add "stops being a card" -- what is left, once
+ * the title and description sentence are gone, is a plain button, and it now lives in
+ * PageHeader's own actions row (item 5, same lane) rather than beside a card title further down
+ * the page. That button and the form it opens are no longer the same React subtree (the button
+ * is authored where dashboard/page.tsx builds `<PageHeader actions={...}>`, the form is this same
+ * component, rendered separately, lower on the page), so neither can hold the other's `useState`.
+ * The URL hash is the one fact both sides can read without a shared parent: exactly the mechanism
+ * ruling R7 already used for the PWA manifest shortcut, just driven live via `hashchange` instead
+ * of checked once on mount, because now a click that changes the hash can happen WHILE this page
+ * is already open, not only on the initial navigation a shortcut produces.
+ */
+function useQuickAddHash(): boolean {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    const sync = () => setOpen(window.location.hash === `#${DASHBOARD_QUICK_ADD_ID}`);
+    sync();
+    window.addEventListener('hashchange', sync);
+    return () => window.removeEventListener('hashchange', sync);
+  }, []);
+  return open;
+}
+
+/**
+ * Item 6: the dashboard-only trigger. dashboard/page.tsx renders this INSIDE
+ * `<PageHeader actions={...}>`; QuickAddTransaction itself (variant="card") renders no button of
+ * its own any more -- see useQuickAddHash above for how the two stay in sync without sharing a
+ * tree. Transactions (variant="page") is untouched by this: its own toggle still lives inside
+ * CardHeader's `action` slot, exactly as ruling S6 shipped it.
+ */
+export function QuickAddTrigger() {
+  const open = useQuickAddHash();
+  return (
+    <button
+      type="button"
+      // 44px floor (global constraint), same reasoning the page-variant toggle below documents.
+      className="btn btn--secondary btn--sm min-h-11 sm:min-h-0"
+      aria-expanded={open}
+      aria-controls={DASHBOARD_QUICK_ADD_ID}
+      onClick={() => {
+        window.location.hash = open ? '' : DASHBOARD_QUICK_ADD_ID;
+        // Dispatched by hand rather than left to the browser: a same-document hash assignment
+        // does fire 'hashchange' natively, but not necessarily inside the same synchronous tick
+        // this click handler runs in, and the ONE other listener that matters (this component's
+        // own dashboard panel, wherever it is mounted) needs to hear about it deterministically.
+        window.dispatchEvent(new Event('hashchange'));
+      }}
+    >
+      {open ? 'Close' : 'Add a transaction'}
+    </button>
+  );
+}
+
 /**
  * v1.13.0 ruling R7 (item AK / PROD-4). With no bank sync, hand entry is the main loop for cash and
  * e-transfers, and until now the only way in was a seven-field form below fifty table rows.
@@ -43,7 +101,9 @@ export function QuickAddTransaction({
   today: string;
   /** users.last_account_id, or null on this person's first entry. */
   defaultAccountId: number | null;
-  /** 'page' anchors it at #quick-add with a heading; 'card' is the dashboard's compact form. */
+  /** 'page' (Transactions) keeps its own Card, title and toggle button, anchored at #quick-add.
+   *  'card' (the dashboard) is item 6's bare form -- no card, no title, no button of its own;
+   *  see QuickAddTrigger above for where its toggle actually lives. */
   variant: 'page' | 'card';
   /**
    * Ruling S6 (v1.15.0) folded this into a disclosure on Transactions only, keying `isDisclosure`
@@ -64,22 +124,34 @@ export function QuickAddTransaction({
   const groups = categoryOptionGroups(categories);
   const accountValue = defaultAccountId === null ? 'cash' : String(defaultAccountId);
   const isDisclosure = collapsible;
+  const isDashboardVariant = variant === 'card';
   // Closed by default when it is a disclosure at all; otherwise always open, which is the exact
-  // pre-ruling-S6 behaviour every existing caller (and every existing test) still gets.
-  const [open, setOpen] = useState(!isDisclosure);
+  // pre-ruling-S6 behaviour every existing caller (and every existing test) still gets. Only
+  // meaningful for variant="page" -- item 6 moved the dashboard's own toggle out of this
+  // component entirely (QuickAddTrigger, above), so its open state is hash-driven instead, via
+  // useQuickAddHash below.
+  const [pageOpen, setPageOpen] = useState(!isDisclosure);
+  const dashboardHashOpen = useQuickAddHash();
 
   // Ruling S6: the PWA manifest shortcut (v1.13.0 ruling R7) targets `/transactions#quick-add`
-  // and must still land on an OPEN form even though this now starts closed on Transactions.
-  // `window.location` does not exist during the server render, so it is read here, in an effect,
-  // and NEVER in the render body -- reading it during render would print the server's "closed"
-  // markup and then flip to "open" the instant this effect ran on the client, which is exactly
-  // what a hydration mismatch is. v1.16.0 Lane C item 1: this effect is harmless on the
-  // dashboard's card render too -- the shortcut's URL always carries `/transactions`, a different
-  // route, so the hash it checks for is never present there in practice.
+  // and must still land on an OPEN form. `window.location` does not exist during the server
+  // render, so it is read here, in an effect, and NEVER in the render body -- reading it during
+  // render would print the server's "closed" markup and then flip to "open" the instant this
+  // effect ran on the client, which is exactly what a hydration mismatch is. This is the
+  // page-variant's OWN one-time check and is unchanged by item 6: the dashboard's equivalent
+  // check is useQuickAddHash's `sync()` call, which runs live (on 'hashchange' too) because its
+  // trigger is a separate component that can fire while this page is already mounted, not only
+  // on the initial navigation a shortcut produces.
   useEffect(() => {
-    if (isDisclosure && window.location.hash === '#quick-add') setOpen(true);
+    if (!isDashboardVariant && isDisclosure && window.location.hash === '#quick-add') setPageOpen(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Item 6: on the dashboard, "open" is entirely the hash's answer (no local toggle at all,
+  // since there is no button left in this component to hold one) unless collapsible was never
+  // requested, in which case there is no disclosure at all and the form is simply always there --
+  // the exact pre-Lane-3 always-open render nothing here changes.
+  const open = isDashboardVariant ? (isDisclosure ? dashboardHashOpen : true) : pageOpen;
 
   const form = (
     <form action={action} className="grid gap-3 sm:grid-cols-6">
@@ -158,6 +230,21 @@ export function QuickAddTransaction({
     </form>
   );
 
+  if (isDashboardVariant) {
+    // Item 6: "stops being a card" -- no Card, no title, no description sentence, no button of
+    // its own (QuickAddTrigger, in the header, is the only thing that opens this). Collapsed, it
+    // renders nothing at all rather than hiding the form with CSS, same reasoning the page
+    // variant's own comment below gives. The `#quick-add` id only needs to exist while this is a
+    // live disclosure target -- the always-open, non-collapsible render (nobody currently calls
+    // it that way on the dashboard, but the pre-Lane-3 contract still allows it) has no toggle to
+    // synchronise with, so it stays a bare form with no anchor id.
+    if (!open) return null;
+    return isDisclosure ? <div id={DASHBOARD_QUICK_ADD_ID}>{form}</div> : form;
+  }
+
+  // variant === 'page' (Transactions): unchanged by item 6 -- this lane touches this file, not
+  // this branch's behaviour. Its own Card, title, description and toggle button all stay exactly
+  // as ruling S6 shipped them.
   const body = (
     <Card as="div">
       <CardHeader
@@ -173,7 +260,7 @@ export function QuickAddTransaction({
               className="btn btn--secondary btn--sm min-h-11 sm:min-h-0"
               aria-expanded={open}
               aria-controls="quick-add-body"
-              onClick={() => setOpen((prev) => !prev)}
+              onClick={() => setPageOpen((prev) => !prev)}
             >
               {open ? 'Close' : 'Add a transaction'}
             </button>
@@ -194,8 +281,6 @@ export function QuickAddTransaction({
       ) : null}
     </Card>
   );
-
-  if (variant === 'card') return body;
 
   // Card does not accept an `id` prop, so the #quick-add anchor (the manifest shortcut's target,
   // ruling R7) lives on a wrapping div instead.

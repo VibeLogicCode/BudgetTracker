@@ -3,7 +3,17 @@ import { daysBetweenIso } from '@/lib/dates';
 import { formatCents } from '@/lib/money';
 import type { UpcomingBill } from '@/lib/bills';
 import { Card, CardBody, CardFooter, CardHeader } from '@/components/ui/Card';
+import { ListRow } from '@/components/ui/ListRow';
+import { Pill, type PillTone } from '@/components/ui/Pill';
 import { RecordPaymentForm } from '@/components/RecordPaymentForm';
+
+/** Item 3 (2026-08-30 plan): the days-remaining pill -- "92d, 22d, and a warning-toned ⚠ 7d
+ *  inside a week." Only ever called for a NOT-overdue bill (see the row below); an overdue one
+ *  already has its own red "Overdue" badge, which says the more urgent thing more plainly than a
+ *  negative day count would. */
+function daysRemainingPill(days: number): { label: string; tone: PillTone } {
+  return days <= 7 ? { label: `⚠ ${days}d`, tone: 'warning' } : { label: `${days}d`, tone: 'neutral' };
+}
 
 /**
  * Item P (ruling P9). The notification evaluator has had a flood guard since v1.4
@@ -125,31 +135,43 @@ export function ComingUpCard({
         </CardBody>
       ) : (
         <ul className="border-t border-line text-sm">
-          {shown.map((bill) => (
-            <li
-              // v1.12.0: ONE item can contribute several rows now (a bill's installments), so
-              // itemId alone is no longer a key. installmentId identifies a schedule row; a
-              // cadence row has at most one occurrence per item in this window, so its item id
-              // still does.
-              key={bill.installmentId === null ? `item-${bill.itemId}` : `installment-${bill.installmentId}`}
-              className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b border-line px-5 py-3 last:border-b-0 sm:px-6"
-            >
-              <span className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
-                <span className="font-medium text-ink">{bill.name}</span>
-                <span className={bill.overdue ? 'text-xs text-danger' : 'text-xs text-subtle'}>{bill.dueDate}</span>
-                {bill.overdue ? <span className="badge badge--red">Overdue</span> : null}
-              </span>
-              <span className="flex shrink-0 items-center gap-3">
-                <span className="money">{formatCents(bill.amountCents)}</span>
-                {/* Ruling R8: only a SCHEDULE row can be recorded. A cadence bill (a subscription)
-                    has no installment row to mark, so the button would have nothing to write
-                    against -- which is why installmentId is the discriminator here, not the kind. */}
-                {canRecord && bill.installmentId !== null ? (
-                  <RecordPaymentForm installmentId={bill.installmentId} />
-                ) : null}
-              </span>
-            </li>
-          ))}
+          {/* Ruling D1: ListRow (Lane 0) -- its own docblock names this exact <li> as one of the
+              hand-rolled rows it generalises. Item 3 adds the days-remaining pill for a
+              not-yet-overdue bill; an overdue one keeps its existing red badge instead (more
+              urgent, and a negative day count would just be confusing). */}
+          {shown.map((bill) => {
+            const pill = bill.overdue ? null : daysRemainingPill(daysBetweenIso(today, bill.dueDate));
+            return (
+              <ListRow
+                // v1.12.0: ONE item can contribute several rows now (a bill's installments), so
+                // itemId alone is no longer a key. installmentId identifies a schedule row; a
+                // cadence row has at most one occurrence per item in this window, so its item id
+                // still does.
+                key={bill.installmentId === null ? `item-${bill.itemId}` : `installment-${bill.installmentId}`}
+                title={bill.name}
+                meta={
+                  <>
+                    <span className={bill.overdue ? 'text-danger' : undefined}>{bill.dueDate}</span>{' '}
+                    {bill.overdue ? (
+                      <span className="badge badge--red">Overdue</span>
+                    ) : pill ? (
+                      <Pill tone={pill.tone}>{pill.label}</Pill>
+                    ) : null}
+                  </>
+                }
+                amount={formatCents(bill.amountCents)}
+                trailing={
+                  // Ruling R8: only a SCHEDULE row can be recorded. A cadence bill (a
+                  // subscription) has no installment row to mark, so the button would have
+                  // nothing to write against -- which is why installmentId is the discriminator
+                  // here, not the kind.
+                  canRecord && bill.installmentId !== null ? (
+                    <RecordPaymentForm installmentId={bill.installmentId} />
+                  ) : undefined
+                }
+              />
+            );
+          })}
           {hiddenCount > 0 ? (
             <li className="border-b border-line px-5 py-3 last:border-b-0 sm:px-6">
               {/* Ruling P10: there is no "+N more" pattern in this app yet and the Card's `action` slot

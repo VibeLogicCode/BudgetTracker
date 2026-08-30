@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import type { OnboardingStep } from '@/lib/onboarding';
 import { Card, CardFooter, CardHeader } from '@/components/ui/Card';
+import { ListRow } from '@/components/ui/ListRow';
 
 /**
  * SELF-HIDING, in the manner of LoansCard: the dashboard renders it unconditionally and it is
@@ -27,20 +28,20 @@ export function GettingStartedCard({ steps }: { steps: OnboardingStep[] }) {
         title="Getting started"
         description="Do these in order — each one needs the one above it. This card goes away on its own once they are done."
       />
+      {/* Ruling D1: ListRow (Lane 0) -- title + meta + a trailing control is exactly this row's
+          shape, the same one every other never-a-table list on this page is converting to. */}
       <ol className="border-t border-line text-sm">
         {steps.map((step) => (
-          <li
+          <ListRow
             key={step.key}
-            className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-line px-5 py-3 last:border-b-0 sm:px-6"
-          >
-            <span className="flex min-w-0 flex-col gap-0.5">
-              <span className="font-medium text-ink">{step.title}</span>
-              <span className="text-muted">{step.body}</span>
-            </span>
-            <Link href={step.href} className="btn btn--secondary btn--sm shrink-0">
-              {step.cta}
-            </Link>
-          </li>
+            title={step.title}
+            meta={step.body}
+            trailing={
+              <Link href={step.href} className="btn btn--secondary btn--sm">
+                {step.cta}
+              </Link>
+            }
+          />
         ))}
       </ol>
       <CardFooter>

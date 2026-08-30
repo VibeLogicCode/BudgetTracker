@@ -1,6 +1,7 @@
 import { formatCents } from '@/lib/money';
 import type { LoanSummary } from '@/lib/loans';
 import { Card, CardHeader } from '@/components/ui/Card';
+import { ListRow } from '@/components/ui/ListRow';
 
 /**
  * v1.14.0 (spec BU, ruling P11). The mirror of LoansCard, for the loans a household has pointed
@@ -65,14 +66,16 @@ export function WhoOwesUsCard({
           </span>
         }
       />
+      {/* Ruling D1: ListRow (Lane 0) rather than a hand-rolled <li> -- this row is exactly its
+          contract (a title and a right-aligned amount, nothing else), the case ListRow exists
+          for. */}
       <ul className="border-t border-line text-sm">
         {shown.map((loan) => (
-          <li key={loan.itemId} className="flex items-center justify-between gap-4 border-b border-line px-5 py-3 last:border-b-0 sm:px-6">
-            <span className="font-medium text-ink">{loan.name}</span>
-            <span className="money whitespace-nowrap">
-              {loan.currentBalanceCents === null ? '—' : formatCents(loan.currentBalanceCents)}
-            </span>
-          </li>
+          <ListRow
+            key={loan.itemId}
+            title={loan.name}
+            amount={loan.currentBalanceCents === null ? '—' : formatCents(loan.currentBalanceCents)}
+          />
         ))}
       </ul>
     </Card>

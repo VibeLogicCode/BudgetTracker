@@ -67,6 +67,10 @@ vi.mock('@/components/QuickAddTransaction', () => ({
     capturedQuickAddProps.collapsible = props.collapsible;
     return null;
   },
+  // Item 6 (2026-08-30 plan): DashboardPage now also renders QuickAddTrigger (the header's own
+  // "Add a transaction" button) alongside QuickAddTransaction -- stubbed the same way so the real
+  // component's `useEffect`/hash wiring (irrelevant to every test in this file) never runs.
+  QuickAddTrigger: () => null,
 }));
 
 afterEach(cleanup);
