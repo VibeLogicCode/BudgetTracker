@@ -31,8 +31,31 @@ month", measured automatically. Different question, no overlap.
 
 - **T1. "Saved" is `income − spend` for the month, transfers excluded.** That is exactly what
   `cashflowTrend` already returns (`src/lib/reports.ts:40-50` excludes `is_transfer` from every
-  series), so money moved into a savings account is not spending and does not depress the figure.
-  Do not invent a second definition of saving anywhere in this release.
+  series). Do not invent a second definition of saving anywhere in this release.
+
+  **Moving money into a savings account does not increase this figure, and must not.** Income minus
+  spending already counts every dollar that was not consumed, including the ones still sitting in
+  chequing; a transfer relocates money rather than creating any. If a transfer did raise the
+  number, a household could hit any target by shuffling cash between its own accounts.
+
+  Three cases decide whether the figure is right, and they are worth knowing before touching this
+  code. On $5,000 of income, $3,500 of spending and $1,000 moved to savings:
+  1. Savings account imported, both legs flagged as transfers — net $1,500. Correct.
+  2. Savings account imported, NEITHER leg flagged — still $1,500. Uncategorised rows count as
+     spend (`reports.ts:151-153`) and `netSpentCents` is a pure sign flip (`money.ts:71-74`), so
+     the -1,000 and the +1,000 cancel exactly inside the spend bucket.
+  3. Savings account NOT imported and the leg not flagged — net $500, understated by exactly the
+     amount that was saved. This is the case that matters: saving more makes the number look worse.
+
+  So the household rule is "import both sides, or flag the transfer", and flagging teaches itself
+  (marking one row writes an exact-match transfer rule, `src/lib/categorize/engine.ts`). One more
+  trap to guard against in test fixtures: a deposit into savings filed under an INCOME category
+  inflates income and overstates the month. A transfer is never income.
+- **T1a. The tile discloses the intent number without scoring it.** Beside the saved figure it
+  prints how much of the month moved into savings — flagged deposits (positive amounts) landing in
+  an account of `type = 'savings'`. Information only: it is never the target, never compared to it,
+  and never added to it. When the household has NO savings-type account, the tile says so instead,
+  because that is exactly the configuration in which case 3 above bites silently.
 - **T2. A target is a percent of income OR a fixed amount of cents.** Percent is the default,
   because income varies and a percent target self-adjusts instead of failing you for a thin month.
   No "whichever is greater" — a rule nobody can restate is a rule nobody can act on.
@@ -89,6 +112,12 @@ export interface SavingsProgress {
   /** net over targetCents as a whole percent; null when targetCents is null or not positive. */
   pct: number | null;
   met: boolean;
+  /** Ruling T1a, disclosure only: flagged transfer deposits landing in a `savings`-type account
+   *  this month. NEVER added to netCents, never compared against targetCents. */
+  movedToSavingsCents: number;
+  /** True when the household has no account of type 'savings' at all, which is the setup where an
+   *  unflagged transfer to an outside bank silently understates the month (ruling T1, case 3). */
+  noSavingsAccount: boolean;
 }
 export function getSavingsTarget(month: string): SavingsTarget | null;
 export function saveSavingsTarget(input: SavingsTarget, at?: Date): void; // upsert on month
@@ -204,6 +233,11 @@ actions file, `src/app/(app)/dashboard/page.tsx`; create `src/components/ui/Mont
    percent, and a bar (from `savingsProgress`); and **Cash runway** — `4.2 months covered`, with
    the `accountsMissing` caveat shown when it is not zero (from `cashRunway`). Both take their
    numbers as props from the server component; do not import the libs into a client component.
+   Per ruling T1a the savings tile carries a sub-line reading `· $1,000 of it moved to savings`
+   from `movedToSavingsCents` — worded so it plainly reads as part of the saved figure rather than
+   an addition to it — and when `noSavingsAccount` is true it instead says that no savings account
+   is set up, and that money moved to a bank the app does not know about counts as spending unless
+   the transaction is marked a transfer.
 
 Run `npx vitest run tests/app/budgets-client.test.tsx tests/app/budgets-page.test.tsx tests/app/budgets-actions.test.ts tests/app/dashboard.test.tsx tests/ops` and `npx tsc --noEmit`.
 
