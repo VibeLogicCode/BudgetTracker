@@ -163,15 +163,20 @@ export default async function DashboardPage({
 
   return (
     <div className="flex flex-col gap-6">
+      {/* Ruling U1 (2026-08-30 plan): no `eyebrow` here anymore -- the MonthNav pill below is
+          now the one place the month is stated, and it is also the control that changes it.
+          Restating it a second time above the greeting was the defect this lane fixes. */}
       <PageHeader
-        eyebrow={monthLabel(month)}
         title={`Hello, ${viewer.name}`}
         description={
           selfScoped
             ? 'Your month.'
             : scopedPerson
               ? `${scopedPerson.name}'s share of the month.`
-              : 'Everything the household spent and brought in this month.'
+              // "this month" dropped (ruling U1): the sentence is wrong the instant someone
+              // navigates MonthNav to any other month, and nothing else here names which month
+              // it means -- the nav right above already says that.
+              : 'Everything the household spent and brought in.'
         }
         actions={
           <div className="flex flex-col items-end gap-2">

@@ -288,6 +288,70 @@ describe('DashboardPage (ruling R2)', () => {
 });
 
 /**
+ * Lane 1 of the 2026-08-30 plan (ruling U1): v1.17.0 stated the month three times in this
+ * header -- an `AUGUST 2026` eyebrow above the greeting, the MonthNav pill, and a second visible
+ * `<input type="month">` beside it, two of the three interactive. This block proves the eyebrow
+ * and the second input are both gone, the subtitle no longer claims anything is "this month" (a
+ * sentence that goes wrong the instant MonthNav is used to look at any other month), and
+ * prev/next print short month names rather than the raw ISO keys they used to.
+ */
+describe('DashboardPage — ruling U1 (the month is stated once, by the control that changes it)', () => {
+  let t: TestDb | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  async function setupBasic() {
+    t = createTestDb();
+    const adult = await createUser({ name: 'Adult', username: 'adult', password: 'correct horse battery', role: 'admin' });
+    return { adultId: adult.id };
+  }
+
+  it('has no eyebrow above the greeting, and exactly one <input type="month"> on the whole page', async () => {
+    const { adultId } = await setupBasic();
+    currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    const { container } = render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+
+    // `.eyebrow` is a shared style class other widgets legitimately use too (StatTile's own
+    // "Spent this month" label, for one) -- what proves THIS defect fixed is that the <h1> has
+    // no eyebrow sibling of its own any more, so its previous sibling within PageHeader's wrapper
+    // is gone outright rather than merely renamed.
+    const heading = screen.getByRole('heading', { level: 1, name: /Hello, Adult/ });
+    expect(heading.previousElementSibling).toBeNull();
+    // v1.17.0 rendered a second, visible <input type="month"> beside the pill -- ruling U1
+    // collapses it behind the pill (still in the DOM for keyboards/mobile) rather than adding a
+    // third statement of the month.
+    expect(container.querySelectorAll('input[type="month"]').length).toBe(1);
+    // The pill is now the only place the month is named.
+    expect(screen.getByText(monthLabel(currentMonth()))).toBeTruthy();
+  });
+
+  it('the subtitle no longer says "this month"', async () => {
+    const { adultId } = await setupBasic();
+    currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.getByText('Everything the household spent and brought in.')).toBeTruthy();
+    expect(screen.queryByText('Everything the household spent and brought in this month.')).toBeNull();
+  });
+
+  it('MonthNav prev/next print three-letter month names, never raw ISO', async () => {
+    const { adultId } = await setupBasic();
+    currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    const { container } = render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+
+    const monthLinks = Array.from(container.querySelectorAll('nav[aria-label="Change month"] a')) as HTMLAnchorElement[];
+    const expectedPrev = monthLabel(addMonths(currentMonth(), -1)).slice(0, 3);
+    const expectedNext = monthLabel(addMonths(currentMonth(), 1)).slice(0, 3);
+    expect(monthLinks.map((a) => a.textContent)).toEqual([`← ${expectedPrev}`, `${expectedNext} →`]);
+  });
+});
+
+/**
  * Lane 3 item 2 (MonthNav on the dashboard) and item 3 (ruling T7: the dashboard follows
  * `?month=`, and every section that does not gets an "as of today" note or is hidden outright).
  * A separate describe block, own seeded db, so a past month's data does not have to share
