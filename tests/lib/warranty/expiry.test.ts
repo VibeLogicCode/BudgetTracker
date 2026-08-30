@@ -60,7 +60,7 @@ describe('warrantyStatus (spec §3.7)', () => {
 describe('statusLabel', () => {
   it('names each badge the way the list page renders it', () => {
     expect(statusLabel('lifetime', null, TODAY)).toBe('Lifetime');
-    expect(statusLabel('unknown', null, TODAY)).toBe('Term unknown');
+    expect(statusLabel('unknown', null, TODAY)).toBe('No end date');
     expect(statusLabel('expired', '2026-08-15', TODAY)).toBe('Expired');
     expect(statusLabel('active', '2027-01-01', TODAY)).toBe('Active');
     expect(statusLabel('expiring', '2026-08-16', TODAY)).toBe('Expires today');

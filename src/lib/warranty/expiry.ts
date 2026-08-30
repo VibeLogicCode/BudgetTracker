@@ -66,7 +66,9 @@ export function statusLabel(
     case 'lifetime':
       return openEndedDisplayLabel(kind);
     case 'unknown':
-      return 'Term unknown';
+      // 'Term unknown' read like something had gone wrong. It means only that no end date was
+      // recorded, which is the normal state of a loan between friends and of an open contract.
+      return 'No end date';
     case 'expired':
       return 'Expired';
     case 'active':

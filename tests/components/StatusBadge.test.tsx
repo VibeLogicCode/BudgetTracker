@@ -24,7 +24,7 @@ describe('StatusBadge (§10.2)', () => {
     cleanup();
 
     render(<StatusBadge status="unknown" expiryDate={null} today="2026-08-16" />);
-    expect(screen.getByText('Term unknown')).toBeTruthy();
+    expect(screen.getByText('No end date')).toBeTruthy();
   });
 
   it('carries a distinct colour class per status so they are not all grey', () => {
