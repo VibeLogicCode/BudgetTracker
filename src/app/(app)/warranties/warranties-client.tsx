@@ -29,7 +29,11 @@ import type { WarrantySearchResult } from '@/lib/warranty/search';
 const SORT_LABELS: Record<WarrantySort, string> = {
   expiry: 'Soonest expiry',
   name: 'Name',
-  purchase: 'Newest purchase',
+  // Item 5 (v1.16.0 plan): the underlying sort key (and the column it orders) is still called
+  // `purchase` everywhere else -- only the two words a person actually reads changed, because
+  // "purchase" is wrong for three of this page's five kinds (a loan is not purchased, a bill
+  // is not purchased, a subscription is barely purchased).
+  purchase: 'Newest start',
 };
 
 export function WarrantiesClient({
@@ -76,7 +80,11 @@ export function WarrantiesClient({
   }
 
   return (
-    <div className="flex flex-col gap-6">
+    // Item 4 (v1.16.0 plan): the trimmed colgroup below still needs more than the shell's
+    // standard 72rem (max-w-6xl) cap to sit comfortably beside eight columns -- the same
+    // data-page-width escape hatch transactions-client.tsx and reports-client.tsx already use
+    // (see globals.css's `main:has(> [data-page-width='wide'])` rule).
+    <div data-page-width="wide" className="flex flex-col gap-6">
       <PageHeader
         title="Contracts & Coverage"
         description="Receipts, coverage and cancel-by dates for everything worth keeping the paperwork on."
@@ -122,7 +130,10 @@ export function WarrantiesClient({
               refresh (Ruling P12). The type filter chip composes with every other filter here --
               it does not replace any of them (type-deltas.md T9). */}
           <form method="get" className="flex flex-wrap items-end gap-3">
-            <Field label="Search" className="min-w-[14rem] flex-1">
+            {/* Item 4 (v1.16.0 plan): flex-1 beside four ~150px selects used to give this field
+                roughly 400px on its own, out of proportion with the row beside it. max-w-sm
+                caps it while keeping flex-1's grow-to-fill-the-gap behaviour on a wide screen. */}
+            <Field label="Search" className="min-w-[14rem] max-w-sm flex-1">
               <input name="q" defaultValue={query} placeholder="Any word on the receipt or document" className={inputClass} />
             </Field>
             <Field label="Status">
@@ -197,37 +208,47 @@ export function WarrantiesClient({
             </EmptyState>
           )
         ) : (
-          /* Item I (ruling P3). minWidth is the colgroup's own total (14+9+9+7+13+8+9+7+9 = 85rem).
-             Without it .data-table's width:100% means the overflow-x-auto wrapper has nothing to
-             scroll and the browser crushes every column instead -- see TableWrap's minWidth docblock. */
-          <TableWrap bare fixed minWidth="85rem" responsive>
+          /* Item 4 (v1.16.0 plan). The colgroup used to total 85rem (14+9+9+7+13+8+9+7+9) inside
+             the shell's 72rem cap -- every desktop scrolled sideways, at any window size, hiding
+             the last two columns even with one row. Two things fixed that together: Vendor
+             stopped being a column (it is `--` on every loan and every contract, and now reads as
+             a muted sub-line under the item name instead -- one whole 9rem column gone), and the
+             remaining eight were trimmed to bring the total to 72rem, matching the shell's own
+             cap so the table fits even without the data-page-width="wide" escape hatch below.
+             minWidth is the colgroup's own total; without it .data-table's width:100% means the
+             overflow-x-auto wrapper has nothing to scroll and the browser crushes every column
+             instead -- see TableWrap's minWidth docblock. */
+          <TableWrap bare fixed minWidth="72rem" responsive>
             <colgroup>
-              {/* The item name, the one column people scan. Left unsized it took whatever the other
-                  eight left over, which on a long name meant a vertical column of characters. */}
-              <col style={{ width: '14rem' }} />
-              {/* An item-type name. */}
-              <col style={{ width: '9rem' }} />
-              {/* A vendor name. */}
+              {/* The item name (plus its vendor sub-line, when there is one) -- still the one
+                  column people scan first. Left unsized it took whatever the other columns left
+                  over, which on a long name meant a vertical column of characters. */}
+              <col style={{ width: '13rem' }} />
+              {/* An item-type name, rendered as a small badge. */}
               <col style={{ width: '9rem' }} />
               {/* An ISO date in tabular figures: the same width on every row. */}
               <col style={{ width: '7rem' }} />
-              {/* Widened from a date to fit item Q's "2 overdue · next 2026-06-30" on one line. */}
+              {/* A date, or -- for a Bill -- "2 overdue · next 2026-06-30" (item Q). */}
               <col style={{ width: '13rem' }} />
               {/* One badge. */}
               <col style={{ width: '8rem' }} />
-              {/* A person's name, or "Household". */}
-              <col style={{ width: '9rem' }} />
+              {/* A person's name, or "Household" -- neither needs 9rem. */}
+              <col style={{ width: '7rem' }} />
               {/* A five-figure amount, right-aligned, on one line. */}
               <col style={{ width: '7rem' }} />
-              {/* An amount plus its cycle suffix ("/mo"). */}
-              <col style={{ width: '9rem' }} />
+              {/* An amount plus its cycle suffix ("/mo" or a loan's longer "per month"). */}
+              <col style={{ width: '8rem' }} />
             </colgroup>
             <thead>
               <tr>
                 <th scope="col">Item</th>
                 <th scope="col">Type</th>
-                <th scope="col">Vendor</th>
-                <th scope="col">Purchase date</th>
+                {/* Item 5 (v1.16.0 plan): this column is shared by all five kinds, so it cannot
+                    say "Purchase date" (wrong for a loan, a bill, barely right for a
+                    subscription) OR pick just one kind's own word -- "Started" is the one word
+                    that reads correctly for all of them. The detail page, which knows the
+                    item's actual kind, says more (see detailStartLabel there). */}
+                <th scope="col">Started</th>
                 <th scope="col">Expiry</th>
                 <th scope="col">Status</th>
                 <th scope="col">Owner</th>
@@ -242,6 +263,14 @@ export function WarrantiesClient({
                       another on this page, so it is the phone card's headline. */}
                   <td className="cell-stack-headline" data-label="Item">
                     <Link href={`/warranties/${row.id}`} className="font-medium text-ink hover:text-accent-text">{row.name}</Link>
+                    {/* Item 4 (v1.16.0 plan): Vendor stopped being its own column -- it is `--`
+                        on every loan and every contract, so it earned a whole 9rem for almost
+                        nothing scanned. Nested in THIS <td>, not a sibling one: the table is
+                        `fixed` with an explicit <colgroup> (one <col> per column), and a real
+                        extra <td> here would desync the two. `cell-stack-meta` is inert outside
+                        the phone media query (Lane A's rule lives there), so `text-xs
+                        text-subtle` is what actually mutes it on every screen size. */}
+                    {row.vendor ? <div className="cell-stack-meta text-xs text-subtle">{row.vendor}</div> : null}
                     {row.model ? <div className="text-xs text-subtle">{row.model}</div> : null}
                   </td>
                   <td data-label="Type">
@@ -251,8 +280,7 @@ export function WarrantiesClient({
                       <span className="text-subtle">—</span>
                     )}
                   </td>
-                  <td className="text-muted" data-label="Vendor">{row.vendor ?? '—'}</td>
-                  <td className="tabnum whitespace-nowrap text-muted" data-label="Purchase date">{row.purchaseDate}</td>
+                  <td className="tabnum whitespace-nowrap text-muted" data-label="Started">{row.purchaseDate}</td>
                   {/* Delta T9, generalized to `kind` in v1.2.2 Task 2: expiryPhraseForKind()
                       supplies the expires/cancel by/ends on/paid off by verb -- no component
                       hard-codes any of them (MUST-19.11). v1.3.0 fix: an open-ended item

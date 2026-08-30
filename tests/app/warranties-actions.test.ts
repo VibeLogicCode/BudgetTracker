@@ -62,9 +62,10 @@ import {
   reRunOcrAction,
   saveLoanRuleAction,
   setInstallmentPaidAction,
+  unlinkLedgerTransactionAction,
   updateWarrantyAction,
 } from '@/app/(app)/warranties/actions';
-import { MAX_RULES_PER_LOAN, listLoanRules } from '@/lib/loans';
+import { MAX_RULES_PER_LOAN, assignTransactionToLoan, itemLedger, listLoanRules } from '@/lib/loans';
 import { attachStagedReceipts, createWarrantyItem, getWarrantyItem, getWarrantyReceipt, listWarrantyReceipts } from '@/lib/warranty/items';
 import { MAX_FILES_PER_UPLOAD, receiptFileExists } from '@/lib/warranty/receipts';
 import { writeSidecar, writeStagedReceipt } from '@/lib/warranty/staging';
@@ -195,6 +196,8 @@ describe('cross-origin rejection comes FIRST (MUST-13.1)', () => {
     ['addInstallmentAction', (fd) => addInstallmentAction({}, fd)],
     ['removeInstallmentAction', (fd) => removeInstallmentAction({}, fd)],
     ['setInstallmentPaidAction', (fd) => setInstallmentPaidAction({}, fd)],
+    // Item 6 (v1.16.0 plan): the Linked transactions card's own Unlink.
+    ['unlinkLedgerTransactionAction', (fd) => unlinkLedgerTransactionAction({}, fd)],
   ];
 
   it.each(cases)('%s refuses a mismatched Origin without touching the database', async (_name, run) => {
@@ -1044,5 +1047,80 @@ describe('ruling R3: destructive actions are owner-or-admin, and are recorded', 
     form.set('receiptId', String(receiptOnAdminItem));
     expect((await deleteReceiptAction({}, form)).error).toBe(NOT_YOURS_ERROR);
     expect(getWarrantyReceipt(receiptOnAdminItem)).not.toBeNull();
+  });
+});
+
+/** A real transaction row, inserted the same way every other test in this file does. */
+function seedTransaction(accountId: number, over: Partial<{ date: string; merchant: string; amountCents: number }> = {}): number {
+  const merchant = over.merchant ?? 'HONDA FIN';
+  return current!.db.get<{ id: number }>(sql`
+    insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, created_by, created_at, updated_at)
+    values (${accountId}, ${over.date ?? '2026-06-14'}, ${merchant}, ${merchant}, ${over.amountCents ?? -450_00}, ${ownerId}, ${nowIso()}, ${nowIso()})
+    returning id`).id;
+}
+
+describe('unlinkLedgerTransactionAction (item 6, v1.16.0 plan)', () => {
+  it('unlinks a loan payment (unassignTransactionFromLoan) and the ledger row disappears', async () => {
+    const itemId = seedLoanItem({ balanceCents: 200_000 });
+    const accountId = insertTestAccount(current!.db, { name: 'Chequing' });
+    const txnId = seedTransaction(accountId);
+    expect(assignTransactionToLoan({ txnId, itemId }).linked).toBe(true);
+    expect(itemLedger(itemId).rows).toHaveLength(1);
+
+    const result = await unlinkLedgerTransactionAction({}, formData({ itemId: String(itemId), txnId: String(txnId) }));
+    expect(result.message).toBeTruthy();
+    expect(itemLedger(itemId).rows).toHaveLength(0);
+  });
+
+  it('unlinks a paid bill installment (the un-mark path) and the ledger row disappears', async () => {
+    const billType = createItemType(`Bill ${randomUUID()}`, 'bill');
+    const billItemId = createWarrantyItem({
+      name: 'Property Tax',
+      vendor: null,
+      model: null,
+      serial: null,
+      purchaseDate: '2024-01-15',
+      warrantyMonths: null,
+      isLifetime: true,
+      priceCents: null,
+      ownerUserId: ownerId,
+      transactionId: null,
+      typeId: billType.id,
+      notes: null,
+    });
+    const accountId = insertTestAccount(current!.db, { name: 'Chequing' });
+    const txnId = seedTransaction(accountId, { merchant: 'CITY TAX OFFICE', amountCents: -120_000 });
+    const installmentId = current!.db.get<{ id: number }>(
+      sql`insert into bill_installments (item_id, due_date, amount_cents, paid_at, paid_txn_id, created_at)
+          values (${billItemId}, '2026-06-15', 120000, ${nowIso()}, ${txnId}, ${nowIso()}) returning id`,
+    ).id;
+    expect(itemLedger(billItemId).rows).toMatchObject([{ txnId, source: 'installment' }]);
+
+    const result = await unlinkLedgerTransactionAction({}, formData({ itemId: String(billItemId), txnId: String(txnId) }));
+    expect(result.message).toBeTruthy();
+    expect(itemLedger(billItemId).rows).toHaveLength(0);
+    const row = current!.db.get<{ paidAt: string | null; paidTxnId: number | null }>(
+      sql`select paid_at as paidAt, paid_txn_id as paidTxnId from bill_installments where id = ${installmentId}`,
+    );
+    expect(row.paidAt).toBeNull();
+    expect(row.paidTxnId).toBeNull();
+  });
+
+  it('refuses when the transaction is not actually linked to this item', async () => {
+    const itemId = seedLoanItem();
+    const result = await unlinkLedgerTransactionAction({}, formData({ itemId: String(itemId), txnId: '999999' }));
+    expect(result.error).toBe('That transaction is no longer linked to this item.');
+  });
+
+  // Authorization: the SAME viewer guard every other action in this file uses (getWarrantyItem),
+  // not a new one -- a self-scoped viewer who cannot see the item at all must be refused exactly
+  // like every other action's "unknown item" case, never widened into a different message that
+  // would leak whether the item exists.
+  it('refuses for a self-scoped viewer who cannot see the item', async () => {
+    const itemId = seedLoanItem();
+    const strangerId = insertTestUser(current!.db, { name: 'Stranger', role: 'member' });
+    currentUser = { id: strangerId, name: 'Stranger', username: 'stranger', role: 'member', visibility: 'self' };
+    const result = await unlinkLedgerTransactionAction({}, formData({ itemId: String(itemId), txnId: '1' }));
+    expect(result.error).toBe('That item no longer exists.');
   });
 });

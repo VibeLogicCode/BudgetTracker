@@ -74,6 +74,16 @@ describe('WarrantiesClient', () => {
     expect(headlineCell?.className).toContain('cell-stack-headline');
   });
 
+  // Item 4 (v1.16.0 plan): Vendor stopped being its own column -- it now reads as a muted
+  // sub-line nested inside the Item cell (the "Home Depot" assertion above already proves it
+  // renders somewhere; this pins WHERE), and the table lost a whole <col>/<th> pair.
+  it('nests Vendor under the item name instead of giving it its own column', () => {
+    const { container } = renderList(result([item()]));
+    const headlineCell = container.querySelector('tbody tr td:first-child')!;
+    expect(headlineCell.textContent).toContain('Home Depot');
+    expect(container.querySelectorAll('thead th')).toHaveLength(8);
+  });
+
   it('shows the expiring badge with a day count', () => {
     renderList(result([item({ status: 'expiring', expiryDate: '2026-09-15' })]));
     expect(screen.getByText('Expires in 30 days')).toBeTruthy();
@@ -186,7 +196,9 @@ describe('WarrantiesClient', () => {
         item({ id: 23, isLifetime: true, expiryDate: null, kind: 'loan' }),
       ]),
     );
-    const cells = Array.from(container.querySelectorAll('tbody td:nth-child(5)')).map((td) => td.textContent);
+    // Item 4 (v1.16.0 plan): Expiry moved from the 5th column to the 4th once Vendor stopped
+    // being its own column (Item, Type, Started, Expiry, ...).
+    const cells = Array.from(container.querySelectorAll('tbody td:nth-child(4)')).map((td) => td.textContent);
     expect(cells).toEqual(['Lifetime', 'Lifetime', 'Ongoing', 'Open-ended']);
   });
 
@@ -198,7 +210,9 @@ describe('WarrantiesClient', () => {
         item({ id: 30, kind: 'subscription', typeId: 2, typeName: 'Subscription', billingCycle: 'monthly', billingAmountCents: 1599 }),
       ]),
     );
-    const cell = container.querySelector('tbody td:nth-child(9)');
+    // Item 4 (v1.16.0 plan): Billing moved from the 9th (last) column to the 8th (last) once
+    // Vendor stopped being its own column.
+    const cell = container.querySelector('tbody td:nth-child(8)');
     expect(cell?.textContent).toBe('$15.99 / month');
   });
 
@@ -209,7 +223,7 @@ describe('WarrantiesClient', () => {
         item({ id: 32, kind: 'subscription', typeId: 2, typeName: 'Subscription' }),
       ]),
     );
-    const cells = Array.from(container.querySelectorAll('tbody td:nth-child(9)')).map((td) => td.textContent);
+    const cells = Array.from(container.querySelectorAll('tbody td:nth-child(8)')).map((td) => td.textContent);
     expect(cells).toEqual(['—', '—']);
   });
 
@@ -223,7 +237,7 @@ describe('WarrantiesClient', () => {
         item({ id: 34, kind: 'subscription', typeId: 2, typeName: 'Subscription', billingCycle: null, billingAmountCents: 1599 }),
       ]),
     );
-    const cells = Array.from(container.querySelectorAll('tbody td:nth-child(9)')).map((td) => td.textContent);
+    const cells = Array.from(container.querySelectorAll('tbody td:nth-child(8)')).map((td) => td.textContent);
     expect(cells).toEqual(['—', '—']);
   });
 });
@@ -261,7 +275,15 @@ describe('WarrantiesClient — the table declares its own widths (item I, ruling
     const { container } = renderList(result([item()]));
     const table = container.querySelector('table');
     expect(table?.className).toContain('data-table--fixed');
-    expect(container.querySelectorAll('colgroup > col')).toHaveLength(9);
-    expect(container.querySelectorAll('thead th')).toHaveLength(9);
+    // Item 4 (v1.16.0 plan): 9 -> 8 once Vendor stopped being its own column.
+    expect(container.querySelectorAll('colgroup > col')).toHaveLength(8);
+    expect(container.querySelectorAll('thead th')).toHaveLength(8);
+  });
+
+  it('carries data-page-width="wide" and a minWidth equal to the colgroup total (item 4)', () => {
+    const { container } = renderList(result([item()]));
+    expect(container.querySelector('[data-page-width="wide"]')).toBeTruthy();
+    const table = container.querySelector('table') as HTMLTableElement;
+    expect(table.style.minWidth).toBe('72rem');
   });
 });

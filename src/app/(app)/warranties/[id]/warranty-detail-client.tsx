@@ -18,7 +18,7 @@ import { BellIcon } from '@/components/icons';
 import { Field, inputClass, labelClass, selectClass, textareaClass } from '@/components/ui/form';
 import { AutoSaveSelect } from '@/components/ui/AutoSave';
 import { formatCents } from '@/lib/money';
-import type { LoanRule } from '@/lib/loans';
+import type { ItemLedger, ItemLedgerRow, LoanRule } from '@/lib/loans';
 import {
   BILLING_CYCLE_LABELS,
   BILLING_CYCLES,
@@ -35,6 +35,7 @@ import {
   LOAN_DIRECTION_LABELS,
   openEndedDisplayLabel,
   type ItemKind,
+  type LoanDirection,
   productFieldsAllowedForKind,
   INSTALLMENT_SECTION_LABEL,
   installmentStateLabel,
@@ -60,6 +61,7 @@ import {
   reRunOcrAction,
   saveLoanRuleAction,
   setInstallmentPaidAction,
+  unlinkLedgerTransactionAction,
   updateWarrantyAction,
   type WarrantyActionState,
 } from '../actions';
@@ -85,6 +87,47 @@ function balanceHintForDirection(direction: string): string {
     ? "Today's balance. Repayments you link will take it down; further advances raise it."
     : "Today's balance. Payments you link will take it down from here.";
 }
+
+/**
+ * Item 5 (v1.16.0 plan): the list page's "Started" header has to cover five kinds with one word,
+ * but the DETAIL page knows the item's actual kind, so it can say what a household would
+ * actually call this date. Subscription is deliberately left out of this matrix and falls
+ * through to formStartLabel's existing "Start date" -- the plan names only warranty, loan
+ * (by direction) and contract-or-bill, and a subscription's start reads fine either way. The
+ * underlying field stays `purchaseDate`; only the label changes.
+ */
+function detailStartLabel(kind: ItemKind, direction: LoanDirection): string {
+  if (kind === 'warranty') return 'Purchased';
+  if (kind === 'loan') return direction === 'lent' ? 'Lent on' : 'Borrowed on';
+  if (kind === 'contract' || kind === 'bill') return 'Starts';
+  return formStartLabel(kind);
+}
+
+/**
+ * Item 6 (v1.16.0 plan): the Linked transactions card's loan-only summary line. Built from the
+ * SAME two numbers the read-only money block below already shows (the original principal and
+ * the current balance), not from the ledger's own totalAppliedCents -- that figure is a signed
+ * NET of every disbursement and repayment ever linked, while this line wants "what's been paid
+ * off the original amount", a different question with a different (always non-negative) answer.
+ * Direction only ever selects which WORD reads correctly; the arithmetic is identical either way.
+ */
+function loanLedgerSummary(direction: LoanDirection, principalCents: number | null, balanceCents: number | null): string | null {
+  if (principalCents === null || balanceCents === null) return null;
+  const repaidCents = Math.max(0, principalCents - balanceCents);
+  return direction === 'lent'
+    ? `You lent ${formatCents(principalCents)}, ${formatCents(repaidCents)} repaid, ${formatCents(balanceCents)} still owed to you.`
+    : `You borrowed ${formatCents(principalCents)}, ${formatCents(repaidCents)} repaid, ${formatCents(balanceCents)} still owed.`;
+}
+
+/** Item 6: "so a wrong automatic match is obvious" -- installment rows get their own word rather
+ *  than being folded into 'rule', because bill_installments carries no source column at all
+ *  (see the schema's own comment on paid_txn_id) and it would be inventing a distinction the
+ *  data does not actually make. */
+const LEDGER_SOURCE_LABEL: Record<ItemLedgerRow['source'], string> = {
+  rule: 'rule',
+  manual: 'by hand',
+  installment: 'installment',
+};
 
 const OCR_CHIP: Record<WarrantyReceiptRow['ocrStatus'], string> = {
   pending: 'Reading…',
@@ -144,6 +187,7 @@ export function WarrantyDetailClient({
   paymentCount,
   installments,
   categories,
+  ledger,
 }: {
   item: WarrantyItemRow;
   receipts: WarrantyReceiptRow[];
@@ -167,6 +211,8 @@ export function WarrantyDetailClient({
   /** v1.13.0 ruling R11 / micro-ruling M9: the budget-category picker's options. Supplied by
    *  Task 12's page.tsx (its Interfaces block declares this prop). */
   categories: { id: number; name: string }[];
+  /** Item 6 (v1.16.0 plan): the Linked transactions card's rows and total, for every kind. */
+  ledger: ItemLedger;
 }) {
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -240,6 +286,16 @@ export function WarrantyDetailClient({
   // reporting it inline in this card mirrors how the Payment matching card's own actions
   // (ruleState/deleteRuleState) already report separately from the five activeSlot actions.
   const [recordPaymentState, recordPaymentDispatch] = useActionState(recordBillPaymentAction, initial);
+  // Item 6: the Linked transactions card's own Unlink, reported inline within that card, the
+  // same "not one of the five activeSlot actions" pattern ruleState/deleteRuleState follow above.
+  const [unlinkState, unlinkDispatch] = useActionState(unlinkLedgerTransactionAction, initial);
+  // Item 7 (v1.16.0 plan): the same disclosure shape QuickAddTransaction.tsx uses -- a useState
+  // toggle, not <details>, so the open state survives a server action re-render (a <details>
+  // element's open attribute is DOM state React does not own, and a re-render after a rule/
+  // receipt action can remount the subtree and silently close it back up). Both start closed:
+  // the existing-rows/receipts table is the content that matters; the CREATE form is not.
+  const [addRuleOpen, setAddRuleOpen] = useState(false);
+  const [addReceiptOpen, setAddReceiptOpen] = useState(false);
   // Ruling R11 / micro-ruling M9: the budget-category link is single-row and reversible (pick a
   // different category, or clear it back to "Not linked"), which is exactly ruling R1's auto-save
   // shape -- tests/ops/row-controls.test.ts refuses a lone select control paired with its own
@@ -300,7 +356,7 @@ export function WarrantyDetailClient({
   // page switches on the item's own kind through these helpers -- the only place either
   // wording lives. Supersedes purchaseDateLabel/termLabel/expiryDateLabel (controller ruling,
   // spec §19.12).
-  const purchaseLabel = formStartLabel(item.kind);
+  const purchaseLabel = detailStartLabel(item.kind, item.loanDirection);
   const termWordLabel = formTermLabel(item.kind);
   const expiryLabel = formEndLabel(item.kind);
 
@@ -357,11 +413,15 @@ export function WarrantyDetailClient({
             <CardBody className="pt-5">
               <dl className="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
                 <Detail label="Type">{item.typeName ?? '—'}</Detail>
-                {/* v1.13.1 (item 3, backlog sweep). Vendor is not gated by kind at all: every kind's
-                    form (this file's EditForm at ~893, new-warranty-client.tsx) asks for Vendor
-                    unconditionally, so the Detail row must match -- shown for every kind, value or
-                    the em-dash placeholder, never dropped the way Model/Serial/Price are. */}
-                <Detail label="Vendor">{item.vendor ?? '—'}</Detail>
+                {/* Item 8 (v1.16.0 plan): Vendor is one of the four fields the screenshot review
+                    found printing a dead "—" cell -- em, this used to render for EVERY kind
+                    (v1.13.1's own ruling), which was right when Vendor was the one field never
+                    gated by kind at all. It is still not gated by kind; it is now gated by
+                    whether the item actually HAS one, the same "hide, don't decorate, an empty
+                    optional field" rule this task applies to Payoff date/Payment/Notes below.
+                    Type/Start date/Owner stay unconditional -- they are the item's identity,
+                    never optional -- Vendor is not one of those three. */}
+                {item.vendor === null ? null : <Detail label="Vendor">{item.vendor}</Detail>}
                 {/* Item R (ruling P6). The gate alone is NOT the condition: productFieldsAllowedForKind's own
                     docblock says it decides what a form OFFERS, never what a page may hide, because an item
                     whose type changed after it was saved can still hold a model. So a row disappears only when
@@ -380,11 +440,16 @@ export function WarrantyDetailClient({
                       ? 'Unknown'
                       : `${item.warrantyMonths} months`}
                 </Detail>
-                {/* v1.3.0 fix: an open-ended item (isLifetime) has no expiry_date to show -- that
-                    used to render as a bare blank/em dash here, which reads as broken. Show the
-                    per-kind open-ended word instead; a non-lifetime item with a genuinely unknown
-                    term still falls through to the em dash, unchanged. */}
-                <Detail label={expiryLabel}>{item.isLifetime ? openEndedDisplayLabel(item.kind) : (item.expiryDate ?? '—')}</Detail>
+                {/* v1.3.0 fix: an open-ended item (isLifetime) has no expiry_date to show -- show
+                    the per-kind open-ended word instead of a blank.
+                    Item 8 (v1.16.0 plan): a NON-lifetime item with a genuinely unknown term used
+                    to render this row as a bare "—" -- Payoff date was one of the four dead
+                    cells the screenshot review named. It is optional in exactly this one case
+                    (not lifetime, no computed expiry_date), so the row is dropped entirely
+                    rather than decorated with a dash nobody can act on. */}
+                {item.isLifetime || item.expiryDate !== null ? (
+                  <Detail label={expiryLabel}>{item.isLifetime ? openEndedDisplayLabel(item.kind) : item.expiryDate}</Detail>
+                ) : null}
                 {/* v1.13.1 (item 3, backlog sweep). The loanFieldsAllowedForKind arm used to keep this
                     row up for every loan, so a loan with no stored price rendered a guaranteed
                     "Price —" beside the loan-money block's own "Original" figure below -- the same
@@ -395,25 +460,21 @@ export function WarrantyDetailClient({
                 {productFieldsAllowedForKind(item.kind) || item.priceCents !== null ? (
                   <Detail label="Price">{item.priceCents === null ? '—' : <Money cents={item.priceCents} plain />}</Detail>
                 ) : null}
-                {billingAllowedForKind(item.kind) ? (
-                  // review fix: cycle and amount are validated as a pair at the schema boundary
-                  // (BILLING_PAIR_ERROR) -- render the value only when BOTH are present. Rendering
-                  // one alone either lies (a blank placeholder next to "/ month", cycle set but no amount) or silently drops
-                  // a value the member entered (amount set but no cycle shown) -- exactly the kind
-                  // of blank-reads-as-broken defect task B set out to eliminate for the end date.
-                  // F5 fix-round: this is now the ONLY billing/payment row on the page -- it used
-                  // to be duplicated by a second "Payment" row in the money block below, showing
-                  // the exact same cycle+amount twice under two different labels. The label
-                  // itself is routed through the kind matrix (MUST-12.3) so a loan reads
-                  // "Payment", not "Billing".
+                {/* review fix: cycle and amount are validated as a pair at the schema boundary
+                    (BILLING_PAIR_ERROR), so the ONLY way this pair is incomplete is a pre-
+                    existing row or a future bug -- the display layer must not trust the pairing
+                    either way. F5 fix-round: this is the ONLY billing/payment row on the page --
+                    it used to be duplicated by a second "Payment" row in the money block below,
+                    showing the exact same cycle+amount twice under two different labels. The
+                    label itself is routed through the kind matrix (MUST-12.3) so a loan reads
+                    "Payment", not "Billing".
+                    Item 8 (v1.16.0 plan): Payment/Billing was the third of the four named dead
+                    cells -- a partial or absent pair used to render "—" here instead of the row
+                    simply not existing. It is now dropped entirely, same as Vendor and Payoff
+                    date above; the Edit card is still how a person fills it in. */}
+                {billingAllowedForKind(item.kind) && item.billingCycle !== null && item.billingAmountCents !== null ? (
                   <Detail label={billingSectionLabelForKind(item.kind)}>
-                    {item.billingCycle !== null && item.billingAmountCents !== null ? (
-                      <>
-                        <Money cents={item.billingAmountCents} plain /> {billingCycleSuffixForKind(item.kind, item.billingCycle)}
-                      </>
-                    ) : (
-                      '—'
-                    )}
+                    <Money cents={item.billingAmountCents} plain /> {billingCycleSuffixForKind(item.kind, item.billingCycle)}
                   </Detail>
                 ) : null}
                 {/* v1.14.0 (spec BU, ruling P16). Same "gate OR held value" rule as
@@ -425,7 +486,11 @@ export function WarrantyDetailClient({
                   <Detail label="Direction">{LOAN_DIRECTION_LABELS[item.loanDirection]}</Detail>
                 ) : null}
                 <Detail label="Owner">{item.ownerName}</Detail>
-                <Detail label="Notes">{item.notes ?? '—'}</Detail>
+                {/* Item 8 (v1.16.0 plan): the fourth named dead cell. Notes is optional on every
+                    kind and has no "gate" of its own to begin with -- it is simply present or
+                    it is not, so the row is dropped rather than printing "—" for a field the
+                    Edit card is always one click away from filling in. */}
+                {item.notes === null ? null : <Detail label="Notes">{item.notes}</Detail>}
                 <Detail label="Transaction">
                   {linkedTransaction ? (
                     <Link
@@ -483,7 +548,11 @@ export function WarrantyDetailClient({
                         <Detail label="Rate">{(item.interestRateBps / 100).toFixed(2)}%</Detail>
                       )}
                       {lastPaymentAt === null ? null : <Detail label="Last payment">{lastPaymentAt.slice(0, 10)}</Detail>}
-                      {paymentCount === 0 ? null : <Detail label="Payments linked">{paymentCount}</Detail>}
+                      {/* Item 6 (v1.16.0 plan): the bare "Payments linked: N" row is gone -- the
+                          Linked transactions card below lists the payments themselves, which is
+                          the whole point of that task. paymentCount is still read above (the
+                          statement-drift hint) and in this dl's own render-gate; only the count
+                          row itself is retired. */}
                     </dl>
                   )}
                 </div>
@@ -492,6 +561,90 @@ export function WarrantyDetailClient({
           </Card>
         )}
       </div>
+
+      {/* Item 6 (v1.16.0 plan): rendered for EVERY item kind, unconditionally -- it replaces the
+          bare "Payments linked" count the money block used to print, and a warranty or a
+          contract deserves the same honest "nothing here yet" empty state a loan or a bill
+          gets, not a card that only appears once something has already happened. */}
+      <Card>
+        <CardHeader title={`Linked transactions (${ledger.rows.length})`} />
+        <CardBody className="flex flex-col gap-4">
+          {/* The summary line is loan-only: a warranty or a bill has no direction and no
+              principal to summarise against, and matchingAllowedForKind's own gate below
+              already limits which kinds show payment RULES for the same reason. */}
+          {item.kind === 'loan' ? (
+            (() => {
+              const summary = loanLedgerSummary(item.loanDirection, item.principalCents, item.currentBalanceCents);
+              return summary === null ? null : <p className="text-sm text-muted">{summary}</p>;
+            })()
+          ) : null}
+          {ledger.rows.length === 0 ? (
+            <p className="rounded-md border border-dashed border-line-strong px-4 py-6 text-center text-sm text-muted">
+              No transactions linked yet. A payment rule above, or the row menu on Transactions,
+              creates one.
+            </p>
+          ) : (
+            <>
+              {/* Not `fixed` -- an auto-layout table of read-only values, the same shape the
+                  Installments and Payment-matching tables above already use. */}
+              <TableWrap bare responsive>
+                <thead>
+                  <tr>
+                    <th scope="col">When</th>
+                    <th scope="col">Merchant</th>
+                    <th scope="col" className="text-right">Amount</th>
+                    <th scope="col" className="text-right">Applied</th>
+                    <th scope="col">Source</th>
+                    <th scope="col"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ledger.rows.map((row) => (
+                    <tr key={row.txnId}>
+                      {/* date+account combined, per the plan: one muted context line under the
+                          headline rather than its own labelled row on a phone card. */}
+                      <td className="cell-stack-meta text-muted" data-label="When">
+                        {row.date} · {row.accountName}
+                      </td>
+                      <td className="cell-stack-headline" data-label="Merchant">
+                        <Link
+                          href={`/transactions?search=${encodeURIComponent(row.merchant)}`}
+                          className="font-medium text-ink underline underline-offset-2 hover:text-accent-text"
+                        >
+                          {row.merchant}
+                        </Link>
+                      </td>
+                      <td className="text-right" data-label="Amount">
+                        <Money cents={row.amountCents} />
+                      </td>
+                      <td className="text-right cell-stack-amount" data-label="Applied">
+                        <Money cents={row.appliedCents} plain />
+                      </td>
+                      <td data-label="Source">
+                        <span className="badge badge--slate">{LEDGER_SOURCE_LABEL[row.source]}</span>
+                      </td>
+                      <td className="text-right cell-stack-actions" data-label="">
+                        <RowMenu label={`Actions for the ${formatCents(row.amountCents)} transaction on ${row.date}`}>
+                          <RowMenuForm
+                            action={unlinkDispatch}
+                            fields={{ itemId: String(item.id), txnId: String(row.txnId) }}
+                          >
+                            Unlink
+                          </RowMenuForm>
+                        </RowMenu>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </TableWrap>
+              {/* Refusals surface inline, never silently -- the same discipline every other
+                  action on this page already follows (F3 fix-round's own stale-delete case). */}
+              <FormError message={unlinkState.error} />
+              {unlinkState.message === undefined ? null : <Notice tone="success">{unlinkState.message}</Notice>}
+            </>
+          )}
+        </CardBody>
+      </Card>
 
       {/* Ruling B7: rendered when the kind ALLOWS installments, or when the item already HAS
           some -- a gate decides what a form offers, never what it may hide, and an item whose
@@ -681,7 +834,24 @@ export function WarrantyDetailClient({
           they are making the decision. */}
       {!matchingAllowedForKind(item.kind) ? null : (
         <Card>
-          <CardHeader title="Payment matching" />
+          <CardHeader
+            title="Payment matching"
+            action={
+              // Item 7 (v1.16.0 plan): the existing-rules table above stays exactly as it is --
+              // the ADD form is the least-used control on this card and the largest, so it goes
+              // behind a button, same disclosure shape as QuickAddTransaction.tsx (a useState
+              // toggle, not <details>).
+              <button
+                type="button"
+                className="btn btn--secondary btn--sm min-h-11 sm:min-h-0"
+                aria-expanded={addRuleOpen}
+                aria-controls="add-rule-body"
+                onClick={() => setAddRuleOpen((open) => !open)}
+              >
+                {addRuleOpen ? 'Close' : 'Add rule'}
+              </button>
+            }
+          />
           <CardBody className="flex flex-col gap-4">
             <p className="text-sm text-muted">{matchingBlurbForKind(item.kind)}</p>
             {rules.length === 0 ? null : (
@@ -721,42 +891,46 @@ export function WarrantyDetailClient({
                 <FormError message={deleteRuleState.error} />
               </>
             )}
-            <form action={addRule} className="flex flex-col gap-3">
-              <input type="hidden" name="itemId" value={item.id} />
-              <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Merchant contains">
-                  <input name="merchantContains" className={inputClass} placeholder="e.g. HONDA FIN" />
-                </Field>
-                <Field label="Account">
-                  <select name="accountId" className={selectClass} defaultValue="">
-                    <option value="">Any account</option>
-                    {accounts.map((account) => (
-                      <option key={account.id} value={account.id}>{account.name}</option>
-                    ))}
-                  </select>
-                </Field>
+            {addRuleOpen ? (
+              <div id="add-rule-body">
+                <form action={addRule} className="flex flex-col gap-3">
+                  <input type="hidden" name="itemId" value={item.id} />
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <Field label="Merchant contains">
+                      <input name="merchantContains" className={inputClass} placeholder="e.g. HONDA FIN" />
+                    </Field>
+                    <Field label="Account">
+                      <select name="accountId" className={selectClass} defaultValue="">
+                        <option value="">Any account</option>
+                        {accounts.map((account) => (
+                          <option key={account.id} value={account.id}>{account.name}</option>
+                        ))}
+                      </select>
+                    </Field>
+                  </div>
+                  {/* MUST-13.9: UNCHECKED by default, and the hint says which case is which. A
+                      person types today's balance and then saves a rule; back-filling a year of
+                      payments would subtract them all from a figure that already accounts for
+                      them. Loan-only (spec Component 5): the server refuses a bill's backfill too
+                      (Step 4), so the checkbox is not offered for one either. */}
+                  {item.kind === 'loan' ? (
+                    <label className="flex items-start gap-2 text-sm text-muted">
+                      <input type="checkbox" name="backfill" className="mt-1" />
+                      <span>
+                        Also link matching payments from the last 12 months
+                        <span className="field-hint block">
+                          Only tick this if the balance you typed is the balance from before those payments. Ticking it
+                          will subtract every payment it finds.
+                        </span>
+                      </span>
+                    </label>
+                  ) : null}
+                  <FormError message={ruleState.error} />
+                  {ruleState.message === undefined ? null : <Notice tone="success">{ruleState.message}</Notice>}
+                  <SubmitButton className="btn btn--primary self-start">Add rule</SubmitButton>
+                </form>
               </div>
-              {/* MUST-13.9: UNCHECKED by default, and the hint says which case is which. A
-                  person types today's balance and then saves a rule; back-filling a year of
-                  payments would subtract them all from a figure that already accounts for
-                  them. Loan-only (spec Component 5): the server refuses a bill's backfill too
-                  (Step 4), so the checkbox is not offered for one either. */}
-              {item.kind === 'loan' ? (
-                <label className="flex items-start gap-2 text-sm text-muted">
-                  <input type="checkbox" name="backfill" className="mt-1" />
-                  <span>
-                    Also link matching payments from the last 12 months
-                    <span className="field-hint block">
-                      Only tick this if the balance you typed is the balance from before those payments. Ticking it
-                      will subtract every payment it finds.
-                    </span>
-                  </span>
-                </label>
-              ) : null}
-              <FormError message={ruleState.error} />
-              {ruleState.message === undefined ? null : <Notice tone="success">{ruleState.message}</Notice>}
-              <SubmitButton className="btn btn--primary self-start">Add rule</SubmitButton>
-            </form>
+            ) : null}
           </CardBody>
         </Card>
       )}
@@ -765,6 +939,32 @@ export function WarrantyDetailClient({
         <CardHeader
           title={<>Receipts ({receipts.length} receipt{receipts.length === 1 ? '' : 's'})</>}
           description="Photos and PDFs are stored on this machine and read offline."
+          action={
+            // Item 7 (v1.16.0 plan): same disclosure shape as Add rule above -- the receipt LIST
+            // stays visible; the file picker and Attach button (a create form) go behind a button.
+            <button
+              type="button"
+              className="btn btn--secondary btn--sm min-h-11 sm:min-h-0"
+              aria-expanded={addReceiptOpen}
+              aria-controls="add-receipt-body"
+              onClick={() =>
+                setAddReceiptOpen((open) => {
+                  // Closing (not opening): drop whatever was staged and give the uploader a
+                  // fresh key, the same M10 reset the successful-attach effect already performs
+                  // -- otherwise a file staged before Close, then Add receipt pressed again,
+                  // would post a staging id the (remounted) uploader no longer shows any tile
+                  // for.
+                  if (open) {
+                    setStaged([]);
+                    setUploaderKey((key) => key + 1);
+                  }
+                  return !open;
+                })
+              }
+            >
+              {addReceiptOpen ? 'Close' : 'Add receipt'}
+            </button>
+          }
         />
         <CardBody className="flex flex-col gap-4">
           {receipts.length === 0 ? (
@@ -821,16 +1021,20 @@ export function WarrantyDetailClient({
             </ul>
           )}
 
-          <form action={attachAction} className="flex flex-col gap-3 border-t border-line pt-4">
-            <input type="hidden" name="itemId" value={item.id} />
-            <input
-              type="hidden"
-              name="staged"
-              value={JSON.stringify(staged.map((f) => ({ stagingId: f.stagingId, originalFilename: f.originalFilename })))}
-            />
-            <ReceiptUploader key={uploaderKey} onStagedChange={onStagedChange} label="Add another receipt" />
-            <SubmitButton className="w-fit">Attach receipts</SubmitButton>
-          </form>
+          {addReceiptOpen ? (
+            <div id="add-receipt-body">
+              <form action={attachAction} className="flex flex-col gap-3 border-t border-line pt-4">
+                <input type="hidden" name="itemId" value={item.id} />
+                <input
+                  type="hidden"
+                  name="staged"
+                  value={JSON.stringify(staged.map((f) => ({ stagingId: f.stagingId, originalFilename: f.originalFilename })))}
+                />
+                <ReceiptUploader key={uploaderKey} onStagedChange={onStagedChange} label="Add another receipt" />
+                <SubmitButton className="w-fit">Attach receipts</SubmitButton>
+              </form>
+            </div>
+          ) : null}
         </CardBody>
       </Card>
     </div>

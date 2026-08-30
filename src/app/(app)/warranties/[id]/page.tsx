@@ -4,7 +4,7 @@ import { requireUser } from '@/lib/auth/session';
 import { listAttributablePeople } from '@/lib/auth/users';
 import { listCategories } from '@/lib/categories';
 import { todayIso } from '@/lib/dates';
-import { listLoanRules, listLoans } from '@/lib/loans';
+import { itemLedger, listLoanRules, listLoans } from '@/lib/loans';
 import { displayNameOf, getTransaction } from '@/lib/transactions';
 import { warrantyStatus } from '@/lib/warranty/expiry';
 import { getWarrantyItem, listWarrantyReceipts } from '@/lib/warranty/items';
@@ -62,6 +62,10 @@ export default async function WarrantyDetailPage({ params }: { params: Promise<{
       payoffFraction={loanSummary?.payoffFraction ?? null}
       lastPaymentAt={loanSummary?.lastPaymentAt ?? null}
       paymentCount={loanSummary?.paymentCount ?? 0}
+      // Item 6 (v1.16.0 plan): the Linked transactions card. Fetched for every kind -- the
+      // card itself renders unconditionally, so the client cannot decide "is there anything
+      // to show" without the rows any more than the Installments card above could.
+      ledger={itemLedger(item.id)}
     />
   );
 }

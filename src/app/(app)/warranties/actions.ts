@@ -18,6 +18,7 @@ import {
   deleteLoanRule,
   listLoanRules,
   saveLoanRule,
+  unlinkItemTransaction,
 } from '@/lib/loans';
 import { formatCents, parseAmountToCents } from '@/lib/money';
 import {
@@ -767,4 +768,44 @@ export async function setInstallmentPaidAction(
   }
   revalidateAll(parsed.data.itemId);
   return { message: paid ? 'Marked as paid.' : 'Marked as unpaid.' };
+}
+
+/**
+ * Item 6 (v1.16.0 plan): the Linked transactions card's row-menu Unlink. One action for both
+ * source tables -- unlinkItemTransaction (src/lib/loans.ts) itself decides which of loan_payments
+ * or bill_installments actually names this (itemId, txnId) pair, so this action does not need to
+ * know which one it is either.
+ *
+ * Authorization: the SAME viewer guard every other action in this file uses -- getWarrantyItem
+ * returns null for an item this viewer may not see, which is what "do not widen what a
+ * self-scoped viewer can see" means in practice. This is an every-member action, like saving a
+ * rule or adding an installment (this file's own docblock: creating and editing stays open to
+ * every member), not a destructive owner-or-admin one like delete -- unlinking a payment is
+ * exactly that kind of shared bookkeeping, not a step that discards the item itself.
+ */
+const unlinkFieldsSchema = z.object({
+  itemId: z.coerce.number().int().positive(),
+  txnId: z.coerce.number().int().positive(),
+});
+
+export async function unlinkLedgerTransactionAction(
+  _prev: WarrantyActionState,
+  formData: FormData,
+): Promise<WarrantyActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+  const user = await requireUser();
+
+  const parsed = unlinkFieldsSchema.safeParse({
+    itemId: formData.get('itemId'),
+    txnId: formData.get('txnId'),
+  });
+  if (!parsed.success) return { error: 'Invalid request.' };
+
+  if (!getWarrantyItem(parsed.data.itemId, user)) return { error: 'That item no longer exists.' };
+
+  if (!unlinkItemTransaction(parsed.data.itemId, parsed.data.txnId)) {
+    return { error: 'That transaction is no longer linked to this item.' };
+  }
+  revalidateAll(parsed.data.itemId);
+  return { message: 'Unlinked. The transaction itself is untouched.' };
 }

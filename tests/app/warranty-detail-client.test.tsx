@@ -2,7 +2,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/react';
 import { WarrantyDetailClient } from '@/app/(app)/warranties/[id]/warranty-detail-client';
-import { deleteLoanRuleAction, updateWarrantyAction } from '@/app/(app)/warranties/actions';
+import { deleteLoanRuleAction, unlinkLedgerTransactionAction, updateWarrantyAction } from '@/app/(app)/warranties/actions';
+import type { ItemLedger } from '@/lib/loans';
 import type { WarrantyItemRow, WarrantyReceiptRow } from '@/lib/warranty/items';
 
 vi.mock('@/app/(app)/warranties/actions', () => ({
@@ -19,6 +20,9 @@ vi.mock('@/app/(app)/warranties/actions', () => ({
   addInstallmentAction: vi.fn(async () => ({})),
   removeInstallmentAction: vi.fn(async () => ({})),
   setInstallmentPaidAction: vi.fn(async () => ({})),
+  // Item 6 (v1.16.0 plan): the Linked transactions card's own Unlink, same "stub every export
+  // useActionState calls unconditionally" reason as the three installment actions above.
+  unlinkLedgerTransactionAction: vi.fn(async () => ({})),
 }));
 
 afterEach(() => cleanup());
@@ -47,6 +51,11 @@ function item(over: Partial<WarrantyItemRow> = {}): WarrantyItemRow {
     loanDirection: 'owed',
     ...over,
   };
+}
+
+/** Item 6: an empty ledger by default -- only the tests exercising the card need real rows. */
+function ledgerFixture(over: Partial<ItemLedger> = {}): ItemLedger {
+  return { rows: [], totalAppliedCents: 0, ...over };
 }
 
 function receipt(over: Partial<WarrantyReceiptRow> = {}): WarrantyReceiptRow {
@@ -79,6 +88,7 @@ function renderDetail(over: Partial<Parameters<typeof WarrantyDetailClient>[0]> 
       // v1.13.0 Task 11: the budget-category picker's options (Task 12's page.tsx supplies the
       // real list). Empty by default -- only the tests exercising the picker need non-empty.
       categories={[]}
+      ledger={ledgerFixture()}
       {...over}
     />,
   );
@@ -190,23 +200,43 @@ describe('WarrantyDetailClient', () => {
   // formStartLabel/formEndLabel, kind-keyed). Old subscription wording 'Period start' ->
   // 'Start date' and label-only 'Cancel by' -> 'Cancel-by date' are deliberate, owner-approved
   // changes (see tests/lib/warranty/constants.test.ts for the full old->new log).
-  it('labels the date fields "Purchase date"/"Expiry date" for a warranty-kind item', () => {
+  //
+  // Item 5 (v1.16.0 plan): the START label is now per-kind on the detail page too (superseding
+  // "Purchase date" for warranty and "Start date" for loan specifically -- the list page's
+  // shared column still says the neutral "Started"; see warranties-client.test.tsx). The END
+  // label (formEndLabel, "Expiry date"/"Payoff date"/...) is untouched by item 5.
+  it('labels the start date "Purchased" and the end date "Expiry date" for a warranty-kind item', () => {
     renderDetail({ item: item({ typeId: 1, typeName: 'Appliance', kind: 'warranty' }) });
-    expect(screen.getByText('Purchase date')).toBeTruthy();
+    expect(screen.getByText('Purchased')).toBeTruthy();
     expect(screen.getByText('Expiry date')).toBeTruthy();
+    expect(screen.queryByText('Purchase date')).toBeNull();
   });
 
-  it('labels the date fields "Start date"/"Cancel-by date" for a subscription-kind item', () => {
+  it('labels the date fields "Start date"/"Cancel-by date" for a subscription-kind item (item 5 leaves this kind alone)', () => {
     renderDetail({ item: item({ typeId: 2, typeName: 'Netflix plan', kind: 'subscription' }) });
     expect(screen.getByText('Start date')).toBeTruthy();
     expect(screen.getByText('Cancel-by date')).toBeTruthy();
     expect(screen.queryByText('Purchase date')).toBeNull();
   });
 
-  it('labels the date fields "Start date"/"Payoff date" for a loan-kind item', () => {
-    renderDetail({ item: item({ typeId: 3, typeName: 'Car loan', kind: 'loan' }) });
-    expect(screen.getByText('Start date')).toBeTruthy();
+  it('labels the start date "Borrowed on"/"Lent on" by loan_direction, and the end date stays "Payoff date" (item 5)', () => {
+    renderDetail({ item: item({ typeId: 3, typeName: 'Car loan', kind: 'loan', loanDirection: 'owed' }) });
+    expect(screen.getByText('Borrowed on')).toBeTruthy();
     expect(screen.getByText('Payoff date')).toBeTruthy();
+    cleanup();
+
+    renderDetail({ item: item({ typeId: 3, typeName: 'Car loan', kind: 'loan', loanDirection: 'lent' }) });
+    expect(screen.getByText('Lent on')).toBeTruthy();
+    expect(screen.queryByText('Borrowed on')).toBeNull();
+  });
+
+  it('labels the start date "Starts" for a contract or a bill (item 5)', () => {
+    renderDetail({ item: item({ kind: 'contract' }) });
+    expect(screen.getByText('Starts')).toBeTruthy();
+    cleanup();
+
+    renderDetail({ item: item({ kind: 'bill' }) });
+    expect(screen.getByText('Starts')).toBeTruthy();
   });
 
   // v1.2.2 Task 2 gave the edit form kind-aware labels and tested them by CHANGING the type
@@ -273,10 +303,14 @@ describe('WarrantyDetailClient', () => {
     expect(screen.getByText('Open-ended')).toBeTruthy();
   });
 
-  it('still shows an em dash for a non-lifetime item with a genuinely unknown term', () => {
+  // Item 8 (v1.16.0 plan): this used to assert an em dash here -- Payoff/Expiry date was one of
+  // the four named dead cells, and it is now dropped entirely rather than decorated with a
+  // dash nobody can act on when there truly is nothing to show (not lifetime, no computed
+  // expiry_date).
+  it('hides the end-date row entirely for a non-lifetime item with a genuinely unknown term (item 8)', () => {
     const { container } = renderDetail({ item: item({ isLifetime: false, expiryDate: null, warrantyMonths: null }) });
-    const dt = Array.from(container.querySelectorAll('dt')).find((el) => el.textContent === 'Expiry date')!;
-    expect(dt.nextElementSibling?.textContent).toBe('—');
+    const dt = Array.from(container.querySelectorAll('dt')).find((el) => el.textContent === 'Expiry date');
+    expect(dt).toBeUndefined();
   });
 
   // --- v1.3.0: billing cycle and amount (task A) ---
@@ -293,21 +327,21 @@ describe('WarrantyDetailClient', () => {
   // review fix: cycle and amount are validated as a pair at the schema boundary, but the
   // display layer must not trust that -- pre-existing rows (or a future bug) could still
   // carry exactly one of the two. Rendering one alone either lies ("— / month") or drops a
-  // value the member entered, so a partial pair renders as a plain "—", same as neither set.
-  it('renders a plain em dash, never "— / month", for a partial billing pair (cycle only)', () => {
-    const { container } = renderDetail({
+  // value the member entered.
+  // Item 8 (v1.16.0 plan): this used to render a plain "—" for the incomplete pair; the row
+  // is now dropped entirely, same as every other empty-optional-field case this task covers.
+  it('hides the Billing row entirely, never "— / month", for a partial billing pair (cycle only) (item 8)', () => {
+    renderDetail({
       item: item({ typeId: 2, typeName: 'Netflix plan', kind: 'subscription', billingCycle: 'monthly', billingAmountCents: null }),
     });
-    const dt = Array.from(container.querySelectorAll('dt')).find((el) => el.textContent === 'Billing')!;
-    expect(dt.nextElementSibling?.textContent).toBe('—');
+    expect(screen.queryByText('Billing')).toBeNull();
   });
 
-  it('renders a plain em dash for a partial billing pair (amount only)', () => {
-    const { container } = renderDetail({
+  it('hides the Billing row entirely for a partial billing pair (amount only) (item 8)', () => {
+    renderDetail({
       item: item({ typeId: 2, typeName: 'Netflix plan', kind: 'subscription', billingCycle: null, billingAmountCents: 1599 }),
     });
-    const dt = Array.from(container.querySelectorAll('dt')).find((el) => el.textContent === 'Billing')!;
-    expect(dt.nextElementSibling?.textContent).toBe('—');
+    expect(screen.queryByText('Billing')).toBeNull();
   });
 
   it('renders no Billing row at all for a warranty-kind item', () => {
@@ -458,8 +492,11 @@ describe('MUST-14.1 / MUST-14.3 / MUST-14.5 / MUST-14.6 / MUST-12.3: the loan su
     expect(screen.getByText('5.49%')).toBeTruthy();
     expect(screen.getByText('Last payment')).toBeTruthy();
     expect(screen.getByText('2026-08-10')).toBeTruthy();
-    expect(screen.getByText('Payments linked')).toBeTruthy();
-    expect(screen.getByText('4')).toBeTruthy();
+    // Item 6 (v1.16.0 plan): "Payments linked: N" is gone -- paymentCount (still 4 here) only
+    // gates this dl and the statement-drift hint now; the count itself moved to the Linked
+    // transactions card's own "Linked transactions (N)" header, which reads from ledger.rows,
+    // not from this prop.
+    expect(screen.queryByText('Payments linked')).toBeNull();
     expect(screen.getByRole('progressbar')).toBeTruthy();
   });
 
@@ -482,6 +519,10 @@ describe('MUST-14.1 / MUST-14.3 / MUST-14.5 / MUST-14.6 / MUST-12.3: the loan su
       rules: [{ id: 1, itemId: 42, merchantContains: 'HONDA FIN', accountId: null, enabled: true }],
       accounts: [{ id: 9, name: 'Joint Chequing' }],
     });
+    // The existing-rules table is visible unconditionally (item 7); the Add-rule FORM is
+    // behind a disclosure that starts closed, so it has to be opened before its own fields
+    // (the backfill checkbox, the account <select>'s "Any account" default option) exist.
+    fireEvent.click(screen.getByRole('button', { name: /^add rule$/i }));
     expect(screen.getByText('HONDA FIN')).toBeTruthy();
     // v1.15.0 (responsive rows): the merchant fragment is this row's identity, so its cell
     // is the phone card's headline.
@@ -492,6 +533,25 @@ describe('MUST-14.1 / MUST-14.3 / MUST-14.5 / MUST-14.6 / MUST-12.3: the loan su
     expect(screen.getByRole('button', { name: /remove/i })).toBeTruthy();
     const backfill = screen.getByRole('checkbox', { name: /also link matching payments/i }) as HTMLInputElement;
     expect(backfill.checked).toBe(false);
+  });
+
+  // Item 7 (v1.16.0 plan): the Add-rule form starts collapsed, and the existing-rules table
+  // stays visible either way -- the row-menu-free rule table has no kebab of its own, but the
+  // "Remove" button proves the table renders without ever opening the disclosure.
+  it('item 7: the Add rule form is collapsed by default; the rules table needs no disclosure', () => {
+    renderDetail({
+      item: item({ typeId: 3, typeName: 'Car loan', kind: 'loan' }),
+      receipts: [],
+      rules: [{ id: 1, itemId: 42, merchantContains: 'HONDA FIN', accountId: null, enabled: true }],
+      accounts: [],
+    });
+    expect(screen.getByText('HONDA FIN')).toBeTruthy();
+    expect(screen.queryByPlaceholderText('e.g. HONDA FIN')).toBeNull();
+    const toggle = screen.getByRole('button', { name: /^add rule$/i });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(toggle);
+    expect(screen.getByPlaceholderText('e.g. HONDA FIN')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^close$/i }).getAttribute('aria-expanded')).toBe('true');
   });
 
   // F3 fix-round: Remove now goes through useActionState (like Add rule), so a stale delete --
@@ -731,16 +791,23 @@ describe('the Installments card offers Record payment', () => {
 });
 
 describe('WarrantyDetailClient — inapplicable product fields (item R, ruling P6)', () => {
-  it('drops Model, Serial and Price for a Bill that holds none of them, but keeps Vendor', () => {
+  // Item 8 (v1.16.0 plan) reverses the "keeps Vendor" half of this test's old name: Vendor is
+  // still not gated by KIND (every kind's form asks for it unconditionally), but it is now
+  // gated by whether the item actually HAS one, same as Payoff date/Payment/Notes. A Bill
+  // with none of these four stored now hides all four instead of showing three dashes and a
+  // guaranteed "Vendor —".
+  it('drops Model, Serial, Price AND an empty Vendor for a Bill that holds none of them', () => {
     renderDetail({ item: item({ kind: 'bill', vendor: null, model: null, serial: null, priceCents: null }) });
-    // v1.13.1 (item 3, backlog sweep). Every kind's edit form asks for Vendor (new-warranty-client
-    // and the edit form both render it unconditionally), so the Detail row must match: it is
-    // shown for every kind, value or the em-dash placeholder, never dropped by kind the way
-    // Model/Serial/Price are.
-    expect(screen.getByText('Vendor')).toBeTruthy();
+    expect(screen.queryByText('Vendor')).toBeNull();
     expect(screen.queryByText('Model')).toBeNull();
     expect(screen.queryByText('Serial number')).toBeNull();
     expect(screen.queryByText('Price')).toBeNull();
+  });
+
+  it('still shows a STORED Vendor value on a Bill -- item 8 gates on presence, not on kind', () => {
+    renderDetail({ item: item({ kind: 'bill', vendor: 'Municipal Tax Office', model: null, serial: null, priceCents: null }) });
+    expect(screen.getByText('Vendor')).toBeTruthy();
+    expect(screen.getByText('Municipal Tax Office')).toBeTruthy();
   });
 
   it('KEEPS a stored value on a kind that can no longer hold it (constants.ts:272-286)', () => {
@@ -752,9 +819,13 @@ describe('WarrantyDetailClient — inapplicable product fields (item R, ruling P
     expect(screen.getByText('GDT645SYNFS')).toBeTruthy();
   });
 
-  it('leaves a warranty untouched, em-dashes and all', () => {
+  // Item 8 (v1.16.0 plan): Model/Serial/Price keep ruling P6's "gate OR held value" em-dash
+  // behaviour unchanged -- item 8 named only Vendor/Payoff date/Payment/Notes, not these three
+  // -- but Vendor is one of the four, so it drops out even for a warranty once it is empty.
+  it('leaves Model/Serial/Price as em-dashes for a warranty with none stored (ruling P6, untouched by item 8), but hides an empty Vendor', () => {
     renderDetail({ item: item({ kind: 'warranty', vendor: null, model: null, serial: null, priceCents: null }) });
-    for (const label of ['Vendor', 'Model', 'Serial number', 'Price']) {
+    expect(screen.queryByText('Vendor')).toBeNull();
+    for (const label of ['Model', 'Serial number', 'Price']) {
       expect(screen.getByText(label)).toBeTruthy();
     }
   });
@@ -779,5 +850,113 @@ describe('WarrantyDetailClient — inapplicable product fields (item R, ruling P
   it('still shows a stored price on a loan (the gate-decides-OFFER-not-HIDE rule still applies)', () => {
     renderDetail({ item: item({ typeId: 3, typeName: 'Car loan', kind: 'loan', priceCents: 250000 }) });
     expect(screen.getByText('Price')).toBeTruthy();
+  });
+});
+
+// v1.16.0 plan, item 8: the fourth named dead cell.
+describe('Notes drops out entirely when empty (item 8)', () => {
+  it('renders nothing for an empty Notes field', () => {
+    renderDetail({ item: item({ notes: null }) });
+    expect(screen.queryByText('Notes')).toBeNull();
+  });
+
+  it('still shows a stored Notes value', () => {
+    renderDetail({ item: item({ notes: 'Keep the receipt in the kitchen drawer.' }) });
+    expect(screen.getByText('Notes')).toBeTruthy();
+    expect(screen.getByText('Keep the receipt in the kitchen drawer.')).toBeTruthy();
+  });
+});
+
+// v1.16.0 plan, item 7: the Receipts card's own disclosure (the Add-rule one is covered above,
+// under the loan surfaces).
+describe('the Add receipt form is collapsed by default (item 7)', () => {
+  it('hides the file picker until Add receipt is pressed, and the receipt LIST needs no disclosure', () => {
+    renderDetail({ receipts: [receipt()] });
+    // The existing receipt (till.jpg, from the default fixture) is visible unconditionally.
+    expect(screen.getByText('till.jpg')).toBeTruthy();
+    const toggle = screen.getByRole('button', { name: /^add receipt$/i });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByRole('button', { name: /^attach receipts$/i })).toBeNull();
+
+    fireEvent.click(toggle);
+    expect(screen.getByRole('button', { name: /^attach receipts$/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^close$/i }).getAttribute('aria-expanded')).toBe('true');
+  });
+});
+
+// v1.16.0 plan, item 6: the Linked transactions card, replacing the old bare "Payments linked"
+// count. Rendered for every kind, unconditionally.
+describe('the Linked transactions card (item 6)', () => {
+  const row = {
+    txnId: 501,
+    date: '2026-08-10',
+    merchant: 'HONDA FIN',
+    accountName: 'Joint Chequing',
+    amountCents: -450000,
+    appliedCents: 450000,
+    source: 'rule' as const,
+  };
+
+  it('shows the header count, an empty state with no rows', () => {
+    renderDetail({ item: item({ kind: 'warranty' }), ledger: ledgerFixture() });
+    expect(screen.getByText('Linked transactions (0)')).toBeTruthy();
+    expect(screen.getByText(/No transactions linked yet/)).toBeTruthy();
+  });
+
+  it('lists a row with date, merchant, account, amount, applied and the rule/by-hand marker', () => {
+    renderDetail({ item: item({ kind: 'loan' }), ledger: ledgerFixture({ rows: [row], totalAppliedCents: -450000 }) });
+    expect(screen.getByText('Linked transactions (1)')).toBeTruthy();
+    expect(screen.getByText('HONDA FIN')).toBeTruthy();
+    expect(screen.getByText(/2026-08-10/)).toBeTruthy();
+    expect(screen.getByText(/Joint Chequing/)).toBeTruthy();
+    expect(screen.getByText('rule')).toBeTruthy();
+    // The merchant links to /transactions?search=<merchant> so the row is one click away.
+    // encodeURIComponent (not a query-string '+' encoder), so a space becomes %20.
+    expect(screen.getByRole('link', { name: 'HONDA FIN' }).getAttribute('href')).toBe('/transactions?search=HONDA%20FIN');
+  });
+
+  it('marks a manual link "by hand" and an installment link "installment"', () => {
+    renderDetail({
+      item: item({ kind: 'loan' }),
+      ledger: ledgerFixture({
+        rows: [
+          { ...row, txnId: 1, source: 'manual' },
+          { ...row, txnId: 2, source: 'installment' },
+        ],
+      }),
+    });
+    expect(screen.getByText('by hand')).toBeTruthy();
+    expect(screen.getByText('installment')).toBeTruthy();
+  });
+
+  it('shows the loan-only summary line, built from principal and the current balance', () => {
+    renderDetail({
+      item: item({ kind: 'loan', principalCents: 3_000_000, currentBalanceCents: 1_000_000, loanDirection: 'owed' }),
+      ledger: ledgerFixture({ rows: [row] }),
+    });
+    expect(screen.getByText(/You borrowed \$30,000\.00, \$20,000\.00 repaid, \$10,000\.00 still owed\./)).toBeTruthy();
+  });
+
+  it('omits the summary line for a non-loan kind', () => {
+    renderDetail({ item: item({ kind: 'bill' }), ledger: ledgerFixture({ rows: [row] }) });
+    expect(screen.queryByText(/repaid/)).toBeNull();
+  });
+
+  it('renders Unlink with the itemId and the row txnId as hidden fields', () => {
+    const { container } = renderDetail({ item: item({ id: 42, kind: 'loan' }), ledger: ledgerFixture({ rows: [row] }) });
+    fireEvent.click(screen.getByRole('button', { name: /actions for the .*4,500\.00 transaction on 2026-08-10/i }));
+    expect(screen.getByRole('menuitem', { name: /^unlink$/i })).toBeTruthy();
+    expect(container.querySelector('input[name="itemId"][value="42"]')).toBeTruthy();
+    expect(container.querySelector('input[name="txnId"][value="501"]')).toBeTruthy();
+  });
+
+  it('surfaces an Unlink refusal inline', async () => {
+    vi.mocked(unlinkLedgerTransactionAction).mockResolvedValueOnce({ error: 'That transaction is no longer linked to this item.' });
+    renderDetail({ item: item({ kind: 'loan' }), ledger: ledgerFixture({ rows: [row] }) });
+    fireEvent.click(screen.getByRole('button', { name: /actions for the .*4,500\.00 transaction on 2026-08-10/i }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /^unlink$/i }));
+    await waitFor(() => {
+      expect(screen.getByText('That transaction is no longer linked to this item.')).toBeTruthy();
+    });
   });
 });

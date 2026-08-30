@@ -1,12 +1,12 @@
-import { and, asc, eq, gte, inArray, isNull, sql } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
-import { billInstallments, loanMatcherRules, loanPayments, transactions, users, warrantyItemTypes, warrantyItems } from '@/db/schema';
+import { accounts, billInstallments, loanMatcherRules, loanPayments, transactions, users, warrantyItemTypes, warrantyItems } from '@/db/schema';
 import { canActOnOwner, ownerScope, NOT_YOURS_ERROR, type Viewer } from '@/lib/auth/viewer';
 import { nowIso } from '@/lib/clock';
 import { addDaysIso, addMonths, addMonthsClamped, daysBetweenIso, monthEnd, monthOf, monthRange, todayIso } from '@/lib/dates';
 import type { RateVerdict } from '@/lib/notify/ratelimit';
 import { meanCents } from '@/lib/predict/stats';
-import { getTransaction } from '@/lib/transactions';
+import { displayNameOf, getTransaction } from '@/lib/transactions';
 import {
   isLoanRepayment,
   loanSignedDelta,
@@ -993,6 +993,159 @@ export function reverseInstallmentLinksForTransactions(txnIds: number[]): number
       .run().changes;
   }
   return reversed;
+}
+
+// ---------------------------------------------------------------- item ledger (detail page)
+
+export interface ItemLedgerRow {
+  txnId: number;
+  date: string;
+  merchant: string;
+  accountName: string;
+  amountCents: number;
+  appliedCents: number;
+  source: 'rule' | 'manual' | 'installment';
+}
+
+export interface ItemLedger {
+  rows: ItemLedgerRow[];
+  /** Signed, direction-aware for a loan; total paid for anything else. */
+  totalAppliedCents: number;
+}
+
+/**
+ * Item 6 (v1.16.0 plan). The detail page used to show a bare count ("Payments linked: 2") with
+ * no way to see the links themselves, even though both source tables were already there and
+ * already indexed for exactly this read: loan_payments_item_idx (itemId, id) and
+ * bill_installments_item_idx (itemId, dueDate). No migration -- this reads what already exists.
+ *
+ * Two queries, not one SQL UNION: loan_payments always names a real link row for this item, while
+ * a bill installment only belongs on the ledger once it is actually PAID (paid_txn_id set) --
+ * folding that distinction into one statement would trade a plain WHERE on each side for a
+ * harder-to-read CASE, for two queries that are each already indexed on itemId alone.
+ *
+ * Newest first, by the LINKED TRANSACTION's own date -- the one date that means the same thing
+ * for both sources. loan_payments has no date of its own (only created_at, when the link was
+ * recorded, which can lag the transaction during a backfill); a bill installment's due_date is
+ * when the money was SCHEDULED to move, not when it did. Ties (same date) break by txnId
+ * descending, so the order is total even for two payments posted the same day.
+ *
+ * Ruling P4 still stands: this file spells no loan direction value directly. totalAppliedCents
+ * recovers a loan's sign the same way unassignTransactionFromLoan and debtOverTime already do --
+ * read the direction back off the linked transaction's own IMMUTABLE amount, via isLoanRepayment, never off
+ * applied_cents itself (loan_payments.applied_cents is stored UNSIGNED in both directions; see
+ * link()'s docblock far above). A bill installment carries no direction of its own -- there is no
+ * balance for it to move -- so its appliedCents always adds in unsigned, "total paid".
+ */
+export function itemLedger(itemId: number): ItemLedger {
+  const db = getDb();
+  const item = db
+    .select({ kind: warrantyItemTypes.kind, direction: warrantyItems.loanDirection })
+    .from(warrantyItems)
+    .innerJoin(warrantyItemTypes, eq(warrantyItemTypes.id, warrantyItems.typeId))
+    .where(eq(warrantyItems.id, itemId))
+    .get();
+  // An untyped item (no type_id at all, or one whose type row is gone) has no `kind` to read --
+  // it falls back to 'warranty', the same default every other reader in this codebase uses for
+  // an untyped row, so a stray link on one still totals unsigned rather than throwing.
+  const kind = item?.kind ?? 'warranty';
+  const direction = item?.direction ?? 'owed';
+
+  const loanRows = db
+    .select({
+      txnId: loanPayments.txnId,
+      date: transactions.date,
+      rawDescription: transactions.rawDescription,
+      displayDescription: transactions.displayDescription,
+      accountName: accounts.name,
+      amountCents: transactions.amountCents,
+      appliedCents: loanPayments.appliedCents,
+      source: loanPayments.source,
+    })
+    .from(loanPayments)
+    .innerJoin(transactions, eq(transactions.id, loanPayments.txnId))
+    .innerJoin(accounts, eq(accounts.id, transactions.accountId))
+    .where(eq(loanPayments.itemId, itemId))
+    .all();
+
+  const installmentRows = db
+    .select({
+      txnId: billInstallments.paidTxnId,
+      date: transactions.date,
+      rawDescription: transactions.rawDescription,
+      displayDescription: transactions.displayDescription,
+      accountName: accounts.name,
+      amountCents: transactions.amountCents,
+      appliedCents: billInstallments.amountCents,
+    })
+    .from(billInstallments)
+    .innerJoin(transactions, eq(transactions.id, billInstallments.paidTxnId))
+    .innerJoin(accounts, eq(accounts.id, transactions.accountId))
+    .where(and(eq(billInstallments.itemId, itemId), isNotNull(billInstallments.paidTxnId)))
+    .all();
+
+  const rows: ItemLedgerRow[] = [
+    ...loanRows.map((row): ItemLedgerRow => ({
+      txnId: row.txnId,
+      date: row.date,
+      merchant: displayNameOf(row),
+      accountName: row.accountName,
+      amountCents: row.amountCents,
+      appliedCents: row.appliedCents,
+      source: row.source,
+    })),
+    ...installmentRows.map((row): ItemLedgerRow => ({
+      // The isNotNull() filter above guarantees this is never actually null; the cast only
+      // satisfies the column's own nullable type (bill_installments.paid_txn_id has no NOT
+      // NULL, because most rows are unpaid), the same cast listInstallments() already makes
+      // for the identical column.
+      txnId: row.txnId as number,
+      date: row.date,
+      merchant: displayNameOf(row),
+      accountName: row.accountName,
+      amountCents: row.amountCents,
+      appliedCents: row.appliedCents,
+      source: 'installment',
+    })),
+  ];
+  rows.sort((a, b) => (a.date === b.date ? b.txnId - a.txnId : a.date < b.date ? 1 : -1));
+
+  const totalAppliedCents = rows.reduce((sum, row) => {
+    // An installment row has no direction to recover -- a bill has no balance -- and neither
+    // does any row on a non-loan item, so both add in unsigned ("total paid"). Only a loan
+    // item's OWN loan_payments rows are re-signed into its own frame.
+    if (row.source === 'installment' || kind !== 'loan') return sum + row.appliedCents;
+    return sum + (isLoanRepayment(direction, row.amountCents) ? -row.appliedCents : row.appliedCents);
+  }, 0);
+
+  return { rows, totalAppliedCents };
+}
+
+/**
+ * Item 6's row-menu Unlink action. A ledger row names exactly one (itemId, txnId) pair, and it
+ * came from exactly one of the two source tables (an item is one kind or the other in practice),
+ * so trying the loan path first and falling through to the installment path costs nothing on the
+ * common case and reports false only when neither table names this pair at all -- which the
+ * caller reads as "already gone" (another tab, or a concurrent unlink).
+ *
+ * The installment arm is NOT a call to unmarkInstallmentPaid (src/lib/warranty/installments.ts):
+ * that module already imports paymentLinksForTransaction from THIS file, and importing it back
+ * would make the two modules circularly depend on each other. It inlines the same update instead
+ * -- paid_at and paid_txn_id cleared, unlinked_at stamped so a rule cannot silently re-mark the
+ * exact row a person just unlinked (the same suppression ruling P1 protects, see
+ * unmarkInstallmentPaid's own docblock). It is keyed on (itemId, txnId), not on the installment's
+ * own id, because that is all a ledger row carries -- ItemLedgerRow deliberately has no
+ * installment id to leak onto a page that only ever talks about transactions.
+ */
+export function unlinkItemTransaction(itemId: number, txnId: number): boolean {
+  if (unassignTransactionFromLoan({ txnId, itemId })) return true;
+  return (
+    getDb()
+      .update(billInstallments)
+      .set({ paidAt: null, paidTxnId: null, unlinkedAt: nowIso() })
+      .where(and(eq(billInstallments.itemId, itemId), eq(billInstallments.paidTxnId, txnId)))
+      .run().changes > 0
+  );
 }
 
 // Note on reverseLoanLinksForTransactions and the enclosing transaction: it uses getDb()
