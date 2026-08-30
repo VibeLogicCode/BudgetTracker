@@ -1,8 +1,12 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
-import { budgetProgress, budgetTotals, categorySpend, clearBudget, copyBudgetsFromPreviousMonth, flattenBudgetRows, resolveBudget, upsertBudget } from '@/lib/budgets';
+import { budgetProgress, budgetTotals, categorySpend, categoryTransactions, clearBudget, copyBudgetsFromPreviousMonth, flattenBudgetRows, resolveBudget, upsertBudget } from '@/lib/budgets';
 import { nowIso } from '@/lib/clock';
+// Lane 1 (2026-08-30 plan): categoryTransactions is split-aware, the same way categorySpend
+// (immediately below) already is -- one test proves it by actually splitting a transaction,
+// rather than trusting that reusing EFFECTIVE_CATEGORY/EFFECTIVE_AMOUNT was enough.
+import { setTransactionSplits } from '@/lib/splits';
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -148,6 +152,83 @@ describe('categorySpend — netting, transfers and attribution', () => {
     const { spend } = setup();
     spend({ categoryId: null, amountCents: -4000 });
     expect(categorySpend('2026-03').size).toBe(0);
+  });
+});
+
+/**
+ * Lane 1 (2026-08-30 plan): the read the Budgets card's "View breakdown" drill-down needs to
+ * show a category's own transactions rather than just its total. Written before the
+ * implementation (categoryTransactions, below categorySpend in src/lib/budgets.ts) -- every
+ * assertion here failed against a stub that returned [] before the real query was written.
+ * Scoping mirrors categorySpend's own tests one section up: same household/personal split, same
+ * transfer exclusion, same "requires a user" guard for personal scope.
+ */
+describe('categoryTransactions — the Lane 1 breakdown drill-down', () => {
+  it('lists this category\'s own transactions for the month, newest first, with a real merchant name', () => {
+    const { db, spend } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    spend({ categoryId: groceries, amountCents: -1200, date: '2026-03-05' });
+    spend({ categoryId: groceries, amountCents: -3400, date: '2026-03-20' });
+    const rows = categoryTransactions('2026-03', groceries);
+    expect(rows.map((r) => r.amountCents)).toEqual([-3400, -1200]);
+    expect(rows[0].merchant).toBe('X'); // the spend() fixture's raw_description
+    expect(rows[0].date).toBe('2026-03-20');
+  });
+
+  it('excludes another category and another month', () => {
+    const { db, spend } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const coffee = categoryIdByName(db, 'Coffee');
+    spend({ categoryId: coffee, amountCents: -500, date: '2026-03-10' });
+    spend({ categoryId: groceries, amountCents: -700, date: '2026-02-10' });
+    expect(categoryTransactions('2026-03', groceries)).toEqual([]);
+  });
+
+  it('excludes transfers', () => {
+    const { db, spend } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    spend({ categoryId: groceries, amountCents: -900, isTransfer: true });
+    expect(categoryTransactions('2026-03', groceries)).toEqual([]);
+  });
+
+  it('scopes personal by attributedUserId, same as categorySpend', () => {
+    const { db, alice, bob, spend } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    spend({ categoryId: groceries, amountCents: -1000, attributedUserId: alice });
+    spend({ categoryId: groceries, amountCents: -2000, attributedUserId: bob });
+    const rows = categoryTransactions('2026-03', groceries, { scope: 'personal', attributedUserId: alice });
+    expect(rows.map((r) => r.amountCents)).toEqual([-1000]);
+  });
+
+  it('household scope counts every attribution, ignoring attributedUserId if also passed', () => {
+    const { db, alice, spend } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    spend({ categoryId: groceries, amountCents: -1000, attributedUserId: alice });
+    spend({ categoryId: groceries, amountCents: -2000, attributedUserId: null });
+    const rows = categoryTransactions('2026-03', groceries, { scope: 'household', attributedUserId: alice });
+    expect(rows).toHaveLength(2);
+  });
+
+  it('throws for personal scope without a user, the same trap categorySpend guards against', () => {
+    setup();
+    expect(() => categoryTransactions('2026-03', 1, { scope: 'personal' })).toThrowError(/requires a user/);
+  });
+
+  it('is split-aware: a split part contributes its own category and amount, not the parent transaction\'s', () => {
+    const { db, alice, spend } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const restaurants = categoryIdByName(db, 'Restaurants');
+    const id = spend({ categoryId: groceries, amountCents: -10000 });
+    setTransactionSplits({
+      txnId: id,
+      parts: [
+        { categoryId: groceries, amountCents: -6000 },
+        { categoryId: restaurants, amountCents: -4000 },
+      ],
+      userId: alice,
+    });
+    expect(categoryTransactions('2026-03', groceries).map((r) => r.amountCents)).toEqual([-6000]);
+    expect(categoryTransactions('2026-03', restaurants).map((r) => r.amountCents)).toEqual([-4000]);
   });
 });
 

@@ -12,6 +12,7 @@ import { Notice } from '@/components/ui/Notice';
 import { PageGuide } from '@/components/ui/PageGuide';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Field, inputClass, selectClass } from '@/components/ui/form';
+import { Pill } from '@/components/ui/Pill';
 import type { ContributionRecord, GoalWithProgress } from '@/lib/goals';
 import { addContributionAction, archiveGoalAction, createGoalAction, deleteContributionAction, type GoalActionState } from './actions';
 
@@ -37,7 +38,7 @@ export function GoalsClient({
   const error = createState.error ?? contributeState.error ?? archiveState.error ?? deleteState.error;
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4 sm:gap-5">
       <PageHeader
         title="Goals"
         description="What the household is saving towards, and whether the pace gets there."
@@ -103,7 +104,7 @@ export function GoalsClient({
               goal={goal}
               footer={
                 <>
-                  {goal.archived ? <span className="badge badge--slate w-fit">Archived</span> : null}
+                  {goal.archived ? <Pill tone="neutral" className="w-fit">Archived</Pill> : null}
                   <form action={contribute} className="flex flex-wrap items-center gap-1.5">
                     <input type="hidden" name="goalId" value={goal.id} />
                     <input

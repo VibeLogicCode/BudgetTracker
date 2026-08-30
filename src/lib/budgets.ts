@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, isNull, lte, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, isNull, lte, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { budgetRollover, budgets, transactions, transactionSplits } from '@/db/schema';
 import { listCategories, type CategoryRecord } from '@/lib/categories';
@@ -153,6 +153,63 @@ export function categorySpend(
     result.set(row.categoryId, netSpentCents(row.total ?? 0));
   }
   return result;
+}
+
+export interface CategoryTransactionRow {
+  id: number;
+  date: string;
+  merchant: string;
+  amountCents: number;
+}
+
+/**
+ * One category's own transactions for one month -- the read the 2026-08-30 plan's Budgets card
+ * "View breakdown" drill-down needs (a card names a total; a person still wants to see what made
+ * it up). Nothing existing served this: listTransactions (src/lib/transactions.ts) scopes to the
+ * REQUESTING viewer's own attribution (ownerScope), which is the wrong axis here -- an admin
+ * viewing a household card must see every member's rows, and viewing a NAMED person's personal
+ * card must see exactly that person's, regardless of who is looking. That is categorySpend's own
+ * scope/attributedUserId shape, not listTransactions', so this reuses categorySpend's exactly --
+ * same options, same "personal requires a user" guard, same split-awareness -- rather than
+ * inventing a third scoping rule next to the two this file already has.
+ *
+ * Deliberately the smallest useful shape: id/date/merchant/amountCents. No account, no source, no
+ * attribution -- a card's breakdown says what was spent and when, not a second transactions
+ * table's worth of columns. A split transaction contributes its OWN part's category and amount
+ * (EFFECTIVE_CATEGORY/EFFECTIVE_AMOUNT, src/lib/splits.ts), the same rule categorySpend already
+ * folds every total through, so a row returned here is exactly one of the rows that total summed.
+ */
+export function categoryTransactions(
+  month: string,
+  categoryId: number,
+  opts: { attributedUserId?: number | null; scope?: BudgetScope } = {},
+): CategoryTransactionRow[] {
+  assertMonth(month);
+  if (opts.scope === 'personal' && (opts.attributedUserId === undefined || opts.attributedUserId === null)) {
+    throw new Error('Personal category transactions requires a user');
+  }
+  const clauses = [
+    gte(transactions.date, monthStart(month)),
+    lte(transactions.date, monthEnd(month)),
+    eq(transactions.isTransfer, false),
+    sql`${EFFECTIVE_CATEGORY} = ${categoryId}`,
+  ];
+  if (opts.scope !== 'household' && opts.attributedUserId !== undefined && opts.attributedUserId !== null) {
+    clauses.push(eq(transactions.attributedUserId, opts.attributedUserId));
+  }
+
+  return getDb()
+    .select({
+      id: transactions.id,
+      date: transactions.date,
+      merchant: sql<string>`coalesce(${transactions.displayDescription}, ${transactions.rawDescription})`,
+      amountCents: EFFECTIVE_AMOUNT,
+    })
+    .from(transactions)
+    .leftJoin(transactionSplits, eq(transactionSplits.txnId, transactions.id))
+    .where(and(...clauses))
+    .orderBy(desc(transactions.date), desc(transactions.id))
+    .all();
 }
 
 /**

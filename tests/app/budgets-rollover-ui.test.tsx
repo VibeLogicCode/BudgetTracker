@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, cleanup, fireEvent, waitFor } from '@testing-library/react';
+import { render, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
 import { BudgetsClient } from '@/app/(app)/budgets/budgets-client';
 import { setRolloverAction } from '@/app/(app)/budgets/actions';
 import type { BudgetRow } from '@/lib/budgets';
@@ -11,6 +11,11 @@ import type { BudgetRow } from '@/lib/budgets';
  * half of the toggle (setRolloverAction's permission checks and its writes) lives in
  * tests/app/budgets-actions.test.ts, next to setLimitAction's own tests, since it already has
  * the real-DB harness these need.
+ *
+ * 2026-08-30 plan: the toggle (and the carry sentence beside it) moved behind "Edit limits" --
+ * the card grid never renders either, so every test below opens that mode first. The rows
+ * themselves, the ids and the permission gating are otherwise unchanged from the table this
+ * replaces.
  */
 
 vi.mock('@/app/(app)/budgets/actions', () => ({
@@ -22,6 +27,10 @@ vi.mock('@/app/(app)/budgets/actions', () => ({
   // and `.mock.calls[n][1]` below has no such index under strict mode -- the mock's OWN
   // inferred arity, not the real action's signature, decides that.
   setRolloverAction: vi.fn(async (_prev: unknown, _formData: FormData) => ({})),
+}));
+
+vi.mock('@/app/(app)/budgets/category-transactions-action', () => ({
+  categoryTransactionsAction: vi.fn(async () => ({ rows: [] })),
 }));
 
 afterEach(() => {
@@ -56,6 +65,13 @@ function sectionFor(container: HTMLElement, name: string): HTMLElement {
   return section as HTMLElement;
 }
 
+/** Same helper as tests/app/budgets-client.test.tsx -- scoped so a page with more than one
+ *  section (household plus several people, each with its own toggle) never throws on an
+ *  ambiguous match. */
+function openEditLimits(scope: HTMLElement) {
+  fireEvent.click(within(scope).getByRole('button', { name: 'Edit limits' }));
+}
+
 describe('rollover toggle — permission (admin, and for a personal budget its own owner)', () => {
   it('a non-admin member does not see the toggle on a household row', () => {
     const { container } = render(
@@ -68,6 +84,7 @@ describe('rollover toggle — permission (admin, and for a personal budget its o
         personal={[]}
       />,
     );
+    openEditLimits(container);
     expect(container.textContent).not.toContain('Roll over unspent');
   });
 
@@ -82,6 +99,7 @@ describe('rollover toggle — permission (admin, and for a personal budget its o
         personal={[]}
       />,
     );
+    openEditLimits(container);
     expect(container.textContent).toContain('Roll over unspent');
   });
 
@@ -96,7 +114,9 @@ describe('rollover toggle — permission (admin, and for a personal budget its o
         personal={[{ userId: 1, name: 'Alice', rows: [makeRow({ categoryId: 7, categoryName: 'Hobbies' })] }]}
       />,
     );
-    expect(sectionFor(container, 'Alice').textContent).toContain('Roll over unspent');
+    const alice = sectionFor(container, 'Alice');
+    openEditLimits(alice);
+    expect(alice.textContent).toContain('Roll over unspent');
   });
 
   it("a non-owner, non-admin member does not see the toggle on someone else's personal row", () => {
@@ -113,7 +133,9 @@ describe('rollover toggle — permission (admin, and for a personal budget its o
         ]}
       />,
     );
-    expect(sectionFor(container, 'Bob').textContent).not.toContain('Roll over unspent');
+    const bob = sectionFor(container, 'Bob');
+    openEditLimits(bob);
+    expect(bob.textContent).not.toContain('Roll over unspent');
   });
 
   it("an admin sees the toggle on someone else's personal row too", () => {
@@ -127,7 +149,9 @@ describe('rollover toggle — permission (admin, and for a personal budget its o
         personal={[{ userId: 2, name: 'Bob', rows: [makeRow({ categoryId: 7, categoryName: 'Hobbies' })] }]}
       />,
     );
-    expect(sectionFor(container, 'Bob').textContent).toContain('Roll over unspent');
+    const bob = sectionFor(container, 'Bob');
+    openEditLimits(bob);
+    expect(bob.textContent).toContain('Roll over unspent');
   });
 
   it('an archived row never shows the toggle, even for an admin', () => {
@@ -141,6 +165,7 @@ describe('rollover toggle — permission (admin, and for a personal budget its o
         personal={[]}
       />,
     );
+    openEditLimits(container);
     expect(container.textContent).not.toContain('Roll over unspent');
   });
 });
@@ -158,6 +183,7 @@ describe('rollover toggle — reflects on/off state and submits the right fields
         personal={[]}
       />,
     );
+    openEditLimits(container);
     const checkbox = container.querySelector('input[name="enabled"]') as HTMLInputElement;
     expect(checkbox).toBeTruthy();
     expect(checkbox.checked).toBe(false);
@@ -175,6 +201,7 @@ describe('rollover toggle — reflects on/off state and submits the right fields
         personal={[]}
       />,
     );
+    openEditLimits(container);
     const checkbox = container.querySelector('input[name="enabled"]') as HTMLInputElement;
     expect(checkbox.checked).toBe(true);
 
@@ -208,6 +235,7 @@ describe('rollover toggle — reflects on/off state and submits the right fields
         personal={[{ userId: 2, name: 'Bob', rows: [makeRow({ categoryId: 7, categoryName: 'Hobbies' })], rolloverIds: [7] }]}
       />,
     );
+    openEditLimits(sectionFor(container, 'Bob'));
     const checkbox = container.querySelector('input[name="enabled"]') as HTMLInputElement;
     expect(checkbox.checked).toBe(true);
 
@@ -240,14 +268,12 @@ describe('rollover toggle — reflects on/off state and submits the right fields
         personal={[]}
       />,
     );
-    const rows = Array.from(container.querySelectorAll('tbody tr'));
+    openEditLimits(container);
+    const rows = Array.from(container.querySelectorAll('#budget-row-household-h-2, #budget-row-household-h-3'));
     const groceriesRow = rows.find((r) => r.textContent?.includes('Groceries'));
     const coffeeRow = rows.find((r) => r.textContent?.includes('Coffee'));
     expect((groceriesRow?.querySelector('input[name="enabled"]') as HTMLInputElement).checked).toBe(true);
     expect((coffeeRow?.querySelector('input[name="enabled"]') as HTMLInputElement).checked).toBe(false);
-    // v1.15.0 (responsive rows, ruling S3): a child row's indent lives on the same cell that
-    // is the phone card's headline, so nesting one level deep must not lose the class.
-    expect(groceriesRow?.querySelector('td:first-child')?.className).toContain('cell-stack-headline');
   });
 });
 
@@ -262,6 +288,7 @@ describe('carried amount display — "$X plus $Y carried"', () => {
         personal={[]}
       />,
     );
+    openEditLimits(container);
     expect(getByText('$500.00 plus $123.00 carried')).toBeTruthy();
     // The editable field itself still holds the BASE, so an unchanged Save cannot bake the
     // carry into it (see the actions test file for the write-path proof of the same rule).
@@ -285,8 +312,10 @@ describe('carried amount display — "$X plus $Y carried"', () => {
       />,
     );
     // Bob's row is read-only for a non-admin viewer who is not Bob.
-    expect(sectionFor(container, 'Bob').textContent).toContain('$150.00 plus $50.00 carried');
-    expect(sectionFor(container, 'Bob').textContent).not.toContain('$200.00 · read-only');
+    const bob = sectionFor(container, 'Bob');
+    openEditLimits(bob);
+    expect(bob.textContent).toContain('$150.00 plus $50.00 carried');
+    expect(bob.textContent).not.toContain('$200.00 · read-only');
   });
 
   it('a row with no carry looks exactly as it did before this feature', () => {
@@ -299,6 +328,7 @@ describe('carried amount display — "$X plus $Y carried"', () => {
         personal={[]}
       />,
     );
+    openEditLimits(container);
     expect(queryByText(/carried/)).toBeNull();
     const input = container.querySelector('input[name="amount"]') as HTMLInputElement;
     expect(input.defaultValue).toBe('200.00');
@@ -318,6 +348,7 @@ describe('carried amount display — "$X plus $Y carried"', () => {
         personal={[]}
       />,
     );
+    openEditLimits(container);
     expect(container.textContent).toContain('$300.00 plus $70.00 carried');
   });
 });

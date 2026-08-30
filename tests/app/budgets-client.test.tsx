@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { render, cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
+import { render, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { BudgetsClient } from '@/app/(app)/budgets/budgets-client';
 import { sectionFrom } from '@/app/(app)/budgets/page';
 import type { BudgetRow } from '@/lib/budgets';
@@ -17,6 +17,15 @@ vi.mock('@/app/(app)/budgets/actions', () => ({
   applyAllSuggestionsAction: vi.fn(async () => ({})),
   setRolloverAction: vi.fn(async () => ({})),
   setSavingsTargetAction: vi.fn(async () => ({})),
+}));
+
+// The Lane 1 drill-down (2026-08-30 plan): a NEW module, not ./actions, so it gets its own mock.
+// Nothing in this file exercises it directly (no test here opens "View transactions"), but every
+// render mounts BudgetCategoryCard, and an unmocked module would otherwise reach requireUser()
+// and the real database the moment a test DID click through -- mocked here so a future test that
+// does can rely on a predictable, empty result rather than a real query.
+vi.mock('@/app/(app)/budgets/category-transactions-action', () => ({
+  categoryTransactionsAction: vi.fn(async () => ({ rows: [] })),
 }));
 
 afterEach(() => cleanup());
@@ -112,6 +121,17 @@ function renderClient({ limitCents }: { limitCents: number | null }) {
   return renderBudgets(null, { limitCents });
 }
 
+/**
+ * 2026-08-30 plan: the limit input, the clear button, the rollover checkbox, the carry/sinking-
+ * fund sentences and the suggestion button all moved behind "Edit limits" -- the card grid never
+ * renders any of them, editable row or not. `scope` narrows to one section on a page that
+ * renders more than one (household + several people each have their OWN toggle), so this never
+ * throws on an ambiguous match the way an unscoped `getByRole` would.
+ */
+function openEditLimits(scope: HTMLElement) {
+  fireEvent.click(within(scope).getByRole('button', { name: 'Edit limits' }));
+}
+
 describe('BudgetsClient — review finding 2: archived rows are read-only', () => {
   it('renders an archived row without an editable limit form', () => {
     const row = makeRow({ categoryId: 99, categoryName: 'Kids', isArchived: true, limitCents: null, remainingCents: null, pct: null });
@@ -125,11 +145,10 @@ describe('BudgetsClient — review finding 2: archived rows are read-only', () =
       />,
     );
     expect(getByText('(archived)')).toBeTruthy();
+    openEditLimits(container);
     expect(getByText('read-only')).toBeTruthy();
-    // No amount input/save form for this row.
-    const rows = Array.from(container.querySelectorAll('tbody tr'));
-    const archivedRowCells = rows.find((r) => r.textContent?.includes('Kids'));
-    expect(archivedRowCells?.querySelector('input[name="amount"]')).toBeNull();
+    // No amount input for this row, even behind Edit limits.
+    expect(container.querySelector('input[name="amount"]')).toBeNull();
   });
 
   it('review LOW cleanup: sectionFrom gives an archived row no projection entry even though it still carries a limit and spend', () => {
@@ -138,7 +157,7 @@ describe('BudgetsClient — review finding 2: archived rows are read-only', () =
     expect(projections.some((entry) => entry.categoryId === 42)).toBe(false);
   });
 
-  it('still renders an editable limit form for a non-archived row', () => {
+  it('still renders an editable limit form for a non-archived row, behind Edit limits', () => {
     const row = makeRow({ categoryId: 2, categoryName: 'Coffee' });
     const { container } = render(
       <BudgetsClient
@@ -149,20 +168,17 @@ describe('BudgetsClient — review finding 2: archived rows are read-only', () =
         personal={[]}
       />,
     );
+    openEditLimits(container);
     const input = container.querySelector('input[name="amount"]') as HTMLInputElement;
     expect(input).toBeTruthy();
     expect(input.defaultValue).toBe('200.00');
-    // v1.15.0 (responsive rows, ruling S3): the category cell is both the tree's indent and
-    // the phone card's headline, so it must carry cell-stack-headline.
-    const headlineCell = container.querySelector('tbody tr td:first-child');
-    expect(headlineCell?.className).toContain('cell-stack-headline');
   });
 
-  // v1.16.0 Lane C item 4: the progress bar is neither text nor a form control, so it needs the
-  // opt-in `cell-stack-block` role (globals.css's `:has(select, textarea, input)` rule has
-  // nothing to match here) to span the card's full width instead of being squeezed into the
-  // right half beside a label it has no room to sit next to.
-  it('the "Progress and pace" cell carries cell-stack-block', () => {
+  // v1.16.0 Lane C item 4's cell-stack-block guard applied to a <td> the progress bar lived in;
+  // that cell no longer exists (budgets is a card grid now, ruling D7). What survives it that
+  // matters is the bar itself: a real, shared ProgressBar (ruling D1) reporting the row's own
+  // percentage, not a hand-rolled meter re-deriving it.
+  it('the card renders a real ProgressBar carrying the row\'s own percentage', () => {
     const row = makeRow({ categoryId: 3, categoryName: 'Rent' });
     const { container } = render(
       <BudgetsClient
@@ -173,8 +189,12 @@ describe('BudgetsClient — review finding 2: archived rows are read-only', () =
         personal={[]}
       />,
     );
-    const progressCell = container.querySelector('tbody td[data-label="Progress and pace"]');
-    expect(progressCell?.className).toContain('cell-stack-block');
+    // Two bars exist on this page (the household total, and this one row's own) -- scoped by
+    // label, since both happen to read the same percentage for this fixture.
+    const bar = Array.from(container.querySelectorAll('[role="progressbar"]')).find(
+      (el) => el.getAttribute('aria-label') === 'Rent budget used',
+    );
+    expect(bar?.getAttribute('aria-valuenow')).toBe('25');
   });
 });
 
@@ -209,14 +229,17 @@ describe('BudgetsClient — polish item 5: other members’ personal sections ar
     const { container } = renderFor(false);
 
     const mine = sectionFor(container, 'Alice');
+    openEditLimits(mine);
     expect(mine.querySelector('input[name="amount"]')).not.toBeNull();
     expect(mine.textContent).toContain('Copy previous month');
 
     const theirs = sectionFor(container, 'Bob');
+    openEditLimits(theirs);
     // No control that setLimitAction / copyPreviousMonthAction would refuse anyway.
     expect(theirs.querySelector('input[name="amount"]')).toBeNull();
     expect(theirs.textContent).not.toContain('Copy previous month');
-    // The number itself is still visible — the household sees everything by design.
+    // The number itself is still visible — the household sees everything by design (the card's
+    // own "of $150.00" compare text, no Edit limits needed for that half).
     expect(theirs.textContent).toContain('$150.00');
     expect(theirs.textContent).toContain('read-only');
   });
@@ -225,6 +248,7 @@ describe('BudgetsClient — polish item 5: other members’ personal sections ar
     const { container } = renderFor(true);
     for (const name of ['Alice', 'Bob']) {
       const section = sectionFor(container, name);
+      openEditLimits(section);
       expect(section.querySelector('input[name="amount"]')).not.toBeNull();
       expect(section.textContent).toContain('Copy previous month');
     }
@@ -241,6 +265,7 @@ describe('BudgetsClient — polish item 5: other members’ personal sections ar
         personal={[]}
       />,
     );
+    openEditLimits(container);
     expect(container.querySelector('input[name="amount"]')).not.toBeNull();
   });
 });
@@ -311,10 +336,11 @@ describe('L-6: the no-attribution sentence names the viewer, not always "you"', 
 });
 
 describe('MUST-14.3 to MUST-14.6: the predictive controls', () => {
-  it('renders a Use button carrying no amount field, and its reasoning in the title', () => {
+  it('renders a Use button carrying no amount field, and its reasoning in the title (behind Edit limits)', () => {
     const { container } = renderBudgets(
       predictionsWith({ household: { suggestions: [SUGGESTION], projections: [], noAttribution: false } }),
     );
+    openEditLimits(container);
     const button = Array.from(container.querySelectorAll('button')).find((el) => el.textContent === 'Use $780.00');
     expect(button).toBeTruthy();
     expect(button!.getAttribute('title')).toContain('Confidence: medium.');
@@ -326,10 +352,11 @@ describe('MUST-14.3 to MUST-14.6: the predictive controls', () => {
 
   it('MUST-15.4: a category with no suggestion shows nothing in the slot', () => {
     const { container } = renderBudgets(predictionsWith());
+    openEditLimits(container);
     expect(Array.from(container.querySelectorAll('button')).some((el) => el.textContent?.startsWith('Use '))).toBe(false);
   });
 
-  it('MUST-14.4: the projection line appears with its assumption in the title', () => {
+  it('MUST-14.4: the projection line appears on the card, with its assumption in the title', () => {
     const { getByText } = renderBudgets(
       predictionsWith({
         household: { suggestions: [], projections: [{ categoryId: 1, projectedCents: 105900 }], noAttribution: false },
@@ -341,7 +368,7 @@ describe('MUST-14.3 to MUST-14.6: the predictive controls', () => {
 
   it('MUST-15.3: before the seventh there is no projection line and no placeholder', () => {
     // The page produces no projections at all before day 7, because projectMonthEnd returns
-    // null. dayOfMonth is set to match, so this test fails if the row ever renders a dash or
+    // null. dayOfMonth is set to match, so this test fails if the card ever renders a dash or
     // an empty pace line rather than nothing.
     const { container } = renderBudgets(
       predictionsWith({ dayOfMonth: 3, household: { suggestions: [], projections: [], noAttribution: false } }),
@@ -399,35 +426,46 @@ describe('MUST-14.3 to MUST-14.6: the predictive controls', () => {
   it('MUST-15.1: under three months there is a sentence and no disabled button', () => {
     const { container, getByText } = renderBudgets(predictionsWith({ monthsUsed: 2 }));
     expect(getByText('Suggestions appear once there are three full calendar months of history.')).toBeTruthy();
+    openEditLimits(container);
     expect(Array.from(container.querySelectorAll('button')).some((el) => el.textContent?.startsWith('Use '))).toBe(false);
   });
 
-  it('MUST-14.1: a past month renders neither column and keeps the header quiet', () => {
+  it('MUST-14.1: a past month renders no Use button and no pace line', () => {
     const { container } = renderBudgets(null);
+    openEditLimits(container);
     expect(Array.from(container.querySelectorAll('button')).some((el) => el.textContent?.startsWith('Use '))).toBe(false);
     expect(container.textContent).not.toContain('On pace for');
-    expect(container.querySelector('th[title]')).toBeNull();
   });
 
-  it('MUST-15.3: the pace column header carries its own explanation', () => {
-    const { container } = renderBudgets(predictionsWith());
-    expect(container.querySelector('th[title]')?.getAttribute('title')).toBe('Appears from the 7th of the month.');
+  // MUST-15.3 used to be a shared <th title=...> column header -- there is no shared column
+  // header in a card grid (ruling D7), so the same explanation now rides on each card's OWN
+  // pace line instead, which is strictly more specific (it already names the exact day count,
+  // where the old header's title was one generic sentence for the whole table).
+  it('MUST-15.3: the pace line carries its own explanation, now per card', () => {
+    const { container } = renderBudgets(
+      predictionsWith({ household: { suggestions: [], projections: [{ categoryId: 1, projectedCents: 78000 }], noAttribution: false } }),
+    );
+    const span = Array.from(container.querySelectorAll('span')).find((el) => el.textContent === 'On pace for $780.00');
+    expect(span?.getAttribute('title')).toBe('Assumes the rest of the month looks like the 12 days so far.');
   });
 });
 
 describe('v1.12.1: clearing a budget is a deliberate button (item X / UX-4)', () => {
   it('renders a clear control on a row that has a limit', () => {
-    renderClient({ limitCents: 60000 });
+    const { container } = renderClient({ limitCents: 60000 });
+    openEditLimits(container);
     expect(screen.getByRole('button', { name: /Clear the budget for Groceries/ })).toBeTruthy();
   });
 
   it('renders no clear control on a row with no limit', () => {
-    renderClient({ limitCents: null });
+    const { container } = renderClient({ limitCents: null });
+    openEditLimits(container);
     expect(screen.queryByRole('button', { name: /Clear the budget for Groceries/ })).toBeNull();
   });
 
   it('the clear control submits an empty amount, which is what clearBudget reads', () => {
-    renderClient({ limitCents: 60000 });
+    const { container } = renderClient({ limitCents: 60000 });
+    openEditLimits(container);
     const button = screen.getByRole('button', { name: /Clear the budget for Groceries/ });
     const form = button.closest('form');
     expect((form?.querySelector('input[name="amount"]') as HTMLInputElement | null)?.value).toBe('');
@@ -438,7 +476,8 @@ describe('v1.12.1: clearing a budget is a deliberate button (item X / UX-4)', ()
   it('fix round 2: a failing clear surfaces the server error inline, next to the button, instead of vanishing (`void setLimitAction(...)` used to discard it)', async () => {
     const { setLimitAction } = await import('@/app/(app)/budgets/actions');
     vi.mocked(setLimitAction).mockResolvedValueOnce({ error: 'You can only edit your own personal budgets.' });
-    renderClient({ limitCents: 60000 });
+    const { container } = renderClient({ limitCents: 60000 });
+    openEditLimits(container);
 
     const button = screen.getByRole('button', { name: /Clear the budget for Groceries/ });
     fireEvent.submit(button.closest('form')!);
@@ -601,6 +640,12 @@ describe('Lane 3 item 1: "Copy previous month" also carries the savings target f
  * (rulings U2-U6). `makeRow`'s default `children: []` already makes every OTHER describe block
  * in this file exercise the "ordinary row" path unchanged -- these tests are the ones that
  * actually give a row children.
+ *
+ * 2026-08-30 plan: the group-open STATE (and its localStorage keys) is unchanged and shared by
+ * both the card grid's "View breakdown" and the Edit-limits list's own disclosure chevron. Most
+ * of these tests exercise it through Edit limits -- its ids and aria-controls are the least
+ * changed surface from the old table, so they carry over almost verbatim -- and one dedicated
+ * test at the end proves the card grid's own toggle reads and writes that very same state.
  */
 function housingGroupRow(overrides: { childRent?: Partial<BudgetRow>; childUtilities?: Partial<BudgetRow> } = {}): BudgetRow {
   return makeRow({
@@ -659,20 +704,19 @@ describe('v1.18.0 Lane 2 items 1-2: a group collapses, and its header already ca
         personal={[]}
       />,
     );
+    openEditLimits(container);
     const toggle = getByRole('button', { name: 'Housing' });
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     expect(toggle.getAttribute('aria-controls')).toBe('budget-row-household-h-11 budget-row-household-h-12');
 
     // Ruling U2: the parent's OWN row already carries the rolled-up spend/remaining
     // (foldRollup, src/lib/budgets.ts) -- no client-side re-summation was needed to show it.
-    const header = container.querySelector('#budget-row-household-h-10') as HTMLTableRowElement;
+    const header = container.querySelector('#budget-row-household-h-10') as HTMLDivElement;
     expect(header.hidden).toBe(false);
-    expect(header.textContent).toContain('$1,500.00'); // net spent, already rolled up
-    expect(header.textContent).toContain('$500.00'); // remaining
 
     // Ruling U3: a closed group's children stay in the DOM (hidden, not unmounted) -- see the
-    // Row prop's own doc comment for why.
-    const childRow = container.querySelector('#budget-row-household-h-11') as HTMLTableRowElement;
+    // EditRow prop's own doc comment for why.
+    const childRow = container.querySelector('#budget-row-household-h-11') as HTMLDivElement;
     expect(childRow.hidden).toBe(true);
   });
 
@@ -686,14 +730,15 @@ describe('v1.18.0 Lane 2 items 1-2: a group collapses, and its header already ca
         personal={[]}
       />,
     );
+    openEditLimits(container);
     fireEvent.click(getByRole('button', { name: 'Housing' }));
     expect(getByRole('button', { name: 'Housing' }).getAttribute('aria-expanded')).toBe('true');
-    const childRow = container.querySelector('#budget-row-household-h-11') as HTMLTableRowElement;
+    const childRow = container.querySelector('#budget-row-household-h-11') as HTMLDivElement;
     expect(childRow.hidden).toBe(false);
   });
 
   it('a parent with no children renders no disclosure (an ordinary row, not an empty disclosure)', () => {
-    const { queryByRole } = render(
+    const { container, queryByRole } = render(
       <BudgetsClient
         month="2026-03"
         currentUserId={1}
@@ -702,14 +747,15 @@ describe('v1.18.0 Lane 2 items 1-2: a group collapses, and its header already ca
         personal={[]}
       />,
     );
+    openEditLimits(container);
     expect(queryByRole('button', { name: 'Insurance' })).toBeNull();
   });
 
-  it('marks an over-budget group on its closed header, and only when it is actually over', () => {
+  it('marks an over-budget group with a Pill, and only when it is actually over', () => {
     const overBudget = housingGroupRow();
     overBudget.overBudget = true;
     overBudget.spentCents = 250000;
-    const { getByText, rerender } = render(
+    const { container, getByText, rerender } = render(
       <BudgetsClient
         month="2026-03"
         currentUserId={1}
@@ -718,6 +764,7 @@ describe('v1.18.0 Lane 2 items 1-2: a group collapses, and its header already ca
         personal={[]}
       />,
     );
+    openEditLimits(container);
     expect(getByText('Over budget')).toBeTruthy();
 
     const underBudget = housingGroupRow();
@@ -734,7 +781,7 @@ describe('v1.18.0 Lane 2 items 1-2: a group collapses, and its header already ca
   });
 
   it('Household and Personal never collapse themselves (ruling U4) -- both render their rows with no click needed', () => {
-    const { container } = render(
+    const { container, getAllByRole } = render(
       <BudgetsClient
         month="2026-03"
         currentUserId={1}
@@ -743,8 +790,9 @@ describe('v1.18.0 Lane 2 items 1-2: a group collapses, and its header already ca
         personal={[{ userId: 1, name: 'Alice', rows: [makeRow({ categoryId: 2 })] }]}
       />,
     );
-    const householdRow = container.querySelector('#budget-row-household-h-1') as HTMLTableRowElement;
-    const personalRow = container.querySelector('#budget-row-personal-1-2') as HTMLTableRowElement;
+    for (const button of getAllByRole('button', { name: 'Edit limits' })) fireEvent.click(button);
+    const householdRow = container.querySelector('#budget-row-household-h-1') as HTMLDivElement;
+    const personalRow = container.querySelector('#budget-row-personal-1-2') as HTMLDivElement;
     expect(householdRow.hidden).toBe(false);
     expect(personalRow.hidden).toBe(false);
   });
@@ -754,7 +802,7 @@ describe('v1.18.0 Lane 2 items 1-2: a group collapses, and its header already ca
     food.categoryId = 20;
     food.categoryName = 'Food';
     food.children = food.children.map((child, i) => ({ ...child, categoryId: 21 + i, parentId: 20 }));
-    const { getByRole, queryByRole } = render(
+    const { container, getByRole, queryByRole } = render(
       <BudgetsClient
         month="2026-03"
         currentUserId={1}
@@ -763,6 +811,7 @@ describe('v1.18.0 Lane 2 items 1-2: a group collapses, and its header already ca
         personal={[]}
       />,
     );
+    openEditLimits(container);
     fireEvent.click(getByRole('button', { name: 'Expand all' }));
     expect(getByRole('button', { name: 'Housing' }).getAttribute('aria-expanded')).toBe('true');
     expect(getByRole('button', { name: 'Food' }).getAttribute('aria-expanded')).toBe('true');
@@ -797,6 +846,7 @@ describe('v1.18.0 Lane 2 items 1-2: a group collapses, and its header already ca
         personal={[{ userId: 1, name: 'Alice', rows: [housingGroupRow()] }]}
       />,
     );
+    for (const button of getAllByRole('button', { name: 'Edit limits' })) fireEvent.click(button);
     // Two sections, same category id (10) -- opening the household one (the first "Housing" in
     // document order) must not touch Alice's own copy of the same category.
     fireEvent.click(getAllByRole('button', { name: 'Housing' })[0]);
@@ -811,6 +861,7 @@ describe('v1.18.0 Lane 2 items 1-2: a group collapses, and its header already ca
         personal={[{ userId: 1, name: 'Alice', rows: [housingGroupRow()] }]}
       />,
     );
+    for (const button of getAllByRoleAfterRemount('button', { name: 'Edit limits' })) fireEvent.click(button);
     const toggles = getAllByRoleAfterRemount('button', { name: 'Housing' });
     expect(toggles.map((t) => t.getAttribute('aria-expanded'))).toEqual(['true', 'false']);
   });
@@ -820,7 +871,7 @@ describe('v1.18.0 Lane 2 items 1-2: a group collapses, and its header already ca
       throw new Error('storage disabled');
     });
     try {
-      const { getByRole } = render(
+      const { container, getByRole } = render(
         <BudgetsClient
           month="2026-03"
           currentUserId={1}
@@ -829,6 +880,7 @@ describe('v1.18.0 Lane 2 items 1-2: a group collapses, and its header already ca
           personal={[]}
         />,
       );
+      openEditLimits(container);
       expect(getByRole('button', { name: 'Housing' }).getAttribute('aria-expanded')).toBe('false');
     } finally {
       getItem.mockRestore();
@@ -840,7 +892,7 @@ describe('v1.18.0 Lane 2 items 1-2: a group collapses, and its header already ca
       throw new Error('quota exceeded');
     });
     try {
-      const { getByRole } = render(
+      const { container, getByRole } = render(
         <BudgetsClient
           month="2026-03"
           currentUserId={1}
@@ -849,32 +901,16 @@ describe('v1.18.0 Lane 2 items 1-2: a group collapses, and its header already ca
           personal={[]}
         />,
       );
+      openEditLimits(container);
       expect(() => fireEvent.click(getByRole('button', { name: 'Housing' }))).not.toThrow();
       expect(getByRole('button', { name: 'Housing' }).getAttribute('aria-expanded')).toBe('true');
     } finally {
       setItem.mockRestore();
     }
   });
-});
 
-describe('v1.18.0 Lane 2 item 4: the parent-limit warning (ruling U6)', () => {
-  it('appears with the right amounts when children add up to more than the parent', () => {
-    const row = housingGroupRow({ childRent: { baseLimitCents: 150000, limitCents: 150000 }, childUtilities: { baseLimitCents: 90000, limitCents: 90000 } });
-    const { getByText } = render(
-      <BudgetsClient
-        month="2026-03"
-        currentUserId={1}
-        household={[row]}
-        householdTotals={{ budgetedLimitCents: 200000, budgetedSpentCents: 150000, totalSpentCents: 150000 }}
-        personal={[]}
-      />,
-    );
-    // 150000 + 90000 = 240000 ($2,400.00), 40000 ($400.00) over the parent's 200000 ($2,000.00).
-    expect(getByText("Children add up to $2,400.00 — $400.00 over Housing's limit.")).toBeTruthy();
-  });
-
-  it('shows nothing at all when the children sum under the parent -- a deliberate, ordinary state', () => {
-    const { queryByText, queryByRole } = render(
+  it('2026-08-30 plan: the card grid\'s own "View breakdown" reads and writes the SAME state as the Edit-limits disclosure', () => {
+    const { getByRole } = render(
       <BudgetsClient
         month="2026-03"
         currentUserId={1}
@@ -883,15 +919,19 @@ describe('v1.18.0 Lane 2 item 4: the parent-limit warning (ruling U6)', () => {
         personal={[]}
       />,
     );
-    expect(queryByText(/Children add up to/)).toBeNull();
-    expect(queryByRole('button', { name: /^Raise/ })).toBeNull();
+    // Opened from the default card grid...
+    fireEvent.click(getByRole('button', { name: 'View breakdown' }));
+    expect(getByRole('button', { name: 'Hide breakdown' })).toBeTruthy();
+    // ...switching to Edit limits shows the SAME category already open, not reset closed.
+    fireEvent.click(getByRole('button', { name: 'Edit limits' }));
+    expect(getByRole('button', { name: 'Housing' }).getAttribute('aria-expanded')).toBe('true');
   });
+});
 
-  it('"Raise <parent> to $X" submits the parent\'s limit through the existing auto-save path', async () => {
-    const { setLimitAction } = await import('@/app/(app)/budgets/actions');
-    vi.mocked(setLimitAction).mockClear();
+describe('v1.18.0 Lane 2 item 4: the parent-limit warning (ruling U6)', () => {
+  it('appears with the right amounts when children add up to more than the parent', () => {
     const row = housingGroupRow({ childRent: { baseLimitCents: 150000, limitCents: 150000 }, childUtilities: { baseLimitCents: 90000, limitCents: 90000 } });
-    render(
+    const { container, getByText } = render(
       <BudgetsClient
         month="2026-03"
         currentUserId={1}
@@ -900,6 +940,40 @@ describe('v1.18.0 Lane 2 item 4: the parent-limit warning (ruling U6)', () => {
         personal={[]}
       />,
     );
+    openEditLimits(container);
+    // 150000 + 90000 = 240000 ($2,400.00), 40000 ($400.00) over the parent's 200000 ($2,000.00).
+    expect(getByText("Children add up to $2,400.00 — $400.00 over Housing's limit.")).toBeTruthy();
+  });
+
+  it('shows nothing at all when the children sum under the parent -- a deliberate, ordinary state', () => {
+    const { container, queryByText, queryByRole } = render(
+      <BudgetsClient
+        month="2026-03"
+        currentUserId={1}
+        household={[housingGroupRow()]}
+        householdTotals={{ budgetedLimitCents: 200000, budgetedSpentCents: 150000, totalSpentCents: 150000 }}
+        personal={[]}
+      />,
+    );
+    openEditLimits(container);
+    expect(queryByText(/Children add up to/)).toBeNull();
+    expect(queryByRole('button', { name: /^Raise/ })).toBeNull();
+  });
+
+  it('"Raise <parent> to $X" submits the parent\'s limit through the existing auto-save path', async () => {
+    const { setLimitAction } = await import('@/app/(app)/budgets/actions');
+    vi.mocked(setLimitAction).mockClear();
+    const row = housingGroupRow({ childRent: { baseLimitCents: 150000, limitCents: 150000 }, childUtilities: { baseLimitCents: 90000, limitCents: 90000 } });
+    const { container } = render(
+      <BudgetsClient
+        month="2026-03"
+        currentUserId={1}
+        household={[row]}
+        householdTotals={{ budgetedLimitCents: 200000, budgetedSpentCents: 150000, totalSpentCents: 150000 }}
+        personal={[]}
+      />,
+    );
+    openEditLimits(container);
     fireEvent.click(screen.getByRole('button', { name: 'Raise Housing to $2,400.00' }));
     await waitFor(() => expect(setLimitAction).toHaveBeenCalled());
     const [, formData] = vi.mocked(setLimitAction).mock.calls.at(-1)!;
@@ -912,7 +986,7 @@ describe('v1.18.0 Lane 2 item 4: the parent-limit warning (ruling U6)', () => {
     const { setLimitAction } = await import('@/app/(app)/budgets/actions');
     vi.mocked(setLimitAction).mockClear();
     const row = housingGroupRow({ childRent: { baseLimitCents: 150000, limitCents: 150000 }, childUtilities: { baseLimitCents: 90000, limitCents: 90000 } });
-    render(
+    const { container } = render(
       <BudgetsClient
         month="2026-03"
         currentUserId={1}
@@ -921,6 +995,7 @@ describe('v1.18.0 Lane 2 item 4: the parent-limit warning (ruling U6)', () => {
         personal={[]}
       />,
     );
+    openEditLimits(container);
     // Ruling U6: no edit has happened yet this session, so there is nothing to restore.
     expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull();
 
