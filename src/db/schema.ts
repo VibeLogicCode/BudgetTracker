@@ -380,6 +380,32 @@ export const budgetRollover = sqliteTable('budget_rollover', {
 });
 // budget_rollover_uq is an expression index; see drizzle/0009_finish_line.sql
 
+/**
+ * One household savings target per month (spec
+ * docs/superpowers/plans/2026-08-30-savings-targets.md, rulings T2/T3/T4, v1.17.0). Mirrors
+ * drizzle/0015_savings_targets.sql. `month` is the PRIMARY KEY -- ruling T3 (household scope
+ * only, no per-person target in this release) and ruling T4 (one row per month, seeded by
+ * copy-forward, the same idiom budgets/budgetRollover already use) together mean there is
+ * exactly one row per month, never a second dimension to key on.
+ *
+ * `mode` decides what `value` means -- 'percent' (a whole percent of that month's income) or
+ * 'amount' (a fixed number of cents) -- and the two are mutually exclusive by construction:
+ * there is deliberately only one value column, so a stored row can never disagree with itself
+ * about which one is live (ruling T2's "no whichever-is-greater" rule). See
+ * src/lib/savings-target.ts for the resolution math.
+ *
+ * NOT represented here; SQL only:
+ *   - CHECK (mode IN ('percent', 'amount'))
+ *   - CHECK ((mode = 'percent' AND value BETWEEN 1 AND 100) OR (mode = 'amount' AND value >= 0))
+ */
+export const savingsTargets = sqliteTable('savings_targets', {
+  month: text('month').primaryKey(),
+  mode: text('mode', { enum: ['percent', 'amount'] }).notNull(),
+  value: integer('value').notNull(),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
 export const goals = sqliteTable('goals', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   name: text('name').notNull(),
