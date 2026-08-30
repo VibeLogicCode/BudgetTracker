@@ -245,9 +245,25 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.16.0 release', () => {
+  it('MUST-7.1: the 1.17.0 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.16.0');
+    expect(pkg.version).toBe('1.17.0');
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toMatch(/^## \[1\.17\.0\] - 2026-08-30$/m);
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.17.0]'));
+    expect(changelog.indexOf('## [1.17.0]')).toBeLessThan(changelog.indexOf('## [1.16.0]'));
+    const entry = changelog.slice(changelog.indexOf('## [1.17.0]'), changelog.indexOf('## [1.16.0]'));
+    // The FIRST release since 1.14.0 that carries a migration. The previous three all said "No
+    // migration", so a reader who has learned to skim that line has to be stopped by this one.
+    expect(entry).toMatch(/migration \(0015\)/i);
+    expect(entry).toMatch(/additive/i);
+    expect(entry).toMatch(/savings target/i);
+    expect(entry).toMatch(/transfers excluded/i);
+  });
+
+  it('MUST-7.1: the 1.16.0 release is still recorded intact (append-only discipline)', () => {
+    const pkg = JSON.parse(read('package.json')) as { version: string };
+    expect(pkg.version).not.toBe('1.16.0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.16\.0\] - 2026-08-30$/m);
     expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.16.0]'));

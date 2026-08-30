@@ -21,6 +21,54 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.17.0] - 2026-08-30
+
+**This release has a migration (0015).** It is additive — one new table, `savings_targets` — and
+nothing existing is reshaped or rewritten. Back up first anyway if that is your habit; the update
+scripts do it for you.
+
+### Added
+
+- **A monthly savings target.** Set it on Budgets, beside the month: either a **percent of what you
+  earn** — which self-adjusts, so a thin month does not read as a failure — or a **fixed amount**.
+  "Copy previous month" carries it forward with the budgets. Saving is measured as **income minus
+  spending, with transfers excluded**, which is what the reports have always computed.
+  Moving money into a savings account does not raise the figure and is not meant to: income minus
+  spending already counts every dollar you did not spend, including the ones still sitting in
+  chequing. A transfer relocates money; it does not create any. The dashboard tile still shows how
+  much of the month you moved into savings, as information, because that is the question everyone
+  asks first.
+  If your savings account is one the app imports, this all works whether or not you flag the
+  transfer — the two sides cancel. Flag it (row menu → *Mark as transfer*, once per description,
+  and it learns the rule) when the money leaves for a bank the app does not know about, or the
+  transfer reads as spending.
+- **Three alerts for it**, in Settings → Notifications like every other: **you hit this month's
+  target**, **on pace to miss it** (pro-rated, and never before the 7th — a three-day sample says
+  nothing about a month), and **last month against target**, which carries the streak. A month with
+  no target set sends nothing at all.
+- **A savings line on Reports.** The cash-flow card keeps its income and spend bars and gains a net
+  line, a running total of what you have kept across the range, and your target drawn across it as
+  a dashed line. A month with no target simply has no segment. The summary adds "target met in 4 of
+  6 months".
+- **A cash runway tile** on the dashboard: liquid balances divided by your recent average monthly
+  spend — "4.2 months covered" — with a caveat shown when an account has no balance on file.
+- **Save an import mapping without importing first.** When a preview comes back wrong you can
+  correct the mapping and now press **Save as a new profile** (on a built-in) or **Update
+  <profile>** (on one of your own). The corrected profile is remembered for that account. This
+  already happened silently on a successful import, which was no help at all for the case that
+  matters — a file that reports nothing but errors can never be committed, so the one mapping you
+  most need to keep was the one being thrown away. A built-in profile is never overwritten; saving
+  one forks it.
+
+### Changed
+
+- **The dashboard follows a month.** Previous / next, or jump to any month or year. Budgets, the
+  spent/earned/net tiles, top merchants and the savings tile all move with it; the twelve-month
+  chart, net worth, goals, loans and the rest stay pinned to today and now say so. Safe to spend is
+  hidden for a past month, where the question has no meaning.
+- **Budgets and the dashboard share one month control**, instead of Budgets having a pair of bare
+  links and the dashboard having nothing.
+
 ## [1.16.0] - 2026-08-30
 
 No migration. Nothing in the database changes shape — the new Linked transactions card reads two
