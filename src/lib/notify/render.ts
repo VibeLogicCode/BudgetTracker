@@ -203,6 +203,31 @@ export type RenderInput =
       budgetedLimitCents: number;
       budgetedSpentCents: number;
       topMerchants: readonly DigestLine[];
+    }
+  // Lane 2 (spec docs/superpowers/plans/2026-08-30-savings-targets.md). Ruling T3: household
+  // scope only, so none of the three savings events below carries a `scope` field the way the
+  // budget events do -- there is exactly one figure per month, not a household/personal pair.
+  | { event: 'savings_target_met'; month: string; netCents: number; targetCents: number }
+  | {
+      event: 'savings_target_pace';
+      month: string;
+      dayOfMonth: number;
+      netCents: number;
+      targetCents: number;
+      /** targetCents pro-rated to dayOfMonth (ruling T5) -- computed by the evaluator, never
+       *  recomputed here (MUST-2.1: this renderer is pure and does no arithmetic of its own). */
+      proRatedTargetCents: number;
+    }
+  | {
+      event: 'savings_month_closed';
+      month: string;
+      netCents: number;
+      targetCents: number;
+      met: boolean;
+      /** From savingsStreak (src/lib/savings-target.ts), already inclusive of this closed month.
+       *  Never restated here: this renderer only picks the wording, per ruling T1's "one
+       *  definition of saved/met" and the same rule extended to "one definition of streak". */
+      streak: number;
     };
 
 function money(cents: number): string {
@@ -211,6 +236,27 @@ function money(cents: number): string {
 
 function scopeWord(scope: 'household' | 'personal'): string {
   return scope === 'household' ? 'Household' : 'Your';
+}
+
+/**
+ * "third month running" is the sentence savings_month_closed exists to send (Lane 2 plan), so
+ * the streak needs a word shape, not a bare integer sitting next to "month running". Handles
+ * the 11th/12th/13th exception explicitly -- savingsStreak's own `max` (default 24) never
+ * reaches a SECOND such exception (111th etc.), so this need not handle one.
+ */
+function ordinal(n: number): string {
+  const mod100 = n % 100;
+  if (mod100 >= 11 && mod100 <= 13) return `${n}th`;
+  switch (n % 10) {
+    case 1:
+      return `${n}st`;
+    case 2:
+      return `${n}nd`;
+    case 3:
+      return `${n}rd`;
+    default:
+      return `${n}th`;
+  }
 }
 
 function inDays(todayIso: string, targetIso: string): string {
@@ -593,5 +639,38 @@ export function renderEvent(input: RenderInput): { subject: string; body: string
       };
     case 'monthly_digest':
       return { subject: `Monthly summary for ${monthLabel(input.month)}`, body: renderMonthlyDigest(input) };
+    case 'savings_target_met': {
+      const label = monthLabel(input.month);
+      return {
+        subject: `Savings target met: ${label}`,
+        body: `${label}: you saved ${money(input.netCents)}, past the ${money(input.targetCents)} target.`,
+      };
+    }
+    case 'savings_target_pace': {
+      const label = monthLabel(input.month);
+      return {
+        subject: `On pace to miss savings: ${label}`,
+        body:
+          `${label}'s savings target is ${money(input.targetCents)}. ` +
+          `${input.dayOfMonth} days in, you have saved ${money(input.netCents)}, short of the ` +
+          `${money(input.proRatedTargetCents)} that pace needs by now.`,
+      };
+    }
+    case 'savings_month_closed': {
+      const label = monthLabel(input.month);
+      if (!input.met) {
+        return {
+          subject: `Savings target missed: ${label}`,
+          body: `${label}: you saved ${money(input.netCents)}, short of the ${money(input.targetCents)} target.`,
+        };
+      }
+      // Ruling from the Lane 2 plan: "one month alone is noise", so the streak clause only
+      // appears once there is an actual streak (2 or more) to report.
+      const streakClause = input.streak >= 2 ? ` This is the ${ordinal(input.streak)} month running.` : '';
+      return {
+        subject: `Savings target met: ${label}`,
+        body: `${label}: you saved ${money(input.netCents)}, past the ${money(input.targetCents)} target.${streakClause}`,
+      };
+    }
   }
 }

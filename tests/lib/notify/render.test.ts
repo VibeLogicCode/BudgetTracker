@@ -477,6 +477,16 @@ const SAMPLES_BY_EVENT: Record<string, RenderInput[]> = {
       topMerchants: [],
     },
   ],
+  // Lane 2, v1.17.0 (savings targets): the three savings_* events.
+  savings_target_met: [{ event: 'savings_target_met', month: '2026-08', netCents: 150000, targetCents: 100000 }],
+  savings_target_pace: [
+    { event: 'savings_target_pace', month: '2026-08', dayOfMonth: 10, netCents: 40000, targetCents: 310000, proRatedTargetCents: 100000 },
+  ],
+  savings_month_closed: [
+    { event: 'savings_month_closed', month: '2026-07', netCents: 150000, targetCents: 100000, met: true, streak: 1 },
+    { event: 'savings_month_closed', month: '2026-07', netCents: 150000, targetCents: 100000, met: true, streak: 3 },
+    { event: 'savings_month_closed', month: '2026-07', netCents: 50000, targetCents: 100000, met: false, streak: 0 },
+  ],
 };
 
 describe('MUST-10.4: no notification body contains a link', () => {

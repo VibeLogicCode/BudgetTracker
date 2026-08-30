@@ -197,6 +197,34 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     trigger: 'daily_slot',
     defaultEnabled: false,
   },
+  {
+    // Lane 2, spec docs/superpowers/plans/2026-08-30-savings-targets.md. Ruling T3: household
+    // scope only, so this fires against ONE pooled figure -- never a per-person one.
+    id: 'savings_target_met',
+    label: "You hit this month's savings target",
+    blurb: "This month's net income has reached the savings target you set.",
+    audience: 'all',
+    trigger: 'tick',
+    defaultEnabled: true,
+  },
+  {
+    // Ruling T5: pro-rated against the day of the month, not a projection to month end --
+    // see evaluate/savings.ts's fireSavingsPace for why that distinction matters here.
+    id: 'savings_target_pace',
+    label: 'On pace to miss the savings target',
+    blurb: "Net so far this month is behind the pace this month's savings target needs.",
+    audience: 'all',
+    trigger: 'daily_slot',
+    defaultEnabled: true,
+  },
+  {
+    id: 'savings_month_closed',
+    label: "Last month's savings, against target",
+    blurb: "How last month's net compared with the savings target you set for it.",
+    audience: 'all',
+    trigger: 'daily_slot',
+    defaultEnabled: true,
+  },
 ];
 
 export function eventDef(id: string): NotificationEventDef | undefined {
@@ -384,4 +412,30 @@ export function syncFailedKey(dateIso: string): string {
  */
 export function monthlyDigestKey(month: string): string {
   return `monthly-digest:${month}`;
+}
+
+/**
+ * Lane 2, spec docs/superpowers/plans/2026-08-30-savings-targets.md. Household-scoped only
+ * (ruling T3), so unlike budgetPaceKey/budgetThresholdKey there is no category id and no
+ * scopeLetter to carry -- one household has exactly one savings target per month, ever.
+ *
+ * Once per month, EVER. Pruning safety mirrors predictedVsActualKey/monthlyDigestKey: the
+ * evaluator only ever visits the current (or, for the closed-month key below, the just-ended)
+ * month, so a row the 400-day retention sweep prunes belongs to a month that will never be
+ * evaluated again.
+ */
+export function savingsTargetMetKey(month: string): string {
+  return `savings-met:${month}`;
+}
+
+/** Once per month, ever -- the first daily slot at or after day 7 that qualifies, same pruning
+ *  argument as savingsTargetMetKey above. */
+export function savingsTargetPaceKey(month: string): string {
+  return `savings-pace:${month}`;
+}
+
+/** Once per reported (closed) month, ever. Distinct prefix from monthlyDigestKey's
+ *  `monthly-digest:` and weeklyDigestKey's `digest:` so none of the three can ever collide. */
+export function savingsMonthClosedKey(month: string): string {
+  return `savings-closed:${month}`;
 }

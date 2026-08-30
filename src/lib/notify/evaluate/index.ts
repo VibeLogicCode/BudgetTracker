@@ -9,6 +9,7 @@ import { evaluateComingDue } from '@/lib/notify/evaluate/coming-due';
 import { evaluateWeeklyDigest } from '@/lib/notify/evaluate/digest';
 import { evaluateMonthBoundary } from '@/lib/notify/evaluate/monthly';
 import { evaluateBudgetPace } from '@/lib/notify/evaluate/pace';
+import { evaluateSavingsDaily, evaluateSavingsTargetMet } from '@/lib/notify/evaluate/savings';
 import { evaluateStaleImport } from '@/lib/notify/evaluate/stale';
 import { dailySlot, weeklySlot } from '@/lib/notify/evaluate/slots';
 import { weeklyDigestKey } from '@/lib/notify/events';
@@ -105,6 +106,11 @@ export function runScheduledEvaluation(now: Date = new Date()): void {
           evaluateBudgetPace({ userId: user.id, now, tz });
           evaluateSubscriptionCreep({ userId: user.id, now, tz });
           evaluateMonthBoundary({ userId: user.id, now, tz });
+          // Lane 2 (savings targets): savings_target_pace and savings_month_closed are both
+          // daily_slot events, so they share this same once-per-day-per-user cache rather than
+          // recomputing savingsProgress/savingsStreak on every five-minute tick inside the
+          // 12-hour catch-up window.
+          evaluateSavingsDaily({ userId: user.id, now, tz });
           lastDailyEvaluatedSlot.set(user.id, daily.slotDate);
         }
       } else {
@@ -138,5 +144,14 @@ export function runScheduledEvaluation(now: Date = new Date()): void {
     evaluateAnomalies({ now, tz });
   } catch (error) {
     console.error('[notify] anomaly evaluation failed', error);
+  }
+
+  try {
+    // Lane 2: savings_target_met is a tick event, household-wide (ruling T3), so it runs once
+    // per tick here rather than once per user inside the loop above -- the same shape
+    // evaluateBudgets/evaluateAnomalies already use for their own tick-triggered events.
+    evaluateSavingsTargetMet({ now, tz });
+  } catch (error) {
+    console.error('[notify] savings target evaluation failed', error);
   }
 }

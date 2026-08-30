@@ -39,12 +39,12 @@ describe('MUST-2.1: events.ts is pure and client-safe', () => {
   });
 });
 
-describe('the nineteen registered events', () => {
-  it('has exactly nineteen entries with unique, well-formed ids', () => {
-    // v1.12.1 (item AA / SEC-4): password_changed and mfa_disabled brought this from 17 to 19.
-    expect(NOTIFICATION_EVENTS).toHaveLength(19);
+describe('the twenty-two registered events', () => {
+  it('has exactly twenty-two entries with unique, well-formed ids', () => {
+    // v1.17.0 (Lane 2, savings targets): the three savings_* events brought this from 19 to 22.
+    expect(NOTIFICATION_EVENTS).toHaveLength(22);
     const ids = NOTIFICATION_EVENTS.map((e) => e.id);
-    expect(new Set(ids).size).toBe(19);
+    expect(new Set(ids).size).toBe(22);
     for (const id of ids) expect(id).toMatch(/^[a-z][a-z0-9_]*$/);
   });
 
@@ -71,6 +71,9 @@ describe('the nineteen registered events', () => {
       ['suggested_budget_refresh', 'all', 'daily_slot', false],
       ['sync_failed', 'admin', 'immediate', true],
       ['monthly_digest', 'all', 'daily_slot', false],
+      ['savings_target_met', 'all', 'tick', true],
+      ['savings_target_pace', 'all', 'daily_slot', true],
+      ['savings_month_closed', 'all', 'daily_slot', true],
     ]);
   });
 
@@ -86,6 +89,9 @@ describe('the nineteen registered events', () => {
       'new_signin',
       'password_changed',
       'restore_outcome',
+      'savings_month_closed',
+      'savings_target_met',
+      'savings_target_pace',
       'subscription_creep',
       'sync_failed',
       'unusual_transaction',
@@ -113,9 +119,10 @@ describe('lookup helpers', () => {
     expect(eventsFor('member').map((e) => e.id)).not.toContain('backup_failed');
     expect(eventsFor('member').map((e) => e.id)).not.toContain('restore_outcome');
     // v1.12.1 (item AA / SEC-4): password_changed and mfa_disabled are both audience 'all',
-    // so they widen both counts by two.
-    expect(eventsFor('member')).toHaveLength(15);
-    expect(eventsFor('admin')).toHaveLength(19);
+    // so they widen both counts by two. v1.17.0's three savings_* events (also all audience
+    // 'all') widen both counts by three more.
+    expect(eventsFor('member')).toHaveLength(18);
+    expect(eventsFor('admin')).toHaveLength(22);
   });
 
   it('exposes the two channels', () => {
@@ -247,10 +254,11 @@ describe('spec section 9: the six predictive dedup keys', () => {
 describe('Task 16 (v1.7.0): the monthly_digest registry entry', () => {
   it('brings the registry to seventeen and is all-audience, default-off, daily_slot-triggered', () => {
     // v1.12.1 (item AA / SEC-4): password_changed and mfa_disabled, added after this one,
-    // brought the live total further to 19 -- this assertion tracks the current total, not
-    // monthly_digest's own historical contribution (see the >= pattern used above for
-    // update_available/sync_failed, which exists for exactly this reason).
-    expect(NOTIFICATION_EVENTS).toHaveLength(19);
+    // brought the live total further to 19; v1.17.0's three savings_* events bring it to 22 --
+    // this assertion tracks the current total, not monthly_digest's own historical contribution
+    // (see the >= pattern used above for update_available/sync_failed, which exists for exactly
+    // this reason).
+    expect(NOTIFICATION_EVENTS).toHaveLength(22);
     const entry = eventDef('monthly_digest');
     expect(entry).toEqual({
       id: 'monthly_digest',
