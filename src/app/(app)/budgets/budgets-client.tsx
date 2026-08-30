@@ -93,7 +93,7 @@ function Row({
 
   return (
     <>
-      <tr>
+      <tr className={depth === 0 ? 'bg-surface-2' : undefined}>
         <td style={{ paddingLeft: `${16 + depth * 20}px` }} className={depth === 0 ? 'font-medium text-ink' : 'text-muted'}>
           {row.categoryName}
           {row.isArchived ? <span className="ml-1.5 text-xs text-subtle">(archived)</span> : null}

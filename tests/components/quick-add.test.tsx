@@ -80,6 +80,22 @@ describe('QuickAddTransaction (ruling R7)', () => {
     expect(values).toEqual(['cash', '1', '2']);
   });
 
+  it('groups a child category under its parent in an <optgroup> (backlog BZ)', () => {
+    render(
+      <QuickAddTransaction
+        {...props}
+        categories={[
+          { id: 1, name: 'Fees', parentId: null, sortOrder: 0, isArchived: false },
+          { id: 2, name: 'Bank Fees', parentId: 1, sortOrder: 1, isArchived: false },
+        ]}
+      />,
+    );
+    const select = screen.getByLabelText('Category') as HTMLSelectElement;
+    const optgroup = select.querySelector('optgroup');
+    expect(optgroup?.label).toBe('Fees');
+    expect(Array.from(optgroup?.querySelectorAll('option') ?? []).map((o) => o.value)).toEqual(['1', '2']);
+  });
+
   it('renders no Person field when there is nobody to attribute to (item BO)', () => {
     render(<QuickAddTransaction {...props} people={[]} />);
     // With people: [] the select degenerated to a lone "Account default" option -- a control

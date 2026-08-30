@@ -254,6 +254,21 @@ describe('ManagersClient — the categories table groups children under their pa
     const names = Array.from(table?.querySelectorAll('tbody input[name="name"]') ?? []).map((el) => (el as HTMLInputElement).defaultValue);
     expect(names).toEqual(['Kids', 'Education', 'Activities', 'Fees', 'Bank Fees', 'Interest']);
   });
+
+  it('tints a parent row but not its child (backlog BZ)', () => {
+    const { container } = renderManagers({
+      categories: [
+        category({ id: 1, name: 'Fees', sortOrder: 0 }),
+        category({ id: 2, name: 'Bank Fees', parentId: 1, sortOrder: 1 }),
+      ],
+    });
+    const rows = Array.from(container.querySelectorAll('table tbody tr'));
+    const nameOf = (tr: Element) => (tr.querySelector('input[name="name"]') as HTMLInputElement | null)?.defaultValue;
+    const parentRow = rows.find((tr) => nameOf(tr) === 'Fees');
+    const childRow = rows.find((tr) => nameOf(tr) === 'Bank Fees');
+    expect(parentRow?.className).toContain('bg-surface-2');
+    expect(childRow?.className ?? '').not.toContain('bg-surface-2');
+  });
 });
 
 describe('ManagersClient — the merchant rules table declares its own widths (item I)', () => {

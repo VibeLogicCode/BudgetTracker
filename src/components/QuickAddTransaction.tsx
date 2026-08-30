@@ -12,7 +12,7 @@ import { FormError } from '@/components/FormError';
 import { SubmitButton } from '@/components/SubmitButton';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { Field, inputClass, selectClass } from '@/components/ui/form';
-import { categoryOptions, type CategoryLike } from '@/lib/category-order';
+import { categoryOptionGroups, type CategoryLike } from '@/lib/category-order';
 
 const initial: { error?: string; message?: string } = {};
 
@@ -47,7 +47,7 @@ export function QuickAddTransaction({
 }) {
   const [state, action] = useActionState(manualEntryAction, initial);
   const [direction, setDirection] = useState<'spend' | 'income'>('spend');
-  const grouped = categoryOptions(categories);
+  const groups = categoryOptionGroups(categories);
   const accountValue = defaultAccountId === null ? 'cash' : String(defaultAccountId);
 
   const form = (
@@ -82,11 +82,21 @@ export function QuickAddTransaction({
       <Field label="Category" className="sm:col-span-1">
         <select name="categoryId" className={selectClass}>
           <option value="">Leave to the categorizer</option>
-          {grouped.map((option) => (
-            <option key={option.id} value={option.id}>
-              {'  '.repeat(option.depth) + option.label}
-            </option>
-          ))}
+          {groups.map((group) =>
+            group.label === null ? (
+              <option key={group.options[0].id} value={group.options[0].id}>
+                {group.options[0].label}
+              </option>
+            ) : (
+              <optgroup key={group.label} label={group.label}>
+                {group.options.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </optgroup>
+            ),
+          )}
         </select>
       </Field>
       {people.length > 0 ? (

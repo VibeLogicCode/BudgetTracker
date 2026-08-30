@@ -10,7 +10,7 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { TableWrap } from '@/components/ui/Table';
 import { Field, inputClass, selectClass } from '@/components/ui/form';
 import { AutoSaveCheckbox, AutoSaveTextInput } from '@/components/ui/AutoSave';
-import { orderedCategoryRows } from '@/lib/category-order';
+import { categoryOptionGroups, orderedCategoryRows } from '@/lib/category-order';
 import type { CategoryRecord } from '@/lib/categories';
 import type { MerchantRuleRecord } from '@/lib/categorize/rules';
 import type { ProfileRecord, ProfileUsage } from '@/lib/import/presets';
@@ -165,7 +165,7 @@ export function ManagersClient({
           </thead>
           <tbody>
             {orderedCategoryRows(categories).map(({ row: category, depth }) => (
-              <tr key={category.id}>
+              <tr key={category.id} className={depth === 0 ? 'bg-surface-2' : undefined}>
                 <td style={{ paddingLeft: depth === 1 ? 36 : 16 }}>
                   <AutoSaveTextInput
                     name="name"
@@ -241,9 +241,21 @@ export function ManagersClient({
             <Field label="Category">
               <select name="categoryId" className={selectClass}>
                 <option value="">(none — transfer, not_transfer and rename rules)</option>
-                {categories.filter((c) => !c.isArchived).map((c) => (
-                  <option key={c.id} value={c.id}>{label(c.id)}</option>
-                ))}
+                {categoryOptionGroups(categories).map((group) =>
+                  group.label === null ? (
+                    <option key={group.options[0].id} value={group.options[0].id}>
+                      {group.options[0].label}
+                    </option>
+                  ) : (
+                    <optgroup key={group.label} label={group.label}>
+                      {group.options.map((option) => (
+                        <option key={option.id} value={option.id}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ),
+                )}
               </select>
             </Field>
             <Field label="Renames to">
