@@ -63,7 +63,11 @@ describe('drizzle/0014_loan_direction.sql', () => {
     const journal = JSON.parse(
       require('node:fs').readFileSync('drizzle/meta/_journal.json', 'utf8'),
     ) as { entries: { idx: number; tag: string }[] };
-    const last = journal.entries[journal.entries.length - 1];
-    expect(last).toMatchObject({ idx: 14, tag: '0014_loan_direction' });
+    // Pinned by tag rather than by position: this guard exists to prove 0014 registered itself,
+    // and every later migration appends after it, so asserting it is LAST made a passing guard
+    // into a chore that every future release has to edit. Ruling: a migration guard asserts its
+    // own entry, never the shape of the list around it.
+    const entry = journal.entries.find((row) => row.tag === '0014_loan_direction');
+    expect(entry).toMatchObject({ idx: 14, tag: '0014_loan_direction' });
   });
 });

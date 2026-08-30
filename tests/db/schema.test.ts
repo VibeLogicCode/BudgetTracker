@@ -22,7 +22,7 @@ const EXPECTED_TABLES = [
   'bayes_tokens', 'bill_installments', 'budget_rollover', 'budgets', 'categories', 'goal_contributions', 'goals',
   'import_profiles', 'imports', 'loan_matcher_rules', 'loan_payments', 'login_attempts',
   'merchant_rules', 'notification_outbox', 'notification_prefs', 'notification_smtp',
-  'notification_targets', 'notification_user_settings', 'sessions', 'settings',
+  'notification_targets', 'notification_user_settings', 'savings_targets', 'sessions', 'settings',
   'simplefin_account_links', 'simplefin_connections', 'totp_recovery_codes',
   'transaction_imports', 'transaction_splits', 'transactions', 'users', 'warranty_item_types',
   'warranty_items', 'warranty_receipts', 'warranty_search',
