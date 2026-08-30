@@ -21,6 +21,40 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.15.0] - 2026-08-29
+
+No migration. Nothing in the database changes shape, and nothing about a laptop's layout changes
+either — this release is about what the app looks like in a hand.
+
+### Changed
+
+- **Every table reads as a list of cards on a phone.** Below 640px a row stops being a row: the
+  header strip disappears, each row becomes a card, and each value prints its own column name
+  beside it. Transactions, Budgets, Warranties, Reports, the Settings managers, the dashboard and
+  the import history all move at once. On a phone the transactions list used to show a checkbox, a
+  date, an account name repeated on every line, and a description cut mid-word — with the amount
+  and the category off-screen behind a sideways scroll. The amount now sits beside the merchant on
+  the first line of the card, where it is the first thing you see.
+  Two deliberate exceptions: the import wizard's column preview and the parsed-rows preview stay
+  tables, because they exist to compare columns side by side and a stack destroys that.
+- **Quick add folds away on Transactions.** It was roughly 600px of form standing between the top
+  of the page and the first transaction. It is now a button that opens the form, closed by default,
+  and it is not shown at all while the review filter is on — a triage queue has no business
+  offering a create form. The home-screen "Add a transaction" shortcut still opens it directly.
+  The dashboard's Quick add card is unchanged.
+- **The filter block folds away on a phone** the same way, behind a `Filters` button that says how
+  many are active, and opens itself when you arrive with a filter already set. At tablet width and
+  up it is always visible, exactly as before.
+- **The review queue keeps its cards at every width**, but they no longer stretch to the full width
+  of a monitor with the amount marooned at the far right — the list is capped to a reading measure.
+  A long merchant name can no longer push the amount onto a line of its own.
+
+### Removed
+
+- **The "uncategorized" badge on review cards.** Every card in a queue defined as "not categorized
+  yet" carried it, so it said nothing about the card it was on. The guessed-category badge, which
+  differs row to row, stays.
+
 ## [1.14.2] - 2026-08-29
 
 No migration. Nothing in the database changes shape.

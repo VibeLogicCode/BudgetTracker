@@ -1657,7 +1657,7 @@ transaction only" / "Every <merchant> — N transactions, plus future imports") 
 duplicated row titles collapse; child categories keep their indent in every dropdown. No backlog
 letter existed for this before it shipped; recorded here as a shipped note.
 
-## BW. Every table should fall back to a card layout on a phone (2026-08-29, not started)
+## BW. Every table should fall back to a card layout on a phone (2026-08-29) — SHIPPED in v1.15.0
 
 **Found while folding the review queue into Transactions (v1.14.1).** The review queue's card list
 is the layout the owner finds usable on a phone; the Transactions table is a fixed 8-column table
@@ -1677,6 +1677,16 @@ Do Transactions first (it is the page the household lives in), then Warranties, 
 
 **Effort:** about 3-4 h for Transactions alone including the guard and test updates; roughly the
 same again for the remaining tables. No migration. No personal data.
+
+**What shipped instead, and why it was cheaper than this estimate.** The estimate assumed a
+responsive row COMPONENT -- markup that switches at `sm`. v1.15.0 got the same result with no new
+component and no switched markup: the table stays exactly as it is, and a media query on
+`.data-table--stack` (globals.css) turns each `<tr>` into a card whose cells reprint their column
+name from a `data-label` attribute. One DOM tree, so the 25 label-and-role test files never saw a
+duplicate, and every desktop layout is byte-identical to v1.14.2. The per-table work was reduced to
+adding `responsive` to the `TableWrap` and a `data-label` to each `<td>`, which is why 20 tables
+landed in one session rather than two. See `docs/superpowers/plans/2026-08-29-responsive-rows.md`,
+rulings S1-S7.
 
 ## BX. "Apply to all N + create rule" is unreachable outside the review filter (2026-08-29) — SHIPPED in v1.14.2
 

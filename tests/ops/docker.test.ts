@@ -245,9 +245,25 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.14.2 release', () => {
+  it('MUST-7.1: the 1.15.0 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.14.2');
+    expect(pkg.version).toBe('1.15.0');
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toMatch(/^## \[1\.15\.0\] - 2026-08-29$/m);
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.15.0]'));
+    expect(changelog.indexOf('## [1.15.0]')).toBeLessThan(changelog.indexOf('## [1.14.2]'));
+    const entry = changelog.slice(changelog.indexOf('## [1.15.0]'), changelog.indexOf('## [1.14.2]'));
+    // A reader on 1.14.2 is deciding whether to back up first. Saying there is no migration is the
+    // information, and this release genuinely touches nothing but markup and one stylesheet.
+    expect(entry).toMatch(/No migration/i);
+    expect(entry).toMatch(/cards on a phone/i);
+    expect(entry).toMatch(/Quick add/);
+    expect(entry).toMatch(/uncategorized/);
+  });
+
+  it('MUST-7.1: the 1.14.2 release is still recorded intact (append-only discipline)', () => {
+    const pkg = JSON.parse(read('package.json')) as { version: string };
+    expect(pkg.version).not.toBe('1.14.2');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.14\.2\] - 2026-08-29$/m);
     expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.14.2]'));
