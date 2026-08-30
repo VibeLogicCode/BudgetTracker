@@ -1635,10 +1635,21 @@ describe('Chip filters (ruling D6): top-level categories, wrapping, no picker du
     expect(chips.getByText('Category 10')).toBeTruthy();
   });
 
+  // Bug fix (owner report): chip hrefs are now built from the `currentQuery` prop page.tsx hands
+  // down (already parsed server-side), not from `window.location.search` -- so these three pass
+  // it directly instead of faking the browser URL with pushState, the same way the real server
+  // render never has a `window.location` to read in the first place.
   it('a chip link changes only the category param, preserving everything else already active', () => {
-    window.history.pushState({}, '', '/transactions?account=3&review=1');
     render(
-      <TransactionsClient page={pageWithRow()} accounts={[]} categories={categories} people={[]} today="2026-08-16" reviewMode />,
+      <TransactionsClient
+        page={pageWithRow()}
+        accounts={[]}
+        categories={categories}
+        people={[]}
+        today="2026-08-16"
+        reviewMode
+        currentQuery="account=3&review=1"
+      />,
     );
     const chips = within(screen.getByRole('group', { name: 'Filter by category' }));
     const link = chips.getByText('Housing').closest('a');
@@ -1646,9 +1657,15 @@ describe('Chip filters (ruling D6): top-level categories, wrapping, no picker du
   });
 
   it('"All" clears the category param but keeps everything else', () => {
-    window.history.pushState({}, '', '/transactions?account=3&category=1');
     render(
-      <TransactionsClient page={pageWithRow()} accounts={[]} categories={categories} people={[]} today="2026-08-16" />,
+      <TransactionsClient
+        page={pageWithRow()}
+        accounts={[]}
+        categories={categories}
+        people={[]}
+        today="2026-08-16"
+        currentQuery="account=3&category=1"
+      />,
     );
     const chips = within(screen.getByRole('group', { name: 'Filter by category' }));
     const link = chips.getByText('All').closest('a');
@@ -1656,9 +1673,15 @@ describe('Chip filters (ruling D6): top-level categories, wrapping, no picker du
   });
 
   it('marks the chip matching the current ?category param active, and All otherwise', () => {
-    window.history.pushState({}, '', '/transactions?category=3');
     render(
-      <TransactionsClient page={pageWithRow()} accounts={[]} categories={categories} people={[]} today="2026-08-16" />,
+      <TransactionsClient
+        page={pageWithRow()}
+        accounts={[]}
+        categories={categories}
+        people={[]}
+        today="2026-08-16"
+        currentQuery="category=3"
+      />,
     );
     const chips = within(screen.getByRole('group', { name: 'Filter by category' }));
     expect(chips.getByText('Groceries').className).toContain('bg-accent-soft');

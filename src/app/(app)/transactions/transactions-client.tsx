@@ -22,9 +22,11 @@ import { RowMenu, RowMenuButton, RowMenuForm, RowMenuLink } from '@/components/u
 // Lane 0 (ruling D2/D1): the one import site for these glyphs is src/components/ui/icons.tsx --
 // see its own docblock. ConfirmIcon/UnconfirmedIcon are the per-row confirm button's two states
 // (item 5), MoneyInIcon/MoneyOutIcon are the review card's own circled direction arrow (item 4,
-// the same pair ListRow uses so a person sees one money-direction vocabulary everywhere), and
-// SuggestIcon marks "Accept all suggestions" as the bulk sibling of the per-row Bayes guess.
-import { categoryIcon, ConfirmIcon, MoneyInIcon, MoneyOutIcon, SuggestIcon, UnconfirmedIcon } from '@/components/ui/icons';
+// the same pair ListRow uses so a person sees one money-direction vocabulary everywhere),
+// SuggestIcon marks "Accept all suggestions" as the bulk sibling of the per-row Bayes guess, and
+// FilterIcon (fix round) is the glyph on the filter disclosure button that replaced the old
+// "Filters (N)" text button -- see that button's own comment below for why.
+import { categoryIcon, ConfirmIcon, FilterIcon, MoneyInIcon, MoneyOutIcon, SuggestIcon, UnconfirmedIcon } from '@/components/ui/icons';
 import { categoryOptionGroups, categoryOptions, type CategoryLike, type CategoryOptionGroup } from '@/lib/category-order';
 import { type ResolvedRange } from '@/lib/date-range';
 import type { LoanLink } from '@/lib/loans';
@@ -135,12 +137,21 @@ const VISIBLE_CHIP_COUNT = 8;
 
 /**
  * Builds one chip's destination href by changing ONLY the `category` param on top of whatever
- * querystring is already there -- `current` is the raw `window.location.search` this component
- * captured on mount (see the effect below), so every other active filter (account, person, date
- * range, search, uncategorized-only, hide-transfers, and `review=1` itself) survives the click
- * untouched, exactly the way clicking the existing "Needs review" chip already only ever adds or
- * removes its own `review` param. `page` is dropped too: changing what is being filtered belongs
- * back on page 1, not wherever pagination happened to be.
+ * querystring is already there -- `current` is `currentQuery`, the querystring page.tsx already
+ * parsed from the request and handed down as a prop (see that prop's own comment), so every other
+ * active filter (account, person, date range, search, uncategorized-only, hide-transfers, and
+ * `review=1` itself) survives the click untouched, exactly the way clicking the existing "Needs
+ * review" chip already only ever adds or removes its own `review` param. `page` is dropped too:
+ * changing what is being filtered belongs back on page 1, not wherever pagination happened to be.
+ *
+ * Bug fix (owner report): this used to read `window.location.search`, captured into a
+ * `useState('')` an effect filled in on mount. Server-side (and for one render on the client,
+ * before that effect ever runs) that state is empty, so the FIRST paint of every chip pointed at
+ * a bare `/transactions?category=N` -- account, person, dates, search, uncategorized-only,
+ * hide-transfers and `review=1` all stripped. Clicking a chip from the review queue before
+ * hydration landed on plain Transactions with no filters, which is exactly what was reported.
+ * Sourcing the href from what the SERVER already knows means the first server-rendered HTML is
+ * correct, with no hydration effect required to fix it up after the fact.
  */
 function categoryChipHref(current: string, categoryId: string | null): string {
   const params = new URLSearchParams(current);
@@ -166,6 +177,7 @@ export function TransactionsClient({
   reviewMode = false,
   reviewCount = 0,
   matchingCounts = {},
+  currentQuery = '',
 }: {
   page: TransactionPage;
   accounts: Option[];
@@ -200,6 +212,18 @@ export function TransactionsClient({
    *  merchant (Lane 1's countMatchingMerchant). Empty outside review mode -- the "Apply a
    *  category to all N matching…" kebab item never appears for a table row. */
   matchingCounts?: Record<number, number>;
+  /**
+   * Bug fix (owner report, category chips silently dropping every other filter): the querystring
+   * this request arrived with, already parsed by page.tsx (readFilter's own `params`) and handed
+   * down as a plain string rather than re-derived from `window.location.search` on the client.
+   * categoryChipHref (above) and `activeCategoryChip` (below) are the only two things that read
+   * this -- everything else on this page already gets its filter values as typed props (`range`,
+   * `selfScoped`, etc.), not by re-parsing a querystring a second time. Defaults to '' so a caller
+   * that hands nothing still renders (every existing test in this file that never mentions chips),
+   * at the cost of "All" being the only chip that would render correctly for it -- exactly the
+   * same fallback the deleted `currentSearch` state used to have before its effect ever ran.
+   */
+  currentQuery?: string;
 }) {
   const [selected, setSelected] = useState<number[]>([]);
   const [renaming, setRenaming] = useState<{ id: number; current: string; merchant: string } | null>(null);
@@ -265,12 +289,6 @@ export function TransactionsClient({
   // no app-router provider in place, and that hook throws outside one.
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [activeFilterCount, setActiveFilterCount] = useState(0);
-  // Chip filters (ruling D6): the raw querystring, captured the same hydration-safe way
-  // filtersOpen/activeFilterCount already are in the same effect below -- starts empty (SSR has
-  // no window.location) and is corrected once the effect runs on the client, then every chip's
-  // href and "is this one active" check is derived from it at render time (categoryChipHref
-  // above), never recomputed field-by-field the way the disclosure's own count is.
-  const [currentSearch, setCurrentSearch] = useState('');
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const count = [
@@ -286,7 +304,6 @@ export function TransactionsClient({
       setActiveFilterCount(count);
       setFiltersOpen(true);
     }
-    setCurrentSearch(window.location.search);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -374,7 +391,7 @@ export function TransactionsClient({
   const topLevelChips = categoryGroups.map((group) => group.options[0]);
   const visibleChips = chipsExpanded ? topLevelChips : topLevelChips.slice(0, VISIBLE_CHIP_COUNT);
   const hiddenChipCount = topLevelChips.length - visibleChips.length;
-  const activeCategoryChip = new URLSearchParams(currentSearch).get('category') ?? '';
+  const activeCategoryChip = new URLSearchParams(currentQuery).get('category') ?? '';
 
   const toggle = (id: number) => setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   // v1.7.0 bulk-guard fix: Categorize and Mark transfer both silently skip a split
@@ -970,67 +987,97 @@ export function TransactionsClient({
 
       <Card as="div">
         <CardBody className="pt-5">
-          {/* Chip filters (ruling D6): TOP-LEVEL categories only, always visible (not folded
-              behind the Filters(N) disclosure below the way account/person/dates/uncategorized/
-              hide-transfers stay), wrapping rather than scrolling, with a "+n" expander for the
-              rest. Plain <Link>s, not a second form field named "category" -- the existing select
-              a few lines down keeps that name, so two controls submitting under it at once (and
-              the browser sending TWO values for one querystring key) never arises. Each href is
-              built from the page's OWN current querystring (categoryChipHref above), so clicking
-              one only ever changes `category` and leaves account/person/dates/search/uncat/
-              transfers/review exactly as they were -- the same "just this one param" contract the
-              existing "Needs review" link below already keeps for `review`. */}
-              {topLevelChips.length > 0 ? (
-                <div role="group" aria-label="Filter by category" className="mb-3 flex flex-wrap items-center gap-2">
-                  <Link href={categoryChipHref(currentSearch, null)} className="inline-flex min-h-11 items-center sm:min-h-0">
-                    <Pill tone={activeCategoryChip === '' ? 'accent' : 'neutral'}>All</Pill>
-                  </Link>
-                  {visibleChips.map((chip) => (
-                    <Link
-                      key={chip.id}
-                      href={categoryChipHref(currentSearch, String(chip.id))}
-                      className="inline-flex min-h-11 items-center sm:min-h-0"
-                    >
-                      <Pill tone={activeCategoryChip === String(chip.id) ? 'accent' : 'neutral'}>{chip.label}</Pill>
-                    </Link>
-                  ))}
-                  {hiddenChipCount > 0 ? (
-                    <button
-                      type="button"
-                      onClick={() => setChipsExpanded(true)}
-                      className="inline-flex min-h-11 items-center sm:min-h-0"
-                      aria-label={`Show ${hiddenChipCount} more categories`}
-                    >
-                      <Pill tone="neutral">{`+${hiddenChipCount}`}</Pill>
-                    </button>
-                  ) : null}
-                </div>
-              ) : null}
           <form method="get" className="flex flex-col gap-3">
             {/* Ruling R1: `review=1` is a filter like any other on this form, so re-submitting
                 it (changing the account, say) must not silently drop out of the review queue --
                 carried forward as a hidden field rather than a visible control, the same way
                 every OTHER already-applied value on this GET form has no widget of its own
-                either. Left outside the disclosure below: a hidden field has no visual state to
-                fold away in the first place. */}
+                either. */}
             {reviewMode ? <input type="hidden" name="review" value="1" /> : null}
-            {/* Ruling S7: the only thing that shows below `sm` when nothing is filtered yet --
-                `sm:hidden` drops it entirely at `sm` and up, where the fields are always visible
-                instead (S7's "plain always-visible markup"). The fields stay mounted in the DOM
-                either way (`hidden` below is a CSS class, never a conditional unmount), so what
-                this form submits never depends on whether a phone has opened this. */}
-            <button
-              type="button"
-              className="btn btn--secondary btn--sm self-start min-h-11 sm:hidden sm:min-h-0"
-              aria-expanded={filtersOpen}
-              aria-controls="transactions-filter-fields"
-              onClick={() => setFiltersOpen((prev) => !prev)}
-            >
-              {activeFilterCount > 0 ? `Filters (${activeFilterCount})` : 'Filters'}
-            </button>
+            {/* Fix round (owner ask): one row, at every width, replaces the old "Filters (N)"
+                text button that only showed below `sm` plus a field block that was simply always
+                visible at `sm` and up -- two different shapes for the same fields depending on
+                viewport. Now there is one shape everywhere: the filter icon plus the merchant
+                search field, both reachable regardless of width, with the rest of the fields
+                (account, person, dates, uncategorized only, hide transfers) behind the icon. */}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                // 44px square on a touch-sized viewport (the tap-target floor this file already
+                // applies elsewhere, e.g. confirmButton above), stepping down to a mouse-sized
+                // 32px at `sm` and up -- `relative` so the count badge below can pin to a corner.
+                className="btn btn--secondary relative h-11 w-11 shrink-0 p-0 sm:h-8 sm:w-8"
+                aria-expanded={filtersOpen}
+                aria-controls="transactions-filter-fields"
+                // The accessible name carries the same "Filters" / "Filters (N)" text the old
+                // button used to show, since an icon alone has no name of its own to compute one
+                // from -- unchanged wording keeps every existing "Filters (N)" query passing.
+                aria-label={activeFilterCount > 0 ? `Filters (${activeFilterCount})` : 'Filters'}
+                onClick={() => setFiltersOpen((prev) => !prev)}
+              >
+                <FilterIcon className="h-4 w-4" aria-hidden="true" />
+                {/* The "3 filters are on" signal the old button's own visible text used to carry
+                    -- losing it when the button became icon-only would be a regression, so it
+                    stays as a small badge pinned to the icon (aria-hidden: the label above
+                    already says the same count to anyone not looking at it). */}
+                {activeFilterCount > 0 ? (
+                  <span
+                    aria-hidden="true"
+                    className="badge badge--accent absolute -right-1.5 -top-1.5 min-w-[1.125rem] justify-center"
+                  >
+                    {activeFilterCount}
+                  </span>
+                ) : null}
+              </button>
+              <Field label="Search" className="min-w-[12rem] flex-1">
+                <input name="q" placeholder="Merchant text" className={inputClass} />
+              </Field>
+            </div>
+
+            {/* Chip filters (ruling D6): TOP-LEVEL categories only, always visible (not folded
+                behind the disclosure the way account/person/dates/uncategorized/hide-transfers
+                stay), wrapping rather than scrolling, with a "+n" expander for the rest. Plain
+                <Link>s, not a second form field named "category" -- the existing select further
+                down keeps that name, so two controls submitting under it at once (and the
+                browser sending TWO values for one querystring key) never arises. Each href is
+                built from `currentQuery` (categoryChipHref above, page.tsx's own comment on that
+                prop), so clicking one only ever changes `category` and leaves account/person/
+                dates/search/uncat/transfers/review exactly as they were -- the same "just this
+                one param" contract the existing "Needs review" link below already keeps for
+                `review`. */}
+            {topLevelChips.length > 0 ? (
+              <div role="group" aria-label="Filter by category" className="flex flex-wrap items-center gap-2">
+                <Link href={categoryChipHref(currentQuery, null)} className="inline-flex min-h-11 items-center sm:min-h-0">
+                  <Pill tone={activeCategoryChip === '' ? 'accent' : 'neutral'}>All</Pill>
+                </Link>
+                {visibleChips.map((chip) => (
+                  <Link
+                    key={chip.id}
+                    href={categoryChipHref(currentQuery, String(chip.id))}
+                    className="inline-flex min-h-11 items-center sm:min-h-0"
+                  >
+                    <Pill tone={activeCategoryChip === String(chip.id) ? 'accent' : 'neutral'}>{chip.label}</Pill>
+                  </Link>
+                ))}
+                {hiddenChipCount > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => setChipsExpanded(true)}
+                    className="inline-flex min-h-11 items-center sm:min-h-0"
+                    aria-label={`Show ${hiddenChipCount} more categories`}
+                  >
+                    <Pill tone="neutral">{`+${hiddenChipCount}`}</Pill>
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+
+            {/* The fields stay mounted in the DOM whether the disclosure is open or not (`hidden`
+                below is a CSS class, never a conditional unmount), so what this form submits
+                never depends on whether the icon above has been clicked. */}
             <div
               id="transactions-filter-fields"
-              className={`${filtersOpen ? 'flex' : 'hidden'} flex-wrap items-end gap-3 sm:flex`}
+              className={`${filtersOpen ? 'flex' : 'hidden'} flex-wrap items-end gap-3`}
             >
               <Field label="Account">
                 <select name="account" className={selectClass}>
@@ -1070,9 +1117,6 @@ export function TransactionsClient({
                 to={range?.to ?? ''}
                 today={today}
               />
-              <Field label="Search" className="min-w-[12rem] flex-1">
-                <input name="q" placeholder="Merchant text" className={inputClass} />
-              </Field>
               <div className="flex flex-wrap items-center gap-4 py-2">
                 <label className="flex items-center gap-2 text-sm text-muted">
                   <input type="checkbox" name="uncat" value="1" className="accent-accent" /> Uncategorized only

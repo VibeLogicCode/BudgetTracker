@@ -106,3 +106,58 @@ describe('TransactionsPage: ?review=1 (ruling R2)', () => {
     expect(container.textContent).not.toContain('Every import runs each new transaction past the categorizer');
   });
 });
+
+/**
+ * Bug fix (owner report): categoryChipHref used to build every chip's href from `currentSearch`,
+ * a `useState('')` an effect filled in from `window.location.search` on mount. This test renders
+ * the real page the way a first paint actually happens -- no `window.history.pushState`, so
+ * `window.location.search` stays empty exactly as it would server-side -- while page.tsx itself
+ * knows the real filter from `searchParams`. Before the fix, that mismatch meant every chip's href
+ * was a bare `/transactions?category=N`, stripping account, review=1, and everything else active;
+ * clicking a chip out of the review queue landed on plain Transactions with no filters, which is
+ * the bug as reported. currentQuery (built server-side from the parsed params, not the browser
+ * URL) is what makes the first render correct with no client effect required to fix it up after.
+ */
+describe('Chip filters (ruling D6) bug fix: hrefs come from the SERVER-known filter, not window.location', () => {
+  let t: TestDb | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  async function renderPage(searchParams: Record<string, string>) {
+    const { default: TransactionsPage } = await import('@/app/(app)/transactions/page');
+    return render(await TransactionsPage({ searchParams: Promise.resolve(searchParams) }));
+  }
+
+  function firstCategoryChipHref(container: HTMLElement): string | null {
+    const link = Array.from(container.querySelectorAll('a')).find((a) =>
+      (a.getAttribute('href') ?? '').includes('category='),
+    );
+    return link?.getAttribute('href') ?? null;
+  }
+
+  it('a category chip still carries review=1 when clicked from the review queue', async () => {
+    t = createSeededTestDb();
+    const admin = insertTestUser(t.db, { name: 'Alice', username: 'alice', role: 'admin' });
+    insertTestAccount(t.db, { type: 'chequing', ownerUserId: null });
+    currentUser.value = { id: admin, name: 'Alice', username: 'alice', role: 'admin', visibility: 'household' };
+
+    const { container } = await renderPage({ review: '1' });
+    const href = firstCategoryChipHref(container);
+    expect(href).not.toBeNull();
+    expect(href).toContain('review=1');
+  });
+
+  it('an unrelated active filter (account) survives a category chip click', async () => {
+    t = createSeededTestDb();
+    const admin = insertTestUser(t.db, { name: 'Alice', username: 'alice', role: 'admin' });
+    const accountId = insertTestAccount(t.db, { type: 'chequing', ownerUserId: null });
+    currentUser.value = { id: admin, name: 'Alice', username: 'alice', role: 'admin', visibility: 'household' };
+
+    const { container } = await renderPage({ account: String(accountId) });
+    const href = firstCategoryChipHref(container);
+    expect(href).not.toBeNull();
+    expect(href).toContain(`account=${accountId}`);
+  });
+});

@@ -14,6 +14,25 @@ import { TransactionsClient } from './transactions-client';
 
 export const dynamic = 'force-dynamic';
 
+/**
+ * Bug fix (owner report): TransactionsClient's category chips used to build their hrefs from
+ * `window.location.search`, read in a client effect -- empty on first paint (server-side, and for
+ * one client render before that effect runs), so every chip's href dropped every OTHER active
+ * filter, `review=1` included. Next.js hands this route the already-parsed params, not the literal
+ * querystring, so this rebuilds an equivalent one from them -- passed down as `currentQuery` so
+ * the client can build a correct chip href on the very first render, with no effect required to
+ * fix it up afterwards. Repeated keys (there are none today, but nothing here assumes there won't
+ * be) are preserved rather than collapsed, the same as a real querystring would carry them.
+ */
+function currentQueryString(params: Record<string, string | string[] | undefined>): string {
+  const qs = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined) continue;
+    for (const one of Array.isArray(value) ? value : [value]) qs.append(key, one);
+  }
+  return qs.toString();
+}
+
 function readFilter(
   params: Record<string, string | string[] | undefined>,
   range: ResolvedRange | null,
@@ -98,6 +117,7 @@ export default async function TransactionsPage({
       reviewMode={reviewMode}
       reviewCount={reviewCount}
       matchingCounts={matchingCounts}
+      currentQuery={currentQueryString(params)}
       // Ruling R10: an asset account holds a typed balance and takes no transactions/imports, so
       // it is filtered out of every account picker on this page -- the filter select, quick-add
       // and (formerly) the bottom manual-entry form all shared this one `accounts` prop, so
