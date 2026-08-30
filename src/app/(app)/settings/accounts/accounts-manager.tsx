@@ -232,7 +232,7 @@ export function AccountsManager({
             }
           />
         ) : (
-          <TableWrap bare fixed minWidth="60.5rem">
+          <TableWrap bare fixed minWidth="60.5rem" responsive>
             {/* Nine columns, two of which carry controls, so auto sizing was handing the width
                 to the Balance sentence ("... now · from a balance recorded <date>") and leaving
                 Actions to stack its two buttons over a column of dead space. The widths below
@@ -273,33 +273,42 @@ export function AccountsManager({
               {accounts.map((account) => (
                 <Fragment key={account.id}>
                   <tr className="align-top">
-                    <td className="font-medium text-ink">{account.name}</td>
-                    <td className="text-muted">{account.institution === '' ? '—' : account.institution}</td>
-                    <td className="text-muted capitalize">{account.type}</td>
-                    <td className="text-muted">
+                    {/* v1.15.0 (responsive rows): the account name is what tells one row from
+                        another on this page, so it is the phone card's headline. */}
+                    <td className="font-medium text-ink cell-stack-headline" data-label="Name">{account.name}</td>
+                    <td className="text-muted" data-label="Institution">{account.institution === '' ? '—' : account.institution}</td>
+                    <td className="text-muted capitalize" data-label="Type">{account.type}</td>
+                    <td className="text-muted" data-label="Owner">
                       {account.ownerUserId === null ? 'Joint' : (people.find((p) => p.id === account.ownerUserId)?.name ?? 'Joint')}
                     </td>
-                    <td className="text-muted">
+                    <td className="text-muted" data-label="Mapping">
                       {account.isSimplefinManaged ? '—' : account.importProfileName ?? 'none'}
                     </td>
-                    <td className="text-muted">
+                    {/* No cell-stack-amount here, unlike every other Lane 4/3 table with a money
+                        column: this cell is a two-clause SENTENCE ("$975.00 now · from a balance
+                        recorded 2026-08-01"), not a bare figure, and cell-stack-amount forces
+                        white-space: nowrap into a grid column sized to its content -- exactly the
+                        sideways-overflow bug this whole release fixes, just reintroduced on one
+                        cell. Left as a normal full-width row so the sentence wraps like any other
+                        label/value line. */}
+                    <td className="text-muted" data-label="Balance">
                       {account.latestBalanceCents === null
                         ? 'no balance yet'
                         : account.latestBalanceMovedCents === 0
                           ? `${formatCents(account.latestBalanceCents)} as of ${account.latestBalanceDate}`
                           : `${formatCents(account.latestBalanceCents)} now · from a balance recorded ${account.latestBalanceDate}`}
                     </td>
-                    <td>
+                    <td data-label="Source">
                       <span className={account.isSimplefinManaged ? 'badge badge--blue' : 'badge badge--slate'}>
                         {account.isSimplefinManaged ? 'SimpleFIN' : 'CSV'}
                       </span>
                     </td>
-                    <td>
+                    <td data-label="Status">
                       <span className={account.isActive ? 'badge badge--green' : 'badge badge--muted'}>
                         {account.isActive ? 'active' : 'deactivated'}
                       </span>
                     </td>
-                    <td className="text-right">
+                    <td className="text-right cell-stack-actions" data-label="">
                       <RowMenu label={`Actions for ${account.name}`}>
                         <RowMenuButton onSelect={() => openEditor(account)}>Update account</RowMenuButton>
                         <RowMenuForm
@@ -316,7 +325,9 @@ export function AccountsManager({
                       at all when the account is clean. */}
                   {account.discrepancies.length > 0 ? (
                     <tr>
-                      <td colSpan={9} className="bg-warning-soft/50">
+                      {/* Spans every column, so it has no one header to echo (ruling S2): empty
+                          data-label, same as the editor row below. */}
+                      <td colSpan={9} className="bg-warning-soft/50" data-label="">
                         <ul className="flex flex-col gap-1 px-1 py-2 text-xs text-warning-soft-fg">
                           {account.discrepancies.map((discrepancy) => (
                             <li key={`${discrepancy.fromDate}-${discrepancy.toDate}`}>{discrepancyMessage(discrepancy)}</li>
@@ -327,7 +338,10 @@ export function AccountsManager({
                   ) : null}
                   {editing !== null && editing.id === account.id ? (
                     <tr>
-                      <td colSpan={9} className="bg-surface-2">
+                      {/* Spans every column, so data-label="" (and nothing else) is all it
+                          needs: the default grid-column: 1 / -1 already gives it the full
+                          card's width on a phone. */}
+                      <td colSpan={9} className="bg-surface-2" data-label="">
                         <form action={update} onSubmit={() => setEditing(null)} className="flex flex-wrap items-end gap-3 py-2">
                           <input type="hidden" name="accountId" value={account.id} />
                           <div className="flex flex-col gap-1">

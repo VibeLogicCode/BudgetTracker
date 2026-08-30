@@ -610,6 +610,17 @@ describe('review fix (MED): the admin payload never carries a delivery subject o
   });
 });
 
+describe('v1.15.0 (responsive rows, ruling S3): the preference matrix headline', () => {
+  it('the Event cell of the first row carries cell-stack-headline', () => {
+    const { container } = render(<NotificationsClient {...props()} />);
+    // The preferences matrix is the first <table> in the page (SMTP/Telegram/Email above it
+    // render no table of their own); Recent deliveries is the second.
+    const matrix = container.querySelectorAll('table')[0];
+    const headlineCell = matrix.querySelector('tbody tr td:first-child');
+    expect(headlineCell?.className).toContain('cell-stack-headline');
+  });
+});
+
 describe('MUST-5.3: no credential ever reaches these props', () => {
   it('the serialized props contain no password and no token field', () => {
     const serialized = JSON.stringify(props({ targets: { telegram: target({ channel: 'telegram', secretSet: true }), email: target() } }));

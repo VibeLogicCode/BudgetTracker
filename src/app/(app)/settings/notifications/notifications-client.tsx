@@ -561,7 +561,7 @@ export function NotificationsClient(data: NotificationsPageData) {
           {prefsState.error ? <Notice tone="error">{prefsState.error}</Notice> : null}
           {prefsState.message ? <Notice tone="success">{prefsState.message}</Notice> : null}
           <form action={savePrefs} className="flex flex-col gap-4">
-            <TableWrap>
+            <TableWrap responsive>
               <thead>
                 <tr>
                   <th className="text-left">Event</th>
@@ -572,14 +572,17 @@ export function NotificationsClient(data: NotificationsPageData) {
               <tbody>
                 {data.events.map((event) => (
                   <tr key={event.id}>
-                    <td className="text-left">
+                    {/* v1.15.0 (responsive rows): the event name is what tells one row from
+                        another in this matrix, so it is the phone card's headline. No
+                        cell-stack-amount: nothing on this row is money. */}
+                    <td className="text-left cell-stack-headline" data-label="Event">
                       <span className="font-semibold text-ink">{event.label}</span>
                       <span className="block text-muted">{event.blurb}</span>
                     </td>
                     {CHANNELS.map((channel) => {
                       const configured = data.targets[channel]?.enabled ?? false;
                       return (
-                        <td key={channel} className="text-center">
+                        <td key={channel} className="text-center" data-label={channel === 'telegram' ? 'Telegram' : 'Email'}>
                           <input
                             type="checkbox"
                             name={`pref:${event.id}:${channel}`}
@@ -646,7 +649,7 @@ export function NotificationsClient(data: NotificationsPageData) {
           </EmptyState>
         ) : (
           <CardBody>
-            <TableWrap>
+            <TableWrap responsive>
               <thead>
                 <tr>
                   <th className="text-left">When</th>
@@ -659,11 +662,15 @@ export function NotificationsClient(data: NotificationsPageData) {
               <tbody>
                 {data.deliveries.map((row) => (
                   <tr key={row.id}>
-                    <td>{formatStamp(row.sentAt ?? row.createdAt)}</td>
-                    {data.role === 'admin' ? <td>{row.userName}</td> : null}
-                    <td>{eventDef(row.eventId)?.label ?? row.eventId}</td>
-                    <td>{row.channel}</td>
-                    <td>
+                    <td data-label="When">{formatStamp(row.sentAt ?? row.createdAt)}</td>
+                    {data.role === 'admin' ? <td data-label="Who">{row.userName}</td> : null}
+                    {/* v1.15.0 (responsive rows): the event is what tells one delivery from
+                        another -- When is nearly as specific, but the event is the thing a
+                        person is actually looking for in this log -- so it is the headline. No
+                        cell-stack-amount: a delivery carries no money of its own. */}
+                    <td className="cell-stack-headline" data-label="Event">{eventDef(row.eventId)?.label ?? row.eventId}</td>
+                    <td data-label="Channel">{row.channel}</td>
+                    <td data-label="Status">
                       <DeliveryStatusBadge status={row.status} />
                       {row.lastError ? <span className="block text-muted">{row.lastError}</span> : null}
                     </td>

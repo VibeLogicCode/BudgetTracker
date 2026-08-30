@@ -121,7 +121,7 @@ export function UsersManager({ users }: { users: UserRecord[] }) {
 
       <Card>
         <CardHeader title="Household" description={`${users.length} account${users.length === 1 ? '' : 's'}.`} />
-        <TableWrap bare>
+        <TableWrap bare responsive>
           <thead>
             <tr>
               <th scope="col">Name</th>
@@ -138,12 +138,14 @@ export function UsersManager({ users }: { users: UserRecord[] }) {
             {users.map((user) => (
               <Fragment key={user.id}>
                 <tr className="align-top">
-                  <td className="font-medium text-ink">{user.name}</td>
-                  <td className="font-mono text-xs text-muted">{user.username}</td>
-                  <td>
+                  {/* v1.15.0 (responsive rows): the person's name is what tells one row from
+                      another on this page, so it is the phone card's headline. */}
+                  <td className="font-medium text-ink cell-stack-headline" data-label="Name">{user.name}</td>
+                  <td className="font-mono text-xs text-muted" data-label="Username">{user.username}</td>
+                  <td data-label="Role">
                     <span className={user.role === 'admin' ? 'badge badge--accent' : 'badge badge--slate'}>{user.role}</span>
                   </td>
-                  <td>
+                  <td data-label="Sees">
                     {/* v1.13.0 ruling R2, micro-ruling M1: an admin cannot be set 'self' --
                         setVisibilityAction refuses it server-side ("Make them a member first."),
                         surfaced here through the same auto-save error line every other row control
@@ -161,7 +163,7 @@ export function UsersManager({ users }: { users: UserRecord[] }) {
                       action={(formData) => setVisibilityAction({}, formData)}
                     />
                   </td>
-                  <td>
+                  <td data-label="Sign-in">
                     {/* Item BI (ruling P11). A checkbox, not a select: it is a boolean, and the
                         row already auto-saves its visibility one cell to the left. Reversible,
                         single-row, refused server-side with a sentence -- the auto-save safety
@@ -175,19 +177,19 @@ export function UsersManager({ users }: { users: UserRecord[] }) {
                       labelHidden
                     />
                   </td>
-                  <td>
+                  <td data-label="MFA">
                     <span className={user.totpEnabled ? 'badge badge--green' : 'badge badge--muted'}>
                       {user.totpEnabled ? 'on' : 'off'}
                     </span>
                   </td>
-                  <td>
+                  <td data-label="Status">
                     <span className={user.isActive ? 'badge badge--green' : 'badge badge--muted'}>
                       {user.isActive ? 'active' : 'deactivated'}
                     </span>
                   </td>
                   {/* Three button-forms used to sit side by side here -- the widest actions cell
                       in the app, and the one that pushed this table past its card. */}
-                  <td className="text-right">
+                  <td className="text-right cell-stack-actions" data-label="">
                     <RowMenu label={`Actions for ${user.name}`}>
                       {user.isActive ? (
                         <RowMenuButton onSelect={() => setConfirming({ id: user.id, intent: 'deactivate' })}>
@@ -208,7 +210,8 @@ export function UsersManager({ users }: { users: UserRecord[] }) {
                 </tr>
                 {confirming?.id === user.id ? (
                   <tr>
-                    <td colSpan={8} className="border-l-2 border-warning bg-warning-soft/40">
+                    {/* Spans every column, so it has no one header to echo (ruling S2). */}
+                    <td colSpan={8} className="border-l-2 border-warning bg-warning-soft/40" data-label="">
                       <div className="flex flex-wrap items-center gap-3 px-4 py-3 text-sm">
                         <p className="text-ink">
                           {confirming.intent === 'deactivate' ? (
@@ -244,7 +247,7 @@ export function UsersManager({ users }: { users: UserRecord[] }) {
                 ) : null}
                 {resetting === user.id ? (
                   <tr>
-                    <td colSpan={8} className="bg-surface-2">
+                    <td colSpan={8} className="bg-surface-2" data-label="">
                       <form
                         action={resetPassword}
                         onSubmit={() => setResetting(null)}

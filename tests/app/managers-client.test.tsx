@@ -283,3 +283,12 @@ describe('ManagersClient — the merchant rules table declares its own widths (i
     expect(rules?.querySelectorAll('thead th')).toHaveLength(7);
   });
 });
+
+describe('ManagersClient — responsive rows (v1.15.0, ruling S3)', () => {
+  it('the categories table headline cell (Name) carries cell-stack-headline', () => {
+    const { container } = renderManagers({ categories: [category()] });
+    const categoriesTable = container.querySelectorAll('table')[0];
+    const headlineCell = categoriesTable.querySelector('tbody tr td:first-child');
+    expect(headlineCell?.className).toContain('cell-stack-headline');
+  });
+});

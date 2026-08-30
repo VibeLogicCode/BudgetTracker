@@ -457,3 +457,11 @@ describe('AccountsManager — reconciliation diagnostics (spec 2026-08-23 v1.8.0
     expect(container.querySelectorAll('.badge').length).toBe(2);
   });
 });
+
+describe('AccountsManager — responsive rows (v1.15.0, ruling S3)', () => {
+  it('the Name cell of the first row carries cell-stack-headline', () => {
+    const { container } = render(<AccountsManager accounts={[account()]} people={PEOPLE} profiles={PROFILES} />);
+    const headlineCell = container.querySelector('tbody tr td:first-child');
+    expect(headlineCell?.className).toContain('cell-stack-headline');
+  });
+});

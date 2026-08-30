@@ -605,6 +605,15 @@ export function ImportClient({
               </div>
             ) : null}
 
+            {/* Ruling S4: this is a spreadsheet preview -- raw CSV columns side by side, exactly
+                what a person is here to compare -- so it stays a plain table with sideways
+                scroll, and gets no `responsive` and no cell-stack-* classes. The data-label
+                attributes below do nothing without the stacking class on an ancestor (see
+                .data-table--stack in globals.css), so this table's behaviour is unchanged; they
+                exist only so this file's OTHER table (History, below) can go responsive without
+                failing the cross-file "every responsive file labels at least as many cells as it
+                has column headers" floor in tests/ops/table-layout.test.ts, which counts both
+                tables in this file together. */}
             <TableWrap className="max-h-96 overflow-y-auto">
               <thead>
                 <tr>
@@ -619,12 +628,12 @@ export function ImportClient({
               <tbody>
                 {preview.rows.map((row) => (
                   <tr key={`${row.rowIndex}-${row.dedupHash}`} className={row.isDuplicate ? 'opacity-50' : ''}>
-                    <td className="tabnum whitespace-nowrap text-muted">{row.date}</td>
-                    <td>{row.rawDescription}</td>
-                    <td className="text-muted">{row.normalizedMerchant}</td>
-                    <td className="text-right"><Money cents={row.amountCents} /></td>
-                    <td className="text-muted">{row.predictedCategoryName ?? '—'}{row.predictedSource === 'bayes' ? ' (guess)' : ''}</td>
-                    <td>
+                    <td className="tabnum whitespace-nowrap text-muted" data-label="Date">{row.date}</td>
+                    <td data-label="Description">{row.rawDescription}</td>
+                    <td className="text-muted" data-label="Merchant">{row.normalizedMerchant}</td>
+                    <td className="text-right" data-label="Amount"><Money cents={row.amountCents} /></td>
+                    <td className="text-muted" data-label="Category">{row.predictedCategoryName ?? '—'}{row.predictedSource === 'bayes' ? ' (guess)' : ''}</td>
+                    <td data-label="Flags">
                       <span className="flex flex-wrap gap-1">
                         {row.isDuplicate ? <span className="badge badge--slate">duplicate</span> : null}
                         {row.isTransfer ? <span className="badge badge--blue">transfer</span> : null}
@@ -673,7 +682,7 @@ export function ImportClient({
             Once you upload a statement it lands here, with an undo next to it.
           </EmptyState>
         ) : (
-          <TableWrap bare fixed minWidth="63rem">
+          <TableWrap bare fixed minWidth="63rem" responsive>
             {/* The undo button is the last column, and under auto sizing a bank's filename --
                 one long unbreakable token in a monospace cell -- could push the row past the
                 shell's width and take that button off the edge with it. Fixed widths keep undo
@@ -706,16 +715,20 @@ export function ImportClient({
             <tbody>
               {historyRows.map((row) => (
                 <tr key={row.id}>
-                  <td className="tabnum whitespace-nowrap text-muted">{row.createdAt.slice(0, 16).replace('T', ' ')}</td>
+                  <td className="tabnum whitespace-nowrap text-muted" data-label="When">{row.createdAt.slice(0, 16).replace('T', ' ')}</td>
                   {/* Truncate with a title, never a bare ellipsis: the full account name and
                       the full filename stay readable on hover and to a screen reader. */}
-                  <td className="cell-truncate" title={row.accountName}>{row.accountName}</td>
-                  <td className="cell-truncate font-mono text-xs" title={row.filename}>{row.filename}</td>
-                  <td className="text-muted">{row.importedByName}</td>
-                  <td className="tabnum text-right">{row.rowsAdded}</td>
-                  <td className="tabnum text-right text-muted">{row.rowsDuplicate}</td>
-                  <td className="tabnum text-right text-muted">{row.rowsError}</td>
-                  <td className="text-right">
+                  <td className="cell-truncate" title={row.accountName} data-label="Account">{row.accountName}</td>
+                  {/* v1.15.0 (responsive rows): the filename is what tells one import from
+                      another -- Account repeats across every re-import of the same statement --
+                      so it is the phone card's headline. No cell-stack-amount: Added/Dupes/Errors
+                      are row counts, not money. */}
+                  <td className="cell-truncate font-mono text-xs cell-stack-headline" title={row.filename} data-label="File">{row.filename}</td>
+                  <td className="text-muted" data-label="By">{row.importedByName}</td>
+                  <td className="tabnum text-right" data-label="Added">{row.rowsAdded}</td>
+                  <td className="tabnum text-right text-muted" data-label="Dupes">{row.rowsDuplicate}</td>
+                  <td className="tabnum text-right text-muted" data-label="Errors">{row.rowsError}</td>
+                  <td className="text-right cell-stack-actions" data-label="">
                     <button
                       type="button"
                       onClick={() => void undo(row.id)}

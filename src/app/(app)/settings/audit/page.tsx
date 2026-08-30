@@ -45,7 +45,7 @@ export default async function AuditPage() {
             Nobody has deleted anything yet.
           </EmptyState>
         ) : (
-          <TableWrap bare className="border-t border-line">
+          <TableWrap bare className="border-t border-line" responsive>
             <thead>
               <tr>
                 <th scope="col">When</th>
@@ -57,10 +57,14 @@ export default async function AuditPage() {
             <tbody>
               {rows.map((row) => (
                 <tr key={row.id}>
-                  <td className="whitespace-nowrap">{row.at.slice(0, 16).replace('T', ' ')}</td>
-                  <td>{row.userName}</td>
-                  <td>{ACTION_LABEL[row.action] ?? row.action}</td>
-                  <td>{row.detail ?? `${row.entity} #${row.entityId}`}</td>
+                  <td className="whitespace-nowrap" data-label="When">{row.at.slice(0, 16).replace('T', ' ')}</td>
+                  <td data-label="Who">{row.userName}</td>
+                  <td data-label="What">{ACTION_LABEL[row.action] ?? row.action}</td>
+                  {/* v1.15.0 (responsive rows): "Which" names the specific thing this row is
+                      about -- an item, an import, an entity#id -- which is what actually tells
+                      one deletion apart from another when When/Who/What repeat across rows. No
+                      cell-stack-amount: nothing here is money. */}
+                  <td className="cell-stack-headline" data-label="Which">{row.detail ?? `${row.entity} #${row.entityId}`}</td>
                 </tr>
               ))}
             </tbody>

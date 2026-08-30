@@ -333,7 +333,7 @@ export default async function DashboardPage({
             </p>
           </CardBody>
         ) : (
-          <TableWrap bare className="border-t border-line">
+          <TableWrap bare className="border-t border-line" responsive>
             <thead>
               <tr>
                 <th scope="col">Category</th>
@@ -348,11 +348,15 @@ export default async function DashboardPage({
             <tbody>
               {budgetRows.map((row) => (
                 <tr key={row.categoryId}>
-                  <td className="font-medium text-ink">{row.categoryName}</td>
-                  <td>
+                  {/* v1.15.0 (responsive rows): the category is what tells one row from another
+                      on this widget, so it is the phone card's headline. */}
+                  <td className="font-medium text-ink cell-stack-headline" data-label="Category">{row.categoryName}</td>
+                  <td data-label="Progress">
                     <BudgetProgressBar limitCents={row.limitCents} spentCents={row.spentCents} label={row.categoryName} />
                   </td>
-                  <td className="money text-right whitespace-nowrap">
+                  {/* Spent is the one money figure this widget carries, so it is the phone
+                      card's amount slot. */}
+                  <td className="money text-right whitespace-nowrap cell-stack-amount" data-label="Spent">
                     {formatCents(row.spentCents)}
                     {row.limitCents === null ? null : (
                       <span className="text-subtle"> / {formatCents(row.limitCents)}</span>

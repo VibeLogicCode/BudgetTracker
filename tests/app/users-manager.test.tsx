@@ -151,3 +151,11 @@ describe('item BI: a sign-in toggle on every row', () => {
     expect((screen.getByLabelText('Robin can sign in') as HTMLInputElement).checked).toBe(false);
   });
 });
+
+describe('UsersManager — responsive rows (v1.15.0, ruling S3)', () => {
+  it('the Name cell of the first row carries cell-stack-headline', () => {
+    const { container } = render(<UsersManager users={[user()]} />);
+    const headlineCell = container.querySelector('tbody tr td:first-child');
+    expect(headlineCell?.className).toContain('cell-stack-headline');
+  });
+});

@@ -938,3 +938,23 @@ describe('ImportClient — no CSV mapping editor for an OFX preview (item BP)', 
     expect(container.textContent).toContain('Fix the mapping');
   });
 });
+
+describe('ImportClient — responsive rows (v1.15.0, ruling S3)', () => {
+  it('the History row\'s File cell carries cell-stack-headline; the preview table stays untouched (ruling S4)', () => {
+    // No preview is rendered here (nothing was uploaded), so the History table is the only
+    // <table> on the page -- the exact case ruling S4 exists for: the preview grid must never
+    // gain cell-stack-headline or go responsive.
+    const { container } = render(
+      <ImportClient
+        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
+        profiles={PROFILES}
+        history={HISTORY}
+        simplefinManaged={[]}
+      />,
+    );
+    const historyTable = container.querySelector('table');
+    // When: Account: File: By: Added: Dupes: Errors: Undo -- File is the third cell.
+    const headlineCell = historyTable?.querySelector('tbody tr td:nth-child(3)');
+    expect(headlineCell?.className).toContain('cell-stack-headline');
+  });
+});

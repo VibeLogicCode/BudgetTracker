@@ -93,4 +93,28 @@ describe('AuditPage', () => {
 
     expect(screen.getByText('archive_bill')).toBeTruthy();
   });
+
+  it('the Which cell carries cell-stack-headline (v1.15.0, ruling S3)', async () => {
+    current = createSeededTestDb();
+    const adminId = insertTestUser(current.db, { name: 'Admin', username: 'admin', role: 'admin' });
+    currentUser.value = { id: adminId, name: 'Admin', username: 'admin', role: 'admin', visibility: 'household' };
+    appendAudit({
+      userId: adminId,
+      action: 'delete_item',
+      entity: 'warranty_items',
+      entityId: 42,
+      detail: 'Deleted "Old Fridge"',
+      at: '2026-08-20T10:00:00.000Z',
+    });
+
+    const { default: AuditPage } = await import('@/app/(app)/settings/audit/page');
+    render(await AuditPage());
+
+    // "Which" (the specific item/import a row is about) is what tells one deletion apart
+    // from another when When/Who/What repeat, so it is the phone card's headline -- the
+    // last <td> in the row.
+    const row = screen.getAllByRole('row')[1];
+    const cells = row.querySelectorAll('td');
+    expect(cells[cells.length - 1].className).toContain('cell-stack-headline');
+  });
 });

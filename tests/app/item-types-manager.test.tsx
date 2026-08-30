@@ -64,3 +64,11 @@ describe('ItemTypesManager — create form (5b lesson, made enforceable)', () =>
     expect(nameInput.maxLength).toBe(60);
   });
 });
+
+describe('ItemTypesManager — responsive rows (v1.15.0, ruling S3)', () => {
+  it('the Name cell of the first row carries cell-stack-headline', () => {
+    const { container } = render(<ItemTypesManager types={[type({ id: 5, name: 'Netflix' })]} />);
+    const headlineCell = container.querySelector('tbody tr td:first-child');
+    expect(headlineCell?.className).toContain('cell-stack-headline');
+  });
+});

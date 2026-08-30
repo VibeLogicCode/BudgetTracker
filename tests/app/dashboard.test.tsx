@@ -3,6 +3,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, cleanup, screen } from '@testing-library/react';
 import { createAccount } from '@/lib/accounts';
 import { createUser } from '@/lib/auth/users';
+import { createCategory } from '@/lib/categories';
 import { recordBalanceSnapshot } from '@/lib/networth';
 import { createManualTransaction } from '@/lib/transactions';
 import { createWarrantyItem } from '@/lib/warranty/items';
@@ -241,5 +242,29 @@ describe('DashboardPage (ruling R2)', () => {
 
     const people = capturedQuickAddProps.people as Array<Record<string, unknown>>;
     expect(people).toEqual([]);
+  });
+
+  // v1.15.0 (responsive rows, ruling S3): the category is what tells one budget row from
+  // another on this widget, so it must carry cell-stack-headline.
+  it('the budgets table\'s Category cell carries cell-stack-headline', async () => {
+    const { adultId } = await setup();
+    const categoryId = createCategory({ name: 'Groceries', parentId: null });
+    createManualTransaction({
+      accountId: createAccount({ name: 'Cash', type: 'cash', ownerUserId: adultId }),
+      date: today,
+      description: 'SUPERMARKET',
+      amountCents: -3000,
+      categoryId,
+      attributedUserId: adultId,
+      userId: adultId,
+      actorRole: 'admin',
+    });
+    currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+
+    const table = screen.getByText('Groceries').closest('table');
+    const headlineCell = table?.querySelector('tbody tr td:first-child');
+    expect(headlineCell?.className).toContain('cell-stack-headline');
   });
 });

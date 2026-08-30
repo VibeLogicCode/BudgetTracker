@@ -150,7 +150,7 @@ export function ManagersClient({
             <SubmitButton>Add</SubmitButton>
           </form>
         </CardBody>
-        <TableWrap bare>
+        <TableWrap bare responsive>
           <thead>
             <tr>
               <th scope="col">Name</th>
@@ -166,7 +166,11 @@ export function ManagersClient({
           <tbody>
             {orderedCategoryRows(categories).map(({ row: category, depth }) => (
               <tr key={category.id} className={depth === 0 ? 'bg-surface-2' : undefined}>
-                <td style={{ paddingLeft: depth === 1 ? 36 : 16 }}>
+                {/* v1.15.0 (responsive rows): this cell is BOTH the tree indent and the phone
+                    card's headline -- a child row's indent must keep working exactly as it does
+                    in the table, so cell-stack-headline goes on this same <td>, not a new one.
+                    No cell-stack-amount: categories carry no money of their own here. */}
+                <td style={{ paddingLeft: depth === 1 ? 36 : 16 }} className="cell-stack-headline" data-label="Name">
                   <AutoSaveTextInput
                     name="name"
                     defaultValue={category.name}
@@ -176,13 +180,13 @@ export function ManagersClient({
                     className={`w-44 ${rowInput}`}
                   />
                 </td>
-                <td>
+                <td data-label="Kind">
                   <span className={category.isIncome ? 'badge badge--green' : 'badge badge--slate'}>
                     {category.isIncome ? 'income' : 'spend'}
                   </span>
                 </td>
-                <td>{category.isArchived ? <span className="badge badge--muted">archived</span> : null}</td>
-                <td>
+                <td data-label="State">{category.isArchived ? <span className="badge badge--muted">archived</span> : null}</td>
+                <td data-label="Tax">
                   {/* labelHidden: the column header already says "Tax", but the accessible name
                       has to name the ROW, so the sentence stays and only its pixels go. */}
                   <AutoSaveCheckbox
@@ -194,7 +198,7 @@ export function ManagersClient({
                     labelHidden
                   />
                 </td>
-                <td className="text-right">
+                <td className="text-right cell-stack-actions" data-label="">
                   <form action={archiveCategory}>
                     <input type="hidden" name="categoryId" value={category.id} />
                     <input type="hidden" name="archived" value={category.isArchived ? '0' : '1'} />
@@ -267,7 +271,7 @@ export function ManagersClient({
         {/* Item I. minWidth is the colgroup's own total (14+6+7+13+10+5+3 = 58rem); without it the
             scroll container has nothing to scroll and the columns crush instead. A long monospace
             pattern beside a "Parent › Child" label reached ~1100px and squeezed the delete button. */}
-        <TableWrap bare fixed minWidth="58rem">
+        <TableWrap bare fixed minWidth="58rem" responsive>
           <colgroup>
             {/* A monospace merchant pattern -- the widest thing in this table by a distance. */}
             <col style={{ width: '14rem' }} />
@@ -298,13 +302,17 @@ export function ManagersClient({
           <tbody>
             {rules.map((rule) => (
               <tr key={rule.id}>
-                <td className="font-mono text-xs text-ink">{rule.pattern}</td>
-                <td className="text-xs text-muted">{rule.matchType}</td>
-                <td className="text-xs"><span className="badge badge--slate">{rule.ruleKind}</span></td>
-                <td className="text-xs text-muted">{rule.ruleKind === 'category' ? label(rule.categoryId) : '—'}</td>
-                <td className="text-xs text-muted">{rule.renameTo ?? '—'}</td>
-                <td className="tabnum text-right text-xs text-muted">{rule.hitCount}</td>
-                <td className="text-right">
+                {/* v1.15.0 (responsive rows): the pattern is what tells one rule from another --
+                    the same merchant pattern never repeats across rows, unlike Kind or Category
+                    -- so it is the phone card's headline. No cell-stack-amount: hitCount is a
+                    count of matches, not money. */}
+                <td className="font-mono text-xs text-ink cell-stack-headline" data-label="Pattern">{rule.pattern}</td>
+                <td className="text-xs text-muted" data-label="Match">{rule.matchType}</td>
+                <td className="text-xs" data-label="Kind"><span className="badge badge--slate">{rule.ruleKind}</span></td>
+                <td className="text-xs text-muted" data-label="Category">{rule.ruleKind === 'category' ? label(rule.categoryId) : '—'}</td>
+                <td className="text-xs text-muted" data-label="Renames to">{rule.renameTo ?? '—'}</td>
+                <td className="tabnum text-right text-xs text-muted" data-label="Hits">{rule.hitCount}</td>
+                <td className="text-right cell-stack-actions" data-label="">
                   <form action={removeRule}>
                     <input type="hidden" name="ruleId" value={rule.id} />
                     <button type="submit" className="btn btn--ghost btn--sm px-2 text-xs">delete</button>

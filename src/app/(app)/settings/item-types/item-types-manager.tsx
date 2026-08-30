@@ -103,7 +103,7 @@ export function ItemTypesManager({ types }: { types: ItemTypeWithUsage[] }) {
             Add one above — Appliance, Electronics and Subscription are a good start.
           </EmptyState>
         ) : (
-          <TableWrap bare>
+          <TableWrap bare responsive>
             <thead>
               <tr>
                 <th scope="col">Name</th>
@@ -115,7 +115,10 @@ export function ItemTypesManager({ types }: { types: ItemTypeWithUsage[] }) {
             <tbody>
               {types.map((type) => (
                 <tr key={type.id} className="align-top">
-                  <td className="font-medium text-ink">
+                  {/* v1.15.0 (responsive rows): the type name is what tells one row from another
+                      on this page, so it is the phone card's headline. No cell-stack-amount:
+                      usageCount is a count of items, not money. */}
+                  <td className="font-medium text-ink cell-stack-headline" data-label="Name">
                     <AutoSaveTextInput
                       name="name"
                       defaultValue={type.name}
@@ -126,7 +129,7 @@ export function ItemTypesManager({ types }: { types: ItemTypeWithUsage[] }) {
                       className={`w-36 ${rowInput}`}
                     />
                   </td>
-                  <td>
+                  <td data-label="Kind">
                     <AutoSaveSelect
                       name="kind"
                       defaultValue={type.kind}
@@ -137,8 +140,8 @@ export function ItemTypesManager({ types }: { types: ItemTypeWithUsage[] }) {
                       className={rowInput}
                     />
                   </td>
-                  <td className="tabnum text-right text-muted">{type.usageCount}</td>
-                  <td>
+                  <td className="tabnum text-right text-muted" data-label="Items using it">{type.usageCount}</td>
+                  <td data-label="Actions">
                     <form action={remove}>
                       <input type="hidden" name="typeId" value={type.id} />
                       <button
