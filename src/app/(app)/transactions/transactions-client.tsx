@@ -174,6 +174,37 @@ export function TransactionsClient({
   // "Apply a category to all N…" editor on a different row replaces whichever one was open.
   const [applyAllRow, setApplyAllRow] = useState<number | null>(null);
 
+  // Ruling S7 (v1.15.0): below `sm` the filter controls sit behind a "Filters" disclosure so
+  // they do not compete with the rows they filter for a phone's limited height (same reason as
+  // Quick add, ruling S6, just below). Open by default whenever the URL already carries a
+  // filter, so someone refining a search they just ran finds it open rather than having to
+  // discover the button first. Both start at "nothing filtered" and are corrected in the effect
+  // below -- `window.location` does not exist during the server render, and reading it here, in
+  // the render body, would print the server's "closed, no count" markup and then flip the
+  // instant the effect ran on the client, which is exactly what a hydration mismatch is. Note
+  // this file does NOT use next/navigation's useSearchParams() for this (unlike AppShell.tsx's
+  // own `review` check): tests/app/transactions-page.test.tsx renders the real server page with
+  // no app-router provider in place, and that hook throws outside one.
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [activeFilterCount, setActiveFilterCount] = useState(0);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const count = [
+      params.get('account'),
+      params.get('category'),
+      params.get('person'),
+      params.get('q'),
+      params.get('uncat'),
+      params.get('transfers') === '0' ? '0' : null,
+      params.get('range') || params.get('from') || params.get('to') ? '1' : null,
+    ].filter((value) => value !== null && value !== '').length;
+    if (count > 0) {
+      setActiveFilterCount(count);
+      setFiltersOpen(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const label = (id: number | null) => {
     if (id === null) return 'Uncategorized';
     const category = categories.find((c) => c.id === id);
@@ -644,14 +675,21 @@ export function TransactionsClient({
         </PageGuide>
       )}
 
-      <QuickAddTransaction
-        variant="page"
-        accounts={accounts}
-        categories={categories}
-        people={people}
-        today={today}
-        defaultAccountId={defaultAccountId}
-      />
+      {/* Ruling S6: a triage queue has no business showing a create form -- review mode hides
+          Quick add entirely instead of merely collapsing it. Outside review mode it renders
+          collapsed by default (the `collapsible` prop): on a phone this was ~600px of form
+          sitting above the first data row of a page whose job is reading rows. */}
+      {reviewMode ? null : (
+        <QuickAddTransaction
+          variant="page"
+          collapsible
+          accounts={accounts}
+          categories={categories}
+          people={people}
+          today={today}
+          defaultAccountId={defaultAccountId}
+        />
+      )}
 
       <FormError message={error} />
       {notice ? <Notice tone="success">{notice}</Notice> : null}
@@ -770,79 +808,99 @@ export function TransactionsClient({
 
       <Card as="div">
         <CardBody className="pt-5">
-          <form method="get" className="flex flex-wrap items-end gap-3">
+          <form method="get" className="flex flex-col gap-3">
             {/* Ruling R1: `review=1` is a filter like any other on this form, so re-submitting
                 it (changing the account, say) must not silently drop out of the review queue --
                 carried forward as a hidden field rather than a visible control, the same way
                 every OTHER already-applied value on this GET form has no widget of its own
-                either. */}
+                either. Left outside the disclosure below: a hidden field has no visual state to
+                fold away in the first place. */}
             {reviewMode ? <input type="hidden" name="review" value="1" /> : null}
-            <Field label="Account">
-              <select name="account" className={selectClass}>
-                <option value="">All</option>
-                {accounts.map((a) => (
-                  <option key={a.id} value={a.id}>{a.name}</option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Category">
-              <select name="category" className={selectClass}>
-                <option value="">All</option>
-                <option value="uncategorized">Uncategorized</option>
-                {groupedCategories.map((opt) => (
-                  <option key={opt.id} value={opt.id}>{'\u00A0\u00A0'.repeat(opt.depth) + opt.label}</option>
-                ))}
-              </select>
-            </Field>
-            {/* Ruling R2: for a self viewer the person filter is already forced to their own id
-                server-side (page.tsx's readFilter), so the pill that would let them ask for
-                somebody else is not rendered at all rather than shown-but-ineffective. */}
-            {selfScoped ? null : (
-              <Field label="Person">
-                <select name="person" className={selectClass}>
-                  <option value="">Everyone</option>
-                  <option value="unattributed">Household/unattributed</option>
-                  {people.map((p) => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
+            {/* Ruling S7: the only thing that shows below `sm` when nothing is filtered yet --
+                `sm:hidden` drops it entirely at `sm` and up, where the fields are always visible
+                instead (S7's "plain always-visible markup"). The fields stay mounted in the DOM
+                either way (`hidden` below is a CSS class, never a conditional unmount), so what
+                this form submits never depends on whether a phone has opened this. */}
+            <button
+              type="button"
+              className="btn btn--secondary btn--sm self-start min-h-11 sm:hidden sm:min-h-0"
+              aria-expanded={filtersOpen}
+              aria-controls="transactions-filter-fields"
+              onClick={() => setFiltersOpen((prev) => !prev)}
+            >
+              {activeFilterCount > 0 ? `Filters (${activeFilterCount})` : 'Filters'}
+            </button>
+            <div
+              id="transactions-filter-fields"
+              className={`${filtersOpen ? 'flex' : 'hidden'} flex-wrap items-end gap-3 sm:flex`}
+            >
+              <Field label="Account">
+                <select name="account" className={selectClass}>
+                  <option value="">All</option>
+                  {accounts.map((a) => (
+                    <option key={a.id} value={a.id}>{a.name}</option>
                   ))}
                 </select>
               </Field>
-            )}
-            <DateRangePicker
-              allowAny
-              value={range?.preset ?? ''}
-              from={range?.from ?? ''}
-              to={range?.to ?? ''}
-              today={today}
-            />
-            <Field label="Search" className="min-w-[12rem] flex-1">
-              <input name="q" placeholder="Merchant text" className={inputClass} />
-            </Field>
-            <div className="flex flex-wrap items-center gap-4 py-2">
-              <label className="flex items-center gap-2 text-sm text-muted">
-                <input type="checkbox" name="uncat" value="1" className="accent-accent" /> Uncategorized only
-              </label>
-              <label className="flex items-center gap-2 text-sm text-muted">
-                <input type="checkbox" name="transfers" value="0" className="accent-accent" /> Hide transfers
-              </label>
+              <Field label="Category">
+                <select name="category" className={selectClass}>
+                  <option value="">All</option>
+                  <option value="uncategorized">Uncategorized</option>
+                  {groupedCategories.map((opt) => (
+                    <option key={opt.id} value={opt.id}>{'\u00A0\u00A0'.repeat(opt.depth) + opt.label}</option>
+                  ))}
+                </select>
+              </Field>
+              {/* Ruling R2: for a self viewer the person filter is already forced to their own id
+                  server-side (page.tsx's readFilter), so the pill that would let them ask for
+                  somebody else is not rendered at all rather than shown-but-ineffective. */}
+              {selfScoped ? null : (
+                <Field label="Person">
+                  <select name="person" className={selectClass}>
+                    <option value="">Everyone</option>
+                    <option value="unattributed">Household/unattributed</option>
+                    {people.map((p) => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                </Field>
+              )}
+              <DateRangePicker
+                allowAny
+                value={range?.preset ?? ''}
+                from={range?.from ?? ''}
+                to={range?.to ?? ''}
+                today={today}
+              />
+              <Field label="Search" className="min-w-[12rem] flex-1">
+                <input name="q" placeholder="Merchant text" className={inputClass} />
+              </Field>
+              <div className="flex flex-wrap items-center gap-4 py-2">
+                <label className="flex items-center gap-2 text-sm text-muted">
+                  <input type="checkbox" name="uncat" value="1" className="accent-accent" /> Uncategorized only
+                </label>
+                <label className="flex items-center gap-2 text-sm text-muted">
+                  <input type="checkbox" name="transfers" value="0" className="accent-accent" /> Hide transfers
+                </label>
+              </div>
+              <button type="submit" className="btn btn--primary">Filter</button>
+              {/* Inventory #3 / ruling R2: the review page's own "N waiting" eyebrow, repointed as
+                  a filter chip on this page instead of a second page's header. Hidden entirely for
+                  a self viewer -- the queue is household-wide by construction, and `reviewMode` is
+                  already forced `false` for one server-side (page.tsx), so a self viewer clicking
+                  this (were it shown) would just get their own ordinary list back, not a refusal.
+                  Shown once in review mode too (even if reviewCount has since dropped to 0), so the
+                  one control that got a person INTO the filter is also the one that gets them back
+                  OUT of it. */}
+              {!selfScoped && (reviewCount > 0 || reviewMode) ? (
+                <Link
+                  href={reviewMode ? '/transactions' : '/transactions?review=1'}
+                  className={`badge ${reviewMode ? 'badge--amber' : 'badge--slate'} min-h-11 items-center px-3 sm:min-h-0`}
+                >
+                  Needs review ({reviewCount})
+                </Link>
+              ) : null}
             </div>
-            <button type="submit" className="btn btn--primary">Filter</button>
-            {/* Inventory #3 / ruling R2: the review page's own "N waiting" eyebrow, repointed as
-                a filter chip on this page instead of a second page's header. Hidden entirely for
-                a self viewer -- the queue is household-wide by construction, and `reviewMode` is
-                already forced `false` for one server-side (page.tsx), so a self viewer clicking
-                this (were it shown) would just get their own ordinary list back, not a refusal.
-                Shown once in review mode too (even if reviewCount has since dropped to 0), so the
-                one control that got a person INTO the filter is also the one that gets them back
-                OUT of it. */}
-            {!selfScoped && (reviewCount > 0 || reviewMode) ? (
-              <Link
-                href={reviewMode ? '/transactions' : '/transactions?review=1'}
-                className={`badge ${reviewMode ? 'badge--amber' : 'badge--slate'} min-h-11 items-center px-3 sm:min-h-0`}
-              >
-                Needs review ({reviewCount})
-              </Link>
-            ) : null}
           </form>
         </CardBody>
       </Card>
@@ -896,7 +954,10 @@ export function TransactionsClient({
           suite. */}
       {reviewMode ? (
         page.rows.length === 0 ? (
-          <Card>
+          // Ruling S5(a): the same reading-measure cap as the populated list and its pager, so
+          // the empty state does not stretch full-width while everything else on this branch is
+          // capped.
+          <Card className="mx-auto w-full max-w-4xl">
             <EmptyState
               icon={CheckIcon}
               title="Nothing to review. Everything is categorized."
@@ -916,7 +977,13 @@ export function TransactionsClient({
           </Card>
         ) : (
           <>
-            <ul className="flex flex-col gap-3">
+            {/* Ruling S5(a): capped to a reading measure, same as the pager paragraph and the
+                empty state above -- on a laptop or a 27-inch monitor this list used to stretch to
+                the shell's full 1100px, which left the amount marooned out at the far right of a
+                card mostly empty space. A queue you work through top to bottom reads better
+                narrow, at every width, which is exactly why ruling S5 keeps this a card list
+                instead of migrating it to the responsive table treatment above. */}
+            <ul className="mx-auto flex w-full max-w-4xl flex-col gap-3">
               {page.rows.map((row) => {
                 const noteForm = noteEditor(row);
                 const newLoanForm = newLoanEditor(row);
@@ -924,7 +991,13 @@ export function TransactionsClient({
                 return (
                   <li key={row.id} className="card flex flex-col gap-3 p-4">
                     <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-                      <span className="text-sm">
+                      {/* Ruling S5(b): `min-w-0 flex-1` lets a long merchant name (a supermarket's
+                          full legal name, say) wrap inside this span instead of pushing the
+                          amount beside it onto its own line and breaking the right alignment down
+                          the list -- `min-w-0` overrides the flex item's default min-width: auto,
+                          which is what let the un-shrinkable text force the row wide in the first
+                          place. */}
+                      <span className="min-w-0 flex-1 text-sm">
                         {/* Renaming happens from the row menu, same as the table row -- the
                             title stays the only place the bank's own text is visible once a
                             row has been renamed. */}
@@ -962,14 +1035,19 @@ export function TransactionsClient({
                       <span className="tabnum">{row.date}</span>
                       <span aria-hidden="true">·</span>
                       <span>{row.accountName}</span>
-                      <span aria-hidden="true">·</span>
+                      {/* Ruling S5(c): the "uncategorized" fallback badge is gone -- every card in
+                          a queue defined as "not categorized yet" carried it, which made it noise
+                          rather than information. The separator before it goes with it: with no
+                          guess, the meta line simply ends after the account name instead of
+                          trailing a dangling "·". The guessed-category badge is unaffected. */}
                       {row.source === 'bayes' && row.categoryName ? (
-                        <span className="badge badge--amber">
-                          guessed {row.categoryName} (margin {row.confidence?.toFixed(2)})
-                        </span>
-                      ) : (
-                        <span className="badge badge--slate">uncategorized</span>
-                      )}
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span className="badge badge--amber">
+                            guessed {row.categoryName} (margin {row.confidence?.toFixed(2)})
+                          </span>
+                        </>
+                      ) : null}
                     </div>
                     <div className="flex flex-wrap items-center gap-2 border-t border-line pt-3">
                       {/* v1.13.3: the "Set" button is gone -- picking a category IS the decision.
@@ -1004,7 +1082,7 @@ export function TransactionsClient({
                 );
               })}
             </ul>
-            <p className="text-sm text-muted">
+            <p className="mx-auto w-full max-w-4xl text-sm text-muted">
               Page {page.page} of {page.pageCount} — {page.total} transactions
             </p>
           </>
@@ -1014,7 +1092,7 @@ export function TransactionsClient({
         {/* minWidth is the colgroup's own total (3+7+9+15+7+13+11+3 = 68rem). Without it this
             table could not exceed its container, so the scroll container had nothing to scroll
             and the browser shrank every column instead -- see TableWrap's minWidth docblock. */}
-        <TableWrap bare fixed minWidth="68rem">
+        <TableWrap bare fixed minWidth="68rem" responsive>
           <colgroup>
             {/* Just the checkbox, plus the 1rem of cell padding either side. */}
             <col style={{ width: '3rem' }} />
@@ -1060,7 +1138,11 @@ export function TransactionsClient({
               return (
               <Fragment key={row.id}>
               <tr>
-                <td>
+                {/* Ruling S3: the checkbox is the "lead" cell -- row 1, column 1 of the phone
+                    card, placed there by `.cell-stack-lead` regardless of its DOM position. No
+                    column header names a checkbox, so `data-label=""` (ruling S2) rather than
+                    reprinting something like "Select". */}
+                <td data-label="" className="cell-stack-lead">
                   <input
                     type="checkbox"
                     checked={selected.includes(row.id)}
@@ -1069,12 +1151,17 @@ export function TransactionsClient({
                     className="accent-accent"
                   />
                 </td>
-                <td className="tabnum whitespace-nowrap text-muted">{row.date}</td>
+                {/* NOT `cell-stack-hide`: unlike the account name below, a date is not identical
+                    down the page and is the thing a person scans for first when hunting a charge,
+                    so it stays visible on the phone card too. */}
+                <td className="tabnum whitespace-nowrap text-muted" data-label="Date">{row.date}</td>
                 {/* Wraps rather than clips, and keeps the title as a courtesy for a very long
                     name. An ellipsis here relied on hover to recover the value, which a phone
-                    does not have. */}
-                <td className="text-muted" title={row.accountName}>{row.accountName}</td>
-                <td>
+                    does not have. `cell-stack-hide`: an account name repeats identically down this
+                    column and is already the Account filter above, so it costs more width on a
+                    390px screen than it is worth. */}
+                <td className="text-muted cell-stack-hide" title={row.accountName} data-label="Account">{row.accountName}</td>
+                <td className="cell-stack-headline" data-label="Description">
                   <span className="flex flex-wrap items-center gap-1.5">
                     {/* Renaming happens from the row menu now. The title stays: it is the only
                         place the bank's own text is visible once a row has been renamed. */}
@@ -1094,10 +1181,10 @@ export function TransactionsClient({
                     ))}
                   </span>
                 </td>
-                <AmountCell className="whitespace-nowrap">
+                <AmountCell className="whitespace-nowrap cell-stack-amount" data-label="Amount">
                   <Money cents={row.amountCents} />
                 </AmountCell>
-                <td>
+                <td data-label="Category">
                   {/* v1.7.0 Task 4: a split transaction has no ONE category -- its money is
                       divided across its parts -- so it shows a badge instead of a control.
                       Editing the parts happens through Split… in the row menu. */}
@@ -1126,7 +1213,7 @@ export function TransactionsClient({
                     />
                   )}
                 </td>
-                <td>
+                <td data-label="Person">
                   {selfScoped ? (
                     // Item BO: plain text, not nothing -- the column keeps its width and the row
                     // keeps its meaning. The <AutoSaveSelect below stays in this file on purpose:
@@ -1160,8 +1247,10 @@ export function TransactionsClient({
                     reachable because assign items are always offered alongside existing links,
                     never replaced by them. */}
                 {/* The shared `rowMenu()` above -- byte-identical to what this cell used to
-                    render inline, plus the transfer toggle (ruling R4) every row gets now. */}
-                <td className="text-right">{rowMenu(row)}</td>
+                    render inline, plus the transfer toggle (ruling R4) every row gets now.
+                    `cell-stack-actions`: no label, hard right, same as the checkbox's
+                    `cell-stack-lead` at the other end of the phone card's row 1. */}
+                <td className="text-right cell-stack-actions" data-label="">{rowMenu(row)}</td>
               </tr>
               {/* Fix round (item CB): noteEditor/newLoanEditor/applyAllEditor's own contents --
                   the SAME functions the review card list renders below -- see those functions'
@@ -1170,18 +1259,22 @@ export function TransactionsClient({
               {noteForm ? (
                 <tr>
                   {/* Ruling R13: an inline sub-row, not a dialog -- the note is about the row
-                      above it, and a modal would hide the charge the note is explaining. */}
-                  <td colSpan={COLUMN_COUNT}>{noteForm}</td>
+                      above it, and a modal would hide the charge the note is explaining.
+                      `data-label=""` and nothing else: the default `grid-column: 1 / -1` every
+                      `<td>` gets on the stacked phone card already spans the row full-width, so
+                      this single cell needs no cell-stack-* role to sit correctly under the row
+                      it belongs to (Lane 2 spec, item 1). */}
+                  <td colSpan={COLUMN_COUNT} data-label="">{noteForm}</td>
                 </tr>
               ) : null}
               {newLoanForm ? (
                 <tr>
-                  <td colSpan={COLUMN_COUNT}>{newLoanForm}</td>
+                  <td colSpan={COLUMN_COUNT} data-label="">{newLoanForm}</td>
                 </tr>
               ) : null}
               {applyAllForm ? (
                 <tr>
-                  <td colSpan={COLUMN_COUNT}>{applyAllForm}</td>
+                  <td colSpan={COLUMN_COUNT} data-label="">{applyAllForm}</td>
                 </tr>
               ) : null}
               </Fragment>

@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState, useState } from 'react';
+import { useActionState, useEffect, useState } from 'react';
 // Relative, not '@/...': tests/ops/client-bundle.test.ts walks every '@/'-value-import edge out of
 // a 'use client' file looking for a path back to @/db/client. actions.ts is 'use server', but the
 // guard is a source-level regex scan, not real webpack -- it does not know that boundary and would
@@ -35,6 +35,7 @@ export function QuickAddTransaction({
   today,
   defaultAccountId,
   variant,
+  collapsible = false,
 }: {
   accounts: { id: number; name: string }[];
   categories: CategoryLike[];
@@ -44,11 +45,35 @@ export function QuickAddTransaction({
   defaultAccountId: number | null;
   /** 'page' anchors it at #quick-add with a heading; 'card' is the dashboard's compact form. */
   variant: 'page' | 'card';
+  /**
+   * Ruling S6 (v1.15.0): on Transactions this form is ~600px sitting above the first data row of
+   * a page whose job is reading rows -- the biggest single measured win of the responsive-rows
+   * release. Default false so the dashboard's `variant="card"` render (Task 13, v1.13.0) stays
+   * byte-identical to before this ruling: `isDisclosure` below is false unless BOTH this is true
+   * AND `variant === 'page'`, so passing it accidentally on the card variant is inert rather than
+   * a silent behaviour change on the dashboard.
+   */
+  collapsible?: boolean;
 }) {
   const [state, action] = useActionState(manualEntryAction, initial);
   const [direction, setDirection] = useState<'spend' | 'income'>('spend');
   const groups = categoryOptionGroups(categories);
   const accountValue = defaultAccountId === null ? 'cash' : String(defaultAccountId);
+  const isDisclosure = collapsible && variant === 'page';
+  // Closed by default when it is a disclosure at all; otherwise always open, which is the exact
+  // pre-ruling-S6 behaviour every existing caller (and every existing test) still gets.
+  const [open, setOpen] = useState(!isDisclosure);
+
+  // Ruling S6: the PWA manifest shortcut (v1.13.0 ruling R7) targets `#quick-add` and must still
+  // land on an OPEN form even though this now starts closed on Transactions. `window.location`
+  // does not exist during the server render, so it is read here, in an effect, and NEVER in the
+  // render body -- reading it during render would print the server's "closed" markup and then
+  // flip to "open" the instant this effect ran on the client, which is exactly what a hydration
+  // mismatch is.
+  useEffect(() => {
+    if (isDisclosure && window.location.hash === '#quick-add') setOpen(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const form = (
     <form action={action} className="grid gap-3 sm:grid-cols-6">
@@ -129,8 +154,38 @@ export function QuickAddTransaction({
 
   const body = (
     <Card as="div">
-      <CardHeader title="Quick add" description="Cash, an e-transfer, anything the bank will not send you." />
-      <CardBody>{form}</CardBody>
+      <CardHeader
+        title="Quick add"
+        description="Cash, an e-transfer, anything the bank will not send you."
+        action={
+          isDisclosure ? (
+            // 44px floor (global constraint) on anything new: `btn--sm`'s own padding alone
+            // lands well under it on a phone, so `min-h-11 sm:min-h-0` is explicit here rather
+            // than relied on from the class alone.
+            <button
+              type="button"
+              className="btn btn--secondary btn--sm min-h-11 sm:min-h-0"
+              aria-expanded={open}
+              aria-controls="quick-add-body"
+              onClick={() => setOpen((prev) => !prev)}
+            >
+              {open ? 'Close' : 'Add a transaction'}
+            </button>
+          ) : undefined
+        }
+      />
+      {/* Collapsed, this simply does not render the form rather than hiding it with CSS -- unlike
+          the filters disclosure (ruling S7, transactions-client.tsx), which must keep its fields
+          mounted so a hand-edited URL's values are never lost mid-toggle. Quick add has no such
+          state to preserve while closed: it is a blank create form either way.
+          CardBody itself takes no `id` prop (out of scope to add one -- Card.tsx belongs to
+          neither file this task may touch), so the `aria-controls` target is this thin wrapping
+          div instead. */}
+      {open ? (
+        <div id="quick-add-body">
+          <CardBody>{form}</CardBody>
+        </div>
+      ) : null}
     </Card>
   );
 

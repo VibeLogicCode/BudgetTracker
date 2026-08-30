@@ -25,7 +25,14 @@ vi.mock('@/app/(app)/transactions/actions', () => ({
   setRowTransferAction: vi.fn(async () => ({})),
 }));
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  // Ruling S7's disclosure reads window.location.search in an effect (never during render --
+  // see transactions-client.tsx's own comment on why) to decide whether it starts open. Reset
+  // between tests so one test's URL never leaks into the next, which defaults to no filter
+  // active -- exactly what every existing test below implicitly assumes.
+  window.history.pushState({}, '', '/');
+});
 
 // v1.11.0 Task 3: the row's actions collapsed into a kebab (RowMenu), which renders its
 // items only once opened -- so any test that used to find "Create warranty", "Split…" or a
@@ -127,6 +134,9 @@ describe('TransactionsClient — archived-category silent-clear hazard', () => {
     expect(filterSelect.querySelector('option[value="42"]')).toBeNull();
     expect(filterSelect.querySelector('option[value="7"]')).not.toBeNull();
 
+    // Ruling S6 changed this: Quick add now renders collapsed by default outside review mode, so
+    // the manual-entry form is not in the DOM until its disclosure is opened.
+    fireEvent.click(screen.getByRole('button', { name: 'Add a transaction' }));
     const manualForm = Array.from(container.querySelectorAll('form')).find((f) => f.querySelector('input[name="description"]'))!;
     const manualCategorySelect = manualForm.querySelector('select[name="categoryId"]') as HTMLSelectElement;
     expect(manualCategorySelect.querySelector('option[value="42"]')).toBeNull();
@@ -560,6 +570,9 @@ describe('v1.12.1: the number pad opens for the manual-entry amount (item Y / UX
     render(
       <TransactionsClient page={pageWithRow()} accounts={[]} categories={[]} people={[]} today="2026-03-02" />,
     );
+    // Ruling S6 changed this: Quick add starts collapsed outside review mode now, so its fields
+    // (this one included) are not in the DOM until the disclosure is opened.
+    fireEvent.click(screen.getByRole('button', { name: 'Add a transaction' }));
     const amount = document.querySelector('input[name="amount"]') as HTMLInputElement | null;
     expect(amount?.getAttribute('inputmode')).toBe('decimal');
   });
@@ -991,8 +1004,12 @@ describe('Review mode (ruling R5): the card list replaces the table', () => {
     expect(screen.getByText(/guessed Dining \(margin 0\.82\)/)).toBeTruthy();
   });
 
-  it('shows an "uncategorized" badge instead when nothing was guessed', () => {
-    render(
+  // Ruling S5(c) replaced this test: every card in a queue defined as "not categorized yet" used
+  // to carry an "uncategorized" badge, which labelled the one thing every card already shares --
+  // noise, not information. The fallback badge is deleted outright now, so this proves its
+  // absence instead of its presence.
+  it('renders no "uncategorized" badge when nothing was guessed -- the meta line just ends after the account', () => {
+    const { container } = render(
       <TransactionsClient
         page={reviewPage({ source: 'none', categoryId: null, categoryName: null, confidence: null })}
         accounts={[]}
@@ -1002,7 +1019,8 @@ describe('Review mode (ruling R5): the card list replaces the table', () => {
         reviewMode
       />,
     );
-    expect(screen.getByText('uncategorized')).toBeTruthy();
+    expect(screen.queryByText('uncategorized')).toBeNull();
+    expect(container.querySelector('.badge--slate')).toBeNull();
   });
 
   it('labels the per-row select "This transaction only" and sends teach=1', async () => {
@@ -1383,5 +1401,137 @@ describe('Backlog BZ: category selects render optgroups', () => {
     const optgroup = container.querySelector('tbody select[name="categoryId"] optgroup') as HTMLOptGroupElement;
     expect(optgroup).toBeTruthy();
     expect(optgroup.label).toBe('Home');
+  });
+});
+
+/**
+ * v1.15.0 (responsive-rows plan, Lane 2, item 1): the table's own `<td>`s now carry `data-label`
+ * and the `cell-stack-*` roles globals.css uses to reflow the row into a phone card below `sm`
+ * (rulings S2/S3). jsdom does not evaluate media queries, so these are attribute/class
+ * assertions, not layout assertions -- the real reflow is covered visually, not here.
+ */
+describe('v1.15.0 ruling S2/S3: the table row carries data-label and cell-stack roles', () => {
+  it('the amount cell carries data-label="Amount" and the cell-stack-amount role', () => {
+    const { container } = render(
+      <TransactionsClient page={pageWithRow()} accounts={[]} categories={[]} people={[]} today="2026-03-02" />,
+    );
+    const amountCell = container.querySelector('tbody td[data-label="Amount"]') as HTMLTableCellElement;
+    expect(amountCell).toBeTruthy();
+    expect(amountCell.className).toContain('cell-stack-amount');
+  });
+
+  it('the account cell carries the cell-stack-hide role -- it repeats down the column and is already the Account filter', () => {
+    const { container } = render(
+      <TransactionsClient page={pageWithRow()} accounts={[]} categories={[]} people={[]} today="2026-03-02" />,
+    );
+    const accountCell = container.querySelector('tbody td[data-label="Account"]') as HTMLTableCellElement;
+    expect(accountCell).toBeTruthy();
+    expect(accountCell.className).toContain('cell-stack-hide');
+  });
+
+  it('the date cell is NOT hidden -- unlike the account, it is not identical down the page', () => {
+    const { container } = render(
+      <TransactionsClient page={pageWithRow()} accounts={[]} categories={[]} people={[]} today="2026-03-02" />,
+    );
+    const dateCell = container.querySelector('tbody td[data-label="Date"]') as HTMLTableCellElement;
+    expect(dateCell).toBeTruthy();
+    expect(dateCell.className).not.toContain('cell-stack-hide');
+  });
+
+  it('the checkbox and row-menu cells carry data-label="" plus their lead/actions roles', () => {
+    const { container } = render(
+      <TransactionsClient page={pageWithRow()} accounts={[]} categories={[]} people={[]} today="2026-03-02" />,
+    );
+    const cells = Array.from(container.querySelectorAll('tbody tr:first-child > td'));
+    const lead = cells.find((td) => td.className.includes('cell-stack-lead'));
+    const actions = cells.find((td) => td.className.includes('cell-stack-actions'));
+    expect(lead?.getAttribute('data-label')).toBe('');
+    expect(actions?.getAttribute('data-label')).toBe('');
+  });
+
+  it('a colSpan sub-row editor carries data-label="" and still renders (regression guard, backlog CB)', () => {
+    render(
+      <TransactionsClient page={pageWithRow({ id: 5, notes: 'paid in cash' })} accounts={[]} categories={[]} people={[]} today="2026-03-02" />,
+    );
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Note…' }));
+    const textarea = screen.getByLabelText(/Note for TIM HORTONS/);
+    const cell = textarea.closest('td') as HTMLTableCellElement;
+    expect(cell.getAttribute('data-label')).toBe('');
+    expect(cell.colSpan).toBeGreaterThan(1);
+  });
+});
+
+/** v1.15.0 ruling S6: Quick add is a disclosure on Transactions, hidden entirely in review mode. */
+describe('v1.15.0 ruling S6: Quick add folds away on Transactions', () => {
+  it('is absent entirely in review mode -- a triage queue has no business showing a create form', () => {
+    const { container } = render(
+      <TransactionsClient page={pageWithRow()} accounts={[]} categories={[]} people={[]} today="2026-03-02" reviewMode />,
+    );
+    expect(container.querySelector('#quick-add')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add a transaction' })).toBeNull();
+  });
+
+  it('renders collapsed by default outside review mode, with a working toggle', () => {
+    const { container } = render(
+      <TransactionsClient page={pageWithRow()} accounts={[]} categories={[]} people={[]} today="2026-03-02" />,
+    );
+    expect(container.querySelector('#quick-add')).toBeTruthy();
+    const toggle = screen.getByRole('button', { name: 'Add a transaction' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    // Collapsed: the manual-entry form is not mounted at all yet.
+    expect(container.querySelector('input[name="description"]')).toBeNull();
+
+    fireEvent.click(toggle);
+    expect(screen.getByRole('button', { name: 'Close' }).getAttribute('aria-expanded')).toBe('true');
+    expect(container.querySelector('input[name="description"]')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(screen.getByRole('button', { name: 'Add a transaction' })).toBeTruthy();
+    expect(container.querySelector('input[name="description"]')).toBeNull();
+  });
+});
+
+/** v1.15.0 ruling S7: the filter controls fold behind a disclosure below `sm`. */
+describe('v1.15.0 ruling S7: the filter controls disclosure', () => {
+  it('the fields stay mounted whether the disclosure is open or not -- the filter form still submits every field it does today', () => {
+    const { container } = render(
+      <TransactionsClient
+        page={pageWithRow()}
+        accounts={[{ id: 1, name: 'Joint Chequing' }]}
+        categories={[]}
+        people={[{ id: 1, name: 'Alice' }]}
+        today="2026-03-02"
+      />,
+    );
+    const form = container.querySelector('form[method="get"]') as HTMLFormElement;
+    // Closed by default (no filter active in the mocked search string) -- still present in the
+    // DOM, not conditionally unmounted, so a hand-edited URL's fields are never lost mid-toggle.
+    expect(form.querySelector('select[name="account"]')).toBeTruthy();
+    expect(form.querySelector('select[name="category"]')).toBeTruthy();
+    expect(form.querySelector('select[name="person"]')).toBeTruthy();
+    expect(form.querySelector('input[name="q"]')).toBeTruthy();
+    expect(form.querySelector('input[name="uncat"]')).toBeTruthy();
+    expect(form.querySelector('input[name="transfers"]')).toBeTruthy();
+    expect(form.querySelector('button[type="submit"]')).toBeTruthy();
+  });
+
+  it('closed by default when nothing is filtered, and the toggle opens it', () => {
+    render(
+      <TransactionsClient page={pageWithRow()} accounts={[]} categories={[]} people={[]} today="2026-03-02" />,
+    );
+    const toggle = screen.getByRole('button', { name: 'Filters' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('opens by default and names the count when the URL already carries a filter', () => {
+    window.history.pushState({}, '', '/transactions?account=1&q=coffee');
+    render(
+      <TransactionsClient page={pageWithRow()} accounts={[]} categories={[]} people={[]} today="2026-03-02" />,
+    );
+    const toggle = screen.getByRole('button', { name: 'Filters (2)' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
   });
 });

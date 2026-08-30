@@ -1,13 +1,18 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, cleanup, screen } from '@testing-library/react';
+import { render, cleanup, screen, fireEvent } from '@testing-library/react';
 import { QuickAddTransaction } from '@/components/QuickAddTransaction';
 
 vi.mock('@/app/(app)/transactions/actions', () => ({
   manualEntryAction: vi.fn(async () => ({ message: 'Transaction added.' })),
 }));
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  // Ruling S6 tests below set this to prove the PWA-shortcut effect; reset it so a later test in
+  // this file never inherits it.
+  window.location.hash = '';
+});
 
 /**
  * Sets an <input>'s value through the NATIVE value setter rather than the plain `el.value = x`
@@ -106,5 +111,53 @@ describe('QuickAddTransaction (ruling R7)', () => {
   it('still renders it for a household viewer', () => {
     render(<QuickAddTransaction {...props} />);
     expect(screen.getByLabelText('Person')).toBeTruthy();
+  });
+});
+
+/**
+ * v1.15.0 ruling S6: `collapsible` folds Quick add into a disclosure, closed by default, on
+ * Transactions. Default false, so every test above (which never passes it) proves the dashboard's
+ * `variant="card"` render stays exactly as it was before this ruling.
+ */
+describe('QuickAddTransaction (ruling S6): the collapsible disclosure', () => {
+  it('with collapsible and variant="page", starts closed and shows only the toggle', () => {
+    render(<QuickAddTransaction {...props} collapsible />);
+    const toggle = screen.getByRole('button', { name: 'Add a transaction' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByLabelText('Description')).toBeNull();
+  });
+
+  it('clicking the toggle opens the form, relabels itself "Close", and closing it again removes the form', () => {
+    render(<QuickAddTransaction {...props} collapsible />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add a transaction' }));
+
+    const closeToggle = screen.getByRole('button', { name: 'Close' });
+    expect(closeToggle.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByLabelText('Description', { exact: false })).toBeTruthy();
+
+    fireEvent.click(closeToggle);
+    expect(screen.getByRole('button', { name: 'Add a transaction' })).toBeTruthy();
+    expect(screen.queryByLabelText('Description')).toBeNull();
+  });
+
+  it('opens on mount when the hash matches #quick-add, so the PWA manifest shortcut (ruling R7) still lands on an open form', () => {
+    window.location.hash = '#quick-add';
+    render(<QuickAddTransaction {...props} collapsible />);
+    expect(screen.getByRole('button', { name: 'Close' }).getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByLabelText('Description', { exact: false })).toBeTruthy();
+  });
+
+  it('does not open on mount when the hash does not match', () => {
+    window.location.hash = '#something-else';
+    render(<QuickAddTransaction {...props} collapsible />);
+    expect(screen.getByRole('button', { name: 'Add a transaction' })).toBeTruthy();
+  });
+
+  it('is inert on the dashboard\'s card variant -- collapsible only changes anything when variant is "page"', () => {
+    render(<QuickAddTransaction {...props} variant="card" collapsible />);
+    expect(screen.queryByRole('button', { name: 'Add a transaction' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Close' })).toBeNull();
+    // The form is there, unconditionally, exactly as the dashboard's byte-identical render needs.
+    expect(screen.getByLabelText('Description', { exact: false })).toBeTruthy();
   });
 });
