@@ -47,6 +47,7 @@ vi.mock('next/cache', () => ({
 
 import { CROSS_ORIGIN_ERROR } from '@/lib/auth/csrf';
 import {
+  acceptAllGuessesAction,
   acceptGuessAction,
   applyToAllMatchingAction,
   assignToLoanAction,
@@ -1435,6 +1436,101 @@ describe('applyToAllMatchingAction (ported from review/actions.ts)', () => {
     expect(result.error).toBe(ruleOwnedError('Bob'));
     const row = sqlite.prepare('select category_id as c from transactions where id = ?').get(id) as { c: number | null };
     expect(row.c).toBeNull();
+  });
+});
+
+/**
+ * v1.19.0 Lane 2 item 5: "Accept all suggestions". This action's OWN body does almost nothing --
+ * it validates the id list, then calls acceptGuessAction once per id, exactly as a person clicking
+ * Accept N times would. These tests prove that reuse actually holds (the self-scoped refusal, the
+ * has-a-guess check and the rule-ownership guard all fire without being reimplemented here), and
+ * that a refusal partway through stops the batch and reports the truth instead of pretending
+ * every id was accepted.
+ */
+describe('acceptAllGuessesAction (v1.19.0 Lane 2 item 5)', () => {
+  it('accepts every id and reports the plural sentence', async () => {
+    const { db, sqlite } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const a = addTxnWithCategory('MERCHANT ONE', coffee, 'bayes');
+    const b = addTxnWithCategory('MERCHANT TWO', coffee, 'bayes');
+    const result = await acceptAllGuessesAction({}, formData({ ids: `${a},${b}` }));
+    expect(result.message).toBe('Accepted 2 suggestions.');
+    const rows = sqlite
+      .prepare('select category_id as c, categorization_source as s from transactions where id in (?, ?)')
+      .all(a, b) as { c: number; s: string }[];
+    expect(rows.every((row) => row.c === coffee && row.s === 'manual')).toBe(true);
+  });
+
+  it('reports the singular sentence for exactly one id', async () => {
+    const { db } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const a = addTxnWithCategory('MERCHANT SOLO', coffee, 'bayes');
+    const result = await acceptAllGuessesAction({}, formData({ ids: String(a) }));
+    expect(result.message).toBe('Accepted 1 suggestion.');
+  });
+
+  it('errors on an empty id list instead of silently accepting nothing', async () => {
+    setup();
+    const result = await acceptAllGuessesAction({}, formData({ ids: '' }));
+    expect(result.error).toBe('Nothing to accept.');
+  });
+
+  it('checks the origin before anything else', async () => {
+    setup();
+    sameOrigin.value = false;
+    const result = await acceptAllGuessesAction({}, formData({ ids: '1' }));
+    expect(result.error).toBe(CROSS_ORIGIN_ERROR);
+  });
+
+  it('refuses a self-scoped viewer, byte-identical to the review-page guard, and writes nothing', async () => {
+    const { db, sqlite } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const a = addTxnWithCategory('MERCHANT SELF', coffee, 'bayes');
+    currentUser = { ...currentUser, role: 'member', visibility: 'self' };
+    const result = await acceptAllGuessesAction({}, formData({ ids: String(a) }));
+    expect(result.error).toBe('Review is not available on this account.');
+    const row = sqlite.prepare('select categorization_source as s from transactions where id = ?').get(a) as { s: string };
+    expect(row.s).toBe('bayes');
+  });
+
+  it('errors when a row has no guess to accept -- the same guard acceptGuessAction enforces on its own', async () => {
+    const { addTxn } = setup();
+    const id = addTxn();
+    const result = await acceptAllGuessesAction({}, formData({ ids: String(id) }));
+    expect(result.error).toBe('There is no guess to accept on that row.');
+  });
+
+  it('stops at the first refusal, keeps what already succeeded, and never touches the rows after it', async () => {
+    const { db, sqlite } = setup();
+    const bob = insertTestUser(db, { name: 'Bob', username: 'bob', role: 'member' });
+    const coffee = categoryIdByName(db, 'Coffee');
+    const groceries = categoryIdByName(db, 'Groceries');
+    // Bob owns MERCHANT TWO's rule already -- the one row in the batch a member cannot accept.
+    upsertRuleFromCorrection({
+      pattern: normalizeMerchant('MERCHANT TWO'),
+      matchType: 'exact',
+      ruleKind: 'category',
+      categoryId: groceries,
+      createdBy: bob,
+      actorRole: 'member',
+    });
+    const a = addTxnWithCategory('MERCHANT ONE', coffee, 'bayes');
+    const b = addTxnWithCategory('MERCHANT TWO', coffee, 'bayes');
+    const c = addTxnWithCategory('MERCHANT THREE', coffee, 'bayes');
+    currentUser = { ...currentUser, role: 'member' };
+
+    const result = await acceptAllGuessesAction({}, formData({ ids: `${a},${b},${c}` }));
+
+    expect(result.error).toBe(`Accepted 1 suggestion before stopping. ${ruleOwnedError('Bob')}`);
+    expect(result.message).toBeUndefined();
+    const row = (id: number) =>
+      sqlite.prepare('select category_id as c, categorization_source as s from transactions where id = ?').get(id) as {
+        c: number;
+        s: string;
+      };
+    expect(row(a)).toEqual({ c: coffee, s: 'manual' }); // accepted before the refusal
+    expect(row(b)).toEqual({ c: coffee, s: 'bayes' }); // the refusal itself changed nothing
+    expect(row(c)).toEqual({ c: coffee, s: 'bayes' }); // never reached
   });
 });
 

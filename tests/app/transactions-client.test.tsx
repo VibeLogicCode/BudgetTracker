@@ -23,6 +23,8 @@ vi.mock('@/app/(app)/transactions/actions', () => ({
   acceptGuessAction: vi.fn(async () => ({})),
   applyToAllMatchingAction: vi.fn(async () => ({})),
   setRowTransferAction: vi.fn(async () => ({})),
+  // v1.19.0 Lane 2 item 5: "Accept all suggestions".
+  acceptAllGuessesAction: vi.fn(async () => ({})),
 }));
 
 afterEach(() => {
@@ -1450,7 +1452,12 @@ describe('v1.15.0 ruling S2/S3: the table row carries data-label and cell-stack 
     const { container } = render(
       <TransactionsClient page={pageWithRow()} accounts={[]} categories={[]} people={[]} today="2026-03-02" />,
     );
-    const cells = Array.from(container.querySelectorAll('tbody tr:first-child > td'));
+    // v1.19.0 Lane 2 item 3: `tbody tr:first-child` used to BE the one data row, but date
+    // grouping now always renders a day-header <tr> ahead of it (every row starts a new day the
+    // first time it appears) -- `:nth-of-type(2)` is the actual transaction row for this
+    // single-row fixture, the same way the day header's own tests below prove it is a plain,
+    // single-<td> row rather than a second copy of the data row's cells.
+    const cells = Array.from(container.querySelectorAll('tbody tr:nth-of-type(2) > td'));
     const lead = cells.find((td) => td.className.includes('cell-stack-lead'));
     const actions = cells.find((td) => td.className.includes('cell-stack-actions'));
     expect(lead?.getAttribute('data-label')).toBe('');
@@ -1578,5 +1585,261 @@ describe('v1.15.0 ruling S7: the filter controls disclosure', () => {
     );
     const toggle = screen.getByRole('button', { name: 'Filters (2)' });
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
+  });
+});
+
+/**
+ * v1.19.0 Lane 2 item 2 (ruling D6). TOP-LEVEL categories only, wrapping, with a "+n" expander,
+ * and never a second `category` form field beside the existing select -- every assertion here is
+ * scoped `within` the chip group specifically, because the existing Category select (still inside
+ * the Filters(N) disclosure, untouched by this task) renders the very same category NAMES as
+ * plain <option> text, and an unscoped screen.getByText would find both.
+ */
+describe('Chip filters (ruling D6): top-level categories, wrapping, no picker duplication', () => {
+  const categories = [
+    { id: 1, name: 'Housing', parentId: null, isArchived: false, sortOrder: 0 },
+    { id: 2, name: 'Rent', parentId: 1, isArchived: false, sortOrder: 0 },
+    { id: 3, name: 'Groceries', parentId: null, isArchived: false, sortOrder: 1 },
+    { id: 4, name: 'Old Category', parentId: null, isArchived: true, sortOrder: 2 },
+  ];
+
+  it('renders "All" plus every active top-level category, never a child or an archived one', () => {
+    render(
+      <TransactionsClient page={pageWithRow()} accounts={[]} categories={categories} people={[]} today="2026-08-16" />,
+    );
+    const chips = within(screen.getByRole('group', { name: 'Filter by category' }));
+    expect(chips.getByText('All')).toBeTruthy();
+    expect(chips.getByText('Housing')).toBeTruthy();
+    expect(chips.getByText('Groceries')).toBeTruthy();
+    expect(chips.queryByText('Rent')).toBeNull();
+    expect(chips.queryByText('Old Category')).toBeNull();
+  });
+
+  it('folds anything past the visible count behind a "+n" expander that reveals the rest', () => {
+    const manyCategories = Array.from({ length: 10 }, (_, i) => ({
+      id: i + 1,
+      name: `Category ${i + 1}`,
+      parentId: null,
+      isArchived: false,
+      sortOrder: i,
+    }));
+    render(
+      <TransactionsClient page={pageWithRow()} accounts={[]} categories={manyCategories} people={[]} today="2026-08-16" />,
+    );
+    const chips = within(screen.getByRole('group', { name: 'Filter by category' }));
+    expect(chips.getByText('Category 8')).toBeTruthy();
+    expect(chips.queryByText('Category 9')).toBeNull();
+    expect(chips.getByText('+2')).toBeTruthy();
+    fireEvent.click(chips.getByText('+2'));
+    expect(chips.getByText('Category 9')).toBeTruthy();
+    expect(chips.getByText('Category 10')).toBeTruthy();
+  });
+
+  it('a chip link changes only the category param, preserving everything else already active', () => {
+    window.history.pushState({}, '', '/transactions?account=3&review=1');
+    render(
+      <TransactionsClient page={pageWithRow()} accounts={[]} categories={categories} people={[]} today="2026-08-16" reviewMode />,
+    );
+    const chips = within(screen.getByRole('group', { name: 'Filter by category' }));
+    const link = chips.getByText('Housing').closest('a');
+    expect(link?.getAttribute('href')).toBe('/transactions?account=3&review=1&category=1');
+  });
+
+  it('"All" clears the category param but keeps everything else', () => {
+    window.history.pushState({}, '', '/transactions?account=3&category=1');
+    render(
+      <TransactionsClient page={pageWithRow()} accounts={[]} categories={categories} people={[]} today="2026-08-16" />,
+    );
+    const chips = within(screen.getByRole('group', { name: 'Filter by category' }));
+    const link = chips.getByText('All').closest('a');
+    expect(link?.getAttribute('href')).toBe('/transactions?account=3');
+  });
+
+  it('marks the chip matching the current ?category param active, and All otherwise', () => {
+    window.history.pushState({}, '', '/transactions?category=3');
+    render(
+      <TransactionsClient page={pageWithRow()} accounts={[]} categories={categories} people={[]} today="2026-08-16" />,
+    );
+    const chips = within(screen.getByRole('group', { name: 'Filter by category' }));
+    expect(chips.getByText('Groceries').className).toContain('bg-accent-soft');
+    expect(chips.getByText('All').className).not.toContain('bg-accent-soft');
+  });
+});
+
+/**
+ * v1.19.0 Lane 2 item 3. Rows are already sorted by date (desc outside review mode, asc inside
+ * it -- listTransactions' own ORDER BY), so grouping is a same-date-as-the-previous-row check,
+ * never a second sort. `2026-08-29` is a Saturday and `2026-08-28` a Friday -- picked because the
+ * plan's own example ("SAT, AUG 29") is exactly this date, so a wrong weekday calculation fails
+ * loudly here instead of quietly matching whatever the test happened to assert.
+ */
+describe('Date grouping (item 3): rows group under a day header', () => {
+  function twoDaysPage(): TransactionPage {
+    const a = pageWithRow({ id: 1, date: '2026-08-29' }).rows[0];
+    const b = pageWithRow({ id: 2, date: '2026-08-29', rawDescription: 'SECOND', normalizedMerchant: 'SECOND' }).rows[0];
+    const c = pageWithRow({ id: 3, date: '2026-08-28', rawDescription: 'THIRD', normalizedMerchant: 'THIRD' }).rows[0];
+    return { total: 3, page: 1, pageSize: 50, pageCount: 1, rows: [a, b, c] };
+  }
+
+  it('the table prints one day header per date, not one per row', () => {
+    const { container } = render(
+      <TransactionsClient page={twoDaysPage()} accounts={[]} categories={[]} people={[]} today="2026-08-29" />,
+    );
+    expect(screen.getByText('SAT, AUG 29')).toBeTruthy();
+    expect(screen.getByText('FRI, AUG 28')).toBeTruthy();
+    // A day header is the only `colspan` cell here (no note/loan/apply-all sub-row is open), so
+    // this counts headers, not data rows -- 2 headers for 3 rows across 2 distinct dates.
+    const headers = container.querySelectorAll('tbody td[data-label=""][colspan]');
+    expect(headers.length).toBe(2);
+  });
+
+  it('the day header is a full-width <tr><td colSpan>, so the existing phone-stack reflow (which already handles a colSpan cell) keeps working with no new CSS', () => {
+    const { container } = render(
+      <TransactionsClient page={twoDaysPage()} accounts={[]} categories={[]} people={[]} today="2026-08-29" />,
+    );
+    const cell = screen.getByText('SAT, AUG 29').closest('td') as HTMLTableCellElement;
+    expect(cell.getAttribute('data-label')).toBe('');
+    expect(cell.colSpan).toBeGreaterThan(1);
+  });
+
+  it('the review card list groups under the same day header, as a plain <li> rather than a second .card', () => {
+    const { container } = render(
+      <TransactionsClient page={twoDaysPage()} accounts={[]} categories={[]} people={[]} today="2026-08-29" reviewMode />,
+    );
+    expect(screen.getByText('SAT, AUG 29')).toBeTruthy();
+    expect(screen.getByText('FRI, AUG 28')).toBeTruthy();
+    // Every real transaction still gets its own card -- the header is an extra sibling, not a
+    // replacement for any row.
+    expect(container.querySelectorAll('ul > li.card').length).toBe(3);
+    const header = screen.getByText('SAT, AUG 29').closest('li') as HTMLLIElement;
+    expect(header.className).not.toContain('card');
+  });
+});
+
+/** v1.19.0 Lane 2 item 4. Money already colours the amount by sign (money-pos/money-neg); the
+ *  circled direction glyph is the one piece of "row rhythm" the review card lacked. */
+describe('Row rhythm (item 4): the review card gets a circled money-direction glyph', () => {
+  it('a positive amount gets the positive-toned "in" circle', () => {
+    const { container } = render(
+      <TransactionsClient page={pageWithRow({ amountCents: 500 })} accounts={[]} categories={[]} people={[]} today="2026-08-16" reviewMode />,
+    );
+    expect(container.querySelector('li.card span[aria-hidden="true"].bg-positive-soft')).toBeTruthy();
+  });
+
+  it('a negative amount gets the plain "out" circle', () => {
+    const { container } = render(
+      <TransactionsClient page={pageWithRow({ amountCents: -500 })} accounts={[]} categories={[]} people={[]} today="2026-08-16" reviewMode />,
+    );
+    expect(container.querySelector('li.card span[aria-hidden="true"].bg-surface-2')).toBeTruthy();
+  });
+});
+
+/** v1.19.0 Lane 2 item 5: the per-row confirm button. Disabled state is gated on `categoryId`
+ *  alone, not `source` -- unlike the kebab's "Accept <category>" item, a hand-picked category
+ *  deserves the same one-click confirm as a bayes guess does. */
+describe('Review mode: per-row confirm button (item 5)', () => {
+  it('is disabled while the row has no category', () => {
+    render(
+      <TransactionsClient
+        page={pageWithRow({ id: 1, source: 'none', categoryId: null, categoryName: null })}
+        accounts={[]}
+        categories={[]}
+        people={[]}
+        today="2026-08-16"
+        reviewMode
+      />,
+    );
+    const button = screen.getByRole('button', { name: /Choose a category before confirming/ }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+  });
+
+  it('is enabled once the row has a category, and confirming posts the transaction id to acceptGuessAction', async () => {
+    const { acceptGuessAction } = await import('@/app/(app)/transactions/actions');
+    vi.mocked(acceptGuessAction).mockClear();
+    render(
+      <TransactionsClient
+        page={pageWithRow({ id: 9, source: 'bayes', categoryId: 1, categoryName: 'Dining' })}
+        accounts={[]}
+        categories={[{ id: 1, name: 'Dining', parentId: null, isArchived: false, sortOrder: 0 }]}
+        people={[]}
+        today="2026-08-16"
+        reviewMode
+      />,
+    );
+    const button = screen.getByRole('button', { name: /Confirm Dining for/ }) as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+    fireEvent.click(button);
+    await waitFor(() => expect(acceptGuessAction).toHaveBeenCalled());
+    const sent = (acceptGuessAction as ReturnType<typeof vi.fn>).mock.calls.at(-1)![1] as FormData;
+    expect(sent.get('transactionId')).toBe('9');
+  });
+});
+
+/**
+ * v1.19.0 Lane 2 item 5: the confirm-progress bar and "Accept all suggestions". Session-local by
+ * design (transactions-client.tsx's own comment on queueCeiling explains why -- this task touches
+ * no src/lib file, so there is nowhere to keep a persisted count), so every fresh render starts
+ * back at 0 confirmed against whatever the current filtered total is.
+ */
+describe('Review mode: confirm-progress bar and Accept all suggestions (item 5)', () => {
+  const diningCategory = [{ id: 1, name: 'Dining', parentId: null, isArchived: false, sortOrder: 0 }];
+
+  function reviewPageOf(total: number, bayesGuessed: number): TransactionPage {
+    const rows: TransactionRow[] = [];
+    for (let i = 0; i < total; i += 1) {
+      rows.push(
+        pageWithRow({
+          id: i + 1,
+          rawDescription: `MERCHANT ${i}`,
+          normalizedMerchant: `MERCHANT ${i}`,
+          source: i < bayesGuessed ? 'bayes' : 'none',
+          categoryId: i < bayesGuessed ? 1 : null,
+          categoryName: i < bayesGuessed ? 'Dining' : null,
+        }).rows[0],
+      );
+    }
+    return { total, page: 1, pageSize: 50, pageCount: 1, rows };
+  }
+
+  it('reads 0/M confirmed on first render, M being the filtered total', () => {
+    render(
+      <TransactionsClient page={reviewPageOf(3, 2)} accounts={[]} categories={diningCategory} people={[]} today="2026-08-16" reviewMode />,
+    );
+    expect(screen.getByText('0/3 confirmed')).toBeTruthy();
+    expect(screen.getByRole('progressbar', { name: 'Review queue confirmed' })).toBeTruthy();
+  });
+
+  it('offers "Accept all suggestions (N)" only for rows the categorizer guessed with a category', () => {
+    render(
+      <TransactionsClient page={reviewPageOf(3, 2)} accounts={[]} categories={diningCategory} people={[]} today="2026-08-16" reviewMode />,
+    );
+    expect(screen.getByRole('button', { name: /Accept all suggestions \(2\)/ })).toBeTruthy();
+  });
+
+  it('is absent when nothing on the page has a guess to accept', () => {
+    render(
+      <TransactionsClient page={reviewPageOf(3, 0)} accounts={[]} categories={[]} people={[]} today="2026-08-16" reviewMode />,
+    );
+    expect(screen.queryByRole('button', { name: /Accept all suggestions/ })).toBeNull();
+  });
+
+  it('clicking it posts every eligible id to acceptAllGuessesAction', async () => {
+    const { acceptAllGuessesAction } = await import('@/app/(app)/transactions/actions');
+    vi.mocked(acceptAllGuessesAction).mockClear();
+    render(
+      <TransactionsClient page={reviewPageOf(3, 2)} accounts={[]} categories={diningCategory} people={[]} today="2026-08-16" reviewMode />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Accept all suggestions \(2\)/ }));
+    await waitFor(() => expect(acceptAllGuessesAction).toHaveBeenCalled());
+    const sent = (acceptAllGuessesAction as ReturnType<typeof vi.fn>).mock.calls.at(-1)![1] as FormData;
+    expect(sent.get('ids')).toBe('1,2');
+  });
+
+  it('never renders outside review mode', () => {
+    render(
+      <TransactionsClient page={reviewPageOf(3, 2)} accounts={[]} categories={diningCategory} people={[]} today="2026-08-16" />,
+    );
+    expect(screen.queryByText(/confirmed$/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /Accept all suggestions/ })).toBeNull();
   });
 });

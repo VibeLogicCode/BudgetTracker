@@ -261,6 +261,51 @@ export async function acceptGuessAction(_prev: ActionState, formData: FormData):
 }
 
 /**
+ * v1.19.0 Lane 2 item 5: "Accept all suggestions" clears every bayes-guessed row the client
+ * offered (every row on the page whose `source` is `bayes` with a category, computed client-side
+ * from the same `page.rows` the card list already renders) in one click instead of one Accept per
+ * row. It calls acceptGuessAction ONCE PER id -- literally the same function the per-row "Accept
+ * <category>" kebab item and the new inline confirm button both dispatch -- rather than
+ * reimplementing the self-scoped refusal, the has-a-guess check, the rule-ownership guard and the
+ * teaching behaviour a second time beside it. That reuse is the whole point: those guards have
+ * already drifted out of sync with each other once in this app's history (review/actions.ts vs.
+ * this file, before v1.14.1 ported them byte-for-byte), and a third hand-written copy is exactly
+ * how that happens again.
+ *
+ * Deliberately NOT wrapped in one db transaction the way bulkSetCategory/bulkSetTransfer are:
+ * each id's accept is independent (confirming row A's guess has no bearing on row B's), so a
+ * refusal partway through (someone else in the household owns that merchant's rule) has nothing
+ * to roll back -- the rows accepted before it hit stay correctly filed, and the message says so
+ * honestly instead of silently discarding real progress to keep an all-or-nothing story that
+ * was never true here.
+ */
+export async function acceptAllGuessesAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  const user = await requireUser();
+  if (isSelfScoped(user)) return { error: 'Review is not available on this account.' };
+
+  const ids = idList.parse(String(formData.get('ids') ?? ''));
+  if (ids.length === 0) return { error: 'Nothing to accept.' };
+
+  let accepted = 0;
+  for (const id of ids) {
+    const single = new FormData();
+    single.set('transactionId', String(id));
+    // eslint-disable-next-line no-await-in-loop -- each accept must see the last one's write
+    // (confirmCategory trains the Bayes model per call), so these cannot run concurrently.
+    const result = await acceptGuessAction({}, single);
+    if (result.error) {
+      return {
+        error: accepted > 0 ? `Accepted ${accepted} suggestion${accepted === 1 ? '' : 's'} before stopping. ${result.error}` : result.error,
+      };
+    }
+    accepted += 1;
+  }
+  return { message: `Accepted ${accepted} suggestion${accepted === 1 ? '' : 's'}.` };
+}
+
+/**
  * v1.14.1: ported from src/app/(app)/review/actions.ts, byte-identical guards and messages
  * (inventory item 7, review-mode-only kebab item).
  */
