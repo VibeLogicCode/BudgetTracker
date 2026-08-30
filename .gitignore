@@ -17,3 +17,6 @@ next-env.d.ts
 /public/scanner/
 
 .vscode/
+
+# Design references (mockups and exported prototypes). Never shipped, never published.
+/UI Component/
