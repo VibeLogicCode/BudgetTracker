@@ -201,7 +201,7 @@ Commit: `feat(transactions): grouped by day, filtered by chips, and a review que
 
 ## Lane 3 — Dashboard
 
-**Files:** `src/app/(app)/dashboard/page.tsx`, and the dashboard card components it renders
+**Files:** `src/app/(app)/dashboard/page.tsx`, `src/components/ui/PageHeader.tsx`, `src/components/QuickAddTransaction.tsx`, and the dashboard card components it renders
 (`src/components/*Card.tsx` for loans, who-owes-us, updates, getting-started — convert each to
 `MetricCard`/`ListRow`/`SectionHeader` as its shape suggests); tests `tests/app/dashboard.test.tsx`,
 `tests/components/*.test.tsx` for the cards you touch.
@@ -213,6 +213,18 @@ Commit: `feat(transactions): grouped by day, filtered by chips, and a review que
 3. Anything with a date gets a **days-remaining pill** — `92d`, `22d`, and `⚠ 7d` in warning tone
    inside a week. Upcoming bills, expiring items, goal target dates.
 4. Goals on the dashboard render the same `MetricCard` as the Goals page.
+5. **Header alignment.** The month navigation and the person pills currently sit centred under the
+   title, and because the two rows are different widths neither edge lines up — which is exactly
+   why it reads as floating rather than placed. Both rows align to ONE edge: the right margin at
+   `sm` and up, flush with the page gutter so their right edges agree; full width and left-aligned
+   with the title below `sm`. This is a change to `src/components/ui/PageHeader.tsx`'s `actions`
+   slot, which this lane owns for the release — it lands on every page's header at once, which is
+   the point.
+6. **Quick add stops being a card.** It is currently a titled card with a description sentence
+   wrapped around one button — three lines of chrome to hide a form. It becomes a plain
+   **Add a transaction** button in the header's action row, opening the form below it. `collapsible`
+   already exists on `QuickAddTransaction`; this is about the chrome around it, not the disclosure
+   behaviour, and the `#quick-add` hash target must keep working (v1.13.0 ruling R7).
 
 Do not change what the dashboard computes, only how it reads. The v1.17.0 month filter, the
 "as of today" notes and the self-viewer gating all stay exactly as they are.
