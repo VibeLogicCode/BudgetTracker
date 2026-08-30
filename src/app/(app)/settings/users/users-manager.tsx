@@ -5,6 +5,7 @@ import { FormError } from '@/components/FormError';
 import { SubmitButton } from '@/components/SubmitButton';
 import { AutoSaveCheckbox, AutoSaveSelect } from '@/components/ui/AutoSave';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
+import { ConfirmIcon, UnconfirmedIcon } from '@/components/ui/icons';
 import { Notice } from '@/components/ui/Notice';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { TableWrap } from '@/components/ui/Table';
@@ -53,7 +54,7 @@ export function UsersManager({ users }: { users: UserRecord[] }) {
   const rowMessage = rowState.message ?? pwState.message ?? mfaState.message;
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4 sm:gap-5">
       <PageHeader
         eyebrow="Settings"
         title="Users"
@@ -178,7 +179,17 @@ export function UsersManager({ users }: { users: UserRecord[] }) {
                     />
                   </td>
                   <td data-label="MFA">
+                    {/* Lane 4 (2026-08-30 one-design-language plan): a checkmark for "on", the
+                        review queue's own unconfirmed dot for "off" -- the same lucide glyphs
+                        the review queue uses for its own confirmed/unconfirmed state, reused
+                        here for the same idea (has this been set up, or not). Decorative: the
+                        word beside it already carries the fact for a screen reader. */}
                     <span className={user.totpEnabled ? 'badge badge--green' : 'badge badge--muted'}>
+                      {user.totpEnabled ? (
+                        <ConfirmIcon aria-hidden="true" className="mr-1 inline h-3 w-3" />
+                      ) : (
+                        <UnconfirmedIcon aria-hidden="true" className="mr-1 inline h-3 w-3" />
+                      )}
                       {user.totpEnabled ? 'on' : 'off'}
                     </span>
                   </td>

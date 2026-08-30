@@ -120,7 +120,7 @@ export function ManagersClient({
     activeState.error;
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4 sm:gap-5">
       <PageHeader
         eyebrow="Settings"
         title="Categories, rules and import profiles"

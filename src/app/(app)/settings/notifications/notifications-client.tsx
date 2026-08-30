@@ -4,6 +4,7 @@ import { useActionState, useState } from 'react';
 import { BellIcon } from '@/components/icons';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { AlertIcon, ClockIcon, ConfirmIcon, type IconComponent } from '@/components/ui/icons';
 import { Notice } from '@/components/ui/Notice';
 import { TableWrap } from '@/components/ui/Table';
 import { Field, hintClass, inputClass, selectClass } from '@/components/ui/form';
@@ -74,16 +75,24 @@ function formatStamp(iso: string): string {
   return iso.slice(0, 16).replace('T', ' ');
 }
 
-const STATUS_BADGE: Record<DeliveryRow['status'], { label: string; className: string }> = {
-  sent: { label: 'Sent', className: 'badge--green' },
-  failed: { label: 'Failed', className: 'badge--red' },
-  pending: { label: 'Pending', className: 'badge--amber' },
+const STATUS_BADGE: Record<DeliveryRow['status'], { label: string; className: string; Icon: IconComponent }> = {
+  sent: { label: 'Sent', className: 'badge--green', Icon: ConfirmIcon },
+  failed: { label: 'Failed', className: 'badge--red', Icon: AlertIcon },
+  pending: { label: 'Pending', className: 'badge--amber', Icon: ClockIcon },
 };
 
-/** §11.6: "status badge": sent/failed/pending are visually distinct, not bare text. */
+/** §11.6: "status badge": sent/failed/pending are visually distinct, not bare text. Lane 4
+ *  (2026-08-30 one-design-language plan) adds the lucide glyph each state already had a word
+ *  for -- decorative, since the label text beside it still carries the fact for a screen
+ *  reader. */
 function DeliveryStatusBadge({ status }: { status: DeliveryRow['status'] }) {
-  const { label, className } = STATUS_BADGE[status];
-  return <span className={`badge ${className}`}>{label}</span>;
+  const { label, className, Icon } = STATUS_BADGE[status];
+  return (
+    <span className={`badge ${className}`}>
+      <Icon aria-hidden="true" className="mr-1 inline h-3 w-3" />
+      {label}
+    </span>
+  );
 }
 
 /**
@@ -441,7 +450,7 @@ export function NotificationsClient(data: NotificationsPageData) {
   ].filter((entry): entry is { channel: string; error: string } => entry !== null);
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4 sm:gap-5">
       {dormant ? <Notice tone="info">{DORMANT}</Notice> : null}
       {liveErrors.map((entry) => (
         <Notice key={entry.channel} tone="error" title={entry.channel}>

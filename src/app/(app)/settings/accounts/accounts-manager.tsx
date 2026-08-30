@@ -1,13 +1,15 @@
 'use client';
 
-import { Fragment, useActionState, useState } from 'react';
+import { useActionState, useState } from 'react';
 import { FormError } from '@/components/FormError';
 import { SubmitButton } from '@/components/SubmitButton';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { MetricCard } from '@/components/ui/MetricCard';
 import { Notice } from '@/components/ui/Notice';
 import { PageHeader } from '@/components/ui/PageHeader';
-import { TableWrap } from '@/components/ui/Table';
+import { Pill } from '@/components/ui/Pill';
+import { SectionHeader } from '@/components/ui/SectionHeader';
 import { Field, hintClass, inputClass, labelClass, selectClass } from '@/components/ui/form';
 import { RowMenu, RowMenuButton, RowMenuForm } from '@/components/ui/RowMenu';
 import { SettingsIcon } from '@/components/icons';
@@ -117,6 +119,59 @@ export function discrepancyMessage(discrepancy: Discrepancy): string {
   );
 }
 
+/**
+ * Lane 4 (2026-08-30 one-design-language plan): the hero value MetricCard wants -- the balance
+ * itself, signed exactly as stored (a credit card stays negative), or an em dash when no
+ * snapshot has ever landed. Split out of the old table cell's one combined sentence so `value`
+ * and `status` below can be two independent, independently-styled slots instead of one string.
+ */
+function balanceValue(account: AccountRow): string {
+  return account.latestBalanceCents === null ? '—' : formatCents(account.latestBalanceCents);
+}
+
+/**
+ * The staleness sentence MetricCard's `status` slot wants (spec: "the staleness sentence as
+ * status"). Ruling R7 (v1.8.0 Task 5): the anchor date is provenance, not "today"'s label, once
+ * movement has been folded in -- see latestBalanceMovedCents's own docblock above. The three
+ * branches are unchanged from the table cell this replaces; only the leading amount is gone,
+ * because `value` above already says it.
+ */
+function balanceStatus(account: AccountRow): string {
+  if (account.latestBalanceCents === null) return 'no balance yet';
+  if (account.latestBalanceMovedCents === 0) return `as of ${account.latestBalanceDate}`;
+  return `now · from a balance recorded ${account.latestBalanceDate}`;
+}
+
+/**
+ * The subtitle MetricCard wants -- "say something real about the card's contents" (that
+ * component's own docblock), not a bare count. Institution, owner, the import mapping (or
+ * SimpleFIN, for a synced account) and active/deactivated together are what the retired table's
+ * five columns (Institution/Owner/Mapping/Source/Status) said about a row that were not already
+ * the hero balance or the type Pill. Each piece is its own <span> -- not one joined string -- so
+ * a test (or a screen reader's "find text") can still land on "TD Chequing/Debit" or "none" on
+ * its own, exactly as it could when Mapping was its own table column.
+ */
+function AccountSubtitle({ account, people }: { account: AccountRow; people: PersonRow[] }) {
+  const ownerLabel = account.ownerUserId === null ? 'Joint' : (people.find((p) => p.id === account.ownerUserId)?.name ?? 'Joint');
+  const mappingLabel = account.isSimplefinManaged ? 'SimpleFIN' : (account.importProfileName ?? 'none');
+  const statusLabel = account.isActive ? 'active' : 'deactivated';
+  return (
+    <span className="flex flex-wrap items-center gap-1">
+      {account.institution === '' ? null : (
+        <>
+          <span>{account.institution}</span>
+          <span aria-hidden="true">·</span>
+        </>
+      )}
+      <span>{ownerLabel}</span>
+      <span aria-hidden="true">·</span>
+      <span>{mappingLabel}</span>
+      <span aria-hidden="true">·</span>
+      <span>{statusLabel}</span>
+    </span>
+  );
+}
+
 export function AccountsManager({
   accounts,
   people,
@@ -157,7 +212,7 @@ export function AccountsManager({
     });
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4 sm:gap-5">
       <PageHeader
         eyebrow="Settings"
         title="Bank accounts"
@@ -219,232 +274,165 @@ export function AccountsManager({
       <FormError message={rowError} />
       {rowMessage ? <Notice tone="success">{rowMessage}</Notice> : null}
 
-      <Card>
-        <CardHeader title="Accounts" description={`${accounts.length} account${accounts.length === 1 ? '' : 's'}.`} />
+      <div className="flex flex-col gap-3">
+        <SectionHeader title={`Accounts (${accounts.length})`} />
         {accounts.length === 0 ? (
-          <EmptyState
-            icon={SettingsIcon}
-            title="No accounts yet. Add the first one above."
-            action={
-              <a href="#add-account" className="btn btn--primary btn--sm">
-                Add an account
-              </a>
-            }
-          />
+          <Card>
+            <EmptyState
+              icon={SettingsIcon}
+              title="No accounts yet. Add the first one above."
+              action={
+                <a href="#add-account" className="btn btn--primary btn--sm">
+                  Add an account
+                </a>
+              }
+            />
+          </Card>
         ) : (
-          <TableWrap bare fixed minWidth="60.5rem" responsive>
-            {/* Nine columns, two of which carry controls, so auto sizing was handing the width
-                to the Balance sentence ("... now · from a balance recorded <date>") and leaving
-                Actions to stack its two buttons over a column of dead space. The widths below
-                total 60.5rem, which is what the shell leaves once max-w-6xl loses its gutters --
-                narrower viewports scroll the wrapper instead of squeezing a button. */}
-            <colgroup>
-              {/* Account and institution names are member-typed; longer ones wrap rather than
-                  truncate, so nothing is hidden. Institution's floor is its own heading. */}
-              <col style={{ width: '8rem' }} />
-              <col style={{ width: '7.5rem' }} />
-              <col style={{ width: '4.5rem' }} />
-              <col style={{ width: '5.5rem' }} />
-              <col style={{ width: '6.5rem' }} />
-              {/* The widest read-only cell: a two-clause balance sentence, happy to wrap. */}
-              <col style={{ width: '11rem' }} />
-              {/* Badges never wrap (.badge is nowrap), so these two need room for the longest
-                  label -- "SimpleFIN" and "deactivated" -- or the chip spills into its neighbour. */}
-              <col style={{ width: '7rem' }} />
-              <col style={{ width: '7.5rem' }} />
-              {/* The kebab: one 2rem button plus padding. It replaced "Update account" and
-                  "Deactivate" side by side, which is where the other 6.5rem went. */}
-              <col style={{ width: '3rem' }} />
-            </colgroup>
-            <thead>
-              <tr>
-                <th scope="col">Name</th>
-                <th scope="col">Institution</th>
-                <th scope="col">Type</th>
-                <th scope="col">Owner</th>
-                <th scope="col">Mapping</th>
-                <th scope="col">Balance</th>
-                <th scope="col">Source</th>
-                <th scope="col">Status</th>
-                <th scope="col" />
-              </tr>
-            </thead>
-            <tbody>
-              {accounts.map((account) => (
-                <Fragment key={account.id}>
-                  <tr className="align-top">
-                    {/* v1.15.0 (responsive rows): the account name is what tells one row from
-                        another on this page, so it is the phone card's headline. */}
-                    <td className="font-medium text-ink cell-stack-headline" data-label="Name">{account.name}</td>
-                    <td className="text-muted" data-label="Institution">{account.institution === '' ? '—' : account.institution}</td>
-                    <td className="text-muted capitalize" data-label="Type">{account.type}</td>
-                    <td className="text-muted" data-label="Owner">
-                      {account.ownerUserId === null ? 'Joint' : (people.find((p) => p.id === account.ownerUserId)?.name ?? 'Joint')}
-                    </td>
-                    <td className="text-muted" data-label="Mapping">
-                      {account.isSimplefinManaged ? '—' : account.importProfileName ?? 'none'}
-                    </td>
-                    {/* No cell-stack-amount here, unlike every other Lane 4/3 table with a money
-                        column: this cell is a two-clause SENTENCE ("$975.00 now · from a balance
-                        recorded 2026-08-01"), not a bare figure, and cell-stack-amount forces
-                        white-space: nowrap into a grid column sized to its content -- exactly the
-                        sideways-overflow bug this whole release fixes, just reintroduced on one
-                        cell. Left as a normal full-width row so the sentence wraps like any other
-                        label/value line. */}
-                    <td className="text-muted" data-label="Balance">
-                      {account.latestBalanceCents === null
-                        ? 'no balance yet'
-                        : account.latestBalanceMovedCents === 0
-                          ? `${formatCents(account.latestBalanceCents)} as of ${account.latestBalanceDate}`
-                          : `${formatCents(account.latestBalanceCents)} now · from a balance recorded ${account.latestBalanceDate}`}
-                    </td>
-                    <td data-label="Source">
-                      <span className={account.isSimplefinManaged ? 'badge badge--blue' : 'badge badge--slate'}>
-                        {account.isSimplefinManaged ? 'SimpleFIN' : 'CSV'}
-                      </span>
-                    </td>
-                    <td data-label="Status">
-                      <span className={account.isActive ? 'badge badge--green' : 'badge badge--muted'}>
-                        {account.isActive ? 'active' : 'deactivated'}
-                      </span>
-                    </td>
-                    <td className="text-right cell-stack-actions" data-label="">
-                      <RowMenu label={`Actions for ${account.name}`}>
-                        <RowMenuButton onSelect={() => openEditor(account)}>Update account</RowMenuButton>
-                        <RowMenuForm
-                          action={setActive}
-                          fields={{ accountId: String(account.id), active: account.isActive ? '0' : '1' }}
+          // Lane 4 (2026-08-30 one-design-language plan): a MetricCard grid, one card per
+          // account -- the same `grid gap-4 md:grid-cols-2 lg:grid-cols-3` Budgets and Goals
+          // use. The table this replaces needed a `fixed minWidth="60.5rem"` colgroup to fit
+          // nine columns; a card has no row of columns to widen in the first place.
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {accounts.map((account) => (
+              <MetricCard
+                key={account.id}
+                title={account.name}
+                subtitle={<AccountSubtitle account={account} people={people} />}
+                pill={
+                  <Pill tone="neutral" className="capitalize">
+                    {account.type}
+                  </Pill>
+                }
+                value={balanceValue(account)}
+                status={balanceStatus(account)}
+                action={
+                  <RowMenu label={`Actions for ${account.name}`}>
+                    <RowMenuButton onSelect={() => openEditor(account)}>Update account</RowMenuButton>
+                    <RowMenuForm
+                      action={setActive}
+                      fields={{ accountId: String(account.id), active: account.isActive ? '0' : '1' }}
+                    >
+                      {account.isActive ? 'Deactivate' : 'Reactivate'}
+                    </RowMenuForm>
+                  </RowMenu>
+                }
+              >
+                {/* v1.8.0 Task 5 (spec 2026-08-23), ruling R7: diagnostic, not an alert -- one
+                    plain-language line per discrepancy, no badge, no icon, nothing rendered at
+                    all when the account is clean. */}
+                {account.discrepancies.length > 0 ? (
+                  <ul className="flex flex-col gap-1 rounded-md bg-warning-soft/50 px-3 py-2 text-xs text-warning-soft-fg">
+                    {account.discrepancies.map((discrepancy) => (
+                      <li key={`${discrepancy.fromDate}-${discrepancy.toDate}`}>{discrepancyMessage(discrepancy)}</li>
+                    ))}
+                  </ul>
+                ) : null}
+                {editing !== null && editing.id === account.id ? (
+                  <form
+                    action={update}
+                    onSubmit={() => setEditing(null)}
+                    className="flex flex-wrap items-end gap-3 border-t border-line pt-3"
+                  >
+                    <input type="hidden" name="accountId" value={account.id} />
+                    <div className="flex flex-col gap-1">
+                      <span className={labelClass}>Name</span>
+                      <input
+                        name="name"
+                        defaultValue={editing.name}
+                        aria-label={`Name for ${account.name}`}
+                        className={`w-36 ${rowInput}`}
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <span className={labelClass}>Owner</span>
+                      <select
+                        name="owner"
+                        defaultValue={editing.owner}
+                        aria-label={`Owner of ${account.name}`}
+                        className={rowInput}
+                      >
+                        <option value="">Joint</option>
+                        {people.map((person) => (
+                          <option key={person.id} value={person.id}>
+                            {person.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    {account.isSimplefinManaged ? null : (
+                      <div className="flex flex-col gap-1">
+                        <span className={labelClass}>Import mapping</span>
+                        <select
+                          name="profile"
+                          defaultValue={editing.profile}
+                          aria-label={`Mapping for ${account.name}`}
+                          className={rowInput}
                         >
-                          {account.isActive ? 'Deactivate' : 'Reactivate'}
-                        </RowMenuForm>
-                      </RowMenu>
-                    </td>
-                  </tr>
-                  {/* v1.8.0 Task 5 (spec 2026-08-23), ruling R7: diagnostic, not an alert -- one
-                      plain-language line per discrepancy, no badge, no icon, nothing rendered
-                      at all when the account is clean. */}
-                  {account.discrepancies.length > 0 ? (
-                    <tr>
-                      {/* Spans every column, so it has no one header to echo (ruling S2): empty
-                          data-label, same as the editor row below. */}
-                      <td colSpan={9} className="bg-warning-soft/50" data-label="">
-                        <ul className="flex flex-col gap-1 px-1 py-2 text-xs text-warning-soft-fg">
-                          {account.discrepancies.map((discrepancy) => (
-                            <li key={`${discrepancy.fromDate}-${discrepancy.toDate}`}>{discrepancyMessage(discrepancy)}</li>
+                          <option value="">None</option>
+                          {profiles.map((profile) => (
+                            <option key={profile.id} value={profile.id}>
+                              {profile.name}
+                            </option>
                           ))}
-                        </ul>
-                      </td>
-                    </tr>
-                  ) : null}
-                  {editing !== null && editing.id === account.id ? (
-                    <tr>
-                      {/* Spans every column, so data-label="" (and nothing else) is all it
-                          needs: the default grid-column: 1 / -1 already gives it the full
-                          card's width on a phone. */}
-                      <td colSpan={9} className="bg-surface-2" data-label="">
-                        <form action={update} onSubmit={() => setEditing(null)} className="flex flex-wrap items-end gap-3 py-2">
-                          <input type="hidden" name="accountId" value={account.id} />
-                          <div className="flex flex-col gap-1">
-                            <span className={labelClass}>Name</span>
-                            <input
-                              name="name"
-                              defaultValue={editing.name}
-                              aria-label={`Name for ${account.name}`}
-                              className={`w-36 ${rowInput}`}
-                            />
-                          </div>
-                          <div className="flex flex-col gap-1">
-                            <span className={labelClass}>Owner</span>
-                            <select
-                              name="owner"
-                              defaultValue={editing.owner}
-                              aria-label={`Owner of ${account.name}`}
-                              className={rowInput}
-                            >
-                              <option value="">Joint</option>
-                              {people.map((person) => (
-                                <option key={person.id} value={person.id}>
-                                  {person.name}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                          {account.isSimplefinManaged ? null : (
-                            <div className="flex flex-col gap-1">
-                              <span className={labelClass}>Import mapping</span>
-                              <select
-                                name="profile"
-                                defaultValue={editing.profile}
-                                aria-label={`Mapping for ${account.name}`}
-                                className={rowInput}
-                              >
-                                <option value="">None</option>
-                                {profiles.map((profile) => (
-                                  <option key={profile.id} value={profile.id}>
-                                    {profile.name}
-                                  </option>
-                                ))}
-                                {/* Dormant pin (spec 2026-08-22 v1.6.0): a pin pointing at a
-                                    profile that is no longer offered (deactivated or gone
-                                    unreadable) still needs an <option> to preselect, or saving
-                                    this editor for an unrelated field would silently clear it. */}
-                                {editing.profile !== '' && !profiles.some((p) => String(p.id) === editing.profile) ? (
-                                  <option value={editing.profile}>{account.importProfileName}</option>
-                                ) : null}
-                              </select>
-                            </div>
-                          )}
-                          {/* v1.7.0 Task 6 (spec 2026-08-22): two fields riding this same
-                              submit, not a fourth button or a second form. Balance always
-                              opens BLANK regardless of the account's latest snapshot -- typing
-                              nothing here must leave that snapshot alone, which only works if
-                              blank is the starting value, not the current balance echoed back.
-                              v1.8.0 ruling R9: a credit account asks for the amount OWED (a
-                              positive figure) and updateAccountAction negates it on write --
-                              chequing/cash keep the plain "Balance" label and store the sign
-                              exactly as typed, including negative for an overdrawn account. */}
-                          <div className="flex flex-col gap-1">
-                            <span className={labelClass}>{account.type === 'credit' ? 'Amount currently owed' : 'Balance'}</span>
-                            <input
-                              name="balance"
-                              placeholder="e.g. 1234.56"
-                              aria-label={
-                                account.type === 'credit'
-                                  ? `Amount currently owed on ${account.name}`
-                                  : `Balance for ${account.name}`
-                              }
-                              className={`w-28 ${rowInput}`}
-                            />
-                            {account.type === 'credit' ? (
-                              <span className={hintClass}>What you owe on this card right now. We store it as a negative balance.</span>
-                            ) : null}
-                          </div>
-                          <div className="flex flex-col gap-1">
-                            <span className={labelClass}>Balance date</span>
-                            <input
-                              type="date"
-                              name="asOfDate"
-                              defaultValue={today}
-                              aria-label={`Balance date for ${account.name}`}
-                              className={rowInput}
-                            />
-                          </div>
-                          <div className="flex gap-2">
-                            <SubmitButton size="sm">Save</SubmitButton>
-                            <button type="button" onClick={() => setEditing(null)} className={rowButton}>
-                              Cancel
-                            </button>
-                          </div>
-                        </form>
-                      </td>
-                    </tr>
-                  ) : null}
-                </Fragment>
-              ))}
-            </tbody>
-          </TableWrap>
+                          {/* Dormant pin (spec 2026-08-22 v1.6.0): a pin pointing at a
+                              profile that is no longer offered (deactivated or gone
+                              unreadable) still needs an <option> to preselect, or saving
+                              this editor for an unrelated field would silently clear it. */}
+                          {editing.profile !== '' && !profiles.some((p) => String(p.id) === editing.profile) ? (
+                            <option value={editing.profile}>{account.importProfileName}</option>
+                          ) : null}
+                        </select>
+                      </div>
+                    )}
+                    {/* v1.7.0 Task 6 (spec 2026-08-22): two fields riding this same
+                        submit, not a fourth button or a second form. Balance always
+                        opens BLANK regardless of the account's latest snapshot -- typing
+                        nothing here must leave that snapshot alone, which only works if
+                        blank is the starting value, not the current balance echoed back.
+                        v1.8.0 ruling R9: a credit account asks for the amount OWED (a
+                        positive figure) and updateAccountAction negates it on write --
+                        chequing/cash keep the plain "Balance" label and store the sign
+                        exactly as typed, including negative for an overdrawn account. */}
+                    <div className="flex flex-col gap-1">
+                      <span className={labelClass}>{account.type === 'credit' ? 'Amount currently owed' : 'Balance'}</span>
+                      <input
+                        name="balance"
+                        placeholder="e.g. 1234.56"
+                        aria-label={
+                          account.type === 'credit'
+                            ? `Amount currently owed on ${account.name}`
+                            : `Balance for ${account.name}`
+                        }
+                        className={`w-28 ${rowInput}`}
+                      />
+                      {account.type === 'credit' ? (
+                        <span className={hintClass}>What you owe on this card right now. We store it as a negative balance.</span>
+                      ) : null}
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <span className={labelClass}>Balance date</span>
+                      <input
+                        type="date"
+                        name="asOfDate"
+                        defaultValue={today}
+                        aria-label={`Balance date for ${account.name}`}
+                        className={rowInput}
+                      />
+                    </div>
+                    <div className="flex gap-2">
+                      <SubmitButton size="sm">Save</SubmitButton>
+                      <button type="button" onClick={() => setEditing(null)} className={rowButton}>
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                ) : null}
+              </MetricCard>
+            ))}
+          </div>
         )}
-      </Card>
+      </div>
     </div>
   );
 }

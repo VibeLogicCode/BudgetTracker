@@ -8,9 +8,11 @@ import { SavingsChart } from '@/components/charts/SavingsChart';
 import { LoanIcon, ReportsIcon, TrendDownIcon, TrendFlatIcon, TrendUpIcon } from '@/components/icons';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { FilterIcon } from '@/components/ui/icons';
 import { Money } from '@/components/ui/Money';
 import { PageGuide } from '@/components/ui/PageGuide';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { SectionHeader } from '@/components/ui/SectionHeader';
 import { AmountCell, TableWrap } from '@/components/ui/Table';
 import { Field, inputClass, selectClass } from '@/components/ui/form';
 import { DateRangePicker } from '@/components/ui/DateRangePicker';
@@ -157,7 +159,7 @@ export function ReportsClient({
 
   return (
     // data-page-width: the month-over-month table grows a column per month (see globals.css).
-    <div data-page-width="wide" className="flex flex-col gap-6">
+    <div data-page-width="wide" className="flex flex-col gap-4 sm:gap-5">
       <PageHeader
         eyebrow={range.label}
         title="Reports"
@@ -220,7 +222,12 @@ export function ReportsClient({
       </PageGuide>
 
       <Card>
-        <CardBody className="pt-5">
+        <CardBody className="flex flex-col gap-3 pt-5">
+          {/* Lane 4 (2026-08-30 one-design-language plan): Reports keeps every chart and table
+              as-is (ruling D7) and adopts only the tightened shell and a SectionHeader -- this
+              is the one section on the page with no CardHeader of its own to already carry
+              that role. */}
+          <SectionHeader title="Filter" icon={<FilterIcon className="h-4 w-4" />} />
           <form method="get" className="flex flex-wrap items-end gap-3">
             <DateRangePicker value={range.preset} from={range.from} to={range.to} today={today} />
             {showPersonSplit ? (

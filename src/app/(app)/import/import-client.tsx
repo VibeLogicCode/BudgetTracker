@@ -11,6 +11,7 @@ import { Money } from '@/components/ui/Money';
 import { Notice } from '@/components/ui/Notice';
 import { PageGuide } from '@/components/ui/PageGuide';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { SectionHeader } from '@/components/ui/SectionHeader';
 import { TableWrap } from '@/components/ui/Table';
 import { Field, hintClass, inputClass, selectClass } from '@/components/ui/form';
 import type { ImportMapping } from '@/lib/import/mapping';
@@ -395,7 +396,7 @@ export function ImportClient({
   const currentProfile = profiles.find((profile) => profile.id === profileId);
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4 sm:gap-5">
       <PageHeader
         title="Import"
         description="Upload a statement, check what it found, then add it. Nothing is written until you say so."
@@ -655,7 +656,10 @@ export function ImportClient({
 
             {mapping.cardCol !== null && preview.cardValues ? (
               <div className="rounded-lg border border-line bg-surface-2/50 p-4">
-                <h3 className="text-sm font-semibold text-ink">Cardholder assignments</h3>
+                {/* Lane 4 (2026-08-30 one-design-language plan): the shared small-caps
+                    SectionHeader, in place of a hand-rolled <h3> -- this stays a table page
+                    (ruling D7), so SectionHeader is the one piece of the new system it adopts. */}
+                <SectionHeader title="Cardholder assignments" />
                 <p className="mt-1 text-sm text-muted">
                   Assign each value found in the cardholder column to a person. Anything left as &ldquo;Account owner (default)&rdquo; —
                   including a row where that column is blank — is attributed to the account owner automatically; nothing here blocks the

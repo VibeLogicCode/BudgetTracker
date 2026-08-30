@@ -236,7 +236,10 @@ describe('AccountsManager — latest balance display and manual entry (spec 2026
     expect(screen.getByText('no balance yet')).toBeTruthy();
   });
 
-  it('shows the latest balance and its as-of date for an account that has one', () => {
+  // Lane 4 (2026-08-30 one-design-language plan): the card's hero `value` and its `status`
+  // line are now two independent elements (MetricCard's own slots), not one combined
+  // sentence -- so the old single-string assertions below are split into two, one per slot.
+  it('shows the latest balance as the hero value and its as-of date as the status line', () => {
     render(
       <AccountsManager
         accounts={[account({ latestBalanceCents: 123456, latestBalanceDate: '2026-08-15' })]}
@@ -244,7 +247,8 @@ describe('AccountsManager — latest balance display and manual entry (spec 2026
         profiles={PROFILES}
       />,
     );
-    expect(screen.getByText('$1,234.56 as of 2026-08-15')).toBeTruthy();
+    expect(screen.getByText('$1,234.56')).toBeTruthy();
+    expect(screen.getByText('as of 2026-08-15')).toBeTruthy();
   });
 
   it('shows a negative balance for a credit card without flipping its sign', () => {
@@ -255,7 +259,8 @@ describe('AccountsManager — latest balance display and manual entry (spec 2026
         profiles={PROFILES}
       />,
     );
-    expect(screen.getByText('-$450.00 as of 2026-08-15')).toBeTruthy();
+    expect(screen.getByText('-$450.00')).toBeTruthy();
+    expect(screen.getByText('as of 2026-08-15')).toBeTruthy();
   });
 
   it('does NOT label a balance that includes movement with its anchor date', () => {
@@ -271,8 +276,9 @@ describe('AccountsManager — latest balance display and manual entry (spec 2026
         today="2026-08-15"
       />,
     );
-    expect(screen.queryByText('$975.00 as of 2026-08-01')).toBeNull();
-    expect(screen.getByText('$975.00 now · from a balance recorded 2026-08-01')).toBeTruthy();
+    expect(screen.queryByText('as of 2026-08-01')).toBeNull();
+    expect(screen.getByText('$975.00')).toBeTruthy();
+    expect(screen.getByText('now · from a balance recorded 2026-08-01')).toBeTruthy();
   });
 
   it('the editor has no separate button or second form: Balance and Balance date are two fields inside the same Update account editor', () => {
@@ -429,11 +435,13 @@ describe('AccountsManager — reconciliation diagnostics (spec 2026-08-23 v1.8.0
     expect(screen.getByText(/between 2026-05-01 and 2026-05-15/)).toBeTruthy();
   });
 
-  it('adds no badge -- the row keeps exactly the SimpleFIN/CSV source badge and the active/deactivated status badge it already had', () => {
-    // Task 5 Step 4: diagnostic, not an alert. document.querySelectorAll rather than
-    // screen.getByRole('status') or similar: a `.badge` span here carries no accessible role of
-    // its own, only a class, so counting the class is the direct way to prove reconciliation did
-    // not add a third one alongside the two the row already renders.
+  // Lane 4 (2026-08-30 one-design-language plan): the account's Source/Status columns folded
+  // into the card's subtitle text once the table became a MetricCard grid, so there is no
+  // `.badge` left on this page to count -- the card's only Pill is its account Type. This test
+  // now proves the same underlying claim (the diagnostic adds no verdict indicator of its own)
+  // by checking that the one Pill and the subtitle's own "active" word are unaffected by a
+  // discrepancy being present.
+  it('adds no Pill or badge of its own -- the diagnostic is plain text alongside the unchanged Type pill and status word', () => {
     const { container } = render(
       <AccountsManager
         accounts={[
@@ -454,14 +462,29 @@ describe('AccountsManager — reconciliation diagnostics (spec 2026-08-23 v1.8.0
         profiles={PROFILES}
       />,
     );
-    expect(container.querySelectorAll('.badge').length).toBe(2);
+    expect(container.querySelectorAll('.badge').length).toBe(0);
+    expect(screen.getByText('chequing')).toBeTruthy();
+    expect(screen.getByText('active')).toBeTruthy();
+    expect(screen.getByText(/probably missing rows/i)).toBeTruthy();
   });
 });
 
-describe('AccountsManager — responsive rows (v1.15.0, ruling S3)', () => {
-  it('the Name cell of the first row carries cell-stack-headline', () => {
-    const { container } = render(<AccountsManager accounts={[account()]} people={PEOPLE} profiles={PROFILES} />);
-    const headlineCell = container.querySelector('tbody tr td:first-child');
-    expect(headlineCell?.className).toContain('cell-stack-headline');
+// Lane 4 (2026-08-30 one-design-language plan): this page stopped being a table, so the
+// v1.15.0 responsive-table concern (a phone card built from a table row via cell-stack-*
+// classes) does not apply here any more -- a MetricCard grid already reflows on a phone the
+// same way every other card on the app does. Replaces the retired 'responsive rows' describe
+// block above, which asserted on a <tbody>/<td> this page no longer renders.
+describe('AccountsManager — card grid (v1.19.0, one design language)', () => {
+  it('renders one MetricCard per account, named by the account -- no table, no colgroup', () => {
+    const { container } = render(
+      <AccountsManager
+        accounts={[account({ id: 1, name: 'First' }), account({ id: 2, name: 'Second' })]}
+        people={PEOPLE}
+        profiles={PROFILES}
+      />,
+    );
+    const headings = Array.from(container.querySelectorAll('h3')).map((h) => h.textContent);
+    expect(headings).toEqual(['First', 'Second']);
+    expect(container.querySelector('table')).toBeNull();
   });
 });

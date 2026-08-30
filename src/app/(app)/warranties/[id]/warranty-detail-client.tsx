@@ -9,6 +9,8 @@ import { SubmitButton } from '@/components/SubmitButton';
 import { StatusBadge } from '@/components/warranty/StatusBadge';
 import { ReceiptUploader, type StagedFile } from '@/components/warranty/ReceiptUploader';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
+import { ListRow } from '@/components/ui/ListRow';
+import { MetricCard } from '@/components/ui/MetricCard';
 import { Money } from '@/components/ui/Money';
 import { Notice } from '@/components/ui/Notice';
 import { TableWrap } from '@/components/ui/Table';
@@ -361,7 +363,7 @@ export function WarrantyDetailClient({
   const expiryLabel = formEndLabel(item.kind);
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4 sm:gap-5">
       <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
         <div className="flex min-w-0 flex-wrap items-center gap-3">
           <h1 className="text-2xl font-semibold tracking-tight text-ink">{item.name}</h1>
@@ -409,6 +411,7 @@ export function WarrantyDetailClient({
         {editing ? (
           <EditForm item={item} people={people} types={types} today={today} action={editAction} />
         ) : (
+          <>
           <Card>
             <CardBody className="pt-5">
               <dl className="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -506,59 +509,64 @@ export function WarrantyDetailClient({
                   )}
                 </Detail>
               </dl>
-
-              {/* MUST-14.3: every row omitted when its value is null; the whole block omitted
-                  when there is no principal AND no balance -- a loan item that has not had its
-                  money fields filled in yet renders exactly like it did before this feature. */}
-              {item.currentBalanceCents === null && item.principalCents === null ? null : (
-                <div className="mt-4 flex flex-col gap-3 border-t border-line pt-4">
-                  {item.currentBalanceCents === null ? null : (
-                    <>
-                      <p className="money-lg">{formatCents(item.currentBalanceCents)}</p>
-                      {/* MUST-11.8: "You set this on" and "Last payment" are labelled
-                          DIFFERENTLY, because they answer different questions.
-                          balance_updated_at is the human anchor. */}
-                      {item.balanceUpdatedAt === null ? null : (
-                        <p className="text-sm text-subtle">You set this on {item.balanceUpdatedAt.slice(0, 10)}</p>
-                      )}
-                    </>
-                  )}
-                  {/* F8 fix-round: a plain-voice heads-up next to the number people are about to
-                      unassign a payment from -- removing an old link doesn't just undo one
-                      transaction in isolation, it can leave the balance ahead of what the
-                      household's latest paper statement says, and that's worth saying before
-                      someone clicks Unassign expecting a plain undo. Gated on currentBalanceCents
-                      too (micro round): a null balance isn't shown at all above, so a hint about
-                      "the balance" would be pointing at a number that isn't even on the page. */}
-                  {item.currentBalanceCents === null || paymentCount === 0 ? null : (
-                    <p className="text-xs text-subtle">
-                      Removing an old payment can push the balance above your latest statement figure.
-                    </p>
-                  )}
-                  {payoffFraction === null ? null : <LoanProgressBar fraction={payoffFraction} label={item.name} />}
-                  {/* F11 fix-round: the Detail rows below are dt/dd pairs and belong inside a
-                      dl, same as the summary grid above -- they were previously loose divs. */}
-                  {item.principalCents === null &&
-                  item.interestRateBps === null &&
-                  lastPaymentAt === null &&
-                  paymentCount === 0 ? null : (
-                    <dl className="flex flex-col gap-2">
-                      {item.principalCents === null ? null : <Detail label="Original">{formatCents(item.principalCents)}</Detail>}
-                      {item.interestRateBps === null ? null : (
-                        <Detail label="Rate">{(item.interestRateBps / 100).toFixed(2)}%</Detail>
-                      )}
-                      {lastPaymentAt === null ? null : <Detail label="Last payment">{lastPaymentAt.slice(0, 10)}</Detail>}
-                      {/* Item 6 (v1.16.0 plan): the bare "Payments linked: N" row is gone -- the
-                          Linked transactions card below lists the payments themselves, which is
-                          the whole point of that task. paymentCount is still read above (the
-                          statement-drift hint) and in this dl's own render-gate; only the count
-                          row itself is retired. */}
-                    </dl>
-                  )}
-                </div>
-              )}
             </CardBody>
           </Card>
+
+          {/* Lane 4 (2026-08-30 one-design-language plan): the loan money block is the one part
+              of this page that was already a hero number, a bar and a status line -- exactly
+              MetricCard's shape (see that file's own docblock) -- so it becomes its own card
+              instead of a bordered sub-section of the summary Card above it. The flat dt/dd
+              summary grid above is deliberately left AS a <dl>: MetricCard has one hero value
+              and one status line, not a dozen independently-labelled fields for every item
+              kind, and forcing Type/Vendor/Model/... through title/subtitle/value would either
+              drop a field or print it twice. Ruling D1's own escape hatch -- "reports it rather
+              than forking it" -- is what this split is exercising.
+              MUST-14.3: every row omitted when its value is null; the whole card omitted when
+              there is no principal AND no balance -- a loan item that has not had its money
+              fields filled in yet renders exactly like it did before this feature. */}
+          {item.currentBalanceCents === null && item.principalCents === null ? null : (
+            <MetricCard
+              title={balanceLabelForDirection(item.loanDirection)}
+              value={item.currentBalanceCents === null ? '—' : formatCents(item.currentBalanceCents)}
+              // MUST-11.8: "You set this on" and "Last payment" are labelled DIFFERENTLY,
+              // because they answer different questions. balance_updated_at is the human anchor.
+              status={item.balanceUpdatedAt === null ? undefined : `You set this on ${item.balanceUpdatedAt.slice(0, 10)}`}
+              bar={payoffFraction === null ? undefined : <LoanProgressBar fraction={payoffFraction} label={item.name} />}
+            >
+              {/* F8 fix-round: a plain-voice heads-up next to the number people are about to
+                  unassign a payment from -- removing an old link doesn't just undo one
+                  transaction in isolation, it can leave the balance ahead of what the
+                  household's latest paper statement says, and that's worth saying before
+                  someone clicks Unassign expecting a plain undo. Gated on currentBalanceCents
+                  too (micro round): a null balance isn't shown at all above, so a hint about
+                  "the balance" would be pointing at a number that isn't even on the page. */}
+              {item.currentBalanceCents === null || paymentCount === 0 ? null : (
+                <p className="text-xs text-subtle">
+                  Removing an old payment can push the balance above your latest statement figure.
+                </p>
+              )}
+              {/* F11 fix-round: the Detail rows below are dt/dd pairs and belong inside a
+                  dl, same as the summary grid above -- they were previously loose divs. */}
+              {item.principalCents === null &&
+              item.interestRateBps === null &&
+              lastPaymentAt === null &&
+              paymentCount === 0 ? null : (
+                <dl className="flex flex-col gap-2">
+                  {item.principalCents === null ? null : <Detail label="Original">{formatCents(item.principalCents)}</Detail>}
+                  {item.interestRateBps === null ? null : (
+                    <Detail label="Rate">{(item.interestRateBps / 100).toFixed(2)}%</Detail>
+                  )}
+                  {lastPaymentAt === null ? null : <Detail label="Last payment">{lastPaymentAt.slice(0, 10)}</Detail>}
+                  {/* Item 6 (v1.16.0 plan): the bare "Payments linked: N" row is gone -- the
+                      Linked transactions card below lists the payments themselves, which is
+                      the whole point of that task. paymentCount is still read above (the
+                      statement-drift hint) and in this dl's own render-gate; only the count
+                      row itself is retired. */}
+                </dl>
+              )}
+            </MetricCard>
+          )}
+          </>
         )}
       </div>
 
@@ -585,58 +593,49 @@ export function WarrantyDetailClient({
             </p>
           ) : (
             <>
-              {/* Not `fixed` -- an auto-layout table of read-only values, the same shape the
-                  Installments and Payment-matching tables above already use. */}
-              <TableWrap bare responsive>
-                <thead>
-                  <tr>
-                    <th scope="col">When</th>
-                    <th scope="col">Merchant</th>
-                    <th scope="col" className="text-right">Amount</th>
-                    <th scope="col" className="text-right">Applied</th>
-                    <th scope="col">Source</th>
-                    <th scope="col"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {ledger.rows.map((row) => (
-                    <tr key={row.txnId}>
-                      {/* date+account combined, per the plan: one muted context line under the
-                          headline rather than its own labelled row on a phone card. */}
-                      <td className="cell-stack-meta text-muted" data-label="When">
-                        {row.date} · {row.accountName}
-                      </td>
-                      <td className="cell-stack-headline" data-label="Merchant">
-                        <Link
-                          href={`/transactions?search=${encodeURIComponent(row.merchant)}`}
-                          className="font-medium text-ink underline underline-offset-2 hover:text-accent-text"
+              {/* Lane 4 (2026-08-30 one-design-language plan): ListRow, not a table -- this
+                  ledger was never sorted-and-scanned-down-a-column the way Transactions is
+                  (ruling D7's carve-out for that page), it is a short per-item list, exactly
+                  what ListRow is for. `direction` reads off the signed amount the same way the
+                  circled arrow does everywhere else in the app; Applied and Source move into a
+                  second muted line under the date/account, since ListRow has one amount column
+                  and this row genuinely has two money figures to show. */}
+              <ul className="flex flex-col rounded-md border border-line">
+                {ledger.rows.map((row) => (
+                  <ListRow
+                    key={row.txnId}
+                    direction={row.amountCents > 0 ? 'in' : 'out'}
+                    title={
+                      <Link
+                        href={`/transactions?search=${encodeURIComponent(row.merchant)}`}
+                        className="hover:text-accent-text hover:underline hover:underline-offset-2"
+                      >
+                        {row.merchant}
+                      </Link>
+                    }
+                    meta={
+                      <>
+                        <span className="block truncate">{row.date} · {row.accountName}</span>
+                        <span className="mt-0.5 flex flex-wrap items-center gap-1.5">
+                          <span>Applied <Money cents={row.appliedCents} plain /></span>
+                          <span className="badge badge--slate">{LEDGER_SOURCE_LABEL[row.source]}</span>
+                        </span>
+                      </>
+                    }
+                    amount={<Money cents={row.amountCents} />}
+                    trailing={
+                      <RowMenu label={`Actions for the ${formatCents(row.amountCents)} transaction on ${row.date}`}>
+                        <RowMenuForm
+                          action={unlinkDispatch}
+                          fields={{ itemId: String(item.id), txnId: String(row.txnId) }}
                         >
-                          {row.merchant}
-                        </Link>
-                      </td>
-                      <td className="text-right" data-label="Amount">
-                        <Money cents={row.amountCents} />
-                      </td>
-                      <td className="text-right cell-stack-amount" data-label="Applied">
-                        <Money cents={row.appliedCents} plain />
-                      </td>
-                      <td data-label="Source">
-                        <span className="badge badge--slate">{LEDGER_SOURCE_LABEL[row.source]}</span>
-                      </td>
-                      <td className="text-right cell-stack-actions" data-label="">
-                        <RowMenu label={`Actions for the ${formatCents(row.amountCents)} transaction on ${row.date}`}>
-                          <RowMenuForm
-                            action={unlinkDispatch}
-                            fields={{ itemId: String(item.id), txnId: String(row.txnId) }}
-                          >
-                            Unlink
-                          </RowMenuForm>
-                        </RowMenu>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </TableWrap>
+                          Unlink
+                        </RowMenuForm>
+                      </RowMenu>
+                    }
+                  />
+                ))}
+              </ul>
               {/* Refusals surface inline, never silently -- the same discipline every other
                   action on this page already follows (F3 fix-round's own stale-delete case). */}
               <FormError message={unlinkState.error} />

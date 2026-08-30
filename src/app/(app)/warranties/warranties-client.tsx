@@ -5,12 +5,16 @@ import { StatusBadge } from '@/components/warranty/StatusBadge';
 import { WarrantiesIcon } from '@/components/icons';
 import { Card, CardBody, CardFooter } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { categoryIcon, WarningIcon } from '@/components/ui/icons';
 import { Money } from '@/components/ui/Money';
 import { Notice } from '@/components/ui/Notice';
 import { PageGuide } from '@/components/ui/PageGuide';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { Pill } from '@/components/ui/Pill';
+import { SectionHeader } from '@/components/ui/SectionHeader';
 import { TableWrap } from '@/components/ui/Table';
 import { Field, inputClass, selectClass } from '@/components/ui/form';
+import { daysBetweenIso } from '@/lib/dates';
 // Ruling P4: WARRANTY_SORTS/WarrantySort come from constants.ts (pure, client-safe), NOT
 // from search.ts -- search.ts imports @/db/client, and a VALUE import from it (as opposed to
 // a type-only one) drags better-sqlite3 into this client bundle and breaks `next build`.
@@ -25,6 +29,46 @@ import {
 } from '@/lib/warranty/constants';
 import { statusLabel, WARRANTY_STATUSES } from '@/lib/warranty/expiry';
 import type { WarrantySearchResult } from '@/lib/warranty/search';
+
+/**
+ * Lane 4 (2026-08-30 one-design-language plan). The Item column already named the type as a
+ * plain `.badge` -- StatusBadge covers the five hue-named lifecycle states (ruling D3's own
+ * carve-out for `.badge`), so this is the one cell on the page that gets the new lucide
+ * treatment: `categoryIcon()` maps the type's NAME to a sensible glyph, the same lookup Budgets
+ * and the dashboard use for a spending category, because an item type ("Appliance",
+ * "Vehicle") reads the same way a category name does.
+ */
+function TypeCell({ typeName }: { typeName: string | null }) {
+  if (typeName === null) return <span className="text-subtle">—</span>;
+  const Icon = categoryIcon(typeName);
+  return (
+    <span className="flex items-center gap-1.5">
+      <Icon aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-subtle" />
+      <span className="badge badge--slate">{typeName}</span>
+    </span>
+  );
+}
+
+/**
+ * Lane 4: the days-remaining Pill (spec examples: "92d", "22d", a warning-toned "7d" inside a
+ * week). Ruling D5's three-state scale collapses to two states here on purpose -- there is no
+ * "over 100%" for a countdown, so only the warning band (within a week) and the calm default
+ * apply, and `tone` is passed explicitly rather than derived from a percentage ProgressBar has
+ * no use for here. Omitted once the date has already passed: StatusBadge's own "expired" pill
+ * (kept as `.badge`, ruling D3's carve-out) already says so, and a negative day count beside it
+ * would read as a second, conflicting answer to the same question.
+ */
+function daysRemainingPill(expiryDate: string, today: string): React.ReactNode {
+  const days = daysBetweenIso(today, expiryDate);
+  if (days < 0) return null;
+  const withinWeek = days <= 7;
+  return (
+    <Pill tone={withinWeek ? 'warning' : 'neutral'}>
+      {withinWeek ? <WarningIcon aria-hidden="true" className="mr-0.5 inline h-3 w-3" /> : null}
+      {days}d
+    </Pill>
+  );
+}
 
 const SORT_LABELS: Record<WarrantySort, string> = {
   expiry: 'Soonest expiry',
@@ -84,7 +128,7 @@ export function WarrantiesClient({
     // standard 72rem (max-w-6xl) cap to sit comfortably beside eight columns -- the same
     // data-page-width escape hatch transactions-client.tsx and reports-client.tsx already use
     // (see globals.css's `main:has(> [data-page-width='wide'])` rule).
-    <div data-page-width="wide" className="flex flex-col gap-6">
+    <div data-page-width="wide" className="flex flex-col gap-4 sm:gap-5">
       <PageHeader
         title="Contracts & Coverage"
         description="Receipts, coverage and cancel-by dates for everything worth keeping the paperwork on."
@@ -180,6 +224,14 @@ export function WarrantiesClient({
       </Card>
 
       <Card>
+        {/* Lane 4: the one SectionHeader this page gets -- the table below keeps its own
+            columns (ruling D7), so there is nowhere else on this page a section grouping
+            reads naturally. */}
+        {result.rows.length > 0 ? (
+          <CardBody className="pb-0">
+            <SectionHeader title={`Items (${result.total})`} icon={<WarrantiesIcon className="h-4 w-4" />} />
+          </CardBody>
+        ) : null}
         {result.rows.length === 0 ? (
           searching ? (
             <EmptyState
@@ -274,11 +326,7 @@ export function WarrantiesClient({
                     {row.model ? <div className="text-xs text-subtle">{row.model}</div> : null}
                   </td>
                   <td data-label="Type">
-                    {row.typeName ? (
-                      <span className="badge badge--slate">{row.typeName}</span>
-                    ) : (
-                      <span className="text-subtle">—</span>
-                    )}
+                    <TypeCell typeName={row.typeName} />
                   </td>
                   <td className="tabnum whitespace-nowrap text-muted" data-label="Started">{row.purchaseDate}</td>
                   {/* Delta T9, generalized to `kind` in v1.2.2 Task 2: expiryPhraseForKind()
@@ -287,19 +335,26 @@ export function WarrantiesClient({
                       (isLifetime) has no expiry_date -- that used to render as a bare em dash
                       here, indistinguishable from "no data". Show the per-kind open-ended word
                       instead. */}
-                  <td className="whitespace-nowrap text-muted" data-label="Expiry">
+                  <td className="text-muted" data-label="Expiry">
                     {/* Item Q: a bill has no expiry, it has a schedule. Every other kind falls through
-                        unchanged -- this is one arm added ahead of the existing three, not a rewrite. */}
-                    {row.kind === 'bill'
-                      ? billScheduleLabel(
-                          billSchedules[row.id]?.nextDueDate ?? null,
-                          billSchedules[row.id]?.overdueCount ?? 0,
-                        )
-                      : row.isLifetime
-                        ? openEndedDisplayLabel(row.kind)
-                        : row.expiryDate === null
-                          ? '—'
-                          : expiryPhraseForKind(row.kind, row.expiryDate)}
+                        unchanged -- this is one arm added ahead of the existing three, not a rewrite.
+                        Lane 4: each phrase stays wrapped in its own <span> so the exact-text
+                        assertions in warranties-client.test.tsx keep matching that span even once
+                        the days-remaining Pill sits beside it as a sibling. */}
+                    {row.kind === 'bill' ? (
+                      <span className="whitespace-nowrap">
+                        {billScheduleLabel(billSchedules[row.id]?.nextDueDate ?? null, billSchedules[row.id]?.overdueCount ?? 0)}
+                      </span>
+                    ) : row.isLifetime ? (
+                      <span className="whitespace-nowrap">{openEndedDisplayLabel(row.kind)}</span>
+                    ) : row.expiryDate === null ? (
+                      '—'
+                    ) : (
+                      <span className="flex flex-wrap items-center gap-1.5">
+                        <span className="whitespace-nowrap">{expiryPhraseForKind(row.kind, row.expiryDate)}</span>
+                        {daysRemainingPill(row.expiryDate, today)}
+                      </span>
+                    )}
                   </td>
                   <td data-label="Status">
                     <StatusBadge status={row.status} expiryDate={row.expiryDate} today={today} kind={row.kind} />

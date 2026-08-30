@@ -39,7 +39,7 @@ export function ItemTypesManager({ types }: { types: ItemTypeWithUsage[] }) {
   const rowMessage = deleteState.message;
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4 sm:gap-5">
       <PageHeader
         eyebrow="Settings"
         title="Item types"
