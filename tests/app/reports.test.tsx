@@ -3,9 +3,10 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, cleanup, screen } from '@testing-library/react';
 import { createAccount } from '@/lib/accounts';
 import { createUser } from '@/lib/auth/users';
+import { saveSavingsTarget } from '@/lib/savings-target';
 import { createManualTransaction } from '@/lib/transactions';
 import { todayIso } from '@/lib/dates';
-import { createTestDb, type TestDb } from '../helpers/db';
+import { createSeededTestDb, createTestDb, categoryIdByName, type TestDb } from '../helpers/db';
 
 /**
  * v1.13.0 ruling R2: reports are force-scoped -- every one of Task 6's seven aggregates takes
@@ -285,5 +286,51 @@ describe('ReportsPage (ruling R2)', () => {
     render(await ReportsPage({ searchParams: Promise.resolve({}) }));
 
     expect(screen.queryByRole('heading', { name: 'Debt over time' })).toBeNull();
+  });
+
+  // Lane 4 (savings targets, v1.17.0 spec docs/superpowers/plans/2026-08-30-savings-targets.md):
+  // the page now resolves each month's target via savingsProgress() (Lane 1,
+  // src/lib/savings-target.ts) and folds it into the Cash flow card's row data. This is the one
+  // test that exercises that wiring end to end against a real database -- every other savings-
+  // target assertion for this card (tests/app/reports-client.test.tsx) passes synthetic props
+  // straight to ReportsClient and never touches the page itself. Needs a seeded DB (not the bare
+  // createTestDb() the rest of this file uses) so an income category ("Salary") exists to file
+  // the paycheque under -- cashflowTrend only counts an is_income category as income
+  // (src/lib/reports.ts), and the bare createTestDb() setup() above deliberately files every
+  // transaction under categoryId: null so it nets as spend.
+  it('a savings target set for the current month reaches the Cash flow card summary', async () => {
+    t = createSeededTestDb();
+    const adult = await createUser({ name: 'Adult', username: 'adult', password: 'correct horse battery', role: 'admin' });
+    const accountId = createAccount({ name: 'Chequing', type: 'chequing', ownerUserId: adult.id });
+    const salary = categoryIdByName(t.db, 'Salary');
+    createManualTransaction({
+      accountId,
+      date: today,
+      description: 'PAYCHEQUE',
+      amountCents: 500000,
+      categoryId: salary,
+      attributedUserId: adult.id,
+      userId: adult.id,
+      actorRole: 'admin',
+    });
+    createManualTransaction({
+      accountId,
+      date: today,
+      description: 'GROCERIES',
+      amountCents: -350000,
+      categoryId: null,
+      attributedUserId: adult.id,
+      userId: adult.id,
+      actorRole: 'admin',
+    });
+    // $1,000 target against $1,500 actually saved (income $5,000 - spend $3,500) -- met, and it
+    // is the only month in range with a target set, so the card should read "1 of 1".
+    saveSavingsTarget({ month: today.slice(0, 7), mode: 'amount', value: 100000 });
+
+    currentUser.value = { id: adult.id, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    const { default: ReportsPage } = await import('@/app/(app)/reports/page');
+    const { container } = render(await ReportsPage({ searchParams: Promise.resolve({}) }));
+
+    expect(container.textContent).toContain('Target met in 1 of 1 month.');
   });
 });

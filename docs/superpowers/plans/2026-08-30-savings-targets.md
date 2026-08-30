@@ -265,7 +265,51 @@ only, so the shape of your saving over time is invisible.
 Run `npx vitest run tests/app/reports-client.test.tsx tests/app/reports.test.tsx tests/ops` and
 `npx tsc --noEmit`.
 
-## Release (after all four lanes)
+## Lane 5 — save a corrected import mapping from the preview
+
+**Files:** `src/app/(app)/import/import-client.tsx`, `src/app/(app)/import/actions.ts`, and the tests
+`tests/app/import-client.test.tsx`, `tests/app/import-actions.test.ts`.
+
+**This is not new logic.** `forkProfileIfBuiltin` (`src/lib/import/presets.ts:452`) already does the
+whole job — copy-on-write: adjusting a BUILT-IN profile's mapping forks it into a new profile named
+after the account, adjusting a custom profile updates it in place — and `setAccountProfile` already
+repoints the account so the next import opens with it. What is missing is a way to reach it.
+
+**The defect.** That call lives inside `commitStagedImport` (`src/lib/import/flow.ts:75-83`), so a
+corrected mapping is only ever saved by a SUCCESSFUL import. A file whose preview reports 0 rows
+and 117 errors can never be committed, so the one mapping a person most needs to keep is precisely
+the one the app throws away. Nothing on screen mentions the profile either, so even the working
+path is invisible.
+
+- **T8. Saving a mapping is an explicit button at preview, and it names its outcome.** On a
+  built-in profile it reads **"Save as a new profile"** and offers the forked name
+  (`<profile> (<account>)`) for editing before saving. On a custom profile it reads
+  **"Update <profile name>"** and saves in place. Never a bare "Save" — the two outcomes are
+  different enough that a person must be told which one they are getting.
+- **T9. A built-in is never overwritten.** `updateProfileMapping` already throws for a built-in
+  (`tests/lib/import/presets.test.ts:68` pins this), and that refusal stays: the shipped fallback
+  has to survive a person's experiment. Overriding a built-in means forking it, which is what the
+  button does.
+- **T10. Saving does not import anything,** and importing still forks as it does today. The button
+  only persists the mapping and repoints the account; the existing commit-time fork stays exactly
+  as it is, and after a commit the result message names the profile that was saved.
+
+Steps: add a `saveMappingAction` beside the existing `saveWizardProfileAction` in
+`import/actions.ts` — same `isSameOrigin` check, same `requireUser` + `isSelfScoped` refusal with
+the existing `NOT_AVAILABLE_ERROR` wording, the same `importMappingSchema` parse — that calls
+`forkProfileIfBuiltin` and `setAccountProfile` and returns a message naming the profile. Wire the
+button into the preview step's mapping panel in `import-client.tsx`, showing the forked name in an
+editable field only when the current profile is built-in. Refusals surface inline, never silently.
+
+Tests: saving from a built-in creates a fork and leaves the built-in untouched; saving from a
+custom profile updates it in place and creates nothing; the account is repointed either way;
+saving an unchanged mapping is a no-op that still reports which profile is in use; a self viewer is
+refused; the button appears in the preview step even when the preview reported errors — which is
+the whole point of the lane.
+
+Run `npx vitest run tests/app/import-client.test.tsx tests/app/import-actions.test.ts tests/lib/import tests/ops` and `npx tsc --noEmit`.
+
+## Release (after all five lanes)
 
 `package.json` → `1.17.0`; `tests/ops/docker.test.ts` gains a 1.17.0 block and renames the 1.16.0
 one; `CHANGELOG.md` gains `## [1.17.0]` **stating that this release HAS a migration (0015) and that

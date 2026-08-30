@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach } from 'vitest';
 import { render, cleanup, within } from '@testing-library/react';
-import { ReportsClient, type TaxYearDisplayRow } from '@/app/(app)/reports/reports-client';
+import { ReportsClient, type SavingsMonthRow, type TaxYearDisplayRow } from '@/app/(app)/reports/reports-client';
+import { buildSavingsSeries } from '@/components/charts/SavingsChart';
 import { UNATTRIBUTED_LABEL } from '@/lib/reports';
 import type { ResolvedRange } from '@/lib/date-range';
 import type { NetWorthPoint } from '@/lib/networth';
@@ -35,7 +36,14 @@ afterEach(() => cleanup());
 
 const RANGE: ResolvedRange = { preset: 'last_6_months', from: '2026-01-01', to: '2026-06-30', label: 'Last 6 months' };
 
-function baseProps(overrides: { taxYears?: number[]; taxYear?: number | null; taxRows?: TaxYearDisplayRow[] } = {}) {
+function baseProps(
+  overrides: {
+    taxYears?: number[];
+    taxYear?: number | null;
+    taxRows?: TaxYearDisplayRow[];
+    cashflow?: SavingsMonthRow[];
+  } = {},
+) {
   return {
     range: RANGE,
     today: '2026-06-30',
@@ -53,7 +61,7 @@ function baseProps(overrides: { taxYears?: number[]; taxYear?: number | null; ta
     merchants: [],
     yoy: [],
     yoyMonth: '2026-06',
-    cashflow: [],
+    cashflow: overrides.cashflow ?? [],
     taxYears: overrides.taxYears ?? [],
     taxYear: overrides.taxYear ?? null,
     taxRows: overrides.taxRows ?? [],
@@ -487,5 +495,128 @@ describe('ReportsClient — the page guide names no absent control (item BM, rul
     expect(guide).toContain('person');
     expect(guide).toContain('Net worth');
     expect(guide).toContain('Tax year');
+  });
+});
+
+/**
+ * Lane 4 (savings targets, v1.17.0 spec docs/superpowers/plans/2026-08-30-savings-targets.md):
+ * the "Cash flow and savings rate" card. No test for this card existed before this lane (Task
+ * 14 relied entirely on savingsRate()'s own lib-level tests) -- this is new coverage, not a
+ * rewrite of an existing block.
+ *
+ * SavingsChart (recharts) renders none of its children under jsdom's 0x0 ResponsiveContainer,
+ * the same limitation the Net worth and Debt over time cards above already work around -- so
+ * these tests exercise the summary sentence, the one piece of this card's content jsdom can
+ * actually show. buildSavingsSeries' own describe block below covers the chart's data shape
+ * directly, bypassing rendering entirely.
+ */
+describe('ReportsClient — Cash flow and savings rate card', () => {
+  function cashflowCard(container: HTMLElement): HTMLElement {
+    const heading = Array.from(container.querySelectorAll('h2')).find((h) => h.textContent === 'Cash flow and savings rate');
+    if (!heading) throw new Error('Cash flow and savings rate card heading not found');
+    const card = heading.closest('section');
+    if (!card) throw new Error('Cash flow and savings rate card section not found');
+    return card as HTMLElement;
+  }
+
+  function savingsRow(over: Partial<SavingsMonthRow> & { month: string }): SavingsMonthRow {
+    return {
+      incomeCents: 0,
+      spendCents: 0,
+      netCents: 0,
+      targetCents: null,
+      met: false,
+      ...over,
+    };
+  }
+
+  it('shows the empty state when there is nothing in the range', () => {
+    const { container } = render(<ReportsClient {...baseProps({ cashflow: [] })} />);
+    expect(within(cashflowCard(container)).getByText('Nothing to show for this range')).toBeTruthy();
+  });
+
+  it('keeps the pre-existing summary sentence, with no target clause, when no month has a target', () => {
+    const rows = [
+      savingsRow({ month: '2026-05', incomeCents: 500000, spendCents: 350000, netCents: 150000 }),
+      savingsRow({ month: '2026-06', incomeCents: 500000, spendCents: 400000, netCents: 100000 }),
+    ];
+    const { container } = render(<ReportsClient {...baseProps({ cashflow: rows })} />);
+    const card = within(cashflowCard(container));
+    expect(card.getByText('Income $10,000.00 · Spent $7,500.00 · Saved $2,500.00 (25%)')).toBeTruthy();
+    expect(card.queryByText(/Target met/)).toBeNull();
+  });
+
+  it('still shows the no-income sentence, unchanged, when the range has no income', () => {
+    const rows = [savingsRow({ month: '2026-06', incomeCents: 0, spendCents: 10000, netCents: -10000 })];
+    const { container } = render(<ReportsClient {...baseProps({ cashflow: rows })} />);
+    expect(within(cashflowCard(container)).getByText('No income recorded in this range.')).toBeTruthy();
+  });
+
+  it('adds the target-met count when every month in range has a target, met or not', () => {
+    const rows = [
+      savingsRow({ month: '2026-04', incomeCents: 500000, spendCents: 350000, netCents: 150000, targetCents: 100000, met: true }),
+      savingsRow({ month: '2026-05', incomeCents: 500000, spendCents: 450000, netCents: 50000, targetCents: 100000, met: false }),
+      savingsRow({ month: '2026-06', incomeCents: 500000, spendCents: 400000, netCents: 100000, targetCents: 100000, met: true }),
+    ];
+    const { container } = render(<ReportsClient {...baseProps({ cashflow: rows })} />);
+    expect(within(cashflowCard(container)).getByText(/Target met in 2 of 3 months\.$/)).toBeTruthy();
+  });
+
+  it('excludes an untargeted month from both the numerator and the denominator', () => {
+    const rows = [
+      savingsRow({ month: '2026-05', incomeCents: 500000, spendCents: 350000, netCents: 150000, targetCents: 100000, met: true }),
+      // No target at all this month -- Lane 1's own rule: neither met nor missed, so it must
+      // not count toward either side of the fraction.
+      savingsRow({ month: '2026-06', incomeCents: 500000, spendCents: 600000, netCents: -100000, targetCents: null, met: false }),
+    ];
+    const { container } = render(<ReportsClient {...baseProps({ cashflow: rows })} />);
+    expect(within(cashflowCard(container)).getByText(/Target met in 1 of 1 month\.$/)).toBeTruthy();
+  });
+
+  it('says nothing about a target at all when no month in the range has one', () => {
+    const rows = [savingsRow({ month: '2026-06', incomeCents: 500000, spendCents: 400000, netCents: 100000 })];
+    const { container } = render(<ReportsClient {...baseProps({ cashflow: rows })} />);
+    expect(within(cashflowCard(container)).queryByText(/Target met/)).toBeNull();
+  });
+});
+
+/**
+ * Lane 4: SavingsChart's own data-shaping helper (src/components/charts/SavingsChart.tsx),
+ * unit tested directly rather than through a render -- see the describe block above for why
+ * recharts itself is not a reachable assertion under jsdom.
+ */
+describe('buildSavingsSeries (src/components/charts/SavingsChart.tsx)', () => {
+  it('carries Income/Spend/Net through in dollars', () => {
+    const [point] = buildSavingsSeries([
+      { month: '2026-06', incomeCents: 500000, spendCents: 350000, netCents: 150000, targetCents: null },
+    ]);
+    expect(point.Income).toBe(5000);
+    expect(point.Spend).toBe(3500);
+    expect(point.Net).toBe(1500);
+  });
+
+  it('resolves a set target to dollars', () => {
+    const [point] = buildSavingsSeries([
+      { month: '2026-06', incomeCents: 500000, spendCents: 350000, netCents: 150000, targetCents: 100000 },
+    ]);
+    expect(point.Target).toBe(1000);
+  });
+
+  it('a month with no target produces Target: null, never 0 -- a zero would read as "your target was nothing"', () => {
+    const [point] = buildSavingsSeries([
+      { month: '2026-06', incomeCents: 500000, spendCents: 350000, netCents: 150000, targetCents: null },
+    ]);
+    expect(point.Target).toBeNull();
+  });
+
+  it('accumulates the cumulative-saved column across the range, starting back at 0 each call', () => {
+    const points = buildSavingsSeries([
+      { month: '2026-04', incomeCents: 500000, spendCents: 400000, netCents: 100000, targetCents: null },
+      { month: '2026-05', incomeCents: 500000, spendCents: 450000, netCents: 50000, targetCents: null },
+      // A deficit month reduces the running total rather than clamping at 0 -- the column is a
+      // plain running sum, not a floor.
+      { month: '2026-06', incomeCents: 500000, spendCents: 600000, netCents: -100000, targetCents: null },
+    ]);
+    expect(points.map((p) => p['Cumulative saved'])).toEqual([1000, 1500, 500]);
   });
 });

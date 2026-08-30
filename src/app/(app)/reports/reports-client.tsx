@@ -1,10 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import { CashflowChart } from '@/components/charts/CashflowChart';
 import { CategoryBarChart } from '@/components/charts/CategoryBarChart';
 import { DebtTrendChart } from '@/components/charts/DebtTrendChart';
 import { NetWorthChart } from '@/components/charts/NetWorthChart';
+import { SavingsChart } from '@/components/charts/SavingsChart';
 import { LoanIcon, ReportsIcon, TrendDownIcon, TrendFlatIcon, TrendUpIcon } from '@/components/icons';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -44,6 +44,23 @@ import type { TaxYearRow } from '@/lib/tax';
  *  under its flagged parent and disclose the overlap (see orderTaxRows below). */
 export interface TaxYearDisplayRow extends TaxYearRow {
   parentId: number | null;
+}
+
+/**
+ * Savings targets, Lane 4 (spec docs/superpowers/plans/2026-08-30-savings-targets.md,
+ * v1.17.0). One cashflowTrend() row (Task 14) plus its resolved savings target and whether the
+ * month met it -- both read from savingsProgress() (src/lib/savings-target.ts, Lane 1) by
+ * reports/page.tsx and carried through here already resolved, exactly the way TaxYearDisplayRow
+ * above carries taxYearReport()'s own row plus a field the page attaches. This file never
+ * recomputes `targetCents` (percent-of-income resolution) or `met` from scratch -- ruling T1
+ * forbids a second definition of "saved", and savingsProgress is the one place that division
+ * happens.
+ */
+export interface SavingsMonthRow extends MonthTrendRow {
+  /** null when no target is set this month, or a percent target had no income to resolve
+   *  against -- never a fallback zero (see SavingsChart.tsx's SavingsChartRow docblock). */
+  targetCents: number | null;
+  met: boolean;
 }
 
 export function ReportsClient({
@@ -94,8 +111,10 @@ export function ReportsClient({
   yoy: YoYRow[];
   /** The month the Task 13 card is comparing, echoed back so the picker keeps its value. */
   yoyMonth: string;
-  /** Task 14: cashflowTrend() over the range's whole-month span, capped at 24. */
-  cashflow: MonthTrendRow[];
+  /** Task 14: cashflowTrend() over the range's whole-month span, capped at 24. Lane 4 (v1.17.0):
+   *  each row also carries that month's resolved savings target and whether it was met, both
+   *  already resolved by the page via savingsProgress() -- see SavingsMonthRow above. */
+  cashflow: SavingsMonthRow[];
   /** Task 15b: years with at least one non-transfer transaction, newest first (taxYears() in
    *  src/lib/tax.ts) -- populates the year select independently of whether anything is flagged. */
   taxYears: number[];
@@ -351,7 +370,7 @@ export function ReportsClient({
           />
         ) : (
           <CardBody className="flex flex-col gap-3">
-            <CashflowChart data={cashflow} />
+            <SavingsChart data={cashflow} />
             <p className="text-sm text-muted">{cashflowSummary(cashflow)}</p>
           </CardBody>
         )}
@@ -697,13 +716,27 @@ function formatOrDash(cents: number): React.ReactNode {
   return <Money cents={cents} plain />;
 }
 
-/** Task 14: the Cash flow and savings rate card's one-line summary. All the arithmetic
- *  (including the division-by-zero guard) lives in savingsRate() (src/lib/reports.ts), so it
- *  has exactly one implementation and one place it is unit tested; this only formats it. */
-function cashflowSummary(rows: MonthTrendRow[]): string {
+/**
+ * Task 14 + Lane 4 (savings targets, v1.17.0): the Cash flow and savings rate card's one-line
+ * summary. All the money arithmetic (including the division-by-zero guard) lives in
+ * savingsRate() (src/lib/savings-rate.ts); whether a month met its target lives in
+ * savingsProgress() (src/lib/savings-target.ts, Lane 1) and reaches this file already resolved
+ * on each row (SavingsMonthRow above) -- this function only formats and counts what is already
+ * computed, so it never invents a second definition of either "saved" or "met" (ruling T1).
+ *
+ * A month with no target set is neither met nor missed -- the same "no opinion" rule
+ * savingsProgress/savingsStreak apply -- so it is left out of both the numerator and the
+ * denominator of the added sentence. The sentence itself is skipped entirely when no month in
+ * the range has a target at all: "met in 0 of 0 months" is not a fact worth stating.
+ */
+function cashflowSummary(rows: SavingsMonthRow[]): string {
   const rate = savingsRate(rows);
   if (rate.pct === null) return 'No income recorded in this range.';
-  return `Income ${formatCents(rate.incomeCents)} · Spent ${formatCents(rate.spendCents)} · Saved ${formatCents(rate.netCents)} (${rate.pct}%)`;
+  const base = `Income ${formatCents(rate.incomeCents)} · Spent ${formatCents(rate.spendCents)} · Saved ${formatCents(rate.netCents)} (${rate.pct}%)`;
+  const withTarget = rows.filter((row) => row.targetCents !== null);
+  if (withTarget.length === 0) return base;
+  const met = withTarget.filter((row) => row.met).length;
+  return `${base} · Target met in ${met} of ${withTarget.length} month${withTarget.length === 1 ? '' : 's'}.`;
 }
 
 /** Task 13: the YoY card's delta indicator. A category with nothing spent in the reference

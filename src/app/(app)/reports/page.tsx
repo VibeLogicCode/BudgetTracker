@@ -17,8 +17,9 @@ import { resolveRange } from '@/lib/date-range';
 import { readEnv } from '@/lib/env';
 import { suggestionsFor } from '@/lib/predict/history';
 import type { BaselineRow } from '@/lib/predict/suggest';
+import { savingsProgress } from '@/lib/savings-target';
 import { taxYearReport, taxYears } from '@/lib/tax';
-import { ReportsClient, type TaxYearDisplayRow } from './reports-client';
+import { ReportsClient, type SavingsMonthRow, type TaxYearDisplayRow } from './reports-client';
 
 export const dynamic = 'force-dynamic';
 
@@ -80,6 +81,17 @@ export default async function ReportsPage({
   // span for it, capped at 24 -- the same cap Debt over time and Net worth already use below --
   // rather than inventing a day-granular series that does not exist.
   const cashflowMonths = Math.min(24, monthsBetween(monthOf(from), monthOf(to)) + 1);
+  const cashflowRows = cashflowTrend(cashflowMonths, { endMonth: monthOf(to), attributedUserId: person }, viewer);
+  // Lane 4 (savings targets, v1.17.0 spec): each month's resolved target and whether it was met
+  // come from savingsProgress() (Lane 1, src/lib/savings-target.ts) -- never recomputed here
+  // (ruling T1). savingsProgress is household-scope by construction (ruling T3: there is no
+  // per-person savings target), so these two figures do not follow the Person filter above the
+  // way the rest of this card's own Income/Spend bars do; that is the correct reading of "one
+  // household, one target" rather than a gap to close.
+  const cashflow: SavingsMonthRow[] = cashflowRows.map((row) => {
+    const progress = savingsProgress(row.month, viewer);
+    return { ...row, targetCents: progress.targetCents, met: progress.met };
+  });
 
   // MUST-14.8: this card's window is the last 6 FULL calendar months, always, whatever the
   // picker says. MUST-16.5: one query, not one per category.
@@ -168,7 +180,7 @@ export default async function ReportsPage({
       merchants={topMerchants({ from, to, limit: 15, attributedUserId: person }, viewer)}
       yoy={categoryYearOverYear({ month: yoyMonth, attributedUserId: person }, viewer)}
       yoyMonth={yoyMonth}
-      cashflow={cashflowTrend(cashflowMonths, { endMonth: monthOf(to), attributedUserId: person }, viewer)}
+      cashflow={cashflow}
       taxYears={taxYearOptions}
       taxYear={selectedTaxYear}
       taxRows={taxRows}
