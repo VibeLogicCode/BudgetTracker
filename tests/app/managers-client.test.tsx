@@ -23,7 +23,16 @@ vi.mock('@/app/(app)/settings/managers/actions', () => ({
   setProfileActiveAction: vi.fn(async () => ({})),
 }));
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  // 2026-08-30 plan item 2: the categories disclosure remembers its open set in localStorage
+  // (key 'managers:categoryGroups') -- cleared so one test's toggle never leaks into the next.
+  try {
+    window.localStorage.clear();
+  } catch {
+    // Not what this suite is testing -- covered explicitly below.
+  }
+});
 afterEach(() => cleanup());
 
 function profile(over: Partial<ProfileRecord> = {}): ProfileRecord {
@@ -181,9 +190,11 @@ describe('ManagersClient — profile deactivation (spec 2026-08-22 v1.6.0, MUST-
 // v1.7.0, Task 15a (spec 2026-08-22): each category row gains a Tax checkbox that reports to
 // the tax year report (src/lib/tax.ts).
 describe('ManagersClient — Tax checkbox', () => {
-  it('renders a Tax column header with a hint about the tax year report', () => {
+  // 2026-08-30 plan item 2: the categories table folded into a Budgets-style disclosure list,
+  // which has no shared column header left to hang a hint off (there is no <thead> any more) --
+  // the same sentence now lives in the Categories card's own description instead.
+  it('mentions the tax year report in the Categories card description', () => {
     render(<ManagersClient {...baseProps({ categories: [category()] })} />);
-    expect(screen.getByRole('columnheader', { name: /tax/i })).toBeTruthy();
     expect(screen.getByText(/tax year report/i)).toBeTruthy();
   });
 
@@ -238,7 +249,20 @@ describe('ManagersClient — Tax checkbox', () => {
   });
 });
 
-describe('ManagersClient — the categories table groups children under their parent (backlog 2a)', () => {
+// 2026-08-30 plan item 2: the flat table folded into the same parent/children disclosure
+// Budgets' Edit-limits list already uses. Every row -- parent or child, open or closed -- stays
+// mounted (hidden via the real `hidden` attribute, never unmounted, same ruling U2/U3 reasoning
+// budgets-client.tsx's own EditRow documents), so a plain DOM query still finds every category
+// without opening anything, exactly as `container.querySelector('table')` used to.
+function categoryRowFor(container: HTMLElement, name: string): HTMLElement {
+  const row = Array.from(container.querySelectorAll('[id^="category-row-"]')).find(
+    (node) => (node.querySelector('input[name="name"]') as HTMLInputElement | null)?.defaultValue === name,
+  );
+  if (!row) throw new Error(`no category row for ${name}`);
+  return row as HTMLElement;
+}
+
+describe('ManagersClient — the categories list groups children under their parent (backlog 2a)', () => {
   it('lists a late-created child right after its parent, not at the end', () => {
     const { container } = renderManagers({
       categories: [
@@ -250,8 +274,11 @@ describe('ManagersClient — the categories table groups children under their pa
         category({ id: 6, name: 'Activities', parentId: 1, sortOrder: 5, isArchived: true }),
       ],
     });
-    const table = container.querySelector('table');
-    const names = Array.from(table?.querySelectorAll('tbody input[name="name"]') ?? []).map((el) => (el as HTMLInputElement).defaultValue);
+    // Every row stays in the DOM whether its group is open or not (ruling U2/U3), so this reads
+    // the whole list's order with nothing clicked open.
+    const names = Array.from(container.querySelectorAll('[id^="category-row-"] input[name="name"]')).map(
+      (el) => (el as HTMLInputElement).defaultValue,
+    );
     expect(names).toEqual(['Kids', 'Education', 'Activities', 'Fees', 'Bank Fees', 'Interest']);
   });
 
@@ -262,33 +289,90 @@ describe('ManagersClient — the categories table groups children under their pa
         category({ id: 2, name: 'Bank Fees', parentId: 1, sortOrder: 1 }),
       ],
     });
-    const rows = Array.from(container.querySelectorAll('table tbody tr'));
-    const nameOf = (tr: Element) => (tr.querySelector('input[name="name"]') as HTMLInputElement | null)?.defaultValue;
-    const parentRow = rows.find((tr) => nameOf(tr) === 'Fees');
-    const childRow = rows.find((tr) => nameOf(tr) === 'Bank Fees');
-    expect(parentRow?.className).toContain('bg-surface-2');
-    expect(childRow?.className ?? '').not.toContain('bg-surface-2');
+    expect(categoryRowFor(container, 'Fees').className).toContain('bg-surface-2');
+    expect(categoryRowFor(container, 'Bank Fees').className).not.toContain('bg-surface-2');
+  });
+});
+
+describe('ManagersClient — the categories list folds like Budgets\' Edit-limits list (2026-08-30 plan item 2)', () => {
+  const parentPlusChild = [
+    category({ id: 1, name: 'Fees', sortOrder: 0 }),
+    category({ id: 2, name: 'Bank Fees', parentId: 1, sortOrder: 1 }),
+  ];
+
+  it('renders closed by default, with the child row present but hidden', () => {
+    const { container, getByRole } = renderManagers({ categories: parentPlusChild });
+    const toggle = getByRole('button', { name: /Expand Fees/i });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle.getAttribute('aria-controls')).toBe('category-row-2');
+    expect(categoryRowFor(container, 'Bank Fees').hidden).toBe(true);
+  });
+
+  it('clicking the chevron reveals the child, and renames the button to Collapse', () => {
+    const { container, getByRole } = renderManagers({ categories: parentPlusChild });
+    fireEvent.click(getByRole('button', { name: /Expand Fees/i }));
+    expect(getByRole('button', { name: /Collapse Fees/i }).getAttribute('aria-expanded')).toBe('true');
+    expect(categoryRowFor(container, 'Bank Fees').hidden).toBe(false);
+  });
+
+  it('a top-level category with no children renders no disclosure chevron', () => {
+    const { queryByRole } = renderManagers({ categories: [category({ id: 1, name: 'Insurance' })] });
+    expect(queryByRole('button', { name: /Expand Insurance/i })).toBeNull();
+  });
+
+  it('remembers an open group across a remount (own storage key, separate from Budgets\')', () => {
+    const { getByRole, unmount } = renderManagers({ categories: parentPlusChild });
+    fireEvent.click(getByRole('button', { name: /Expand Fees/i }));
+    unmount();
+
+    const { getByRole: getByRoleAfterRemount } = renderManagers({ categories: parentPlusChild });
+    expect(getByRoleAfterRemount('button', { name: /Collapse Fees/i }).getAttribute('aria-expanded')).toBe('true');
+    expect(window.localStorage.getItem('managers:categoryGroups')).toBe('[1]');
+  });
+
+  it('renders correctly (closed) when localStorage throws on read', () => {
+    const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('storage disabled');
+    });
+    try {
+      const { getByRole } = renderManagers({ categories: parentPlusChild });
+      expect(getByRole('button', { name: /Expand Fees/i }).getAttribute('aria-expanded')).toBe('false');
+    } finally {
+      getItem.mockRestore();
+    }
+  });
+
+  it('a toggle click does not throw when localStorage.setItem throws', () => {
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('quota exceeded');
+    });
+    try {
+      const { getByRole } = renderManagers({ categories: parentPlusChild });
+      expect(() => fireEvent.click(getByRole('button', { name: /Expand Fees/i }))).not.toThrow();
+      expect(getByRole('button', { name: /Collapse Fees/i }).getAttribute('aria-expanded')).toBe('true');
+    } finally {
+      setItem.mockRestore();
+    }
+  });
+
+  it('is not a MetricCard -- no hero number or progress bar rides along with a category row', () => {
+    const { container } = renderManagers({ categories: parentPlusChild });
+    // MetricCard's own hero-number class (src/components/ui/MetricCard.tsx) and its footer
+    // strip marker -- a category has no number to be the hero and no progress bar, so neither
+    // should ever appear here.
+    expect(container.querySelector('.money-lg')).toBeNull();
+    expect(container.querySelector('[data-testid="metric-card-footer"]')).toBeNull();
   });
 });
 
 describe('ManagersClient — the merchant rules table declares its own widths (item I)', () => {
   it('is a fixed table with one <col> per column', () => {
     const { container } = renderManagers({ rules: [rule()] });
-    const tables = [...container.querySelectorAll('table')];
-    // Two tables in this file: categories (5 cols) then merchant rules (7 cols). Item I converts
-    // only the second -- the categories table is not on its list.
-    const rules = tables[1];
+    // Item 2 (2026-08-30 plan) moved the categories table to a disclosure list, so the merchant
+    // rules table is now the only <table> left in this file.
+    const rules = container.querySelector('table');
     expect(rules?.className).toContain('data-table--fixed');
     expect(rules?.querySelectorAll('colgroup > col')).toHaveLength(7);
     expect(rules?.querySelectorAll('thead th')).toHaveLength(7);
-  });
-});
-
-describe('ManagersClient — responsive rows (v1.15.0, ruling S3)', () => {
-  it('the categories table headline cell (Name) carries cell-stack-headline', () => {
-    const { container } = renderManagers({ categories: [category()] });
-    const categoriesTable = container.querySelectorAll('table')[0];
-    const headlineCell = categoriesTable.querySelector('tbody tr td:first-child');
-    expect(headlineCell?.className).toContain('cell-stack-headline');
   });
 });

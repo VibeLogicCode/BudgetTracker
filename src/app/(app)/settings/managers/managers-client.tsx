@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState, useState } from 'react';
+import { useActionState, useEffect, useState } from 'react';
 import { FormError } from '@/components/FormError';
 import { MappingEditor } from '@/components/MappingEditor';
 import { SubmitButton } from '@/components/SubmitButton';
@@ -10,6 +10,7 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { TableWrap } from '@/components/ui/Table';
 import { Field, inputClass, selectClass } from '@/components/ui/form';
 import { AutoSaveCheckbox, AutoSaveTextInput } from '@/components/ui/AutoSave';
+import { ExpandIcon } from '@/components/ui/icons';
 import { categoryOptionGroups, orderedCategoryRows } from '@/lib/category-order';
 import type { CategoryRecord } from '@/lib/categories';
 import type { MerchantRuleRecord } from '@/lib/categorize/rules';
@@ -67,6 +68,220 @@ function describeDeactivationImpact(usage: ProfileUsage): string {
   return `${usage.accounts} account${usage.accounts === 1 ? '' : 's'} pinned to it will be treated as unpinned until it is reactivated. Nothing is deleted — reactivating resumes the pin immediately.`;
 }
 
+/** Unique per category id -- an open parent's `aria-controls` names exactly the child rows it
+ *  reveals, and the same id lets a closed row's `hidden` state be found in tests the way
+ *  budgets-client.tsx's own `rowId` already does for Edit-limits rows. */
+function categoryRowId(categoryId: number): string {
+  return `category-row-${categoryId}`;
+}
+
+interface CategoryGroup {
+  parent: CategoryRecord;
+  children: CategoryRecord[];
+}
+
+/**
+ * 2026-08-30 plan item 2: groups `orderedCategoryRows`'s already-correctly-ordered flat list
+ * (parent immediately followed by its own children, backlog 2a) into parent/children pairs, the
+ * same walk `categoryOptionGroups` (category-order.ts) already does for a `<select>`'s
+ * `<optgroup>`s. Kept archived rows in, unlike that helper -- this admin table is exactly the one
+ * place an archived category must still be visible and reachable (it can be restored from here).
+ */
+function groupCategories(categories: CategoryRecord[]): CategoryGroup[] {
+  const groups: CategoryGroup[] = [];
+  for (const { row, depth } of orderedCategoryRows(categories)) {
+    if (depth === 0) groups.push({ parent: row, children: [] });
+    else groups[groups.length - 1].children.push(row);
+  }
+  return groups;
+}
+
+/**
+ * Item 2: which category groups are open is a per-browser viewing preference, not household
+ * data -- same ruling U5 budgets-client.tsx's own `useGroupOpenState` already applies, duplicated
+ * here rather than imported because this lane's file list keeps the two pages' client components
+ * independent of each other. Closed by default (a fresh render's `openIds` is always an empty
+ * Set), and every localStorage read or write is wrapped in try/catch so a private window, cleared
+ * site data, or storage that simply throws still leaves the page in a correct, all-closed state.
+ */
+function useCategoryGroupOpenState(groupIds: number[]): { isOpen: (categoryId: number) => boolean; toggle: (categoryId: number) => void } {
+  const STORAGE_KEY = 'managers:categoryGroups';
+  const [openIds, setOpenIds] = useState<ReadonlySet<number>>(() => new Set());
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(STORAGE_KEY);
+      if (raw === null) return;
+      const parsed: unknown = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return;
+      const restored = new Set(parsed.filter((id): id is number => typeof id === 'number' && groupIds.includes(id)));
+      if (restored.size > 0) setOpenIds(restored);
+    } catch {
+      // Corrupted value, storage disabled, or a private window that throws on access -- the
+      // deterministic all-closed default above is already a correct render.
+    }
+    // Intentionally run once: the category list behind groupIds does not change while this
+    // page is open, and re-reading on every render would fight the writes below make on click.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const toggle = (categoryId: number) => {
+    const next = new Set(openIds);
+    if (next.has(categoryId)) next.delete(categoryId);
+    else next.add(categoryId);
+    setOpenIds(next);
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(Array.from(next)));
+    } catch {
+      // A convenience, never a correctness dependency -- the in-memory state above already
+      // reflects the click; this browser simply will not remember it next visit.
+    }
+  };
+
+  return { isOpen: (categoryId) => openIds.has(categoryId), toggle };
+}
+
+/**
+ * One category row -- a disclosure (chevron + rename field) for a parent WITH children, an
+ * ordinary indented row otherwise (mirrors budgets-client.tsx EditRow's own "only a category
+ * that actually has children becomes a disclosure" rule). NOT MetricCard: a category has no
+ * number to be the hero and no progress bar, so a metric card here would be an empty frame
+ * pretending to be data -- this is a plain flex row, the same rhythm Edit-limits already uses,
+ * in an appropriate (bordered list) container instead.
+ *
+ * The rename field is always an input, even on a parent -- unlike a budget row's read-only
+ * category name, there is no non-editable rendering of a category name to fall back to, so the
+ * chevron sits BESIDE the input rather than wrapping it (an <input> cannot nest inside a
+ * <button>, and the button needs its own accessible name distinct from the field beside it).
+ */
+function CategoryRow({
+  category,
+  depth,
+  disclosure,
+  hidden = false,
+  saveCategoryName,
+  saveCategoryTaxRelevant,
+  archiveCategory,
+}: {
+  category: CategoryRecord;
+  depth: 0 | 1;
+  /** Present only on the one row per top-level category that actually has children. */
+  disclosure?: { open: boolean; onToggle: () => void; controlsId: string };
+  /** Item 2's own version of ruling U2/U3: a closed group's children stay in the DOM (hidden,
+   *  not unmounted), so an in-progress rename is never discarded by collapsing the group, and a
+   *  raw markup scan (goals-page.test.tsx's sibling reasoning, or a browser's find-in-page)
+   *  still finds every category even before anyone opens a group. */
+  hidden?: boolean;
+  saveCategoryName: (formData: FormData) => Promise<{ error?: string }>;
+  saveCategoryTaxRelevant: (formData: FormData) => Promise<{ error?: string }>;
+  archiveCategory: (formData: FormData) => void;
+}) {
+  return (
+    <div
+      id={categoryRowId(category.id)}
+      hidden={hidden}
+      className={`flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-line px-4 py-2 last:border-b-0 sm:px-5 ${depth === 0 ? 'bg-surface-2' : ''}`}
+    >
+      <div style={{ paddingLeft: `${depth * 20}px` }} className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+        {disclosure ? (
+          <button
+            type="button"
+            aria-expanded={disclosure.open}
+            aria-controls={disclosure.controlsId}
+            aria-label={`${disclosure.open ? 'Collapse' : 'Expand'} ${category.name}`}
+            onClick={disclosure.onToggle}
+            className="inline-flex min-h-11 min-w-0 shrink-0 items-center py-1 sm:min-h-0"
+          >
+            {/* Same chevron, same rhythm as budgets-client.tsx's EditRow: closed is the
+                default shape, so only the OPEN state rotates. */}
+            <ExpandIcon className={`h-4 w-4 shrink-0 text-muted transition-transform ${disclosure.open ? 'rotate-90' : ''}`} />
+          </button>
+        ) : null}
+        <AutoSaveTextInput
+          name="name"
+          defaultValue={category.name}
+          fields={{ categoryId: String(category.id) }}
+          action={saveCategoryName}
+          ariaLabel={`Rename ${category.name}`}
+          className={`w-44 min-w-0 ${rowInput}`}
+        />
+        <span className={category.isIncome ? 'badge badge--green' : 'badge badge--slate'}>
+          {category.isIncome ? 'income' : 'spend'}
+        </span>
+        {category.isArchived ? <span className="badge badge--muted">archived</span> : null}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <AutoSaveCheckbox
+          name="taxRelevant"
+          defaultChecked={category.taxRelevant}
+          fields={{ categoryId: String(category.id) }}
+          action={saveCategoryTaxRelevant}
+          label={`Mark ${category.name} tax-relevant`}
+          labelHidden
+        />
+        <form action={archiveCategory}>
+          <input type="hidden" name="categoryId" value={category.id} />
+          <input type="hidden" name="archived" value={category.isArchived ? '0' : '1'} />
+          <button type="submit" className="btn btn--ghost btn--sm px-2 text-xs">
+            {category.isArchived ? 'restore' : 'archive'}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+/** A parent row plus its own children, as siblings in the DOM (a Fragment, not a wrapping div)
+ *  so `last:border-b-0` (CategoryRow's own className) still finds the true last row in the
+ *  whole list -- the same reason budgets-client.tsx's EditRow recurses instead of nesting. */
+function CategoryGroupRows({
+  group,
+  groupState,
+  saveCategoryName,
+  saveCategoryTaxRelevant,
+  archiveCategory,
+}: {
+  group: CategoryGroup;
+  groupState: { isOpen: (categoryId: number) => boolean; toggle: (categoryId: number) => void };
+  saveCategoryName: (formData: FormData) => Promise<{ error?: string }>;
+  saveCategoryTaxRelevant: (formData: FormData) => Promise<{ error?: string }>;
+  archiveCategory: (formData: FormData) => void;
+}) {
+  const hasChildren = group.children.length > 0;
+  const open = hasChildren && groupState.isOpen(group.parent.id);
+  return (
+    <>
+      <CategoryRow
+        category={group.parent}
+        depth={0}
+        disclosure={
+          hasChildren
+            ? {
+                open,
+                onToggle: () => groupState.toggle(group.parent.id),
+                controlsId: group.children.map((child) => categoryRowId(child.id)).join(' '),
+              }
+            : undefined
+        }
+        saveCategoryName={saveCategoryName}
+        saveCategoryTaxRelevant={saveCategoryTaxRelevant}
+        archiveCategory={archiveCategory}
+      />
+      {group.children.map((child) => (
+        <CategoryRow
+          key={child.id}
+          category={child}
+          depth={1}
+          hidden={!open}
+          saveCategoryName={saveCategoryName}
+          saveCategoryTaxRelevant={saveCategoryTaxRelevant}
+          archiveCategory={archiveCategory}
+        />
+      ))}
+    </>
+  );
+}
+
 export function ManagersClient({
   categories,
   rules,
@@ -92,6 +307,14 @@ export function ManagersClient({
   const [editing, setEditing] = useState<{ id: number; mapping: ImportMapping } | null>(null);
   const [deletingProfileId, setDeletingProfileId] = useState<number | null>(null);
   const [deactivatingProfileId, setDeactivatingProfileId] = useState<number | null>(null);
+
+  // Item 2 (2026-08-30 plan): the same fold Budgets already uses for a category's children,
+  // closed by default with the open set kept in localStorage (useCategoryGroupOpenState above).
+  // Only a parent that actually HAS children is ever a disclosure -- an ordinary top-level
+  // category with none never grows a chevron it would do nothing with.
+  const categoryGroups = groupCategories(categories);
+  const categoryGroupIds = categoryGroups.filter((group) => group.children.length > 0).map((group) => group.parent.id);
+  const categoryGroupState = useCategoryGroupOpenState(categoryGroupIds);
 
   const parents = categories.filter((c) => c.parentId === null);
   const label = (id: number | null) => {
@@ -132,7 +355,7 @@ export function ManagersClient({
       <Card>
         <CardHeader
           title="Categories"
-          description="Categories are archived, never deleted — transactions, rules and budgets reference them permanently. Nesting is limited to two levels."
+          description="Categories are archived, never deleted — transactions, rules and budgets reference them permanently. Nesting is limited to two levels. Marking one tax-relevant (below, beside its name) includes it in the tax year report."
         />
         <CardBody className="pb-4">
           <form action={createCategory} className="flex flex-wrap items-end gap-3">
@@ -150,65 +373,21 @@ export function ManagersClient({
             <SubmitButton>Add</SubmitButton>
           </form>
         </CardBody>
-        <TableWrap bare responsive>
-          <thead>
-            <tr>
-              <th scope="col">Name</th>
-              <th scope="col">Kind</th>
-              <th scope="col">State</th>
-              <th scope="col">
-                Tax
-                <span className="block font-normal text-xs text-muted">Shows in the tax year report</span>
-              </th>
-              <th scope="col" />
-            </tr>
-          </thead>
-          <tbody>
-            {orderedCategoryRows(categories).map(({ row: category, depth }) => (
-              <tr key={category.id} className={depth === 0 ? 'bg-surface-2' : undefined}>
-                {/* v1.15.0 (responsive rows): this cell is BOTH the tree indent and the phone
-                    card's headline -- a child row's indent must keep working exactly as it does
-                    in the table, so cell-stack-headline goes on this same <td>, not a new one.
-                    No cell-stack-amount: categories carry no money of their own here. */}
-                <td style={{ paddingLeft: depth === 1 ? 36 : 16 }} className="cell-stack-headline" data-label="Name">
-                  <AutoSaveTextInput
-                    name="name"
-                    defaultValue={category.name}
-                    fields={{ categoryId: String(category.id) }}
-                    action={saveCategoryName}
-                    ariaLabel={`Rename ${category.name}`}
-                    className={`w-44 ${rowInput}`}
-                  />
-                </td>
-                <td data-label="Kind">
-                  <span className={category.isIncome ? 'badge badge--green' : 'badge badge--slate'}>
-                    {category.isIncome ? 'income' : 'spend'}
-                  </span>
-                </td>
-                <td data-label="State">{category.isArchived ? <span className="badge badge--muted">archived</span> : null}</td>
-                <td data-label="Tax">
-                  {/* labelHidden: the column header already says "Tax", but the accessible name
-                      has to name the ROW, so the sentence stays and only its pixels go. */}
-                  <AutoSaveCheckbox
-                    name="taxRelevant"
-                    defaultChecked={category.taxRelevant}
-                    fields={{ categoryId: String(category.id) }}
-                    action={saveCategoryTaxRelevant}
-                    label={`Mark ${category.name} tax-relevant`}
-                    labelHidden
-                  />
-                </td>
-                <td className="text-right cell-stack-actions" data-label="">
-                  <form action={archiveCategory}>
-                    <input type="hidden" name="categoryId" value={category.id} />
-                    <input type="hidden" name="archived" value={category.isArchived ? '0' : '1'} />
-                    <button type="submit" className="btn btn--ghost btn--sm px-2 text-xs">{category.isArchived ? 'restore' : 'archive'}</button>
-                  </form>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </TableWrap>
+        {/* Item 2: folds the same way Budgets' Edit-limits list does -- a parent with children is
+            a disclosure, closed by default, its children indented beneath it. Not a TableWrap any
+            more: there is no shared column header left to hang a <thead> off once a category's
+            own row carries its own controls directly, the same reasoning Budgets' own row list
+            replaced its table with a Card of rows. */}
+        {categoryGroups.map((group) => (
+          <CategoryGroupRows
+            key={group.parent.id}
+            group={group}
+            groupState={categoryGroupState}
+            saveCategoryName={saveCategoryName}
+            saveCategoryTaxRelevant={saveCategoryTaxRelevant}
+            archiveCategory={archiveCategory}
+          />
+        ))}
       </Card>
 
       <Card>

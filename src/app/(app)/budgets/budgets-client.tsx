@@ -744,14 +744,25 @@ function EditRow({
         hidden={hidden}
         className={`flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-line px-4 py-2 last:border-b-0 sm:px-5 ${depth === 0 ? 'bg-surface-2' : ''}`}
       >
-        <div style={{ paddingLeft: `${depth * 20}px` }} className="flex min-w-0 flex-1 items-center gap-1.5">
+        {/* 2026-08-30 fix (owner's screenshot): "Food" and "Transport" clipped their own "Over
+            b…" pill on a narrow phone. This div had no `flex-wrap` of its own, and Pill.tsx
+            carries `shrink-0` -- so once the name (which had no `min-w-0`, and therefore
+            refused to shrink below its own text width either) and the pill together outgrew
+            the row, neither could give ground and the excess just overflowed past Card's own
+            `overflow-hidden` edge instead of reflowing. `flex-wrap` here lets the pill drop to
+            its own line under the name instead of fighting it for the same one. */}
+        <div style={{ paddingLeft: `${depth * 20}px` }} className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
           {disclosure ? (
             <button
               type="button"
               aria-expanded={disclosure.open}
               aria-controls={row.children.map((child) => rowId(scope, userId, child.categoryId)).join(' ')}
               onClick={disclosure.onToggle}
-              className="inline-flex min-h-11 items-center gap-1.5 py-1 text-left font-medium text-ink sm:min-h-0"
+              // `min-w-0`: a flex item's default `min-width: auto` is its own content size, which
+              // is what forced this button to hold its full width even when the row had no room
+              // left for the pill beside it. Letting it shrink is what gives `flex-wrap` above
+              // something to actually wrap around.
+              className="inline-flex min-h-11 min-w-0 items-center gap-1.5 py-1 text-left font-medium text-ink sm:min-h-0"
             >
               {/* Ruling U3: closed is the page's default shape, so the chevron points at the
                   direction opening will take it -- ExpandIcon (lucide's ChevronRight) already
@@ -761,7 +772,7 @@ function EditRow({
               {row.categoryName}
             </button>
           ) : (
-            <span className={depth === 0 ? 'font-medium text-ink' : 'text-muted'}>{row.categoryName}</span>
+            <span className={`min-w-0 ${depth === 0 ? 'font-medium text-ink' : 'text-muted'}`}>{row.categoryName}</span>
           )}
           {row.isArchived ? <span className="text-xs text-subtle">(archived)</span> : null}
           {/* Ruling U3: the marker that lets an over-budget group still announce itself while its
@@ -802,7 +813,13 @@ function EditRow({
                 ariaLabel={`Monthly limit for ${row.categoryName}`}
                 inputMode="decimal"
                 placeholder="none"
-                className="field-control w-24 px-2 py-1 text-right text-xs"
+                // 2026-08-30 fix: this className used to REPLACE AutoSaveTextInput's own default
+                // (AUTO_SAVE_CONTROL), which is the only place `min-h-11 sm:min-h-0` lived --
+                // so this one input, alone among the row's auto-save controls, had no 44px
+                // floor on a phone. Carried over explicitly rather than reverting to the
+                // default class, since `w-24 ... text-right text-xs` is still what this
+                // particular cell needs at every width.
+                className="field-control w-24 px-2 py-1 text-right text-xs min-h-11 sm:min-h-0"
               />
               {row.baseLimitCents !== null ? (
                 <form action={clearLimit}>

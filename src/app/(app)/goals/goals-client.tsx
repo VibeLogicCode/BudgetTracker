@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState } from 'react';
+import { useActionState, useState } from 'react';
 import { FormError } from '@/components/FormError';
 import { GoalCard } from '@/components/GoalCard';
 import { SubmitButton } from '@/components/SubmitButton';
@@ -33,6 +33,14 @@ export function GoalsClient({
   const [contributeState, contribute] = useActionState(addContributionAction, initial);
   const [archiveState, archive] = useActionState(archiveGoalAction, initial);
   const [deleteState, remove] = useActionState(deleteContributionAction, initial);
+  // 2026-08-30 plan item 1: the same disclosure shape QuickAddTransaction's page variant uses
+  // for its own toggle (src/components/QuickAddTransaction.tsx) -- a plain useState boolean,
+  // closed by default, flipped by one button carrying aria-expanded/aria-controls. Unlike that
+  // component, the form stays MOUNTED (hidden via the real HTML attribute below, not omitted)
+  // rather than closed: tests/app/goals-page.test.tsx reads a household viewer's full owner
+  // roster straight out of this form's <select> on a page load that never opens anything, the
+  // same "closed groups stay in the DOM" reasoning budgets-client.tsx's own EditRow documents.
+  const [addGoalOpen, setAddGoalOpen] = useState(false);
 
   const notice = createState.message ?? contributeState.message ?? archiveState.message ?? deleteState.message;
   const error = createState.error ?? contributeState.error ?? archiveState.error ?? deleteState.error;
@@ -43,11 +51,26 @@ export function GoalsClient({
         title="Goals"
         description="What the household is saving towards, and whether the pace gets there."
         actions={
-          /* Archiving was previously one-way in the UI: archiveGoal(id, false) existed
-             but nothing could reach it, so an archived goal was gone for good. */
-          <a className="btn btn--secondary btn--sm" href={showArchived ? '/goals' : '/goals?archived=1'}>
-            {showArchived ? 'Hide archived' : 'Show archived'}
-          </a>
+          <>
+            {/* Archiving was previously one-way in the UI: archiveGoal(id, false) existed
+                but nothing could reach it, so an archived goal was gone for good. */}
+            <a className="btn btn--secondary btn--sm" href={showArchived ? '/goals' : '/goals?archived=1'}>
+              {showArchived ? 'Hide archived' : 'Show archived'}
+            </a>
+            {/* Item 1 (2026-08-30 plan): "content is always visible, a form that CREATES
+                something sits behind a button" -- the same house rule already applied to Quick
+                add on Transactions and the dashboard. 44px floor on a phone, same reasoning
+                QuickAddTransaction's own toggle documents. */}
+            <button
+              type="button"
+              className="btn btn--primary btn--sm min-h-11 sm:min-h-0"
+              aria-expanded={addGoalOpen}
+              aria-controls="new-goal"
+              onClick={() => setAddGoalOpen((open) => !open)}
+            >
+              {addGoalOpen ? 'Close' : 'Add goal'}
+            </button>
+          </>
         }
       />
       <PageGuide>
@@ -88,9 +111,18 @@ export function GoalsClient({
             icon={GoalsIcon}
             title="No goals yet"
             action={
-              <a href="#new-goal" className="btn btn--primary btn--sm">
+              // Was an <a href="#new-goal"> jump -- the form it pointed at was always open, so
+              // scrolling to it was enough. Now that the form is a closed-by-default disclosure
+              // (item 1), a hash jump would land on a hidden card; this opens it instead.
+              <button
+                type="button"
+                className="btn btn--primary btn--sm"
+                aria-expanded={addGoalOpen}
+                aria-controls="new-goal"
+                onClick={() => setAddGoalOpen(true)}
+              >
                 Add a goal
-              </a>
+              </button>
             }
           >
             A goal is a target amount and, if you want one, a date. Add the first one below and log contributions as you go.
@@ -174,7 +206,9 @@ export function GoalsClient({
         </div>
       )}
 
-      <div id="new-goal">
+      {/* Item 1: `hidden`, not a conditional `null` -- the form stays mounted while closed (see
+          `addGoalOpen`'s own doc comment above for why goals-page.test.tsx requires that). */}
+      <div id="new-goal" hidden={!addGoalOpen}>
         <Card className="max-w-md">
           <CardHeader title="New goal" description="Name it, give it a target, and it starts tracking pace on the first contribution." />
           <CardBody>
