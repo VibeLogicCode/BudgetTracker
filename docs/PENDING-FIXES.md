@@ -1731,3 +1731,35 @@ change lands, which may make it unnecessary.
 **Also raised:** parent rows in the Budgets and Settings -> Categories tables read the same as their
 children. A subtle background tint on depth-0 rows (a token already in the palette, not a new
 colour) would separate them. ~30 min, independent of the picker work.
+
+## CB. Two kebab editors are dead in review mode (2026-08-29) — REGRESSION shipped in v1.14.1
+
+**Reported by the owner:** on `/transactions?review=1`, choosing **Assign to new loan…** does
+nothing -- no editor, no field to type a name. Same for **Note…**.
+
+**Cause.** `rowMenu()` is shared by both branches, so the menu items render and their `onSelect`
+sets state correctly. The editors those items open do not: `noting?.id === row.id` and
+`newLoan?.id === row.id` render `<tr>` sub-rows inside the TABLE branch only
+(`transactions-client.tsx`, after the row's `</tr>`). The card branch renders just the
+apply-to-all editor. Rename… and Split… are unaffected -- they are page-level modals outside both
+branches. Dispatch-only coverage (`tests/app/transactions-client.test.tsx`) passed because clicking
+an EXISTING loan is a form submit, not an editor.
+
+**Fix.** Extract the note and new-loan editors into one renderer each, called from both branches --
+a `<tr><td colSpan>` in the table and a plain `<div>` inside the `<li>` in the card list. Tests must
+assert the editor APPEARS (a field to type into), in both modes, not just that a click dispatches.
+
+**Effort:** ~45 min. No migration. No personal data. Ship promptly: the image on `:latest` has it.
+
+## CA. Nothing on a row shows it is linked to a loan (2026-08-29)
+
+`loanLinks[row.id]` is read only inside the kebab, to build the `Unassign from <name>` item. After
+assigning, neither the table row nor the review card changes: the row keeps its place (a review row
+is still uncategorised), and the only confirmation is a banner at the top of the page, which on a
+phone is scrolled out of sight. Reopening the menu to see "Unassign from Civic" is currently the
+only proof it worked.
+
+**Fix.** A small badge on the row and the card when the transaction carries a loan link, naming the
+loan -- the same treatment `transfer`, `renamed` and `rule` badges already get.
+
+**Effort:** ~30-40 min. No migration. No personal data.
