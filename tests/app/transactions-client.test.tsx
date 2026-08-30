@@ -189,19 +189,22 @@ describe('MUST-14.8 / MUST-14.9: the row control', () => {
   };
   const transferOnlyProps = { ...baseProps, page: pageWithRow({ isTransfer: true }) };
 
-  it('with no loans, the assign-to-an-existing-loan control is absent entirely', () => {
-    // Addendum A: "Assign to new loan…" is now offered even with no loans (it creates one) --
-    // only the per-loan "Assign to <loan>" items are gated on loanOptions being non-empty, so
-    // this excludes that one item by name rather than reverting to a bare /Assign to/ match.
+  it('with no loans, the "Assign to loan…" editor offers only "New loan…" (backlog BY)', () => {
+    // Backlog BY: the per-loan "Assign to <loan>" list is gone -- one "Assign to loan…" item
+    // opens the (extended) new-loan editor instead, whose own select is what gates on
+    // loanOptions being non-empty.
     render(<TransactionsClient {...baseProps} loanOptions={[]} loanLinks={{}} />);
     openRowMenu('Actions for TIM HORTONS');
-    expect(screen.queryByText(/^Assign to(?! new loan)/)).toBeNull();
+    expect(screen.getByRole('menuitem', { name: 'Assign to loan…' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
+    const select = screen.getByLabelText('Assign to') as HTMLSelectElement;
+    expect([...select.options].map((option) => option.textContent)).toEqual(['New loan…']);
   });
 
-  it('a linked row shows Unassign and keeps the assign item reachable (F4 fix-round)', () => {
-    // F4: the select used to disappear entirely once a row had a link, which made the
+  it('a linked row shows Unassign, and the single "Assign to loan…" item stays reachable (F4 fix-round)', () => {
+    // F4: the assign control used to disappear entirely once a row had a link, which made the
     // over-link warn path (MUST-14.10) unreachable from the UI. The row menu keeps both --
-    // "Unassign from Civic" and "Assign to Civic" -- offered together, one item each.
+    // "Unassign from Civic" and "Assign to loan…" -- offered together.
     render(
       <TransactionsClient
         {...baseProps}
@@ -215,7 +218,7 @@ describe('MUST-14.8 / MUST-14.9: the row control', () => {
     );
     openRowMenu('Actions for TIM HORTONS');
     expect(screen.getByText('Unassign from Civic')).toBeTruthy();
-    expect(screen.getByText('Assign to Civic')).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Assign to loan…' })).toBeTruthy();
   });
 
   it('renders every link on a row, each with its own Unassign (F4 fix-round: a combined payment)', () => {
@@ -236,27 +239,31 @@ describe('MUST-14.8 / MUST-14.9: the row control', () => {
     expect(screen.getByText('Unassign from Boat')).toBeTruthy();
   });
 
-  it('an unlinked row renders an assign item for the loan when there ARE loans', () => {
+  it('an unlinked row\'s "Assign to loan…" editor lists an existing loan alongside "New loan…"', () => {
     render(<TransactionsClient {...baseProps} loanOptions={[{ id: 7, name: 'Civic' }]} loanLinks={{}} />);
     openRowMenu('Actions for TIM HORTONS');
-    expect(screen.getByText('Assign to Civic')).toBeTruthy();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
+    const select = screen.getByLabelText('Assign to') as HTMLSelectElement;
+    expect([...select.options].map((option) => option.textContent)).toEqual(['Civic', 'New loan…']);
   });
 
   it('a transfer row renders neither control', () => {
     render(<TransactionsClient {...transferOnlyProps} loanOptions={[{ id: 7, name: 'Civic' }]} loanLinks={{}} />);
     openRowMenu('Actions for TIM HORTONS');
-    expect(screen.queryByText(/Assign to/)).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'Assign to loan…' })).toBeNull();
     expect(screen.queryByText(/Unassign/)).toBeNull();
   });
 
   // Fix wave (2026-08-23 review, finding I4): the six kebab-form dispatch paths across the
   // suite had zero coverage that clicking the menuitem actually fires the bound server action
   // with the right fields. These two cover Assign to loan / Unassign from loan.
-  it('clicking "Assign to <loan>" calls assignToLoanAction with the transaction and loan ids', async () => {
+  it('choosing an existing loan and saving calls assignToLoanAction with the transaction and loan ids (backlog BY)', async () => {
     const { assignToLoanAction } = await import('@/app/(app)/transactions/actions');
     render(<TransactionsClient {...baseProps} loanOptions={[{ id: 7, name: 'Civic' }]} loanLinks={{}} />);
     openRowMenu('Actions for TIM HORTONS');
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to Civic' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
+    fireEvent.change(screen.getByLabelText('Assign to'), { target: { value: '7' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(assignToLoanAction).toHaveBeenCalled());
     // Bound as `(_prev, formData) => assignToLoanAction(formData)` (transactions-client.tsx),
@@ -755,19 +762,19 @@ describe('Assign to new loan — Addendum A', () => {
   it('is offered on a normal row even when the household has no loans yet', () => {
     render(<TransactionsClient {...baseProps} loanOptions={[]} loanLinks={{}} />);
     openRowMenu('Actions for TIM HORTONS');
-    expect(screen.getByRole('menuitem', { name: 'Assign to new loan…' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Assign to loan…' })).toBeTruthy();
   });
 
   it('is not offered on a transfer (MUST-14.8, ruling A13)', () => {
     render(<TransactionsClient {...transferOnlyProps} loanOptions={[]} loanLinks={{}} />);
     openRowMenu('Actions for TIM HORTONS');
-    expect(screen.queryByRole('menuitem', { name: 'Assign to new loan…' })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'Assign to loan…' })).toBeNull();
   });
 
   it('opens an inline sub-row with a name box and a direction select, defaulting to lent', () => {
     render(<TransactionsClient {...baseProps} loanOptions={[]} loanLinks={{}} />);
     openRowMenu('Actions for TIM HORTONS');
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to new loan…' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
     const name = screen.getByLabelText('Loan name') as HTMLInputElement;
     const direction = screen.getByLabelText('Direction') as HTMLSelectElement;
     expect(name.name).toBe('loanName');
@@ -789,7 +796,7 @@ describe('Assign to new loan — Addendum A', () => {
     spy.mockClear();
     const { container } = render(<TransactionsClient {...baseProps} loanOptions={[]} loanLinks={{}} />);
     openRowMenu('Actions for TIM HORTONS');
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to new loan…' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
     fireEvent.change(screen.getByLabelText('Loan name'), { target: { value: 'Loan to Sam' } });
     fireEvent.submit(container.querySelector('form[data-testid="new-loan-form"]') as HTMLFormElement);
     await waitFor(() => expect(spy).toHaveBeenCalled());
@@ -802,9 +809,9 @@ describe('Assign to new loan — Addendum A', () => {
   it('opening it on a second row replaces the first, like the note editor', () => {
     render(<TransactionsClient {...twoRowProps} loanOptions={[]} loanLinks={{}} />);
     openRowMenu('Actions for TIM HORTONS');
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to new loan…' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
     openRowMenu('Actions for SECOND ROW');
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to new loan…' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
     expect(screen.getAllByLabelText('Loan name')).toHaveLength(1);
   });
 
@@ -813,7 +820,7 @@ describe('Assign to new loan — Addendum A', () => {
   it('the loan name input requires a value, caps at 80 characters, and takes focus on open', () => {
     render(<TransactionsClient {...baseProps} loanOptions={[]} loanLinks={{}} />);
     openRowMenu('Actions for TIM HORTONS');
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to new loan…' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
     const name = screen.getByLabelText('Loan name') as HTMLInputElement;
     expect(name.required).toBe(true);
     expect(name.maxLength).toBe(80);
@@ -840,7 +847,7 @@ describe('Assign to new loan — a refusal keeps the editor open (review round)'
     spy.mockResolvedValueOnce({ error: 'A loan you lent out starts with money going out.' });
     const { container } = render(<TransactionsClient {...baseProps} loanOptions={[]} loanLinks={{}} />);
     openRowMenu('Actions for TIM HORTONS');
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to new loan…' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
     fireEvent.change(screen.getByLabelText('Loan name'), { target: { value: 'Loan to Sam' } });
     const form = container.querySelector('form[data-testid="new-loan-form"]') as HTMLFormElement;
     fireEvent.submit(form);
@@ -860,7 +867,7 @@ describe('Assign to new loan — a refusal keeps the editor open (review round)'
     spy.mockResolvedValueOnce({ message: 'Created Loan to Sam. Assigned. $500.00 came off the balance.' });
     const { container } = render(<TransactionsClient {...baseProps} loanOptions={[]} loanLinks={{}} />);
     openRowMenu('Actions for TIM HORTONS');
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to new loan…' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
     fireEvent.change(screen.getByLabelText('Loan name'), { target: { value: 'Loan to Sam' } });
     fireEvent.submit(container.querySelector('form[data-testid="new-loan-form"]') as HTMLFormElement);
     await waitFor(() => expect(spy).toHaveBeenCalled());
@@ -898,11 +905,13 @@ describe('Assign to new loan — create result priority (review round)', () => {
       <TransactionsClient {...twoRowProps} loanOptions={[{ id: 7, name: 'Civic' }]} loanLinks={{}} />,
     );
     openRowMenu('Actions for TIM HORTONS');
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to Civic' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
+    fireEvent.change(screen.getByLabelText('Assign to'), { target: { value: '7' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(screen.getByText('That transaction is already linked to this loan.')).toBeTruthy());
 
     openRowMenu('Actions for SECOND ROW');
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to new loan…' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
     fireEvent.change(screen.getByLabelText('Loan name'), { target: { value: 'Loan to Sam' } });
     fireEvent.submit(container.querySelector('form[data-testid="new-loan-form"]') as HTMLFormElement);
 
@@ -933,8 +942,9 @@ describe('Review mode (ruling R5): the card list replaces the table', () => {
 
   /** The card branch renders the SAME rowMenu() as the table, but nothing covered that its
    *  kebab forms actually dispatch from inside a <li> rather than a <td>. Reported as
-   *  "assign to loan does nothing in review mode": the dispatch is fine (this test), what is
-   *  missing is any confirmation on the row -- see backlog CA. */
+   *  "assign to loan does nothing in review mode": the dispatch is fine (this test); what was
+   *  actually missing was noteEditor/newLoanEditor's own sub-rows never rendering from the card
+   *  list at all (fix round, item CB) -- covered by its own describe block below. */
   it('dispatches a kebab action from a review card, not just from a table row', async () => {
     const { assignToLoanAction } = await import('@/app/(app)/transactions/actions');
     vi.mocked(assignToLoanAction).mockClear();
@@ -952,7 +962,9 @@ describe('Review mode (ruling R5): the card list replaces the table', () => {
     );
     const menus = screen.getAllByRole('button', { name: /Actions for/ });
     fireEvent.click(menus[0]);
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to Civic' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
+    fireEvent.change(screen.getByLabelText('Assign to'), { target: { value: '7' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(assignToLoanAction).toHaveBeenCalled());
   });
 
@@ -1282,5 +1294,94 @@ describe('Ruling R2: the "Needs review" chip', () => {
     );
     const link = screen.getByText('Needs review (4)').closest('a');
     expect(link?.getAttribute('href')).toBe('/transactions');
+  });
+});
+
+/**
+ * Fix round (item CB, regression): noteEditor/newLoanEditor used to be `<tr>` sub-rows rendered
+ * only from the table branch, so opening either one from the review card list's kebab did
+ * nothing at all. Both are now plain functions rendered from both branches -- these two prove
+ * the card branch specifically.
+ */
+describe('Fix round (item CB): the row editors work from the review card list', () => {
+  const categories = [{ id: 1, name: 'Dining', parentId: null, isArchived: false, sortOrder: 0 }];
+
+  function reviewPage(overrides: Partial<TransactionRow> = {}): TransactionPage {
+    return pageWithRow({ source: 'bayes', categoryId: 1, categoryName: 'Dining', confidence: 0.82, ...overrides });
+  }
+
+  it('in review mode, clicking Note… shows a textarea', () => {
+    render(
+      <TransactionsClient page={reviewPage()} accounts={[]} categories={categories} people={[]} today="2026-08-16" reviewMode />,
+    );
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Note…' }));
+    expect(screen.getByLabelText(/Note for TIM HORTONS/).tagName).toBe('TEXTAREA');
+  });
+
+  // Backlog BY folded in: the same editor now opens with a select at the top, listing every
+  // existing loan plus "New loan…".
+  it('in review mode, clicking Assign to loan… shows the editor with a select listing an existing loan and New loan…', () => {
+    render(
+      <TransactionsClient
+        page={reviewPage()}
+        accounts={[]}
+        categories={categories}
+        people={[]}
+        today="2026-08-16"
+        reviewMode
+        loanOptions={[{ id: 7, name: 'Civic' }]}
+        loanLinks={{}}
+      />,
+    );
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
+    const select = screen.getByLabelText('Assign to') as HTMLSelectElement;
+    expect([...select.options].map((option) => option.textContent)).toEqual(['Civic', 'New loan…']);
+  });
+});
+
+/** Backlog CA: a row linked to a loan carries a badge naming it, on the table row and the card. */
+describe('Backlog CA: a loan link shows a badge naming the loan', () => {
+  const linkedLoanLinks = {
+    1: [{ id: 1, txnId: 1, itemId: 7, itemName: 'Civic', amountCents: 45000, appliedCents: 45000, source: 'manual' as const }],
+  };
+
+  it('renders a badge naming the loan on the table row', () => {
+    render(
+      <TransactionsClient
+        page={pageWithRow({ id: 1 })}
+        accounts={[]}
+        categories={[]}
+        people={[]}
+        today="2026-08-16"
+        loanOptions={[{ id: 7, name: 'Civic' }]}
+        loanLinks={linkedLoanLinks}
+      />,
+    );
+    expect(screen.getByText('Civic')).toBeTruthy();
+  });
+});
+
+/** Backlog BZ: the category selects group children under their parent via an <optgroup>. */
+describe('Backlog BZ: category selects render optgroups', () => {
+  const categories = [
+    { id: 1, name: 'Home', parentId: null, isArchived: false, sortOrder: 0 },
+    { id: 2, name: 'Rent', parentId: 1, isArchived: false, sortOrder: 0 },
+  ];
+
+  it("renders an <optgroup> whose label is the parent's name", () => {
+    const { container } = render(
+      <TransactionsClient
+        page={pageWithRow({ id: 1 })}
+        accounts={[]}
+        categories={categories}
+        people={[]}
+        today="2026-08-16"
+      />,
+    );
+    const optgroup = container.querySelector('tbody select[name="categoryId"] optgroup') as HTMLOptGroupElement;
+    expect(optgroup).toBeTruthy();
+    expect(optgroup.label).toBe('Home');
   });
 });

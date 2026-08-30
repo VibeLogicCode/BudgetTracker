@@ -17,7 +17,7 @@ import { Field, inputClass, labelClass, selectClass } from '@/components/ui/form
 import { DateRangePicker } from '@/components/ui/DateRangePicker';
 import { AutoSaveSelect } from '@/components/ui/AutoSave';
 import { RowMenu, RowMenuButton, RowMenuForm, RowMenuLink } from '@/components/ui/RowMenu';
-import { categoryOptions, type CategoryLike } from '@/lib/category-order';
+import { categoryOptionGroups, categoryOptions, type CategoryLike, type CategoryOptionGroup } from '@/lib/category-order';
 import { type ResolvedRange } from '@/lib/date-range';
 import type { LoanLink } from '@/lib/loans';
 import { formatCents, parseAmountToCents, sumCents } from '@/lib/money';
@@ -136,14 +136,19 @@ export function TransactionsClient({
   // sub-row on a different row always replaces whichever one was already open.
   const [noting, setNoting] = useState<{ id: number; current: string } | null>(null);
   // Addendum A, ruling A1: mirrors `noting` exactly -- one nullable slot, so opening the
-  // "Assign to new loan…" sub-row on a different row always replaces whichever one was open.
+  // "Assign to loan…" sub-row on a different row always replaces whichever one was open.
   //
   // Review round: `name` is carried in this state (a CONTROLLED input below), not left as an
   // uncontrolled DOM value, because React resets a `<form action={...}>`'s uncontrolled fields
   // to their defaults once the action settles -- on a refusal just as much as a success. Without
   // this, the very name a person typed when the refusal happened would vanish from the input
   // the instant the action's promise resolved, even though the form itself stays open.
-  const [newLoan, setNewLoan] = useState<{ id: number; name: string } | null>(null);
+  //
+  // Backlog BY: `itemId` is this same editor's own "Assign to" select, carried in state for the
+  // same reason `name` already is -- an existing-loan choice must survive a refusal exactly like
+  // a typed name does. '' means "New loan…" (the name/direction fields below apply); any other
+  // value is an existing loan's id, and Save posts straight to assignToLoanAction instead.
+  const [newLoan, setNewLoan] = useState<{ id: number; name: string; itemId: string } | null>(null);
   const [attrState, attrAction] = useActionState(setAttributionAction, initial);
   const [bulkCatState, bulkCatAction] = useActionState(bulkCategorizeAction, initial);
   const [bulkTfrState, bulkTfrAction] = useActionState(bulkTransferAction, initial);
@@ -190,6 +195,33 @@ export function TransactionsClient({
   // initial selection cannot match, the select falls back to "Uncategorized", and an untouched
   // "save" click clears (and untrains) a legitimate historical categorization.
   const groupedCategories = categoryOptions(categories);
+
+  // Backlog BZ: the same rows as groupedCategories, arranged for an <optgroup> instead of NBSP
+  // indentation -- a parent WITH children becomes a group named after it (itself included as
+  // the group's first option), a childless top-level category stays a plain option.
+  const categoryGroups: CategoryOptionGroup[] = categoryOptionGroups(categories);
+  // AutoSaveSelect's own option shape (src/components/ui/AutoSave.tsx): a group is
+  // { label, options }, a childless category is passed through directly.
+  const categorySelectOptions = categoryGroups.map((group) =>
+    group.label === null
+      ? { value: String(group.options[0].id), label: group.options[0].label }
+      : { label: group.label, options: group.options.map((opt) => ({ value: String(opt.id), label: opt.label })) },
+  );
+  // The same groups, rendered as real <option>/<optgroup> elements for the two plain <select>s
+  // in this file that still need one (the apply-to-all editor, the splits editor).
+  function categoryOptGroups(groups: CategoryOptionGroup[]) {
+    return groups.map((group) =>
+      group.label === null ? (
+        <option key={group.options[0].id} value={group.options[0].id}>{group.options[0].label}</option>
+      ) : (
+        <optgroup key={`group-${group.label}`} label={group.label}>
+          {group.options.map((opt) => (
+            <option key={opt.id} value={opt.id}>{opt.label}</option>
+          ))}
+        </optgroup>
+      ),
+    );
+  }
 
   const toggle = (id: number) => setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   // v1.7.0 bulk-guard fix: Categorize and Mark transfer both silently skip a split
@@ -238,6 +270,17 @@ export function TransactionsClient({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [newLoanState]);
+
+  // Backlog BY: the same editor now also posts an EXISTING-loan choice to assignToLoanAction
+  // (assignState), so it must close on that action's own success too, for the same reason as
+  // newLoanState just above -- a refusal (no loan picked, already linked at the DB layer) must
+  // leave the editor open with the choice still made.
+  useEffect(() => {
+    if (assignState.message && !assignState.error) {
+      setNewLoan(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assignState]);
 
   // Same idiom as newLoan above: the "Apply a category to all N…" editor stays open on a
   // refusal (a rule someone else in the household owns) so its own inline error is visible
@@ -308,7 +351,11 @@ export function TransactionsClient({
    * new and review-mode-only (inventory #5/#7).
    */
   function rowMenu(row: TransactionRow) {
-    const matchingCount = matchingCounts[row.id] ?? 0;
+    // Backlog BX: matchingCounts is populated for every row IN review mode (page.tsx) and empty
+    // outside it -- so a MISSING entry (rather than a low one) is exactly "we're outside review
+    // mode and never counted", and gets the generic label instead of a real number.
+    const matchingCount = matchingCounts[row.id];
+    const hasMatchingCount = matchingCount !== undefined;
     return (
       <RowMenu
         label={`Actions for ${row.displayDescription ?? row.rawDescription} on ${row.date}, ${formatCents(row.amountCents)}`}
@@ -355,19 +402,13 @@ export function TransactionsClient({
                 {`Unassign from ${link.itemName}`}
               </RowMenuForm>
             ))}
-        {row.isTransfer
-          ? null
-          : loanOptions.map((loan) => (
-              <RowMenuForm
-                key={`assign-${loan.id}`}
-                action={assignLoan}
-                fields={{ transactionId: String(row.id), itemId: String(loan.id) }}
-              >
-                {`Assign to ${loan.name}`}
-              </RowMenuForm>
-            ))}
+        {/* Backlog BY: one item, not one per loan -- it opens the same inline editor as before,
+            now extended with a select for an existing loan (Save -> assignToLoanAction) or
+            "New loan…" (Save -> createLoanFromTransactionAction, unchanged). */}
         {row.isTransfer ? null : (
-          <RowMenuButton onSelect={() => setNewLoan({ id: row.id, name: '' })}>Assign to new loan…</RowMenuButton>
+          <RowMenuButton onSelect={() => setNewLoan({ id: row.id, name: '', itemId: '' })}>
+            Assign to loan…
+          </RowMenuButton>
         )}
         {/* Review-mode-only, inventory #5: only when the categorizer itself guessed this row and
             nobody has confirmed it yet. */}
@@ -376,14 +417,177 @@ export function TransactionsClient({
             {`Accept ${row.categoryName}`}
           </RowMenuForm>
         ) : null}
-        {/* Review-mode-only, inventory #7: only when other rows actually share this merchant --
-            same gate the old review page's own "apply to all" group used. */}
-        {reviewMode && matchingCount > 1 ? (
+        {/* Backlog BX: offered on every row, not gated on reviewMode any more. Inside review
+            mode (inventory #7) matchingCounts is real and gates on >1, same as before -- outside
+            it there is nothing to gate on (matchingCounts is never populated there), so the item
+            is offered with a merchant-named label instead and the server counts on submit. */}
+        {hasMatchingCount ? (
+          matchingCount > 1 ? (
+            <RowMenuButton onSelect={() => setApplyAllRow(row.id)}>
+              {`Apply a category to all ${matchingCount} matching…`}
+            </RowMenuButton>
+          ) : null
+        ) : (
           <RowMenuButton onSelect={() => setApplyAllRow(row.id)}>
-            {`Apply a category to all ${matchingCount} matching…`}
+            {`Apply this category to every "${row.normalizedMerchant}"…`}
           </RowMenuButton>
-        ) : null}
+        )}
       </RowMenu>
+    );
+  }
+
+  /**
+   * Fix round (item CB, regression): this used to be a `<tr>` sub-row rendered ONLY from the
+   * table branch below, so opening it from the review card list's kebab did nothing -- the same
+   * dead-editor bug noteEditor's docblock describes. Pulled out to a plain function so both
+   * branches can render its contents (a table `<tr><td colSpan>`, a card `<div>`), with no
+   * change to the fields, action or behaviour themselves.
+   */
+  function noteEditor(row: TransactionRow) {
+    if (noting?.id !== row.id) return null;
+    return (
+      // Ruling R13: an inline sub-row, not a dialog -- the note is about the row above it, and a
+      // modal would hide the charge the note is explaining. NOT an auto-save (v1.11.0's rule): a
+      // free-text field that saves on blur loses a half-typed sentence, which is the one thing a
+      // note must never do.
+      <form action={noteAction} onSubmit={() => setNoting(null)} className="flex flex-col gap-2 py-2">
+        <input type="hidden" name="transactionId" value={row.id} />
+        <Field label={`Note for ${row.displayDescription ?? row.rawDescription}`}>
+          <textarea name="notes" defaultValue={noting.current} rows={2} className={inputClass} />
+        </Field>
+        <div className="flex gap-2">
+          <SubmitButton className="w-fit">Save note</SubmitButton>
+          <button type="button" className="btn btn--ghost btn--sm" onClick={() => setNoting(null)}>
+            Cancel
+          </button>
+        </div>
+      </form>
+    );
+  }
+
+  /**
+   * Fix round (item CB, regression): same dead-editor bug as noteEditor, for the "Assign to
+   * loan…" sub-row -- pulled out so the review card list can render it too.
+   *
+   * Backlog BY, folded in here: this is now ALSO the existing-loan assign form, not just the
+   * new-loan one. `newLoan.itemId` is the "Assign to" select's own value: '' means "New loan…"
+   * (the name/direction fields below apply, posting to createLoanFromTransactionAction exactly
+   * as before); any other value is an existing loan's id, and Save posts straight to
+   * assignToLoanAction instead. One <form>, whose `action` picks the right dispatcher at submit
+   * time -- the fields either action reads (transactionId always; loanName/loanDirection or
+   * itemId depending on the choice) are exactly what's rendered below.
+   */
+  function newLoanEditor(row: TransactionRow) {
+    if (newLoan?.id !== row.id) return null;
+    const isNew = newLoan.itemId === '';
+    return (
+      <form
+        action={(formData: FormData) => {
+          if (isNew) newLoanAction(formData);
+          else assignLoan(formData);
+        }}
+        className="flex flex-col gap-2 py-2"
+        data-testid="new-loan-form"
+      >
+        <input type="hidden" name="transactionId" value={row.id} />
+        {/* Shown INLINE, under the form a refusal leaves open, not only through the top banner
+            (that still gets it too, via `error` above) -- the person is looking here, not at the
+            top of the page. Whichever action was actually posted owns this message. */}
+        <FormError message={isNew ? newLoanState.error : assignState.error} />
+        <Field label="Assign to">
+          <select
+            name="itemId"
+            value={newLoan.itemId}
+            onChange={(e) => setNewLoan({ ...newLoan, itemId: e.target.value })}
+            className={selectClass}
+          >
+            {loanOptions.map((loan) => (
+              <option key={loan.id} value={String(loan.id)}>{loan.name}</option>
+            ))}
+            <option value="">New loan…</option>
+          </select>
+        </Field>
+        {isNew ? (
+          <>
+            <Field label="Loan name" hint="Who the loan is with — a name you will recognise later.">
+              <input
+                name="loanName"
+                value={newLoan.name}
+                onChange={(e) => setNewLoan({ ...newLoan, name: e.target.value })}
+                required
+                maxLength={80}
+                autoFocus
+                className={inputClass}
+              />
+            </Field>
+            <Field label="Direction">
+              <select name="loanDirection" defaultValue="lent" className={selectClass}>
+                {LOAN_DIRECTIONS.map((direction) => (
+                  <option key={direction} value={direction}>{LOAN_DIRECTION_LABELS[direction]}</option>
+                ))}
+              </select>
+            </Field>
+          </>
+        ) : null}
+        <div className="flex gap-2">
+          <SubmitButton className="w-fit">Save</SubmitButton>
+          <button type="button" className="btn btn--ghost btn--sm" onClick={() => setNewLoan(null)}>
+            Cancel
+          </button>
+        </div>
+      </form>
+    );
+  }
+
+  /**
+   * Backlog BX: this editor used to live only in the card branch, gated on reviewMode through
+   * the kebab item that opens it. Now the item is offered on every row, so this must render from
+   * the table branch too -- pulled out for the same reason noteEditor/newLoanEditor were.
+   */
+  function applyAllEditor(row: TransactionRow) {
+    if (applyAllRow !== row.id) return null;
+    const matchingCount = matchingCounts[row.id];
+    const hasMatchingCount = matchingCount !== undefined;
+    return (
+      <div className="flex flex-col gap-1.5 rounded-lg border border-line p-3">
+        <p className="text-xs font-semibold text-ink">
+          {hasMatchingCount ? (
+            <>Every &quot;{row.normalizedMerchant}&quot; — {matchingCount} transactions, plus future imports</>
+          ) : (
+            <>Every &quot;{row.normalizedMerchant}&quot;, plus future imports</>
+          )}
+        </p>
+        <p className="text-xs text-muted">
+          Only for merchants that are always one category (coffee shop, streaming).
+          Walmart, Amazon, e-transfers: use the select above.
+        </p>
+        {/* Shown inline, under the editor a refusal leaves open, not only through the top banner
+            (that still gets it too, via `error` above) -- the same idiom the new-loan editor
+            already uses. */}
+        <FormError message={applyAllState.error} />
+        <form action={applyAllAction} className="flex flex-col gap-1.5 sm:flex-row sm:items-center">
+          <input type="hidden" name="normalizedMerchant" value={row.normalizedMerchant} />
+          <select
+            name="categoryId"
+            defaultValue={row.categoryId ?? ''}
+            aria-label={
+              hasMatchingCount
+                ? `Category for all ${matchingCount} matching ${row.normalizedMerchant} — every transaction`
+                : `Category for every ${row.normalizedMerchant} — every transaction`
+            }
+            className={REVIEW_PICKER_CLASS}
+          >
+            <option value="">{hasMatchingCount ? `Choose for all ${matchingCount}…` : 'Choose a category…'}</option>
+            {categoryOptGroups(categoryGroups)}
+          </select>
+          <SubmitButton variant="secondary" size="sm" className="w-fit">
+            {hasMatchingCount ? `Apply to all ${matchingCount} matching + create rule` : 'Apply to all matching + create rule'}
+          </SubmitButton>
+          <button type="button" className="btn btn--ghost btn--sm" onClick={() => setApplyAllRow(null)}>
+            Cancel
+          </button>
+        </form>
+      </div>
     );
   }
 
@@ -511,13 +715,10 @@ export function TransactionsClient({
                       className={`${selectClass} w-44`}
                     >
                       <option value="">Choose a category</option>
-                      {/* Task 6: children grouped directly under their parent via categoryOptions,
-                          instead of the flat creation-order list every category select used to
-                          show. categoryOptions() already excludes archived categories, matching
-                          this select's own live-category-only rule. */}
-                      {categoryOptions(categories).map((opt) => (
-                        <option key={opt.id} value={opt.id}>{'\u00A0\u00A0'.repeat(opt.depth) + opt.label}</option>
-                      ))}
+                      {/* Backlog BZ: an <optgroup> per parent instead of the flat NBSP-indented
+                          list -- categoryOptGroups() already excludes archived categories,
+                          matching this select's own live-category-only rule. */}
+                      {categoryOptGroups(categoryGroups)}
                     </select>
                     <input
                       value={part.amount}
@@ -717,7 +918,9 @@ export function TransactionsClient({
           <>
             <ul className="flex flex-col gap-3">
               {page.rows.map((row) => {
-                const matchingCount = matchingCounts[row.id] ?? 0;
+                const noteForm = noteEditor(row);
+                const newLoanForm = newLoanEditor(row);
+                const applyAllForm = applyAllEditor(row);
                 return (
                   <li key={row.id} className="card flex flex-col gap-3 p-4">
                     <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
@@ -746,6 +949,12 @@ export function TransactionsClient({
                         ) : null}
                         {row.displaySource === 'manual' ? <span className="badge badge--blue ml-1.5">renamed</span> : null}
                         {row.displaySource === 'rename' ? <span className="badge badge--blue ml-1.5">rule</span> : null}
+                        {/* Backlog CA: one badge per loan link, naming the loan, beside the
+                            renamed/rule badges above -- the table row gets the same treatment
+                            below. */}
+                        {(loanLinks[row.id] ?? []).map((link) => (
+                          <span key={`loan-badge-${link.id}`} className="badge badge--blue ml-1.5">{link.itemName}</span>
+                        ))}
                       </span>
                       <Money cents={row.amountCents} className="text-base font-semibold" />
                     </div>
@@ -775,10 +984,7 @@ export function TransactionsClient({
                           defaultValue={row.categoryId === null ? '' : String(row.categoryId)}
                           options={[
                             { value: '', label: 'Choose for this one…', disabled: true },
-                            ...groupedCategories.map((opt) => ({
-                              value: String(opt.id),
-                              label: '  '.repeat(opt.depth) + opt.label,
-                            })),
+                            ...categorySelectOptions,
                           ]}
                           fields={{ transactionId: String(row.id), teach: '1' }}
                           action={saveCategory}
@@ -788,41 +994,12 @@ export function TransactionsClient({
                       </div>
                       {rowMenu(row)}
                     </div>
-                    {applyAllRow === row.id ? (
-                      <div className="flex flex-col gap-1.5 rounded-lg border border-line p-3">
-                        <p className="text-xs font-semibold text-ink">
-                          Every &quot;{row.normalizedMerchant}&quot; — {matchingCount} transactions, plus future imports
-                        </p>
-                        <p className="text-xs text-muted">
-                          Only for merchants that are always one category (coffee shop, streaming).
-                          Walmart, Amazon, e-transfers: use the select above.
-                        </p>
-                        {/* Shown inline, under the editor a refusal leaves open, not only through
-                            the top banner (that still gets it too, via `error` above) -- the
-                            same idiom the new-loan editor already uses. */}
-                        <FormError message={applyAllState.error} />
-                        <form action={applyAllAction} className="flex flex-col gap-1.5 sm:flex-row sm:items-center">
-                          <input type="hidden" name="normalizedMerchant" value={row.normalizedMerchant} />
-                          <select
-                            name="categoryId"
-                            defaultValue={row.categoryId ?? ''}
-                            aria-label={`Category for all ${matchingCount} matching ${row.normalizedMerchant} — every transaction`}
-                            className={REVIEW_PICKER_CLASS}
-                          >
-                            <option value="">Choose for all {matchingCount}…</option>
-                            {groupedCategories.map((opt) => (
-                              <option key={opt.id} value={opt.id}>{'  '.repeat(opt.depth) + opt.label}</option>
-                            ))}
-                          </select>
-                          <SubmitButton variant="secondary" size="sm" className="w-fit">
-                            Apply to all {matchingCount} matching + create rule
-                          </SubmitButton>
-                          <button type="button" className="btn btn--ghost btn--sm" onClick={() => setApplyAllRow(null)}>
-                            Cancel
-                          </button>
-                        </form>
-                      </div>
-                    ) : null}
+                    {/* Fix round (item CB): noteEditor/newLoanEditor's own contents, rendered as
+                        a plain <div> here so they actually reach a person reviewing from the
+                        card list -- see those functions' docblocks. */}
+                    {noteForm ? <div>{noteForm}</div> : null}
+                    {newLoanForm ? <div>{newLoanForm}</div> : null}
+                    {applyAllForm}
                   </li>
                 );
               })}
@@ -874,7 +1051,13 @@ export function TransactionsClient({
             </tr>
           </thead>
           <tbody>
-            {page.rows.map((row) => (
+            {page.rows.map((row) => {
+              // Fix round (item CB): computed once per row so the <tr> sub-rows below don't
+              // call each editor function twice (the open-state check and the content itself).
+              const noteForm = noteEditor(row);
+              const newLoanForm = newLoanEditor(row);
+              const applyAllForm = applyAllEditor(row);
+              return (
               <Fragment key={row.id}>
               <tr>
                 <td>
@@ -905,6 +1088,10 @@ export function TransactionsClient({
                     {row.displaySource === 'rename' ? <span className="badge badge--blue">rule</span> : null}
                     {row.isTransfer ? <span className="badge badge--slate">transfer</span> : null}
                     {row.source === 'bayes' ? <span className="badge badge--amber">guess</span> : null}
+                    {/* Backlog CA: one badge per loan link, naming the loan. */}
+                    {(loanLinks[row.id] ?? []).map((link) => (
+                      <span key={`loan-badge-${link.id}`} className="badge badge--blue">{link.itemName}</span>
+                    ))}
                   </span>
                 </td>
                 <AmountCell className="whitespace-nowrap">
@@ -920,17 +1107,15 @@ export function TransactionsClient({
                     <AutoSaveSelect
                       name="categoryId"
                       defaultValue={row.categoryId === null ? '' : String(row.categoryId)}
-                      /* Live categories grouped under their parent, then the ARCHIVED ones flat
-                         and disabled. That coverage is deliberate: a row whose category was
-                         archived after the fact must still have a real <option>, or the browser
-                         silently selects "Uncategorized" -- and with auto-save a stray change
-                         would then clear (and untrain) a legitimate historical categorization. */
+                      /* Live categories grouped under their parent (backlog BZ), then the
+                         ARCHIVED ones flat and disabled. That coverage is deliberate: a row whose
+                         category was archived after the fact must still have a real <option>, or
+                         the browser silently selects "Uncategorized" -- and with auto-save a
+                         stray change would then clear (and untrain) a legitimate historical
+                         categorization. */
                       options={[
                         { value: '', label: 'Uncategorized' },
-                        ...groupedCategories.map((opt) => ({
-                          value: String(opt.id),
-                          label: '  '.repeat(opt.depth) + opt.label,
-                        })),
+                        ...categorySelectOptions,
                         ...categories
                           .filter((c) => c.isArchived)
                           .map((c) => ({ value: String(c.id), label: `${label(c.id)} (archived)`, disabled: true })),
@@ -978,75 +1163,30 @@ export function TransactionsClient({
                     render inline, plus the transfer toggle (ruling R4) every row gets now. */}
                 <td className="text-right">{rowMenu(row)}</td>
               </tr>
-              {noting?.id === row.id ? (
+              {/* Fix round (item CB): noteEditor/newLoanEditor/applyAllEditor's own contents --
+                  the SAME functions the review card list renders below -- see those functions'
+                  docblocks for why a second, table-only copy of each used to leave the card
+                  list's kebab dead in review mode. */}
+              {noteForm ? (
                 <tr>
                   {/* Ruling R13: an inline sub-row, not a dialog -- the note is about the row
-                      above it, and a modal would hide the charge the note is explaining. NOT an
-                      auto-save (v1.11.0's rule): a free-text field that saves on blur loses a
-                      half-typed sentence, which is the one thing a note must never do. */}
-                  <td colSpan={COLUMN_COUNT}>
-                    <form
-                      action={noteAction}
-                      onSubmit={() => setNoting(null)}
-                      className="flex flex-col gap-2 py-2"
-                    >
-                      <input type="hidden" name="transactionId" value={row.id} />
-                      <Field label={`Note for ${row.displayDescription ?? row.rawDescription}`}>
-                        <textarea name="notes" defaultValue={noting.current} rows={2} className={inputClass} />
-                      </Field>
-                      <div className="flex gap-2">
-                        <SubmitButton className="w-fit">Save note</SubmitButton>
-                        <button type="button" className="btn btn--ghost btn--sm" onClick={() => setNoting(null)}>
-                          Cancel
-                        </button>
-                      </div>
-                    </form>
-                  </td>
+                      above it, and a modal would hide the charge the note is explaining. */}
+                  <td colSpan={COLUMN_COUNT}>{noteForm}</td>
                 </tr>
               ) : null}
-              {newLoan?.id === row.id ? (
+              {newLoanForm ? (
                 <tr>
-                  <td colSpan={COLUMN_COUNT}>
-                    <form
-                      action={newLoanAction}
-                      className="flex flex-col gap-2 py-2"
-                      data-testid="new-loan-form"
-                    >
-                      <input type="hidden" name="transactionId" value={row.id} />
-                      {/* Review round: shown INLINE, under the form a refusal leaves open, not
-                          only through the top banner (that still gets it too, via `error`
-                          above) -- the person is looking here, not at the top of the page. */}
-                      <FormError message={newLoanState.error} />
-                      <Field label="Loan name" hint="Who the loan is with — a name you will recognise later.">
-                        <input
-                          name="loanName"
-                          value={newLoan.name}
-                          onChange={(e) => setNewLoan({ id: row.id, name: e.target.value })}
-                          required
-                          maxLength={80}
-                          autoFocus
-                          className={inputClass}
-                        />
-                      </Field>
-                      <Field label="Direction">
-                        <select name="loanDirection" defaultValue="lent" className={selectClass}>
-                          {LOAN_DIRECTIONS.map((direction) => (
-                            <option key={direction} value={direction}>{LOAN_DIRECTION_LABELS[direction]}</option>
-                          ))}
-                        </select>
-                      </Field>
-                      <div className="flex gap-2">
-                        <SubmitButton className="w-fit">Create loan</SubmitButton>
-                        <button type="button" className="btn btn--ghost btn--sm" onClick={() => setNewLoan(null)}>
-                          Cancel
-                        </button>
-                      </div>
-                    </form>
-                  </td>
+                  <td colSpan={COLUMN_COUNT}>{newLoanForm}</td>
+                </tr>
+              ) : null}
+              {applyAllForm ? (
+                <tr>
+                  <td colSpan={COLUMN_COUNT}>{applyAllForm}</td>
                 </tr>
               ) : null}
               </Fragment>
-            ))}
+              );
+            })}
           </tbody>
         </TableWrap>
         {page.rows.length === 0 ? (
