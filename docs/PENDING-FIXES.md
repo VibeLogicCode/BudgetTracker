@@ -1678,7 +1678,7 @@ Do Transactions first (it is the page the household lives in), then Warranties, 
 **Effort:** about 3-4 h for Transactions alone including the guard and test updates; roughly the
 same again for the remaining tables. No migration. No personal data.
 
-## BX. "Apply to all N + create rule" is unreachable outside the review filter (2026-08-29)
+## BX. "Apply to all N + create rule" is unreachable outside the review filter (2026-08-29) — SHIPPED in v1.14.2
 
 The deliberate rule-making path is gated on `reviewMode` (`transactions-client.tsx`, the kebab item
 added in v1.14.1). An already-categorised row is never in the review queue, so noticing a wrongly
@@ -1693,7 +1693,7 @@ category select rule-free -- a hard rule is a commitment and should stay deliber
 
 **Effort:** 20-30 min. No migration. No personal data.
 
-## BY. Assign to loan should be one menu item, not one per loan (2026-08-29)
+## BY. Assign to loan should be one menu item, not one per loan (2026-08-29) — SHIPPED in v1.14.2
 
 `rowMenu()` renders a `RowMenuForm` per loan (`Assign to <name>`) plus a separate
 `Assign to new loan…`. With ten loans that is eleven menu items on every row, and the two paths --
@@ -1708,7 +1708,7 @@ worth surfacing in the editor rather than rendering an empty select.
 
 **Effort:** ~1 h. No migration. No personal data.
 
-## BZ. Category pickers give parents and children no visual distinction (2026-08-29)
+## BZ. Category pickers give parents and children no visual distinction (2026-08-29) — SHIPPED in v1.14.2
 
 Every category picker is a native `<select>` fed by `categoryOptions()`
 (`src/lib/category-order.ts`), which distinguishes a child only by two non-breaking spaces. At a
@@ -1732,7 +1732,7 @@ change lands, which may make it unnecessary.
 children. A subtle background tint on depth-0 rows (a token already in the palette, not a new
 colour) would separate them. ~30 min, independent of the picker work.
 
-## CB. Two kebab editors are dead in review mode (2026-08-29) — REGRESSION shipped in v1.14.1
+## CB. Two kebab editors are dead in review mode (2026-08-29) — REGRESSION shipped in v1.14.1, FIXED in v1.14.2
 
 **Reported by the owner:** on `/transactions?review=1`, choosing **Assign to new loan…** does
 nothing -- no editor, no field to type a name. Same for **Note…**.
@@ -1751,7 +1751,7 @@ assert the editor APPEARS (a field to type into), in both modes, not just that a
 
 **Effort:** ~45 min. No migration. No personal data. Ship promptly: the image on `:latest` has it.
 
-## CA. Nothing on a row shows it is linked to a loan (2026-08-29)
+## CA. Nothing on a row shows it is linked to a loan (2026-08-29) — SHIPPED in v1.14.2
 
 `loanLinks[row.id]` is read only inside the kebab, to build the `Unassign from <name>` item. After
 assigning, neither the table row nor the review card changes: the row keeps its place (a review row

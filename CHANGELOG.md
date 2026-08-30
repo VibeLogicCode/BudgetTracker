@@ -21,6 +21,30 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.14.2] - 2026-08-29
+
+No migration. Nothing in the database changes shape.
+
+### Fixed
+
+- **Note… and Assign to new loan… now work while reviewing.** Both menu items opened nothing on
+  the review filter in 1.14.1: the editors they open were built into the table and the review list
+  is not a table. They are now the same editor in both places.
+
+### Changed
+
+- **One "Assign to loan…" entry instead of one per loan.** Choosing it opens a short form with the
+  household's loans listed, plus **New loan…** for one that does not exist yet — the same two paths
+  as before, no longer eleven menu items on a row.
+- **A transaction assigned to a loan says so on the row**, next to the transfer and renamed badges,
+  so the assignment is visible without opening the menu.
+- **"Apply to every transaction from this merchant" is available on any row**, not only while
+  reviewing. Picking a category on a row still teaches the categorizer either way; this is the
+  deliberate step that also writes a rule for future imports.
+- **Category lists group children under their parent.** Parents are headings in the dropdown, on
+  the phone picker too, and parent rows in Budgets and Settings → Categories carry a light tint —
+  so a sub-category is no longer indistinguishable from the category above it.
+
 ## [1.14.1] - 2026-08-29
 
 No migration. Nothing in the database changes shape.
