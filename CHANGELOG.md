@@ -21,6 +21,33 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.18.0] - 2026-08-30
+
+No migration this time — 1.17.0 had one, this one changes nothing in the database.
+
+### Changed
+
+- **Budgets opens as a handful of groups, not forty rows.** Each parent category is now a group you
+  can fold open: closed, its header still carries the limit, what has been spent, what is left and
+  the bar, so folding hides the detail and never the answer. Everything starts closed, so the page
+  has the same shape every visit, and a group that is over its limit says so while still closed.
+  There is an Expand all in each section, and what you leave open is remembered in your own browser.
+  Household and Personal do not fold — they are the two halves of the page.
+- **A parent limit now says when its children have outgrown it.** Set Housing to $2,000 and let the
+  categories under it add up to $2,400, and the group tells you: *Children add up to $2,400 — $400
+  over Housing's limit*, with a button to raise Housing to $2,400 and one to undo. Nothing is
+  refused. Blocking the edit would mean moving $200 from one child to another only works in one
+  order, and lowering a parent below its children would have to be refused too — which makes a
+  parent almost uneditable. The number was always allowed; now it is visible. A parent whose
+  children add up to *less* than its limit is left alone, because that is an ordinary choice.
+- **The month is stated once.** The header carried three copies of it — a label above the greeting,
+  the month in the navigation, and a separate date box beside it, two of them clickable. Now the
+  month in the navigation is the thing you click, and the arrows read *Jul* and *Sep* instead of
+  *2026-07* and *2026-09*.
+- **A month with nothing budgeted says so.** The Budgets header used to read *spent $0.00 of $0.00
+  budgeted · $0.00 total spent*. It now says there are no budgets set for that month and points at
+  what to do about it.
+
 ## [1.17.0] - 2026-08-30
 
 **This release has a migration (0015).** It is additive — one new table, `savings_targets` — and
