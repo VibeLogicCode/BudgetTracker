@@ -931,6 +931,31 @@ describe('Review mode (ruling R5): the card list replaces the table', () => {
     });
   }
 
+  /** The card branch renders the SAME rowMenu() as the table, but nothing covered that its
+   *  kebab forms actually dispatch from inside a <li> rather than a <td>. Reported as
+   *  "assign to loan does nothing in review mode": the dispatch is fine (this test), what is
+   *  missing is any confirmation on the row -- see backlog CA. */
+  it('dispatches a kebab action from a review card, not just from a table row', async () => {
+    const { assignToLoanAction } = await import('@/app/(app)/transactions/actions');
+    vi.mocked(assignToLoanAction).mockClear();
+    render(
+      <TransactionsClient
+        page={reviewPage()}
+        accounts={[]}
+        categories={categories}
+        people={[]}
+        today="2026-08-16"
+        reviewMode
+        loanOptions={[{ id: 7, name: 'Civic' }]}
+        loanLinks={{}}
+      />,
+    );
+    const menus = screen.getAllByRole('button', { name: /Actions for/ });
+    fireEvent.click(menus[0]);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to Civic' }));
+    await waitFor(() => expect(assignToLoanAction).toHaveBeenCalled());
+  });
+
   it('renders a <li> card, not a <table>, when reviewMode is set', () => {
     const { container } = render(
       <TransactionsClient page={reviewPage()} accounts={[]} categories={categories} people={[]} today="2026-08-16" reviewMode />,
