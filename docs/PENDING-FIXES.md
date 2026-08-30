@@ -1677,3 +1677,57 @@ Do Transactions first (it is the page the household lives in), then Warranties, 
 
 **Effort:** about 3-4 h for Transactions alone including the guard and test updates; roughly the
 same again for the remaining tables. No migration. No personal data.
+
+## BX. "Apply to all N + create rule" is unreachable outside the review filter (2026-08-29)
+
+The deliberate rule-making path is gated on `reviewMode` (`transactions-client.tsx`, the kebab item
+added in v1.14.1). An already-categorised row is never in the review queue, so noticing a wrongly
+filed merchant on the plain Transactions list leaves no way to create a rule for it without first
+re-opening the row's category. The soft half still works everywhere -- `confirmCategory` calls
+`train()` unconditionally (`src/lib/categorize/engine.ts`), so the classifier learns from every
+category pick; only the exact merchant RULE is skipped when `createRule: false`.
+
+**Fix:** offer the same kebab item on every row, not just review-mode rows. The action
+(`applyToAllMatchingAction`) and the inline editor already exist and are unchanged. Keep the plain
+category select rule-free -- a hard rule is a commitment and should stay deliberate.
+
+**Effort:** 20-30 min. No migration. No personal data.
+
+## BY. Assign to loan should be one menu item, not one per loan (2026-08-29)
+
+`rowMenu()` renders a `RowMenuForm` per loan (`Assign to <name>`) plus a separate
+`Assign to new loan…`. With ten loans that is eleven menu items on every row, and the two paths --
+existing and new -- look unrelated even though they are the same decision.
+
+**Fix:** one `Assign to loan…` item opening the existing inline editor, with a select listing the
+household's loans plus a `New loan…` entry that reveals the name + direction fields already built
+for `createLoanFromTransactionAction`. Unassign entries stay as they are (they name a link that
+exists). Note `loanOptions` is filtered to loans with a tracked balance
+(`transactions/page.tsx`), which is why a household whose only loan has no balance sees nothing --
+worth surfacing in the editor rather than rendering an empty select.
+
+**Effort:** ~1 h. No migration. No personal data.
+
+## BZ. Category pickers give parents and children no visual distinction (2026-08-29)
+
+Every category picker is a native `<select>` fed by `categoryOptions()`
+(`src/lib/category-order.ts`), which distinguishes a child only by two non-breaking spaces. At a
+glance a parent and its children look identical, and with enough categories the list is hard to
+scan. Raised by the owner from the category assignment on a transaction row.
+
+**Fix (recommended, cheap):** render each parent as an `<optgroup>` label with its own selectable
+option first inside the group. Browsers style group labels distinctly for free, on desktop and in
+the native mobile pickers, with no custom JS and no a11y risk. One change in the shared option
+builder covers every call site (review card, transactions table, splits editor, quick-add, review
+apply-to-all).
+
+**Effort:** ~45 min including the call-site tests.
+
+**Deferred half -- search.** A type-to-filter box needs a custom combobox (input, filtered listbox,
+keyboard and ARIA wiring) shared by all five call sites; native selects already offer type-ahead,
+so the gain is mostly desktop with a long category list. ~3 h on its own. Decide after the optgroup
+change lands, which may make it unnecessary.
+
+**Also raised:** parent rows in the Budgets and Settings -> Categories tables read the same as their
+children. A subtle background tint on depth-0 rows (a token already in the palette, not a new
+colour) would separate them. ~30 min, independent of the picker work.
