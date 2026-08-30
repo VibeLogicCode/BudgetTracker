@@ -723,6 +723,28 @@
     .data-table--stack tbody td .field-control {
       max-width: 100%;
     }
+
+    /* A cell that spans the whole table is not a label/value pair. It is a sub-row holding an
+       editor -- the note form, the new-loan form, the apply-to-all form, a split breakdown, the
+       accounts editor -- and as a flex item it would shrink to its content instead of filling
+       the card, which is how those forms came out cramped against the left edge. Block layout
+       gives them the width they were written for. */
+    .data-table--stack tbody td[colspan] {
+      display: block;
+    }
+
+    /* A TableWrap that is not `bare` draws its own border, radius and shadow around the table.
+       Around a LIST OF CARDS that reads as a box inside a box, with two borders 14px apart. The
+       cards are the container now, so the shell steps aside -- matched on the wrapper because
+       the class that triggers this lives on the <table> inside it. A browser without :has()
+       keeps today's double border, which is cosmetic, so the worst case of this rule is that it
+       does nothing. */
+    div:has(> .data-table--stack) {
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      box-shadow: none;
+    }
   }
 
   /* ----- Ambient wash behind the signed-out pages ----- */
