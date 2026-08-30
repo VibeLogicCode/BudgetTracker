@@ -10,6 +10,7 @@ import { currentMonth, isMonthKey } from '@/lib/dates';
 import { readEnv } from '@/lib/env';
 import { formatCents, parseAmountToCents } from '@/lib/money';
 import { suggestionsFor } from '@/lib/predict/history';
+import { copySavingsTargetForward, saveSavingsTarget } from '@/lib/savings-target';
 
 export interface BudgetActionState {
   error?: string;
@@ -75,8 +76,67 @@ export async function copyPreviousMonthAction(_prev: BudgetActionState, formData
   }
 
   const copied = copyBudgetsFromPreviousMonth(month.data, scope.data as BudgetScope, userId);
+  // Lane 3 item 1 / ruling T4 ("one row per month, seeded by copy-forward"): the savings target
+  // rides along on the SAME button rather than getting a second one, exactly the way the
+  // budgets themselves are seeded. Household scope only -- ruling T3 gives the target no
+  // per-person copy of its own, so a personal-scope copy has nothing of this kind to bring
+  // forward.
+  const targetCopied = scope.data === 'household' ? copySavingsTargetForward(month.data) : false;
   revalidatePath('/budgets');
-  return { message: `Copied ${copied} budgets from the previous month.` };
+  revalidatePath('/dashboard');
+  return {
+    message: `Copied ${copied} budgets${targetCopied ? ' and the savings target' : ''} from the previous month.`,
+  };
+}
+
+const savingsTargetModeSchema = z.enum(['percent', 'amount']);
+
+/**
+ * Ruling T6: set on Budgets, beside the month it applies to. Ruling T3: household scope only,
+ * so unlike setLimitAction there is no personal-scope branch and no per-user ownership check --
+ * every household member may set it, the same permission model household budget LIMITS already
+ * use (Row's `editable` is unconditionally true for household scope), not the stricter
+ * admin-only rule "Roll over unspent" carries. Nothing in the rulings asks for that stricter
+ * gate here, and inventing one this release would be exactly the kind of unwritten rule ruling
+ * T2 already warns against ("a rule nobody can restate is a rule nobody can act on").
+ *
+ * Ruling T2: mode and value travel together, always -- there is no partial update, because a
+ * bare `value` with no `mode` (or vice versa) is not a number anyone could act on.
+ */
+export async function setSavingsTargetAction(_prev: BudgetActionState, formData: FormData): Promise<BudgetActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  await requireUser();
+  const month = monthSchema.safeParse(String(formData.get('month') ?? ''));
+  const mode = savingsTargetModeSchema.safeParse(formData.get('mode'));
+  if (!month.success || !mode.success) return { error: 'Invalid request.' };
+
+  const rawValue = String(formData.get('value') ?? '').trim();
+  if (rawValue === '') return { error: 'Enter a value.' };
+
+  let value: number;
+  if (mode.data === 'percent') {
+    // A whole percent, 1-100 -- ruling T2 rules out "whichever is greater" and any other
+    // compound rule, and a target of 0% or over 100% is not a rule a household could restate
+    // either.
+    const parsed = Number(rawValue);
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 100) {
+      return { error: 'Enter a whole percent from 1 to 100.' };
+    }
+    value = parsed;
+  } else {
+    const cents = parseAmountToCents(rawValue);
+    if (cents === null || cents <= 0) return { error: 'Enter a positive amount.' };
+    value = cents;
+  }
+
+  saveSavingsTarget({ month: month.data, mode: mode.data, value });
+  revalidatePath('/budgets');
+  // The dashboard's Saved this month tile reads the same row (savingsProgress) -- without this
+  // it would keep showing whatever target was in force before this save until its own
+  // force-dynamic reload happened to run anyway.
+  revalidatePath('/dashboard');
+  return { message: 'Savings target saved.' };
 }
 
 /**

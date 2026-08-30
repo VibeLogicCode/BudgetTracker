@@ -1,27 +1,34 @@
 'use client';
 
-import { useActionState, useState } from 'react';
+import { useActionState, useEffect, useRef, useState } from 'react';
 import { BudgetProgressBar } from '@/components/BudgetProgressBar';
 import { FormError } from '@/components/FormError';
-import { AutoSaveCheckbox, AutoSaveTextInput } from '@/components/ui/AutoSave';
+import { AutoSaveCheckbox, AutoSaveTextInput, useAutoSave } from '@/components/ui/AutoSave';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { Money } from '@/components/ui/Money';
+import { MonthNav } from '@/components/ui/MonthNav';
 import { Notice } from '@/components/ui/Notice';
 import { PageGuide } from '@/components/ui/PageGuide';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { TableWrap } from '@/components/ui/Table';
-import { addMonths, monthLabel } from '@/lib/dates';
+import { monthLabel } from '@/lib/dates';
 import { formatCents } from '@/lib/money';
 import type { SinkingFund } from '@/lib/bills';
 import type { BudgetRow } from '@/lib/budgets';
 import { MIN_HISTORY_MONTHS } from '@/lib/predict/constants';
 import type { BudgetPredictions, CategorySuggestion, SectionPredictions } from '@/lib/predict/suggest';
+// Type-only: a 'use client' file may never VALUE-import from a module that reaches @/db (Lane
+// 1's src/lib/savings-target.ts does, for getSavingsTarget/saveSavingsTarget) --
+// tests/ops/client-bundle.test.ts guards exactly this. Every name below is erased at compile
+// time, so this edge never exists in the bundled graph at all.
+import type { SavingsProgress, SavingsTarget, SavingsTargetMode } from '@/lib/savings-target';
 import {
   applyAllSuggestionsAction,
   applySuggestionAction,
   copyPreviousMonthAction,
   setLimitAction,
   setRolloverAction,
+  setSavingsTargetAction,
   type BudgetActionState,
 } from './actions';
 
@@ -31,6 +38,142 @@ const initial: BudgetActionState = {};
  *  controls want `(formData)`. No server-side change of any kind. */
 const saveLimit = (formData: FormData) => setLimitAction({}, formData);
 const saveRollover = (formData: FormData) => setRolloverAction({}, formData);
+// Named `saveTarget`, not `saveSavingsTarget` -- that name belongs to the Lane 1 library
+// function of the same job (src/lib/savings-target.ts), and this file must never import that
+// module as a VALUE (tests/ops/client-bundle.test.ts). Same bind-the-first-argument reasoning
+// as saveLimit/saveRollover above.
+const saveTarget = (formData: FormData) => setSavingsTargetAction({}, formData);
+
+/** '' for no target, else `mode:value` -- cheap enough to compare across renders without a
+ *  deep-equal, and it is exactly the two fields that decide whether the SERVER'S row changed. */
+function targetKey(target: SavingsTarget | null): string {
+  return target === null ? '' : `${target.mode}:${target.value}`;
+}
+
+function targetValueText(target: SavingsTarget | null): string {
+  if (target === null) return '';
+  return target.mode === 'percent' ? String(target.value) : (target.value / 100).toFixed(2);
+}
+
+/**
+ * Ruling T6: the savings target lives on Budgets, beside the month it applies to, not in
+ * Settings. Ruling T2: a target is a percent of income OR a fixed amount, never both -- so
+ * there is exactly one value field, and its UNIT is whatever `mode` currently is.
+ *
+ * Auto-save, no Save button (v1.11.0 ruling R1 / tests/ops/row-controls.test.ts) -- but this is
+ * not an AutoSaveSelect/AutoSaveTextInput pair the way the rows above it are, because those two
+ * each write ONE field and savings_targets has no partial-row upsert: mode and value must reach
+ * the server TOGETHER every time either one is saved. So both are lifted into this component's
+ * own state, and only the value field's commit ever calls the server -- switching mode is local
+ * only (see the comment on its onChange) until a value for the new unit is actually typed.
+ */
+function SavingsTargetControl({ month, progress }: { month: string; progress: SavingsProgress | null }) {
+  const target = progress?.target ?? null;
+  const [mode, setMode] = useState<SavingsTargetMode>(target?.mode ?? 'percent');
+  const [valueText, setValueText] = useState(targetValueText(target));
+  const { save, pending, status, error } = useAutoSave(saveTarget, { month, mode });
+  const valueInput = useRef<HTMLInputElement | null>(null);
+  /** The server row this control has already reacted to -- same resync discipline as
+   *  AutoSaveTextInput/AutoSaveSelect (v1.12.1 ruling R3): revalidatePath after a save, or
+   *  another admin changing the target, re-renders this component with new props without
+   *  remounting it, and nothing else here would ever pick that up. */
+  const serverKey = useRef(targetKey(target));
+
+  useEffect(() => {
+    if (pending) return;
+    const key = targetKey(target);
+    if (key === serverKey.current) return;
+    // A focused value field is mid-edit; the blur that eventually follows commits whatever was
+    // typed, same reasoning as AutoSaveTextInput's own resync guard.
+    if (valueInput.current !== null && document.activeElement === valueInput.current) return;
+    serverKey.current = key;
+    setMode(target?.mode ?? 'percent');
+    setValueText(targetValueText(target));
+  }, [target, pending]);
+
+  const commitValue = () => {
+    const raw = valueText.trim();
+    if (raw === '') return; // Nothing typed yet -- there is no value to save.
+    // No onSuccess resync here: revalidatePath (setSavingsTargetAction) re-renders this
+    // component with a fresh `progress` prop reflecting exactly what the server just accepted,
+    // and the effect above picks that up the same way it picks up any other change in origin
+    // (another admin, or "Copy previous month"). Guessing the server's own formatting here --
+    // an amount mode's `value` is CENTS, not the dollar string just typed -- would only recreate
+    // the mismatch this effect exists to avoid.
+    save('value', raw);
+  };
+
+  const resolved = (() => {
+    if (target === null) return null;
+    if (target.mode === 'amount') return `Fixed at ${formatCents(target.value)} every month.`;
+    // Ruling T5: a percent target is provisional until the month closes, because income is
+    // still landing -- this sentence names both the percent it came from and the figure it
+    // resolves to today, rather than one bare dollar amount with no context for why it will
+    // keep moving.
+    if (progress?.targetCents == null) return `${target.value}% of income -- no income recorded yet this month.`;
+    return `${target.value}% of income so far — ${formatCents(progress.targetCents)}. Provisional until the month closes.`;
+  })();
+
+  return (
+    <Card as="section">
+      <CardHeader
+        title="Savings target"
+        description="What this household means by “keep enough” each month -- a percent of income or a fixed amount, applied to the month shown above."
+      />
+      <CardBody className="flex flex-wrap items-end gap-3">
+        <label className="flex flex-col gap-1 text-xs text-muted">
+          Mode
+          <select
+            value={mode}
+            onChange={(event) => {
+              const nextMode = event.target.value as SavingsTargetMode;
+              setMode(nextMode);
+              // A percent and a dollar amount are not the same number -- carrying the old
+              // digits into the new unit would silently save, say, "20" (a 20% target) as
+              // $20.00 the instant amount mode is picked. Nothing saves until a real value is
+              // typed for whichever unit is now selected.
+              setValueText('');
+            }}
+            className="field-control w-auto min-h-11 px-2 py-1 text-sm sm:min-h-0"
+            aria-label="Savings target mode"
+          >
+            <option value="percent">% of income</option>
+            <option value="amount">Fixed amount</option>
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-muted">
+          {mode === 'percent' ? 'Percent' : 'Amount ($)'}
+          <input
+            ref={valueInput}
+            value={valueText}
+            onChange={(event) => setValueText(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter') return;
+              event.preventDefault();
+              commitValue();
+            }}
+            onBlur={commitValue}
+            inputMode={mode === 'percent' ? 'numeric' : 'decimal'}
+            placeholder={mode === 'percent' ? '20' : '250.00'}
+            aria-label={mode === 'percent' ? 'Savings target percent' : 'Savings target amount'}
+            className="field-control w-24 min-h-11 px-2 py-1 text-right text-sm sm:min-h-0"
+          />
+        </label>
+        <span role="status" aria-live="polite" className="text-xs text-muted">
+          {pending ? 'Saving…' : status === 'saved' ? 'Saved' : ''}
+        </span>
+        {error ? (
+          <span role="alert" className="text-xs font-medium text-negative-soft-fg">
+            {error}
+          </span>
+        ) : null}
+        <p className="w-full text-xs text-muted">
+          {resolved ?? 'No savings target set for this month yet.'}
+        </p>
+      </CardBody>
+    </Card>
+  );
+}
 
 /** Everything a row needs from the predictions, resolved once per section. */
 interface RowPredictions {
@@ -323,6 +466,7 @@ export function BudgetsClient({
   personal,
   predictions = null,
   householdSinkingFunds = {},
+  savingsProgress = null,
 }: {
   month: string;
   currentUserId: number;
@@ -350,6 +494,10 @@ export function BudgetsClient({
   /** v1.13.0 ruling R11 / micro-ruling M9: the Household section's own sinkingFundsFor()
    *  result, serialized to a plain object keyed by category id. */
   householdSinkingFunds?: Record<number, SinkingFund>;
+  /** Ruling T3: household scope only, so this is null exactly when `household` is (a self
+   *  viewer has no household scope to set a target for at all -- same pairing as
+   *  householdTotals above). */
+  savingsProgress?: SavingsProgress | null;
 }) {
   const [copyState, dispatchCopy] = useActionState(copyPreviousMonthAction, initial);
   const [applyState, dispatchApply] = useActionState(applySuggestionAction, initial);
@@ -405,23 +553,19 @@ export function BudgetsClient({
   // there is admin-only). For personal scope the two checks are the same admin-or-owner rule.
   const householdRolloverOn = new Set(householdRolloverIds);
 
-  const previous = addMonths(month, -1);
-  const next = addMonths(month, 1);
-
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
         eyebrow={monthLabel(month)}
         title="Budgets"
         description="A limit set here applies to this month and every month after it, until you change it again."
-        actions={
-          <nav aria-label="Change month" className="flex items-center gap-1 rounded-full border border-line bg-surface-2 p-1">
-            <a className="btn btn--ghost btn--sm rounded-full" href={`/budgets?month=${previous}`}>← {previous}</a>
-            <strong className="rounded-full bg-surface px-3 py-1 text-sm font-semibold shadow-flat">{month}</strong>
-            <a className="btn btn--ghost btn--sm rounded-full" href={`/budgets?month=${next}`}>{next} →</a>
-          </nav>
-        }
+        actions={<MonthNav month={month} basePath="/budgets" />}
       />
+
+      {/* Ruling T3/T6: household scope only, so this sits beside the month navigation at the
+          top of the page rather than inside the Household card below -- the same reasoning R2
+          already applies to that card is why this is gated on the same `household !== null`. */}
+      {household !== null ? <SavingsTargetControl month={month} progress={savingsProgress} /> : null}
 
       <PageGuide>
         <p>
@@ -432,9 +576,9 @@ export function BudgetsClient({
         <p>
           A limit you set applies to the month shown at the top and to every month after it,
           until you set a different one. So a normal month needs no visits at all; you come back
-          when something has changed. Use the arrows beside the month to look at another one, or{' '}
-          <strong className="font-semibold text-ink">Copy previous month</strong> to start from
-          what was in force last month.
+          when something has changed. Use the arrows beside the month, or the month field itself,
+          to look at another one, or <strong className="font-semibold text-ink">Copy previous month</strong> to
+          start from what was in force last month.
         </p>
         <p>
           There are two scopes. The Household section is the shared budget everyone in the house
@@ -448,6 +592,14 @@ export function BudgetsClient({
           shows the pace the month is running at. Both are read off your own past spending in
           that category; neither is an opinion about what the amount ought to be.
         </p>
+        {household !== null ? (
+          <p>
+            The savings target above is a household decision, not a per-person one — a percent of
+            income or a fixed amount, whichever this household finds easier to reason about. It
+            measures income minus spending for the month; moving money into a savings account is
+            not itself part of that number; see the dashboard&apos;s Saved this month tile for why.
+          </p>
+        ) : null}
       </PageGuide>
 
       <FormError message={banner.error} />
@@ -470,7 +622,16 @@ export function BudgetsClient({
                 <form action={copyAction}>
                   <input type="hidden" name="scope" value="household" />
                   <input type="hidden" name="month" value={month} />
-                  <button type="submit" className="btn btn--secondary btn--sm">Copy previous month</button>
+                  {/* Lane 3 item 1: this button now also carries the savings target forward
+                      (copySavingsTargetForward, in copyPreviousMonthAction) -- household scope
+                      only, since ruling T3 gives the target no per-person copy of its own. */}
+                  <button
+                    type="submit"
+                    className="btn btn--secondary btn--sm"
+                    title="Also brings forward last month's savings target, if one was set."
+                  >
+                    Copy previous month
+                  </button>
                 </form>
                 {/* MUST-15.1: a control that cannot act is not offered. There is nothing to apply
                     when there are no suggestions, whether that is because history is short or

@@ -9,6 +9,7 @@ import { flattenBudgetRows } from '@/lib/notify/evaluate/pace';
 import { isAllNoSpend, suggestionsFor, type ScopeSuggestions } from '@/lib/predict/history';
 import { projectMonthEnd } from '@/lib/predict/pace';
 import type { BudgetPredictions, CategorySuggestion, SectionPredictions } from '@/lib/predict/suggest';
+import { savingsProgress } from '@/lib/savings-target';
 import { BudgetsClient } from './budgets-client';
 
 export const dynamic = 'force-dynamic';
@@ -74,6 +75,9 @@ export default async function BudgetsPage({
   // total, which is the thing R2 names. And the personal loop is themselves and nobody else.
   const household = selfScoped ? null : budgetProgress(month, 'household', null);
   const householdRolloverIds = household === null ? [] : rolloverIdsFor('household', null, household);
+  // Ruling T3: household scope only, so this is null exactly when `household` is -- there is no
+  // per-person target to resolve for a self viewer, the same pairing householdTotals below uses.
+  const savings = household === null ? null : savingsProgress(month, viewer);
   const people = selfScoped
     ? listAttributablePeople().filter((person) => person.id === viewer.id)
     : listAttributablePeople();
@@ -161,6 +165,7 @@ export default async function BudgetsPage({
       // A Map is not a valid Server-Component prop -- each section's sinkingFundsFor() result
       // is serialized to a plain object keyed by category id, per the comment above.
       householdSinkingFunds={householdSinkingFunds}
+      savingsProgress={savings}
     />
   );
 }

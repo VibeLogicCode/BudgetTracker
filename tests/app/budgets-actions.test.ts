@@ -22,8 +22,12 @@ vi.mock('next/cache', () => ({
   revalidatePath: vi.fn(),
 }));
 
-import { copyPreviousMonthAction, setLimitAction, setRolloverAction } from '@/app/(app)/budgets/actions';
+import { copyPreviousMonthAction, setLimitAction, setRolloverAction, setSavingsTargetAction } from '@/app/(app)/budgets/actions';
 import { rolloverIdsFor } from '@/app/(app)/budgets/page';
+// Lane 1 (src/lib/savings-target.ts): not mocked here, same as every other library import in
+// this file -- these tests read the real row a save wrote, the same way resolveBudget above
+// verifies setLimitAction/copyPreviousMonthAction against the real budgets table.
+import { getSavingsTarget, saveSavingsTarget } from '@/lib/savings-target';
 
 const SAME_ORIGIN = new Headers({ origin: 'http://nas.local:3000', host: 'nas.local:3000' });
 const CROSS_ORIGIN = new Headers({ origin: 'http://evil.local', host: 'nas.local:3000' });
@@ -155,6 +159,109 @@ describe('copyPreviousMonthAction — review finding 6', () => {
     const household = await copyPreviousMonthAction({}, formData({ scope: 'household', month: '2026-03', userId: '' }));
     expect(household.message).toMatch(/copied 1/i);
     expect(resolveBudget('household', null, groceries, '2026-03')).toBe(8000);
+  });
+
+  // Lane 3 item 1 / ruling T4: the same button that seeds budgets by copy-forward now seeds the
+  // savings target too, household scope only (ruling T3 -- a personal-scope copy has no target
+  // of its own to bring forward).
+  it('household copy also carries the savings target forward, and names it in the message', async () => {
+    setup();
+    saveSavingsTarget({ month: '2026-02', mode: 'percent', value: 20 });
+    const result = await copyPreviousMonthAction({}, formData({ scope: 'household', month: '2026-03', userId: '' }));
+    expect(result.message).toMatch(/and the savings target/i);
+    expect(getSavingsTarget('2026-03')).toEqual({ month: '2026-03', mode: 'percent', value: 20 });
+  });
+
+  it('household copy still succeeds, and says nothing about a target, when the previous month had none', async () => {
+    setup();
+    const result = await copyPreviousMonthAction({}, formData({ scope: 'household', month: '2026-03', userId: '' }));
+    expect(result.message).not.toMatch(/savings target/i);
+    expect(getSavingsTarget('2026-03')).toBeNull();
+  });
+
+  it("a personal copy never touches the savings target -- it is household scope only (ruling T3)", async () => {
+    const { alice, groceries } = setup();
+    upsertBudget({ scope: 'personal', userId: alice, categoryId: groceries, month: '2026-02', amountCents: 3000 });
+    saveSavingsTarget({ month: '2026-02', mode: 'percent', value: 20 });
+    const result = await copyPreviousMonthAction({}, formData({ scope: 'personal', month: '2026-03', userId: '' }));
+    expect(result.message).not.toMatch(/savings target/i);
+    expect(getSavingsTarget('2026-03')).toBeNull();
+  });
+});
+
+/**
+ * Ruling T6: set on Budgets, not Settings. Ruling T3: household scope only, so unlike
+ * setLimitAction there is no personal-scope branch and no per-user ownership check here -- any
+ * household member (not just an admin) may set it, mirroring how any member may set a household
+ * budget LIMIT rather than the admin-only "Roll over unspent" rule.
+ */
+describe('setSavingsTargetAction', () => {
+  it('rejects a cross-origin submission before touching the database', async () => {
+    setup();
+    mockHeaders = CROSS_ORIGIN;
+    const result = await setSavingsTargetAction({}, formData({ month: '2026-03', mode: 'percent', value: '20' }));
+    expect(result.error).toMatch(/cross-origin/i);
+    expect(getSavingsTarget('2026-03')).toBeNull();
+  });
+
+  it('rejects an invalid month and writes nothing', async () => {
+    setup();
+    const result = await setSavingsTargetAction({}, formData({ month: 'not-a-month', mode: 'percent', value: '20' }));
+    expect(result.error).toBe('Invalid request.');
+  });
+
+  it('rejects a blank value', async () => {
+    setup();
+    const result = await setSavingsTargetAction({}, formData({ month: '2026-03', mode: 'percent', value: '' }));
+    expect(result.error).toMatch(/enter a value/i);
+    expect(getSavingsTarget('2026-03')).toBeNull();
+  });
+
+  it('rejects a percent target outside 1-100', async () => {
+    setup();
+    const tooLow = await setSavingsTargetAction({}, formData({ month: '2026-03', mode: 'percent', value: '0' }));
+    expect(tooLow.error).toMatch(/1 to 100/i);
+    const tooHigh = await setSavingsTargetAction({}, formData({ month: '2026-03', mode: 'percent', value: '101' }));
+    expect(tooHigh.error).toMatch(/1 to 100/i);
+    const notWhole = await setSavingsTargetAction({}, formData({ month: '2026-03', mode: 'percent', value: '20.5' }));
+    expect(notWhole.error).toMatch(/1 to 100/i);
+    expect(getSavingsTarget('2026-03')).toBeNull();
+  });
+
+  it('saves a whole-percent target', async () => {
+    setup();
+    const result = await setSavingsTargetAction({}, formData({ month: '2026-03', mode: 'percent', value: '20' }));
+    expect(result.message).toBeTruthy();
+    expect(getSavingsTarget('2026-03')).toEqual({ month: '2026-03', mode: 'percent', value: 20 });
+  });
+
+  it('rejects a non-positive amount', async () => {
+    setup();
+    const result = await setSavingsTargetAction({}, formData({ month: '2026-03', mode: 'amount', value: '0' }));
+    expect(result.error).toMatch(/positive amount/i);
+    expect(getSavingsTarget('2026-03')).toBeNull();
+  });
+
+  it('saves an amount target in cents, from a dollar string', async () => {
+    setup();
+    const result = await setSavingsTargetAction({}, formData({ month: '2026-03', mode: 'amount', value: '250.00' }));
+    expect(result.message).toBeTruthy();
+    expect(getSavingsTarget('2026-03')).toEqual({ month: '2026-03', mode: 'amount', value: 25000 });
+  });
+
+  it('upserts rather than duplicating a month, and switching mode replaces the old row outright', async () => {
+    setup();
+    await setSavingsTargetAction({}, formData({ month: '2026-03', mode: 'percent', value: '20' }));
+    await setSavingsTargetAction({}, formData({ month: '2026-03', mode: 'amount', value: '100.00' }));
+    expect(getSavingsTarget('2026-03')).toEqual({ month: '2026-03', mode: 'amount', value: 10000 });
+  });
+
+  it('a non-admin member may set the household target -- ruling T3 has no stricter gate here', async () => {
+    const { alice } = setup();
+    currentUser = { id: alice, name: 'Alice', username: 'alice', role: 'member' };
+    const result = await setSavingsTargetAction({}, formData({ month: '2026-03', mode: 'percent', value: '20' }));
+    expect(result.error).toBeUndefined();
+    expect(getSavingsTarget('2026-03')).toEqual({ month: '2026-03', mode: 'percent', value: 20 });
   });
 });
 

@@ -7,13 +7,15 @@ import { safeToSpend, upcomingBills } from '@/lib/bills';
 import { budgetProgress, budgetTotals } from '@/lib/budgets';
 import { listCategories } from '@/lib/categories';
 import { reviewQueueCount } from '@/lib/categorize/engine';
-import { currentMonth, monthEnd, monthLabel, monthStart, todayIso } from '@/lib/dates';
+import { currentMonth, isMonthKey, monthEnd, monthLabel, monthStart, todayIso } from '@/lib/dates';
 import { listGoals } from '@/lib/goals';
 import { householdInsights } from '@/lib/insights';
 import { listLoans } from '@/lib/loans';
 import { netWorthHint, netWorthOverTime } from '@/lib/networth';
 import { onboardingSteps } from '@/lib/onboarding';
 import { cashflowTrend, topMerchants } from '@/lib/reports';
+import { cashRunway, type CashRunway } from '@/lib/runway';
+import { savingsProgress, type SavingsProgress } from '@/lib/savings-target';
 import { expiringSoonItems } from '@/lib/warranty/search';
 import { formatCents } from '@/lib/money';
 import { BudgetProgressBar } from '@/components/BudgetProgressBar';
@@ -27,6 +29,7 @@ import { QuickAddTransaction } from '@/components/QuickAddTransaction';
 import { CashflowChart } from '@/components/charts/CashflowChart';
 import { AlertIcon, ArrowRightIcon, InfoIcon } from '@/components/icons';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
+import { MonthNav } from '@/components/ui/MonthNav';
 import { PageGuide } from '@/components/ui/PageGuide';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { StatTile } from '@/components/ui/StatTile';
@@ -53,10 +56,25 @@ export default async function DashboardPage({
   const selfScoped = isSelfScoped(viewer);
   const scopeUserId = ownerScope(viewer) ?? urlScope;
 
-  const month = currentMonth();
+  // Ruling T7: the dashboard follows `?month=`, same fallback-on-malformed-input rule
+  // budgets/page.tsx already uses -- a bad month string is a reason to show the current month,
+  // never a reason to throw.
+  const rawMonth = Array.isArray(params.month) ? params.month[0] : params.month;
+  const month = rawMonth && isMonthKey(rawMonth) ? rawMonth : currentMonth();
+  const isCurrentMonth = month === currentMonth();
+
   const rows = scopeUserId === null ? budgetProgress(month) : budgetProgress(month, 'personal', scopeUserId);
   const totals = budgetTotals(rows);
-  const trend = cashflowTrend(12, { endMonth: month, attributedUserId: scopeUserId }, viewer);
+  // Ruling T7: the 12-month chart does NOT follow the chosen month -- it stays pinned to the
+  // trailing 12 months ending TODAY regardless of which month is being drilled into, so a look
+  // back at March does not also truncate the household's own trend line to end in March. The
+  // person-pill scoping is unaffected; only which month is the rightmost bar is fixed.
+  const trend = cashflowTrend(12, { endMonth: currentMonth(), attributedUserId: scopeUserId }, viewer);
+  // The headline Money-in/Net tiles DO follow the chosen month (ruling T7), and unlike the chart
+  // above they need to work for a month outside the chart's own trailing-12 window -- a
+  // dedicated one-month query, not a lookup into `trend`, which cashflowTrend already supports
+  // (Lane 1's own note: "every function the page calls already takes a month or a range").
+  const monthCashflow = cashflowTrend(1, { endMonth: month, attributedUserId: scopeUserId }, viewer)[0] ?? null;
   const merchants = topMerchants(
     { from: monthStart(month), to: monthEnd(month), limit: 8, attributedUserId: scopeUserId },
     viewer,
@@ -90,6 +108,15 @@ export default async function DashboardPage({
   // MUST-10.6: the widget respects the dashboard's existing person switcher. Household
   // shows every item, a selected person shows only items they own.
   const today = todayIso();
+
+  // Ruling T3: household scope only -- there is no per-person savings target, so this is null
+  // for a self viewer, the same pairing net worth below already uses.
+  const savings: SavingsProgress | null = selfScoped ? null : savingsProgress(month, viewer);
+  // Cash runway takes `today`, not a month (Lane 1's own signature) -- it cannot follow the
+  // chosen month even in principle, so it is always "as of today" and says so in its own hint
+  // rather than needing the "as of today" note the loans/goals/etc. sections below carry.
+  const runway: CashRunway | null = selfScoped ? null : cashRunway({ today }, viewer);
+
   const expiring = expiringSoonItems(EXPIRING_WIDGET_LIMIT, scopeUserId, today, viewer);
   // Review fix-round: one read-model scan, not two -- loansTotalOwedCents() would otherwise
   // call listLoans() again just to re-derive the sum LoansCard's own props already carry.
@@ -117,11 +144,11 @@ export default async function DashboardPage({
   const spendPlan = safeToSpend({ month, today, viewer });
   const householdTotals = selfScoped ? totals : scopeUserId === null ? totals : budgetTotals(budgetProgress(month));
 
-  // The trend already covers this month, so the headline income/net figures come
-  // out of it rather than costing a second query.
-  const thisMonth = trend.find((row) => row.month === month);
-  const incomeCents = thisMonth?.incomeCents ?? 0;
-  const netCents = thisMonth?.netCents ?? incomeCents - totals.totalSpentCents;
+  // monthCashflow (above) is the SAME query cashflowTrend always was, just no longer read off
+  // the 12-month `trend` -- ruling T7 pinned that one to today, so a viewed month outside its
+  // trailing-12 window would otherwise silently zero out these two tiles.
+  const incomeCents = monthCashflow?.incomeCents ?? 0;
+  const netCents = monthCashflow?.netCents ?? incomeCents - totals.totalSpentCents;
 
   const budgetRows = rows.filter((row) => !row.isIncome && (row.limitCents !== null || row.spentCents !== 0));
   const scopedPerson = scopeUserId === null ? null : people.find((person) => person.id === scopeUserId);
@@ -147,27 +174,57 @@ export default async function DashboardPage({
               : 'Everything the household spent and brought in this month.'
         }
         actions={
-          selfScoped ? undefined : (
-            <nav aria-label="Whose money to show" className="flex flex-wrap items-center gap-1 rounded-full border border-line bg-surface-2 p-1">
-              <PersonPill href="/dashboard" label="Household" active={scopeUserId === null} />
-              {people.map((person) => (
-                <PersonPill
-                  key={person.id}
-                  href={`/dashboard?person=${person.id}`}
-                  label={person.name}
-                  active={scopeUserId === person.id}
-                />
-              ))}
-            </nav>
-          )
+          <div className="flex flex-col items-end gap-2">
+            {/* Ruling T7: the dashboard follows `?month=`, same as Budgets -- see MonthNav's own
+                docblock for why this needs no client-side router. `person=` is carried along
+                only when it is actually a household viewer's own choice: a self viewer's own id
+                is forced server-side regardless of the URL (ownerScope), so encoding it here
+                would be a param nobody ever reads back. */}
+            <MonthNav
+              month={month}
+              basePath="/dashboard"
+              extraParams={!selfScoped && scopeUserId !== null ? { person: String(scopeUserId) } : {}}
+            />
+            {selfScoped ? null : (
+              <nav aria-label="Whose money to show" className="flex flex-wrap items-center gap-1 rounded-full border border-line bg-surface-2 p-1">
+                {/* Both pills now carry `month=` too -- without it, switching WHO the page is
+                    scoped to would silently reset WHICH month it shows, the same drift ruling T7
+                    exists to prevent in the other direction. */}
+                <PersonPill href={`/dashboard?month=${month}`} label="Household" active={scopeUserId === null} />
+                {people.map((person) => (
+                  <PersonPill
+                    key={person.id}
+                    href={`/dashboard?person=${person.id}&month=${month}`}
+                    label={person.name}
+                    active={scopeUserId === person.id}
+                  />
+                ))}
+              </nav>
+            )}
+          </div>
         }
       />
 
+      {/* Ruling T7: "A dashboard section either follows the chosen month or is visibly 'as of
+          today'." This is the page-level half of that -- the per-section "as of today" notes
+          below are the other half, on each section that does not follow `month`. */}
+      {!isCurrentMonth ? (
+        <div
+          role="status"
+          className="flex items-center gap-2.5 rounded-md bg-info-soft px-3.5 py-3 text-sm text-info-soft-fg"
+        >
+          <InfoIcon className="h-4 w-4 shrink-0" />
+          Viewing {monthLabel(month)}. Net worth, loans, goals, upcoming bills and everything below
+          marked “as of today” still reflect today, not this month.
+        </div>
+      ) : null}
+
       <PageGuide>
         <p>
-          This is the current month at a glance: what {selfScoped ? 'you' : 'the household'} spent,
-          what came in, and how much of any limit you set is left. Every figure here is read back
-          from imported statements, so nothing on this screen is edited in place.
+          This is {isCurrentMonth ? 'the current month' : monthLabel(month)} at a glance: what{' '}
+          {selfScoped ? 'you' : 'the household'} spent, what came in, and how much of any limit you
+          set is left. Every figure here is read back from imported statements, so nothing on this
+          screen is edited in place.
         </p>
         {selfScoped ? (
           // Review fix-round: the household clause below (pills, Loans card, "stay
@@ -284,37 +341,73 @@ export default async function DashboardPage({
             label="Net worth"
             value={formatCents(netWorthLatest.netCents, { showSign: true })}
             tone={netWorthLatest.netCents < 0 ? 'negative' : 'positive'}
-            hint={netWorthHint(netWorthLatest)}
+            // Ruling T7: net worth does not follow the chosen month (it is always today's
+            // balance sheet) -- netWorthHint's own sentence is unaffected, so the disclosure is
+            // appended after it rather than replacing it.
+            hint={
+              <>
+                {netWorthHint(netWorthLatest)}
+                {!isCurrentMonth ? ' · as of today' : ''}
+              </>
+            }
           />
         )}
+        {/* Lane 3 item 4: ruling T3 makes both of these household-only, same gate as Net worth
+            just above. Ruling T7: the savings tile follows the chosen month (savingsProgress was
+            computed against it); cash runway cannot even in principle (Lane 1's own signature
+            takes `today`, never a month), so it says "as of today" in its own hint instead of
+            needing the page-level note the sections further down carry. */}
+        {savings !== null ? <SavedThisMonthTile progress={savings} /> : null}
+        {runway !== null ? <CashRunwayTile runway={runway} /> : null}
       </div>
 
       {/* Ruling R6 (item AJ / PROD-2): self-hiding, above ExpiringSoonCard -- it is the card
-          that asks for attention, and the cards below it are reference. */}
+          that asks for attention, and the cards below it are reference. Ruling T7: insights are
+          always "as of today" (householdInsights takes `today`, never `month`), so a note is
+          added only while it actually has something to say and the viewed month differs. */}
+      {!isCurrentMonth && insights.length > 0 ? <AsOfTodayNote month={month} /> : null}
       <NeedsALookCard rows={insights} />
 
+      {!isCurrentMonth && expiring.length > 0 ? <AsOfTodayNote month={month} /> : null}
       <ExpiringSoonCard items={expiring} today={today} />
 
       {/* MUST-15.1: self-hiding. Rendered unconditionally; absent when there is nothing to say.
           Ruling R2: a loan balance is household money, so this is hidden entirely for a self
-          viewer -- there is no honest per-person share of it to show instead. */}
-      {selfScoped ? null : <LoansCard loans={owedLoans} totalOwedCents={totalOwedCents} />}
+          viewer -- there is no honest per-person share of it to show instead. Ruling T7: loans
+          are always "as of today" (listLoans takes `today`, never `month`). */}
+      {selfScoped ? null : (
+        <>
+          {!isCurrentMonth && owedLoans.length > 0 ? <AsOfTodayNote month={month} /> : null}
+          <LoansCard loans={owedLoans} totalOwedCents={totalOwedCents} />
+        </>
+      )}
 
       {/* v1.14.0: NOT behind selfScoped -- ruling R2 hides household balances from a child, and
-          every row here is a row that child owns (listLoans has already scoped them). */}
+          every row here is a row that child owns (listLoans has already scoped them). Ruling
+          T7: same "as of today" reasoning as the Loans card above. */}
+      {!isCurrentMonth && lentLoans.length > 0 ? <AsOfTodayNote month={month} /> : null}
       <WhoOwesUsCard loans={lentLoans} totalLentCents={totalLentCents} selfScoped={selfScoped} />
 
-      {/* Task 9: self-hiding, same pattern as LoansCard -- absent when there are no bills
-          coming up AND no budgeted limits at all this month. */}
-      <ComingUpCard
-        bills={bills}
-        budgetedRemainingCents={spendPlan.budgetedRemainingCents}
-        billsDueCents={spendPlan.billsDueCents}
-        hasBudgetedLimits={householdTotals.budgetedLimitCents > 0}
-        monthEndDate={monthEnd(month)}
-        canRecord={hasAccounts}
-        today={today}
-      />
+      {/* Task 9 / ruling T7: "Safe to spend is hidden entirely for a past month" -- this card's
+          own footer sentence blends the (always-current) upcoming-bills list with month-scoped
+          safeToSpend figures, and ComingUpCard.tsx is outside this lane's file set (Lane 3's
+          allowed files stop at budgets-client.tsx/page.tsx/actions.ts, dashboard/page.tsx and
+          MonthNav.tsx), so its two concerns cannot be split apart here. Hiding the whole card
+          for any month other than the current one is the closest honest reading of "hidden
+          entirely" available without touching a file outside that set -- "how much can we still
+          spend" has no meaning for a month that is not the one in progress, in either
+          direction. */}
+      {isCurrentMonth ? (
+        <ComingUpCard
+          bills={bills}
+          budgetedRemainingCents={spendPlan.budgetedRemainingCents}
+          billsDueCents={spendPlan.billsDueCents}
+          hasBudgetedLimits={householdTotals.budgetedLimitCents > 0}
+          monthEndDate={monthEnd(month)}
+          canRecord={hasAccounts}
+          today={today}
+        />
+      ) : null}
 
       <Card>
         <CardHeader
@@ -376,7 +469,13 @@ export default async function DashboardPage({
 
       <div className="grid gap-5 lg:grid-cols-5">
         <Card className={selfScoped ? 'lg:col-span-5' : 'lg:col-span-3'}>
-          <CardHeader title="12-month cashflow" description="Transfers excluded." />
+          <CardHeader
+            title="12-month cashflow"
+            // Ruling T7: this chart does NOT follow the chosen month (see `trend` above) --
+            // always the trailing 12 months ending today, so the note only needs to appear
+            // once here rather than on every bar.
+            description={`Transfers excluded.${isCurrentMonth ? '' : ' Always the trailing 12 months to today, not ' + monthLabel(month) + '.'}`}
+          />
           <CardBody>
             <CashflowChart data={trend} />
           </CardBody>
@@ -414,6 +513,11 @@ export default async function DashboardPage({
       {goals.length > 0 ? (
         <section className="flex flex-col gap-3">
           <h2 className="text-base font-semibold text-ink">Goals</h2>
+          {/* Ruling T7: goals are always "as of today" (listGoals takes no month at all), so
+              this note only earns its place when the page is actually showing a different one. */}
+          {!isCurrentMonth ? (
+            <p className="text-xs text-subtle">As of today, not {monthLabel(month)}.</p>
+          ) : null}
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             {goals.map((goal) => (
               <GoalCard key={goal.id} goal={goal} />
@@ -461,5 +565,114 @@ function CalloutLink({
       {children}
       <ArrowRightIcon className="ml-auto h-4 w-4 shrink-0" />
     </Link>
+  );
+}
+
+/**
+ * Ruling T7's per-section half: a section that reads from `today` rather than the page's own
+ * `month` still needs to say so once the two have diverged, or a household drilling into March
+ * would have no way to tell that the loan balance sitting beside it is today's, not March's.
+ * Every call site already gates this on the SAME emptiness check that decides whether the
+ * section below it renders at all, so this never appears with nothing under it to explain.
+ */
+function AsOfTodayNote({ month }: { month: string }) {
+  return <p className="text-xs text-subtle">As of today, not {monthLabel(month)}.</p>;
+}
+
+/**
+ * Lane 3 item 4. Ruling T1a: the sub-line below the hint is disclosure, never addition -- "of
+ * it" ties `movedToSavingsCents` back to the figure already shown above, so this can never be
+ * misread as "moving money to savings increases what we saved" (ruling T1's own wording test).
+ *
+ * The bar is deliberately NOT BudgetProgressBar: that component reads "over 100%" as a red
+ * warning, which is exactly backwards for a savings target -- exceeding it is the good outcome,
+ * not the over-budget one.
+ */
+function SavedThisMonthTile({ progress }: { progress: SavingsProgress }) {
+  const { netCents, target, targetCents, pct, movedToSavingsCents, noSavingsAccount } = progress;
+
+  const hint = (() => {
+    if (target === null) return 'No savings target set for this month yet — set one on Budgets.';
+    if (targetCents === null) {
+      // Ruling T5: a percent target with no income recorded yet has nothing to resolve
+      // against -- targetCents is null here rather than a divide-by-zero.
+      return `${target.value}% target — no income recorded yet this month.`;
+    }
+    return `${formatCents(netCents)} of ${formatCents(targetCents)} target${pct === null ? '' : ` (${pct}%)`}`;
+  })();
+
+  const clampedPct = Math.max(0, Math.min(100, pct ?? 0));
+
+  return (
+    <StatTile
+      label="Saved this month"
+      value={formatCents(netCents, { showSign: true })}
+      tone={netCents < 0 ? 'negative' : 'positive'}
+      hint={
+        <>
+          {hint}
+          <br />
+          {noSavingsAccount ? (
+            // Ruling T1 case 3: exactly the setup where an unflagged transfer to an outside
+            // bank silently understates the month -- this is the one place that trap gets
+            // surfaced, rather than the figure above just quietly reading low.
+            <>
+              No savings-type account is set up. Money moved to a bank this app doesn&apos;t track
+              counts as spending unless the transaction is marked a transfer.
+            </>
+          ) : (
+            <>· {formatCents(movedToSavingsCents)} of it moved to savings</>
+          )}
+        </>
+      }
+      footer={
+        targetCents !== null && targetCents > 0 ? (
+          <div
+            role="progressbar"
+            aria-label="Savings target progress"
+            aria-valuenow={clampedPct}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            className="h-2 w-full overflow-hidden rounded-full bg-surface-3"
+          >
+            <div
+              style={{ width: `${clampedPct}%` }}
+              className={`h-full rounded-full transition-[width] duration-300 ease-out ${
+                netCents >= targetCents ? 'bg-positive-solid' : 'bg-warning-solid'
+              }`}
+            />
+          </div>
+        ) : null
+      }
+    />
+  );
+}
+
+/** Lane 3 item 4. `months` is null exactly when there is no spend history to average against
+ *  (Lane 1's own contract) -- shown as a dash rather than a nonsense "0.0 months". */
+function CashRunwayTile({ runway }: { runway: CashRunway }) {
+  return (
+    <StatTile
+      label="Cash runway"
+      value={runway.months === null ? '—' : `${runway.months.toFixed(1)} months covered`}
+      hint={
+        <>
+          {/* cashRunway takes `today`, never a month (Lane 1's own signature) -- this is always
+              "as of today" regardless of which month the rest of the page is showing, so it
+              says so in its own hint rather than needing AsOfTodayNote beside it. */}
+          As of today ·{' '}
+          {runway.months === null
+            ? 'no spending history yet to average'
+            : `${formatCents(runway.liquidCents)} liquid ÷ ${formatCents(runway.avgMonthlySpendCents)} average monthly spend`}
+          {runway.accountsMissing > 0 ? (
+            <>
+              <br />
+              {runway.accountsMissing} account{runway.accountsMissing === 1 ? '' : 's'} missing a
+              balance — this figure is incomplete.
+            </>
+          ) : null}
+        </>
+      }
+    />
   );
 }

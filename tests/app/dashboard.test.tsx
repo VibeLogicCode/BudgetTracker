@@ -8,7 +8,9 @@ import { recordBalanceSnapshot } from '@/lib/networth';
 import { createManualTransaction } from '@/lib/transactions';
 import { createWarrantyItem } from '@/lib/warranty/items';
 import { createItemType } from '@/lib/warranty/types';
-import { todayIso } from '@/lib/dates';
+import { addMonths, currentMonth, monthLabel, todayIso } from '@/lib/dates';
+// Lane 1 (src/lib/savings-target.ts): not mocked, real DB, same as every other lib import here.
+import { saveSavingsTarget } from '@/lib/savings-target';
 import { createTestDb, type TestDb } from '../helpers/db';
 
 /**
@@ -282,5 +284,133 @@ describe('DashboardPage (ruling R2)', () => {
     const table = screen.getByText('Groceries').closest('table');
     const headlineCell = table?.querySelector('tbody tr td:first-child');
     expect(headlineCell?.className).toContain('cell-stack-headline');
+  });
+});
+
+/**
+ * Lane 3 item 2 (MonthNav on the dashboard) and item 3 (ruling T7: the dashboard follows
+ * `?month=`, and every section that does not gets an "as of today" note or is hidden outright).
+ * A separate describe block, own seeded db, so a past month's data does not have to share
+ * fixtures with the "today" scenarios the block above already covers.
+ */
+describe('DashboardPage — ruling T7 (month filter)', () => {
+  let t: TestDb | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  const today = todayIso();
+  const prevMonth = addMonths(currentMonth(), -1);
+
+  async function setupMonths() {
+    t = createTestDb();
+    const adult = await createUser({ name: 'Adult', username: 'adult', password: 'correct horse battery', role: 'admin' });
+    const accountId = createAccount({ name: 'Chequing', type: 'chequing', ownerUserId: adult.id });
+    recordBalanceSnapshot({ accountId, date: today, balanceCents: 500_000, source: 'manual' });
+    // Categorised, deliberately: "Spent this month" reads budgetTotals(budgetProgress(month)),
+    // which attributes spend by category id and never sees an uncategorised (categoryId: null)
+    // transaction at all -- unlike cashflowTrend (Money in/Net/savingsProgress), which counts
+    // every uncategorised row as spend. A real category is what makes this fixture actually
+    // exercise "Spent this month follows the chosen month" rather than silently proving nothing.
+    const categoryId = createCategory({ name: 'Old Month Category', parentId: null });
+    createManualTransaction({
+      accountId,
+      date: `${prevMonth}-05`,
+      description: 'OLD MONTH SPEND',
+      amountCents: -4000,
+      categoryId,
+      attributedUserId: adult.id,
+      userId: adult.id,
+      actorRole: 'admin',
+    });
+    return { adultId: adult.id };
+  }
+
+  it('a malformed ?month= falls back to the current month instead of throwing', async () => {
+    const { adultId } = await setupMonths();
+    currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    await expect(DashboardPage({ searchParams: Promise.resolve({ month: 'not-a-month' }) })).resolves.toBeTruthy();
+  });
+
+  it('a past month shows the Viewing banner and follows spend into "Spent this month"', async () => {
+    const { adultId } = await setupMonths();
+    currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    render(await DashboardPage({ searchParams: Promise.resolve({ month: prevMonth }) }));
+
+    expect(screen.getByText(new RegExp(`Viewing ${monthLabel(prevMonth)}`))).toBeTruthy();
+    // Ruling T7: "Spent this month" follows the chosen month, so the OLD MONTH SPEND transaction
+    // (dated in prevMonth, not today) shows up in this tile's own figure.
+    const spentTile = screen.getByText('Spent this month').closest('div');
+    expect(spentTile?.textContent).toContain('$40.00');
+  });
+
+  it('ruling T7: "Safe to spend" (the Coming up card) is hidden entirely for a past month', async () => {
+    const { adultId } = await setupMonths();
+    currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    render(await DashboardPage({ searchParams: Promise.resolve({ month: prevMonth }) }));
+    expect(screen.queryByText('Coming up')).toBeNull();
+  });
+
+  it('the current month shows neither the Viewing banner nor any "as of today" note, and Coming up is present', async () => {
+    const { adultId } = await setupMonths();
+    currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.queryByText(/^Viewing /)).toBeNull();
+    expect(screen.queryByText(/As of today, not/)).toBeNull();
+  });
+
+  it('MonthNav prev/next and the person pills both carry the other\'s param, so switching one never resets the other', async () => {
+    const { adultId } = await setupMonths();
+    currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    const { container } = render(await DashboardPage({ searchParams: Promise.resolve({ month: prevMonth }) }));
+
+    const householdPill = screen.getByText('Household').closest('a') as HTMLAnchorElement;
+    expect(householdPill.getAttribute('href')).toBe(`/dashboard?month=${prevMonth}`);
+
+    const monthLinks = Array.from(container.querySelectorAll('nav[aria-label="Change month"] a')) as HTMLAnchorElement[];
+    expect(monthLinks.map((a) => a.getAttribute('href'))).toEqual([
+      `/dashboard?month=${addMonths(prevMonth, -1)}`,
+      `/dashboard?month=${addMonths(prevMonth, 1)}`,
+    ]);
+  });
+
+  // Lane 3 item 4. Ruling T1a: the household has NO savings-type account in this fixture, so
+  // the tile must name that setup rather than silently showing a low or zero figure -- exactly
+  // the trap ruling T1 case 3 describes (an unflagged transfer to an outside bank understates
+  // the month).
+  it('Saved this month names the no-savings-account setup; Cash runway shows a figure from the recorded balance', async () => {
+    const { adultId } = await setupMonths();
+    saveSavingsTarget({ month: currentMonth(), mode: 'percent', value: 20 });
+    currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+
+    const savedTile = screen.getByText('Saved this month').closest('div');
+    expect(savedTile?.textContent).toContain("doesn't track counts as spending unless the transaction is marked a transfer");
+
+    const runwayTile = screen.getByText('Cash runway').closest('div');
+    expect(runwayTile?.textContent).toContain('As of today');
+  });
+
+  // Ruling T3: household scope only -- a self viewer gets neither tile, the same gate net worth
+  // already uses.
+  it('a self viewer sees neither Saved this month nor Cash runway', async () => {
+    t = createTestDb();
+    const adult = await createUser({ name: 'Adult', username: 'adult', password: 'correct horse battery', role: 'admin' });
+    const child = await createUser({ name: 'Kid', username: 'kid', password: 'correct horse battery', role: 'member' });
+    void adult;
+    currentUser.value = { id: child.id, name: 'Kid', username: 'kid', role: 'member', visibility: 'self' };
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.queryByText('Saved this month')).toBeNull();
+    expect(screen.queryByText('Cash runway')).toBeNull();
   });
 });

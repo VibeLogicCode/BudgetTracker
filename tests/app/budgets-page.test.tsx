@@ -6,6 +6,9 @@ import type { Db } from '@/db/client';
 import { nowIso } from '@/lib/clock';
 import { upsertBudget, setRollover } from '@/lib/budgets';
 import { addMonths, currentMonth, todayIso } from '@/lib/dates';
+// Lane 1 (src/lib/savings-target.ts): not mocked, real DB, same as every other lib import in
+// this file.
+import { saveSavingsTarget } from '@/lib/savings-target';
 import { setBudgetCategory } from '@/lib/warranty/items';
 import { addInstallment } from '@/lib/warranty/installments';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
@@ -113,5 +116,31 @@ describe('BudgetsPage (rulings R2, R11 / M9)', () => {
     expect(screen.getByRole('heading', { name: 'Kid (you)' })).toBeTruthy();
     void adultId;
     void today;
+  });
+
+  // Lane 3 item 3 / ruling T3: household scope only -- same R2 gate as the Household card
+  // itself, since a self viewer has no household scope to set a target for.
+  it('a household viewer sees the savings target control; a self viewer does not', async () => {
+    const { adultId, childId } = await setup();
+    currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    const { default: BudgetsPage } = await import('@/app/(app)/budgets/page');
+    const { unmount } = render(await BudgetsPage({ searchParams: Promise.resolve({}) }));
+    expect(screen.getByText('Savings target')).toBeTruthy();
+    unmount();
+
+    currentUser.value = { id: childId, name: 'Kid', username: 'kid', role: 'member', visibility: 'self' };
+    render(await BudgetsPage({ searchParams: Promise.resolve({}) }));
+    expect(screen.queryByText('Savings target')).toBeNull();
+  });
+
+  it('a set target resolves for the viewed month, and Copy previous month brings it forward', async () => {
+    const { adultId } = await setup();
+    currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    saveSavingsTarget({ month: prevMonth, mode: 'percent', value: 20 });
+    const { default: BudgetsPage } = await import('@/app/(app)/budgets/page');
+    const { container } = render(await BudgetsPage({ searchParams: Promise.resolve({ month: prevMonth }) }));
+    // Provisional-until-close wording (ruling T5) -- the exact resolved dollar figure is Lane
+    // 1's own math to test; this just proves the page wired the real target through.
+    expect(container.textContent).toContain('20% of income');
   });
 });

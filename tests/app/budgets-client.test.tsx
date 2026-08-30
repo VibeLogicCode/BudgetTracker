@@ -5,6 +5,10 @@ import { BudgetsClient } from '@/app/(app)/budgets/budgets-client';
 import { sectionFrom } from '@/app/(app)/budgets/page';
 import type { BudgetRow } from '@/lib/budgets';
 import type { BudgetPredictions, CategorySuggestion } from '@/lib/predict/suggest';
+// Type-only (see budgets-client.tsx's own import of this module for why): never evaluated at
+// runtime, so this line does not need Lane 1's src/lib/savings-target.ts to exist to compile or
+// to run under vitest -- only `@/app/(app)/budgets/page` above (a VALUE import) does.
+import type { SavingsProgress } from '@/lib/savings-target';
 
 vi.mock('@/app/(app)/budgets/actions', () => ({
   setLimitAction: vi.fn(async () => ({})),
@@ -12,6 +16,7 @@ vi.mock('@/app/(app)/budgets/actions', () => ({
   applySuggestionAction: vi.fn(async () => ({})),
   applyAllSuggestionsAction: vi.fn(async () => ({})),
   setRolloverAction: vi.fn(async () => ({})),
+  setSavingsTargetAction: vi.fn(async () => ({})),
 }));
 
 afterEach(() => cleanup());
@@ -58,6 +63,25 @@ function predictionsWith(over: Partial<BudgetPredictions> = {}): BudgetPredictio
   };
 }
 
+/** A fully-resolved SavingsProgress fixture, close enough to what savingsProgress() itself
+ *  would compute -- these tests only assert on what SavingsTargetControl reads off it (target,
+ *  targetCents), not the money/pace math Lane 1's own tests already cover. */
+function progressWith(over: Partial<SavingsProgress> = {}): SavingsProgress {
+  return {
+    month: '2026-03',
+    target: null,
+    targetCents: null,
+    incomeCents: 0,
+    spendCents: 0,
+    netCents: 0,
+    pct: null,
+    met: false,
+    movedToSavingsCents: 0,
+    noSavingsAccount: false,
+    ...over,
+  };
+}
+
 /**
  * The file's existing inline shape, plus whatever the test under way needs.
  *
@@ -65,7 +89,10 @@ function predictionsWith(over: Partial<BudgetPredictions> = {}): BudgetPredictio
  * tests can vary just the row's limit without a second render(<BudgetsClient/>) call of their own
  * -- renderClient below is a thin alias over this, not a second mount.
  */
-function renderBudgets(predictions: BudgetPredictions | null, opts: { limitCents?: number | null } = {}) {
+function renderBudgets(
+  predictions: BudgetPredictions | null,
+  opts: { limitCents?: number | null; savingsProgress?: SavingsProgress | null } = {},
+) {
   return render(
     <BudgetsClient
       month="2026-03"
@@ -74,6 +101,7 @@ function renderBudgets(predictions: BudgetPredictions | null, opts: { limitCents
       householdTotals={{ budgetedLimitCents: 20000, budgetedSpentCents: 5000, totalSpentCents: 5000 }}
       personal={[]}
       predictions={predictions}
+      savingsProgress={opts.savingsProgress ?? null}
     />,
   );
 }
@@ -419,5 +447,137 @@ describe('v1.12.1: clearing a budget is a deliberate button (item X / UX-4)', ()
     // The row itself is untouched by this render-only failure -- nothing else on the page
     // claims a message it did not earn.
     expect(screen.queryByText('Budget cleared from this month forward.')).toBeNull();
+  });
+});
+
+describe('Lane 3 item 2: MonthNav replaces the bare prev/next links on Budgets', () => {
+  it('prev/next point at ?month=, and the jump input carries the current month', () => {
+    const { container } = renderBudgets(null);
+    const links = Array.from(container.querySelectorAll('nav[aria-label="Change month"] a')) as HTMLAnchorElement[];
+    expect(links.map((a) => a.getAttribute('href'))).toEqual(['/budgets?month=2026-02', '/budgets?month=2026-04']);
+    const monthInput = container.querySelector('input[type="month"]') as HTMLInputElement;
+    expect(monthInput.value).toBe('2026-03');
+  });
+
+  it('changing the month input submits the jump form (a real GET, no client router)', () => {
+    // jsdom does not implement form submission/navigation (HTMLFormElement.prototype.requestSubmit
+    // fires the "submit" event and then reports "not implemented"); spied so this test can assert
+    // the control ASKS for a submit without depending on jsdom's own unimplemented navigation
+    // path, and restored so no later test in this file observes the patched prototype.
+    const requestSubmit = vi.spyOn(HTMLFormElement.prototype, 'requestSubmit').mockImplementation(() => {});
+    try {
+      const { container } = renderBudgets(null);
+      const monthInput = container.querySelector('input[type="month"]') as HTMLInputElement;
+      fireEvent.change(monthInput, { target: { value: '2025-11' } });
+      expect(requestSubmit).toHaveBeenCalledTimes(1);
+    } finally {
+      requestSubmit.mockRestore();
+    }
+  });
+});
+
+describe('Lane 3 item 3: the savings target control (ruling T6)', () => {
+  it('ruling T3/R2: absent for a self viewer -- household is null, the same gate the Household card uses', () => {
+    const { queryByText } = render(
+      <BudgetsClient
+        month="2026-03"
+        currentUserId={1}
+        household={null}
+        householdTotals={null}
+        personal={[]}
+      />,
+    );
+    expect(queryByText('Savings target')).toBeNull();
+  });
+
+  it('renders for a household viewer even with no target set yet', () => {
+    const { getByText } = renderBudgets(null, { savingsProgress: progressWith() });
+    expect(getByText('Savings target')).toBeTruthy();
+    expect(getByText('No savings target set for this month yet.')).toBeTruthy();
+  });
+
+  it('names the resolved figure for a percent target (ruling T5: provisional until the month closes)', () => {
+    const { getByText } = renderBudgets(null, {
+      savingsProgress: progressWith({ target: { month: '2026-03', mode: 'percent', value: 20 }, targetCents: 124000 }),
+    });
+    expect(getByText(/20% of income so far — \$1,240\.00\. Provisional until the month closes\./)).toBeTruthy();
+  });
+
+  it('names a percent target with no income yet, without dividing by zero', () => {
+    const { getByText } = renderBudgets(null, {
+      savingsProgress: progressWith({ target: { month: '2026-03', mode: 'percent', value: 20 }, targetCents: null }),
+    });
+    expect(getByText('20% of income -- no income recorded yet this month.')).toBeTruthy();
+  });
+
+  it('names a fixed amount target', () => {
+    const { getByText } = renderBudgets(null, {
+      savingsProgress: progressWith({ target: { month: '2026-03', mode: 'amount', value: 25000 }, targetCents: 25000 }),
+    });
+    expect(getByText('Fixed at $250.00 every month.')).toBeTruthy();
+  });
+
+  it('defaults the mode select and value input from the existing target', () => {
+    const { container } = renderBudgets(null, {
+      savingsProgress: progressWith({ target: { month: '2026-03', mode: 'amount', value: 25000 }, targetCents: 25000 }),
+    });
+    expect((container.querySelector('select[aria-label="Savings target mode"]') as HTMLSelectElement).value).toBe('amount');
+    expect((container.querySelector('input[aria-label="Savings target amount"]') as HTMLInputElement).value).toBe('250.00');
+  });
+
+  it('switching mode clears the value rather than reinterpreting the old digits under the new unit', () => {
+    const { container } = renderBudgets(null, {
+      savingsProgress: progressWith({ target: { month: '2026-03', mode: 'percent', value: 20 }, targetCents: 124000 }),
+    });
+    const select = container.querySelector('select[aria-label="Savings target mode"]') as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: 'amount' } });
+    const amountInput = container.querySelector('input[aria-label="Savings target amount"]') as HTMLInputElement;
+    expect(amountInput.value).toBe('');
+  });
+
+  it('committing a value on blur saves mode+value+month together', async () => {
+    const { setSavingsTargetAction } = await import('@/app/(app)/budgets/actions');
+    renderBudgets(null, { savingsProgress: progressWith() });
+    const valueInput = screen.getByLabelText('Savings target percent') as HTMLInputElement;
+    fireEvent.change(valueInput, { target: { value: '25' } });
+    fireEvent.blur(valueInput);
+    await waitFor(() => expect(setSavingsTargetAction).toHaveBeenCalled());
+    const [, formData] = vi.mocked(setSavingsTargetAction).mock.calls.at(-1)!;
+    expect((formData as FormData).get('month')).toBe('2026-03');
+    expect((formData as FormData).get('mode')).toBe('percent');
+    expect((formData as FormData).get('value')).toBe('25');
+  });
+
+  it('committing on Enter saves too, and a blank value never calls the server', async () => {
+    const { setSavingsTargetAction } = await import('@/app/(app)/budgets/actions');
+    // The mock is module-scoped and vitest.config.ts sets no clearMocks -- an earlier test's
+    // call in this same file would otherwise still be sitting in this mock's history.
+    vi.mocked(setSavingsTargetAction).mockClear();
+    renderBudgets(null, { savingsProgress: progressWith() });
+    const valueInput = screen.getByLabelText('Savings target percent') as HTMLInputElement;
+    // Blank, then blurred: no value to save, so the server is never asked.
+    fireEvent.blur(valueInput);
+    expect(setSavingsTargetAction).not.toHaveBeenCalled();
+    fireEvent.change(valueInput, { target: { value: '30' } });
+    fireEvent.keyDown(valueInput, { key: 'Enter' });
+    await waitFor(() => expect(setSavingsTargetAction).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe('Lane 3 item 1: "Copy previous month" also carries the savings target forward', () => {
+  it("the household button's title says so, but a personal button's does not (ruling T3)", () => {
+    const { container } = render(
+      <BudgetsClient
+        month="2026-03"
+        currentUserId={1}
+        household={[makeRow()]}
+        householdTotals={{ budgetedLimitCents: 20000, budgetedSpentCents: 5000, totalSpentCents: 5000 }}
+        personal={[{ userId: 1, name: 'Alice', rows: [makeRow()] }]}
+      />,
+    );
+    const buttons = Array.from(container.querySelectorAll('button')).filter((b) => b.textContent === 'Copy previous month');
+    expect(buttons).toHaveLength(2);
+    expect(buttons[0].getAttribute('title')).toMatch(/savings target/i);
+    expect(buttons[1].getAttribute('title')).toBeNull();
   });
 });
