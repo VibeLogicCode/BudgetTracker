@@ -25,7 +25,7 @@ import { LoansCard } from '@/components/LoansCard';
 import { WhoOwesUsCard } from '@/components/WhoOwesUsCard';
 import { NeedsALookCard } from '@/components/NeedsALookCard';
 import { QuickAddTransaction, QuickAddTrigger } from '@/components/QuickAddTransaction';
-import { CashflowChart } from '@/components/charts/CashflowChart';
+import { SavingsChart, type SavingsChartRow } from '@/components/charts/SavingsChart';
 import { AlertIcon, ArrowRightIcon, InfoIcon } from '@/components/icons';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { MonthNav } from '@/components/ui/MonthNav';
@@ -99,6 +99,18 @@ export default async function DashboardPage({
   // back at March does not also truncate the household's own trend line to end in March. The
   // person-pill scoping is unaffected; only which month is the rightmost bar is fixed.
   const trend = cashflowTrend(12, { endMonth: currentMonth(), attributedUserId: scopeUserId }, viewer);
+  // Item 1 (2026-08-30 plan): the dashboard's 12-month card now renders the same SavingsChart
+  // Reports does, fed the same way -- each row's `targetCents` comes from savingsProgress()
+  // (Lane 1, src/lib/savings-target.ts), never recomputed here (ruling T1: no second definition
+  // of "saved"). Ruling T3: the target is household-scope only and does not vary by the person
+  // pill, so it is resolved once per month regardless of `scopeUserId` -- but a self-scoped
+  // viewer must still never receive it, the same gate `savings`/`runway` below already use for
+  // every other household-wide figure on this page, so their rows carry `null` rather than a
+  // call to savingsProgress at all.
+  const savingsChartData: SavingsChartRow[] = trend.map((row) => ({
+    ...row,
+    targetCents: selfScoped ? null : savingsProgress(row.month, viewer).targetCents,
+  }));
   // The headline Money-in/Net tiles DO follow the chosen month (ruling T7), and unlike the chart
   // above they need to work for a month outside the chart's own trailing-12 window -- a
   // dedicated one-month query, not a lookup into `trend`, which cashflowTrend already supports
@@ -568,7 +580,7 @@ export default async function DashboardPage({
             description={`Transfers excluded.${isCurrentMonth ? '' : ' Always the trailing 12 months to today, not ' + monthLabel(month) + '.'}`}
           />
           <CardBody>
-            <CashflowChart data={trend} />
+            <SavingsChart data={savingsChartData} />
           </CardBody>
         </Card>
 

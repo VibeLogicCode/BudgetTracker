@@ -26,8 +26,12 @@ import { createTestDb, type TestDb } from '../helpers/db';
  * real createTestDb()).
  */
 
-// recharts' ResponsiveContainer (used by CashflowChart) requires ResizeObserver to mount, which
-// jsdom does not provide -- same test-environment shim as tests/app/reports-client.test.tsx.
+// recharts' ResponsiveContainer requires ResizeObserver to mount, which jsdom does not provide --
+// same test-environment shim as tests/app/reports-client.test.tsx. Item 1 (2026-08-30 plan)
+// mocks SavingsChart itself below (the dashboard's own 12-month card, formerly CashflowChart), so
+// nothing in this file actually exercises recharts any more -- the shim is kept anyway, on the
+// same "harmless and cheap" reasoning as every other global test shim in this repo, rather than
+// leaving a future card that DOES mount a real chart to rediscover the missing polyfill.
 class ResizeObserverStub {
   observe() {}
   unobserve() {}
@@ -71,6 +75,20 @@ vi.mock('@/components/QuickAddTransaction', () => ({
   // "Add a transaction" button) alongside QuickAddTransaction -- stubbed the same way so the real
   // component's `useEffect`/hash wiring (irrelevant to every test in this file) never runs.
   QuickAddTrigger: () => null,
+}));
+
+// Item 1 (2026-08-30 plan): the dashboard's 12-month card now renders SavingsChart (the same
+// component Reports uses) instead of the plain CashflowChart. Stubbed the same way as
+// QuickAddTransaction above, to capture the exact `data` array DashboardPage builds rather than
+// trying to read it back out of recharts' own DOM -- jsdom's ResponsiveContainer measures 0x0 and
+// renders none of its children (see reports-client.test.tsx and reports.test.tsx, which hit the
+// same limitation), so asserting on chart internals is not an option here either.
+const capturedSavingsChartProps = vi.hoisted(() => ({ data: null as unknown }));
+vi.mock('@/components/charts/SavingsChart', () => ({
+  SavingsChart: (props: { data: unknown }) => {
+    capturedSavingsChartProps.data = props.data;
+    return null;
+  },
 }));
 
 afterEach(cleanup);
@@ -480,5 +498,44 @@ describe('DashboardPage — ruling T7 (month filter)', () => {
 
     expect(screen.queryByText('Saved this month')).toBeNull();
     expect(screen.queryByText('Cash runway')).toBeNull();
+  });
+
+  // Item 1 (2026-08-30 plan): the dashboard's 12-month card renders SavingsChart, the same
+  // component Reports uses, in place of the plain CashflowChart -- fed a target resolved per
+  // month via savingsProgress() (ruling T1). Only the current month gets a target here, so this
+  // also proves the other 11 months in the trailing window carry `targetCents: null` rather than
+  // a fallback 0 (SavingsChart.tsx's own docblock: a null-vs-0 mixup would draw a dashed target
+  // line reading "your target was nothing" for a month that in fact had no target at all).
+  it('renders the savings chart, and a month with no target carries targetCents: null, never 0', async () => {
+    const { adultId } = await setupMonths();
+    saveSavingsTarget({ month: currentMonth(), mode: 'amount', value: 20000 });
+    currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+
+    const data = capturedSavingsChartProps.data as Array<{ month: string; targetCents: number | null }>;
+    expect(data.length).toBe(12);
+    expect(data.find((row) => row.month === currentMonth())?.targetCents).toBe(20000);
+    // prevMonth (set up by setupMonths' own fixture) is inside this same trailing-12 window and
+    // never got a target -- it must read `null`, not `0`.
+    expect(data.find((row) => row.month === prevMonth)?.targetCents).toBeNull();
+  });
+
+  // Ruling T3: the savings target is household-scope only, the same gate the "Saved this month"
+  // tile above already uses -- a self-scoped viewer must never receive a resolved target on the
+  // chart either, even when the household has one on file for the current month.
+  it('a self-scoped viewer never receives a resolved savings target on the chart, even when one is set', async () => {
+    t = createTestDb();
+    const adult = await createUser({ name: 'Adult', username: 'adult', password: 'correct horse battery', role: 'admin' });
+    const child = await createUser({ name: 'Kid', username: 'kid', password: 'correct horse battery', role: 'member' });
+    void adult;
+    saveSavingsTarget({ month: currentMonth(), mode: 'amount', value: 20000 });
+    currentUser.value = { id: child.id, name: 'Kid', username: 'kid', role: 'member', visibility: 'self' };
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+
+    const data = capturedSavingsChartProps.data as Array<{ targetCents: number | null }>;
+    expect(data.length).toBeGreaterThan(0);
+    expect(data.every((row) => row.targetCents === null)).toBe(true);
   });
 });
