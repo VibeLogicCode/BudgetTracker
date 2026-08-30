@@ -954,8 +954,10 @@ export function BudgetsClient({
 
   return (
     <div className="flex flex-col gap-6">
+      {/* Ruling U1 (v1.18.0): no eyebrow. MonthNav in `actions` already names the month, in the
+          control that changes it -- an eyebrow beside it made the header state one fact twice,
+          and the reader had to work out which of the two was authoritative. */}
       <PageHeader
-        eyebrow={monthLabel(month)}
         title="Budgets"
         description="A limit set here applies to this month and every month after it, until you change it again."
         actions={<MonthNav month={month} basePath="/budgets" />}
