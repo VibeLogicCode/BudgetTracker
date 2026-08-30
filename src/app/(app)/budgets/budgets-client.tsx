@@ -3,6 +3,7 @@
 import { useActionState, useEffect, useRef, useState } from 'react';
 import { BudgetProgressBar } from '@/components/BudgetProgressBar';
 import { FormError } from '@/components/FormError';
+import { ChevronDownIcon } from '@/components/icons';
 import { AutoSaveCheckbox, AutoSaveTextInput, useAutoSave } from '@/components/ui/AutoSave';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { Money } from '@/components/ui/Money';
@@ -183,6 +184,85 @@ interface RowPredictions {
   dayOfMonth: number;
 }
 
+/**
+ * Unique per (scope, user, category), so a disclosure's `aria-controls` can name exactly the
+ * rows it hides and two sections that happen to share a category id -- a household row and
+ * someone's personal row both named "Hobbies" -- never collide on one DOM id.
+ */
+function rowId(scope: 'household' | 'personal', userId: number | null, categoryId: number): string {
+  return `budget-row-${scope}-${userId ?? 'h'}-${categoryId}`;
+}
+
+/** What each section's collapse-state hook hands back to the header that renders it. */
+interface GroupOpenState {
+  isOpen: (categoryId: number) => boolean;
+  toggle: (categoryId: number) => void;
+  expandAll: () => void;
+  collapseAll: () => void;
+  /** Drives the one Expand-all/Collapse-all button's own label -- "collapse" only once every
+   *  group in the section is already open. */
+  anyCollapsed: boolean;
+}
+
+/**
+ * Ruling U5: which category groups are open is a viewing preference, not household data -- it
+ * lives in THIS browser's localStorage, never in the database, and it is a convenience the page
+ * must render correctly without (a private window, cleared site data, or storage that simply
+ * throws). Every read and write below is wrapped in try/catch, and a failure is treated as
+ * "nothing was ever saved" rather than surfaced anywhere.
+ *
+ * Ruling U3: the very first render -- server and client alike, before the effect below has ever
+ * run -- is always "every group closed" (`new Set()`), so the page has the same shape on every
+ * visit regardless of what an earlier visit left behind. The effect only ever layers a
+ * previously-saved OPEN set on top of that deterministic default once localStorage has actually
+ * been read, which is also why it runs after mount rather than during the initial render.
+ */
+function useGroupOpenState(storageKey: string, groupIds: number[]): GroupOpenState {
+  const [openIds, setOpenIds] = useState<ReadonlySet<number>>(() => new Set());
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(storageKey);
+      if (raw === null) return;
+      const parsed: unknown = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return;
+      const restored = new Set(parsed.filter((id): id is number => typeof id === 'number' && groupIds.includes(id)));
+      if (restored.size > 0) setOpenIds(restored);
+    } catch {
+      // Corrupted value, storage disabled, or a private window that throws on access -- the
+      // deterministic all-closed default above is already a correct render, so there is
+      // nothing here to repair.
+    }
+    // Intentionally keyed on storageKey alone: the category list behind groupIds does not
+    // change while this page is open, and re-reading localStorage every time a render happens
+    // to produce a new array identity would fight the writes `persist` below makes on click.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storageKey]);
+
+  const persist = (next: Set<number>) => {
+    setOpenIds(next);
+    try {
+      window.localStorage.setItem(storageKey, JSON.stringify(Array.from(next)));
+    } catch {
+      // A convenience, never a correctness dependency (ruling U5) -- the in-memory state above
+      // already reflects the click; this browser simply will not remember it next visit.
+    }
+  };
+
+  return {
+    isOpen: (categoryId) => openIds.has(categoryId),
+    toggle: (categoryId) => {
+      const next = new Set(openIds);
+      if (next.has(categoryId)) next.delete(categoryId);
+      else next.add(categoryId);
+      persist(next);
+    },
+    expandAll: () => persist(new Set(groupIds)),
+    collapseAll: () => persist(new Set()),
+    anyCollapsed: groupIds.some((id) => !openIds.has(id)),
+  };
+}
+
 function Row({
   row,
   depth,
@@ -195,6 +275,9 @@ function Row({
   rolloverOn,
   predict,
   sinkingFunds,
+  hidden = false,
+  disclosure,
+  onGroupLimitSaved,
 }: {
   row: BudgetRow;
   depth: number;
@@ -216,6 +299,24 @@ function Row({
   /** v1.13.0 ruling R11 / micro-ruling M9: one linked bill's sinking-fund progress, keyed by
    *  category id (sinkingFundsFor, src/lib/bills.ts). */
   sinkingFunds: Record<number, SinkingFund>;
+  /**
+   * Ruling U2/U3: a collapsed group's children stay in the DOM -- hidden, not unmounted -- so an
+   * edit in progress in one of them is never discarded by opening or closing the group, and
+   * anything reading the page's raw markup (a browser's own find-in-page, an assistive-tech
+   * tree walk) still sees the real figures even while the group is visually closed. Only ever
+   * true for a depth-1 row: categories are limited to two levels (src/lib/categories.ts), so a
+   * depth-1 row never has children of its own to pass this down to.
+   */
+  hidden?: boolean;
+  /** Present only on the one Row per top-level category that actually has children (ruling U2:
+   *  a parent with no children stays an ordinary row, so this is never passed for one). Carries
+   *  everything a disclosure toggle needs to announce and control itself. */
+  disclosure?: { open: boolean; onToggle: () => void };
+  /** Ruling U6: bubbles a successful limit save -- this row's own, or (via the recursive call
+   *  below) any child's -- up to whichever Row owns the "children add up to more than the
+   *  parent" warning. Undefined on that owning Row itself, which is how it knows to keep the
+   *  report rather than forward it again. */
+  onGroupLimitSaved?: (categoryId: number, previousBaseCents: number | null) => void;
 }) {
   const suggestion = predict?.suggestionOf.get(row.categoryId) ?? null;
   const projection = predict?.projectionOf.get(row.categoryId) ?? null;
@@ -234,9 +335,79 @@ function Row({
     setClearError(result.error ?? null);
   };
 
+  // Ruling U6's bookkeeping. Declared unconditionally (hooks cannot be conditional) even though
+  // it is only ever READ on the one Row that also received `disclosure` -- an ordinary row, or a
+  // child row that only ever forwards its own edits upward via `onGroupLimitSaved`, never looks
+  // at its own copy of this state.
+  const [ownGroupEdit, setOwnGroupEdit] = useState<{ categoryId: number; previousBaseCents: number | null } | null>(null);
+  const [warningPending, setWarningPending] = useState(false);
+  const [warningError, setWarningError] = useState<string | null>(null);
+
+  // A child forwards through the callback its own parent handed it; the group header (which
+  // receives no such callback, since nothing sits above it) is where a report actually lands.
+  const reportLimitEdit =
+    onGroupLimitSaved ??
+    ((categoryId: number, previousBaseCents: number | null) => setOwnGroupEdit({ categoryId, previousBaseCents }));
+
+  // The auto-save control below already calls setLimitAction (via `saveLimit`); this only adds
+  // the bookkeeping ruling U6's Undo button needs. A real failure still surfaces exactly the way
+  // it always has -- AutoSaveTextInput's own ErrorLine, reading the same `result.error`.
+  const trackedSaveLimit = async (formData: FormData) => {
+    const previousBaseCents = row.baseLimitCents;
+    const result = await saveLimit(formData);
+    if (!result.error) reportLimitEdit(row.categoryId, previousBaseCents);
+    return result;
+  };
+
+  // Ruling U6: summed on the BASE limit, not the effective one -- rollover's carried-forward
+  // cents (carryCents) answer a different question (what survived from past underspend), and
+  // folding it in here would make "Raise Housing to $X" write a number nobody actually typed
+  // into any field. Only meaningful on the one Row that owns a disclosure; every other Row
+  // leaves these at 0/false and renders nothing that reads them.
+  const childrenBaseSumCents = disclosure
+    ? row.children.reduce((sum, child) => sum + (child.baseLimitCents ?? 0), 0)
+    : 0;
+  const overParentLimit = disclosure !== undefined && row.baseLimitCents !== null && childrenBaseSumCents > row.baseLimitCents;
+
+  const submitLimitFor = (categoryId: number, cents: number | null) => {
+    const formData = new FormData();
+    formData.set('scope', scope);
+    formData.set('userId', userId === null ? '' : String(userId));
+    formData.set('month', month);
+    formData.set('categoryId', String(categoryId));
+    formData.set('amount', cents === null ? '' : (cents / 100).toFixed(2));
+    return saveLimit(formData);
+  };
+
+  const raiseParentToChildrenSum = async () => {
+    setWarningPending(true);
+    setWarningError(null);
+    const previousBaseCents = row.baseLimitCents;
+    const result = await submitLimitFor(row.categoryId, childrenBaseSumCents);
+    setWarningPending(false);
+    if (result.error) {
+      setWarningError(result.error);
+      return;
+    }
+    setOwnGroupEdit({ categoryId: row.categoryId, previousBaseCents });
+  };
+
+  const undoLastGroupEdit = async () => {
+    if (ownGroupEdit === null) return;
+    setWarningPending(true);
+    setWarningError(null);
+    const result = await submitLimitFor(ownGroupEdit.categoryId, ownGroupEdit.previousBaseCents);
+    setWarningPending(false);
+    if (result.error) {
+      setWarningError(result.error);
+      return;
+    }
+    setOwnGroupEdit(null);
+  };
+
   return (
     <>
-      <tr className={depth === 0 ? 'bg-surface-2' : undefined}>
+      <tr id={rowId(scope, userId, row.categoryId)} hidden={hidden} className={depth === 0 ? 'bg-surface-2' : undefined}>
         {/* v1.15.0 (responsive rows): this cell is BOTH the tree indent (the inline
             paddingLeft that v1.13.2 fixed the ordering/nesting of) and the phone card's
             headline -- a child row's indent must keep working exactly as it does in the
@@ -246,8 +417,30 @@ function Row({
           className={`${depth === 0 ? 'font-medium text-ink' : 'text-muted'} cell-stack-headline`}
           data-label="Category"
         >
-          {row.categoryName}
+          {disclosure ? (
+            <button
+              type="button"
+              aria-expanded={disclosure.open}
+              aria-controls={row.children.map((child) => rowId(scope, userId, child.categoryId)).join(' ')}
+              onClick={disclosure.onToggle}
+              className="inline-flex min-h-11 items-center gap-1.5 py-1 text-left font-medium text-ink sm:min-h-0"
+            >
+              {/* Ruling U3: closed is the page's default shape, so the chevron points at the
+                  direction opening will take it -- sideways when closed, down once open -- the
+                  same convention a native <details> uses. */}
+              <ChevronDownIcon
+                className={`h-4 w-4 shrink-0 text-muted transition-transform ${disclosure.open ? '' : '-rotate-90'}`}
+              />
+              {row.categoryName}
+            </button>
+          ) : (
+            row.categoryName
+          )}
           {row.isArchived ? <span className="ml-1.5 text-xs text-subtle">(archived)</span> : null}
+          {/* Ruling U3: the marker that lets an over-budget group still announce itself while its
+              disclosure is closed -- a different signal from the U6 warning below, which is
+              about the children's LIMITS outgrowing the parent's, not about actual spend. */}
+          {disclosure && row.overBudget ? <span className="badge badge--red ml-2 align-middle">Over budget</span> : null}
         </td>
         {/* No width class on this cell or the progress one any more: the colgroup owns the
             widths under fixed layout, and a `w-44` here only reads as if it still decided
@@ -280,7 +473,7 @@ function Row({
                   month,
                   categoryId: String(row.categoryId),
                 }}
-                action={saveLimit}
+                action={trackedSaveLimit}
                 ariaLabel={`Monthly limit for ${row.categoryName}`}
                 inputMode="decimal"
                 placeholder="none"
@@ -392,6 +585,49 @@ function Row({
           ) : null}
         </td>
       </tr>
+      {overParentLimit ? (
+        <tr>
+          {/* Never `hidden`, unlike the children rows below: ruling U6 requires this visible
+              whether the group is open or closed, since the closed header is where most people
+              will actually see it. */}
+          <td colSpan={5} className="px-4 py-3">
+            <Notice tone="warning">
+              <p>
+                Children add up to {formatCents(childrenBaseSumCents)} —{' '}
+                {formatCents(childrenBaseSumCents - (row.baseLimitCents ?? 0))} over {row.categoryName}&apos;s limit.
+              </p>
+              <div className="flex flex-wrap gap-2 pt-1">
+                <button
+                  type="button"
+                  className="btn btn--secondary btn--sm min-h-11 sm:min-h-0"
+                  disabled={warningPending}
+                  onClick={() => void raiseParentToChildrenSum()}
+                >
+                  Raise {row.categoryName} to {formatCents(childrenBaseSumCents)}
+                </button>
+                {/* Ruling U6: omitted entirely, not disabled, when there is no previous value to
+                    restore -- a fresh page load has seen no edit yet this session, and a button
+                    that would do nothing is worse than no button at all. */}
+                {ownGroupEdit !== null ? (
+                  <button
+                    type="button"
+                    className="btn btn--ghost btn--sm min-h-11 sm:min-h-0"
+                    disabled={warningPending}
+                    onClick={() => void undoLastGroupEdit()}
+                  >
+                    Undo
+                  </button>
+                ) : null}
+              </div>
+              {warningError ? (
+                <p role="alert" className="text-xs font-medium text-negative-soft-fg">
+                  {warningError}
+                </p>
+              ) : null}
+            </Notice>
+          </td>
+        </tr>
+      ) : null}
       {row.children.map((child) => (
         <Row
           key={child.categoryId}
@@ -406,6 +642,8 @@ function Row({
           rolloverOn={rolloverOn}
           predict={predict}
           sinkingFunds={sinkingFunds}
+          hidden={disclosure ? !disclosure.open : hidden}
+          onGroupLimitSaved={disclosure ? reportLimitEdit : onGroupLimitSaved}
         />
       ))}
     </>
@@ -453,6 +691,154 @@ function BudgetTable({ children, paceTitle }: { children: React.ReactNode; paceT
       </thead>
       <tbody>{children}</tbody>
     </TableWrap>
+  );
+}
+
+/**
+ * Extracted from BudgetsClient's own `personal.map(...)` (v1.18.0 Lane 2) because a per-section
+ * collapse state (`useGroupOpenState`) is a React hook, and hooks cannot be called from inside a
+ * `.map` callback that lives directly in another component's body -- the number of times it
+ * would run depends on `personal.length`, which breaks the fixed call order React requires. A
+ * real component, one instance per person with its own stable `key`, is the only place this
+ * hook can live.
+ */
+function PersonalCard({
+  person,
+  month,
+  currentUserId,
+  editable,
+  copyAction,
+  applyAction,
+  applyAllAction,
+  personPredict,
+  paceTitle,
+  showHistorySentence,
+  personNoAttribution,
+}: {
+  person: {
+    userId: number;
+    name: string;
+    rows: BudgetRow[];
+    rolloverIds?: number[];
+    sinkingFunds?: Record<number, SinkingFund>;
+  };
+  month: string;
+  currentUserId: number;
+  editable: boolean;
+  copyAction: (formData: FormData) => void;
+  applyAction: (formData: FormData) => void;
+  applyAllAction: (formData: FormData) => void;
+  personPredict: RowPredictions | null;
+  paceTitle?: string;
+  showHistorySentence: boolean;
+  personNoAttribution: boolean;
+}) {
+  const personRolloverOn = new Set(person.rolloverIds ?? []);
+  // Ruling U2: only a category that actually HAS children becomes a disclosure -- an ordinary
+  // row is never counted here, so Expand all/Collapse all never appears for a section with none.
+  const groupIds = person.rows.filter((row) => row.children.length > 0).map((row) => row.categoryId);
+  // Ruling U5: keyed by this person's own id, distinct from the household key below and from
+  // every other person's, so opening Bob's "Food" group never opens Alice's.
+  const groupState = useGroupOpenState(`budgets:groups:personal:${person.userId}`, groupIds);
+
+  return (
+    <Card as="section">
+      <CardHeader
+        title={
+          <>
+            {person.name}
+            {person.userId === currentUserId ? ' (you)' : ''}
+            {editable ? null : <span className="ml-2 text-xs font-normal text-subtle">read-only</span>}
+          </>
+        }
+        description="Personal limits, on top of the household ones."
+        action={
+          editable || groupIds.length > 0 ? (
+            <>
+              {/* Same ownership rule as the limit inputs: no copy button where the copy
+                  would be refused server-side by copyPreviousMonthAction. */}
+              {editable ? (
+                <>
+                  <form action={copyAction}>
+                    <input type="hidden" name="scope" value="personal" />
+                    <input type="hidden" name="userId" value={person.userId} />
+                    <input type="hidden" name="month" value={month} />
+                    <button type="submit" className="btn btn--secondary btn--sm">Copy previous month</button>
+                  </form>
+                  {/* Same MUST-15.1 rule as the household section above. */}
+                  {personPredict !== null && personPredict.suggestionOf.size > 0 ? (
+                    <form action={applyAllAction}>
+                      <input type="hidden" name="scope" value="personal" />
+                      <input type="hidden" name="userId" value={person.userId} />
+                      <input type="hidden" name="month" value={month} />
+                      <button
+                        type="submit"
+                        className="btn btn--secondary btn--sm"
+                        title="Only fills in categories with no limit set. Nothing you have typed is changed."
+                      >
+                        Apply all suggestions
+                      </button>
+                    </form>
+                  ) : null}
+                </>
+              ) : null}
+              {/* Ruling U3: one control for the whole section, regardless of edit permission --
+                  expanding a group to read its children is not an edit, so even a read-only
+                  viewer of someone else's section gets this. */}
+              {groupIds.length > 0 ? (
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--sm"
+                  onClick={groupState.anyCollapsed ? groupState.expandAll : groupState.collapseAll}
+                >
+                  {groupState.anyCollapsed ? 'Expand all' : 'Collapse all'}
+                </button>
+              ) : null}
+            </>
+          ) : null
+        }
+      />
+      {showHistorySentence || personNoAttribution ? (
+        <CardBody className="pt-5 pb-0">
+          {showHistorySentence ? (
+            <p className="text-sm text-muted">Suggestions appear once there are three full calendar months of history.</p>
+          ) : null}
+          {personNoAttribution ? (
+            <p className="text-sm text-muted">
+              {/* L-6: "to you" is only true in the viewer's own section. Everyone else's
+                  section names the person it is actually about. */}
+              No transactions are attributed {person.userId === currentUserId ? 'to you' : `to ${person.name}`} yet, so
+              there is nothing to base a personal suggestion on.
+            </p>
+          ) : null}
+        </CardBody>
+      ) : null}
+      <BudgetTable paceTitle={paceTitle}>
+        {person.rows.map((row) => (
+          <Row
+            key={row.categoryId}
+            row={row}
+            depth={0}
+            scope="personal"
+            userId={person.userId}
+            month={month}
+            applyAction={applyAction}
+            editable={editable}
+            // Same admin-or-owner rule as editable, for personal scope (unlike
+            // household, where rollover is admin-only but the amount is not).
+            canToggleRollover={editable}
+            rolloverOn={personRolloverOn}
+            predict={personPredict}
+            sinkingFunds={person.sinkingFunds ?? {}}
+            disclosure={
+              row.children.length > 0
+                ? { open: groupState.isOpen(row.categoryId), onToggle: () => groupState.toggle(row.categoryId) }
+                : undefined
+            }
+          />
+        ))}
+      </BudgetTable>
+    </Card>
   );
 }
 
@@ -553,6 +939,19 @@ export function BudgetsClient({
   // there is admin-only). For personal scope the two checks are the same admin-or-owner rule.
   const householdRolloverOn = new Set(householdRolloverIds);
 
+  // Ruling U2: only a category that actually has children becomes a disclosure. Called
+  // unconditionally (household ?? [] rather than skipping the hook when household is null) --
+  // hooks cannot be called only on some renders, and a self viewer's empty groupIds list simply
+  // never renders the Expand all/Collapse all button below.
+  const householdGroupIds = (household ?? []).filter((row) => row.children.length > 0).map((row) => row.categoryId);
+  const householdGroupState = useGroupOpenState('budgets:groups:household', householdGroupIds);
+
+  // Ruling U2/item 3: "spent $0.00 of $0.00 budgeted" is not information, it is three zeros
+  // saying "you have not set any budgets" -- the same all-zero test the progress bar just below
+  // already uses to fall back to "No budget" instead of a real $0 bar.
+  const noHouseholdBudgets =
+    householdTotals !== null && householdTotals.budgetedLimitCents === 0 && householdTotals.budgetedSpentCents === 0;
+
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
@@ -612,11 +1011,18 @@ export function BudgetsClient({
         <Card as="section">
           <CardHeader
             title={
-              <>
-                Household — spent {formatCents(householdTotals.budgetedSpentCents)} of {formatCents(householdTotals.budgetedLimitCents)} budgeted
-                <span className="font-normal text-muted"> · {formatCents(householdTotals.totalSpentCents)} total spent</span>
-              </>
+              noHouseholdBudgets ? (
+                `No budgets set for ${monthLabel(month)}.`
+              ) : (
+                <>
+                  Household — spent {formatCents(householdTotals.budgetedSpentCents)} of {formatCents(householdTotals.budgetedLimitCents)} budgeted
+                  <span className="font-normal text-muted"> · {formatCents(householdTotals.totalSpentCents)} total spent</span>
+                </>
+              )
             }
+            // Item 3: the three-zero header said nothing a person could act on. This sentence
+            // names the one thing to actually do, and points at exactly where to do it.
+            description={noHouseholdBudgets ? 'Set a limit on any category below to start tracking it.' : undefined}
             action={
               <>
                 <form action={copyAction}>
@@ -648,6 +1054,17 @@ export function BudgetsClient({
                       Apply all suggestions
                     </button>
                   </form>
+                ) : null}
+                {/* Ruling U3: one control for the whole section. Absent when nothing in it can
+                    collapse in the first place (every household row is an ordinary one). */}
+                {householdGroupIds.length > 0 ? (
+                  <button
+                    type="button"
+                    className="btn btn--ghost btn--sm"
+                    onClick={householdGroupState.anyCollapsed ? householdGroupState.expandAll : householdGroupState.collapseAll}
+                  >
+                    {householdGroupState.anyCollapsed ? 'Expand all' : 'Collapse all'}
+                  </button>
                 ) : null}
               </>
             }
@@ -686,6 +1103,11 @@ export function BudgetsClient({
                 rolloverOn={householdRolloverOn}
                 predict={householdPredict}
                 sinkingFunds={householdSinkingFunds}
+                disclosure={
+                  row.children.length > 0
+                    ? { open: householdGroupState.isOpen(row.categoryId), onToggle: () => householdGroupState.toggle(row.categoryId) }
+                    : undefined
+                }
               />
             ))}
           </BudgetTable>
@@ -694,89 +1116,24 @@ export function BudgetsClient({
 
       {personal.map((person) => {
         const personPredict = personalPredict.get(person.userId) ?? null;
-        const personRolloverOn = new Set(person.rolloverIds ?? []);
         const personNoAttribution =
           predictions?.personal.find((entry) => entry.userId === person.userId)?.predictions.noAttribution ?? false;
         const showHistorySentence = predictions !== null && predictions.monthsUsed < MIN_HISTORY_MONTHS;
         return (
-          <Card as="section" key={person.userId}>
-            <CardHeader
-              title={
-                <>
-                  {person.name}
-                  {person.userId === currentUserId ? ' (you)' : ''}
-                  {canEditPersonal(person.userId) ? null : (
-                    <span className="ml-2 text-xs font-normal text-subtle">read-only</span>
-                  )}
-                </>
-              }
-              description="Personal limits, on top of the household ones."
-              action={
-                /* Same ownership rule as the limit inputs: no copy button where the copy
-                   would be refused server-side by copyPreviousMonthAction. */
-                canEditPersonal(person.userId) ? (
-                  <>
-                    <form action={copyAction}>
-                      <input type="hidden" name="scope" value="personal" />
-                      <input type="hidden" name="userId" value={person.userId} />
-                      <input type="hidden" name="month" value={month} />
-                      <button type="submit" className="btn btn--secondary btn--sm">Copy previous month</button>
-                    </form>
-                    {/* Same MUST-15.1 rule as the household section above. */}
-                    {personPredict !== null && personPredict.suggestionOf.size > 0 ? (
-                      <form action={applyAllAction}>
-                        <input type="hidden" name="scope" value="personal" />
-                        <input type="hidden" name="userId" value={person.userId} />
-                        <input type="hidden" name="month" value={month} />
-                        <button
-                          type="submit"
-                          className="btn btn--secondary btn--sm"
-                          title="Only fills in categories with no limit set. Nothing you have typed is changed."
-                        >
-                          Apply all suggestions
-                        </button>
-                      </form>
-                    ) : null}
-                  </>
-                ) : null
-              }
-            />
-            {showHistorySentence || personNoAttribution ? (
-              <CardBody className="pt-5 pb-0">
-                {showHistorySentence ? (
-                  <p className="text-sm text-muted">Suggestions appear once there are three full calendar months of history.</p>
-                ) : null}
-                {personNoAttribution ? (
-                  <p className="text-sm text-muted">
-                    {/* L-6: "to you" is only true in the viewer's own section. Everyone else's
-                        section names the person it is actually about. */}
-                    No transactions are attributed {person.userId === currentUserId ? 'to you' : `to ${person.name}`} yet, so
-                    there is nothing to base a personal suggestion on.
-                  </p>
-                ) : null}
-              </CardBody>
-            ) : null}
-            <BudgetTable paceTitle={paceTitle}>
-              {person.rows.map((row) => (
-                <Row
-                  key={row.categoryId}
-                  row={row}
-                  depth={0}
-                  scope="personal"
-                  userId={person.userId}
-                  month={month}
-                  applyAction={applyAction}
-                  editable={canEditPersonal(person.userId)}
-                  // Same admin-or-owner rule as editable, for personal scope (unlike
-                  // household, where rollover is admin-only but the amount is not).
-                  canToggleRollover={canEditPersonal(person.userId)}
-                  rolloverOn={personRolloverOn}
-                  predict={personPredict}
-                  sinkingFunds={person.sinkingFunds ?? {}}
-                />
-              ))}
-            </BudgetTable>
-          </Card>
+          <PersonalCard
+            key={person.userId}
+            person={person}
+            month={month}
+            currentUserId={currentUserId}
+            editable={canEditPersonal(person.userId)}
+            copyAction={copyAction}
+            applyAction={applyAction}
+            applyAllAction={applyAllAction}
+            personPredict={personPredict}
+            paceTitle={paceTitle}
+            showHistorySentence={showHistorySentence}
+            personNoAttribution={personNoAttribution}
+          />
         );
       })}
 

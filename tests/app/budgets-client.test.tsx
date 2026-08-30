@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { render, cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
 import { BudgetsClient } from '@/app/(app)/budgets/budgets-client';
 import { sectionFrom } from '@/app/(app)/budgets/page';
@@ -450,13 +450,27 @@ describe('v1.12.1: clearing a budget is a deliberate button (item X / UX-4)', ()
   });
 });
 
-describe('Lane 3 item 2: MonthNav replaces the bare prev/next links on Budgets', () => {
-  it('prev/next point at ?month=, and the jump input carries the current month', () => {
+describe('Lane 1 (2026-08-30 plan, ruling U1): MonthNav states the month once, in the pill', () => {
+  it('prev/next read Feb/Apr, never raw ISO, and still point at ?month=', () => {
     const { container } = renderBudgets(null);
     const links = Array.from(container.querySelectorAll('nav[aria-label="Change month"] a')) as HTMLAnchorElement[];
     expect(links.map((a) => a.getAttribute('href'))).toEqual(['/budgets?month=2026-02', '/budgets?month=2026-04']);
-    const monthInput = container.querySelector('input[type="month"]') as HTMLInputElement;
-    expect(monthInput.value).toBe('2026-03');
+    expect(links.map((a) => a.textContent)).toEqual(['← Feb', 'Apr →']);
+  });
+
+  it('the centre pill names the month, and the native month input is collapsed behind it rather than sitting beside it as a second control', () => {
+    // Scoped to the nav itself: budgets-client.tsx renders its OWN `eyebrow={monthLabel(month)}`
+    // (Lane 2's file, untouched here), which would also read "March 2026" and turn a page-wide
+    // getByText into a false "multiple elements" failure that has nothing to do with MonthNav.
+    const { container } = renderBudgets(null);
+    const nav = container.querySelector('nav[aria-label="Change month"]') as HTMLElement;
+    const pill = nav.querySelector('label[for="month-nav-jump"]') as HTMLElement;
+    expect(pill.textContent).toContain('March 2026');
+    // Exactly one <input type="month"> inside the nav -- v1.17.0 shipped a second, visible one
+    // beside the pill; ruling U1 removed it rather than adding a third statement of the month.
+    const monthInputs = nav.querySelectorAll('input[type="month"]');
+    expect(monthInputs.length).toBe(1);
+    expect((monthInputs[0] as HTMLInputElement).value).toBe('2026-03');
   });
 
   it('changing the month input submits the jump form (a real GET, no client router)', () => {
@@ -579,5 +593,379 @@ describe('Lane 3 item 1: "Copy previous month" also carries the savings target f
     expect(buttons).toHaveLength(2);
     expect(buttons[0].getAttribute('title')).toMatch(/savings target/i);
     expect(buttons[1].getAttribute('title')).toBeNull();
+  });
+});
+
+/**
+ * v1.18.0 Lane 2: collapsible budget groups, the zero state, and the parent-limit warning
+ * (rulings U2-U6). `makeRow`'s default `children: []` already makes every OTHER describe block
+ * in this file exercise the "ordinary row" path unchanged -- these tests are the ones that
+ * actually give a row children.
+ */
+function housingGroupRow(overrides: { childRent?: Partial<BudgetRow>; childUtilities?: Partial<BudgetRow> } = {}): BudgetRow {
+  return makeRow({
+    categoryId: 10,
+    categoryName: 'Housing',
+    baseLimitCents: 200000,
+    limitCents: 200000,
+    spentCents: 150000,
+    remainingCents: 50000,
+    pct: 75,
+    overBudget: false,
+    children: [
+      makeRow({
+        categoryId: 11,
+        categoryName: 'Rent',
+        parentId: 10,
+        baseLimitCents: 100000,
+        limitCents: 100000,
+        spentCents: 100000,
+        remainingCents: 0,
+        pct: 100,
+        ...overrides.childRent,
+      }),
+      makeRow({
+        categoryId: 12,
+        categoryName: 'Utilities',
+        parentId: 10,
+        baseLimitCents: 50000,
+        limitCents: 50000,
+        spentCents: 50000,
+        remainingCents: 0,
+        pct: 100,
+        ...overrides.childUtilities,
+      }),
+    ],
+  });
+}
+
+beforeEach(() => {
+  try {
+    window.localStorage.clear();
+  } catch {
+    // Not what this suite is testing -- if the jsdom environment itself has no working
+    // localStorage, the "throws" test below covers that case explicitly.
+  }
+});
+
+describe('v1.18.0 Lane 2 items 1-2: a group collapses, and its header already carries the numbers', () => {
+  it('renders collapsed by default, with the rolled-up figures already on the closed header', () => {
+    const { container, getByRole } = render(
+      <BudgetsClient
+        month="2026-03"
+        currentUserId={1}
+        household={[housingGroupRow()]}
+        householdTotals={{ budgetedLimitCents: 200000, budgetedSpentCents: 150000, totalSpentCents: 150000 }}
+        personal={[]}
+      />,
+    );
+    const toggle = getByRole('button', { name: 'Housing' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle.getAttribute('aria-controls')).toBe('budget-row-household-h-11 budget-row-household-h-12');
+
+    // Ruling U2: the parent's OWN row already carries the rolled-up spend/remaining
+    // (foldRollup, src/lib/budgets.ts) -- no client-side re-summation was needed to show it.
+    const header = container.querySelector('#budget-row-household-h-10') as HTMLTableRowElement;
+    expect(header.hidden).toBe(false);
+    expect(header.textContent).toContain('$1,500.00'); // net spent, already rolled up
+    expect(header.textContent).toContain('$500.00'); // remaining
+
+    // Ruling U3: a closed group's children stay in the DOM (hidden, not unmounted) -- see the
+    // Row prop's own doc comment for why.
+    const childRow = container.querySelector('#budget-row-household-h-11') as HTMLTableRowElement;
+    expect(childRow.hidden).toBe(true);
+  });
+
+  it('expanding the group reveals its children', () => {
+    const { container, getByRole } = render(
+      <BudgetsClient
+        month="2026-03"
+        currentUserId={1}
+        household={[housingGroupRow()]}
+        householdTotals={{ budgetedLimitCents: 200000, budgetedSpentCents: 150000, totalSpentCents: 150000 }}
+        personal={[]}
+      />,
+    );
+    fireEvent.click(getByRole('button', { name: 'Housing' }));
+    expect(getByRole('button', { name: 'Housing' }).getAttribute('aria-expanded')).toBe('true');
+    const childRow = container.querySelector('#budget-row-household-h-11') as HTMLTableRowElement;
+    expect(childRow.hidden).toBe(false);
+  });
+
+  it('a parent with no children renders no disclosure (an ordinary row, not an empty disclosure)', () => {
+    const { queryByRole } = render(
+      <BudgetsClient
+        month="2026-03"
+        currentUserId={1}
+        household={[makeRow({ categoryId: 5, categoryName: 'Insurance' })]}
+        householdTotals={{ budgetedLimitCents: 20000, budgetedSpentCents: 5000, totalSpentCents: 5000 }}
+        personal={[]}
+      />,
+    );
+    expect(queryByRole('button', { name: 'Insurance' })).toBeNull();
+  });
+
+  it('marks an over-budget group on its closed header, and only when it is actually over', () => {
+    const overBudget = housingGroupRow();
+    overBudget.overBudget = true;
+    overBudget.spentCents = 250000;
+    const { getByText, rerender } = render(
+      <BudgetsClient
+        month="2026-03"
+        currentUserId={1}
+        household={[overBudget]}
+        householdTotals={{ budgetedLimitCents: 200000, budgetedSpentCents: 250000, totalSpentCents: 250000 }}
+        personal={[]}
+      />,
+    );
+    expect(getByText('Over budget')).toBeTruthy();
+
+    const underBudget = housingGroupRow();
+    rerender(
+      <BudgetsClient
+        month="2026-03"
+        currentUserId={1}
+        household={[underBudget]}
+        householdTotals={{ budgetedLimitCents: 200000, budgetedSpentCents: 150000, totalSpentCents: 150000 }}
+        personal={[]}
+      />,
+    );
+    expect(() => getByText('Over budget')).toThrow();
+  });
+
+  it('Household and Personal never collapse themselves (ruling U4) -- both render their rows with no click needed', () => {
+    const { container } = render(
+      <BudgetsClient
+        month="2026-03"
+        currentUserId={1}
+        household={[makeRow({ categoryId: 1 })]}
+        householdTotals={{ budgetedLimitCents: 20000, budgetedSpentCents: 5000, totalSpentCents: 5000 }}
+        personal={[{ userId: 1, name: 'Alice', rows: [makeRow({ categoryId: 2 })] }]}
+      />,
+    );
+    const householdRow = container.querySelector('#budget-row-household-h-1') as HTMLTableRowElement;
+    const personalRow = container.querySelector('#budget-row-personal-1-2') as HTMLTableRowElement;
+    expect(householdRow.hidden).toBe(false);
+    expect(personalRow.hidden).toBe(false);
+  });
+
+  it('one Expand all/Collapse all control opens every group in the section at once, then flips', () => {
+    const food = housingGroupRow({});
+    food.categoryId = 20;
+    food.categoryName = 'Food';
+    food.children = food.children.map((child, i) => ({ ...child, categoryId: 21 + i, parentId: 20 }));
+    const { getByRole, queryByRole } = render(
+      <BudgetsClient
+        month="2026-03"
+        currentUserId={1}
+        household={[housingGroupRow(), food]}
+        householdTotals={{ budgetedLimitCents: 400000, budgetedSpentCents: 300000, totalSpentCents: 300000 }}
+        personal={[]}
+      />,
+    );
+    fireEvent.click(getByRole('button', { name: 'Expand all' }));
+    expect(getByRole('button', { name: 'Housing' }).getAttribute('aria-expanded')).toBe('true');
+    expect(getByRole('button', { name: 'Food' }).getAttribute('aria-expanded')).toBe('true');
+    expect(queryByRole('button', { name: 'Expand all' })).toBeNull();
+
+    fireEvent.click(getByRole('button', { name: 'Collapse all' }));
+    expect(getByRole('button', { name: 'Housing' }).getAttribute('aria-expanded')).toBe('false');
+    expect(getByRole('button', { name: 'Food' }).getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('no Expand all/Collapse all control appears when a section has nothing that can collapse', () => {
+    const { queryByRole } = render(
+      <BudgetsClient
+        month="2026-03"
+        currentUserId={1}
+        household={[makeRow()]}
+        householdTotals={{ budgetedLimitCents: 20000, budgetedSpentCents: 5000, totalSpentCents: 5000 }}
+        personal={[]}
+      />,
+    );
+    expect(queryByRole('button', { name: 'Expand all' })).toBeNull();
+    expect(queryByRole('button', { name: 'Collapse all' })).toBeNull();
+  });
+
+  it('ruling U5: remembers an open group across a remount, keyed separately for household and personal', () => {
+    const { getAllByRole, unmount } = render(
+      <BudgetsClient
+        month="2026-03"
+        currentUserId={1}
+        household={[housingGroupRow()]}
+        householdTotals={{ budgetedLimitCents: 200000, budgetedSpentCents: 150000, totalSpentCents: 150000 }}
+        personal={[{ userId: 1, name: 'Alice', rows: [housingGroupRow()] }]}
+      />,
+    );
+    // Two sections, same category id (10) -- opening the household one (the first "Housing" in
+    // document order) must not touch Alice's own copy of the same category.
+    fireEvent.click(getAllByRole('button', { name: 'Housing' })[0]);
+    unmount();
+
+    const { getAllByRole: getAllByRoleAfterRemount } = render(
+      <BudgetsClient
+        month="2026-03"
+        currentUserId={1}
+        household={[housingGroupRow()]}
+        householdTotals={{ budgetedLimitCents: 200000, budgetedSpentCents: 150000, totalSpentCents: 150000 }}
+        personal={[{ userId: 1, name: 'Alice', rows: [housingGroupRow()] }]}
+      />,
+    );
+    const toggles = getAllByRoleAfterRemount('button', { name: 'Housing' });
+    expect(toggles.map((t) => t.getAttribute('aria-expanded'))).toEqual(['true', 'false']);
+  });
+
+  it('ruling U5: renders correctly (all closed) when localStorage throws on read', () => {
+    const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('storage disabled');
+    });
+    try {
+      const { getByRole } = render(
+        <BudgetsClient
+          month="2026-03"
+          currentUserId={1}
+          household={[housingGroupRow()]}
+          householdTotals={{ budgetedLimitCents: 200000, budgetedSpentCents: 150000, totalSpentCents: 150000 }}
+          personal={[]}
+        />,
+      );
+      expect(getByRole('button', { name: 'Housing' }).getAttribute('aria-expanded')).toBe('false');
+    } finally {
+      getItem.mockRestore();
+    }
+  });
+
+  it('ruling U5: a toggle click does not throw when localStorage.setItem throws', () => {
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('quota exceeded');
+    });
+    try {
+      const { getByRole } = render(
+        <BudgetsClient
+          month="2026-03"
+          currentUserId={1}
+          household={[housingGroupRow()]}
+          householdTotals={{ budgetedLimitCents: 200000, budgetedSpentCents: 150000, totalSpentCents: 150000 }}
+          personal={[]}
+        />,
+      );
+      expect(() => fireEvent.click(getByRole('button', { name: 'Housing' }))).not.toThrow();
+      expect(getByRole('button', { name: 'Housing' }).getAttribute('aria-expanded')).toBe('true');
+    } finally {
+      setItem.mockRestore();
+    }
+  });
+});
+
+describe('v1.18.0 Lane 2 item 4: the parent-limit warning (ruling U6)', () => {
+  it('appears with the right amounts when children add up to more than the parent', () => {
+    const row = housingGroupRow({ childRent: { baseLimitCents: 150000, limitCents: 150000 }, childUtilities: { baseLimitCents: 90000, limitCents: 90000 } });
+    const { getByText } = render(
+      <BudgetsClient
+        month="2026-03"
+        currentUserId={1}
+        household={[row]}
+        householdTotals={{ budgetedLimitCents: 200000, budgetedSpentCents: 150000, totalSpentCents: 150000 }}
+        personal={[]}
+      />,
+    );
+    // 150000 + 90000 = 240000 ($2,400.00), 40000 ($400.00) over the parent's 200000 ($2,000.00).
+    expect(getByText("Children add up to $2,400.00 — $400.00 over Housing's limit.")).toBeTruthy();
+  });
+
+  it('shows nothing at all when the children sum under the parent -- a deliberate, ordinary state', () => {
+    const { queryByText, queryByRole } = render(
+      <BudgetsClient
+        month="2026-03"
+        currentUserId={1}
+        household={[housingGroupRow()]}
+        householdTotals={{ budgetedLimitCents: 200000, budgetedSpentCents: 150000, totalSpentCents: 150000 }}
+        personal={[]}
+      />,
+    );
+    expect(queryByText(/Children add up to/)).toBeNull();
+    expect(queryByRole('button', { name: /^Raise/ })).toBeNull();
+  });
+
+  it('"Raise <parent> to $X" submits the parent\'s limit through the existing auto-save path', async () => {
+    const { setLimitAction } = await import('@/app/(app)/budgets/actions');
+    vi.mocked(setLimitAction).mockClear();
+    const row = housingGroupRow({ childRent: { baseLimitCents: 150000, limitCents: 150000 }, childUtilities: { baseLimitCents: 90000, limitCents: 90000 } });
+    render(
+      <BudgetsClient
+        month="2026-03"
+        currentUserId={1}
+        household={[row]}
+        householdTotals={{ budgetedLimitCents: 200000, budgetedSpentCents: 150000, totalSpentCents: 150000 }}
+        personal={[]}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Raise Housing to $2,400.00' }));
+    await waitFor(() => expect(setLimitAction).toHaveBeenCalled());
+    const [, formData] = vi.mocked(setLimitAction).mock.calls.at(-1)!;
+    expect((formData as FormData).get('scope')).toBe('household');
+    expect((formData as FormData).get('categoryId')).toBe('10');
+    expect((formData as FormData).get('amount')).toBe('2400.00');
+  });
+
+  it('offers no Undo on a fresh page load, and Undo restores the value from before Raise was clicked', async () => {
+    const { setLimitAction } = await import('@/app/(app)/budgets/actions');
+    vi.mocked(setLimitAction).mockClear();
+    const row = housingGroupRow({ childRent: { baseLimitCents: 150000, limitCents: 150000 }, childUtilities: { baseLimitCents: 90000, limitCents: 90000 } });
+    render(
+      <BudgetsClient
+        month="2026-03"
+        currentUserId={1}
+        household={[row]}
+        householdTotals={{ budgetedLimitCents: 200000, budgetedSpentCents: 150000, totalSpentCents: 150000 }}
+        personal={[]}
+      />,
+    );
+    // Ruling U6: no edit has happened yet this session, so there is nothing to restore.
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Raise Housing to $2,400.00' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Undo' })).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+    await waitFor(() => expect(vi.mocked(setLimitAction)).toHaveBeenCalledTimes(2));
+    const [, undoFormData] = vi.mocked(setLimitAction).mock.calls.at(-1)!;
+    expect((undoFormData as FormData).get('categoryId')).toBe('10');
+    // Housing's own base limit before Raise was clicked (200000 cents = $2,000.00).
+    expect((undoFormData as FormData).get('amount')).toBe('2000.00');
+  });
+});
+
+describe('v1.18.0 Lane 2 item 3: the zero-state header replaces the three-zero sentence', () => {
+  it('says what to do instead when nothing is budgeted for the month', () => {
+    const row = makeRow({ limitCents: null, baseLimitCents: null, remainingCents: null, pct: null, spentCents: 0 });
+    const { getByText, queryByText } = render(
+      <BudgetsClient
+        month="2026-03"
+        currentUserId={1}
+        household={[row]}
+        householdTotals={{ budgetedLimitCents: 0, budgetedSpentCents: 0, totalSpentCents: 0 }}
+        personal={[]}
+      />,
+    );
+    expect(getByText('No budgets set for March 2026.')).toBeTruthy();
+    expect(getByText('Set a limit on any category below to start tracking it.')).toBeTruthy();
+    // The existing Copy previous month BUTTON stays -- the zero state only replaces the title.
+    // (PageGuide also mentions the phrase in prose, so this is scoped to the control itself.)
+    expect(screen.getByRole('button', { name: 'Copy previous month' })).toBeTruthy();
+    expect(queryByText(/spent \$0\.00 of \$0\.00 budgeted/)).toBeNull();
+  });
+
+  it('keeps the classic header for a month that has real budgets', () => {
+    const { queryByText } = render(
+      <BudgetsClient
+        month="2026-03"
+        currentUserId={1}
+        household={[makeRow()]}
+        householdTotals={{ budgetedLimitCents: 20000, budgetedSpentCents: 5000, totalSpentCents: 5000 }}
+        personal={[]}
+      />,
+    );
+    expect(queryByText(/No budgets set for/)).toBeNull();
   });
 });
