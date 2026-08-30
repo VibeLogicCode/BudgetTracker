@@ -26,8 +26,9 @@ vi.mock('next/cache', () => ({
   revalidatePath: vi.fn(),
 }));
 
-import { saveWizardProfileAction, setCardPersonAction } from '@/app/(app)/import/actions';
-import { getBuiltinPreset, getProfileByName, listProfiles } from '@/lib/import/presets';
+import { saveMappingAction, saveWizardProfileAction, setCardPersonAction } from '@/app/(app)/import/actions';
+import { getAccount } from '@/lib/accounts';
+import { createProfile, getBuiltinPreset, getProfile, getProfileByName, listProfiles } from '@/lib/import/presets';
 import { writeStagedFile, stagedFilePath } from '@/lib/import/staging';
 import { insertTestAccount, insertTestUser } from '../helpers/db';
 import { listAccountCardPeople } from '@/lib/import/card-people';
@@ -233,5 +234,133 @@ describe('setCardPersonAction (MUST-6.1: saves an account_card_people assignment
 
     expect(result.error).toBeTruthy();
     expect(listAccountCardPeople(accountId)).toHaveLength(0);
+  });
+});
+
+// Lane 5 (2026-08-30 savings-targets plan, ruling T8/T9/T10). Before this action existed, a
+// corrected mapping was only ever saved by a SUCCESSFUL commitStagedImport (flow.ts), so a file
+// whose preview reported 0 rows and 117 errors could never save the very fix that would make it
+// parse. These tests exercise the earlier door directly, the same way saveWizardProfileAction's
+// own tests above exercise the wizard's.
+describe('saveMappingAction (Lane 5: save a corrected import mapping from the preview)', () => {
+  it('forks a built-in into a new profile, leaves the built-in untouched, and repoints the account (ruling T9)', async () => {
+    const builtin = getProfileByName('TD Visa')!;
+    const accountId = insertTestAccount(current!.db, { name: 'Household Visa', importProfileId: builtin.id });
+    const edited = { ...builtin.mapping!, dateFormat: 'YYYY-MM-DD' };
+
+    const result = await saveMappingAction(
+      {},
+      formData({
+        profileId: String(builtin.id),
+        accountId: String(accountId),
+        accountName: 'Household Visa',
+        mapping: JSON.stringify(edited),
+      }),
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.message).toMatch(/new profile/i);
+
+    const forked = getProfileByName('TD Visa (Household Visa)');
+    expect(forked).not.toBeNull();
+    expect(forked!.isBuiltin).toBe(false);
+    expect(forked!.mapping).toEqual(edited);
+
+    // The shared built-in is untouched -- updateProfileMapping's own refusal for a built-in
+    // (presets.ts:343, pinned by tests/lib/import/presets.test.ts:68) is exactly why this had to
+    // go through forkProfileIfBuiltin rather than writing the profile directly.
+    expect(getProfile(builtin.id)?.mapping?.dateFormat).toBe('MM/DD/YYYY');
+
+    expect(getAccount(accountId)?.importProfileId).toBe(forked!.id);
+  });
+
+  it('updates a custom profile in place and creates nothing new', async () => {
+    const mapping = getBuiltinPreset('Scotiabank Chequing/Debit');
+    const customId = createProfile({ name: 'Tangerine Chequing', institution: 'Tangerine', mapping });
+    const accountId = insertTestAccount(current!.db, { name: 'Tangerine', importProfileId: null });
+    const before = listProfiles().length;
+    const edited = { ...mapping, dateFormat: 'YYYY-MM-DD' };
+
+    const result = await saveMappingAction(
+      {},
+      formData({
+        profileId: String(customId),
+        accountId: String(accountId),
+        accountName: 'Tangerine',
+        mapping: JSON.stringify(edited),
+      }),
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.message).toMatch(/Updated/i);
+    expect(listProfiles()).toHaveLength(before);
+    expect(getProfile(customId)?.mapping?.dateFormat).toBe('YYYY-MM-DD');
+    expect(getAccount(accountId)?.importProfileId).toBe(customId);
+  });
+
+  it('is a no-op for an unchanged mapping, but still reports which profile is in use and repoints the account', async () => {
+    const builtin = getProfileByName('TD Chequing/Debit')!;
+    const accountId = insertTestAccount(current!.db, { name: 'Joint Chequing', importProfileId: null });
+    const before = listProfiles().length;
+
+    const result = await saveMappingAction(
+      {},
+      formData({
+        profileId: String(builtin.id),
+        accountId: String(accountId),
+        accountName: 'Joint Chequing',
+        mapping: JSON.stringify(builtin.mapping),
+      }),
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.message).toContain('TD Chequing/Debit');
+    expect(listProfiles()).toHaveLength(before);
+    // Still repointed even though nothing changed -- an account that was never pinned before
+    // saving a mapping for it should leave pinned to whichever profile now holds that mapping.
+    expect(getAccount(accountId)?.importProfileId).toBe(builtin.id);
+  });
+
+  it('refuses a self-scoped viewer, forking nothing and repointing nothing', async () => {
+    FAKE_USER.role = 'member';
+    FAKE_USER.visibility = 'self';
+    const builtin = getProfileByName('TD Visa')!;
+    const accountId = insertTestAccount(current!.db, { name: 'Joint Visa', importProfileId: null });
+    const before = listProfiles().length;
+
+    const result = await saveMappingAction(
+      {},
+      formData({
+        profileId: String(builtin.id),
+        accountId: String(accountId),
+        accountName: 'Joint Visa',
+        mapping: JSON.stringify({ ...builtin.mapping!, dateFormat: 'YYYY-MM-DD' }),
+      }),
+    );
+
+    expect(result.error).toBeTruthy();
+    expect(listProfiles()).toHaveLength(before);
+    expect(getAccount(accountId)?.importProfileId).toBeNull();
+  });
+
+  it('rejects a cross-origin request before writing anything', async () => {
+    const builtin = getProfileByName('TD Visa')!;
+    const accountId = insertTestAccount(current!.db, { name: 'Joint Visa', importProfileId: null });
+    const before = listProfiles().length;
+    requestHeaders = new Headers({ origin: 'http://evil.example', host: 'nas.local:3000' });
+
+    const result = await saveMappingAction(
+      {},
+      formData({
+        profileId: String(builtin.id),
+        accountId: String(accountId),
+        accountName: 'Joint Visa',
+        mapping: JSON.stringify({ ...builtin.mapping!, dateFormat: 'YYYY-MM-DD' }),
+      }),
+    );
+
+    expect(result.error).toBe('Cross-origin request rejected');
+    expect(listProfiles()).toHaveLength(before);
+    expect(getAccount(accountId)?.importProfileId).toBeNull();
   });
 });

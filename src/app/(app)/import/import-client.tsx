@@ -12,11 +12,12 @@ import { Notice } from '@/components/ui/Notice';
 import { PageGuide } from '@/components/ui/PageGuide';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { TableWrap } from '@/components/ui/Table';
-import { Field, hintClass, selectClass } from '@/components/ui/form';
+import { Field, hintClass, inputClass, selectClass } from '@/components/ui/form';
 import type { ImportMapping } from '@/lib/import/mapping';
 import type { CardValueSummary, PreviewResult } from '@/lib/import/preview';
 import type { ImportHistoryRow } from '@/lib/import/commit';
-import { setCardPersonAction } from './actions';
+import { saveMappingAction, setCardPersonAction } from './actions';
+import type { SaveMappingState } from './actions';
 
 interface AccountOption { id: number; name: string; importProfileId: number | null }
 interface ProfileOption { id: number; name: string; isBuiltin: boolean; mapping: ImportMapping }
@@ -195,6 +196,17 @@ export function ImportClient({
   const [busy, setBusy] = useState(false);
   const [historyRows, setHistoryRows] = useState<ImportHistoryRow[]>(history);
 
+  // Lane 5 (2026-08-30 savings-targets plan): the "Save as a new profile" / "Update <name>"
+  // button's own state. `forkAccountName` fills the one editable slot in presets.ts's
+  // copy-on-write naming template (`<profile> (<account>)`) -- seeded from the real account name
+  // the moment a preview lands (see `upload`), and left alone on every re-preview after that so
+  // an edit here survives a person tweaking an unrelated mapping field. `mappingSaveState` is
+  // deliberately its own state rather than reusing the top-of-page `error`/`summary` Notices:
+  // those already carry the Preview/Import/Undo story, and interleaving a fourth, unrelated
+  // outcome into them would make it unclear which action a message was actually reporting on.
+  const [forkAccountName, setForkAccountName] = useState('');
+  const [mappingSaveState, setMappingSaveState] = useState<SaveMappingState | null>(null);
+
   // F1 fix: patches the ONE row that was just saved inside `preview.cardValues`, leaving
   // everything else (including the rest of `preview`, e.g. `rows`/`errors`) untouched. This is
   // the only place `cardValues` is written outside of a fresh preview response, so a sibling
@@ -234,6 +246,33 @@ export function ImportClient({
     }
     setPreview(body as PreviewResult);
     setMapping((body as PreviewResult).mapping);
+    // A fresh preview is a fresh save-mapping session: reseed the fork name from the real
+    // account name (rather than whatever an earlier account/file's edit left behind) and drop
+    // any leftover message from a previous file's save.
+    setForkAccountName(accounts.find((a) => a.id === accountId)?.name ?? '');
+    setMappingSaveState(null);
+  }
+
+  // A plain onClick (not a form action, and not gated by useFormStatus) because this button has
+  // to stay reachable exactly when the Preview/Import ones might not be worth pressing yet --
+  // ruling T8's whole point is a mapping fix must be saveable from a preview that reported 0
+  // rows and 117 errors, so it cannot depend on `preview` having anything to import. `busy` is
+  // still the right guard (same reasoning commit()/undo() give): released in a finally so a
+  // dropped connection cannot strand the button disabled forever.
+  async function saveMapping() {
+    if (!mapping) return;
+    setBusy(true);
+    try {
+      const formData = new FormData();
+      formData.set('profileId', String(profileId));
+      formData.set('accountId', String(accountId));
+      formData.set('accountName', forkAccountName);
+      formData.set('mapping', JSON.stringify(mapping));
+      const result = await saveMappingAction({}, formData);
+      setMappingSaveState(result);
+    } finally {
+      setBusy(false);
+    }
   }
 
   // Optimistically applies `next` so the form reflects what the user just changed while the
@@ -348,6 +387,12 @@ export function ImportClient({
       setBusy(false);
     }
   }
+
+  // Which profile the save-mapping button/field below describe. Looked up rather than trusted
+  // to always exist: `profileId` only ever comes from one of `profiles`' own <option> values or
+  // a just-loaded preview's mapping, but a defensive `undefined` here (never rendering the
+  // panel) is cheaper than a crash if that ever stops being true.
+  const currentProfile = profiles.find((profile) => profile.id === profileId);
 
   return (
     <div className="flex flex-col gap-6">
@@ -575,6 +620,38 @@ export function ImportClient({
                 below and commit.
               </p>
             )}
+
+            {/* Lane 5 (2026-08-30 savings-targets plan, ruling T8). Deliberately reachable
+                regardless of preview.errorCount/totalRows -- an OFX file skips this entirely (no
+                CSV mapping to save, same reasoning flow.ts's own fork/repoint skip gives for
+                OFX), but a CSV preview that found 0 rows and every row an error is exactly the
+                case this button exists for: without it, the one mapping fix a person most needs
+                to keep could never be saved, because the only other path into
+                forkProfileIfBuiltin is a SUCCESSFUL commit. Never a bare "Save" -- the label
+                names which of the two outcomes (fork vs. update-in-place) this press produces,
+                because they are different enough that a person must be told which one they are
+                getting. */}
+            {preview.source === 'csv' && currentProfile ? (
+              <div className="flex flex-wrap items-end gap-3 rounded-lg border border-line bg-surface-2/50 p-4">
+                {currentProfile.isBuiltin ? (
+                  <Field
+                    label="New profile name"
+                    hint={`"${currentProfile.name}" is a shared, built-in profile and is never changed in place — saving forks it into a new profile named "${currentProfile.name} (${forkAccountName || '…'})".`}
+                  >
+                    <input
+                      value={forkAccountName}
+                      onChange={(e) => setForkAccountName(e.target.value)}
+                      className={inputClass}
+                    />
+                  </Field>
+                ) : null}
+                <button type="button" onClick={() => void saveMapping()} disabled={busy} className="btn btn--secondary">
+                  {currentProfile.isBuiltin ? 'Save as a new profile' : `Update ${currentProfile.name}`}
+                </button>
+                {mappingSaveState?.error ? <Notice tone="error">{mappingSaveState.error}</Notice> : null}
+                {mappingSaveState?.message ? <Notice tone="success">{mappingSaveState.message}</Notice> : null}
+              </div>
+            ) : null}
 
             {mapping.cardCol !== null && preview.cardValues ? (
               <div className="rounded-lg border border-line bg-surface-2/50 p-4">

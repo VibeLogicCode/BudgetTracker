@@ -10,6 +10,10 @@ import type { ImportHistoryRow } from '@/lib/import/commit';
 // its own actions module, since a real 'use server' function touches next/headers and the DB.
 vi.mock('@/app/(app)/import/actions', () => ({
   setCardPersonAction: vi.fn(async () => ({ message: 'Saved.' })),
+  // Lane 5 (2026-08-30 savings-targets plan): mocked the same way setCardPersonAction is above,
+  // since the real action touches next/headers and the DB. Default resolves like a successful
+  // save; individual tests below override with mockResolvedValueOnce for the message/error cases.
+  saveMappingAction: vi.fn(async () => ({ message: 'Saved.' })),
 }));
 
 beforeEach(() => vi.clearAllMocks());
@@ -976,5 +980,153 @@ describe('ImportClient — responsive rows (v1.15.0, ruling S3)', () => {
     const accountCell = historyTable?.querySelector('tbody tr td:nth-child(2)');
     expect(whenCell?.className).toContain('cell-stack-meta');
     expect(accountCell?.className).toContain('cell-stack-meta');
+  });
+});
+
+// Lane 5 (2026-08-30 savings-targets plan, ruling T8/T9/T10). Before this button existed, the
+// only way to reach forkProfileIfBuiltin was a SUCCESSFUL commit (flow.ts:75-83) -- so a file
+// whose preview reported 0 rows and 117 errors could never save the corrected mapping that would
+// make it parse. These tests exercise the button import-client.tsx wires to saveMappingAction.
+describe('ImportClient — Lane 5: saving a corrected mapping from the preview', () => {
+  it('renders the save-mapping button in the preview step even when the preview reported errors and zero rows', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, json: async () => previewBody({ totalRows: 0, errorCount: 117, rows: [], errors: [] }) })),
+    );
+    const { container, getByRole } = render(
+      <ImportClient
+        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
+        profiles={PROFILES}
+        history={[]}
+        simplefinManaged={[]}
+      />,
+    );
+    fireEvent.submit(container.querySelector('form')!);
+    await waitFor(() => expect(container.textContent).toContain('Preview —'));
+    expect(container.textContent).toContain('117 errors');
+
+    expect(getByRole('button', { name: /save as a new profile/i })).toBeTruthy();
+  });
+
+  it('offers an editable "New profile name" field, defaulted to the account name, only for a built-in profile', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => previewBody({}) })));
+    const { container, getByLabelText, getByRole } = render(
+      <ImportClient
+        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
+        profiles={PROFILES}
+        history={[]}
+        simplefinManaged={[]}
+      />,
+    );
+    fireEvent.submit(container.querySelector('form')!);
+    await waitFor(() => expect(container.textContent).toContain('Preview —'));
+
+    expect(getByRole('button', { name: /save as a new profile/i })).toBeTruthy();
+    expect((getByLabelText(/New profile name/i) as HTMLInputElement).value).toBe('Joint Chequing');
+  });
+
+  it('labels the button "Update <profile name>" for a custom profile, with no editable name field, never a bare "Save"', async () => {
+    const CUSTOM_PROFILES = [{ id: 3, name: 'Tangerine Chequing', isBuiltin: false, mapping: TD_CHEQUING }];
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => previewBody({ profileId: 3, mapping: TD_CHEQUING }) })));
+    const { container, getByRole, queryByLabelText, queryByRole } = render(
+      <ImportClient
+        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 3 }]}
+        profiles={CUSTOM_PROFILES}
+        history={[]}
+        simplefinManaged={[]}
+      />,
+    );
+    fireEvent.submit(container.querySelector('form')!);
+    await waitFor(() => expect(container.textContent).toContain('Preview —'));
+
+    expect(getByRole('button', { name: 'Update Tangerine Chequing' })).toBeTruthy();
+    expect(queryByLabelText(/New profile name/i)).toBeNull();
+    expect(queryByRole('button', { name: /^Save$/ })).toBeNull();
+  });
+
+  it('submits the current mapping, profile, account and fork name when clicked', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => previewBody({}) })));
+    const { container, getByRole } = render(
+      <ImportClient
+        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
+        profiles={PROFILES}
+        history={[]}
+        simplefinManaged={[]}
+      />,
+    );
+    fireEvent.submit(container.querySelector('form')!);
+    await waitFor(() => expect(container.textContent).toContain('Preview —'));
+
+    const { saveMappingAction } = await import('@/app/(app)/import/actions');
+    fireEvent.click(getByRole('button', { name: /save as a new profile/i }));
+
+    await waitFor(() => expect(saveMappingAction).toHaveBeenCalled());
+    const submitted = vi.mocked(saveMappingAction).mock.calls[0][1] as FormData;
+    expect(submitted.get('profileId')).toBe('1');
+    expect(submitted.get('accountId')).toBe('10');
+    expect(submitted.get('accountName')).toBe('Joint Chequing');
+    expect(JSON.parse(submitted.get('mapping') as string)).toEqual(TD_CHEQUING);
+  });
+
+  it('shows the returned message inline once the save succeeds', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => previewBody({}) })));
+    const { container, getByRole, getByText } = render(
+      <ImportClient
+        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
+        profiles={PROFILES}
+        history={[]}
+        simplefinManaged={[]}
+      />,
+    );
+    fireEvent.submit(container.querySelector('form')!);
+    await waitFor(() => expect(container.textContent).toContain('Preview —'));
+
+    const { saveMappingAction } = await import('@/app/(app)/import/actions');
+    vi.mocked(saveMappingAction).mockResolvedValueOnce({
+      message: 'Saved "TD Chequing/Debit (Joint Chequing)" as a new profile, and pointed this account at it.',
+    });
+    fireEvent.click(getByRole('button', { name: /save as a new profile/i }));
+
+    await waitFor(() => expect(getByText(/pointed this account at it/i)).toBeTruthy());
+  });
+
+  it('surfaces a refusal inline instead of failing silently (a self-scoped viewer, e.g.)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => previewBody({}) })));
+    const { container, getByRole, getByText } = render(
+      <ImportClient
+        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
+        profiles={PROFILES}
+        history={[]}
+        simplefinManaged={[]}
+      />,
+    );
+    fireEvent.submit(container.querySelector('form')!);
+    await waitFor(() => expect(container.textContent).toContain('Preview —'));
+
+    const { saveMappingAction } = await import('@/app/(app)/import/actions');
+    vi.mocked(saveMappingAction).mockResolvedValueOnce({ error: 'Import is not available on this account.' });
+    fireEvent.click(getByRole('button', { name: /save as a new profile/i }));
+
+    await waitFor(() => expect(getByText(/not available on this account/i)).toBeTruthy());
+  });
+
+  it('renders no save-mapping panel at all for an OFX preview, which has no mapping to save', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, json: async () => previewBody({ source: 'ofx', dateFormatDetection: { candidates: [], status: 'none', detected: null }, columnOptions: [] }) })),
+    );
+    const { container, queryByRole } = render(
+      <ImportClient
+        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
+        profiles={PROFILES}
+        history={[]}
+        simplefinManaged={[]}
+      />,
+    );
+    fireEvent.submit(container.querySelector('form')!);
+    await waitFor(() => expect(container.textContent).toContain('Preview —'));
+
+    expect(queryByRole('button', { name: /save as a new profile/i })).toBeNull();
+    expect(queryByRole('button', { name: /^Update /i })).toBeNull();
   });
 });
