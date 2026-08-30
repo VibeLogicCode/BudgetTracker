@@ -63,6 +63,24 @@ const blankSplitPart = (): SplitPartDraft => ({ categoryId: '', amount: '', note
 const initial: ActionState = {};
 
 /**
+ * v1.16.0 Lane C item 3. The root below used to carry `data-page-width="wide"` in BOTH modes,
+ * bumping the shell's `main` to a 96rem cap for the review filter too -- so the guide and the
+ * filter card ran to 96rem while the card list a few lines down stayed capped at `max-w-4xl`
+ * (ruling S5(a)), a visible edge mismatch on any screen wide enough to show both. The fix has two
+ * halves: the root only emits the wide marker OUTSIDE review mode now (see its own comment below),
+ * and everything from here down to the pager sits inside this one container in review mode, so
+ * every edge lines up with the card list's own cap instead of each element picking its own.
+ *
+ * A plain Fragment outside review mode, not a `<div>` with a conditional class: a Fragment adds no
+ * DOM node at all, which is what keeps "outside review mode nothing about the layout may change"
+ * literally true rather than merely "true modulo one extra wrapping div that happens to carry no
+ * width class".
+ */
+function ReviewWidth({ active, children }: { active: boolean; children: React.ReactNode }) {
+  return active ? <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">{children}</div> : <>{children}</>;
+}
+
+/**
  * Review round (fold /review in): the card list's own "This transaction only" and "apply to
  * all" selects, ported byte-for-byte from review-client.tsx's `pickerClass` -- dense enough to
  * sit alongside the row's kebab without shouting, with the same explicit `min-h-11 sm:min-h-0`
@@ -624,9 +642,13 @@ export function TransactionsClient({
 
   return (
     // data-page-width: this table needs more than the shell's 6xl reading cap (see globals.css).
-    <div data-page-width="wide" className="flex flex-col gap-6">
+    // v1.16.0 Lane C item 3: NOT emitted at all in review mode -- the review filter is one
+    // narrow column (ReviewWidth below), not the wide table, so bumping `main` to 96rem there
+    // was exactly the mismatch this task fixes, not something review mode also needs.
+    <div data-page-width={reviewMode ? undefined : 'wide'} className="flex flex-col gap-6">
       <PageHeader title="Transactions" description="Every line from every account, with what it was spent on." />
 
+      <ReviewWidth active={reviewMode}>
       {/* Review round (fold /review in): review mode gets the review page's own three teaching
           paragraphs instead of the ordinary Transactions guide -- ported verbatim from
           review-client.tsx, only "this screen" -> "this filter" since it is no longer a
@@ -954,10 +976,10 @@ export function TransactionsClient({
           suite. */}
       {reviewMode ? (
         page.rows.length === 0 ? (
-          // Ruling S5(a): the same reading-measure cap as the populated list and its pager, so
-          // the empty state does not stretch full-width while everything else on this branch is
-          // capped.
-          <Card className="mx-auto w-full max-w-4xl">
+          // Ruling S5(a): the reading-measure cap now lives once on ReviewWidth above (v1.16.0
+          // Lane C item 3), not repeated on every element inside it -- this Card needs no width
+          // class of its own to line up with everything else on this branch.
+          <Card>
             <EmptyState
               icon={CheckIcon}
               title="Nothing to review. Everything is categorized."
@@ -977,13 +999,13 @@ export function TransactionsClient({
           </Card>
         ) : (
           <>
-            {/* Ruling S5(a): capped to a reading measure, same as the pager paragraph and the
-                empty state above -- on a laptop or a 27-inch monitor this list used to stretch to
-                the shell's full 1100px, which left the amount marooned out at the far right of a
-                card mostly empty space. A queue you work through top to bottom reads better
-                narrow, at every width, which is exactly why ruling S5 keeps this a card list
-                instead of migrating it to the responsive table treatment above. */}
-            <ul className="mx-auto flex w-full max-w-4xl flex-col gap-3">
+            {/* Ruling S5(a): the reading-measure cap lives once on ReviewWidth now (v1.16.0 Lane
+                C item 3) -- on a laptop or a 27-inch monitor this list used to stretch to the
+                shell's full width on its own, which left the amount marooned out at the far
+                right of a card mostly empty space. A queue you work through top to bottom reads
+                better narrow, at every width, which is exactly why ruling S5 keeps this a card
+                list instead of migrating it to the responsive table treatment above. */}
+            <ul className="flex flex-col gap-3">
               {page.rows.map((row) => {
                 const noteForm = noteEditor(row);
                 const newLoanForm = newLoanEditor(row);
@@ -1082,7 +1104,7 @@ export function TransactionsClient({
                 );
               })}
             </ul>
-            <p className="mx-auto w-full max-w-4xl text-sm text-muted">
+            <p className="text-sm text-muted">
               Page {page.page} of {page.pageCount} — {page.total} transactions
             </p>
           </>
@@ -1153,14 +1175,19 @@ export function TransactionsClient({
                 </td>
                 {/* NOT `cell-stack-hide`: unlike the account name below, a date is not identical
                     down the page and is the thing a person scans for first when hunting a charge,
-                    so it stays visible on the phone card too. */}
-                <td className="tabnum whitespace-nowrap text-muted" data-label="Date">{row.date}</td>
+                    so it stays visible on the phone card too -- `cell-stack-meta` (v1.16.0 Lane C
+                    item 3) puts it on its own small muted line under the merchant instead of its
+                    own labelled row, which is what it actually is: context for the headline, not
+                    a second fact of equal weight. */}
+                <td className="tabnum whitespace-nowrap text-muted cell-stack-meta" data-label="Date">{row.date}</td>
                 {/* Wraps rather than clips, and keeps the title as a courtesy for a very long
                     name. An ellipsis here relied on hover to recover the value, which a phone
-                    does not have. `cell-stack-hide`: an account name repeats identically down this
-                    column and is already the Account filter above, so it costs more width on a
-                    390px screen than it is worth. */}
-                <td className="text-muted cell-stack-hide" title={row.accountName} data-label="Account">{row.accountName}</td>
+                    does not have. v1.16.0 Lane C item 3: this used to be `cell-stack-hide`,
+                    dropping it from the phone card entirely on the reasoning that an account name
+                    repeats identically down the column and is already the Account filter above --
+                    but the owner asked for it back, so it now reads as `cell-stack-meta` context
+                    under the merchant instead of vanishing outright. */}
+                <td className="text-muted cell-stack-meta" title={row.accountName} data-label="Account">{row.accountName}</td>
                 <td className="cell-stack-headline" data-label="Description">
                   <span className="flex flex-wrap items-center gap-1.5">
                     {/* Renaming happens from the row menu now. The title stays: it is the only
@@ -1300,6 +1327,7 @@ export function TransactionsClient({
         </CardFooter>
       </Card>
       )}
+      </ReviewWidth>
     </div>
   );
 }

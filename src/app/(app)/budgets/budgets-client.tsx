@@ -232,7 +232,12 @@ function Row({
             <Money cents={row.remainingCents} />
           )}
         </td>
-        <td data-label="Progress and pace">
+        {/* v1.16.0 Lane C item 4: the bar is neither text nor a form control, so `:has(select,
+            textarea, input)` (globals.css) has nothing to match here -- `cell-stack-block` is
+            the opt-in twin of that rule, stacking the label above and letting the bar itself
+            span the card's full width instead of being squeezed into the right half next to a
+            label it has no room to sit beside. */}
+        <td className="cell-stack-block" data-label="Progress and pace">
           <BudgetProgressBar limitCents={row.limitCents} spentCents={row.spentCents} label={row.categoryName} />
           {projection !== null && predict !== null ? (
             <p

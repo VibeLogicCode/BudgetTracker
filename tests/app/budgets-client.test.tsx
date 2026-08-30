@@ -129,6 +129,25 @@ describe('BudgetsClient — review finding 2: archived rows are read-only', () =
     const headlineCell = container.querySelector('tbody tr td:first-child');
     expect(headlineCell?.className).toContain('cell-stack-headline');
   });
+
+  // v1.16.0 Lane C item 4: the progress bar is neither text nor a form control, so it needs the
+  // opt-in `cell-stack-block` role (globals.css's `:has(select, textarea, input)` rule has
+  // nothing to match here) to span the card's full width instead of being squeezed into the
+  // right half beside a label it has no room to sit next to.
+  it('the "Progress and pace" cell carries cell-stack-block', () => {
+    const row = makeRow({ categoryId: 3, categoryName: 'Rent' });
+    const { container } = render(
+      <BudgetsClient
+        month="2026-03"
+        currentUserId={1}
+        household={[row]}
+        householdTotals={{ budgetedLimitCents: 20000, budgetedSpentCents: 5000, totalSpentCents: 5000 }}
+        personal={[]}
+      />,
+    );
+    const progressCell = container.querySelector('tbody td[data-label="Progress and pace"]');
+    expect(progressCell?.className).toContain('cell-stack-block');
+  });
 });
 
 describe('BudgetsClient — polish item 5: other members’ personal sections are read-only', () => {

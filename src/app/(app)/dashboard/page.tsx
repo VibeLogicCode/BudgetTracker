@@ -191,9 +191,14 @@ export default async function DashboardPage({
       </PageGuide>
 
       {/* Task 10 (ruling R7): the same position it holds on /transactions, so the two surfaces
-          are one habit. */}
+          are one habit. v1.16.0 Lane C item 1: `collapsible` now folds this card behind an
+          "Add a transaction" button too -- the plan's own rule ("Content is always visible. A
+          form that CREATES something sits behind a button.") applies here exactly as it did to
+          Transactions' own Quick add (ruling S6), and this was the largest block on the
+          dashboard's card while being the least-used control on it. */}
       <QuickAddTransaction
         variant="card"
+        collapsible
         accounts={accounts}
         categories={categories}
         // v1.13.0 (item I2): `people` above is listAttributablePeople()'s full UserRecord —

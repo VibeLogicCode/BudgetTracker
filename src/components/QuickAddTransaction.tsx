@@ -46,12 +46,16 @@ export function QuickAddTransaction({
   /** 'page' anchors it at #quick-add with a heading; 'card' is the dashboard's compact form. */
   variant: 'page' | 'card';
   /**
-   * Ruling S6 (v1.15.0): on Transactions this form is ~600px sitting above the first data row of
-   * a page whose job is reading rows -- the biggest single measured win of the responsive-rows
-   * release. Default false so the dashboard's `variant="card"` render (Task 13, v1.13.0) stays
-   * byte-identical to before this ruling: `isDisclosure` below is false unless BOTH this is true
-   * AND `variant === 'page'`, so passing it accidentally on the card variant is inert rather than
-   * a silent behaviour change on the dashboard.
+   * Ruling S6 (v1.15.0) folded this into a disclosure on Transactions only, keying `isDisclosure`
+   * below on BOTH this flag AND `variant === 'page'` so that passing it "by accident" on the
+   * dashboard's card render stayed inert. v1.16.0 Lane C item 1 (the plan's own rule: "Content is
+   * always visible. A form that CREATES something sits behind a button.") applies just as much to
+   * the dashboard's Quick add -- it was the largest block on the card while being the least-used
+   * control on it, exactly like the loan rule form and the receipt picker this same plan folds
+   * away elsewhere. `isDisclosure` below now keys on this flag alone; dashboard/page.tsx passes it
+   * on purpose so the two surfaces share one behaviour instead of one being fixed and the other
+   * left standing open. Default stays false, so anything that never passes it keeps the old
+   * always-open render.
    */
   collapsible?: boolean;
 }) {
@@ -59,17 +63,19 @@ export function QuickAddTransaction({
   const [direction, setDirection] = useState<'spend' | 'income'>('spend');
   const groups = categoryOptionGroups(categories);
   const accountValue = defaultAccountId === null ? 'cash' : String(defaultAccountId);
-  const isDisclosure = collapsible && variant === 'page';
+  const isDisclosure = collapsible;
   // Closed by default when it is a disclosure at all; otherwise always open, which is the exact
   // pre-ruling-S6 behaviour every existing caller (and every existing test) still gets.
   const [open, setOpen] = useState(!isDisclosure);
 
-  // Ruling S6: the PWA manifest shortcut (v1.13.0 ruling R7) targets `#quick-add` and must still
-  // land on an OPEN form even though this now starts closed on Transactions. `window.location`
-  // does not exist during the server render, so it is read here, in an effect, and NEVER in the
-  // render body -- reading it during render would print the server's "closed" markup and then
-  // flip to "open" the instant this effect ran on the client, which is exactly what a hydration
-  // mismatch is.
+  // Ruling S6: the PWA manifest shortcut (v1.13.0 ruling R7) targets `/transactions#quick-add`
+  // and must still land on an OPEN form even though this now starts closed on Transactions.
+  // `window.location` does not exist during the server render, so it is read here, in an effect,
+  // and NEVER in the render body -- reading it during render would print the server's "closed"
+  // markup and then flip to "open" the instant this effect ran on the client, which is exactly
+  // what a hydration mismatch is. v1.16.0 Lane C item 1: this effect is harmless on the
+  // dashboard's card render too -- the shortcut's URL always carries `/transactions`, a different
+  // route, so the hash it checks for is never present there in practice.
   useEffect(() => {
     if (isDisclosure && window.location.hash === '#quick-add') setOpen(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps

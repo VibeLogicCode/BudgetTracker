@@ -957,4 +957,24 @@ describe('ImportClient — responsive rows (v1.15.0, ruling S3)', () => {
     const headlineCell = historyTable?.querySelector('tbody tr td:nth-child(3)');
     expect(headlineCell?.className).toContain('cell-stack-headline');
   });
+
+  // v1.16.0 Lane C item 3: When and Account are context for the row (the file is what tells one
+  // import from another), so both now carry cell-stack-meta -- a small muted line under the
+  // File headline instead of two more labelled rows of their own.
+  it('the History row\'s When and Account cells carry cell-stack-meta', () => {
+    const { container } = render(
+      <ImportClient
+        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
+        profiles={PROFILES}
+        history={HISTORY}
+        simplefinManaged={[]}
+      />,
+    );
+    const historyTable = container.querySelector('table');
+    // When: Account: File: By: Added: Dupes: Errors: Undo.
+    const whenCell = historyTable?.querySelector('tbody tr td:nth-child(1)');
+    const accountCell = historyTable?.querySelector('tbody tr td:nth-child(2)');
+    expect(whenCell?.className).toContain('cell-stack-meta');
+    expect(accountCell?.className).toContain('cell-stack-meta');
+  });
 });

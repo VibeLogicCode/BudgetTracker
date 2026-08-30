@@ -715,10 +715,14 @@ export function ImportClient({
             <tbody>
               {historyRows.map((row) => (
                 <tr key={row.id}>
-                  <td className="tabnum whitespace-nowrap text-muted" data-label="When">{row.createdAt.slice(0, 16).replace('T', ' ')}</td>
+                  {/* v1.16.0 Lane C item 3: When and Account are context for the row, not the
+                      fact it is about -- File (below) already carries `cell-stack-headline`, so
+                      `cell-stack-meta` puts these on a small muted line under it instead of two
+                      more labelled rows of their own. */}
+                  <td className="tabnum whitespace-nowrap text-muted cell-stack-meta" data-label="When">{row.createdAt.slice(0, 16).replace('T', ' ')}</td>
                   {/* Truncate with a title, never a bare ellipsis: the full account name and
                       the full filename stay readable on hover and to a screen reader. */}
-                  <td className="cell-truncate" title={row.accountName} data-label="Account">{row.accountName}</td>
+                  <td className="cell-truncate cell-stack-meta" title={row.accountName} data-label="Account">{row.accountName}</td>
                   {/* v1.15.0 (responsive rows): the filename is what tells one import from
                       another -- Account repeats across every re-import of the same statement --
                       so it is the phone card's headline. No cell-stack-amount: Added/Dupes/Errors

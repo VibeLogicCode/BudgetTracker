@@ -1420,22 +1420,30 @@ describe('v1.15.0 ruling S2/S3: the table row carries data-label and cell-stack 
     expect(amountCell.className).toContain('cell-stack-amount');
   });
 
-  it('the account cell carries the cell-stack-hide role -- it repeats down the column and is already the Account filter', () => {
+  // v1.16.0 Lane C item 3: this used to be `cell-stack-hide`, which dropped the account entirely
+  // from the phone card -- the owner asked for it back, so it now carries `cell-stack-meta`
+  // instead, reading as context under the merchant rather than vanishing outright.
+  it('the account cell carries the cell-stack-meta role, not cell-stack-hide -- the owner asked for it back', () => {
     const { container } = render(
       <TransactionsClient page={pageWithRow()} accounts={[]} categories={[]} people={[]} today="2026-03-02" />,
     );
     const accountCell = container.querySelector('tbody td[data-label="Account"]') as HTMLTableCellElement;
     expect(accountCell).toBeTruthy();
-    expect(accountCell.className).toContain('cell-stack-hide');
+    expect(accountCell.className).toContain('cell-stack-meta');
+    expect(accountCell.className).not.toContain('cell-stack-hide');
   });
 
-  it('the date cell is NOT hidden -- unlike the account, it is not identical down the page', () => {
+  // v1.16.0 Lane C item 3: a date is not identical down the page and is the thing a person scans
+  // for first, so it stays visible -- as `cell-stack-meta` context under the merchant headline,
+  // not its own labelled row.
+  it('the date cell is NOT hidden, and carries cell-stack-meta rather than its own labelled row', () => {
     const { container } = render(
       <TransactionsClient page={pageWithRow()} accounts={[]} categories={[]} people={[]} today="2026-03-02" />,
     );
     const dateCell = container.querySelector('tbody td[data-label="Date"]') as HTMLTableCellElement;
     expect(dateCell).toBeTruthy();
     expect(dateCell.className).not.toContain('cell-stack-hide');
+    expect(dateCell.className).toContain('cell-stack-meta');
   });
 
   it('the checkbox and row-menu cells carry data-label="" plus their lead/actions roles', () => {
@@ -1489,6 +1497,43 @@ describe('v1.15.0 ruling S6: Quick add folds away on Transactions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(screen.getByRole('button', { name: 'Add a transaction' })).toBeTruthy();
     expect(container.querySelector('input[name="description"]')).toBeNull();
+  });
+});
+
+/**
+ * v1.16.0 Lane C item 3. The root used to carry `data-page-width="wide"` in BOTH modes, bumping
+ * the shell's `main` to a 96rem cap for the review filter too -- so the guide and the filter card
+ * ran to 96rem while the card list a few lines down stayed capped at `max-w-4xl` (ruling S5(a)),
+ * a visible edge mismatch. The fix: the wide marker is gone entirely in review mode, and the
+ * guide/filter card/card list/pager all sit inside one shared `max-w-4xl` container instead.
+ */
+describe('v1.16.0 Lane C item 3: review mode is one narrow column, not the wide table\'s width', () => {
+  it('renders no data-page-width="wide" in review mode', () => {
+    const { container } = render(
+      <TransactionsClient page={pageWithRow()} accounts={[]} categories={[]} people={[]} today="2026-03-02" reviewMode />,
+    );
+    expect(container.querySelector('[data-page-width]')).toBeNull();
+  });
+
+  it('still marks the page wide outside review mode -- nothing about that layout changes', () => {
+    const { container } = render(
+      <TransactionsClient page={pageWithRow()} accounts={[]} categories={[]} people={[]} today="2026-03-02" />,
+    );
+    expect(container.querySelector('[data-page-width="wide"]')).toBeTruthy();
+  });
+
+  it('wraps the guide and the filter card in the SAME max-w-4xl container as the card list, so every edge lines up', () => {
+    render(
+      <TransactionsClient page={pageWithRow()} accounts={[]} categories={[]} people={[]} today="2026-03-02" reviewMode />,
+    );
+    const guide = screen.getByText('What is this page for?').closest('details');
+    const wrapper = guide?.closest('.max-w-4xl');
+    expect(wrapper).not.toBeNull();
+    // The filter form's own "Filter" submit button, and the card list's row menu, both sit
+    // inside that SAME wrapper as the guide -- proving this is one shared container rather than
+    // three elements that each happened to pick max-w-4xl independently (the reported mismatch).
+    expect(wrapper?.contains(screen.getByRole('button', { name: 'Filter' }))).toBe(true);
+    expect(wrapper?.contains(screen.getByText('TIM HORTONS'))).toBe(true);
   });
 });
 

@@ -56,10 +56,13 @@ vi.mock('@/lib/auth/session', () => ({
 // assert on the ACTUAL serialized shape rather than on whether the extra fields happen to be
 // rendered anywhere in the DOM (they never were, even before the fix -- the leak is in the
 // payload, not the render).
-const capturedQuickAddProps = vi.hoisted(() => ({ people: null as unknown }));
+const capturedQuickAddProps = vi.hoisted(() => ({ people: null as unknown, collapsible: null as unknown }));
 vi.mock('@/components/QuickAddTransaction', () => ({
-  QuickAddTransaction: (props: { people: unknown }) => {
+  // v1.16.0 Lane C item 1: also captures `collapsible` now, so the test below can prove the
+  // dashboard actually asks for the folded-away card rather than merely rendering SOME props.
+  QuickAddTransaction: (props: { people: unknown; collapsible?: unknown }) => {
     capturedQuickAddProps.people = props.people;
+    capturedQuickAddProps.collapsible = props.collapsible;
     return null;
   },
 }));
@@ -242,6 +245,19 @@ describe('DashboardPage (ruling R2)', () => {
 
     const people = capturedQuickAddProps.people as Array<Record<string, unknown>>;
     expect(people).toEqual([]);
+  });
+
+  // v1.16.0 Lane C item 1: the dashboard's Quick add now folds away behind an "Add a
+  // transaction" button, exactly like Transactions' own copy (ruling S6) -- the global rule
+  // behind this plan is that a form which CREATES something sits behind a button, and this was
+  // the largest block on the dashboard's card while being the least-used control on it.
+  it('passes collapsible to QuickAddTransaction, so the dashboard card starts folded away', async () => {
+    const { adultId } = await setup();
+    currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+
+    expect(capturedQuickAddProps.collapsible).toBe(true);
   });
 
   // v1.15.0 (responsive rows, ruling S3): the category is what tells one budget row from

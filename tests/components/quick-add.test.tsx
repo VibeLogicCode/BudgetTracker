@@ -116,8 +116,8 @@ describe('QuickAddTransaction (ruling R7)', () => {
 
 /**
  * v1.15.0 ruling S6: `collapsible` folds Quick add into a disclosure, closed by default, on
- * Transactions. Default false, so every test above (which never passes it) proves the dashboard's
- * `variant="card"` render stays exactly as it was before this ruling.
+ * Transactions. Default false, so every test above (which never passes it) proves BOTH variants'
+ * render stays exactly as it was before this ruling.
  */
 describe('QuickAddTransaction (ruling S6): the collapsible disclosure', () => {
   it('with collapsible and variant="page", starts closed and shows only the toggle', () => {
@@ -153,11 +153,22 @@ describe('QuickAddTransaction (ruling S6): the collapsible disclosure', () => {
     expect(screen.getByRole('button', { name: 'Add a transaction' })).toBeTruthy();
   });
 
-  it('is inert on the dashboard\'s card variant -- collapsible only changes anything when variant is "page"', () => {
+  it('with collapsible and variant="card", also starts closed behind the same toggle (v1.16.0 Lane C item 1)', () => {
     render(<QuickAddTransaction {...props} variant="card" collapsible />);
+    const toggle = screen.getByRole('button', { name: 'Add a transaction' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByLabelText('Description')).toBeNull();
+
+    fireEvent.click(toggle);
+    expect(screen.getByRole('button', { name: 'Close' }).getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByLabelText('Description', { exact: false })).toBeTruthy();
+  });
+
+  it('without collapsible, the card variant stays exactly as it was before this ruling -- the form is always mounted, with no toggle', () => {
+    render(<QuickAddTransaction {...props} variant="card" />);
     expect(screen.queryByRole('button', { name: 'Add a transaction' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Close' })).toBeNull();
-    // The form is there, unconditionally, exactly as the dashboard's byte-identical render needs.
+    // The form is there, unconditionally, exactly as the pre-Lane-C-item-1 render needs.
     expect(screen.getByLabelText('Description', { exact: false })).toBeTruthy();
   });
 });
