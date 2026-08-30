@@ -68,3 +68,38 @@ export function categoryOptions(all: CategoryLike[]): CategoryOption[] {
   const active = all.filter((category) => !category.isArchived);
   return orderedCategoryRows(active).map(({ row, depth }) => ({ id: row.id, label: row.name, depth }));
 }
+
+/**
+ * Backlog BZ (owner ruling A, 2026-08-29). The same order categoryOptions() produces, arranged
+ * for `<optgroup>`: a parent that HAS children becomes a group whose label is the parent's name,
+ * with the parent itself as the first selectable option inside it, and a top-level category with
+ * no children stays a plain ungrouped option.
+ *
+ * Why grouping rather than shading: a native <select> gives no per-option styling worth relying
+ * on, but every browser renders an <optgroup> label distinctly (and the iOS/Android pickers group
+ * it too), so the hierarchy the two leading non-breaking spaces were carrying alone becomes
+ * visible for free -- no custom combobox, no JavaScript, no accessibility risk.
+ *
+ * `label: null` means "render these options directly, not inside a group".
+ */
+export interface CategoryOptionGroup {
+  label: string | null;
+  options: CategoryOption[];
+}
+
+export function categoryOptionGroups(all: CategoryLike[]): CategoryOptionGroup[] {
+  const flat = categoryOptions(all);
+  const groups: CategoryOptionGroup[] = [];
+  for (let i = 0; i < flat.length; i += 1) {
+    const option = flat[i];
+    if (option.depth !== 0) continue; // consumed by its parent below
+    const children: CategoryOption[] = [];
+    for (let j = i + 1; j < flat.length && flat[j].depth === 1; j += 1) children.push(flat[j]);
+    groups.push(
+      children.length === 0
+        ? { label: null, options: [option] }
+        : { label: option.label, options: [option, ...children] },
+    );
+  }
+  return groups;
+}

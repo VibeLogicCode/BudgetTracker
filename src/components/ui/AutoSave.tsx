@@ -27,6 +27,14 @@ export type AutoSaveAction = (formData: FormData) => Promise<AutoSaveResult>;
 export type AutoSaveStatus = 'idle' | 'saved' | 'error';
 
 /**
+ * A plain option, or a group of them (backlog BZ). A group renders as an <optgroup>, which is the
+ * only way a native <select> can show hierarchy without custom JavaScript.
+ */
+export type AutoSaveSelectOption =
+  | { value: string; label: string; disabled?: boolean }
+  | { label: string; options: { value: string; label: string; disabled?: boolean }[] };
+
+/**
  * The dense inline control the tables already use (transactions' old `rowControl`).
  *
  * v1.12.1 (item AV / UX-7): `py-2 text-sm` below the `sm:` breakpoint, because a `text-xs` control
@@ -193,7 +201,7 @@ export function AutoSaveSelect({
 }: {
   name: string;
   defaultValue: string;
-  options: { value: string; label: string; disabled?: boolean }[];
+  options: AutoSaveSelectOption[];
   fields: Record<string, string>;
   action: AutoSaveAction;
   ariaLabel: string;
@@ -252,7 +260,18 @@ export function AutoSaveSelect({
             });
           }}
         >
-          {options.map((option) => (
+          {options.map((option) =>
+            'options' in option ? (
+              // Backlog BZ: a parent category and its children, so the hierarchy is visible in
+              // the list itself rather than implied by two leading spaces.
+              <optgroup key={`group-${option.label}`} label={option.label}>
+                {option.options.map((child) => (
+                  <option key={child.value} value={child.value} disabled={child.disabled}>
+                    {child.label.replace(/^ +/, (spaces) => ' '.repeat(spaces.length))}
+                  </option>
+                ))}
+              </optgroup>
+            ) : (
             <option key={option.value} value={option.value} disabled={option.disabled}>
               {/* Fix round on 5439851, item 2: every call site indents a nested option's label
                   with repeated ASCII spaces (e.g. '  '.repeat(depth) + name) to show hierarchy --
@@ -262,7 +281,8 @@ export function AutoSaveSelect({
                   in the one place that actually renders every option's text. */}
               {option.label.replace(/^ +/, (spaces) => ' '.repeat(spaces.length))}
             </option>
-          ))}
+            ),
+          )}
         </select>
         <StatusSlot pending={pending} status={status} />
       </span>
