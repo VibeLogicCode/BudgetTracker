@@ -53,11 +53,24 @@ describe('MUST-11.1: the Settings entry point', () => {
 });
 
 describe('MUST-9.1: the Updates card', () => {
+  // The database is not optional here, even though this test asserts an ABSENCE. SettingsPage
+  // reads a setting while it renders (readOcrEngineState -> getSetting -> getDb), so without a
+  // temp data directory of its own this test only passes when some other file in the same vitest
+  // worker happened to leave one behind first -- which it did, until v1.19.0 added test files and
+  // shifted the ordering. It then failed in CI with "Cannot open database because the directory
+  // does not exist" while still passing locally, because worker assignment differs between the
+  // two. Owning the database, the way the admin test below already does, is what makes this test
+  // independent of what runs beside it.
   it('a member sees no Updates card', async () => {
-    currentUser.value.role = 'member';
-    const { default: SettingsPage } = await import('@/app/(app)/settings/page');
-    render(await SettingsPage());
-    expect(screen.queryByText('Updates')).toBeNull();
+    const t = createTestDb();
+    try {
+      currentUser.value.role = 'member';
+      const { default: SettingsPage } = await import('@/app/(app)/settings/page');
+      render(await SettingsPage());
+      expect(screen.queryByText('Updates')).toBeNull();
+    } finally {
+      t.cleanup();
+    }
   });
 
   // Review fix (LOW): the positive mirror of the test above — without it, deleting
