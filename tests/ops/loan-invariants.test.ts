@@ -64,11 +64,66 @@ describe('MUST-13.1: the interest rate is display only', () => {
 });
 
 describe('MUST-13.2: loan payments are invisible to every spend calculation', () => {
-  it('budgets, reports and the categorizer never read the link table', () => {
-    for (const file of ['src/lib/budgets.ts', 'src/lib/reports.ts', 'src/lib/categorize/engine.ts']) {
+  it('budgets and reports never read the link table at all', () => {
+    for (const file of ['src/lib/budgets.ts', 'src/lib/reports.ts']) {
       const source = read(file);
       expect({ file, hit: /loan_payments|loanPayments/.test(source) }).toEqual({ file, hit: false });
     }
+  });
+
+  /**
+   * engine.ts is a special case, and narrowing this rather than banning the name outright is a
+   * deliberate call made in v1.20.0 -- recorded here because loosening an invariant deserves an
+   * argument, not a silent edit.
+   *
+   * What MUST-13.2 protects is that money moving to or from a loan still counts as ordinary
+   * spending: a car payment belongs in the Transport budget and in the reports, and no code may
+   * quietly filter it out on the grounds that it also repays a loan. budgets.ts and reports.ts
+   * are exactly where that could go wrong, so for them the ban stays absolute.
+   *
+   * engine.ts holds TWO unrelated things in one file: the categorizer, which is a spend
+   * calculation and must never see this table, and REVIEW_WHERE, which is the definition of the
+   * "needs review" triage queue and is not a calculation at all -- it decides which rows still
+   * need a person's attention. v1.20.0 added a clause there so that a transaction someone has
+   * already assigned to a loan stops reappearing in that queue, which was the reported bug. That
+   * clause touches no category, no amount and no transfer flag; it cannot move a dollar into or
+   * out of any budget or report.
+   *
+   * A file-wide grep cannot tell those two halves apart, so it is made position-aware instead:
+   * inside REVIEW_WHERE the reference is allowed, anywhere else in the file it is still a
+   * failure. The rejected alternative was moving the SQL fragment into another module so the
+   * literal name disappears from this file -- that would turn the guard green while changing
+   * nothing about what engine.ts does, which is dressing up the check rather than passing it.
+   */
+  it('the categorizer reads the link table only inside REVIEW_WHERE, never anywhere else', () => {
+    const source = read('src/lib/categorize/engine.ts');
+    const start = source.indexOf('export const REVIEW_WHERE');
+    expect(start).toBeGreaterThan(-1);
+    // The definition ends at the first line that closes it at column 0 -- the same "top-level
+    // declaration ends where the indentation returns" shape the rest of this file's greps use.
+    const end = source.indexOf('\n);', start);
+    expect(end).toBeGreaterThan(start);
+
+    const inside = source.slice(start, end);
+    // Two exemptions, both for lines that cannot read a table. The import: a symbol has to be
+    // named to be used at all, and banning it there would only force an inline
+    // `sql.raw('loan_payments')` that no tooling could follow. And comments: the clause below
+    // explains itself in prose, and a rule that forbids DESCRIBING the code it governs makes the
+    // code less clear, not safer -- MUST-13.1 above filters comment lines for the same reason.
+    // What is left, and what this guard actually asserts, is that no executable line outside
+    // REVIEW_WHERE reads the table.
+    const outside = (source.slice(0, start) + source.slice(end))
+      .split('\n')
+      .filter((line) => {
+        const trimmed = line.trim();
+        return !/^import\b/.test(trimmed) && !trimmed.startsWith('//') && !trimmed.startsWith('*') && !trimmed.startsWith('/*');
+      })
+      .join('\n');
+
+    expect({ where: 'inside REVIEW_WHERE', hit: /loan_payments|loanPayments/.test(inside) })
+      .toEqual({ where: 'inside REVIEW_WHERE', hit: true });
+    expect({ where: 'elsewhere in engine.ts', hit: /loan_payments|loanPayments/.test(outside) })
+      .toEqual({ where: 'elsewhere in engine.ts', hit: false });
   });
 });
 

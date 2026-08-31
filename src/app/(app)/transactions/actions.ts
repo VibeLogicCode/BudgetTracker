@@ -545,6 +545,26 @@ export async function assignToLoanAction(formData: FormData): Promise<ActionStat
   revalidatePath('/transactions');
   revalidatePath('/dashboard');
   revalidatePath('/reports');
+
+  // 2026-08-30 fix: the "Also mark as a transfer" checkbox in the assign-to-loan editor
+  // (transactions-client.tsx), defaulting ON. Money lent out and money repaid moves an asset
+  // between pockets, not spending -- counting it as spending makes the month it left look
+  // expensive and the month it returned look rich. This reuses setTransferFlag, the SAME
+  // already-guarded path setRowTransferAction (above) posts to, rather than writing is_transfer a
+  // second way. A refusal here (a transfer/not_transfer rule someone else in the household owns)
+  // must surface as THIS action's own error, not be swallowed under a cheerful "Assigned."
+  // message below -- the loan link itself already succeeded and its revalidatePath calls above
+  // already ran, so only the transfer half of this submit is what a person needs to be told failed.
+  if (formData.get('alsoTransfer') === '1') {
+    const transferResult = setTransferFlag({
+      transactionId: parsed.data.transactionId,
+      isTransfer: true,
+      userId: user.id,
+      actorRole: user.role,
+    });
+    if (!transferResult.ok) return { error: guardedWriteError(transferResult) };
+  }
+
   if (!result.linked) return { message: 'That transaction is already linked to this loan.' };
 
   // MUST-14.10: over-linking SUCCEEDS and warns. A refusal here would block a legitimate

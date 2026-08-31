@@ -25,6 +25,7 @@ import { exactRuleOwner, listRules, matchRule, upsertRuleFromCorrection } from '
 import { classify, train } from '@/lib/categorize/bayes';
 import { normalizeMerchant, tokenize } from '@/lib/categorize/normalize';
 import { nowIso } from '@/lib/clock';
+import { unassignTransactionFromLoan } from '@/lib/loans';
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -551,6 +552,79 @@ describe('review queue', () => {
     expect(reviewQueueIds(2, 0)).toHaveLength(2);
     expect(reviewQueueIds(2, 2)).toHaveLength(1);
     expect(reviewQueueCount()).toBe(ids.length);
+  });
+});
+
+/**
+ * 2026-08-30 fix: assigning a transaction to a loan writes a loan_payments row (see
+ * src/lib/loans.ts's assignTransactionToLoan) and never touches category_id or
+ * categorization_source -- so, before this fix, a loan-linked row a person had already dealt
+ * with kept coming back to the review queue forever, exactly because nothing about its category
+ * ever changed. These tests are the executable proof the new clause on REVIEW_WHERE closes that:
+ * a loan link is a decision, and it takes the row out of the queue the same way confirming a
+ * category or splitting a row already does; undoing the link is undoing the decision, so the
+ * row is undecided again.
+ */
+describe('review queue: a loan link is a decision (2026-08-30 fix)', () => {
+  /** Seeds a loan-kind warranty item and links `txnId` to it via a real loan_payments row, the
+   *  same raw-SQL shape tests/lib/item-ledger.test.ts already uses for the same table -- this
+   *  file has no fixture of its own for warranty items, so it is inserted directly here rather
+   *  than pulled in from another test file's helper. */
+  function linkToLoan(db: TestDb['db'], userId: number, txnId: number): number {
+    const now = nowIso();
+    // migration 0004 already seeds a default 'Loan' item type on every fresh db (it backfills one
+    // for exactly this reason, so createLoanFromTransaction always has one to use) -- inserting a
+    // second row with that same name collides with warranty_item_types_name_uq's COLLATE NOCASE
+    // unique index, so this looks the existing one up instead of inserting another.
+    const typeId = db.get<{ id: number }>(sql`select id from warranty_item_types where name = 'Loan' collate nocase limit 1`).id;
+    const itemId = db.get<{ id: number }>(sql`
+      insert into warranty_items (name, purchase_date, is_lifetime, owner_user_id, type_id, loan_direction, created_at, updated_at)
+      values ('Car Loan', '2026-01-01', 0, ${userId}, ${typeId}, 'owed', ${now}, ${now}) returning id`).id;
+    db.run(sql`insert into loan_payments (txn_id, item_id, amount_cents, applied_cents, source, created_at)
+               values (${txnId}, ${itemId}, 1000, 1000, 'manual', ${now})`);
+    return itemId;
+  }
+
+  it('a loan-linked, uncategorized row is absent from the queue and its count', () => {
+    const { db, userId, add } = setup();
+    const linked = add('CAR LOAN PAYMENT');
+    linkToLoan(db, userId, linked);
+
+    expect(reviewQueueIds()).not.toContain(linked);
+    expect(reviewQueueCount()).toBe(0);
+  });
+
+  it('an unlinked, uncategorized control row is still present', () => {
+    const { db, userId, add } = setup();
+    const linked = add('CAR LOAN PAYMENT');
+    linkToLoan(db, userId, linked);
+    const control = add('SOME NEW SHOP');
+
+    expect(reviewQueueIds()).toEqual([control]);
+    expect(reviewQueueCount()).toBe(1);
+  });
+
+  it('a bayes-guessed, loan-linked row is absent too, not just an uncategorized one', () => {
+    const { db, userId, add } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const linked = add('CAR LOAN PAYMENT');
+    db.run(sql`update transactions set category_id = ${groceries}, categorization_source = 'bayes' where id = ${linked}`);
+    linkToLoan(db, userId, linked);
+
+    expect(reviewQueueIds()).not.toContain(linked);
+    expect(reviewQueueCount()).toBe(0);
+  });
+
+  it('unlinking the transaction from its loan puts it back in the queue -- undecided again', () => {
+    const { db, userId, add } = setup();
+    const txnId = add('CAR LOAN PAYMENT');
+    const itemId = linkToLoan(db, userId, txnId);
+    expect(reviewQueueIds()).not.toContain(txnId);
+
+    expect(unassignTransactionFromLoan({ txnId, itemId })).toBe(true);
+
+    expect(reviewQueueIds()).toContain(txnId);
+    expect(reviewQueueCount()).toBe(1);
   });
 });
 

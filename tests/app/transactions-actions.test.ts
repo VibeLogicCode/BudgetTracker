@@ -454,6 +454,55 @@ describe('MUST-14.8 … MUST-14.11: assign and unassign', () => {
   });
 });
 
+/**
+ * 2026-08-30 fix. The assign-to-loan editor's "Also mark as a transfer" checkbox (defaulting ON
+ * in the UI) posts `alsoTransfer` alongside `transactionId`/`itemId`; assignToLoanAction reads it
+ * and, when present, calls setTransferFlag -- the SAME already-guarded path setRowTransferAction
+ * posts to (see that describe block below) -- rather than writing is_transfer a second way.
+ */
+describe('assignToLoanAction: the opt-in "also mark as a transfer" checkbox', () => {
+  it('ticked (alsoTransfer=1) sets is_transfer on the linked transaction', async () => {
+    const { sqlite } = setup();
+    const { itemId, txnId } = seedLoanAndSpend(2_000_000, -45_000);
+    const result = await assignToLoanAction(formData({ transactionId: String(txnId), itemId: String(itemId), alsoTransfer: '1' }));
+    expect(result.error).toBeUndefined();
+    expect((sqlite.prepare('select is_transfer as t from transactions where id = ?').get(txnId) as { t: number }).t).toBe(1);
+  });
+
+  it('unticked (alsoTransfer omitted) leaves is_transfer exactly as it was -- today\'s behaviour', async () => {
+    const { sqlite } = setup();
+    const { itemId, txnId } = seedLoanAndSpend(2_000_000, -45_000);
+    const result = await assignToLoanAction(formData({ transactionId: String(txnId), itemId: String(itemId) }));
+    expect(result.error).toBeUndefined();
+    expect((sqlite.prepare('select is_transfer as t from transactions where id = ?').get(txnId) as { t: number }).t).toBe(0);
+  });
+
+  it('a refusal (a transfer rule someone else in the household owns) surfaces as THIS action\'s own error, not swallowed', async () => {
+    const { sqlite } = setup();
+    const { itemId, txnId } = seedLoanAndSpend(2_000_000, -45_000);
+    // Alice (admin, the setup() default caller) already owns an exact transfer rule for this
+    // merchant. Switching the caller to a different MEMBER before the assign reproduces the
+    // ownership refusal setTransferFlag already enforces for every other "mark as transfer"
+    // control in this file (see setRowTransferAction's own R4 tests below).
+    upsertRuleFromCorrection({
+      pattern: normalizeMerchant('HONDA FIN PAYMENT'), matchType: 'exact', ruleKind: 'transfer',
+      categoryId: null, createdBy: ctx!.userId, actorRole: 'admin',
+    });
+    const memberId = insertTestUser(current!.db, { name: 'Member Other', username: 'member-other-loan', role: 'member' });
+    currentUser = { id: memberId, name: 'Member Other', username: 'member-other-loan', role: 'member' };
+
+    const result = await assignToLoanAction(formData({ transactionId: String(txnId), itemId: String(itemId), alsoTransfer: '1' }));
+
+    expect(result.error).toBe(ruleOwnedError('Alice'));
+    expect(result.message).toBeUndefined();
+    // The refusal is scoped to the TRANSFER half of this submit: the loan link itself performs
+    // no owner check at all (MUST-13.13) and already went through before setTransferFlag ran, so
+    // it must not have been rolled back underneath the refusal.
+    expect(balanceOf(itemId)).toBe(1_955_000);
+    expect((sqlite.prepare('select is_transfer as t from transactions where id = ?').get(txnId) as { t: number }).t).toBe(0);
+  });
+});
+
 /** Splits a freshly-added -$100.00 txn into $70 groceries / $30 gas -- the reviewer's own
  *  reproduction numbers -- via the given setup()'s own addTxn/userId. */
 function splitAMerchant(

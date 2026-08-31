@@ -285,6 +285,53 @@ describe('MUST-14.8 / MUST-14.9: the row control', () => {
     expect(sent.get('itemId')).toBe('7');
   });
 
+  /**
+   * 2026-08-30 fix: the assign-to-loan editor's opt-in "Also mark as a transfer" checkbox.
+   * Offered only once an EXISTING loan is chosen (assignToLoanAction is the one action wired to
+   * read it) -- not on the default "New loan…" branch, which posts to createLoanFromTransactionAction
+   * instead and is untouched by this fix. Defaults ON: money lent out and money repaid moves an
+   * asset between pockets, not spending.
+   */
+  it('the "Also mark as a transfer" checkbox appears once an existing loan is chosen, checked by default', () => {
+    render(<TransactionsClient {...baseProps} loanOptions={[{ id: 7, name: 'Civic' }]} loanLinks={{}} />);
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
+    // Not shown yet: the editor opens on the default "New loan…" branch.
+    expect(screen.queryByLabelText(/Also mark as a transfer/)).toBeNull();
+
+    fireEvent.change(screen.getByLabelText('Assign to'), { target: { value: '7' } });
+    const checkbox = screen.getByLabelText(/Also mark as a transfer/) as HTMLInputElement;
+    expect(checkbox.checked).toBe(true);
+  });
+
+  it('saving with the checkbox left ticked sends alsoTransfer=1 to assignToLoanAction', async () => {
+    const { assignToLoanAction } = await import('@/app/(app)/transactions/actions');
+    render(<TransactionsClient {...baseProps} loanOptions={[{ id: 7, name: 'Civic' }]} loanLinks={{}} />);
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
+    fireEvent.change(screen.getByLabelText('Assign to'), { target: { value: '7' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(assignToLoanAction).toHaveBeenCalled());
+    const sent = (assignToLoanAction as ReturnType<typeof vi.fn>).mock.calls[0][0] as FormData;
+    expect(sent.get('alsoTransfer')).toBe('1');
+  });
+
+  it('unticking the checkbox before saving sends no alsoTransfer field at all', async () => {
+    const { assignToLoanAction } = await import('@/app/(app)/transactions/actions');
+    vi.mocked(assignToLoanAction).mockClear();
+    render(<TransactionsClient {...baseProps} loanOptions={[{ id: 7, name: 'Civic' }]} loanLinks={{}} />);
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
+    fireEvent.change(screen.getByLabelText('Assign to'), { target: { value: '7' } });
+    fireEvent.click(screen.getByLabelText(/Also mark as a transfer/));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(assignToLoanAction).toHaveBeenCalled());
+    const sent = (assignToLoanAction as ReturnType<typeof vi.fn>).mock.calls[0][0] as FormData;
+    expect(sent.get('alsoTransfer')).toBeNull();
+  });
+
   it('clicking "Unassign from <loan>" calls unassignFromLoanAction with the transaction and loan ids', async () => {
     // v1.12.1 (item AU / UX-6, ruling R5): Unassign now confirms first. Mocked to accept, so
     // this test still covers the underlying dispatch; the refusal path is RowMenu's own test.

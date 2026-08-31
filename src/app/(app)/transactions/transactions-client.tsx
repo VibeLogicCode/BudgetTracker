@@ -732,7 +732,18 @@ export function TransactionsClient({
               </select>
             </Field>
           </>
-        ) : null}
+        ) : (
+          // 2026-08-30 fix: offered only on the EXISTING-loan path (Save -> assignToLoanAction),
+          // which is the one action wired to read it -- the new-loan path just above posts to
+          // createLoanFromTransactionAction instead, which this fix does not touch. Defaults ON:
+          // money lent out and money repaid moves an asset between pockets, not spending, so the
+          // common case is that a loan payment should also leave spending -- a person who wants
+          // the payment counted as ordinary spending can still untick it.
+          <label className="flex items-center gap-2 text-sm text-muted">
+            <input type="checkbox" name="alsoTransfer" value="1" defaultChecked className="accent-accent" />
+            Also mark as a transfer (keeps it out of spending)
+          </label>
+        )}
         <div className="flex gap-2">
           <SubmitButton className="w-fit">Save</SubmitButton>
           <button type="button" className="btn btn--ghost btn--sm" onClick={() => setNewLoan(null)}>

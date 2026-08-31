@@ -1,6 +1,6 @@
 import { and, asc, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
-import { transactions, transactionSplits } from '@/db/schema';
+import { loanPayments, transactions, transactionSplits } from '@/db/schema';
 import { nowIso } from '@/lib/clock';
 import { applyPaymentMatchers } from '@/lib/loans';
 import { classify, train, untrain } from './bayes';
@@ -657,11 +657,30 @@ export function applyCategoryToMatching(input: {
  * category_id stays NULL, since a split never invents or overwrites the parent's own category
  * -- must not nag here forever just because that column is still empty. Served by
  * transaction_splits_txn_idx (migration 0009).
+ *
+ * A row with any loan_payments link is excluded too (2026-08-30 fix). Assigning a transaction to
+ * a loan writes a loan_payments row and, by design (MUST-13.2, src/lib/loans.ts), never touches
+ * category_id or categorization_source -- a loan payment stays in its spending category and in
+ * every budget. Without this clause a loan-linked row a person had already dealt with kept
+ * coming back to this queue forever, because nothing about ITS category ever changed even
+ * though a decision about the row plainly had been made. A loan link IS that decision, the same
+ * way confirming a category or splitting a row already is one -- so it takes the row out of the
+ * queue for the same reason those do. Unassigning the link (unassignTransactionFromLoan,
+ * src/lib/loans.ts) undoes the decision, so a row with no link left is undecided again and comes
+ * right back. This is like the not-a-split-row clause immediately above -- a correlated `not
+ * exists` in a `.where()` predicate, never a computed `.select()` field: the same warning
+ * applies (see transactionHasSplits' own docblock, below) -- a bare `txn_id` interpolated into a
+ * raw `sql` fragment used as a SELECT-list value is not table-qualified the way it is inside a
+ * `.where()` condition, so putting this in a select list would let the correlated subquery's
+ * `txn_id` resolve against loan_payments' OWN row instead of this outer transactions row,
+ * matching every transaction the moment ANY loan link exists anywhere. Served by
+ * loan_payments_txn_idx (migration 0007) -- no new index, no migration needed.
  */
 export const REVIEW_WHERE = and(
   eq(transactions.isTransfer, false),
   or(isNull(transactions.categoryId), eq(transactions.categorizationSource, 'bayes')),
   sql`not exists (select 1 from ${transactionSplits} where ${transactionSplits.txnId} = ${transactions.id})`,
+  sql`not exists (select 1 from ${loanPayments} where ${loanPayments.txnId} = ${transactions.id})`,
 );
 
 export function reviewQueueIds(limit = 100, offset = 0): number[] {

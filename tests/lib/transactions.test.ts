@@ -434,6 +434,34 @@ describe('review queue and merchant counting', () => {
     expect(countMatchingMerchant('LOBLAWS')).toBe(1);
     expect(countMatchingMerchant('NOBODY')).toBe(0);
   });
+
+  /**
+   * 2026-08-30 fix: REVIEW_WHERE (src/lib/categorize/engine.ts) gained a "no loan_payments link"
+   * clause -- a loan link is a decision about the row, made without ever touching its category, so
+   * without this clause a loan-linked row kept nagging the review queue forever. This file's
+   * listReviewQueue and listTransactions' own reviewOnly filter both import REVIEW_WHERE rather
+   * than restating it (see the ruling R1 comment above), so this is the proof that both actually
+   * follow the new clause rather than assuming they do.
+   */
+  it('a loan-linked row is absent from listReviewQueue AND the reviewOnly filter alike', () => {
+    const { db, alice, add } = setup();
+    const linked = add({ date: '2026-03-01', description: 'CAR LOAN PAYMENT' });
+    const control = add({ date: '2026-03-02', description: 'SOME NEW SHOP' });
+
+    const now = nowIso();
+    // migration 0004 seeds a default 'Loan' item type on every fresh db, so this looks it up
+    // rather than inserting a second, colliding row (warranty_item_types_name_uq is COLLATE
+    // NOCASE) -- the same lookup tests/lib/categorize/engine.test.ts's own fixture uses.
+    const typeId = db.get<{ id: number }>(sql`select id from warranty_item_types where name = 'Loan' collate nocase limit 1`).id;
+    const itemId = db.get<{ id: number }>(sql`
+      insert into warranty_items (name, purchase_date, is_lifetime, owner_user_id, type_id, loan_direction, created_at, updated_at)
+      values ('Car Loan', '2026-01-01', 0, ${alice}, ${typeId}, 'owed', ${now}, ${now}) returning id`).id;
+    db.run(sql`insert into loan_payments (txn_id, item_id, amount_cents, applied_cents, source, created_at)
+               values (${linked}, ${itemId}, 1000, 1000, 'manual', ${now})`);
+
+    expect(listReviewQueue().map((r) => r.id)).toEqual([control]);
+    expect(listTransactions({ reviewOnly: true }, VIEWER).rows.map((r) => r.id)).toEqual([control]);
+  });
 });
 
 describe('display names (spec v1.4)', () => {
