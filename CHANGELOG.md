@@ -21,6 +21,63 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.21.0] - 2026-08-31
+
+One migration (0016), which tidies merchant rules — see Fixed. It merges rules that differ only
+in letter case, keeping the one with the most use and recording what it dropped.
+
+### Added
+
+- **Merchant rules have their own page**, at Settings → Merchant rules. Search, filter by kind,
+  paging, and multi-select, because a list that grows every time you confirm a category is a
+  dataset, not a setting. Deleting rename rules in bulk tells you how many *transactions* change,
+  not how many rules.
+- **A rule can be disabled instead of deleted**, and re-run over transactions you already have —
+  per rule, or all of them at once. Both show what they will change before they change it, and
+  neither can overwrite a category you set by hand.
+- **Rules that do nothing are findable.** The page shows how many transactions each rule affects
+  right now, and flags an exact rule that a broader one already covers.
+- **Budgets picks a scope.** Pills at the top choose household or a person, so the page is one
+  grid instead of one per person. The totals stay visible whichever you pick.
+- **A loan whose balance drifted can be recomputed** from its own payments, from the loan's page.
+
+### Changed
+
+- **The cashflow chart is two charts.** Income and spend with net on one axis, cumulative saved
+  below on its own — the old card carried five series on two axes with three of them the same
+  colour. It no longer plots months from before you had any transactions, and no longer draws a
+  target line when no target is set.
+
+### Fixed
+
+- **Lending money out is no longer counted as spending it.** It was the largest merchant, the
+  whole uncategorized bar, and the reason income minus spend did not equal net. Money moving as
+  loan principal converts cash into something owed rather than being consumed. Repaying a debt you
+  owe is still spending — a car payment is a real monthly expense.
+- **A loan's balance no longer depends on the order you linked its payments.** Linking a repayment
+  before the payment that justified it silently discarded the difference, permanently and with no
+  warning. Payments now replay in the order they actually happened.
+- **A transaction assigned to a loan says so** — "Loan to …" or "Repayment from …" — and reverts
+  if you unassign it.
+- **A parent category's own spending has a row.** A category could show $628 while its
+  sub-categories showed $183, with the difference counted but never displayed.
+- **A category chip includes the category's children.** Clicking Health hid everything filed under
+  Pharmacy while the Health budget counted it.
+- **A split transaction appears when you filter by the category you split it into.** It counted
+  toward that budget already; it just never showed in the list.
+- **Renaming a merchant now groups it in Top merchants**, so one shop across five store numbers is
+  one row. Previously the rule fixed the transactions list and nothing else.
+- **A rule typed in lowercase is no longer silently dead.** Patterns are stored the way merchants
+  are, so a rule matches what you meant.
+- **Net worth stops claiming a figure it cannot support.** With account balances missing, neither
+  the amount nor its sign is established, so it says it is partial and points at what to fill in.
+  Money lent out now counts as an asset.
+- **Spent, Money in and Net agree on the dashboard.** Spent counted only categorized transactions
+  while Net counted everything, so the three tiles contradicted each other. Uncategorized spending
+  is now called out separately, with a link to the review queue.
+- **Cash runway explains itself.** It said there was no spending history on a page full of
+  spending; it needs one complete month, and now says so.
+
 ## [1.20.0] - 2026-08-30
 
 No migration. Nothing changed about what is stored.

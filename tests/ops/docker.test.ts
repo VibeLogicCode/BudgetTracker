@@ -245,12 +245,26 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.20.0 release', () => {
+  it('MUST-7.1: the 1.21.0 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.20.0');
+    expect(pkg.version).toBe('1.21.0');
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toMatch(/^## \[1\.21\.0\] - 2026-08-31$/m);
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.21.0]'));
+    expect(changelog.indexOf('## [1.21.0]')).toBeLessThan(changelog.indexOf('## [1.20.0]'));
+    const entry = changelog.slice(changelog.indexOf('## [1.21.0]'), changelog.indexOf('## [1.20.0]'));
+    // The three things this release is about: money classified by what it did, one meaning for
+    // "in this category", and merchant rules becoming manageable.
+    expect(entry).toMatch(/Lending money out is no longer counted as spending it/i);
+    expect(entry).toMatch(/A parent category's own spending has a row/i);
+    expect(entry).toMatch(/Merchant rules have their own page/i);
+    // Unlike 1.19/1.20 this release DOES carry a migration; the entry must say so.
+    expect(entry).toMatch(/One migration \(0016\)/i);
+  });
+
+  it('MUST-7.1: the 1.20.0 release is still recorded intact (append-only discipline)', () => {
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.20\.0\] - 2026-08-30$/m);
-    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.20.0]'));
     expect(changelog.indexOf('## [1.20.0]')).toBeLessThan(changelog.indexOf('## [1.19.0]'));
     const entry = changelog.slice(changelog.indexOf('## [1.20.0]'), changelog.indexOf('## [1.19.0]'));
     expect(entry).toMatch(/No migration/i);
