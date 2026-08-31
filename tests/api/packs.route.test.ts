@@ -166,18 +166,36 @@ describe('POST /api/packs/rules/import', () => {
     expect(formDataSpy).not.toHaveBeenCalled();
   });
 
-  it('skips a rule with an unsupported rule_kind (e.g. rename) rather than 400ing the whole pack', async () => {
+  // Controller ruling (a) — revised 2026-08-31: rename is importable now. not_transfer is the
+  // kind that stays permanently unsupported on import (it describes this install's own account
+  // wiring), so it is what exercises the "skip gracefully, don't 400 the whole pack" path here.
+  it('skips a rule with an unsupported rule_kind (e.g. not_transfer) rather than 400ing the whole pack', async () => {
+    const { adminToken } = setup();
+    const withNotTransfer = JSON.stringify({
+      format: 'budget-tracker-rules',
+      version: 1,
+      exported_at: '2026-08-15T12:00:00.000Z',
+      categories: [],
+      rules: [{ pattern: 'ACME PAYROLL CO', match_type: 'exact', rule_kind: 'not_transfer', category: null }],
+    });
+    const response = await rulesImport(uploadRequest('http://nas.local:3000/api/packs/rules/import', withNotTransfer, adminToken));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ applied: false, skippedRules: 1, newRules: 0 });
+  });
+
+  it('imports a rename rule (no longer skipped) and applies it retroactively', async () => {
     const { adminToken } = setup();
     const withRename = JSON.stringify({
       format: 'budget-tracker-rules',
       version: 1,
       exported_at: '2026-08-15T12:00:00.000Z',
       categories: [],
-      rules: [{ pattern: 'MCDONALDS', match_type: 'exact', rule_kind: 'rename', category: null }],
+      rules: [{ pattern: 'MCDONALDS', match_type: 'exact', rule_kind: 'rename', category: null, rename_to: "McDonald's" }],
     });
-    const response = await rulesImport(uploadRequest('http://nas.local:3000/api/packs/rules/import', withRename, adminToken));
-    expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ applied: false, skippedRules: 1, newRules: 0 });
+    const applied = await rulesImport(uploadRequest('http://nas.local:3000/api/packs/rules/import', withRename, adminToken, { mode: 'apply' }));
+    expect(applied.status).toBe(200);
+    expect(await applied.json()).toMatchObject({ applied: true, rulesAdded: 1, rulesSkipped: 0 });
+    expect(listRules('rename').find((r) => r.pattern === 'MCDONALDS')?.renameTo).toBe("McDonald's");
   });
 });
 

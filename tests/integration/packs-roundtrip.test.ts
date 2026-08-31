@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
+import { sql } from 'drizzle-orm';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
 import { exportProfilesPack, exportRulesPack, importProfilesPack, importRulesPack, previewRulesPackImport } from '@/lib/packs';
 import { listRules, upsertRuleFromCorrection } from '@/lib/categorize/rules';
@@ -7,6 +8,7 @@ import { BUILTIN_PRESET_NAMES, createProfile, getBuiltinPreset, getProfileByName
 import { upsertAccountCardPerson } from '@/lib/import/card-people';
 import { buildContext, categorizeTransaction } from '@/lib/categorize/engine';
 import { normalizeMerchant } from '@/lib/categorize/normalize';
+import { nowIso } from '@/lib/clock';
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -126,6 +128,49 @@ describe('rules pack round trip onto a fresh database', () => {
     const again = importRulesPack(rules);
     expect(again).toEqual({ rulesAdded: 0, rulesOverwritten: 0, rulesKept: 0, rulesSkipped: 0, categoriesCreated: 0 });
     expect(listRules().length).toBe(before);
+  });
+
+  // Coordinator brief (2026-08-31 revision): a round trip -- export with renames opted in, import
+  // into a fresh seeded database -- must reproduce the rename AND apply it retroactively, the same
+  // way saving one on the form does. Renames stay OFF by default (controller ruling (a)), so this
+  // sender deliberately asks for includeRenameRules: true rather than reusing packFromSender.
+  it('reproduces a rename on round trip and applies it retroactively when the sender opted in', () => {
+    const sender = createSeededTestDb();
+    const senderUserId = insertTestUser(sender.db, { name: 'Alice', username: 'alice' });
+    upsertRuleFromCorrection({
+      pattern: 'MCDONALDS',
+      matchType: 'exact',
+      ruleKind: 'rename',
+      categoryId: null,
+      renameTo: "McDonald's",
+      createdBy: senderUserId,
+      actorRole: 'admin',
+    });
+    const withoutOptIn = exportRulesPack();
+    const withOptIn = exportRulesPack({ includeRenameRules: true });
+    sender.cleanup();
+
+    // Off by default even on a sender who has the rule -- confirms the export side of the round
+    // trip before touching the receiver at all.
+    expect(withoutOptIn.rules.some((r) => r.rule_kind === 'rename')).toBe(false);
+    expect(withOptIn.rules.find((r) => r.rule_kind === 'rename')).toMatchObject({ pattern: 'MCDONALDS', rename_to: "McDonald's" });
+
+    current = createSeededTestDb();
+    const receiverUserId = insertTestUser(current.db, { name: 'Bob', username: 'bob' });
+    const accountId = insertTestAccount(current.db);
+    const txn = current.db.get<{ id: number }>(sql`
+      insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, categorization_source, created_by, created_at, updated_at)
+      values (${accountId}, '2026-03-02', ${'MCDONALDS #4821 TORONTO ON'}, ${normalizeMerchant('MCDONALDS #4821 TORONTO ON')}, -1200, 'none', ${receiverUserId}, ${nowIso()}, ${nowIso()})
+      returning id`);
+
+    const result = importRulesPack(withOptIn);
+    expect(result.rulesAdded).toBe(1);
+    expect(listRules('rename').find((r) => r.pattern === 'MCDONALDS')?.renameTo).toBe("McDonald's");
+
+    const row = current.sqlite
+      .prepare('select display_description, display_source from transactions where id = ?')
+      .get(txn.id) as { display_description: string | null; display_source: string | null };
+    expect(row).toEqual({ display_description: "McDonald's", display_source: 'rename' });
   });
 });
 

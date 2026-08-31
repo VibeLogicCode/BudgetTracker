@@ -92,7 +92,7 @@ export default async function MerchantRulesPage({
       redundantCount={redundant.length}
       impactCounts={impactRecord}
       redundantByRuleId={redundantRecord}
-      rulesPackRows={previewRulesPackExport({ includeTransferRules: true })}
+      rulesPackRows={previewRulesPackExport({ includeTransferRules: true, includeRenameRules: true })}
     />
   );
 }

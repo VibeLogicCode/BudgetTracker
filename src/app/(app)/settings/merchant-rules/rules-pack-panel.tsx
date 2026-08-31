@@ -19,7 +19,14 @@ interface ImportPreview {
   unchanged: number;
   transferRules: number;
   skippedRules: number;
-  conflicts: { pattern: string; matchType: string; existingCategory: string | null; incomingCategory: string | null }[];
+  conflicts: {
+    pattern: string;
+    matchType: string;
+    existingCategory: string | null;
+    incomingCategory: string | null;
+    existingRenameTo?: string | null;
+    incomingRenameTo?: string | null;
+  }[];
   newCategories: string[];
 }
 
@@ -28,6 +35,11 @@ const fileInputClass =
 
 export function RulesPackPanel({ rows }: { rows: RulesExportRow[] }) {
   const [includeTransfers, setIncludeTransfers] = useState(false);
+  // Off by default (controller ruling (a), src/lib/packs.ts): a rename's text is something a
+  // household member typed, and it can name a real person -- "Loan to Sam", "Rent from Alex".
+  // Unlike a category rule (a pattern plus a category id) that text is a genuine disclosure risk,
+  // so it needs its own explicit opt-in rather than riding along with includeTransfers.
+  const [includeRenames, setIncludeRenames] = useState(false);
   const [excluded, setExcluded] = useState<number[]>([]);
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [onConflict, setOnConflict] = useState<'keep' | 'overwrite'>('keep');
@@ -35,8 +47,12 @@ export function RulesPackPanel({ rows }: { rows: RulesExportRow[] }) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const visible = rows.filter((row) => (row.ruleKind === 'transfer' ? includeTransfers : true));
-  const exportHref = `/api/packs/rules/export?includeTransfers=${includeTransfers ? '1' : '0'}&exclude=${excluded.join(',')}`;
+  const visible = rows.filter((row) => {
+    if (row.ruleKind === 'transfer') return includeTransfers;
+    if (row.ruleKind === 'rename') return includeRenames;
+    return true;
+  });
+  const exportHref = `/api/packs/rules/export?includeTransfers=${includeTransfers ? '1' : '0'}&includeRenames=${includeRenames ? '1' : '0'}&exclude=${excluded.join(',')}`;
   const toggle = (id: number) => setExcluded((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
 
   async function send(mode: 'preview' | 'apply') {
@@ -92,6 +108,16 @@ export function RulesPackPanel({ rows }: { rows: RulesExportRow[] }) {
           />
           Include transfer rules (they can contain personal names from e-transfer descriptions)
         </label>
+        <label className="flex items-start gap-2 text-muted">
+          <input
+            type="checkbox"
+            checked={includeRenames}
+            onChange={(e) => setIncludeRenames(e.target.checked)}
+            className="mt-0.5 accent-accent"
+          />
+          Include rename rules (off by default: a rename&apos;s text is something you typed, and may name a
+          person — &quot;Loan to Sam&quot;, &quot;Rent from Alex&quot;)
+        </label>
         <p className="text-xs text-subtle">Everything ticked below will be written into the file. Untick anything you would rather not share.</p>
         <ul className="max-h-64 overflow-y-auto rounded-md border border-line bg-surface p-2">
           {visible.map((row) => (
@@ -106,7 +132,11 @@ export function RulesPackPanel({ rows }: { rows: RulesExportRow[] }) {
               <code className="font-mono text-xs text-ink">{row.pattern}</code>
               <span className="text-xs text-subtle">
                 {row.matchType}
-                {row.ruleKind === 'transfer' ? ' · transfer' : ` → ${row.categoryLabel ?? 'Uncategorized'}`}
+                {row.ruleKind === 'transfer'
+                  ? ' · transfer'
+                  : row.ruleKind === 'rename'
+                    ? ` → renamed to "${row.renameTo ?? ''}"`
+                    : ` → ${row.categoryLabel ?? 'Uncategorized'}`}
               </span>
             </li>
           ))}
@@ -150,15 +180,24 @@ export function RulesPackPanel({ rows }: { rows: RulesExportRow[] }) {
               {preview.conflicts.length} conflicts, {preview.unchanged} already identical, {preview.transferRules} transfer rules.
             </p>
             {preview.skippedRules > 0 ? (
-              <p>{preview.skippedRules} rules use a kind this install doesn&apos;t import (e.g. rename) and will be skipped.</p>
+              <p>{preview.skippedRules} rules use a kind this install doesn&apos;t import (e.g. not_transfer) and will be skipped.</p>
             ) : null}
             {preview.newCategories.length > 0 ? <p>Categories to create: {preview.newCategories.join(', ')}</p> : null}
             {preview.conflicts.length > 0 ? (
               <ul className="mt-1 list-inside list-disc">
                 {preview.conflicts.map((conflict) => (
                   <li key={`${conflict.pattern}-${conflict.matchType}`}>
-                    <code className="font-mono">{conflict.pattern}</code>: mine {conflict.existingCategory ?? 'none'} · theirs{' '}
-                    {conflict.incomingCategory ?? 'none'}
+                    <code className="font-mono">{conflict.pattern}</code>:{' '}
+                    {conflict.existingRenameTo !== undefined || conflict.incomingRenameTo !== undefined ? (
+                      <>
+                        mine renames to {conflict.existingRenameTo ? `"${conflict.existingRenameTo}"` : 'none'} · theirs renames to{' '}
+                        {conflict.incomingRenameTo ? `"${conflict.incomingRenameTo}"` : 'none'}
+                      </>
+                    ) : (
+                      <>
+                        mine {conflict.existingCategory ?? 'none'} · theirs {conflict.incomingCategory ?? 'none'}
+                      </>
+                    )}
                   </li>
                 ))}
               </ul>

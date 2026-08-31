@@ -1,0 +1,1690 @@
+{
+  "format": "budget-tracker-rules",
+  "version": 1,
+  "exported_at": "2026-08-31T00:00:00.000Z",
+  "categories": [
+    {
+      "name": "Transport",
+      "parent": null,
+      "is_income": false,
+      "icon": "🚗",
+      "color": "#6366f1"
+    },
+    {
+      "name": "Gas",
+      "parent": "Transport",
+      "is_income": false,
+      "icon": "🚗",
+      "color": "#6366f1"
+    },
+    {
+      "name": "Food",
+      "parent": null,
+      "is_income": false,
+      "icon": "🍽️",
+      "color": "#f97316"
+    },
+    {
+      "name": "Coffee",
+      "parent": "Food",
+      "is_income": false,
+      "icon": "🍽️",
+      "color": "#f97316"
+    },
+    {
+      "name": "Restaurants",
+      "parent": "Food",
+      "is_income": false,
+      "icon": "🍽️",
+      "color": "#f97316"
+    },
+    {
+      "name": "Groceries",
+      "parent": "Food",
+      "is_income": false,
+      "icon": "🍽️",
+      "color": "#f97316"
+    },
+    {
+      "name": "Housing",
+      "parent": null,
+      "is_income": false,
+      "icon": "🏠",
+      "color": "#0ea5e9"
+    },
+    {
+      "name": "Internet & Phone",
+      "parent": "Housing",
+      "is_income": false,
+      "icon": "🏠",
+      "color": "#0ea5e9"
+    },
+    {
+      "name": "Utilities",
+      "parent": "Housing",
+      "is_income": false,
+      "icon": "🏠",
+      "color": "#0ea5e9"
+    },
+    {
+      "name": "Transit",
+      "parent": "Transport",
+      "is_income": false,
+      "icon": "🚗",
+      "color": "#6366f1"
+    },
+    {
+      "name": "Parking",
+      "parent": "Transport",
+      "is_income": false,
+      "icon": "🚗",
+      "color": "#6366f1"
+    },
+    {
+      "name": "Health",
+      "parent": null,
+      "is_income": false,
+      "icon": "🩺",
+      "color": "#14b8a6"
+    },
+    {
+      "name": "Pharmacy",
+      "parent": "Health",
+      "is_income": false,
+      "icon": "🩺",
+      "color": "#14b8a6"
+    },
+    {
+      "name": "Fitness",
+      "parent": "Health",
+      "is_income": false,
+      "icon": "🩺",
+      "color": "#14b8a6"
+    },
+    {
+      "name": "Personal",
+      "parent": null,
+      "is_income": false,
+      "icon": "🎧",
+      "color": "#a855f7"
+    },
+    {
+      "name": "Subscriptions",
+      "parent": "Personal",
+      "is_income": false,
+      "icon": "🎧",
+      "color": "#a855f7"
+    },
+    {
+      "name": "Entertainment",
+      "parent": "Personal",
+      "is_income": false,
+      "icon": "🎧",
+      "color": "#a855f7"
+    },
+    {
+      "name": "Fees",
+      "parent": null,
+      "is_income": false,
+      "icon": "🏦",
+      "color": "#64748b"
+    },
+    {
+      "name": "Bank Fees",
+      "parent": "Fees",
+      "is_income": false,
+      "icon": "🏦",
+      "color": "#64748b"
+    },
+    {
+      "name": "Travel",
+      "parent": "Personal",
+      "is_income": false,
+      "icon": "🎧",
+      "color": "#a855f7"
+    },
+    {
+      "name": "Shopping",
+      "parent": null,
+      "is_income": false,
+      "icon": "🛍️",
+      "color": "#ec4899"
+    },
+    {
+      "name": "Electronics",
+      "parent": "Shopping",
+      "is_income": false,
+      "icon": "🛍️",
+      "color": "#ec4899"
+    },
+    {
+      "name": "General",
+      "parent": "Shopping",
+      "is_income": false,
+      "icon": "🛍️",
+      "color": "#ec4899"
+    }
+  ],
+  "rules": [
+    {
+      "pattern": "PETRO-CANADA",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Gas",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "PETRO CANADA",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Gas",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "ESSO",
+      "match_type": "exact",
+      "rule_kind": "category",
+      "category": "Gas",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "SHELL",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Gas",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "CHEVRON",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Gas",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "ULTRAMAR",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Gas",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "HUSKY",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Gas",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "PIONEER",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Gas",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "FAS GAS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Gas",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "TIM HORTONS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Coffee",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "STARBUCKS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Coffee",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "SECOND CUP",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Coffee",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "COUNTRY STYLE",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Coffee",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "COFFEE TIME",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Coffee",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "MCDONALD'S",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Restaurants",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "WENDY'S",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Restaurants",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "BURGER KING",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Restaurants",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "A&W",
+      "match_type": "exact",
+      "rule_kind": "category",
+      "category": "Restaurants",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "A & W",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Restaurants",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "HARVEY'S",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Restaurants",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "KFC",
+      "match_type": "exact",
+      "rule_kind": "category",
+      "category": "Restaurants",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "TACO BELL",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Restaurants",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "SUBWAY",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Restaurants",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "PIZZA PIZZA",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Restaurants",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "PIZZA HUT",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Restaurants",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "DOMINO'S",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Restaurants",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "BOSTON PIZZA",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Restaurants",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "SWISS CHALET",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Restaurants",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "MARY BROWN'S",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Restaurants",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "EAST SIDE MARIO'S",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Restaurants",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "MR SUB",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Restaurants",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "FIVE GUYS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Restaurants",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "CHIPOTLE",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Restaurants",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "POPEYES",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Restaurants",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "DAIRY QUEEN",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Restaurants",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "LITTLE CAESARS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Restaurants",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "ST-HUBERT",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Restaurants",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "ST HUBERT",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Restaurants",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "MONTANA'S",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Restaurants",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "KELSEY'S",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Restaurants",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "EARLS KITCHEN",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Restaurants",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "CACTUS CLUB",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Restaurants",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "WHITE SPOT",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Restaurants",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "NANDO'S",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Restaurants",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "DENNY'S",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Restaurants",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "LOBLAWS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "NO FRILLS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "ZEHRS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "FOOD BASICS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "FRESHCO",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "METRO",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "SOBEYS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "SAFEWAY",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "IGA",
+      "match_type": "exact",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "SAVE-ON-FOODS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "SAVE ON FOODS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "THRIFTY FOODS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "LONGO'S",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "FARM BOY",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "WHOLE FOODS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "PROVIGO",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "MAXI",
+      "match_type": "exact",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "MAXI & CIE",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "VALU-MART",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "VALU MART",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "FORTINOS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "INDEPENDENT GROCER",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "BELL CANADA",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Internet & Phone",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "BELL MOBILITY",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Internet & Phone",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "BELL MTS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Internet & Phone",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "BELL ALIANT",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Internet & Phone",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "VIRGIN PLUS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Internet & Phone",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "VIRGIN MOBILE",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Internet & Phone",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "LUCKY MOBILE",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Internet & Phone",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "ROGERS COMMUNICATIONS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Internet & Phone",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "ROGERS WIRELESS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Internet & Phone",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "ROGERS CABLE",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Internet & Phone",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "FIDO",
+      "match_type": "exact",
+      "rule_kind": "category",
+      "category": "Internet & Phone",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "FIDO MOBILE",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Internet & Phone",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "CHATR",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Internet & Phone",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "TELUS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Internet & Phone",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "KOODO",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Internet & Phone",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "PUBLIC MOBILE",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Internet & Phone",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "VIDEOTRON",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Internet & Phone",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "FREEDOM MOBILE",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Internet & Phone",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "SASKTEL",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Internet & Phone",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "EASTLINK",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Internet & Phone",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "COGECO",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Internet & Phone",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "SHAW DIRECT",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Internet & Phone",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "BC HYDRO",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "HYDRO ONE",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "HYDRO OTTAWA",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "TORONTO HYDRO",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "MANITOBA HYDRO",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "SASKPOWER",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "SASKENERGY",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "ENBRIDGE",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "FORTIS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "NEWFOUNDLAND POWER",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "NOVA SCOTIA POWER",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "NB POWER",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "EPCOR",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "ENMAX",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "ATCO",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "HYDRO-QUÉBEC",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "HYDRO-QUEBEC",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "HYDRO QUEBEC",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "ENERGIR",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "ÉNERGIR",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "PRESTO",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Transit",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "TTC",
+      "match_type": "exact",
+      "rule_kind": "category",
+      "category": "Transit",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "GO TRANSIT",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Transit",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "STM",
+      "match_type": "exact",
+      "rule_kind": "category",
+      "category": "Transit",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "OC TRANSPO",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Transit",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "TRANSLINK",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Transit",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "COMPASS CARD",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Transit",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "IMPARK",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Parking",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "PRECISE PARKLINK",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Parking",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "GREEN P",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Parking",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "INDIGO PARK",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Parking",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "PAYBYPHONE",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Parking",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "CALGARY PARKING",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Parking",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "PHARMASAVE",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Pharmacy",
+      "category_parent": "Health",
+      "rename_to": null
+    },
+    {
+      "pattern": "GUARDIAN DRUGS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Pharmacy",
+      "category_parent": "Health",
+      "rename_to": null
+    },
+    {
+      "pattern": "GUARDIAN PHARMACY",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Pharmacy",
+      "category_parent": "Health",
+      "rename_to": null
+    },
+    {
+      "pattern": "MEDICINE SHOPPE",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Pharmacy",
+      "category_parent": "Health",
+      "rename_to": null
+    },
+    {
+      "pattern": "GOODLIFE FITNESS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Fitness",
+      "category_parent": "Health",
+      "rename_to": null
+    },
+    {
+      "pattern": "LA FITNESS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Fitness",
+      "category_parent": "Health",
+      "rename_to": null
+    },
+    {
+      "pattern": "ANYTIME FITNESS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Fitness",
+      "category_parent": "Health",
+      "rename_to": null
+    },
+    {
+      "pattern": "PLANET FITNESS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Fitness",
+      "category_parent": "Health",
+      "rename_to": null
+    },
+    {
+      "pattern": "FIT4LESS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Fitness",
+      "category_parent": "Health",
+      "rename_to": null
+    },
+    {
+      "pattern": "CRUNCH FITNESS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Fitness",
+      "category_parent": "Health",
+      "rename_to": null
+    },
+    {
+      "pattern": "ORANGETHEORY",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Fitness",
+      "category_parent": "Health",
+      "rename_to": null
+    },
+    {
+      "pattern": "F45",
+      "match_type": "exact",
+      "rule_kind": "category",
+      "category": "Fitness",
+      "category_parent": "Health",
+      "rename_to": null
+    },
+    {
+      "pattern": "F45 TRAINING",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Fitness",
+      "category_parent": "Health",
+      "rename_to": null
+    },
+    {
+      "pattern": "YMCA",
+      "match_type": "exact",
+      "rule_kind": "category",
+      "category": "Fitness",
+      "category_parent": "Health",
+      "rename_to": null
+    },
+    {
+      "pattern": "NETFLIX",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Subscriptions",
+      "category_parent": "Personal",
+      "rename_to": null
+    },
+    {
+      "pattern": "SPOTIFY",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Subscriptions",
+      "category_parent": "Personal",
+      "rename_to": null
+    },
+    {
+      "pattern": "DISNEY PLUS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Subscriptions",
+      "category_parent": "Personal",
+      "rename_to": null
+    },
+    {
+      "pattern": "DISNEYPLUS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Subscriptions",
+      "category_parent": "Personal",
+      "rename_to": null
+    },
+    {
+      "pattern": "AMAZON PRIME",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Subscriptions",
+      "category_parent": "Personal",
+      "rename_to": null
+    },
+    {
+      "pattern": "APPLE.COM/BILL",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Subscriptions",
+      "category_parent": "Personal",
+      "rename_to": null
+    },
+    {
+      "pattern": "MICROSOFT 365",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Subscriptions",
+      "category_parent": "Personal",
+      "rename_to": null
+    },
+    {
+      "pattern": "ADOBE",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Subscriptions",
+      "category_parent": "Personal",
+      "rename_to": null
+    },
+    {
+      "pattern": "DROPBOX",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Subscriptions",
+      "category_parent": "Personal",
+      "rename_to": null
+    },
+    {
+      "pattern": "YOUTUBE PREMIUM",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Subscriptions",
+      "category_parent": "Personal",
+      "rename_to": null
+    },
+    {
+      "pattern": "CRAVE TV",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Subscriptions",
+      "category_parent": "Personal",
+      "rename_to": null
+    },
+    {
+      "pattern": "SIRIUSXM",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Subscriptions",
+      "category_parent": "Personal",
+      "rename_to": null
+    },
+    {
+      "pattern": "SIRIUS XM",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Subscriptions",
+      "category_parent": "Personal",
+      "rename_to": null
+    },
+    {
+      "pattern": "AUDIBLE",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Subscriptions",
+      "category_parent": "Personal",
+      "rename_to": null
+    },
+    {
+      "pattern": "PARAMOUNT PLUS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Subscriptions",
+      "category_parent": "Personal",
+      "rename_to": null
+    },
+    {
+      "pattern": "CINEPLEX",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Entertainment",
+      "category_parent": "Personal",
+      "rename_to": null
+    },
+    {
+      "pattern": "LANDMARK CINEMAS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Entertainment",
+      "category_parent": "Personal",
+      "rename_to": null
+    },
+    {
+      "pattern": "TICKETMASTER",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Entertainment",
+      "category_parent": "Personal",
+      "rename_to": null
+    },
+    {
+      "pattern": "STUBHUB",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Entertainment",
+      "category_parent": "Personal",
+      "rename_to": null
+    },
+    {
+      "pattern": "XBOX",
+      "match_type": "exact",
+      "rule_kind": "category",
+      "category": "Entertainment",
+      "category_parent": "Personal",
+      "rename_to": null
+    },
+    {
+      "pattern": "XBOX GAME PASS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Entertainment",
+      "category_parent": "Personal",
+      "rename_to": null
+    },
+    {
+      "pattern": "PLAYSTATION",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Entertainment",
+      "category_parent": "Personal",
+      "rename_to": null
+    },
+    {
+      "pattern": "NINTENDO",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Entertainment",
+      "category_parent": "Personal",
+      "rename_to": null
+    },
+    {
+      "pattern": "NSF FEE",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Bank Fees",
+      "category_parent": "Fees",
+      "rename_to": null
+    },
+    {
+      "pattern": "NSF CHARGE",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Bank Fees",
+      "category_parent": "Fees",
+      "rename_to": null
+    },
+    {
+      "pattern": "OVERDRAFT FEE",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Bank Fees",
+      "category_parent": "Fees",
+      "rename_to": null
+    },
+    {
+      "pattern": "ACCOUNT FEE",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Bank Fees",
+      "category_parent": "Fees",
+      "rename_to": null
+    },
+    {
+      "pattern": "SERVICE CHARGE",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Bank Fees",
+      "category_parent": "Fees",
+      "rename_to": null
+    },
+    {
+      "pattern": "NON-SUFFICIENT FUNDS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Bank Fees",
+      "category_parent": "Fees",
+      "rename_to": null
+    },
+    {
+      "pattern": "NON SUFFICIENT FUNDS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Bank Fees",
+      "category_parent": "Fees",
+      "rename_to": null
+    },
+    {
+      "pattern": "RETURNED ITEM FEE",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Bank Fees",
+      "category_parent": "Fees",
+      "rename_to": null
+    },
+    {
+      "pattern": "INSUFFICIENT FUNDS FEE",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Bank Fees",
+      "category_parent": "Fees",
+      "rename_to": null
+    },
+    {
+      "pattern": "AIR CANADA",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Travel",
+      "category_parent": "Personal",
+      "rename_to": null
+    },
+    {
+      "pattern": "WESTJET",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Travel",
+      "category_parent": "Personal",
+      "rename_to": null
+    },
+    {
+      "pattern": "PORTER AIRLINES",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Travel",
+      "category_parent": "Personal",
+      "rename_to": null
+    },
+    {
+      "pattern": "VIA RAIL",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Travel",
+      "category_parent": "Personal",
+      "rename_to": null
+    },
+    {
+      "pattern": "BEST BUY",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Electronics",
+      "category_parent": "Shopping",
+      "rename_to": null
+    },
+    {
+      "pattern": "DOLLARAMA",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "General",
+      "category_parent": "Shopping",
+      "rename_to": null
+    },
+    {
+      "pattern": "WALMART",
+      "match_type": "contains",
+      "rule_kind": "rename",
+      "category": null,
+      "category_parent": null,
+      "rename_to": "Walmart"
+    },
+    {
+      "pattern": "SUPERSTORE",
+      "match_type": "contains",
+      "rule_kind": "rename",
+      "category": null,
+      "category_parent": null,
+      "rename_to": "Real Canadian Superstore"
+    },
+    {
+      "pattern": "COSTCO",
+      "match_type": "contains",
+      "rule_kind": "rename",
+      "category": null,
+      "category_parent": null,
+      "rename_to": "Costco"
+    },
+    {
+      "pattern": "AMAZON",
+      "match_type": "contains",
+      "rule_kind": "rename",
+      "category": null,
+      "category_parent": null,
+      "rename_to": "Amazon"
+    },
+    {
+      "pattern": "AMZN MKTP",
+      "match_type": "contains",
+      "rule_kind": "rename",
+      "category": null,
+      "category_parent": null,
+      "rename_to": "Amazon"
+    },
+    {
+      "pattern": "CANADIAN TIRE",
+      "match_type": "contains",
+      "rule_kind": "rename",
+      "category": null,
+      "category_parent": null,
+      "rename_to": "Canadian Tire"
+    },
+    {
+      "pattern": "HOME DEPOT",
+      "match_type": "contains",
+      "rule_kind": "rename",
+      "category": null,
+      "category_parent": null,
+      "rename_to": "Home Depot"
+    },
+    {
+      "pattern": "HOME HARDWARE",
+      "match_type": "contains",
+      "rule_kind": "rename",
+      "category": null,
+      "category_parent": null,
+      "rename_to": "Home Hardware"
+    },
+    {
+      "pattern": "RONA",
+      "match_type": "exact",
+      "rule_kind": "rename",
+      "category": null,
+      "category_parent": null,
+      "rename_to": "Rona"
+    },
+    {
+      "pattern": "LOWE'S",
+      "match_type": "contains",
+      "rule_kind": "rename",
+      "category": null,
+      "category_parent": null,
+      "rename_to": "Lowe's"
+    },
+    {
+      "pattern": "SHOPPERS DRUG MART",
+      "match_type": "contains",
+      "rule_kind": "rename",
+      "category": null,
+      "category_parent": null,
+      "rename_to": "Shoppers Drug Mart"
+    },
+    {
+      "pattern": "REXALL",
+      "match_type": "contains",
+      "rule_kind": "rename",
+      "category": null,
+      "category_parent": null,
+      "rename_to": "Rexall"
+    },
+    {
+      "pattern": "PHARMAPRIX",
+      "match_type": "contains",
+      "rule_kind": "rename",
+      "category": null,
+      "category_parent": null,
+      "rename_to": "Pharmaprix"
+    },
+    {
+      "pattern": "LONDON DRUGS",
+      "match_type": "contains",
+      "rule_kind": "rename",
+      "category": null,
+      "category_parent": null,
+      "rename_to": "London Drugs"
+    },
+    {
+      "pattern": "JEAN COUTU",
+      "match_type": "contains",
+      "rule_kind": "rename",
+      "category": null,
+      "category_parent": null,
+      "rename_to": "Jean Coutu"
+    },
+    {
+      "pattern": "GIANT TIGER",
+      "match_type": "contains",
+      "rule_kind": "rename",
+      "category": null,
+      "category_parent": null,
+      "rename_to": "Giant Tiger"
+    }
+  ]
+}

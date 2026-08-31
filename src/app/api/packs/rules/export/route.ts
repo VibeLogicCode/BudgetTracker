@@ -25,12 +25,15 @@ export async function GET(request: Request): Promise<Response> {
 
   const params = new URL(request.url).searchParams;
   const includeTransferRules = params.get('includeTransfers') === '1';
+  // Off by default (controller ruling (a), src/lib/packs.ts): a rename's text may name a real
+  // person, so it only leaves on this explicit opt-in.
+  const includeRenameRules = params.get('includeRenames') === '1';
   const excludeRuleIds = (params.get('exclude') ?? '')
     .split(',')
     .map((value) => Number(value.trim()))
     .filter((value) => Number.isInteger(value) && value > 0);
 
-  const pack = exportRulesPack({ includeTransferRules, excludeRuleIds });
+  const pack = exportRulesPack({ includeTransferRules, includeRenameRules, excludeRuleIds });
   return new Response(JSON.stringify(pack, null, 2), {
     status: 200,
     headers: {

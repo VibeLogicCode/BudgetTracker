@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { createSeededTestDb, categoryIdByName, insertTestUser, type TestDb } from '../helpers/db';
+import { sql } from 'drizzle-orm';
+import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
 import {
   PACK_VERSION,
   PROFILES_PACK_FORMAT,
@@ -18,6 +19,8 @@ import {
 } from '@/lib/packs';
 import { listRules, upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { listCategories } from '@/lib/categories';
+import { normalizeMerchant } from '@/lib/categorize/normalize';
+import { nowIso } from '@/lib/clock';
 import { BUILTIN_PRESET_NAMES, getBuiltinPreset, getProfileByName, listProfiles } from '@/lib/import/presets';
 
 let current: TestDb | null = null;
@@ -37,6 +40,15 @@ function setup() {
   upsertRuleFromCorrection({ pattern: 'TOY STORE', matchType: 'exact', ruleKind: 'category', categoryId: kids, createdBy: userId, actorRole: 'admin' });
   upsertRuleFromCorrection({ pattern: 'E-TRANSFER SENT J DOE', matchType: 'exact', ruleKind: 'transfer', categoryId: null, createdBy: userId, actorRole: 'admin' });
   return { db: current.db, sqlite: current.sqlite, userId, coffee, groceries, kids };
+}
+
+/** Insert a bare transaction row, the way an import would leave it (categorization_source 'none'). */
+function addTxn(db: TestDb['db'], accountId: number, userId: number, rawDescription: string): number {
+  const row = db.get<{ id: number }>(sql`
+    insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, categorization_source, created_by, created_at, updated_at)
+    values (${accountId}, '2026-03-02', ${rawDescription}, ${normalizeMerchant(rawDescription)}, -1000, 'none', ${userId}, ${nowIso()}, ${nowIso()})
+    returning id`);
+  return row.id;
 }
 
 describe('rules pack envelope', () => {
@@ -82,13 +94,55 @@ describe('rules pack privacy', () => {
     expect(transfer).toMatchObject({ pattern: 'E-TRANSFER SENT J DOE', match_type: 'exact', category: null, category_parent: null });
   });
 
-  it('never exports rename rules, even with the transfer toggle on (spec v1.4)', () => {
+  // Controller ruling (a) — revised 2026-08-31: rename rules ARE exportable now, but only
+  // behind their own explicit opt-in (includeRenameRules), off by default and independent of
+  // the transfer toggle — the risk is disclosure of free text a person typed, not a difference
+  // of taste. See src/lib/packs.ts's controller ruling (a) docblock for the full argument.
+  it('excludes rename rules from export unless includeRenameRules is explicitly set', () => {
     const { userId } = setup();
     upsertRuleFromCorrection({ pattern: 'MCDONALDS', matchType: 'exact', ruleKind: 'rename', categoryId: null, renameTo: "McDonald's", createdBy: userId, actorRole: 'admin' });
     expect(exportRulesPack().rules.some((r) => r.pattern === 'MCDONALDS')).toBe(false);
+    // The transfer toggle alone does not pull renames in -- they are independent opt-ins.
     expect(exportRulesPack({ includeTransferRules: true }).rules).toHaveLength(4);
     expect(previewRulesPackExport({ includeTransferRules: true }).some((r) => r.ruleKind === 'rename')).toBe(false);
     expect(JSON.stringify(exportRulesPack())).not.toContain("McDonald's");
+  });
+
+  it('includes rename rules, WITH their target text, only when includeRenameRules is set', () => {
+    const { userId } = setup();
+    upsertRuleFromCorrection({ pattern: 'MCDONALDS', matchType: 'exact', ruleKind: 'rename', categoryId: null, renameTo: "McDonald's", createdBy: userId, actorRole: 'admin' });
+
+    const pack = exportRulesPack({ includeRenameRules: true });
+    expect(pack.rules).toHaveLength(4); // 3 category + the 1 rename (transfer stays excluded, its own toggle is off)
+    const rename = pack.rules.find((r) => r.rule_kind === 'rename')!;
+    expect(rename).toMatchObject({ pattern: 'MCDONALDS', match_type: 'exact', category: null, category_parent: null, rename_to: "McDonald's" });
+    expect(JSON.stringify(pack)).toContain("McDonald's");
+
+    const withBoth = exportRulesPack({ includeTransferRules: true, includeRenameRules: true });
+    expect(withBoth.rules).toHaveLength(5);
+  });
+
+  it('surfaces the rename target text in the export preview, so an opt-in is informed consent', () => {
+    const { userId } = setup();
+    upsertRuleFromCorrection({ pattern: 'MCDONALDS', matchType: 'exact', ruleKind: 'rename', categoryId: null, renameTo: "McDonald's", createdBy: userId, actorRole: 'admin' });
+    // renameTo is present in the preview row regardless of the toggle -- the household needs to
+    // see the text BEFORE deciding whether to opt in, not after.
+    const withoutOptIn = previewRulesPackExport();
+    expect(withoutOptIn.some((r) => r.pattern === 'MCDONALDS')).toBe(false);
+    const withOptIn = previewRulesPackExport({ includeRenameRules: true });
+    expect(withOptIn.find((r) => r.pattern === 'MCDONALDS')).toMatchObject({ ruleKind: 'rename', renameTo: "McDonald's", categoryLabel: null });
+  });
+
+  it('excludeRuleIds can drop a single rename while keeping the others', () => {
+    const { userId } = setup();
+    upsertRuleFromCorrection({ pattern: 'MCDONALDS', matchType: 'exact', ruleKind: 'rename', categoryId: null, renameTo: "McDonald's", createdBy: userId, actorRole: 'admin' });
+    upsertRuleFromCorrection({ pattern: 'WALMART', matchType: 'contains', ruleKind: 'rename', categoryId: null, renameTo: 'Walmart', createdBy: userId, actorRole: 'admin' });
+
+    const rows = previewRulesPackExport({ includeRenameRules: true });
+    const mcdonalds = rows.find((r) => r.pattern === 'MCDONALDS')!.ruleId;
+    const pack = exportRulesPack({ includeRenameRules: true, excludeRuleIds: [mcdonalds] });
+    const renames = pack.rules.filter((r) => r.rule_kind === 'rename');
+    expect(renames.map((r) => r.pattern)).toEqual(['WALMART']);
   });
 
   // Controller ruling (a): 'not_transfer' (added post-brief) is excluded from packs
@@ -103,23 +157,42 @@ describe('rules pack privacy', () => {
     expect(previewRulesPackExport({ includeTransferRules: true }).some((r) => r.ruleKind === 'not_transfer')).toBe(false);
   });
 
-  // Controller ruling (a): unknown/excluded rule_kind entries in an INCOMING pack
-  // are skipped gracefully with a counted warning, never a whole-pack rejection —
-  // this supersedes the brief's original "reject a rename rule" test.
-  it('skips a rename rule entry in an incoming pack gracefully, rather than rejecting the whole pack', () => {
+  // Controller ruling (a) — revised 2026-08-31: rename is importable now (only export keeps the
+  // opt-in). Importing a rename creates the rule -- it is never skipped.
+  it('imports a rename rule entry rather than skipping it', () => {
     setup();
     const pack = {
       ...exportRulesPack(),
-      rules: [{ pattern: 'MCDONALDS', match_type: 'exact', rule_kind: 'rename', category: null }],
+      rules: [{ pattern: 'mcdonalds', match_type: 'exact', rule_kind: 'rename', category: null, rename_to: "McDonald's" }],
     };
     expect(() => parseRulesPack(pack)).not.toThrow();
 
     const plan = previewRulesPackImport(pack);
-    expect(plan).toMatchObject({ totalRules: 1, newRules: 0, unchanged: 0, skippedRules: 1, conflicts: [] });
+    expect(plan).toMatchObject({ totalRules: 1, newRules: 1, unchanged: 0, skippedRules: 0, conflicts: [] });
 
     const result = importRulesPack(pack);
-    expect(result).toMatchObject({ rulesAdded: 0, rulesOverwritten: 0, rulesKept: 0, rulesSkipped: 1 });
-    expect(listRules('rename')).toHaveLength(0);
+    expect(result).toMatchObject({ rulesAdded: 1, rulesOverwritten: 0, rulesKept: 0, rulesSkipped: 0 });
+    const rule = listRules('rename').find((r) => r.pattern === 'MCDONALDS');
+    // Required care item 3: patterns are uppercased at the write choke point even when the pack
+    // itself was authored lowercase.
+    expect(rule?.pattern).toBe('MCDONALDS');
+    expect(rule?.renameTo).toBe("McDonald's");
+  });
+
+  it('rejects a rename entry with no non-empty rename_to, rather than silently skipping it', () => {
+    setup();
+    const noTarget = {
+      ...exportRulesPack(),
+      rules: [{ pattern: 'MCDONALDS', match_type: 'exact', rule_kind: 'rename', category: null, rename_to: null }],
+    };
+    expect(() => parseRulesPack(noTarget)).toThrowError(PackFormatError);
+    expect(() => parseRulesPack(noTarget)).toThrowError(/rename rule needs a non-empty rename_to/i);
+
+    const blankTarget = {
+      ...exportRulesPack(),
+      rules: [{ pattern: 'MCDONALDS', match_type: 'exact', rule_kind: 'rename', category: null, rename_to: '   ' }],
+    };
+    expect(() => parseRulesPack(blankTarget)).toThrowError(PackFormatError);
   });
 
   it('skips a not_transfer rule entry in an incoming pack gracefully', () => {
@@ -471,6 +544,76 @@ describe('previewRulesPackImport', () => {
 
     expect((sqlite.prepare('select count(*) as c from merchant_rules').get() as { c: number }).c).toBe(before);
     expect(sqlite.prepare("select count(*) as c from categories where name = 'Pets'").get()).toEqual({ c: 0 });
+  });
+});
+
+describe('importRulesPack applies renames retroactively', () => {
+  function renamePack(pattern: string, renameTo: string) {
+    return {
+      format: RULES_PACK_FORMAT,
+      version: 1,
+      exported_at: '2026-08-15T12:00:00.000Z',
+      categories: [],
+      rules: [{ pattern, match_type: 'exact', rule_kind: 'rename', category: null, rename_to: renameTo }],
+    };
+  }
+
+  // Required care item 2: the form path (upsertRenameRule) runs the engine's reapply pass, so an
+  // imported rename must too -- otherwise it would sit in merchant_rules changing nothing until
+  // some unrelated re-run happened to touch the row.
+  it('changes a matching transaction\'s display immediately, the same way saving one on the form does', () => {
+    const { db, sqlite, userId } = setup();
+    const accountId = insertTestAccount(db);
+    const id = addTxn(db, accountId, userId, 'MCDONALDS #4821 TORONTO ON');
+
+    importRulesPack(renamePack('MCDONALDS', "McDonald's"));
+
+    const row = sqlite.prepare('select display_description, display_source from transactions where id = ?').get(id) as {
+      display_description: string | null;
+      display_source: string | null;
+    };
+    expect(row).toEqual({ display_description: "McDonald's", display_source: 'rename' });
+  });
+
+  it('never overwrites a transaction a household member renamed by hand (display_source = manual)', () => {
+    const { db, sqlite, userId } = setup();
+    const accountId = insertTestAccount(db);
+    const id = addTxn(db, accountId, userId, 'MCDONALDS #4821 TORONTO ON');
+    sqlite
+      .prepare("update transactions set display_description = ?, display_source = 'manual' where id = ?")
+      .run('Lunch with Bob', id);
+
+    importRulesPack(renamePack('MCDONALDS', "McDonald's"));
+
+    const row = sqlite.prepare('select display_description, display_source from transactions where id = ?').get(id) as {
+      display_description: string | null;
+      display_source: string | null;
+    };
+    expect(row).toEqual({ display_description: 'Lunch with Bob', display_source: 'manual' });
+  });
+
+  it('leaves an unrelated manual rename alone when the pack has no rename rules at all', () => {
+    const { db, sqlite, userId } = setup();
+    const accountId = insertTestAccount(db);
+    const id = addTxn(db, accountId, userId, 'SECOND CUP #12');
+    sqlite.prepare("update transactions set display_description = ?, display_source = 'manual' where id = ?").run('Study coffee', id);
+
+    // A category-only pack still runs the ensureCategory/upsert machinery; this asserts the
+    // renameRulesWritten guard correctly skips the reapply pass (no rename rows were written),
+    // leaving the manual row exactly as it was rather than merely "still correct by coincidence".
+    importRulesPack({
+      format: RULES_PACK_FORMAT,
+      version: 1,
+      exported_at: '2026-08-15T12:00:00.000Z',
+      categories: [{ name: 'Coffee', parent: 'Food', is_income: false, icon: null, color: null }],
+      rules: [{ pattern: 'SECOND CUP', match_type: 'exact', category: 'Coffee' }],
+    });
+
+    const row = sqlite.prepare('select display_description, display_source from transactions where id = ?').get(id) as {
+      display_description: string | null;
+      display_source: string | null;
+    };
+    expect(row).toEqual({ display_description: 'Study coffee', display_source: 'manual' });
   });
 });
 
