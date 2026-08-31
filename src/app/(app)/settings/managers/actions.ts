@@ -7,8 +7,6 @@ import BetterSqlite3 from 'better-sqlite3';
 import { isSameOrigin } from '@/lib/auth/csrf';
 import { requireAdmin } from '@/lib/auth/session';
 import { archiveCategory, createCategory, listCategories, renameCategory, setCategoryTaxRelevant } from '@/lib/categories';
-import { deleteRule, listRules, ruleOwnedError, upsertRuleFromCorrection } from '@/lib/categorize/rules';
-import { deleteRenameRule, upsertRenameRule } from '@/lib/categorize/engine';
 import {
   createProfile,
   deleteProfile,
@@ -117,87 +115,6 @@ export async function setCategoryTaxRelevantAction(_prev: ManagerState, formData
   setCategoryTaxRelevant(parsed.data.categoryId, taxRelevant);
   revalidateCategoryRoutes();
   return { message: taxRelevant ? 'Category marked tax-relevant.' : 'Category no longer marked tax-relevant.' };
-}
-
-export async function updateRuleAction(_prev: ManagerState, formData: FormData): Promise<ManagerState> {
-  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
-
-  const admin = await requireAdmin();
-  const parsed = z
-    .object({
-      pattern: z.string().trim().min(1).max(200),
-      matchType: z.enum(['exact', 'contains']),
-      // 'not_transfer' added post-brief (controller ruling c): an exact-match-only
-      // override that undoes a card-payment pattern's auto-transfer-flag for one merchant.
-      ruleKind: z.enum(['category', 'transfer', 'rename', 'not_transfer']),
-      categoryId: z.string(),
-      renameTo: z.string().trim().max(200),
-    })
-    .safeParse({
-      pattern: formData.get('pattern') ?? '',
-      matchType: formData.get('matchType') ?? 'exact',
-      ruleKind: formData.get('ruleKind') ?? 'category',
-      categoryId: String(formData.get('categoryId') ?? ''),
-      renameTo: String(formData.get('renameTo') ?? ''),
-    });
-  if (!parsed.success) return { error: 'Invalid rule.' };
-
-  // Rename rules go through the engine so the change is applied retroactively.
-  if (parsed.data.ruleKind === 'rename') {
-    if (parsed.data.renameTo.length === 0) return { error: 'A rename rule needs a display name.' };
-    const result = upsertRenameRule({
-      pattern: parsed.data.pattern,
-      matchType: parsed.data.matchType,
-      renameTo: parsed.data.renameTo,
-      userId: admin.id,
-      // v1.13.0 ruling R4. This action is requireAdmin()-gated, so the refusal branch below is
-      // unreachable in practice (an admin actor always passes upsertRuleFromCorrection's
-      // ownership check) -- the guard exists so the type stays sound if that ever changes.
-      actorRole: admin.role,
-    });
-    if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
-    revalidatePath('/settings/managers');
-    revalidatePath('/transactions');
-    return { message: `Rename rule saved and applied to ${result.rowsUpdated} transaction${result.rowsUpdated === 1 ? '' : 's'}.` };
-  }
-
-  const upserted = upsertRuleFromCorrection({
-    pattern: parsed.data.pattern,
-    matchType: parsed.data.matchType,
-    ruleKind: parsed.data.ruleKind,
-    categoryId:
-      parsed.data.ruleKind === 'transfer' || parsed.data.ruleKind === 'not_transfer' || parsed.data.categoryId === ''
-        ? null
-        : Number(parsed.data.categoryId),
-    createdBy: admin.id,
-    actorRole: admin.role,
-  });
-  if (!upserted.ok) return { error: ruleOwnedError(upserted.ownerName) };
-  revalidatePath('/settings/managers');
-  return { message: 'Rule saved.' };
-}
-
-export async function deleteRuleAction(_prev: ManagerState, formData: FormData): Promise<ManagerState> {
-  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
-
-  await requireAdmin();
-  const parsed = z.object({ ruleId: z.coerce.number().int().positive() }).safeParse({ ruleId: formData.get('ruleId') });
-  if (!parsed.success) return { error: 'Invalid request.' };
-
-  const target = listRules().find((rule) => rule.id === parsed.data.ruleId);
-  if (!target) return { error: 'That rule no longer exists.' };
-
-  // Deleting a rename rule must also clear the rows it set (spec section 4).
-  if (target.ruleKind === 'rename') {
-    const result = deleteRenameRule({ pattern: target.pattern, matchType: target.matchType });
-    revalidatePath('/settings/managers');
-    revalidatePath('/transactions');
-    return { message: `Rename rule deleted; ${result.rowsCleared} transaction${result.rowsCleared === 1 ? '' : 's'} went back to the bank text.` };
-  }
-
-  deleteRule(target.id);
-  revalidatePath('/settings/managers');
-  return { message: 'Rule deleted.' };
 }
 
 export async function saveProfileMappingAction(_prev: ManagerState, formData: FormData): Promise<ManagerState> {

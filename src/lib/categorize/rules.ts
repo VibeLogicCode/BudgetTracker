@@ -26,6 +26,9 @@ export interface MerchantRuleRecord {
   createdAt: string;
   /** v1.13.0 ruling R4. Who last changed the rule; NULL before v1.13.0 or if never edited since. */
   lastModifiedBy: number | null;
+  /** v1.21.0 (item 11). NULL = enabled (every row ever, until someone flips it). See the
+   *  docblock on schema.ts's merchantRules.disabledAt for the full reasoning. */
+  disabledAt: string | null;
 }
 
 export function listRules(kind?: RuleKind): MerchantRuleRecord[] {
@@ -34,7 +37,15 @@ export function listRules(kind?: RuleKind): MerchantRuleRecord[] {
   return rows.sort((a, b) => a.id - b.id);
 }
 
-/** Exact wins; otherwise the longest contains pattern wins; ties break on lowest id. */
+/**
+ * Exact wins; otherwise the longest contains pattern wins; ties break on lowest id.
+ *
+ * v1.21.0 (item 11): a disabled rule (disabledAt !== null) is skipped outright, before its
+ * matchType is even looked at. This is the ONE place every caller's match ultimately funnels
+ * through -- buildContext()/listRules() deliberately still return disabled rows (the settings
+ * page needs to list and re-enable them), so the filter has to live here rather than at every
+ * call site, or a caller that forgets to pre-filter would let a disabled rule match anyway.
+ */
 export function matchRule(
   normalizedMerchant: string,
   kind: RuleKind,
@@ -43,6 +54,7 @@ export function matchRule(
   let bestContains: MerchantRuleRecord | null = null;
   for (const rule of rules) {
     if (rule.ruleKind !== kind) continue;
+    if (rule.disabledAt !== null) continue;
     if (rule.matchType === 'exact') {
       if (rule.pattern === normalizedMerchant) return rule;
       continue;
@@ -119,6 +131,14 @@ export function upsertRuleFromCorrection(input: {
 }): RuleUpsertResult {
   const db = getDb();
   const renameTo = input.ruleKind === 'rename' ? (input.renameTo ?? null) : null;
+  // v1.21.0 (item 9): normalized_merchant is always uppercase (normalizeMerchant() calls
+  // .toUpperCase()) and matchRule compares patterns with no case folding on either side -- a
+  // pattern saved as `walmart` was therefore accepted, listed, and dead forever, with no error.
+  // This is the ONE place every write path funnels through (the admin form, upsertRenameRule,
+  // confirmCategory, setTransferFlag, applyCategoryToMatching, pack import), so uppercasing here
+  // once makes every one of them correct rather than needing the same fix repeated at each call
+  // site. drizzle/0016_rule_hygiene.sql is the one-time catch-up for rows already in the table.
+  const pattern = input.pattern.trim().toUpperCase();
 
   const existing = db
     .select({ id: merchantRules.id, createdBy: merchantRules.createdBy, ownerName: users.name })
@@ -126,7 +146,7 @@ export function upsertRuleFromCorrection(input: {
     .leftJoin(users, eq(users.id, merchantRules.createdBy))
     .where(
       and(
-        eq(merchantRules.pattern, input.pattern),
+        eq(merchantRules.pattern, pattern),
         eq(merchantRules.matchType, input.matchType),
         eq(merchantRules.ruleKind, input.ruleKind),
       ),
@@ -145,7 +165,7 @@ export function upsertRuleFromCorrection(input: {
 
   db.insert(merchantRules)
     .values({
-      pattern: input.pattern,
+      pattern,
       matchType: input.matchType,
       ruleKind: input.ruleKind,
       categoryId: input.categoryId,
@@ -173,7 +193,7 @@ export function upsertRuleFromCorrection(input: {
     .from(merchantRules)
     .where(
       and(
-        eq(merchantRules.pattern, input.pattern),
+        eq(merchantRules.pattern, pattern),
         eq(merchantRules.matchType, input.matchType),
         eq(merchantRules.ruleKind, input.ruleKind),
       ),
@@ -200,4 +220,64 @@ export function bumpRuleUsage(id: number, at: Date = new Date()): void {
     .set({ hitCount: sql`${merchantRules.hitCount} + 1`, lastUsedAt: nowIso(at) })
     .where(eq(merchantRules.id, id))
     .run();
+}
+
+/**
+ * v1.21.0 (item 11). The raw column flip -- "disable, not delete", a switch that can always be
+ * flipped back, unlike deleteRule. This is the ONLY writer of disabled_at. It deliberately does
+ * NOT touch anything else: a rename rule's rows are cleared/restored by
+ * src/lib/categorize/engine.ts's setRuleDisabled, which calls this and then re-runs
+ * applyRenameRules -- kept as two functions in two files because this one has no business
+ * knowing about transactions at all, the same separation rules.ts already keeps from engine.ts
+ * everywhere else in this module.
+ */
+export function setRuleDisabledFlag(id: number, disabled: boolean, at: Date = new Date()): void {
+  getDb()
+    .update(merchantRules)
+    .set({ disabledAt: disabled ? nowIso(at) : null })
+    .where(eq(merchantRules.id, id))
+    .run();
+}
+
+export interface RedundantRule {
+  ruleId: number;
+  /** The contains rule that already produces this rule's exact same outcome. */
+  coveredByRuleId: number;
+}
+
+/**
+ * v1.21.0 (item 10): "once `contains WALMART` exists, every exact `WALMART <store> <city>` rule
+ * under it is dead weight still evaluated on every match". matchRule already gives an exact rule
+ * priority over any contains rule (see its own docblock), so an exact rule flagged here changes
+ * NOTHING if deleted -- the covering contains rule already resolves every transaction that exact
+ * rule ever did, to the identical outcome. "Identical outcome" is kind-specific: the same
+ * categoryId for a category rule, the same renameTo for a rename rule; transfer and not_transfer
+ * carry no further outcome to disagree on, so kind alone (and the substring relationship) is
+ * enough for those two.
+ *
+ * Deliberately pure (no DB access): the merchant-rules page calls this once per render over the
+ * rules it already has, the same way it already computes impact counts, rather than this
+ * function re-fetching its own copy of the list.
+ */
+export function findRedundantExactRules(rules: MerchantRuleRecord[]): RedundantRule[] {
+  const out: RedundantRule[] = [];
+  for (const exact of rules) {
+    if (exact.matchType !== 'exact' || exact.disabledAt !== null) continue;
+    let best: MerchantRuleRecord | null = null;
+    for (const contains of rules) {
+      if (contains.matchType !== 'contains' || contains.ruleKind !== exact.ruleKind) continue;
+      if (contains.disabledAt !== null || contains.pattern.length === 0) continue;
+      if (!exact.pattern.includes(contains.pattern)) continue;
+      const sameOutcome =
+        exact.ruleKind === 'category'
+          ? contains.categoryId === exact.categoryId
+          : exact.ruleKind === 'rename'
+            ? contains.renameTo === exact.renameTo
+            : true; // transfer / not_transfer: kind is the whole outcome
+      if (!sameOutcome) continue;
+      if (best === null || contains.pattern.length > best.pattern.length) best = contains;
+    }
+    if (best !== null) out.push({ ruleId: exact.id, coveredByRuleId: best.id });
+  }
+  return out;
 }

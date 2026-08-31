@@ -62,7 +62,7 @@ describe('commitStagedImport — engine-failure isolation (review finding 2)', (
 
     expect(result.engineFailed).toBe(true);
     expect(result.rowsAdded).toBe(9);
-    expect(result.engine).toEqual({ processed: 0, categorized: 0, transfers: 0, skipped: 0 });
+    expect(result.engine).toEqual({ processed: 0, categorized: 0, transfers: 0, skipped: 0, changed: 0 });
     // The rows are genuinely committed, not rolled back because categorization failed.
     expect((sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c).toBe(9);
     // Staging must not leak just because the engine threw.

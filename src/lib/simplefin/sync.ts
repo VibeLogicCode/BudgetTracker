@@ -235,7 +235,7 @@ export async function runSync(input: { userId: number; fetcher?: Fetcher; now?: 
     engine = runEngine(insertedIds);
   } catch {
     engineFailed = true;
-    engine = { processed: 0, categorized: 0, transfers: 0, skipped: 0 };
+    engine = { processed: 0, categorized: 0, transfers: 0, skipped: 0, changed: 0 };
   }
   // MUST-13.7: same post-commit slot as import/flow.ts, on the sync's own inserted ids.
   // Same out-param pattern as flow.ts for F5's loanMatchFailed.

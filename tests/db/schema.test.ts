@@ -21,7 +21,7 @@ const EXPECTED_TABLES = [
   'account_balance_snapshots', 'account_card_people', 'accounts', 'audit_log', 'bayes_category_totals',
   'bayes_tokens', 'bill_installments', 'budget_rollover', 'budgets', 'categories', 'goal_contributions', 'goals',
   'import_profiles', 'imports', 'loan_matcher_rules', 'loan_payments', 'login_attempts',
-  'merchant_rules', 'notification_outbox', 'notification_prefs', 'notification_smtp',
+  'merchant_rule_merges', 'merchant_rules', 'notification_outbox', 'notification_prefs', 'notification_smtp',
   'notification_targets', 'notification_user_settings', 'savings_targets', 'sessions', 'settings',
   'simplefin_account_links', 'simplefin_connections', 'totp_recovery_codes',
   'transaction_imports', 'transaction_splits', 'transactions', 'users', 'warranty_item_types',
@@ -66,6 +66,7 @@ const EXPECTED_INDEXES = [
   'loan_payments_txn_idx',
   'loan_payments_txn_item_uq',
   'account_card_people_uq',
+  'merchant_rule_merges_kept_idx',
 ];
 
 describe('database schema', () => {
@@ -153,6 +154,26 @@ describe('database schema', () => {
     insert.run('TIM HORTONS', 'exact', 'rename');
     const kinds = (sqlite.prepare("select rule_kind from merchant_rules where pattern = 'TIM HORTONS' and match_type = 'exact' order by rule_kind").all() as { rule_kind: string }[]).map((r) => r.rule_kind);
     expect(kinds).toEqual(['category', 'rename', 'transfer']);
+  });
+
+  it('defaults disabled_at to NULL, and records a merge in merchant_rule_merges (item 9/11, drizzle/0016_rule_hygiene.sql)', () => {
+    current = createTestDb();
+    const { sqlite } = current;
+    sqlite
+      .prepare(
+        "insert into merchant_rules (id, pattern, match_type, rule_kind, category_id, hit_count, created_at) values (1, 'WALMART', 'exact', 'category', null, 3, '2026-01-01T00:00:00.000Z')",
+      )
+      .run();
+    const row = sqlite.prepare('select disabled_at from merchant_rules where id = 1').get() as { disabled_at: string | null };
+    expect(row.disabled_at).toBeNull();
+
+    sqlite
+      .prepare(
+        "insert into merchant_rule_merges (kept_rule_id, dropped_pattern, dropped_match_type, dropped_rule_kind, dropped_hit_count, dropped_created_at, merged_at) values (1, 'walmart', 'exact', 'category', 0, '2025-12-01T00:00:00.000Z', '2026-01-02T00:00:00.000Z')",
+      )
+      .run();
+    const merge = sqlite.prepare('select * from merchant_rule_merges where kept_rule_id = 1').get() as Record<string, unknown>;
+    expect(merge).toMatchObject({ dropped_pattern: 'walmart', dropped_hit_count: 0 });
   });
 
   it('stores rename_to on rename rules and leaves it NULL elsewhere', () => {

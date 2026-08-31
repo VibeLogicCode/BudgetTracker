@@ -31,8 +31,14 @@ const ADMIN_LINKS: { href: string; label: string; blurb: string; Icon: (props: I
   { href: '/settings/accounts', label: 'Bank accounts', blurb: 'Where imported transactions land.', Icon: BudgetsIcon },
   {
     href: '/settings/managers',
-    label: 'Categories, merchant rules and import profiles',
+    label: 'Categories and import profiles',
     blurb: 'How transactions get named and sorted.',
+    Icon: TransactionsIcon,
+  },
+  {
+    href: '/settings/merchant-rules',
+    label: 'Merchant rules',
+    blurb: 'Category, rename, transfer and not-a-transfer rules -- searched, filtered and disabled or re-run in bulk.',
     Icon: TransactionsIcon,
   },
   { href: '/settings/backups', label: 'Backups', blurb: 'Nightly archives, downloads and restore.', Icon: ImportIcon },
@@ -60,9 +66,10 @@ export default async function SettingsPage() {
           Of the admin sections below, <strong className="font-semibold text-ink">Bank
           accounts</strong> is the one that has to be done first: an import has to land in an
           account, so nothing can be brought in until at least one exists. Alongside it,
-          Categories, merchant rules and import profiles is where you adjust how imported rows
-          get named and sorted, and where a bank&rsquo;s import mapping can be switched off
-          without deleting it if you stop using that bank.
+          Categories and import profiles is where a bank&rsquo;s import mapping can be switched
+          off without deleting it if you stop using that bank, and Merchant rules is where the
+          patterns that name and sort a row live — its own page, searchable and filterable, since
+          that list only ever grows.
         </p>
         <p>
           The rest is optional and can wait. Notifications decide whether the app messages you

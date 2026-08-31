@@ -16,24 +16,24 @@ import { Card, CardBody, CardHeader } from '@/components/ui/Card';
  * aria-modal, a labelled title, a focus trap, Escape, backdrop-click-only dismissal, body-scroll
  * lock, and focus restored to the trigger on close -- carries over unchanged to every caller.
  *
- * BELONGS IN src/components/ui/ once that directory is not held by a concurrent lane (this repo's
- * convention, see e.g. the note glyph's own docblock in transactions-client.tsx for the same
- * situation) -- nothing about this component is Transactions-specific; it lives under
- * src/app/(app)/transactions/ only because that is the one directory this task was allowed to
- * touch. Move the file and update its two import sites (this one, transactions-client.tsx) when
- * that lane frees up.
+ * MOVED HERE v1.21.0 (item 10): this file used to live at src/app/(app)/transactions/RowDialog.tsx,
+ * with its own docblock explicitly asking to be moved to src/components/ui/ "once that directory
+ * is not held by a concurrent lane" -- nothing about the component is Transactions-specific, it
+ * only lived there because that was the one directory an earlier task was allowed to touch. This
+ * merchant-rules page needed the exact same "edit one thing about this row" dialog and was not
+ * allowed to edit transactions-client.tsx or its sibling files, so rather than copy the ~150 lines
+ * of focus-trap/scroll-lock/Escape logic a second time, this is the real move the old docblock was
+ * waiting for. The transactions/ copy has since been deleted and that page repointed here, so this
+ * is now the ONE implementation both callers share -- which was the point.
  *
- * Mount-once contract: the opener capture runs once at render (see its own comment below for
- * why it cannot wait for an effect), and the initial focus move plus the scroll lock run in a
- * `useEffect` with an EMPTY dependency array -- deliberately, in both cases: this
- * component is only ever rendered while its dialog is open (each caller conditionally renders it,
- * `{state ? <RowDialog ...>...</RowDialog> : null}`), so a fresh mount already IS a fresh open;
- * there is no second "did the target change" case to key an effect on the way the split editor's
- * own `splitting?.id` dependency used to have to. A caller switching which ROW this dialog acts on
- * without an intervening close (never actually reachable once every trigger sits behind this
- * dialog's own backdrop+focus-trap, but still worth being correct against) must pass a `key` that
- * changes with the row id, forcing React to unmount and remount rather than re-use this instance
- * across two different rows -- see transactions-client.tsx's own call sites.
+ * Mount-once contract: the opener capture runs once at render (see its own comment below for why
+ * it cannot wait for an effect), and the initial focus move plus the scroll lock run in a
+ * `useEffect` with an EMPTY dependency array -- deliberately, in both cases: this component is
+ * only ever rendered while its dialog is open (each caller conditionally renders it,
+ * `{state ? <RowDialog ...>...</RowDialog> : null}`), so a fresh mount already IS a fresh open.
+ * A caller switching which ROW this dialog acts on without an intervening close must pass a `key`
+ * that changes with the row id, forcing a remount rather than re-using one instance across two
+ * different rows -- see transactions-client.tsx's own call sites.
  */
 
 /**
@@ -70,7 +70,7 @@ export interface RowDialogProps {
    * its backdrop's `data-testid` (`${dialogId}-backdrop`, unless `backdropTestId` overrides it).
    * A stable per-KIND id (`"split-dialog"`, `"note-dialog"`, ...) is enough -- there is never two
    * instances of the same kind mounted at once (each editor is its own nullable slot of state in
-   * transactions-client.tsx), so this needs no per-row uniqueness of its own.
+   * the caller), so this needs no per-row uniqueness of its own.
    */
   dialogId: string;
   /** Rendered as the dialog's heading (CardHeader's own `title` slot) AND named by

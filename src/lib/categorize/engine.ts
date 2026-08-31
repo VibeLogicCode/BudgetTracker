@@ -12,6 +12,7 @@ import {
   exactRuleOwner,
   listRules,
   matchRule,
+  setRuleDisabledFlag,
   upsertRuleFromCorrection,
   type MatchType,
   type MerchantRuleRecord,
@@ -120,6 +121,15 @@ export interface EngineResult {
   categorized: number;
   transfers: number;
   skipped: number;
+  /**
+   * v1.21.0 (item 11). How many of the `processed` rows actually ended up with a different
+   * category_id or is_transfer than they carried going in -- distinct from `processed`, which
+   * counts every row the engine LOOKED AT regardless of whether anything changed (a bayes-guessed
+   * row that gets re-guessed to the identical category is processed but not changed). This is the
+   * figure a re-run confirmation actually needs: "this will change N transactions", not "this will
+   * look at N transactions".
+   */
+  changed: number;
 }
 
 /**
@@ -148,6 +158,9 @@ function selectRowsByIds(ids: number[]) {
     normalizedMerchant: string;
     categoryId: number | null;
     source: 'rule' | 'bayes' | 'manual' | 'none';
+    /** v1.21.0 (item 11). Selected alongside categoryId so runEngine/previewRerun can tell
+     *  "this row changed" from "this row was merely looked at" -- see EngineResult.changed. */
+    isTransfer: boolean;
     /**
      * v1.12.1 (item BC / MON-6). ELIGIBLE (above) carries the splits half of the predicate and its
      * docblock explains at length why. runEngine re-derived eligibility in JavaScript and
@@ -165,6 +178,7 @@ function selectRowsByIds(ids: number[]) {
         normalizedMerchant: transactions.normalizedMerchant,
         categoryId: transactions.categoryId,
         source: transactions.categorizationSource,
+        isTransfer: transactions.isTransfer,
       })
       .from(transactions)
       .where(inArray(transactions.id, chunk))
@@ -193,10 +207,10 @@ function selectRowsByIds(ids: number[]) {
 }
 
 export function runEngine(txnIds: number[]): EngineResult {
-  if (txnIds.length === 0) return { processed: 0, categorized: 0, transfers: 0, skipped: 0 };
+  if (txnIds.length === 0) return { processed: 0, categorized: 0, transfers: 0, skipped: 0, changed: 0 };
 
   const db = getDb();
-  let result: EngineResult = { processed: 0, categorized: 0, transfers: 0, skipped: 0 };
+  let result: EngineResult = { processed: 0, categorized: 0, transfers: 0, skipped: 0, changed: 0 };
 
   // The rename pass, the categorization pass and the rule-hit bumps must land
   // atomically as one unit of work, not three independent commits — a crash
@@ -221,6 +235,7 @@ export function runEngine(txnIds: number[]): EngineResult {
     const at = new Date();
     let categorized = 0;
     let transfers = 0;
+    let changed = 0;
     const ruleHits = new Map<number, number>();
 
     for (const row of eligible) {
@@ -230,6 +245,10 @@ export function runEngine(txnIds: number[]): EngineResult {
       if (outcome.matchedRuleId !== null) {
         ruleHits.set(outcome.matchedRuleId, (ruleHits.get(outcome.matchedRuleId) ?? 0) + 1);
       }
+      // v1.21.0 (item 11): EngineResult.changed. Compared against what the row ALREADY carried,
+      // not against what this loop just wrote to a different row -- so a re-guess that lands on
+      // the same category, or a row that was already flagged a transfer, does not inflate the count.
+      if (outcome.categoryId !== row.categoryId || outcome.isTransfer !== row.isTransfer) changed += 1;
       tx.update(transactions)
         .set({
           categoryId: outcome.categoryId,
@@ -246,7 +265,7 @@ export function runEngine(txnIds: number[]): EngineResult {
       for (let i = 0; i < hits; i += 1) bumpRuleUsage(ruleId, at);
     }
 
-    result = { processed: eligible.length, categorized, transfers, skipped };
+    result = { processed: eligible.length, categorized, transfers, skipped, changed };
   });
 
   return result;
@@ -265,6 +284,217 @@ export function eligibleForRerun(scope: { accountId?: number } = {}): number[] {
 
 export function rerunEngine(scope: { accountId?: number } = {}): EngineResult {
   return runEngine(eligibleForRerun(scope));
+}
+
+export interface RerunPreview {
+  /** Rows runEngine(txnIds) would look at (same count as the eventual EngineResult.processed). */
+  eligible: number;
+  /** Rows whose category_id or is_transfer would actually differ afterward. */
+  wouldChange: number;
+}
+
+/**
+ * v1.21.0 (item 11): "report a count before and after... that is the difference between a
+ * useful button and a frightening one". A read-only dry run over exactly the rows
+ * runEngine(txnIds) would touch, so a confirm step can say "this will change N transactions"
+ * BEFORE anything is written.
+ *
+ * Deliberately duplicates runEngine's per-row simulation rather than sharing a helper with it:
+ * runEngine's loop composes its write inside the very same pass as the count on purpose (one
+ * transaction, one pass over `eligible` -- see its own docblock on why the rename pass, the
+ * categorize pass and the rule-hit bumps all land atomically together), so splitting "compute
+ * outcome" from "write outcome" there would cost that guarantee for every REAL run just so this
+ * preview could reuse three lines. This function does no `db.transaction`, no `tx.update`, no
+ * `bumpRuleUsage` -- nothing it does can race or invalidate the write runEngine performs moments
+ * later when a person clicks through, and calling it twice in a row is exactly as safe as calling
+ * it once.
+ */
+export function previewRerun(txnIds: number[]): RerunPreview {
+  if (txnIds.length === 0) return { eligible: 0, wouldChange: 0 };
+  const rows = selectRowsByIds(txnIds);
+  const ctx = buildContext();
+  const eligible = rows.filter((row) => (row.categoryId === null || row.source === 'bayes') && row.hasSplits === 0);
+  let wouldChange = 0;
+  for (const row of eligible) {
+    const outcome = categorizeTransaction({ id: row.id, normalizedMerchant: row.normalizedMerchant }, ctx);
+    if (outcome.categoryId !== row.categoryId || outcome.isTransfer !== row.isTransfer) wouldChange += 1;
+  }
+  return { eligible: eligible.length, wouldChange };
+}
+
+/**
+ * v1.21.0 (item 11): the rows eligibleForRerun() would already touch (so a human decision --
+ * categorization_source = 'manual' -- is never in scope; see ELIGIBLE's own docblock), narrowed
+ * to the ones that CURRENTLY resolve to this one specific rule, so "Apply now" on one row can
+ * never reach past that rule's own pattern into what a different rule already reconciled.
+ *
+ * Rename rules return an empty scope: they are already retroactive on every save/disable/delete
+ * (upsertRenameRule / setRuleDisabled / deleteRenameRule all call applyRenameRules), so there is
+ * nothing left for "Apply now" to do that saving the rule did not already do the moment it was
+ * saved.
+ *
+ * transfer / not_transfer are exact-match-only kinds (matchRule's own callers document this), so
+ * attribution is unambiguous without a full categorizeTransaction simulation: the unique index on
+ * (pattern, match_type, rule_kind) already makes "this rule's own rows" just "this exact merchant
+ * text". category rules DO need the full simulation -- categorizeTransaction checks for a
+ * transfer FIRST, so a merchant a transfer rule also claims must not be attributed to a category
+ * rule that would never actually fire for it.
+ */
+function eligibleForRuleReapply(rule: MerchantRuleRecord): number[] {
+  if (rule.ruleKind === 'rename') return [];
+  const ids = eligibleForRerun();
+  if (ids.length === 0) return [];
+  const rows = selectRowsByIds(ids);
+  const eligible = rows.filter((row) => (row.categoryId === null || row.source === 'bayes') && row.hasSplits === 0);
+
+  if (rule.ruleKind === 'transfer' || rule.ruleKind === 'not_transfer') {
+    return eligible.filter((row) => row.normalizedMerchant === rule.pattern).map((row) => row.id);
+  }
+
+  const ctx = buildContext();
+  return eligible
+    .filter(
+      (row) =>
+        categorizeTransaction({ id: row.id, normalizedMerchant: row.normalizedMerchant }, ctx).matchedRuleId === rule.id,
+    )
+    .map((row) => row.id);
+}
+
+/** Per-rule "Apply now" preview: the confirm text before the click. */
+export function previewRuleReapply(ruleId: number): RerunPreview {
+  const rule = listRules().find((r) => r.id === ruleId);
+  if (!rule) return { eligible: 0, wouldChange: 0 };
+  return previewRerun(eligibleForRuleReapply(rule));
+}
+
+/**
+ * Per-rule "Apply now" (item 11): re-runs the engine scoped to exactly the rows
+ * eligibleForRuleReapply resolved for this one rule. Reuses runEngine wholesale rather than
+ * writing a second categorization loop -- the "never overwrite a human decision" invariant lives
+ * in ELIGIBLE/eligibleForRerun once, and every caller of runEngine inherits it for free.
+ */
+export function applyRuleNow(ruleId: number): EngineResult {
+  const rule = listRules().find((r) => r.id === ruleId);
+  if (!rule) return { processed: 0, categorized: 0, transfers: 0, skipped: 0, changed: 0 };
+  return runEngine(eligibleForRuleReapply(rule));
+}
+
+/**
+ * v1.21.0 (item 11): "disable, not delete". The composed, retroactive-aware version of
+ * setRuleDisabledFlag (src/lib/categorize/rules.ts), which is the raw column write and nothing
+ * else. This is the version every caller (the merchant-rules page's action) should use.
+ *
+ * Disabling a RENAME rule must revert its rows exactly as deleteRenameRule does, or a display
+ * name is left behind with no rule to explain it -- so this reapplies the rename pass immediately
+ * afterward, which naturally clears every row the now-invisible rule used to set (matchRule skips
+ * a disabled row, so resolveRename returns null for it, and applyRenameRules already clears
+ * anything a rule no longer resolves). Re-enabling is the same call in reverse and just as
+ * symmetric: the rule becomes visible to matchRule again and the very same reapply pass restores
+ * whatever it used to set.
+ *
+ * Every other rule kind (category, transfer, not_transfer) reports rowsChanged: 0 here on
+ * purpose. Disabling one of those changes nothing retroactively by itself -- matchRule simply
+ * stops offering it to the NEXT match, whether that is the next import or an explicit "Apply
+ * now"/"Re-run rules" click. Making a category disable ALSO silently revert already-categorized
+ * rows would be the opposite of item 11's own invariant: a person's confirmed category is a human
+ * decision, and disabling the rule that originally suggested it is not un-deciding anything.
+ */
+export function setRuleDisabled(input: { ruleId: number; disabled: boolean; at?: Date }): { rowsChanged: number } {
+  const rule = listRules().find((r) => r.id === input.ruleId);
+  if (!rule) return { rowsChanged: 0 };
+  setRuleDisabledFlag(input.ruleId, input.disabled, input.at);
+  if (rule.ruleKind !== 'rename') return { rowsChanged: 0 };
+  return { rowsChanged: applyRenameRules(undefined, buildContext()) };
+}
+
+/**
+ * "Currently affects N transactions" (item 12), computed on demand rather than stored.
+ * `hit_count` is import-time history -- bumpRuleUsage's only caller is runEngine's tail
+ * (fired during import-time categorization), and the retroactive rename-reapply pass
+ * (applyRenameRules) sits outside that loop entirely and never touches it. So a rename rule
+ * reads hit_count = 0 forever, however well it is matching, and the household cannot tell
+ * "this rule matches nothing" (item 9's lowercase trap) from "this rule works but never bumped a
+ * counter". Rather than bumping usage from a second call site (which would still only describe
+ * PAST import events), this answers the question a person actually has: what is this rule doing
+ * to my data RIGHT NOW. The honest definition of "affects" differs by kind:
+ *
+ *  - category: every non-manual, non-split transaction, re-simulated fresh through
+ *    categorizeTransaction (the same function runEngine itself calls -- so this can never
+ *    silently disagree with what a real run would do) and attributed to whichever rule wins.
+ *    Deliberately WIDER than ELIGIBLE/eligibleForRerun (which excludes an already-'rule'-sourced
+ *    row as "already settled", so an import does not reprocess it): a rule that already set 200
+ *    rows is still affecting all 200 of them right now, and telling "matches nothing" from
+ *    "works" needs exactly that number, not the (always smaller, often zero) count of rows still
+ *    waiting for a re-run.
+ *  - transfer / not_transfer: exact-match-only kinds (matchRule's own callers document this), so
+ *    unambiguous without a full simulation. Counted directly against the transaction's CURRENT
+ *    stored is_transfer flag: 'transfer' counts currently-NOT-flagged rows carrying this exact
+ *    merchant text (what flipping it would change), 'not_transfer' counts currently-flagged ones
+ *    (what clearing the override would change back).
+ *  - rename: transactions currently carrying display_source = 'rename' whose normalized merchant
+ *    this rule resolves -- always in sync already (every rename save/disable/delete reapplies),
+ *    so this is the one kind that needs no re-run to become accurate; it just reads what already
+ *    happened.
+ *
+ * Read-only; never called from a path that writes.
+ */
+export function ruleImpactCounts(ctx: CategorizeContext = buildContext()): Map<number, number> {
+  const db = getDb();
+  const counts = new Map<number, number>();
+  const bump = (ruleId: number | null, n: number) => {
+    if (ruleId === null || n === 0) return;
+    counts.set(ruleId, (counts.get(ruleId) ?? 0) + n);
+  };
+
+  // category: every row a human has not decided, re-simulated fresh (see docblock above for why
+  // this is wider than ELIGIBLE).
+  const reachable = db
+    .select({ normalizedMerchant: transactions.normalizedMerchant, c: sql<number>`count(*)` })
+    .from(transactions)
+    .where(
+      and(
+        ne(transactions.categorizationSource, 'manual'),
+        sql`not exists (select 1 from ${transactionSplits} where ${transactionSplits.txnId} = ${transactions.id})`,
+      ),
+    )
+    .groupBy(transactions.normalizedMerchant)
+    .all();
+  for (const row of reachable) {
+    const outcome = categorizeTransaction({ id: 0, normalizedMerchant: row.normalizedMerchant }, ctx);
+    if (!outcome.isTransfer) bump(outcome.matchedRuleId, row.c);
+  }
+
+  // transfer / not_transfer: exact merchant text against the CURRENT stored flag.
+  const byMerchantAndFlag = db
+    .select({ normalizedMerchant: transactions.normalizedMerchant, isTransfer: transactions.isTransfer, c: sql<number>`count(*)` })
+    .from(transactions)
+    .groupBy(transactions.normalizedMerchant, transactions.isTransfer)
+    .all();
+  const notFlagged = new Map<string, number>();
+  const flagged = new Map<string, number>();
+  for (const row of byMerchantAndFlag) {
+    const target = row.isTransfer ? flagged : notFlagged;
+    target.set(row.normalizedMerchant, (target.get(row.normalizedMerchant) ?? 0) + row.c);
+  }
+  for (const rule of ctx.rules) {
+    if (rule.ruleKind === 'transfer') bump(rule.id, notFlagged.get(rule.pattern) ?? 0);
+    else if (rule.ruleKind === 'not_transfer') bump(rule.id, flagged.get(rule.pattern) ?? 0);
+  }
+
+  // rename: rows already carrying display_source = 'rename', attributed to whichever rename rule
+  // currently resolves for their merchant.
+  const renamed = db
+    .select({ normalizedMerchant: transactions.normalizedMerchant, c: sql<number>`count(*)` })
+    .from(transactions)
+    .where(eq(transactions.displaySource, 'rename'))
+    .groupBy(transactions.normalizedMerchant)
+    .all();
+  for (const row of renamed) {
+    const rule = matchRule(row.normalizedMerchant, 'rename', ctx.rules);
+    bump(rule?.id ?? null, row.c);
+  }
+
+  return counts;
 }
 
 /**

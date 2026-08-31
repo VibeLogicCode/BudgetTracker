@@ -5,19 +5,20 @@ import { ManagersClient } from '@/app/(app)/settings/managers/managers-client';
 import { getBuiltinPreset } from '@/lib/import/presets';
 import type { ProfileRecord, ProfileUsage } from '@/lib/import/presets';
 import type { CategoryRecord } from '@/lib/categories';
-import type { MerchantRuleRecord } from '@/lib/categorize/rules';
 
 // Server actions aren't under test here -- only the UI the v1.6.0 deactivation feature adds
 // (spec 2026-08-22, MUST-4.1: an inactive badge and an activate/deactivate toggle on every
 // profile, built-in or not, plus a warn-first confirm step when accounts are pinned, MUST-4.3)
 // and the v1.7.0 Task 15a Tax checkbox.
+//
+// v1.21.0 (item 10): updateRuleAction/deleteRuleAction moved off this file entirely, to
+// /settings/merchant-rules -- see tests/app/merchant-rules-client.test.tsx and
+// tests/app/merchant-rules-actions.test.ts for their coverage now.
 vi.mock('@/app/(app)/settings/managers/actions', () => ({
   createCategoryAction: vi.fn(async () => ({})),
   renameCategoryAction: vi.fn(async () => ({})),
   archiveCategoryAction: vi.fn(async () => ({})),
   setCategoryTaxRelevantAction: vi.fn(async () => ({})),
-  updateRuleAction: vi.fn(async () => ({})),
-  deleteRuleAction: vi.fn(async () => ({})),
   saveProfileMappingAction: vi.fn(async () => ({})),
   deleteProfileAction: vi.fn(async () => ({})),
   setProfileActiveAction: vi.fn(async () => ({})),
@@ -53,33 +54,13 @@ function baseProps(
     profiles?: ProfileRecord[];
     profileUsage?: Record<number, ProfileUsage>;
     categories?: CategoryRecord[];
-    rules?: MerchantRuleRecord[];
   } = {},
 ) {
   return {
     categories: overrides.categories ?? [],
-    rules: overrides.rules ?? [],
     profiles: overrides.profiles ?? [profile()],
     profileUsage: overrides.profileUsage ?? {},
-    rulesPackRows: [],
     profilePackRows: [],
-  };
-}
-
-function rule(over: Partial<MerchantRuleRecord> = {}): MerchantRuleRecord {
-  return {
-    id: 1,
-    pattern: 'TIM HORTONS',
-    matchType: 'exact',
-    ruleKind: 'category',
-    categoryId: null,
-    renameTo: null,
-    createdBy: null,
-    hitCount: 0,
-    lastUsedAt: null,
-    createdAt: '2026-08-16T00:00:00.000Z',
-    lastModifiedBy: null,
-    ...over,
   };
 }
 
@@ -365,22 +346,9 @@ describe('ManagersClient — the categories list folds like Budgets\' Edit-limit
   });
 });
 
-describe('ManagersClient — the merchant rules table declares its own widths (item I)', () => {
-  it('is a fixed table with one <col> per column', () => {
-    const { container } = renderManagers({ rules: [rule()] });
-    // Item 2 (2026-08-30 plan) moved the categories table to a disclosure list, so the merchant
-    // rules table is now the only <table> left in this file.
-    const rules = container.querySelector('table');
-    expect(rules?.className).toContain('data-table--fixed');
-    expect(rules?.querySelectorAll('colgroup > col')).toHaveLength(7);
-    expect(rules?.querySelectorAll('thead th')).toHaveLength(7);
-  });
-});
-
-// 2026-08-30 Settings disclosure sweep: "New category" and "Save rule" each fold behind their
-// own button (two unrelated create actions, two independent toggles -- see the addCategoryOpen/
-// addRuleOpen docblock in managers-client.tsx for why this is not one shared toggle the way
-// users-manager.tsx's pair is).
+// 2026-08-30 Settings disclosure sweep: "New category" folds behind its own button.
+// v1.21.0 (item 10): the sibling "Add rule" toggle/table this comment used to describe moved off
+// this file entirely, to /settings/merchant-rules -- see tests/app/merchant-rules-client.test.tsx.
 describe('ManagersClient — "Add category" is a disclosure (2026-08-30 Settings sweep)', () => {
   it('is closed on first paint: the toggle reads "Add category" and the create form is hidden', () => {
     const { container } = renderManagers();
@@ -399,26 +367,5 @@ describe('ManagersClient — "Add category" is a disclosure (2026-08-30 Settings
     const toggle = screen.getByRole('button', { name: 'Close' });
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
     expect(screen.getByPlaceholderText('Groceries')).toBeTruthy();
-  });
-});
-
-describe('ManagersClient — "Add rule" is a disclosure (2026-08-30 Settings sweep)', () => {
-  it('is closed on first paint: the toggle reads "Add rule" and the create form is hidden', () => {
-    const { container } = renderManagers();
-    const toggle = screen.getByRole('button', { name: 'Add rule' });
-    expect(toggle.getAttribute('aria-expanded')).toBe('false');
-    expect(toggle.getAttribute('aria-controls')).toBe('add-rule-body');
-    // `queryByPlaceholderText` finds a node whether or not it is hidden (only `byRole` respects
-    // the accessibility tree by default), so closedness is checked directly on the wrapper's
-    // `hidden` property, the same idiom `categoryRowFor(...).hidden` already uses above.
-    expect((container.querySelector('#add-rule-body') as HTMLElement).hidden).toBe(true);
-  });
-
-  it('opens on click, revealing the Pattern field, and the toggle becomes Close', () => {
-    renderManagers();
-    fireEvent.click(screen.getByRole('button', { name: 'Add rule' }));
-    const toggle = screen.getByRole('button', { name: 'Close' });
-    expect(toggle.getAttribute('aria-expanded')).toBe('true');
-    expect(screen.getByPlaceholderText('Normalized merchant pattern')).toBeTruthy();
   });
 });

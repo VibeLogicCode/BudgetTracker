@@ -113,7 +113,7 @@ export function commitStagedImport(input: {
     engine = runEngine(committed.insertedTransactionIds);
   } catch {
     engineFailed = true;
-    engine = { processed: 0, categorized: 0, transfers: 0, skipped: 0 };
+    engine = { processed: 0, categorized: 0, transfers: 0, skipped: 0, changed: 0 };
   } finally {
     // The staged file has done its job the moment commitImport succeeds —
     // clean it up regardless of what happens to categorization.

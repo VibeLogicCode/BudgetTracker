@@ -5,6 +5,7 @@ import {
   CARD_PAYMENT_PATTERNS,
   applyCategoryToMatching,
   applyRenameRules,
+  applyRuleNow,
   buildContext,
   categorizeTransaction,
   clearCategory,
@@ -12,11 +13,15 @@ import {
   deleteRenameRule,
   detectTransfer,
   eligibleForRerun,
+  previewRerun,
+  previewRuleReapply,
   rerunEngine,
   resolveRename,
   reviewQueueCount,
   reviewQueueIds,
+  ruleImpactCounts,
   runEngine,
+  setRuleDisabled,
   setTransactionDisplayName,
   setTransferFlag,
   upsertRenameRule,
@@ -219,6 +224,62 @@ describe('runEngine', () => {
     expect(eligibleForRerun({ accountId }).sort()).toEqual([uncategorized, bayesRow].sort());
     expect(eligibleForRerun({ accountId: accountId + 999 })).toEqual([]);
     expect(rerunEngine().processed).toBe(2);
+  });
+
+  // v1.21.0 (item 11): EngineResult.changed distinguishes "the engine looked at N rows" from
+  // "the engine actually changed N rows" -- what a re-run confirmation needs to say honestly.
+  describe('EngineResult.changed', () => {
+    it('counts a newly-categorized row as changed', () => {
+      const { db, add } = setup();
+      const coffee = categoryIdByName(db, 'Coffee');
+      upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: null, actorRole: 'admin' });
+      const id = add('TIM HORTONS');
+      expect(runEngine([id])).toMatchObject({ processed: 1, changed: 1 });
+    });
+
+    it('does NOT count a bayes row re-guessed to the identical category', () => {
+      const { db, add } = setup();
+      const coffee = categoryIdByName(db, 'Coffee');
+      const groceries = categoryIdByName(db, 'Groceries');
+      // Two contrasting categories, matching how "falls back to Bayes" above establishes a real
+      // margin -- a single trained category gives classify() nothing to contrast against and it
+      // returns null, which would make this row look "changed" for the wrong reason entirely.
+      for (let i = 0; i < 3; i += 1) train(['TIM', 'HORTONS'], coffee);
+      for (let i = 0; i < 3; i += 1) train(['METRO', 'PLUS'], groceries);
+      const id = add('TIM HORTONS');
+      db.run(sql`update transactions set category_id = ${coffee}, categorization_source = 'bayes' where id = ${id}`);
+      const result = runEngine([id]);
+      expect(result.processed).toBe(1);
+      expect(result.changed).toBe(0);
+    });
+
+    it('counts a row newly flagged a transfer', () => {
+      const { add } = setup();
+      const id = add('PAYMENT - THANK YOU');
+      expect(runEngine([id])).toMatchObject({ changed: 1 });
+    });
+  });
+
+  describe('previewRerun', () => {
+    it('reports the same eligible/wouldChange figures runEngine would actually produce, without writing anything', () => {
+      const { db, sqlite, add } = setup();
+      const coffee = categoryIdByName(db, 'Coffee');
+      upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: null, actorRole: 'admin' });
+      const id = add('TIM HORTONS');
+
+      const preview = previewRerun([id]);
+      expect(preview).toEqual({ eligible: 1, wouldChange: 1 });
+      // Nothing was written.
+      expect(readTxn(sqlite, id)).toMatchObject({ category_id: null, categorization_source: 'none' });
+
+      const real = runEngine([id]);
+      expect(real).toMatchObject({ processed: preview.eligible, changed: preview.wouldChange });
+    });
+
+    it('an empty id list previews as nothing to do', () => {
+      setup();
+      expect(previewRerun([])).toEqual({ eligible: 0, wouldChange: 0 });
+    });
   });
 });
 
@@ -519,6 +580,162 @@ describe('merchant renames', () => {
   it('rejects an empty rename target', () => {
     const { userId } = setup();
     expect(() => upsertRenameRule({ pattern: 'MCDONALDS', matchType: 'exact', renameTo: '   ', userId, actorRole: 'admin' })).toThrowError(/non-empty display name/);
+  });
+});
+
+// v1.21.0 (item 11): "disable, not delete" -- disabling a rename rule must revert its rows
+// exactly as deleting does; disabling any other kind changes nothing retroactively by itself.
+describe('setRuleDisabled', () => {
+  const readDisplay = (sqlite: TestDb['sqlite'], id: number) =>
+    sqlite.prepare('select display_description, display_source from transactions where id = ?').get(id) as {
+      display_description: string | null;
+      display_source: string | null;
+    };
+
+  it('disabling a rename rule reverts every row it set, and re-enabling restores them', () => {
+    const { sqlite, add, userId } = setup();
+    const ruled = add('POS PURCHASE MCDONALDS #4821 TORONTO ON');
+    const manual = add('POS PURCHASE MCDONALDS #1099 OAKVILLE ON', -1500, '2026-03-05');
+    const upserted = upsertRenameRule({ pattern: 'MCDONALDS', matchType: 'exact', renameTo: "McDonald's", userId, actorRole: 'admin' });
+    if (!upserted.ok) throw new Error('unexpected refusal');
+    setTransactionDisplayName({ transactionId: manual, displayDescription: 'Lunch with Bob', userId });
+
+    const disabled = setRuleDisabled({ ruleId: upserted.ruleId, disabled: true });
+    expect(disabled.rowsChanged).toBe(1);
+    expect(readDisplay(sqlite, ruled)).toEqual({ display_description: null, display_source: null });
+    // Manual is never touched, exactly like a delete.
+    expect(readDisplay(sqlite, manual)).toEqual({ display_description: 'Lunch with Bob', display_source: 'manual' });
+    // The rule itself is still there, just inert -- unlike deleteRenameRule.
+    expect(listRules('rename')).toHaveLength(1);
+    expect(listRules('rename')[0].disabledAt).not.toBeNull();
+
+    const reenabled = setRuleDisabled({ ruleId: upserted.ruleId, disabled: false });
+    expect(reenabled.rowsChanged).toBe(1);
+    expect(readDisplay(sqlite, ruled)).toEqual({ display_description: "McDonald's", display_source: 'rename' });
+    expect(listRules('rename')[0].disabledAt).toBeNull();
+  });
+
+  it('disabling a category rule reports zero rows changed and leaves already-set rows exactly as they were', () => {
+    const { db, sqlite, add, userId } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const upserted = upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: userId, actorRole: 'admin' });
+    if (!upserted.ok) throw new Error('unexpected refusal');
+    const id = add('TIM HORTONS');
+    runEngine([id]);
+    expect(readTxn(sqlite, id).category_id).toBe(coffee);
+
+    const result = setRuleDisabled({ ruleId: upserted.ruleId, disabled: true });
+    expect(result.rowsChanged).toBe(0);
+    // Disabling the rule stops it from matching the NEXT run; it does not un-decide this row.
+    expect(readTxn(sqlite, id)).toMatchObject({ category_id: coffee, categorization_source: 'rule' });
+    expect(matchRule('TIM HORTONS', 'category', listRules())).toBeNull();
+  });
+
+  it('an unknown ruleId is a no-op', () => {
+    setup();
+    expect(setRuleDisabled({ ruleId: 999999, disabled: true })).toEqual({ rowsChanged: 0 });
+  });
+});
+
+describe('applyRuleNow / previewRuleReapply (item 11: per-rule Apply now)', () => {
+  it('categorizes exactly the rows this rule resolves, never a manually-decided row', () => {
+    const { db, sqlite, add, userId } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const groceries = categoryIdByName(db, 'Groceries');
+    const uncategorized = add('TIM HORTONS');
+    const manual = add('TIM HORTONS EXPRESS', -500, '2026-03-05');
+    db.run(sql`update transactions set category_id = ${groceries}, categorization_source = 'manual' where id = ${manual}`);
+    const unrelated = add('SOME OTHER SHOP');
+
+    const upserted = upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: userId, actorRole: 'admin' });
+    if (!upserted.ok) throw new Error('unexpected refusal');
+
+    const preview = previewRuleReapply(upserted.ruleId);
+    expect(preview).toEqual({ eligible: 1, wouldChange: 1 });
+
+    const result = applyRuleNow(upserted.ruleId);
+    expect(result).toMatchObject({ processed: 1, changed: 1 });
+    expect(readTxn(sqlite, uncategorized).category_id).toBe(coffee);
+    // Never touched: the manual row, and the row an unrelated rule/pattern would not reach.
+    expect(readTxn(sqlite, manual)).toMatchObject({ category_id: groceries, categorization_source: 'manual' });
+    expect(readTxn(sqlite, unrelated).category_id).toBeNull();
+  });
+
+  it('does not reach a merchant a transfer rule already claims (category rule scoping respects precedence)', () => {
+    const { db, add, userId } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    upsertRuleFromCorrection({ pattern: 'PAYMENT', matchType: 'contains', ruleKind: 'transfer', categoryId: null, createdBy: userId, actorRole: 'admin' });
+    const categoryRule = upsertRuleFromCorrection({ pattern: 'PAYMENT', matchType: 'contains', ruleKind: 'category', categoryId: coffee, createdBy: userId, actorRole: 'admin' });
+    if (!categoryRule.ok) throw new Error('unexpected refusal');
+    add('PAYMENT - THANK YOU');
+
+    expect(previewRuleReapply(categoryRule.ruleId)).toEqual({ eligible: 0, wouldChange: 0 });
+  });
+
+  it('a rename rule has nothing left to apply -- it is already retroactive', () => {
+    const { add, userId } = setup();
+    add('MCDONALDS');
+    const upserted = upsertRenameRule({ pattern: 'MCDONALDS', matchType: 'exact', renameTo: "McDonald's", userId, actorRole: 'admin' });
+    if (!upserted.ok) throw new Error('unexpected refusal');
+    expect(previewRuleReapply(upserted.ruleId)).toEqual({ eligible: 0, wouldChange: 0 });
+    expect(applyRuleNow(upserted.ruleId)).toMatchObject({ processed: 0 });
+  });
+
+  it('an unknown ruleId previews and applies as nothing to do', () => {
+    setup();
+    expect(previewRuleReapply(999999)).toEqual({ eligible: 0, wouldChange: 0 });
+    expect(applyRuleNow(999999)).toMatchObject({ processed: 0, changed: 0 });
+  });
+});
+
+// v1.21.0 (item 12): "currently affects N transactions", computed on demand, replaces relying on
+// hit_count (which a rename rule can never bump -- see bumpRuleUsage's only caller in runEngine).
+describe('ruleImpactCounts', () => {
+  it('category: counts both an already-settled row and a still-eligible one, never a manual row', () => {
+    const { db, add, userId } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const groceries = categoryIdByName(db, 'Groceries');
+    const upserted = upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: userId, actorRole: 'admin' });
+    if (!upserted.ok) throw new Error('unexpected refusal');
+    const alreadySettled = add('TIM HORTONS');
+    runEngine([alreadySettled]);
+    const stillEligible = add('TIM HORTONS', -500, '2026-03-05');
+    const manual = add('TIM HORTONS', -700, '2026-03-06');
+    db.run(sql`update transactions set category_id = ${groceries}, categorization_source = 'manual' where id = ${manual}`);
+
+    const counts = ruleImpactCounts();
+    expect(counts.get(upserted.ruleId)).toBe(2); // alreadySettled + stillEligible, not manual
+  });
+
+  it('a rule matching nothing is simply absent from the map (never a false zero-vs-missing ambiguity)', () => {
+    const { db, userId } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const upserted = upsertRuleFromCorrection({ pattern: 'NOBODY SHOPS HERE', matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: userId, actorRole: 'admin' });
+    if (!upserted.ok) throw new Error('unexpected refusal');
+    expect(ruleImpactCounts().get(upserted.ruleId) ?? 0).toBe(0);
+    expect(db).toBeDefined();
+  });
+
+  it('transfer / not_transfer: counts against the CURRENT stored is_transfer flag', () => {
+    const { add, userId } = setup();
+    const transferRule = upsertRuleFromCorrection({ pattern: 'E-TRANSFER SENT J DOE', matchType: 'exact', ruleKind: 'transfer', categoryId: null, createdBy: userId, actorRole: 'admin' });
+    if (!transferRule.ok) throw new Error('unexpected refusal');
+    const id = add('E-TRANSFER SENT J DOE');
+    // Not yet flagged (still 0/false) -- this is exactly what applying the rule would change.
+    expect(ruleImpactCounts().get(transferRule.ruleId)).toBe(1);
+    runEngine([id]);
+    // Now flagged -- the 'transfer' rule's own job is already done, nothing left for it to affect.
+    expect(ruleImpactCounts().get(transferRule.ruleId) ?? 0).toBe(0);
+  });
+
+  it('rename: counts transactions currently carrying display_source = rename that this rule resolves', () => {
+    const { add, userId } = setup();
+    const a = add('MCDONALDS');
+    const b = add('MCDONALDS', -500, '2026-03-05');
+    const upserted = upsertRenameRule({ pattern: 'MCDONALDS', matchType: 'exact', renameTo: "McDonald's", userId, actorRole: 'admin' });
+    if (!upserted.ok) throw new Error('unexpected refusal');
+    expect(ruleImpactCounts().get(upserted.ruleId)).toBe(2);
+    expect([a, b]).toHaveLength(2);
   });
 });
 

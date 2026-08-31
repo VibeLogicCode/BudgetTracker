@@ -113,6 +113,13 @@
       "when": 1756512000000,
       "tag": "0015_savings_targets",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1756598400000,
+      "tag": "0016_rule_hygiene",
+      "breakpoints": true
     }
   ]
 }

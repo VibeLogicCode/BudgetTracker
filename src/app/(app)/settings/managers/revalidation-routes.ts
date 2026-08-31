@@ -2,12 +2,14 @@
  * Every route that renders a category's name or the category hierarchy to a user. Found by
  * grepping the app for `listCategories`/`categoryName`/`categoryId`
  * rather than trusting the three routes the bug report happened to name:
- *   - /settings/managers  -- this page; the category table itself.
- *   - /transactions       -- the per-row category and the filter list.
- *   - /reports            -- category breakdown and series.
- *   - /budgets            -- budgetProgress() rows, keyed by category, incl. nested children.
- *   - /dashboard          -- the "this month's budgets" table (budgetProgress() again) and
- *                            the account-setup callout's category-driven copy.
+ *   - /settings/managers       -- this page; the category table itself.
+ *   - /settings/merchant-rules -- v1.21.0 (item 10): a category rule's row shows the category
+ *                                 it resolves to, by name.
+ *   - /transactions            -- the per-row category and the filter list.
+ *   - /reports                 -- category breakdown and series.
+ *   - /budgets                 -- budgetProgress() rows, keyed by category, incl. nested children.
+ *   - /dashboard               -- the "this month's budgets" table (budgetProgress() again) and
+ *                                 the account-setup callout's category-driven copy.
  * Review round (fold /review in): `/review` is gone from this list -- it is now `?review=1` on
  * `/transactions` (ruling R1), which already revalidates the category picker for every queued
  * row (review or not) as the same route. `/review` itself still exists as a route (ruling R6,
@@ -28,6 +30,7 @@
  */
 export const CATEGORY_RENDERING_ROUTES = [
   '/settings/managers',
+  '/settings/merchant-rules',
   '/transactions',
   '/reports',
   '/budgets',

@@ -1,5 +1,12 @@
 'use client';
 
+// v1.21.0 (item 10): moved here verbatim from src/app/(app)/settings/managers/rules-pack-panel.tsx
+// when the whole "Merchant rules" surface moved off /settings/managers -- sharing a rules pack
+// with another install is a rule concern, not a categories-and-profiles concern, so it belongs
+// beside the rules it exports/imports rather than left behind as a second surface for the same
+// data. Nothing in this component changed: it hits its own dedicated API routes
+// (/api/packs/rules/export, /api/packs/rules/import), which are unaffected by which page renders it.
+
 import { useState } from 'react';
 import { Notice } from '@/components/ui/Notice';
 import { selectClass } from '@/components/ui/form';

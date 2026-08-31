@@ -1,8 +1,7 @@
 import { requireAdmin } from '@/lib/auth/session';
 import { listCategories } from '@/lib/categories';
-import { listRules } from '@/lib/categorize/rules';
 import { getProfileUsage, listProfiles, type ProfileUsage } from '@/lib/import/presets';
-import { previewProfilesPackExport, previewRulesPackExport } from '@/lib/packs';
+import { previewProfilesPackExport } from '@/lib/packs';
 import { ManagersClient } from './managers-client';
 
 export const dynamic = 'force-dynamic';
@@ -22,10 +21,8 @@ export default async function ManagersPage() {
   return (
     <ManagersClient
       categories={listCategories({ includeArchived: true })}
-      rules={listRules()}
       profiles={profiles}
       profileUsage={profileUsage}
-      rulesPackRows={previewRulesPackExport({ includeTransferRules: true })}
       profilePackRows={previewProfilesPackExport()}
     />
   );

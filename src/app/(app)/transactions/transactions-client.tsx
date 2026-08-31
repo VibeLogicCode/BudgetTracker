@@ -31,7 +31,7 @@ import { RowMenu, RowMenuButton, RowMenuForm, RowMenuLink } from '@/components/u
 // for its hand-drawn replacement and why it could not simply be swapped in-place there instead.
 import { categoryIcon, ConfirmIcon, FilterIcon, MoneyInIcon, MoneyOutIcon, SuggestIcon, UnconfirmedIcon } from '@/components/ui/icons';
 import { NoteGlyph } from './note-glyph';
-import { RowDialog } from './RowDialog';
+import { RowDialog } from '@/components/ui/RowDialog';
 import { categoryOptionGroups, categoryOptions, type CategoryLike, type CategoryOptionGroup } from '@/lib/category-order';
 import { type ResolvedRange } from '@/lib/date-range';
 import type { LoanLink } from '@/lib/loans';

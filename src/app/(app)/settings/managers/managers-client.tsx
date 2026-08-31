@@ -7,28 +7,23 @@ import { SubmitButton } from '@/components/SubmitButton';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { Notice } from '@/components/ui/Notice';
 import { PageHeader } from '@/components/ui/PageHeader';
-import { TableWrap } from '@/components/ui/Table';
 import { Field, inputClass, selectClass } from '@/components/ui/form';
 import { AutoSaveCheckbox, AutoSaveTextInput } from '@/components/ui/AutoSave';
 import { ExpandIcon } from '@/components/ui/icons';
-import { categoryOptionGroups, orderedCategoryRows } from '@/lib/category-order';
+import { orderedCategoryRows } from '@/lib/category-order';
 import type { CategoryRecord } from '@/lib/categories';
-import type { MerchantRuleRecord } from '@/lib/categorize/rules';
 import type { ProfileRecord, ProfileUsage } from '@/lib/import/presets';
 import type { ImportMapping } from '@/lib/import/mapping';
-import type { ProfilesExportRow, RulesExportRow } from '@/lib/packs';
-import { RulesPackPanel } from './rules-pack-panel';
+import type { ProfilesExportRow } from '@/lib/packs';
 import { ProfilesPackPanel } from './profiles-pack-panel';
 import {
   archiveCategoryAction,
   createCategoryAction,
   deleteProfileAction,
-  deleteRuleAction,
   renameCategoryAction,
   saveProfileMappingAction,
   setCategoryTaxRelevantAction,
   setProfileActiveAction,
-  updateRuleAction,
   type ManagerState,
 } from './actions';
 
@@ -284,23 +279,17 @@ function CategoryGroupRows({
 
 export function ManagersClient({
   categories,
-  rules,
   profiles,
   profileUsage,
-  rulesPackRows,
   profilePackRows,
 }: {
   categories: CategoryRecord[];
-  rules: MerchantRuleRecord[];
   profiles: ProfileRecord[];
   profileUsage: Record<number, ProfileUsage>;
-  rulesPackRows: RulesExportRow[];
   profilePackRows: ProfilesExportRow[];
 }) {
   const [createState, createCategory] = useActionState(createCategoryAction, initial);
   const [archiveState, archiveCategory] = useActionState(archiveCategoryAction, initial);
-  const [ruleState, saveRule] = useActionState(updateRuleAction, initial);
-  const [deleteState, removeRule] = useActionState(deleteRuleAction, initial);
   const [profileState, saveProfile] = useActionState(saveProfileMappingAction, initial);
   const [deleteProfileState, removeProfile] = useActionState(deleteProfileAction, initial);
   const [activeState, setProfileActive] = useActionState(setProfileActiveAction, initial);
@@ -311,31 +300,25 @@ export function ManagersClient({
    * 2026-08-30 Settings disclosure sweep: v1.16.0's own rule ("Content is always visible. A
    * form that creates something sits behind a button" -- CHANGELOG 1.16.0, the Quick add / Add
    * rule / Add receipt folds) reached Goals next and then a read-only audit of Settings, which
-   * is what these two toggles answer. Two independent booleans, not one: the Categories card and
-   * the Merchant rules card are two unrelated create actions on two unrelated tables, exactly
-   * the "Add rule" / "Add receipt" split warranty-detail-client.tsx already keeps as two toggles
-   * rather than one -- unlike users-manager.tsx's pair (see that file's own docblock), neither
-   * form here is a variant of the other. Both closed by default.
+   * is what this toggle answers.
+   *
+   * v1.21.0 (item 10): the sibling "Add rule" toggle this docblock used to justify moved out
+   * with the whole Merchant rules card, to its own route (/settings/merchant-rules) -- rules
+   * outgrew a card on a shared page the same way import profiles never did, so only the
+   * Categories toggle is left here.
    */
   const [addCategoryOpen, setAddCategoryOpen] = useState(false);
-  const [addRuleOpen, setAddRuleOpen] = useState(false);
 
   // A failed create must not leave its own form collapsed. The FormError near the top of this
-  // page is shared across every action on it (createState/archiveState/ruleState/... all feed
-  // the same `error` variable below), so the message itself is never actually invisible here --
-  // but a person still needs the FORM open to see which field caused it and fix it in place,
-  // so each disclosure reopens on its OWN action's error, not on the shared one (an archive
-  // failure must not pop the create-category form open for no reason connected to it). Keyed on
+  // page is shared across every action on it (createState/archiveState/... all feed the same
+  // `error` variable below), so the message itself is never actually invisible here -- but a
+  // person still needs the FORM open to see which field caused it and fix it in place. Keyed on
   // the state object itself, the same idiom warranty-detail-client.tsx's own M10/edit-close
   // effects use: useActionState hands back a new object only when the action actually ran.
   useEffect(() => {
     if (createState.error) setAddCategoryOpen(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [createState]);
-  useEffect(() => {
-    if (ruleState.error) setAddRuleOpen(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ruleState]);
 
   // Item 2 (2026-08-30 plan): the same fold Budgets already uses for a category's children,
   // closed by default with the open set kept in localStorage (useCategoryGroupOpenState above).
@@ -346,27 +329,16 @@ export function ManagersClient({
   const categoryGroupState = useCategoryGroupOpenState(categoryGroupIds);
 
   const parents = categories.filter((c) => c.parentId === null);
-  const label = (id: number | null) => {
-    if (id === null) return '—';
-    const category = categories.find((c) => c.id === id);
-    if (!category) return '—';
-    const parent = category.parentId ? categories.find((c) => c.id === category.parentId) : undefined;
-    return parent ? `${parent.name} › ${category.name}` : category.name;
-  };
 
   const notice =
     createState.message ??
     archiveState.message ??
-    ruleState.message ??
-    deleteState.message ??
     profileState.message ??
     deleteProfileState.message ??
     activeState.message;
   const error =
     createState.error ??
     archiveState.error ??
-    ruleState.error ??
-    deleteState.error ??
     profileState.error ??
     deleteProfileState.error ??
     activeState.error;
@@ -375,8 +347,8 @@ export function ManagersClient({
     <div className="flex flex-col gap-4 sm:gap-5">
       <PageHeader
         eyebrow="Settings"
-        title="Categories, rules and import profiles"
-        description="How a line from the bank turns into something with a name and a category."
+        title="Categories and import profiles"
+        description="How a line from the bank turns into something with a name and a category. Merchant rules moved to their own page."
       />
       <FormError message={error} />
       {notice ? <Notice tone="success">{notice}</Notice> : null}
@@ -439,144 +411,6 @@ export function ManagersClient({
             archiveCategory={archiveCategory}
           />
         ))}
-      </Card>
-
-      <Card>
-        <CardHeader
-          title={`Merchant rules (${rules.length})`}
-          description={
-            <>
-              A <strong className="font-semibold text-ink">rename</strong> rule changes only what you see. Saving one applies it to every existing
-              matching transaction that has not been renamed by hand; deleting one puts those rows back to the bank&apos;s wording. Transactions
-              renamed individually are never touched. A <strong className="font-semibold text-ink">not a transfer</strong> rule is an exact-match
-              override that stops one merchant from being auto-flagged as a card payment.
-            </>
-          }
-          action={
-            // Same "Add rule" wording warranty-detail-client.tsx's own Payment matching card
-            // uses for the identical idea: the existing-rules table stays visible, the CREATE
-            // form (the widest row on this card) folds behind the toggle.
-            <button
-              type="button"
-              className="btn btn--secondary btn--sm min-h-11 sm:min-h-0"
-              aria-expanded={addRuleOpen}
-              aria-controls="add-rule-body"
-              onClick={() => setAddRuleOpen((open) => !open)}
-            >
-              {addRuleOpen ? 'Close' : 'Add rule'}
-            </button>
-          }
-        />
-        {/* Hidden via the real `hidden` attribute, never conditionally unmounted -- ruling
-            U2/U3's reasoning (budgets-client.tsx EditRow, this file's own CategoryRow above):
-            the Category <select> here runs through categoryOptionGroups the same way the
-            Transactions quick-add form's does, and unmounting it on collapse would turn any
-            future test reading it on a closed render into a false negative for a reason
-            unrelated to what it is testing. */}
-        <div id="add-rule-body" hidden={!addRuleOpen}>
-          <CardBody className="pb-4">
-            <form action={saveRule} className="flex flex-wrap items-end gap-3">
-              <Field label="Pattern">
-                <input name="pattern" placeholder="Normalized merchant pattern" required className={inputClass} />
-              </Field>
-              <Field label="Match">
-                <select name="matchType" className={selectClass}>
-                  <option value="exact">exact</option>
-                  <option value="contains">contains</option>
-                </select>
-              </Field>
-              <Field label="Kind">
-                <select name="ruleKind" className={selectClass}>
-                  <option value="category">category</option>
-                  <option value="transfer">transfer</option>
-                  <option value="rename">rename</option>
-                  <option value="not_transfer">not a transfer (override)</option>
-                </select>
-              </Field>
-              <Field label="Category">
-                <select name="categoryId" className={selectClass}>
-                  <option value="">(none — transfer, not_transfer and rename rules)</option>
-                  {categoryOptionGroups(categories).map((group) =>
-                    group.label === null ? (
-                      <option key={group.options[0].id} value={group.options[0].id}>
-                        {group.options[0].label}
-                      </option>
-                    ) : (
-                      <optgroup key={group.label} label={group.label}>
-                        {group.options.map((option) => (
-                          <option key={option.id} value={option.id}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </optgroup>
-                    ),
-                  )}
-                </select>
-              </Field>
-              <Field label="Renames to">
-                <input name="renameTo" placeholder="Display name (rename rules only)" className={inputClass} />
-              </Field>
-              <SubmitButton>Save rule</SubmitButton>
-            </form>
-          </CardBody>
-        </div>
-        {/* Item I. minWidth is the colgroup's own total (14+6+7+13+10+5+3 = 58rem); without it the
-            scroll container has nothing to scroll and the columns crush instead. A long monospace
-            pattern beside a "Parent › Child" label reached ~1100px and squeezed the delete button. */}
-        <TableWrap bare fixed minWidth="58rem" responsive>
-          <colgroup>
-            {/* A monospace merchant pattern -- the widest thing in this table by a distance. */}
-            <col style={{ width: '14rem' }} />
-            {/* "exact" / "contains". */}
-            <col style={{ width: '6rem' }} />
-            {/* A rule kind: category / transfer / rename / not_transfer. */}
-            <col style={{ width: '7rem' }} />
-            {/* "Parent › Child" -- the cell that used to starve the button on the right. */}
-            <col style={{ width: '13rem' }} />
-            {/* A rename target, usually shorter than the pattern it replaces. */}
-            <col style={{ width: '10rem' }} />
-            {/* A hit count in tabular figures, right-aligned. */}
-            <col style={{ width: '5rem' }} />
-            {/* The delete button: one small button plus padding. */}
-            <col style={{ width: '3rem' }} />
-          </colgroup>
-          <thead>
-            <tr>
-              <th scope="col">Pattern</th>
-              <th scope="col">Match</th>
-              <th scope="col">Kind</th>
-              <th scope="col">Category</th>
-              <th scope="col">Renames to</th>
-              <th scope="col" className="text-right">Hits</th>
-              <th scope="col" />
-            </tr>
-          </thead>
-          <tbody>
-            {rules.map((rule) => (
-              <tr key={rule.id}>
-                {/* v1.15.0 (responsive rows): the pattern is what tells one rule from another --
-                    the same merchant pattern never repeats across rows, unlike Kind or Category
-                    -- so it is the phone card's headline. No cell-stack-amount: hitCount is a
-                    count of matches, not money. */}
-                <td className="font-mono text-xs text-ink cell-stack-headline" data-label="Pattern">{rule.pattern}</td>
-                <td className="text-xs text-muted" data-label="Match">{rule.matchType}</td>
-                <td className="text-xs" data-label="Kind"><span className="badge badge--slate">{rule.ruleKind}</span></td>
-                <td className="text-xs text-muted" data-label="Category">{rule.ruleKind === 'category' ? label(rule.categoryId) : '—'}</td>
-                <td className="text-xs text-muted" data-label="Renames to">{rule.renameTo ?? '—'}</td>
-                <td className="tabnum text-right text-xs text-muted" data-label="Hits">{rule.hitCount}</td>
-                <td className="text-right cell-stack-actions" data-label="">
-                  <form action={removeRule}>
-                    <input type="hidden" name="ruleId" value={rule.id} />
-                    <button type="submit" className="btn btn--ghost btn--sm px-2 text-xs">delete</button>
-                  </form>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </TableWrap>
-        <CardBody className="pt-4">
-          <RulesPackPanel rows={rulesPackRows} />
-        </CardBody>
       </Card>
 
       <Card>

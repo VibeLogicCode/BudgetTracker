@@ -143,7 +143,7 @@ describe('runSync', () => {
 
     // Not a thrown sync, not a lost import.
     expect(result.engineFailed).toBe(true);
-    expect(result.engine).toEqual({ processed: 0, categorized: 0, transfers: 0, skipped: 0 });
+    expect(result.engine).toEqual({ processed: 0, categorized: 0, transfers: 0, skipped: 0, changed: 0 });
     expect(result.totalAdded).toBe(2);
     expect((sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c).toBe(2);
     // Uncategorized, which is exactly what the review queue picks up.

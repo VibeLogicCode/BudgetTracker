@@ -315,8 +315,52 @@ export const merchantRules = sqliteTable(
      * rule never edited since it was created.
      */
     lastModifiedBy: integer('last_modified_by').references(() => users.id),
+    /**
+     * v1.21.0 (item 11), added by drizzle/0016_rule_hygiene.sql. Declared last -- same
+     * ALTER-TABLE-ADD-COLUMN convention as lastModifiedBy above. NULL means enabled -- every row
+     * before v1.21.0, and every row nobody has ever disabled -- the same absence-is-off shape
+     * budgetRollover already uses, chosen over a boolean so "when" is recorded for free instead of
+     * needing a second column the moment anyone asks. A switch, not history: flipping it back to
+     * NULL re-enables the rule outright rather than filing it away, which is the whole difference
+     * between "disable" and "delete" (see the docblock on setRuleDisabled, src/lib/categorize/
+     * engine.ts) -- "109 disabled typos is no better than 109 live ones" is why delete still
+     * exists for a genuine mistake. matchRule (src/lib/categorize/rules.ts) skips any rule carrying
+     * a non-NULL value here, so a disabled rule cannot match through any caller that forgets to
+     * filter its input list -- the filter lives at the one place every match funnels through.
+     */
+    disabledAt: text('disabled_at'),
   },
   (t) => [uniqueIndex('merchant_rules_pattern_uq').on(t.pattern, t.matchType, t.ruleKind)],
+);
+
+/**
+ * v1.21.0 (item 9), added by drizzle/0016_rule_hygiene.sql. That migration uppercases every
+ * merchant_rules.pattern (matchRule and normalized_merchant are both otherwise-uppercase; a
+ * lowercase pattern silently never matched anything -- see the migration's own header for the
+ * full defect). Uppercasing can collide with a row that was already stored uppercase, which
+ * merchant_rules_pattern_uq then refuses as a duplicate write -- so the migration MERGES instead
+ * of failing, and this table is where it records what it merged, so a household that had 109
+ * rules can see what happened to them rather than just noticing a smaller number.
+ *
+ * One row per duplicate DROPPED (not per survivor): a 3-way collision produces two rows here, all
+ * pointing at the same keptRuleId. No onDelete on the FK to merchant_rules -- if that survivor
+ * row is later deleted by an admin, this stays as a historical record of the merge, which already
+ * happened and is independent of what became of the row afterward.
+ */
+export const merchantRuleMerges = sqliteTable(
+  'merchant_rule_merges',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    keptRuleId: integer('kept_rule_id').notNull().references(() => merchantRules.id),
+    /** The pattern exactly as it was stored before this migration uppercased and merged it. */
+    droppedPattern: text('dropped_pattern').notNull(),
+    droppedMatchType: text('dropped_match_type', { enum: ['exact', 'contains'] }).notNull(),
+    droppedRuleKind: text('dropped_rule_kind', { enum: ['category', 'transfer', 'rename', 'not_transfer'] }).notNull(),
+    droppedHitCount: integer('dropped_hit_count').notNull(),
+    droppedCreatedAt: text('dropped_created_at').notNull(),
+    mergedAt: text('merged_at').notNull(),
+  },
+  (t) => [index('merchant_rule_merges_kept_idx').on(t.keptRuleId)],
 );
 
 export const bayesTokens = sqliteTable(
