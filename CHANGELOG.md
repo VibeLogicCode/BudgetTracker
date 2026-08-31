@@ -21,6 +21,47 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.23.0] - 2026-08-31
+
+One migration (0017): three nullable columns on merchant rules recording which preset pack
+installed a rule. Nothing existing changes; rules you wrote stay unmarked.
+
+### Added
+
+- **Install the preset rules from inside the app.** Settings → Merchant rules now carries the
+  Canadian pack — no downloading a file. It tells you what it will do before it writes anything:
+  how many rules, that the name cleanups apply to your existing transactions immediately while the
+  categorizations wait for **Re-run rules**, that conflicts keep your own rules, and which two of
+  its rules are the likeliest to be wrong for you.
+- **The rules table says which rules came from a pack**, with a filter for them, so your own work
+  is never mixed up with the preset. Remove them all in one action — which tells you how many
+  transactions get their original names back — or delete and disable them one at a time as before.
+- **You are told when a newer preset pack ships**, on the rules page, in the Settings Updates card
+  and in your notification digest. Nothing is ever applied on its own: you read a list of what was
+  added, changed and dropped, then choose. A preset rule you have edited is left alone, and one you
+  disabled stays disabled.
+
+### Changed
+
+- Importing a rule pack no longer marks a rule as coming from that pack when it kept yours instead
+  — so removing a pack can never delete something you wrote.
+
+One migration (0017): three nullable columns on `merchant_rules` (`pack_source`, `pack_version`,
+`installed_at`).
+
+### Added
+
+- **The Canadian merchant pack installs from inside the app.** Settings → Merchant rules has an
+  Install button (a disclaimer states the rule count, that renames apply immediately while
+  category rules need Re-run rules, that conflicts always keep your own rules, and that FORTIS/ATCO
+  are its documented likely-miscategorisations) and a Remove all button that deletes exactly what
+  it installed and reports how many transactions revert. The rules table marks a preset rule with
+  a badge and a filter chip; editing one by hand makes it yours from that point on.
+- **Version-aware, never auto-applied.** When a newer pack version ships, Settings shows an update
+  available line (Updates card and Merchant rules) and a one-time notification -- never a silent
+  recategorization. Applying an update always shows a diff (added/changed/removed) first, leaves
+  an edited rule alone, and keeps a disabled rule disabled.
+
 ## [1.22.0] - 2026-08-31
 
 No migration.
