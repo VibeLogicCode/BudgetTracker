@@ -21,6 +21,17 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.23.1] - 2026-08-31
+
+No migration.
+
+### Fixed
+
+- **The preset pack's confirmations open the same dialog as everything else.** Installing, removing
+  and reviewing an update — and deleting rules in bulk — used to unfold inside the card while every
+  other "read this, then confirm" step in the app dims the page behind it. Same words, same counts,
+  consistent shell.
+
 ## [1.23.0] - 2026-08-31
 
 One migration (0017): three nullable columns on merchant rules recording which preset pack
