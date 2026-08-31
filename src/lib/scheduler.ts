@@ -1,5 +1,6 @@
 import cron, { type ScheduledTask } from 'node-cron';
 import { runNightlyJob } from '@/lib/backup';
+import { notifyCanadianPackUpdateAvailable } from '@/lib/canadian-pack';
 import { readEnv } from '@/lib/env';
 import { adminUserIds, hasAnyEnabledTarget } from '@/lib/notify/config';
 import { runScheduledEvaluation } from '@/lib/notify/evaluate';
@@ -120,6 +121,26 @@ export function runUpdateTick(now: Date = new Date()): void {
 }
 
 /**
+ * Backlog item 17 / Part 4: a SEPARATE function with its OWN independent gate (there is none --
+ * see below) from runUpdateTick, deliberately. runUpdateTick's very first statement bails out
+ * when the household has switched APP update checks off (isUpdateCheckEnabled) -- a household
+ * preference about polling GitHub for a newer Budget Tracker image, which has nothing to do with
+ * whether they would want to hear about a stale preset pack they installed. Folding this into
+ * runUpdateTick would make disabling one silently disable the other.
+ *
+ * No single-flight guard, unlike runUpdateTick/runSimplefinTick: notifyCanadianPackUpdateAvailable
+ * is synchronous (a local version comparison plus an idempotent, dedup-keyed insert -- no network
+ * call), so there is no async window across which a second tick could overlap the first.
+ */
+export function runCanadianPackUpdateTick(now: Date = new Date()): void {
+  try {
+    notifyCanadianPackUpdateAvailable(now);
+  } catch (error) {
+    console.error('[canadian-pack] update tick failed', error);
+  }
+}
+
+/**
  * Task 8 (v1.7.0, design ruling 7): a SEPARATE function with its OWN independent gate,
  * deliberately not folded into runUpdateTick or runNotifyTick, for the same reason MUST-5.1
  * separates the update tick from the notify tick: a household that wants auto-sync but has
@@ -190,6 +211,7 @@ export function startScheduler(): void {
     NOTIFY_TICK_CRON,
     () => {
       runUpdateTick();
+      runCanadianPackUpdateTick();
       runNotifyTick();
       runSimplefinTick();
     },
@@ -205,6 +227,7 @@ export function startScheduler(): void {
   // through a slot catches up in seconds rather than waiting up to five minutes for the
   // next cron tick. The update check goes first, ahead of the notification tick.
   runUpdateTick();
+  runCanadianPackUpdateTick();
   runNotifyTick();
   // Task 8: same reasoning as the two ticks above -- a container that was off catches up on
   // a due auto-sync immediately at boot rather than waiting up to five minutes.

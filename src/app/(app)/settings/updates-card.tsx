@@ -1,3 +1,4 @@
+import { canadianPackState } from '@/lib/canadian-pack';
 import { classify, parseSemver, type UpdateSeverity } from '@/lib/update/semver';
 import { readUpdateState } from '@/lib/update/state';
 import { watchtowerConfig, watchtowerConfigError } from '@/lib/update/watchtower';
@@ -27,6 +28,15 @@ export function UpdatesCard() {
   const remote = state.latestVersion === null ? null : parseSemver(state.latestVersion);
   const severity: UpdateSeverity = current !== null && remote !== null ? classify(current, remote) : 'none';
 
+  // Backlog item 17 / Part 4 (version awareness): the SAME card that already tells an admin an
+  // app update is available also carries the preset-pack line -- not a second card, not a second
+  // mechanism. This is a version COMPARISON only (installed vs bundled, both already resolved
+  // synchronously, no network call), never an apply trigger -- see applyCanadianPackUpdate's own
+  // docblock for why this feature never auto-applies. The card itself is only ever rendered for
+  // an admin (settings/page.tsx: `user.role === 'admin' ? <UpdatesCard /> : null`), so this line
+  // inherits that same gate for free.
+  const pack = canadianPackState();
+
   return (
     <UpdatesClient
       currentVersion={APP_VERSION}
@@ -42,6 +52,9 @@ export function UpdatesCard() {
       severity={severity}
       canApplyInApp={watchtowerConfig() !== null}
       watchtowerError={watchtowerConfigError()}
+      canadianPackUpdate={
+        pack.updateAvailable ? { installedVersion: pack.installedVersion, bundledVersion: pack.bundledVersion } : null
+      }
     />
   );
 }

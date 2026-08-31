@@ -120,6 +120,13 @@
       "when": 1756598400000,
       "tag": "0016_rule_hygiene",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1756684800000,
+      "tag": "0017_pack_provenance",
+      "breakpoints": true
     }
   ]
 }

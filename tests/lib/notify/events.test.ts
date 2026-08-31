@@ -17,6 +17,7 @@ import {
   isNotificationEventId,
   monthlyDigestKey,
   newSigninKey,
+  packUpdateAvailableKey,
   predictedVsActualKey,
   restoreOutcomeKey,
   staleImportKey,
@@ -39,12 +40,14 @@ describe('MUST-2.1: events.ts is pure and client-safe', () => {
   });
 });
 
-describe('the twenty-two registered events', () => {
-  it('has exactly twenty-two entries with unique, well-formed ids', () => {
-    // v1.17.0 (Lane 2, savings targets): the three savings_* events brought this from 19 to 22.
-    expect(NOTIFICATION_EVENTS).toHaveLength(22);
+describe('the twenty-three registered events', () => {
+  it('has exactly twenty-three entries with unique, well-formed ids', () => {
+    // Backlog item 17 / Part 4 (preset pack version awareness): pack_update_available brought
+    // this from 22 to 23, the same way each addition before it moved the count (see the >=
+    // precedent lower down for events whose OWN historical contribution is what is pinned).
+    expect(NOTIFICATION_EVENTS).toHaveLength(23);
     const ids = NOTIFICATION_EVENTS.map((e) => e.id);
-    expect(new Set(ids).size).toBe(22);
+    expect(new Set(ids).size).toBe(23);
     for (const id of ids) expect(id).toMatch(/^[a-z][a-z0-9_]*$/);
   });
 
@@ -74,6 +77,7 @@ describe('the twenty-two registered events', () => {
       ['savings_target_met', 'all', 'tick', true],
       ['savings_target_pace', 'all', 'daily_slot', true],
       ['savings_month_closed', 'all', 'daily_slot', true],
+      ['pack_update_available', 'admin', 'tick', true],
     ]);
   });
 
@@ -87,6 +91,7 @@ describe('the twenty-two registered events', () => {
       'duplicate_charge',
       'mfa_disabled',
       'new_signin',
+      'pack_update_available',
       'password_changed',
       'restore_outcome',
       'savings_month_closed',
@@ -121,8 +126,10 @@ describe('lookup helpers', () => {
     // v1.12.1 (item AA / SEC-4): password_changed and mfa_disabled are both audience 'all',
     // so they widen both counts by two. v1.17.0's three savings_* events (also all audience
     // 'all') widen both counts by three more.
+    // pack_update_available (backlog item 17 / Part 4) is audience 'admin' too, so it widens only
+    // the admin count, same as backup_failed/restore_outcome/sync_failed above it.
     expect(eventsFor('member')).toHaveLength(18);
-    expect(eventsFor('admin')).toHaveLength(22);
+    expect(eventsFor('admin')).toHaveLength(23);
   });
 
   it('exposes the two channels', () => {
@@ -254,11 +261,11 @@ describe('spec section 9: the six predictive dedup keys', () => {
 describe('Task 16 (v1.7.0): the monthly_digest registry entry', () => {
   it('brings the registry to seventeen and is all-audience, default-off, daily_slot-triggered', () => {
     // v1.12.1 (item AA / SEC-4): password_changed and mfa_disabled, added after this one,
-    // brought the live total further to 19; v1.17.0's three savings_* events bring it to 22 --
-    // this assertion tracks the current total, not monthly_digest's own historical contribution
-    // (see the >= pattern used above for update_available/sync_failed, which exists for exactly
-    // this reason).
-    expect(NOTIFICATION_EVENTS).toHaveLength(22);
+    // brought the live total further to 19; v1.17.0's three savings_* events bring it to 22, and
+    // backlog item 17 / Part 4's pack_update_available brings it to 23 -- this assertion tracks
+    // the current total, not monthly_digest's own historical contribution (see the >= pattern
+    // used above for update_available/sync_failed, which exists for exactly this reason).
+    expect(NOTIFICATION_EVENTS).toHaveLength(23);
     const entry = eventDef('monthly_digest');
     expect(entry).toEqual({
       id: 'monthly_digest',
@@ -284,5 +291,32 @@ describe('Task 16 (v1.7.0): the monthly_digest registry entry', () => {
   it('never collides with weeklyDigestKey, which uses a similarly-named prefix', () => {
     expect(monthlyDigestKey('2026-07')).not.toBe(weeklyDigestKey('2026-07-01'));
     expect(monthlyDigestKey('2026-07-01')).not.toBe(weeklyDigestKey('2026-07-01'));
+  });
+});
+
+describe('backlog item 17 / Part 4: the pack_update_available registry entry', () => {
+  it('brings the registry to twenty-three and is admin-audience, default-on, tick-triggered -- modelled on update_available', () => {
+    expect(NOTIFICATION_EVENTS.length).toBeGreaterThanOrEqual(23);
+    const entry = eventDef('pack_update_available');
+    expect(entry).toEqual({
+      id: 'pack_update_available',
+      label: 'A merchant rules pack update is available',
+      blurb: 'A merchant rules pack you installed (e.g. the Canadian pack) has a newer version published.',
+      audience: 'admin',
+      trigger: 'tick',
+      defaultEnabled: true,
+    });
+  });
+
+  it('MUST-4.3: eventsFor(member) excludes it', () => {
+    expect(eventsFor('member').some((e) => e.id === 'pack_update_available')).toBe(false);
+    expect(eventsFor('admin').some((e) => e.id === 'pack_update_available')).toBe(true);
+  });
+
+  it('the dedup key is per (pack, version) and only ever goes up, and never collides with updateAvailableKey', () => {
+    expect(packUpdateAvailableKey('canadian-merchants', 1)).toBe('pack-update:canadian-merchants:1');
+    expect(packUpdateAvailableKey('canadian-merchants', 1)).not.toBe(packUpdateAvailableKey('canadian-merchants', 2));
+    expect(packUpdateAvailableKey('canadian-merchants', 1)).not.toBe(updateAvailableKey('1'));
+    expect(packUpdateAvailableKey('canadian-merchants', 1)).not.toMatch(/telegram|email|user/);
   });
 });

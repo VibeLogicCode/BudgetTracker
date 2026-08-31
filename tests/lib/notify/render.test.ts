@@ -487,6 +487,11 @@ const SAMPLES_BY_EVENT: Record<string, RenderInput[]> = {
     { event: 'savings_month_closed', month: '2026-07', netCents: 150000, targetCents: 100000, met: true, streak: 3 },
     { event: 'savings_month_closed', month: '2026-07', netCents: 50000, targetCents: 100000, met: false, streak: 0 },
   ],
+  // Backlog item 17 / Part 4: modelled on update_available -- a version pair, nothing this
+  // renderer resolves itself.
+  pack_update_available: [
+    { event: 'pack_update_available', packLabel: 'Canadian merchant pack', installedVersion: 1, bundledVersion: 2 },
+  ],
 };
 
 describe('MUST-10.4: no notification body contains a link', () => {
@@ -703,6 +708,23 @@ describe('MUST-6.4 / MUST-6.5: update_available renders three bodies and no URL'
     const { body } = renderEvent({ ...base, severity: 'patch', canApplyInApp: true, publishedAt: '2026-08-16T09:00:00Z' });
     expect(body).toContain('Published 2026-08-16 09:00.');
     expect(body).not.toMatch(/https?:/);
+  });
+});
+
+describe('backlog item 17 / Part 4: pack_update_available names both versions, no URL, no auto-apply claim', () => {
+  it('renders the subject and body', () => {
+    const { subject, body } = renderEvent({
+      event: 'pack_update_available',
+      packLabel: 'Canadian merchant pack',
+      installedVersion: 1,
+      bundledVersion: 2,
+    });
+    expect(subject).toBe('Canadian merchant pack: version 2 is available');
+    expect(body).toBe(
+      'You installed v1; this build ships v2. Open Settings → Merchant rules to review what changed and apply it -- ' +
+        'nothing is applied automatically.',
+    );
+    expect(body).not.toMatch(/https?:\/\//);
   });
 });
 

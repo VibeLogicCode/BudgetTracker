@@ -88,3 +88,50 @@ describe('MUST-9.1: the Updates card', () => {
     }
   });
 });
+
+/**
+ * Backlog item 17 / Part 4: the preset-pack update line lives inside the SAME admin-only card
+ * (MUST-9.1), so proving the card itself is admin-only (above) already covers it structurally --
+ * these two tests pin the actual TEXT, with a real pending update in the database, so deleting
+ * canadianPackState()'s wiring into UpdatesCard would fail here even if the card's own title
+ * still rendered.
+ */
+describe('backlog item 17 / Part 4: the Updates card carries the preset-pack line for an admin only', () => {
+  function installStalePackRow(t: ReturnType<typeof createTestDb>): void {
+    t.sqlite
+      .prepare(
+        `insert into merchant_rules
+           (pattern, match_type, rule_kind, category_id, rename_to, hit_count, created_at, pack_source, pack_version, installed_at)
+         values ('OLD PATTERN', 'exact', 'rename', null, 'Old Pattern', 0, '2026-01-01T00:00:00.000Z', 'canadian-merchants', 0, '2026-01-01T00:00:00.000Z')`,
+      )
+      .run();
+  }
+
+  it('an admin sees the pack-update line when the installed version is behind the bundled one', async () => {
+    const t = createTestDb();
+    try {
+      installStalePackRow(t);
+      currentUser.value.role = 'admin';
+      const { default: SettingsPage } = await import('@/app/(app)/settings/page');
+      render(await SettingsPage());
+      expect(screen.getByText('Preset rules: an update is available')).toBeTruthy();
+    } finally {
+      currentUser.value.role = 'member';
+      t.cleanup();
+    }
+  });
+
+  it('a member sees neither the Updates card nor the pack-update line', async () => {
+    const t = createTestDb();
+    try {
+      installStalePackRow(t);
+      currentUser.value.role = 'member';
+      const { default: SettingsPage } = await import('@/app/(app)/settings/page');
+      render(await SettingsPage());
+      expect(screen.queryByText('Updates')).toBeNull();
+      expect(screen.queryByText('Preset rules: an update is available')).toBeNull();
+    } finally {
+      t.cleanup();
+    }
+  });
+});

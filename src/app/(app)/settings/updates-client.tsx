@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useActionState, useState } from 'react';
 import { FormError } from '@/components/FormError';
 import { renderEmphasis } from '@/components/render-emphasis';
@@ -34,6 +35,9 @@ export interface UpdatesViewProps {
   /** MUST-7.3: the card receives this boolean and NOTHING else about Watchtower. */
   canApplyInApp: boolean;
   watchtowerError: string | null;
+  /** Backlog item 17 / Part 4: null when up to date or nothing installed -- see UpdatesCard for
+   *  how this is derived (a plain version comparison, never a network call). */
+  canadianPackUpdate: { installedVersion: number | null; bundledVersion: number } | null;
 }
 
 const initial: UpdateActionState = {};
@@ -66,12 +70,34 @@ export function UpdatesClient(props: UpdatesViewProps) {
   const message = messages.map((s) => s.message).find((m) => m !== undefined);
   const error = messages.map((s) => s.error).find((e) => e !== undefined) ?? review.error;
 
+  /**
+   * Backlog item 17 / Part 4: independent of whether APP update checks are on/off (this is a
+   * plain, local version comparison -- no GitHub request, nothing to enable) so it renders in
+   * both the "checks are off" branch below and the normal one. Never an apply control here -- see
+   * applyCanadianPackUpdate's own docblock for why the diff-and-confirm step only ever lives on
+   * the merchant-rules page, which is what this links to.
+   */
+  const canadianPackNotice =
+    props.canadianPackUpdate === null ? null : (
+      <Notice tone="info" title="Preset rules: an update is available">
+        <p>
+          The Canadian merchant pack you installed is v{props.canadianPackUpdate.installedVersion}; this build ships
+          v{props.canadianPackUpdate.bundledVersion}.{' '}
+          <Link href="/settings/merchant-rules" className="underline">
+            Review the change and apply it on Settings → Merchant rules
+          </Link>
+          .
+        </p>
+      </Notice>
+    );
+
   // MUST-9.3: the off state. One button, no other control.
   if (!props.enabled) {
     return (
       <Card>
         <CardHeader title="Updates" description={`Budget Tracker v${props.currentVersion} · update checks are off.`} />
         <CardBody className="flex flex-col gap-4">
+          {canadianPackNotice}
           <p className="text-sm text-muted">
             This app does not check for updates unless you ask it to. Switch this on and once a day it will ask GitHub
             whether a newer version of Budget Tracker has been published. That request carries the version you are
@@ -110,6 +136,7 @@ export function UpdatesClient(props: UpdatesViewProps) {
         }
       />
       <CardBody className="flex flex-col gap-4">
+        {canadianPackNotice}
         <p className="text-sm text-subtle">
           Last checked {stamp(props.lastCheckedAt)}
           {props.latestPublishedAt === null ? null : ` · published ${stamp(props.latestPublishedAt)}`}

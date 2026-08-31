@@ -228,6 +228,16 @@ export type RenderInput =
        *  Never restated here: this renderer only picks the wording, per ruling T1's "one
        *  definition of saved/met" and the same rule extended to "one definition of streak". */
       streak: number;
+    }
+  | {
+      /** Backlog item 17 / Part 4: modelled on 'update_available' above -- a version comparison,
+       *  nothing this renderer resolves itself (src/lib/canadian-pack.ts's
+       *  notifyCanadianPackUpdateAvailable passes already-resolved numbers, the same discipline
+       *  runUpdateCheck follows for the app's own version pair). */
+      event: 'pack_update_available';
+      packLabel: string;
+      installedVersion: number;
+      bundledVersion: number;
     };
 
 function money(cents: number): string {
@@ -672,5 +682,14 @@ export function renderEvent(input: RenderInput): { subject: string; body: string
         body: `${label}: you saved ${money(input.netCents)}, past the ${money(input.targetCents)} target.${streakClause}`,
       };
     }
+    case 'pack_update_available':
+      // MUST-10.4 (no URL in a body): points at the settings page by NAME, the same way
+      // update_available's own no-apply-path tail says "see Settings" rather than linking one.
+      return {
+        subject: `${input.packLabel}: version ${input.bundledVersion} is available`,
+        body:
+          `You installed v${input.installedVersion}; this build ships v${input.bundledVersion}. ` +
+          'Open Settings → Merchant rules to review what changed and apply it -- nothing is applied automatically.',
+      };
   }
 }

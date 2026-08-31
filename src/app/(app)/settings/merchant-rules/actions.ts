@@ -6,6 +6,11 @@ import { z } from 'zod';
 import { isSameOrigin } from '@/lib/auth/csrf';
 import { requireAdmin } from '@/lib/auth/session';
 import {
+  applyCanadianPackUpdate,
+  installCanadianPack,
+  removeCanadianPack,
+} from '@/lib/canadian-pack';
+import {
   applyRuleNow,
   deleteRenameRule,
   eligibleForRerun,
@@ -247,4 +252,73 @@ export async function rerunAllAction(_prev: RuleActionState, _formData: FormData
   revalidatePath('/transactions');
   if (result.processed === 0) return { message: 'Nothing to re-run -- no eligible transaction is waiting.' };
   return { message: `Re-ran the rules: ${result.changed} of ${result.processed} eligible transaction${result.processed === 1 ? '' : 's'} changed.` };
+}
+
+/**
+ * Backlog item 17 ("an imported pack cannot be un-imported"): install the bundled Canadian
+ * merchant pack. The page's own disclaimer (CanadianPackPanel) is what makes this an INFORMED
+ * click -- rule counts, the "renames apply immediately, categories only affect future imports"
+ * distinction, and the FORTIS/ATCO caveat are all shown BEFORE this form ever submits. Always
+ * 'keep' on conflict (installCanadianPack's own default) -- a household rule with a matching
+ * pattern is never touched or stamped.
+ */
+export async function installCanadianPackAction(_prev: RuleActionState, _formData: FormData): Promise<RuleActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  await requireAdmin();
+  const result = installCanadianPack();
+  revalidatePath('/settings/merchant-rules');
+  const keptNote =
+    result.rulesKept > 0
+      ? ` ${result.rulesKept} pattern${result.rulesKept === 1 ? '' : 's'} you already had ${result.rulesKept === 1 ? 'was' : 'were'} left as-is.`
+      : '';
+  return { message: `Installed ${result.rulesAdded} preset rule${result.rulesAdded === 1 ? '' : 's'}.${keptNote}` };
+}
+
+/**
+ * Deletes only the currently-stamped rows (installedCanadianPackRows() -- a row the household
+ * edited since install already lost its stamp, so this can never touch it). Reports how many
+ * transactions revert, the same honesty bulkDeleteRulesAction already gives an ordinary bulk
+ * delete of rename rules.
+ */
+export async function removeCanadianPackAction(_prev: RuleActionState, _formData: FormData): Promise<RuleActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  await requireAdmin();
+  const result = removeCanadianPack();
+  revalidatePath('/settings/merchant-rules');
+  revalidatePath('/transactions');
+  const revertedNote =
+    result.transactionsReverted > 0
+      ? ` ${result.transactionsReverted} transaction${result.transactionsReverted === 1 ? '' : 's'} went back to the bank's wording.`
+      : '';
+  return { message: `Removed ${result.deleted} preset rule${result.deleted === 1 ? '' : 's'}.${revertedNote}` };
+}
+
+/**
+ * Backlog item 17 / Part 4 (version awareness): applies a reviewed diff, never a bare version
+ * bump -- this action only ever runs after the page has shown canadianPackUpdateDiff() and an
+ * admin pressed a button naming the target version (see applyCanadianPackUpdate's own docblock
+ * for why nothing in this codebase ever calls it any other way). `deleteRemoved` defaults to NOT
+ * deleting: a rule the new pack no longer defines is kept, just no longer tracked as a preset,
+ * unless the admin explicitly ticked the box offering its removal.
+ */
+export async function applyCanadianPackUpdateAction(_prev: RuleActionState, formData: FormData): Promise<RuleActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  await requireAdmin();
+  const deleteRemoved = formData.get('deleteRemoved') === '1';
+  const result = applyCanadianPackUpdate({ deleteRemoved });
+  revalidatePath('/settings/merchant-rules');
+  revalidatePath('/transactions');
+
+  const bits = [`${result.added} added`, `${result.changed} updated`, `${result.unchanged} unchanged`];
+  if (result.skippedEdited > 0) bits.push(`${result.skippedEdited} left alone (you had edited them)`);
+  if (result.removedDeleted > 0) bits.push(`${result.removedDeleted} deleted (no longer in the pack)`);
+  else if (result.removedOffered > 0) bits.push(`${result.removedOffered} no longer in the pack (kept, un-tracked)`);
+  const revertedNote =
+    result.transactionsReverted > 0
+      ? ` ${result.transactionsReverted} transaction${result.transactionsReverted === 1 ? '' : 's'} went back to the bank's wording.`
+      : '';
+  return { message: `Updated preset rules to v${result.toVersion}: ${bits.join(', ')}.${revertedNote}` };
 }

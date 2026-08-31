@@ -329,6 +329,20 @@ export const merchantRules = sqliteTable(
      * filter its input list -- the filter lives at the one place every match funnels through.
      */
     disabledAt: text('disabled_at'),
+    /**
+     * Installable preset packs (backlog item 17), added by drizzle/0017_pack_provenance.sql.
+     * All three columns below are NULL together for a rule a person wrote, and set together for
+     * one an installed pack wrote -- pack_source is the discriminator every reader checks first
+     * (src/lib/categorize/rules.ts's upsertRuleFromCorrection is the one place that writes any of
+     * them). See that migration's own header for why pack_version is deliberately NOT the same
+     * number as the rules-pack file format version (RulesPack.version / PACK_VERSION in
+     * src/lib/packs.ts).
+     */
+    packSource: text('pack_source'),
+    /** The pack's own content version this row was last written by. NULL exactly when packSource is. */
+    packVersion: integer('pack_version'),
+    /** When this row was last written by the pack (install or a since-applied update). */
+    installedAt: text('installed_at'),
   },
   (t) => [uniqueIndex('merchant_rules_pattern_uq').on(t.pattern, t.matchType, t.ruleKind)],
 );

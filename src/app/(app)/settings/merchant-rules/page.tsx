@@ -1,4 +1,10 @@
 import { requireAdmin } from '@/lib/auth/session';
+import {
+  canadianPackState,
+  canadianPackUpdateDiff,
+  previewCanadianPackInstall,
+  previewCanadianPackRemoval,
+} from '@/lib/canadian-pack';
 import { listCategories } from '@/lib/categories';
 import { ruleImpactCounts } from '@/lib/categorize/engine';
 import { findRedundantExactRules, listRules, type MerchantRuleRecord, type RuleKind } from '@/lib/categorize/rules';
@@ -44,6 +50,7 @@ export default async function MerchantRulesPage({
   const kindParam = one(params, 'kind');
   const kind: RuleKind | null = KINDS.includes(kindParam as RuleKind) ? (kindParam as RuleKind) : null;
   const redundantOnly = one(params, 'redundant') === '1';
+  const presetOnly = one(params, 'preset') === '1';
   const page = Math.max(1, Number(one(params, 'page') ?? '1') || 1);
 
   const categories = listCategories({ includeArchived: true });
@@ -51,6 +58,7 @@ export default async function MerchantRulesPage({
   const impactCounts = ruleImpactCounts();
   const redundant = findRedundantExactRules(allRules);
   const redundantByRuleId = new Map(redundant.map((r) => [r.ruleId, r.coveredByRuleId]));
+  const presetCount = allRules.filter((rule) => rule.packSource !== null).length;
 
   const kindCounts: Record<RuleKind, number> = { category: 0, transfer: 0, rename: 0, not_transfer: 0 };
   for (const rule of allRules) kindCounts[rule.ruleKind] += 1;
@@ -58,6 +66,7 @@ export default async function MerchantRulesPage({
   let filtered = allRules;
   if (kind !== null) filtered = filtered.filter((rule) => rule.ruleKind === kind);
   if (redundantOnly) filtered = filtered.filter((rule) => redundantByRuleId.has(rule.id));
+  if (presetOnly) filtered = filtered.filter((rule) => rule.packSource !== null);
   if (q.length > 0) {
     filtered = filtered.filter(
       (rule) => rule.pattern.includes(q) || (rule.renameTo !== null && rule.renameTo.toUpperCase().includes(q)),
@@ -77,6 +86,14 @@ export default async function MerchantRulesPage({
   const redundantRecord: Record<number, number> = {};
   for (const [ruleId, coveredByRuleId] of redundantByRuleId) redundantRecord[ruleId] = coveredByRuleId;
 
+  // Only ever computed on the branch that needs it: previewCanadianPackInstall/
+  // previewCanadianPackRemoval/canadianPackUpdateDiff each re-derive their own figures from
+  // listRules()-shaped queries, so there is no reason to pay for all three on every render.
+  const canadianPack = canadianPackState();
+  const canadianInstallPreview = canadianPack.installed ? null : previewCanadianPackInstall();
+  const canadianRemovalPreview = canadianPack.installed ? previewCanadianPackRemoval() : null;
+  const canadianUpdateDiff = canadianPack.updateAvailable ? canadianPackUpdateDiff() : null;
+
   return (
     <MerchantRulesClient
       categories={categories}
@@ -88,11 +105,17 @@ export default async function MerchantRulesPage({
       searchValue={one(params, 'q') ?? ''}
       activeKind={kind}
       redundantOnly={redundantOnly}
+      presetOnly={presetOnly}
+      presetCount={presetCount}
       kindCounts={kindCounts}
       redundantCount={redundant.length}
       impactCounts={impactRecord}
       redundantByRuleId={redundantRecord}
       rulesPackRows={previewRulesPackExport({ includeTransferRules: true, includeRenameRules: true })}
+      canadianPack={canadianPack}
+      canadianInstallPreview={canadianInstallPreview}
+      canadianRemovalPreview={canadianRemovalPreview}
+      canadianUpdateDiff={canadianUpdateDiff}
     />
   );
 }

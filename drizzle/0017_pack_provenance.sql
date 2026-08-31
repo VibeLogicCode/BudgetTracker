@@ -1,0 +1,48 @@
+-- WARNING: this migration is hand-maintained, not drizzle-kit-generated.
+-- Read the header of drizzle/0000_init.sql and the docblock in drizzle.config.ts before
+-- adding another one: there is no 0000_snapshot.json, so `drizzle-kit generate` would
+-- diff against an empty baseline and re-emit the whole schema. Hand-author the SQL,
+-- append the matching entry to drizzle/meta/_journal.json, and mirror the tables in
+-- src/db/schema.ts -- in that order.
+--
+-- NOTE ON SEPARATORS: drizzle's migrator splits this file on the breakpoint marker written
+-- between each statement below, and on nothing else, and it does NOT skip comments. That
+-- marker must therefore never appear inside a comment -- including this one, which is why
+-- it is described here rather than quoted -- or the file is shredded into fragments that
+-- will not parse.
+--
+-- Rule provenance (installable preset packs, backlog item 17: "an imported pack cannot be
+-- un-imported", docs/superpowers/plans/2026-08-30-v1.21.0-backlog.md). Three nullable columns,
+-- ADDITIVE ONLY, same ALTER-TABLE-ADD-COLUMN shape as 0016's disabled_at.
+--
+-- THE FOREIGN-KEY PRAGMA IS NOT IN THIS FILE, ON PURPOSE -- see 0011's header. src/db/client.ts's
+-- openDatabase() disables foreign keys around the whole migration pass and re-enables them (plus a
+-- foreign_key_check) immediately after. Do not put a pragma here.
+--
+-- WHY THREE COLUMNS, NOT A SEPARATE "pack_installs" TABLE: a rule needs to answer "who put this
+-- here" on its own, without a join, because the two places that ask (the rules table's per-row
+-- Pill, and "remove everything this pack wrote") both start from a row already in hand. All three
+-- are NULL together or set together -- pack_source is the discriminator every reader checks first
+-- (see src/lib/categorize/rules.ts's upsertRuleFromCorrection), so pack_version/installed_at are
+-- never read on a row where pack_source is NULL.
+--
+-- pack_source: which pack wrote this row (e.g. 'canadian-merchants'). NULL for a rule a person
+--   wrote by hand -- the form, confirmCategory, setTransferFlag and applyCategoryToMatching all
+--   pass no pack info, so every write they make leaves this column (and the two below) NULL,
+--   including on an UPDATE: editing a previously-stamped preset rule through any of those four
+--   paths clears the stamp, converting the row to "written by a person" from that edit onward.
+--   That is deliberate, not a side effect to fix later -- see the docblock on upsertRuleFromCorrection
+--   for why an edited preset rule losing its stamp is exactly what lets "update the pack" leave a
+--   household's edit alone instead of clobbering it.
+-- pack_version: the pack's OWN content version at the moment this row was last written by that
+--   pack (install or a since-applied update) -- distinct from the rules-pack file FORMAT version
+--   (RulesPack.version / PACK_VERSION in src/lib/packs.ts), which governs JSON shape compatibility
+--   and has nothing to do with which edition of a specific curated pack's merchant list this is.
+--   Conflating the two would mean a pack's own content revisions (more merchants, a fixed pattern)
+--   could only ever move in lockstep with a JSON schema bump, which they have no reason to.
+-- installed_at: when this row was last written by the pack (install or update), for display only.
+ALTER TABLE `merchant_rules` ADD `pack_source` text;
+--> statement-breakpoint
+ALTER TABLE `merchant_rules` ADD `pack_version` integer;
+--> statement-breakpoint
+ALTER TABLE `merchant_rules` ADD `installed_at` text;

@@ -14,6 +14,9 @@ vi.mock('@/app/(app)/settings/merchant-rules/actions', () => ({
   applyRuleNowAction: vi.fn(async () => ({})),
   rerunAllAction: vi.fn(async () => ({})),
   previewRerunAllAction: vi.fn(async () => ({ eligible: 10, wouldChange: 4 })),
+  installCanadianPackAction: vi.fn(async () => ({})),
+  removeCanadianPackAction: vi.fn(async () => ({})),
+  applyCanadianPackUpdateAction: vi.fn(async () => ({})),
 }));
 
 beforeEach(() => vi.clearAllMocks());
@@ -30,7 +33,7 @@ function rule(over: Partial<MerchantRuleRecord> = {}): MerchantRuleRecord {
   return {
     id: 1, pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: 1, renameTo: null,
     createdBy: null, hitCount: 0, lastUsedAt: null, createdAt: '2026-08-16T00:00:00.000Z', lastModifiedBy: null,
-    disabledAt: null, ...over,
+    disabledAt: null, packSource: null, packVersion: null, installedAt: null, ...over,
   };
 }
 
@@ -45,11 +48,17 @@ function baseProps(overrides: Partial<Parameters<typeof MerchantRulesClient>[0]>
     searchValue: '',
     activeKind: null,
     redundantOnly: false,
+    presetOnly: false,
+    presetCount: 0,
     kindCounts: { category: 1, transfer: 0, rename: 0, not_transfer: 0 },
     redundantCount: 0,
     impactCounts: {},
     redundantByRuleId: {},
     rulesPackRows: [],
+    canadianPack: { installed: false, installedVersion: null, bundledVersion: 1, updateAvailable: false, presentCount: 0, totalCount: 190 },
+    canadianInstallPreview: { totalRules: 190, categoryRules: 174, renameRules: 16, wouldWrite: 190, alreadyPresent: 0 },
+    canadianRemovalPreview: null,
+    canadianUpdateDiff: null,
     ...overrides,
   };
 }

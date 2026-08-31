@@ -225,6 +225,21 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     trigger: 'daily_slot',
     defaultEnabled: true,
   },
+  {
+    // Backlog item 17 / Part 4 (version awareness): "wire a line into the existing notification
+    // digest so it can be told once, rather than only on a page visit". Modelled exactly on
+    // update_available immediately above -- same audience, same trigger label, same default --
+    // because a preset pack update is the identical shape of fact (a version comparison, nothing
+    // urgent, admin's call whether to act), evaluated the same way (src/lib/canadian-pack.ts's
+    // notifyCanadianPackUpdateAvailable, called from runUpdateTick alongside the app's own check;
+    // see that function's docblock for why it only ever NOTIFIES, never applies anything).
+    id: 'pack_update_available',
+    label: 'A merchant rules pack update is available',
+    blurb: 'A merchant rules pack you installed (e.g. the Canadian pack) has a newer version published.',
+    audience: 'admin',
+    trigger: 'tick',
+    defaultEnabled: true,
+  },
 ];
 
 export function eventDef(id: string): NotificationEventDef | undefined {
@@ -438,4 +453,14 @@ export function savingsTargetPaceKey(month: string): string {
  *  `monthly-digest:` and weeklyDigestKey's `digest:` so none of the three can ever collide. */
 export function savingsMonthClosedKey(month: string): string {
   return `savings-closed:${month}`;
+}
+
+/**
+ * Once per (pack, version), ever -- same shape as updateAvailableKey, and the same reasoning:
+ * pack versions only ever go up, so this key never recurs, and the one residual pruning case
+ * updateAvailableKey's own docblock documents (a 400-day-stale reminder resurfacing once) applies
+ * here identically.
+ */
+export function packUpdateAvailableKey(packId: string, version: number): string {
+  return `pack-update:${packId}:${version}`;
 }

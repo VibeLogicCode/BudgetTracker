@@ -15,9 +15,16 @@ import { RowMenu, RowMenuButton, RowMenuForm } from '@/components/ui/RowMenu';
 import { TableWrap } from '@/components/ui/Table';
 import { Field, inputClass, selectClass } from '@/components/ui/form';
 import { categoryOptionGroups } from '@/lib/category-order';
+import type {
+  CanadianPackInstallPreview,
+  CanadianPackRemovalPreview,
+  CanadianPackState,
+  CanadianPackUpdateDiff,
+} from '@/lib/canadian-pack';
 import type { CategoryRecord } from '@/lib/categories';
 import type { MatchType, MerchantRuleRecord, RuleKind } from '@/lib/categorize/rules';
 import type { RulesExportRow } from '@/lib/packs';
+import { CanadianPackPanel } from './canadian-pack-panel';
 import { RulesPackPanel } from './rules-pack-panel';
 import {
   applyRuleNowAction,
@@ -107,11 +114,17 @@ export function MerchantRulesClient({
   searchValue,
   activeKind,
   redundantOnly,
+  presetOnly,
+  presetCount,
   kindCounts,
   redundantCount,
   impactCounts,
   redundantByRuleId,
   rulesPackRows,
+  canadianPack,
+  canadianInstallPreview,
+  canadianRemovalPreview,
+  canadianUpdateDiff,
 }: {
   categories: CategoryRecord[];
   rows: MerchantRuleRecord[];
@@ -122,6 +135,9 @@ export function MerchantRulesClient({
   searchValue: string;
   activeKind: RuleKind | null;
   redundantOnly: boolean;
+  /** Backlog item 17: the "Preset" filter chip, same idiom as redundantOnly. */
+  presetOnly: boolean;
+  presetCount: number;
   kindCounts: Record<RuleKind, number>;
   redundantCount: number;
   /** Sparse: absent means 0 (item 12's ruleImpactCounts never stores a zero entry). */
@@ -129,6 +145,10 @@ export function MerchantRulesClient({
   /** ruleId -> the contains rule id that already covers it (item 10's redundancy detection). */
   redundantByRuleId: Record<number, number>;
   rulesPackRows: RulesExportRow[];
+  canadianPack: CanadianPackState;
+  canadianInstallPreview: CanadianPackInstallPreview | null;
+  canadianRemovalPreview: CanadianPackRemovalPreview | null;
+  canadianUpdateDiff: CanadianPackUpdateDiff | null;
 }) {
   const [saveState, saveRule] = useActionState(saveRuleAction, initial);
   const [deleteState, removeRule] = useActionState(deleteRuleAction, initial);
@@ -235,9 +255,9 @@ export function MerchantRulesClient({
   }
 
   const kindChip = (label: string, kind: RuleKind | null, count: number) => {
-    const active = activeKind === kind && !redundantOnly;
+    const active = activeKind === kind && !redundantOnly && !presetOnly;
     return (
-      <Link key={kind ?? 'all'} href={chipHref(currentQuery, { kind, redundant: null })} className="inline-flex min-h-11 items-center sm:min-h-0">
+      <Link key={kind ?? 'all'} href={chipHref(currentQuery, { kind, redundant: null, preset: null })} className="inline-flex min-h-11 items-center sm:min-h-0">
         <Pill tone={active ? 'accent' : 'neutral'}>{`${label} (${count})`}</Pill>
       </Link>
     );
@@ -284,6 +304,7 @@ export function MerchantRulesClient({
           <form method="get" className="flex flex-wrap items-end gap-3">
             {activeKind ? <input type="hidden" name="kind" value={activeKind} /> : null}
             {redundantOnly ? <input type="hidden" name="redundant" value="1" /> : null}
+            {presetOnly ? <input type="hidden" name="preset" value="1" /> : null}
             <Field label="Search">
               <input
                 name="q"
@@ -297,8 +318,8 @@ export function MerchantRulesClient({
           </form>
 
           <div role="group" aria-label="Filter by kind" className="flex flex-wrap items-center gap-2">
-            <Link href={chipHref(currentQuery, { kind: null, redundant: null })} className="inline-flex min-h-11 items-center sm:min-h-0">
-              <Pill tone={activeKind === null && !redundantOnly ? 'accent' : 'neutral'}>{`All (${Object.values(kindCounts).reduce((a, b) => a + b, 0)})`}</Pill>
+            <Link href={chipHref(currentQuery, { kind: null, redundant: null, preset: null })} className="inline-flex min-h-11 items-center sm:min-h-0">
+              <Pill tone={activeKind === null && !redundantOnly && !presetOnly ? 'accent' : 'neutral'}>{`All (${Object.values(kindCounts).reduce((a, b) => a + b, 0)})`}</Pill>
             </Link>
             {kindChip(KIND_LABEL.category, 'category', kindCounts.category)}
             {kindChip(KIND_LABEL.rename, 'rename', kindCounts.rename)}
@@ -307,6 +328,11 @@ export function MerchantRulesClient({
             {redundantCount > 0 ? (
               <Link href={chipHref(currentQuery, { redundant: redundantOnly ? null : '1' })} className="inline-flex min-h-11 items-center sm:min-h-0">
                 <Pill tone={redundantOnly ? 'warning' : 'neutral'}>{`Redundant (${redundantCount})`}</Pill>
+              </Link>
+            ) : null}
+            {presetCount > 0 ? (
+              <Link href={chipHref(currentQuery, { preset: presetOnly ? null : '1' })} className="inline-flex min-h-11 items-center sm:min-h-0">
+                <Pill tone={presetOnly ? 'accent' : 'neutral'}>{`Preset (${presetCount})`}</Pill>
               </Link>
             ) : null}
           </div>
@@ -428,6 +454,9 @@ export function MerchantRulesClient({
                     </td>
                     <td className="font-mono text-xs text-ink cell-stack-headline" data-label="Pattern">
                       {rule.pattern}
+                      {rule.packSource !== null ? (
+                        <span className="ml-2 badge badge--blue" title={`Installed by the ${rule.packSource} preset pack, v${rule.packVersion}`}>preset</span>
+                      ) : null}
                       {coveredBy !== undefined ? (
                         <span className="ml-2 badge badge--amber" title={`Already covered by rule #${coveredBy}`}>redundant</span>
                       ) : null}
@@ -497,6 +526,17 @@ export function MerchantRulesClient({
         ) : rows.length > 0 ? (
           <CardFooter>{total} rule{total === 1 ? '' : 's'}</CardFooter>
         ) : null}
+      </Card>
+
+      <Card>
+        <CardBody>
+          <CanadianPackPanel
+            state={canadianPack}
+            installPreview={canadianInstallPreview}
+            removalPreview={canadianRemovalPreview}
+            updateDiff={canadianUpdateDiff}
+          />
+        </CardBody>
       </Card>
 
       <Card>

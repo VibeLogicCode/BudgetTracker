@@ -29,6 +29,23 @@ export interface MerchantRuleRecord {
   /** v1.21.0 (item 11). NULL = enabled (every row ever, until someone flips it). See the
    *  docblock on schema.ts's merchantRules.disabledAt for the full reasoning. */
   disabledAt: string | null;
+  /**
+   * Installable preset packs (backlog item 17). All three null for a rule a person wrote --
+   * see the docblock on upsertRuleFromCorrection's `pack` parameter for how that stays true even
+   * across an edit of a previously-stamped row.
+   */
+  packSource: string | null;
+  /** The pack's own content version, distinct from the rules-pack file format version -- see
+   *  drizzle/0017_pack_provenance.sql's header. Null exactly when packSource is. */
+  packVersion: number | null;
+  installedAt: string | null;
+}
+
+/** What a pack write stamps on the row it writes -- see upsertRuleFromCorrection's `pack` param. */
+export interface PackProvenance {
+  source: string;
+  version: number;
+  installedAt: string;
 }
 
 export function listRules(kind?: RuleKind): MerchantRuleRecord[] {
@@ -127,10 +144,32 @@ export function upsertRuleFromCorrection(input: {
   createdBy: number | null;
   /** The ACTOR's role, not the rule's. An admin may write over anyone's rule. */
   actorRole: 'admin' | 'member';
+  /**
+   * Installable preset packs (backlog item 17). Omitted (or explicitly null) by every one of
+   * this function's pre-existing callers -- the admin form (saveRuleAction), confirmCategory,
+   * setTransferFlag and applyCategoryToMatching -- which is what keeps pack_source/pack_version/
+   * installed_at null for a rule a person wrote, exactly as required.
+   *
+   * The subtle part: this is written into BOTH the insert `values` (trivial -- a brand-new row
+   * has no prior stamp to preserve) AND the `onConflictDoUpdate` `set` object below (load-bearing
+   * -- an UPDATE through this function otherwise leaves whatever was already in those three
+   * columns untouched). That second half is deliberate, not an oversight: it is what makes
+   * editing a previously pack-installed rule THROUGH THE FORM clear its stamp and turn it into a
+   * rule "a person wrote" from that edit onward, which is exactly the signal
+   * src/lib/canadian-pack.ts's update-apply flow needs to tell "this preset rule was left alone
+   * because the household edited it" apart from "this preset rule was never touched" -- there is
+   * no separate audit column for that; a null stamp on a row the pack's own rule list still
+   * names IS the "edited" fact. Only the pack-install/update path (src/lib/canadian-pack.ts, via
+   * importRulesPack's `stamp` option) ever passes a non-null `pack` here.
+   */
+  pack?: PackProvenance | null;
   at?: Date;
 }): RuleUpsertResult {
   const db = getDb();
   const renameTo = input.ruleKind === 'rename' ? (input.renameTo ?? null) : null;
+  const packSource = input.pack?.source ?? null;
+  const packVersion = input.pack?.version ?? null;
+  const installedAt = input.pack?.installedAt ?? null;
   // v1.21.0 (item 9): normalized_merchant is always uppercase (normalizeMerchant() calls
   // .toUpperCase()) and matchRule compares patterns with no case folding on either side -- a
   // pattern saved as `walmart` was therefore accepted, listed, and dead forever, with no error.
@@ -180,11 +219,18 @@ export function upsertRuleFromCorrection(input: {
       hitCount: 0,
       lastUsedAt: null,
       createdAt: nowIso(input.at ?? new Date()),
+      packSource,
+      packVersion,
+      installedAt,
     })
     .onConflictDoUpdate({
       target: [merchantRules.pattern, merchantRules.matchType, merchantRules.ruleKind],
       // createdBy is DELIBERATELY absent from this set object -- that is the whole of ruling R4.
-      set: { categoryId: input.categoryId, renameTo, lastModifiedBy: input.createdBy },
+      // packSource/packVersion/installedAt ARE present, and that is deliberate too -- see this
+      // function's `pack` parameter docblock above for why an update through this function must
+      // write whatever provenance the caller passes (null for every non-pack caller), not
+      // preserve whatever was there before.
+      set: { categoryId: input.categoryId, renameTo, lastModifiedBy: input.createdBy, packSource, packVersion, installedAt },
     })
     .run();
 

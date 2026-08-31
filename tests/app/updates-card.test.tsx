@@ -40,6 +40,7 @@ const base: UpdatesViewProps = {
   severity: 'none',
   canApplyInApp: true,
   watchtowerError: null,
+  canadianPackUpdate: null,
 };
 
 describe('MUST-9.3: the off state', () => {
@@ -216,6 +217,26 @@ describe('MUST-7.3: the card never receives a token', () => {
     expect(keys).toContain('canApplyInApp');
     for (const key of keys) expect(key.toLowerCase()).not.toContain('token');
     expect(JSON.stringify(base).toLowerCase()).not.toContain('bearer');
+  });
+});
+
+describe('backlog item 17 / Part 4: the preset-pack update notice', () => {
+  it('is absent when no pack update is pending', () => {
+    render(<UpdatesClient {...base} />);
+    expect(screen.queryByText('Preset rules: an update is available')).toBeNull();
+  });
+
+  it('shows both versions and a link to the merchant-rules page when one is pending', () => {
+    const { container } = render(<UpdatesClient {...base} canadianPackUpdate={{ installedVersion: 1, bundledVersion: 2 }} />);
+    expect(screen.getByText('Preset rules: an update is available')).toBeTruthy();
+    expect(container.textContent).toContain('installed is v1; this build ships v2');
+    const link = screen.getByRole('link', { name: /Review the change and apply it/ });
+    expect(link.getAttribute('href')).toBe('/settings/merchant-rules');
+  });
+
+  it('still shows the pack notice even when app update checks are off', () => {
+    render(<UpdatesClient {...base} enabled={false} autoApply={false} lastCheckedAt={null} canadianPackUpdate={{ installedVersion: 1, bundledVersion: 2 }} />);
+    expect(screen.getByText('Preset rules: an update is available')).toBeTruthy();
   });
 });
 

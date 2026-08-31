@@ -8,7 +8,14 @@ import { categoryLabel, createCategory, listCategories, type CategoryRecord } fr
 // applyRenameRules/buildContext: required care item 2 -- an imported rename has to be applied
 // retroactively, exactly as upsertRenameRule does for the form path (src/lib/categorize/engine.ts).
 import { applyRenameRules, buildContext } from '@/lib/categorize/engine';
-import { listRules, upsertRuleFromCorrection, type MatchType, type MerchantRuleRecord, type RuleKind } from '@/lib/categorize/rules';
+import {
+  listRules,
+  upsertRuleFromCorrection,
+  type MatchType,
+  type MerchantRuleRecord,
+  type PackProvenance,
+  type RuleKind,
+} from '@/lib/categorize/rules';
 import { importMappingSchema, type ImportMapping } from '@/lib/import/mapping';
 import { createProfile, getProfileByName, hasReadableMapping, listProfiles } from '@/lib/import/presets';
 
@@ -373,7 +380,12 @@ export function exportRulesPack(
 
 // ------------------------------------------------------------- rules import
 
-function findCategory(all: CategoryRecord[], name: string, parentName: string | null): CategoryRecord | null {
+/**
+ * Exported (not just used internally) so src/lib/canadian-pack.ts's update-diff/apply can resolve
+ * a pack rule's target category exactly the way an import does, rather than a second copy of the
+ * same name/parent matching logic drifting from this one over time.
+ */
+export function findCategory(all: CategoryRecord[], name: string, parentName: string | null): CategoryRecord | null {
   const candidates = all.filter((row) => lower(row.name) === lower(name));
   if (candidates.length === 0) return null;
   if (parentName === null) {
@@ -385,7 +397,7 @@ function findCategory(all: CategoryRecord[], name: string, parentName: string | 
 }
 
 /** Resolve the parent a rule's category should sit under, using the pack's own category list. */
-function resolveParentName(pack: RulesPack, rule: PackRule): string | null {
+export function resolveParentName(pack: RulesPack, rule: PackRule): string | null {
   if (rule.category_parent !== null) return rule.category_parent;
   if (rule.category === null) return null;
   const entry = pack.categories.find((c) => lower(c.name) === lower(rule.category as string));
@@ -501,11 +513,27 @@ export interface RulesImportResult {
   categoriesCreated: number;
 }
 
-export function importRulesPack(input: unknown, opts: { onConflict?: 'keep' | 'overwrite' } = {}): RulesImportResult {
+export function importRulesPack(
+  input: unknown,
+  opts: {
+    onConflict?: 'keep' | 'overwrite';
+    /**
+     * Installable preset packs (backlog item 17). Undefined for every caller of this function
+     * except src/lib/canadian-pack.ts's install path: the file-upload flow this function was
+     * originally written for (RulesPackPanel, /api/packs/rules/import) shares another household's
+     * export, which carries no tracked pack identity this install recognises, so it must never be
+     * stamped. Only a row this call actually WRITES gets stamped -- a conflict resolved as 'keep'
+     * `continue`s before reaching the write below, so the household's own kept rule is never
+     * touched, exactly as backlog item 17's "a conflict-kept row is theirs" requires.
+     */
+    stamp?: PackProvenance | null;
+  } = {},
+): RulesImportResult {
   const pack = parseRulesPack(input);
   // Default stays 'keep' (required care item 4): an import must never replace a rule the
   // household wrote themselves unless they explicitly asked for 'overwrite'.
   const onConflict = opts.onConflict ?? 'keep';
+  const stamp = opts.stamp ?? null;
 
   let all = listCategories({ includeArchived: true });
   let categoriesCreated = 0;
@@ -623,6 +651,10 @@ export function importRulesPack(input: unknown, opts: { onConflict?: 'keep' | 'o
       renameTo: rule.rename_to,
       createdBy: null,
       actorRole: 'admin',
+      // Only a row this loop actually writes reaches this call at all (a 'keep'-resolved
+      // conflict `continue`s above, before ever getting here) -- see this function's `stamp`
+      // option docblock for why that is exactly what backlog item 17 needs.
+      pack: stamp,
     });
     db.update(merchantRules)
       .set({ hitCount: 0, lastUsedAt: null })

@@ -1,6 +1,7 @@
 {
   "format": "budget-tracker-rules",
   "version": 1,
+  "pack_version": 1,
   "exported_at": "2026-08-31T00:00:00.000Z",
   "categories": [
     {
