@@ -488,3 +488,31 @@ describe('AccountsManager — card grid (v1.19.0, one design language)', () => {
     expect(container.querySelector('table')).toBeNull();
   });
 });
+
+// 2026-08-30 Settings disclosure sweep: "Add an account" folds behind a button, same shape as
+// "Add a type" / "New category" / "Save rule" / "Add a user".
+describe('AccountsManager — "Add an account" is a disclosure (2026-08-30 Settings sweep)', () => {
+  it('is closed on first paint: the toggle reads "Add an account" and the create form is hidden', () => {
+    // A non-empty account list, so the EmptyState's own "Add an account" link (a different
+    // element, a plain anchor) never renders and cannot be confused with the toggle button.
+    const { container } = render(<AccountsManager accounts={[account()]} people={PEOPLE} profiles={PROFILES} />);
+    const toggle = screen.getByRole('button', { name: 'Add an account' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle.getAttribute('aria-controls')).toBe('add-account-body');
+    // Requirement 4's own contract: mounted but hidden via the real `hidden` attribute, not
+    // unmounted -- `queryByPlaceholderText` finds a node whether or not it is hidden (only
+    // `byRole` respects the accessibility tree by default), so closedness is checked directly
+    // on the wrapper's `hidden` property, the same idiom this file's own CategoryRow-style
+    // disclosures elsewhere in the app (managers-client.test.tsx's `categoryRowFor(...).hidden`)
+    // already use.
+    expect((container.querySelector('#add-account-body') as HTMLElement).hidden).toBe(true);
+  });
+
+  it('opens on click, revealing the create form, and the toggle becomes Close', () => {
+    render(<AccountsManager accounts={[account()]} people={PEOPLE} profiles={PROFILES} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add an account' }));
+    const toggle = screen.getByRole('button', { name: 'Close' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByPlaceholderText('Joint Chequing')).toBeTruthy();
+  });
+});

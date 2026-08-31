@@ -307,6 +307,35 @@ export function ManagersClient({
   const [editing, setEditing] = useState<{ id: number; mapping: ImportMapping } | null>(null);
   const [deletingProfileId, setDeletingProfileId] = useState<number | null>(null);
   const [deactivatingProfileId, setDeactivatingProfileId] = useState<number | null>(null);
+  /**
+   * 2026-08-30 Settings disclosure sweep: v1.16.0's own rule ("Content is always visible. A
+   * form that creates something sits behind a button" -- CHANGELOG 1.16.0, the Quick add / Add
+   * rule / Add receipt folds) reached Goals next and then a read-only audit of Settings, which
+   * is what these two toggles answer. Two independent booleans, not one: the Categories card and
+   * the Merchant rules card are two unrelated create actions on two unrelated tables, exactly
+   * the "Add rule" / "Add receipt" split warranty-detail-client.tsx already keeps as two toggles
+   * rather than one -- unlike users-manager.tsx's pair (see that file's own docblock), neither
+   * form here is a variant of the other. Both closed by default.
+   */
+  const [addCategoryOpen, setAddCategoryOpen] = useState(false);
+  const [addRuleOpen, setAddRuleOpen] = useState(false);
+
+  // A failed create must not leave its own form collapsed. The FormError near the top of this
+  // page is shared across every action on it (createState/archiveState/ruleState/... all feed
+  // the same `error` variable below), so the message itself is never actually invisible here --
+  // but a person still needs the FORM open to see which field caused it and fix it in place,
+  // so each disclosure reopens on its OWN action's error, not on the shared one (an archive
+  // failure must not pop the create-category form open for no reason connected to it). Keyed on
+  // the state object itself, the same idiom warranty-detail-client.tsx's own M10/edit-close
+  // effects use: useActionState hands back a new object only when the action actually ran.
+  useEffect(() => {
+    if (createState.error) setAddCategoryOpen(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [createState]);
+  useEffect(() => {
+    if (ruleState.error) setAddRuleOpen(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ruleState]);
 
   // Item 2 (2026-08-30 plan): the same fold Budgets already uses for a category's children,
   // closed by default with the open set kept in localStorage (useCategoryGroupOpenState above).
@@ -356,23 +385,45 @@ export function ManagersClient({
         <CardHeader
           title="Categories"
           description="Categories are archived, never deleted — transactions, rules and budgets reference them permanently. Nesting is limited to two levels. Marking one tax-relevant (below, beside its name) includes it in the tax year report."
+          action={
+            // The card already lists every category with a chevron of its own (below); the
+            // CREATE form is the least-used control here and the widest row on the card, so it
+            // folds behind this toggle -- same shape as "Add an account" / "Add a type".
+            <button
+              type="button"
+              className="btn btn--secondary btn--sm min-h-11 sm:min-h-0"
+              aria-expanded={addCategoryOpen}
+              aria-controls="add-category-body"
+              onClick={() => setAddCategoryOpen((open) => !open)}
+            >
+              {addCategoryOpen ? 'Close' : 'Add category'}
+            </button>
+          }
         />
-        <CardBody className="pb-4">
-          <form action={createCategory} className="flex flex-wrap items-end gap-3">
-            <Field label="New category">
-              <input name="name" placeholder="Groceries" required className={inputClass} />
-            </Field>
-            <Field label="Parent">
-              <select name="parentId" className={selectClass}>
-                <option value="">Top level</option>
-                {parents.map((parent) => (
-                  <option key={parent.id} value={parent.id}>{parent.name}</option>
-                ))}
-              </select>
-            </Field>
-            <SubmitButton>Add</SubmitButton>
-          </form>
-        </CardBody>
+        {/* Hidden via the real `hidden` attribute, never conditionally unmounted -- ruling
+            U2/U3's reasoning (budgets-client.tsx EditRow, this file's own CategoryRow above):
+            the Parent <select> here is exactly the shape of option list this task's own
+            checklist warns about, and unmounting it on collapse would turn any future test
+            reading it on a closed render into a false negative for a reason unrelated to what
+            it is testing. */}
+        <div id="add-category-body" hidden={!addCategoryOpen}>
+          <CardBody className="pb-4">
+            <form action={createCategory} className="flex flex-wrap items-end gap-3">
+              <Field label="New category">
+                <input name="name" placeholder="Groceries" required className={inputClass} />
+              </Field>
+              <Field label="Parent">
+                <select name="parentId" className={selectClass}>
+                  <option value="">Top level</option>
+                  {parents.map((parent) => (
+                    <option key={parent.id} value={parent.id}>{parent.name}</option>
+                  ))}
+                </select>
+              </Field>
+              <SubmitButton>Add</SubmitButton>
+            </form>
+          </CardBody>
+        </div>
         {/* Item 2: folds the same way Budgets' Edit-limits list does -- a parent with children is
             a disclosure, closed by default, its children indented beneath it. Not a TableWrap any
             more: there is no shared column header left to hang a <thead> off once a category's
@@ -401,52 +452,74 @@ export function ManagersClient({
               override that stops one merchant from being auto-flagged as a card payment.
             </>
           }
+          action={
+            // Same "Add rule" wording warranty-detail-client.tsx's own Payment matching card
+            // uses for the identical idea: the existing-rules table stays visible, the CREATE
+            // form (the widest row on this card) folds behind the toggle.
+            <button
+              type="button"
+              className="btn btn--secondary btn--sm min-h-11 sm:min-h-0"
+              aria-expanded={addRuleOpen}
+              aria-controls="add-rule-body"
+              onClick={() => setAddRuleOpen((open) => !open)}
+            >
+              {addRuleOpen ? 'Close' : 'Add rule'}
+            </button>
+          }
         />
-        <CardBody className="pb-4">
-          <form action={saveRule} className="flex flex-wrap items-end gap-3">
-            <Field label="Pattern">
-              <input name="pattern" placeholder="Normalized merchant pattern" required className={inputClass} />
-            </Field>
-            <Field label="Match">
-              <select name="matchType" className={selectClass}>
-                <option value="exact">exact</option>
-                <option value="contains">contains</option>
-              </select>
-            </Field>
-            <Field label="Kind">
-              <select name="ruleKind" className={selectClass}>
-                <option value="category">category</option>
-                <option value="transfer">transfer</option>
-                <option value="rename">rename</option>
-                <option value="not_transfer">not a transfer (override)</option>
-              </select>
-            </Field>
-            <Field label="Category">
-              <select name="categoryId" className={selectClass}>
-                <option value="">(none — transfer, not_transfer and rename rules)</option>
-                {categoryOptionGroups(categories).map((group) =>
-                  group.label === null ? (
-                    <option key={group.options[0].id} value={group.options[0].id}>
-                      {group.options[0].label}
-                    </option>
-                  ) : (
-                    <optgroup key={group.label} label={group.label}>
-                      {group.options.map((option) => (
-                        <option key={option.id} value={option.id}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ),
-                )}
-              </select>
-            </Field>
-            <Field label="Renames to">
-              <input name="renameTo" placeholder="Display name (rename rules only)" className={inputClass} />
-            </Field>
-            <SubmitButton>Save rule</SubmitButton>
-          </form>
-        </CardBody>
+        {/* Hidden via the real `hidden` attribute, never conditionally unmounted -- ruling
+            U2/U3's reasoning (budgets-client.tsx EditRow, this file's own CategoryRow above):
+            the Category <select> here runs through categoryOptionGroups the same way the
+            Transactions quick-add form's does, and unmounting it on collapse would turn any
+            future test reading it on a closed render into a false negative for a reason
+            unrelated to what it is testing. */}
+        <div id="add-rule-body" hidden={!addRuleOpen}>
+          <CardBody className="pb-4">
+            <form action={saveRule} className="flex flex-wrap items-end gap-3">
+              <Field label="Pattern">
+                <input name="pattern" placeholder="Normalized merchant pattern" required className={inputClass} />
+              </Field>
+              <Field label="Match">
+                <select name="matchType" className={selectClass}>
+                  <option value="exact">exact</option>
+                  <option value="contains">contains</option>
+                </select>
+              </Field>
+              <Field label="Kind">
+                <select name="ruleKind" className={selectClass}>
+                  <option value="category">category</option>
+                  <option value="transfer">transfer</option>
+                  <option value="rename">rename</option>
+                  <option value="not_transfer">not a transfer (override)</option>
+                </select>
+              </Field>
+              <Field label="Category">
+                <select name="categoryId" className={selectClass}>
+                  <option value="">(none — transfer, not_transfer and rename rules)</option>
+                  {categoryOptionGroups(categories).map((group) =>
+                    group.label === null ? (
+                      <option key={group.options[0].id} value={group.options[0].id}>
+                        {group.options[0].label}
+                      </option>
+                    ) : (
+                      <optgroup key={group.label} label={group.label}>
+                        {group.options.map((option) => (
+                          <option key={option.id} value={option.id}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ),
+                  )}
+                </select>
+              </Field>
+              <Field label="Renames to">
+                <input name="renameTo" placeholder="Display name (rename rules only)" className={inputClass} />
+              </Field>
+              <SubmitButton>Save rule</SubmitButton>
+            </form>
+          </CardBody>
+        </div>
         {/* Item I. minWidth is the colgroup's own total (14+6+7+13+10+5+3 = 58rem); without it the
             scroll container has nothing to scroll and the columns crush instead. A long monospace
             pattern beside a "Parent › Child" label reached ~1100px and squeezed the delete button. */}

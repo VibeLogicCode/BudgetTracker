@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, cleanup, screen } from '@testing-library/react';
+import { render, cleanup, fireEvent, screen } from '@testing-library/react';
 import { ItemTypesManager } from '@/app/(app)/settings/item-types/item-types-manager';
 import type { ItemTypeWithUsage } from '@/lib/warranty/types';
 
@@ -29,6 +29,11 @@ function type(over: Partial<ItemTypeWithUsage> = {}): ItemTypeWithUsage {
 describe('ItemTypesManager — create form (5b lesson, made enforceable)', () => {
   it('renders exactly ONE [name="kind"] control in the create form', () => {
     const { container } = render(<ItemTypesManager types={[]} />);
+    // 2026-08-30 Settings disclosure sweep: "Add a type" is now a disclosure, closed by
+    // default (see item-types-manager.tsx's own docblock), so the create form has to be
+    // opened before it can be queried at all -- getByRole excludes anything hidden via the
+    // `hidden` attribute, same as every other accessibility-tree query in this suite.
+    fireEvent.click(screen.getByRole('button', { name: 'Add a type' }));
     // 5b regression: a hidden input sharing the same `name` as the real control silently wins
     // over the admin's choice via FormData.get()'s first-value semantics. A plain <select> has
     // no such sibling, but this pins the invariant directly: exactly one element named "kind"
@@ -42,6 +47,7 @@ describe('ItemTypesManager — create form (5b lesson, made enforceable)', () =>
 
   it('offers all five kinds as options, defaulting to Warranty', () => {
     render(<ItemTypesManager types={[]} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add a type' }));
     const select = screen.getByRole('button', { name: /add type/i }).closest('form')!.querySelector('select[name="kind"]') as HTMLSelectElement;
     const optionLabels = Array.from(select.querySelectorAll('option')).map((o) => o.textContent);
     expect(optionLabels).toEqual(['Warranty', 'Subscription', 'Contract', 'Loan', 'Bill']);
@@ -70,5 +76,27 @@ describe('ItemTypesManager — responsive rows (v1.15.0, ruling S3)', () => {
     const { container } = render(<ItemTypesManager types={[type({ id: 5, name: 'Netflix' })]} />);
     const headlineCell = container.querySelector('tbody tr td:first-child');
     expect(headlineCell?.className).toContain('cell-stack-headline');
+  });
+});
+
+// 2026-08-30 Settings disclosure sweep: "Add a type" folds behind a button, same shape as
+// "Add an account" / "New category" / "Save rule" / "Add a user".
+describe('ItemTypesManager — "Add a type" is a disclosure (2026-08-30 Settings sweep)', () => {
+  it('is closed on first paint: the toggle reads "Add a type" and the create form is not queryable', () => {
+    render(<ItemTypesManager types={[]} />);
+    const toggle = screen.getByRole('button', { name: 'Add a type' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle.getAttribute('aria-controls')).toBe('add-type-body');
+    // getByRole excludes anything hidden via the `hidden` attribute -- this is the same check
+    // a screen reader or a keyboard user would hit, not just an implementation detail.
+    expect(screen.queryByRole('textbox', { name: /type name/i })).toBeNull();
+  });
+
+  it('opens on click, revealing the Type name field, and the toggle becomes Close', () => {
+    render(<ItemTypesManager types={[]} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add a type' }));
+    const toggle = screen.getByRole('button', { name: 'Close' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByPlaceholderText('Appliance')).toBeTruthy();
   });
 });

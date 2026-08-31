@@ -159,3 +159,29 @@ describe('UsersManager — responsive rows (v1.15.0, ruling S3)', () => {
     expect(headlineCell?.className).toContain('cell-stack-headline');
   });
 });
+
+// 2026-08-30 Settings disclosure sweep: ONE toggle reveals BOTH "Add a user" and "Add a person
+// without a login" -- see the addUserOpen docblock in users-manager.tsx for why the pair shares
+// a control instead of getting one each.
+describe('UsersManager — "Add a user" is a disclosure covering both create cards (2026-08-30 Settings sweep)', () => {
+  it('is closed on first paint: the toggle reads "Add a user" and both create forms are hidden', () => {
+    const { container } = render(<UsersManager users={[user()]} />);
+    const toggle = screen.getByRole('button', { name: 'Add a user' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle.getAttribute('aria-controls')).toBe('add-user-body');
+    // `queryByPlaceholderText` finds a node whether or not it is hidden (only `byRole` respects
+    // the accessibility tree by default), so closedness is checked directly on the wrapper's
+    // `hidden` property -- one wrapper covers both cards (see the addUserOpen docblock in
+    // users-manager.tsx for why this pair shares a single toggle and a single wrapper).
+    expect((container.querySelector('#add-user-body') as HTMLElement).hidden).toBe(true);
+  });
+
+  it('opens on click, revealing both create forms, and the toggle becomes Close', () => {
+    render(<UsersManager users={[user()]} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add a user' }));
+    const toggle = screen.getByRole('button', { name: 'Close' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByPlaceholderText('Alex')).toBeTruthy();
+    expect(screen.getByPlaceholderText('Robin')).toBeTruthy();
+  });
+});

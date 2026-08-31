@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, useActionState, useState } from 'react';
+import { Fragment, useActionState, useEffect, useState } from 'react';
 import { FormError } from '@/components/FormError';
 import { SubmitButton } from '@/components/SubmitButton';
 import { AutoSaveCheckbox, AutoSaveSelect } from '@/components/ui/AutoSave';
@@ -51,6 +51,35 @@ export function UsersManager({ users }: { users: UserRecord[] }) {
    */
   const [confirming, setConfirming] = useState<{ id: number; intent: 'deactivate' | 'mfa' } | null>(null);
 
+  /**
+   * 2026-08-30 Settings disclosure sweep: v1.16.0's own rule ("Content is always visible. A
+   * form that creates something sits behind a button" -- CHANGELOG 1.16.0, the Quick add / Add
+   * rule / Add receipt folds) reached Goals next and then a read-only audit of Settings, which
+   * is what this toggle answers.
+   *
+   * ONE boolean for BOTH cards, not two independent toggles: unlike warranty-detail-client.tsx's
+   * Add rule / Add receipt (two unrelated sub-features on two unrelated cards, each earning its
+   * own toggle), "Add a person without a login" reads as a variant of "Add a user", not a
+   * separate feature -- the two cards already sit side by side in one grid under one shared
+   * page action ("adding a household member"), never behind their own separate CardHeaders with
+   * separate titles-as-actions the way Categories/Merchant rules on managers-client.tsx do.
+   * Splitting them into two toggles would make a person open BOTH, one at a time, to compare
+   * "which one do I want" -- exactly backwards from what the two-column layout already offers at
+   * a glance. Closed by default, same as every other disclosure the rule has produced so far.
+   */
+  const [addUserOpen, setAddUserOpen] = useState(false);
+
+  // A failed create (either card) must not leave the pair collapsed -- both FormErrors render
+  // INSIDE these forms, so a closed section would swallow whichever message applies. Keyed on
+  // both state objects (the same idiom warranty-detail-client.tsx's own M10/edit-close effects
+  // use): useActionState hands back a new object only when its own action actually ran, so this
+  // fires once per real submission on either card and never fights someone who closes the
+  // section afterwards while the same stale error still sits in state.
+  useEffect(() => {
+    if (createState.error || personState.error) setAddUserOpen(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [createState, personState]);
+
   const rowMessage = rowState.message ?? pwState.message ?? mfaState.message;
 
   return (
@@ -59,62 +88,82 @@ export function UsersManager({ users }: { users: UserRecord[] }) {
         eyebrow="Settings"
         title="Users"
         description="Everyone who can sign in. Members see the whole household; admins can also change these settings."
+        actions={
+          // One toggle for both cards below -- see the addUserOpen docblock above for why this
+          // page treats "add a person without a login" as a variant of "add a user" rather than
+          // a second, independent feature.
+          <button
+            type="button"
+            className="btn btn--primary btn--sm min-h-11 sm:min-h-0"
+            aria-expanded={addUserOpen}
+            aria-controls="add-user-body"
+            onClick={() => setAddUserOpen((open) => !open)}
+          >
+            {addUserOpen ? 'Close' : 'Add a user'}
+          </button>
+        }
       />
 
-      <div className="grid gap-6 sm:grid-cols-2">
-        <Card>
-          <CardHeader title="Add a user" description="They pick their own password the first time they sign in." />
-          <CardBody>
-            <form action={create} className="flex flex-col gap-4">
-              <FormError message={createState.error} />
-              {createState.message ? <Notice tone="success">{createState.message}</Notice> : null}
-              <Field label="Name">
-                <input name="name" placeholder="Alex" required className={inputClass} />
-              </Field>
-              <Field label="Username">
-                <input name="username" placeholder="alex" required className={inputClass} />
-              </Field>
-              <Field label="Temporary password" hint="At least 10 characters.">
-                <input name="password" placeholder="At least 10 characters" required className={inputClass} />
-              </Field>
-              <Field label="Role">
-                <select name="role" defaultValue="member" className={selectClass}>
-                  <option value="member">Member</option>
-                  <option value="admin">Admin</option>
-                </select>
-              </Field>
-              <SubmitButton className="w-fit">Create user</SubmitButton>
-            </form>
-          </CardBody>
-        </Card>
+      {/* Hidden via the real `hidden` attribute, never conditionally unmounted -- ruling U2/U3's
+          reasoning (budgets-client.tsx EditRow, managers-client.tsx CategoryRow): unmounting
+          either form on collapse would turn any future test reading its controls on a closed
+          render into a false negative for a reason unrelated to what it is testing. */}
+      <div id="add-user-body" hidden={!addUserOpen}>
+        <div className="grid gap-6 sm:grid-cols-2">
+          <Card>
+            <CardHeader title="Add a user" description="They pick their own password the first time they sign in." />
+            <CardBody>
+              <form action={create} className="flex flex-col gap-4">
+                <FormError message={createState.error} />
+                {createState.message ? <Notice tone="success">{createState.message}</Notice> : null}
+                <Field label="Name">
+                  <input name="name" placeholder="Alex" required className={inputClass} />
+                </Field>
+                <Field label="Username">
+                  <input name="username" placeholder="alex" required className={inputClass} />
+                </Field>
+                <Field label="Temporary password" hint="At least 10 characters.">
+                  <input name="password" placeholder="At least 10 characters" required className={inputClass} />
+                </Field>
+                <Field label="Role">
+                  <select name="role" defaultValue="member" className={selectClass}>
+                    <option value="member">Member</option>
+                    <option value="admin">Admin</option>
+                  </select>
+                </Field>
+                <SubmitButton className="w-fit">Create user</SubmitButton>
+              </form>
+            </CardBody>
+          </Card>
 
-        {/* v1.13.0 ruling R5. No password field at all -- createPersonWithoutLogin hashes 32
-            random bytes nobody is ever told, and this person cannot sign in and cannot be made
-            an admin (micro-ruling M1 blocks self+admin; a no-login person cannot be given a role
-            other than 'member' at all, since no role-setting action exists in this app). */}
-        <Card>
-          <CardHeader
-            title="Add a person without a login"
-            description="For a child, a relative or a housemate who is never going to sign in."
-          />
-          <CardBody>
-            <form action={createPerson} className="flex flex-col gap-4">
-              <FormError message={personState.error} />
-              {personState.message ? <Notice tone="success">{personState.message}</Notice> : null}
-              <Field label="Name">
-                <input name="name" placeholder="Robin" required className={inputClass} />
-              </Field>
-              <Field label="Username">
-                <input name="username" placeholder="robin" required className={inputClass} />
-              </Field>
-              <p className={hintClass}>
-                They will show up wherever you choose who a transaction was for. They cannot sign in and
-                cannot be made an admin.
-              </p>
-              <SubmitButton className="w-fit">Add person</SubmitButton>
-            </form>
-          </CardBody>
-        </Card>
+          {/* v1.13.0 ruling R5. No password field at all -- createPersonWithoutLogin hashes 32
+              random bytes nobody is ever told, and this person cannot sign in and cannot be made
+              an admin (micro-ruling M1 blocks self+admin; a no-login person cannot be given a role
+              other than 'member' at all, since no role-setting action exists in this app). */}
+          <Card>
+            <CardHeader
+              title="Add a person without a login"
+              description="For a child, a relative or a housemate who is never going to sign in."
+            />
+            <CardBody>
+              <form action={createPerson} className="flex flex-col gap-4">
+                <FormError message={personState.error} />
+                {personState.message ? <Notice tone="success">{personState.message}</Notice> : null}
+                <Field label="Name">
+                  <input name="name" placeholder="Robin" required className={inputClass} />
+                </Field>
+                <Field label="Username">
+                  <input name="username" placeholder="robin" required className={inputClass} />
+                </Field>
+                <p className={hintClass}>
+                  They will show up wherever you choose who a transaction was for. They cannot sign in and
+                  cannot be made an admin.
+                </p>
+                <SubmitButton className="w-fit">Add person</SubmitButton>
+              </form>
+            </CardBody>
+          </Card>
+        </div>
       </div>
 
       <FormError message={rowState.error ?? pwState.error ?? mfaState.error} />

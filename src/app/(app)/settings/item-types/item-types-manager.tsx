@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState } from 'react';
+import { useActionState, useEffect, useState } from 'react';
 import { FormError } from '@/components/FormError';
 import { SubmitButton } from '@/components/SubmitButton';
 import { WarrantiesIcon } from '@/components/icons';
@@ -34,6 +34,25 @@ const saveItemTypeKind = (formData: FormData) => setKindAction({}, formData);
 export function ItemTypesManager({ types }: { types: ItemTypeWithUsage[] }) {
   const [createState, create] = useActionState(createItemTypeAction, initialState);
   const [deleteState, remove] = useActionState(deleteItemTypeAction, initialState);
+  /**
+   * 2026-08-30 Settings disclosure sweep: v1.16.0's own rule ("Content is always visible. A
+   * form that creates something sits behind a button" -- CHANGELOG 1.16.0, the Quick add / Add
+   * rule / Add receipt folds) reached Goals next and then a read-only audit of Settings, which
+   * is what this toggle answers. Closed by default, same as every other disclosure the rule has
+   * produced so far.
+   */
+  const [addTypeOpen, setAddTypeOpen] = useState(false);
+
+  // A failed create must not leave its own form collapsed -- FormError below renders INSIDE
+  // this card's form, so a closed card would swallow the very message the person needs to see.
+  // Keyed on the createState object itself (the same idiom warranty-detail-client.tsx's own
+  // M10/edit-close effects use): useActionState hands back a new object only when
+  // createItemTypeAction actually ran, so this fires exactly once per real submission and never
+  // fights someone who closes the card afterwards while the same stale error still sits in state.
+  useEffect(() => {
+    if (createState.error) setAddTypeOpen(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [createState]);
 
   const rowError = deleteState.error;
   const rowMessage = deleteState.message;
@@ -56,32 +75,56 @@ export function ItemTypesManager({ types }: { types: ItemTypeWithUsage[] }) {
 
       <div id="add-type">
         <Card className="max-w-md">
-          <CardHeader title="Add a type" />
-          <CardBody>
-            <form action={create} className="flex flex-col gap-4">
-              <FormError message={createState.error} />
-              {createState.message ? <Notice tone="success">{createState.message}</Notice> : null}
-              <Field label="Type name">
-                <input name="name" placeholder="Appliance" required maxLength={60} className={inputClass} />
-              </Field>
-              <Field label="Kind">
-                {/*
-                  A plain <select> -- FormData.get() only ever returns one value for this key
-                  either way, but a <select> also sidesteps the hidden-input-shadowing bug a
-                  checkbox had here (see the create-form regression tests): there is exactly one
-                  control and exactly one value, chosen, never inferred from absence.
-                */}
-                <select name="kind" defaultValue="warranty" className={selectClass}>
-                  {ITEM_KINDS.map((kind) => (
-                    <option key={kind} value={kind}>
-                      {ITEM_KIND_LABELS[kind]}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <SubmitButton className="w-fit">Add type</SubmitButton>
-            </form>
-          </CardBody>
+          <CardHeader
+            title="Add a type"
+            action={
+              // The title already reads as the action, so the toggle's label matches it exactly
+              // -- the same "Add rule" / "Close" shape warranty-detail-client.tsx's Payment
+              // matching card uses. 44px floor (global constraint) via min-h-11, same as there.
+              <button
+                type="button"
+                className="btn btn--secondary btn--sm min-h-11 sm:min-h-0"
+                aria-expanded={addTypeOpen}
+                aria-controls="add-type-body"
+                onClick={() => setAddTypeOpen((open) => !open)}
+              >
+                {addTypeOpen ? 'Close' : 'Add a type'}
+              </button>
+            }
+          />
+          {/* Hidden via the real `hidden` attribute, never conditionally unmounted -- ruling
+              U2/U3's reasoning (budgets-client.tsx EditRow, managers-client.tsx CategoryRow):
+              this exact form's own regression test (the 5b "exactly one [name=kind] control"
+              lesson, below in item-types-manager.test.tsx) reads its <select> straight out of
+              the DOM, and unmounting on collapse would have turned that test into a false
+              negative for a reason that has nothing to do with what it is checking. */}
+          <div id="add-type-body" hidden={!addTypeOpen}>
+            <CardBody>
+              <form action={create} className="flex flex-col gap-4">
+                <FormError message={createState.error} />
+                {createState.message ? <Notice tone="success">{createState.message}</Notice> : null}
+                <Field label="Type name">
+                  <input name="name" placeholder="Appliance" required maxLength={60} className={inputClass} />
+                </Field>
+                <Field label="Kind">
+                  {/*
+                    A plain <select> -- FormData.get() only ever returns one value for this key
+                    either way, but a <select> also sidesteps the hidden-input-shadowing bug a
+                    checkbox had here (see the create-form regression tests): there is exactly one
+                    control and exactly one value, chosen, never inferred from absence.
+                  */}
+                  <select name="kind" defaultValue="warranty" className={selectClass}>
+                    {ITEM_KINDS.map((kind) => (
+                      <option key={kind} value={kind}>
+                        {ITEM_KIND_LABELS[kind]}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <SubmitButton className="w-fit">Add type</SubmitButton>
+              </form>
+            </CardBody>
+          </div>
         </Card>
       </div>
 
@@ -95,7 +138,14 @@ export function ItemTypesManager({ types }: { types: ItemTypeWithUsage[] }) {
             icon={WarrantiesIcon}
             title="No item types yet"
             action={
-              <a href="#add-type" className="btn btn--primary btn--sm">
+              // Opens the disclosure as well as scrolling to it -- with zero types this is the
+              // very first thing a person clicks, and a collapsed card at the far end of the
+              // anchor would be a dead end.
+              <a
+                href="#add-type"
+                className="btn btn--primary btn--sm"
+                onClick={() => setAddTypeOpen(true)}
+              >
                 Add a type
               </a>
             }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState, useState } from 'react';
+import { useActionState, useEffect, useState } from 'react';
 import { FormError } from '@/components/FormError';
 import { SubmitButton } from '@/components/SubmitButton';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
@@ -199,6 +199,25 @@ export function AccountsManager({
   // Ruling R10: savings and asset are new enough that the select needs a one-line explanation
   // right under it, and only the one that applies to what is currently picked.
   const [newAccountType, setNewAccountType] = useState<AccountType>('chequing');
+  /**
+   * 2026-08-30 Settings disclosure sweep: v1.16.0's own rule ("Content is always visible. A
+   * form that creates something sits behind a button" -- CHANGELOG 1.16.0, the Quick add / Add
+   * rule / Add receipt folds) reached Goals next and then a read-only audit of Settings, which
+   * is what this toggle answers. Closed by default, same as every other disclosure the rule has
+   * produced so far.
+   */
+  const [addAccountOpen, setAddAccountOpen] = useState(false);
+
+  // A failed create must not leave its own form collapsed -- FormError below renders INSIDE
+  // this card's form, so a closed card would swallow the very message the person needs to see.
+  // Keyed on the createState object itself (the same idiom warranty-detail-client.tsx's own
+  // M10/edit-close effects use): useActionState hands back a new object only when
+  // createAccountAction actually ran, so this fires exactly once per real submission and never
+  // fights someone who closes the card afterwards while the same stale error still sits in state.
+  useEffect(() => {
+    if (createState.error) setAddAccountOpen(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [createState]);
 
   const rowError = activeState.error ?? updateState.error;
   const rowMessage = activeState.message ?? updateState.message;
@@ -221,53 +240,78 @@ export function AccountsManager({
 
       <div id="add-account">
         <Card className="max-w-md">
-          <CardHeader title="Add an account" />
-          <CardBody>
-            <form action={create} className="flex flex-col gap-4">
-              <FormError message={createState.error} />
-              {createState.message ? <Notice tone="success">{createState.message}</Notice> : null}
-              <Field label="Name">
-                <input name="name" placeholder="Joint Chequing" required className={inputClass} />
-              </Field>
-              <Field label="Institution (optional)">
-                <input name="institution" placeholder="TD" className={inputClass} />
-              </Field>
-              <Field
-                label="Type"
-                hint={
-                  newAccountType === 'savings'
-                    ? 'Savings — like a chequing account, but left out of safe-to-spend.'
-                    : newAccountType === 'asset'
-                      ? 'Asset — a house, a TFSA or an RRSP. You type the balance in; it takes no transactions and no imports.'
-                      : undefined
-                }
+          <CardHeader
+            title="Add an account"
+            action={
+              // The title already reads as the action, so the toggle's label matches it exactly
+              // -- the same "Add rule" / "Close" shape warranty-detail-client.tsx's Payment
+              // matching card uses. 44px floor (global constraint) via min-h-11, same as there.
+              <button
+                type="button"
+                className="btn btn--secondary btn--sm min-h-11 sm:min-h-0"
+                aria-expanded={addAccountOpen}
+                aria-controls="add-account-body"
+                onClick={() => setAddAccountOpen((open) => !open)}
               >
-                <select
-                  name="type"
-                  value={newAccountType}
-                  onChange={(e) => setNewAccountType(e.target.value as AccountType)}
-                  className={selectClass}
+                {addAccountOpen ? 'Close' : 'Add an account'}
+              </button>
+            }
+          />
+          {/* Hidden via the real `hidden` attribute, never conditionally unmounted -- ruling
+              U2/U3's reasoning (budgets-client.tsx EditRow, managers-client.tsx CategoryRow):
+              a form that vanished from the DOM on collapse would turn a future test that reads
+              its option lists on a closed render into a false negative for no reason connected
+              to what it is actually testing. Nothing in this file's own suite reaches into this
+              particular form today, but every other disclosure in the app keeps this contract,
+              and there is no upside to this one being the exception. */}
+          <div id="add-account-body" hidden={!addAccountOpen}>
+            <CardBody>
+              <form action={create} className="flex flex-col gap-4">
+                <FormError message={createState.error} />
+                {createState.message ? <Notice tone="success">{createState.message}</Notice> : null}
+                <Field label="Name">
+                  <input name="name" placeholder="Joint Chequing" required className={inputClass} />
+                </Field>
+                <Field label="Institution (optional)">
+                  <input name="institution" placeholder="TD" className={inputClass} />
+                </Field>
+                <Field
+                  label="Type"
+                  hint={
+                    newAccountType === 'savings'
+                      ? 'Savings — like a chequing account, but left out of safe-to-spend.'
+                      : newAccountType === 'asset'
+                        ? 'Asset — a house, a TFSA or an RRSP. You type the balance in; it takes no transactions and no imports.'
+                        : undefined
+                  }
                 >
-                  <option value="chequing">Chequing</option>
-                  <option value="credit">Credit</option>
-                  <option value="cash">Cash</option>
-                  <option value="savings">Savings</option>
-                  <option value="asset">Asset</option>
-                </select>
-              </Field>
-              <Field label="Owner">
-                <select name="owner" defaultValue="" className={selectClass}>
-                  <option value="">Joint (household)</option>
-                  {people.map((person) => (
-                    <option key={person.id} value={person.id}>
-                      {person.name}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <SubmitButton className="w-fit">Add account</SubmitButton>
-            </form>
-          </CardBody>
+                  <select
+                    name="type"
+                    value={newAccountType}
+                    onChange={(e) => setNewAccountType(e.target.value as AccountType)}
+                    className={selectClass}
+                  >
+                    <option value="chequing">Chequing</option>
+                    <option value="credit">Credit</option>
+                    <option value="cash">Cash</option>
+                    <option value="savings">Savings</option>
+                    <option value="asset">Asset</option>
+                  </select>
+                </Field>
+                <Field label="Owner">
+                  <select name="owner" defaultValue="" className={selectClass}>
+                    <option value="">Joint (household)</option>
+                    {people.map((person) => (
+                      <option key={person.id} value={person.id}>
+                        {person.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <SubmitButton className="w-fit">Add account</SubmitButton>
+              </form>
+            </CardBody>
+          </div>
         </Card>
       </div>
 
@@ -282,7 +326,14 @@ export function AccountsManager({
               icon={SettingsIcon}
               title="No accounts yet. Add the first one above."
               action={
-                <a href="#add-account" className="btn btn--primary btn--sm">
+                // Opens the disclosure as well as scrolling to it -- with zero accounts this is
+                // the very first thing a person clicks, and a collapsed card at the far end of
+                // the anchor would be a dead end.
+                <a
+                  href="#add-account"
+                  className="btn btn--primary btn--sm"
+                  onClick={() => setAddAccountOpen(true)}
+                >
                   Add an account
                 </a>
               }

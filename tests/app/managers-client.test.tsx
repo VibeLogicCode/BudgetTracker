@@ -376,3 +376,49 @@ describe('ManagersClient — the merchant rules table declares its own widths (i
     expect(rules?.querySelectorAll('thead th')).toHaveLength(7);
   });
 });
+
+// 2026-08-30 Settings disclosure sweep: "New category" and "Save rule" each fold behind their
+// own button (two unrelated create actions, two independent toggles -- see the addCategoryOpen/
+// addRuleOpen docblock in managers-client.tsx for why this is not one shared toggle the way
+// users-manager.tsx's pair is).
+describe('ManagersClient — "Add category" is a disclosure (2026-08-30 Settings sweep)', () => {
+  it('is closed on first paint: the toggle reads "Add category" and the create form is hidden', () => {
+    const { container } = renderManagers();
+    const toggle = screen.getByRole('button', { name: 'Add category' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle.getAttribute('aria-controls')).toBe('add-category-body');
+    // `queryByPlaceholderText` finds a node whether or not it is hidden (only `byRole` respects
+    // the accessibility tree by default), so closedness is checked directly on the wrapper's
+    // `hidden` property, the same idiom `categoryRowFor(...).hidden` already uses above.
+    expect((container.querySelector('#add-category-body') as HTMLElement).hidden).toBe(true);
+  });
+
+  it('opens on click, revealing the New category field, and the toggle becomes Close', () => {
+    renderManagers();
+    fireEvent.click(screen.getByRole('button', { name: 'Add category' }));
+    const toggle = screen.getByRole('button', { name: 'Close' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByPlaceholderText('Groceries')).toBeTruthy();
+  });
+});
+
+describe('ManagersClient — "Add rule" is a disclosure (2026-08-30 Settings sweep)', () => {
+  it('is closed on first paint: the toggle reads "Add rule" and the create form is hidden', () => {
+    const { container } = renderManagers();
+    const toggle = screen.getByRole('button', { name: 'Add rule' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle.getAttribute('aria-controls')).toBe('add-rule-body');
+    // `queryByPlaceholderText` finds a node whether or not it is hidden (only `byRole` respects
+    // the accessibility tree by default), so closedness is checked directly on the wrapper's
+    // `hidden` property, the same idiom `categoryRowFor(...).hidden` already uses above.
+    expect((container.querySelector('#add-rule-body') as HTMLElement).hidden).toBe(true);
+  });
+
+  it('opens on click, revealing the Pattern field, and the toggle becomes Close', () => {
+    renderManagers();
+    fireEvent.click(screen.getByRole('button', { name: 'Add rule' }));
+    const toggle = screen.getByRole('button', { name: 'Close' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByPlaceholderText('Normalized merchant pattern')).toBeTruthy();
+  });
+});
