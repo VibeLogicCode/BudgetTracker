@@ -1,6 +1,7 @@
 import { loadChangelog } from '@/lib/changelog';
 import { APP_VERSION } from '@/lib/version';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
+import { EmptyState } from '@/components/ui/EmptyState';
 import { Notice } from '@/components/ui/Notice';
 import { renderEmphasis } from '@/components/render-emphasis';
 import type { OcrEngineKind, OcrEngineState } from '@/lib/warranty/ocr/onnx/probe';
@@ -90,9 +91,16 @@ export function AboutPanel({
           </Notice>
         ) : null}
         {releases.length === 0 ? (
-          <p className="rounded-md border border-dashed border-line-strong px-4 py-6 text-center text-sm text-muted">
-            No changelog is available in this install (CHANGELOG.md was not found).
-          </p>
+          // Guard 1 (tests/ops/onboarding-coverage.test.ts): `noAction`, not `action` -- this is
+          // the one genuine exception EmptyState's own docblock names. CHANGELOG.md ships inside
+          // the built image; if it is missing, nothing reachable from inside a running install
+          // can put it back, so inventing a button here would be the "wrong action is worse than
+          // none" case the onboarding spec itself warns about.
+          <EmptyState
+            size="compact"
+            title="No changelog is available in this install (CHANGELOG.md was not found)."
+            noAction="CHANGELOG.md ships inside the built image; a missing file is a packaging defect in this install, not something fixable from a running session."
+          />
         ) : (
           <div className="max-h-[28rem] overflow-y-auto pr-1">
             <ol className="relative flex flex-col gap-7 border-l border-line pl-6">

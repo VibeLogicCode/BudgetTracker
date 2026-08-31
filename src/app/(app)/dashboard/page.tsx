@@ -28,6 +28,7 @@ import { QuickAddTransaction, QuickAddTrigger } from '@/components/QuickAddTrans
 import { SavingsChart, type SavingsChartRow } from '@/components/charts/SavingsChart';
 import { AlertIcon, ArrowRightIcon, InfoIcon } from '@/components/icons';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
+import { EmptyState } from '@/components/ui/EmptyState';
 import { MonthNav } from '@/components/ui/MonthNav';
 import { PageGuide } from '@/components/ui/PageGuide';
 import { PageHeader } from '@/components/ui/PageHeader';
@@ -515,9 +516,21 @@ export default async function DashboardPage({
         />
         {budgetRows.length === 0 ? (
           <CardBody>
-            <p className="rounded-md border border-dashed border-line-strong px-4 py-8 text-center text-sm text-muted">
-              Nothing spent yet this month. Import a statement and the categories will fill in here.
-            </p>
+            {/* Item 2 (2026-08-30 plan): the shared EmptyState, `size="compact"` -- see that
+                component's own docblock for why a card-scoped empty box drops the icon circle
+                and bold title the page-level default carries. Guard 1
+                (tests/ops/onboarding-coverage.test.ts) requires a real action on every
+                EmptyState; the honest next step for "nothing spent yet" is the same one the
+                sentence already names -- go import a statement. */}
+            <EmptyState
+              size="compact"
+              title="Nothing spent yet this month. Import a statement and the categories will fill in here."
+              action={
+                <Link href="/import" className="btn btn--secondary btn--sm">
+                  Import a statement
+                </Link>
+              }
+            />
           </CardBody>
         ) : (
           <TableWrap bare className="border-t border-line" responsive>
@@ -540,11 +553,12 @@ export default async function DashboardPage({
                   <td className="font-medium text-ink cell-stack-headline" data-label="Category">{row.categoryName}</td>
                   <td data-label="Progress">
                     {/* Ruling D1: the shared ProgressBar (Lane 0) rather than a second hand-rolled
-                        bar -- BudgetProgressBar.tsx itself stays (Budgets still uses it), but this
-                        page's own two bars (this one, the StatTile footer above) read from the
-                        one bar component every other page is converting to. Its D5 threshold
-                        scale is identical to BudgetProgressBar's own (< 80 calm, 80-100 warning,
-                        > 100 over), so `tone` is left to auto-derive from `pct` here. */}
+                        bar. Item 4 (2026-08-30 plan): BudgetProgressBar.tsx is gone -- Budgets
+                        moved to this same shared ProgressBar first (budgets-client.tsx), which
+                        left it unused everywhere, and this page's own two bars (this one, the
+                        StatTile footer above) were the last holdouts still worth naming here.
+                        Its D5 threshold scale (< 80 calm, 80-100 warning, > 100 over) is the
+                        default, so `tone` is left to auto-derive from `pct`. */}
                     {row.limitCents === null ? (
                       <span className="text-xs text-subtle">No budget</span>
                     ) : (
@@ -595,9 +609,17 @@ export default async function DashboardPage({
             <CardHeader title="Top merchants" description={`Where the money went in ${monthLabel(month)}.`} />
             {merchants.length === 0 ? (
               <CardBody>
-                <p className="rounded-md border border-dashed border-line-strong px-4 py-8 text-center text-sm text-muted">
-                  No transactions this month yet.
-                </p>
+                {/* Guard 1: same reasoning as the Budgets card above -- nothing to show here
+                    until a statement is imported, so that is the action. */}
+                <EmptyState
+                  size="compact"
+                  title="No transactions this month yet."
+                  action={
+                    <Link href="/import" className="btn btn--secondary btn--sm">
+                      Import a statement
+                    </Link>
+                  }
+                />
               </CardBody>
             ) : (
               <ul className="border-t border-line text-sm">
@@ -707,9 +729,14 @@ function AsOfTodayNote({ month }: { month: string }) {
  * it" ties `movedToSavingsCents` back to the figure already shown above, so this can never be
  * misread as "moving money to savings increases what we saved" (ruling T1's own wording test).
  *
- * The bar is deliberately NOT BudgetProgressBar: that component reads "over 100%" as a red
- * warning, which is exactly backwards for a savings target -- exceeding it is the good outcome,
- * not the over-budget one.
+ * Item 4 (2026-08-30 plan): the bar below is deliberately NOT the shared ProgressBar
+ * (ui/ProgressBar.tsx, formerly also BudgetProgressBar.tsx before that component was retired as
+ * dead code) -- that component's default scale reads "over 100%" as a red warning, which is
+ * exactly backwards for a savings target: exceeding it is the good outcome, not the over-budget
+ * one. ProgressBar's `tone` prop can be overridden explicitly for exactly this kind of case, but
+ * this tile's tone is a binary on whether the target was met (`netCents >= targetCents`), not a
+ * percentage band, so it keeps its own small bar rather than fighting ProgressBar's pct-shaped
+ * tone derivation for a comparison ProgressBar was never built to express.
  */
 function SavedThisMonthTile({ progress }: { progress: SavingsProgress }) {
   const { netCents, target, targetCents, pct, movedToSavingsCents, noSavingsAccount } = progress;

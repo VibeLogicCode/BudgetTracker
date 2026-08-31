@@ -2,8 +2,9 @@ import { MoneyInIcon, MoneyOutIcon } from '@/components/ui/icons';
 
 /**
  * One line in any list -- a transaction, a review-queue row, a subscription, a linked receipt.
- * Generalises the row shape `ComingUpCard` and `BudgetProgressBar`'s callers each hand-rolled
- * separately (src/components/ComingUpCard.tsx's `<li>`, the design reference's TransactionList
+ * Generalises the row shape `ComingUpCard` and BudgetProgressBar's callers (that component itself
+ * retired since, item 4 of the 2026-08-30 plan) each hand-rolled separately
+ * (src/components/ComingUpCard.tsx's `<li>`, the design reference's TransactionList
  * row) into the one row every list renders from now on (ruling D1). Transactions itself stays a
  * `<table>` on desktop (ruling D7 -- a ledger is scanned down a column) and does not render this
  * component there; ListRow is for the lists that were never a table to begin with, and for the

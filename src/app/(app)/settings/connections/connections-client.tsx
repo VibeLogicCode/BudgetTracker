@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { FormError } from '@/components/FormError';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
+import { EmptyState } from '@/components/ui/EmptyState';
 import { Money } from '@/components/ui/Money';
 import { Notice } from '@/components/ui/Notice';
 import { PageHeader } from '@/components/ui/PageHeader';
@@ -274,9 +275,18 @@ export function ConnectionsClient({
             <CardHeader title="Linked accounts" description="Each remote account maps to exactly one account here." />
             <CardBody className="flex flex-col gap-3">
               {links.length === 0 ? (
-                <p className="rounded-md border border-dashed border-line-strong px-4 py-6 text-center text-sm text-muted">
-                  Nothing linked yet. List the remote accounts to map them.
-                </p>
+                // Guard 1 (tests/ops/onboarding-coverage.test.ts): the action calls the same
+                // loadRemote() the "List remote accounts" button above already does -- the
+                // sentence names it, so the button does it.
+                <EmptyState
+                  size="compact"
+                  title="Nothing linked yet. List the remote accounts to map them."
+                  action={
+                    <button type="button" onClick={() => void loadRemote()} disabled={busy} className="btn btn--secondary btn--sm">
+                      List remote accounts
+                    </button>
+                  }
+                />
               ) : (
                 <ul className="flex flex-col">
                   {links.map((link) => (

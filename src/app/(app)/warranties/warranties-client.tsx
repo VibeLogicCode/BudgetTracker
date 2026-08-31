@@ -4,13 +4,13 @@ import Link from 'next/link';
 import { StatusBadge } from '@/components/warranty/StatusBadge';
 import { WarrantiesIcon } from '@/components/icons';
 import { Card, CardBody, CardFooter } from '@/components/ui/Card';
+import { DaysRemainingPill } from '@/components/ui/DaysRemainingPill';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { categoryIcon, WarningIcon } from '@/components/ui/icons';
+import { categoryIcon } from '@/components/ui/icons';
 import { Money } from '@/components/ui/Money';
 import { Notice } from '@/components/ui/Notice';
 import { PageGuide } from '@/components/ui/PageGuide';
 import { PageHeader } from '@/components/ui/PageHeader';
-import { Pill } from '@/components/ui/Pill';
 import { SectionHeader } from '@/components/ui/SectionHeader';
 import { TableWrap } from '@/components/ui/Table';
 import { Field, inputClass, selectClass } from '@/components/ui/form';
@@ -46,27 +46,6 @@ function TypeCell({ typeName }: { typeName: string | null }) {
       <Icon aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-subtle" />
       <span className="badge badge--slate">{typeName}</span>
     </span>
-  );
-}
-
-/**
- * Lane 4: the days-remaining Pill (spec examples: "92d", "22d", a warning-toned "7d" inside a
- * week). Ruling D5's three-state scale collapses to two states here on purpose -- there is no
- * "over 100%" for a countdown, so only the warning band (within a week) and the calm default
- * apply, and `tone` is passed explicitly rather than derived from a percentage ProgressBar has
- * no use for here. Omitted once the date has already passed: StatusBadge's own "expired" pill
- * (kept as `.badge`, ruling D3's carve-out) already says so, and a negative day count beside it
- * would read as a second, conflicting answer to the same question.
- */
-function daysRemainingPill(expiryDate: string, today: string): React.ReactNode {
-  const days = daysBetweenIso(today, expiryDate);
-  if (days < 0) return null;
-  const withinWeek = days <= 7;
-  return (
-    <Pill tone={withinWeek ? 'warning' : 'neutral'}>
-      {withinWeek ? <WarningIcon aria-hidden="true" className="mr-0.5 inline h-3 w-3" /> : null}
-      {days}d
-    </Pill>
   );
 }
 
@@ -352,7 +331,7 @@ export function WarrantiesClient({
                     ) : (
                       <span className="flex flex-wrap items-center gap-1.5">
                         <span className="whitespace-nowrap">{expiryPhraseForKind(row.kind, row.expiryDate)}</span>
-                        {daysRemainingPill(row.expiryDate, today)}
+                        <DaysRemainingPill days={daysBetweenIso(today, row.expiryDate)} />
                       </span>
                     )}
                   </td>

@@ -74,8 +74,19 @@ function openingTag(source: string, start: number): string {
   return source.slice(start);
 }
 
-/** file:line for every `<EmptyState` whose opening tag carries no `action=` prop. */
-function emptyStatesWithoutAction(): string[] {
+/**
+ * file:line for every `<EmptyState` whose opening tag carries neither `action=` nor `noAction=`.
+ *
+ * This spec's own ruling was "because every kind has a correct action, the guard test needs no
+ * allowlist" -- and it still doesn't: `noAction` (added by the 2026-08-30 one-design-language
+ * plan when it converted seven hand-rolled empty boxes to this component; see EmptyState.tsx's
+ * own docblock) is not an allowlist of exempt FILES, it is a second, equally explicit prop a call
+ * site must opt INTO, one at a time, with a written reason `emptyStatesWithWeakNoActionReason`
+ * below checks is real. An omission is still a failure here -- only a literal `action=` or
+ * `noAction=` on the tag satisfies this guard, never a missing prop that merely happens not to
+ * be `action`.
+ */
+function emptyStatesWithoutActionOrReason(): string[] {
   const offenders: string[] = [];
   for (const file of tsxFiles('src')) {
     const source = read(file);
@@ -85,7 +96,32 @@ function emptyStatesWithoutAction(): string[] {
     let match: RegExpExecArray | null;
     while ((match = pattern.exec(source)) !== null) {
       const tag = openingTag(source, match.index);
-      if (!/\baction\s*=/.test(tag)) {
+      if (!/\baction\s*=/.test(tag) && !/\bnoAction\s*=/.test(tag)) {
+        const line = source.slice(0, match.index).split('\n').length;
+        offenders.push(`${file}:${line}`);
+      }
+    }
+  }
+  return offenders;
+}
+
+/**
+ * file:line for every `<EmptyState` whose `noAction=` string is under 30 characters -- guards
+ * against the escape hatch above rotting into a one-word rubber stamp ("n/a", "none") instead of
+ * the sentence a reviewer can actually judge. 30 is not a precise number, only long enough that
+ * "no action" (10 chars) and similar non-answers cannot pass while a real sentence can.
+ */
+function emptyStatesWithWeakNoActionReason(): string[] {
+  const offenders: string[] = [];
+  for (const file of tsxFiles('src')) {
+    const source = read(file);
+    if (file.endsWith('components/ui/EmptyState.tsx')) continue;
+    const pattern = /<EmptyState(?=[\s/>])/g;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(source)) !== null) {
+      const tag = openingTag(source, match.index);
+      const reason = /\bnoAction\s*=\s*"([^"]*)"/.exec(tag);
+      if (reason && reason[1].trim().length < 30) {
         const line = source.slice(0, match.index).split('\n').length;
         offenders.push(`${file}:${line}`);
       }
@@ -131,8 +167,12 @@ describe('Guard 1 (spec 2026-08-23, Component 6): every EmptyState offers an act
     expect(total).toBeGreaterThan(15);
   });
 
-  it('every <EmptyState call site in src/ passes action=', () => {
-    expect(emptyStatesWithoutAction()).toEqual([]);
+  it('every <EmptyState call site in src/ passes action= or noAction= (2026-08-30 plan: the explicit no-action exception)', () => {
+    expect(emptyStatesWithoutActionOrReason()).toEqual([]);
+  });
+
+  it('every noAction= carries a real written reason, not a rubber-stamp placeholder', () => {
+    expect(emptyStatesWithWeakNoActionReason()).toEqual([]);
   });
 
   it('scanner correctness: the opening-tag parser catches a missing action and is not fooled by children', () => {
@@ -143,10 +183,16 @@ describe('Guard 1 (spec 2026-08-23, Component 6): every EmptyState offers an act
 
     const bare = `<EmptyState icon={Icon} title="x">body</EmptyState>`;
     expect(/\baction\s*=/.test(openingTag(bare, 0))).toBe(false);
+    expect(/\bnoAction\s*=/.test(openingTag(bare, 0))).toBe(false);
 
     // An action= belonging to a child element must NOT satisfy the parent.
     const childOnly = `<EmptyState icon={Icon} title="x"><Thing action={y} /></EmptyState>`;
     expect(/\baction\s*=/.test(openingTag(childOnly, 0))).toBe(false);
+
+    // noAction= alone (no action=) must satisfy the "carries one or the other" guard.
+    const withReason = `<EmptyState title="x" noAction="A real, specific, thirty-plus character reason." />`;
+    expect(/\baction\s*=/.test(openingTag(withReason, 0))).toBe(false);
+    expect(/\bnoAction\s*=/.test(openingTag(withReason, 0))).toBe(true);
   });
 });
 

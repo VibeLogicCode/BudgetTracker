@@ -19,9 +19,10 @@ import { ProgressBar } from '@/components/ui/ProgressBar';
  *
  * Ruling D1 (2026-08-30 plan): the bar is now the shared ProgressBar (Lane 0), `tone="calm"`
  * fixed rather than derived from `pct` -- more paid off is unambiguously good here, the same
- * reasoning LoanProgressBar.tsx's own docblock gives for never reading this as a warning-system
- * bar. That file itself stays (warranty-detail-client.tsx, outside this lane, still uses it);
- * this is only this card's OWN row no longer forking a second bar component for it.
+ * reasoning LoanProgressBar.tsx's own docblock gave for never reading this as a warning-system
+ * bar. Item 3 of the same plan later migrated warranty-detail-client.tsx's own loan bar to this
+ * same ProgressBar and deleted LoanProgressBar.tsx once nothing else called it -- this file's own
+ * conversion just got there first.
  *
  * The ROW ITSELF stays a hand-authored `<li>`, not ListRow (Lane 0): a loan's row is three
  * stacked lines -- name+balance, the payoff bar, then a meta sentence -- and ListRow's own

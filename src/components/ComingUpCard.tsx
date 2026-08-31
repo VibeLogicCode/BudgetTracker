@@ -3,17 +3,10 @@ import { daysBetweenIso } from '@/lib/dates';
 import { formatCents } from '@/lib/money';
 import type { UpcomingBill } from '@/lib/bills';
 import { Card, CardBody, CardFooter, CardHeader } from '@/components/ui/Card';
+import { DaysRemainingPill } from '@/components/ui/DaysRemainingPill';
+import { EmptyState } from '@/components/ui/EmptyState';
 import { ListRow } from '@/components/ui/ListRow';
-import { Pill, type PillTone } from '@/components/ui/Pill';
 import { RecordPaymentForm } from '@/components/RecordPaymentForm';
-
-/** Item 3 (2026-08-30 plan): the days-remaining pill -- "92d, 22d, and a warning-toned ⚠ 7d
- *  inside a week." Only ever called for a NOT-overdue bill (see the row below); an overdue one
- *  already has its own red "Overdue" badge, which says the more urgent thing more plainly than a
- *  negative day count would. */
-function daysRemainingPill(days: number): { label: string; tone: PillTone } {
-  return days <= 7 ? { label: `⚠ ${days}d`, tone: 'warning' } : { label: `${days}d`, tone: 'neutral' };
-}
 
 /**
  * Item P (ruling P9). The notification evaluator has had a flood guard since v1.4
@@ -115,23 +108,47 @@ export function ComingUpCard({
       />
       {withinBound.length === 0 ? (
         <CardBody>
-          <p className="rounded-md border border-dashed border-line-strong px-4 py-8 text-center text-sm text-muted">
-            {/* Review B fix round (item 4): withinBound can be empty while `bills` is not --
-                every unpaid bill fell outside the 90-day overdue bound. Saying "No bills due"
-                there is worse than the flood of rows the bound exists to prevent: it reads as
-                nothing owed, when the opposite is true. */}
-            {bills.length > 0 ? (
-              <>
-                Nothing due in the next 30 days. Older overdue bills are on the{' '}
-                <Link href="/warranties" className="font-medium text-accent-text">
-                  Warranties &amp; bills page
+          {/* Item 2 (2026-08-30 plan): the shared EmptyState, `size="compact"` -- see that
+              component's own docblock for why a card-scoped empty box drops the icon circle and
+              bold title the page-level default carries. Review B fix round (item 4):
+              withinBound can be empty while `bills` is not -- every unpaid bill fell outside the
+              90-day overdue bound. Saying "No bills due" there is worse than the flood of rows
+              the bound exists to prevent: it reads as nothing owed, when the opposite is true.
+              Guard 1 (tests/ops/onboarding-coverage.test.ts) requires a real action on every
+              EmptyState; the two branches below get two different ones, because they are two
+              different situations -- `bills.length > 0` means real bills exist just outside this
+              card's own window (the same "view the unfiltered list" fix the title's own inline
+              link already offers, repeated here as the actual action button), while
+              `bills.length === 0` is a true cold start, so the fix is creating the first one
+              (the same "Add the first one" convention warranties-client.tsx's own empty state
+              uses for /warranties/new). */}
+          <EmptyState
+            size="compact"
+            title={
+              bills.length > 0 ? (
+                <>
+                  Nothing due in the next 30 days. Older overdue bills are on the{' '}
+                  <Link href="/warranties" className="font-medium text-accent-text">
+                    Warranties &amp; bills page
+                  </Link>
+                  .
+                </>
+              ) : (
+                'No bills due in the next 30 days.'
+              )
+            }
+            action={
+              bills.length > 0 ? (
+                <Link href="/warranties" className="btn btn--secondary btn--sm">
+                  View bills
                 </Link>
-                .
-              </>
-            ) : (
-              'No bills due in the next 30 days.'
-            )}
-          </p>
+              ) : (
+                <Link href="/warranties/new" className="btn btn--primary btn--sm">
+                  Add a bill
+                </Link>
+              )
+            }
+          />
         </CardBody>
       ) : (
         <ul className="border-t border-line text-sm">
@@ -140,7 +157,7 @@ export function ComingUpCard({
               not-yet-overdue bill; an overdue one keeps its existing red badge instead (more
               urgent, and a negative day count would just be confusing). */}
           {shown.map((bill) => {
-            const pill = bill.overdue ? null : daysRemainingPill(daysBetweenIso(today, bill.dueDate));
+            const pill = bill.overdue ? null : <DaysRemainingPill days={daysBetweenIso(today, bill.dueDate)} />;
             return (
               <ListRow
                 // v1.12.0: ONE item can contribute several rows now (a bill's installments), so
@@ -152,11 +169,7 @@ export function ComingUpCard({
                 meta={
                   <>
                     <span className={bill.overdue ? 'text-danger' : undefined}>{bill.dueDate}</span>{' '}
-                    {bill.overdue ? (
-                      <span className="badge badge--red">Overdue</span>
-                    ) : pill ? (
-                      <Pill tone={pill.tone}>{pill.label}</Pill>
-                    ) : null}
+                    {bill.overdue ? <span className="badge badge--red">Overdue</span> : pill}
                   </>
                 }
                 amount={formatCents(bill.amountCents)}

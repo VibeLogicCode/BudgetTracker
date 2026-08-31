@@ -1,8 +1,9 @@
 /**
  * The one meter every page uses for "how much of X has happened" -- a budget's spend, a review
- * queue's confirmed count, anything with a limit. Generalises BudgetProgressBar and GoalCard's
- * own hand-rolled bar (src/components/BudgetProgressBar.tsx, src/components/GoalCard.tsx) into a
- * single component so a third page cannot invent a fourth meter (ruling D1).
+ * queue's confirmed count, anything with a limit. Generalised BudgetProgressBar's and GoalCard's
+ * own hand-rolled bars (src/components/GoalCard.tsx; BudgetProgressBar.tsx itself was retired as
+ * dead code once every caller had migrated here -- item 4 of the 2026-08-30 plan) into a single
+ * component so a third page cannot invent a fourth meter (ruling D1).
  *
  * Ruling D4 is the one rule this file exists to get right: the FILL clamps at 100% so a bar can
  * never overflow its track in any browser, but `aria-valuenow` and the caller's own label/pill

@@ -4,8 +4,8 @@ import { expiringSoonLabelForKind, expiryPhraseForKind } from '@/lib/warranty/co
 import type { WarrantyListItem } from '@/lib/warranty/search';
 import { ArrowRightIcon } from '@/components/icons';
 import { Card, CardHeader } from '@/components/ui/Card';
+import { DaysRemainingPill } from '@/components/ui/DaysRemainingPill';
 import { ListRow } from '@/components/ui/ListRow';
-import { Pill, type PillTone } from '@/components/ui/Pill';
 
 /** §17.19 / MUST-10.5: top 5, hidden when empty. */
 export const EXPIRING_WIDGET_LIMIT = 5;
@@ -13,13 +13,6 @@ export const EXPIRING_WIDGET_LIMIT = 5;
 /** Sentence-initial capitalization only — the phrase itself (verb + wording) is untouched. */
 function capitalize(text: string): string {
   return text.length === 0 ? text : text.charAt(0).toUpperCase() + text.slice(1);
-}
-
-/** Item 3 (2026-08-30 plan): "92d, 22d, and a warning-toned ⚠ 7d inside a week" -- computed the
- *  same way for every kind (warranty, subscription, contract, loan), independent of whichever
- *  phrase (day-count sentence or end-date sentence) that kind gets below. */
-function daysRemainingPill(days: number): { label: string; tone: PillTone } {
-  return days <= 7 ? { label: `⚠ ${days}d`, tone: 'warning' } : { label: `${days}d`, tone: 'neutral' };
 }
 
 export function ExpiringSoonCard({ items, today }: { items: WarrantyListItem[]; today: string }) {
@@ -48,7 +41,6 @@ export function ExpiringSoonCard({ items, today }: { items: WarrantyListItem[]; 
       <ul className="border-t border-line text-sm">
         {items.slice(0, EXPIRING_WIDGET_LIMIT).map((row) => {
           const days = daysBetweenIso(today, row.expiryDate as string);
-          const pill = daysRemainingPill(days);
           // Every row here already carries status 'expiring' (expiringSoonItems()'s own filter),
           // which per warrantyStatus() in expiry.ts is only ever reached with a non-null
           // expiryDate. MUST-19.10 / MUST-19.13 / type-deltas.md T10, generalized to `kind` in
@@ -83,7 +75,7 @@ export function ExpiringSoonCard({ items, today }: { items: WarrantyListItem[]; 
               }
               trailing={
                 <div className="flex flex-col items-end gap-1">
-                  <Pill tone={pill.tone}>{pill.label}</Pill>
+                  <DaysRemainingPill days={days} />
                   <span className="whitespace-nowrap text-xs font-medium text-warning">{phrase}</span>
                 </div>
               }

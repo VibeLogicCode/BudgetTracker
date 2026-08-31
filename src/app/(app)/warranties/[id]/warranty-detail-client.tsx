@@ -4,7 +4,6 @@ import { useActionState, useCallback, useEffect, useRef, useState } from 'react'
 import { useFormStatus } from 'react-dom';
 import Link from 'next/link';
 import { FormError } from '@/components/FormError';
-import { LoanProgressBar } from '@/components/LoanProgressBar';
 import { SubmitButton } from '@/components/SubmitButton';
 import { StatusBadge } from '@/components/warranty/StatusBadge';
 import { ReceiptUploader, type StagedFile } from '@/components/warranty/ReceiptUploader';
@@ -13,6 +12,7 @@ import { ListRow } from '@/components/ui/ListRow';
 import { MetricCard } from '@/components/ui/MetricCard';
 import { Money } from '@/components/ui/Money';
 import { Notice } from '@/components/ui/Notice';
+import { ProgressBar } from '@/components/ui/ProgressBar';
 import { TableWrap } from '@/components/ui/Table';
 import { RowMenu, RowMenuForm } from '@/components/ui/RowMenu';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -298,6 +298,22 @@ export function WarrantyDetailClient({
   // the existing-rows/receipts table is the content that matters; the CREATE form is not.
   const [addRuleOpen, setAddRuleOpen] = useState(false);
   const [addReceiptOpen, setAddReceiptOpen] = useState(false);
+  // Item 2 (2026-08-30 plan, Guard 1): extracted so the Receipts card's EmptyState action button
+  // can open the same disclosure the header's own "Add receipt" button does, rather than a second
+  // call site re-deriving the M10 staged-file reset below by hand.
+  const toggleAddReceipt = useCallback(() => {
+    setAddReceiptOpen((open) => {
+      // Closing (not opening): drop whatever was staged and give the uploader a fresh key, the
+      // same M10 reset the successful-attach effect below already performs -- otherwise a file
+      // staged before Close, then Add receipt pressed again, would post a staging id the
+      // (remounted) uploader no longer shows any tile for.
+      if (open) {
+        setStaged([]);
+        setUploaderKey((key) => key + 1);
+      }
+      return !open;
+    });
+  }, []);
   // Ruling R11 / micro-ruling M9: the budget-category link is single-row and reversible (pick a
   // different category, or clear it back to "Not linked"), which is exactly ruling R1's auto-save
   // shape -- tests/ops/row-controls.test.ts refuses a lone select control paired with its own
@@ -531,7 +547,20 @@ export function WarrantyDetailClient({
               // MUST-11.8: "You set this on" and "Last payment" are labelled DIFFERENTLY,
               // because they answer different questions. balance_updated_at is the human anchor.
               status={item.balanceUpdatedAt === null ? undefined : `You set this on ${item.balanceUpdatedAt.slice(0, 10)}`}
-              bar={payoffFraction === null ? undefined : <LoanProgressBar fraction={payoffFraction} label={item.name} />}
+              // Item 3 (2026-08-30 plan): the shared ProgressBar (Lane 0), `tone="calm"` fixed
+              // rather than derived from `pct` -- same reasoning as LoansCard's own row (more
+              // paid off is unambiguously good here, never a warning-system reading). This was
+              // the last caller of the standalone LoanProgressBar.tsx, now deleted.
+              // payoffFraction is clamp(1 - balance/principal, 0, 1) at the source (MUST-15.4,
+              // src/lib/loans.ts), so it can never itself exceed 1 -- a balance LARGER than the
+              // principal clamps to 0 (0% paid off), not to some reading past 100%. ProgressBar's
+              // own 100%-fill clamp is defense in depth for that case, not something this data
+              // path can actually reach; `aria-valuenow` still reports the true rounded percent.
+              bar={
+                payoffFraction === null ? undefined : (
+                  <ProgressBar pct={Math.round(payoffFraction * 100)} tone="calm" label={`${item.name} paid off`} />
+                )
+              }
             >
               {/* F8 fix-round: a plain-voice heads-up next to the number people are about to
                   unassign a payment from -- removing an old link doesn't just undo one
@@ -587,10 +616,17 @@ export function WarrantyDetailClient({
             })()
           ) : null}
           {ledger.rows.length === 0 ? (
-            <p className="rounded-md border border-dashed border-line-strong px-4 py-6 text-center text-sm text-muted">
-              No transactions linked yet. A payment rule above, or the row menu on Transactions,
-              creates one.
-            </p>
+            // Guard 1 (tests/ops/onboarding-coverage.test.ts): the honest next step here is the
+            // one the sentence already names -- the row menu lives on Transactions, not here.
+            <EmptyState
+              size="compact"
+              title="No transactions linked yet. A payment rule above, or the row menu on Transactions, creates one."
+              action={
+                <Link href="/transactions" className="btn btn--secondary btn--sm">
+                  Go to Transactions
+                </Link>
+              }
+            />
           ) : (
             <>
               {/* Lane 4 (2026-08-30 one-design-language plan): ListRow, not a table -- this
@@ -946,20 +982,7 @@ export function WarrantyDetailClient({
               className="btn btn--secondary btn--sm min-h-11 sm:min-h-0"
               aria-expanded={addReceiptOpen}
               aria-controls="add-receipt-body"
-              onClick={() =>
-                setAddReceiptOpen((open) => {
-                  // Closing (not opening): drop whatever was staged and give the uploader a
-                  // fresh key, the same M10 reset the successful-attach effect already performs
-                  // -- otherwise a file staged before Close, then Add receipt pressed again,
-                  // would post a staging id the (remounted) uploader no longer shows any tile
-                  // for.
-                  if (open) {
-                    setStaged([]);
-                    setUploaderKey((key) => key + 1);
-                  }
-                  return !open;
-                })
-              }
+              onClick={toggleAddReceipt}
             >
               {addReceiptOpen ? 'Close' : 'Add receipt'}
             </button>
@@ -967,9 +990,18 @@ export function WarrantyDetailClient({
         />
         <CardBody className="flex flex-col gap-4">
           {receipts.length === 0 ? (
-            <p className="rounded-md border border-dashed border-line-strong px-4 py-6 text-center text-sm text-muted">
-              No receipts attached yet.
-            </p>
+            // Guard 1 (tests/ops/onboarding-coverage.test.ts): the action opens the same
+            // disclosure the header's own button does (toggleAddReceipt above), rather than
+            // leaving the empty state unable to do what the header already can.
+            <EmptyState
+              size="compact"
+              title="No receipts attached yet."
+              action={
+                <button type="button" onClick={toggleAddReceipt} className="btn btn--secondary btn--sm">
+                  Add receipt
+                </button>
+              }
+            />
           ) : (
             <ul className="flex flex-wrap gap-3">
               {receipts.map((receipt) => (
