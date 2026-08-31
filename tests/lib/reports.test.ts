@@ -15,6 +15,7 @@ import {
   type MonthTrendRow,
 } from '@/lib/reports';
 import { nowIso } from '@/lib/clock';
+import { upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { assignTransactionToLoan } from '@/lib/loans';
 import { setTransactionSplits } from '@/lib/splits';
 
@@ -119,6 +120,49 @@ describe('categoryBreakdown', () => {
     const rolled = categoryBreakdown({ ...MARCH, rollup: true }, HOUSEHOLD);
     expect(rolled.find((r) => r.categoryId === food)?.spentCents).toBe(24000);
     expect(rolled.some((r) => r.categoryId === groceries)).toBe(false);
+  });
+
+  /**
+   * v1.21.0 plan, item 2 (reports half). With rollup off, the direct-to-parent bucket used to
+   * be emitted under the parent's own plain name -- reading exactly like the parent's TOTAL
+   * ($1,000) when it is only the slice never assigned to a sub-category, while Groceries and
+   * Coffee sat right beside it also named for themselves. Same vocabulary as the Budgets
+   * breakdown's "Not in a sub-category" row (budgets-client.tsx) fixes both readings at once.
+   * The ROLLED bucket is unaffected -- it already IS "parent plus every child", so it keeps
+   * Food's own name.
+   *
+   * The label is QUALIFIED with the category's name here ("Food -- not in a sub-category") while
+   * the Budgets card's row says only "Not in a sub-category". Deliberate, not drift: on Budgets
+   * that row renders nested INSIDE Food's own breakdown, so the enclosing card already says which
+   * category it belongs to. These rows land in FLAT lists with no such enclosure -- the weekly
+   * digest (src/lib/notify/evaluate/digest.ts) is the only non-rollup consumer today -- where a
+   * bare label would name no category at all, saying strictly less than the plain name it
+   * replaced.
+   */
+  it('names the flat, direct-to-parent bucket "Not in a sub-category"; the rolled bucket keeps the parent\'s own name', () => {
+    const { db, add } = setup();
+    const food = categoryIdByName(db, 'Food');
+    const groceries = categoryIdByName(db, 'Groceries');
+    add({ categoryId: food, amountCents: -1000 });
+    add({ categoryId: groceries, amountCents: -20000 });
+
+    const flat = categoryBreakdown(MARCH, HOUSEHOLD);
+    expect(flat.find((r) => r.categoryId === food)?.categoryName).toBe('Food — not in a sub-category');
+    expect(flat.find((r) => r.categoryId === groceries)?.categoryName).toBe('Groceries');
+
+    const rolled = categoryBreakdown({ ...MARCH, rollup: true }, HOUSEHOLD);
+    expect(rolled.find((r) => r.categoryId === food)?.categoryName).toBe('Food');
+  });
+
+  /** A top-level category with no children (the seeded 'Kids' category has none) has nothing to
+   *  disambiguate it from, so it keeps its plain name even with rollup off. */
+  it('a childless top-level category keeps its plain name, flat', () => {
+    const { db, add } = setup();
+    const kids = categoryIdByName(db, 'Kids');
+    add({ categoryId: kids, amountCents: -1500 });
+
+    const flat = categoryBreakdown(MARCH, HOUSEHOLD);
+    expect(flat.find((r) => r.categoryId === kids)?.categoryName).toBe('Kids');
   });
 
   it('respects the date range and the person filter', () => {
@@ -296,6 +340,125 @@ describe('topMerchants', () => {
     const rows = topMerchants({ ...MARCH, limit: 1 }, HOUSEHOLD);
     expect(rows).toHaveLength(1);
     expect(rows[0].normalizedMerchant).toBe('B');
+  });
+});
+
+/**
+ * v1.21.0 plan, item 8b. `topMerchants` groups and displays `transactions.normalized_merchant`,
+ * while a rename rule (`merchant_rules`, rule_kind = 'rename') writes `display_description` +
+ * `display_source = 'rename'` on the matching transactions themselves -- so a `contains WALMART
+ * -> Walmart` rule already relabels the Transactions list but did nothing here, and a big-box
+ * store with several store-number suffixes still showed up as one row per suffix. These tests
+ * fold the report's buckets through the SAME rename rules at read time.
+ */
+describe('topMerchants — folded through rename rules (item 8b, 2026-08-30 plan)', () => {
+  it('merges every raw normalized-merchant bucket a rename rule resolves into one row, summing spend and charge counts', () => {
+    const { db, alice, add } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    upsertRuleFromCorrection({
+      pattern: 'WALMART',
+      matchType: 'contains',
+      ruleKind: 'rename',
+      categoryId: null,
+      renameTo: 'Walmart',
+      createdBy: alice,
+      actorRole: 'admin',
+    });
+    add({ categoryId: groceries, amountCents: -1000, merchant: 'WALMART 1234' });
+    add({ categoryId: groceries, amountCents: -2000, merchant: 'WALMART 5678' });
+    add({ categoryId: groceries, amountCents: -500, merchant: 'WALMART 5678' });
+
+    const rows = topMerchants({ ...MARCH, limit: 5 }, HOUSEHOLD);
+    // ONE row, not three -- the two raw store-number buckets folded into the rule's own name.
+    expect(rows.filter((r) => r.normalizedMerchant === 'Walmart')).toHaveLength(1);
+    expect(rows.find((r) => r.normalizedMerchant === 'Walmart')).toMatchObject({ spentCents: 3500, count: 3 });
+    // The raw, unfolded keys are gone -- nothing is left double-counted under its old name.
+    expect(rows.some((r) => r.normalizedMerchant === 'WALMART 1234')).toBe(false);
+    expect(rows.some((r) => r.normalizedMerchant === 'WALMART 5678')).toBe(false);
+  });
+
+  /**
+   * The specific case the brief asks to be reported on: two DIFFERENT rule patterns pointing at
+   * the same canonical name must still land in ONE bucket, not two, since the fold keys on the
+   * resolved display name rather than on which rule produced it.
+   */
+  it('folds two different rule patterns that both resolve to the same name into one bucket', () => {
+    const { db, alice, add } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    upsertRuleFromCorrection({
+      pattern: 'WALMART',
+      matchType: 'contains',
+      ruleKind: 'rename',
+      categoryId: null,
+      renameTo: 'Walmart',
+      createdBy: alice,
+      actorRole: 'admin',
+    });
+    upsertRuleFromCorrection({
+      pattern: 'WAL-MART',
+      matchType: 'contains',
+      ruleKind: 'rename',
+      categoryId: null,
+      renameTo: 'Walmart',
+      createdBy: alice,
+      actorRole: 'admin',
+    });
+    add({ categoryId: groceries, amountCents: -1000, merchant: 'WALMART 1234' });
+    add({ categoryId: groceries, amountCents: -2500, merchant: 'WAL-MART 9999' });
+
+    const rows = topMerchants({ ...MARCH, limit: 5 }, HOUSEHOLD);
+    expect(rows.filter((r) => r.normalizedMerchant === 'Walmart')).toHaveLength(1);
+    expect(rows.find((r) => r.normalizedMerchant === 'Walmart')).toMatchObject({ spentCents: 3500, count: 2 });
+  });
+
+  /**
+   * Folded by RULE, not by the stored `display_description`: a transaction renamed BY HAND keeps
+   * its own label and is deliberately skipped by the rename engine (display_source stays
+   * 'manual', see src/lib/categorize/engine.ts:793) -- but its normalized_merchant still matches
+   * the rule exactly like every other row at that store, so it must still fold into the SAME
+   * vendor bucket rather than being torn off into its own row under the hand-typed label.
+   */
+  it('a hand-renamed transaction still folds into the rule-resolved bucket, not off on its own', () => {
+    const { db, alice, add } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    upsertRuleFromCorrection({
+      pattern: 'WALMART',
+      matchType: 'contains',
+      ruleKind: 'rename',
+      categoryId: null,
+      renameTo: 'Walmart',
+      createdBy: alice,
+      actorRole: 'admin',
+    });
+    add({ categoryId: groceries, amountCents: -1000, merchant: 'WALMART 1234' });
+    const handRenamedId = add({ categoryId: groceries, amountCents: -750, merchant: 'WALMART 1234' });
+    current!.db.run(
+      sql`update transactions set display_description = ${'My own label'}, display_source = 'manual' where id = ${handRenamedId}`,
+    );
+
+    const rows = topMerchants({ ...MARCH, limit: 5 }, HOUSEHOLD);
+    expect(rows.filter((r) => r.normalizedMerchant === 'Walmart')).toHaveLength(1);
+    expect(rows.find((r) => r.normalizedMerchant === 'Walmart')).toMatchObject({ spentCents: 1750, count: 2 });
+    expect(rows.some((r) => r.normalizedMerchant === 'My own label')).toBe(false);
+  });
+
+  it('a raw key with no matching rule keeps its own normalized name, unaffected', () => {
+    const { db, alice, add } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    upsertRuleFromCorrection({
+      pattern: 'WALMART',
+      matchType: 'contains',
+      ruleKind: 'rename',
+      categoryId: null,
+      renameTo: 'Walmart',
+      createdBy: alice,
+      actorRole: 'admin',
+    });
+    add({ categoryId: groceries, amountCents: -1000, merchant: 'WALMART 1234' });
+    add({ categoryId: groceries, amountCents: -4000, merchant: 'METRO' });
+
+    const rows = topMerchants({ ...MARCH, limit: 5 }, HOUSEHOLD);
+    expect(rows.find((r) => r.normalizedMerchant === 'METRO')).toMatchObject({ spentCents: 4000, count: 1 });
   });
 });
 

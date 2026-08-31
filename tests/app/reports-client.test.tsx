@@ -2,7 +2,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { render, cleanup, within } from '@testing-library/react';
 import { ReportsClient, type SavingsMonthRow, type TaxYearDisplayRow } from '@/app/(app)/reports/reports-client';
-import { buildSavingsSeries } from '@/components/charts/SavingsChart';
+import { buildSavingsSeries, hasAnyTarget, SavingsChart } from '@/components/charts/SavingsChart';
 import { UNATTRIBUTED_LABEL } from '@/lib/reports';
 import type { ResolvedRange } from '@/lib/date-range';
 import type { NetWorthPoint } from '@/lib/networth';
@@ -618,5 +618,47 @@ describe('buildSavingsSeries (src/components/charts/SavingsChart.tsx)', () => {
       { month: '2026-06', incomeCents: 500000, spendCents: 600000, netCents: -100000, targetCents: null },
     ]);
     expect(points.map((p) => p['Cumulative saved'])).toEqual([1000, 1500, 500]);
+  });
+});
+
+/**
+ * v1.21.0 plan, item 5. `hasAnyTarget` decides defect 3 (a Target line/legend entry drawn when
+ * no savings target was ever set) -- exported for exactly the reason buildSavingsSeries is: a
+ * plain function can be pinned directly without fighting jsdom's inability to mount
+ * ResponsiveContainer's children.
+ */
+describe('hasAnyTarget (src/components/charts/SavingsChart.tsx)', () => {
+  it('false when every point in the window has no target', () => {
+    const series = buildSavingsSeries([
+      { month: '2026-05', incomeCents: 500000, spendCents: 400000, netCents: 100000, targetCents: null },
+      { month: '2026-06', incomeCents: 500000, spendCents: 450000, netCents: 50000, targetCents: null },
+    ]);
+    expect(hasAnyTarget(series)).toBe(false);
+  });
+
+  it('true the moment any single point has a target, even if the rest do not', () => {
+    const series = buildSavingsSeries([
+      { month: '2026-05', incomeCents: 500000, spendCents: 400000, netCents: 100000, targetCents: null },
+      { month: '2026-06', incomeCents: 500000, spendCents: 450000, netCents: 50000, targetCents: 100000 },
+    ]);
+    expect(hasAnyTarget(series)).toBe(true);
+  });
+});
+
+/**
+ * v1.21.0 plan, item 5. SavingsChart itself, rendered: recharts' ResponsiveContainer still
+ * measures 0x0 under jsdom (the same limitation noted throughout this file), so nothing inside
+ * it is assertable -- but the split this item introduces put a plain heading ("Cumulative
+ * saved") OUTSIDE that container, specifically so the split is visible even under this
+ * limitation, and that much IS assertable.
+ */
+describe('SavingsChart (src/components/charts/SavingsChart.tsx)', () => {
+  it('renders the cumulative-saved chart with its own heading, not folded back into one chart', () => {
+    const { container } = render(
+      <SavingsChart
+        data={[{ month: '2026-06', incomeCents: 500000, spendCents: 400000, netCents: 100000, targetCents: null }]}
+      />,
+    );
+    expect(within(container).getByText('Cumulative saved')).toBeTruthy();
   });
 });

@@ -3,6 +3,7 @@ import { getDb } from '@/db/client';
 import { categories, loanPayments, transactions, transactionSplits, users, warrantyItems } from '@/db/schema';
 import { ownerScope, type Viewer } from '@/lib/auth/viewer';
 import { listCategories } from '@/lib/categories';
+import { listRules, matchRule } from '@/lib/categorize/rules';
 import { addMonths, monthEnd, monthOf, monthRange, monthStart } from '@/lib/dates';
 import { netSpentCents } from '@/lib/money';
 import { savingsRate, type SavingsRate } from '@/lib/savings-rate';
@@ -147,13 +148,13 @@ export function categoryBreakdown(
   for (const row of rows) spendByCategory.set(row.categoryId, netSpentCents(row.total ?? 0));
 
   const result: CategoryBreakdownRow[] = [];
-  const emit = (categoryId: number | null, spentCents: number) => {
+  const emit = (categoryId: number | null, spentCents: number, nameOverride?: string) => {
     const category = categoryId === null ? null : byId.get(categoryId);
     const isIncome = category?.isIncome ?? false;
     if (!input.includeIncome && isIncome) return;
     result.push({
       categoryId,
-      categoryName: category?.name ?? 'Uncategorized',
+      categoryName: nameOverride ?? category?.name ?? 'Uncategorized',
       parentId: category?.parentId ?? null,
       isIncome,
       spentCents,
@@ -171,9 +172,35 @@ export function categoryBreakdown(
       const target = category?.parentId ?? categoryId;
       rolled.set(target, (rolled.get(target) ?? 0) + spent);
     }
+    // Rolled-up reports are already correct here (v1.21.0 plan, item 2): a rolled bucket for an
+    // actual parent already IS "parent plus every child", so its own name is exactly right and
+    // gets no override.
     for (const [categoryId, spent] of rolled) emit(categoryId, spent);
   } else {
-    for (const [categoryId, spent] of spendByCategory) emit(categoryId, spent);
+    // v1.21.0 plan, item 2: with rollup off, a bucket keyed by a PARENT category id (money spent
+    // directly on Health, say, never on Pharmacy/Dental/Fitness) is only that direct slice, not
+    // the parent's total -- but emitting it under the parent's own plain name reads exactly like
+    // the total, the same lie item 2 already fixed on the Budgets breakdown (BudgetCategoryCard's
+    // "Not in a sub-category" row, budgets-client.tsx). One vocabulary fixes both surfaces: this
+    // uses the SAME label, verbatim, only for a parent category that ALSO carries at least one
+    // child -- `parentIds` below is exactly "category ids that are somebody's parentId". A
+    // top-level category with no children (e.g. a household's own 'Kids' bucket) has nothing to
+    // disambiguate it from, so it keeps its plain name.
+    //
+    // The label is QUALIFIED with the category's own name here, unlike the Budgets card's bare
+    // "Not in a sub-category". That is not drift: on Budgets the row is rendered nested INSIDE the
+    // parent's own breakdown, so the enclosing card already says which category it belongs to.
+    // This function's rows land in FLAT lists with no such enclosure -- the weekly digest
+    // (src/lib/notify/evaluate/digest.ts) is its only non-rollup consumer today -- where a bare
+    // "Not in a sub-category" line would name no category at all and be strictly less informative
+    // than the plain name it replaced. Same vocabulary, carried into a context that has to say
+    // what it is about.
+    const parentIds = new Set(all.filter((category) => category.parentId !== null).map((category) => category.parentId as number));
+    for (const [categoryId, spent] of spendByCategory) {
+      const isDirectParentSpend = categoryId !== null && parentIds.has(categoryId);
+      const name = categoryId === null ? null : byId.get(categoryId)?.name;
+      emit(categoryId, spent, isDirectParentSpend && name ? `${name} — not in a sub-category` : undefined);
+    }
   }
 
   return result.sort((a, b) => b.spentCents - a.spentCents);
@@ -435,11 +462,47 @@ export function personSpendSplit(input: DateRange, viewer: Viewer): PersonSplitR
 }
 
 export interface TopMerchantRow {
+  /**
+   * v1.21.0 plan, item 8b: NOT always the raw `transactions.normalized_merchant` any more. When
+   * a rename rule (`merchant_rules`, rule_kind = 'rename') resolves for a bucket's own
+   * normalized key, this is the rule's `rename_to` -- the same folded identity the buckets below
+   * are grouped by. A key with no matching rule keeps its own raw value, exactly as before.
+   */
   normalizedMerchant: string;
   spentCents: number;
   count: number;
 }
 
+/**
+ * v1.21.0 plan, item 8b. Before this fix, a big-box store split across several
+ * `normalized_merchant` values (differing store numbers/city suffixes normalize.ts's
+ * deterministic rules do not strip) stayed split here even after the owner wrote a `contains
+ * WALMART -> Walmart` rename rule -- that rule already relabels the Transactions list (it writes
+ * `display_description`/`display_source = 'rename'` at engine.ts:793), but this report grouped
+ * and displayed `transactions.normalized_merchant` directly and never consulted it.
+ *
+ * Folded by RULE, not by the stored `display_description`: a transaction renamed BY HAND keeps
+ * its own label and is deliberately skipped by the rename engine (its `display_source` is
+ * 'manual', not 'rename'), so grouping on the stored display value would tear that one row away
+ * from the vendor bucket it belongs in even though its `normalized_merchant` matches the rule
+ * exactly like every other row at that store. Running `matchRule` against each bucket's raw
+ * normalized key -- never against a transaction's own possibly-hand-edited display text --
+ * groups it correctly regardless of what a person typed over it.
+ *
+ * Folded at the RAW bucket level, before `netSpentCents`/the `> 0` filter, not after: the SQL
+ * query below already nets refunds against charges PER RAW normalized_merchant (a return at
+ * "WALMART 1234" against a charge at the same key). Two of a rename rule's raw buckets are
+ * disjoint by construction (one row's normalized_merchant cannot equal two different values), so
+ * summing their signed totals and their `count(distinct id)` before resolving to dollars and
+ * filtering is exactly "the buckets are disjoint, so sums and charge counts simply add" -- and it
+ * is also the economically correct answer: a refund-heavy location of the same vendor nets
+ * against a spend-heavy one, the same way two receipts at the identical store already do.
+ *
+ * Two different rule patterns resolving to the SAME `rename_to` (e.g. `contains WALMART ->
+ * Walmart` and a separate `contains WAL-MART -> Walmart`) fold into ONE bucket too -- the map
+ * below keys on the resolved display name, not on which rule produced it, so there is no way for
+ * the same vendor to end up split across two rows just because two patterns both point at it.
+ */
 export function topMerchants(input: DateRange & { limit?: number; attributedUserId?: PersonScope }, viewer: Viewer): TopMerchantRow[] {
   const scope = scopeFor(input.attributedUserId, viewer);
   // Split-aware (v1.7.0 review fix, 2026-08-22): merchant IDENTITY still groups by the
@@ -472,8 +535,20 @@ export function topMerchants(input: DateRange & { limit?: number; attributedUser
     .groupBy(transactions.normalizedMerchant)
     .all();
 
-  return rows
-    .map((row) => ({ normalizedMerchant: row.normalizedMerchant, spentCents: netSpentCents(row.total ?? 0), count: row.count }))
+  // A handful of rules read once for the whole report, not once per merchant bucket.
+  const renameRules = listRules('rename');
+  const folded = new Map<string, { total: number; count: number }>();
+  for (const row of rows) {
+    const rule = matchRule(row.normalizedMerchant, 'rename', renameRules);
+    const displayName = rule?.renameTo ?? row.normalizedMerchant;
+    const bucket = folded.get(displayName) ?? { total: 0, count: 0 };
+    bucket.total += row.total ?? 0;
+    bucket.count += row.count;
+    folded.set(displayName, bucket);
+  }
+
+  return [...folded.entries()]
+    .map(([normalizedMerchant, bucket]) => ({ normalizedMerchant, spentCents: netSpentCents(bucket.total), count: bucket.count }))
     .filter((row) => row.spentCents > 0)
     .sort((a, b) => b.spentCents - a.spentCents)
     .slice(0, input.limit ?? 10);

@@ -1,6 +1,7 @@
 import { listAccounts } from '@/lib/accounts';
 import type { Viewer } from '@/lib/auth/viewer';
-import { addMonths, monthOf } from '@/lib/dates';
+import { addMonths, monthLabel, monthOf } from '@/lib/dates';
+import { formatCents } from '@/lib/money';
 import { latestSnapshots } from '@/lib/networth';
 import { cashflowTrend } from '@/lib/reports';
 
@@ -22,6 +23,14 @@ export interface CashRunway {
   months: number | null;
   /** Liquid accounts with no balance on file — the figure is only as good as this is 0. */
   accountsMissing: number;
+  /**
+   * v1.21.0 plan, item 14. The month (YYYY-MM) that has to finish before `months` can stop
+   * being null on a household this new -- i.e. the first month `cashflowTrend`'s trailing
+   * window below will include once it has ended. Always computed, even when `months` is
+   * already non-null (there is nothing wrong with a well-defined value nobody currently reads);
+   * `cashRunwayHint` is the one place it is actually consulted.
+   */
+  readyAfterMonth: string;
 }
 
 const DEFAULT_TRAILING_MONTHS = 6;
@@ -80,5 +89,29 @@ export function cashRunway(opts: { today: string; months?: number }, viewer: Vie
     avgMonthlySpendCents,
     months: avgMonthlySpendCents > 0 ? Math.round((liquidCents / avgMonthlySpendCents) * 10) / 10 : null,
     accountsMissing,
+    // Item 14: `opts.today`'s own month is the partial one this whole function deliberately
+    // excludes (the docblock above). It becomes usable the moment the household is INTO the
+    // following month, which is exactly when `lastFullMonth` above would advance to include it.
+    readyAfterMonth: addMonths(monthOf(opts.today), 1),
   };
+}
+
+/**
+ * v1.21.0 plan, item 14. `CashRunwayTile` (src/app/(app)/dashboard/page.tsx) used to say "no
+ * spending history yet to average" whenever `months` was null -- true on a household that has
+ * genuinely never recorded a transaction, false and actively misleading on one looking at a page
+ * full of this month's own spending: the arithmetic (excluding the current, partial month from
+ * the average) is correct, deliberate, and unchanged by this fix -- see cashRunway's own
+ * docblock -- only the SENTENCE was lying about why there is nothing to show yet.
+ *
+ * The single place this wording is decided, the same pattern `netWorthHint` (src/lib/networth.ts)
+ * already established for the sibling "some accounts have no balance" disclosure -- so a second
+ * surface rendering a runway figure could not reinvent, and possibly mis-state, the same
+ * sentence differently.
+ */
+export function cashRunwayHint(runway: Pick<CashRunway, 'months' | 'liquidCents' | 'avgMonthlySpendCents' | 'readyAfterMonth'>): string {
+  if (runway.months === null) {
+    return `Needs one complete month of spending before this can be estimated — check back once ${monthLabel(runway.readyAfterMonth)} begins.`;
+  }
+  return `${formatCents(runway.liquidCents)} liquid ÷ ${formatCents(runway.avgMonthlySpendCents)} average monthly spend`;
 }

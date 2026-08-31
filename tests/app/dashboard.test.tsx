@@ -511,7 +511,7 @@ describe('DashboardPage — ruling T7 (month filter)', () => {
   // also proves the other 11 months in the trailing window carry `targetCents: null` rather than
   // a fallback 0 (SavingsChart.tsx's own docblock: a null-vs-0 mixup would draw a dashed target
   // line reading "your target was nothing" for a month that in fact had no target at all).
-  it('renders the savings chart, and a month with no target carries targetCents: null, never 0', async () => {
+  it('renders the savings chart trimmed to the months with real history, and a month with no target carries targetCents: null, never 0', async () => {
     const { adultId } = await setupMonths();
     saveSavingsTarget({ month: currentMonth(), mode: 'amount', value: 20000 });
     currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
@@ -519,10 +519,13 @@ describe('DashboardPage — ruling T7 (month filter)', () => {
     render(await DashboardPage({ searchParams: Promise.resolve({}) }));
 
     const data = capturedSavingsChartProps.data as Array<{ month: string; targetCents: number | null }>;
-    expect(data.length).toBe(12);
+    // Item 5 (2026-08-30 plan): setupMonths' only transaction is dated prevMonth, so every one
+    // of the 10 months before it is a leading month with no history and is trimmed -- only
+    // prevMonth and currentMonth (the two REAL months in this fixture) survive, not all 12.
+    expect(data.map((row) => row.month)).toEqual([prevMonth, currentMonth()]);
     expect(data.find((row) => row.month === currentMonth())?.targetCents).toBe(20000);
-    // prevMonth (set up by setupMonths' own fixture) is inside this same trailing-12 window and
-    // never got a target -- it must read `null`, not `0`.
+    // prevMonth (set up by setupMonths' own fixture) never got a target -- it must read `null`,
+    // not `0`.
     expect(data.find((row) => row.month === prevMonth)?.targetCents).toBeNull();
   });
 
@@ -534,6 +537,20 @@ describe('DashboardPage — ruling T7 (month filter)', () => {
     const adult = await createUser({ name: 'Adult', username: 'adult', password: 'correct horse battery', role: 'admin' });
     const child = await createUser({ name: 'Kid', username: 'kid', password: 'correct horse battery', role: 'member' });
     void adult;
+    // Item 5: with no history at all for this child, the trim below would leave the chart with
+    // nothing to show -- one of their own transactions, dated today, is what this test needs to
+    // exercise the target-nulling behavior on a non-empty chart.
+    const accountId = createAccount({ name: 'Kid Chequing', type: 'chequing', ownerUserId: child.id });
+    createManualTransaction({
+      accountId,
+      date: today,
+      description: 'KID SNACK',
+      amountCents: -500,
+      categoryId: null,
+      attributedUserId: child.id,
+      userId: adult.id,
+      actorRole: 'admin',
+    });
     saveSavingsTarget({ month: currentMonth(), mode: 'amount', value: 20000 });
     currentUser.value = { id: child.id, name: 'Kid', username: 'kid', role: 'member', visibility: 'self' };
     const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
@@ -542,6 +559,68 @@ describe('DashboardPage — ruling T7 (month filter)', () => {
     const data = capturedSavingsChartProps.data as Array<{ targetCents: number | null }>;
     expect(data.length).toBeGreaterThan(0);
     expect(data.every((row) => row.targetCents === null)).toBe(true);
+  });
+
+  /**
+   * v1.21.0 plan, item 5, defect 1. This is the owner's own reported shape: a household a few
+   * weeks old, whose only real history is the last couple of months, used to see all 12 trailing
+   * months plotted (ten of them at a flat 0,0) and a card confidently titled "12-month cashflow".
+   */
+  describe('item 5: the 12-month cashflow card names how much history it actually has', () => {
+    it('with two real months, the title and description say 2, not 12', async () => {
+      const { adultId } = await setupMonths();
+      currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+      const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+      // Viewing prevMonth (not the current month) so the "Always the trailing..." clause, which
+      // only appears once the viewed month differs from today, is on screen to assert against.
+      const { container } = render(await DashboardPage({ searchParams: Promise.resolve({ month: prevMonth }) }));
+
+      expect(screen.getByText('2-month cashflow')).toBeTruthy();
+      expect(screen.queryByText('12-month cashflow')).toBeNull();
+      expect(container.textContent).toContain(`Always the trailing 2 months to today, not ${monthLabel(prevMonth)}.`);
+    });
+
+    it('with only the current month of history, the title reads as one month, not "1-month"', async () => {
+      t = createTestDb();
+      const adult = await createUser({ name: 'Adult', username: 'adult', password: 'correct horse battery', role: 'admin' });
+      const accountId = createAccount({ name: 'Chequing', type: 'chequing', ownerUserId: adult.id });
+      createManualTransaction({
+        accountId,
+        date: today,
+        description: 'FIRST EVER PURCHASE',
+        amountCents: -1000,
+        categoryId: null,
+        attributedUserId: adult.id,
+        userId: adult.id,
+        actorRole: 'admin',
+      });
+      currentUser.value = { id: adult.id, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+      const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+      render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+
+      expect(screen.getByText("This month's cashflow")).toBeTruthy();
+      expect(capturedSavingsChartProps.data).toEqual([expect.objectContaining({ month: currentMonth() })]);
+    });
+
+    it('with no transactions at all, shows an empty state instead of an empty chart', async () => {
+      t = createTestDb();
+      const adult = await createUser({ name: 'Adult', username: 'adult', password: 'correct horse battery', role: 'admin' });
+      createAccount({ name: 'Chequing', type: 'chequing', ownerUserId: adult.id });
+      currentUser.value = { id: adult.id, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+      const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+      render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+
+      expect(screen.getByText('Cashflow')).toBeTruthy();
+      expect(screen.getByText('No transactions yet to chart.')).toBeTruthy();
+
+      // Item 14, checked from the same fixture: a household this new has zero complete months
+      // to average, and the runway tile must say so honestly rather than the old, actively false
+      // "no spending history yet to average" (this page shows nothing BUT this household's own
+      // lack of history, so there is nothing on screen that sentence was ever true against).
+      const runwayTile = screen.getByText('Cash runway').closest('div');
+      expect(runwayTile?.textContent).not.toContain('no spending history');
+      expect(runwayTile?.textContent).toContain('one complete month');
+    });
   });
 });
 

@@ -4,7 +4,7 @@ import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser
 import type { Viewer } from '@/lib/auth/viewer';
 import { nowIso } from '@/lib/clock';
 import { recordBalanceSnapshot } from '@/lib/networth';
-import { cashRunway } from '@/lib/runway';
+import { cashRunway, cashRunwayHint } from '@/lib/runway';
 
 const HOUSEHOLD: Viewer = { id: 1, role: 'admin', visibility: 'household' };
 
@@ -129,5 +129,36 @@ describe('cashRunway: average monthly spend and months covered', () => {
     const runway = cashRunway({ today: '2026-06-30' }, HOUSEHOLD);
     expect(runway.avgMonthlySpendCents).toBe(0);
     expect(runway.months).toBeNull();
+  });
+
+  /** v1.21.0 plan, item 14: `readyAfterMonth` names the month that must begin before there is a
+   *  complete month to average -- one month after `today`'s own month, regardless of the
+   *  reason `months` is null (this field is always computed, see its own docblock). */
+  it('readyAfterMonth is one month after today, regardless of whether months is null', () => {
+    const { db } = setup();
+    const chequing = insertTestAccount(db, { name: 'Chequing', type: 'chequing' });
+    recordBalanceSnapshot({ accountId: chequing, date: '2026-06-30', balanceCents: 100000, source: 'manual' });
+
+    expect(cashRunway({ today: '2026-06-30' }, HOUSEHOLD).readyAfterMonth).toBe('2026-07');
+  });
+});
+
+/**
+ * v1.21.0 plan, item 14. `cashRunwayHint` is the one place the "why is there nothing to show"
+ * sentence is decided (mirroring `netWorthHint`, src/lib/networth.ts) -- these tests pin it
+ * directly rather than through a rendered dashboard page, the same level render.test.ts already
+ * tests notify's own per-event sentences at.
+ */
+describe('cashRunwayHint', () => {
+  it('says what is true on a brand-new household -- needs one complete month, and names when', () => {
+    const hint = cashRunwayHint({ months: null, liquidCents: 0, avgMonthlySpendCents: 0, readyAfterMonth: '2026-09' });
+    expect(hint).not.toContain('no spending history');
+    expect(hint).toContain('one complete month');
+    expect(hint).toContain('September 2026');
+  });
+
+  it('states the liquid/average-spend arithmetic once months is resolved', () => {
+    const hint = cashRunwayHint({ months: 4.2, liquidCents: 420000, avgMonthlySpendCents: 100000, readyAfterMonth: '2026-08' });
+    expect(hint).toBe('$4,200.00 liquid ÷ $1,000.00 average monthly spend');
   });
 });

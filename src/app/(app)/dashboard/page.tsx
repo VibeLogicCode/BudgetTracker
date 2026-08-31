@@ -13,8 +13,8 @@ import { householdInsights } from '@/lib/insights';
 import { listLoans } from '@/lib/loans';
 import { netWorthHint, netWorthOverTime } from '@/lib/networth';
 import { onboardingSteps } from '@/lib/onboarding';
-import { cashflowTrend, categoryBreakdown, topMerchants } from '@/lib/reports';
-import { cashRunway, type CashRunway } from '@/lib/runway';
+import { cashflowTrend, categoryBreakdown, topMerchants, type MonthTrendRow } from '@/lib/reports';
+import { cashRunway, cashRunwayHint, type CashRunway } from '@/lib/runway';
 import { savingsProgress, type SavingsProgress } from '@/lib/savings-target';
 import { expiringSoonItems } from '@/lib/warranty/search';
 import { formatCents } from '@/lib/money';
@@ -66,6 +66,32 @@ function deltaProps(curr: number, prev: number, goodWhenUp: boolean): { delta?: 
   return { delta: `${sign}${pct.toFixed(1)}% vs last month`, deltaTone: tone };
 }
 
+/**
+ * v1.21.0 plan, item 5, defect 1. `cashflowTrend` seeds every month key in its requested range
+ * with 0 by contract (src/lib/reports.ts) -- it has no way to tell "the household earned $0 and
+ * spent $0 this month" apart from "this month is before the household's first transaction", so it
+ * does not try; that is this function's job instead. Ten such months, on a household a few weeks
+ * old, used to squeeze one real month of data into the last few percent of a 12-wide chart.
+ *
+ * Trims only the LEADING run of zero-both months, never an interior or trailing one: once real
+ * history has started, a later genuinely-quiet month is indistinguishable from "no data" by this
+ * same test, and only the former is the defect being fixed here -- a real zero month stays on the
+ * chart. Every dropped row would have plotted a flat, informationless baseline bar anyway (income
+ * 0, spend 0, so net 0 too), so the cumulative-saved running total SavingsChart derives from
+ * whatever survives this trim is unaffected: a dropped row could only ever have contributed 0 to
+ * it.
+ *
+ * Lives here rather than in src/lib/reports.ts: cashflowTrend's own contract (zero-fill every
+ * requested month) is correct and shared by callers that need exactly that, e.g. Reports' own
+ * cash flow card, which follows a range the person picking it already chose on purpose -- this
+ * trim is specific to the dashboard's own fixed trailing-N-months-ending-today window, the one
+ * place a household's youth actually produces a wall of leading zeros nobody asked to see.
+ */
+function trimLeadingEmptyMonths(rows: MonthTrendRow[]): MonthTrendRow[] {
+  const firstReal = rows.findIndex((row) => row.incomeCents !== 0 || row.spendCents !== 0);
+  return firstReal === -1 ? [] : rows.slice(firstReal);
+}
+
 export const dynamic = 'force-dynamic';
 
 export default async function DashboardPage({
@@ -100,6 +126,12 @@ export default async function DashboardPage({
   // back at March does not also truncate the household's own trend line to end in March. The
   // person-pill scoping is unaffected; only which month is the rightmost bar is fixed.
   const trend = cashflowTrend(12, { endMonth: currentMonth(), attributedUserId: scopeUserId }, viewer);
+  // Item 5 (2026-08-30 plan): drop the leading run of months before this scope's first
+  // transaction -- see trimLeadingEmptyMonths' own docblock. `monthsOfHistory` (below) is exactly
+  // how many of the requested 12 survive, and is what the card's own title and description read
+  // instead of a hardcoded "12-month" claim that stopped being true the day this trim was added.
+  const trimmedTrend = trimLeadingEmptyMonths(trend);
+  const monthsOfHistory = trimmedTrend.length;
   // Item 1 (2026-08-30 plan): the dashboard's 12-month card now renders the same SavingsChart
   // Reports does, fed the same way -- each row's `targetCents` comes from savingsProgress()
   // (Lane 1, src/lib/savings-target.ts), never recomputed here (ruling T1: no second definition
@@ -108,10 +140,21 @@ export default async function DashboardPage({
   // viewer must still never receive it, the same gate `savings`/`runway` below already use for
   // every other household-wide figure on this page, so their rows carry `null` rather than a
   // call to savingsProgress at all.
-  const savingsChartData: SavingsChartRow[] = trend.map((row) => ({
+  const savingsChartData: SavingsChartRow[] = trimmedTrend.map((row) => ({
     ...row,
     targetCents: selfScoped ? null : savingsProgress(row.month, viewer).targetCents,
   }));
+  // Item 5: the title never claims a month count the trim above did not actually deliver. Only
+  // the "12-month" case gets the special-cased noun (matching how every other count-bearing
+  // string on this page already reads, e.g. "N accounts missing"), because "1-month cashflow"
+  // reads as a typo of "12-month cashflow" where "This month's cashflow" does not.
+  const cashflowCardTitle =
+    monthsOfHistory === 0 ? 'Cashflow' : monthsOfHistory === 1 ? "This month's cashflow" : `${monthsOfHistory}-month cashflow`;
+  const cashflowCardDescription = `Transfers excluded.${
+    isCurrentMonth
+      ? ''
+      : ` Always the trailing ${monthsOfHistory === 1 ? 'month' : `${monthsOfHistory} months`} to today, not ${monthLabel(month)}.`
+  }`;
   // The headline Money-in/Net tiles DO follow the chosen month (ruling T7), and unlike the chart
   // above they need to work for a month outside the chart's own trailing-12 window -- a
   // dedicated one-month query, not a lookup into `trend`, which cashflowTrend already supports
@@ -677,14 +720,32 @@ export default async function DashboardPage({
       <div className="grid gap-5 lg:grid-cols-5">
         <Card className={selfScoped ? 'lg:col-span-5' : 'lg:col-span-3'}>
           <CardHeader
-            title="12-month cashflow"
+            // Item 5 (2026-08-30 plan): no longer a hardcoded "12-month" -- see
+            // trimLeadingEmptyMonths' docblock above for why a household with less than 12
+            // months of its own history should never be told it is looking at 12.
+            title={cashflowCardTitle}
             // Ruling T7: this chart does NOT follow the chosen month (see `trend` above) --
-            // always the trailing 12 months ending today, so the note only needs to appear
+            // always the trailing N months ending today, so the note only needs to appear
             // once here rather than on every bar.
-            description={`Transfers excluded.${isCurrentMonth ? '' : ' Always the trailing 12 months to today, not ' + monthLabel(month) + '.'}`}
+            description={cashflowCardDescription}
           />
           <CardBody>
-            <SavingsChart data={savingsChartData} />
+            {savingsChartData.length === 0 ? (
+              // Item 5: a chart with nothing plotted on it is not a chart, it is an empty
+              // rectangle -- the same "go import a statement" action every other empty first-run
+              // card on this page already offers (Guard 1: tests/ops/onboarding-coverage.test.ts).
+              <EmptyState
+                size="compact"
+                title="No transactions yet to chart."
+                action={
+                  <Link href="/import" className="btn btn--secondary btn--sm">
+                    Import a statement
+                  </Link>
+                }
+              />
+            ) : (
+              <SavingsChart data={savingsChartData} />
+            )}
           </CardBody>
         </Card>
 
@@ -884,7 +945,12 @@ function SavedThisMonthTile({ progress }: { progress: SavingsProgress }) {
 }
 
 /** Lane 3 item 4. `months` is null exactly when there is no spend history to average against
- *  (Lane 1's own contract) -- shown as a dash rather than a nonsense "0.0 months". */
+ *  (Lane 1's own contract) -- shown as a dash rather than a nonsense "0.0 months".
+ *
+ *  v1.21.0 plan, item 14: the sentence explaining WHY is now `cashRunwayHint`
+ *  (src/lib/runway.ts) rather than a ternary re-litigated here -- see that function's own
+ *  docblock for why "no spending history yet to average" was false on a page full of spending,
+ *  and what replaced it. */
 function CashRunwayTile({ runway }: { runway: CashRunway }) {
   return (
     <StatTile
@@ -895,10 +961,7 @@ function CashRunwayTile({ runway }: { runway: CashRunway }) {
           {/* cashRunway takes `today`, never a month (Lane 1's own signature) -- this is always
               "as of today" regardless of which month the rest of the page is showing, so it
               says so in its own hint rather than needing AsOfTodayNote beside it. */}
-          As of today ·{' '}
-          {runway.months === null
-            ? 'no spending history yet to average'
-            : `${formatCents(runway.liquidCents)} liquid ÷ ${formatCents(runway.avgMonthlySpendCents)} average monthly spend`}
+          As of today · {cashRunwayHint(runway)}
           {runway.accountsMissing > 0 ? (
             <>
               <br />
