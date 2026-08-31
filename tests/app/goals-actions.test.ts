@@ -23,6 +23,33 @@ vi.mock('next/cache', () => ({
   revalidatePath: vi.fn(),
 }));
 
+// v1.20.0: createGoalAction's happy path now redirects to /goals instead of returning a
+// message (see actions.ts's own comment on that change) -- the same shape createWarrantyAction
+// already uses, and the same test double warranties-actions.test.ts mocks redirect() with, so a
+// thrown redirect can be told apart from an unrelated thrown error.
+class RedirectSignal extends Error {
+  constructor(readonly to: string) {
+    super(`NEXT_REDIRECT:${to}`);
+  }
+}
+
+vi.mock('next/navigation', () => ({
+  redirect: (to: string) => {
+    throw new RedirectSignal(to);
+  },
+}));
+
+/** Runs a redirecting action and returns the path it redirected to. */
+async function redirectPath(run: () => Promise<unknown>): Promise<string> {
+  try {
+    await run();
+  } catch (error) {
+    if (error instanceof RedirectSignal) return error.to;
+    throw error;
+  }
+  throw new Error('expected a redirect');
+}
+
 import {
   addContributionAction,
   archiveGoalAction,
@@ -79,26 +106,26 @@ describe('createGoalAction', () => {
   it("lets an admin create a goal owned by another member", async () => {
     const { admin, bob } = setup();
     currentUser = { id: admin, name: 'Admin', username: 'admin', role: 'admin', visibility: 'household' };
-    const result = await createGoalAction(
-      {},
-      formData({ name: 'Trip', target: '500.00', targetDate: '', owner: String(bob) }),
+    const to = await redirectPath(() =>
+      createGoalAction({}, formData({ name: 'Trip', target: '500.00', targetDate: '', owner: String(bob) })),
     );
-    expect(result.message).toBeTruthy();
+    expect(to).toBe('/goals');
   });
 
   it('happy path: a member creates their own goal and a shared goal', async () => {
     const { alice } = setup();
-    const own = await createGoalAction(
-      {},
-      formData({ name: 'New bike', target: '1500.00', targetDate: '2026-12-01', owner: String(alice) }),
+    const ownTo = await redirectPath(() =>
+      createGoalAction(
+        {},
+        formData({ name: 'New bike', target: '1500.00', targetDate: '2026-12-01', owner: String(alice) }),
+      ),
     );
-    expect(own.message).toBeTruthy();
+    expect(ownTo).toBe('/goals');
 
-    const shared = await createGoalAction(
-      {},
-      formData({ name: 'Emergency fund', target: '10000.00', targetDate: '', owner: 'shared' }),
+    const sharedTo = await redirectPath(() =>
+      createGoalAction({}, formData({ name: 'Emergency fund', target: '10000.00', targetDate: '', owner: 'shared' })),
     );
-    expect(shared.message).toBeTruthy();
+    expect(sharedTo).toBe('/goals');
   });
 });
 

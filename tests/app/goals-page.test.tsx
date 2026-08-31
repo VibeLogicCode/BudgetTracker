@@ -4,13 +4,21 @@ import { render, cleanup } from '@testing-library/react';
 import { createSeededTestDb, insertTestUser, type TestDb } from '../helpers/db';
 
 /**
- * v1.13.1 fix round, review A (item 2 -- same class as item 1's dashboard leak).
- * GoalsPage passed listAttributablePeople() into GoalsClient's "Owner" dropdown unconditionally
- * -- no selfScoped gate. Unlike the dashboard case this one also RENDERS the roster in the DOM
- * as visible <option> elements, not just serializes it. canActOnOwner already refuses a self
- * viewer's attempt to set an owner other than themselves or "shared" server-side
- * (src/app/(app)/goals/actions.ts), so narrowing the dropdown to "Shared" + the viewer's own
- * name costs no functionality.
+ * v1.13.1 fix round, review A (item 2 -- same class as item 1's dashboard leak), RELOCATED in
+ * v1.20.0.
+ *
+ * This file used to render GoalsPage itself: the "New goal" form's Owner <select> lived on
+ * /goals as an on-page disclosure, so GoalsPage was where a household viewer's full roster (or a
+ * self viewer's narrowed one) actually reached the DOM. v1.20.0 moved that form -- and the
+ * isSelfScoped/listAttributablePeople roster computation that feeds it -- onto its own route,
+ * /goals/new (goals/new/page.tsx), the same shape /warranties/new already used. GoalsPage no
+ * longer renders an Owner <select> at all, so this suite now renders NewGoalPage instead: the
+ * risk being guarded against (a self-scoped viewer seeing another household member's name) has
+ * not gone away, it just moved with the control that could leak it.
+ *
+ * canActOnOwner already refuses a self viewer's attempt to set an owner other than themselves or
+ * "shared" server-side (src/app/(app)/goals/actions.ts), so narrowing the dropdown to "Shared" +
+ * the viewer's own name costs no functionality.
  */
 const currentUser = vi.hoisted(() => ({
   value: {
@@ -26,7 +34,7 @@ vi.mock('@/lib/auth/session', () => ({ requireUser: async () => currentUser.valu
 
 afterEach(cleanup);
 
-describe('GoalsPage (review A, item 2)', () => {
+describe('NewGoalPage (review A, item 2 -- relocated from GoalsPage in v1.20.0)', () => {
   let t: TestDb | null = null;
   afterEach(() => {
     t?.cleanup();
@@ -34,8 +42,8 @@ describe('GoalsPage (review A, item 2)', () => {
   });
 
   async function renderPage() {
-    const { default: GoalsPage } = await import('@/app/(app)/goals/page');
-    return render(await GoalsPage({ searchParams: Promise.resolve({}) }));
+    const { default: NewGoalPage } = await import('@/app/(app)/goals/new/page');
+    return render(await NewGoalPage());
   }
 
   it('does not offer another household member as a goal owner to a self viewer', async () => {

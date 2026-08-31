@@ -1,49 +1,38 @@
 'use client';
 
-import { useActionState, useState } from 'react';
+import { useActionState } from 'react';
+import Link from 'next/link';
 import { FormError } from '@/components/FormError';
 import { GoalCard } from '@/components/GoalCard';
 import { SubmitButton } from '@/components/SubmitButton';
 import { GoalsIcon } from '@/components/icons';
-import { Card, CardBody, CardHeader } from '@/components/ui/Card';
+import { Card } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Money } from '@/components/ui/Money';
 import { Notice } from '@/components/ui/Notice';
 import { PageGuide } from '@/components/ui/PageGuide';
 import { PageHeader } from '@/components/ui/PageHeader';
-import { Field, inputClass, selectClass } from '@/components/ui/form';
 import { Pill } from '@/components/ui/Pill';
 import type { ContributionRecord, GoalWithProgress } from '@/lib/goals';
-import { addContributionAction, archiveGoalAction, createGoalAction, deleteContributionAction, type GoalActionState } from './actions';
+import { addContributionAction, archiveGoalAction, deleteContributionAction, type GoalActionState } from './actions';
 
 const initial: GoalActionState = {};
 
 export function GoalsClient({
   today,
   goals,
-  people,
   showArchived = false,
 }: {
   today: string;
   goals: { goal: GoalWithProgress; contributions: ContributionRecord[] }[];
-  people: { id: number; name: string }[];
   showArchived?: boolean;
 }) {
-  const [createState, create] = useActionState(createGoalAction, initial);
   const [contributeState, contribute] = useActionState(addContributionAction, initial);
   const [archiveState, archive] = useActionState(archiveGoalAction, initial);
   const [deleteState, remove] = useActionState(deleteContributionAction, initial);
-  // 2026-08-30 plan item 1: the same disclosure shape QuickAddTransaction's page variant uses
-  // for its own toggle (src/components/QuickAddTransaction.tsx) -- a plain useState boolean,
-  // closed by default, flipped by one button carrying aria-expanded/aria-controls. Unlike that
-  // component, the form stays MOUNTED (hidden via the real HTML attribute below, not omitted)
-  // rather than closed: tests/app/goals-page.test.tsx reads a household viewer's full owner
-  // roster straight out of this form's <select> on a page load that never opens anything, the
-  // same "closed groups stay in the DOM" reasoning budgets-client.tsx's own EditRow documents.
-  const [addGoalOpen, setAddGoalOpen] = useState(false);
 
-  const notice = createState.message ?? contributeState.message ?? archiveState.message ?? deleteState.message;
-  const error = createState.error ?? contributeState.error ?? archiveState.error ?? deleteState.error;
+  const notice = contributeState.message ?? archiveState.message ?? deleteState.message;
+  const error = contributeState.error ?? archiveState.error ?? deleteState.error;
 
   return (
     <div className="flex flex-col gap-4 sm:gap-5">
@@ -57,19 +46,15 @@ export function GoalsClient({
             <a className="btn btn--secondary btn--sm" href={showArchived ? '/goals' : '/goals?archived=1'}>
               {showArchived ? 'Hide archived' : 'Show archived'}
             </a>
-            {/* Item 1 (2026-08-30 plan): "content is always visible, a form that CREATES
-                something sits behind a button" -- the same house rule already applied to Quick
-                add on Transactions and the dashboard. 44px floor on a phone, same reasoning
-                QuickAddTransaction's own toggle documents. */}
-            <button
-              type="button"
-              className="btn btn--primary btn--sm min-h-11 sm:min-h-0"
-              aria-expanded={addGoalOpen}
-              aria-controls="new-goal"
-              onClick={() => setAddGoalOpen((open) => !open)}
-            >
-              {addGoalOpen ? 'Close' : 'Add goal'}
-            </button>
+            {/* v1.20.0: "New goal" moved off this page onto its own route, /goals/new -- the
+                same idiom /warranties/new already established (see warranties-client.tsx's own
+                "Add item" link). This used to be a disclosure toggle that revealed a form BELOW
+                the whole gallery on this same page; two different idioms for "create a thing"
+                is exactly the drift the design-system work exists to remove, so this is now a
+                plain navigation like every other create button in the app. */}
+            <Link href="/goals/new" className="btn btn--primary btn--sm min-h-11 sm:min-h-0">
+              Add goal
+            </Link>
           </>
         }
       />
@@ -111,18 +96,12 @@ export function GoalsClient({
             icon={GoalsIcon}
             title="No goals yet"
             action={
-              // Was an <a href="#new-goal"> jump -- the form it pointed at was always open, so
-              // scrolling to it was enough. Now that the form is a closed-by-default disclosure
-              // (item 1), a hash jump would land on a hidden card; this opens it instead.
-              <button
-                type="button"
-                className="btn btn--primary btn--sm"
-                aria-expanded={addGoalOpen}
-                aria-controls="new-goal"
-                onClick={() => setAddGoalOpen(true)}
-              >
+              // v1.20.0: was a button that opened the on-page disclosure; the form it pointed
+              // at now lives at /goals/new (see the header Link's own docblock above), so this
+              // is a plain link there instead.
+              <Link href="/goals/new" className="btn btn--primary btn--sm">
                 Add a goal
-              </button>
+              </Link>
             }
           >
             A goal is a target amount and, if you want one, a date. Add the first one below and log contributions as you go.
@@ -205,36 +184,6 @@ export function GoalsClient({
           ))}
         </div>
       )}
-
-      {/* Item 1: `hidden`, not a conditional `null` -- the form stays mounted while closed (see
-          `addGoalOpen`'s own doc comment above for why goals-page.test.tsx requires that). */}
-      <div id="new-goal" hidden={!addGoalOpen}>
-        <Card className="max-w-md">
-          <CardHeader title="New goal" description="Name it, give it a target, and it starts tracking pace on the first contribution." />
-          <CardBody>
-            <form action={create} className="flex flex-col gap-4">
-              <Field label="Name">
-                <input name="name" placeholder="Trip to Japan" required className={inputClass} />
-              </Field>
-              <Field label="Target amount">
-                <input name="target" inputMode="decimal" placeholder="5000" required className={inputClass} />
-              </Field>
-              <Field label="Target date (optional)">
-                <input type="date" name="targetDate" className={inputClass} />
-              </Field>
-              <Field label="Owner">
-                <select name="owner" className={selectClass}>
-                  <option value="shared">Shared</option>
-                  {people.map((person) => (
-                    <option key={person.id} value={person.id}>{person.name}</option>
-                  ))}
-                </select>
-              </Field>
-              <SubmitButton className="w-fit">Create goal</SubmitButton>
-            </form>
-          </CardBody>
-        </Card>
-      </div>
     </div>
   );
 }

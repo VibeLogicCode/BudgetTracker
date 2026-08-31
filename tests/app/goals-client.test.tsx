@@ -1,11 +1,10 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import { GoalsClient } from '@/app/(app)/goals/goals-client';
 import { computePace, type GoalWithProgress } from '@/lib/goals';
 
 vi.mock('@/app/(app)/goals/actions', () => ({
-  createGoalAction: vi.fn(async () => ({})),
   addContributionAction: vi.fn(async () => ({})),
   archiveGoalAction: vi.fn(async () => ({})),
   deleteContributionAction: vi.fn(async () => ({})),
@@ -36,7 +35,6 @@ function renderClient(over: { archived?: boolean; showArchived?: boolean } = {})
       today="2026-08-16"
       showArchived={over.showArchived ?? false}
       goals={[{ goal: goal({ archived: over.archived ?? false }), contributions: [] }]}
-      people={[{ id: 1, name: 'Alice' }]}
     />,
   );
 }
@@ -78,56 +76,32 @@ describe('v1.12.1: the number pad opens for both goal money fields (item Y / UX-
     expect(field.getAttribute('inputmode')).toBe('decimal');
   });
 
-  it('the new goal target carries inputMode="decimal"', () => {
-    renderClient();
-    const target = document.querySelector('input[name="target"]') as HTMLInputElement | null;
-    expect(target?.getAttribute('inputmode')).toBe('decimal');
-  });
+  // v1.20.0: the New goal target field's own half of this test moved with the field itself --
+  // "New goal" is no longer part of GoalsClient (see the describe block below), so it is now
+  // covered by tests/app/new-goal-client.test.tsx instead of being deleted outright.
 });
 
-describe('GoalsClient — item 1 (2026-08-30 plan): "New goal" sits behind an Add goal button', () => {
-  it('the New goal card starts hidden, and the header button says "Add goal"', () => {
-    const { container, getByRole } = renderClient();
-    const toggle = getByRole('button', { name: 'Add goal' });
-    expect(toggle.getAttribute('aria-expanded')).toBe('false');
-    expect(toggle.getAttribute('aria-controls')).toBe('new-goal');
-    // Mounted, not omitted -- so a person tabbing or scanning raw text still finds every field;
-    // only the real `hidden` attribute keeps it off-screen while closed.
-    const card = container.querySelector('#new-goal') as HTMLElement;
-    expect(card.hidden).toBe(true);
-    expect(container.querySelector('input[name="target"]')).toBeTruthy();
+/**
+ * v1.20.0: replaces the old "item 1 (2026-08-30 plan)" describe block, which asserted a
+ * disclosure toggling open/closed on this same page -- that disclosure (and every field it
+ * held) moved to its own route, /goals/new (see new-goal-client.tsx), mirroring how
+ * /warranties/new already works. The risk those tests guarded -- that "Add goal" reaches the
+ * create form at all -- still exists, just one hop further away now: it is a plain navigation
+ * link rather than a client-side toggle, so what is worth asserting here is its href, not an
+ * aria-expanded/hidden dance that no longer happens on this page. The fields themselves (name,
+ * target, targetDate, owner) are covered by tests/app/new-goal-client.test.tsx, which renders
+ * the form they actually live in now.
+ */
+describe('GoalsClient — v1.20.0: "Add goal" navigates to its own route', () => {
+  it('the header "Add goal" link points at /goals/new', () => {
+    const { getByRole } = renderClient();
+    const link = getByRole('link', { name: 'Add goal' }) as HTMLAnchorElement;
+    expect(link.getAttribute('href')).toBe('/goals/new');
   });
 
-  it('clicking the header button opens the form and flips its own label to "Close"', () => {
-    const { container, getByRole } = renderClient();
-    fireEvent.click(getByRole('button', { name: 'Add goal' }));
-    const toggle = getByRole('button', { name: 'Close' });
-    expect(toggle.getAttribute('aria-expanded')).toBe('true');
-    expect((container.querySelector('#new-goal') as HTMLElement).hidden).toBe(false);
-  });
-
-  it('clicking Close collapses it again', () => {
-    const { container, getByRole } = renderClient();
-    fireEvent.click(getByRole('button', { name: 'Add goal' }));
-    fireEvent.click(getByRole('button', { name: 'Close' }));
-    expect(getByRole('button', { name: 'Add goal' })).toBeTruthy();
-    expect((container.querySelector('#new-goal') as HTMLElement).hidden).toBe(true);
-  });
-
-  it('every existing field in the form survives the move behind the disclosure', () => {
-    const { container } = renderClient();
-    expect(container.querySelector('input[name="name"]')).toBeTruthy();
-    expect(container.querySelector('input[name="target"]')).toBeTruthy();
-    expect(container.querySelector('input[name="targetDate"]')).toBeTruthy();
-    expect(container.querySelector('select[name="owner"]')).toBeTruthy();
-  });
-
-  it('the empty-state "Add a goal" button opens the same disclosure (no goals yet)', () => {
-    const { container, getByRole } = render(
-      <GoalsClient today="2026-08-16" goals={[]} people={[{ id: 1, name: 'Alice' }]} />,
-    );
-    expect((container.querySelector('#new-goal') as HTMLElement).hidden).toBe(true);
-    fireEvent.click(getByRole('button', { name: 'Add a goal' }));
-    expect((container.querySelector('#new-goal') as HTMLElement).hidden).toBe(false);
+  it('the empty-state "Add a goal" link also points at /goals/new (no goals yet)', () => {
+    const { getByRole } = render(<GoalsClient today="2026-08-16" goals={[]} />);
+    const link = getByRole('link', { name: 'Add a goal' }) as HTMLAnchorElement;
+    expect(link.getAttribute('href')).toBe('/goals/new');
   });
 });

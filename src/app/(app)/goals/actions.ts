@@ -1,6 +1,7 @@
 'use server';
 
 import { headers } from 'next/headers';
+import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { isSameOrigin } from '@/lib/auth/csrf';
@@ -47,7 +48,13 @@ export async function createGoalAction(_prev: GoalActionState, formData: FormDat
     return { error: error instanceof Error ? error.message : 'Could not create the goal.' };
   }
   revalidatePath('/goals');
-  return { message: 'Goal created.' };
+  // v1.20.0 (goal creation moves to its own route, /goals/new, matching /warranties/new):
+  // redirect() rather than a returned message, the same shape createWarrantyAction already
+  // uses -- the "New goal" form no longer lives on a page it can leave a notice on top of, so
+  // there is nowhere for a returned `message` to be read. Landing back on /goals shows the new
+  // card directly, which says "created" more plainly than a banner would. Outside the try:
+  // redirect() signals by throwing, and catching it would swallow it.
+  redirect('/goals');
 }
 
 export async function addContributionAction(_prev: GoalActionState, formData: FormData): Promise<GoalActionState> {
