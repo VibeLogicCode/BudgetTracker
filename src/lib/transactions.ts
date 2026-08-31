@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, gte, inArray, isNull, lte, ne, or, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '@/db/client';
-import { accounts, categories, transactions, users } from '@/db/schema';
+import { accounts, categories, transactions, transactionSplits, users } from '@/db/schema';
 import { getAccount } from '@/lib/accounts';
 import { ownerScope, type Viewer } from '@/lib/auth/viewer';
 import { REVIEW_WHERE, confirmCategory, runEngine, setTransferFlag } from '@/lib/categorize/engine';
@@ -29,6 +29,23 @@ export class RuleOwnedRefusal extends Error {
 export interface TransactionFilter {
   accountId?: number | null;
   categoryId?: number | 'uncategorized' | null;
+  /**
+   * v1.21.0 item 3 (owner's screenshot of the chip row: "filter on page transactions only
+   * filter where i directly assign parent and ignore all child"). Only meaningful when
+   * `categoryId` is a number:
+   *   - false/omitted (what a chip does) -- `categoryId` AND its children match. The category
+   *     tree is two levels deep (src/lib/categories.ts), so "children" here means exactly
+   *     that: this id plus its direct children, never a general recursive walk for a depth
+   *     this app does not have.
+   *   - true -- `categoryId` alone matches, no children. What the Budgets "Not in a
+   *     sub-category" row's drill-down wants (its own categoryTransactions call, in
+   *     src/lib/budgets.ts, already does this filtering a different way for a different
+   *     surface -- this is the same answer for the Transactions page).
+   * One filter, two stated meanings, neither inferred -- see buildWhere's own comment on
+   * categoryMatchClause below for the rest of the reasoning, including why this is also
+   * split-aware.
+   */
+  categoryExact?: boolean;
   attributedUserId?: number | 'unattributed' | null;
   from?: string | null;
   to?: string | null;
@@ -136,12 +153,63 @@ function escapeLikeNeedle(value: string): string {
   return value.replace(/[\\%_]/g, (match) => `${LIKE_ESCAPE}${match}`);
 }
 
+/**
+ * v1.21.0 item 3. `categoryId`'s children -- this id plus every category with it as a
+ * `parentId` (src/db/schema.ts). The tree is two levels deep, so this is deliberately a flat
+ * lookup, not a recursive walk: there is no grandchild to find. Archived children are
+ * included on purpose, matching foldRollup's own archived-inclusive child list in
+ * src/lib/budgets.ts -- a chip for "Health" must still find a transaction filed under a
+ * since-archived "Dental" before it was archived, the same way the Health budget card's own
+ * total already counts that spend.
+ */
+function descendantCategoryIds(categoryId: number): number[] {
+  const children = getDb()
+    .select({ id: categories.id })
+    .from(categories)
+    .where(eq(categories.parentId, categoryId))
+    .all();
+  return [categoryId, ...children.map((row) => row.id)];
+}
+
+/**
+ * "Which rows are in this category?" -- the same question foldRollup (src/lib/budgets.ts) and
+ * categoryBreakdown's `parentId ?? categoryId` (src/lib/reports.ts) already answer for a
+ * budget total and a report total. This is that answer for the Transactions list: `exact`
+ * false matches `categoryId` and its children (descendantCategoryIds above); `exact` true
+ * matches `categoryId` alone (see TransactionFilter.categoryExact's own doc comment).
+ *
+ * Split-aware, matching every other total in the app (EFFECTIVE_CATEGORY, src/lib/splits.ts):
+ * a transaction with splits is tested on its PARTS' own categories, never on its own
+ * (possibly stale, possibly absent) top-level categoryId, and a transaction with no splits
+ * falls back to that column exactly as before -- so a $50 split to Health now shows up when
+ * Transactions is filtered by Health, the same way it already counted toward the Health
+ * budget.
+ *
+ * Built as two correlated EXISTS/NOT EXISTS checks, the same idiom REVIEW_WHERE (engine.ts)
+ * already uses for the same reason: a LEFT JOIN onto transaction_splits would return one row
+ * per split PART for a split transaction, which is right for an aggregate's GROUP BY
+ * (categorySpend, categoryBreakdown) but wrong here -- listTransactions returns one row per
+ * TRANSACTION, and a join would silently duplicate a split row's parent across the page and
+ * inflate `total`/pageCount along with it.
+ */
+function categoryMatchClause(categoryId: number, exact: boolean): SQL {
+  const ids = exact ? [categoryId] : descendantCategoryIds(categoryId);
+  return sql`(
+    exists (select 1 from ${transactionSplits} where ${transactionSplits.txnId} = ${transactions.id} and ${inArray(transactionSplits.categoryId, ids)})
+    or (
+      not exists (select 1 from ${transactionSplits} where ${transactionSplits.txnId} = ${transactions.id})
+      and ${inArray(transactions.categoryId, ids)}
+    )
+  )`;
+}
+
 function buildWhere(filter: TransactionFilter, viewer: Viewer): SQL | undefined {
   const clauses: SQL[] = [];
   if (typeof filter.accountId === 'number') clauses.push(eq(transactions.accountId, filter.accountId));
 
   if (filter.categoryId === 'uncategorized') clauses.push(isNull(transactions.categoryId));
-  else if (typeof filter.categoryId === 'number') clauses.push(eq(transactions.categoryId, filter.categoryId));
+  else if (typeof filter.categoryId === 'number')
+    clauses.push(categoryMatchClause(filter.categoryId, filter.categoryExact === true));
 
   if (filter.attributedUserId === 'unattributed') clauses.push(isNull(transactions.attributedUserId));
   else if (typeof filter.attributedUserId === 'number') clauses.push(eq(transactions.attributedUserId, filter.attributedUserId));

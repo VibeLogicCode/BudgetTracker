@@ -47,6 +47,10 @@ function makeRow(overrides: Partial<BudgetRow> = {}): BudgetRow {
     pct: 25,
     overBudget: false,
     children: [],
+    // v1.21.0 item 2: 0 by default, same as any row with no direct spend of its own --
+    // BudgetCategoryCard renders the "Not in a sub-category" row only when this is non-zero,
+    // so the default keeps every existing test's card exactly as it rendered before that row existed.
+    directSpentCents: 0,
     ...overrides,
   };
 }
@@ -925,6 +929,66 @@ describe('v1.18.0 Lane 2 items 1-2: a group collapses, and its header already ca
     // ...switching to Edit limits shows the SAME category already open, not reset closed.
     fireEvent.click(getByRole('button', { name: 'Edit limits' }));
     expect(getByRole('button', { name: 'Housing' }).getAttribute('aria-expanded')).toBe('true');
+  });
+});
+
+/**
+ * v1.21.0 item 2 (owner's screenshot: a parent reading $628.55 over children totalling
+ * $183.55, because the direct-to-parent spend counted in the headline but rendered nowhere).
+ * These render the card grid (the default mode -- "View breakdown", not Edit limits), since
+ * that is where BudgetCategoryCard's breakdown -- and this new row inside it -- lives.
+ */
+describe('v1.21.0 item 2: a parent\'s own direct spend gets its own row', () => {
+  it('renders "Not in a sub-category" with the right amount, only when direct spend is non-zero', () => {
+    const row = housingGroupRow();
+    // The headline already counts this (foldRollup's seed, src/lib/budgets.ts) -- only the
+    // ROW was missing before this fix.
+    row.directSpentCents = 30000;
+    row.spentCents += 30000;
+    const { getByRole, getByText } = render(
+      <BudgetsClient
+        month="2026-03"
+        currentUserId={1}
+        household={[row]}
+        householdTotals={{ budgetedLimitCents: 200000, budgetedSpentCents: 180000, totalSpentCents: 180000 }}
+        personal={[]}
+      />,
+    );
+    fireEvent.click(getByRole('button', { name: 'View breakdown' }));
+    expect(getByText('Not in a sub-category')).toBeTruthy();
+    expect(getByText('$300.00')).toBeTruthy();
+  });
+
+  it('renders nothing extra when the parent has no direct spend of its own', () => {
+    const { getByRole, queryByText } = render(
+      <BudgetsClient
+        month="2026-03"
+        currentUserId={1}
+        household={[housingGroupRow()]}
+        householdTotals={{ budgetedLimitCents: 200000, budgetedSpentCents: 150000, totalSpentCents: 150000 }}
+        personal={[]}
+      />,
+    );
+    fireEvent.click(getByRole('button', { name: 'View breakdown' }));
+    expect(queryByText('Not in a sub-category')).toBeNull();
+  });
+
+  it('the eyebrow reads "N sub-categories", and the direct bucket never counts toward "over"', () => {
+    const row = housingGroupRow();
+    row.directSpentCents = 30000;
+    row.spentCents += 30000;
+    const { getByText } = render(
+      <BudgetsClient
+        month="2026-03"
+        currentUserId={1}
+        household={[row]}
+        householdTotals={{ budgetedLimitCents: 200000, budgetedSpentCents: 150000, totalSpentCents: 150000 }}
+        personal={[]}
+      />,
+    );
+    // Two REAL children (Rent, Utilities); the direct bucket is not one of them and cannot be
+    // "over" (it carries no limit), so this must read exactly this, not "3 sub-categories".
+    expect(getByText('2 sub-categories · 0 over')).toBeTruthy();
   });
 });
 

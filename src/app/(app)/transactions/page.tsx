@@ -58,6 +58,11 @@ function readFilter(
   return {
     accountId: num('account') ?? null,
     categoryId: category === 'uncategorized' ? 'uncategorized' : category && /^\d+$/.test(category) ? Number(category) : null,
+    // v1.21.0 item 3: `?category=<id>` means the category AND its children (a chip's own
+    // meaning); `?category=<id>&exact=1` means that category alone (the Budgets "Not in a
+    // sub-category" row's drill-down wants this). See TransactionFilter.categoryExact's own
+    // doc comment (src/lib/transactions.ts) for the rest of the reasoning.
+    categoryExact: one('exact') === '1',
     attributedUserId:
       selfOwnerId !== null
         ? selfOwnerId

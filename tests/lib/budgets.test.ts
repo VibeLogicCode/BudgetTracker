@@ -249,6 +249,30 @@ describe('budgetProgress', () => {
     expect(foodRow.children.find((c) => c.categoryId === coffee)?.spentCents).toBe(3000);
   });
 
+  /**
+   * v1.21.0 item 2 (owner's screenshot: a parent reading $628.55 over children totalling
+   * $183.55, because the direct-to-parent spend counted in the headline but rendered nowhere).
+   * `directSpentCents` is the seed foldRollup adds children to -- read back here rather than
+   * recomputed, so this pins that it stays exactly the parent's OWN spend, never rolled, while
+   * `spentCents` keeps rolling up exactly as it always did (no accounting change, only a new,
+   * previously-invisible field naming a number that was already being counted).
+   */
+  it('directSpentCents exposes a parent\'s own spend separately from its rolled-up total', () => {
+    const { db, spend } = setup();
+    const food = categoryIdByName(db, 'Food');
+    const groceries = categoryIdByName(db, 'Groceries');
+    spend({ categoryId: food, amountCents: -44500 }); // filed straight under Food, no sub-category
+    spend({ categoryId: groceries, amountCents: -18355 });
+
+    const foodRow = budgetProgress('2026-03').find((r) => r.categoryId === food)!;
+    expect(foodRow.directSpentCents).toBe(44500);
+    expect(foodRow.spentCents).toBe(44500 + 18355);
+    // A child's own directSpentCents equals its spentCents -- it has no children of its own
+    // to distinguish itself from.
+    const groceriesRow = foodRow.children.find((c) => c.categoryId === groceries)!;
+    expect(groceriesRow.directSpentCents).toBe(groceriesRow.spentCents);
+  });
+
   it('computes remaining and percentage against the resolved limit', () => {
     const { db, spend } = setup();
     const groceries = categoryIdByName(db, 'Groceries');

@@ -450,6 +450,65 @@ function ChildBreakdownRow({
 }
 
 /**
+ * v1.21.0 item 2 (owner's screenshot: a parent reading $628.55 over children totalling $183.55).
+ * The label is **"Not in a sub-category"** -- reused verbatim wherever this same bucket shows up
+ * elsewhere (the un-rolled Reports breakdown names it identically, per the 2026-08-30 plan).
+ *
+ * Deliberately its own small component rather than a `BudgetRow`-shaped stand-in fed into
+ * ChildBreakdownRow: this bucket has no limit (so no bar, no sinking fund, no "N% of $X" meta --
+ * it is not a category, just money with no sub-category of its own), and its own
+ * "View transactions" needs no query change -- `categoryId={row.categoryId}` is the PARENT's own
+ * id, and categoryTransactions (src/lib/budgets.ts) already filters EFFECTIVE_CATEGORY =
+ * categoryId exactly (no rollup), so it returns precisely this bucket's rows for free.
+ */
+function DirectSpendRow({
+  row,
+  scope,
+  userId,
+  month,
+}: {
+  row: BudgetRow;
+  scope: BudgetScope;
+  userId: number | null;
+  month: string;
+}) {
+  const [txOpen, setTxOpen] = useState(false);
+  const Icon = categoryIcon(row.categoryName);
+
+  return (
+    <>
+      <ListRow
+        icon={<Icon className="h-4 w-4" />}
+        title="Not in a sub-category"
+        meta="No limit set"
+        amount={<Money cents={row.directSpentCents} plain />}
+        trailing={
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm px-2 text-xs"
+            aria-expanded={txOpen}
+            onClick={() => setTxOpen((open) => !open)}
+          >
+            {txOpen ? 'Hide transactions' : 'View transactions'}
+          </button>
+        }
+      />
+      {txOpen ? (
+        <li className="bg-surface-2">
+          <CategoryTransactionsPanel
+            scope={scope}
+            userId={userId}
+            month={month}
+            categoryId={row.categoryId}
+            categoryName="Not in a sub-category"
+          />
+        </li>
+      ) : null}
+    </>
+  );
+}
+
+/**
  * View mode's one card per top-level category (the "budgets stops being a table" ruling). Uses
  * MetricCard verbatim (ruling D1): icon from categoryIcon, a subtitle that says something real, a
  * percentage Pill, spent as the hero with "of $X" beside it, a ProgressBar, and the remaining/over
@@ -490,8 +549,12 @@ function BudgetCategoryCard({
   const projection = predict !== null ? (predict.projectionOf.get(row.categoryId) ?? null) : null;
   const sinkingFund = sinkingFunds[row.categoryId] ?? null;
 
+  // v1.21.0 item 2: "N categories" used to name the direct-spend bucket as if it were one of
+  // them -- it is not (it carries no limit, so it can never be "over") -- so this reads
+  // "N sub-categories" now, and overChildren above is already computed from `row.children`
+  // alone, which never includes that bucket (see BudgetRow.directSpentCents's own doc comment).
   const subtitle = hasChildren
-    ? `${row.children.length} categor${row.children.length === 1 ? 'y' : 'ies'} · ${overChildren} over`
+    ? `${row.children.length} sub-categor${row.children.length === 1 ? 'y' : 'ies'} · ${overChildren} over`
     : undefined;
 
   const statusText = !hasLimit
@@ -566,6 +629,12 @@ function BudgetCategoryCard({
               sinkingFund={sinkingFunds[child.categoryId] ?? null}
             />
           ))}
+          {/* v1.21.0 item 2: rendered last, and only when this parent actually carries direct
+              spend -- a parent whose money always lands on a child renders exactly as it always
+              has, with nothing appended. */}
+          {row.directSpentCents !== 0 ? (
+            <DirectSpendRow row={row} scope={scope} userId={userId} month={month} />
+          ) : null}
         </ul>
       ) : isOpen ? (
         // A leaf's transactions are NOT pre-fetched data -- see CategoryTransactionsPanel's own

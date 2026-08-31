@@ -34,6 +34,22 @@ export interface BudgetRow {
   pct: number | null;
   overBudget: boolean;
   children: BudgetRow[];
+  /**
+   * v1.21.0 item 2 (owner's screenshot: a parent reading $628.55 over children totalling
+   * $183.55). This category's OWN spend, before foldRollup adds any child's -- the exact same
+   * figure foldRollup seeds `spentCents` with (src/lib/budgets.ts's own foldRollup, just below).
+   * That seed was always arithmetically correct; the defect was that it had no ROW anywhere --
+   * BudgetCategoryCard rendered only `children`, so a pharmacy run filed straight under "Health"
+   * counted in the parent's headline total and then vanished from the breakdown underneath it.
+   *
+   * Populated for every row, leaf or parent (a leaf's own spend and its `spentCents` are the same
+   * number, since it has no children to fold in) -- the CLIENT decides when it means anything: a
+   * leaf never renders it as a separate row, and a parent renders it, labelled "Not in a
+   * sub-category", only when it is non-zero. Deliberately NOT one of `children`: it carries no
+   * limit of its own, so it must never be counted in a card's "N sub-categories" eyebrow or its
+   * "M over" tally -- both read `children` alone, which this figure is not part of.
+   */
+  directSpentCents: number;
 }
 
 function assertMonth(month: string): void {
@@ -490,6 +506,9 @@ function buildRow(
     pct: computePct(effectiveCents, spentCents),
     overBudget: effectiveCents !== null && spentCents > effectiveCents,
     children: childRows,
+    // The foldRollup seed above, read back rather than recomputed -- see this field's own
+    // doc comment on BudgetRow for why it exists and why it is never one of `children`.
+    directSpentCents: spendByCategory.get(category.id) ?? 0,
   };
 }
 

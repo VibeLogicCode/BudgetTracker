@@ -53,6 +53,9 @@ function makeRow(overrides: Partial<BudgetRow> = {}): BudgetRow {
     pct: 25,
     overBudget: false,
     children: [],
+    // v1.21.0 item 2: see tests/app/budgets-client.test.tsx's own makeRow for why this defaults
+    // to 0 (no direct-spend row rendered unless a test explicitly overrides it non-zero).
+    directSpentCents: 0,
     ...overrides,
   };
 }

@@ -20,6 +20,7 @@ import { normalizeMerchant } from '@/lib/categorize/normalize';
 import { listRules, upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { setTransactionDisplayName, upsertRenameRule } from '@/lib/categorize/engine';
 import { nowIso } from '@/lib/clock';
+import { setTransactionSplits } from '@/lib/splits';
 
 // v1.13.0 ruling R2: listTransactions/getTransaction now require a viewer. Every existing call in
 // this file predates viewer scoping and expects the pre-v1.13.0, household-wide result set, so a
@@ -95,6 +96,71 @@ describe('listTransactions', () => {
     expect(listTransactions({ to: '2026-03-31' }, VIEWER).rows.map((r) => r.id)).toEqual([a]);
     expect(listTransactions({ search: 'loblaws' }, VIEWER).rows.map((r) => r.id)).toEqual([b]);
     expect(listTransactions({ search: 'hortons' }, VIEWER).rows.map((r) => r.id)).toEqual([a]);
+  });
+
+  /**
+   * v1.21.0 item 3 (owner's screenshot of the chip row: "filter on page transactions only
+   * filter where i directly assign parent and ignore all child"). A top-level chip's own
+   * meaning is "this category and its children" -- the same rule foldRollup (budgets.ts) and
+   * categoryBreakdown's parentId ?? categoryId (reports.ts) already use for the SAME category's
+   * total, so the list a chip shows now agrees with the number that chip's own budget card
+   * counts.
+   */
+  it('a parent category matches its own direct rows AND every child\'s -- what a chip means', () => {
+    const { db, add } = setup();
+    const food = categoryIdByName(db, 'Food');
+    const groceries = categoryIdByName(db, 'Groceries');
+    const health = categoryIdByName(db, 'Health');
+    const direct = add({ categoryId: food, description: 'FARMERS MARKET' });
+    const child = add({ categoryId: groceries, description: 'LOBLAWS' });
+    const unrelated = add({ categoryId: health, description: 'PHARMACY' });
+
+    expect(listTransactions({ categoryId: food }, VIEWER).rows.map((r) => r.id).sort()).toEqual([direct, child].sort());
+    expect(unrelated).toBeGreaterThan(0);
+  });
+
+  /**
+   * `exact: true` is the opposite, explicit mode -- what the Budgets "Not in a sub-category"
+   * row's own drill-down wants (categoryTransactions in src/lib/budgets.ts already filters this
+   * way for that surface; this is the same answer for Transactions' `?category=<id>&exact=1`).
+   */
+  it('categoryExact restricts the match to that category alone, no children', () => {
+    const { db, add } = setup();
+    const food = categoryIdByName(db, 'Food');
+    const groceries = categoryIdByName(db, 'Groceries');
+    const direct = add({ categoryId: food, description: 'FARMERS MARKET' });
+    const child = add({ categoryId: groceries, description: 'LOBLAWS' });
+
+    expect(listTransactions({ categoryId: food, categoryExact: true }, VIEWER).rows.map((r) => r.id)).toEqual([direct]);
+    expect(child).toBeGreaterThan(0);
+  });
+
+  /**
+   * Second defect found alongside the first: this filter used to read transactions.categoryId
+   * while every TOTAL in the app reads EFFECTIVE_CATEGORY (split-aware, src/lib/splits.ts) --
+   * so a $60 split to Groceries counted toward the Groceries budget but never appeared here.
+   * The transaction's own (now stale) top-level categoryId is Coffee; only its PARTS decide
+   * which category filter finds it once it has been split.
+   */
+  it('is split-aware: a split part is found by its OWN category, not the parent transaction\'s', () => {
+    const { db, alice, add } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const groceries = categoryIdByName(db, 'Groceries');
+    const restaurants = categoryIdByName(db, 'Restaurants');
+    const id = add({ categoryId: coffee, amountCents: -10000, description: 'MIXED RECEIPT' });
+    setTransactionSplits({
+      txnId: id,
+      parts: [
+        { categoryId: groceries, amountCents: -6000 },
+        { categoryId: restaurants, amountCents: -4000 },
+      ],
+      userId: alice,
+    });
+
+    expect(listTransactions({ categoryId: groceries }, VIEWER).rows.map((r) => r.id)).toEqual([id]);
+    expect(listTransactions({ categoryId: restaurants }, VIEWER).rows.map((r) => r.id)).toEqual([id]);
+    // The parent's own stale categoryId (Coffee) no longer decides anything once it is split.
+    expect(listTransactions({ categoryId: coffee }, VIEWER).rows.map((r) => r.id)).toEqual([]);
   });
 
   it('treats % and _ in the search box as literal characters, not LIKE wildcards', () => {
