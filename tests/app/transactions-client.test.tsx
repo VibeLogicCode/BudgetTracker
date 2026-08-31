@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, cleanup, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { TransactionsClient } from '@/app/(app)/transactions/transactions-client';
 import { setCategoryAction } from '@/app/(app)/transactions/actions';
 import type { TransactionPage, TransactionRow } from '@/lib/transactions';
@@ -45,9 +48,24 @@ afterEach(() => {
 // (`Actions for TIM HORTONS on 2026-08-03, -$4.12`), so an exact-string match no longer finds
 // it. The 16 existing call sites below still pass just `Actions for <description>`, so this
 // matches on that as a PREFIX instead of the whole name.
+//
+// Single-card-renderer task (2026-08-30): outside review mode this file now renders TWO trees
+// for the same rows -- a card list (sm:hidden) and a <table> (hidden below sm), because a real
+// browser only ever shows one (see transactions-client.tsx's own docblock on transactionCard).
+// jsdom evaluates no media query, so both are live nodes here, and a bare, unscoped query for a
+// row's kebab now matches twice. rowScope()/openRowMenu below fix that by scoping to the
+// <table> when one exists -- every test in this file that predates this task was written back
+// when the table was the ONLY tree, so that reproduces exactly what those assertions already
+// meant. Review mode never grows a second tree (there was only ever the card list), so falling
+// back to the whole document there is a no-op change.
+function rowScope() {
+  const table = document.querySelector('table');
+  return within((table ?? document.body) as HTMLElement);
+}
+
 function openRowMenu(name: string) {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  fireEvent.click(screen.getByRole('button', { name: new RegExp(`^${escaped}`) }));
+  fireEvent.click(rowScope().getByRole('button', { name: new RegExp(`^${escaped}`) }));
 }
 
 function pageWithRow(overrides: Partial<TransactionRow> = {}): TransactionPage {
@@ -209,7 +227,7 @@ describe('MUST-14.8 / MUST-14.9: the row control', () => {
     openRowMenu('Actions for TIM HORTONS');
     expect(screen.getByRole('menuitem', { name: 'Assign to loan…' })).toBeTruthy();
     fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
-    const select = screen.getByLabelText('Assign to') as HTMLSelectElement;
+    const select = rowScope().getByLabelText('Assign to') as HTMLSelectElement;
     expect([...select.options].map((option) => option.textContent)).toEqual(['New loan…']);
   });
 
@@ -255,7 +273,7 @@ describe('MUST-14.8 / MUST-14.9: the row control', () => {
     render(<TransactionsClient {...baseProps} loanOptions={[{ id: 7, name: 'Civic' }]} loanLinks={{}} />);
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
-    const select = screen.getByLabelText('Assign to') as HTMLSelectElement;
+    const select = rowScope().getByLabelText('Assign to') as HTMLSelectElement;
     expect([...select.options].map((option) => option.textContent)).toEqual(['Civic', 'New loan…']);
   });
 
@@ -274,8 +292,8 @@ describe('MUST-14.8 / MUST-14.9: the row control', () => {
     render(<TransactionsClient {...baseProps} loanOptions={[{ id: 7, name: 'Civic' }]} loanLinks={{}} />);
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
-    fireEvent.change(screen.getByLabelText('Assign to'), { target: { value: '7' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    fireEvent.change(rowScope().getByLabelText('Assign to'), { target: { value: '7' } });
+    fireEvent.click(rowScope().getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(assignToLoanAction).toHaveBeenCalled());
     // Bound as `(_prev, formData) => assignToLoanAction(formData)` (transactions-client.tsx),
@@ -297,10 +315,10 @@ describe('MUST-14.8 / MUST-14.9: the row control', () => {
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
     // Not shown yet: the editor opens on the default "New loan…" branch.
-    expect(screen.queryByLabelText(/Also mark as a transfer/)).toBeNull();
+    expect(rowScope().queryByLabelText(/Also mark as a transfer/)).toBeNull();
 
-    fireEvent.change(screen.getByLabelText('Assign to'), { target: { value: '7' } });
-    const checkbox = screen.getByLabelText(/Also mark as a transfer/) as HTMLInputElement;
+    fireEvent.change(rowScope().getByLabelText('Assign to'), { target: { value: '7' } });
+    const checkbox = rowScope().getByLabelText(/Also mark as a transfer/) as HTMLInputElement;
     expect(checkbox.checked).toBe(true);
   });
 
@@ -309,8 +327,8 @@ describe('MUST-14.8 / MUST-14.9: the row control', () => {
     render(<TransactionsClient {...baseProps} loanOptions={[{ id: 7, name: 'Civic' }]} loanLinks={{}} />);
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
-    fireEvent.change(screen.getByLabelText('Assign to'), { target: { value: '7' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    fireEvent.change(rowScope().getByLabelText('Assign to'), { target: { value: '7' } });
+    fireEvent.click(rowScope().getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(assignToLoanAction).toHaveBeenCalled());
     const sent = (assignToLoanAction as ReturnType<typeof vi.fn>).mock.calls[0][0] as FormData;
@@ -323,9 +341,9 @@ describe('MUST-14.8 / MUST-14.9: the row control', () => {
     render(<TransactionsClient {...baseProps} loanOptions={[{ id: 7, name: 'Civic' }]} loanLinks={{}} />);
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
-    fireEvent.change(screen.getByLabelText('Assign to'), { target: { value: '7' } });
-    fireEvent.click(screen.getByLabelText(/Also mark as a transfer/));
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    fireEvent.change(rowScope().getByLabelText('Assign to'), { target: { value: '7' } });
+    fireEvent.click(rowScope().getByLabelText(/Also mark as a transfer/));
+    fireEvent.click(rowScope().getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(assignToLoanAction).toHaveBeenCalled());
     const sent = (assignToLoanAction as ReturnType<typeof vi.fn>).mock.calls[0][0] as FormData;
@@ -410,7 +428,7 @@ describe('Split editor (v1.7.0 Task 4)', () => {
         splits={{ 1: splitRows }}
       />,
     );
-    expect(screen.getByText('Split · 2 parts')).toBeTruthy();
+    expect(rowScope().getByText('Split · 2 parts')).toBeTruthy();
     expect(container.querySelector('tbody select[name="categoryId"]')).toBeNull();
   });
 
@@ -569,7 +587,12 @@ describe('Split editor is a modal dialog, not a card at the top of the page (ite
 
   it('returns focus to the row menu button that opened it once it closes', () => {
     openSplit();
-    const trigger = screen.getByRole('button', { name: /^Actions for TIM HORTONS/ });
+    // rowScope(), not plain screen: outside review mode this render now also carries the
+    // mobile card's own kebab for the same row (transactionCard, sm:hidden), so an unscoped
+    // query would match twice. openRowMenu (which openSplit() calls) already opened the
+    // TABLE's trigger specifically -- this must name that exact same element back, not merely
+    // "a" trigger with the same name.
+    const trigger = rowScope().getByRole('button', { name: /^Actions for TIM HORTONS/ });
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(document.activeElement).toBe(trigger);
@@ -655,7 +678,7 @@ describe('Note indicator (item 2): a saved note is no longer invisible', () => {
         today="2026-03-02"
       />,
     );
-    const button = screen.getByRole('button', { name: 'Note on TIM HORTONS' });
+    const button = rowScope().getByRole('button', { name: 'Note on TIM HORTONS' });
     expect(button.getAttribute('title')).toBe('split with Bob');
   });
 
@@ -682,8 +705,8 @@ describe('Note indicator (item 2): a saved note is no longer invisible', () => {
         today="2026-03-02"
       />,
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Note on TIM HORTONS' }));
-    const textarea = screen.getByLabelText(/Note for TIM HORTONS/) as HTMLTextAreaElement;
+    fireEvent.click(rowScope().getByRole('button', { name: 'Note on TIM HORTONS' }));
+    const textarea = rowScope().getByLabelText(/Note for TIM HORTONS/) as HTMLTextAreaElement;
     expect(textarea.value).toBe('split with Bob');
   });
 
@@ -698,8 +721,8 @@ describe('Note indicator (item 2): a saved note is no longer invisible', () => {
         reviewMode
       />,
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Note on TIM HORTONS' }));
-    expect((screen.getByLabelText(/Note for TIM HORTONS/) as HTMLTextAreaElement).value).toBe('split with Bob');
+    fireEvent.click(rowScope().getByRole('button', { name: 'Note on TIM HORTONS' }));
+    expect((rowScope().getByLabelText(/Note for TIM HORTONS/) as HTMLTextAreaElement).value).toBe('split with Bob');
   });
 });
 
@@ -793,7 +816,7 @@ describe('Bulk toolbar and a split row (v1.7.0 bulk-guard fix, requirement c)', 
         splits={{ 1: splitRows }}
       />,
     );
-    const checkbox = screen.getByLabelText('Select transaction 1') as HTMLInputElement;
+    const checkbox = rowScope().getByLabelText('Select transaction 1') as HTMLInputElement;
     expect(checkbox.disabled).toBe(false);
   });
 
@@ -808,7 +831,7 @@ describe('Bulk toolbar and a split row (v1.7.0 bulk-guard fix, requirement c)', 
         splits={{ 1: splitRows }}
       />,
     );
-    fireEvent.click(screen.getByLabelText('Select transaction 1'));
+    fireEvent.click(rowScope().getByLabelText('Select transaction 1'));
     expect(screen.getByText('1 selected')).toBeTruthy();
     // Bulk attribution is still offered -- attribution stays legitimate on a split row.
     expect(screen.getByRole('button', { name: 'Attribute' })).toBeTruthy();
@@ -828,7 +851,7 @@ describe('Bulk toolbar and a split row (v1.7.0 bulk-guard fix, requirement c)', 
         splits={{ 1: splitRows }}
       />,
     );
-    fireEvent.click(screen.getByLabelText('Select transaction 1'));
+    fireEvent.click(rowScope().getByLabelText('Select transaction 1'));
     expect(screen.getByText(/split and will be skipped/i)).toBeTruthy();
   });
 
@@ -843,7 +866,7 @@ describe('Bulk toolbar and a split row (v1.7.0 bulk-guard fix, requirement c)', 
         splits={{}}
       />,
     );
-    fireEvent.click(screen.getByLabelText('Select transaction 1'));
+    fireEvent.click(rowScope().getByLabelText('Select transaction 1'));
     expect(screen.getByText('1 selected')).toBeTruthy();
     expect(screen.queryByText(/split and will be skipped/i)).toBeNull();
   });
@@ -902,6 +925,104 @@ describe('v1.13.0 ruling R7: QuickAddTransaction sits at the top of the page', (
   });
 });
 
+/**
+ * Coordinator fix (2026-08-30): renaming used to open as a plain Card at the very top of the
+ * page, wherever `renaming` happened to sit in the JSX -- the same "editor rendered somewhere
+ * other than beside its row" defect the split dialog had before item 1 fixed it. It is now the
+ * same inline-sub-row idiom as Note…/Assign to loan…/Apply to all, anchored at its own row and
+ * rendered from both the card and the table row.
+ */
+describe('Rename editor: an inline sub-row anchored at its row, not a card at the top of the page', () => {
+  it('does not render a top-of-page "Rename this merchant" card at all', () => {
+    render(
+      <TransactionsClient page={pageWithRow({ id: 5 })} accounts={[]} categories={[]} people={[]} today="2026-03-02" />,
+    );
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename…' }));
+    expect(screen.queryByText('Rename this merchant')).toBeNull();
+  });
+
+  it('opens inline, prefilled with the display name, spanning every column of the table row', () => {
+    render(
+      <TransactionsClient
+        page={pageWithRow({ id: 5, displayDescription: 'Coffee run' })}
+        accounts={[]}
+        categories={[]}
+        people={[]}
+        today="2026-03-02"
+      />,
+    );
+    // The kebab's own accessible name is built from displayDescription when the row has one
+    // (rowMenu's own `displayDescription ?? rawDescription`), so "Coffee run" replaces
+    // "TIM HORTONS" here rather than joining it.
+    openRowMenu('Actions for Coffee run');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename…' }));
+
+    // rowScope(): the rename form renders once per tree outside review mode (the same card/
+    // table duplication every other inline editor has -- see rowScope's own docblock), so an
+    // unscoped query would match twice.
+    const nameInput = rowScope().getByLabelText('Display name') as HTMLInputElement;
+    expect(nameInput.value).toBe('Coffee run');
+    const cell = nameInput.closest('td') as HTMLTableCellElement;
+    expect(cell.colSpan).toBeGreaterThan(1);
+  });
+
+  it('submits the transaction id, the typed name and the default "this transaction only" scope through renameTransactionAction', async () => {
+    const { renameTransactionAction } = await import('@/app/(app)/transactions/actions');
+    vi.mocked(renameTransactionAction).mockClear();
+    render(
+      <TransactionsClient page={pageWithRow({ id: 5 })} accounts={[]} categories={[]} people={[]} today="2026-03-02" />,
+    );
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename…' }));
+
+    fireEvent.change(rowScope().getByLabelText('Display name'), { target: { value: 'Coffee run' } });
+    fireEvent.click(rowScope().getByRole('button', { name: 'Save name' }));
+
+    await waitFor(() => expect(renameTransactionAction).toHaveBeenCalled());
+    const sent = (renameTransactionAction as ReturnType<typeof vi.fn>).mock.calls[0][1] as FormData;
+    expect(sent.get('transactionId')).toBe('5');
+    expect(sent.get('displayName')).toBe('Coffee run');
+    expect(sent.get('scope')).toBe('one');
+    expect(rowScope().queryByLabelText('Display name')).toBeNull();
+  });
+
+  it('Cancel closes the sub-row without submitting', async () => {
+    const { renameTransactionAction } = await import('@/app/(app)/transactions/actions');
+    vi.mocked(renameTransactionAction).mockClear();
+    render(
+      <TransactionsClient page={pageWithRow({ id: 5 })} accounts={[]} categories={[]} people={[]} today="2026-03-02" />,
+    );
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename…' }));
+    expect(rowScope().getByRole('button', { name: 'Save name' })).toBeTruthy();
+
+    fireEvent.click(rowScope().getByRole('button', { name: 'Cancel' }));
+    expect(rowScope().queryByRole('button', { name: 'Save name' })).toBeNull();
+    expect(renameTransactionAction).not.toHaveBeenCalled();
+  });
+
+  it('opens from the review card list too, at the same row, as a plain <div> (no colSpan there)', async () => {
+    const { renameTransactionAction } = await import('@/app/(app)/transactions/actions');
+    vi.mocked(renameTransactionAction).mockClear();
+    render(
+      <TransactionsClient
+        page={pageWithRow({ id: 5, source: 'bayes', categoryId: 1, categoryName: 'Dining', confidence: 0.5 })}
+        accounts={[]}
+        categories={[{ id: 1, name: 'Dining', parentId: null, isArchived: false, sortOrder: 0 }]}
+        people={[]}
+        today="2026-03-02"
+        reviewMode
+      />,
+    );
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename…' }));
+    fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'Coffee run' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save name' }));
+    await waitFor(() => expect(renameTransactionAction).toHaveBeenCalled());
+  });
+});
+
 describe('v1.13.0 ruling R13: the Note… row action', () => {
   it('opens an inline sub-row prefilled with the existing note, spanning every column', () => {
     const { container } = render(
@@ -916,7 +1037,7 @@ describe('v1.13.0 ruling R13: the Note… row action', () => {
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Note…' }));
 
-    const textarea = screen.getByLabelText(/Note for TIM HORTONS/) as HTMLTextAreaElement;
+    const textarea = rowScope().getByLabelText(/Note for TIM HORTONS/) as HTMLTextAreaElement;
     expect(textarea.value).toBe('paid in cash');
     const cell = textarea.closest('td') as HTMLTableCellElement;
     expect(cell.colSpan).toBeGreaterThan(1);
@@ -930,15 +1051,18 @@ describe('v1.13.0 ruling R13: the Note… row action', () => {
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Note…' }));
 
-    const textarea = screen.getByLabelText(/Note for TIM HORTONS/) as HTMLTextAreaElement;
+    const textarea = rowScope().getByLabelText(/Note for TIM HORTONS/) as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: 'split with Bob' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save note' }));
+    // rowScope(): the note editor's own Save/Cancel buttons render once per tree too (they are
+    // part of the same duplicated sub-row noteEditor() returns), so an unscoped query matches
+    // twice outside review mode.
+    fireEvent.click(rowScope().getByRole('button', { name: 'Save note' }));
 
     await waitFor(() => expect(saveNoteAction).toHaveBeenCalled());
     const sent = (saveNoteAction as ReturnType<typeof vi.fn>).mock.calls[0][1] as FormData;
     expect(sent.get('transactionId')).toBe('5');
     expect(sent.get('notes')).toBe('split with Bob');
-    expect(screen.queryByLabelText(/Note for TIM HORTONS/)).toBeNull();
+    expect(rowScope().queryByLabelText(/Note for TIM HORTONS/)).toBeNull();
   });
 
   it('Cancel closes the sub-row without submitting', () => {
@@ -947,10 +1071,10 @@ describe('v1.13.0 ruling R13: the Note… row action', () => {
     );
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Note…' }));
-    expect(screen.getByRole('button', { name: 'Save note' })).toBeTruthy();
+    expect(rowScope().getByRole('button', { name: 'Save note' })).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    expect(screen.queryByRole('button', { name: 'Save note' })).toBeNull();
+    fireEvent.click(rowScope().getByRole('button', { name: 'Cancel' }));
+    expect(rowScope().queryByRole('button', { name: 'Save note' })).toBeNull();
   });
 });
 
@@ -997,9 +1121,11 @@ describe('TransactionsClient — two identical charges are tellable apart (item 
     };
     render(<TransactionsClient page={page} accounts={[]} categories={[]} people={[]} today="2026-08-16" />);
     // Sighted users disambiguate by position, amount and date; none of that was in the name.
-    expect(screen.getByRole('button', { name: 'Actions for TIM HORTONS on 2026-08-03, -$4.12' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Actions for TIM HORTONS on 2026-08-03, -$10.99' })).toBeTruthy();
-    expect(screen.getAllByRole('button', { name: /^Actions for TIM HORTONS/ })).toHaveLength(2);
+    // rowScope(): outside review mode this page also carries the mobile card's own kebab for
+    // each row (sm:hidden), so an unscoped query would find every name twice.
+    expect(rowScope().getByRole('button', { name: 'Actions for TIM HORTONS on 2026-08-03, -$4.12' })).toBeTruthy();
+    expect(rowScope().getByRole('button', { name: 'Actions for TIM HORTONS on 2026-08-03, -$10.99' })).toBeTruthy();
+    expect(rowScope().getAllByRole('button', { name: /^Actions for TIM HORTONS/ })).toHaveLength(2);
   });
 });
 
@@ -1015,7 +1141,7 @@ describe('TransactionsClient — a self viewer gets no attribution controls (ite
         selfScoped
       />,
     );
-    fireEvent.click(screen.getByLabelText('Select transaction 1'));
+    fireEvent.click(rowScope().getByLabelText('Select transaction 1'));
     expect(screen.queryByRole('button', { name: 'Attribute' })).toBeNull();
     expect(screen.queryByLabelText('Person for transaction 1')).toBeNull();
     // Not rendered rather than shown-but-ineffective -- this file's own rule at :382-384.
@@ -1033,7 +1159,9 @@ describe('TransactionsClient — a self viewer gets no attribution controls (ite
         selfScoped
       />,
     );
-    expect(screen.getByText('Alice')).toBeTruthy();
+    // rowScope(): both the table row and the mobile card show this same plain-text fallback
+    // for a self-scoped viewer, so an unscoped query matches twice.
+    expect(rowScope().getByText('Alice')).toBeTruthy();
   });
 
   it('keeps both controls for a household viewer', () => {
@@ -1046,7 +1174,7 @@ describe('TransactionsClient — a self viewer gets no attribution controls (ite
         today="2026-03-02"
       />,
     );
-    expect(screen.getByLabelText('Person for transaction 1')).toBeTruthy();
+    expect(rowScope().getByLabelText('Person for transaction 1')).toBeTruthy();
   });
 });
 
@@ -1089,8 +1217,8 @@ describe('Assign to new loan — Addendum A', () => {
     render(<TransactionsClient {...baseProps} loanOptions={[]} loanLinks={{}} />);
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
-    const name = screen.getByLabelText('Loan name') as HTMLInputElement;
-    const direction = screen.getByLabelText('Direction') as HTMLSelectElement;
+    const name = rowScope().getByLabelText('Loan name') as HTMLInputElement;
+    const direction = rowScope().getByLabelText('Direction') as HTMLSelectElement;
     expect(name.name).toBe('loanName');
     expect(direction.name).toBe('loanDirection');
     expect(direction.value).toBe('lent');
@@ -1111,7 +1239,7 @@ describe('Assign to new loan — Addendum A', () => {
     const { container } = render(<TransactionsClient {...baseProps} loanOptions={[]} loanLinks={{}} />);
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
-    fireEvent.change(screen.getByLabelText('Loan name'), { target: { value: 'Loan to Sam' } });
+    fireEvent.change(rowScope().getByLabelText('Loan name'), { target: { value: 'Loan to Sam' } });
     fireEvent.submit(container.querySelector('form[data-testid="new-loan-form"]') as HTMLFormElement);
     await waitFor(() => expect(spy).toHaveBeenCalled());
     const submitted = spy.mock.calls.at(-1)![1] as FormData;
@@ -1126,7 +1254,7 @@ describe('Assign to new loan — Addendum A', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
     openRowMenu('Actions for SECOND ROW');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
-    expect(screen.getAllByLabelText('Loan name')).toHaveLength(1);
+    expect(rowScope().getAllByLabelText('Loan name')).toHaveLength(1);
   });
 
   // Review round: the name input carries HTML validation and focus attributes, not just a
@@ -1135,7 +1263,7 @@ describe('Assign to new loan — Addendum A', () => {
     render(<TransactionsClient {...baseProps} loanOptions={[]} loanLinks={{}} />);
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
-    const name = screen.getByLabelText('Loan name') as HTMLInputElement;
+    const name = rowScope().getByLabelText('Loan name') as HTMLInputElement;
     expect(name.required).toBe(true);
     expect(name.maxLength).toBe(80);
     expect(document.activeElement).toBe(name);
@@ -1162,7 +1290,7 @@ describe('Assign to new loan — a refusal keeps the editor open (review round)'
     const { container } = render(<TransactionsClient {...baseProps} loanOptions={[]} loanLinks={{}} />);
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
-    fireEvent.change(screen.getByLabelText('Loan name'), { target: { value: 'Loan to Sam' } });
+    fireEvent.change(rowScope().getByLabelText('Loan name'), { target: { value: 'Loan to Sam' } });
     const form = container.querySelector('form[data-testid="new-loan-form"]') as HTMLFormElement;
     fireEvent.submit(form);
     await waitFor(() => expect(spy).toHaveBeenCalled());
@@ -1172,7 +1300,7 @@ describe('Assign to new loan — a refusal keeps the editor open (review round)'
       expect(within(form).getByText('A loan you lent out starts with money going out.')).toBeTruthy(),
     );
     expect(within(form).getByRole('alert')).toBeTruthy();
-    expect((screen.getByLabelText('Loan name') as HTMLInputElement).value).toBe('Loan to Sam');
+    expect((rowScope().getByLabelText('Loan name') as HTMLInputElement).value).toBe('Loan to Sam');
   });
 
   it('a success closes the editor', async () => {
@@ -1182,10 +1310,10 @@ describe('Assign to new loan — a refusal keeps the editor open (review round)'
     const { container } = render(<TransactionsClient {...baseProps} loanOptions={[]} loanLinks={{}} />);
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
-    fireEvent.change(screen.getByLabelText('Loan name'), { target: { value: 'Loan to Sam' } });
+    fireEvent.change(rowScope().getByLabelText('Loan name'), { target: { value: 'Loan to Sam' } });
     fireEvent.submit(container.querySelector('form[data-testid="new-loan-form"]') as HTMLFormElement);
     await waitFor(() => expect(spy).toHaveBeenCalled());
-    await waitFor(() => expect(screen.queryByLabelText('Loan name')).toBeNull());
+    await waitFor(() => expect(rowScope().queryByLabelText('Loan name')).toBeNull());
   });
 });
 
@@ -1220,13 +1348,13 @@ describe('Assign to new loan — create result priority (review round)', () => {
     );
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
-    fireEvent.change(screen.getByLabelText('Assign to'), { target: { value: '7' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    fireEvent.change(rowScope().getByLabelText('Assign to'), { target: { value: '7' } });
+    fireEvent.click(rowScope().getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(screen.getByText('That transaction is already linked to this loan.')).toBeTruthy());
 
     openRowMenu('Actions for SECOND ROW');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
-    fireEvent.change(screen.getByLabelText('Loan name'), { target: { value: 'Loan to Sam' } });
+    fireEvent.change(rowScope().getByLabelText('Loan name'), { target: { value: 'Loan to Sam' } });
     fireEvent.submit(container.querySelector('form[data-testid="new-loan-form"]') as HTMLFormElement);
 
     await waitFor(() => expect(screen.getByText('Created Loan to Sam. Assigned. $500.00 came off the balance.')).toBeTruthy());
@@ -1277,8 +1405,8 @@ describe('Review mode (ruling R5): the card list replaces the table', () => {
     const menus = screen.getAllByRole('button', { name: /Actions for/ });
     fireEvent.click(menus[0]);
     fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
-    fireEvent.change(screen.getByLabelText('Assign to'), { target: { value: '7' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    fireEvent.change(rowScope().getByLabelText('Assign to'), { target: { value: '7' } });
+    fireEvent.click(rowScope().getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(assignToLoanAction).toHaveBeenCalled());
   });
 
@@ -1290,12 +1418,29 @@ describe('Review mode (ruling R5): the card list replaces the table', () => {
     expect(container.querySelector('ul > li.card')).toBeTruthy();
   });
 
-  it('renders the ordinary table when reviewMode is not set, even with the same rows', () => {
+  /**
+   * Single-card-renderer task (2026-08-30): before this task, "reviewMode not set" meant the
+   * table and ONLY the table -- no card anywhere in the DOM. That is no longer true: the shared
+   * row card (transactionCard) is now ALSO rendered outside review mode, for the below-`sm`
+   * Transactions view, so both a <table> and a card list exist here. What still distinguishes
+   * plain Transactions from review mode is that each is shown at a different width instead of
+   * unconditionally -- CSS decides which one a real browser displays, not two DOM trees that
+   * always both render fully visible (see transactionCard's own docblock on the rule this
+   * proves).
+   */
+  it('renders BOTH the desktop table and the shared row card when reviewMode is not set, each hidden at the other one\'s width', () => {
     const { container } = render(
       <TransactionsClient page={reviewPage()} accounts={[]} categories={categories} people={[]} today="2026-08-16" />,
     );
-    expect(container.querySelector('table')).toBeTruthy();
-    expect(container.querySelector('ul > li.card')).toBeNull();
+    const table = container.querySelector('table');
+    expect(table).toBeTruthy();
+    // The table's own wrapper is hidden below `sm` -- the card list is what a phone sees there
+    // instead, fed from the same page.rows.
+    expect(table!.closest('.hidden.sm\\:block')).toBeTruthy();
+    const card = container.querySelector('ul[data-transaction-cards] > li.card');
+    expect(card).toBeTruthy();
+    // And the card list is hidden AT `sm` and up -- the table is the wide browsing view there.
+    expect(card!.closest('ul')?.className).toContain('sm:hidden');
   });
 
   it('shows the guessed-category badge with its margin', () => {
@@ -1344,7 +1489,11 @@ describe('Review mode (ruling R5): the card list replaces the table', () => {
     render(
       <TransactionsClient page={reviewPage()} accounts={[]} categories={categories} people={[]} today="2026-08-16" />,
     );
-    const select = screen.getByLabelText('Category for transaction 1') as HTMLSelectElement;
+    // rowScope(): outside review mode, the mobile card's own category select carries the SAME
+    // aria-label as the table row's (both read "Category for transaction 1" -- see
+    // transactionCard's own comment on why its label matches the table's outside review mode),
+    // so an unscoped query would find two.
+    const select = rowScope().getByLabelText('Category for transaction 1') as HTMLSelectElement;
     fireEvent.change(select, { target: { value: '1' } });
     await waitFor(() => expect(setCategoryAction).toHaveBeenCalled());
     const sent = (setCategoryAction as ReturnType<typeof vi.fn>).mock.calls.at(-1)![1] as FormData;
@@ -1635,7 +1784,7 @@ describe('Fix round (item CB): the row editors work from the review card list', 
     );
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Note…' }));
-    expect(screen.getByLabelText(/Note for TIM HORTONS/).tagName).toBe('TEXTAREA');
+    expect(rowScope().getByLabelText(/Note for TIM HORTONS/).tagName).toBe('TEXTAREA');
   });
 
   // Backlog BY folded in: the same editor now opens with a select at the top, listing every
@@ -1655,7 +1804,7 @@ describe('Fix round (item CB): the row editors work from the review card list', 
     );
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
-    const select = screen.getByLabelText('Assign to') as HTMLSelectElement;
+    const select = rowScope().getByLabelText('Assign to') as HTMLSelectElement;
     expect([...select.options].map((option) => option.textContent)).toEqual(['Civic', 'New loan…']);
   });
 });
@@ -1678,7 +1827,7 @@ describe('Backlog CA: a loan link shows a badge naming the loan', () => {
         loanLinks={linkedLoanLinks}
       />,
     );
-    expect(screen.getByText('Civic')).toBeTruthy();
+    expect(rowScope().getByText('Civic')).toBeTruthy();
   });
 });
 
@@ -1769,7 +1918,7 @@ describe('v1.15.0 ruling S2/S3: the table row carries data-label and cell-stack 
     );
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Note…' }));
-    const textarea = screen.getByLabelText(/Note for TIM HORTONS/);
+    const textarea = rowScope().getByLabelText(/Note for TIM HORTONS/);
     const cell = textarea.closest('td') as HTMLTableCellElement;
     expect(cell.getAttribute('data-label')).toBe('');
     expect(cell.colSpan).toBeGreaterThan(1);
@@ -1884,6 +2033,40 @@ describe('v1.15.0 ruling S7: the filter controls disclosure', () => {
     );
     const toggle = screen.getByRole('button', { name: 'Filters (2)' });
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
+  });
+});
+
+/**
+ * Owner report (item 3): the visible "Search" label pushed the field down a line, which left the
+ * Filters icon beside it floating above centre with a dead band around it -- the label added
+ * nothing the new placeholder does not already say, so it is gone, and the field keeps its
+ * accessible name through `aria-label` instead of a visible <span>.
+ */
+describe('Owner report (item 3): the search field has no visible label but keeps an accessible name', () => {
+  it('has an accessible name a screen reader can still compute, with no visible "Search" text', () => {
+    render(
+      <TransactionsClient page={pageWithRow()} accounts={[]} categories={[]} people={[]} today="2026-03-02" />,
+    );
+    const input = screen.getByRole('textbox', { name: 'Search by merchant name or description' }) as HTMLInputElement;
+    expect(input.name).toBe('q');
+    expect(input.getAttribute('placeholder')).toBe('Search by merchant name or description');
+    // The old visible label text is gone outright, not merely restyled -- ruling: a placeholder
+    // this specific is not a second copy of it.
+    expect(screen.queryByText('Search', { selector: 'span' })).toBeNull();
+  });
+
+  it('sits on the same row as the Filters button, both clearing the 44px touch floor', () => {
+    render(
+      <TransactionsClient page={pageWithRow()} accounts={[]} categories={[]} people={[]} today="2026-03-02" />,
+    );
+    const input = screen.getByRole('textbox', { name: 'Search by merchant name or description' });
+    const filterButton = screen.getByRole('button', { name: 'Filters' });
+    // Same immediate row container -- the fix for "the icon floats above centre" is that both
+    // controls are direct children of the one flex row, not one of them nested inside an extra
+    // label wrapper a line taller than the other.
+    expect(input.parentElement).toBe(filterButton.parentElement);
+    expect(input.className).toContain('min-h-11');
+    expect(filterButton.className).toContain('h-11');
   });
 });
 
@@ -2007,8 +2190,11 @@ describe('Date grouping (item 3): rows group under a day header', () => {
     const { container } = render(
       <TransactionsClient page={twoDaysPage()} accounts={[]} categories={[]} people={[]} today="2026-08-29" />,
     );
-    expect(screen.getByText('SAT, AUG 29')).toBeTruthy();
-    expect(screen.getByText('FRI, AUG 28')).toBeTruthy();
+    // rowScope(): day headers now print once in the table AND once in the mobile card list
+    // (both iterate the same page.rows outside review mode -- see transactionCard's own
+    // docblock), so an unscoped query finds each date's header twice.
+    expect(rowScope().getByText('SAT, AUG 29')).toBeTruthy();
+    expect(rowScope().getByText('FRI, AUG 28')).toBeTruthy();
     // A day header is the only `colspan` cell here (no note/loan/apply-all sub-row is open), so
     // this counts headers, not data rows -- 2 headers for 3 rows across 2 distinct dates.
     const headers = container.querySelectorAll('tbody td[data-label=""][colspan]');
@@ -2019,7 +2205,10 @@ describe('Date grouping (item 3): rows group under a day header', () => {
     const { container } = render(
       <TransactionsClient page={twoDaysPage()} accounts={[]} categories={[]} people={[]} today="2026-08-29" />,
     );
-    const cell = screen.getByText('SAT, AUG 29').closest('td') as HTMLTableCellElement;
+    // rowScope(): the card list's own day header is a <li>, not a <td> -- .closest('td') on it
+    // would just return null -- so this must land on the TABLE's header specifically, not
+    // whichever of the two an unscoped query happens to find first.
+    const cell = rowScope().getByText('SAT, AUG 29').closest('td') as HTMLTableCellElement;
     expect(cell.getAttribute('data-label')).toBe('');
     expect(cell.colSpan).toBeGreaterThan(1);
   });
@@ -2164,4 +2353,92 @@ describe('Review mode: confirm-progress bar and Accept all suggestions (item 5)'
     expect(screen.queryByText(/confirmed$/)).toBeNull();
     expect(screen.queryByRole('button', { name: /Accept all suggestions/ })).toBeNull();
   });
+});
+
+/**
+ * Owner report (item 4): the placeholder task. `.field-control::placeholder` used to be a bare
+ * `color: var(--subtle)` -- a readable secondary-TEXT colour, so a hinted field read almost as
+ * strongly as one that already had a real value typed into it. This proves the fix at the TOKEN
+ * level, not just the rule: `--placeholder` exists in BOTH themes (a colour tuned for one theme
+ * is not tuned for the other), each one's contrast against that theme's own `--field-bg` clears
+ * a legible floor, and each is clearly lower than that same theme's own `--subtle` -- "recede
+ * without vanishing". Computed straight from globals.css's own hex values (the same WCAG
+ * relative-luminance formula this design system already grades every other colour pair by, per
+ * that file's own docblock on --positive-solid/--warning-solid/--negative-solid), so a future
+ * edit to any of these tokens is checked against the rule itself, not a hardcoded ratio that
+ * would drift out of sync with it.
+ */
+describe('Owner report (item 4): placeholder text recedes but stays legible, in both themes', () => {
+  const css = fs.readFileSync(
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../src/app/globals.css'),
+    'utf8',
+  );
+
+  function tokenIn(block: string, name: string): string {
+    const match = new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})`).exec(block);
+    if (!match) throw new Error(`--${name} not found in the given block of globals.css`);
+    return match[1];
+  }
+
+  // Both :root and .dark are flat custom-property lists in this file (no nested rule inside
+  // either), so a non-greedy match up to the first `\n}` after the opening brace is exactly that
+  // block and nothing past it.
+  function themeBlock(selector: string): string {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const match = new RegExp(`${escaped}\\s*\\{([\\s\\S]*?)\\n\\}`).exec(css);
+    if (!match) throw new Error(`no ${selector} block found in globals.css`);
+    return match[1];
+  }
+
+  function luminance(hex: string): number {
+    const int = parseInt(hex.slice(1), 16);
+    const channels = [(int >> 16) & 255, (int >> 8) & 255, int & 255].map((c) => {
+      const v = c / 255;
+      return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+  }
+
+  function contrastRatio(a: string, b: string): number {
+    const l1 = luminance(a) + 0.05;
+    const l2 = luminance(b) + 0.05;
+    return Math.max(l1, l2) / Math.min(l1, l2);
+  }
+
+  it('the placeholder rule reads --placeholder, never --subtle', () => {
+    const rule = /\.field-control::placeholder\s*\{([^}]*)\}/.exec(css)?.[1];
+    expect(rule, 'no .field-control::placeholder rule found in globals.css').toBeTruthy();
+    expect(rule).toMatch(/color:\s*var\(--placeholder\)/);
+    expect(rule).not.toMatch(/color:\s*var\(--subtle\)/);
+  });
+
+  it('never renders italic, and never lets a browser dim it a second time on top of that', () => {
+    const rule = /\.field-control::placeholder\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    // No italics, ever -- a hinted field must look like an empty field, not a stylised one.
+    expect(rule).toMatch(/font-style:\s*normal/);
+    // Firefox's UA stylesheet applies opacity: 0.54 to ::placeholder by default -- left alone,
+    // that would dim --placeholder a SECOND time on top of the contrast this task tuned it to,
+    // landing Firefox users below every other browser's rendering of the same value.
+    expect(rule).toMatch(/opacity:\s*1\b/);
+  });
+
+  for (const selector of [':root', '.dark']) {
+    const theme = selector === ':root' ? 'light' : 'dark';
+    it(`${theme} theme: --placeholder clears a legible floor but recedes below --subtle`, () => {
+      const block = themeBlock(selector);
+      const fieldBg = tokenIn(block, 'field-bg');
+      const placeholder = tokenIn(block, 'placeholder');
+      const subtle = tokenIn(block, 'subtle');
+
+      const placeholderRatio = contrastRatio(placeholder, fieldBg);
+      const subtleRatio = contrastRatio(subtle, fieldBg);
+
+      // Legible: at or above the 3:1 floor WCAG sets for large text/UI components -- fainter
+      // than that is not "receding", it is "gone", which is its own defect.
+      expect(placeholderRatio).toBeGreaterThanOrEqual(3);
+      // Receded: clearly below the real secondary-text colour it replaced, so a value someone
+      // actually typed still reads as the stronger thing on the field.
+      expect(placeholderRatio).toBeLessThan(subtleRatio);
+    });
+  }
 });

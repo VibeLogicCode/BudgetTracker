@@ -103,6 +103,16 @@ function ReviewWidth({ active, children }: { active: boolean; children: React.Re
 const REVIEW_PICKER_CLASS = 'field-control w-auto max-w-[12rem] px-2 py-1 text-xs min-h-11 sm:min-h-0';
 
 /**
+ * Single-card-renderer task, item 2 (mobile density): the row card's own category/person
+ * selects, which now sit side by side in a two-column grid (see transactionCard's own comment)
+ * instead of each wrapping onto its own line. `w-full` (not REVIEW_PICKER_CLASS's own
+ * `max-w-[12rem]`) so each select fills its half of that grid rather than leaving dead space
+ * beside a narrower control -- the grid cell itself is what bounds the width now, the same way a
+ * table's <col> bounds one, so no separate max-width is needed here.
+ */
+const CARD_FIELD_CLASS = 'field-control w-full px-2 py-1 text-xs min-h-11 sm:min-h-0';
+
+/**
  * The auto-save controls take `(formData) => Promise<{ error?: string }>`. Both actions are
  * declared `(prevState, formData)` for useActionState, so the first argument is bound here --
  * once, at module level, rather than in a closure whose identity changes on every render.
@@ -614,12 +624,23 @@ export function TransactionsClient({
   function noteIndicator(row: TransactionRow) {
     if (!row.notes) return null;
     return (
+      // Owner screenshot fix (2026-08-30): this used to sit with no gap at all right after the
+      // merchant text, in `text-muted` -- the same colour as the name itself -- so it read as a
+      // stray glyph stuck onto the end of the word rather than a control. Three changes, none of
+      // which touch what this does (still setNoting -- one editing path, per noteIndicator's own
+      // top-of-file rule): `ml-1.5` gives it real separation from the name; the `--info`/
+      // `--info-soft` pair (already proven for contrast in both themes -- it backs a badge tone
+      // elsewhere in this app) recolours it so it reads as an annotation, not part of the name;
+      // and `inline-flex items-center` plus an explicit icon size keeps it vertically centred on
+      // the merchant's line instead of inheriting a line box that could ride high or low. The tap
+      // target stays 44px on a touch-sized viewport (`h-11 w-11`, the same floor confirmButton and
+      // RowMenu's own trigger already use), shrinking to a mouse-sized 20px at `sm` and up.
       <button
         type="button"
         onClick={() => setNoting({ id: row.id, current: row.notes ?? '' })}
         title={row.notes}
         aria-label={`Note on ${row.normalizedMerchant}`}
-        className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink"
+        className="ml-1.5 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-info-soft text-info-soft-fg hover:opacity-80 sm:h-5 sm:w-5"
       >
         <NoteIcon className="h-3.5 w-3.5" aria-hidden="true" />
       </button>
@@ -751,6 +772,55 @@ export function TransactionsClient({
           </RowMenuButton>
         )}
       </RowMenu>
+    );
+  }
+
+  /**
+   * Coordinator fix (2026-08-30, single-card-renderer task): renaming used to open as a plain
+   * `<Card>` at the very top of the page (see the git history for the block this replaced),
+   * wherever `renaming` happened to sit in the JSX -- so pressing Rename… in the row menu looked
+   * like it did nothing until a person scrolled up to find it, and once there they had lost track
+   * of which row it was for. That is the exact defect the split editor used to have (item 1's own
+   * docblock on the modal below) and the one noteEditor/newLoanEditor/applyAllEditor were already
+   * fixed against -- this brings renaming into the SAME idiom as those three: an inline editor
+   * anchored at its own row, rendered from both the card and the table row via this one function,
+   * closing on submit (`onSubmit={() => setRenaming(null)}`) before the action even settles, the
+   * same way noteEditor's own form does. The split editor stays the deliberate exception and
+   * keeps its modal (a multi-row form with its own arithmetic and a Save gate earns the focus a
+   * modal takes; a single display-name field does not). Nothing about what this SUBMITS changed --
+   * same hidden field, same `scope` radios, same renameAction, same validation.
+   */
+  function renameEditor(row: TransactionRow) {
+    if (renaming?.id !== row.id) return null;
+    return (
+      <form
+        action={renameAction}
+        onSubmit={() => setRenaming(null)}
+        className="flex flex-col gap-2 py-2"
+        data-testid="rename-form"
+      >
+        <input type="hidden" name="transactionId" value={renaming.id} />
+        <Field label="Display name" hint="Leave it empty to go back to the bank's wording.">
+          <input name="displayName" defaultValue={renaming.current} autoFocus className={inputClass} />
+        </Field>
+        <fieldset className="flex flex-col gap-1.5">
+          <legend className={labelClass}>Apply to</legend>
+          <label className="flex items-center gap-2 text-sm text-muted">
+            <input type="radio" name="scope" value="one" defaultChecked className="accent-accent" /> This transaction only
+          </label>
+          <label className="flex items-center gap-2 text-sm text-muted">
+            <input type="radio" name="scope" value="all" className="accent-accent" /> All matching{' '}
+            <code className="rounded bg-surface-2 px-1 font-mono text-xs text-ink">{renaming.merchant}</code> + future imports
+            (creates a rename rule)
+          </label>
+        </fieldset>
+        <div className="flex gap-2">
+          <SubmitButton className="w-fit">Save name</SubmitButton>
+          <button type="button" className="btn btn--ghost btn--sm" onClick={() => setRenaming(null)}>
+            Cancel
+          </button>
+        </div>
+      </form>
     );
   }
 
@@ -920,6 +990,193 @@ export function TransactionsClient({
     );
   }
 
+  /**
+   * Refactor lane (2026-08-30): THE single row card. Before this task, this component's contents
+   * existed twice -- once written for the review queue's own `<li>`, and completely separately as
+   * the table's `<tr>`/`<td>` markup below -- and every control added to one silently never
+   * reached the other: the note and loan editors worked only in the table branch until the "fix
+   * round (item CB)" comments above patched that, the person picker existed only on the table row
+   * until an hour before this task, and ListRow (src/components/ui/ListRow.tsx) fits one shape and
+   * not the other. Two renderers for one dataset was the actual defect each of those was a
+   * symptom of, not the layouts themselves.
+   *
+   * THE RULE FOR WHOEVER ADDS THE NEXT FEATURE TO A ROW: there is exactly one card renderer now,
+   * used by the review queue at every width (ruling R5) AND by Transactions below `sm` (rendered
+   * inside the `sm:hidden` <ul> near the end of this file's `return`). If you are about to write a
+   * second one -- a bespoke review-only card, a bespoke mobile-only card -- stop: extend THIS
+   * function instead, or the drift this docblock describes starts over. The desktop table
+   * (Transactions at `sm` and up, `hidden` below it) is the one deliberate exception, kept because
+   * a ledger scanned down a column is what a table is for -- but it is fed from the same
+   * `page.rows` and must carry exactly the same control set as this card: nothing here that is
+   * missing there, or vice versa.
+   *
+   * Review mode's own addition is scoped to exactly one control -- the per-row confirm button
+   * (confirmButton, called only when `reviewMode`) -- everything else this function renders
+   * (the checkbox/bulk-toolbar hookup, the money-direction glyph, every badge, both pickers, the
+   * row menu, and all four inline sub-editors) is identical markup regardless of mode. The only
+   * OTHER place `reviewMode` is read below is the category field's placeholder/archived-option
+   * treatment, which already branched on it on the table row before this task (ruling R3):
+   * review's placeholder stays disabled on purpose (nothing is pre-selected -- a guess waiting for
+   * a decision must never look like "Uncategorized" already chosen), while plain Transactions
+   * keeps "Uncategorized" as a legitimate resting state, archived categories and all.
+   */
+  function transactionCard(row: TransactionRow) {
+    const renameForm = renameEditor(row);
+    const noteForm = noteEditor(row);
+    const newLoanForm = newLoanEditor(row);
+    const applyAllForm = applyAllEditor(row);
+    // Row rhythm (item 4): only meaningful alongside the guessed-category badge just below.
+    const GuessCategoryIcon = row.categoryName ? categoryIcon(row.categoryName) : null;
+    const rowSplits = splits[row.id] ?? [];
+    const categoryFieldOptions = reviewMode
+      ? [{ value: '', label: 'Choose for this one…', disabled: true }, ...categorySelectOptions]
+      : [
+          { value: '', label: 'Uncategorized' },
+          ...categorySelectOptions,
+          ...categories
+            .filter((c) => c.isArchived)
+            .map((c) => ({ value: String(c.id), label: `${label(c.id)} (archived)`, disabled: true })),
+        ];
+    return (
+      <li className="card flex flex-col gap-2 p-3 sm:gap-3 sm:p-4">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+          {/* Checkbox (bulk toolbar): card-only until this task -- review's own queue had no way
+              to bulk-select at all. The bulk toolbar just below this component's return is already
+              mode-agnostic (nothing in it checks reviewMode), so giving every card a checkbox is
+              the one line that was missing to make it usable from review too. */}
+          <label className="flex h-11 w-11 shrink-0 items-center justify-center sm:h-4 sm:w-4">
+            <input
+              type="checkbox"
+              checked={selected.includes(row.id)}
+              onChange={() => toggle(row.id)}
+              aria-label={`Select transaction ${row.id}`}
+              className="accent-accent"
+            />
+          </label>
+          {/* Row rhythm (item 4): the circled money-direction glyph. Decorative rhythm, not a
+              control, so -- unlike everything else in this function -- it stays card-only exactly
+              as it was before this task; the desktop table already says the same thing through
+              Money's own sign colouring, so the "same control set" rule does not reach it. */}
+          <span
+            aria-hidden="true"
+            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${
+              row.amountCents > 0 ? 'bg-positive-soft text-positive-soft-fg' : 'bg-surface-2 text-muted'
+            }`}
+          >
+            {row.amountCents > 0 ? <MoneyInIcon className="h-4 w-4" /> : <MoneyOutIcon className="h-4 w-4" />}
+          </span>
+          {/* Ruling S5(b): `min-w-0 flex-1` lets a long merchant name wrap instead of pushing the
+              amount beside it onto its own line. */}
+          <span className="min-w-0 flex-1 text-sm">
+            <strong
+              className="font-semibold text-ink"
+              title={row.displayDescription ? `Bank text: ${row.rawDescription}` : undefined}
+            >
+              {row.displayDescription ?? row.normalizedMerchant}
+            </strong>
+            {noteIndicator(row)}
+            {row.normalizedMerchant !==
+            row.rawDescription.trim().replace(/\s+/g, ' ').normalize('NFC').toUpperCase() ? (
+              <>
+                {' '}
+                <span className="text-muted">— {row.rawDescription}</span>
+              </>
+            ) : null}
+            {row.displaySource === 'manual' ? <span className="badge badge--blue ml-1.5">renamed</span> : null}
+            {row.displaySource === 'rename' ? <span className="badge badge--blue ml-1.5">rule</span> : null}
+            {/* Same control set as the table row (below): a transfer badge, absent from this card
+               before this task even though the table always carried one. */}
+            {row.isTransfer ? <span className="badge badge--slate ml-1.5">transfer</span> : null}
+            {(loanLinks[row.id] ?? []).map((link) => (
+              <span key={`loan-badge-${link.id}`} className="badge badge--blue ml-1.5">{link.itemName}</span>
+            ))}
+          </span>
+          <Money cents={row.amountCents} className="text-base font-semibold" />
+        </div>
+        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-subtle">
+          <span className="tabnum">{row.date}</span>
+          <span aria-hidden="true">·</span>
+          <span>{row.accountName}</span>
+          {/* Ruling S5(c): no "uncategorized" fallback badge -- every card in a queue defined as
+              "not categorized yet" carried it, which made it noise rather than information. */}
+          {row.source === 'bayes' && row.categoryName ? (
+            <>
+              <span aria-hidden="true">·</span>
+              <span className="badge badge--amber">
+                {GuessCategoryIcon ? <GuessCategoryIcon aria-hidden="true" className="mr-1 inline h-3 w-3" /> : null}
+                guessed {row.categoryName} (margin {row.confidence?.toFixed(2)})
+              </span>
+            </>
+          ) : null}
+        </div>
+        {/*
+          Mobile density (item 2, owner report: "too much wasted space"): category and person now
+          share one row -- a two-column grid, not the flex-wrap that let either control claim a
+          full line of its own before this task -- and the card's own padding came down (p-4 ->
+          p-3, the outer gap-3 -> gap-2) to match. Every control here still clears the 44px touch
+          floor through CARD_FIELD_CLASS/confirmButton/RowMenu's own trigger, so density did not
+          cost tap accuracy.
+        */}
+        <div className="grid grid-cols-2 gap-2 border-t border-line pt-2 sm:pt-3">
+          <div className="flex flex-col gap-1">
+            <span className="text-[0.6875rem] font-medium text-muted">This transaction only</span>
+            {/* v1.7.0 Task 4: a split transaction has no ONE category -- same rule as the table
+                row, now honoured here too (never checked from this card before this task). */}
+            {rowSplits.length > 0 ? (
+              <span className="badge badge--blue w-fit">{`Split · ${rowSplits.length} parts`}</span>
+            ) : (
+              <AutoSaveSelect
+                name="categoryId"
+                defaultValue={row.categoryId === null ? '' : String(row.categoryId)}
+                options={categoryFieldOptions}
+                fields={reviewMode ? { transactionId: String(row.id), teach: '1' } : { transactionId: String(row.id) }}
+                action={saveCategory}
+                ariaLabel={
+                  reviewMode
+                    ? `Category for ${row.normalizedMerchant} — this transaction only`
+                    : `Category for transaction ${row.id}`
+                }
+                className={CARD_FIELD_CLASS}
+              />
+            )}
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="text-[0.6875rem] font-medium text-muted">Person</span>
+            {selfScoped ? (
+              <span className="text-xs text-muted">{row.attributedUserName ?? 'Household'}</span>
+            ) : (
+              <AutoSaveSelect
+                name="attributedUserId"
+                defaultValue={row.attributedUserId === null ? '' : String(row.attributedUserId)}
+                options={[
+                  { value: '', label: 'Household' },
+                  ...people.map((person) => ({ value: String(person.id), label: person.name })),
+                ]}
+                fields={{ ids: String(row.id) }}
+                action={saveAttribution}
+                ariaLabel={`Person for transaction ${row.id}`}
+                className={CARD_FIELD_CLASS}
+              />
+            )}
+          </div>
+        </div>
+        <div className="flex items-center justify-end gap-1">
+          {/* The one thing review mode adds beyond this card's shared control set. */}
+          {reviewMode ? confirmButton(row) : null}
+          {rowMenu(row)}
+        </div>
+        {/* The four inline sub-editors, each anchored at this row -- rename, note, assign-to-loan,
+            apply-to-all all share one idiom now (coordinator fix, 2026-08-30): open in place,
+            close on submit, never render anywhere else on the page. The split editor is the
+            deliberate exception and stays the modal dialog below. */}
+        {renameForm ? <div>{renameForm}</div> : null}
+        {noteForm ? <div>{noteForm}</div> : null}
+        {newLoanForm ? <div>{newLoanForm}</div> : null}
+        {applyAllForm}
+      </li>
+    );
+  }
+
   return (
     // data-page-width: this table needs more than the shell's 6xl reading cap (see globals.css).
     // v1.16.0 Lane C item 3: NOT emitted at all in review mode -- the review filter is one
@@ -997,40 +1254,6 @@ export function TransactionsClient({
 
       <FormError message={error} />
       {notice ? <Notice tone="success">{notice}</Notice> : null}
-
-      {renaming ? (
-        <Card as="div">
-          <CardHeader
-            title="Rename this merchant"
-            description="The bank's text is kept exactly as-is behind the scenes — renaming changes only what you see, and never affects duplicate detection or how the categorizer learns."
-          />
-          <CardBody>
-            <form action={renameAction} onSubmit={() => setRenaming(null)} className="flex flex-col gap-4">
-              <input type="hidden" name="transactionId" value={renaming.id} />
-              <Field label="Display name" hint="Leave it empty to go back to the bank's wording." className="max-w-md">
-                <input name="displayName" defaultValue={renaming.current} autoFocus className={inputClass} />
-              </Field>
-              <fieldset className="flex flex-col gap-2">
-                <legend className={labelClass}>Apply to</legend>
-                <label className="flex items-center gap-2 text-sm text-muted">
-                  <input type="radio" name="scope" value="one" defaultChecked className="accent-accent" /> This transaction only
-                </label>
-                <label className="flex items-center gap-2 text-sm text-muted">
-                  <input type="radio" name="scope" value="all" className="accent-accent" /> All matching{' '}
-                  <code className="rounded bg-surface-2 px-1 font-mono text-xs text-ink">{renaming.merchant}</code> + future imports
-                  (creates a rename rule)
-                </label>
-              </fieldset>
-              <div className="flex gap-2">
-                <SubmitButton>Save name</SubmitButton>
-                <button type="button" onClick={() => setRenaming(null)} className="btn btn--secondary">
-                  Cancel
-                </button>
-              </div>
-            </form>
-          </CardBody>
-        </Card>
-      ) : null}
 
       {/*
         Owner report (item 1): this used to be a plain Card rendered wherever `splitting` happened
@@ -1191,9 +1414,25 @@ export function TransactionsClient({
                   </span>
                 ) : null}
               </button>
-              <Field label="Search" className="min-w-[12rem] flex-1">
-                <input name="q" placeholder="Merchant text" className={inputClass} />
-              </Field>
+              {/*
+                Owner report (item 3): Field's own stacked shape (a label span above the
+                control, see src/components/ui/form.tsx) made this the tallest thing on the
+                row -- `items-center` above then centred the Filters button against that taller
+                column, which is exactly the "icon floats above centre with a dead band around
+                it" the owner screenshotted. A bare <input> is the fix, not a shorter Field: the
+                visible "Search" label added nothing a placeholder this specific does not already
+                say, so it is gone rather than shrunk, and `aria-label` carries the same wording
+                to a screen reader now that there is no visible text to compute a name from.
+                `min-h-11 sm:min-h-0` matches the Filters button's own `h-11 ... sm:h-8` floor
+                (AUTO_SAVE_CONTROL's idiom elsewhere in this file), so the two sit at the same
+                height on the same row instead of the input being shorter and off-centre.
+              */}
+              <input
+                name="q"
+                placeholder="Search by merchant name or description"
+                aria-label="Search by merchant name or description"
+                className={`${inputClass} min-h-11 min-w-[12rem] flex-1 sm:min-h-0`}
+              />
             </div>
 
             {/* Chip filters (ruling D6): TOP-LEVEL categories only, always visible (not folded
@@ -1353,9 +1592,11 @@ export function TransactionsClient({
         </div>
       ) : null}
 
-      {/* Ruling R5: review mode renders the card list INSTEAD of the table -- never both, which
-          would give every control two DOM nodes and break label-based queries across the
-          suite. */}
+      {/* Ruling R5: review mode renders the card list INSTEAD of the table -- never both. This is
+          still true after the single-card-renderer task: review mode is mode-gated (this
+          conditional), not width-gated, so it never grows a second tree the way the plain
+          Transactions branch below deliberately does (transactionCard's own docblock explains
+          why that one DOES carry two trees, one hidden by width at a time). */}
       {reviewMode ? (
         page.rows.length === 0 ? (
           // Ruling S5(a): the reading-measure cap now lives once on ReviewWidth above (v1.16.0
@@ -1413,18 +1654,14 @@ export function TransactionsClient({
                 </form>
               ) : null}
             </div>
-            <ul className="flex flex-col gap-3">
-              {page.rows.map((row, index) => {
-                const noteForm = noteEditor(row);
-                const newLoanForm = newLoanEditor(row);
-                const applyAllForm = applyAllEditor(row);
-                // Row rhythm (item 4): only meaningful alongside the guessed-category badge just
-                // below, which already gates on `row.categoryName` truthy -- computed once here
-                // rather than inside that JSX so the badge stays a plain conditional, not a
-                // second nested function call.
-                const GuessCategoryIcon = row.categoryName ? categoryIcon(row.categoryName) : null;
-                return (
-                  <Fragment key={row.id}>
+            {/* Refactor lane (2026-08-30): this used to carry the review queue's own, separately-
+                written <li> markup. It now calls transactionCard(row) -- the SAME function the
+                mobile Transactions view below calls -- so a feature added here (or there) can no
+                longer silently miss the other; see that function's own docblock for the rule this
+                keeps. */}
+            <ul className="flex flex-col gap-3" data-transaction-cards>
+              {page.rows.map((row, index) => (
+                <Fragment key={row.id}>
                   {/* Date grouping (item 3): a plain <li>, not `.card` -- so `li.card` still
                       counts real transaction rows only, and every existing query that looks for
                       "the first li.card" keeps finding a real row rather than this header. */}
@@ -1433,163 +1670,67 @@ export function TransactionsClient({
                       {formatDayHeader(row.date)}
                     </li>
                   ) : null}
-                  <li className="card flex flex-col gap-3 p-4">
-                    <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-                      {/* Row rhythm (item 4): the same circled money-direction glyph ListRow
-                          renders (src/components/ui/ListRow.tsx) -- reused here rather than
-                          forked, because this card cannot adopt ListRow itself (see this file's
-                          own report to the caller: ListRow forces its own <li> root with no slot
-                          for the badges/picker/menu/sub-editor content this row already carries,
-                          so importing it here would mean nesting an <li> inside this one). Money
-                          itself already colours the amount by sign (ruling: "positive-toned when
-                          money came in" was already true before this task); the arrow is the one
-                          piece of that rhythm this card lacked. */}
-                      <span
-                        aria-hidden="true"
-                        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${
-                          row.amountCents > 0 ? 'bg-positive-soft text-positive-soft-fg' : 'bg-surface-2 text-muted'
-                        }`}
-                      >
-                        {row.amountCents > 0 ? <MoneyInIcon className="h-4 w-4" /> : <MoneyOutIcon className="h-4 w-4" />}
-                      </span>
-                      {/* Ruling S5(b): `min-w-0 flex-1` lets a long merchant name (a supermarket's
-                          full legal name, say) wrap inside this span instead of pushing the
-                          amount beside it onto its own line and breaking the right alignment down
-                          the list -- `min-w-0` overrides the flex item's default min-width: auto,
-                          which is what let the un-shrinkable text force the row wide in the first
-                          place. */}
-                      <span className="min-w-0 flex-1 text-sm">
-                        {/* Renaming happens from the row menu, same as the table row -- the
-                            title stays the only place the bank's own text is visible once a
-                            row has been renamed. */}
-                        <strong
-                          className="font-semibold text-ink"
-                          title={row.displayDescription ? `Bank text: ${row.rawDescription}` : undefined}
-                        >
-                          {row.displayDescription ?? row.normalizedMerchant}
-                        </strong>
-                        {noteIndicator(row)}
-                        {/* v1.13.3 / fix round on 5439851: a raw description that is identical to
-                            the already-normalized merchant name (on the same NFC-normalized,
-                            trimmed, collapsed-whitespace, uppercased footing normalizeMerchant
-                            itself uses -- src/lib/categorize/normalize.ts) adds nothing, so it is
-                            shown only when it says something different. Ported verbatim from
-                            review-client.tsx. */}
-                        {row.normalizedMerchant !==
-                        row.rawDescription.trim().replace(/\s+/g, ' ').normalize('NFC').toUpperCase() ? (
-                          <>
-                            {' '}
-                            <span className="text-muted">— {row.rawDescription}</span>
-                          </>
-                        ) : null}
-                        {row.displaySource === 'manual' ? <span className="badge badge--blue ml-1.5">renamed</span> : null}
-                        {row.displaySource === 'rename' ? <span className="badge badge--blue ml-1.5">rule</span> : null}
-                        {/* Backlog CA: one badge per loan link, naming the loan, beside the
-                            renamed/rule badges above -- the table row gets the same treatment
-                            below. */}
-                        {(loanLinks[row.id] ?? []).map((link) => (
-                          <span key={`loan-badge-${link.id}`} className="badge badge--blue ml-1.5">{link.itemName}</span>
-                        ))}
-                      </span>
-                      <Money cents={row.amountCents} className="text-base font-semibold" />
-                    </div>
-                    <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-subtle">
-                      <span className="tabnum">{row.date}</span>
-                      <span aria-hidden="true">·</span>
-                      <span>{row.accountName}</span>
-                      {/* Ruling S5(c): the "uncategorized" fallback badge is gone -- every card in
-                          a queue defined as "not categorized yet" carried it, which made it noise
-                          rather than information. The separator before it goes with it: with no
-                          guess, the meta line simply ends after the account name instead of
-                          trailing a dangling "·". The guessed-category badge is unaffected. */}
-                      {row.source === 'bayes' && row.categoryName ? (
-                        <>
-                          <span aria-hidden="true">·</span>
-                          {/* Row rhythm (item 4): "category with its icon beneath" -- this badge
-                              already IS the category line beneath the merchant title, so
-                              categoryIcon() (Lane 0's own top-level-name-to-glyph map) is the
-                              icon that line was missing. */}
-                          <span className="badge badge--amber">
-                            {GuessCategoryIcon ? <GuessCategoryIcon aria-hidden="true" className="mr-1 inline h-3 w-3" /> : null}
-                            guessed {row.categoryName} (margin {row.confidence?.toFixed(2)})
-                          </span>
-                        </>
-                      ) : null}
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2 border-t border-line pt-3">
-                      {/* v1.13.3: the "Set" button is gone -- picking a category IS the decision.
-                          The placeholder is `disabled` so it can only ever be the starting state.
-                          Ruling R3: `teach: '1'` is the whole difference from the table's own
-                          per-row select -- in review mode a category pick teaches the
-                          categorizer (createRule: true server-side); outside it, it does not. */}
-                      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-1.5">
-                        <span className="text-xs font-medium text-muted">This transaction only</span>
-                        <AutoSaveSelect
-                          name="categoryId"
-                          defaultValue={row.categoryId === null ? '' : String(row.categoryId)}
-                          options={[
-                            { value: '', label: 'Choose for this one…', disabled: true },
-                            ...categorySelectOptions,
-                          ]}
-                          fields={{ transactionId: String(row.id), teach: '1' }}
-                          action={saveCategory}
-                          ariaLabel={`Category for ${row.normalizedMerchant} — this transaction only`}
-                          className={REVIEW_PICKER_CLASS}
-                        />
-                      </div>
-                      {/*
-                        Owner report (item 3): the review card had no way at all to attribute a
-                        transaction to a household member -- triaging a shared import meant
-                        categorizing HERE, then flipping back to plain Transactions just to say who
-                        it belonged to. This is the exact same control the table row renders
-                        further down (same AutoSaveSelect, same `saveAttribution` binding to
-                        setAttributionAction, same `people` roster this component was handed) --
-                        one attribution path, not a second one bolted on for review mode. Hidden
-                        for a self-scoped viewer for the identical reason the table row hides it:
-                        every choice would come back NOT_YOURS_ERROR (item BO), so an interactive
-                        control that can never succeed is replaced with the same plain-text
-                        fallback the table row shows instead.
-                      */}
-                      {selfScoped ? (
-                        <span className="text-xs text-muted">{row.attributedUserName ?? 'Household'}</span>
-                      ) : (
-                        <AutoSaveSelect
-                          name="attributedUserId"
-                          defaultValue={row.attributedUserId === null ? '' : String(row.attributedUserId)}
-                          options={[
-                            { value: '', label: 'Household' },
-                            ...people.map((person) => ({ value: String(person.id), label: person.name })),
-                          ]}
-                          fields={{ ids: String(row.id) }}
-                          action={saveAttribution}
-                          ariaLabel={`Person for transaction ${row.id}`}
-                          className={REVIEW_PICKER_CLASS}
-                        />
-                      )}
-                      {confirmButton(row)}
-                      {rowMenu(row)}
-                    </div>
-                    {/* Fix round (item CB): noteEditor/newLoanEditor's own contents, rendered as
-                        a plain <div> here so they actually reach a person reviewing from the
-                        card list -- see those functions' docblocks. */}
-                    {noteForm ? <div>{noteForm}</div> : null}
-                    {newLoanForm ? <div>{newLoanForm}</div> : null}
-                    {applyAllForm}
-                  </li>
-                  </Fragment>
-                );
-              })}
+                  {transactionCard(row)}
+                </Fragment>
+              ))}
             </ul>
             <p className="text-sm text-muted">
               Page {page.page} of {page.pageCount} — {page.total} transactions
             </p>
           </>
         )
+      ) : page.rows.length === 0 ? (
+        <Card as="div">
+          <EmptyState
+            icon={TransactionsIcon}
+            title="Nothing matches these filters"
+            action={
+              <Link href="/transactions" className="btn btn--secondary btn--sm">
+                Clear filters
+              </Link>
+            }
+          >
+            Widen the date range or clear the search — or import a statement to get some transactions in here.
+          </EmptyState>
+        </Card>
       ) : (
+      <>
+        {/*
+          Single-card-renderer task, item 1. Below `sm` this renders the exact same
+          transactionCard(row) the review queue calls above -- not a second, Transactions-only
+          card -- so a control added to one is never missing from the other (see that function's
+          own docblock). `sm:hidden` keeps it out of the way at `sm` and up, where the table just
+          below (`hidden` here, shown from `sm` up) is the wide browsing view a ledger scanned
+          down a column needs. A real browser shows exactly one of the two: CSS `display:none`
+          also removes the hidden one from the tab order and the accessibility tree, so neither a
+          keyboard nor a screen-reader user ever meets the same row control twice.
+        */}
+        <ul className="flex flex-col gap-3 sm:hidden" data-transaction-cards>
+          {page.rows.map((row, index) => (
+            <Fragment key={row.id}>
+              {startsNewDay(page.rows, index) ? (
+                <li className="px-1 pt-2 text-xs font-semibold uppercase tracking-wide text-subtle first:pt-0">
+                  {formatDayHeader(row.date)}
+                </li>
+              ) : null}
+              {transactionCard(row)}
+            </Fragment>
+          ))}
+        </ul>
+        <p className="text-sm text-muted sm:hidden">
+          Page {page.page} of {page.pageCount} — {page.total} transactions
+        </p>
+      <div className="hidden sm:block">
       <Card as="div">
         {/* minWidth is the colgroup's own total (3+7+9+15+7+13+11+3 = 68rem). Without it this
             table could not exceed its container, so the scroll container had nothing to scroll
-            and the browser shrank every column instead -- see TableWrap's minWidth docblock. */}
+            and the browser shrank every column instead -- see TableWrap's minWidth docblock.
+            `responsive` (the data-table--stack phone reflow) is left wired exactly as it was --
+            it is redundant now that the `hidden sm:block` wrapper above already keeps this whole
+            table out of the DOM's visible flow below `sm` (the card list is what a phone sees
+            instead), but ripping it and its cell-stack and data-label plumbing out is a bigger,
+            separate change than this task's brief calls for, and leaving it costs nothing: it
+            simply never gets a viewport narrow enough to apply itself in any more. */}
         <TableWrap bare fixed minWidth="68rem" responsive>
           <colgroup>
             {/* Just the checkbox, plus the 1rem of cell padding either side. */}
@@ -1630,6 +1771,9 @@ export function TransactionsClient({
             {page.rows.map((row, index) => {
               // Fix round (item CB): computed once per row so the <tr> sub-rows below don't
               // call each editor function twice (the open-state check and the content itself).
+              // Coordinator fix (2026-08-30): renameForm joins this set now that renaming is the
+              // same inline-anchored-at-its-row idiom as the other three, not a top-of-page Card.
+              const renameForm = renameEditor(row);
               const noteForm = noteEditor(row);
               const newLoanForm = newLoanEditor(row);
               const applyAllForm = applyAllEditor(row);
@@ -1772,10 +1916,17 @@ export function TransactionsClient({
                     `cell-stack-lead` at the other end of the phone card's row 1. */}
                 <td className="text-right cell-stack-actions" data-label="">{rowMenu(row)}</td>
               </tr>
-              {/* Fix round (item CB): noteEditor/newLoanEditor/applyAllEditor's own contents --
-                  the SAME functions the review card list renders below -- see those functions'
-                  docblocks for why a second, table-only copy of each used to leave the card
-                  list's kebab dead in review mode. */}
+              {/* Fix round (item CB) / coordinator fix (2026-08-30): renameForm/noteEditor/
+                  newLoanEditor/applyAllEditor's own contents -- the SAME functions transactionCard
+                  calls for the card just above -- see those functions' own docblocks for why a
+                  second, table-only copy of each used to leave the card list's kebab dead in
+                  review mode. All four are the same anchored-at-its-row idiom now; the split
+                  editor is the deliberate exception and stays the modal below. */}
+              {renameForm ? (
+                <tr>
+                  <td colSpan={COLUMN_COUNT} data-label="">{renameForm}</td>
+                </tr>
+              ) : null}
               {noteForm ? (
                 <tr>
                   {/* Ruling R13: an inline sub-row, not a dialog -- the note is about the row
@@ -1802,23 +1953,15 @@ export function TransactionsClient({
             })}
           </tbody>
         </TableWrap>
-        {page.rows.length === 0 ? (
-          <EmptyState
-            icon={TransactionsIcon}
-            title="Nothing matches these filters"
-            action={
-              <Link href="/transactions" className="btn btn--secondary btn--sm">
-                Clear filters
-              </Link>
-            }
-          >
-            Widen the date range or clear the search — or import a statement to get some transactions in here.
-          </EmptyState>
-        ) : null}
+        {/* No "Nothing matches these filters" check here any more -- that empty state is now
+            hoisted above this whole card/table split (shared, not duplicated across two hidden
+            trees), and this branch only ever renders once page.rows.length > 0 already. */}
         <CardFooter>
           Page {page.page} of {page.pageCount} — {page.total} transactions
         </CardFooter>
       </Card>
+      </div>
+      </>
       )}
       </ReviewWidth>
     </div>

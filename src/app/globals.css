@@ -38,6 +38,13 @@
   --ink: #16162b;
   --muted: #5a5a72;
   --subtle: #6e6e88;
+  /* Placeholder task (owner screenshot fix): `--subtle` clears 4.94:1 against --field-bg here --
+     comfortably AA for normal text, which is exactly the bug (a hinted field read almost as
+     strongly as a filled one, so it looked pre-filled). --placeholder sits below every other
+     text-hierarchy token on purpose, at ~3.3:1 -- above --line-strong's ~1.5:1 (a border, not
+     text) so it stays legible, below --subtle so a value the person actually typed still reads
+     as the stronger thing on the field. See the dark variant below for the matching pair. */
+  --placeholder: #8c8ca6;
 
   /* Accent (iris) — fill vs. on-canvas text are separate tokens because a
      single value cannot clear AA in both roles in both themes. */
@@ -104,6 +111,10 @@
   --ink: #ededf5;
   --muted: #a9adc4;
   --subtle: #868ba6;
+  /* Same ~3.3:1-against-field-bg intent as the light value above, recomputed against this
+     theme's own --field-bg (#10111c) rather than assumed to carry over -- a colour tuned in one
+     theme is not tuned in the other, which is why this task checks both. */
+  --placeholder: #63687f;
 
   --accent: #5d59e8;
   --accent-hover: #6f6bf2;
@@ -399,8 +410,29 @@
     }
   }
 
+  /*
+    Owner report (item 4): this used to be `color: var(--subtle)` alone -- a readable
+    secondary-TEXT colour (4.94:1 in light, 5.59:1 in dark against --field-bg, comfortably AA
+    for normal text), so a hint read almost as strongly as a real value and a merely-hinted
+    field looked pre-filled. `--placeholder` (defined beside --subtle above, in both themes) is
+    tuned lower on purpose -- about 3.3:1 against --field-bg in each theme, clearly receded from
+    --subtle/--muted/--ink but still above a hairline border's ~1.5-1.8:1, so it stays legible
+    rather than vanishing.
+
+    `opacity: 1` overrides Firefox's UA stylesheet, which applies `opacity: 0.54` to
+    `::placeholder` by default -- left alone, that would dim `--placeholder` a SECOND time on
+    top of the contrast this token was already tuned to, landing Firefox users below every other
+    browser's rendering of the same value. `font-weight`/`font-style` are set explicitly (not
+    left to inherit) so a hint is never bolder, lighter or slanted relative to the value that
+    replaces it -- same size (this rule sets none, so it already matches the input's own
+    font-size), same weight, upright -- which is what keeps the field from visibly shifting the
+    moment someone starts typing over it.
+  */
   .field-control::placeholder {
-    color: var(--subtle);
+    color: var(--placeholder);
+    opacity: 1;
+    font-weight: 400;
+    font-style: normal;
   }
 
   .field-control:hover:not(:disabled) {
