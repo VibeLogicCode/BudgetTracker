@@ -46,6 +46,48 @@ import { Card, CardBody, CardHeader } from '@/components/ui/Card';
  * "Add a part"/"Remove part"-style buttons can change how many focusable controls exist while it
  * stays open.
  */
+
+/**
+ * WHEN TO USE THIS vs a plain inline confirm (owner ask, 2026-08-31). The question came up because
+ * v1.23.0's Canadian merchant pack panel (settings/merchant-rules/canadian-pack-panel.tsx) shipped
+ * its install/remove-all/review-update confirmations as three inline `useState` disclosures --
+ * not because that was a considered choice, but because the brief that produced that file spelled
+ * out exactly what each confirmation had to SAY and DO and never named an idiom, so the file fell
+ * back to copying the nearest existing pattern in the same directory instead of reaching for this
+ * component. "Make every confirm a dialog" would have been the wrong fix, though -- this codebase
+ * already has plenty of confirms that are correctly inline, on purpose, so the line has to be
+ * drawn on what the confirm is ABOUT, not on how much it says:
+ *
+ *   - A confirm that belongs to ONE ROW -- the decision is "does THIS row survive, yes or no", and
+ *     the person needs to keep seeing which row while they decide -- stays inline, anchored at
+ *     that row. RowMenuForm's own `confirm` prop docblock (RowMenu.tsx) draws this line for the
+ *     two lightest cases (Remove an installment, Unassign a loan: a plain `window.confirm`, no
+ *     room needed). The heavier row-level ones that need more room than `confirm()` can hold --
+ *     Deactivate / Reset MFA in settings/users/users-manager.tsx, the restore panel in
+ *     settings/backups/backups-client.tsx -- stay inline too, as a panel that REPLACES or sits
+ *     directly under that one row (users-manager.tsx spans every column, ruling S2), specifically
+ *     BECAUSE turning them into a dialog would hide the one thing the decision turns on: which
+ *     row. Word count never enters into it -- the backup restore panel is the longest confirm
+ *     copy in the app and is still correctly inline for exactly this reason.
+ *
+ *   - A confirm that is PAGE-LEVEL -- there is no single row left for it to anchor to, because it
+ *     acts on the page's data as a whole (install/remove/update an entire rule pack) or on a
+ *     multi-row SELECTION (a bulk delete) rather than one row someone can keep looking at -- and
+ *     carries wording that has to be read before agreeing, belongs in a dialog. It is one focused
+ *     decision with a consequence, the same reason the split editor became a dialog instead of a
+ *     card at the top of the page (this component's own top-of-file docblock): nothing else on
+ *     the page competes for attention while it is open, Escape/backdrop/focus-trap all apply, and
+ *     it does not silently push the rest of the page down the way an inline disclosure did.
+ *
+ * canadian-pack-panel.tsx's install/remove-all/review-update confirmations and
+ * merchant-rules-client.tsx's bulk-delete confirmation are the worked example of the second case
+ * (see their own docblocks for the conversion). Their PERSISTENT status line ("installed, v1 ·
+ * 182 of 190 present") is not a decision at all and deliberately stays outside any dialog --
+ * only the yes/no moment belongs in one. A page-level panel that only ever previews a safe,
+ * reversible, non-destructive operation with nothing to lose (merchant-rules-client.tsx's own
+ * "Re-run rules" preview is the example that was checked and left alone) is not "a confirm" in
+ * this sense either, and has no obligation to become a dialog just for being page-level.
+ */
 const DIALOG_FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 

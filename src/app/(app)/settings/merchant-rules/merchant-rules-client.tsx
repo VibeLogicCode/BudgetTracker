@@ -188,6 +188,54 @@ export function MerchantRulesClient({
     setRerunPreview(result);
   }
 
+  /**
+   * Owner ask (2026-08-31), same conversion as the Canadian pack panel's three confirmations
+   * (canadian-pack-panel.tsx, its own docblock spells out the rule this follows): this confirm is
+   * PAGE-LEVEL -- it acts on a multi-row SELECTION, not one row a person can keep looking at while
+   * they decide -- and it states a real consequence (how many transactions a rename rule among
+   * the selection will revert) that has to be read before agreeing. It stayed inline this whole
+   * time only because it was written before RowDialog existed as a shared shell to reach for.
+   * Every word of the confirm text is unchanged; only the shell and this dialog's title are new.
+   *
+   * Deliberately NOT extended to the "Re-run rules" preview further up this file: that panel
+   * previews a SAFE, reversible, forward-only operation ("about N would actually change... a
+   * hand-categorized transaction is never touched") with no destructive consequence to weigh --
+   * it is closer to a live status readout than a decision with something to lose, so it stays the
+   * one page-level confirm-shaped panel on this page that stays inline.
+   */
+  function bulkDeleteDialog() {
+    if (!confirmingBulkDelete) return null;
+    return (
+      <RowDialog
+        dialogId="bulk-delete-rules-dialog"
+        title={`Delete ${selected.length} rule${selected.length === 1 ? '' : 's'}`}
+        onClose={() => setConfirmingBulkDelete(false)}
+      >
+        <p className="text-sm text-ink">
+          Delete {selected.length} rule{selected.length === 1 ? '' : 's'}?
+          {revertCount > 0
+            ? ` ${revertCount} transaction${revertCount === 1 ? '' : 's'} using a rename rule among them will revert to the bank's wording.`
+            : ' This cannot be undone.'}
+        </p>
+        <div className="flex gap-2">
+          <form
+            action={bulkDelete}
+            onSubmit={() => {
+              setConfirmingBulkDelete(false);
+              setSelected([]);
+            }}
+          >
+            <input type="hidden" name="ids" value={selected.join(',')} />
+            <SubmitButton variant="danger" size="sm">Delete permanently</SubmitButton>
+          </form>
+          <button type="button" className="btn btn--secondary btn--sm" onClick={() => setConfirmingBulkDelete(false)}>
+            Cancel
+          </button>
+        </div>
+      </RowDialog>
+    );
+  }
+
   function ruleDialog() {
     if (!editing) return null;
     const isNew = editing.id === null;
@@ -385,21 +433,6 @@ export function MerchantRulesClient({
             ) : null}
             <button type="button" className="btn btn--ghost btn--sm" onClick={() => setSelected([])}>Clear selection</button>
           </div>
-          {confirmingBulkDelete ? (
-            <div className="flex flex-wrap items-center gap-3 rounded-md border border-negative-soft bg-surface p-3 text-sm">
-              <span className="text-ink">
-                Delete {selected.length} rule{selected.length === 1 ? '' : 's'}?
-                {revertCount > 0
-                  ? ` ${revertCount} transaction${revertCount === 1 ? '' : 's'} using a rename rule among them will revert to the bank's wording.`
-                  : ' This cannot be undone.'}
-              </span>
-              <form action={bulkDelete} onSubmit={() => { setConfirmingBulkDelete(false); setSelected([]); }}>
-                <input type="hidden" name="ids" value={selected.join(',')} />
-                <SubmitButton variant="danger" size="sm">Delete permanently</SubmitButton>
-              </form>
-              <button type="button" className="btn btn--secondary btn--sm" onClick={() => setConfirmingBulkDelete(false)}>Cancel</button>
-            </div>
-          ) : null}
         </div>
       ) : null}
 
@@ -546,6 +579,7 @@ export function MerchantRulesClient({
       </Card>
 
       {ruleDialog()}
+      {bulkDeleteDialog()}
     </div>
   );
 }

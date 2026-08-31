@@ -2,6 +2,7 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { render, cleanup, fireEvent, screen, within } from '@testing-library/react';
 import { MerchantRulesClient } from '@/app/(app)/settings/merchant-rules/merchant-rules-client';
+import type { CanadianPackState, CanadianPackUpdateDiff } from '@/lib/canadian-pack';
 import type { CategoryRecord } from '@/lib/categories';
 import type { MerchantRuleRecord, RuleKind } from '@/lib/categorize/rules';
 
@@ -34,6 +35,19 @@ function rule(over: Partial<MerchantRuleRecord> = {}): MerchantRuleRecord {
     id: 1, pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: 1, renameTo: null,
     createdBy: null, hitCount: 0, lastUsedAt: null, createdAt: '2026-08-16T00:00:00.000Z', lastModifiedBy: null,
     disabledAt: null, packSource: null, packVersion: null, installedAt: null, ...over,
+  };
+}
+
+function updateDiffFixture(over: Partial<CanadianPackUpdateDiff> = {}): CanadianPackUpdateDiff {
+  return {
+    fromVersion: 1,
+    toVersion: 2,
+    added: [],
+    changed: [],
+    removed: [],
+    skippedEdited: [],
+    unchangedCount: 180,
+    ...over,
   };
 }
 
@@ -161,6 +175,25 @@ describe('MerchantRulesClient — multi-select and bulk delete states its real c
     fireEvent.click(screen.getByRole('checkbox', { name: 'Select rule TIM HORTONS' }));
     expect(screen.getByText('1 selected')).toBeTruthy();
   });
+});
+
+/**
+ * Owner ask (2026-08-31): this confirm moved from a plain bordered div under the toolbar to a
+ * RowDialog (see that component's own docblock, and merchant-rules-client.tsx's bulkDeleteDialog
+ * docblock, for why: page-level, a multi-row selection rather than one row to keep looking at,
+ * and a real consequence to read first). The shell RowDialog itself owes every caller -- role,
+ * aria-modal, Escape, backdrop, focus trap, focus-restore-to-trigger -- is asserted once, in full,
+ * against the split editor in transactions-client.test.tsx (its first caller); this block only
+ * pins THIS dialog's own content: the disclaimer wording is unchanged from the pre-dialog version.
+ */
+describe('MerchantRulesClient — bulk delete confirm (RowDialog, item 10)', () => {
+  it('opens a labelled dialog naming how many rules it will delete', () => {
+    render(<MerchantRulesClient {...baseProps({ rows: [rule({ id: 1 }), rule({ id: 2, pattern: 'WENDYS' })] })} />);
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select rule TIM HORTONS' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select rule WENDYS' }));
+    fireEvent.click(screen.getByRole('button', { name: /delete selected/i }));
+    expect(screen.getByRole('dialog', { name: /delete 2 rules/i })).toBeTruthy();
+  });
 
   it('states how many TRANSACTIONS a bulk delete of rename rules will revert, not just the rule count', () => {
     render(
@@ -184,12 +217,13 @@ describe('MerchantRulesClient — multi-select and bulk delete states its real c
     expect(screen.getByText(/this cannot be undone/i)).toBeTruthy();
   });
 
-  it('cancelling the bulk delete confirm submits nothing', async () => {
+  it('cancelling the bulk delete confirm submits nothing and closes the dialog', async () => {
     const { bulkDeleteRulesAction } = await import('@/app/(app)/settings/merchant-rules/actions');
     render(<MerchantRulesClient {...baseProps({ rows: [rule({ id: 1 })] })} />);
     fireEvent.click(screen.getByRole('checkbox', { name: 'Select rule TIM HORTONS' }));
     fireEvent.click(screen.getByRole('button', { name: /delete selected/i }));
     fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+    expect(screen.queryByRole('dialog')).toBeNull();
     expect(screen.queryByRole('button', { name: /delete permanently/i })).toBeNull();
     expect(bulkDeleteRulesAction).not.toHaveBeenCalled();
   });
@@ -258,5 +292,217 @@ describe('MerchantRulesClient — sharing a rules pack still lives on this page 
   it('renders the pack panel', () => {
     render(<MerchantRulesClient {...baseProps()} />);
     expect(screen.getByText(/share rules with another install/i)).toBeTruthy();
+  });
+});
+
+/**
+ * Owner ask (2026-08-31): the Canadian pack panel's three confirmations (install, remove-all,
+ * review-update) moved from inline disclosures to RowDialog -- see canadian-pack-panel.tsx's own
+ * docblock, and RowDialog's, for why. The shell RowDialog owes every caller (role, aria-modal,
+ * Escape, backdrop, focus trap, focus-restore) is asserted once, in full, against the split editor
+ * in transactions-client.test.tsx (its first caller) -- these three blocks only pin each dialog's
+ * own CONTENT: the disclaimer wording, the remove-consequence count and the update diff are every
+ * one carried over unchanged from the v1.23.0 inline version, so these assertions are the same
+ * substance that version's own text was, just read out of a dialog now instead of a bordered div.
+ */
+describe('MerchantRulesClient — Canadian pack panel: persistent status line stays outside any dialog', () => {
+  it('renders "not installed" as plain page content, with no dialog open', () => {
+    render(<MerchantRulesClient {...baseProps()} />);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByText(/not installed/)).toBeTruthy();
+  });
+
+  it('renders the installed/version/count line as plain page content too', () => {
+    render(
+      <MerchantRulesClient
+        {...baseProps({
+          canadianPack: { installed: true, installedVersion: 1, bundledVersion: 1, updateAvailable: false, presentCount: 182, totalCount: 190 },
+        })}
+      />,
+    );
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByText(/installed, v1 · 182 of 190 present/)).toBeTruthy();
+  });
+});
+
+describe('MerchantRulesClient — Canadian pack panel: install confirmation (RowDialog)', () => {
+  it('Install opens a labelled dialog carrying the write count, the FORTIS/ATCO caveat and the removable-afterward note', () => {
+    render(<MerchantRulesClient {...baseProps()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Install' }));
+    const dialog = screen.getByRole('dialog', { name: /install the canadian merchant pack/i });
+    expect(dialog.textContent).toMatch(/writes\s*190\s*rules out of 190 in the pack/);
+    expect(dialog.textContent).toMatch(/174 categorizations, 16 merchant-name/);
+    expect(dialog.textContent).toContain('FORTIS');
+    expect(dialog.textContent).toContain('ATCO');
+    expect(dialog.textContent).toMatch(/removable afterward with the Remove all button/);
+  });
+
+  it('reports how many already-present patterns are left untouched, only when there are any', () => {
+    render(
+      <MerchantRulesClient
+        {...baseProps({
+          canadianInstallPreview: { totalRules: 190, categoryRules: 174, renameRules: 16, wouldWrite: 185, alreadyPresent: 5 },
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Install' }));
+    expect(screen.getByText(/5 patterns you already have will be left exactly as they are/)).toBeTruthy();
+  });
+
+  it('Cancel closes the install dialog and calls nothing', async () => {
+    const { installCanadianPackAction } = await import('@/app/(app)/settings/merchant-rules/actions');
+    render(<MerchantRulesClient {...baseProps()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Install' }));
+    fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(installCanadianPackAction).not.toHaveBeenCalled();
+  });
+
+  it('Install now submits the install action', async () => {
+    const { installCanadianPackAction } = await import('@/app/(app)/settings/merchant-rules/actions');
+    render(<MerchantRulesClient {...baseProps()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Install' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Install now' }));
+    expect(installCanadianPackAction).toHaveBeenCalled();
+  });
+});
+
+describe('MerchantRulesClient — Canadian pack panel: remove confirmation (RowDialog)', () => {
+  const installedState: CanadianPackState = {
+    installed: true,
+    installedVersion: 1,
+    bundledVersion: 1,
+    updateAvailable: false,
+    presentCount: 190,
+    totalCount: 190,
+  };
+
+  it('Remove all opens a labelled dialog stating the rule count and the transaction-revert consequence', () => {
+    render(
+      <MerchantRulesClient
+        {...baseProps({ canadianPack: installedState, canadianRemovalPreview: { ruleCount: 190, transactionsRevert: 12 } })}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Remove all' }));
+    const dialog = screen.getByRole('dialog', { name: /remove the canadian merchant pack/i });
+    expect(dialog.textContent).toMatch(/Remove 190 preset rules\?/);
+    expect(dialog.textContent).toMatch(/12 transactions using a preset rename will revert to the bank's wording/);
+    expect(dialog.textContent).toMatch(/A rule you edited since installing is not touched/);
+  });
+
+  it('says the removal cannot be undone when no rename rule would revert anything', () => {
+    render(
+      <MerchantRulesClient
+        {...baseProps({ canadianPack: installedState, canadianRemovalPreview: { ruleCount: 190, transactionsRevert: 0 } })}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Remove all' }));
+    expect(screen.getByText(/this cannot be undone/i)).toBeTruthy();
+  });
+
+  it('Cancel closes it without calling the remove action', async () => {
+    const { removeCanadianPackAction } = await import('@/app/(app)/settings/merchant-rules/actions');
+    render(
+      <MerchantRulesClient
+        {...baseProps({ canadianPack: installedState, canadianRemovalPreview: { ruleCount: 190, transactionsRevert: 0 } })}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Remove all' }));
+    fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(removeCanadianPackAction).not.toHaveBeenCalled();
+  });
+
+  it('Remove permanently submits the remove action', async () => {
+    const { removeCanadianPackAction } = await import('@/app/(app)/settings/merchant-rules/actions');
+    render(
+      <MerchantRulesClient
+        {...baseProps({ canadianPack: installedState, canadianRemovalPreview: { ruleCount: 190, transactionsRevert: 0 } })}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Remove all' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove permanently' }));
+    expect(removeCanadianPackAction).toHaveBeenCalled();
+  });
+});
+
+describe('MerchantRulesClient — Canadian pack panel: update review (RowDialog)', () => {
+  const updateAvailableState: CanadianPackState = {
+    installed: true,
+    installedVersion: 1,
+    bundledVersion: 2,
+    updateAvailable: true,
+    presentCount: 190,
+    totalCount: 190,
+  };
+
+  it('Update opens a labelled dialog naming the target version, keeping the "What vX changes" heading and every section of the diff', () => {
+    render(
+      <MerchantRulesClient
+        {...baseProps({
+          canadianPack: updateAvailableState,
+          canadianUpdateDiff: updateDiffFixture({
+            added: [{ pattern: 'PETRO CANADA', matchType: 'contains', ruleKind: 'category', categoryLabel: 'Gas', renameTo: null }],
+            changed: [{ pattern: 'ESSO', matchType: 'contains', ruleKind: 'rename', before: 'Esso', after: 'ESSO Gas Station' }],
+            removed: [{ pattern: 'OLDCO', matchType: 'exact', ruleKind: 'category', categoryLabel: 'Misc', renameTo: null }],
+            skippedEdited: [{ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryLabel: 'Coffee', renameTo: null }],
+            unchangedCount: 175,
+          }),
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Update' }));
+    const dialog = screen.getByRole('dialog', { name: /update the canadian merchant pack to v2/i });
+    expect(dialog.textContent).toMatch(/What v2 changes \(currently v1\)/);
+    expect(dialog.textContent).toMatch(/1 added:/);
+    expect(dialog.textContent).toContain('PETRO CANADA');
+    expect(dialog.textContent).toMatch(/1 changed:/);
+    expect(dialog.textContent).toContain('ESSO: Esso → ESSO Gas Station');
+    expect(dialog.textContent).toMatch(/1 no longer in the pack:/);
+    expect(dialog.textContent).toContain('OLDCO');
+    expect(dialog.textContent).toMatch(/1 rule left alone/);
+    expect(dialog.textContent).toContain('TIM HORTONS');
+    expect(dialog.textContent).toMatch(/175 rules unchanged/);
+  });
+
+  it('the "also delete" checkbox appears only when something was removed, and toggles', () => {
+    render(
+      <MerchantRulesClient
+        {...baseProps({
+          canadianPack: updateAvailableState,
+          canadianUpdateDiff: updateDiffFixture({
+            removed: [{ pattern: 'OLDCO', matchType: 'exact', ruleKind: 'category', categoryLabel: 'Misc', renameTo: null }],
+          }),
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Update' }));
+    const checkbox = screen.getByRole('checkbox', { name: /also delete the 1 rule no longer in the pack/i }) as HTMLInputElement;
+    expect(checkbox.checked).toBe(false);
+    fireEvent.click(checkbox);
+    expect(checkbox.checked).toBe(true);
+  });
+
+  it('the checkbox is absent when nothing was removed', () => {
+    render(<MerchantRulesClient {...baseProps({ canadianPack: updateAvailableState, canadianUpdateDiff: updateDiffFixture() })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Update' }));
+    expect(screen.queryByRole('checkbox', { name: /also delete/i })).toBeNull();
+  });
+
+  it('Cancel closes it without applying the update', async () => {
+    const { applyCanadianPackUpdateAction } = await import('@/app/(app)/settings/merchant-rules/actions');
+    render(<MerchantRulesClient {...baseProps({ canadianPack: updateAvailableState, canadianUpdateDiff: updateDiffFixture() })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Update' }));
+    fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(applyCanadianPackUpdateAction).not.toHaveBeenCalled();
+  });
+
+  it('Apply update submits the update action, its label naming the target version', async () => {
+    const { applyCanadianPackUpdateAction } = await import('@/app/(app)/settings/merchant-rules/actions');
+    render(<MerchantRulesClient {...baseProps({ canadianPack: updateAvailableState, canadianUpdateDiff: updateDiffFixture() })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Update' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply update to v2' }));
+    expect(applyCanadianPackUpdateAction).toHaveBeenCalled();
   });
 });
