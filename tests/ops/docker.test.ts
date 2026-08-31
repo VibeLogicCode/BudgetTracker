@@ -245,12 +245,26 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.19.0 release', () => {
+  it('MUST-7.1: the 1.20.0 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.19.0');
+    expect(pkg.version).toBe('1.20.0');
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toMatch(/^## \[1\.20\.0\] - 2026-08-30$/m);
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.20.0]'));
+    expect(changelog.indexOf('## [1.20.0]')).toBeLessThan(changelog.indexOf('## [1.19.0]'));
+    const entry = changelog.slice(changelog.indexOf('## [1.20.0]'), changelog.indexOf('## [1.19.0]'));
+    expect(entry).toMatch(/No migration/i);
+    // The three things this release is actually about, each phrased the way the entry states it:
+    // one card renderer instead of two, one dialog for every row editor instead of two idioms,
+    // and creation forms behind a button on every page rather than five Settings holdouts.
+    expect(entry).toMatch(/One card renders a transaction everywhere/i);
+    expect(entry).toMatch(/Every row editor is the same dialog/i);
+    expect(entry).toMatch(/behind a button, on every page that creates something/i);
+  });
+
+  it('MUST-7.1: the 1.19.0 release is still recorded intact (append-only discipline)', () => {
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.19\.0\] - 2026-08-30$/m);
-    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.19.0]'));
     expect(changelog.indexOf('## [1.19.0]')).toBeLessThan(changelog.indexOf('## [1.18.0]'));
     const entry = changelog.slice(changelog.indexOf('## [1.19.0]'), changelog.indexOf('## [1.18.0]'));
     expect(entry).toMatch(/No migration/i);

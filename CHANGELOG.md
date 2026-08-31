@@ -21,6 +21,52 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.20.0] - 2026-08-30
+
+No migration. Nothing changed about what is stored.
+
+### Added
+
+- **The dashboard charts savings, not just income against spend.** The same chart the reports page
+  draws, on the page you land on.
+- **Needs review can attribute a transaction to a person**, without opening it on the transactions
+  page first.
+
+### Changed
+
+- **One card renders a transaction everywhere it appears** — in the review queue and on a phone.
+  There used to be two, which is why a split transaction showed a "Split · N parts" badge in one
+  place and a bare category picker in the other, and why every control added to one had to be
+  remembered into the other.
+- **Every row editor is the same dialog.** Note, rename, assign to loan and apply-to-all used to
+  open as panels wedged between two rows, shoving the rest of the table down the page, while split
+  opened as a proper dialog over it. All five are now that dialog.
+- **A transaction card is three lines instead of five.** The row menu moved up beside the amount —
+  it used to sit after the controls and land alone on a trailing line holding nothing else — labels
+  sit beside their fields rather than above, and the controls wrap on a narrow screen instead of
+  stretching.
+- **Creating something is behind a button, on every page that creates something.** Goal creation
+  moved to its own page the way adding an item on Contracts & Coverage already worked, and the five
+  Settings forms that were always open — add an account, add a type, new category, save rule, add a
+  user — now fold away until asked for.
+- **Search says what it searches.** The redundant label is gone, the placeholder names the fields it
+  looks at, and the filter button sits on the same line at the same height.
+- **Settings groups its categories the way Budgets does**, by parent, foldable.
+- **One implementation each of the days-remaining pill, the empty state and the progress bar.** They
+  had three, seven and two respectively. Nothing about them looks different; there is now one place
+  to change each.
+- **An empty state offers something to do.** Seven of them said only that there was nothing there.
+
+### Fixed
+
+- **A transaction assigned to a loan leaves the review queue.** It stayed, with no way to clear it
+  short of marking it a transfer, which it is not.
+- **A category chip keeps the filters you already set**, review included. It used to drop them.
+- **Two buttons in a page header sit side by side** instead of stacked with dead space beside them.
+- **A note is visible on the row that has one.** Adding a note left no trace, so the only way to
+  find one was to open rows until it turned up. The indicator is also the way to open it again.
+- **Labels stop colliding on a phone** on the budgets and transactions pages.
+
 ## [1.19.0] - 2026-08-30
 
 No migration. Every page changed how it looks; nothing changed what it stores.
