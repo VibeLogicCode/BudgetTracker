@@ -235,7 +235,12 @@ export default async function DashboardPage({
               : 'Everything the household spent and brought in.'
         }
         actions={
-          <>
+          // Item 5 (2026-08-30 plan, corrected): PageHeader's own actions slot is now a plain
+          // row, so a page passing several stacked rows -- this one passes three: quick-add,
+          // the month nav, and the person-scope pills -- composes its own column instead of
+          // relying on the shared slot to do it. Keeps the pre-fix look (stacked, sharing the
+          // right page gutter at `sm` and up) exactly as it was before that slot changed.
+          <div className="flex w-full flex-col items-start gap-2 sm:items-end">
             {/* Item 6: "Add a transaction" now lives in this row (PageHeader's own item 5 fix
                 is what makes that a row worth adding it to -- see PageHeader.tsx). Its own toggle
                 state is the #quick-add hash, not React state, because the form it opens is a
@@ -268,7 +273,7 @@ export default async function DashboardPage({
                 ))}
               </nav>
             )}
-          </>
+          </div>
         }
       />
 

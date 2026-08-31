@@ -3,17 +3,20 @@
  * `eyebrow` is for real context (the month a page is scoped to, the account a
  * detail page belongs to) — not decoration.
  *
- * Item 5 (2026-08-30 plan, the owner's own complaint): the dashboard passes SEVERAL stacked
- * rows through `actions` (a month nav, a person-scope pills row, and now a quick-add button) --
- * before this fix each row centred itself independently inside this slot, and because the rows
- * are different widths that meant NEITHER edge lined up with anything, which is exactly why the
- * block read as floating rather than placed. One rule now, applied here so every page's header
- * gets it at once rather than each page re-solving it: stacked rows share ONE edge -- flush with
- * the right page gutter (the same edge the title's own column ends on) at `sm` and up, full
- * width and left-aligned with the title below `sm` where there is no gutter left to flush
- * against. `flex-col` applies at every width (not just when there happen to be multiple rows) so
- * a page with a single action button gets the identical rule -- it just has nothing else to
- * align against.
+ * Item 5 (2026-08-30 plan, corrected): a first pass at this slot made it `flex-col`, reasoning
+ * from the dashboard's own header, which passes THREE stacked rows (a quick-add button, a month
+ * nav, and a person-scope pills nav) that need a shared right edge. That reasoning was sound for
+ * the dashboard and wrong for everyone else -- every other page passes a small handful of plain
+ * buttons/links through `actions`, and `flex-col` stacked those vertically too, leaving dead
+ * space beside each one for no reason (the owner's own complaint, reported on /goals: "Hide
+ * archived" and "Add goal" sat on separate lines with nothing between them).
+ *
+ * The slot is ONE ROW of actions that wraps if it must, full width and left-aligned below `sm`,
+ * right-flush with the page gutter (the same edge the title's own column ends on) at `sm` and
+ * up. A page that genuinely needs several stacked rows -- the dashboard's own case -- composes
+ * its own `flex-col` wrapper around them and passes that ONE element in; the "stacked rows share
+ * one edge, flush with the right gutter" reasoning above is still correct, it now belongs to
+ * that caller instead of to every page that never asked for it.
  */
 export function PageHeader({
   title,
@@ -36,7 +39,7 @@ export function PageHeader({
         {description ? <p className="max-w-2xl text-sm text-muted">{description}</p> : null}
       </div>
       {actions ? (
-        <div className="flex w-full flex-col items-start gap-2 sm:w-auto sm:items-end">{actions}</div>
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">{actions}</div>
       ) : null}
     </div>
   );
