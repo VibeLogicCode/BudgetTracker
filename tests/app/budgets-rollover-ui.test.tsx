@@ -112,6 +112,12 @@ describe('rollover toggle — permission (admin, and for a personal budget its o
         month="2026-03"
         currentUserId={1}
         currentUserIsAdmin={false}
+        // v1.21.0 item 1: the category GRID now follows the scope pill (see budgets-client.tsx's
+        // own `selectedPersonId` doc comment) -- Alice's own grid is only mounted while her
+        // scope is the one selected, so every test in this describe block that reads content
+        // INSIDE a personal section's grid now selects that person explicitly, the same way a
+        // click on her own pill would.
+        selectedPersonId={1}
         household={[]}
         householdTotals={{ budgetedLimitCents: 0, budgetedSpentCents: 0, totalSpentCents: 0 }}
         personal={[{ userId: 1, name: 'Alice', rows: [makeRow({ categoryId: 7, categoryName: 'Hobbies' })] }]}
@@ -128,6 +134,9 @@ describe('rollover toggle — permission (admin, and for a personal budget its o
         month="2026-03"
         currentUserId={1}
         currentUserIsAdmin={false}
+        // Bob's own scope selected -- his grid must actually be rendered for this to test the
+        // PERMISSION gate rather than trivially passing because his grid is not shown at all.
+        selectedPersonId={2}
         household={[]}
         householdTotals={{ budgetedLimitCents: 0, budgetedSpentCents: 0, totalSpentCents: 0 }}
         personal={[
@@ -147,6 +156,7 @@ describe('rollover toggle — permission (admin, and for a personal budget its o
         month="2026-03"
         currentUserId={1}
         currentUserIsAdmin
+        selectedPersonId={2}
         household={[]}
         householdTotals={{ budgetedLimitCents: 0, budgetedSpentCents: 0, totalSpentCents: 0 }}
         personal={[{ userId: 2, name: 'Bob', rows: [makeRow({ categoryId: 7, categoryName: 'Hobbies' })] }]}
@@ -233,6 +243,7 @@ describe('rollover toggle — reflects on/off state and submits the right fields
         month="2026-04"
         currentUserId={1}
         currentUserIsAdmin
+        selectedPersonId={2}
         household={[]}
         householdTotals={{ budgetedLimitCents: 0, budgetedSpentCents: 0, totalSpentCents: 0 }}
         personal={[{ userId: 2, name: 'Bob', rows: [makeRow({ categoryId: 7, categoryName: 'Hobbies' })], rolloverIds: [7] }]}
@@ -306,6 +317,7 @@ describe('carried amount display — "$X plus $Y carried"', () => {
         month="2026-03"
         currentUserId={1}
         currentUserIsAdmin={false}
+        selectedPersonId={2}
         household={[]}
         householdTotals={{ budgetedLimitCents: 0, budgetedSpentCents: 0, totalSpentCents: 0 }}
         personal={[

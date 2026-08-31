@@ -1025,6 +1025,34 @@ function EditRow({
   );
 }
 
+/**
+ * v1.21.0 item 1. The same pill nav the dashboard already ships ("Whose money to show",
+ * dashboard/page.tsx's own `PersonPill`) -- same markup, same `aria-current`/active styling,
+ * same "a plain `<Link>` to a `?person=` URL, no client router" shape. Not imported from there:
+ * that component is private to dashboard/page.tsx (unexported), and that file is owned by a
+ * different lane of this same release and is off-limits to this task's edits (see this task's
+ * own file list) -- extracting it into a shared component is real cleanup, but it is cleanup
+ * that touches a file this task must not touch, so it is left for whoever next has that file
+ * open rather than done here as a side effect. Named differently (`ScopePill`, not `PersonPill`)
+ * because what it selects here is NOT "whose money" the way the dashboard's own control reads --
+ * it is which SET OF BUDGETS is showing (see `selectedPersonId`'s own doc comment) -- reusing the
+ * identical name for a differently-scoped idea would be its own small version of the drift this
+ * item exists to avoid.
+ */
+function ScopePill({ href, label, active }: { href: string; label: string; active: boolean }) {
+  return (
+    <a
+      href={href}
+      aria-current={active ? 'true' : undefined}
+      className={`rounded-full px-3 py-1 text-sm transition-colors ${
+        active ? 'bg-surface font-semibold text-ink shadow-flat' : 'font-medium text-muted hover:text-ink'
+      }`}
+    >
+      {label}
+    </a>
+  );
+}
+
 /** The toggle that switches a section between the card grid and the compact edit list. Identical
  *  in both places it appears (household, and each PersonalCard) -- one implementation, per D1. */
 function EditLimitsToggle({ open, onToggle }: { open: boolean; onToggle: () => void }) {
@@ -1132,6 +1160,7 @@ function PersonalCard({
   personPredict,
   showHistorySentence,
   personNoAttribution,
+  gridVisible,
 }: {
   person: {
     userId: number;
@@ -1149,6 +1178,11 @@ function PersonalCard({
   personPredict: RowPredictions | null;
   showHistorySentence: boolean;
   personNoAttribution: boolean;
+  /** v1.21.0 item 1: whether THIS person is the scope the pill currently selects (computed by
+   *  the caller's `personalGridVisible`, which also covers the self-viewer exception -- see its
+   *  own doc comment). Gates only the category grid below; this card's own header, totals and
+   *  actions render unconditionally regardless. */
+  gridVisible: boolean;
 }) {
   const personRolloverOn = new Set(person.rolloverIds ?? []);
   // Ruling U2: only a category that actually HAS children becomes a disclosure -- an ordinary
@@ -1232,22 +1266,27 @@ function PersonalCard({
           </CardBody>
         ) : null}
       </Card>
-      <BudgetSectionBody
-        rows={person.rows}
-        scope="personal"
-        userId={person.userId}
-        month={month}
-        editMode={editMode}
-        // Same admin-or-owner rule as editable, for personal scope (unlike
-        // household, where rollover is admin-only but the amount is not).
-        editable={editable}
-        canToggleRollover={editable}
-        rolloverOn={personRolloverOn}
-        predict={personPredict}
-        sinkingFunds={person.sinkingFunds ?? {}}
-        applyAction={applyAction}
-        groupState={groupState}
-      />
+      {/* v1.21.0 item 1: the ONE thing the scope pill decides for this section too -- the Card
+          above (name, description, Copy previous month, Apply all suggestions, Expand/collapse,
+          Edit limits toggle) renders unconditionally either way. */}
+      {gridVisible ? (
+        <BudgetSectionBody
+          rows={person.rows}
+          scope="personal"
+          userId={person.userId}
+          month={month}
+          editMode={editMode}
+          // Same admin-or-owner rule as editable, for personal scope (unlike
+          // household, where rollover is admin-only but the amount is not).
+          editable={editable}
+          canToggleRollover={editable}
+          rolloverOn={personRolloverOn}
+          predict={personPredict}
+          sinkingFunds={person.sinkingFunds ?? {}}
+          applyAction={applyAction}
+          groupState={groupState}
+        />
+      ) : null}
     </section>
   );
 }
@@ -1256,6 +1295,7 @@ export function BudgetsClient({
   month,
   currentUserId,
   currentUserIsAdmin = false,
+  selectedPersonId = null,
   household,
   householdRolloverIds = [],
   householdTotals,
@@ -1267,6 +1307,24 @@ export function BudgetsClient({
   month: string;
   currentUserId: number;
   currentUserIsAdmin?: boolean;
+  /**
+   * v1.21.0 item 1: which scope's category GRID is showing -- null for Household (the
+   * default), a person's id for theirs. Read and validated server-side (budgets/page.tsx),
+   * never client state -- a pill is a plain link to `?person=<id>`, a full navigation, the
+   * same as the dashboard's own person-scope nav.
+   *
+   * Deliberately NOT a filter over `household`/`personal` themselves -- see this file's own
+   * doc comment above BudgetSectionBody's household and PersonalCard call sites. Household and
+   * personal budgets are separate records with their own limits, not one dataset viewed
+   * through a filter, so every section's SUMMARY (its CardHeader, its totals, its "Copy
+   * previous month"/"Apply all suggestions" actions) renders unconditionally at every setting
+   * of this prop; only which section's GRID (BudgetSectionBody) is mounted follows it.
+   *
+   * Ruling R2: a self viewer's `household` is null, and for them this filter never applies at
+   * all (see `personalGridVisible` below) -- their own, only, personal section always shows its
+   * grid, which is also why they get no pills to change this with in the first place.
+   */
+  selectedPersonId?: number | null;
   /** v1.13.0 ruling R2: null for a self viewer -- there is no household scope for them at all,
    *  and the Household card below does not render. */
   household: BudgetRow[] | null;
@@ -1362,6 +1420,18 @@ export function BudgetsClient({
   const noHouseholdBudgets =
     householdTotals !== null && householdTotals.budgetedLimitCents === 0 && householdTotals.budgetedSpentCents === 0;
 
+  // v1.21.0 item 1: Household's own grid follows the pill -- mounted only while Household is
+  // the selected scope, which is also the default (selectedPersonId's own doc comment). This
+  // is read only inside the `household !== null` block below, so a self viewer (whose
+  // `selectedPersonId` is forced null right alongside `household` being null, ruling R2) never
+  // has this decide anything -- there is no Household section for it to gate in the first place.
+  const householdGridVisible = selectedPersonId === null;
+  // A person's own grid follows the SAME pill, with one deliberate exception: `household ===
+  // null` means there is no household scope to distinguish a selection FROM (a self viewer,
+  // ruling R2) -- there are no pills, and the one personal section they have is the only thing
+  // on the page, so it always shows rather than waiting on a selection nothing ever sets it to.
+  const personalGridVisible = (userId: number): boolean => household === null || selectedPersonId === userId;
+
   return (
     <div className="flex flex-col gap-4 sm:gap-5">
       {/* Ruling U1 (v1.18.0): no eyebrow. MonthNav in `actions` already names the month, in the
@@ -1370,7 +1440,46 @@ export function BudgetsClient({
       <PageHeader
         title="Budgets"
         description="A limit set here applies to this month and every month after it, until you change it again."
-        actions={<MonthNav month={month} basePath="/budgets" />}
+        actions={
+          // v1.21.0 item 1 (2026-08-30 plan, item 1): PageHeader's own actions slot is a plain
+          // row now (item 5 the same plan already shipped) -- a caller stacking several rows
+          // composes its own column, exactly the way dashboard/page.tsx does for its own
+          // month-nav-plus-pills pair. See PageHeader.tsx's own doc comment.
+          <div className="flex w-full flex-col items-start gap-2 sm:items-end">
+            <MonthNav
+              month={month}
+              basePath="/budgets"
+              // Ruling (dashboard's own T7 precedent): the scope pill must survive a month
+              // change, or picking a different month would silently reset which grid is
+              // showing. Household (null) carries nothing extra, same as the dashboard's own
+              // `person=` omission for its own default scope.
+              extraParams={selectedPersonId !== null ? { person: String(selectedPersonId) } : {}}
+            />
+            {/* Ruling R2: no pills at all for a self viewer -- `household` is null for them
+                (same gate the section below uses), and rendering even a disabled/inactive pill
+                here would be the thing that leaks a household scope exists at all. */}
+            {household !== null ? (
+              <nav
+                aria-label="Which budgets to show"
+                className="flex flex-wrap items-center gap-1 rounded-full border border-line bg-surface-2 p-1"
+              >
+                {/* Both pills carry `month=` too, same reasoning as the dashboard's own nav --
+                    switching which budgets are shown must not silently reset which month they
+                    are shown for. No "All" pill (2026-08-30 plan): that would rebuild the
+                    exact long page this item exists to shorten. */}
+                <ScopePill href={`/budgets?month=${month}`} label="Household" active={selectedPersonId === null} />
+                {personal.map((person) => (
+                  <ScopePill
+                    key={person.userId}
+                    href={`/budgets?person=${person.userId}&month=${month}`}
+                    label={person.name}
+                    active={selectedPersonId === person.userId}
+                  />
+                ))}
+              </nav>
+            ) : null}
+          </div>
+        }
       />
 
       {/* Ruling T3/T6: household scope only, so this sits beside the month navigation at the
@@ -1502,20 +1611,24 @@ export function BudgetsClient({
               ) : null}
             </CardBody>
           </Card>
-          <BudgetSectionBody
-            rows={household}
-            scope="household"
-            userId={null}
-            month={month}
-            editMode={householdEditMode}
-            editable // Household budgets are editable by every member (spec section 6).
-            canToggleRollover={currentUserIsAdmin}
-            rolloverOn={householdRolloverOn}
-            predict={householdPredict}
-            sinkingFunds={householdSinkingFunds}
-            applyAction={applyAction}
-            groupState={householdGroupState}
-          />
+          {/* v1.21.0 item 1: the ONE thing the scope pill decides -- everything above (the
+              summary Card, its totals, its own actions) rendered unconditionally either way. */}
+          {householdGridVisible ? (
+            <BudgetSectionBody
+              rows={household}
+              scope="household"
+              userId={null}
+              month={month}
+              editMode={householdEditMode}
+              editable // Household budgets are editable by every member (spec section 6).
+              canToggleRollover={currentUserIsAdmin}
+              rolloverOn={householdRolloverOn}
+              predict={householdPredict}
+              sinkingFunds={householdSinkingFunds}
+              applyAction={applyAction}
+              groupState={householdGroupState}
+            />
+          ) : null}
         </section>
       ) : null}
 
@@ -1537,6 +1650,7 @@ export function BudgetsClient({
             personPredict={personPredict}
             showHistorySentence={showHistorySentence}
             personNoAttribution={personNoAttribution}
+            gridVisible={personalGridVisible(person.userId)}
           />
         );
       })}

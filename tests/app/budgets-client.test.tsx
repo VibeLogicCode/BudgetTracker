@@ -205,12 +205,18 @@ describe('BudgetsClient — review finding 2: archived rows are read-only', () =
 describe('BudgetsClient — polish item 5: other members’ personal sections are read-only', () => {
   const personalRow = makeRow({ categoryId: 7, categoryName: 'Hobbies', limitCents: 15000 });
 
-  function renderFor(currentUserIsAdmin: boolean) {
+  // v1.21.0 item 1: the category GRID now follows the scope pill, so only one person's grid is
+  // ever mounted per render (see budgets-client.tsx's own `selectedPersonId` doc comment) --
+  // this helper takes WHICH person's scope is selected rather than rendering both at once the
+  // way it used to. The header each section always carries (name, "Copy previous month", the
+  // read-only marker) is unaffected either way, which is exactly what these tests check.
+  function renderFor(currentUserIsAdmin: boolean, selectedPersonId: number) {
     return render(
       <BudgetsClient
         month="2026-03"
         currentUserId={1}
         currentUserIsAdmin={currentUserIsAdmin}
+        selectedPersonId={selectedPersonId}
         household={[]}
         householdTotals={{ budgetedLimitCents: 0, budgetedSpentCents: 0, totalSpentCents: 0 }}
         personal={[
@@ -230,14 +236,14 @@ describe('BudgetsClient — polish item 5: other members’ personal sections ar
   }
 
   it('a non-admin gets inputs and a copy button for themselves only', () => {
-    const { container } = renderFor(false);
-
-    const mine = sectionFor(container, 'Alice');
+    const { container: aliceScoped } = renderFor(false, 1);
+    const mine = sectionFor(aliceScoped, 'Alice');
     openEditLimits(mine);
     expect(mine.querySelector('input[name="amount"]')).not.toBeNull();
     expect(mine.textContent).toContain('Copy previous month');
 
-    const theirs = sectionFor(container, 'Bob');
+    const { container: bobScoped } = renderFor(false, 2);
+    const theirs = sectionFor(bobScoped, 'Bob');
     openEditLimits(theirs);
     // No control that setLimitAction / copyPreviousMonthAction would refuse anyway.
     expect(theirs.querySelector('input[name="amount"]')).toBeNull();
@@ -249,8 +255,8 @@ describe('BudgetsClient — polish item 5: other members’ personal sections ar
   });
 
   it('an admin keeps the controls on everyone’s section', () => {
-    const { container } = renderFor(true);
-    for (const name of ['Alice', 'Bob']) {
+    for (const [name, id] of [['Alice', 1], ['Bob', 2]] as const) {
+      const { container } = renderFor(true, id);
       const section = sectionFor(container, name);
       openEditLimits(section);
       expect(section.querySelector('input[name="amount"]')).not.toBeNull();
@@ -785,7 +791,10 @@ describe('v1.18.0 Lane 2 items 1-2: a group collapses, and its header already ca
   });
 
   it('Household and Personal never collapse themselves (ruling U4) -- both render their rows with no click needed', () => {
-    const { container, getAllByRole } = render(
+    // v1.21.0 item 1: only one scope's grid is mounted per render now (the pill picks which),
+    // so this proves the rule once for the Household-scoped render (the default) and once more
+    // for Alice's own -- two renders, not the one that used to see both grids at once.
+    const { container: householdScoped, getAllByRole: householdButtons } = render(
       <BudgetsClient
         month="2026-03"
         currentUserId={1}
@@ -794,10 +803,22 @@ describe('v1.18.0 Lane 2 items 1-2: a group collapses, and its header already ca
         personal={[{ userId: 1, name: 'Alice', rows: [makeRow({ categoryId: 2 })] }]}
       />,
     );
-    for (const button of getAllByRole('button', { name: 'Edit limits' })) fireEvent.click(button);
-    const householdRow = container.querySelector('#budget-row-household-h-1') as HTMLDivElement;
-    const personalRow = container.querySelector('#budget-row-personal-1-2') as HTMLDivElement;
+    for (const button of householdButtons('button', { name: 'Edit limits' })) fireEvent.click(button);
+    const householdRow = householdScoped.querySelector('#budget-row-household-h-1') as HTMLDivElement;
     expect(householdRow.hidden).toBe(false);
+
+    const { container: aliceScoped, getAllByRole: aliceButtons } = render(
+      <BudgetsClient
+        month="2026-03"
+        currentUserId={1}
+        selectedPersonId={1}
+        household={[makeRow({ categoryId: 1 })]}
+        householdTotals={{ budgetedLimitCents: 20000, budgetedSpentCents: 5000, totalSpentCents: 5000 }}
+        personal={[{ userId: 1, name: 'Alice', rows: [makeRow({ categoryId: 2 })] }]}
+      />,
+    );
+    for (const button of aliceButtons('button', { name: 'Edit limits' })) fireEvent.click(button);
+    const personalRow = aliceScoped.querySelector('#budget-row-personal-1-2') as HTMLDivElement;
     expect(personalRow.hidden).toBe(false);
   });
 
@@ -841,6 +862,15 @@ describe('v1.18.0 Lane 2 items 1-2: a group collapses, and its header already ca
   });
 
   it('ruling U5: remembers an open group across a remount, keyed separately for household and personal', () => {
+    // v1.21.0 item 1: only one scope's grid mounts per render now, so "opening the household
+    // one must not touch Alice's own copy of the same category id" is proven across renders --
+    // open household's, remount Household-scoped to prove IT persisted, then switch to Alice's
+    // own scope and prove HER copy of the same category (10) was never touched.
+    // Both sections' headers render on every one of these renders regardless of which grid is
+    // selected (household's own Card, and Alice's, per PersonalCard's own doc comment) -- so
+    // "Edit limits" always has two matches; household's is the first in document order (it
+    // renders before the `personal.map(...)` loop), same as this test's original comment on
+    // "Housing" below.
     const { getAllByRole, unmount } = render(
       <BudgetsClient
         month="2026-03"
@@ -850,13 +880,12 @@ describe('v1.18.0 Lane 2 items 1-2: a group collapses, and its header already ca
         personal={[{ userId: 1, name: 'Alice', rows: [housingGroupRow()] }]}
       />,
     );
-    for (const button of getAllByRole('button', { name: 'Edit limits' })) fireEvent.click(button);
-    // Two sections, same category id (10) -- opening the household one (the first "Housing" in
-    // document order) must not touch Alice's own copy of the same category.
+    fireEvent.click(getAllByRole('button', { name: 'Edit limits' })[0]);
     fireEvent.click(getAllByRole('button', { name: 'Housing' })[0]);
+    expect(getAllByRole('button', { name: 'Housing' })[0].getAttribute('aria-expanded')).toBe('true');
     unmount();
 
-    const { getAllByRole: getAllByRoleAfterRemount } = render(
+    const { getAllByRole: getAllByRoleAfterRemount, unmount: unmountAfterRemount } = render(
       <BudgetsClient
         month="2026-03"
         currentUserId={1}
@@ -865,9 +894,28 @@ describe('v1.18.0 Lane 2 items 1-2: a group collapses, and its header already ca
         personal={[{ userId: 1, name: 'Alice', rows: [housingGroupRow()] }]}
       />,
     );
-    for (const button of getAllByRoleAfterRemount('button', { name: 'Edit limits' })) fireEvent.click(button);
-    const toggles = getAllByRoleAfterRemount('button', { name: 'Housing' });
-    expect(toggles.map((t) => t.getAttribute('aria-expanded'))).toEqual(['true', 'false']);
+    fireEvent.click(getAllByRoleAfterRemount('button', { name: 'Edit limits' })[0]);
+    // The household's own group is still open after the remount.
+    expect(getAllByRoleAfterRemount('button', { name: 'Housing' })[0].getAttribute('aria-expanded')).toBe('true');
+    unmountAfterRemount();
+
+    const { getAllByRole: getAllByRoleAliceScoped, getByRole: getByRoleAliceScoped } = render(
+      <BudgetsClient
+        month="2026-03"
+        currentUserId={1}
+        selectedPersonId={1}
+        household={[housingGroupRow()]}
+        householdTotals={{ budgetedLimitCents: 200000, budgetedSpentCents: 150000, totalSpentCents: 150000 }}
+        personal={[{ userId: 1, name: 'Alice', rows: [housingGroupRow()] }]}
+      />,
+    );
+    // Household's own Card header still renders (and still offers its own Edit limits toggle)
+    // even though its grid is not the one selected -- clicking every "Edit limits" toggle here
+    // reaches Alice's own regardless of how many others exist.
+    for (const button of getAllByRoleAliceScoped('button', { name: 'Edit limits' })) fireEvent.click(button);
+    // Alice's own copy of category id 10 -- untouched by opening the household's above, which is
+    // exactly what a separate localStorage key (`budgets:groups:personal:1`) buys.
+    expect(getByRoleAliceScoped('button', { name: 'Housing' }).getAttribute('aria-expanded')).toBe('false');
   });
 
   it('ruling U5: renders correctly (all closed) when localStorage throws on read', () => {

@@ -82,6 +82,31 @@ export default async function BudgetsPage({
     ? listAttributablePeople().filter((person) => person.id === viewer.id)
     : listAttributablePeople();
 
+  /**
+   * v1.21.0 item 1: which SET OF BUDGETS the category grid below shows -- reusing the
+   * dashboard's own `?person=` param and validation shape (dashboard/page.tsx's `urlScope`),
+   * not a new control (see budgets-client.tsx's own doc comment on why this is a filter over
+   * which GRID renders, never over which DATA is fetched -- every household/personal query
+   * below still runs exactly as it did before this item, for every scope, unconditionally).
+   * A non-numeric or unrecognised id falls back to the default (household), the same
+   * "malformed input is a reason to fall back, never to throw" rule `month` above already
+   * follows -- and, deliberately, the same fallback a since-removed member or a stale bookmark
+   * produces, rather than a page that errors because someone left the household.
+   *
+   * Ruling R2: forced null for a self viewer regardless of the URL. There is no household
+   * scope for them to select in the first place, and (falls out of the same rule) they get no
+   * pills to choose one with at all -- `people` above is already just themselves, so this could
+   * never resolve to anyone else even unvalidated, but forcing it here keeps the rule stated in
+   * one place rather than relying on that incidental fact.
+   */
+  const rawPerson = Array.isArray(params.person) ? params.person[0] : params.person;
+  const requestedPersonId = rawPerson && /^\d+$/.test(rawPerson) ? Number(rawPerson) : null;
+  const selectedPersonId = selfScoped
+    ? null
+    : requestedPersonId !== null && people.some((person) => person.id === requestedPersonId)
+      ? requestedPersonId
+      : null;
+
   const { tz } = readEnv();
   const today = todayIso(new Date(), tz);
   const dayOfMonth = Number(today.slice(8, 10));
@@ -157,6 +182,7 @@ export default async function BudgetsPage({
       month={month}
       currentUserId={viewer.id}
       currentUserIsAdmin={viewer.role === 'admin'}
+      selectedPersonId={selectedPersonId}
       household={household}
       householdRolloverIds={householdRolloverIds}
       householdTotals={household === null ? null : budgetTotals(household)}
