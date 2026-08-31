@@ -277,12 +277,29 @@ export { STALE_SNAPSHOT_DAYS };
  * of silently passing as current. The stale check only runs on the branch where a snapshot was
  * found, so an account is counted in exactly one of accountsMissing/accountsStale, never both.
  * A carried balance > 0 is an asset; < 0 is debt (its absolute value); debtOverTime's owed
- * figure for the month is added on top of the debts side (a month debtOverTime could not
- * reconstruct, MUST-15.7's null case, folds in as 0 rather than forcing debtsCents to carry a
- * null NetWorthPoint's contract does not allow). Months before the first snapshot of any
- * (active) account are omitted entirely -- never fabricate net worth history predating every
- * account's first recorded balance. No snapshot anywhere (or no active account at all)
- * returns [].
+ * figure for the month is added on top of the debts side and its LENT figure on top of the
+ * assets side (a month debtOverTime could not reconstruct, MUST-15.7's null case, folds in as 0
+ * for whichever side it belongs to rather than forcing assetsCents/debtsCents to carry a null
+ * NetWorthPoint's contract does not allow). Months before the first snapshot of any (active)
+ * account are omitted entirely -- never fabricate net worth history predating every account's
+ * first recorded balance. No snapshot anywhere (or no active account at all) returns [].
+ *
+ * Item 7 (2026-08-30 plan): lentCents counts as an asset, a DELIBERATE decision, not an
+ * oversight left over from before debtOverTime returned it. `current_balance_cents` on a 'lent'
+ * loan is the exact same kind of number as on an 'owed' one -- a household-maintained balance,
+ * corrected the same way, trusted the same way, surfaced on the same dashboard (WhoOwesUsCard)
+ * as real money the household expects back. Excluding it while including its 'owed' twin is the
+ * asymmetry item 8a's own reasoning already rejects on the transaction side: lending $6,000 out
+ * turns cash into a receivable, not into nothing, so the receivable belongs on the balance sheet.
+ * The counterargument recorded here rather than silently overridden: a debt owed TO the household
+ * may never actually be repaid, unlike a snapshot balance backed by a bank's own figure. That is
+ * real, but it is not particular to a loan -- every other asset counted above (an investment
+ * account's snapshot, a bank's own stated balance) carries the same "the number could turn out to
+ * be wrong" risk with no special discount applied, and a household that decides a specific loan is
+ * uncollectible already has a lever for that: correct or zero its own current_balance_cents, the
+ * same way a lost or devalued account balance would be corrected. There is no separate
+ * "collectability discount" concept anywhere else in this file, and inventing one only for
+ * lentCents would be a second, inconsistent rule.
  *
  * Performance note (v1.8.0): this now calls `balancesAsOf` once per month in the requested
  * window -- two batched queries per call, never one query per account -- rather than the single
@@ -316,7 +333,11 @@ export function netWorthOverTime(months: number, opts: { endMonth?: string; toda
   const firstDate = firstDateRow?.firstDate ?? null;
   if (firstDate === null) return [];
 
-  const debtByMonth = new Map(debtOverTime(months, { endMonth, today }).map((point) => [point.month, point.owedCents]));
+  // Item 7: one call to debtOverTime, both series read off its result -- never a second query
+  // for the lent side, and never a second reconstruction of loan history.
+  const debtSeries = debtOverTime(months, { endMonth, today });
+  const debtByMonth = new Map(debtSeries.map((point) => [point.month, point.owedCents]));
+  const lentByMonth = new Map(debtSeries.map((point) => [point.month, point.lentCents]));
 
   const points: NetWorthPoint[] = [];
   for (const month of keys) {
@@ -342,6 +363,9 @@ export function netWorthOverTime(months: number, opts: { endMonth?: string; toda
     }
 
     debtsCents += debtByMonth.get(month) ?? 0;
+    // Item 7: money lent out is a receivable, and a receivable is an asset -- see this
+    // function's own docblock for the decision and the counterargument it weighs.
+    assetsCents += lentByMonth.get(month) ?? 0;
     points.push({ month, assetsCents, debtsCents, netCents: assetsCents - debtsCents, accountsMissing, accountsStale });
   }
 

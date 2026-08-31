@@ -27,18 +27,38 @@ afterEach(() => {
  * the two dates debtOverTime keys off (createdAt = existence, balanceUpdatedAt = the anchor)
  * and the balance itself matter here; no payments are seeded, so the loan's contribution to
  * debtOverTime is simply its balance, unchanged, for every month at or after the anchor.
+ *
+ * `direction` defaults to omitted -- the column DEFAULT ('owed') -- so every pre-item-7 caller
+ * of this helper keeps exercising exactly the same insert shape it always has. Item 7
+ * (2026-08-30 plan, lentCents as an asset) is the first thing in this file that needs a 'lent'
+ * loan, so it is the first caller to pass one explicitly.
  */
-function seedLoan(t: TestDb, ownerUserId: number, balanceCents: number, anchor = '2020-01-01T00:00:00.000Z'): number {
+function seedLoan(
+  t: TestDb,
+  ownerUserId: number,
+  balanceCents: number,
+  anchor = '2020-01-01T00:00:00.000Z',
+  direction?: 'owed' | 'lent',
+): number {
   const type = t.sqlite
     .prepare(`insert into warranty_item_types (name, is_subscription, kind, created_at) values (?, 0, 'loan', ?) returning id`)
     .get(`Loan type ${Math.random().toString(36).slice(2, 8)}`, anchor) as { id: number };
-  const row = t.sqlite
-    .prepare(
-      `insert into warranty_items
-         (name, purchase_date, is_lifetime, owner_user_id, type_id, current_balance_cents, balance_updated_at, created_at, updated_at)
-       values ('Loan', '2020-01-01', 0, ?, ?, ?, ?, ?, ?) returning id`,
-    )
-    .get(ownerUserId, type.id, balanceCents, anchor, anchor, anchor) as { id: number };
+  const row =
+    direction === undefined
+      ? (t.sqlite
+          .prepare(
+            `insert into warranty_items
+               (name, purchase_date, is_lifetime, owner_user_id, type_id, current_balance_cents, balance_updated_at, created_at, updated_at)
+             values ('Loan', '2020-01-01', 0, ?, ?, ?, ?, ?, ?) returning id`,
+          )
+          .get(ownerUserId, type.id, balanceCents, anchor, anchor, anchor) as { id: number })
+      : (t.sqlite
+          .prepare(
+            `insert into warranty_items
+               (name, purchase_date, is_lifetime, owner_user_id, type_id, loan_direction, current_balance_cents, balance_updated_at, created_at, updated_at)
+             values ('Loan', '2020-01-01', 0, ?, ?, ?, ?, ?, ?, ?) returning id`,
+          )
+          .get(ownerUserId, type.id, direction, balanceCents, anchor, anchor, anchor) as { id: number });
   return row.id;
 }
 
@@ -194,6 +214,44 @@ describe('netWorthOverTime: loan inclusion', () => {
     expect(series[0].assetsCents).toBe(0);
     expect(series[0].debtsCents).toBe(450_000);
     expect(series[0].netCents).toBe(-450_000);
+  });
+
+  /**
+   * Item 7 (2026-08-30 plan): debtOverTime returns BOTH owedCents and lentCents, but this
+   * function used to add only the owed side to debtsCents -- money lent out was never counted
+   * as an asset, so lending $6,000 out made the household's own books $6,000 poorer for no
+   * reason. See this function's own docblock for the deliberate decision (and the
+   * counterargument it weighs) to fold lentCents into assetsCents instead.
+   */
+  it("folds debtOverTime's lent figure for the month into assetsCents, as an asset", () => {
+    current = createSeededTestDb();
+    const userId = insertTestUser(current.db, { username: 'nw-lent' });
+    const accountId = insertTestAccount(current.db);
+    recordBalanceSnapshot({ accountId, date: '2020-06-01', balanceCents: 0, source: 'manual' });
+    seedLoan(current, userId, 600_000, '2020-01-01T00:00:00.000Z', 'lent');
+
+    const series = netWorthOverTime(1, { endMonth: '2026-08', today: '2026-08-18', viewer: household });
+
+    expect(series).toHaveLength(1);
+    expect(series[0].assetsCents).toBe(600_000);
+    expect(series[0].debtsCents).toBe(0);
+    expect(series[0].netCents).toBe(600_000);
+  });
+
+  it('nets an owed loan and a lent loan on opposite sides of the same net worth figure', () => {
+    current = createSeededTestDb();
+    const userId = insertTestUser(current.db, { username: 'nw-both' });
+    const accountId = insertTestAccount(current.db);
+    recordBalanceSnapshot({ accountId, date: '2020-06-01', balanceCents: 0, source: 'manual' });
+    seedLoan(current, userId, 450_000, '2020-01-01T00:00:00.000Z', 'owed');
+    seedLoan(current, userId, 600_000, '2020-01-01T00:00:00.000Z', 'lent');
+
+    const series = netWorthOverTime(1, { endMonth: '2026-08', today: '2026-08-18', viewer: household });
+
+    expect(series).toHaveLength(1);
+    expect(series[0].assetsCents).toBe(600_000);
+    expect(series[0].debtsCents).toBe(450_000);
+    expect(series[0].netCents).toBe(150_000);
   });
 });
 

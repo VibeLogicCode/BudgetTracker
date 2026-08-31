@@ -64,11 +64,75 @@ describe('MUST-13.1: the interest rate is display only', () => {
 });
 
 describe('MUST-13.2: loan payments are invisible to every spend calculation', () => {
-  it('budgets and reports never read the link table at all', () => {
-    for (const file of ['src/lib/budgets.ts', 'src/lib/reports.ts']) {
-      const source = read(file);
-      expect({ file, hit: /loan_payments|loanPayments/.test(source) }).toEqual({ file, hit: false });
-    }
+  it('budgets never reads the link table at all', () => {
+    const source = read('src/lib/budgets.ts');
+    expect({ file: 'src/lib/budgets.ts', hit: /loan_payments|loanPayments/.test(source) }).toEqual({
+      file: 'src/lib/budgets.ts',
+      hit: false,
+    });
+  });
+
+  /**
+   * v1.21.0 (2026-08-30 plan, item 8a; revised the next day after a coordinator review flagged
+   * the FIRST version) narrowed reports.ts from an absolute ban to a SECOND position-aware
+   * carve-out -- the same shape engine.ts's REVIEW_WHERE exemption just below already uses, and
+   * for the same reason: a flat grep cannot tell "quietly filtering a car payment out of spend"
+   * from "correctly excluding a loan disbursement that was never spend to begin with", so the
+   * position has to carry the distinction a plain string match cannot.
+   *
+   * What MUST-13.2 protects, restated, is still absolute: repaying a debt the household OWES --
+   * a car payment, money that leaves and is never seen again -- must count as ordinary spend, in
+   * every budget and every report, forever. Nothing below touches that.
+   *
+   * What changed: item 8a established that not every transaction touching a loan IS spend. Of
+   * the four ways money can move against a loan, three convert cash into a receivable or a
+   * receivable into cash -- lending money out, being repaid, and borrowing -- and none of those
+   * change how much the household earned or consumed; only the fourth, repaying a loan the
+   * household itself owes, is real consumption. `NOT_PRINCIPAL_MOVEMENT` (src/lib/reports.ts) is
+   * the ONE place in this file allowed to read the link table, and it exists to compute exactly
+   * that three-way exclusion, as a correlated SQL predicate rather than a materialized id list --
+   * see its own docblock for the full classification, why it is correlated (not a JS-side scan
+   * repeated at every rangeClauses call site, and no unbounded bind parameters), and the
+   * MUST-11.16 tie-break it derives carefully (an existential OR, not the universal-quantifier
+   * NOT EXISTS that reads almost the same but gets that tie-break backwards). A car payment
+   * (money out, an 'owed' loan) always fails its exclusion test and stays counted; no other
+   * place in reports.ts may read this table to decide what counts as spend.
+   */
+  it('reports.ts reads the link table only inside NOT_PRINCIPAL_MOVEMENT, never anywhere else', () => {
+    const source = read('src/lib/reports.ts');
+    const start = source.indexOf('const NOT_PRINCIPAL_MOVEMENT');
+    expect(start).toBeGreaterThan(-1);
+
+    // NOT_PRINCIPAL_MOVEMENT is `const NAME: SQL = sql\`...\`;` -- one tagged template, not a
+    // function body (brace-counting) or a top-level `and(...)` call (REVIEW_WHERE's own "\n);"
+    // search below). Its own SQL text contains no backtick, so the next backtick after the
+    // template's OPENING one is unambiguously its closing one.
+    const openBacktick = source.indexOf('`', start);
+    expect(openBacktick).toBeGreaterThan(-1);
+    const closeBacktick = source.indexOf('`', openBacktick + 1);
+    expect(closeBacktick).toBeGreaterThan(openBacktick);
+    const end = closeBacktick + 1;
+
+    const inside = source.slice(start, end);
+    // Same two exemptions REVIEW_WHERE's own check below applies, for the same reasons: the
+    // import (a symbol must be named to be used at all) and comments (a rule that forbids
+    // DESCRIBING the code it governs makes the code less clear, not safer).
+    const outside = (source.slice(0, start) + source.slice(end))
+      .split('\n')
+      .filter((line) => {
+        const trimmed = line.trim();
+        return !/^import\b/.test(trimmed) && !trimmed.startsWith('//') && !trimmed.startsWith('*') && !trimmed.startsWith('/*');
+      })
+      .join('\n');
+
+    expect({ where: 'inside NOT_PRINCIPAL_MOVEMENT', hit: /loan_payments|loanPayments/.test(inside) }).toEqual({
+      where: 'inside NOT_PRINCIPAL_MOVEMENT',
+      hit: true,
+    });
+    expect({ where: 'elsewhere in reports.ts', hit: /loan_payments|loanPayments/.test(outside) }).toEqual({
+      where: 'elsewhere in reports.ts',
+      hit: false,
+    });
   });
 
   /**

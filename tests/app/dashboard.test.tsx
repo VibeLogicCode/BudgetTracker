@@ -8,7 +8,7 @@ import { recordBalanceSnapshot } from '@/lib/networth';
 import { createManualTransaction } from '@/lib/transactions';
 import { createWarrantyItem } from '@/lib/warranty/items';
 import { createItemType } from '@/lib/warranty/types';
-import { addMonths, currentMonth, monthLabel, todayIso } from '@/lib/dates';
+import { addMonths, currentMonth, monthEnd, monthLabel, todayIso } from '@/lib/dates';
 // Lane 1 (src/lib/savings-target.ts): not mocked, real DB, same as every other lib import here.
 import { saveSavingsTarget } from '@/lib/savings-target';
 import { createTestDb, type TestDb } from '../helpers/db';
@@ -200,8 +200,11 @@ describe('DashboardPage (ruling R2)', () => {
     expect(screen.queryByText('Top merchants')).toBeNull();
     expect(screen.queryByRole('navigation', { name: 'Whose money to show' })).toBeNull();
     expect(screen.getByText('Your month.')).toBeTruthy();
-    // The self viewer's own spending still shows up -- this is their own transaction.
-    expect(screen.getByText(/\$12\.00/)).toBeTruthy();
+    // The self viewer's own spending still shows up -- this is their own transaction ($12.00,
+    // uncategorized). Item 4 (2026-08-30 plan) means it now appears in BOTH "Spent this month"
+    // (which counts uncategorized spend since this fix) and "Net this month" (which always did),
+    // so this asserts at least one match rather than the single match it used to be.
+    expect(screen.getAllByText(/\$12\.00/).length).toBeGreaterThanOrEqual(1);
   });
 
   it('a household viewer keeps the full card set, including net worth, top merchants and the person switcher', async () => {
@@ -394,11 +397,13 @@ describe('DashboardPage — ruling T7 (month filter)', () => {
     const adult = await createUser({ name: 'Adult', username: 'adult', password: 'correct horse battery', role: 'admin' });
     const accountId = createAccount({ name: 'Chequing', type: 'chequing', ownerUserId: adult.id });
     recordBalanceSnapshot({ accountId, date: today, balanceCents: 500_000, source: 'manual' });
-    // Categorised, deliberately: "Spent this month" reads budgetTotals(budgetProgress(month)),
-    // which attributes spend by category id and never sees an uncategorised (categoryId: null)
-    // transaction at all -- unlike cashflowTrend (Money in/Net/savingsProgress), which counts
-    // every uncategorised row as spend. A real category is what makes this fixture actually
-    // exercise "Spent this month follows the chosen month" rather than silently proving nothing.
+    // Categorised, though it no longer has to be: before item 8a (2026-08-30 plan), "Spent this
+    // month" read budgetTotals(budgetProgress(month)), which attributes spend by category id and
+    // never saw an uncategorised (categoryId: null) transaction at all -- unlike cashflowTrend
+    // (Money in/Net/savingsProgress), which counted every uncategorised row as spend. Item 4
+    // moved "Spent this month" onto cashflowTrend too, so both would now follow the chosen month
+    // regardless of category; this fixture is kept categorised anyway so this test still proves
+    // the ORIGINAL claim (budgetProgress itself honours `month`) rather than only the newer one.
     const categoryId = createCategory({ name: 'Old Month Category', parentId: null });
     createManualTransaction({
       accountId,
@@ -537,5 +542,160 @@ describe('DashboardPage — ruling T7 (month filter)', () => {
     const data = capturedSavingsChartProps.data as Array<{ targetCents: number | null }>;
     expect(data.length).toBeGreaterThan(0);
     expect(data.every((row) => row.targetCents === null)).toBe(true);
+  });
+});
+
+/**
+ * Item 4 (2026-08-30 plan): "Spent this month" now counts EVERYTHING cashflowTrend counts
+ * (uncategorized rows included), so it reconciles with "Money in" and "Net this month" on the
+ * face of the card, and names the uncategorized share with a link to the review queue.
+ */
+describe('DashboardPage — item 4 (Spent tile counts everything)', () => {
+  let t: TestDb | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  const today = todayIso();
+
+  it('Spent this month includes uncategorized spend, reconciles Money in - Spent = Net, and names the uncategorized share with a link', async () => {
+    t = createTestDb();
+    const adult = await createUser({ name: 'Adult', username: 'adult', password: 'correct horse battery', role: 'admin' });
+    const accountId = createAccount({ name: 'Chequing', type: 'chequing', ownerUserId: adult.id });
+    const salary = createCategory({ name: 'Salary', parentId: null, isIncome: true });
+    const groceries = createCategory({ name: 'Groceries', parentId: null });
+    createManualTransaction({
+      accountId,
+      date: today,
+      description: 'PAYCHEQUE',
+      amountCents: 500_000,
+      categoryId: salary,
+      attributedUserId: adult.id,
+      userId: adult.id,
+      actorRole: 'admin',
+    });
+    createManualTransaction({
+      accountId,
+      date: today,
+      description: 'SUPERMARKET',
+      amountCents: -100_000,
+      categoryId: groceries,
+      attributedUserId: adult.id,
+      userId: adult.id,
+      actorRole: 'admin',
+    });
+    createManualTransaction({
+      accountId,
+      date: today,
+      description: 'UNKNOWN SHOP',
+      amountCents: -25_000,
+      categoryId: null,
+      attributedUserId: adult.id,
+      userId: adult.id,
+      actorRole: 'admin',
+    });
+    currentUser.value = { id: adult.id, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+
+    // $1,000.00 (Groceries) + $250.00 (uncategorized) = $1,250.00 -- before item 4 this tile
+    // would have shown only $1,000.00 (budgetProgress never sees the uncategorized row at all).
+    const spentTile = screen.getByText('Spent this month').closest('div');
+    expect(spentTile?.textContent).toContain('$1,250.00');
+
+    // The uncategorized share is named on the tile, linking to the review queue.
+    const uncategorizedLink = screen.getByText('$250.00 not categorized yet');
+    expect(uncategorizedLink.closest('a')?.getAttribute('href')).toBe('/transactions?review=1');
+
+    // Money in ($5,000.00) - Spent ($1,250.00) = Net (+$3,750.00) -- the reconciliation item 4
+    // exists to restore.
+    const moneyInTile = screen.getByText('Money in').closest('div');
+    expect(moneyInTile?.textContent).toContain('$5,000.00');
+    const netTile = screen.getByText('Net this month').closest('div');
+    expect(netTile?.textContent).toContain('+$3,750.00');
+  });
+
+  it('says nothing about uncategorized spend when there is none', async () => {
+    t = createTestDb();
+    const adult = await createUser({ name: 'Adult', username: 'adult', password: 'correct horse battery', role: 'admin' });
+    const accountId = createAccount({ name: 'Chequing', type: 'chequing', ownerUserId: adult.id });
+    const groceries = createCategory({ name: 'Groceries', parentId: null });
+    createManualTransaction({
+      accountId,
+      date: today,
+      description: 'SUPERMARKET',
+      amountCents: -100_000,
+      categoryId: groceries,
+      attributedUserId: adult.id,
+      userId: adult.id,
+      actorRole: 'admin',
+    });
+    currentUser.value = { id: adult.id, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+
+    const spentTile = screen.getByText('Spent this month').closest('div');
+    expect(spentTile?.textContent).toContain('$1,000.00');
+    expect(screen.queryByText(/not categorized yet/)).toBeNull();
+  });
+});
+
+/**
+ * Item 7 (2026-08-30 plan): when an active account has no balance snapshot at all, the Net worth
+ * tile stops asserting a sign (accountsMissing > 0 means the sign is not established), marks the
+ * figure "(partial)", and offers a route to fix it -- rather than rendering a confident green or
+ * red figure that excludes the very accounts that could flip it.
+ */
+describe('DashboardPage — item 7 (Net worth stops asserting when accounts are missing)', () => {
+  let t: TestDb | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  const today = todayIso();
+
+  it('marks the figure partial, drops the positive/negative tone, drops the delta, and links to Settings > Accounts', async () => {
+    t = createTestDb();
+    const adult = await createUser({ name: 'Adult', username: 'adult', password: 'correct horse battery', role: 'admin' });
+    const hasSnapshot = createAccount({ name: 'Chequing', type: 'chequing', ownerUserId: adult.id });
+    createAccount({ name: 'Never snapshotted', type: 'credit', ownerUserId: adult.id });
+    recordBalanceSnapshot({ accountId: hasSnapshot, date: today, balanceCents: 500_000, source: 'manual' });
+    currentUser.value = { id: adult.id, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    const { container } = render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+
+    const netWorthTile = screen.getByText('Net worth').closest('div') as HTMLElement;
+    expect(netWorthTile.textContent).toContain('(partial)');
+    expect(netWorthTile.textContent).toContain('1 account has no balance yet');
+    // No colored tone -- the sign is not established with an account excluded.
+    const valueSpan = netWorthTile.querySelector('.money-lg') as HTMLElement;
+    expect(valueSpan.className).not.toMatch(/money-pos|money-neg/);
+    // No "vs last month" delta compounding the same unsupported claim a second way.
+    expect(netWorthTile.textContent).not.toMatch(/vs last month/);
+
+    const accountsLink = screen.getByText('Update in Settings and Accounts').closest('a');
+    expect(accountsLink?.getAttribute('href')).toBe('/settings/accounts');
+    void container;
+  });
+
+  it('keeps the positive/negative tone and the delta when no account is missing a balance', async () => {
+    t = createTestDb();
+    const adult = await createUser({ name: 'Adult', username: 'adult', password: 'correct horse battery', role: 'admin' });
+    const accountId = createAccount({ name: 'Chequing', type: 'chequing', ownerUserId: adult.id });
+    // addMonths takes a MONTH KEY ('YYYY-MM'), not a full date -- monthEnd back to a real date.
+    recordBalanceSnapshot({ accountId, date: monthEnd(addMonths(currentMonth(), -1)), balanceCents: 400_000, source: 'manual' });
+    recordBalanceSnapshot({ accountId, date: today, balanceCents: 500_000, source: 'manual' });
+    currentUser.value = { id: adult.id, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+
+    const netWorthTile = screen.getByText('Net worth').closest('div') as HTMLElement;
+    expect(netWorthTile.textContent).not.toContain('(partial)');
+    const valueSpan = netWorthTile.querySelector('.money-lg') as HTMLElement;
+    expect(valueSpan.className).toMatch(/money-pos/);
+    expect(netWorthTile.textContent).toMatch(/vs last month/);
+    expect(screen.queryByText('Update in Settings and Accounts')).toBeNull();
   });
 });

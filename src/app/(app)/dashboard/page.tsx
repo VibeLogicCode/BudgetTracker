@@ -13,7 +13,7 @@ import { householdInsights } from '@/lib/insights';
 import { listLoans } from '@/lib/loans';
 import { netWorthHint, netWorthOverTime } from '@/lib/networth';
 import { onboardingSteps } from '@/lib/onboarding';
-import { cashflowTrend, topMerchants } from '@/lib/reports';
+import { cashflowTrend, categoryBreakdown, topMerchants } from '@/lib/reports';
 import { cashRunway, type CashRunway } from '@/lib/runway';
 import { savingsProgress, type SavingsProgress } from '@/lib/savings-target';
 import { expiringSoonItems } from '@/lib/warranty/search';
@@ -40,8 +40,8 @@ import { ExpiringSoonCard, EXPIRING_WIDGET_LIMIT } from '@/components/warranty/E
 
 /**
  * Item 1 (2026-08-30 plan): "+2.4% vs last month", derived from whatever prior-period figure
- * the tile already has a twin query for (see prevMonthCashflow/prevTotals/netWorthPrev below --
- * none of this widens what the page COMPUTES for its headline values, only what it fetches
+ * the tile already has a twin query for (see prevMonthCashflow/netWorthPrev below -- none of
+ * this widens what the page COMPUTES for its headline values, only what it fetches
  * ALONGSIDE them to describe a trend). `prev === 0` returns null rather than a fabricated
  * percentage (a household with $0 spent last month dividing by zero is not "infinite percent
  * more", it is nothing to compare against) -- callers render no delta at all in that case, which
@@ -117,12 +117,16 @@ export default async function DashboardPage({
   // dedicated one-month query, not a lookup into `trend`, which cashflowTrend already supports
   // (Lane 1's own note: "every function the page calls already takes a month or a range").
   const monthCashflow = cashflowTrend(1, { endMonth: month, attributedUserId: scopeUserId }, viewer)[0] ?? null;
-  // Item 1: the prior-period twin of `rows`/`totals`/`monthCashflow` above, purely to power each
-  // tile's "vs last month" delta -- same functions, same scoping, one month earlier than whatever
-  // is being VIEWED (not calendar-"last month" when a past month is being drilled into).
+  // Item 1: the prior-period twin of `monthCashflow` above, purely to power each tile's "vs last
+  // month" delta -- same function, same scoping, one month earlier than whatever is being VIEWED
+  // (not calendar-"last month" when a past month is being drilled into).
+  //
+  // Item 4 (2026-08-30 plan): this used to also carry `prevRows`/`prevTotals`
+  // (budgetProgress/budgetTotals for prevMonth), purely to power the old "Spent this month"
+  // delta. That delta now compares spentCents/prevSpentCents (both cashflowTrend figures, below)
+  // instead, so the budget-scoped prior-month query was dropped rather than left computing a
+  // number nothing on this page reads any more.
   const prevMonth = addMonths(month, -1);
-  const prevRows = scopeUserId === null ? budgetProgress(prevMonth) : budgetProgress(prevMonth, 'personal', scopeUserId);
-  const prevTotals = budgetTotals(prevRows);
   const prevMonthCashflow = cashflowTrend(1, { endMonth: prevMonth, attributedUserId: scopeUserId }, viewer)[0] ?? null;
   const merchants = topMerchants(
     { from: monthStart(month), to: monthEnd(month), limit: 8, attributedUserId: scopeUserId },
@@ -205,7 +209,35 @@ export default async function DashboardPage({
   // the 12-month `trend` -- ruling T7 pinned that one to today, so a viewed month outside its
   // trailing-12 window would otherwise silently zero out these two tiles.
   const incomeCents = monthCashflow?.incomeCents ?? 0;
-  const netCents = monthCashflow?.netCents ?? incomeCents - totals.totalSpentCents;
+
+  /**
+   * Item 4 (2026-08-30 plan): "Spent this month" now counts EVERYTHING cashflowTrend counts --
+   * every non-income, non-transfer row (uncategorized included), minus item 8a's loan-principal
+   * exclusions -- the same source Money in/Net already read, so the three headline tiles
+   * reconcile on their face: Money in - Spent = Net, always. Before this, the tile read
+   * `totals.totalSpentCents` (budgetProgress, CATEGORIZED rows only), which could -- and on the
+   * owner's own reported case, did -- disagree with Net by exactly the amount of uncategorized
+   * spend. `totals.totalSpentCents` keeps its home in this tile's own hint and the progress bar
+   * below it, where a budget-relative comparison belongs; it is not deleted, only demoted.
+   */
+  const spentCents = monthCashflow?.spendCents ?? 0;
+  const prevSpentCents = prevMonthCashflow?.spendCents ?? 0;
+  const netCents = monthCashflow?.netCents ?? incomeCents - spentCents;
+
+  /**
+   * Item 4: the gap between "everything spent" (spentCents, above) and "spend that has a
+   * category" (totals.totalSpentCents) is uncategorized spend -- but it is read directly off
+   * categoryBreakdown's own null-category bucket rather than diffed between those two numbers.
+   * A diff would also include item 8a's loan-principal exclusions the moment a CATEGORIZED
+   * transaction happens to be a loan link (assigning to a loan never touches category_id, so a
+   * previously-categorized row can do exactly this) -- a real gap, but a different one, and
+   * mislabelling it "not categorized yet" would send someone to the review queue to fix a row
+   * that was never uncategorized in the first place.
+   */
+  const uncategorizedSpentCents =
+    categoryBreakdown({ from: monthStart(month), to: monthEnd(month), attributedUserId: scopeUserId }, viewer).find(
+      (row) => row.categoryId === null,
+    )?.spentCents ?? 0;
 
   const budgetRows = rows.filter((row) => !row.isIncome && (row.limitCents !== null || row.spentCents !== 0));
   const scopedPerson = scopeUserId === null ? null : people.find((person) => person.id === scopeUserId);
@@ -377,15 +409,32 @@ export default async function DashboardPage({
           className="sm:col-span-2"
           emphasis
           label="Spent this month"
-          value={formatCents(totals.totalSpentCents)}
+          value={formatCents(spentCents)}
           hint={
-            totals.budgetedLimitCents > 0
-              ? `${formatCents(totals.budgetedSpentCents)} of ${formatCents(totals.budgetedLimitCents)} budgeted`
-              : 'No category limits set yet'
+            <>
+              {totals.budgetedLimitCents > 0
+                ? `${formatCents(totals.budgetedSpentCents)} of ${formatCents(totals.budgetedLimitCents)} budgeted`
+                : 'No category limits set yet'}
+              {/* Item 4: the tile now counts uncategorized spend in its headline, so it says so
+                  here rather than leaving the gap between this figure and "budgeted" unexplained
+                  -- and links straight to the queue that fixes it. */}
+              {uncategorizedSpentCents > 0 ? (
+                <>
+                  <br />
+                  <Link href="/transactions?review=1" className="underline hover:text-ink">
+                    {formatCents(uncategorizedSpentCents)} not categorized yet
+                  </Link>
+                </>
+              ) : null}
+            </>
           }
           // Item 1: spending UP is bad news, so goodWhenUp is false here -- the one tile in this
-          // grid where a positive arithmetic move is the negative-toned one.
-          {...deltaProps(totals.totalSpentCents, prevTotals.totalSpentCents, false)}
+          // grid where a positive arithmetic move is the negative-toned one. Item 4: the delta now
+          // compares the SAME figure the tile displays (spentCents/prevSpentCents), not the
+          // budget-relative totalSpentCents pair -- a "+12% vs last month" describing a different
+          // number than the one shown above it would be its own version of this item's original
+          // defect.
+          {...deltaProps(spentCents, prevSpentCents, false)}
           footer={
             totals.budgetedLimitCents > 0 ? (
               <ProgressBar
@@ -409,7 +458,13 @@ export default async function DashboardPage({
           hint={netCents < 0 ? 'Spending outran income' : 'Kept, after everything went out'}
           {...deltaProps(
             netCents,
-            prevMonthCashflow?.netCents ?? (prevMonthCashflow?.incomeCents ?? 0) - prevTotals.totalSpentCents,
+            // Item 4: this fallback now matches netCents' OWN fallback above -- spentCents/
+            // prevSpentCents (the "everything" cashflow figure), never the budget-relative
+            // totalSpentCents pair. Both fallbacks are effectively unreachable in practice
+            // (cashflowTrend(1, ...) always returns exactly one row), kept only so a delta
+            // computed from a hypothetically-missing monthCashflow point could never describe a
+            // different number than the tile itself would then be showing.
+            prevMonthCashflow?.netCents ?? (prevMonthCashflow?.incomeCents ?? 0) - prevSpentCents,
             true,
           )}
         />
@@ -420,26 +475,56 @@ export default async function DashboardPage({
             the Reports Net worth card was disclosing the opposite for the same figure --
             netWorthHint is the one place that wording is decided now, so the two surfaces
             cannot disagree. Ruling R2: also absent whenever the viewer is self-scoped -- see
-            netWorthLatest's own comment above. */}
+            netWorthLatest's own comment above.
+
+            Item 7 (2026-08-30 plan): when accountsMissing > 0 this tile STOPS ASSERTING a sign --
+            with accounts excluded, the sign is not established (they could easily be credit cards
+            that flip it), so a green/red tone here would be a claim the data does not support.
+            The figure itself is kept (it is still genuinely useful), marked "(partial)" beside
+            the number, and the "vs last month" delta -- which would otherwise put its own
+            good/bad tone on a comparison between two possibly-differently-partial figures -- is
+            dropped rather than compounding the same claim a second way. netWorthHint's own
+            wording (unchanged, still the single source of "N accounts...") already says what is
+            missing; this only adds the route to fix it, the same "Update ... in Settings and
+            Accounts" call to action the Reports net-worth card already offers for the identical
+            figure. */}
         {netWorthLatest === null ? null : (
           <StatTile
             label="Net worth"
-            value={formatCents(netWorthLatest.netCents, { showSign: true })}
-            tone={netWorthLatest.netCents < 0 ? 'negative' : 'positive'}
+            value={
+              <>
+                {formatCents(netWorthLatest.netCents, { showSign: true })}
+                {netWorthLatest.accountsMissing > 0 ? (
+                  <span className="ml-1.5 align-middle text-xs font-normal text-muted">(partial)</span>
+                ) : null}
+              </>
+            }
+            tone={netWorthLatest.accountsMissing > 0 ? 'default' : netWorthLatest.netCents < 0 ? 'negative' : 'positive'}
             // Ruling T7: net worth does not follow the chosen month (it is always today's
             // balance sheet) -- netWorthHint's own sentence is unaffected, so the disclosure is
             // appended after it rather than replacing it.
             hint={
               <>
                 {netWorthHint(netWorthLatest)}
+                {netWorthLatest.accountsMissing > 0 ? (
+                  <>
+                    {' '}
+                    <Link href="/settings/accounts" className="underline hover:text-ink">
+                      Update in Settings and Accounts
+                    </Link>
+                  </>
+                ) : null}
                 {!isCurrentMonth ? ' · as of today' : ''}
               </>
             }
             // Item 1: only when there IS a prior point -- netWorthPrev is null (rather than 0)
             // when the household's own history does not reach back that far yet, and deltaProps
             // treats a genuine 0 prior balance differently (that still renders a delta) from "no
-            // prior data" (which must not).
-            {...(netWorthPrev !== null ? deltaProps(netWorthLatest.netCents, netWorthPrev.netCents, true) : {})}
+            // prior data" (which must not). Item 7: also suppressed once accountsMissing > 0 --
+            // see this tile's own comment above.
+            {...(netWorthPrev !== null && netWorthLatest.accountsMissing === 0
+              ? deltaProps(netWorthLatest.netCents, netWorthPrev.netCents, true)
+              : {})}
           />
         )}
         {/* Lane 3 item 4: ruling T3 makes both of these household-only, same gate as Net worth
