@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, cleanup } from '@testing-library/react';
+import { sql } from 'drizzle-orm';
+import { nowIso } from '@/lib/clock';
 import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
 
 /**
@@ -104,6 +106,56 @@ describe('TransactionsPage: ?review=1 (ruling R2)', () => {
 
     const { container } = await renderPage({});
     expect(container.textContent).not.toContain('Every import runs each new transaction past the categorizer');
+  });
+});
+
+/**
+ * Item 2 (owner report): a saved note used to vanish from the row entirely -- nothing said one
+ * existed until the Note… editor was reopened blind. transactions-client.tsx's own note
+ * indicator renders only when `row.notes` is non-empty, with the note text as its `title` -- so
+ * finding that literal title in the rendered page proves `notes` actually survived
+ * listTransactions' SELECTION (src/lib/transactions.ts already selects it) and page.tsx's
+ * straight `page={page}` pass-through to the client, not merely that the client COULD render it
+ * if it had it.
+ */
+describe('Item 2: a transaction note reaches the client end-to-end', () => {
+  let t: TestDb | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  async function renderPage() {
+    const { default: TransactionsPage } = await import('@/app/(app)/transactions/page');
+    return render(await TransactionsPage({ searchParams: Promise.resolve({}) }));
+  }
+
+  it('a row with a note renders the note indicator, its title carrying the note text', async () => {
+    t = createSeededTestDb();
+    const admin = insertTestUser(t.db, { name: 'Alice', username: 'alice', role: 'admin' });
+    const accountId = insertTestAccount(t.db, { type: 'chequing', ownerUserId: null });
+    currentUser.value = { id: admin, name: 'Alice', username: 'alice', role: 'admin', visibility: 'household' };
+    t.db.run(sql`
+      insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, notes, created_by, created_at, updated_at)
+      values (${accountId}, '2026-03-02', 'TIM HORTONS', 'TIM HORTONS', -500, 'paid in cash', ${admin}, ${nowIso()}, ${nowIso()})
+    `);
+
+    const { container } = await renderPage();
+    expect(container.querySelector('button[title="paid in cash"]')).toBeTruthy();
+  });
+
+  it('a row with no note renders no note indicator', async () => {
+    t = createSeededTestDb();
+    const admin = insertTestUser(t.db, { name: 'Alice', username: 'alice', role: 'admin' });
+    const accountId = insertTestAccount(t.db, { type: 'chequing', ownerUserId: null });
+    currentUser.value = { id: admin, name: 'Alice', username: 'alice', role: 'admin', visibility: 'household' };
+    t.db.run(sql`
+      insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, created_by, created_at, updated_at)
+      values (${accountId}, '2026-03-02', 'TIM HORTONS', 'TIM HORTONS', -500, ${admin}, ${nowIso()}, ${nowIso()})
+    `);
+
+    const { container } = await renderPage();
+    expect(container.querySelector('button[aria-label^="Note on"]')).toBeNull();
   });
 });
 

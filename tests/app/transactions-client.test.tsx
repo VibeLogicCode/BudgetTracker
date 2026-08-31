@@ -484,6 +484,9 @@ describe('Split editor (v1.7.0 Task 4)', () => {
     expect(saveButton.disabled).toBe(false);
   });
 
+  // Item 1 (split editor -> modal dialog): the title used to be the fixed string "Split this
+  // transaction"; it now names the transaction ("Split TIM HORTONS"), so "only one editor is
+  // open" is asserted by counting `role="dialog"` elements instead of matching that literal text.
   it('only one row editor is open at a time', () => {
     const { container } = render(
       <TransactionsClient
@@ -503,15 +506,264 @@ describe('Split editor (v1.7.0 Task 4)', () => {
 
     fireEvent.click(kebabs[0]);
     fireEvent.click(screen.getByRole('menuitem', { name: 'Split…' }));
-    expect(screen.getAllByText('Split this transaction')).toHaveLength(1);
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
     expect((container.querySelector('input[name="txnId"]') as HTMLInputElement).value).toBe('1');
 
     fireEvent.click(kebabs[1]);
     fireEvent.click(screen.getByRole('menuitem', { name: 'Split…' }));
-    expect(screen.getAllByText('Split this transaction')).toHaveLength(1);
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
     const txnIdInputs = Array.from(container.querySelectorAll('input[name="txnId"]')) as HTMLInputElement[];
     expect(txnIdInputs.length).toBeGreaterThan(0);
     expect(txnIdInputs.every((input) => input.value === '2')).toBe(true);
+  });
+});
+
+/**
+ * Owner report (item 1): the split editor used to render at the very top of the page (a plain
+ * Card, wherever `splitting` happened to sit in the JSX), so pressing Split… looked like it did
+ * nothing until a person scrolled up -- and once there, they had lost track of which row they
+ * were splitting. It is a real modal dialog now: a dimmed/blurred backdrop that closes it on
+ * click, role="dialog" + aria-modal, a header naming the transaction, a focus trap, Escape-to-
+ * close, and the page behind stops scrolling while it is open.
+ */
+describe('Split editor is a modal dialog, not a card at the top of the page (item 1)', () => {
+  const categories = [{ id: 42, name: 'Old Category', parentId: null, isArchived: false, sortOrder: 0 }];
+
+  function openSplit() {
+    render(
+      <TransactionsClient
+        page={pageWithRow({ id: 1, date: '2026-03-02', amountCents: -500, normalizedMerchant: 'TIM HORTONS' })}
+        accounts={[{ id: 1, name: 'Joint Chequing' }]}
+        categories={categories}
+        people={[]}
+        today="2026-03-02"
+        splits={{}}
+      />,
+    );
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Split…' }));
+  }
+
+  it('opens as a labelled dialog naming the merchant, date and amount', () => {
+    openSplit();
+    const dialog = screen.getByRole('dialog');
+    expect(dialog.getAttribute('aria-modal')).toBe('true');
+    const labelledby = dialog.getAttribute('aria-labelledby');
+    expect(labelledby).toBeTruthy();
+    // aria-labelledby may name more than one element; concatenating each one's text is the same
+    // computation an accessibility tree gives the dialog its accessible name from.
+    const name = labelledby!
+      .split(' ')
+      .map((id) => document.getElementById(id)?.textContent ?? '')
+      .join(' ');
+    expect(name).toContain('TIM HORTONS');
+    expect(name).toContain('2026-03-02');
+    expect(name).toContain('-$5.00');
+  });
+
+  it('moves focus into the dialog on open', () => {
+    openSplit();
+    const dialog = screen.getByRole('dialog');
+    expect(dialog.contains(document.activeElement)).toBe(true);
+  });
+
+  it('returns focus to the row menu button that opened it once it closes', () => {
+    openSplit();
+    const trigger = screen.getByRole('button', { name: /^Actions for TIM HORTONS/ });
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('Escape closes it', () => {
+    openSplit();
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('clicking the backdrop closes it, but clicking a control inside the panel does not', () => {
+    openSplit();
+    fireEvent.click(screen.getByRole('button', { name: 'Add a part' }));
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('split-dialog-backdrop'));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('locks the page behind from scrolling while open, and restores it once closed', () => {
+    openSplit();
+    expect(document.body.style.overflow).toBe('hidden');
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(document.body.style.overflow).not.toBe('hidden');
+  });
+
+  it('traps Tab inside the dialog: past the last control it wraps to the first, and Shift+Tab off the first wraps to the last', () => {
+    openSplit();
+    const dialog = screen.getByRole('dialog');
+    const focusable = Array.from(
+      dialog.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled])',
+      ),
+    );
+    expect(focusable.length).toBeGreaterThan(1);
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+
+    last.focus();
+    fireEvent.keyDown(dialog, { key: 'Tab' });
+    expect(document.activeElement).toBe(first);
+
+    first.focus();
+    fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(last);
+  });
+
+  it('changes nothing about what the form submits: same hidden fields, same action, same disabled-until-zero Save', async () => {
+    const { saveSplitsAction } = await import('@/app/(app)/transactions/actions');
+    vi.mocked(saveSplitsAction).mockClear();
+    openSplit();
+
+    const saveButton = screen.getByRole('button', { name: 'Save split' }) as HTMLButtonElement;
+    expect(saveButton.disabled).toBe(true);
+
+    const categorySelects = screen.getAllByLabelText(/Category for part/) as HTMLSelectElement[];
+    const amountInputs = screen.getAllByLabelText(/Amount for part/) as HTMLInputElement[];
+    fireEvent.change(categorySelects[0], { target: { value: '42' } });
+    fireEvent.change(amountInputs[0], { target: { value: '5.00' } });
+    expect(saveButton.disabled).toBe(false);
+
+    fireEvent.click(saveButton);
+    await waitFor(() => expect(saveSplitsAction).toHaveBeenCalled());
+    const sent = (saveSplitsAction as ReturnType<typeof vi.fn>).mock.calls.at(-1)![1] as FormData;
+    expect(sent.get('txnId')).toBe('1');
+    expect(JSON.parse(String(sent.get('parts')))).toEqual([{ categoryId: 42, amountCents: -500, note: null }]);
+  });
+});
+
+/**
+ * Owner report (item 2): a note used to vanish from the row the instant it was saved -- nothing
+ * said one existed, so telling which rows carried one (or reading it back) meant reopening the
+ * Note… editor blind, one row at a time.
+ */
+describe('Note indicator (item 2): a saved note is no longer invisible', () => {
+  it('renders an icon button beside the merchant when the row has a note, its text as the title and an accessible name naming the row', () => {
+    render(
+      <TransactionsClient
+        page={pageWithRow({ id: 5, notes: 'split with Bob', normalizedMerchant: 'TIM HORTONS' })}
+        accounts={[]}
+        categories={[]}
+        people={[]}
+        today="2026-03-02"
+      />,
+    );
+    const button = screen.getByRole('button', { name: 'Note on TIM HORTONS' });
+    expect(button.getAttribute('title')).toBe('split with Bob');
+  });
+
+  it('renders nothing for a row with no note', () => {
+    render(
+      <TransactionsClient
+        page={pageWithRow({ id: 5, notes: null })}
+        accounts={[]}
+        categories={[]}
+        people={[]}
+        today="2026-03-02"
+      />,
+    );
+    expect(screen.queryByRole('button', { name: /^Note on/ })).toBeNull();
+  });
+
+  it('clicking it opens the same pre-filled Note… editor the row menu already wires up -- one editing path, not two', () => {
+    render(
+      <TransactionsClient
+        page={pageWithRow({ id: 5, notes: 'split with Bob', normalizedMerchant: 'TIM HORTONS' })}
+        accounts={[]}
+        categories={[]}
+        people={[]}
+        today="2026-03-02"
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Note on TIM HORTONS' }));
+    const textarea = screen.getByLabelText(/Note for TIM HORTONS/) as HTMLTextAreaElement;
+    expect(textarea.value).toBe('split with Bob');
+  });
+
+  it('renders in the review card list too, and opens the same editor there', () => {
+    render(
+      <TransactionsClient
+        page={pageWithRow({ id: 5, notes: 'split with Bob', normalizedMerchant: 'TIM HORTONS' })}
+        accounts={[]}
+        categories={[]}
+        people={[]}
+        today="2026-03-02"
+        reviewMode
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Note on TIM HORTONS' }));
+    expect((screen.getByLabelText(/Note for TIM HORTONS/) as HTMLTextAreaElement).value).toBe('split with Bob');
+  });
+});
+
+/**
+ * Owner report (item 3): the review card had no way at all to attribute a transaction to a
+ * household member -- triaging a shared import meant categorizing in review, then flipping back
+ * to plain Transactions just to say who a charge belonged to.
+ */
+describe('Review card: the person control (item 3)', () => {
+  const categories = [{ id: 1, name: 'Dining', parentId: null, isArchived: false, sortOrder: 0 }];
+
+  function reviewPage(overrides: Partial<TransactionRow> = {}): TransactionPage {
+    return pageWithRow({ source: 'bayes', categoryId: 1, categoryName: 'Dining', confidence: 0.82, ...overrides });
+  }
+
+  it('renders the same attribution control the table row uses, offering the household roster it was handed', () => {
+    render(
+      <TransactionsClient
+        page={reviewPage({ id: 1 })}
+        accounts={[]}
+        categories={categories}
+        people={[{ id: 7, name: 'Alice' }]}
+        today="2026-08-16"
+        reviewMode
+      />,
+    );
+    const select = screen.getByLabelText('Person for transaction 1') as HTMLSelectElement;
+    expect([...select.options].map((option) => option.textContent)).toEqual(['Household', 'Alice']);
+  });
+
+  it('submits through the same setAttributionAction the table row posts to', async () => {
+    const { setAttributionAction } = await import('@/app/(app)/transactions/actions');
+    vi.mocked(setAttributionAction).mockClear();
+    render(
+      <TransactionsClient
+        page={reviewPage({ id: 1 })}
+        accounts={[]}
+        categories={categories}
+        people={[{ id: 7, name: 'Alice' }]}
+        today="2026-08-16"
+        reviewMode
+      />,
+    );
+    fireEvent.change(screen.getByLabelText('Person for transaction 1'), { target: { value: '7' } });
+    await waitFor(() => expect(setAttributionAction).toHaveBeenCalled());
+    const sent = (setAttributionAction as ReturnType<typeof vi.fn>).mock.calls.at(-1)![1] as FormData;
+    expect(sent.get('ids')).toBe('1');
+    expect(sent.get('attributedUserId')).toBe('7');
+  });
+
+  it('is hidden for a self-scoped viewer, exactly as it is on the table row -- plain text instead', () => {
+    render(
+      <TransactionsClient
+        page={reviewPage({ id: 1, attributedUserId: 7, attributedUserName: 'Alice' })}
+        accounts={[]}
+        categories={categories}
+        people={[]}
+        today="2026-08-16"
+        reviewMode
+        selfScoped
+      />,
+    );
+    expect(screen.queryByLabelText('Person for transaction 1')).toBeNull();
+    expect(screen.getByText('Alice')).toBeTruthy();
   });
 });
 

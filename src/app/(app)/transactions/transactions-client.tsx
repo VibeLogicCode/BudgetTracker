@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { Fragment, useActionState, useEffect, useState } from 'react';
+import { Fragment, useActionState, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { FormError } from '@/components/FormError';
 import { QuickAddTransaction } from '@/components/QuickAddTransaction';
 import { SubmitButton } from '@/components/SubmitButton';
@@ -25,8 +25,10 @@ import { RowMenu, RowMenuButton, RowMenuForm, RowMenuLink } from '@/components/u
 // the same pair ListRow uses so a person sees one money-direction vocabulary everywhere),
 // SuggestIcon marks "Accept all suggestions" as the bulk sibling of the per-row Bayes guess, and
 // FilterIcon (fix round) is the glyph on the filter disclosure button that replaced the old
-// "Filters (N)" text button -- see that button's own comment below for why.
-import { categoryIcon, ConfirmIcon, FilterIcon, MoneyInIcon, MoneyOutIcon, SuggestIcon, UnconfirmedIcon } from '@/components/ui/icons';
+// "Filters (N)" text button -- see that button's own comment below for why. NoteIcon (owner
+// report, item 2) is the small button beside a row's merchant that appears once `notes` is
+// non-empty, so a saved note is no longer invisible until the row is reopened.
+import { categoryIcon, ConfirmIcon, FilterIcon, MoneyInIcon, MoneyOutIcon, NoteIcon, SuggestIcon, UnconfirmedIcon } from '@/components/ui/icons';
 import { categoryOptionGroups, categoryOptions, type CategoryLike, type CategoryOptionGroup } from '@/lib/category-order';
 import { type ResolvedRange } from '@/lib/date-range';
 import type { LoanLink } from '@/lib/loans';
@@ -162,6 +164,34 @@ function categoryChipHref(current: string, categoryId: string | null): string {
   return query.length > 0 ? `/transactions?${query}` : '/transactions';
 }
 
+/**
+ * Owner report (item 1): the split editor became a real modal dialog, and nothing native (no
+ * <dialog>.showModal() here -- this app hand-rolls its own overlays rather than take on a
+ * dialog library) keeps Tab cycling inside one on its own. `input[type="hidden"]` is excluded
+ * even though the plain tag-name selectors below would otherwise match it: a hidden field can
+ * never actually receive focus in a real browser, and counting it as a focus stop just breaks
+ * the wrap-around math by one at both ends. The element list is read fresh on every Tab press
+ * (not cached once at open) because the split editor's own "Add a part"/"Remove part" buttons
+ * change how many focusable controls exist while the dialog stays open.
+ */
+const DIALOG_FOCUSABLE_SELECTOR =
+  'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+function trapDialogTab(container: HTMLElement, event: ReactKeyboardEvent<HTMLDivElement>): void {
+  if (event.key !== 'Tab') return;
+  const focusable = Array.from(container.querySelectorAll<HTMLElement>(DIALOG_FOCUSABLE_SELECTOR));
+  if (focusable.length === 0) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
 export function TransactionsClient({
   page,
   accounts,
@@ -227,7 +257,26 @@ export function TransactionsClient({
 }) {
   const [selected, setSelected] = useState<number[]>([]);
   const [renaming, setRenaming] = useState<{ id: number; current: string; merchant: string } | null>(null);
-  const [splitting, setSplitting] = useState<{ id: number; amountCents: number; parts: SplitPartDraft[] } | null>(null);
+  const [splitting, setSplitting] = useState<{
+    id: number;
+    /** Owner report (item 1): the modal dialog names the transaction it is editing (merchant,
+     *  date, amount) in its own header, so a person is never left wondering which row Split…
+     *  was for once the row itself is out of view behind the backdrop. Captured here, at open
+     *  time, rather than re-looked-up from `page.rows` on every render of the dialog. */
+    merchant: string;
+    date: string;
+    amountCents: number;
+    parts: SplitPartDraft[];
+  } | null>(null);
+  // Owner report (item 1): who had focus right before the split dialog opened, so closing it
+  // (Escape, the backdrop, Cancel, or a real submit) puts focus back exactly where it was. The
+  // row's own kebab button is already what has focus by the time this is read -- RowMenu closes
+  // itself and refocuses its trigger SYNCHRONOUSLY, inside the same click handler that then
+  // calls openSplitEditor (RowMenuButton's onClick: `close(); onSelect();`) -- so document.
+  // activeElement is already correct the moment the effect below runs, with no extra plumbing
+  // needed to pass "who clicked me" down from the row menu.
+  const splitOpenerRef = useRef<HTMLElement | null>(null);
+  const splitDialogRef = useRef<HTMLDivElement | null>(null);
   // Mirrors `renaming` exactly (ruling R13): one nullable slot of state, so opening the note
   // sub-row on a different row always replaces whichever one was already open.
   const [noting, setNoting] = useState<{ id: number; current: string } | null>(null);
@@ -470,6 +519,8 @@ export function TransactionsClient({
     const existing = splits[row.id] ?? [];
     setSplitting({
       id: row.id,
+      merchant: row.normalizedMerchant,
+      date: row.date,
       amountCents: row.amountCents,
       parts:
         existing.length > 0
@@ -511,6 +562,69 @@ export function TransactionsClient({
     note: part.note.trim() === '' ? null : part.note.trim(),
   }));
   const splitRemainderCents = splitting ? splitting.amountCents - sumCents(activeSplitParts.map(draftPartCents)) : 0;
+
+  /**
+   * Owner report (item 1): the three behaviours a real modal owes a keyboard/screen-reader user,
+   * none of which the old plain-Card version gave for free. Keyed on `splitting?.id` rather than
+   * `splitting !== null` -- a boolean would fail to refire when one row's editor is replaced by
+   * another's without ever passing through `null` in between (backlog's own "opening a second
+   * row replaces the first" test does exactly this), and a stale `splitOpenerRef` would then
+   * return focus to the WRONG row's kebab once the second editor closes.
+   *   - focus moves INTO the dialog on open (the dialog shell itself takes it -- there is no one
+   *     obvious "first field" the way a rename box has a single autoFocus input);
+   *   - the page behind stops scrolling while it is open, or a touch/wheel scroll would move a
+   *     page the person can no longer see behind the dimmed backdrop;
+   *   - focus returns to whatever had it before the dialog opened when it closes, by any of the
+   *     four paths that clear `splitting` (Escape, the backdrop, Cancel, or a real submit).
+   */
+  useEffect(() => {
+    if (splitting === null) return;
+    splitOpenerRef.current = document.activeElement as HTMLElement | null;
+    splitDialogRef.current?.focus();
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      splitOpenerRef.current?.focus();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [splitting?.id ?? null]);
+
+  /** Owner report (item 1): Escape closes the dialog from anywhere inside it; every other key
+   *  falls through to the focus trap so Tab still cycles within the dialog while it is open. */
+  function onSplitDialogKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      setSplitting(null);
+      return;
+    }
+    if (splitDialogRef.current) trapDialogTab(splitDialogRef.current, event);
+  }
+
+  /**
+   * Owner report (item 2): a note used to vanish the moment it was saved -- nothing on the row
+   * said one existed, so telling which rows carried one meant reopening the Note… editor blind,
+   * on every row, one at a time. Rendered beside the merchant on any row whose `notes` is
+   * non-empty; `title` carries the note text (the same hover/assistive-tech affordance the bank-
+   * text `title` on the merchant span already uses elsewhere on this row), and the accessible
+   * name NAMES the row ("Note on TIM HORTONS") so two rows sharing a merchant are still tellable
+   * apart. Clicking it opens the SAME `noting` state the row menu's Note… item already writes to
+   * -- one note-editing path, not a second one bolted on beside it.
+   */
+  function noteIndicator(row: TransactionRow) {
+    if (!row.notes) return null;
+    return (
+      <button
+        type="button"
+        onClick={() => setNoting({ id: row.id, current: row.notes ?? '' })}
+        title={row.notes}
+        aria-label={`Note on ${row.normalizedMerchant}`}
+        className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink"
+      >
+        <NoteIcon className="h-3.5 w-3.5" aria-hidden="true" />
+      </button>
+    );
+  }
 
   /**
    * v1.19.0 Lane 2 item 5: the per-row confirm button, review-mode-only. Disabled while the row
@@ -918,82 +1032,119 @@ export function TransactionsClient({
         </Card>
       ) : null}
 
+      {/*
+        Owner report (item 1): this used to be a plain Card rendered wherever `splitting` happened
+        to sit in the JSX (the very top of the page) -- so pressing Split… appeared to do nothing
+        until a person scrolled up to find it, and once there they had lost sight of which row it
+        belonged to. It is a real modal dialog now: a dimmed, blurred backdrop that closes the
+        dialog on click (the panel's own onClick stops that same click from bubbling up to the
+        backdrop, so clicking anything INSIDE never closes it), role="dialog"/aria-modal so
+        assistive tech treats it as one, aria-labelledby pointing at the header's own merchant/
+        date/amount (so the transaction being split is named without scrolling back to the row to
+        remember it), Escape and a focus trap wired through onSplitDialogKeyDown, and the open/
+        close focus-management + body-scroll-lock effect above. The FORM inside is byte-for-byte
+        what it was before this task -- same fields, same action (splitAction), same validation
+        (Save stays disabled until the remainder is exactly zero) and the same error surface
+        (FormError/`error` in the top banner) -- only the shell around it changed.
+      */}
       {splitting ? (
-        <Card as="div">
-          <CardHeader
-            title="Split this transaction"
-            description="Divide this transaction across more than one category. The parts must add up to the full amount."
-          />
-          <CardBody className="flex flex-col gap-4">
-            <form action={splitAction} onSubmit={() => setSplitting(null)} className="flex flex-col gap-4">
-              <input type="hidden" name="txnId" value={splitting.id} />
-              <input type="hidden" name="parts" value={JSON.stringify(splitPartsPayload)} />
-              <div className="flex flex-col gap-2">
-                <div className="flex flex-wrap gap-2 text-xs font-medium text-muted">
-                  <span className="w-44">Category</span>
-                  <span className="w-24">Amount</span>
-                  <span className="flex-1">Note</span>
-                </div>
-                {splitting.parts.map((part, index) => (
-                  <div key={index} className="flex flex-wrap items-center gap-2">
-                    <select
-                      value={part.categoryId}
-                      onChange={(e) => updateSplitPart(index, { categoryId: e.target.value })}
-                      aria-label={`Category for part ${index + 1}`}
-                      className={`${selectClass} w-44`}
-                    >
-                      <option value="">Choose a category</option>
-                      {/* Backlog BZ: an <optgroup> per parent instead of the flat NBSP-indented
-                          list -- categoryOptGroups() already excludes archived categories,
-                          matching this select's own live-category-only rule. */}
-                      {categoryOptGroups(categoryGroups)}
-                    </select>
-                    <input
-                      value={part.amount}
-                      onChange={(e) => updateSplitPart(index, { amount: e.target.value })}
-                      placeholder="0.00"
-                      inputMode="decimal"
-                      aria-label={`Amount for part ${index + 1}`}
-                      className={`${inputClass} w-24`}
-                    />
-                    <input
-                      value={part.note}
-                      onChange={(e) => updateSplitPart(index, { note: e.target.value })}
-                      placeholder="Note (optional)"
-                      aria-label={`Note for part ${index + 1}`}
-                      className={`${inputClass} flex-1 min-w-[10rem]`}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => removeSplitPart(index)}
-                      disabled={splitting.parts.length <= 2}
-                      className="btn btn--ghost btn--sm px-2 text-xs"
-                    >
-                      Remove part
+        <div
+          data-testid="split-dialog-backdrop"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
+          onClick={() => setSplitting(null)}
+        >
+          <div
+            ref={splitDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="split-dialog-heading split-dialog-description"
+            tabIndex={-1}
+            onClick={(event) => event.stopPropagation()}
+            onKeyDown={onSplitDialogKeyDown}
+            className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl outline-none"
+          >
+            <Card as="div">
+              <CardHeader
+                title={<span id="split-dialog-heading">{`Split ${splitting.merchant}`}</span>}
+                description={
+                  <span id="split-dialog-description">
+                    {`${splitting.date} · ${formatCents(splitting.amountCents)} — `}
+                    Divide this transaction across more than one category. The parts must add up to the full amount.
+                  </span>
+                }
+              />
+              <CardBody className="flex flex-col gap-4">
+                <form action={splitAction} onSubmit={() => setSplitting(null)} className="flex flex-col gap-4">
+                  <input type="hidden" name="txnId" value={splitting.id} />
+                  <input type="hidden" name="parts" value={JSON.stringify(splitPartsPayload)} />
+                  <div className="flex flex-col gap-2">
+                    <div className="flex flex-wrap gap-2 text-xs font-medium text-muted">
+                      <span className="w-44">Category</span>
+                      <span className="w-24">Amount</span>
+                      <span className="flex-1">Note</span>
+                    </div>
+                    {splitting.parts.map((part, index) => (
+                      <div key={index} className="flex flex-wrap items-center gap-2">
+                        <select
+                          value={part.categoryId}
+                          onChange={(e) => updateSplitPart(index, { categoryId: e.target.value })}
+                          aria-label={`Category for part ${index + 1}`}
+                          className={`${selectClass} w-44`}
+                        >
+                          <option value="">Choose a category</option>
+                          {/* Backlog BZ: an <optgroup> per parent instead of the flat NBSP-indented
+                              list -- categoryOptGroups() already excludes archived categories,
+                              matching this select's own live-category-only rule. */}
+                          {categoryOptGroups(categoryGroups)}
+                        </select>
+                        <input
+                          value={part.amount}
+                          onChange={(e) => updateSplitPart(index, { amount: e.target.value })}
+                          placeholder="0.00"
+                          inputMode="decimal"
+                          aria-label={`Amount for part ${index + 1}`}
+                          className={`${inputClass} w-24`}
+                        />
+                        <input
+                          value={part.note}
+                          onChange={(e) => updateSplitPart(index, { note: e.target.value })}
+                          placeholder="Note (optional)"
+                          aria-label={`Note for part ${index + 1}`}
+                          className={`${inputClass} flex-1 min-w-[10rem]`}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => removeSplitPart(index)}
+                          disabled={splitting.parts.length <= 2}
+                          className="btn btn--ghost btn--sm px-2 text-xs"
+                        >
+                          Remove part
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button type="button" onClick={addSplitPart} className="btn btn--secondary btn--sm">
+                      Add a part
+                    </button>
+                    <span className="text-sm text-muted">Remaining to assign: {formatCents(splitRemainderCents)}</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <SubmitButton disabled={splitRemainderCents !== 0}>Save split</SubmitButton>
+                    <button type="button" onClick={() => setSplitting(null)} className="btn btn--secondary">
+                      Cancel
                     </button>
                   </div>
-                ))}
-              </div>
-              <div className="flex flex-wrap items-center gap-3">
-                <button type="button" onClick={addSplitPart} className="btn btn--secondary btn--sm">
-                  Add a part
-                </button>
-                <span className="text-sm text-muted">Remaining to assign: {formatCents(splitRemainderCents)}</span>
-              </div>
-              <div className="flex gap-2">
-                <SubmitButton disabled={splitRemainderCents !== 0}>Save split</SubmitButton>
-                <button type="button" onClick={() => setSplitting(null)} className="btn btn--secondary">
-                  Cancel
-                </button>
-              </div>
-            </form>
-            <form action={splitAction} onSubmit={() => setSplitting(null)}>
-              <input type="hidden" name="txnId" value={splitting.id} />
-              <input type="hidden" name="parts" value="[]" />
-              <SubmitButton variant="secondary">Remove split</SubmitButton>
-            </form>
-          </CardBody>
-        </Card>
+                </form>
+                <form action={splitAction} onSubmit={() => setSplitting(null)}>
+                  <input type="hidden" name="txnId" value={splitting.id} />
+                  <input type="hidden" name="parts" value="[]" />
+                  <SubmitButton variant="secondary">Remove split</SubmitButton>
+                </form>
+              </CardBody>
+            </Card>
+          </div>
+        </div>
       ) : null}
 
       <Card as="div">
@@ -1317,6 +1468,7 @@ export function TransactionsClient({
                         >
                           {row.displayDescription ?? row.normalizedMerchant}
                         </strong>
+                        {noteIndicator(row)}
                         {/* v1.13.3 / fix round on 5439851: a raw description that is identical to
                             the already-normalized merchant name (on the same NFC-normalized,
                             trimmed, collapsed-whitespace, uppercased footing normalizeMerchant
@@ -1385,6 +1537,35 @@ export function TransactionsClient({
                           className={REVIEW_PICKER_CLASS}
                         />
                       </div>
+                      {/*
+                        Owner report (item 3): the review card had no way at all to attribute a
+                        transaction to a household member -- triaging a shared import meant
+                        categorizing HERE, then flipping back to plain Transactions just to say who
+                        it belonged to. This is the exact same control the table row renders
+                        further down (same AutoSaveSelect, same `saveAttribution` binding to
+                        setAttributionAction, same `people` roster this component was handed) --
+                        one attribution path, not a second one bolted on for review mode. Hidden
+                        for a self-scoped viewer for the identical reason the table row hides it:
+                        every choice would come back NOT_YOURS_ERROR (item BO), so an interactive
+                        control that can never succeed is replaced with the same plain-text
+                        fallback the table row shows instead.
+                      */}
+                      {selfScoped ? (
+                        <span className="text-xs text-muted">{row.attributedUserName ?? 'Household'}</span>
+                      ) : (
+                        <AutoSaveSelect
+                          name="attributedUserId"
+                          defaultValue={row.attributedUserId === null ? '' : String(row.attributedUserId)}
+                          options={[
+                            { value: '', label: 'Household' },
+                            ...people.map((person) => ({ value: String(person.id), label: person.name })),
+                          ]}
+                          fields={{ ids: String(row.id) }}
+                          action={saveAttribution}
+                          ariaLabel={`Person for transaction ${row.id}`}
+                          className={REVIEW_PICKER_CLASS}
+                        />
+                      )}
                       {confirmButton(row)}
                       {rowMenu(row)}
                     </div>
@@ -1509,6 +1690,7 @@ export function TransactionsClient({
                     >
                       {row.displayDescription ?? row.rawDescription}
                     </span>
+                    {noteIndicator(row)}
                     {row.displaySource === 'manual' ? <span className="badge badge--blue">renamed</span> : null}
                     {row.displaySource === 'rename' ? <span className="badge badge--blue">rule</span> : null}
                     {row.isTransfer ? <span className="badge badge--slate">transfer</span> : null}
