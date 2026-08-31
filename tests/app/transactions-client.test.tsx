@@ -227,7 +227,10 @@ describe('MUST-14.8 / MUST-14.9: the row control', () => {
     openRowMenu('Actions for TIM HORTONS');
     expect(screen.getByRole('menuitem', { name: 'Assign to loan…' })).toBeTruthy();
     fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
-    const select = rowScope().getByLabelText('Assign to') as HTMLSelectElement;
+    // Unify-the-editors task (2026-08-30): this editor is a dialog now, rendered once at the top
+    // level of the page rather than duplicated inside the table/card the row itself lives in --
+    // so, unlike the row's own kebab trigger, its content needs no rowScope() to disambiguate.
+    const select = screen.getByLabelText('Assign to') as HTMLSelectElement;
     expect([...select.options].map((option) => option.textContent)).toEqual(['New loan…']);
   });
 
@@ -273,7 +276,7 @@ describe('MUST-14.8 / MUST-14.9: the row control', () => {
     render(<TransactionsClient {...baseProps} loanOptions={[{ id: 7, name: 'Civic' }]} loanLinks={{}} />);
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
-    const select = rowScope().getByLabelText('Assign to') as HTMLSelectElement;
+    const select = screen.getByLabelText('Assign to') as HTMLSelectElement;
     expect([...select.options].map((option) => option.textContent)).toEqual(['Civic', 'New loan…']);
   });
 
@@ -292,8 +295,8 @@ describe('MUST-14.8 / MUST-14.9: the row control', () => {
     render(<TransactionsClient {...baseProps} loanOptions={[{ id: 7, name: 'Civic' }]} loanLinks={{}} />);
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
-    fireEvent.change(rowScope().getByLabelText('Assign to'), { target: { value: '7' } });
-    fireEvent.click(rowScope().getByRole('button', { name: 'Save' }));
+    fireEvent.change(screen.getByLabelText('Assign to'), { target: { value: '7' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(assignToLoanAction).toHaveBeenCalled());
     // Bound as `(_prev, formData) => assignToLoanAction(formData)` (transactions-client.tsx),
@@ -315,10 +318,10 @@ describe('MUST-14.8 / MUST-14.9: the row control', () => {
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
     // Not shown yet: the editor opens on the default "New loan…" branch.
-    expect(rowScope().queryByLabelText(/Also mark as a transfer/)).toBeNull();
+    expect(screen.queryByLabelText(/Also mark as a transfer/)).toBeNull();
 
-    fireEvent.change(rowScope().getByLabelText('Assign to'), { target: { value: '7' } });
-    const checkbox = rowScope().getByLabelText(/Also mark as a transfer/) as HTMLInputElement;
+    fireEvent.change(screen.getByLabelText('Assign to'), { target: { value: '7' } });
+    const checkbox = screen.getByLabelText(/Also mark as a transfer/) as HTMLInputElement;
     expect(checkbox.checked).toBe(true);
   });
 
@@ -327,8 +330,8 @@ describe('MUST-14.8 / MUST-14.9: the row control', () => {
     render(<TransactionsClient {...baseProps} loanOptions={[{ id: 7, name: 'Civic' }]} loanLinks={{}} />);
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
-    fireEvent.change(rowScope().getByLabelText('Assign to'), { target: { value: '7' } });
-    fireEvent.click(rowScope().getByRole('button', { name: 'Save' }));
+    fireEvent.change(screen.getByLabelText('Assign to'), { target: { value: '7' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(assignToLoanAction).toHaveBeenCalled());
     const sent = (assignToLoanAction as ReturnType<typeof vi.fn>).mock.calls[0][0] as FormData;
@@ -341,9 +344,9 @@ describe('MUST-14.8 / MUST-14.9: the row control', () => {
     render(<TransactionsClient {...baseProps} loanOptions={[{ id: 7, name: 'Civic' }]} loanLinks={{}} />);
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
-    fireEvent.change(rowScope().getByLabelText('Assign to'), { target: { value: '7' } });
-    fireEvent.click(rowScope().getByLabelText(/Also mark as a transfer/));
-    fireEvent.click(rowScope().getByRole('button', { name: 'Save' }));
+    fireEvent.change(screen.getByLabelText('Assign to'), { target: { value: '7' } });
+    fireEvent.click(screen.getByLabelText(/Also mark as a transfer/));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(assignToLoanAction).toHaveBeenCalled());
     const sent = (assignToLoanAction as ReturnType<typeof vi.fn>).mock.calls[0][0] as FormData;
@@ -668,7 +671,7 @@ describe('Split editor is a modal dialog, not a card at the top of the page (ite
  * Note… editor blind, one row at a time.
  */
 describe('Note indicator (item 2): a saved note is no longer invisible', () => {
-  it('renders an icon button beside the merchant when the row has a note, its text as the title and an accessible name naming the row', () => {
+  it('renders a small icon button beside the merchant, its text as the title and an accessible name naming the row', () => {
     render(
       <TransactionsClient
         page={pageWithRow({ id: 5, notes: 'split with Bob', normalizedMerchant: 'TIM HORTONS' })}
@@ -678,7 +681,12 @@ describe('Note indicator (item 2): a saved note is no longer invisible', () => {
         today="2026-03-02"
       />,
     );
-    const button = rowScope().getByRole('button', { name: 'Note on TIM HORTONS' });
+    // rowScope(): the desktop table row's own copy specifically. Coordinator fix (2026-08-30,
+    // card-density task) moved the CARD's own copy off the merchant line onto the meta line
+    // instead (transactionCard's own docblock) -- the table row's placement, beside the merchant
+    // name, is what this test is actually about, and rowScope() is what keeps it pinned there
+    // rather than finding either copy on a page that (outside review mode) renders both trees.
+    const button = rowScope().getByRole('button', { name: 'Edit note for TIM HORTONS' });
     expect(button.getAttribute('title')).toBe('split with Bob');
   });
 
@@ -692,7 +700,7 @@ describe('Note indicator (item 2): a saved note is no longer invisible', () => {
         today="2026-03-02"
       />,
     );
-    expect(screen.queryByRole('button', { name: /^Note on/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Edit note for/ })).toBeNull();
   });
 
   it('clicking it opens the same pre-filled Note… editor the row menu already wires up -- one editing path, not two', () => {
@@ -705,8 +713,13 @@ describe('Note indicator (item 2): a saved note is no longer invisible', () => {
         today="2026-03-02"
       />,
     );
-    fireEvent.click(rowScope().getByRole('button', { name: 'Note on TIM HORTONS' }));
-    const textarea = rowScope().getByLabelText(/Note for TIM HORTONS/) as HTMLTextAreaElement;
+    fireEvent.click(rowScope().getByRole('button', { name: 'Edit note for TIM HORTONS' }));
+    // Unify-the-editors task (2026-08-30): the note editor is a dialog now, rendered once at the
+    // top level of the page (not nested inside the table this row's own trigger lives in),
+    // titled "Note for TIM HORTONS" -- the copy pattern the owner's report asked to keep, now
+    // carried by the dialog's own accessible name rather than the field's label.
+    expect(screen.getByRole('dialog', { name: /Note for TIM HORTONS/ })).toBeTruthy();
+    const textarea = screen.getByLabelText('Note') as HTMLTextAreaElement;
     expect(textarea.value).toBe('split with Bob');
   });
 
@@ -721,8 +734,8 @@ describe('Note indicator (item 2): a saved note is no longer invisible', () => {
         reviewMode
       />,
     );
-    fireEvent.click(rowScope().getByRole('button', { name: 'Note on TIM HORTONS' }));
-    expect((rowScope().getByLabelText(/Note for TIM HORTONS/) as HTMLTextAreaElement).value).toBe('split with Bob');
+    fireEvent.click(rowScope().getByRole('button', { name: 'Edit note for TIM HORTONS' }));
+    expect((screen.getByLabelText('Note') as HTMLTextAreaElement).value).toBe('split with Bob');
   });
 });
 
@@ -932,7 +945,7 @@ describe('v1.13.0 ruling R7: QuickAddTransaction sits at the top of the page', (
  * same inline-sub-row idiom as Note…/Assign to loan…/Apply to all, anchored at its own row and
  * rendered from both the card and the table row.
  */
-describe('Rename editor: an inline sub-row anchored at its row, not a card at the top of the page', () => {
+describe('Rename editor: a dialog naming the row, not a card at the top of the page', () => {
   it('does not render a top-of-page "Rename this merchant" card at all', () => {
     render(
       <TransactionsClient page={pageWithRow({ id: 5 })} accounts={[]} categories={[]} people={[]} today="2026-03-02" />,
@@ -942,7 +955,7 @@ describe('Rename editor: an inline sub-row anchored at its row, not a card at th
     expect(screen.queryByText('Rename this merchant')).toBeNull();
   });
 
-  it('opens inline, prefilled with the display name, spanning every column of the table row', () => {
+  it('opens as a dialog titled with the display name, prefilled with it', () => {
     render(
       <TransactionsClient
         page={pageWithRow({ id: 5, displayDescription: 'Coffee run' })}
@@ -958,13 +971,13 @@ describe('Rename editor: an inline sub-row anchored at its row, not a card at th
     openRowMenu('Actions for Coffee run');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Rename…' }));
 
-    // rowScope(): the rename form renders once per tree outside review mode (the same card/
-    // table duplication every other inline editor has -- see rowScope's own docblock), so an
-    // unscoped query would match twice.
-    const nameInput = rowScope().getByLabelText('Display name') as HTMLInputElement;
+    // Unify-the-editors task (2026-08-30): this editor is a dialog now, rendered once at the top
+    // level of the page rather than duplicated inside whichever tree (table or card) the row
+    // itself lives in -- see RowDialog's own docblock. Its title names the row being renamed,
+    // the same copy pattern the note dialog already established ("Note for X").
+    expect(screen.getByRole('dialog', { name: /Rename Coffee run/ })).toBeTruthy();
+    const nameInput = screen.getByLabelText('Display name') as HTMLInputElement;
     expect(nameInput.value).toBe('Coffee run');
-    const cell = nameInput.closest('td') as HTMLTableCellElement;
-    expect(cell.colSpan).toBeGreaterThan(1);
   });
 
   it('submits the transaction id, the typed name and the default "this transaction only" scope through renameTransactionAction', async () => {
@@ -976,18 +989,18 @@ describe('Rename editor: an inline sub-row anchored at its row, not a card at th
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Rename…' }));
 
-    fireEvent.change(rowScope().getByLabelText('Display name'), { target: { value: 'Coffee run' } });
-    fireEvent.click(rowScope().getByRole('button', { name: 'Save name' }));
+    fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'Coffee run' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save name' }));
 
     await waitFor(() => expect(renameTransactionAction).toHaveBeenCalled());
     const sent = (renameTransactionAction as ReturnType<typeof vi.fn>).mock.calls[0][1] as FormData;
     expect(sent.get('transactionId')).toBe('5');
     expect(sent.get('displayName')).toBe('Coffee run');
     expect(sent.get('scope')).toBe('one');
-    expect(rowScope().queryByLabelText('Display name')).toBeNull();
+    expect(screen.queryByLabelText('Display name')).toBeNull();
   });
 
-  it('Cancel closes the sub-row without submitting', async () => {
+  it('Cancel closes the dialog without submitting', async () => {
     const { renameTransactionAction } = await import('@/app/(app)/transactions/actions');
     vi.mocked(renameTransactionAction).mockClear();
     render(
@@ -995,14 +1008,14 @@ describe('Rename editor: an inline sub-row anchored at its row, not a card at th
     );
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Rename…' }));
-    expect(rowScope().getByRole('button', { name: 'Save name' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Save name' })).toBeTruthy();
 
-    fireEvent.click(rowScope().getByRole('button', { name: 'Cancel' }));
-    expect(rowScope().queryByRole('button', { name: 'Save name' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('button', { name: 'Save name' })).toBeNull();
     expect(renameTransactionAction).not.toHaveBeenCalled();
   });
 
-  it('opens from the review card list too, at the same row, as a plain <div> (no colSpan there)', async () => {
+  it('opens from the review card list too, at the same row', async () => {
     const { renameTransactionAction } = await import('@/app/(app)/transactions/actions');
     vi.mocked(renameTransactionAction).mockClear();
     render(
@@ -1024,8 +1037,8 @@ describe('Rename editor: an inline sub-row anchored at its row, not a card at th
 });
 
 describe('v1.13.0 ruling R13: the Note… row action', () => {
-  it('opens an inline sub-row prefilled with the existing note, spanning every column', () => {
-    const { container } = render(
+  it('opens a dialog titled with the row, prefilled with the existing note', () => {
+    render(
       <TransactionsClient
         page={pageWithRow({ id: 5, notes: 'paid in cash' })}
         accounts={[]}
@@ -1037,13 +1050,15 @@ describe('v1.13.0 ruling R13: the Note… row action', () => {
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Note…' }));
 
-    const textarea = rowScope().getByLabelText(/Note for TIM HORTONS/) as HTMLTextAreaElement;
+    // Unify-the-editors task (2026-08-30): a dialog now, rendered once at the top level of the
+    // page -- role="dialog" per RowDialog's own contract, titled "Note for TIM HORTONS" (the
+    // exact copy pattern the owner's report asked to keep), with a plain "Note" field inside.
+    expect(screen.getByRole('dialog', { name: /Note for TIM HORTONS/ })).toBeTruthy();
+    const textarea = screen.getByLabelText('Note') as HTMLTextAreaElement;
     expect(textarea.value).toBe('paid in cash');
-    const cell = textarea.closest('td') as HTMLTableCellElement;
-    expect(cell.colSpan).toBeGreaterThan(1);
   });
 
-  it('submits the note through saveNoteAction with the transaction id, and closes the sub-row', async () => {
+  it('submits the note through saveNoteAction with the transaction id, and closes the dialog', async () => {
     const { saveNoteAction } = await import('@/app/(app)/transactions/actions');
     render(
       <TransactionsClient page={pageWithRow({ id: 5, notes: null })} accounts={[]} categories={[]} people={[]} today="2026-03-02" />,
@@ -1051,30 +1066,27 @@ describe('v1.13.0 ruling R13: the Note… row action', () => {
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Note…' }));
 
-    const textarea = rowScope().getByLabelText(/Note for TIM HORTONS/) as HTMLTextAreaElement;
+    const textarea = screen.getByLabelText('Note') as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: 'split with Bob' } });
-    // rowScope(): the note editor's own Save/Cancel buttons render once per tree too (they are
-    // part of the same duplicated sub-row noteEditor() returns), so an unscoped query matches
-    // twice outside review mode.
-    fireEvent.click(rowScope().getByRole('button', { name: 'Save note' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save note' }));
 
     await waitFor(() => expect(saveNoteAction).toHaveBeenCalled());
     const sent = (saveNoteAction as ReturnType<typeof vi.fn>).mock.calls[0][1] as FormData;
     expect(sent.get('transactionId')).toBe('5');
     expect(sent.get('notes')).toBe('split with Bob');
-    expect(rowScope().queryByLabelText(/Note for TIM HORTONS/)).toBeNull();
+    expect(screen.queryByLabelText('Note')).toBeNull();
   });
 
-  it('Cancel closes the sub-row without submitting', () => {
+  it('Cancel closes the dialog without submitting', () => {
     render(
       <TransactionsClient page={pageWithRow({ id: 5 })} accounts={[]} categories={[]} people={[]} today="2026-03-02" />,
     );
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Note…' }));
-    expect(rowScope().getByRole('button', { name: 'Save note' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Save note' })).toBeTruthy();
 
-    fireEvent.click(rowScope().getByRole('button', { name: 'Cancel' }));
-    expect(rowScope().queryByRole('button', { name: 'Save note' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('button', { name: 'Save note' })).toBeNull();
   });
 });
 
@@ -1213,12 +1225,15 @@ describe('Assign to new loan — Addendum A', () => {
     expect(screen.queryByRole('menuitem', { name: 'Assign to loan…' })).toBeNull();
   });
 
-  it('opens an inline sub-row with a name box and a direction select, defaulting to lent', () => {
+  it('opens a dialog naming the row, with a name box and a direction select, defaulting to lent', () => {
     render(<TransactionsClient {...baseProps} loanOptions={[]} loanLinks={{}} />);
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
-    const name = rowScope().getByLabelText('Loan name') as HTMLInputElement;
-    const direction = rowScope().getByLabelText('Direction') as HTMLSelectElement;
+    // Unify-the-editors task (2026-08-30): a dialog now, rendered once at the top level of the
+    // page, titled after the row it assigns ("Assign TIM HORTONS to a loan").
+    expect(screen.getByRole('dialog', { name: /Assign TIM HORTONS to a loan/ })).toBeTruthy();
+    const name = screen.getByLabelText('Loan name') as HTMLInputElement;
+    const direction = screen.getByLabelText('Direction') as HTMLSelectElement;
     expect(name.name).toBe('loanName');
     expect(direction.name).toBe('loanDirection');
     expect(direction.value).toBe('lent');
@@ -1239,7 +1254,7 @@ describe('Assign to new loan — Addendum A', () => {
     const { container } = render(<TransactionsClient {...baseProps} loanOptions={[]} loanLinks={{}} />);
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
-    fireEvent.change(rowScope().getByLabelText('Loan name'), { target: { value: 'Loan to Sam' } });
+    fireEvent.change(screen.getByLabelText('Loan name'), { target: { value: 'Loan to Sam' } });
     fireEvent.submit(container.querySelector('form[data-testid="new-loan-form"]') as HTMLFormElement);
     await waitFor(() => expect(spy).toHaveBeenCalled());
     const submitted = spy.mock.calls.at(-1)![1] as FormData;
@@ -1254,7 +1269,7 @@ describe('Assign to new loan — Addendum A', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
     openRowMenu('Actions for SECOND ROW');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
-    expect(rowScope().getAllByLabelText('Loan name')).toHaveLength(1);
+    expect(screen.getAllByLabelText('Loan name')).toHaveLength(1);
   });
 
   // Review round: the name input carries HTML validation and focus attributes, not just a
@@ -1263,7 +1278,7 @@ describe('Assign to new loan — Addendum A', () => {
     render(<TransactionsClient {...baseProps} loanOptions={[]} loanLinks={{}} />);
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
-    const name = rowScope().getByLabelText('Loan name') as HTMLInputElement;
+    const name = screen.getByLabelText('Loan name') as HTMLInputElement;
     expect(name.required).toBe(true);
     expect(name.maxLength).toBe(80);
     expect(document.activeElement).toBe(name);
@@ -1290,7 +1305,7 @@ describe('Assign to new loan — a refusal keeps the editor open (review round)'
     const { container } = render(<TransactionsClient {...baseProps} loanOptions={[]} loanLinks={{}} />);
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
-    fireEvent.change(rowScope().getByLabelText('Loan name'), { target: { value: 'Loan to Sam' } });
+    fireEvent.change(screen.getByLabelText('Loan name'), { target: { value: 'Loan to Sam' } });
     const form = container.querySelector('form[data-testid="new-loan-form"]') as HTMLFormElement;
     fireEvent.submit(form);
     await waitFor(() => expect(spy).toHaveBeenCalled());
@@ -1300,7 +1315,7 @@ describe('Assign to new loan — a refusal keeps the editor open (review round)'
       expect(within(form).getByText('A loan you lent out starts with money going out.')).toBeTruthy(),
     );
     expect(within(form).getByRole('alert')).toBeTruthy();
-    expect((rowScope().getByLabelText('Loan name') as HTMLInputElement).value).toBe('Loan to Sam');
+    expect((screen.getByLabelText('Loan name') as HTMLInputElement).value).toBe('Loan to Sam');
   });
 
   it('a success closes the editor', async () => {
@@ -1310,10 +1325,10 @@ describe('Assign to new loan — a refusal keeps the editor open (review round)'
     const { container } = render(<TransactionsClient {...baseProps} loanOptions={[]} loanLinks={{}} />);
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
-    fireEvent.change(rowScope().getByLabelText('Loan name'), { target: { value: 'Loan to Sam' } });
+    fireEvent.change(screen.getByLabelText('Loan name'), { target: { value: 'Loan to Sam' } });
     fireEvent.submit(container.querySelector('form[data-testid="new-loan-form"]') as HTMLFormElement);
     await waitFor(() => expect(spy).toHaveBeenCalled());
-    await waitFor(() => expect(rowScope().queryByLabelText('Loan name')).toBeNull());
+    await waitFor(() => expect(screen.queryByLabelText('Loan name')).toBeNull());
   });
 });
 
@@ -1348,13 +1363,13 @@ describe('Assign to new loan — create result priority (review round)', () => {
     );
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
-    fireEvent.change(rowScope().getByLabelText('Assign to'), { target: { value: '7' } });
-    fireEvent.click(rowScope().getByRole('button', { name: 'Save' }));
+    fireEvent.change(screen.getByLabelText('Assign to'), { target: { value: '7' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(screen.getByText('That transaction is already linked to this loan.')).toBeTruthy());
 
     openRowMenu('Actions for SECOND ROW');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
-    fireEvent.change(rowScope().getByLabelText('Loan name'), { target: { value: 'Loan to Sam' } });
+    fireEvent.change(screen.getByLabelText('Loan name'), { target: { value: 'Loan to Sam' } });
     fireEvent.submit(container.querySelector('form[data-testid="new-loan-form"]') as HTMLFormElement);
 
     await waitFor(() => expect(screen.getByText('Created Loan to Sam. Assigned. $500.00 came off the balance.')).toBeTruthy());
@@ -1622,7 +1637,7 @@ describe('Review mode: Accept <category> and Apply to all N matching (inventory 
     expect(screen.queryByRole('menuitem', { name: /^Apply a category to all/ })).toBeNull();
   });
 
-  it('opens an inline editor with the merchant name, count and a labelled select, and posts to applyToAllMatchingAction', async () => {
+  it('opens a titled dialog with the merchant name, count and a labelled select, and posts to applyToAllMatchingAction', async () => {
     const { applyToAllMatchingAction } = await import('@/app/(app)/transactions/actions');
     const { container } = render(
       <TransactionsClient
@@ -1637,6 +1652,9 @@ describe('Review mode: Accept <category> and Apply to all N matching (inventory 
     );
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Apply a category to all 3 matching…' }));
+    // Unify-the-editors task (2026-08-30): a dialog now, titled with the merchant every matching
+    // transaction shares.
+    expect(screen.getByRole('dialog', { name: /Apply a category to every "CITY GROCER"/ })).toBeTruthy();
     expect(screen.getByText('Every "CITY GROCER" — 3 transactions, plus future imports')).toBeTruthy();
     const select = screen.getByLabelText('Category for all 3 matching CITY GROCER — every transaction') as HTMLSelectElement;
     fireEvent.change(select, { target: { value: '1' } });
@@ -1766,10 +1784,11 @@ describe('Ruling R2: the "Needs review" chip', () => {
 });
 
 /**
- * Fix round (item CB, regression): noteEditor/newLoanEditor used to be `<tr>` sub-rows rendered
- * only from the table branch, so opening either one from the review card list's kebab did
- * nothing at all. Both are now plain functions rendered from both branches -- these two prove
- * the card branch specifically.
+ * Fix round (item CB, regression, now historical): noteEditor/newLoanEditor used to be `<tr>`
+ * sub-rows rendered only from the table branch, so opening either one from the review card
+ * list's kebab did nothing at all. Unify-the-editors task (2026-08-30): both are dialogs now,
+ * rendered once regardless of which branch (table or card) triggered them -- these two prove
+ * the review card list's own kebab still reaches them.
  */
 describe('Fix round (item CB): the row editors work from the review card list', () => {
   const categories = [{ id: 1, name: 'Dining', parentId: null, isArchived: false, sortOrder: 0 }];
@@ -1778,13 +1797,14 @@ describe('Fix round (item CB): the row editors work from the review card list', 
     return pageWithRow({ source: 'bayes', categoryId: 1, categoryName: 'Dining', confidence: 0.82, ...overrides });
   }
 
-  it('in review mode, clicking Note… shows a textarea', () => {
+  it('in review mode, clicking Note… shows a textarea, in a dialog titled with the row', () => {
     render(
       <TransactionsClient page={reviewPage()} accounts={[]} categories={categories} people={[]} today="2026-08-16" reviewMode />,
     );
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Note…' }));
-    expect(rowScope().getByLabelText(/Note for TIM HORTONS/).tagName).toBe('TEXTAREA');
+    expect(screen.getByRole('dialog', { name: /Note for TIM HORTONS/ })).toBeTruthy();
+    expect(screen.getByLabelText('Note').tagName).toBe('TEXTAREA');
   });
 
   // Backlog BY folded in: the same editor now opens with a select at the top, listing every
@@ -1912,17 +1932,13 @@ describe('v1.15.0 ruling S2/S3: the table row carries data-label and cell-stack 
     expect(actions?.getAttribute('data-label')).toBe('');
   });
 
-  it('a colSpan sub-row editor carries data-label="" and still renders (regression guard, backlog CB)', () => {
-    render(
-      <TransactionsClient page={pageWithRow({ id: 5, notes: 'paid in cash' })} accounts={[]} categories={[]} people={[]} today="2026-03-02" />,
-    );
-    openRowMenu('Actions for TIM HORTONS');
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Note…' }));
-    const textarea = rowScope().getByLabelText(/Note for TIM HORTONS/);
-    const cell = textarea.closest('td') as HTMLTableCellElement;
-    expect(cell.getAttribute('data-label')).toBe('');
-    expect(cell.colSpan).toBeGreaterThan(1);
-  });
+  // The colSpan sub-row regression guard that used to live here (backlog CB: a `<td
+  // colSpan>` note/loan/apply-all editor carrying `data-label=""` so the phone-stack reflow
+  // still handled it) is gone along with the code path it guarded: unify-the-editors task
+  // (2026-08-30) replaced every one of those sub-rows with a dialog, which renders as a
+  // `fixed inset-0` overlay outside the table entirely and so has no `<td>`, colSpan or
+  // data-label of its own to carry. See the Note/Rename/Assign-to-loan/Apply-to-all describe
+  // blocks elsewhere in this file for the dialog-shaped assertions that replaced it.
 });
 
 /** v1.15.0 ruling S6: Quick add is a disclosure on Transactions, hidden entirely in review mode. */
@@ -2356,6 +2372,102 @@ describe('Review mode: confirm-progress bar and Accept all suggestions (item 5)'
 });
 
 /**
+ * Coordinator fix (2026-08-30, card-density task): a screenshot comparison against an older
+ * build showed the card losing on density for three concrete reasons -- the kebab and review
+ * mode's confirm button stranded on a trailing line of their own, both selects stretching to
+ * fill a two-column grid cell, and each control's label on its own line above it -- all fixed in
+ * transactionCard's own docblock (src/app/(app)/transactions/transactions-client.tsx). These
+ * prove the resulting shape structurally rather than by counting pixels, which jsdom cannot
+ * measure: three lines exactly, the kebab sharing the identity line with the amount, the confirm
+ * button sharing the controls line with category/person instead of being orphaned, a capped
+ * (never `w-full`) select width, and each label sitting beside its own control rather than above
+ * it.
+ */
+describe('Coordinator fix (2026-08-30): card density -- three lines, not four', () => {
+  it('the card renders exactly three top-level lines (identity, meta, controls) -- no trailing actions-only line', () => {
+    const { container } = render(
+      <TransactionsClient page={pageWithRow({ id: 1 })} accounts={[]} categories={[]} people={[]} today="2026-03-02" />,
+    );
+    const card = container.querySelector('li.card') as HTMLLIElement;
+    const lines = Array.from(card.children).filter((el) => el.tagName === 'DIV');
+    expect(lines).toHaveLength(3);
+  });
+
+  it('the kebab shares the identity line (line 1) with the amount, not a trailing line of its own', () => {
+    const { container } = render(
+      <TransactionsClient page={pageWithRow({ id: 1 })} accounts={[]} categories={[]} people={[]} today="2026-03-02" />,
+    );
+    const card = container.querySelector('li.card') as HTMLLIElement;
+    const [line1] = Array.from(card.children).filter((el) => el.tagName === 'DIV') as HTMLDivElement[];
+    expect(within(line1).getByText('-$5.00')).toBeTruthy();
+    expect(within(line1).getByRole('button', { name: /^Actions for TIM HORTONS/ })).toBeTruthy();
+  });
+
+  it("review mode's confirm button shares the controls line (line 3) with category/person -- not orphaned with the kebab", () => {
+    const { container } = render(
+      <TransactionsClient
+        page={pageWithRow({ id: 1, source: 'bayes', categoryId: 1, categoryName: 'Dining' })}
+        accounts={[]}
+        categories={[{ id: 1, name: 'Dining', parentId: null, isArchived: false, sortOrder: 0 }]}
+        people={[]}
+        today="2026-03-02"
+        reviewMode
+      />,
+    );
+    const card = container.querySelector('li.card') as HTMLLIElement;
+    const [, , line3] = Array.from(card.children).filter((el) => el.tagName === 'DIV') as HTMLDivElement[];
+    expect(within(line3).getByRole('button', { name: /Confirm Dining for/ })).toBeTruthy();
+    expect(within(line3).getByLabelText(/Category for TIM HORTONS/)).toBeTruthy();
+  });
+
+  it('the note indicator sits on the meta line (line 2, with date/account), not beside the merchant name, on the card', () => {
+    const { container } = render(
+      <TransactionsClient
+        page={pageWithRow({ id: 1, notes: 'paid in cash', normalizedMerchant: 'TIM HORTONS' })}
+        accounts={[{ id: 1, name: 'Joint Chequing' }]}
+        categories={[]}
+        people={[]}
+        today="2026-03-02"
+        reviewMode
+      />,
+    );
+    const card = container.querySelector('li.card') as HTMLLIElement;
+    const [, line2] = Array.from(card.children).filter((el) => el.tagName === 'DIV') as HTMLDivElement[];
+    expect(within(line2).getByText('Joint Chequing')).toBeTruthy();
+    expect(within(line2).getByRole('button', { name: 'Edit note for TIM HORTONS' })).toBeTruthy();
+  });
+
+  it('category and person selects keep their natural capped width, never stretched full-width', () => {
+    const { container } = render(
+      <TransactionsClient
+        page={pageWithRow({ id: 1 })}
+        accounts={[]}
+        categories={[]}
+        people={[{ id: 7, name: 'Alice' }]}
+        today="2026-03-02"
+      />,
+    );
+    const selects = container.querySelectorAll('li.card select');
+    expect(selects.length).toBeGreaterThan(0);
+    for (const select of Array.from(selects)) {
+      expect(select.className).not.toContain('w-full');
+      expect(select.className).toContain('max-w-[11rem]');
+    }
+  });
+
+  it("each control's label sits inline beside it, not stacked on its own line above it", () => {
+    const { container } = render(
+      <TransactionsClient page={pageWithRow({ id: 1 })} accounts={[]} categories={[]} people={[]} today="2026-03-02" />,
+    );
+    const card = container.querySelector('li.card') as HTMLLIElement;
+    const label = within(card).getByText('This transaction only');
+    const controlGroup = label.parentElement as HTMLElement;
+    expect(within(controlGroup).getByLabelText(/Category for transaction/)).toBeTruthy();
+    expect(controlGroup.className).toContain('items-center');
+  });
+});
+
+/**
  * Owner report (item 4): the placeholder task. `.field-control::placeholder` used to be a bare
  * `color: var(--subtle)` -- a readable secondary-TEXT colour, so a hinted field read almost as
  * strongly as one that already had a real value typed into it. This proves the fix at the TOKEN
@@ -2441,4 +2553,56 @@ describe('Owner report (item 4): placeholder text recedes but stays legible, in 
       expect(placeholderRatio).toBeLessThan(subtleRatio);
     });
   }
+});
+
+/**
+ * Coordinator's screenshot review (2026-08-30): an uncategorized row APPEARED to show "Income"
+ * pre-selected in the card's category picker, which would be a real bug (a null category must
+ * never render as though it were already filed under a real one). Reproduced directly rather
+ * than guessed at: a row with `categoryId: null, source: 'none'` against a category list whose
+ * FIRST real option is Income. In both modes the select's own `.value`/`selectedIndex` land on
+ * the placeholder option, not on Income -- React sets a controlled <select>'s value by matching
+ * it against an option's `value` attribute, and that match applies even when the matching option
+ * also carries `disabled` (disabled only blocks a person from choosing it via click/keyboard; it
+ * has no effect on which option is programmatically selected). So this is not happening: the
+ * screenshot's "Income" was a row the categorizer actually guessed Income for (`source: 'bayes',
+ * categoryId: <Income id>`), which is legitimate, reviewable state -- exactly what review mode's
+ * "guessed Income" badge beside the select exists to surface. Left alone, as instructed.
+ */
+describe('Coordinator check: an uncategorized row never pre-selects the first real category', () => {
+  const categories = [
+    { id: 1, name: 'Income', parentId: null, isArchived: false, sortOrder: 0 },
+    { id: 2, name: 'Dining', parentId: null, isArchived: false, sortOrder: 1 },
+  ];
+
+  it('review mode: shows the disabled placeholder, not Income', () => {
+    const { container } = render(
+      <TransactionsClient
+        page={pageWithRow({ id: 1, categoryId: null, categoryName: null, source: 'none' })}
+        accounts={[]}
+        categories={categories}
+        people={[]}
+        today="2026-03-02"
+        reviewMode
+      />,
+    );
+    const select = container.querySelector('li.card select[name="categoryId"]') as HTMLSelectElement;
+    expect(select.value).toBe('');
+    expect(select.options[select.selectedIndex].textContent).toBe('Choose for this one…');
+  });
+
+  it('plain Transactions: shows "Uncategorized", not Income', () => {
+    const { container } = render(
+      <TransactionsClient
+        page={pageWithRow({ id: 1, categoryId: null, categoryName: null, source: 'none' })}
+        accounts={[]}
+        categories={categories}
+        people={[]}
+        today="2026-03-02"
+      />,
+    );
+    const select = container.querySelector('li.card select[name="categoryId"]') as HTMLSelectElement;
+    expect(select.value).toBe('');
+    expect(select.options[select.selectedIndex].textContent).toBe('Uncategorized');
+  });
 });

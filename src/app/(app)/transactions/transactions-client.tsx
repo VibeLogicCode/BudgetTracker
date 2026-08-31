@@ -1,12 +1,12 @@
 'use client';
 
 import Link from 'next/link';
-import { Fragment, useActionState, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { Fragment, useActionState, useEffect, useState } from 'react';
 import { FormError } from '@/components/FormError';
 import { QuickAddTransaction } from '@/components/QuickAddTransaction';
 import { SubmitButton } from '@/components/SubmitButton';
 import { CheckIcon, TransactionsIcon } from '@/components/icons';
-import { Card, CardBody, CardFooter, CardHeader } from '@/components/ui/Card';
+import { Card, CardBody, CardFooter } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Money } from '@/components/ui/Money';
 import { Notice } from '@/components/ui/Notice';
@@ -25,10 +25,13 @@ import { RowMenu, RowMenuButton, RowMenuForm, RowMenuLink } from '@/components/u
 // the same pair ListRow uses so a person sees one money-direction vocabulary everywhere),
 // SuggestIcon marks "Accept all suggestions" as the bulk sibling of the per-row Bayes guess, and
 // FilterIcon (fix round) is the glyph on the filter disclosure button that replaced the old
-// "Filters (N)" text button -- see that button's own comment below for why. NoteIcon (owner
-// report, item 2) is the small button beside a row's merchant that appears once `notes` is
-// non-empty, so a saved note is no longer invisible until the row is reopened.
-import { categoryIcon, ConfirmIcon, FilterIcon, MoneyInIcon, MoneyOutIcon, NoteIcon, SuggestIcon, UnconfirmedIcon } from '@/components/ui/icons';
+// "Filters (N)" text button -- see that button's own comment below for why. That file's own
+// NoteIcon (lucide's StickyNote) is NOT used here any more -- the owner's second rejection of the
+// note indicator was that it reads as a generic document, not "a note exists"; see note-glyph.tsx
+// for its hand-drawn replacement and why it could not simply be swapped in-place there instead.
+import { categoryIcon, ConfirmIcon, FilterIcon, MoneyInIcon, MoneyOutIcon, SuggestIcon, UnconfirmedIcon } from '@/components/ui/icons';
+import { NoteGlyph } from './note-glyph';
+import { RowDialog } from './RowDialog';
 import { categoryOptionGroups, categoryOptions, type CategoryLike, type CategoryOptionGroup } from '@/lib/category-order';
 import { type ResolvedRange } from '@/lib/date-range';
 import type { LoanLink } from '@/lib/loans';
@@ -94,23 +97,18 @@ function ReviewWidth({ active, children }: { active: boolean; children: React.Re
 }
 
 /**
- * Review round (fold /review in): the card list's own "This transaction only" and "apply to
- * all" selects, ported byte-for-byte from review-client.tsx's `pickerClass` -- dense enough to
- * sit alongside the row's kebab without shouting, with the same explicit `min-h-11 sm:min-h-0`
- * floor AUTO_SAVE_CONTROL uses (`field-control`'s own padding/line-height alone clear only
- * ~38px, short of the 44px these need on the phones this household uses).
+ * Card-density fix (2026-08-30, coordinator's screenshot review): the card's own category/person
+ * selects used to carry their own bespoke `CARD_FIELD_CLASS` (`w-full`, stretching to fill a
+ * two-column grid cell -- see git history) and `REVIEW_PICKER_CLASS` (a separate dense class the
+ * apply-to-all editor used, now gone entirely now that that editor is a dialog with room to use
+ * the plain `selectClass` instead, per applyAllDialog's own comment). Both are deleted: "a
+ * category picker is no more usable at 400px than at 200px, it just pushes the card apart" is the
+ * coordinator's own diagnosis, and the fix is not a THIRD bespoke class -- it is to stop bespoke-
+ * sizing this control at all and let every AutoSaveSelect on this page default to the same
+ * `AUTO_SAVE_CONTROL` the desktop table row's own category/person selects already use (neither
+ * passes a `className` today). One dense, natural-width, 44px-floored control class for every
+ * per-row select on this page, table or card, review or not.
  */
-const REVIEW_PICKER_CLASS = 'field-control w-auto max-w-[12rem] px-2 py-1 text-xs min-h-11 sm:min-h-0';
-
-/**
- * Single-card-renderer task, item 2 (mobile density): the row card's own category/person
- * selects, which now sit side by side in a two-column grid (see transactionCard's own comment)
- * instead of each wrapping onto its own line. `w-full` (not REVIEW_PICKER_CLASS's own
- * `max-w-[12rem]`) so each select fills its half of that grid rather than leaving dead space
- * beside a narrower control -- the grid cell itself is what bounds the width now, the same way a
- * table's <col> bounds one, so no separate max-width is needed here.
- */
-const CARD_FIELD_CLASS = 'field-control w-full px-2 py-1 text-xs min-h-11 sm:min-h-0';
 
 /**
  * The auto-save controls take `(formData) => Promise<{ error?: string }>`. Both actions are
@@ -172,34 +170,6 @@ function categoryChipHref(current: string, categoryId: string | null): string {
   params.delete('page');
   const query = params.toString();
   return query.length > 0 ? `/transactions?${query}` : '/transactions';
-}
-
-/**
- * Owner report (item 1): the split editor became a real modal dialog, and nothing native (no
- * <dialog>.showModal() here -- this app hand-rolls its own overlays rather than take on a
- * dialog library) keeps Tab cycling inside one on its own. `input[type="hidden"]` is excluded
- * even though the plain tag-name selectors below would otherwise match it: a hidden field can
- * never actually receive focus in a real browser, and counting it as a focus stop just breaks
- * the wrap-around math by one at both ends. The element list is read fresh on every Tab press
- * (not cached once at open) because the split editor's own "Add a part"/"Remove part" buttons
- * change how many focusable controls exist while the dialog stays open.
- */
-const DIALOG_FOCUSABLE_SELECTOR =
-  'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
-
-function trapDialogTab(container: HTMLElement, event: ReactKeyboardEvent<HTMLDivElement>): void {
-  if (event.key !== 'Tab') return;
-  const focusable = Array.from(container.querySelectorAll<HTMLElement>(DIALOG_FOCUSABLE_SELECTOR));
-  if (focusable.length === 0) return;
-  const first = focusable[0];
-  const last = focusable[focusable.length - 1];
-  if (event.shiftKey && document.activeElement === first) {
-    event.preventDefault();
-    last.focus();
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault();
-    first.focus();
-  }
 }
 
 export function TransactionsClient({
@@ -278,15 +248,11 @@ export function TransactionsClient({
     amountCents: number;
     parts: SplitPartDraft[];
   } | null>(null);
-  // Owner report (item 1): who had focus right before the split dialog opened, so closing it
-  // (Escape, the backdrop, Cancel, or a real submit) puts focus back exactly where it was. The
-  // row's own kebab button is already what has focus by the time this is read -- RowMenu closes
-  // itself and refocuses its trigger SYNCHRONOUSLY, inside the same click handler that then
-  // calls openSplitEditor (RowMenuButton's onClick: `close(); onSelect();`) -- so document.
-  // activeElement is already correct the moment the effect below runs, with no extra plumbing
-  // needed to pass "who clicked me" down from the row menu.
-  const splitOpenerRef = useRef<HTMLElement | null>(null);
-  const splitDialogRef = useRef<HTMLDivElement | null>(null);
+  // Unify-the-editors task (2026-08-30): the backdrop, focus trap, Escape handling, body-scroll
+  // lock and opener-focus-restore this state used to need its OWN ref pair and two effects for
+  // (see git history) now live once, generically, in RowDialog -- see that component's own
+  // docblock. This state is only the split form's own DATA any more (which row, its parts, the
+  // remainder math), not its dialog chrome.
   // Mirrors `renaming` exactly (ruling R13): one nullable slot of state, so opening the note
   // sub-row on a different row always replaces whichever one was already open.
   const [noting, setNoting] = useState<{ id: number; current: string } | null>(null);
@@ -574,75 +540,70 @@ export function TransactionsClient({
   const splitRemainderCents = splitting ? splitting.amountCents - sumCents(activeSplitParts.map(draftPartCents)) : 0;
 
   /**
-   * Owner report (item 1): the three behaviours a real modal owes a keyboard/screen-reader user,
-   * none of which the old plain-Card version gave for free. Keyed on `splitting?.id` rather than
-   * `splitting !== null` -- a boolean would fail to refire when one row's editor is replaced by
-   * another's without ever passing through `null` in between (backlog's own "opening a second
-   * row replaces the first" test does exactly this), and a stale `splitOpenerRef` would then
-   * return focus to the WRONG row's kebab once the second editor closes.
-   *   - focus moves INTO the dialog on open (the dialog shell itself takes it -- there is no one
-   *     obvious "first field" the way a rename box has a single autoFocus input);
-   *   - the page behind stops scrolling while it is open, or a touch/wheel scroll would move a
-   *     page the person can no longer see behind the dimmed backdrop;
-   *   - focus returns to whatever had it before the dialog opened when it closes, by any of the
-   *     four paths that clear `splitting` (Escape, the backdrop, Cancel, or a real submit).
-   */
-  useEffect(() => {
-    if (splitting === null) return;
-    splitOpenerRef.current = document.activeElement as HTMLElement | null;
-    splitDialogRef.current?.focus();
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      splitOpenerRef.current?.focus();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [splitting?.id ?? null]);
-
-  /** Owner report (item 1): Escape closes the dialog from anywhere inside it; every other key
-   *  falls through to the focus trap so Tab still cycles within the dialog while it is open. */
-  function onSplitDialogKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      setSplitting(null);
-      return;
-    }
-    if (splitDialogRef.current) trapDialogTab(splitDialogRef.current, event);
-  }
-
-  /**
-   * Owner report (item 2): a note used to vanish the moment it was saved -- nothing on the row
-   * said one existed, so telling which rows carried one meant reopening the Note… editor blind,
-   * on every row, one at a time. Rendered beside the merchant on any row whose `notes` is
-   * non-empty; `title` carries the note text (the same hover/assistive-tech affordance the bank-
-   * text `title` on the merchant span already uses elsewhere on this row), and the accessible
-   * name NAMES the row ("Note on TIM HORTONS") so two rows sharing a merchant are still tellable
-   * apart. Clicking it opens the SAME `noting` state the row menu's Note… item already writes to
-   * -- one note-editing path, not a second one bolted on beside it.
+   * Owner report (item 2), THIRD pass -- the first two both shipped and were both rejected from
+   * the same screenshot review. Attempt 1: nothing on the row said a note existed at all. Attempt
+   * 2 (`ml-1.5 inline-flex h-11 w-11 ... bg-info-soft`, kept in git history) fixed that but broke
+   * two other things the screenshot called out: the merchant `<strong>`/`<span>` this renders
+   * beside is plain inline content, not a flex container -- so a 44px-square inline-flex box could
+   * not always fit the remaining width of the line it was on, and an inline box that does not fit
+   * does not shrink, it wraps WHOLE onto the next line, which read as "the icon is on its own row
+   * below the merchant name". And a solid `bg-info-soft` PILL, sized the same as the row's other
+   * badges (renamed/rule/transfer/loan), competed with them and with the amount for attention
+   * instead of reading as a quiet marker.
+   *
+   * This pass fixes both by decoupling "how much room this claims in the text flow" from "how big
+   * a target a thumb can hit":
+   *  - The glyph's own box is `h-3.5 w-3.5` (14px) at EVERY width, the same size a badge's own
+   *    icon uses elsewhere on this row -- small enough that it behaves like any other inline
+   *    glyph for wrapping purposes, on the table row's flex-with-gap layout and the card's plain
+   *    inline layout alike, and it never resizes at `sm:`, so there is no breakpoint-dependent
+   *    layout shift to reason about.
+   *  - The 44px touch target is a `before:` pseudo-element positioned `absolute -inset-[15px]`
+   *    (14 + 15*2 = 44), not a literal padding-plus-negative-margin box: a real child/padding box
+   *    that size would itself be what participates in the surrounding flex `gap` (the table row's
+   *    merchant cell is `flex ... gap-1.5`) and could still overlap or shrink that gap unpredictably.
+   *    An absolutely positioned pseudo-element is taken out of flow entirely -- it paints (nothing,
+   *    since it carries no background) beyond the button's own edges without the button's OWN box,
+   *    which is what the line height and the flex gap actually measure, growing at all. Reset to
+   *    `inset-0` (no expansion) at `sm:` and up, where a mouse pointer does not need the floor.
+   *  - Tone: plain `text-info` (no background pill) at rest, an `--info` value chosen because it
+   *    reads as "annotation", not as spending-direction (Money's own positive/negative colouring)
+   *    or as one of the other badge tones already busy on this row -- against this app's own
+   *    `--surface` card background it computes (standard WCAG relative-luminance formula, the
+   *    same one this codebase's own placeholder-contrast test already grades colours by) to
+   *    roughly 5.7:1 in the light theme and 8.5:1 in the dark theme, both comfortably past the
+   *    3:1 floor a non-text/icon control needs and past the 4.5:1 a body of text would. A soft
+   *    `hover:bg-info-soft`/`hover:text-info-soft-fg` circle (the SAME pairing attempt 2 used,
+   *    proven for contrast already) appears only on hover/focus, so the resting state stays quiet.
+   *
+   * `title` still carries the note text (the same hover/assistive-tech affordance the bank-text
+   * `title` on the merchant span already uses), and the accessible name still NAMES the row so two
+   * rows sharing a merchant are tellable apart -- reworded from "Note on X" to "Edit note for X"
+   * (this is a button that opens the editor, not a label describing a fact) at the coordinator's
+   * suggestion; the tests below were updated for the new wording, not loosened. Clicking it opens
+   * the SAME `noting` state the row menu's Note… item already writes to -- one note-editing path,
+   * not a second one bolted on beside it -- and, since this is now a real modal (Task A) rather
+   * than an inline sub-row, `event.currentTarget.focus()` runs before that state is set: a plain
+   * <button> is not wrapped by RowMenu's own close()-then-refocus idiom, and neither a real
+   * browser's click-to-focus behaviour for a <button> (Safari notably has none) nor Testing
+   * Library's `fireEvent.click` can be relied on to have already done this, but RowDialog's own
+   * "whoever has focus when I mount is the opener" contract (see its docblock) needs it to be true
+   * regardless.
    */
   function noteIndicator(row: TransactionRow) {
     if (!row.notes) return null;
     return (
-      // Owner screenshot fix (2026-08-30): this used to sit with no gap at all right after the
-      // merchant text, in `text-muted` -- the same colour as the name itself -- so it read as a
-      // stray glyph stuck onto the end of the word rather than a control. Three changes, none of
-      // which touch what this does (still setNoting -- one editing path, per noteIndicator's own
-      // top-of-file rule): `ml-1.5` gives it real separation from the name; the `--info`/
-      // `--info-soft` pair (already proven for contrast in both themes -- it backs a badge tone
-      // elsewhere in this app) recolours it so it reads as an annotation, not part of the name;
-      // and `inline-flex items-center` plus an explicit icon size keeps it vertically centred on
-      // the merchant's line instead of inheriting a line box that could ride high or low. The tap
-      // target stays 44px on a touch-sized viewport (`h-11 w-11`, the same floor confirmButton and
-      // RowMenu's own trigger already use), shrinking to a mouse-sized 20px at `sm` and up.
       <button
         type="button"
-        onClick={() => setNoting({ id: row.id, current: row.notes ?? '' })}
+        onClick={(event) => {
+          event.currentTarget.focus();
+          setNoting({ id: row.id, current: row.notes ?? '' });
+        }}
         title={row.notes}
-        aria-label={`Note on ${row.normalizedMerchant}`}
-        className="ml-1.5 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-info-soft text-info-soft-fg hover:opacity-80 sm:h-5 sm:w-5"
+        aria-label={`Edit note for ${row.normalizedMerchant}`}
+        className="relative inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full align-middle text-info before:absolute before:-inset-[15px] before:content-[''] hover:bg-info-soft hover:text-info-soft-fg sm:before:inset-0"
       >
-        <NoteIcon className="h-3.5 w-3.5" aria-hidden="true" />
+        <NoteGlyph className="h-3.5 w-3.5" />
       </button>
     );
   }
@@ -776,195 +737,212 @@ export function TransactionsClient({
   }
 
   /**
-   * Coordinator fix (2026-08-30, single-card-renderer task): renaming used to open as a plain
-   * `<Card>` at the very top of the page (see the git history for the block this replaced),
-   * wherever `renaming` happened to sit in the JSX -- so pressing Rename… in the row menu looked
-   * like it did nothing until a person scrolled up to find it, and once there they had lost track
-   * of which row it was for. That is the exact defect the split editor used to have (item 1's own
-   * docblock on the modal below) and the one noteEditor/newLoanEditor/applyAllEditor were already
-   * fixed against -- this brings renaming into the SAME idiom as those three: an inline editor
-   * anchored at its own row, rendered from both the card and the table row via this one function,
-   * closing on submit (`onSubmit={() => setRenaming(null)}`) before the action even settles, the
-   * same way noteEditor's own form does. The split editor stays the deliberate exception and
-   * keeps its modal (a multi-row form with its own arithmetic and a Save gate earns the focus a
-   * modal takes; a single display-name field does not). Nothing about what this SUBMITS changed --
-   * same hidden field, same `scope` radios, same renameAction, same validation.
+   * Unify-the-editors task (2026-08-30) -- see RowDialog's own docblock for the shell all four of
+   * the functions below (plus the split form further down) now share. Every one of them renders
+   * ONCE, at the top level of this component's return, alongside the split dialog -- not per row,
+   * and not duplicated between the table and the card list the way an inline sub-row anchored at
+   * its own row used to have to be. (The "Fix round item CB" / "coordinator fix" docblocks these
+   * functions used to carry -- preserved in git history -- describe exactly that duplication, and
+   * the dead-editor bug it caused whenever a control existed on only one of the two branches.) A
+   * dialog's own `fixed inset-0` backdrop makes WHERE in the DOM it is mounted irrelevant to where
+   * it appears on screen, so there is no "table branch" copy and "card branch" copy left to keep
+   * in sync -- each function below looks its target row up by id from `page.rows` instead, the
+   * same page data every other control on this file already reads from.
    */
-  function renameEditor(row: TransactionRow) {
-    if (renaming?.id !== row.id) return null;
+  const findRow = (id: number) => page.rows.find((row) => row.id === id);
+
+  /** Owner report (item 1): names the row it acts on ("Rename Coffee run"), the copy pattern the
+   *  note dialog below established first. Nothing about what this SUBMITS changed from the
+   *  inline sub-row it replaces -- same hidden field, same `scope` radios, same renameAction,
+   *  same validation; only the shell around it did. */
+  function renameDialog() {
+    if (!renaming) return null;
     return (
-      <form
-        action={renameAction}
-        onSubmit={() => setRenaming(null)}
-        className="flex flex-col gap-2 py-2"
-        data-testid="rename-form"
+      <RowDialog
+        dialogId="rename-dialog"
+        key={renaming.id}
+        title={`Rename ${renaming.current}`}
+        onClose={() => setRenaming(null)}
       >
-        <input type="hidden" name="transactionId" value={renaming.id} />
-        <Field label="Display name" hint="Leave it empty to go back to the bank's wording.">
-          <input name="displayName" defaultValue={renaming.current} autoFocus className={inputClass} />
-        </Field>
-        <fieldset className="flex flex-col gap-1.5">
-          <legend className={labelClass}>Apply to</legend>
-          <label className="flex items-center gap-2 text-sm text-muted">
-            <input type="radio" name="scope" value="one" defaultChecked className="accent-accent" /> This transaction only
-          </label>
-          <label className="flex items-center gap-2 text-sm text-muted">
-            <input type="radio" name="scope" value="all" className="accent-accent" /> All matching{' '}
-            <code className="rounded bg-surface-2 px-1 font-mono text-xs text-ink">{renaming.merchant}</code> + future imports
-            (creates a rename rule)
-          </label>
-        </fieldset>
-        <div className="flex gap-2">
-          <SubmitButton className="w-fit">Save name</SubmitButton>
-          <button type="button" className="btn btn--ghost btn--sm" onClick={() => setRenaming(null)}>
-            Cancel
-          </button>
-        </div>
-      </form>
+        <form action={renameAction} onSubmit={() => setRenaming(null)} className="flex flex-col gap-3">
+          <input type="hidden" name="transactionId" value={renaming.id} />
+          <Field label="Display name" hint="Leave it empty to go back to the bank's wording.">
+            <input name="displayName" defaultValue={renaming.current} autoFocus className={inputClass} />
+          </Field>
+          <fieldset className="flex flex-col gap-1.5">
+            <legend className={labelClass}>Apply to</legend>
+            <label className="flex items-center gap-2 text-sm text-muted">
+              <input type="radio" name="scope" value="one" defaultChecked className="accent-accent" /> This transaction only
+            </label>
+            <label className="flex items-center gap-2 text-sm text-muted">
+              <input type="radio" name="scope" value="all" className="accent-accent" /> All matching{' '}
+              <code className="rounded bg-surface-2 px-1 font-mono text-xs text-ink">{renaming.merchant}</code> + future imports
+              (creates a rename rule)
+            </label>
+          </fieldset>
+          <div className="flex gap-2">
+            <SubmitButton className="w-fit">Save name</SubmitButton>
+            <button type="button" className="btn btn--ghost btn--sm" onClick={() => setRenaming(null)}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      </RowDialog>
     );
   }
 
-  /**
-   * Fix round (item CB, regression): this used to be a `<tr>` sub-row rendered ONLY from the
-   * table branch below, so opening it from the review card list's kebab did nothing -- the same
-   * dead-editor bug noteEditor's docblock describes. Pulled out to a plain function so both
-   * branches can render its contents (a table `<tr><td colSpan>`, a card `<div>`), with no
-   * change to the fields, action or behaviour themselves.
-   */
-  function noteEditor(row: TransactionRow) {
-    if (noting?.id !== row.id) return null;
+  /** Ruling R13: NOT an auto-save (v1.11.0's rule) -- a free-text field that saves on blur loses
+   *  a half-typed sentence, which is the one thing a note must never do. Title names the row
+   *  ("Note for SQ *UNKNOWN VENDOR 8841"), the exact copy pattern the owner's report asked to
+   *  keep; the field's own label is plain "Note" now that the dialog's title already says whose. */
+  function noteDialog() {
+    if (!noting) return null;
+    const row = findRow(noting.id);
+    if (!row) return null;
+    const desc = row.displayDescription ?? row.rawDescription;
     return (
-      // Ruling R13: an inline sub-row, not a dialog -- the note is about the row above it, and a
-      // modal would hide the charge the note is explaining. NOT an auto-save (v1.11.0's rule): a
-      // free-text field that saves on blur loses a half-typed sentence, which is the one thing a
-      // note must never do.
-      <form action={noteAction} onSubmit={() => setNoting(null)} className="flex flex-col gap-2 py-2">
-        <input type="hidden" name="transactionId" value={row.id} />
-        <Field label={`Note for ${row.displayDescription ?? row.rawDescription}`}>
-          <textarea name="notes" defaultValue={noting.current} rows={2} className={inputClass} />
-        </Field>
-        <div className="flex gap-2">
-          <SubmitButton className="w-fit">Save note</SubmitButton>
-          <button type="button" className="btn btn--ghost btn--sm" onClick={() => setNoting(null)}>
-            Cancel
-          </button>
-        </div>
-      </form>
+      <RowDialog dialogId="note-dialog" key={noting.id} title={`Note for ${desc}`} onClose={() => setNoting(null)}>
+        <form action={noteAction} onSubmit={() => setNoting(null)} className="flex flex-col gap-3">
+          <input type="hidden" name="transactionId" value={row.id} />
+          <Field label="Note">
+            <textarea name="notes" defaultValue={noting.current} rows={3} autoFocus className={inputClass} />
+          </Field>
+          <div className="flex gap-2">
+            <SubmitButton className="w-fit">Save note</SubmitButton>
+            <button type="button" className="btn btn--ghost btn--sm" onClick={() => setNoting(null)}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      </RowDialog>
     );
   }
 
   /**
-   * Fix round (item CB, regression): same dead-editor bug as noteEditor, for the "Assign to
-   * loan…" sub-row -- pulled out so the review card list can render it too.
-   *
-   * Backlog BY, folded in here: this is now ALSO the existing-loan assign form, not just the
-   * new-loan one. `newLoan.itemId` is the "Assign to" select's own value: '' means "New loan…"
-   * (the name/direction fields below apply, posting to createLoanFromTransactionAction exactly
-   * as before); any other value is an existing loan's id, and Save posts straight to
-   * assignToLoanAction instead. One <form>, whose `action` picks the right dispatcher at submit
-   * time -- the fields either action reads (transactionId always; loanName/loanDirection or
-   * itemId depending on the choice) are exactly what's rendered below.
+   * Backlog BY: this is ALSO the existing-loan assign form, not just the new-loan one.
+   * `newLoan.itemId` is the "Assign to" select's own value: '' means "New loan…" (the
+   * name/direction fields below apply, posting to createLoanFromTransactionAction); any other
+   * value is an existing loan's id, and Save posts straight to assignToLoanAction instead. One
+   * <form>, whose `action` picks the right dispatcher at submit time -- the fields either action
+   * reads (transactionId always; loanName/loanDirection or itemId depending on the choice) are
+   * exactly what's rendered below. Title names the row being assigned.
    */
-  function newLoanEditor(row: TransactionRow) {
-    if (newLoan?.id !== row.id) return null;
+  function newLoanDialog() {
+    if (!newLoan) return null;
+    const row = findRow(newLoan.id);
+    if (!row) return null;
+    const desc = row.displayDescription ?? row.rawDescription;
     const isNew = newLoan.itemId === '';
     return (
-      <form
-        action={(formData: FormData) => {
-          if (isNew) newLoanAction(formData);
-          else assignLoan(formData);
-        }}
-        className="flex flex-col gap-2 py-2"
-        data-testid="new-loan-form"
+      <RowDialog
+        dialogId="new-loan-dialog"
+        key={newLoan.id}
+        title={`Assign ${desc} to a loan`}
+        onClose={() => setNewLoan(null)}
       >
-        <input type="hidden" name="transactionId" value={row.id} />
-        {/* Shown INLINE, under the form a refusal leaves open, not only through the top banner
-            (that still gets it too, via `error` above) -- the person is looking here, not at the
-            top of the page. Whichever action was actually posted owns this message. */}
-        <FormError message={isNew ? newLoanState.error : assignState.error} />
-        <Field label="Assign to">
-          <select
-            name="itemId"
-            value={newLoan.itemId}
-            onChange={(e) => setNewLoan({ ...newLoan, itemId: e.target.value })}
-            className={selectClass}
-          >
-            {loanOptions.map((loan) => (
-              <option key={loan.id} value={String(loan.id)}>{loan.name}</option>
-            ))}
-            <option value="">New loan…</option>
-          </select>
-        </Field>
-        {isNew ? (
-          <>
-            <Field label="Loan name" hint="Who the loan is with — a name you will recognise later.">
-              <input
-                name="loanName"
-                value={newLoan.name}
-                onChange={(e) => setNewLoan({ ...newLoan, name: e.target.value })}
-                required
-                maxLength={80}
-                autoFocus
-                className={inputClass}
-              />
-            </Field>
-            <Field label="Direction">
-              <select name="loanDirection" defaultValue="lent" className={selectClass}>
-                {LOAN_DIRECTIONS.map((direction) => (
-                  <option key={direction} value={direction}>{LOAN_DIRECTION_LABELS[direction]}</option>
-                ))}
-              </select>
-            </Field>
-          </>
-        ) : (
-          // 2026-08-30 fix: offered only on the EXISTING-loan path (Save -> assignToLoanAction),
-          // which is the one action wired to read it -- the new-loan path just above posts to
-          // createLoanFromTransactionAction instead, which this fix does not touch. Defaults ON:
-          // money lent out and money repaid moves an asset between pockets, not spending, so the
-          // common case is that a loan payment should also leave spending -- a person who wants
-          // the payment counted as ordinary spending can still untick it.
-          <label className="flex items-center gap-2 text-sm text-muted">
-            <input type="checkbox" name="alsoTransfer" value="1" defaultChecked className="accent-accent" />
-            Also mark as a transfer (keeps it out of spending)
-          </label>
-        )}
-        <div className="flex gap-2">
-          <SubmitButton className="w-fit">Save</SubmitButton>
-          <button type="button" className="btn btn--ghost btn--sm" onClick={() => setNewLoan(null)}>
-            Cancel
-          </button>
-        </div>
-      </form>
+        <form
+          action={(formData: FormData) => {
+            if (isNew) newLoanAction(formData);
+            else assignLoan(formData);
+          }}
+          className="flex flex-col gap-3"
+          data-testid="new-loan-form"
+        >
+          <input type="hidden" name="transactionId" value={row.id} />
+          {/* Shown INLINE, under the form a refusal leaves open, not only through the top banner
+              (that still gets it too, via `error` above) -- the person is looking here, not at
+              the top of the page. Whichever action was actually posted owns this message. */}
+          <FormError message={isNew ? newLoanState.error : assignState.error} />
+          <Field label="Assign to">
+            <select
+              name="itemId"
+              value={newLoan.itemId}
+              onChange={(e) => setNewLoan({ ...newLoan, itemId: e.target.value })}
+              className={selectClass}
+            >
+              {loanOptions.map((loan) => (
+                <option key={loan.id} value={String(loan.id)}>{loan.name}</option>
+              ))}
+              <option value="">New loan…</option>
+            </select>
+          </Field>
+          {isNew ? (
+            <>
+              <Field label="Loan name" hint="Who the loan is with — a name you will recognise later.">
+                <input
+                  name="loanName"
+                  value={newLoan.name}
+                  onChange={(e) => setNewLoan({ ...newLoan, name: e.target.value })}
+                  required
+                  maxLength={80}
+                  autoFocus
+                  className={inputClass}
+                />
+              </Field>
+              <Field label="Direction">
+                <select name="loanDirection" defaultValue="lent" className={selectClass}>
+                  {LOAN_DIRECTIONS.map((direction) => (
+                    <option key={direction} value={direction}>{LOAN_DIRECTION_LABELS[direction]}</option>
+                  ))}
+                </select>
+              </Field>
+            </>
+          ) : (
+            // 2026-08-30 fix: offered only on the EXISTING-loan path (Save -> assignToLoanAction),
+            // which is the one action wired to read it -- the new-loan path just above posts to
+            // createLoanFromTransactionAction instead, which this fix does not touch. Defaults ON:
+            // money lent out and money repaid moves an asset between pockets, not spending, so the
+            // common case is that a loan payment should also leave spending -- a person who wants
+            // the payment counted as ordinary spending can still untick it.
+            <label className="flex items-center gap-2 text-sm text-muted">
+              <input type="checkbox" name="alsoTransfer" value="1" defaultChecked className="accent-accent" />
+              Also mark as a transfer (keeps it out of spending)
+            </label>
+          )}
+          <div className="flex gap-2">
+            <SubmitButton className="w-fit">Save</SubmitButton>
+            <button type="button" className="btn btn--ghost btn--sm" onClick={() => setNewLoan(null)}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      </RowDialog>
     );
   }
 
-  /**
-   * Backlog BX: this editor used to live only in the card branch, gated on reviewMode through
-   * the kebab item that opens it. Now the item is offered on every row, so this must render from
-   * the table branch too -- pulled out for the same reason noteEditor/newLoanEditor were.
-   */
-  function applyAllEditor(row: TransactionRow) {
-    if (applyAllRow !== row.id) return null;
+  /** Backlog BX. Title names the merchant every matching transaction shares. The select drops the
+   *  dense `REVIEW_PICKER_CLASS` row-control sizing (gone now -- grep confirms nothing else used
+   *  it) for the ordinary `selectClass`: this control used to have to fit beside a row's own
+   *  kebab, and now has a whole dialog to itself. */
+  function applyAllDialog() {
+    if (applyAllRow === null) return null;
+    const row = findRow(applyAllRow);
+    if (!row) return null;
     const matchingCount = matchingCounts[row.id];
     const hasMatchingCount = matchingCount !== undefined;
     return (
-      <div className="flex flex-col gap-1.5 rounded-lg border border-line p-3">
-        <p className="text-xs font-semibold text-ink">
+      <RowDialog
+        dialogId="apply-all-dialog"
+        key={row.id}
+        title={`Apply a category to every "${row.normalizedMerchant}"`}
+        onClose={() => setApplyAllRow(null)}
+      >
+        <p className="text-sm text-ink">
           {hasMatchingCount ? (
             <>Every &quot;{row.normalizedMerchant}&quot; — {matchingCount} transactions, plus future imports</>
           ) : (
             <>Every &quot;{row.normalizedMerchant}&quot;, plus future imports</>
           )}
         </p>
-        <p className="text-xs text-muted">
-          Only for merchants that are always one category (coffee shop, streaming).
-          Walmart, Amazon, e-transfers: use the select above.
+        <p className="text-sm text-muted">
+          Only for merchants that are always one category (coffee shop, streaming). Walmart, Amazon, e-transfers: use
+          the category picker on the row instead.
         </p>
         {/* Shown inline, under the editor a refusal leaves open, not only through the top banner
             (that still gets it too, via `error` above) -- the same idiom the new-loan editor
             already uses. */}
         <FormError message={applyAllState.error} />
-        <form action={applyAllAction} className="flex flex-col gap-1.5 sm:flex-row sm:items-center">
+        <form action={applyAllAction} className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <input type="hidden" name="normalizedMerchant" value={row.normalizedMerchant} />
           <select
             name="categoryId"
@@ -974,7 +952,7 @@ export function TransactionsClient({
                 ? `Category for all ${matchingCount} matching ${row.normalizedMerchant} — every transaction`
                 : `Category for every ${row.normalizedMerchant} — every transaction`
             }
-            className={REVIEW_PICKER_CLASS}
+            className={selectClass}
           >
             <option value="">{hasMatchingCount ? `Choose for all ${matchingCount}…` : 'Choose a category…'}</option>
             {categoryOptGroups(categoryGroups)}
@@ -986,7 +964,7 @@ export function TransactionsClient({
             Cancel
           </button>
         </form>
-      </div>
+      </RowDialog>
     );
   }
 
@@ -1011,20 +989,52 @@ export function TransactionsClient({
    * missing there, or vice versa.
    *
    * Review mode's own addition is scoped to exactly one control -- the per-row confirm button
-   * (confirmButton, called only when `reviewMode`) -- everything else this function renders
-   * (the checkbox/bulk-toolbar hookup, the money-direction glyph, every badge, both pickers, the
-   * row menu, and all four inline sub-editors) is identical markup regardless of mode. The only
-   * OTHER place `reviewMode` is read below is the category field's placeholder/archived-option
-   * treatment, which already branched on it on the table row before this task (ruling R3):
-   * review's placeholder stays disabled on purpose (nothing is pre-selected -- a guess waiting for
-   * a decision must never look like "Uncategorized" already chosen), while plain Transactions
-   * keeps "Uncategorized" as a legitimate resting state, archived categories and all.
+   * (confirmButton, called only when `reviewMode`) -- everything else this function renders (the
+   * checkbox/bulk-toolbar hookup, the money-direction glyph, every badge, both pickers, and the
+   * row menu) is identical markup regardless of mode. The four editor DIALOGS (rename, note,
+   * assign-to-loan, apply-to-all) are no longer part of this function's own control set at all --
+   * unify-the-editors task, same date -- they render once, at the top level of this component's
+   * return, looked up by row id; see renameDialog/noteDialog/newLoanDialog/applyAllDialog's own
+   * shared docblock. The only OTHER place `reviewMode` is read below is the category field's
+   * placeholder/archived-option treatment, which already branched on it on the table row before
+   * this task (ruling R3): review's placeholder stays disabled on purpose (nothing is pre-selected
+   * -- a guess waiting for a decision must never look like "Uncategorized" already chosen), while
+   * plain Transactions keeps "Uncategorized" as a legitimate resting state, archived categories
+   * and all.
+   *
+   * Coordinator fix (2026-08-30, card-density task): a screenshot comparison against the older
+   * build showed this card losing badly on density, for three concrete reasons, each fixed below:
+   *   1. The kebab and review mode's confirm button used to render on a TRAILING line all their
+   *      own (`flex items-center justify-end gap-1`) -- a full line of card height holding two
+   *      small right-aligned controls and nothing else, the single biggest waste. The kebab acts
+   *      on the WHOLE row, which is why it now sits on the row's own identity line, opposite the
+   *      amount (Line 1 below) -- exactly where a table row's own kebab already sits, at the far
+   *      right of ITS row rather than on a row of its own beneath it. The confirm button moves to
+   *      Line 3, beside the controls it actually reports on, rather than being orphaned with it.
+   *   2. Both selects used to stretch to fill a two-column grid cell (`w-full`) -- a category
+   *      picker is no more usable at 400px than at 200px, it just pushes the card apart. Neither
+   *      passes a `className` any more, so both fall back to AutoSaveSelect's own default,
+   *      AUTO_SAVE_CONTROL -- the SAME natural-width, capped, 44px-floored control the desktop
+   *      table row's category/person selects already use un-customised.
+   *   3. Each label used to sit on its own line ABOVE its select, costing a second line per
+   *      control. Line 3 below puts each label INLINE beside its own control instead (the older
+   *      layout's own idiom, which lost nothing) -- and note-indicator moves from beside the
+   *      merchant name to Line 2 (the date/account meta line), quiet company for already-small
+   *      muted text instead of crowding a bold merchant name that already shares its line with the
+   *      amount and the kebab. This is a CARD-only change: the desktop table row's own
+   *      `noteIndicator(row)` call, beside the merchant name in its Description cell, is
+   *      untouched -- that row has no width problem to solve and no trailing-line-of-controls
+   *      problem either, so nothing about it needed to move.
+   *
+   * Three lines, one purpose each, is the resulting shape: identity (checkbox, merchant, amount,
+   * kebab), meta (date, account, note), controls (category, person, confirm). Below `sm`, Line 3
+   * is `flex flex-wrap`, not the two-column `grid` it used to be -- a grid forces exactly two
+   * equal columns that stretch to fill a row a narrow phone does not have room for; flex-wrap lets
+   * each label+control pair keep AUTO_SAVE_CONTROL's own natural width and wrap onto a second
+   * control line instead of being squeezed into a share of the row it does not fit, which is
+   * exactly the mistake a previous pass made on mobile that this one does not repeat.
    */
   function transactionCard(row: TransactionRow) {
-    const renameForm = renameEditor(row);
-    const noteForm = noteEditor(row);
-    const newLoanForm = newLoanEditor(row);
-    const applyAllForm = applyAllEditor(row);
     // Row rhythm (item 4): only meaningful alongside the guessed-category badge just below.
     const GuessCategoryIcon = row.categoryName ? categoryIcon(row.categoryName) : null;
     const rowSplits = splits[row.id] ?? [];
@@ -1039,7 +1049,8 @@ export function TransactionsClient({
         ];
     return (
       <li className="card flex flex-col gap-2 p-3 sm:gap-3 sm:p-4">
-        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        {/* Line 1 (identity): checkbox, money-direction glyph, merchant + badges, amount, kebab. */}
+        <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
           {/* Checkbox (bulk toolbar): card-only until this task -- review's own queue had no way
               to bulk-select at all. The bulk toolbar just below this component's return is already
               mode-agnostic (nothing in it checks reviewMode), so giving every card a checkbox is
@@ -1074,7 +1085,6 @@ export function TransactionsClient({
             >
               {row.displayDescription ?? row.normalizedMerchant}
             </strong>
-            {noteIndicator(row)}
             {row.normalizedMerchant !==
             row.rawDescription.trim().replace(/\s+/g, ' ').normalize('NFC').toUpperCase() ? (
               <>
@@ -1091,12 +1101,22 @@ export function TransactionsClient({
               <span key={`loan-badge-${link.id}`} className="badge badge--blue ml-1.5">{link.itemName}</span>
             ))}
           </span>
-          <Money cents={row.amountCents} className="text-base font-semibold" />
+          {/* Amount + kebab grouped together so the two stay adjacent at the row's trailing edge
+              (coordinator fix: the kebab moved here from its own trailing line -- see this
+              function's own docblock, point 1). */}
+          <span className="flex shrink-0 items-center gap-1">
+            <Money cents={row.amountCents} className="text-base font-semibold" />
+            {rowMenu(row)}
+          </span>
         </div>
+        {/* Line 2 (meta): date, account, the note indicator (coordinator fix, point 3 -- CARD
+            only; the desktop table row keeps noteIndicator(row) beside its merchant name,
+            unchanged), and the guessed-category badge. */}
         <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-subtle">
           <span className="tabnum">{row.date}</span>
           <span aria-hidden="true">·</span>
           <span>{row.accountName}</span>
+          {noteIndicator(row)}
           {/* Ruling S5(c): no "uncategorized" fallback badge -- every card in a queue defined as
               "not categorized yet" carried it, which made it noise rather than information. */}
           {row.source === 'bayes' && row.categoryName ? (
@@ -1109,17 +1129,13 @@ export function TransactionsClient({
             </>
           ) : null}
         </div>
-        {/*
-          Mobile density (item 2, owner report: "too much wasted space"): category and person now
-          share one row -- a two-column grid, not the flex-wrap that let either control claim a
-          full line of its own before this task -- and the card's own padding came down (p-4 ->
-          p-3, the outer gap-3 -> gap-2) to match. Every control here still clears the 44px touch
-          floor through CARD_FIELD_CLASS/confirmButton/RowMenu's own trigger, so density did not
-          cost tap accuracy.
-        */}
-        <div className="grid grid-cols-2 gap-2 border-t border-line pt-2 sm:pt-3">
-          <div className="flex flex-col gap-1">
-            <span className="text-[0.6875rem] font-medium text-muted">This transaction only</span>
+        {/* Line 3 (controls): category, person -- each label inline beside its own control, both
+            at AUTO_SAVE_CONTROL's natural capped width, never stretched -- and review mode's
+            confirm button, inline next to the controls it reports on. `flex flex-wrap`, not a
+            grid: see this function's own docblock, point 2/3, for why. */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-line pt-2 sm:pt-3">
+          <span className="flex items-center gap-1.5">
+            <span className="shrink-0 text-[0.6875rem] font-medium text-muted">This transaction only</span>
             {/* v1.7.0 Task 4: a split transaction has no ONE category -- same rule as the table
                 row, now honoured here too (never checked from this card before this task). */}
             {rowSplits.length > 0 ? (
@@ -1136,12 +1152,11 @@ export function TransactionsClient({
                     ? `Category for ${row.normalizedMerchant} — this transaction only`
                     : `Category for transaction ${row.id}`
                 }
-                className={CARD_FIELD_CLASS}
               />
             )}
-          </div>
-          <div className="flex flex-col gap-1">
-            <span className="text-[0.6875rem] font-medium text-muted">Person</span>
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="shrink-0 text-[0.6875rem] font-medium text-muted">Person</span>
             {selfScoped ? (
               <span className="text-xs text-muted">{row.attributedUserName ?? 'Household'}</span>
             ) : (
@@ -1155,24 +1170,12 @@ export function TransactionsClient({
                 fields={{ ids: String(row.id) }}
                 action={saveAttribution}
                 ariaLabel={`Person for transaction ${row.id}`}
-                className={CARD_FIELD_CLASS}
               />
             )}
-          </div>
-        </div>
-        <div className="flex items-center justify-end gap-1">
+          </span>
           {/* The one thing review mode adds beyond this card's shared control set. */}
           {reviewMode ? confirmButton(row) : null}
-          {rowMenu(row)}
         </div>
-        {/* The four inline sub-editors, each anchored at this row -- rename, note, assign-to-loan,
-            apply-to-all all share one idiom now (coordinator fix, 2026-08-30): open in place,
-            close on submit, never render anywhere else on the page. The split editor is the
-            deliberate exception and stays the modal dialog below. */}
-        {renameForm ? <div>{renameForm}</div> : null}
-        {noteForm ? <div>{noteForm}</div> : null}
-        {newLoanForm ? <div>{newLoanForm}</div> : null}
-        {applyAllForm}
       </li>
     );
   }
@@ -1259,116 +1262,107 @@ export function TransactionsClient({
         Owner report (item 1): this used to be a plain Card rendered wherever `splitting` happened
         to sit in the JSX (the very top of the page) -- so pressing Split… appeared to do nothing
         until a person scrolled up to find it, and once there they had lost sight of which row it
-        belonged to. It is a real modal dialog now: a dimmed, blurred backdrop that closes the
-        dialog on click (the panel's own onClick stops that same click from bubbling up to the
-        backdrop, so clicking anything INSIDE never closes it), role="dialog"/aria-modal so
-        assistive tech treats it as one, aria-labelledby pointing at the header's own merchant/
-        date/amount (so the transaction being split is named without scrolling back to the row to
-        remember it), Escape and a focus trap wired through onSplitDialogKeyDown, and the open/
-        close focus-management + body-scroll-lock effect above. The FORM inside is byte-for-byte
-        what it was before this task -- same fields, same action (splitAction), same validation
-        (Save stays disabled until the remainder is exactly zero) and the same error surface
-        (FormError/`error` in the top banner) -- only the shell around it changed.
+        belonged to. Unify-the-editors task (2026-08-30): the dimmed/blurred backdrop, role=dialog/
+        aria-modal, the focus trap, Escape, body-scroll lock and focus-restore-to-trigger all now
+        live once in RowDialog (see its own docblock) rather than being hand-wired here -- this is
+        the shell's first and original caller. The FORM inside is byte-for-byte what it was before
+        this task -- same fields, same action (splitAction), same validation (Save stays disabled
+        until the remainder is exactly zero) and the same error surface (FormError/`error` in the
+        top banner) -- only the shell around it changed. `key={splitting.id}` forces a fresh
+        RowDialog instance (fresh opener capture, fresh initial focus) when one row's editor is
+        replaced by another's without passing through `null` in between -- see RowDialog's own
+        docblock on why a plain `splitting !== null` boolean would not refire for that case.
       */}
       {splitting ? (
-        <div
-          data-testid="split-dialog-backdrop"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
-          onClick={() => setSplitting(null)}
+        <RowDialog
+          dialogId="split-dialog"
+          key={splitting.id}
+          title={`Split ${splitting.merchant}`}
+          description={
+            <>
+              {`${splitting.date} · ${formatCents(splitting.amountCents)} — `}
+              Divide this transaction across more than one category. The parts must add up to the full amount.
+            </>
+          }
+          onClose={() => setSplitting(null)}
         >
-          <div
-            ref={splitDialogRef}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="split-dialog-heading split-dialog-description"
-            tabIndex={-1}
-            onClick={(event) => event.stopPropagation()}
-            onKeyDown={onSplitDialogKeyDown}
-            className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl outline-none"
-          >
-            <Card as="div">
-              <CardHeader
-                title={<span id="split-dialog-heading">{`Split ${splitting.merchant}`}</span>}
-                description={
-                  <span id="split-dialog-description">
-                    {`${splitting.date} · ${formatCents(splitting.amountCents)} — `}
-                    Divide this transaction across more than one category. The parts must add up to the full amount.
-                  </span>
-                }
-              />
-              <CardBody className="flex flex-col gap-4">
-                <form action={splitAction} onSubmit={() => setSplitting(null)} className="flex flex-col gap-4">
-                  <input type="hidden" name="txnId" value={splitting.id} />
-                  <input type="hidden" name="parts" value={JSON.stringify(splitPartsPayload)} />
-                  <div className="flex flex-col gap-2">
-                    <div className="flex flex-wrap gap-2 text-xs font-medium text-muted">
-                      <span className="w-44">Category</span>
-                      <span className="w-24">Amount</span>
-                      <span className="flex-1">Note</span>
-                    </div>
-                    {splitting.parts.map((part, index) => (
-                      <div key={index} className="flex flex-wrap items-center gap-2">
-                        <select
-                          value={part.categoryId}
-                          onChange={(e) => updateSplitPart(index, { categoryId: e.target.value })}
-                          aria-label={`Category for part ${index + 1}`}
-                          className={`${selectClass} w-44`}
-                        >
-                          <option value="">Choose a category</option>
-                          {/* Backlog BZ: an <optgroup> per parent instead of the flat NBSP-indented
-                              list -- categoryOptGroups() already excludes archived categories,
-                              matching this select's own live-category-only rule. */}
-                          {categoryOptGroups(categoryGroups)}
-                        </select>
-                        <input
-                          value={part.amount}
-                          onChange={(e) => updateSplitPart(index, { amount: e.target.value })}
-                          placeholder="0.00"
-                          inputMode="decimal"
-                          aria-label={`Amount for part ${index + 1}`}
-                          className={`${inputClass} w-24`}
-                        />
-                        <input
-                          value={part.note}
-                          onChange={(e) => updateSplitPart(index, { note: e.target.value })}
-                          placeholder="Note (optional)"
-                          aria-label={`Note for part ${index + 1}`}
-                          className={`${inputClass} flex-1 min-w-[10rem]`}
-                        />
-                        <button
-                          type="button"
-                          onClick={() => removeSplitPart(index)}
-                          disabled={splitting.parts.length <= 2}
-                          className="btn btn--ghost btn--sm px-2 text-xs"
-                        >
-                          Remove part
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="flex flex-wrap items-center gap-3">
-                    <button type="button" onClick={addSplitPart} className="btn btn--secondary btn--sm">
-                      Add a part
-                    </button>
-                    <span className="text-sm text-muted">Remaining to assign: {formatCents(splitRemainderCents)}</span>
-                  </div>
-                  <div className="flex gap-2">
-                    <SubmitButton disabled={splitRemainderCents !== 0}>Save split</SubmitButton>
-                    <button type="button" onClick={() => setSplitting(null)} className="btn btn--secondary">
-                      Cancel
-                    </button>
-                  </div>
-                </form>
-                <form action={splitAction} onSubmit={() => setSplitting(null)}>
-                  <input type="hidden" name="txnId" value={splitting.id} />
-                  <input type="hidden" name="parts" value="[]" />
-                  <SubmitButton variant="secondary">Remove split</SubmitButton>
-                </form>
-              </CardBody>
-            </Card>
-          </div>
-        </div>
+          <form action={splitAction} onSubmit={() => setSplitting(null)} className="flex flex-col gap-4">
+            <input type="hidden" name="txnId" value={splitting.id} />
+            <input type="hidden" name="parts" value={JSON.stringify(splitPartsPayload)} />
+            <div className="flex flex-col gap-2">
+              <div className="flex flex-wrap gap-2 text-xs font-medium text-muted">
+                <span className="w-44">Category</span>
+                <span className="w-24">Amount</span>
+                <span className="flex-1">Note</span>
+              </div>
+              {splitting.parts.map((part, index) => (
+                <div key={index} className="flex flex-wrap items-center gap-2">
+                  <select
+                    value={part.categoryId}
+                    onChange={(e) => updateSplitPart(index, { categoryId: e.target.value })}
+                    aria-label={`Category for part ${index + 1}`}
+                    className={`${selectClass} w-44`}
+                  >
+                    <option value="">Choose a category</option>
+                    {/* Backlog BZ: an <optgroup> per parent instead of the flat NBSP-indented
+                        list -- categoryOptGroups() already excludes archived categories,
+                        matching this select's own live-category-only rule. */}
+                    {categoryOptGroups(categoryGroups)}
+                  </select>
+                  <input
+                    value={part.amount}
+                    onChange={(e) => updateSplitPart(index, { amount: e.target.value })}
+                    placeholder="0.00"
+                    inputMode="decimal"
+                    aria-label={`Amount for part ${index + 1}`}
+                    className={`${inputClass} w-24`}
+                  />
+                  <input
+                    value={part.note}
+                    onChange={(e) => updateSplitPart(index, { note: e.target.value })}
+                    placeholder="Note (optional)"
+                    aria-label={`Note for part ${index + 1}`}
+                    className={`${inputClass} flex-1 min-w-[10rem]`}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeSplitPart(index)}
+                    disabled={splitting.parts.length <= 2}
+                    className="btn btn--ghost btn--sm px-2 text-xs"
+                  >
+                    Remove part
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <button type="button" onClick={addSplitPart} className="btn btn--secondary btn--sm">
+                Add a part
+              </button>
+              <span className="text-sm text-muted">Remaining to assign: {formatCents(splitRemainderCents)}</span>
+            </div>
+            <div className="flex gap-2">
+              <SubmitButton disabled={splitRemainderCents !== 0}>Save split</SubmitButton>
+              <button type="button" onClick={() => setSplitting(null)} className="btn btn--secondary">
+                Cancel
+              </button>
+            </div>
+          </form>
+          <form action={splitAction} onSubmit={() => setSplitting(null)}>
+            <input type="hidden" name="txnId" value={splitting.id} />
+            <input type="hidden" name="parts" value="[]" />
+            <SubmitButton variant="secondary">Remove split</SubmitButton>
+          </form>
+        </RowDialog>
       ) : null}
+
+      {/* The remaining four row editors, unified onto the same RowDialog shell -- see
+          renameDialog/noteDialog/newLoanDialog/applyAllDialog's own shared docblock for why each
+          renders here, once, rather than per row. */}
+      {renameDialog()}
+      {noteDialog()}
+      {newLoanDialog()}
+      {applyAllDialog()}
 
       <Card as="div">
         <CardBody className="pt-5">
@@ -1769,14 +1763,6 @@ export function TransactionsClient({
           </thead>
           <tbody>
             {page.rows.map((row, index) => {
-              // Fix round (item CB): computed once per row so the <tr> sub-rows below don't
-              // call each editor function twice (the open-state check and the content itself).
-              // Coordinator fix (2026-08-30): renameForm joins this set now that renaming is the
-              // same inline-anchored-at-its-row idiom as the other three, not a top-of-page Card.
-              const renameForm = renameEditor(row);
-              const noteForm = noteEditor(row);
-              const newLoanForm = newLoanEditor(row);
-              const applyAllForm = applyAllEditor(row);
               return (
               <Fragment key={row.id}>
               {/* Date grouping (item 3, ruling D7): the table stays a table, so the day header is
@@ -1916,38 +1902,13 @@ export function TransactionsClient({
                     `cell-stack-lead` at the other end of the phone card's row 1. */}
                 <td className="text-right cell-stack-actions" data-label="">{rowMenu(row)}</td>
               </tr>
-              {/* Fix round (item CB) / coordinator fix (2026-08-30): renameForm/noteEditor/
-                  newLoanEditor/applyAllEditor's own contents -- the SAME functions transactionCard
-                  calls for the card just above -- see those functions' own docblocks for why a
-                  second, table-only copy of each used to leave the card list's kebab dead in
-                  review mode. All four are the same anchored-at-its-row idiom now; the split
-                  editor is the deliberate exception and stays the modal below. */}
-              {renameForm ? (
-                <tr>
-                  <td colSpan={COLUMN_COUNT} data-label="">{renameForm}</td>
-                </tr>
-              ) : null}
-              {noteForm ? (
-                <tr>
-                  {/* Ruling R13: an inline sub-row, not a dialog -- the note is about the row
-                      above it, and a modal would hide the charge the note is explaining.
-                      `data-label=""` and nothing else: the default `grid-column: 1 / -1` every
-                      `<td>` gets on the stacked phone card already spans the row full-width, so
-                      this single cell needs no cell-stack-* role to sit correctly under the row
-                      it belongs to (Lane 2 spec, item 1). */}
-                  <td colSpan={COLUMN_COUNT} data-label="">{noteForm}</td>
-                </tr>
-              ) : null}
-              {newLoanForm ? (
-                <tr>
-                  <td colSpan={COLUMN_COUNT} data-label="">{newLoanForm}</td>
-                </tr>
-              ) : null}
-              {applyAllForm ? (
-                <tr>
-                  <td colSpan={COLUMN_COUNT} data-label="">{applyAllForm}</td>
-                </tr>
-              ) : null}
+              {/* Unify-the-editors task (2026-08-30): rename/note/assign-to-loan/apply-to-all used
+                  to each render a SECOND time here, as their own `<tr><td colSpan>` sub-row --
+                  the "Fix round (item CB)" this comment replaces exists in git history along with
+                  the dead-editor bug that duplication caused whenever a control existed on only
+                  one of the table/card branches. All four are dialogs now (renameDialog() and
+                  friends, rendered once at the top of this component's return, alongside the
+                  split dialog) -- there is nothing left to render per row here. */}
               </Fragment>
               );
             })}
