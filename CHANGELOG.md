@@ -21,6 +21,27 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.22.0] - 2026-08-31
+
+No migration.
+
+### Added
+
+- **A Canadian merchant rules pack**, importable from Settings → Merchant rules. 190 rules: 174
+  categorizations for merchants that sell one kind of thing — fuel, coffee, groceries, a phone
+  plan, a hydro bill, a transit fare — and 16 name cleanups for the big retailers. Every category
+  it names is one you already have, so importing creates nothing new. The multi-category stores get
+  a tidier name and deliberately no category, because how a household splits a warehouse-club trip
+  is not something a pack can know.
+- **Rule packs can carry merchant renames.** Importing applies them to transactions you already
+  have. Exporting them is off by default and shows you the exact text first — a rename is
+  something you typed, and it often names a person.
+
+### Changed
+
+- **The rules export preview shows what a rename would say**, not just which merchant it matches,
+  so nothing leaves without being read first.
+
 ## [1.21.0] - 2026-08-31
 
 One migration (0016), which tidies merchant rules — see Fixed. It merges rules that differ only

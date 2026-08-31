@@ -245,9 +245,20 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.21.0 release', () => {
+  it('MUST-7.1: the 1.22.0 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.21.0');
+    expect(pkg.version).toBe('1.22.0');
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toMatch(/^## \[1\.22\.0\] - 2026-08-31$/m);
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.22.0]'));
+    expect(changelog.indexOf('## [1.22.0]')).toBeLessThan(changelog.indexOf('## [1.21.0]'));
+    const entry = changelog.slice(changelog.indexOf('## [1.22.0]'), changelog.indexOf('## [1.21.0]'));
+    expect(entry).toMatch(/A Canadian merchant rules pack/i);
+    expect(entry).toMatch(/Rule packs can carry merchant renames/i);
+    expect(entry).toMatch(/No migration/i);
+  });
+
+  it('MUST-7.1: the 1.21.0 release is still recorded intact (append-only discipline)', () => {
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.21\.0\] - 2026-08-31$/m);
     expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.21.0]'));
