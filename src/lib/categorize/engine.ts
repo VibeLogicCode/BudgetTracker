@@ -740,7 +740,7 @@ export function applyRenameRules(txnIds?: number[], ctx: CategorizeContext = bui
     id: number;
     normalizedMerchant: string;
     displayDescription: string | null;
-    displaySource: 'manual' | 'rename' | null;
+    displaySource: 'manual' | 'rename' | 'loan' | null;
   }[] = [];
 
   if (scope === undefined) {

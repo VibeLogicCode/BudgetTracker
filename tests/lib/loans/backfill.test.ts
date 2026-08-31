@@ -63,13 +63,18 @@ describe('MUST-13.9 / MUST-13.10 / MUST-14.12: the backfill', () => {
   });
 
   it('accumulates advances on a lent loan (the running balance is signed)', () => {
-    // Review round (Lane A): a THIRD, much larger advance is what actually stresses the running
-    // total here -- growth never clamps against that total's VALUE (only its nullness), so two
-    // advances landing at the right database figure does not, by itself, prove the running
-    // figure carried between them has the right sign. It guards the same regression risk as the
-    // three-advance test in payment-matchers.test.ts: a mistake in this round's refactor
-    // (backfillLoanRule now advances `balance` by link()'s own returned signed delta, rather
-    // than re-deriving the sign a second time) that reintroduces a ceiling on growth.
+    // Originally: a THIRD, much larger advance was what stressed the running total here --
+    // growth never clamps against that total's VALUE (only its nullness), so two advances
+    // landing at the right database figure did not, by itself, prove the running figure carried
+    // between them had the right sign.
+    //
+    // Item 6 (v1.21.0 backlog): there is no more running total for this loop to carry at all --
+    // link() recomputes the WHOLE balance fresh on every call (recomputeBalance, replaying every
+    // linked payment in true chronological order) and this loop just stores whatever it returns
+    // for the NEXT call's balanceCents. The third, much larger advance still guards the same
+    // regression risk in a different place: a mistake inside recomputeBalance that reintroduces
+    // a ceiling on growth would truncate this one, where it would not have been visible against
+    // a smaller number.
     const { itemId } = ctx.seedLoan({ balanceCents: 0, direction: 'lent' });
     const ruleId = saveLoanRule({ itemId, merchantContains: 'E TRANSFER', accountId: null, enabled: true });
     ctx.spend('E TRANSFER', -20_000, { date: '2026-07-01' });
@@ -81,19 +86,16 @@ describe('MUST-13.9 / MUST-13.10 / MUST-14.12: the backfill', () => {
   });
 
   /**
-   * Review round (Lane A): the genuinely observable version of the test above. Ruling P8 (the
-   * backfill row query itself filters to `amount_cents < 0`) means a `lent` loan can only ever
-   * show growth here, never a repayment -- and growth's applied amount never reads the running
-   * `balance`'s VALUE, only whether it is null, so nothing reachable through backfillLoanRule can
-   * tell a correctly-signed running total apart from a wrongly-signed one on that side. An `owed`
-   * loan's repayments ARE clamped against that value, so three in one backfill run make the third
-   * one's clamp depend on what the first two left behind.
+   * Originally: the genuinely observable version of the test above. Ruling P8 (the backfill row
+   * query itself filters to `amount_cents < 0`) means a `lent` loan can only ever show growth
+   * here, never a repayment -- an `owed` loan's repayments ARE clamped, so three in one backfill
+   * run make the third one's clamp depend on what the first two left behind.
    *
-   * Confirmed by hand: with `balance` advanced by `result.appliedCents` (unsigned) instead of
-   * `result.deltaCents` (signed), the third repayment sees an inflated ceiling, applies its full
-   * magnitude instead of clamping, current_balance_cents' own CHECK constraint throws on the
-   * resulting negative balance, backfillLoanRule's own catch swallows it, and this test's
-   * expectations (linked: 3, appliedCents: 1,000, balance 0) fail.
+   * Item 6 (v1.21.0 backlog): the mechanism changed, the numbers did not. Each transaction below
+   * carries its OWN, ascending date, so recomputeBalance's chronological replay processes them in
+   * the same order they were linked -- exactly what the OLD running-total code did too. What this
+   * test still guards is that a batch of same-loan repayments clamp in sequence rather than each
+   * one independently re-reading the loan's ORIGINAL balance.
    */
   it('three repayments on an owed loan in one backfill run: the third clamps against what the first two left', () => {
     const { itemId } = ctx.seedLoan({ balanceCents: 1_000 });
@@ -101,8 +103,8 @@ describe('MUST-13.9 / MUST-13.10 / MUST-14.12: the backfill', () => {
     ctx.spend('HONDA FIN SVC', -300, { date: '2026-06-01' });
     ctx.spend('HONDA FIN SVC', -300, { date: '2026-06-15' });
     // Bigger than the true remaining balance (400) but smaller than the original one (1,000): a
-    // running total that forgot to subtract (or subtracted the wrong thing) would let this apply
-    // in full instead of clamping to what is actually left.
+    // batch that re-read the loan's ORIGINAL balance for each payment, instead of replaying them
+    // in sequence, would let this apply in full instead of clamping to what is actually left.
     ctx.spend('HONDA FIN SVC', -1_000, { date: '2026-07-01' });
 
     expect(backfillLoanRule(ruleId, { at: new Date('2026-08-18T12:00:00Z') })).toEqual({ linked: 3, appliedCents: 1_000 });

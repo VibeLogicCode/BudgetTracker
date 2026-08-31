@@ -540,6 +540,26 @@ export function loanAssignedMessage(input: {
 }
 
 /**
+ * Item 6 (v1.21.0 backlog): surfaced only when a repayment applied LESS than its own magnitude --
+ * it was clamped against the outstanding balance at the moment it was linked. This does not mean
+ * the loan is wrong: a payment that genuinely exceeds what's left (the loan is nearly paid off, or
+ * this is a real overpayment) clamps for an entirely ordinary reason. It is shown because the
+ * OTHER cause -- a repayment linked before the growth that justifies it -- looks identical from
+ * this one assign alone and used to be silent and permanent (the exact defect item 6 traced); now
+ * that link() self-heals by replaying in true date order, linking the missing growth afterward
+ * fixes it automatically, and "Recompute balance" repairs a loan that has no reason to get a new
+ * link soon. The wording points at both without asserting which one this is.
+ */
+export function loanClampWarning(magnitudeCents: number, appliedCents: number): string {
+  const shortCents = magnitudeCents - appliedCents;
+  return (
+    `Note: only ${formatCents(appliedCents)} of this ${formatCents(magnitudeCents)} repayment applied -- ` +
+    `${formatCents(shortCents)} exceeded the outstanding balance at the time. If a deposit or charge that ` +
+    'should have come first is still unlinked, link it, or use "Recompute balance" on the loan.'
+  );
+}
+
+/**
  * The sentence above the Payment matching rules table. Both arms keep MUST-14.6's budget
  * promise, because that is the thing a person is most likely to get wrong about this feature:
  * a matched payment is still a real transaction in the budget and in the reports.

@@ -17,6 +17,7 @@ import {
   checkLoanBackfill,
   deleteLoanRule,
   listLoanRules,
+  recomputeLoanBalance,
   saveLoanRule,
   unlinkItemTransaction,
 } from '@/lib/loans';
@@ -808,4 +809,37 @@ export async function unlinkLedgerTransactionAction(
   }
   revalidateAll(parsed.data.itemId);
   return { message: 'Unlinked. The transaction itself is untouched.' };
+}
+
+const recomputeBalanceSchema = z.object({ itemId: z.coerce.number().int().positive() });
+
+/**
+ * Item 6 (v1.21.0 backlog): "there must be a route back" for a loan whose balance predates the
+ * link()-order fix and is already wrong -- the owner's own case had no repair short of deleting
+ * and recreating the item. recomputeLoanBalance (src/lib/loans.ts) replays every linked payment
+ * in the order its TRANSACTION actually happened, not the order it was linked, and reports the
+ * corrected figure; every member may run it, the same "shared bookkeeping, not a destructive
+ * owner-or-admin step" posture unlinkLedgerTransactionAction above already takes.
+ *
+ * Loan-only, deliberately, same as the backfill checkbox above: a bill has no balance for this
+ * to recompute.
+ */
+export async function recomputeLoanBalanceAction(_prev: WarrantyActionState, formData: FormData): Promise<WarrantyActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+  const user = await requireUser();
+
+  const parsed = recomputeBalanceSchema.safeParse({ itemId: formData.get('itemId') });
+  if (!parsed.success) return { error: 'Invalid request.' };
+
+  const item = getWarrantyItem(parsed.data.itemId, user);
+  if (!item) return { error: 'That item no longer exists.' };
+  if (item.kind !== 'loan') return { error: MATCHING_KIND_ERROR };
+
+  try {
+    const { balanceCents } = recomputeLoanBalance(parsed.data.itemId);
+    revalidateAll(parsed.data.itemId);
+    return { message: `Balance recomputed from the linked payments: ${formatCents(balanceCents)}.` };
+  } catch (error) {
+    return failure(error, 'Could not recompute that balance.');
+  }
 }

@@ -18,7 +18,7 @@ import {
 import { formatCents, parseAmountToCents } from '@/lib/money';
 import { setTransactionSplits } from '@/lib/splits';
 import { getWarrantyItem } from '@/lib/warranty/items';
-import { isLoanRepayment, loanAssignedMessage, LOAN_DIRECTIONS } from '@/lib/warranty/constants';
+import { isLoanRepayment, loanAssignedMessage, loanClampWarning, LOAN_DIRECTIONS } from '@/lib/warranty/constants';
 import { isIsoDate } from '@/lib/dates';
 import {
   bulkSetAttribution,
@@ -592,19 +592,36 @@ export async function assignToLoanAction(formData: FormData): Promise<ActionStat
   const item = getWarrantyItem(parsed.data.itemId, user);
   const direction = item?.loanDirection ?? 'owed';
   const isRepayment = txn !== null && isLoanRepayment(direction, txn.amountCents);
-  return {
-    message: loanAssignedMessage({
-      direction,
-      isRepayment,
-      appliedCents: result.appliedCents,
-      // Review round: a null item here means the READ came back empty (the assign itself
-      // already succeeded -- see assignTransactionToLoan, which performs no owner check at
-      // all), not that the balance is unanchored. Those are different facts (loanAssignedMessage
-      // docblock, src/lib/warranty/constants.ts) -- `item === null` reads as balance 0, the same
-      // as any other loan whose balance genuinely sits at zero.
-      balanceAfterCents: item === null ? 0 : item.currentBalanceCents,
-    }),
-  };
+  const message = loanAssignedMessage({
+    direction,
+    isRepayment,
+    appliedCents: result.appliedCents,
+    // Review round: a null item here means the READ came back empty (the assign itself
+    // already succeeded -- see assignTransactionToLoan, which performs no owner check at
+    // all), not that the balance is unanchored. Those are different facts (loanAssignedMessage
+    // docblock, src/lib/warranty/constants.ts) -- `item === null` reads as balance 0, the same
+    // as any other loan whose balance genuinely sits at zero.
+    balanceAfterCents: item === null ? 0 : item.currentBalanceCents,
+  });
+
+  // Item 6 (v1.21.0 backlog): a repayment that applied LESS than its own magnitude was clamped
+  // against the outstanding balance at the moment it was linked -- surfaced rather than absorbed
+  // silently, which is exactly what the backlog's read-only trace found missing. Computed here,
+  // not carried on assignTransactionToLoan's return, because everything the check needs
+  // (isRepayment, the transaction's own magnitude, result.appliedCents) is already in hand.
+  //
+  // `result.appliedCents > 0` on purpose: an untracked (unknown) balance and an already-zero one
+  // BOTH report appliedCents === 0, and loanAssignedMessage already has its own dedicated,
+  // self-explanatory sentence for each of those ("balance was unknown, so it did not move" /
+  // "balance was already $0.00, so nothing came off") -- this warning would only repeat that,
+  // less clearly. It exists for the case neither of those sentences covers: SOME of a repayment
+  // applied, but not all of it, which is exactly where a person could not tell "this loan is
+  // nearly paid off" from "something is linked out of order" without being told.
+  if (isRepayment && txn !== null && result.appliedCents > 0 && result.appliedCents < Math.abs(txn.amountCents)) {
+    return { message: `${message} ${loanClampWarning(Math.abs(txn.amountCents), result.appliedCents)}` };
+  }
+
+  return { message };
 }
 
 const newLoanSchema = z.object({

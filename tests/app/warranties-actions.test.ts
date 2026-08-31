@@ -1,4 +1,4 @@
-import { ITEM_TYPE_IMMUTABLE_ERROR } from '@/lib/warranty/constants';
+import { ITEM_TYPE_IMMUTABLE_ERROR, MATCHING_KIND_ERROR } from '@/lib/warranty/constants';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -58,6 +58,7 @@ import {
   deleteLoanRuleAction,
   deleteReceiptAction,
   deleteWarrantyAction,
+  recomputeLoanBalanceAction,
   removeInstallmentAction,
   reRunOcrAction,
   saveLoanRuleAction,
@@ -65,7 +66,7 @@ import {
   unlinkLedgerTransactionAction,
   updateWarrantyAction,
 } from '@/app/(app)/warranties/actions';
-import { MAX_RULES_PER_LOAN, assignTransactionToLoan, itemLedger, listLoanRules } from '@/lib/loans';
+import { MAX_RULES_PER_LOAN, assignTransactionToLoan, itemLedger, listLoanRules, unassignTransactionFromLoan } from '@/lib/loans';
 import { attachStagedReceipts, createWarrantyItem, getWarrantyItem, getWarrantyReceipt, listWarrantyReceipts } from '@/lib/warranty/items';
 import { MAX_FILES_PER_UPLOAD, receiptFileExists } from '@/lib/warranty/receipts';
 import { writeSidecar, writeStagedReceipt } from '@/lib/warranty/staging';
@@ -198,6 +199,8 @@ describe('cross-origin rejection comes FIRST (MUST-13.1)', () => {
     ['setInstallmentPaidAction', (fd) => setInstallmentPaidAction({}, fd)],
     // Item 6 (v1.16.0 plan): the Linked transactions card's own Unlink.
     ['unlinkLedgerTransactionAction', (fd) => unlinkLedgerTransactionAction({}, fd)],
+    // Item 6 (v1.21.0 backlog): the balance repair action.
+    ['recomputeLoanBalanceAction', (fd) => recomputeLoanBalanceAction({}, fd)],
   ];
 
   it.each(cases)('%s refuses a mismatched Origin without touching the database', async (_name, run) => {
@@ -1121,6 +1124,55 @@ describe('unlinkLedgerTransactionAction (item 6, v1.16.0 plan)', () => {
     const strangerId = insertTestUser(current!.db, { name: 'Stranger', role: 'member' });
     currentUser = { id: strangerId, name: 'Stranger', username: 'stranger', role: 'member', visibility: 'self' };
     const result = await unlinkLedgerTransactionAction({}, formData({ itemId: String(itemId), txnId: '1' }));
+    expect(result.error).toBe('That item no longer exists.');
+  });
+});
+
+describe('recomputeLoanBalanceAction (item 6, v1.21.0 backlog)', () => {
+  it('recomputes and reports the corrected figure', async () => {
+    const itemId = seedLoanItem({ balanceCents: 1_955_000 });
+    const accountId = insertTestAccount(current!.db, { name: 'Chequing' });
+    const txnId = seedTransaction(accountId, { amountCents: -45_000 });
+    expect(assignTransactionToLoan({ txnId, itemId }).linked).toBe(true);
+    expect(getWarrantyItem(itemId, currentUser)?.currentBalanceCents).toBe(1_910_000);
+
+    const result = await recomputeLoanBalanceAction({}, formData({ itemId: String(itemId) }));
+    expect(result.message).toBe('Balance recomputed from the linked payments: $19,100.00.');
+    expect(getWarrantyItem(itemId, currentUser)?.currentBalanceCents).toBe(1_910_000);
+  });
+
+  it('refuses a bill-kind item -- there is no balance for it to recompute', async () => {
+    const billType = createItemType(`Bill ${randomUUID()}`, 'bill');
+    const billItemId = createWarrantyItem({
+      name: 'Property Tax',
+      vendor: null,
+      model: null,
+      serial: null,
+      purchaseDate: '2024-01-15',
+      warrantyMonths: null,
+      isLifetime: true,
+      priceCents: null,
+      ownerUserId: ownerId,
+      transactionId: null,
+      typeId: billType.id,
+      notes: null,
+    });
+    const result = await recomputeLoanBalanceAction({}, formData({ itemId: String(billItemId) }));
+    expect(result.error).toBe(MATCHING_KIND_ERROR);
+  });
+
+  it('refuses a loan with no balance being tracked', async () => {
+    const itemId = seedLoanItem();
+    current!.db.run(sql`update warranty_items set current_balance_cents = null, balance_updated_at = null where id = ${itemId}`);
+    const result = await recomputeLoanBalanceAction({}, formData({ itemId: String(itemId) }));
+    expect(result.error).toBe('This loan has no balance being tracked yet.');
+  });
+
+  it('refuses for a self-scoped viewer who cannot see the item', async () => {
+    const itemId = seedLoanItem();
+    const strangerId = insertTestUser(current!.db, { name: 'Stranger', role: 'member' });
+    currentUser = { id: strangerId, name: 'Stranger', username: 'stranger', role: 'member', visibility: 'self' };
+    const result = await recomputeLoanBalanceAction({}, formData({ itemId: String(itemId) }));
     expect(result.error).toBe('That item no longer exists.');
   });
 });

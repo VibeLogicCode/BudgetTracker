@@ -394,19 +394,19 @@ describe('applyPaymentMatchers on a lent loan (spec BU)', () => {
   afterEach(() => ctx?.t.cleanup());
 
   it('three matched advances on a lent loan accumulate, they do not cancel or get clamped (ruling P8)', () => {
-    // The defect this pins: applyPaymentMatchers keeps a running balance per item and used to
-    // SUBTRACT every applied amount, which is only right for an owed loan. On a lent loan the
-    // first advance raises the balance, and the second and third must add onto the RAISED figure.
+    // The defect this originally pinned: applyPaymentMatchers used to keep a running balance per
+    // item and SUBTRACT every applied amount, which is only right for an owed loan. On a lent
+    // loan the first advance raises the balance, and the second and third must add onto the
+    // RAISED figure.
     //
-    // Review round (Lane A): a THIRD, much larger advance is the point of this test, not the
-    // first two alone. Growth never clamps against the running balance's own VALUE -- only its
-    // nullness -- so two advances landing at the right total in the database is not, by itself,
-    // proof the running figure the loop carries between them is being tracked with the right
-    // sign; the database write for growth is correct even when that figure is wrong (see link()'s
-    // docblock). A third advance an order of magnitude bigger than the first two guards against a
-    // DIFFERENT, very real regression risk in the refactor this round makes (link() now returns a
-    // signed delta for the loop to add directly): a mistake that reintroduces a ceiling on GROWTH
-    // would truncate this one, where it would not have been visible against a smaller number.
+    // Item 6 (v1.21.0 backlog): applyPaymentMatchers no longer tracks that figure itself at all.
+    // link() now recomputes the WHOLE balance on every call (recomputeBalance, replaying every
+    // linked payment in true chronological order) and returns the fresh total, which this loop
+    // just stores and hands to the NEXT call's balanceCents -- there is no running delta left to
+    // get the sign of wrong. A third, much larger advance still guards against a real regression
+    // risk in a DIFFERENT place: a mistake that reintroduces a ceiling on GROWTH inside
+    // recomputeBalance would truncate this one, where it would not have been visible against a
+    // smaller number.
     ctx = setupLoanTest();
     const { itemId } = ctx.seedLoan({ name: 'Loan to a friend', balanceCents: 0, direction: 'lent' });
     saveLoanRule({ itemId, merchantContains: 'E TRANSFER', accountId: null, enabled: true });
@@ -431,22 +431,24 @@ describe('applyPaymentMatchers on a lent loan (spec BU)', () => {
 });
 
 /**
- * Review round (Lane A): the test the two above cannot be, on a `lent` loan, no matter how many
- * advances are chained. Ruling P8 means a rule only EVER sees outgoing money, and for a `lent`
- * loan outgoing money is always growth, never a repayment -- growth's own applied amount never
- * reads the running balance's VALUE (only whether it is null), so nothing reachable through this
- * function can tell a correctly-signed running total apart from a wrongly-signed one on that
- * side. This is the genuinely observable version: an `owed` loan, where a rule DOES see
- * repayments, and three of them land in ONE call -- so the third one's clamp depends on the
- * running total the first two left behind, not on a value freshly re-read from the database.
+ * Originally: the test the two above could not be, on a `lent` loan, no matter how many advances
+ * are chained -- ruling P8 means a rule only EVER sees outgoing money, and for a `lent` loan
+ * outgoing money is always growth, never a repayment, so nothing reachable through this function
+ * could tell a correctly-signed running total apart from a wrongly-signed one on that side. This
+ * is the genuinely observable version: an `owed` loan, where a rule DOES see repayments, and
+ * three of them land in ONE call.
  *
- * Confirmed by hand: with the running total advanced by `result.appliedCents` (unsigned) instead
- * of `result.deltaCents` (signed) at the line above, this third repayment sees an inflated,
- * wrong-signed ceiling, applies its full magnitude instead of clamping, and the balance update
- * undershoots zero -- current_balance_cents' own CHECK constraint throws, applyPaymentMatchers'
- * MUST-13.5 catch swallows it, and this test's expectations (created === 3, balance === 0) fail.
+ * Item 6 (v1.21.0 backlog): the mechanism this test exercises changed, not the numbers it expects.
+ * There is no more running total for this loop to carry between calls -- each link() call
+ * recomputes the balance FRESH from every currently-linked payment, replayed in true
+ * chronological order (recomputeBalance), and this loop just stores whatever it returns. The
+ * three repayments below share one date (spend()'s default), so the tie-break (payment id
+ * ascending) replays them in the same order they were linked -- exactly what the OLD
+ * running-total code path did too, which is why the expected numbers are unchanged. What this
+ * test still guards is that a batch of same-loan repayments correctly clamp in sequence rather
+ * than each seeing the loan's ORIGINAL balance independently.
  */
-describe('applyPaymentMatchers: the running total within one batch (review round, Lane A)', () => {
+describe('applyPaymentMatchers: a batch of same-loan repayments clamps in sequence', () => {
   let ctx: ReturnType<typeof setupLoanTest>;
   afterEach(() => ctx?.t.cleanup());
 
@@ -457,8 +459,8 @@ describe('applyPaymentMatchers: the running total within one batch (review round
     const first = ctx.spend('HONDA FIN SVC', -300);
     const second = ctx.spend('HONDA FIN SVC', -300);
     // Bigger than the true remaining balance (400) but smaller than the original one (1,000): a
-    // running total that forgot to subtract (or subtracted the wrong thing) would let this apply
-    // in full instead of clamping to what is actually left.
+    // batch that re-read the loan's ORIGINAL balance for each payment, instead of replaying them
+    // in sequence, would let this apply in full instead of clamping to what is actually left.
     const third = ctx.spend('HONDA FIN SVC', -1_000);
 
     expect(applyPaymentMatchers([first, second, third])).toBe(3);

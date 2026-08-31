@@ -411,7 +411,14 @@ describe('MUST-14.8 … MUST-14.11: assign and unassign', () => {
       values (${ctx!.accountId}, '2026-03-05', 'HONDA FIN PAYMENT', ${normalizeMerchant('HONDA FIN PAYMENT')}, -45000, ${ctx!.userId}, ${nowIso()}, ${nowIso()})
       returning id`);
     const result = await assignToLoanAction(formData({ transactionId: String(txn.id), itemId: String(itemId) }));
-    expect(result.message).toBe('Assigned. $100.00 came off; the balance is now $0.00.');
+    // Item 6 (v1.21.0 backlog): SOME of the repayment applied, but not all -- exactly the shape
+    // the new clamp warning exists for (see loanClampWarning, src/lib/warranty/constants.ts),
+    // appended after the ordinary confirmation sentence rather than replacing it.
+    expect(result.message).toBe(
+      'Assigned. $100.00 came off; the balance is now $0.00. ' +
+        'Note: only $100.00 of this $450.00 repayment applied -- $350.00 exceeded the outstanding balance at the time. ' +
+        'If a deposit or charge that should have come first is still unlinked, link it, or use "Recompute balance" on the loan.',
+    );
     expect(balanceOf(itemId)).toBe(0);
   });
 

@@ -28,9 +28,19 @@ import { createItemType, listItemTypes, ItemTypeError, type ItemType } from '@/l
  * fix) locks in transactions.amount_cents' immutability.
  *
  * MUST-13.2: loan payments STAY in their spending category and in every budget. Nothing here
- * writes is_transfer, category_id or attributed_user_id, and nothing here touches the
- * `transactions` table at all. A car payment is money that left the household this month;
- * hiding it from the budget would make the budget wrong.
+ * writes is_transfer, category_id or attributed_user_id -- a car payment is money that left the
+ * household this month, and hiding it from the budget would make the budget wrong.
+ *
+ * v1.21.0 (item 13) narrows the second half of that sentence, the same way reports.ts's
+ * NOT_PRINCIPAL_MOVEMENT and engine.ts's REVIEW_WHERE each carry their own narrow, argued
+ * carve-out of a broad rule (see tests/ops/loan-invariants.test.ts's MUST-13.2 section): this
+ * file now ALSO writes transactions.display_description / display_source, in
+ * applyLoanDescription / revertLoanDescription below, so a loan-linked row reads as what it is.
+ * That is a presentational label, never one of the three spend-relevant columns named above, and
+ * it changes no budget total and no report total -- MUST-13.2's actual protection (a car payment
+ * counts as spend) is untouched. Nowhere else in this file reads or writes any other column on
+ * `transactions` besides `amount_cents` (read-only, for sign recovery) and `date` (read-only, for
+ * chronological replay -- see recomputeBalance).
  */
 export const MAX_RULES_PER_LOAN = 5;
 export const LOAN_BACKFILL_DAYS = 365;
@@ -242,15 +252,107 @@ function activeRules(tx: ReturnType<typeof getDb>): ActiveRule[] {
 }
 
 /**
+ * Item 6 (v1.21.0 backlog): replays EVERY payment currently linked to this loan, in the order the
+ * underlying TRANSACTIONS actually happened (their own `date`, ties broken by payment id -- the
+ * ORDER a payment was LINKED in has no vote), from the balance implied to have stood before any
+ * of them were ever applied.
+ *
+ * That starting point -- `impliedAnchor` -- is recovered ALGEBRAICALLY rather than stored
+ * separately: `currentTotal` is `anchor + sum(signed deltas already applied)`, so
+ * `anchor = currentTotal - sum(signed deltas already applied)`, using each row's CURRENTLY
+ * STORED applied_cents. That subtraction is exact regardless of whether any individual stored
+ * delta was itself computed correctly -- it just undoes whatever `currentTotal` already
+ * incorporates, correct or not -- which is what makes this function a REPAIR as well as a write
+ * path: it needs no separate anchor column and no migration.
+ *
+ * This is the fix for the defect a read-only trace confirmed (see the backlog entry): the OLD
+ * `link()` clamped a repayment against whatever `current_balance_cents` held AT THE MOMENT of
+ * that one call, which depended on which payment a person happened to link first -- link a
+ * repayment before the growth that justifies it, and the excess was clamped away and never seen
+ * again (not even by unassigning and re-linking, since the excess was never STORED anywhere).
+ * Replaying chronologically after every new link makes the final total, and every row's own
+ * applied_cents, independent of LINK order: only each transaction's own date and amount decide
+ * the outcome, matching what actually happened. A brand-new loan with no existing rows degenerates
+ * to exactly the old single-payment math (nothing to undo, nothing to replay first), which is why
+ * every existing passing test that exercises one isolated payment needed no changes.
+ *
+ * Every row's applied_cents is rewritten when the replay disagrees with what is stored, so the
+ * item ledger ("Applied $X" beside each payment) stays internally consistent with the new total --
+ * a payment that used to read "Applied $11.29" because it was clamped out of order now correctly
+ * reads the fuller figure once the growth that justifies it is linked, self-healing without
+ * anyone having to notice or ask.
+ *
+ * Deliberately NOT reused by unassign/reverse below: those still clamp their own single-row
+ * restore at zero, pinned exactly as before by tests/lib/loans/debt-over-time.test.ts's "Task 10
+ * carry (a)" documented drift. A DELETED row leaves no trace for a replay to reconstruct either
+ * way, so running this same replay on delete would not recover a truer number, only a
+ * DIFFERENT wrong one, and it would retroactively rewrite a drift that file already accepts and
+ * pins as a separate, known trade-off. Growing this fix to cover deletion is a bigger change than
+ * item 6 asked for, and item 6's own bug is reachable only through insertion (see below).
+ *
+ * `direction` and `currentTotal` are needed, never `merchantContains` or anything else about the
+ * rule that matched -- this function does not care HOW a payment got linked, only WHEN its
+ * transaction happened, so it serves the manual, rule and backfill paths identically without
+ * any of them needing to say so.
+ */
+function recomputeBalance(
+  tx: ReturnType<typeof getDb>,
+  itemId: number,
+  direction: LoanDirection,
+  currentTotal: number,
+): { balance: number; appliedByTxnId: Map<number, number> } {
+  const rows = tx
+    .select({
+      id: loanPayments.id,
+      txnId: loanPayments.txnId,
+      appliedCents: loanPayments.appliedCents,
+      txnDate: transactions.date,
+      txnAmountCents: transactions.amountCents,
+    })
+    .from(loanPayments)
+    .innerJoin(transactions, eq(transactions.id, loanPayments.txnId))
+    .where(eq(loanPayments.itemId, itemId))
+    .all();
+
+  let impliedAnchor = currentTotal;
+  for (const row of rows) {
+    const wasRepayment = isLoanRepayment(direction, row.txnAmountCents);
+    impliedAnchor -= wasRepayment ? -row.appliedCents : row.appliedCents;
+  }
+
+  // Chronological order -- the one thing insertion order corrupted. A tie (same date) breaks by
+  // payment id ascending, so an EXISTING row (a smaller id, since it was inserted first) always
+  // replays before a same-day new one -- exactly today's behaviour whenever nothing is actually
+  // out of order, which is every existing test in this suite.
+  rows.sort((a, b) => (a.txnDate === b.txnDate ? a.id - b.id : a.txnDate < b.txnDate ? -1 : 1));
+
+  let balance = impliedAnchor;
+  const appliedByTxnId = new Map<number, number>();
+  for (const row of rows) {
+    const magnitude = Math.abs(row.txnAmountCents);
+    const isRepayment = isLoanRepayment(direction, row.txnAmountCents);
+    // Repayments clamp at zero against the balance AS OF THIS ROW'S OWN chronological position;
+    // growth applies in full, exactly as before (MUST-11.14 / MUST-13.6).
+    const applied = isRepayment ? Math.max(0, Math.min(magnitude, balance)) : magnitude;
+    balance += isRepayment ? -applied : applied;
+    appliedByTxnId.set(row.txnId, applied);
+    if (applied !== row.appliedCents) {
+      tx.update(loanPayments).set({ appliedCents: applied }).where(eq(loanPayments.id, row.id)).run();
+    }
+  }
+
+  return { balance, appliedByTxnId };
+}
+
+/**
  * MUST-11.15: the link row IS the guard. INSERT ... ON CONFLICT DO NOTHING, and the balance
  * move runs in the SAME statement sequence, conditional on changes > 0, so a crash between
  * "decide to apply" and "record that we applied" is impossible.
  *
  * F1 fix-round (sign-aware apply): `signedAmountCents` carries the transaction's real sign.
  * A NEGATIVE **signed delta in the loan's own frame** (see loanSignedDelta, v1.14.0 below) is a
- * REPAYMENT and DECREMENTS the balance, clamped at zero exactly as before
- * (MUST-11.14 / MUST-13.6). A POSITIVE one GROWS the balance by its full magnitude; there is no
- * ceiling to clamp against on that side.
+ * REPAYMENT and DECREMENTS the balance, clamped at zero (MUST-11.14 / MUST-13.6). A POSITIVE one
+ * GROWS the balance by its full magnitude; there is no ceiling to clamp against on that side.
  *
  * v1.14.0 (spec BU, ruling P4): `input.direction` re-expresses `signedAmountCents` into the
  * loan's own frame via `loanSignedDelta` before any of the above is decided. For an `owed` loan
@@ -275,14 +377,16 @@ function activeRules(tx: ReturnType<typeof getDb>): ActiveRule[] {
  * record a phantom `applied_cents`, and a LATER unassign, after a person finally anchors the
  * balance, would subtract that phantom figure off a real number it had nothing to do with.
  *
- * Review round (Lane A, v1.14.0): returns BOTH `appliedCents` (unsigned, what's stored in
- * loan_payments.applied_cents) and `deltaCents` (the SIGNED move actually applied to the
- * balance, in the loan's own frame). `applyPaymentMatchers` and `backfillLoanRule` add
- * `deltaCents` straight onto their own running total instead of re-deriving the sign a second
- * time via `isLoanRepayment(direction, txn.amountCents)` -- this function already decided that
- * once, right here, and a caller re-deriving it is a second place that sign logic could drift
- * from this one. `assignTransactionToLoan` (which reports appliedCents unsigned) uses only the
- * other field.
+ * Item 6 (v1.21.0 backlog): the tracked-balance branch below INSERTS the new row FIRST (with a
+ * placeholder applied_cents of 0, since its true figure depends on where it lands chronologically
+ * among every other row already on record), then hands the WHOLE ledger -- the new row included,
+ * already visible to this same db.transaction -- to recomputeBalance, which replays it in true
+ * date order and reports back what THIS row specifically applied. `balance` (the new
+ * current_balance_cents, already written by recomputeBalance's caller -- see below) is returned
+ * so a caller processing several transactions in one batch (applyPaymentMatchers, backfillLoanRule)
+ * can feed it straight into the NEXT call's `balanceCents`, rather than re-reading the column or
+ * re-deriving a running total by hand -- either of which is a second place this number could drift
+ * from what recomputeBalance just decided.
  */
 function link(
   tx: ReturnType<typeof getDb>,
@@ -295,38 +399,65 @@ function link(
     at: string;
     direction: LoanDirection;
   },
-): { appliedCents: number; deltaCents: number } | null {
+): { appliedCents: number; balance: number | null } | null {
   const magnitude = Math.abs(input.signedAmountCents);
-  // v1.14.0 (spec BU, ruling P4): the loan's own frame, not the account's. For an owed loan
-  // loanSignedDelta is the identity and every line below is byte-for-byte what it was.
-  const signed = loanSignedDelta(input.direction, input.signedAmountCents);
-  const isRepayment = signed < 0;
-  // Repayments clamp at zero; growth applies in full (no ceiling exists for how much can be
-  // added back onto an outstanding balance) -- except when the balance is unknown, in which
-  // case neither direction applies anything (NEW-2).
-  const applied = input.balanceCents === null ? 0 : isRepayment ? Math.max(0, Math.min(magnitude, input.balanceCents)) : magnitude;
-  const delta = isRepayment ? -applied : applied;
-  const result = tx
+
+  // NEW-2 (unchanged): an untracked balance takes no move in either direction, so there is
+  // nothing for recomputeBalance to do -- the link is recorded plainly, once, with no placeholder
+  // to resolve later.
+  if (input.balanceCents === null) {
+    const result = tx
+      .insert(loanPayments)
+      .values({ txnId: input.txnId, itemId: input.itemId, amountCents: magnitude, appliedCents: 0, source: input.source, createdAt: input.at })
+      .onConflictDoNothing()
+      .run();
+    return result.changes === 0 ? null : { appliedCents: 0, balance: null };
+  }
+
+  const insertResult = tx
     .insert(loanPayments)
-    .values({
-      txnId: input.txnId,
-      itemId: input.itemId,
-      amountCents: magnitude,
-      appliedCents: applied,
-      source: input.source,
-      createdAt: input.at,
-    })
+    .values({ txnId: input.txnId, itemId: input.itemId, amountCents: magnitude, appliedCents: 0, source: input.source, createdAt: input.at })
     .onConflictDoNothing()
     .run();
-  if (result.changes === 0) return null;
-  if (delta !== 0) {
+  if (insertResult.changes === 0) return null;
+
+  const { balance, appliedByTxnId } = recomputeBalance(tx, input.itemId, input.direction, input.balanceCents);
+  tx.update(warrantyItems)
+    .set({ currentBalanceCents: balance })
+    // MUST-11.8: balance_updated_at is NOT touched. It is the human anchor.
+    .where(eq(warrantyItems.id, input.itemId))
+    .run();
+  return { appliedCents: appliedByTxnId.get(input.txnId) ?? 0, balance };
+}
+
+/**
+ * Item 6 (v1.21.0 backlog): the explicit repair action the backlog required -- "there must be a
+ * route back" -- for a loan whose current_balance_cents predates this fix and is already wrong.
+ * Reuses recomputeBalance exactly as link() now does, just invoked over the whole ledger on
+ * demand instead of triggered by inserting one more row: existing loans self-heal only as NEW
+ * activity touches them, so a loan with no reason to get a new link soon needs a way back that
+ * does not require deleting and recreating it, which is the thing the owner actually had to do.
+ *
+ * Does not touch balance_updated_at (MUST-11.8): this recomputes what the payments already on
+ * record imply, in the order they actually happened -- it is not a person typing a new number.
+ */
+export function recomputeLoanBalance(itemId: number): { balanceCents: number } {
+  return getDb().transaction((tx) => {
+    const item = tx
+      .select({ balance: warrantyItems.currentBalanceCents, direction: warrantyItems.loanDirection })
+      .from(warrantyItems)
+      .where(eq(warrantyItems.id, itemId))
+      .get();
+    if (!item) throw new Error('That loan no longer exists.');
+    if (item.balance === null) throw new Error('This loan has no balance being tracked yet.');
+
+    const { balance } = recomputeBalance(tx, itemId, item.direction, item.balance);
     tx.update(warrantyItems)
-      .set({ currentBalanceCents: sql`${warrantyItems.currentBalanceCents} + ${delta}` })
-      // MUST-11.8: balance_updated_at is NOT touched. It is the human anchor.
-      .where(eq(warrantyItems.id, input.itemId))
+      .set({ currentBalanceCents: balance })
+      .where(eq(warrantyItems.id, itemId))
       .run();
-  }
-  return { appliedCents: applied, deltaCents: delta };
+    return { balanceCents: balance };
+  });
 }
 
 interface Candidate {
@@ -581,11 +712,13 @@ export function applyPaymentMatchers(txnIds: number[], at: Date = new Date(), re
           direction,
         });
         if (result === null) continue;
-        // Review round (Lane A): link() already decided the sign once (deltaCents, in the
-        // loan's own frame) -- add THAT straight to the running total instead of re-deriving
-        // it here a second time. A second place computing the same sign is a second place it
-        // could drift from the first, silently.
-        balances.set(match.itemId, (balances.get(match.itemId) ?? 0) + result.deltaCents);
+        // Item 6 (v1.21.0 backlog): link() itself now recomputes the WHOLE balance by replaying
+        // every linked payment in true chronological order (recomputeBalance) -- so the fresh
+        // total it returns is stored here directly, not accumulated as a running delta the way
+        // this loop used to. A delta-accumulation is exactly the shape that let a stale or
+        // wrongly-ordered running figure drift from what the database actually holds; replacing
+        // it wholesale each call cannot drift, because there is nothing left to drift FROM.
+        balances.set(match.itemId, result.balance);
         linked.add(txn.id);
         created += 1;
       }
@@ -654,9 +787,11 @@ export function backfillLoanRule(
         // here. Ruling P4: pass the loan's OWN direction through link(), and move the running
         // balance the way the loan moves, not the way the account does.
         //
-        // Review round (Lane A): `balance` is advanced by link()'s own returned deltaCents,
-        // the SAME sign decision applyPaymentMatchers now consumes, rather than this loop
-        // re-deriving isLoanRepayment(rule.direction, row.amountCents) a second time.
+        // Item 6 (v1.21.0 backlog): `balance` is REPLACED by link()'s own returned fresh total
+        // (recomputeBalance's answer, having just replayed every linked payment -- this one
+        // included -- in true chronological order), not advanced by a delta this loop
+        // accumulates by hand. `rule.balanceCents` is never actually null for a loan-kind row
+        // (see the comment on anchoredBalance above), so `?? balance` only satisfies the type.
         const result = link(tx, {
           txnId: row.id,
           itemId: rule.itemId,
@@ -667,7 +802,7 @@ export function backfillLoanRule(
           direction: rule.direction,
         });
         if (result === null) continue;
-        balance += result.deltaCents;
+        balance = result.balance ?? balance;
         appliedTotal += result.appliedCents;
         linked += 1;
       }
@@ -677,6 +812,55 @@ export function backfillLoanRule(
     console.error('[loans] backfill failed', error);
     return { linked: 0, appliedCents: 0 };
   }
+}
+
+/**
+ * Item 13 (v1.21.0 backlog): the label text, worded for the loan's own direction through
+ * isLoanRepayment (ruling P4) rather than a raw sign check here -- the same helper every other
+ * direction decision in this file goes through, so this can never disagree with what the balance
+ * itself just did with the same transaction.
+ */
+function loanLinkedDescription(direction: LoanDirection, itemName: string, signedAmountCents: number): string {
+  return isLoanRepayment(direction, signedAmountCents) ? `Repayment from ${itemName}` : `Loan to ${itemName}`;
+}
+
+/**
+ * Item 13 (v1.21.0 backlog): "set display_description automatically... with its OWN
+ * display_source value ('loan'), distinct from 'manual' and 'rename'." Precedence mirrors
+ * applyRenameRules' own rule (src/lib/categorize/engine.ts, read for the pattern, not called --
+ * see the docblock at the top of this file for why this stays a narrow, argued exception to
+ * MUST-13.2's transactions-table boundary): display_source = 'manual' means a person typed a name
+ * for THIS row by hand, and nothing automatic -- a rename rule or a loan link alike -- may ever
+ * overwrite it.
+ */
+function applyLoanDescription(
+  tx: ReturnType<typeof getDb>,
+  txnId: number,
+  itemName: string,
+  direction: LoanDirection,
+  signedAmountCents: number,
+  at: string,
+): void {
+  const row = tx.select({ displaySource: transactions.displaySource }).from(transactions).where(eq(transactions.id, txnId)).get();
+  if (row === undefined || row.displaySource === 'manual') return;
+  tx.update(transactions)
+    .set({ displayDescription: loanLinkedDescription(direction, itemName, signedAmountCents), displaySource: 'loan', updatedAt: at })
+    .where(eq(transactions.id, txnId))
+    .run();
+}
+
+/**
+ * Item 13 (v1.21.0 backlog): "Unlinking must REVERT the description, exactly as deleting a rename
+ * rule does" -- applyRenameRules' own "clear only what THIS source set" rule, copied for
+ * display_source = 'loan' rather than 'rename'. A row this file never labelled (display_source is
+ * null, 'manual' or 'rename') is left exactly as it was; only a row THIS file set is handed back
+ * to raw, the same way clearing a rename rule hands a row back to the bank's own wording pending
+ * whatever the rules engine next decides for it.
+ */
+function revertLoanDescription(tx: ReturnType<typeof getDb>, txnId: number, at: string): void {
+  const row = tx.select({ displaySource: transactions.displaySource }).from(transactions).where(eq(transactions.id, txnId)).get();
+  if (row === undefined || row.displaySource !== 'loan') return;
+  tx.update(transactions).set({ displayDescription: null, displaySource: null, updatedAt: at }).where(eq(transactions.id, txnId)).run();
 }
 
 /**
@@ -701,7 +885,7 @@ export function assignTransactionToLoan(input: { txnId: number; itemId: number; 
     if (!txn) throw new Error('That transaction no longer exists.');
 
     const item = tx
-      .select({ balance: warrantyItems.currentBalanceCents, direction: warrantyItems.loanDirection })
+      .select({ balance: warrantyItems.currentBalanceCents, direction: warrantyItems.loanDirection, name: warrantyItems.name })
       .from(warrantyItems)
       .where(eq(warrantyItems.id, input.itemId))
       .get();
@@ -734,7 +918,11 @@ export function assignTransactionToLoan(input: { txnId: number; itemId: number; 
       at: stamp,
       direction: item.direction,
     });
-    return result === null ? { linked: false, appliedCents: 0 } : { linked: true, appliedCents: result.appliedCents };
+    if (result === null) return { linked: false, appliedCents: 0 };
+    // Item 13: label the row for what it is, whether or not this specific link moved the
+    // balance -- the linkage itself is the fact being described, not the delta.
+    applyLoanDescription(tx, input.txnId, item.name, item.direction, txn.amountCents, stamp);
+    return { linked: true, appliedCents: result.appliedCents };
   });
 }
 
@@ -876,8 +1064,14 @@ export function createLoanFromTransaction(input: NewLoanFromTransaction, viewer:
  * >= 0` CHECK and throw a raw SqliteError instead of ever reaching a state a person could see.
  * Clamping trades perfect reconstruction for "never crash, never go negative", which is the
  * same trade every other clamp in this file already makes.
+ *
+ * Item 13 (v1.21.0 backlog): also reverts the display_description/display_source this file may
+ * have set on assign (revertLoanDescription below), unconditionally -- unlike the balance
+ * restore, this runs whether or not row.appliedCents was ever nonzero, because the LABEL
+ * describes the linkage itself, not the amount it moved.
  */
-export function unassignTransactionFromLoan(input: { txnId: number; itemId: number }): boolean {
+export function unassignTransactionFromLoan(input: { txnId: number; itemId: number; at?: Date }): boolean {
+  const stamp = nowIso(input.at);
   return getDb().transaction((tx) => {
     const row = tx
       .select({
@@ -902,6 +1096,9 @@ export function unassignTransactionFromLoan(input: { txnId: number; itemId: numb
         .where(and(eq(warrantyItems.id, input.itemId), sql`${warrantyItems.currentBalanceCents} is not null`))
         .run();
     }
+    // Item 13: revert what assignment set, regardless of whether the balance moved -- the
+    // linkage is gone either way, so a label describing it must go too.
+    revertLoanDescription(tx, input.txnId, stamp);
     return true;
   });
 }
@@ -924,6 +1121,12 @@ export function unassignTransactionFromLoan(input: { txnId: number; itemId: numb
  * SqliteError would abort that ENTIRE transaction, rolling back the delete of every OTHER
  * sole transaction the undo was supposed to remove, not just this loan's. Clamping makes
  * that abort structurally impossible rather than merely unlikely.
+ *
+ * Item 13 (v1.21.0 backlog): deliberately does NOT call revertLoanDescription, unlike
+ * unassignTransactionFromLoan. Every caller of this function (there is exactly one --
+ * src/lib/import/commit.ts's undoImport) deletes the transaction row itself immediately
+ * afterward, in the SAME enclosing transaction -- reverting a label on a row about to disappear
+ * is a write with no reader ever able to see it.
  */
 export function reverseLoanLinksForTransactions(txnIds: number[]): number {
   if (txnIds.length === 0) return 0;

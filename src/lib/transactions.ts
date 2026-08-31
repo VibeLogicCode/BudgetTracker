@@ -73,7 +73,7 @@ export interface TransactionRow {
   rawDescription: string;
   /** Spec v1.4: what the UI shows when set; raw_description is the fallback. */
   displayDescription: string | null;
-  displaySource: 'manual' | 'rename' | null;
+  displaySource: 'manual' | 'rename' | 'loan' | null;
   normalizedMerchant: string;
   amountCents: number;
   categoryId: number | null;

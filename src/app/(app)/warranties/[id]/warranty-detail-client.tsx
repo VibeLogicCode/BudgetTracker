@@ -59,6 +59,7 @@ import {
   deleteLoanRuleAction,
   deleteReceiptAction,
   deleteWarrantyAction,
+  recomputeLoanBalanceAction,
   removeInstallmentAction,
   reRunOcrAction,
   saveLoanRuleAction,
@@ -291,6 +292,10 @@ export function WarrantyDetailClient({
   // Item 6: the Linked transactions card's own Unlink, reported inline within that card, the
   // same "not one of the five activeSlot actions" pattern ruleState/deleteRuleState follow above.
   const [unlinkState, unlinkDispatch] = useActionState(unlinkLedgerTransactionAction, initial);
+  // Item 6 (v1.21.0 backlog): the repair action for a balance that predates the link()-order fix.
+  // Reported inline beside the balance MetricCard, not folded into unlinkState -- the two forms
+  // sit in different cards and a person acting on one should not see the other's leftover message.
+  const [recomputeState, recomputeDispatch] = useActionState(recomputeLoanBalanceAction, initial);
   // Item 7 (v1.16.0 plan): the same disclosure shape QuickAddTransaction.tsx uses -- a useState
   // toggle, not <details>, so the open state survives a server action re-render (a <details>
   // element's open attribute is DOM state React does not own, and a re-render after a rule/
@@ -574,6 +579,24 @@ export function WarrantyDetailClient({
                   Removing an old payment can push the balance above your latest statement figure.
                 </p>
               )}
+              {/* Item 6 (v1.21.0 backlog): the repair action for a balance that predates the
+                  link()-order fix -- the "route back" the backlog required so a corrupted loan
+                  no longer has to be deleted and recreated. Loan-only (item.kind check mirrors
+                  the server action's own gate) and only shown once there is at least one linked
+                  payment to replay. */}
+              {item.kind === 'loan' && item.currentBalanceCents !== null && paymentCount > 0 ? (
+                <form action={recomputeDispatch} className="flex flex-col items-start gap-1.5">
+                  <input type="hidden" name="itemId" value={item.id} />
+                  <SubmitButton variant="secondary" size="sm">
+                    Recompute balance
+                  </SubmitButton>
+                  <p className="text-xs text-subtle">
+                    Replays every linked payment in the order it actually happened, in case one was linked out of order.
+                  </p>
+                  <FormError message={recomputeState.error} />
+                  {recomputeState.message === undefined ? null : <Notice tone="success">{recomputeState.message}</Notice>}
+                </form>
+              ) : null}
               {/* F11 fix-round: the Detail rows below are dt/dd pairs and belong inside a
                   dl, same as the summary grid above -- they were previously loose divs. */}
               {item.principalCents === null &&

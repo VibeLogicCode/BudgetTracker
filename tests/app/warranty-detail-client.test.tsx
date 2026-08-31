@@ -23,6 +23,8 @@ vi.mock('@/app/(app)/warranties/actions', () => ({
   // Item 6 (v1.16.0 plan): the Linked transactions card's own Unlink, same "stub every export
   // useActionState calls unconditionally" reason as the three installment actions above.
   unlinkLedgerTransactionAction: vi.fn(async () => ({})),
+  // Item 6 (v1.21.0 backlog): the balance repair action, same reason.
+  recomputeLoanBalanceAction: vi.fn(async () => ({})),
 }));
 
 afterEach(() => cleanup());

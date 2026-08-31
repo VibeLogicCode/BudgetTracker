@@ -195,7 +195,13 @@ export const transactions = sqliteTable(
     // only this and normalized_merchant. display_description is presentation only.
     rawDescription: text('raw_description').notNull(),
     displayDescription: text('display_description'),
-    displaySource: text('display_source', { enum: ['manual', 'rename'] }),
+    // v1.21.0 (item 13): 'loan' added, distinct from 'manual' and 'rename' -- set when a
+    // transaction is (un)assigned to a loan (src/lib/loans.ts), so unlinking can tell "the loan
+    // link set this" from "a rename rule did" and revert only its own. No CHECK constraint
+    // backs this column (confirmed against drizzle/0000_init.sql: `display_source text`, no
+    // constraint) -- the enum below is a TypeScript-only annotation, so widening it needs no
+    // migration and no table rebuild.
+    displaySource: text('display_source', { enum: ['manual', 'rename', 'loan'] }),
     normalizedMerchant: text('normalized_merchant').notNull(),
     // amount_cents is IMMUTABLE after insert -- no writer in src/ ever updates it (a signed
     // magnitude fixed at import/entry time). src/lib/loans.ts's sign-recovery reversal
