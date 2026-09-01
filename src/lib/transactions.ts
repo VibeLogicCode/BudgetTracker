@@ -796,10 +796,16 @@ export function createManualTransaction(input: {
     // display columns, so the manual category survives and the transfer flag sticks.
     runEngine([row.id]);
     if (parsed.categoryId !== null) {
+      // v1.27.0 item 1: `createRule` spelled out rather than left to confirmCategory's `!== false`
+      // default. Behaviour is identical -- hand-typing a transaction with a category has always
+      // taught that merchant's rule -- but tests/ops/rule-authoring-intent.test.ts requires every
+      // call site that can author a merchant rule to say so at the call, and an omitted optional
+      // flag is exactly the silence that made the v1.27.0 loan bug invisible.
       const result = confirmCategory({
         transactionId: row.id,
         categoryId: parsed.categoryId,
         userId: input.userId,
+        createRule: true,
         actorRole: input.actorRole,
       });
       if (!result.ok) {
@@ -919,6 +925,34 @@ export function bulkSetCategory(
   return { ok: true, changed, skipped };
 }
 
+/**
+ * v1.27.0 item 1. setTransferFlag's `learnRule` is REQUIRED with no default, so this call site has
+ * to answer the question the parameter asks. It passes TRUE -- today's behaviour, unchanged --
+ * and the reasoning is worth recording, because the loan fix in the same release answers the same
+ * question the other way.
+ *
+ * Twenty statements about twenty merchants, not one statement about twenty rows. Three things
+ * decide it:
+ *
+ *   1. The CONTROL is the statement. The bulk bar's transfer button is the per-row "Mark as
+ *      transfer" applied to a hand-ticked selection; nothing is pre-armed and nothing rides along
+ *      with some other action. Selecting a run of payroll deposits or card payments and pressing
+ *      it is a person saying what those merchants ARE -- the merchant-driven case exactly. That is
+ *      the opposite of the loan path, where the rule write was a side effect of a checkbox
+ *      defaulted ON underneath an assign-to-loan submit.
+ *   2. Transfers are the recurring kind of thing. The reason a person has twenty of them to select
+ *      at once is that the same merchant keeps producing them, which is the argument FOR learning
+ *      the merchant, not against it.
+ *   3. Passing false would strand this function's own machinery. The `owned_by_another` branch
+ *      below, BulkOwnershipRefusal, the whole-batch ROLLBACK, and bulkTransferAction's
+ *      ruleOwnedError message all exist for one reason: bulk transfer authors rules. Suppressing
+ *      the rules would leave that entire refusal path unreachable -- dead code that still reads
+ *      like a live protection, which is the same failure mode the v1.27.0 ops guard was written
+ *      to prevent.
+ *
+ * No parameter is threaded for it. There is one caller (bulkTransferAction) and one right answer;
+ * an unexercised knob here would be configuration nobody sets and every test has to guess at.
+ */
 export function bulkSetTransfer(
   ids: number[],
   isTransfer: boolean,
@@ -931,7 +965,7 @@ export function bulkSetTransfer(
   try {
     getDb().transaction(() => {
       for (const id of ids) {
-        const result = setTransferFlag({ transactionId: id, isTransfer, userId, actorRole });
+        const result = setTransferFlag({ transactionId: id, isTransfer, userId, actorRole, learnRule: true });
         if (result.ok) {
           changed += 1;
         } else if (result.reason === 'owned_by_another') {

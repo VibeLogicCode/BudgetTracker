@@ -118,7 +118,7 @@ describe('setTransferFlag refuses a split transaction (defect 1 fix, manual coun
     expect(spentAt(groceries)).toBe(7000);
     expect(spentAt(gas)).toBe(3000);
 
-    expect(setTransferFlag({ transactionId: id, isTransfer: true, userId: alice, actorRole: 'admin' }).ok).toBe(false);
+    expect(setTransferFlag({ transactionId: id, isTransfer: true, userId: alice, actorRole: 'admin', learnRule: true }).ok).toBe(false);
 
     expect(readTxn(id).is_transfer).toBe(0);
     expect(listRules('transfer')).toHaveLength(0);
@@ -129,7 +129,7 @@ describe('setTransferFlag refuses a split transaction (defect 1 fix, manual coun
   it('an unsplit control transaction can still be flagged a transfer normally', () => {
     const { alice, add, readTxn } = setup();
     const id = add({ description: 'CONTROL MERCHANT' });
-    expect(setTransferFlag({ transactionId: id, isTransfer: true, userId: alice, actorRole: 'admin' }).ok).toBe(true);
+    expect(setTransferFlag({ transactionId: id, isTransfer: true, userId: alice, actorRole: 'admin', learnRule: true }).ok).toBe(true);
     expect(readTxn(id).is_transfer).toBe(1);
     expect(listRules('transfer')).toHaveLength(1);
   });

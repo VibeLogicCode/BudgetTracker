@@ -467,6 +467,62 @@ describe('bulk actions', () => {
     ]);
   });
 
+  /**
+   * v1.27.0 item 1. setTransferFlag's `learnRule` is required with no default, so bulkSetTransfer
+   * had to answer it, and it answers TRUE -- today's behaviour, unchanged. The full argument is on
+   * bulkSetTransfer's own docblock (src/lib/transactions.ts); these are the two halves of it that
+   * can be executed rather than asserted in prose.
+   *
+   * The question the parameter forces: is bulk-marking twenty rows twenty statements about twenty
+   * merchants, or one statement about those rows? Twenty statements. Unlike the loan checkbox --
+   * pre-armed, ON, riding along underneath a different submit -- nothing here is implicit: a
+   * person hand-ticked the rows and pressed the transfer button itself.
+   */
+  it('bulk mark transfer learns a rule PER MERCHANT, not one statement about the selection', () => {
+    const { alice, add } = setup();
+    const ids = [
+      add({ description: 'ACME PAYROLL DEPOSIT', amountCents: 250000 }),
+      add({ description: 'ACME PAYROLL DEPOSIT', amountCents: 250000, date: '2026-04-02' }),
+      add({ description: 'NORTHBANK VISA PAYMENT', amountCents: 90000 }),
+    ];
+    expect(bulkSetTransfer(ids, true, alice, 'admin')).toEqual({ ok: true, changed: 3, skipped: 0 });
+
+    // Two merchants across three rows -> two rules, one each. Not three, and not one.
+    expect(listRules('transfer').map((r) => r.pattern).sort()).toEqual([
+      'ACME PAYROLL DEPOSIT',
+      'NORTHBANK VISA PAYMENT',
+    ]);
+  });
+
+  /**
+   * The third leg of the defence, and the one that would rot silently if this call ever flipped to
+   * `learnRule: false`: the `owned_by_another` branch, BulkOwnershipRefusal and the whole-batch
+   * ROLLBACK below it all exist for exactly one reason -- bulk transfer authors rules. Suppressing
+   * the rules would leave that machinery unreachable: dead code that still reads like a live
+   * protection, which is the very failure mode the v1.27.0 ops guard was written to prevent.
+   */
+  it('and so the whole-batch ownership refusal stays reachable, rolling back every row', () => {
+    const { sqlite, alice, bob, add } = setup();
+    upsertRuleFromCorrection({
+      pattern: 'ACME PAYROLL DEPOSIT', matchType: 'exact', ruleKind: 'transfer',
+      categoryId: null, createdBy: alice, actorRole: 'admin',
+    });
+    const mine = add({ description: 'NORTHBANK VISA PAYMENT', amountCents: 90000 });
+    const theirs = add({ description: 'ACME PAYROLL DEPOSIT', amountCents: 250000 });
+
+    expect(bulkSetTransfer([mine, theirs], true, bob, 'member')).toEqual({
+      ok: false,
+      reason: 'owned_by_another',
+      ownerName: 'Alice',
+    });
+    // Not a partial success: the row Bob was entitled to change is rolled back with the rest.
+    const flags = sqlite
+      .prepare('select id, is_transfer as t from transactions where id in (?, ?)')
+      .all(mine, theirs) as { id: number; t: number }[];
+    expect(flags.every((row) => row.t === 0)).toBe(true);
+    expect(listRules('transfer')).toHaveLength(1);
+  });
+
   it('bulk actions on an empty id list do nothing', () => {
     const { alice } = setup();
     expect(bulkSetAttribution([], null)).toBe(0);

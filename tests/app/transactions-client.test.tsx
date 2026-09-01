@@ -318,17 +318,41 @@ describe('MUST-14.8 / MUST-14.9: the row control', () => {
    * read it) -- not on the default "New loan…" branch, which posts to createLoanFromTransactionAction
    * instead and is untouched by this fix. Defaults ON: money lent out and money repaid moves an
    * asset between pockets, not spending.
+   *
+   * v1.27.0 item 1 relabelled it. The old copy stopped at "(keeps it out of spending)", which was
+   * true and incomplete: ticking it also wrote a household-wide exact transfer rule for the
+   * merchant. That rule write is gone, and the copy now says so -- see the help-text test below.
    */
-  it('the "Also mark as a transfer" checkbox appears once an existing loan is chosen, checked by default', () => {
+  it('the "Also keep this out of spending" checkbox appears once an existing loan is chosen, checked by default', () => {
     render(<TransactionsClient {...baseProps} loanOptions={[{ id: 7, name: 'Civic' }]} loanLinks={{}} />);
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
     // Not shown yet: the editor opens on the default "New loan…" branch.
-    expect(screen.queryByLabelText(/Also mark as a transfer/)).toBeNull();
+    expect(screen.queryByLabelText(/Also keep this out of spending/)).toBeNull();
 
     fireEvent.change(screen.getByLabelText('Assign to'), { target: { value: '7' } });
-    const checkbox = screen.getByLabelText(/Also mark as a transfer/) as HTMLInputElement;
+    const checkbox = screen.getByLabelText(/Also keep this out of spending/) as HTMLInputElement;
     expect(checkbox.checked).toBe(true);
+  });
+
+  /**
+   * v1.27.0 item 1 (the owner's report: "it also adds a rule ... next time i buy from [that shop] i
+   * dont want it to automatically caretgorize it as transfer"). The control's copy has to answer
+   * the question the owner had to discover by being bitten by it, because the per-row "Mark as
+   * transfer" control one menu away DOES author a rule and says so in its own success message.
+   * Asserted as copy rather than left to the docblock: a person reading a pre-armed checkbox is the
+   * only protection against a surprise they cannot see.
+   */
+  it('says in plain words that no merchant rule is created', () => {
+    render(<TransactionsClient {...baseProps} loanOptions={[{ id: 7, name: 'Civic' }]} loanLinks={{}} />);
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
+    fireEvent.change(screen.getByLabelText('Assign to'), { target: { value: '7' } });
+
+    // The whole sentence, not a fragment: "This transaction only" on its own is already this
+    // page's house phrase (the scope radio and the row-select label both use it), so a partial
+    // match would find three elements and prove nothing about THIS control's copy.
+    expect(screen.getByText(/No rule is created, so other purchases from this merchant are unaffected/)).toBeTruthy();
   });
 
   it('saving with the checkbox left ticked sends alsoTransfer=1 to assignToLoanAction', async () => {
@@ -351,7 +375,7 @@ describe('MUST-14.8 / MUST-14.9: the row control', () => {
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Assign to loan…' }));
     fireEvent.change(screen.getByLabelText('Assign to'), { target: { value: '7' } });
-    fireEvent.click(screen.getByLabelText(/Also mark as a transfer/));
+    fireEvent.click(screen.getByLabelText(/Also keep this out of spending/));
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(assignToLoanAction).toHaveBeenCalled());

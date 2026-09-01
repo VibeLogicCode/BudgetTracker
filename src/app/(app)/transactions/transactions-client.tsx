@@ -1277,10 +1277,24 @@ export function TransactionsClient({
             // money lent out and money repaid moves an asset between pockets, not spending, so the
             // common case is that a loan payment should also leave spending -- a person who wants
             // the payment counted as ordinary spending can still untick it.
-            <label className="flex items-center gap-2 text-sm text-muted">
-              <input type="checkbox" name="alsoTransfer" value="1" defaultChecked className="accent-accent" />
-              Also mark as a transfer (keeps it out of spending)
-            </label>
+            //
+            // v1.27.0 item 1 (the owner's report). The copy used to stop at "(keeps it out of
+            // spending)", which was true and incomplete: ticking it ALSO wrote a household-wide
+            // exact transfer rule for the merchant, so one reimbursement filed against a work loan
+            // silently taught the app to flag every future purchase from that shop. The rule write
+            // is gone (assignToLoanAction now passes learnRule: false), and the copy says so
+            // rather than leaving a person to infer it -- the per-row "Mark as transfer" control
+            // one menu away DOES learn a rule and says "learned an exact rule" when it does, so
+            // "this one only" is the difference a person actually needs told.
+            <div className="flex flex-col gap-1">
+              <label className="flex items-center gap-2 text-sm text-muted">
+                <input type="checkbox" name="alsoTransfer" value="1" defaultChecked className="accent-accent" />
+                Also keep this out of spending (marks it a transfer)
+              </label>
+              <p className="pl-6 text-xs text-muted">
+                This transaction only. No rule is created, so other purchases from this merchant are unaffected.
+              </p>
+            </div>
           )}
           <div className="flex gap-2">
             <SubmitButton className="w-fit">Save</SubmitButton>

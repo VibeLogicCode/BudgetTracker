@@ -262,7 +262,12 @@ export async function acceptGuessAction(_prev: ActionState, formData: FormData):
   const transactionId = Number(formData.get('transactionId'));
   const row = getTransaction(transactionId, user);
   if (!row || row.categoryId === null) return { error: 'There is no guess to accept on that row.' };
-  const result = confirmCategory({ transactionId, categoryId: row.categoryId, userId: user.id, actorRole: user.role });
+  // v1.27.0 item 1: `createRule` spelled out rather than left to confirmCategory's `!== false`
+  // default. Behaviour is identical -- accepting a guess has always taught the merchant's rule,
+  // which is the point of accepting it -- but tests/ops/rule-authoring-intent.test.ts requires
+  // every call site that can author a merchant rule to say so at the call, and an omitted
+  // optional flag is exactly the silence that made the loan bug invisible.
+  const result = confirmCategory({ transactionId, categoryId: row.categoryId, userId: user.id, createRule: true, actorRole: user.role });
   if (!result.ok) return { error: guardedWriteError(result) };
   revalidatePath('/transactions');
   return { message: 'Accepted.' };
@@ -361,6 +366,12 @@ export async function setRowTransferAction(_prev: ActionState, formData: FormDat
       isTransfer,
       userId: user.id,
       actorRole: user.role,
+      // v1.27.0 item 1: TRUE, and deliberately so. This is the explicit per-row "Mark as
+      // transfer" / "Not a transfer" control -- a person naming a merchant and saying what it
+      // always is. That is the merchant-driven case setTransferFlag's `learnRule` docblock
+      // describes, its success message below has said "and learned an exact rule" out loud since
+      // v1.14.1, and nothing about it changes in this release. The loan path is what changed.
+      learnRule: true,
     });
     if (!result.ok) return { error: guardedWriteError(result) };
   } catch (error) {
@@ -818,16 +829,32 @@ export async function assignToLoanAction(formData: FormData): Promise<ActionStat
   // between pockets, not spending -- counting it as spending makes the month it left look
   // expensive and the month it returned look rich. This reuses setTransferFlag, the SAME
   // already-guarded path setRowTransferAction (above) posts to, rather than writing is_transfer a
-  // second way. A refusal here (a transfer/not_transfer rule someone else in the household owns)
-  // must surface as THIS action's own error, not be swallowed under a cheerful "Assigned."
-  // message below -- the loan link itself already succeeded and its revalidatePath calls above
-  // already ran, so only the transfer half of this submit is what a person needs to be told failed.
+  // second way. A refusal here (a split row) must surface as THIS action's own error, not be
+  // swallowed under a cheerful "Assigned." message below -- the loan link itself already succeeded
+  // and its revalidatePath calls above already ran, so only the transfer half of this submit is
+  // what a person needs to be told failed.
+  //
+  // v1.27.0 item 1 (the owner's report): `learnRule: false`. This checkbox is pre-armed ON, and
+  // setTransferFlag used to answer it by upserting an exact TRANSFER RULE for the merchant -- so
+  // assigning one reimbursement to a work loan taught the household that every future purchase
+  // from that shop is a transfer, and the next one was flagged out of spending on import with
+  // nothing on screen to say why. What makes a loan payment not-spending is the LINK, which this
+  // action just wrote; the merchant is incidental to it. So the flag is still set (see the
+  // v1.27.0 investigation recorded on assignToLoanAction's own docblock -- budgets, insights, tax,
+  // predict and the notification evaluators all read is_transfer and none of them read the loan
+  // link, so dropping the flag here would move real numbers) and no rule is authored or deleted.
+  //
+  // The `owned_by_another` branch of guardedWriteError is now unreachable from here, by
+  // construction: with no rule read or written there is nothing to own. It is deliberately not
+  // special-cased -- guardedWriteError still handles the split refusal this path can return, and
+  // narrowing the error mapping per call site would be a second place for the two to disagree.
   if (formData.get('alsoTransfer') === '1') {
     const transferResult = setTransferFlag({
       transactionId: parsed.data.transactionId,
       isTransfer: true,
       userId: user.id,
       actorRole: user.role,
+      learnRule: false,
     });
     if (!transferResult.ok) return { error: guardedWriteError(transferResult) };
   }

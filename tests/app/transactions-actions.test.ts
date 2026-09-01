@@ -7,7 +7,7 @@ import { nowIso } from '@/lib/clock';
 import { createWarrantyItem, getWarrantyItem } from '@/lib/warranty/items';
 import { createItemType } from '@/lib/warranty/types';
 import { setTransactionSplits } from '@/lib/splits';
-import { confirmCategory } from '@/lib/categorize/engine';
+import { confirmCategory, runEngine } from '@/lib/categorize/engine';
 import { listRules, ruleOwnedError, upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { NOT_YOURS_ERROR } from '@/lib/auth/viewer';
 
@@ -575,13 +575,24 @@ describe('assignToLoanAction: the opt-in "also mark as a transfer" checkbox', ()
     expect((sqlite.prepare('select is_transfer as t from transactions where id = ?').get(txnId) as { t: number }).t).toBe(0);
   });
 
-  it('a refusal (a transfer rule someone else in the household owns) surfaces as THIS action\'s own error, not swallowed', async () => {
+  /**
+   * v1.27.0 item 1. This test used to assert the OPPOSITE, and the change is deliberate rather
+   * than a regression, so the old expectation is recorded here rather than deleted quietly.
+   *
+   * It used to prove that a member assigning a transaction to a loan was REFUSED when an admin
+   * owned that merchant's transfer rule -- correct, and unavoidable, while the loan path authored
+   * a rule of its own. Now it does not author one (`learnRule: false`), so there is nothing to
+   * own and nothing to refuse: the member's assign succeeds, the flag is set on their own
+   * transaction, and the admin's household-wide rule is left exactly as it was. That is strictly
+   * better on both counts -- the member is no longer blocked from filing their own paperwork by a
+   * rule that was never relevant to it, and the admin's rule is no longer at risk from it.
+   *
+   * The ownership refusal itself is untouched on the path that still authors rules; see
+   * setRowTransferAction's own R4 tests below.
+   */
+  it('no longer refuses on a rule someone else owns, because the loan path authors no rule (v1.27.0 item 1)', async () => {
     const { sqlite } = setup();
     const { itemId, txnId } = seedLoanAndSpend(2_000_000, -45_000);
-    // Alice (admin, the setup() default caller) already owns an exact transfer rule for this
-    // merchant. Switching the caller to a different MEMBER before the assign reproduces the
-    // ownership refusal setTransferFlag already enforces for every other "mark as transfer"
-    // control in this file (see setRowTransferAction's own R4 tests below).
     upsertRuleFromCorrection({
       pattern: normalizeMerchant('HONDA FIN PAYMENT'), matchType: 'exact', ruleKind: 'transfer',
       categoryId: null, createdBy: ctx!.userId, actorRole: 'admin',
@@ -591,13 +602,77 @@ describe('assignToLoanAction: the opt-in "also mark as a transfer" checkbox', ()
 
     const result = await assignToLoanAction(formData({ transactionId: String(txnId), itemId: String(itemId), alsoTransfer: '1' }));
 
-    expect(result.error).toBe(ruleOwnedError('Alice'));
-    expect(result.message).toBeUndefined();
-    // The refusal is scoped to the TRANSFER half of this submit: the loan link itself performs
-    // no owner check at all (MUST-13.13) and already went through before setTransferFlag ran, so
-    // it must not have been rolled back underneath the refusal.
+    expect(result.error).toBeUndefined();
     expect(balanceOf(itemId)).toBe(1_955_000);
-    expect((sqlite.prepare('select is_transfer as t from transactions where id = ?').get(txnId) as { t: number }).t).toBe(0);
+    expect((sqlite.prepare('select is_transfer as t from transactions where id = ?').get(txnId) as { t: number }).t).toBe(1);
+    // Alice's rule survives the member's assign, unedited and undeleted.
+    const owned = listRules('transfer');
+    expect(owned).toHaveLength(1);
+    expect(owned[0]).toMatchObject({ pattern: normalizeMerchant('HONDA FIN PAYMENT'), createdBy: ctx!.userId });
+  });
+});
+
+/**
+ * v1.27.0 item 1 -- the owner's report, verbatim:
+ *
+ *   "when i add items to loan they are marked transfer by default but it also adds a rule. for
+ *    example i moved this to work loan as this was re ebuisnment but next time i buy from
+ *    [that shop] i dont want it to automatically caretgorize it as transfer."
+ *
+ * The checkbox is pre-armed ON and posts `alsoTransfer=1`; setTransferFlag does not only set
+ * `is_transfer`, it upserts an exact merchant rule. So one reimbursement filed against a work loan
+ * taught the household that everything from that shop is a transfer, permanently, with nothing on
+ * screen to say a rule had been written. The fix is `learnRule: false` on this path only.
+ */
+describe('assignToLoanAction: filing one reimbursement against a loan must not teach the merchant', () => {
+  /** The owner's own shape: a shop the household buys from normally, this once reimbursed. */
+  function seedLoanAndPurchase(): { itemId: number; txnId: number } {
+    const { accountId, userId } = ctx!;
+    const itemId = seedLoanItem({ balanceCents: 2_000_000 });
+    const row = current!.db.get<{ id: number }>(sql`
+      insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, created_by, created_at, updated_at)
+      values (${accountId}, '2026-03-02', 'MAPLEVIEW ELECTRONICS WOODBRIDGE', ${normalizeMerchant('MAPLEVIEW ELECTRONICS WOODBRIDGE')}, -24999, ${userId}, ${nowIso()}, ${nowIso()})
+      returning id`);
+    return { itemId, txnId: row.id };
+  }
+
+  it('sets is_transfer and creates NO merchant rule of any kind, and deletes none', async () => {
+    const { sqlite } = setup();
+    const { itemId, txnId } = seedLoanAndPurchase();
+
+    const result = await assignToLoanAction(formData({ transactionId: String(txnId), itemId: String(itemId), alsoTransfer: '1' }));
+    expect(result.error).toBeUndefined();
+
+    expect((sqlite.prepare('select is_transfer as t from transactions where id = ?').get(txnId) as { t: number }).t).toBe(1);
+    expect(listRules('transfer')).toEqual([]);
+    expect(listRules('not_transfer')).toEqual([]);
+    expect(listRules()).toEqual([]);
+  });
+
+  it('leaves an existing not_transfer rule for that merchant alone (no housekeeping delete)', async () => {
+    setup();
+    const { itemId, txnId } = seedLoanAndPurchase();
+    upsertRuleFromCorrection({
+      pattern: normalizeMerchant('MAPLEVIEW ELECTRONICS WOODBRIDGE'), matchType: 'exact', ruleKind: 'not_transfer',
+      categoryId: null, createdBy: ctx!.userId, actorRole: 'admin',
+    });
+
+    await assignToLoanAction(formData({ transactionId: String(txnId), itemId: String(itemId), alsoTransfer: '1' }));
+    expect(listRules('not_transfer')).toHaveLength(1);
+  });
+
+  it('the next purchase from that same merchant is not auto-flagged as a transfer on import', async () => {
+    const { sqlite, accountId, userId } = setup();
+    const { itemId, txnId } = seedLoanAndPurchase();
+    await assignToLoanAction(formData({ transactionId: String(txnId), itemId: String(itemId), alsoTransfer: '1' }));
+
+    const next = current!.db.get<{ id: number }>(sql`
+      insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, categorization_source, created_by, created_at, updated_at)
+      values (${accountId}, '2026-04-11', 'MAPLEVIEW ELECTRONICS WOODBRIDGE', ${normalizeMerchant('MAPLEVIEW ELECTRONICS WOODBRIDGE')}, -8999, 'none', ${userId}, ${nowIso()}, ${nowIso()})
+      returning id`);
+    runEngine([next.id]);
+
+    expect((sqlite.prepare('select is_transfer as t from transactions where id = ?').get(next.id) as { t: number }).t).toBe(0);
   });
 });
 

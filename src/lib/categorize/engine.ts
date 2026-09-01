@@ -1016,6 +1016,11 @@ export function clearCategory(input: {
  * now resolved HERE, in the same block and before is_transfer is written, and a member who
  * does not own it gets the whole action refused -- no row touched, no rule deleted -- exactly
  * as confirmCategory and upsertRuleFromCorrection already refuse for the rule they write.
+ *
+ * v1.27.0 item 1 (the owner's report, verbatim: "when i add items to loan they are marked
+ * transfer by default but it also adds a rule ... next time i buy from best buy woodbridge i
+ * dont want it to automatically caretgorize it as transfer"). `learnRule` splits the two things
+ * this function used to do as one -- see its own docblock just below.
  */
 export function setTransferFlag(input: {
   transactionId: number;
@@ -1023,6 +1028,34 @@ export function setTransferFlag(input: {
   userId: number;
   /** The ACTOR's role, not the rule's. An admin may write over anyone's rule. */
   actorRole: 'admin' | 'member';
+  /**
+   * v1.27.0 item 1 (the owner's report). REQUIRED, with no default, so the compiler makes every
+   * call site say what it means -- the same shape, for the same bug class, as clearCategory's
+   * `deleteRule` above: a per-row UI action silently rewriting household-wide rules.
+   *
+   * Assigning one transaction to a loan used to arrive here with the assign editor's "Also mark
+   * as a transfer" checkbox pre-armed ON, and this function does not only set `is_transfer` -- it
+   * upserts an EXACT transfer rule for the merchant. So filing one reimbursement against a work
+   * loan permanently taught the household that everything from that shop is a transfer, and the
+   * next unrelated purchase there was auto-flagged out of spending on import. Nothing on screen
+   * said a rule had been written.
+   *
+   * The distinction the flag encodes: a transfer rule is MERCHANT-driven -- a payroll deposit or
+   * a credit-card payment is a transfer every single time, so learning the merchant is exactly
+   * right. A loan payment is LINK-driven -- what makes it not-spending is the loan link, and the
+   * merchant is incidental. Only the merchant-driven case may author a rule.
+   *
+   * `false` does NO rule work whatsoever: no upsert of a transfer/not_transfer rule, and no
+   * housekeeping delete of the opposite-kind rule either. Both halves matter. Leaving only the
+   * delete active would still mutate household rules from a loan assignment -- quietly removing
+   * somebody's deliberate "not a transfer" override -- which is the same defect wearing the other
+   * sign. Nothing being read or written about rules also means there is nothing to OWN, so the
+   * `owned_by_another` refusal cannot arise on this path; the split refusal still does, and
+   * `is_transfer` is still written exactly as before.
+   *
+   * `true` is today's behaviour, byte for byte, ownership refusals included.
+   */
+  learnRule: boolean;
   at?: Date;
 }): RuleGuardedWriteResult {
   const db = getDb();
@@ -1047,7 +1080,7 @@ export function setTransferFlag(input: {
   // -- the "optional owner check that still deletes on a refusal" this fix explicitly rejects,
   // applied to a create instead of a delete.
   const housekeepingKind: RuleKind = input.isTransfer ? 'not_transfer' : 'transfer';
-  if (input.actorRole !== 'admin') {
+  if (input.learnRule && input.actorRole !== 'admin') {
     const owner = exactRuleOwner(row.normalizedMerchant, housekeepingKind);
     if (owner !== null && owner.createdBy !== null && owner.createdBy !== input.userId) {
       return { ok: false, reason: 'owned_by_another', ownerName: owner.ownerName };
@@ -1056,7 +1089,13 @@ export function setTransferFlag(input: {
 
   // R4 ownership check: whichever rule this flip would learn is resolved -- and can
   // refuse -- before is_transfer itself is ever written.
-  if (input.isTransfer) {
+  //
+  // v1.27.0 item 1: `learnRule` gates BOTH rule halves, and this is the write half. It is the
+  // OUTERMOST condition on purpose rather than an `&& input.learnRule` bolted onto each branch --
+  // the card-payment branch below is easy to read as "not really a rule write, just an override"
+  // and would be exactly the kind of half-suppressed case this parameter exists to make
+  // impossible. The housekeeping delete half is gated the same way, after the is_transfer write.
+  if (input.learnRule && input.isTransfer) {
     // EXACT match only: a contains rule learned from an e-transfer description
     // would over-match every unrelated e-transfer.
     const upserted = upsertRuleFromCorrection({
@@ -1069,7 +1108,7 @@ export function setTransferFlag(input: {
       at,
     });
     if (!upserted.ok) return { ok: false, reason: 'owned_by_another', ownerName: upserted.ownerName };
-  } else if (matchesCardPattern) {
+  } else if (input.learnRule && matchesCardPattern) {
     // The card-payment pattern list would re-catch this merchant on the very
     // next runEngine/rerun. Merely deleting a (nonexistent) transfer rule would
     // not stop that, so teach an exact 'not_transfer' override instead.
@@ -1090,6 +1129,13 @@ export function setTransferFlag(input: {
     .where(eq(transactions.id, input.transactionId))
     .run();
 
+  // v1.27.0 item 1: the housekeeping DELETE half, gated by the same `learnRule` as the write half
+  // above. `learnRule: false` reaches here having touched no rule at all and leaves with the same
+  // guarantee -- see the parameter's own docblock for why suppressing only the upsert would still
+  // let a loan assignment delete a rule the household deliberately made.
+  if (!input.learnRule) {
+    return { ok: true };
+  }
   if (input.isTransfer) {
     // Re-flagging as a transfer must undo any earlier "not a transfer" override
     // on this exact merchant, or detectTransfer's not_transfer check (which runs

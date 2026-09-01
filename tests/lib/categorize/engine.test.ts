@@ -390,7 +390,7 @@ describe('transfer toggling', () => {
   it('turning the flag on teaches an EXACT transfer rule', () => {
     const { sqlite, add, userId } = setup();
     const id = add('E-TRANSFER SENT J DOE');
-    setTransferFlag({ transactionId: id, isTransfer: true, userId, actorRole: 'admin' });
+    setTransferFlag({ transactionId: id, isTransfer: true, userId, actorRole: 'admin', learnRule: true });
     expect(readTxn(sqlite, id).is_transfer).toBe(1);
     const rules = listRules('transfer');
     expect(rules).toHaveLength(1);
@@ -400,8 +400,8 @@ describe('transfer toggling', () => {
   it('turning it off removes the learned rule', () => {
     const { sqlite, add, userId } = setup();
     const id = add('E-TRANSFER SENT J DOE');
-    setTransferFlag({ transactionId: id, isTransfer: true, userId, actorRole: 'admin' });
-    setTransferFlag({ transactionId: id, isTransfer: false, userId, actorRole: 'admin' });
+    setTransferFlag({ transactionId: id, isTransfer: true, userId, actorRole: 'admin', learnRule: true });
+    setTransferFlag({ transactionId: id, isTransfer: false, userId, actorRole: 'admin', learnRule: true });
     expect(readTxn(sqlite, id).is_transfer).toBe(0);
     expect(listRules('transfer')).toHaveLength(0);
   });
@@ -412,7 +412,7 @@ describe('transfer toggling', () => {
     runEngine([id]);
     expect(readTxn(sqlite, id).is_transfer).toBe(1);
 
-    setTransferFlag({ transactionId: id, isTransfer: false, userId, actorRole: 'admin' });
+    setTransferFlag({ transactionId: id, isTransfer: false, userId, actorRole: 'admin', learnRule: true });
     expect(readTxn(sqlite, id).is_transfer).toBe(0);
     const rules = listRules('not_transfer');
     expect(rules).toHaveLength(1);
@@ -427,13 +427,169 @@ describe('transfer toggling', () => {
     const { sqlite, add, userId } = setup();
     const id = add('PAYMENT - THANK YOU', 50000);
     runEngine([id]);
-    setTransferFlag({ transactionId: id, isTransfer: false, userId, actorRole: 'admin' });
+    setTransferFlag({ transactionId: id, isTransfer: false, userId, actorRole: 'admin', learnRule: true });
     expect(listRules('not_transfer')).toHaveLength(1);
 
-    setTransferFlag({ transactionId: id, isTransfer: true, userId, actorRole: 'admin' });
+    setTransferFlag({ transactionId: id, isTransfer: true, userId, actorRole: 'admin', learnRule: true });
     expect(readTxn(sqlite, id).is_transfer).toBe(1);
     expect(listRules('not_transfer')).toHaveLength(0);
     expect(detectTransfer('PAYMENT - THANK YOU', buildContext())).toBe(true);
+  });
+});
+
+/**
+ * v1.27.0 item 1 (the owner's report, verbatim: "when i add items to loan they are marked transfer
+ * by default but it also adds a rule ... next time i buy from best buy woodbridge i dont want it to
+ * automatically caretgorize it as transfer").
+ *
+ * The five cases above cover `learnRule: true` -- today's behaviour, unchanged. In particular
+ * "turning the flag on teaches an EXACT transfer rule" is already the proof that the explicit
+ * per-row "Mark as transfer" control still authors its rule exactly as before, so that case is NOT
+ * duplicated here; every test in this block is about the other value.
+ */
+describe('v1.27.0 item 1: learnRule: false sets the flag and authors NO rule', () => {
+  it('sets is_transfer and creates no merchant rule of any kind', () => {
+    const { sqlite, add, userId } = setup();
+    // The owner's shape: a shop they buy from normally, this once a reimbursement.
+    const id = add('MAPLEVIEW ELECTRONICS WOODBRIDGE');
+    expect(setTransferFlag({ transactionId: id, isTransfer: true, userId, actorRole: 'admin', learnRule: false })).toEqual({ ok: true });
+
+    expect(readTxn(sqlite, id).is_transfer).toBe(1);
+    expect(listRules('transfer')).toEqual([]);
+    expect(listRules('not_transfer')).toEqual([]);
+    expect(listRules()).toEqual([]);
+  });
+
+  /**
+   * The half a partial fix is most likely to miss. Suppressing only the UPSERT would still let a
+   * loan assignment reach in and delete a rule the household deliberately made -- the same defect
+   * wearing the other sign, and invisible in exactly the same way.
+   */
+  it('does NOT delete the opposite-kind rule as housekeeping (the half a partial fix misses)', () => {
+    const { sqlite, add, userId } = setup();
+    // Somebody has already told the household "this merchant is NOT a transfer", deliberately.
+    upsertRuleFromCorrection({
+      pattern: 'MAPLEVIEW ELECTRONICS WOODBRIDGE',
+      matchType: 'exact',
+      ruleKind: 'not_transfer',
+      categoryId: null,
+      createdBy: userId,
+      actorRole: 'admin',
+    });
+    const id = add('MAPLEVIEW ELECTRONICS WOODBRIDGE');
+    expect(setTransferFlag({ transactionId: id, isTransfer: true, userId, actorRole: 'admin', learnRule: false })).toEqual({ ok: true });
+
+    expect(readTxn(sqlite, id).is_transfer).toBe(1);
+    expect(listRules('not_transfer')).toHaveLength(1);
+    expect(listRules('transfer')).toEqual([]);
+  });
+
+  it('does NOT delete a learned transfer rule when un-flagging either', () => {
+    const { sqlite, add, userId } = setup();
+    const id = add('E-TRANSFER SENT J DOE');
+    setTransferFlag({ transactionId: id, isTransfer: true, userId, actorRole: 'admin', learnRule: true });
+    expect(listRules('transfer')).toHaveLength(1);
+
+    setTransferFlag({ transactionId: id, isTransfer: false, userId, actorRole: 'admin', learnRule: false });
+    expect(readTxn(sqlite, id).is_transfer).toBe(0);
+    expect(listRules('transfer')).toHaveLength(1);
+  });
+
+  it('does NOT teach a not_transfer override for a card-payment merchant', () => {
+    const { sqlite, add, userId } = setup();
+    const id = add('PAYMENT - THANK YOU', 50000);
+    runEngine([id]);
+    expect(readTxn(sqlite, id).is_transfer).toBe(1);
+
+    setTransferFlag({ transactionId: id, isTransfer: false, userId, actorRole: 'admin', learnRule: false });
+    expect(readTxn(sqlite, id).is_transfer).toBe(0);
+    // The card-payment branch is the one that reads least like a rule write and so is the one most
+    // likely to be left un-gated. No rule means rerunEngine re-flags the row -- stated here rather
+    // than left as a surprise, because it is the honest consequence of not teaching an override.
+    expect(listRules('not_transfer')).toEqual([]);
+  });
+
+  /**
+   * With no rule read and none written there is nothing to OWN, so this path cannot refuse on
+   * ownership -- the counterpart of the `learnRule: true` refusals proved in the ruling R4 block
+   * further down, which are unchanged.
+   */
+  it('cannot refuse on rule ownership, because it touches no rule', () => {
+    current = createSeededTestDb();
+    const adminId = insertTestUser(current.db, { name: 'Admin Owner', username: 'admin-owner', role: 'admin' });
+    const memberId = insertTestUser(current.db, { name: 'Member Other', username: 'member-other', role: 'member' });
+    const accountId = insertTestAccount(current.db);
+    const { sqlite } = current;
+    upsertRuleFromCorrection({
+      pattern: 'MAPLEVIEW ELECTRONICS WOODBRIDGE',
+      matchType: 'exact',
+      ruleKind: 'not_transfer',
+      categoryId: null,
+      createdBy: adminId,
+      actorRole: 'admin',
+    });
+    const row = current.db.get<{ id: number }>(sql`
+      insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, categorization_source, created_by, created_at, updated_at)
+      values (${accountId}, '2026-03-02', 'MAPLEVIEW ELECTRONICS WOODBRIDGE', ${normalizeMerchant('MAPLEVIEW ELECTRONICS WOODBRIDGE')}, -24999, 'none', ${memberId}, ${nowIso()}, ${nowIso()})
+      returning id`);
+
+    expect(
+      setTransferFlag({ transactionId: row.id, isTransfer: true, userId: memberId, actorRole: 'member', learnRule: false }),
+    ).toEqual({ ok: true });
+    expect(readTxn(sqlite, row.id).is_transfer).toBe(1);
+    expect(listRules('not_transfer')).toHaveLength(1);
+  });
+
+  it('a split row is still refused, and still writes nothing', () => {
+    const { sqlite, db, add, userId } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const id = add('MAPLEVIEW ELECTRONICS WOODBRIDGE', -1000);
+    db.run(sql`insert into transaction_splits (txn_id, category_id, amount_cents, created_at)
+      values (${id}, ${coffee}, -1000, ${nowIso()})`);
+
+    expect(setTransferFlag({ transactionId: id, isTransfer: true, userId, actorRole: 'admin', learnRule: false })).toEqual({
+      ok: false,
+      reason: 'has_splits',
+    });
+    expect(readTxn(sqlite, id).is_transfer).toBe(0);
+    expect(listRules()).toEqual([]);
+  });
+
+  /**
+   * THE BUG, end to end and in the owner's own terms: file one purchase from a shop against a loan
+   * (flag set, no rule), then let the NEXT purchase from that same shop arrive the way a real one
+   * does -- through the engine. It must be ordinary spending.
+   */
+  it('the next transaction from that merchant is not auto-flagged as a transfer on import', () => {
+    const { sqlite, add, userId } = setup();
+    const reimbursed = add('MAPLEVIEW ELECTRONICS WOODBRIDGE', -24999, '2026-03-02');
+    setTransferFlag({ transactionId: reimbursed, isTransfer: true, userId, actorRole: 'admin', learnRule: false });
+
+    expect(detectTransfer(normalizeMerchant('MAPLEVIEW ELECTRONICS WOODBRIDGE'), buildContext())).toBe(false);
+
+    const nextMonth = add('MAPLEVIEW ELECTRONICS WOODBRIDGE', -8999, '2026-04-11');
+    runEngine([nextMonth]);
+    expect(readTxn(sqlite, nextMonth).is_transfer).toBe(0);
+
+    // And a re-run over everything does not retroactively flag it either.
+    rerunEngine();
+    expect(readTxn(sqlite, nextMonth).is_transfer).toBe(0);
+  });
+
+  /**
+   * The contrast, in one test, so the fix cannot be read as "loan payments stopped being
+   * transfers": the SAME merchant, the SAME flag, marked through the deliberate per-row control
+   * instead -- and the next import IS flagged, because that is what the person asked for.
+   */
+  it('but the deliberate per-row control still teaches the merchant, and the next import IS flagged', () => {
+    const { sqlite, add, userId } = setup();
+    const first = add('ACME PAYROLL DEPOSIT', 250000, '2026-03-02');
+    setTransferFlag({ transactionId: first, isTransfer: true, userId, actorRole: 'admin', learnRule: true });
+    expect(listRules('transfer')).toHaveLength(1);
+
+    const second = add('ACME PAYROLL DEPOSIT', 250000, '2026-04-02');
+    runEngine([second]);
+    expect(readTxn(sqlite, second).is_transfer).toBe(1);
   });
 });
 
@@ -1031,10 +1187,10 @@ describe('ruling R4, fix round 1: confirmCategory / setTransferFlag / applyCateg
     it('a member cannot overwrite an admin-owned transfer rule; is_transfer stays untouched', () => {
       const { sqlite, adminId, memberId, add } = setupTwoUsers();
       const first = add('ACME PAYROLL CO', -500, '2026-03-02');
-      expect(setTransferFlag({ transactionId: first, isTransfer: true, userId: adminId, actorRole: 'admin' }).ok).toBe(true);
+      expect(setTransferFlag({ transactionId: first, isTransfer: true, userId: adminId, actorRole: 'admin', learnRule: true }).ok).toBe(true);
 
       const second = add('ACME PAYROLL CO', -500, '2026-03-03');
-      const result = setTransferFlag({ transactionId: second, isTransfer: true, userId: memberId, actorRole: 'member' });
+      const result = setTransferFlag({ transactionId: second, isTransfer: true, userId: memberId, actorRole: 'member', learnRule: true });
       expect(result).toEqual({ ok: false, reason: 'owned_by_another', ownerName: 'Admin Owner' });
 
       expect(readTxn(sqlite, second).is_transfer).toBe(0);
@@ -1045,20 +1201,20 @@ describe('ruling R4, fix round 1: confirmCategory / setTransferFlag / applyCateg
     it('an admin can overwrite anyone\'s transfer rule', () => {
       const { sqlite, adminId, memberId, add } = setupTwoUsers();
       const first = add('ACME PAYROLL CO', -500, '2026-03-02');
-      expect(setTransferFlag({ transactionId: first, isTransfer: true, userId: memberId, actorRole: 'member' }).ok).toBe(true);
+      expect(setTransferFlag({ transactionId: first, isTransfer: true, userId: memberId, actorRole: 'member', learnRule: true }).ok).toBe(true);
 
       const second = add('ACME PAYROLL CO', -500, '2026-03-03');
-      expect(setTransferFlag({ transactionId: second, isTransfer: true, userId: adminId, actorRole: 'admin' }).ok).toBe(true);
+      expect(setTransferFlag({ transactionId: second, isTransfer: true, userId: adminId, actorRole: 'admin', learnRule: true }).ok).toBe(true);
       expect(readTxn(sqlite, second).is_transfer).toBe(1);
     });
 
     it('a member can update a transfer rule they own themselves', () => {
       const { sqlite, memberId, add } = setupTwoUsers();
       const first = add('ACME PAYROLL CO', -500, '2026-03-02');
-      expect(setTransferFlag({ transactionId: first, isTransfer: true, userId: memberId, actorRole: 'member' }).ok).toBe(true);
+      expect(setTransferFlag({ transactionId: first, isTransfer: true, userId: memberId, actorRole: 'member', learnRule: true }).ok).toBe(true);
 
       const second = add('ACME PAYROLL CO', -500, '2026-03-03');
-      expect(setTransferFlag({ transactionId: second, isTransfer: true, userId: memberId, actorRole: 'member' }).ok).toBe(true);
+      expect(setTransferFlag({ transactionId: second, isTransfer: true, userId: memberId, actorRole: 'member', learnRule: true }).ok).toBe(true);
       expect(readTxn(sqlite, second).is_transfer).toBe(1);
     });
   });
@@ -1142,7 +1298,7 @@ describe('ruling R4, fix round 2 (item BJ): setTransferFlag refuses over the rul
       categoryId: null, createdBy: adminId, actorRole: 'admin',
     });
 
-    const result = setTransferFlag({ transactionId: txnId, isTransfer: true, userId: memberId, actorRole: 'member' });
+    const result = setTransferFlag({ transactionId: txnId, isTransfer: true, userId: memberId, actorRole: 'member', learnRule: true });
 
     // The whole action refuses. An "optional owner check" that still deletes on a refusal is
     // not this fix -- every sibling R4 writer leaves every row and every rule untouched.
@@ -1159,7 +1315,7 @@ describe('ruling R4, fix round 2 (item BJ): setTransferFlag refuses over the rul
       categoryId: null, createdBy: adminId, actorRole: 'admin',
     });
 
-    const result = setTransferFlag({ transactionId: txnId, isTransfer: false, userId: memberId, actorRole: 'member' });
+    const result = setTransferFlag({ transactionId: txnId, isTransfer: false, userId: memberId, actorRole: 'member', learnRule: true });
 
     expect(result).toEqual({ ok: false, reason: 'owned_by_another', ownerName: 'Admin Owner' });
     expect(exactRuleOwner(merchant, 'transfer')).not.toBeNull();
@@ -1173,7 +1329,7 @@ describe('ruling R4, fix round 2 (item BJ): setTransferFlag refuses over the rul
       categoryId: null, createdBy: memberId, actorRole: 'member',
     });
 
-    expect(setTransferFlag({ transactionId: txnId, isTransfer: true, userId: adminId, actorRole: 'admin' })).toEqual({ ok: true });
+    expect(setTransferFlag({ transactionId: txnId, isTransfer: true, userId: adminId, actorRole: 'admin', learnRule: true })).toEqual({ ok: true });
     expect(exactRuleOwner(merchant, 'not_transfer')).toBeNull();
   });
 
@@ -1184,7 +1340,7 @@ describe('ruling R4, fix round 2 (item BJ): setTransferFlag refuses over the rul
       categoryId: null, createdBy: memberId, actorRole: 'member',
     });
 
-    expect(setTransferFlag({ transactionId: txnId, isTransfer: true, userId: memberId, actorRole: 'member' })).toEqual({ ok: true });
+    expect(setTransferFlag({ transactionId: txnId, isTransfer: true, userId: memberId, actorRole: 'member', learnRule: true })).toEqual({ ok: true });
     expect(exactRuleOwner(merchant, 'not_transfer')).toBeNull();
   });
 
@@ -1195,7 +1351,7 @@ describe('ruling R4, fix round 2 (item BJ): setTransferFlag refuses over the rul
       categoryId: null, createdBy: null, actorRole: 'admin',
     });
 
-    expect(setTransferFlag({ transactionId: txnId, isTransfer: true, userId: memberId, actorRole: 'member' })).toEqual({ ok: true });
+    expect(setTransferFlag({ transactionId: txnId, isTransfer: true, userId: memberId, actorRole: 'member', learnRule: true })).toEqual({ ok: true });
     expect(exactRuleOwner(merchant, 'not_transfer')).toBeNull();
   });
 });
