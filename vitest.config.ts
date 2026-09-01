@@ -24,5 +24,10 @@ export default defineConfig({
     },
     testTimeout: 20000,
     hookTimeout: 20000,
+    // Defence, not a fix for anything known: every current vi.spyOn(fs, ...) site already
+    // restores itself (mockRestore in a finally, or an explicit .mockRestore() call). This
+    // just stops a future unrestored spy from leaking into an unrelated test in this
+    // shared-process pool (`pool: 'forks'`, `singleFork: false`).
+    restoreMocks: true,
   },
 });

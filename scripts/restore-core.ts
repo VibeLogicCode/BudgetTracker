@@ -43,6 +43,8 @@ export interface RestoreResult {
   receiptsRestored: number;
   /** The directory the previous receipts/ was renamed to, or null when there was none. */
   receiptsMovedAside: string | null;
+  /** Best-effort (see safeCountMissingReceiptRows): also 0 when the post-commit count itself
+   *  failed, not only when nothing is genuinely missing. Never gates anything — reported only. */
   missingReceiptRows: number;
   /** How many pre-existing receipt files had their mtime re-armed to "now" after a bare-db restore. */
   receiptsTouched: number;
@@ -124,6 +126,43 @@ function countMissingReceiptRows(databasePath: string, receiptsPath: string): nu
     return rows.filter((row) => !fs.existsSync(path.join(receiptsPath, row.stored_filename))).length;
   } finally {
     db.close();
+  }
+}
+
+/**
+ * Wraps countMissingReceiptRows() so a failure in it can never be mistaken for the restore
+ * itself failing. This call runs from inside commitRestore(), strictly AFTER every restore
+ * step has already renamed its files into place — the point of no return has long since
+ * passed, and its result feeds nothing but a reported statistic (a source grep confirms it:
+ * the RestoreResult/RestoreOutcome JSON, one notification line in src/lib/notify/render.ts,
+ * and one CLI console.log in restore-backup.ts — nothing anywhere branches on it).
+ *
+ * Left unguarded, a throw here (the just-renamed budget.db momentarily locked, or a corrupt
+ * page making better-sqlite3's own open() throw) propagates out of commitRestore() and is
+ * caught by the app boot hook's runCommitAttempt(), whose try block exists to catch failures
+ * IN THE COMMIT ITSELF — misreporting a restore that already, correctly, fully completed as a
+ * failed commit attempt and signalling 'restart' (see runCommitAttempt()'s docblock,
+ * src/lib/backup/restore.ts). Repeated across MAX_COMMIT_ATTEMPTS boots, that becomes a FAILED
+ * restore whose recovery text tells the operator to roll a good database back — the worst
+ * outcome a data-recovery path can produce. The same throw also reaches the CLI's
+ * restoreFromArtifact() caller (scripts/restore-backup.ts's main().catch), which would exit 1
+ * and print an error for a restore that had, in fact, already succeeded.
+ *
+ * Reports 0 on failure, console.warn'ing in this module's existing log style, rather than
+ * widening RestoreResult['missingReceiptRows'] to a `number | null` that distinguishes
+ * "genuinely none missing" from "could not count": this module is deliberately alias-free and
+ * shared by both the CLI and the app (MUST-20.4), and that field is threaded, as a plain
+ * number, into RestoreOutcome and its zod schema, src/lib/notify/render.ts and raise.ts, and
+ * the backups UI — none of which restore-core.ts may import into or should have to change for
+ * a best-effort statistic. An operator who needs to know the difference has the warn line in
+ * the server log.
+ */
+function safeCountMissingReceiptRows(databasePath: string, receiptsPath: string): number {
+  try {
+    return countMissingReceiptRows(databasePath, receiptsPath);
+  } catch (error) {
+    console.warn('[restore] could not count missing receipt rows after a successful commit; reporting 0', error);
+    return 0;
   }
 }
 
@@ -566,7 +605,7 @@ export function commitRestore(plan: RestorePlan, opts: { dataDir: string; now?: 
     databaseRestored: true,
     receiptsRestored: plan.receiptsRestored,
     receiptsMovedAside: plan.receiptsMovedAside,
-    missingReceiptRows: countMissingReceiptRows(dbPath, receiptsPath),
+    missingReceiptRows: safeCountMissingReceiptRows(dbPath, receiptsPath),
     receiptsTouched,
   };
 }

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import Database from 'better-sqlite3';
 import { migrationsFolder } from '@/db/client';
 import { backupsDir, runNightlyBackup } from '@/lib/backup';
 import { createSeededTestDb, insertTestUser, type TestDb } from '../helpers/db';
@@ -53,7 +54,13 @@ beforeEach(() => {
 
   // The "live" data the restore machinery actually operates on: a real copy of the seeded,
   // migrated database at ${DATA_DIR}/budget.db, plus a receipts/ directory with one file.
-  fs.copyFileSync(current.path, path.join(dataDir, 'budget.db'));
+  // VACUUM INTO, not fs.copyFileSync: `current.sqlite` is a live WAL-mode connection
+  // (journal_mode=WAL, src/db/client.ts), and a plain file copy only captures the main db
+  // file — everything still buffered in its -wal sidecar is missed, producing a 4096-byte
+  // file with zero tables rather than a genuine copy. Mirrors buildArchive()
+  // (src/lib/backup/archive.ts) and tests/integration/gui-restore-flow.test.ts's own
+  // vacuumIntoLiveDb().
+  current.sqlite.exec(`VACUUM INTO '${path.join(dataDir, 'budget.db').replace(/'/g, "''")}'`);
   fs.mkdirSync(path.join(dataDir, 'receipts'), { recursive: true });
   fs.writeFileSync(path.join(dataDir, 'receipts', '11111111-2222-3333-4444-555555555555.jpg'), JPEG);
 });
@@ -287,6 +294,52 @@ describe('MUST-20.17: the state machine', () => {
     expect(fs.readFileSync(dbTarget).toString()).not.toContain('BOGUS-EMPTY-DB');
   });
 
+  it('T2 fix: a failure counting missing receipt rows AFTER a successful commit is reported, never mistaken for a failed commit or a restart', () => {
+    stageArchiveBackup();
+    const applying = applyingDir();
+    fs.renameSync(stagedDir(), applying);
+    const plan = prepareRestore(path.join(applying, 'payload'), {
+      dataDir,
+      scratchDir: applying,
+      migrationsFolder: migrationsFolder(),
+      now: new Date('2026-08-16T21:00:00.000Z'),
+    });
+    fs.writeFileSync(path.join(applying, 'commit.json'), JSON.stringify({ ...plan, attempts: 1 }));
+
+    // Simulate commitRestore()'s own post-completion missing-receipt count throwing — e.g.
+    // its single better-sqlite3 open of the just-renamed budget.db hitting a transient
+    // failure — AFTER every real restore step has already succeeded. Matched by the exact
+    // query text countMissingReceiptRows() issues, so nothing else this boot touches (no
+    // other query in this resume path shares it) is affected.
+    const realPrepare = Database.prototype.prepare;
+    const spy = vi
+      .spyOn(Database.prototype, 'prepare')
+      .mockImplementation(function (this: InstanceType<typeof Database>, sql: string) {
+        if (sql === "select name from sqlite_master where type = 'table' and name = 'warranty_receipts'") {
+          throw new Error('simulated: database is momentarily locked');
+        }
+        return realPrepare.call(this, sql);
+      } as typeof Database.prototype.prepare);
+
+    let outcome: 'continue' | 'restart';
+    try {
+      outcome = applyStagedRestoreOnBoot(new Date('2026-08-16T21:05:00.000Z'));
+    } finally {
+      spy.mockRestore();
+    }
+
+    // The regression (pre-fix): this throw was caught by runCommitAttempt()'s try block —
+    // which exists to catch failures IN THE COMMIT ITSELF — and reinterpreted as a failed
+    // commit attempt, signalling 'restart' for a restore that had already, fully succeeded.
+    expect(outcome).toBe('continue');
+    expect(fs.existsSync(applying)).toBe(false);
+    const state = readRestoreState();
+    expect(state.result?.status).toBe('success');
+    // Honestly "could not count", reported as 0 (safeCountMissingReceiptRows), not left to
+    // masquerade as a report the restore never actually produced.
+    expect(state.result?.missingReceiptRows).toBe(0);
+  });
+
   it('MUST-20.13 (T1 review CRITICAL 2): a tampered commit.json pointing outside the data directory is refused and terminal', () => {
     stageArchiveBackup();
     const applying = applyingDir();
@@ -297,8 +350,10 @@ describe('MUST-20.17: the state machine', () => {
       migrationsFolder: migrationsFolder(),
       now: new Date('2026-08-16T21:00:00.000Z'),
     });
-    const outsideTarget = path.join(os.tmpdir(), 'escaped-outside-data-dir.txt');
-    fs.rmSync(outsideTarget, { force: true });
+    // A unique per-test directory, not a fixed shared path under os.tmpdir() — a fixed name
+    // would collide if this test ever ran concurrently with itself.
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-restore-escape-'));
+    const outsideTarget = path.join(outsideDir, 'escaped-outside-data-dir.txt');
     const tampered = {
       ...plan,
       attempts: 1,
@@ -317,7 +372,7 @@ describe('MUST-20.17: the state machine', () => {
     expect(fs.existsSync(applying)).toBe(false);
     expect(fs.readdirSync(dataDir).some((name) => name.startsWith('restore-failed-'))).toBe(true);
     expect(readRestoreState().result?.status).toBe('failed');
-    fs.rmSync(outsideTarget, { force: true });
+    fs.rmSync(outsideDir, { recursive: true, force: true });
   });
 
   it('MUST-20.13 (T1 review CRITICAL 2): a truncated commit.json is terminal, and staging is possible again afterward', () => {
@@ -357,16 +412,13 @@ describe('MUST-20.17: the state machine', () => {
     // already holds the INCOMING content by the time exhaustion is simulated — the exact
     // state in which a naive recovery command would nest the old receipts/ inside the new one.
     // budget.db does not exist at this halfway point (the truncated steps list never got to
-    // the final rename), so commitRestore's own countMissingReceiptRows() throws trying to
-    // report on it — exactly like a real kill never reaching its own return statement.
-    try {
-      commitRestore(
-        { ...plan, steps: plan.steps.slice(0, plan.steps.length - 1) },
-        { dataDir, now: new Date('2026-08-16T21:00:01.000Z') },
-      );
-    } catch {
-      /* the steps themselves ran; only the truncated call's own result-reporting throws */
-    }
+    // the final rename), so commitRestore()'s missing-receipt count can't open it —
+    // safeCountMissingReceiptRows() swallows that and reports 0, so this truncated call
+    // completes normally (it does not throw) rather than raising an error of its own.
+    commitRestore(
+      { ...plan, steps: plan.steps.slice(0, plan.steps.length - 1) },
+      { dataDir, now: new Date('2026-08-16T21:00:01.000Z') },
+    );
     expect(fs.existsSync(path.join(dataDir, 'receipts'))).toBe(true);
     expect(plan.receiptsMovedAside).not.toBeNull();
 
@@ -395,12 +447,11 @@ describe('MUST-20.17: the state machine', () => {
     expect(plan.safetyCopy).not.toBeNull();
 
     // Run only the first step (the safety-copy db rename) for real, so the safety copy
-    // genuinely exists on disk...
-    try {
-      commitRestore({ ...plan, steps: plan.steps.slice(0, 1) }, { dataDir, now: new Date('2026-08-16T22:00:01.000Z') });
-    } catch {
-      /* the step itself ran; only the truncated call's own result-reporting throws */
-    }
+    // genuinely exists on disk. budget.db does not exist at this halfway point (it was just
+    // moved aside by that one step), so commitRestore()'s missing-receipt count can't open
+    // it — safeCountMissingReceiptRows() swallows that and reports 0, so this truncated call
+    // completes normally.
+    commitRestore({ ...plan, steps: plan.steps.slice(0, 1) }, { dataDir, now: new Date('2026-08-16T22:00:01.000Z') });
     const safetyCopyPath = path.join(dataDir, plan.safetyCopy!);
     expect(fs.existsSync(safetyCopyPath)).toBe(true);
 
@@ -456,11 +507,10 @@ describe('MUST-20.17: the state machine', () => {
     // persistently — the ORIGINAL live database's own -wal is left orphaned at
     // budget.db-wal. There is no impostor main file at dbTarget, so this -wal cannot be
     // impostor garbage; it may hold committed transactions from the original database.
-    try {
-      commitRestore({ ...plan, steps: plan.steps.slice(0, 1) }, { dataDir, now: new Date('2026-08-16T23:00:01.000Z') });
-    } catch {
-      /* the step itself ran; only the truncated call's own result-reporting throws */
-    }
+    // budget.db does not exist at this halfway point, so commitRestore()'s missing-receipt
+    // count can't open it — safeCountMissingReceiptRows() swallows that and reports 0, so
+    // this truncated call completes normally.
+    commitRestore({ ...plan, steps: plan.steps.slice(0, 1) }, { dataDir, now: new Date('2026-08-16T23:00:01.000Z') });
     const dbTarget = path.join(dataDir, 'budget.db');
     const safetyCopyPath = path.join(dataDir, plan.safetyCopy!);
     expect(fs.existsSync(dbTarget)).toBe(false); // step 0 succeeded: no impostor main file
