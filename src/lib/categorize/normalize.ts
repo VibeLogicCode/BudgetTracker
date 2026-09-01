@@ -160,3 +160,50 @@ export function tokenize(normalizedMerchant: string): string[] {
     .map((token) => token.toUpperCase())
     .filter((token) => token.length > 1 && !/^\d+$/.test(token));
 }
+
+/**
+ * v1.25.0 (backlog item 16). The token definition behind matchRule's 'word' match type
+ * (src/lib/categorize/rules.ts). It lives HERE, immediately below tokenize(), and not next to
+ * matchRule, for one reason: both functions are opinions about where a word ends in
+ * normalizeMerchant()'s own output, and the ALNUM class above is the shared premise of all three.
+ * Split them across two files and the next person to widen ALNUM (the accented block was added
+ * for café/Québec) fixes one caller and silently breaks the other.
+ *
+ * THE SEPARATOR, stated explicitly because it IS the feature: a token boundary is any run of one
+ * or more characters that is neither alphanumeric (ALNUM, accents included) NOR an apostrophe
+ * (') NOR an ampersand (&).
+ *
+ * Why those two characters stay INSIDE a token while '-', '/', '.', '#', '*' and every other
+ * punctuation mark break one -- an asymmetry that looks arbitrary and is not:
+ *
+ *   - ' and & occur INSIDE a brand's own single word. normalizeMerchant deliberately preserves
+ *     both (see stripWithinToken, and the "apostrophes survive" assertion in
+ *     tests/ops/canadian-merchants-pack.test.ts), so LOWE'S, HARVEY'S, A&W and M&M arrive here
+ *     intact. Keeping them in means "LOWE'S" is the single token LOWE'S -- so a rule whose
+ *     pattern is LOWE'S matches it, and a rule whose pattern is LOWE does NOT, because LOWE is a
+ *     different token, not a prefix of a shorter one. That single discrimination is the whole
+ *     reason this match type exists: `contains LOWE` matching FLOWERS is the v1.22.0 defect
+ *     (backlog item 16), and a boundary that split LOWE'S into LOWE + S would hand the same trap
+ *     straight back.
+ *   - '-', '/', '.', '#' and friends are JOINERS the bank puts BETWEEN separate words:
+ *     PETRO-CANADA, KFC/TACO BELL, WWW.MERCHANT.COM. Treating them as boundaries is what makes
+ *     `word KFC` actually match KFC/TACO BELL instead of merely being safe by matching nothing --
+ *     "prefer a miss over a false positive" (this pack's governing principle) is a tie-breaker,
+ *     not a reason to prefer a miss when there is no false positive on offer.
+ *
+ * Punctuation-only tokens (the lone '&' in "MAXI & CIE") are KEPT rather than filtered. They can
+ * only ever be matched by an equally pathological pattern, and keeping them is what makes the
+ * consecutive-run check honest: pattern "MAXI CIE" must NOT match "MAXI & CIE", because the
+ * merchant text has a word between the two.
+ *
+ * Deliberately NOT tokenize(): that one folds case, drops single characters and drops pure-digit
+ * runs because multinomial Bayes wants a feature bag. Every one of those three would be a defect
+ * here -- it would make pattern F45 unmatchable, make A&W's own "A" vanish, and fold case that
+ * matchRule documents itself as never folding (see v1.21.0 item 9: patterns are uppercased once
+ * at the write choke point precisely so no reader has to fold).
+ */
+const WORD_BOUNDARY_RUN = new RegExp(`[^${ALNUM}'&]+`, 'u');
+
+export function wordBoundaryTokens(text: string): string[] {
+  return text.split(WORD_BOUNDARY_RUN).filter((token) => token.length > 0);
+}

@@ -300,7 +300,19 @@ export const merchantRules = sqliteTable(
   {
     id: integer('id').primaryKey({ autoIncrement: true }),
     pattern: text('pattern').notNull(),
-    matchType: text('match_type', { enum: ['exact', 'contains'] }).notNull(),
+    /**
+     * v1.25.0 (backlog item 16) added 'word' -- whole-token matching, so a short acronym like IGA
+     * can stay broad (IGA MARCHE) without the substring collision that made `contains IGA` match
+     * MICHIGAN. See the MatchType docblock in src/lib/categorize/rules.ts for the defect and
+     * wordBoundaryTokens in src/lib/categorize/normalize.ts for what a boundary is.
+     *
+     * NO MIGRATION widened this column, and none was needed: drizzle/0000_init.sql declares it as
+     * a bare `text NOT NULL` with no CHECK constraint, so the enum here has only ever been a
+     * TypeScript-level claim. merchant_rules_pattern_uq below includes match_type, so a 'word'
+     * rule is a DISTINCT ROW from a 'contains' rule on the same pattern -- intended: the two say
+     * different things and a household may reasonably hold both.
+     */
+    matchType: text('match_type', { enum: ['exact', 'contains', 'word'] }).notNull(),
     ruleKind: text('rule_kind', { enum: ['category', 'transfer', 'rename', 'not_transfer'] }).notNull().default('category'),
     categoryId: integer('category_id').references(() => categories.id),
     /** Set only on rule_kind = 'rename'; NULL on category and transfer rules. */
@@ -343,6 +355,37 @@ export const merchantRules = sqliteTable(
     packVersion: integer('pack_version'),
     /** When this row was last written by the pack (install or a since-applied update). */
     installedAt: text('installed_at'),
+    /**
+     * v1.25.0 (backlog item 18), added by drizzle/0018_pack_origin_key.sql. Declared last -- same
+     * ALTER-TABLE-ADD-COLUMN convention as the three above.
+     *
+     * WHERE THIS ROW CAME FROM, which is a different question from the three columns above and has
+     * a different lifetime. Those are a LIVE CLAIM ("the pack owns this row right now") that the
+     * household revokes by editing the rule; this is a HISTORICAL FACT ("this row started life as
+     * the pack's X") that no later edit can falsify. It holds the pack rule's whole key --
+     * `pattern|match_type|rule_kind`, exactly what keyOf() in src/lib/canadian-pack.ts builds and
+     * exactly what merchant_rules_pattern_uq enforces -- not just its pattern, because match_type
+     * is part of a rule's identity (a 'word' rule is a different rule from a 'contains' one on the
+     * same pattern, per the matchType docblock above) and storing only the pattern would silently
+     * reclassify item 16's twelve exact-to-word promotions as household edits.
+     *
+     * NULL means no recorded origin: every row a person wrote, every row that predates 0018 and
+     * was not stamped when it ran, and every conflict-kept row an install refused to touch. A NULL
+     * here is always read as "purely the household's".
+     *
+     * NOTHING PARSES THIS STRING -- it is only ever compared to a freshly built key -- so the '|'
+     * separator carries no meaning a pattern containing a '|' could confuse.
+     *
+     * Written in exactly two places, NEITHER of them upsertRuleFromCorrection: the pack stamps its
+     * own key on every row it writes (rememberPackOrigin, src/lib/canadian-pack.ts), and a form
+     * save that re-keys a rule which already has an origin passes it to the new row
+     * (planPackOriginCarry then applyPackOriginCarry, src/lib/packs.ts). Because the shared upsert names this column in
+     * neither its INSERT values nor its onConflictDoUpdate set, SQLite leaves it alone on an
+     * update and NULL on an insert -- so an ordinary form edit clears the stamp (as it must) and
+     * preserves the origin (as it must) with no exception written into rules.ts at all. See
+     * drizzle/0018_pack_origin_key.sql's header for the defect this exists to fix.
+     */
+    packOriginKey: text('pack_origin_key'),
   },
   (t) => [uniqueIndex('merchant_rules_pattern_uq').on(t.pattern, t.matchType, t.ruleKind)],
 );
@@ -368,6 +411,24 @@ export const merchantRuleMerges = sqliteTable(
     keptRuleId: integer('kept_rule_id').notNull().references(() => merchantRules.id),
     /** The pattern exactly as it was stored before this migration uppercased and merged it. */
     droppedPattern: text('dropped_pattern').notNull(),
+    /**
+     * Deliberately NOT widened with 'word' in v1.25.0 (item 16), unlike merchantRules.matchType
+     * above. Two independent reasons, either sufficient:
+     *
+     *   1. NOTHING WRITES THIS TABLE AT RUNTIME. Its only writer is the one-time INSERT at the
+     *      bottom of drizzle/0016_rule_hygiene.sql; no application code inserts here (verified by
+     *      grep across src/ -- this schema declaration and the migration tests are the only
+     *      references). It is a frozen historical audit of what that single migration merged.
+     *   2. That migration ran before 'word' existed as a value anywhere, so every row this table
+     *      can ever contain was dropped from a set of purely 'exact'/'contains' rules. A 'word'
+     *      value here would be a record of something that never happened.
+     *
+     * drizzle/0016_rule_hygiene.sql:33 backs this column with a real
+     * `CHECK (dropped_match_type IN ('exact','contains'))`. Widening it would need a full table
+     * rebuild (SQLite cannot alter a CHECK) to admit a value no writer can produce -- so the CHECK
+     * stays exactly as it is, and this enum stays narrower than MatchType on purpose. If a future
+     * item ever gives this table a runtime writer, THAT is when it needs migration 0018.
+     */
     droppedMatchType: text('dropped_match_type', { enum: ['exact', 'contains'] }).notNull(),
     droppedRuleKind: text('dropped_rule_kind', { enum: ['category', 'transfer', 'rename', 'not_transfer'] }).notNull(),
     droppedHitCount: integer('dropped_hit_count').notNull(),
