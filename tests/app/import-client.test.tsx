@@ -649,6 +649,126 @@ describe('ImportClient — Carry 2: the post-commit message shows the attributio
   });
 });
 
+// v1.26.0 Lane 3b. The post-commit OFFER to inspect what rules did on THIS import -- the
+// owner's own objection was "i still need to confirm or deny no? i dont just want to auto
+// apply rules and never see what happened on my import." rulesApplied and importId already
+// reach the /api/import/commit JSON body (CommitFlowResult, src/lib/import/flow.ts); this is
+// the display half.
+describe('ImportClient — Lane 3b: the post-commit offer to check what rules did', () => {
+  it('offers the audit link, to the exact contract URL, only when rulesApplied > 0', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockImplementationOnce(async () => ({ ok: true, json: async () => previewBody({ totalRows: 4 }) }))
+        .mockImplementationOnce(async () => ({
+          ok: true,
+          json: async () => ({
+            importId: 77,
+            rowsAdded: 4,
+            rowsDuplicate: 0,
+            rowsError: 0,
+            needsReview: 1,
+            engineFailed: false,
+            loanMatchFailed: false,
+            rulesApplied: 3,
+          }),
+        })),
+    );
+
+    const { container, getByRole } = render(
+      <ImportClient
+        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
+        profiles={PROFILES}
+        history={[]}
+        simplefinManaged={[]}
+      />,
+    );
+    fireEvent.submit(container.querySelector('form')!);
+    await waitFor(() => expect(container.textContent).toContain('Preview —'));
+    fireEvent.click(getByRole('button', { name: /^Import \d+ transactions$/ }));
+
+    await waitFor(() => expect(container.textContent).toContain('3 transactions were categorized by rules.'));
+    const link = getByRole('link', { name: /check them/i });
+    // The fixed contract URL (v1.26.0 Lane 3a/3b) -- never a param this lane invents.
+    expect(link.getAttribute('href')).toBe('/transactions?import=77&source=rule&group=category');
+  });
+
+  it('says nothing about rules when rulesApplied is 0 -- nothing to audit, no dead-end offer', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockImplementationOnce(async () => ({ ok: true, json: async () => previewBody({ totalRows: 4 }) }))
+        .mockImplementationOnce(async () => ({
+          ok: true,
+          json: async () => ({
+            importId: 78,
+            rowsAdded: 4,
+            rowsDuplicate: 0,
+            rowsError: 0,
+            needsReview: 1,
+            engineFailed: false,
+            loanMatchFailed: false,
+            rulesApplied: 0,
+          }),
+        })),
+    );
+
+    const { container, getByRole } = render(
+      <ImportClient
+        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
+        profiles={PROFILES}
+        history={[]}
+        simplefinManaged={[]}
+      />,
+    );
+    fireEvent.submit(container.querySelector('form')!);
+    await waitFor(() => expect(container.textContent).toContain('Preview —'));
+    fireEvent.click(getByRole('button', { name: /^Import \d+ transactions$/ }));
+
+    await waitFor(() => expect(container.textContent).toContain('4 added'));
+    expect(container.textContent).not.toContain('categorized by rules');
+  });
+
+  it('is an offer, not a gate: the row-count summary and its review-queue link render exactly as before, offer or not', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockImplementationOnce(async () => ({ ok: true, json: async () => previewBody({ totalRows: 4 }) }))
+        .mockImplementationOnce(async () => ({
+          ok: true,
+          json: async () => ({
+            importId: 79,
+            rowsAdded: 4,
+            rowsDuplicate: 0,
+            rowsError: 0,
+            needsReview: 1,
+            engineFailed: false,
+            loanMatchFailed: false,
+            rulesApplied: 2,
+          }),
+        })),
+    );
+
+    const { container, getByRole } = render(
+      <ImportClient
+        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
+        profiles={PROFILES}
+        history={[]}
+        simplefinManaged={[]}
+      />,
+    );
+    fireEvent.submit(container.querySelector('form')!);
+    await waitFor(() => expect(container.textContent).toContain('Preview —'));
+    fireEvent.click(getByRole('button', { name: /^Import \d+ transactions$/ }));
+
+    await waitFor(() => expect(container.textContent).toContain('4 added, 0 duplicates skipped, 0 errors, 1 need review.'));
+    expect(getByRole('link', { name: /go to the review queue/i })).toBeTruthy();
+  });
+});
+
 // MUST-6.1/6.2 (spec 2026-08-22 v1.6.0): the preview screen's per-card-value assignment UI.
 describe('ImportClient — per-card assignment UI (MUST-6.1, MUST-6.2)', () => {
   const PEOPLE = [

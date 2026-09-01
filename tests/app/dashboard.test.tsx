@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, cleanup, screen } from '@testing-library/react';
+import { sql } from 'drizzle-orm';
 import { createAccount } from '@/lib/accounts';
 import { createUser } from '@/lib/auth/users';
 import { createCategory } from '@/lib/categories';
+import { nowIso } from '@/lib/clock';
 import { recordBalanceSnapshot } from '@/lib/networth';
 import { createManualTransaction } from '@/lib/transactions';
 import { createWarrantyItem } from '@/lib/warranty/items';
@@ -12,6 +14,18 @@ import { addMonths, currentMonth, monthEnd, monthLabel, todayIso } from '@/lib/d
 // Lane 1 (src/lib/savings-target.ts): not mocked, real DB, same as every other lib import here.
 import { saveSavingsTarget } from '@/lib/savings-target';
 import { createTestDb, type TestDb } from '../helpers/db';
+
+// v1.26.0 Lane 3b's own describe block near the end of this file exercises
+// dismissRuleImportAction directly (a real 'use server' function, same reasoning
+// tests/app/import-actions.test.ts gives for mocking these two rather than letting the real
+// ones run under jsdom) -- same origin/host pair that file uses, so isSameOrigin accepts it.
+let requestHeaders = new Headers({ origin: 'http://nas.local:3000', host: 'nas.local:3000' });
+vi.mock('next/headers', () => ({
+  headers: async () => requestHeaders,
+}));
+vi.mock('next/cache', () => ({
+  revalidatePath: vi.fn(),
+}));
 
 /**
  * v1.13.0 ruling R2: a self viewer's dashboard shows only the cards that survive (own
@@ -781,5 +795,129 @@ describe('DashboardPage — item 7 (Net worth stops asserting when accounts are 
     expect(valueSpan.className).toMatch(/money-pos/);
     expect(netWorthTile.textContent).toMatch(/vs last month/);
     expect(screen.queryByText('Update in Settings and Accounts')).toBeNull();
+  });
+});
+
+/**
+ * v1.26.0 Lane 3b. RuleReviewCard (src/components/RuleReviewCard.tsx) is the standing notice
+ * for "rules did this, nobody has looked" -- unreviewedRuleImports() (src/lib/import/commit.ts)
+ * is deliberately not viewer-scoped, so these fixtures build imports/transactions rows with raw
+ * SQL exactly the way tests/lib/import/rules-audit.test.ts's own setup() does (that file is
+ * owned by a concurrent lane and is not touched here), rather than driving a real CSV through
+ * commitStagedImport just to get a categorization_source of 'rule' onto a row.
+ */
+describe('DashboardPage — Lane 3b: the unreviewed-rule-imports card', () => {
+  let t: TestDb | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  function addImport(accountId: number, userId: number, filename: string): number {
+    const row = t!.db.get<{ id: number }>(sql`
+      insert into imports (account_id, profile_id, filename, imported_by, rows_added, rows_duplicate, rows_error, created_at)
+      values (${accountId}, null, ${filename}, ${userId}, 0, 0, 0, ${nowIso()})
+      returning id`);
+    return row.id;
+  }
+
+  function addRuleRow(accountId: number, importId: number, userId: number, description = 'CORNER MARKET'): number {
+    const row = t!.db.get<{ id: number }>(sql`
+      insert into transactions (account_id, import_id, date, raw_description, normalized_merchant, amount_cents,
+                                category_id, categorization_source, is_transfer, hash_version, created_by, created_at, updated_at)
+      values (${accountId}, ${importId}, '2026-03-04', ${description}, ${description}, -2500,
+              null, 'rule', 0, 1, ${userId}, ${nowIso()}, ${nowIso()})
+      returning id`);
+    return row.id;
+  }
+
+  it('renders nothing at all when no import is unreviewed', async () => {
+    t = createTestDb();
+    const adult = await createUser({ name: 'Adult', username: 'adult', password: 'correct horse battery', role: 'admin' });
+    currentUser.value = { id: adult.id, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.queryByText('Rules categorized these on import')).toBeNull();
+  });
+
+  it('lists an unreviewed import with account, filename and count, linking to the fixed audit contract URL', async () => {
+    t = createTestDb();
+    const adult = await createUser({ name: 'Adult', username: 'adult', password: 'correct horse battery', role: 'admin' });
+    const accountId = createAccount({ name: 'Joint Chequing', type: 'chequing', ownerUserId: adult.id });
+    const importId = addImport(accountId, adult.id, 'march.csv');
+    addRuleRow(accountId, importId, adult.id, 'CORNER MARKET');
+    addRuleRow(accountId, importId, adult.id, 'FUEL DEPOT');
+    currentUser.value = { id: adult.id, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.getByText('Rules categorized these on import')).toBeTruthy();
+    expect(screen.getByText('Joint Chequing')).toBeTruthy();
+    expect(screen.getByText(/march\.csv/)).toBeTruthy();
+    expect(screen.getByText(/2 transactions categorized by a rule/)).toBeTruthy();
+    const link = screen.getByRole('link', { name: 'Check' });
+    // The URL contract is fixed (v1.26.0 Lane 3a/3b) -- never a param this lane invents.
+    expect(link.getAttribute('href')).toBe(`/transactions?import=${importId}&source=rule&group=category`);
+  });
+
+  it('caps the list and reports how many more there are', async () => {
+    t = createTestDb();
+    const adult = await createUser({ name: 'Adult', username: 'adult', password: 'correct horse battery', role: 'admin' });
+    const accountId = createAccount({ name: 'Joint Chequing', type: 'chequing', ownerUserId: adult.id });
+    for (let i = 0; i < 7; i += 1) {
+      const importId = addImport(accountId, adult.id, `statement-${i}.csv`);
+      addRuleRow(accountId, importId, adult.id, `MERCHANT ${i}`);
+    }
+    currentUser.value = { id: adult.id, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+
+    // RULE_REVIEW_ROW_LIMIT (RuleReviewCard.tsx) is 5 -- 7 unreviewed imports means 5 rows and
+    // an overflow line naming the other 2, never a silently truncated or unbounded list.
+    expect(screen.getAllByRole('link', { name: 'Check' })).toHaveLength(5);
+    expect(screen.getByText('+2 more to check')).toBeTruthy();
+  });
+
+  it('a self viewer never sees the card, even with an unreviewed import on the books', async () => {
+    t = createTestDb();
+    const adult = await createUser({ name: 'Adult', username: 'adult', password: 'correct horse battery', role: 'admin' });
+    const kid = await createUser({ name: 'Kid', username: 'kid', password: 'correct horse battery', role: 'member' });
+    const accountId = createAccount({ name: 'Joint Chequing', type: 'chequing', ownerUserId: adult.id });
+    const importId = addImport(accountId, adult.id, 'march.csv');
+    addRuleRow(accountId, importId, adult.id);
+    currentUser.value = { id: kid.id, name: 'Kid', username: 'kid', role: 'member', visibility: 'self' };
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.queryByText('Rules categorized these on import')).toBeNull();
+  });
+
+  it('dismiss calls markImportRulesReviewed, and the entry disappears from the card', async () => {
+    t = createTestDb();
+    const adult = await createUser({ name: 'Adult', username: 'adult', password: 'correct horse battery', role: 'admin' });
+    const accountId = createAccount({ name: 'Joint Chequing', type: 'chequing', ownerUserId: adult.id });
+    const importId = addImport(accountId, adult.id, 'march.csv');
+    addRuleRow(accountId, importId, adult.id);
+    currentUser.value = { id: adult.id, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+    expect(screen.getByText('Rules categorized these on import')).toBeTruthy();
+
+    // dismissRuleImportAction (src/app/(app)/dashboard/actions.ts) is the real 'use server'
+    // function -- invoked directly with a FormData rather than through the rendered
+    // DismissImportForm, the same reasoning tests/app/import-actions.test.ts and
+    // tests/app/bills-actions.test.ts give for calling their own actions directly against a
+    // real DB instead of simulating a click through jsdom.
+    const { dismissRuleImportAction } = await import('@/app/(app)/dashboard/actions');
+    const fd = new FormData();
+    fd.set('importId', String(importId));
+    const result = await dismissRuleImportAction({}, fd);
+    expect(result.error).toBeUndefined();
+
+    cleanup();
+    render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+    expect(screen.queryByText('Rules categorized these on import')).toBeNull();
   });
 });

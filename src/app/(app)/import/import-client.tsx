@@ -196,6 +196,14 @@ export function ImportClient({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [historyRows, setHistoryRows] = useState<ImportHistoryRow[]>(history);
+  // v1.26.0 Lane 3b. The post-commit offer to inspect what rules did (the owner: "i still need
+  // to confirm or deny no? i dont just want to auto apply rules and never see what happened on
+  // my import."). Its own state rather than folded into `summary` -- the offer carries an
+  // importId a plain string cannot, and it must be cleared by a fresh preview the same way
+  // `summary` already is, but never touched by anything else. null renders nothing: this is an
+  // offer, not a gate, and the result screen below reads exactly as it always has when there is
+  // nothing to offer (rulesApplied === 0, the common and unremarkable case).
+  const [ruleOffer, setRuleOffer] = useState<{ importId: number; count: number } | null>(null);
 
   // Lane 5 (2026-08-30 savings-targets plan): the "Save as a new profile" / "Update <name>"
   // button's own state. `forkAccountName` fills the one editable slot in presets.ts's
@@ -237,6 +245,7 @@ export function ImportClient({
   async function upload(formData: FormData) {
     setError(null);
     setSummary(null);
+    setRuleOffer(null);
     formData.set('accountId', String(accountId));
     formData.set('profileId', String(profileId));
     const response = await fetch('/api/import/preview', { method: 'POST', body: formData });
@@ -338,6 +347,10 @@ export function ImportClient({
       // runEngine is caught above, so a matcher failure never fails the import either — it
       // just needs the same honest note engineFailed already gets.
       setSummary(body.loanMatchFailed ? `${withAttribution} Loan payment matching failed for these rows.` : withAttribution);
+      // v1.26.0 Lane 3b: an OFFER, not a gate -- only when a rule actually claimed a row.
+      // Zero is the common case and means there is nothing to audit, so it renders nothing
+      // rather than a link to a screen that would just say so.
+      setRuleOffer(body.rulesApplied > 0 ? { importId: body.importId, count: body.rulesApplied } : null);
     } finally {
       setBusy(false);
     }
@@ -441,6 +454,27 @@ export function ImportClient({
               (ruling R1), not a second page -- repointed the same way the nav item and the
               dashboard callout were. */}
           <a className="font-semibold underline underline-offset-2" href="/transactions?review=1">Go to the review queue</a>
+        </Notice>
+      ) : null}
+
+      {/* v1.26.0 Lane 3b. An OFFER, never a gate: its own Notice, separate from the row-count
+          summary above, so ignoring it leaves that summary exactly as it always read. Only
+          rendered when a rule actually claimed a row of THIS import (ruleOffer is null
+          otherwise) -- a rule-assigned row never reaches the review queue above (REVIEW_WHERE
+          treats `source = 'rule'` as settled), which is exactly why it needs its own way to be
+          found. Links to the fixed audit contract verbatim: /transactions?import=<id>&source=
+          rule&group=category (a sibling lane owns that screen). */}
+      {ruleOffer ? (
+        <Notice tone="info">
+          {ruleOffer.count} transaction{ruleOffer.count === 1 ? '' : 's'} {ruleOffer.count === 1 ? 'was' : 'were'} categorized
+          by rules.{' '}
+          <a
+            className="font-semibold underline underline-offset-2"
+            href={`/transactions?import=${ruleOffer.importId}&source=rule&group=category`}
+          >
+            Check {ruleOffer.count === 1 ? 'it' : 'them'}
+          </a>
+          .
         </Notice>
       ) : null}
 

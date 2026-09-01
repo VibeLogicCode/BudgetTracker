@@ -10,6 +10,7 @@ import { reviewQueueCount } from '@/lib/categorize/engine';
 import { addMonths, currentMonth, isMonthKey, monthEnd, monthLabel, monthStart, todayIso } from '@/lib/dates';
 import { listGoals } from '@/lib/goals';
 import { householdInsights } from '@/lib/insights';
+import { unreviewedRuleImports } from '@/lib/import/commit';
 import { listLoans } from '@/lib/loans';
 import { netWorthHint, netWorthOverTime } from '@/lib/networth';
 import { onboardingSteps } from '@/lib/onboarding';
@@ -24,6 +25,7 @@ import { GoalCard } from '@/components/GoalCard';
 import { LoansCard } from '@/components/LoansCard';
 import { WhoOwesUsCard } from '@/components/WhoOwesUsCard';
 import { NeedsALookCard } from '@/components/NeedsALookCard';
+import { RuleReviewCard } from '@/components/RuleReviewCard';
 import { QuickAddTransaction, QuickAddTrigger } from '@/components/QuickAddTransaction';
 import { SavingsChart, type SavingsChartRow } from '@/components/charts/SavingsChart';
 import { AlertIcon, ArrowRightIcon, InfoIcon } from '@/components/icons';
@@ -288,6 +290,11 @@ export default async function DashboardPage({
 
   // Ruling R6. Self-hiding widget: absent whenever there is nothing to say.
   const insights = householdInsights({ today, viewer });
+
+  // v1.26.0 Lane 3b. unreviewedRuleImports() is deliberately not viewer-scoped -- an import is
+  // an account-level event, not a per-person one (see its own doc comment) -- so it is read only
+  // for a household viewer, the same gate LoansCard's household balance already uses below.
+  const unreviewedImports = selfScoped ? [] : unreviewedRuleImports();
 
   // Task 10 (ruling R7): the same component and the same manualEntryAction as /transactions'
   // own quick-add, so hand entry does not drift between the two surfaces.
@@ -587,6 +594,12 @@ export default async function DashboardPage({
           added only while it actually has something to say and the viewed month differs. */}
       {!isCurrentMonth && insights.length > 0 ? <AsOfTodayNote month={month} /> : null}
       <NeedsALookCard rows={insights} />
+
+      {/* v1.26.0 Lane 3b. Self-hiding, same family as NeedsALookCard just above -- unlike that
+          card, "unreviewed" has no month of its own (unreviewedRuleImports reads only whether
+          rulesReviewedAt is null), so it carries no AsOfTodayNote and renders identically
+          regardless of which month MonthNav is pointed at. */}
+      <RuleReviewCard imports={unreviewedImports} />
 
       {!isCurrentMonth && expiring.length > 0 ? <AsOfTodayNote month={month} /> : null}
       <ExpiringSoonCard items={expiring} today={today} />
