@@ -812,159 +812,180 @@ function EditRow({
       <div
         id={rowId(scope, userId, row.categoryId)}
         hidden={hidden}
-        className={`flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-line px-4 py-2 last:border-b-0 sm:px-5 ${depth === 0 ? 'bg-surface-2' : ''}`}
+        className={`border-b border-line px-4 py-2 last:border-b-0 sm:px-5 ${depth === 0 ? 'bg-surface-2' : ''}`}
       >
-        {/* 2026-08-30 fix (owner's screenshot): "Food" and "Transport" clipped their own "Over
-            b…" pill on a narrow phone. This div had no `flex-wrap` of its own, and Pill.tsx
-            carries `shrink-0` -- so once the name (which had no `min-w-0`, and therefore
-            refused to shrink below its own text width either) and the pill together outgrew
-            the row, neither could give ground and the excess just overflowed past Card's own
-            `overflow-hidden` edge instead of reflowing. `flex-wrap` here lets the pill drop to
-            its own line under the name instead of fighting it for the same one. */}
-        <div style={{ paddingLeft: `${depth * 20}px` }} className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
-          {disclosure ? (
-            <button
-              type="button"
-              aria-expanded={disclosure.open}
-              aria-controls={row.children.map((child) => rowId(scope, userId, child.categoryId)).join(' ')}
-              onClick={disclosure.onToggle}
-              // `min-w-0`: a flex item's default `min-width: auto` is its own content size, which
-              // is what forced this button to hold its full width even when the row had no room
-              // left for the pill beside it. Letting it shrink is what gives `flex-wrap` above
-              // something to actually wrap around.
-              className="inline-flex min-h-11 min-w-0 items-center gap-1.5 py-1 text-left font-medium text-ink sm:min-h-0"
-            >
-              {/* Ruling U3: closed is the page's default shape, so the chevron points at the
-                  direction opening will take it -- ExpandIcon (lucide's ChevronRight) already
-                  points sideways at rest, so only the OPEN state needs a rotation, the reverse
-                  of the hand-drawn ChevronDownIcon this replaces. */}
-              <ExpandIcon className={`h-4 w-4 shrink-0 text-muted transition-transform ${disclosure.open ? 'rotate-90' : ''}`} />
-              {row.categoryName}
-            </button>
-          ) : (
-            <span className={`min-w-0 ${depth === 0 ? 'font-medium text-ink' : 'text-muted'}`}>{row.categoryName}</span>
-          )}
-          {row.isArchived ? <span className="text-xs text-subtle">(archived)</span> : null}
-          {/* Ruling U3: the marker that lets an over-budget group still announce itself while its
-              disclosure is closed -- a different signal from the U6 warning below, which is
-              about the children's LIMITS outgrowing the parent's, not about actual spend. */}
-          {disclosure && row.overBudget ? <Pill tone="negative">Over budget</Pill> : null}
-        </div>
+        {/* 2026-09-01 fix (owner's screenshot: "when roll over text comes in it messes up the
+            allignemnt"). Tier 1 -- every CONTROL in the row (name/disclosure, the amount input
+            or its read-only span, clear, the suggestion button, the rollover checkbox) lives in
+            this one flex-wrap container, and nothing else does. The carried-amount and
+            sinking-fund sentences used to be flex ITEMS in here too, each carrying `w-full` --
+            and `w-full` inside `flex-wrap` forces a line break, so on the one row that had
+            something to report, every control declared after that note got shoved onto a second
+            line while its neighbours (nothing to report) stayed on one. Moving both notes below
+            this div entirely (Tier 2, at the bottom of this component) removes them from this
+            flex layout altogether: a control's position here now depends only on the OTHER
+            controls, never on whether a note happens to exist this month. */}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          {/* 2026-08-30 fix (owner's screenshot): "Food" and "Transport" clipped their own "Over
+              b…" pill on a narrow phone. This div had no `flex-wrap` of its own, and Pill.tsx
+              carries `shrink-0` -- so once the name (which had no `min-w-0`, and therefore
+              refused to shrink below its own text width either) and the pill together outgrew
+              the row, neither could give ground and the excess just overflowed past Card's own
+              `overflow-hidden` edge instead of reflowing. `flex-wrap` here lets the pill drop to
+              its own line under the name instead of fighting it for the same one. */}
+          <div style={{ paddingLeft: `${depth * 20}px` }} className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+            {disclosure ? (
+              <button
+                type="button"
+                aria-expanded={disclosure.open}
+                aria-controls={row.children.map((child) => rowId(scope, userId, child.categoryId)).join(' ')}
+                onClick={disclosure.onToggle}
+                // `min-w-0`: a flex item's default `min-width: auto` is its own content size, which
+                // is what forced this button to hold its full width even when the row had no room
+                // left for the pill beside it. Letting it shrink is what gives `flex-wrap` above
+                // something to actually wrap around.
+                className="inline-flex min-h-11 min-w-0 items-center gap-1.5 py-1 text-left font-medium text-ink sm:min-h-0"
+              >
+                {/* Ruling U3: closed is the page's default shape, so the chevron points at the
+                    direction opening will take it -- ExpandIcon (lucide's ChevronRight) already
+                    points sideways at rest, so only the OPEN state needs a rotation, the reverse
+                    of the hand-drawn ChevronDownIcon this replaces. */}
+                <ExpandIcon className={`h-4 w-4 shrink-0 text-muted transition-transform ${disclosure.open ? 'rotate-90' : ''}`} />
+                {row.categoryName}
+              </button>
+            ) : (
+              <span className={`min-w-0 ${depth === 0 ? 'font-medium text-ink' : 'text-muted'}`}>{row.categoryName}</span>
+            )}
+            {row.isArchived ? <span className="text-xs text-subtle">(archived)</span> : null}
+            {/* Ruling U3: the marker that lets an over-budget group still announce itself while its
+                disclosure is closed -- a different signal from the U6 warning below, which is
+                about the children's LIMITS outgrowing the parent's, not about actual spend. */}
+            {disclosure && row.overBudget ? <Pill tone="negative">Over budget</Pill> : null}
+          </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          {row.isArchived || !editable ? (
-            // Two reasons a limit is not editable here. Archived categories can no longer
-            // be actively budgeted (spec section 3) — the row is a read-only record of the
-            // spend it still rolled up this month. And a non-admin looking at someone
-            // else's personal budget may only read it: setLimitAction rejects the write,
-            // so rendering an input that always fails is a promise the server won't keep.
-            <span className="text-xs text-subtle">
-              {row.limitCents === null
-                ? 'read-only'
-                : row.baseLimitCents !== null && row.carryCents > 0
-                  ? `${formatCents(row.baseLimitCents)} plus ${formatCents(row.carryCents)} carried · read-only`
-                  : `${formatCents(row.limitCents)} · read-only`}
-            </span>
-          ) : (
-            <>
-              {/* This must default to the BASE limit, never the effective `limitCents`: a save
-                  writes the base (setLimitAction -> upsertBudget), so defaulting to the
-                  effective number would bake the carry into the base on the next edit. */}
-              <AutoSaveTextInput
-                name="amount"
-                defaultValue={row.baseLimitCents === null ? '' : (row.baseLimitCents / 100).toFixed(2)}
+          <div className="flex flex-wrap items-center gap-2">
+            {row.isArchived || !editable ? (
+              // Two reasons a limit is not editable here. Archived categories can no longer
+              // be actively budgeted (spec section 3) — the row is a read-only record of the
+              // spend it still rolled up this month. And a non-admin looking at someone
+              // else's personal budget may only read it: setLimitAction rejects the write,
+              // so rendering an input that always fails is a promise the server won't keep.
+              <span className="text-xs text-subtle">
+                {row.limitCents === null
+                  ? 'read-only'
+                  : row.baseLimitCents !== null && row.carryCents > 0
+                    ? `${formatCents(row.baseLimitCents)} plus ${formatCents(row.carryCents)} carried · read-only`
+                    : `${formatCents(row.limitCents)} · read-only`}
+              </span>
+            ) : (
+              <>
+                {/* This must default to the BASE limit, never the effective `limitCents`: a save
+                    writes the base (setLimitAction -> upsertBudget), so defaulting to the
+                    effective number would bake the carry into the base on the next edit. */}
+                <AutoSaveTextInput
+                  name="amount"
+                  defaultValue={row.baseLimitCents === null ? '' : (row.baseLimitCents / 100).toFixed(2)}
+                  fields={{
+                    scope,
+                    userId: userId === null ? '' : String(userId),
+                    month,
+                    categoryId: String(row.categoryId),
+                  }}
+                  action={trackedSaveLimit}
+                  ariaLabel={`Monthly limit for ${row.categoryName}`}
+                  inputMode="decimal"
+                  placeholder="none"
+                  // 2026-08-30 fix: this className used to REPLACE AutoSaveTextInput's own default
+                  // (AUTO_SAVE_CONTROL), which is the only place `min-h-11 sm:min-h-0` lived --
+                  // so this one input, alone among the row's auto-save controls, had no 44px
+                  // floor on a phone. Carried over explicitly rather than reverting to the
+                  // default class, since `w-24 ... text-right text-xs` is still what this
+                  // particular cell needs at every width.
+                  className="field-control w-24 px-2 py-1 text-right text-xs min-h-11 sm:min-h-0"
+                />
+                {row.baseLimitCents !== null ? (
+                  <form action={clearLimit}>
+                    <input type="hidden" name="scope" value={scope} />
+                    <input type="hidden" name="userId" value={userId ?? ''} />
+                    <input type="hidden" name="month" value={month} />
+                    <input type="hidden" name="categoryId" value={row.categoryId} />
+                    <input type="hidden" name="amount" value="" />
+                    <button
+                      type="submit"
+                      aria-label={`Clear the budget for ${row.categoryName} from this month forward`}
+                      title="Clears this budget from this month forward"
+                      className="btn btn--ghost btn--sm px-2 text-xs"
+                    >
+                      clear
+                    </button>
+                    {clearError ? (
+                      <span role="alert" className="ml-1.5 text-xs font-medium text-negative-soft-fg">
+                        {clearError}
+                      </span>
+                    ) : null}
+                  </form>
+                ) : null}
+                {suggestion ? (
+                  <form action={applyAction}>
+                    <input type="hidden" name="scope" value={scope} />
+                    <input type="hidden" name="userId" value={userId ?? ''} />
+                    <input type="hidden" name="month" value={month} />
+                    <input type="hidden" name="categoryId" value={row.categoryId} />
+                    <button
+                      type="submit"
+                      className="btn btn--ghost btn--sm px-2 text-xs"
+                      title={`Median of the last ${suggestion.monthsUsed} full months${
+                        suggestion.trend.direction === 'rising'
+                          ? ', adjusted for a rising trend'
+                          : suggestion.trend.direction === 'falling'
+                            ? ', adjusted for a falling trend'
+                            : ''
+                      }${suggestion.seasonalApplied ? ', adjusted for the same month last year' : ''}. Confidence: ${suggestion.confidence}.`}
+                    >
+                      Use {formatCents(suggestion.suggestedCents, { currency: true })}
+                    </button>
+                  </form>
+                ) : null}
+              </>
+            )}
+            {!row.isArchived && canToggleRollover ? (
+              <AutoSaveCheckbox
+                name="enabled"
+                defaultChecked={rolloverOn.has(row.categoryId)}
                 fields={{
                   scope,
                   userId: userId === null ? '' : String(userId),
                   month,
                   categoryId: String(row.categoryId),
                 }}
-                action={trackedSaveLimit}
-                ariaLabel={`Monthly limit for ${row.categoryName}`}
-                inputMode="decimal"
-                placeholder="none"
-                // 2026-08-30 fix: this className used to REPLACE AutoSaveTextInput's own default
-                // (AUTO_SAVE_CONTROL), which is the only place `min-h-11 sm:min-h-0` lived --
-                // so this one input, alone among the row's auto-save controls, had no 44px
-                // floor on a phone. Carried over explicitly rather than reverting to the
-                // default class, since `w-24 ... text-right text-xs` is still what this
-                // particular cell needs at every width.
-                className="field-control w-24 px-2 py-1 text-right text-xs min-h-11 sm:min-h-0"
+                action={saveRollover}
+                label="Roll over unspent"
               />
-              {row.baseLimitCents !== null ? (
-                <form action={clearLimit}>
-                  <input type="hidden" name="scope" value={scope} />
-                  <input type="hidden" name="userId" value={userId ?? ''} />
-                  <input type="hidden" name="month" value={month} />
-                  <input type="hidden" name="categoryId" value={row.categoryId} />
-                  <input type="hidden" name="amount" value="" />
-                  <button
-                    type="submit"
-                    aria-label={`Clear the budget for ${row.categoryName} from this month forward`}
-                    title="Clears this budget from this month forward"
-                    className="btn btn--ghost btn--sm px-2 text-xs"
-                  >
-                    clear
-                  </button>
-                  {clearError ? (
-                    <span role="alert" className="ml-1.5 text-xs font-medium text-negative-soft-fg">
-                      {clearError}
-                    </span>
-                  ) : null}
-                </form>
-              ) : null}
-              {row.baseLimitCents !== null && row.carryCents > 0 ? (
-                <p className="w-full text-xs text-muted">
-                  {formatCents(row.baseLimitCents)} plus {formatCents(row.carryCents)} carried
-                </p>
-              ) : null}
-              {sinkingFund ? (
-                <p className="w-full text-xs text-muted">
-                  {/* Ruling R11: rollover IS the envelope; this sentence is what makes it legible.
-                      It reports what the carry already is -- it does not set a target and it does not
-                      change the limit above it. */}
-                  Accumulating for {sinkingFund.itemName} — {formatCents(sinkingFund.carriedCents)} of{' '}
-                  {formatCents(sinkingFund.targetCents)} by {sinkingFund.dueDate}
-                </p>
-              ) : null}
-              {suggestion ? (
-                <form action={applyAction}>
-                  <input type="hidden" name="scope" value={scope} />
-                  <input type="hidden" name="userId" value={userId ?? ''} />
-                  <input type="hidden" name="month" value={month} />
-                  <input type="hidden" name="categoryId" value={row.categoryId} />
-                  <button
-                    type="submit"
-                    className="btn btn--ghost btn--sm px-2 text-xs"
-                    title={`Median of the last ${suggestion.monthsUsed} full months${
-                      suggestion.trend.direction === 'rising'
-                        ? ', adjusted for a rising trend'
-                        : suggestion.trend.direction === 'falling'
-                          ? ', adjusted for a falling trend'
-                          : ''
-                    }${suggestion.seasonalApplied ? ', adjusted for the same month last year' : ''}. Confidence: ${suggestion.confidence}.`}
-                  >
-                    Use {formatCents(suggestion.suggestedCents, { currency: true })}
-                  </button>
-                </form>
-              ) : null}
-            </>
-          )}
-          {!row.isArchived && canToggleRollover ? (
-            <AutoSaveCheckbox
-              name="enabled"
-              defaultChecked={rolloverOn.has(row.categoryId)}
-              fields={{
-                scope,
-                userId: userId === null ? '' : String(userId),
-                month,
-                categoryId: String(row.categoryId),
-              }}
-              action={saveRollover}
-              label="Roll over unspent"
-            />
-          ) : null}
+            ) : null}
+          </div>
         </div>
+
+        {/* Tier 2 -- notes about this row, rendered BELOW the controls div above rather than
+            inside it. Plain block-level <p>s, not flex items of anything, so neither one can
+            ever be what forces a control in Tier 1 onto a second line -- see this component's
+            own doc comment above Tier 1 for the mechanism that used to let them. Only ever
+            reached on the editable branch: the read-only span above already folds the same
+            carried figure into its own single line of text (see "read-only" branch above), so
+            it never doubles this sentence. */}
+        {!row.isArchived && editable && row.baseLimitCents !== null && row.carryCents > 0 ? (
+          <p style={{ paddingLeft: `${depth * 20}px` }} className="pt-1 text-xs text-muted">
+            {formatCents(row.baseLimitCents)} plus {formatCents(row.carryCents)} carried
+          </p>
+        ) : null}
+        {!row.isArchived && editable && sinkingFund ? (
+          <p style={{ paddingLeft: `${depth * 20}px` }} className="pt-1 text-xs text-muted">
+            {/* Ruling R11: rollover IS the envelope; this sentence is what makes it legible.
+                It reports what the carry already is -- it does not set a target and it does not
+                change the limit above it. */}
+            Accumulating for {sinkingFund.itemName} — {formatCents(sinkingFund.carriedCents)} of{' '}
+            {formatCents(sinkingFund.targetCents)} by {sinkingFund.dueDate}
+          </p>
+        ) : null}
       </div>
       {overParentLimit ? (
         <div className="border-b border-line px-4 py-3 sm:px-5">
