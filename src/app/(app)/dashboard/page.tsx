@@ -32,6 +32,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { MonthNav } from '@/components/ui/MonthNav';
 import { PageGuide } from '@/components/ui/PageGuide';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { PillNav } from '@/components/ui/PillNav';
 import { ProgressBar } from '@/components/ui/ProgressBar';
 import { SectionHeader } from '@/components/ui/SectionHeader';
 import { StatTile, type DeltaTone } from '@/components/ui/StatTile';
@@ -334,20 +335,21 @@ export default async function DashboardPage({
               extraParams={!selfScoped && scopeUserId !== null ? { person: String(scopeUserId) } : {}}
             />
             {selfScoped ? null : (
-              <nav aria-label="Whose money to show" className="flex flex-wrap items-center gap-1 rounded-full border border-line bg-surface-2 p-1">
-                {/* Both pills now carry `month=` too -- without it, switching WHO the page is
-                    scoped to would silently reset WHICH month it shows, the same drift ruling T7
-                    exists to prevent in the other direction. */}
-                <PersonPill href={`/dashboard?month=${month}`} label="Household" active={scopeUserId === null} />
-                {people.map((person) => (
-                  <PersonPill
-                    key={person.id}
-                    href={`/dashboard?person=${person.id}&month=${month}`}
-                    label={person.name}
-                    active={scopeUserId === person.id}
-                  />
-                ))}
-              </nav>
+              <PillNav
+                groupLabel="Whose money to show"
+                // Both options now carry `month=` too -- without it, switching WHO the page is
+                // scoped to would silently reset WHICH month it shows, the same drift ruling T7
+                // exists to prevent in the other direction.
+                options={[
+                  { key: 'household', href: `/dashboard?month=${month}`, label: 'Household', active: scopeUserId === null },
+                  ...people.map((person) => ({
+                    key: String(person.id),
+                    href: `/dashboard?person=${person.id}&month=${month}`,
+                    label: person.name,
+                    active: scopeUserId === person.id,
+                  })),
+                ]}
+              />
             )}
           </div>
         }
@@ -817,20 +819,6 @@ export default async function DashboardPage({
         </section>
       ) : null}
     </div>
-  );
-}
-
-function PersonPill({ href, label, active }: { href: string; label: string; active: boolean }) {
-  return (
-    <Link
-      href={href}
-      aria-current={active ? 'true' : undefined}
-      className={`rounded-full px-3 py-1 text-sm transition-colors ${
-        active ? 'bg-surface font-semibold text-ink shadow-flat' : 'font-medium text-muted hover:text-ink'
-      }`}
-    >
-      {label}
-    </Link>
   );
 }
 

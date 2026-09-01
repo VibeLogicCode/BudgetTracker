@@ -12,6 +12,7 @@ import { Notice } from '@/components/ui/Notice';
 import { PageGuide } from '@/components/ui/PageGuide';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Pill, type PillTone } from '@/components/ui/Pill';
+import { PillNav } from '@/components/ui/PillNav';
 import { ProgressBar } from '@/components/ui/ProgressBar';
 import { categoryIcon, ExpandIcon } from '@/components/ui/icons';
 import { monthLabel } from '@/lib/dates';
@@ -1025,34 +1026,6 @@ function EditRow({
   );
 }
 
-/**
- * v1.21.0 item 1. The same pill nav the dashboard already ships ("Whose money to show",
- * dashboard/page.tsx's own `PersonPill`) -- same markup, same `aria-current`/active styling,
- * same "a plain `<Link>` to a `?person=` URL, no client router" shape. Not imported from there:
- * that component is private to dashboard/page.tsx (unexported), and that file is owned by a
- * different lane of this same release and is off-limits to this task's edits (see this task's
- * own file list) -- extracting it into a shared component is real cleanup, but it is cleanup
- * that touches a file this task must not touch, so it is left for whoever next has that file
- * open rather than done here as a side effect. Named differently (`ScopePill`, not `PersonPill`)
- * because what it selects here is NOT "whose money" the way the dashboard's own control reads --
- * it is which SET OF BUDGETS is showing (see `selectedPersonId`'s own doc comment) -- reusing the
- * identical name for a differently-scoped idea would be its own small version of the drift this
- * item exists to avoid.
- */
-function ScopePill({ href, label, active }: { href: string; label: string; active: boolean }) {
-  return (
-    <a
-      href={href}
-      aria-current={active ? 'true' : undefined}
-      className={`rounded-full px-3 py-1 text-sm transition-colors ${
-        active ? 'bg-surface font-semibold text-ink shadow-flat' : 'font-medium text-muted hover:text-ink'
-      }`}
-    >
-      {label}
-    </a>
-  );
-}
-
 /** The toggle that switches a section between the card grid and the compact edit list. Identical
  *  in both places it appears (household, and each PersonalCard) -- one implementation, per D1. */
 function EditLimitsToggle({ open, onToggle }: { open: boolean; onToggle: () => void }) {
@@ -1459,24 +1432,22 @@ export function BudgetsClient({
                 (same gate the section below uses), and rendering even a disabled/inactive pill
                 here would be the thing that leaks a household scope exists at all. */}
             {household !== null ? (
-              <nav
-                aria-label="Which budgets to show"
-                className="flex flex-wrap items-center gap-1 rounded-full border border-line bg-surface-2 p-1"
-              >
-                {/* Both pills carry `month=` too, same reasoning as the dashboard's own nav --
-                    switching which budgets are shown must not silently reset which month they
-                    are shown for. No "All" pill (2026-08-30 plan): that would rebuild the
-                    exact long page this item exists to shorten. */}
-                <ScopePill href={`/budgets?month=${month}`} label="Household" active={selectedPersonId === null} />
-                {personal.map((person) => (
-                  <ScopePill
-                    key={person.userId}
-                    href={`/budgets?person=${person.userId}&month=${month}`}
-                    label={person.name}
-                    active={selectedPersonId === person.userId}
-                  />
-                ))}
-              </nav>
+              <PillNav
+                groupLabel="Which budgets to show"
+                // Both options carry `month=` too, same reasoning as the dashboard's own nav --
+                // switching which budgets are shown must not silently reset which month they are
+                // shown for. No "All" option (2026-08-30 plan): that would rebuild the exact long
+                // page this item exists to shorten.
+                options={[
+                  { key: 'household', href: `/budgets?month=${month}`, label: 'Household', active: selectedPersonId === null },
+                  ...personal.map((person) => ({
+                    key: String(person.userId),
+                    href: `/budgets?person=${person.userId}&month=${month}`,
+                    label: person.name,
+                    active: selectedPersonId === person.userId,
+                  })),
+                ]}
+              />
             ) : null}
           </div>
         }

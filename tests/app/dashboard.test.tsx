@@ -198,6 +198,10 @@ describe('DashboardPage (ruling R2)', () => {
 
     expect(screen.queryByText('Net worth')).toBeNull();
     expect(screen.queryByText('Top merchants')).toBeNull();
+    // v1.25.0 backlog item 15: the person-scope pills' wrapper is now PillNav's own
+    // a labelled `<nav>` landmark (src/components/ui/PillNav.tsx), the implicit navigation
+    // landmark -- see that component's own docblock for why the shared control settled on the
+    // same explicit role the transactions transfer-view control (v1.24.0) already used.
     expect(screen.queryByRole('navigation', { name: 'Whose money to show' })).toBeNull();
     expect(screen.getByText('Your month.')).toBeTruthy();
     // The self viewer's own spending still shows up -- this is their own transaction ($12.00,
@@ -215,6 +219,7 @@ describe('DashboardPage (ruling R2)', () => {
 
     expect(screen.getByText('Net worth')).toBeTruthy();
     expect(screen.getByText('Top merchants')).toBeTruthy();
+    // v1.25.0 backlog item 15: same role change as the self-viewer test above.
     expect(screen.getByRole('navigation', { name: 'Whose money to show' })).toBeTruthy();
   });
 
