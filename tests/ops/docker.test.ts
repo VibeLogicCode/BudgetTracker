@@ -245,12 +245,29 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.25.0 release', () => {
+  it('MUST-7.1: the 1.26.0 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.25.0');
+    expect(pkg.version).toBe('1.26.0');
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toMatch(/^## \[1\.26\.0\] - 2026-09-01$/m);
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.26.0]'));
+    expect(changelog.indexOf('## [1.26.0]')).toBeLessThan(changelog.indexOf('## [1.25.0]'));
+    const entry = changelog.slice(changelog.indexOf('## [1.26.0]'), changelog.indexOf('## [1.25.0]'));
+    // An unannounced schema change is the one thing a self-hosted household cannot review before
+    // pulling the image, so the migration this release ships must be named in its own entry.
+    expect(entry).toMatch(/One migration \(0019\)/i);
+    // The invariant behind the whole release: rule-assigned rows never reach Needs review, so the
+    // entry must say the audit surface exists and that it blocks nothing.
+    // \s+ not a literal space: this file is hard-wrapped at ~100 columns, so any phrase asserted
+    // here can land across a line break plus indentation. A literal-space regex would make the
+    // guard depend on where the prose happens to wrap, which is not what it is guarding.
+    expect(entry).toMatch(/never\s+appear in Needs review/i);
+    expect(entry).toMatch(/split-aware/i);
+  });
+
+  it('MUST-7.1: the 1.25.0 release is still recorded intact (append-only discipline)', () => {
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.25\.0\] - 2026-09-01$/m);
-    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.25.0]'));
     expect(changelog.indexOf('## [1.25.0]')).toBeLessThan(changelog.indexOf('## [1.24.0]'));
     const entry = changelog.slice(changelog.indexOf('## [1.25.0]'), changelog.indexOf('## [1.24.0]'));
     // The migration this release ships must be NAMED in its own entry -- an unannounced schema

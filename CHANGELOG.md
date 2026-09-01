@@ -21,6 +21,37 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.26.0] - 2026-09-01
+
+One migration (0019): one nullable column on imports, recording when you last checked what the
+rules did to it. Imports that already exist are marked as checked, so upgrading does not greet you
+with a pile of old work.
+
+### Added
+
+- **See what the rules did to an import.** Rules categorize on import and those transactions never
+  appear in Needs review — they are treated as settled, so until now there was no screen anywhere
+  that showed them. After an import you are offered the list, and the dashboard keeps a card for any
+  import nobody has looked at. Neither blocks anything: the card disappears on its own as you work
+  through an import, and vanishes entirely when there is nothing to check.
+- **Group the transaction list by category.** One row per category with its count and its total,
+  biggest first, so you can look at everything the rules called Groceries in one go instead of
+  scrolling past it by date. Totals are split-aware — a split transaction lands in each of its
+  parts' categories at each part's own amount, never counted twice.
+- **Confirm or recategorize a whole group at once.** Both act on every transaction in the group,
+  not only the ones on screen, and both say how many before they write.
+- **Sort by date, amount or category**, either direction, and **filter by how a category was
+  decided** — by a rule, by a guess, or by hand.
+
+### Fixed
+
+- **You can see what a renamed transaction was actually called.** A row reading `Amazon` gave no way
+  to tell a correct rename from a wrong one, since the bank text sat in a hover tooltip that does not
+  exist on a phone. The badge on the row is now a button: it opens the bank text, names the rule
+  responsible, and offers to rename just that one, or to edit or delete the rule. The review screen
+  shows the original outright, and **Show bank text** reveals every one at once for scanning a fresh
+  import.
+
 ## [1.25.0] - 2026-09-01
 
 One migration (0018): one nullable column on merchant rules recording which preset-pack entry a
