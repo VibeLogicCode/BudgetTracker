@@ -58,7 +58,9 @@ export async function GET(request: Request): Promise<Response> {
     to: range?.to ?? null,
     search: params.get('q'),
     uncategorizedOnly: params.get('uncat') === '1',
-    includeTransfers: params.get('transfers') !== '0',
+    // Same three-state contract as the Transactions page's own readFilter (page.tsx) -- see
+    // TransactionFilter.transferView's own doc comment (src/lib/transactions.ts).
+    transferView: params.get('transfers') === '0' ? 'none' : params.get('transfers') === 'only' ? 'only' : 'all',
   };
 
   const csv = transactionsCsv(filter, user);

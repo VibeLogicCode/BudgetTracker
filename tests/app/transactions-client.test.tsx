@@ -2028,8 +2028,30 @@ describe('v1.15.0 ruling S7: the filter controls disclosure', () => {
     expect(form.querySelector('select[name="person"]')).toBeTruthy();
     expect(form.querySelector('input[name="q"]')).toBeTruthy();
     expect(form.querySelector('input[name="uncat"]')).toBeTruthy();
-    expect(form.querySelector('input[name="transfers"]')).toBeTruthy();
     expect(form.querySelector('button[type="submit"]')).toBeTruthy();
+  });
+
+  /**
+   * v1.24.0 Lane A item 2: `transfers` is no longer one of the fields THIS disclosure toggles --
+   * the old "Hide transfers" checkbox is gone, replaced by three always-visible links (below,
+   * regardless of `filtersOpen`) that navigate rather than submit. Burying that control behind a
+   * disclosure was the reported bug (a mis-tagged transfer had no way back into view), so it
+   * staying visible with the disclosure closed is the fix, not an oversight.
+   */
+  it('the transfer-view control renders outside the disclosure, visible whether it is open or not', () => {
+    render(
+      <TransactionsClient
+        page={pageWithRow()}
+        accounts={[{ id: 1, name: 'Joint Chequing' }]}
+        categories={[]}
+        people={[{ id: 1, name: 'Alice' }]}
+        today="2026-03-02"
+      />,
+    );
+    // Disclosure is closed by default here (no filter active) -- the links are still findable.
+    expect(screen.getByRole('link', { name: 'All' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Transfers only' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'No transfers' })).toBeTruthy();
   });
 
   it('closed by default when nothing is filtered, and the toggle opens it', () => {

@@ -200,12 +200,37 @@ describe('listTransactions', () => {
     expect(categorized).toBeGreaterThan(0);
   });
 
-  it('can exclude transfers', () => {
-    const { add } = setup();
-    const normal = add({ description: 'TIM HORTONS' });
-    const transfer = add({ description: 'PAYMENT - THANK YOU', isTransfer: true });
-    expect(listTransactions({}, VIEWER).rows.map((r) => r.id).sort()).toEqual([normal, transfer].sort());
-    expect(listTransactions({ includeTransfers: false }, VIEWER).rows.map((r) => r.id)).toEqual([normal]);
+  /**
+   * v1.24.0 Lane A item 2 (owner report: "currently once i apply a trasnfer its hard to find
+   * that data again"). `transferView: 'only'` is the new state -- the recovery path for a
+   * mis-tagged transfer, which REVIEW_WHERE (src/lib/categorize/engine.ts) excludes
+   * unconditionally, so it needs its own way back into view. All three states proven against the
+   * same fixture: one ordinary row, one transfer.
+   */
+  describe('transferView (Lane A item 2)', () => {
+    it("'all' (and the default, omitted) returns both rows", () => {
+      const { add } = setup();
+      const normal = add({ description: 'TIM HORTONS' });
+      const transfer = add({ description: 'PAYMENT - THANK YOU', isTransfer: true });
+      expect(listTransactions({}, VIEWER).rows.map((r) => r.id).sort()).toEqual([normal, transfer].sort());
+      expect(listTransactions({ transferView: 'all' }, VIEWER).rows.map((r) => r.id).sort()).toEqual(
+        [normal, transfer].sort(),
+      );
+    });
+
+    it("'none' excludes transfers -- the old includeTransfers: false behaviour", () => {
+      const { add } = setup();
+      const normal = add({ description: 'TIM HORTONS' });
+      add({ description: 'PAYMENT - THANK YOU', isTransfer: true });
+      expect(listTransactions({ transferView: 'none' }, VIEWER).rows.map((r) => r.id)).toEqual([normal]);
+    });
+
+    it("'only' returns transfers and nothing else -- the recovery path for a mis-tagged one", () => {
+      const { add } = setup();
+      add({ description: 'TIM HORTONS' });
+      const transfer = add({ description: 'PAYMENT - THANK YOU', isTransfer: true });
+      expect(listTransactions({ transferView: 'only' }, VIEWER).rows.map((r) => r.id)).toEqual([transfer]);
+    });
   });
 
   it('clamps the page size', () => {

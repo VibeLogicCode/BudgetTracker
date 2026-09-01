@@ -213,3 +213,59 @@ describe('Chip filters (ruling D6) bug fix: hrefs come from the SERVER-known fil
     expect(href).toContain(`account=${accountId}`);
   });
 });
+
+/**
+ * v1.24.0 Lane A item 2 (owner report: "currently once i apply a trasnfer its hard to find that
+ * data again"). readFilter (page.tsx, not exported) parses `?transfers=` into
+ * TransactionFilter.transferView -- proven here end-to-end through the real page and a real
+ * transfer/non-transfer pair, the same way the note test above (Item 2) proves a value reaches
+ * the client rather than unit-testing a private function directly.
+ */
+describe('TransactionsPage: ?transfers= parses to transferView (Lane A item 2)', () => {
+  let t: TestDb | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  async function renderWithTransfers(searchParams: Record<string, string>) {
+    t = createSeededTestDb();
+    const admin = insertTestUser(t.db, { name: 'Alice', username: 'alice', role: 'admin' });
+    const accountId = insertTestAccount(t.db, { type: 'chequing', ownerUserId: null });
+    currentUser.value = { id: admin, name: 'Alice', username: 'alice', role: 'admin', visibility: 'household' };
+    t.db.run(sql`
+      insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, is_transfer, created_by, created_at, updated_at)
+      values (${accountId}, '2026-03-02', 'TIM HORTONS', 'TIM HORTONS', -500, 0, ${admin}, ${nowIso()}, ${nowIso()})
+    `);
+    t.db.run(sql`
+      insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, is_transfer, created_by, created_at, updated_at)
+      values (${accountId}, '2026-03-02', 'PAYMENT - THANK YOU', 'PAYMENT - THANK YOU', -1000, 1, ${admin}, ${nowIso()}, ${nowIso()})
+    `);
+    const { default: TransactionsPage } = await import('@/app/(app)/transactions/page');
+    return render(await TransactionsPage({ searchParams: Promise.resolve(searchParams) }));
+  }
+
+  it("'transfers=only' shows the transfer row and hides the ordinary one", async () => {
+    const { container } = await renderWithTransfers({ transfers: 'only' });
+    expect(container.textContent).toContain('PAYMENT - THANK YOU');
+    expect(container.textContent).not.toContain('TIM HORTONS');
+  });
+
+  it("'transfers=0' hides the transfer -- the existing checkbox value, unchanged meaning", async () => {
+    const { container } = await renderWithTransfers({ transfers: '0' });
+    expect(container.textContent).toContain('TIM HORTONS');
+    expect(container.textContent).not.toContain('PAYMENT - THANK YOU');
+  });
+
+  it('an absent transfers param shows both rows -- the default is "all"', async () => {
+    const { container } = await renderWithTransfers({});
+    expect(container.textContent).toContain('TIM HORTONS');
+    expect(container.textContent).toContain('PAYMENT - THANK YOU');
+  });
+
+  it('a hand-edited junk value falls back to "all", not a refusal or an empty page', async () => {
+    const { container } = await renderWithTransfers({ transfers: 'nonsense' });
+    expect(container.textContent).toContain('TIM HORTONS');
+    expect(container.textContent).toContain('PAYMENT - THANK YOU');
+  });
+});

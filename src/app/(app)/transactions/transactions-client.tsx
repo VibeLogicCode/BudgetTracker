@@ -146,31 +146,57 @@ function startsNewDay(rows: TransactionRow[], index: number): boolean {
 const VISIBLE_CHIP_COUNT = 8;
 
 /**
- * Builds one chip's destination href by changing ONLY the `category` param on top of whatever
- * querystring is already there -- `current` is `currentQuery`, the querystring page.tsx already
- * parsed from the request and handed down as a prop (see that prop's own comment), so every other
- * active filter (account, person, date range, search, uncategorized-only, hide-transfers, and
- * `review=1` itself) survives the click untouched, exactly the way clicking the existing "Needs
- * review" chip already only ever adds or removes its own `review` param. `page` is dropped too:
- * changing what is being filtered belongs back on page 1, not wherever pagination happened to be.
+ * "This page's current querystring, with exactly one param changed" -- `current` is
+ * `currentQuery`, the querystring page.tsx already parsed from the request and handed down as a
+ * prop (see that prop's own comment), so every OTHER active filter (account, person, date range,
+ * search, uncategorized-only, transfer view, and `review=1` itself) survives the click untouched.
+ * `page` is dropped too: changing what is being filtered belongs back on page 1, not wherever
+ * pagination happened to be. `value === null` deletes the key entirely rather than writing an
+ * empty/default value into the querystring, so the "no filter" link stays a bare `/transactions`
+ * (or whatever else is active) instead of growing a param nobody would ever type by hand.
  *
- * Bug fix (owner report): this used to read `window.location.search`, captured into a
- * `useState('')` an effect filled in on mount. Server-side (and for one render on the client,
- * before that effect ever runs) that state is empty, so the FIRST paint of every chip pointed at
- * a bare `/transactions?category=N` -- account, person, dates, search, uncategorized-only,
- * hide-transfers and `review=1` all stripped. Clicking a chip from the review queue before
- * hydration landed on plain Transactions with no filters, which is exactly what was reported.
- * Sourcing the href from what the SERVER already knows means the first server-rendered HTML is
- * correct, with no hydration effect required to fix it up after the fact.
+ * Shared by the category chips (categoryChipHref, just below) and the transfer-view control
+ * further down this file -- the same generalization
+ * src/app/(app)/settings/merchant-rules/merchant-rules-client.tsx's own chipHref already applied
+ * to ITS chips (see that function's own comment: "copy the idiom, not invent a second one").
+ *
+ * Bug fix (owner report, categoryChipHref's original defect): this used to read
+ * `window.location.search`, captured into a `useState('')` an effect filled in on mount.
+ * Server-side (and for one render on the client, before that effect ever ran) that state is
+ * empty, so the FIRST paint of every chip pointed at a bare `/transactions?category=N` -- account,
+ * person, dates, search, uncategorized-only, transfer view and `review=1` all stripped. Clicking
+ * a chip from the review queue before hydration landed on plain Transactions with no filters,
+ * which is exactly what was reported. Sourcing the href from what the SERVER already knows means
+ * the first server-rendered HTML is correct, with no hydration effect required to fix it up after.
  */
-function categoryChipHref(current: string, categoryId: string | null): string {
+function filterHref(current: string, key: string, value: string | null): string {
   const params = new URLSearchParams(current);
-  if (categoryId === null) params.delete('category');
-  else params.set('category', categoryId);
+  if (value === null) params.delete(key);
+  else params.set(key, value);
   params.delete('page');
   const query = params.toString();
   return query.length > 0 ? `/transactions?${query}` : '/transactions';
 }
+
+/** One chip's destination href, changing only the `category` param -- see filterHref's own
+ *  docblock for the reasoning this and every other filter-preserving link on this page shares. */
+function categoryChipHref(current: string, categoryId: string | null): string {
+  return filterHref(current, 'category', categoryId);
+}
+
+/**
+ * v1.24.0 Lane A item 2 (owner report: "currently once i apply a trasnfer its hard to find that
+ * data again"). The three states TransactionFilter.transferView understands
+ * (src/lib/transactions.ts), paired with the `transfers` query value each one navigates to.
+ * `'all'` clears the param entirely (filterHref's own null-means-delete contract) rather than
+ * writing `transfers=all`. `'none'` keeps writing `transfers=0` -- the value existing bookmarked
+ * links already use -- rather than some new spelling that would orphan them.
+ */
+const TRANSFER_VIEW_OPTIONS: { value: 'all' | 'only' | 'none'; label: string; param: string | null }[] = [
+  { value: 'all', label: 'All', param: null },
+  { value: 'only', label: 'Transfers only', param: 'only' },
+  { value: 'none', label: 'No transfers', param: '0' },
+];
 
 export function TransactionsClient({
   page,
@@ -322,7 +348,10 @@ export function TransactionsClient({
       params.get('person'),
       params.get('q'),
       params.get('uncat'),
-      params.get('transfers') === '0' ? '0' : null,
+      // v1.24.0 Lane A item 2: 'only' counts as active too, not just the old checkbox's '0' --
+      // same rule category's own chip already follows two lines up (an always-visible control
+      // still counts here and still opens the disclosure, exactly like `category` does).
+      params.get('transfers') === '0' || params.get('transfers') === 'only' ? params.get('transfers') : null,
       params.get('range') || params.get('from') || params.get('to') ? '1' : null,
     ].filter((value) => value !== null && value !== '').length;
     if (count > 0) {
@@ -417,6 +446,14 @@ export function TransactionsClient({
   const visibleChips = chipsExpanded ? topLevelChips : topLevelChips.slice(0, VISIBLE_CHIP_COUNT);
   const hiddenChipCount = topLevelChips.length - visibleChips.length;
   const activeCategoryChip = new URLSearchParams(currentQuery).get('category') ?? '';
+
+  // v1.24.0 Lane A item 2: same "read it off currentQuery, not window.location" idiom as
+  // activeCategoryChip just above, and the same backwards-compatible parse readFilter (page.tsx)
+  // applies server-side -- `transfers=0` is 'none', `transfers=only` is 'only', anything else
+  // (absent, or a stale/hand-edited value) is 'all'.
+  const transfersParam = new URLSearchParams(currentQuery).get('transfers');
+  const activeTransferView: 'all' | 'only' | 'none' =
+    transfersParam === 'only' ? 'only' : transfersParam === '0' ? 'none' : 'all';
 
   const toggle = (id: number) => setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   // v1.7.0 bulk-guard fix: Categorize and Mark transfer both silently skip a split
@@ -1188,7 +1225,19 @@ export function TransactionsClient({
     // Lane 0 shell tightening: gap-6 -> gap-4 sm:gap-5, the same page-level stack gap every other
     // page converts to this release, landing everywhere at once (Lane 0's own docblock).
     <div data-page-width={reviewMode ? undefined : 'wide'} className="flex flex-col gap-4 sm:gap-5">
-      <PageHeader title="Transactions" description="Every line from every account, with what it was spent on." />
+      {/* v1.24.0 Lane A item 1 (owner report: "Review page still says trasaction. can we change
+          that its confusing?"). The review queue is a FILTER on this page, not a separate page --
+          the PageGuide right below already branches on reviewMode for exactly that reason -- so
+          the header has to say which one a person is looking at instead of always saying
+          "Transactions" regardless of which filter narrowed the list underneath it. */}
+      <PageHeader
+        title={reviewMode ? 'Needs review' : 'Transactions'}
+        description={
+          reviewMode
+            ? 'Transactions the rules could not settle on their own. Pick a category to clear each one.'
+            : 'Every line from every account, with what it was spent on.'
+        }
+      />
 
       <ReviewWidth active={reviewMode}>
       {/* Review round (fold /review in): review mode gets the review page's own three teaching
@@ -1373,12 +1422,21 @@ export function TransactionsClient({
                 every OTHER already-applied value on this GET form has no widget of its own
                 either. */}
             {reviewMode ? <input type="hidden" name="review" value="1" /> : null}
+            {/* v1.24.0 Lane A item 2: same reasoning as `review` just above -- the transfer-view
+                control (below) is a set of plain <a> links, not a form field, so re-submitting
+                THIS form (changing the account, say) would otherwise silently reset it back to
+                'all'. Only rendered when it differs from the default, same as `review`. */}
+            {activeTransferView !== 'all' ? (
+              <input type="hidden" name="transfers" value={activeTransferView === 'only' ? 'only' : '0'} />
+            ) : null}
             {/* Fix round (owner ask): one row, at every width, replaces the old "Filters (N)"
                 text button that only showed below `sm` plus a field block that was simply always
                 visible at `sm` and up -- two different shapes for the same fields depending on
                 viewport. Now there is one shape everywhere: the filter icon plus the merchant
                 search field, both reachable regardless of width, with the rest of the fields
-                (account, person, dates, uncategorized only, hide transfers) behind the icon. */}
+                (account, person, dates, uncategorized only) behind the icon -- transfer view
+                (below) moved OUT from behind it, v1.24.0 Lane A item 2, see that control's own
+                comment for why. */}
             <div className="flex items-center gap-2">
               <button
                 type="button"
@@ -1429,17 +1487,51 @@ export function TransactionsClient({
               />
             </div>
 
+            {/*
+              v1.24.0 Lane A item 2 (owner report: "currently once i apply a trasnfer its hard to
+              find that data again"). Three plain links, styled and built exactly like the
+              category chips just below (same Pill, same filterHref) -- ALWAYS visible, never
+              folded behind the Filters(N) disclosure the old two-state checkbox lived in.
+              Burying it there is what made a mis-tagged transfer unreachable in the first place:
+              REVIEW_WHERE (src/lib/categorize/engine.ts) excludes every transfer unconditionally,
+              so once a row was flagged a transfer AND the checkbox's "hide transfers" default hid
+              it from the ordinary list too, nothing on this page could ever show it again.
+              "Transfers only" is that recovery path, and a recovery path that needs discovering
+              through a collapsed disclosure first is not really one.
+
+              NOT rendered in review mode: the review queue is REVIEW_WHERE, which excludes
+              transfers unconditionally regardless of this control, so offering a "transfers only"
+              or "no transfers" choice there would be a lie about what the filtered list can ever
+              return -- every option would either show nothing (transfers only, none) or the same
+              rows (no transfers, redundant with REVIEW_WHERE's own exclusion).
+            */}
+            {reviewMode ? null : (
+              <div role="group" aria-label="Filter by transfer status" className="flex flex-wrap items-center gap-2">
+                {TRANSFER_VIEW_OPTIONS.map((option) => (
+                  <Link
+                    key={option.value}
+                    href={filterHref(currentQuery, 'transfers', option.param)}
+                    aria-current={activeTransferView === option.value ? 'page' : undefined}
+                    className="inline-flex min-h-11 items-center sm:min-h-0"
+                  >
+                    <Pill tone={activeTransferView === option.value ? 'accent' : 'neutral'}>{option.label}</Pill>
+                  </Link>
+                ))}
+              </div>
+            )}
+
             {/* Chip filters (ruling D6): TOP-LEVEL categories only, always visible (not folded
-                behind the disclosure the way account/person/dates/uncategorized/hide-transfers
-                stay), wrapping rather than scrolling, with a "+n" expander for the rest. Plain
-                <Link>s, not a second form field named "category" -- the existing select further
-                down keeps that name, so two controls submitting under it at once (and the
-                browser sending TWO values for one querystring key) never arises. Each href is
-                built from `currentQuery` (categoryChipHref above, page.tsx's own comment on that
-                prop), so clicking one only ever changes `category` and leaves account/person/
-                dates/search/uncat/transfers/review exactly as they were -- the same "just this
-                one param" contract the existing "Needs review" link below already keeps for
-                `review`. */}
+                behind the disclosure the way account/person/dates/uncategorized stay -- the
+                transfer-view control just above is the same kind of always-visible link row, for
+                the same reason), wrapping rather than scrolling, with a "+n" expander for the
+                rest. Plain <Link>s, not a second form field named "category" -- the existing
+                select further down keeps that name, so two controls submitting under it at once
+                (and the browser sending TWO values for one querystring key) never arises. Each
+                href is built from `currentQuery` (categoryChipHref above, page.tsx's own comment
+                on that prop), so clicking one only ever changes `category` and leaves
+                account/person/dates/search/uncat/transfers/review exactly as they were -- the
+                same "just this one param" contract the existing "Needs review" link below already
+                keeps for `review`. */}
             {topLevelChips.length > 0 ? (
               <div role="group" aria-label="Filter by category" className="flex flex-wrap items-center gap-2">
                 <Link href={categoryChipHref(currentQuery, null)} className="inline-flex min-h-11 items-center sm:min-h-0">
@@ -1516,9 +1608,10 @@ export function TransactionsClient({
                 <label className="flex items-center gap-2 text-sm text-muted">
                   <input type="checkbox" name="uncat" value="1" className="accent-accent" /> Uncategorized only
                 </label>
-                <label className="flex items-center gap-2 text-sm text-muted">
-                  <input type="checkbox" name="transfers" value="0" className="accent-accent" /> Hide transfers
-                </label>
+                {/* v1.24.0 Lane A item 2: the "Hide transfers" checkbox that used to live here is
+                    gone -- it's the always-visible transfer-view control above the search row now
+                    (three states, not two; see that control's own comment for why burying it
+                    behind this disclosure was the actual bug). */}
               </div>
               <button type="submit" className="btn btn--primary">Filter</button>
               {/* Inventory #3 / ruling R2: the review page's own "N waiting" eyebrow, repointed as

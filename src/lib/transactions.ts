@@ -51,7 +51,20 @@ export interface TransactionFilter {
   to?: string | null;
   search?: string | null;
   uncategorizedOnly?: boolean;
-  includeTransfers?: boolean;
+  /**
+   * v1.24.0 Lane A item 2 (owner report: "currently once i apply a trasnfer its hard to find
+   * that data again"). Three states, not a boolean -- a mis-tagged transfer needs a way BACK.
+   * REVIEW_WHERE (src/lib/categorize/engine.ts) excludes every transfer unconditionally, so a
+   * row wrongly flagged a transfer was already invisible to the review queue before this field
+   * existed; the old two-state "hide transfers" checkbox then ALSO hid it from the default list
+   * the moment it was flagged, which left no filter anywhere on this page that could ever surface
+   * that row again. `'only'` is that recovery path -- the one view that shows transfers and
+   * nothing else, so the row can be found and un-flagged.
+   *   - `'all'` (default; `undefined` behaves the same) -- no clause, today's behaviour unchanged.
+   *   - `'none'` -- ordinary spending only, transfers excluded (the old `includeTransfers: false`).
+   *   - `'only'` -- transfers only, nothing else.
+   */
+  transferView?: 'all' | 'only' | 'none';
   /**
    * v1.14.1 ruling R1. `?review=1` is a filter, not a page: this pushes engine.ts's own
    * REVIEW_WHERE into buildWhere (never restated here) and flips listTransactions to oldest-first
@@ -241,7 +254,10 @@ function buildWhere(filter: TransactionFilter, viewer: Viewer): SQL | undefined 
   }
 
   if (filter.uncategorizedOnly) clauses.push(isNull(transactions.categoryId));
-  if (filter.includeTransfers === false) clauses.push(eq(transactions.isTransfer, false));
+  // v1.24.0 Lane A item 2: see TransactionFilter.transferView's own doc comment for why 'only'
+  // exists at all -- it is the recovery path for a transfer REVIEW_WHERE (below) can never show.
+  if (filter.transferView === 'none') clauses.push(eq(transactions.isTransfer, false));
+  else if (filter.transferView === 'only') clauses.push(eq(transactions.isTransfer, true));
   // Ruling R1: the queue definition lives in engine.ts and is imported, never restated. and()'s
   // return type is `SQL | undefined` regardless of argument count -- REVIEW_WHERE is built from
   // three fixed clauses and is never actually undefined at runtime, but the guard keeps this

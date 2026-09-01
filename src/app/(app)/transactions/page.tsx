@@ -75,7 +75,11 @@ function readFilter(
     to: range?.to ?? null,
     search: one('q') ?? null,
     uncategorizedOnly: one('uncat') === '1',
-    includeTransfers: one('transfers') !== '0',
+    // v1.24.0 Lane A item 2. Backwards compatible with links people already have: `transfers=0`
+    // keeps meaning "hide transfers", exactly as it always has. `transfers=only` is the new
+    // recovery-path value (TransactionFilter.transferView's own doc comment, src/lib/transactions.ts,
+    // has the full reasoning); anything else -- absent, or a hand-edited junk value -- is 'all'.
+    transferView: one('transfers') === '0' ? 'none' : one('transfers') === 'only' ? 'only' : 'all',
     page: num('page') ?? 1,
     pageSize: 50,
     reviewOnly: reviewMode,
