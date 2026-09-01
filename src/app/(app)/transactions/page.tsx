@@ -5,11 +5,21 @@ import { listCategories } from '@/lib/categories';
 import { findUserById, listAttributablePeople } from '@/lib/auth/users';
 import { loanLinksForTransactions, listLoans } from '@/lib/loans';
 import { reviewQueueCount } from '@/lib/categorize/engine';
+// v1.26.0 Lane 1 (owner report: "shows amazon i dont know what orignal entry was so maybe its
+// wrong maybe its not"). Read-only import from src/lib/categorize/rules.ts -- a concurrent
+// lane's file this task's brief says not to TOUCH, which importing its own already-exported,
+// already-pure listRules/matchRule is not: nothing there is edited. See renameRules below for
+// why this is the one honest way to answer "which rule renamed this row" at all.
+import { listRules, matchRule } from '@/lib/categorize/rules';
 import { splitsForTransactions } from '@/lib/splits';
-import { countMatchingMerchant, listTransactions, type TransactionFilter } from '@/lib/transactions';
+import { countMatchingMerchant, groupTransactionsByCategory, listTransactions } from '@/lib/transactions';
 import { todayIso } from '@/lib/dates';
-import { resolveRange, type ResolvedRange } from '@/lib/date-range';
+import { resolveRange } from '@/lib/date-range';
 import { readEnv } from '@/lib/env';
+// v1.26.0 Lane 3a: readFilter moved out of this file into a module the SERVER ACTIONS can share --
+// see filter-params.ts's own top-of-file docblock for why a group bulk action has to rebuild the
+// very filter this render used, and why two parsers would be two ways to misread one URL.
+import { readFilter, readGroupMode, readGroupPage } from './filter-params';
 import { TransactionsClient } from './transactions-client';
 
 export const dynamic = 'force-dynamic';
@@ -31,64 +41,6 @@ function currentQueryString(params: Record<string, string | string[] | undefined
     for (const one of Array.isArray(value) ? value : [value]) qs.append(key, one);
   }
   return qs.toString();
-}
-
-function readFilter(
-  params: Record<string, string | string[] | undefined>,
-  range: ResolvedRange | null,
-  /** v1.13.0 ruling R2: the person filter for a self viewer comes from the SESSION, not the URL --
-   *  the same `ownerScope(viewer) ?? urlValue` idiom dashboard/page.tsx and reports/page.tsx already
-   *  use, so a self viewer's own id always wins over whatever a hand-edited `?person=` says. */
-  selfOwnerId: number | null,
-  /** Ruling R1/R2: already forced to `false` for a self viewer by the caller -- listReviewQueue's
-   *  replacement (`reviewOnly` on the filter) is household-wide by construction, same as the page
-   *  it replaces, so this function never has to know WHY it is false, only what to do with it. */
-  reviewMode: boolean,
-): TransactionFilter {
-  const one = (key: string) => {
-    const value = params[key];
-    return Array.isArray(value) ? value[0] : value;
-  };
-  const num = (key: string) => {
-    const value = one(key);
-    return value && /^\d+$/.test(value) ? Number(value) : undefined;
-  };
-  const person = one('person');
-  const category = one('category');
-  return {
-    accountId: num('account') ?? null,
-    categoryId: category === 'uncategorized' ? 'uncategorized' : category && /^\d+$/.test(category) ? Number(category) : null,
-    // v1.21.0 item 3: `?category=<id>` means the category AND its children (a chip's own
-    // meaning); `?category=<id>&exact=1` means that category alone (the Budgets "Not in a
-    // sub-category" row's drill-down wants this). See TransactionFilter.categoryExact's own
-    // doc comment (src/lib/transactions.ts) for the rest of the reasoning.
-    categoryExact: one('exact') === '1',
-    attributedUserId:
-      selfOwnerId !== null
-        ? selfOwnerId
-        : person === 'unattributed'
-          ? 'unattributed'
-          : person && /^\d+$/.test(person)
-            ? Number(person)
-            : null,
-    from: range?.from ?? null,
-    to: range?.to ?? null,
-    search: one('q') ?? null,
-    uncategorizedOnly: one('uncat') === '1',
-    // v1.24.0 Lane A item 2. Backwards compatible with links people already have: `transfers=0`
-    // keeps meaning "hide transfers", exactly as it always has. `transfers=only` is the new
-    // recovery-path value (TransactionFilter.transferView's own doc comment, src/lib/transactions.ts,
-    // has the full reasoning); anything else -- absent, or a hand-edited junk value -- is 'all'.
-    transferView: one('transfers') === '0' ? 'none' : one('transfers') === 'only' ? 'only' : 'all',
-    // v1.25.0 Lane R item R1: `?queue=` chips onto the review filter (TransactionFilter.reviewQueue's
-    // own doc comment, src/lib/transactions.ts). Anything but the two real values -- absent, or a
-    // hand-edited junk value -- is `undefined`, meaning "both", the same "fall back rather than
-    // refuse" rule `?transfers=` just above already follows.
-    reviewQueue: one('queue') === 'suggested' ? 'suggested' : one('queue') === 'uncategorized' ? 'uncategorized' : undefined,
-    page: num('page') ?? 1,
-    pageSize: 50,
-    reviewOnly: reviewMode,
-  };
 }
 
 export default async function TransactionsPage({
@@ -114,6 +66,29 @@ export default async function TransactionsPage({
   const reviewMode = one('review') === '1' && !selfScopedViewer;
   const filter = readFilter(params, range, ownerScope(viewer), reviewMode);
   const page = listTransactions(filter, viewer);
+  /**
+   * v1.26.0 Lane 3a item 2 (owner: "if rules set category grocier i can just scoll and look at all
+   * the groceries 1 shot whiel receiving rather then by just date"). `?group=category` renders the
+   * clusters instead of the rows -- groupTransactionsByCategory over the SAME `filter` object the
+   * row query above already used, so the groups can never describe a different set than the list
+   * they link into (that function's own doc comment, src/lib/transactions.ts, makes the same point
+   * about sharing one buildWhere).
+   *
+   * `null` when the param is off, which is what the client reads to decide which view to render --
+   * one source of truth for "is this the grouped view", not a boolean prop beside the data that
+   * could disagree with it.
+   *
+   * The row query above is NOT skipped in grouped mode, deliberately. It is one indexed page of 50
+   * rows -- the identical query this page already ran on every visit before this release, so
+   * grouped mode costs one grouped aggregate MORE, never a query per group (see this task's own
+   * expand-vs-link decision: a group header links to the drill-down filter, it does not fetch that
+   * group's rows). Keeping it also keeps `page.total`/`pageCount` available to the client for the
+   * "N transactions in this view" line, taken from the same count `CategoryGroupPage.totalCount`
+   * reports, which is how the two views are kept from stating different totals.
+   */
+  const groups = readGroupMode(params)
+    ? groupTransactionsByCategory(filter, viewer, { page: readGroupPage(params) })
+    : null;
   // Ruling: cheap even when nobody is looking at it -- one count(*) behind REVIEW_WHERE, the
   // same query the nav badge already runs. Always computed, never gated on reviewMode, so the
   // "Needs review (N)" chip stays accurate when a filtered view happens to be review-empty.
@@ -125,12 +100,38 @@ export default async function TransactionsPage({
   if (reviewMode) {
     for (const row of page.rows) matchingCounts[row.id] = countMatchingMerchant(row.normalizedMerchant);
   }
+  /**
+   * v1.26.0 Lane 1. Which rename rule (if any) produced a renamed row's display name -- there is
+   * no rule_id column on the transaction itself (TransactionRow.displaySource, src/lib/
+   * transactions.ts, only records THAT a rule acted, never which one), so this is resolved the
+   * exact same way the engine resolves it for its own bookkeeping: matchRule(row.
+   * normalizedMerchant, 'rename', rules), the identical call applyRenameRules/resolveRename
+   * (src/lib/categorize/engine.ts) already make to keep a renamed row's display text in sync with
+   * the current rule set. A row is simply ABSENT from this map when that resolves to nothing --
+   * the rule that renamed it may since have been edited or deleted -- and the client treats a
+   * missing entry exactly like "the rule list was never available": bank text still shows, the
+   * rule attribution does not (this task's own brief: never invent an attribution that could name
+   * the wrong rule).
+   */
+  const renameRules: Record<number, { pattern: string; matchType: string; renameTo: string; ruleId: number }> = {};
+  {
+    const rules = listRules('rename');
+    for (const row of page.rows) {
+      if (row.displaySource !== 'rename') continue;
+      const rule = matchRule(row.normalizedMerchant, 'rename', rules);
+      if (rule && rule.renameTo !== null) {
+        renameRules[row.id] = { pattern: rule.pattern, matchType: rule.matchType, renameTo: rule.renameTo, ruleId: rule.id };
+      }
+    }
+  }
   return (
     <TransactionsClient
       page={page}
       reviewMode={reviewMode}
       reviewCount={reviewCount}
       matchingCounts={matchingCounts}
+      renameRules={renameRules}
+      groups={groups}
       currentQuery={currentQueryString(params)}
       // Ruling R10: an asset account holds a typed balance and takes no transactions/imports, so
       // it is filtered out of every account picker on this page -- the filter select, quick-add

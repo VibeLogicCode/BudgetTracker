@@ -28,9 +28,15 @@ import {
   bulkSetTransfer,
   createManualTransaction,
   getTransaction,
+  listTransactions,
   transactionOwners,
   updateTransactionNotes,
+  type TransactionFilter,
 } from '@/lib/transactions';
+// v1.26.0 Lane 3a: the ONE parser this route's querystring has (filter-params.ts's own docblock) --
+// shared with page.tsx so a group bulk action writes the set the group header counted, not a set
+// some second parse happened to agree with.
+import { filterFromQuery } from './filter-params';
 import {
   applyCategoryToMatching,
   clearCategory,
@@ -508,6 +514,204 @@ export async function bulkNoteAction(_prev: ActionState, formData: FormData): Pr
   const changed = bulkSetNotes(ids, note.length === 0 ? null : note);
   revalidatePath('/transactions');
   return { message: `Note saved for ${changed} transaction${changed === 1 ? '' : 's'}.` };
+}
+
+/**
+ * v1.26.0 Lane 3a item 4. The two group bulk actions' shared shape: the querystring the grouped
+ * view was rendered under, plus which cluster inside it is being acted on.
+ *
+ * `scope` is the page's OWN querystring (transactions-client.tsx hands it `currentQuery`, the
+ * string page.tsx already built from the parsed searchParams), not a list of row ids. That is the
+ * whole design, and it is what makes the count in the dialog honest: `CategoryGroupRow.count` is
+ * the cluster's FULL size across every row page, so an action that could only reach the ids the
+ * client had rendered would state a number it does not honour -- the exact failure this codebase
+ * has been fixing all week. Sending the filter instead means the write recomputes the same set the
+ * group header counted, from the same parser (filterFromQuery, filter-params.ts), at the moment it
+ * runs.
+ *
+ * `groupCategoryId` is `''` for the uncategorized cluster (CategoryGroupRow.categoryId === null),
+ * a positive integer id otherwise -- the same two-valued encoding `?category=` itself uses
+ * ('uncategorized' vs. an id), spelled as an empty string here because a form field is a string
+ * either way and `''` is what an absent select posts.
+ *
+ * 2000 characters is a generous cap on a querystring this page can actually produce (its longest
+ * realistic form is roughly 120), sized so a hand-crafted post cannot make the URLSearchParams
+ * parse below arbitrarily large.
+ */
+const groupScopeSchema = z.object({
+  scope: z.string().max(2000),
+  groupCategoryId: z.string().refine((v) => v === '' || /^\d+$/.test(v), { message: 'Invalid request.' }),
+});
+
+/** How many rows one page of the id sweep below asks for -- listTransactions' own clamp ceiling
+ *  (src/lib/transactions.ts), so a cluster of 300 costs two queries rather than six. */
+const GROUP_SWEEP_PAGE_SIZE = 200;
+
+/**
+ * v1.26.0 Lane 3a item 4. Every transaction id in one category cluster of one filtered view.
+ *
+ * The cluster is expressed exactly as groupTransactionsByCategory's own doc comment prescribes for
+ * a drill-down -- `{ ...filter, categoryId, categoryExact: true }` -- so the ids swept here are the
+ * ids the group's own drill-down LINK shows in the flat list. One statement of what a cluster is,
+ * used by the link and the write alike, rather than a second definition that could drift from it.
+ *
+ * Paged rather than one unbounded read: listTransactions clamps pageSize to 200 by construction, so
+ * "all of them" has to be a sweep whatever this does. The page count is taken from the FIRST
+ * query's own `total` and never recomputed, which bounds the loop by a number read before any write
+ * happens -- a loop that re-read `pageCount` each time would be a loop whose exit condition the
+ * writes it precedes could move.
+ *
+ * The ids come back from a VIEWER-SCOPED read (listTransactions applies ownerScope inside
+ * buildWhere, and readFilter has already forced a self viewer's own person id over any `?person=`
+ * in the posted scope), so unlike every other bulk action in this file these ids are derived, not
+ * accepted from the request -- which is why there is no allTransactionsVisible call here. That
+ * function exists because `ids` normally arrives as a comma-joined field a caller can tamper with;
+ * there is no equivalent hole to close when the request cannot name a row at all. The one thing a
+ * tampered `scope` can do is narrow or widen the FILTER, and every widening it could ask for
+ * (another person's rows, the review queue) is already refused inside the parser rather than here.
+ */
+function groupTransactionIds(filter: TransactionFilter, groupCategoryId: string, viewer: SessionUser): number[] {
+  const clusterFilter: TransactionFilter =
+    groupCategoryId === ''
+      ? // The null cluster. `categoryExact` is meaningless for it (there is no id to be exact
+        // about) and is cleared rather than left at whatever the posted URL carried, so a stale
+        // `?exact=1` cannot change which rows "uncategorized" means.
+        { ...filter, categoryId: 'uncategorized', categoryExact: false }
+      : { ...filter, categoryId: Number(groupCategoryId), categoryExact: true };
+
+  const first = listTransactions({ ...clusterFilter, page: 1, pageSize: GROUP_SWEEP_PAGE_SIZE }, viewer);
+  const ids = first.rows.map((row) => row.id);
+  for (let page = 2; page <= first.pageCount; page += 1) {
+    ids.push(
+      ...listTransactions({ ...clusterFilter, page, pageSize: GROUP_SWEEP_PAGE_SIZE }, viewer).rows.map((row) => row.id),
+    );
+  }
+  return ids;
+}
+
+/**
+ * v1.26.0 Lane 3a item 4, action one: "These are all correct".
+ *
+ * WHY IT EXISTS. REVIEW_WHERE (src/lib/categorize/engine.ts) is `category IS NULL OR source =
+ * 'bayes'`, so a rule-assigned row never enters the review queue -- correct (rules must not create
+ * as much work as they save) and, since v1.25.0 shipped 107 preset-pack rules the household never
+ * wrote, it left a great many silent decisions with no surface that showed them. This is the
+ * dismissal half of that surface: a cluster the household has looked at and agrees with becomes
+ * `categorization_source = 'manual'`, which is what locks those rows against a future rule run
+ * changing them again.
+ *
+ * IT CALLS THE EXISTING CONFIRM PATH, not a second one. bulkSetCategory (src/lib/transactions.ts)
+ * loops confirmCategory -- the identical function the per-row category select, the per-row "Accept
+ * <category>" item, "Accept all suggestions" and the bulk Categorize toolbar all already reach, and
+ * the only place `categorization_source = 'manual'` is written for a category. Every guard that
+ * lives inside it (the split refusal, ruling R4's rule-ownership refusal, the untrain/retrain pair)
+ * therefore applies here without being restated.
+ *
+ * `createRules: false`, deliberately, and this is the one place these two actions differ from the
+ * bulk Categorize toolbar (which defaults the checkbox ON). Confirming means "the category already
+ * on these rows is right" -- the rows are here BECAUSE a rule filed them, so an exact per-merchant
+ * rule saying the same thing again is at best a duplicate of the rule that acted and at worst a
+ * household-wide write nobody asked for, made by a button whose whole promise was that nothing
+ * changes but the confirmation. Recategorize below offers the checkbox precisely because there the
+ * household IS telling the app something new.
+ *
+ * SPLIT ROWS ARE SKIPPED, and that is the right answer here rather than a copied guard. Two
+ * independent reasons: a split transaction's money lives in transaction_splits, so writing its own
+ * category_id would create a second, contradictory home for it (the reason confirmCategory refuses
+ * one at all); and grouping is split-AWARE, so a split row appears in the cluster of each of its
+ * PARTS -- confirming "this cluster's category" onto the row would file the whole transaction under
+ * one part's category. The skip is not silent: bulkSetCategory counts it and splitSkipSentence
+ * (above) words it, the same sentence bulkCategorizeAction/bulkTransferAction already use. It
+ * cannot arise on the audit URL at all -- splitting stamps `categorization_source = 'manual'`
+ * (src/lib/splits.ts), so no split row can match `source: 'rule'`.
+ *
+ * The uncategorized cluster is refused, because there is nothing to confirm: no category to write,
+ * and confirmCategory takes a real category id. The client does not offer the button for that group
+ * (transactions-client.tsx's own groupList), so this refusal is for a stale form or a hand-made
+ * post, not a path a person can click into.
+ */
+export async function bulkConfirmGroupAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  const user = await requireUser();
+  const parsed = groupScopeSchema.safeParse({
+    scope: String(formData.get('scope') ?? ''),
+    groupCategoryId: String(formData.get('groupCategoryId') ?? ''),
+  });
+  if (!parsed.success) return { error: 'Invalid request.' };
+  if (parsed.data.groupCategoryId === '') {
+    return { error: 'These transactions have no category yet — pick one for the group instead.' };
+  }
+
+  const filter = filterFromQuery(parsed.data.scope, user);
+  const ids = groupTransactionIds(filter, parsed.data.groupCategoryId, user);
+  if (ids.length === 0) return { error: 'That group is empty now — nothing was changed.' };
+
+  const result = bulkSetCategory(ids, Number(parsed.data.groupCategoryId), user.id, false, user.role);
+  if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
+  revalidatePath('/transactions');
+  revalidatePath('/review');
+  const changedSentence = `Confirmed ${result.changed} transaction${result.changed === 1 ? '' : 's'}. Rules will leave ${result.changed === 1 ? 'it' : 'them'} alone from now on.`;
+  const skipSentence = splitSkipSentence(result.skipped);
+  return { message: skipSentence ? `${changedSentence} ${skipSentence}` : changedSentence };
+}
+
+/**
+ * v1.26.0 Lane 3a item 4, action two: "Recategorize the group".
+ *
+ * Same cluster resolution and the same single confirm path as bulkConfirmGroupAction above (see its
+ * docblock for both, and for why the ids are derived rather than accepted) -- the only differences
+ * are the category written and the rule checkbox.
+ *
+ * `createRules` IS offered here, and defaults on in the form, because a recategorize is the
+ * household correcting what the rules did: the pack rule that misfiled this cluster will misfile
+ * the next import the same way unless the correction teaches an exact per-merchant rule, which is
+ * exactly what confirmCategory's `createRule` writes. It stays a checkbox rather than being forced,
+ * for the same reason the bulk Categorize toolbar's is one -- a one-off correction ("this month's
+ * charge was actually a gift") should not become a standing household rule. Its refusal path is
+ * unchanged and shared: a rule someone else in the household owns refuses the WHOLE batch (ruling
+ * R4 fix round 2, enforced inside bulkSetCategory) rather than half-writing it.
+ *
+ * SPLIT ROWS ARE SKIPPED, for the first of the two reasons given above (their money is in
+ * transaction_splits) plus one specific to moving them: only ONE PART of a split row is in this
+ * cluster, so "move the group" has no single meaning for it -- the honest answer is to leave it
+ * alone and say so, which is what splitSkipSentence does. Editing that row's parts stays where it
+ * already is, in the split editor.
+ *
+ * UNLIKE confirm, the uncategorized cluster is allowed -- and is one of the more useful things
+ * here: "everything the rules had no opinion about in that import, all of it, into Groceries".
+ * There is one honesty note that belongs in the record rather than a comment nobody reads:
+ * `?category=uncategorized` is `category_id IS NULL` at the data layer and is NOT split-aware,
+ * while the grouping is, so a split row whose own category_id is null (the usual case --
+ * setTransactionSplits never invents one) is swept into this cluster's ids even though the grouped
+ * view counted it under its parts' clusters. Those rows are then skipped by the split guard and
+ * reported, so the outcome is correct and stated; what it means is that the uncategorized cluster's
+ * `changed` count can be lower than its header said for a household that splits transactions. It
+ * cannot arise on the audit URL (`source: 'rule'` excludes every split row).
+ */
+export async function bulkRecategorizeGroupAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  const user = await requireUser();
+  const parsed = groupScopeSchema.safeParse({
+    scope: String(formData.get('scope') ?? ''),
+    groupCategoryId: String(formData.get('groupCategoryId') ?? ''),
+  });
+  if (!parsed.success) return { error: 'Invalid request.' };
+  const categoryId = Number(formData.get('categoryId'));
+  if (!Number.isInteger(categoryId) || categoryId <= 0) return { error: 'Pick a category first.' };
+
+  const filter = filterFromQuery(parsed.data.scope, user);
+  const ids = groupTransactionIds(filter, parsed.data.groupCategoryId, user);
+  if (ids.length === 0) return { error: 'That group is empty now — nothing was changed.' };
+
+  const result = bulkSetCategory(ids, categoryId, user.id, formData.get('createRules') === 'on', user.role);
+  if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
+  revalidatePath('/transactions');
+  revalidatePath('/review');
+  const changedSentence = `Moved ${result.changed} transaction${result.changed === 1 ? '' : 's'}.`;
+  const skipSentence = splitSkipSentence(result.skipped);
+  return { message: skipSentence ? `${changedSentence} ${skipSentence}` : changedSentence };
 }
 
 /**

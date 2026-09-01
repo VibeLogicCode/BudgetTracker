@@ -53,7 +53,10 @@ import {
   assignToLoanAction,
   bulkAssignToLoanAction,
   bulkCategorizeAction,
+  // v1.26.0 Lane 3a item 4: the two group-header bulk actions.
+  bulkConfirmGroupAction,
   bulkNoteAction,
+  bulkRecategorizeGroupAction,
   bulkTransferAction,
   createLoanFromTransactionAction,
   manualEntryAction,
@@ -1791,5 +1794,294 @@ describe("setCategoryAction: ruling R3 -- teach='1' creates a rule, anything els
     const id = addTxn('GARBAGE TEACH MERCHANT');
     await setCategoryAction({}, formData({ transactionId: String(id), categoryId: String(coffee), teach: 'garbage' }));
     expect(listRules('category').map((r) => r.pattern)).not.toContain(normalizeMerchant('GARBAGE TEACH MERCHANT'));
+  });
+});
+
+/**
+ * v1.26.0 Lane 3a item 4. The two group bulk actions.
+ *
+ * The property every test here is really about: a group header states
+ * `CategoryGroupRow.count`, which is the cluster's FULL size across every row page, so the write
+ * behind it must reach the same set. The fixture is deliberately 60 rows against a 50-row page --
+ * anything that can only see one rendered page of rows fails these, which is the exact failure the
+ * dialog's own copy would otherwise be lying about.
+ */
+describe('bulkConfirmGroupAction / bulkRecategorizeGroupAction (Lane 3a item 4)', () => {
+  /** One import, so `?import=` in the posted scope has something to select and something to
+   *  exclude. */
+  function seedImport(filename: string): number {
+    const { accountId, userId } = ctx!;
+    return current!.db.get<{ id: number }>(sql`
+      insert into imports (account_id, filename, imported_by, rows_added, rows_duplicate, rows_error, created_at)
+      values (${accountId}, ${filename}, ${userId}, 0, 0, 0, ${nowIso()})
+      returning id`).id;
+  }
+
+  function addRuleRow(opts: {
+    importId: number;
+    categoryId: number | null;
+    merchant: string;
+    amountCents?: number;
+    source?: 'rule' | 'manual' | 'none';
+  }): number {
+    const { accountId, userId } = ctx!;
+    return current!.db.get<{ id: number }>(sql`
+      insert into transactions (account_id, import_id, date, raw_description, normalized_merchant, amount_cents, category_id, categorization_source, created_by, created_at, updated_at)
+      values (${accountId}, ${opts.importId}, '2026-03-02', ${opts.merchant}, ${normalizeMerchant(opts.merchant)},
+              ${opts.amountCents ?? -1000}, ${opts.categoryId}, ${opts.source ?? 'rule'}, ${userId}, ${nowIso()}, ${nowIso()})
+      returning id`).id;
+  }
+
+  function sourceOf(id: number): string {
+    return (
+      current!.sqlite.prepare('select categorization_source as s from transactions where id = ?').get(id) as { s: string }
+    ).s;
+  }
+
+  function categoryOf(id: number): number | null {
+    return (
+      current!.sqlite.prepare('select category_id as c from transactions where id = ?').get(id) as { c: number | null }
+    ).c;
+  }
+
+  it('confirms EVERY row in the group, not only the 50 one row page could show', async () => {
+    const { db } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const importId = seedImport('march.csv');
+    // 60 > the 50-row page listTransactions serves this page with, and > any single rendered page.
+    const ids = Array.from({ length: 60 }, (_, index) =>
+      addRuleRow({ importId, categoryId: groceries, merchant: `GREENFIELD ${index}` }),
+    );
+
+    const result = await bulkConfirmGroupAction(
+      {},
+      formData({ scope: `import=${importId}&source=rule&group=category`, groupCategoryId: String(groceries) }),
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.message).toContain('Confirmed 60 transactions');
+    expect(ids.every((id) => sourceOf(id) === 'manual')).toBe(true);
+    // The category itself is untouched -- confirming is about locking the row, not moving it.
+    expect(categoryOf(ids[0])).toBe(groceries);
+  });
+
+  it('honours the posted filter: another cluster, and another import, are left alone', async () => {
+    const { db } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const coffee = categoryIdByName(db, 'Coffee');
+    const march = seedImport('march.csv');
+    const april = seedImport('april.csv');
+    const target = addRuleRow({ importId: march, categoryId: groceries, merchant: 'GREENFIELD MARKET' });
+    const otherCluster = addRuleRow({ importId: march, categoryId: coffee, merchant: 'HARBOUR ROAST' });
+    const otherImport = addRuleRow({ importId: april, categoryId: groceries, merchant: 'GREENFIELD MARKET' });
+    const byHand = addRuleRow({ importId: march, categoryId: groceries, merchant: 'BY HAND SHOP', source: 'manual' });
+
+    const result = await bulkConfirmGroupAction(
+      {},
+      formData({ scope: `import=${march}&source=rule&group=category`, groupCategoryId: String(groceries) }),
+    );
+
+    expect(result.message).toContain('Confirmed 1 transaction');
+    expect(sourceOf(target)).toBe('manual');
+    expect(sourceOf(otherCluster)).toBe('rule');
+    expect(sourceOf(otherImport)).toBe('rule');
+    // Already 'manual', excluded by ?source=rule -- and untouched either way.
+    expect(sourceOf(byHand)).toBe('manual');
+  });
+
+  it('creates no merchant rule -- a confirmation says the existing category is right, nothing more', async () => {
+    const { db } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const importId = seedImport('march.csv');
+    addRuleRow({ importId, categoryId: groceries, merchant: 'GREENFIELD MARKET' });
+
+    await bulkConfirmGroupAction(
+      {},
+      formData({ scope: `import=${importId}&source=rule`, groupCategoryId: String(groceries) }),
+    );
+
+    expect(listRules('category')).toEqual([]);
+  });
+
+  it('refuses the uncategorized cluster -- there is no category there to confirm', async () => {
+    setup();
+    const importId = seedImport('march.csv');
+    const id = addRuleRow({ importId, categoryId: null, merchant: 'UNKNOWN SHOP', source: 'none' });
+
+    const result = await bulkConfirmGroupAction({}, formData({ scope: `import=${importId}`, groupCategoryId: '' }));
+
+    expect(result.error).toBeTruthy();
+    expect(result.message).toBeUndefined();
+    expect(sourceOf(id)).toBe('none');
+  });
+
+  it('reports honestly when the group has emptied out from under the dialog', async () => {
+    const { db } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const importId = seedImport('march.csv');
+
+    const result = await bulkConfirmGroupAction(
+      {},
+      formData({ scope: `import=${importId}&source=rule`, groupCategoryId: String(groceries) }),
+    );
+
+    expect(result.error).toContain('empty');
+  });
+
+  it('refuses a cross-origin post before reading anything', async () => {
+    const { db } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const importId = seedImport('march.csv');
+    const id = addRuleRow({ importId, categoryId: groceries, merchant: 'GREENFIELD MARKET' });
+    sameOrigin.value = false;
+
+    const confirm = await bulkConfirmGroupAction(
+      {},
+      formData({ scope: `import=${importId}`, groupCategoryId: String(groceries) }),
+    );
+    const recategorize = await bulkRecategorizeGroupAction(
+      {},
+      formData({ scope: `import=${importId}`, groupCategoryId: String(groceries), categoryId: String(groceries) }),
+    );
+
+    expect(confirm.error).toBe(CROSS_ORIGIN_ERROR);
+    expect(recategorize.error).toBe(CROSS_ORIGIN_ERROR);
+    expect(sourceOf(id)).toBe('rule');
+  });
+
+  it('moves EVERY row in the group to the chosen category, not only a rendered page of them', async () => {
+    const { db } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const coffee = categoryIdByName(db, 'Coffee');
+    const importId = seedImport('march.csv');
+    const ids = Array.from({ length: 60 }, (_, index) =>
+      addRuleRow({ importId, categoryId: groceries, merchant: `GREENFIELD ${index}` }),
+    );
+
+    const result = await bulkRecategorizeGroupAction(
+      {},
+      formData({
+        scope: `import=${importId}&source=rule&group=category`,
+        groupCategoryId: String(groceries),
+        categoryId: String(coffee),
+      }),
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.message).toContain('Moved 60 transactions');
+    expect(ids.every((id) => categoryOf(id) === coffee)).toBe(true);
+    expect(ids.every((id) => sourceOf(id) === 'manual')).toBe(true);
+  });
+
+  it('moves the uncategorized cluster too -- everything the rules had no opinion about, in one go', async () => {
+    const { db } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const importId = seedImport('march.csv');
+    const blank = addRuleRow({ importId, categoryId: null, merchant: 'UNKNOWN SHOP', source: 'none' });
+    const filed = addRuleRow({ importId, categoryId: groceries, merchant: 'GREENFIELD MARKET' });
+
+    const result = await bulkRecategorizeGroupAction(
+      {},
+      formData({ scope: `import=${importId}`, groupCategoryId: '', categoryId: String(groceries) }),
+    );
+
+    expect(result.message).toContain('Moved 1 transaction');
+    expect(categoryOf(blank)).toBe(groceries);
+    // The already-filed row is a different cluster and was never in scope.
+    expect(sourceOf(filed)).toBe('rule');
+  });
+
+  it('teaches a rule only when the checkbox was ticked', async () => {
+    const { db } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const coffee = categoryIdByName(db, 'Coffee');
+    const importId = seedImport('march.csv');
+    addRuleRow({ importId, categoryId: groceries, merchant: 'GREENFIELD MARKET' });
+
+    const untaught = await bulkRecategorizeGroupAction(
+      {},
+      formData({ scope: `import=${importId}`, groupCategoryId: String(groceries), categoryId: String(coffee) }),
+    );
+    expect(untaught.message).toBeTruthy();
+    expect(listRules('category')).toEqual([]);
+
+    addRuleRow({ importId, categoryId: groceries, merchant: 'OTHER MARKET' });
+    const taught = await bulkRecategorizeGroupAction(
+      {},
+      formData({
+        scope: `import=${importId}`,
+        groupCategoryId: String(groceries),
+        categoryId: String(coffee),
+        createRules: 'on',
+      }),
+    );
+    expect(taught.message).toBeTruthy();
+    expect(listRules('category').map((rule) => rule.pattern)).toContain('OTHER MARKET');
+  });
+
+  it('skips a split transaction in the cluster and says how many were skipped', async () => {
+    const { db, userId } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const coffee = categoryIdByName(db, 'Coffee');
+    const gas = categoryIdByName(db, 'Gas');
+    const importId = seedImport('march.csv');
+    const plain = addRuleRow({ importId, categoryId: groceries, merchant: 'GREENFIELD MARKET' });
+    // A split row with one PART in Groceries: categoryMatchClause selects a split transaction on
+    // its parts (src/lib/transactions.ts), so this row really is in the Groceries cluster and
+    // really is swept into the ids -- which is what makes the skip worth asserting rather than
+    // assuming.
+    const split = addRuleRow({ importId, categoryId: null, merchant: 'SPLIT SHOP', amountCents: -10000, source: 'none' });
+    setTransactionSplits({
+      txnId: split,
+      parts: [
+        { categoryId: groceries, amountCents: -7000 },
+        { categoryId: gas, amountCents: -3000 },
+      ],
+      userId,
+    });
+
+    const result = await bulkRecategorizeGroupAction(
+      {},
+      formData({ scope: `import=${importId}`, groupCategoryId: String(groceries), categoryId: String(coffee) }),
+    );
+
+    expect(result.message).toContain('Moved 1 transaction');
+    expect(result.message).toContain('1 split transaction was skipped');
+    expect(categoryOf(plain)).toBe(coffee);
+    // The split row's own parts are untouched, which is the whole point of the skip.
+    expect(
+      current!.sqlite.prepare('select count(*) as c from transaction_splits where txn_id = ?').get(split),
+    ).toEqual({ c: 2 });
+  });
+
+  it('cannot be widened past a self viewer’s own rows by a tampered scope', async () => {
+    const { db, accountId } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const importId = seedImport('march.csv');
+    const other = insertTestUser(db, { name: 'Robin', username: 'robin', role: 'member' });
+    const mine = current!.db.get<{ id: number }>(sql`
+      insert into transactions (account_id, import_id, date, raw_description, normalized_merchant, amount_cents, category_id, categorization_source, attributed_user_id, created_by, created_at, updated_at)
+      values (${accountId}, ${importId}, '2026-03-02', 'MINE', 'MINE', -100, ${groceries}, 'rule', ${currentUser.id}, ${currentUser.id}, ${nowIso()}, ${nowIso()})
+      returning id`).id;
+    const theirs = current!.db.get<{ id: number }>(sql`
+      insert into transactions (account_id, import_id, date, raw_description, normalized_merchant, amount_cents, category_id, categorization_source, attributed_user_id, created_by, created_at, updated_at)
+      values (${accountId}, ${importId}, '2026-03-02', 'THEIRS', 'THEIRS', -200, ${groceries}, 'rule', ${other}, ${currentUser.id}, ${nowIso()}, ${nowIso()})
+      returning id`).id;
+    // A self-scoped MEMBER: ownerScope (src/lib/auth/viewer.ts) is `visibility === 'self' && role
+    // !== 'admin'`, so an admin is never scoped down whatever their visibility says -- setting only
+    // `visibility` here would have tested a household viewer and passed for the wrong reason.
+    currentUser = { ...currentUser, role: 'member', visibility: 'self' };
+
+    // The posted scope asks for the OTHER person's rows. readFilter forces a self viewer's own id
+    // over any `?person=` (ruling R2), and listTransactions applies ownerScope on top, so the
+    // sweep can only ever return rows this viewer already owns.
+    const result = await bulkConfirmGroupAction(
+      {},
+      formData({ scope: `import=${importId}&person=${other}`, groupCategoryId: String(groceries) }),
+    );
+
+    expect(result.message).toContain('Confirmed 1 transaction');
+    expect(sourceOf(mine)).toBe('manual');
+    expect(sourceOf(theirs)).toBe('rule');
   });
 });

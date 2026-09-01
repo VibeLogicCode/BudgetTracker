@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TransactionsClient } from '@/app/(app)/transactions/transactions-client';
 import { setCategoryAction } from '@/app/(app)/transactions/actions';
-import type { TransactionPage, TransactionRow } from '@/lib/transactions';
+import type { CategoryGroupPage, CategoryGroupRow, TransactionPage, TransactionRow } from '@/lib/transactions';
 import type { SplitRow } from '@/lib/splits';
 
 vi.mock('@/app/(app)/transactions/actions', () => ({
@@ -18,6 +18,9 @@ vi.mock('@/app/(app)/transactions/actions', () => ({
   // v1.25.0 Lane R item R3: the two new bulk actions (assign-to-loan, note).
   bulkAssignToLoanAction: vi.fn(async () => ({})),
   bulkNoteAction: vi.fn(async () => ({})),
+  // v1.26.0 Lane 3a item 4: the two group-header actions.
+  bulkConfirmGroupAction: vi.fn(async () => ({})),
+  bulkRecategorizeGroupAction: vi.fn(async () => ({})),
   renameTransactionAction: vi.fn(async () => ({})),
   assignToLoanAction: vi.fn(async () => ({})),
   unassignFromLoanAction: vi.fn(async () => ({})),
@@ -2904,5 +2907,725 @@ describe('Coordinator check: an uncategorized row never pre-selects the first re
     const select = container.querySelector('li.card select[name="categoryId"]') as HTMLSelectElement;
     expect(select.value).toBe('');
     expect(select.options[select.selectedIndex].textContent).toBe('Uncategorized');
+  });
+});
+
+/**
+ * v1.26.0 Lane 1 (owner report: a row reading "Amazon" with a small blue `rule` badge --
+ * "shows amazon i dont know what orignal entry was so maybe its wrong maybe its not"). Covers the
+ * whole task's brief: the card shows a rule-renamed row's bank text unconditionally, the table
+ * hides it behind the badge-turned-button (noteIndicator's own touch-target mechanics, copied not
+ * reinvented), `?bank=1` reveals it table-wide, the dialog wording is honest per display_source,
+ * and "Rename just this one" reaches the existing manual-rename path rather than a second one.
+ */
+describe('v1.26.0 Lane 1: bank text (owner report -- "shows amazon i dont know what orignal entry was")', () => {
+  it('review mode: a rule-renamed row shows the bank text with no interaction', () => {
+    const { container } = render(
+      <TransactionsClient
+        page={pageWithRow({
+          id: 1,
+          displayDescription: 'Amazon',
+          displaySource: 'rename',
+          rawDescription: 'AMZN MKTP CA*5H1CF8BE0',
+          normalizedMerchant: 'AMAZON',
+        })}
+        accounts={[]}
+        categories={[]}
+        people={[]}
+        today="2026-03-02"
+        reviewMode
+      />,
+    );
+    expect(container.querySelector('li.card')!.textContent).toContain('AMZN MKTP CA*5H1CF8BE0');
+  });
+
+  it('table: a rule-renamed row shows no bank text by default; the rule badge is a button; activating it opens a dialog with the full bank text', () => {
+    render(
+      <TransactionsClient
+        page={pageWithRow({
+          id: 1,
+          displayDescription: 'Amazon',
+          displaySource: 'rename',
+          rawDescription: 'AMZN MKTP CA*5H1CF8BE0',
+          normalizedMerchant: 'AMAZON',
+        })}
+        accounts={[]}
+        categories={[]}
+        people={[]}
+        today="2026-03-02"
+      />,
+    );
+    // rowScope(): outside review mode the mobile card carries the SAME badge-button, so an
+    // unscoped query would find two -- see rowScope's own doc comment above.
+    expect(rowScope().queryByText(/AMZN MKTP CA\*5H1CF8BE0/)).toBeNull();
+
+    const badge = rowScope().getByRole('button', { name: 'Why AMAZON shows this name' });
+    expect(badge.textContent).toBe('rule');
+    fireEvent.click(badge);
+
+    expect(screen.getByRole('dialog', { name: /Renamed by a rule/ })).toBeTruthy();
+    expect(screen.getByText('AMZN MKTP CA*5H1CF8BE0')).toBeTruthy();
+  });
+
+  it('a row that was never renamed renders no badge button at all', () => {
+    render(<TransactionsClient page={pageWithRow({ id: 1 })} accounts={[]} categories={[]} people={[]} today="2026-03-02" />);
+    expect(rowScope().queryByRole('button', { name: /shows this name/ })).toBeNull();
+  });
+
+  function bankTextFixture(): TransactionPage {
+    return {
+      total: 3,
+      page: 1,
+      pageSize: 50,
+      pageCount: 1,
+      rows: [
+        pageWithRow({
+          id: 1,
+          displayDescription: 'Amazon',
+          displaySource: 'rename',
+          rawDescription: 'AMZN MKTP CA*5H1CF8BE0',
+          normalizedMerchant: 'AMAZON',
+        }).rows[0],
+        pageWithRow({
+          id: 2,
+          displayDescription: 'Coffee run',
+          displaySource: 'manual',
+          rawDescription: 'TIM HORTONS #4021',
+          normalizedMerchant: 'TIM HORTONS',
+        }).rows[0],
+        pageWithRow({ id: 3, rawDescription: 'GROCERY MART', normalizedMerchant: 'GROCERY MART' }).rows[0],
+      ],
+    };
+  }
+
+  it('?bank=1 reveals bank text for every renamed row in the table; absent, none; a junk value behaves as absent', () => {
+    render(
+      <TransactionsClient page={bankTextFixture()} accounts={[]} categories={[]} people={[]} today="2026-03-02" currentQuery="bank=1" />,
+    );
+    expect(rowScope().getByText(/AMZN MKTP CA\*5H1CF8BE0/)).toBeTruthy();
+    expect(rowScope().getByText(/TIM HORTONS #4021/)).toBeTruthy();
+
+    cleanup();
+    render(<TransactionsClient page={bankTextFixture()} accounts={[]} categories={[]} people={[]} today="2026-03-02" />);
+    expect(rowScope().queryByText(/AMZN MKTP CA\*5H1CF8BE0/)).toBeNull();
+    expect(rowScope().queryByText(/TIM HORTONS #4021/)).toBeNull();
+
+    cleanup();
+    render(
+      <TransactionsClient
+        page={bankTextFixture()}
+        accounts={[]}
+        categories={[]}
+        people={[]}
+        today="2026-03-02"
+        currentQuery="bank=nonsense"
+      />,
+    );
+    expect(rowScope().queryByText(/AMZN MKTP CA\*5H1CF8BE0/)).toBeNull();
+    expect(rowScope().queryByText(/TIM HORTONS #4021/)).toBeNull();
+  });
+
+  it('the table-level toggle link flips ?bank=1 through filterHref, preserving other params', () => {
+    const { unmount } = render(
+      <TransactionsClient page={pageWithRow()} accounts={[]} categories={[]} people={[]} today="2026-03-02" currentQuery="account=3" />,
+    );
+    // Not scoped to rowScope(): unlike the badge, this control renders once (table-only, never
+    // duplicated for the mobile card list), so it is unambiguous to query unscoped.
+    expect(screen.getByRole('link', { name: 'Show bank text' }).getAttribute('href')).toBe('/transactions?account=3&bank=1');
+    unmount();
+
+    render(
+      <TransactionsClient
+        page={pageWithRow()}
+        accounts={[]}
+        categories={[]}
+        people={[]}
+        today="2026-03-02"
+        currentQuery="account=3&bank=1"
+      />,
+    );
+    expect(screen.getByRole('link', { name: 'Hide bank text' }).getAttribute('href')).toBe('/transactions?account=3');
+  });
+
+  it('the dialog resolves and shows the rule line + Edit/Delete links when renameRules identifies one', () => {
+    render(
+      <TransactionsClient
+        page={pageWithRow({
+          id: 1,
+          displayDescription: 'Amazon',
+          displaySource: 'rename',
+          rawDescription: 'AMZN MKTP CA*5H1CF8BE0',
+          normalizedMerchant: 'AMAZON',
+        })}
+        accounts={[]}
+        categories={[]}
+        people={[]}
+        today="2026-03-02"
+        renameRules={{ 1: { pattern: 'AMAZON', matchType: 'contains', renameTo: 'Amazon', ruleId: 9 } }}
+      />,
+    );
+    fireEvent.click(rowScope().getByRole('button', { name: 'Why AMAZON shows this name' }));
+    expect(screen.getByText('Rule: contains AMAZON → "Amazon"')).toBeTruthy();
+    const editLink = screen.getByRole('link', { name: 'Edit the rule' });
+    const deleteLink = screen.getByRole('link', { name: 'Delete the rule' });
+    expect(editLink.getAttribute('href')).toBe('/settings/merchant-rules?kind=rename&q=AMAZON');
+    expect(deleteLink.getAttribute('href')).toBe('/settings/merchant-rules?kind=rename&q=AMAZON');
+  });
+
+  it('omits the rule line and Edit/Delete links when no rule could be identified (renameRules empty)', () => {
+    render(
+      <TransactionsClient
+        page={pageWithRow({
+          id: 1,
+          displayDescription: 'Amazon',
+          displaySource: 'rename',
+          rawDescription: 'AMZN MKTP CA*5H1CF8BE0',
+          normalizedMerchant: 'AMAZON',
+        })}
+        accounts={[]}
+        categories={[]}
+        people={[]}
+        today="2026-03-02"
+      />,
+    );
+    fireEvent.click(rowScope().getByRole('button', { name: 'Why AMAZON shows this name' }));
+    expect(screen.getByText('AMZN MKTP CA*5H1CF8BE0')).toBeTruthy();
+    expect(screen.queryByText(/^Rule:/)).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Edit the rule' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Delete the rule' })).toBeNull();
+  });
+
+  it('display_source "manual" says the household set it, with no rule line or rule links', () => {
+    render(
+      <TransactionsClient
+        page={pageWithRow({
+          id: 1,
+          displayDescription: 'Coffee run',
+          displaySource: 'manual',
+          rawDescription: 'TIM HORTONS #4021',
+          normalizedMerchant: 'TIM HORTONS',
+        })}
+        accounts={[]}
+        categories={[]}
+        people={[]}
+        today="2026-03-02"
+      />,
+    );
+    fireEvent.click(rowScope().getByRole('button', { name: 'Why TIM HORTONS shows this name' }));
+    expect(screen.getByRole('dialog', { name: /Renamed by the household/ })).toBeTruthy();
+    expect(screen.getByText(/typed this name in by hand/)).toBeTruthy();
+    expect(screen.queryByText(/^Rule:/)).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Edit the rule' })).toBeNull();
+  });
+
+  it('display_source "loan" says a linked loan set it, distinct wording from manual/rename, reached through the existing loan badge', () => {
+    render(
+      <TransactionsClient
+        page={pageWithRow({
+          id: 1,
+          displayDescription: 'Repayment from Civic',
+          displaySource: 'loan',
+          rawDescription: 'ETRNSFR RECV 1234',
+          normalizedMerchant: 'ETRNSFR',
+        })}
+        accounts={[]}
+        categories={[]}
+        people={[]}
+        today="2026-03-02"
+        loanOptions={[{ id: 7, name: 'Civic' }]}
+        loanLinks={{
+          1: [{ id: 1, txnId: 1, itemId: 7, itemName: 'Civic', amountCents: 45000, appliedCents: 45000, source: 'manual' }],
+        }}
+      />,
+    );
+    const badge = rowScope().getByRole('button', { name: 'Why ETRNSFR shows this name' });
+    expect(badge.textContent).toBe('Civic');
+    fireEvent.click(badge);
+    expect(screen.getByRole('dialog', { name: /Named by a linked loan/ })).toBeTruthy();
+    expect(screen.getByText(/loan this transaction is linked to/)).toBeTruthy();
+    expect(screen.queryByText(/typed this name in by hand/)).toBeNull();
+    expect(screen.queryByText(/^Rule:/)).toBeNull();
+  });
+
+  it('"Rename just this one" closes the bank-text dialog and opens the existing manual-rename path, wired to renameTransactionAction', async () => {
+    const { renameTransactionAction } = await import('@/app/(app)/transactions/actions');
+    vi.mocked(renameTransactionAction).mockClear();
+    render(
+      <TransactionsClient
+        page={pageWithRow({
+          id: 1,
+          displayDescription: 'Amazon',
+          displaySource: 'rename',
+          rawDescription: 'AMZN MKTP CA*5H1CF8BE0',
+          normalizedMerchant: 'AMAZON',
+        })}
+        accounts={[]}
+        categories={[]}
+        people={[]}
+        today="2026-03-02"
+      />,
+    );
+    fireEvent.click(rowScope().getByRole('button', { name: 'Why AMAZON shows this name' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Rename just this one' }));
+
+    // The bank-text dialog is gone; the SAME rename dialog the row's own kebab "Rename…" item
+    // opens (renameDialog, prefilled with the current display name) takes its place -- not a
+    // second rename path.
+    expect(screen.queryByRole('dialog', { name: /Renamed by a rule/ })).toBeNull();
+    expect(screen.getByRole('dialog', { name: /Rename Amazon/ })).toBeTruthy();
+    const nameInput = screen.getByLabelText('Display name') as HTMLInputElement;
+    expect(nameInput.value).toBe('Amazon');
+
+    fireEvent.change(nameInput, { target: { value: 'Amazon.ca' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save name' }));
+    await waitFor(() => expect(renameTransactionAction).toHaveBeenCalled());
+    const sent = (renameTransactionAction as ReturnType<typeof vi.fn>).mock.calls.at(-1)![1] as FormData;
+    expect(sent.get('transactionId')).toBe('1');
+    expect(sent.get('displayName')).toBe('Amazon.ca');
+  });
+
+  it('the badge is a real, focusable <button> (not a div/span with onClick), reachable and activated by keyboard', () => {
+    render(
+      <TransactionsClient
+        page={pageWithRow({
+          id: 1,
+          displayDescription: 'Amazon',
+          displaySource: 'rename',
+          rawDescription: 'AMZN MKTP CA*5H1CF8BE0',
+          normalizedMerchant: 'AMAZON',
+        })}
+        accounts={[]}
+        categories={[]}
+        people={[]}
+        today="2026-03-02"
+      />,
+    );
+    const badge = rowScope().getByRole('button', { name: 'Why AMAZON shows this name' }) as HTMLButtonElement;
+    // A native <button type="button">, never disabled and never pulled out of the tab order --
+    // the one thing that guarantees every real browser translates a focused Enter/Space press
+    // into the very click event this test then fires, the same event a pointer sends.
+    expect(badge.tagName).toBe('BUTTON');
+    expect(badge.type).toBe('button');
+    expect(badge.disabled).toBe(false);
+    expect(badge.tabIndex).toBe(0);
+
+    badge.focus();
+    expect(document.activeElement).toBe(badge);
+
+    fireEvent.keyDown(badge, { key: 'Enter' });
+    fireEvent.click(badge);
+    expect(screen.getByRole('dialog', { name: /Renamed by a rule/ })).toBeTruthy();
+  });
+});
+
+/**
+ * v1.26.0 Lane 3a items 1-4, the client half. The server half (that these params reach the real
+ * queries and change the real order/clusters) lives in tests/app/transactions-page.test.tsx; this
+ * file asserts what the COMPONENT does with what it is handed -- the hrefs, the copy, the counts it
+ * states, and which dialogs post what.
+ */
+const CATEGORIES = [
+  { id: 42, name: 'Groceries', parentId: null, isArchived: false, sortOrder: 0 },
+  { id: 43, name: 'Coffee', parentId: null, isArchived: false, sortOrder: 1 },
+];
+
+function groupPage(overrides: Partial<CategoryGroupPage> = {}): CategoryGroupPage {
+  const groups: CategoryGroupRow[] = [
+    { categoryId: 42, categoryName: 'Groceries', parentId: null, count: 37, totalCents: -166_00 },
+    { categoryId: 43, categoryName: 'Coffee', parentId: null, count: 4, totalCents: -15_00 },
+  ];
+  return {
+    groups,
+    page: 1,
+    pageSize: 25,
+    pageCount: 1,
+    groupCount: groups.length,
+    totalCount: 41,
+    totalCents: -181_00,
+    ...overrides,
+  };
+}
+
+function renderGrouped(overrides: Partial<CategoryGroupPage> = {}, currentQuery = 'import=7&source=rule&group=category') {
+  return render(
+    <TransactionsClient
+      page={pageWithRow({ id: 1 })}
+      accounts={[{ id: 1, name: 'Joint Chequing' }]}
+      categories={CATEGORIES}
+      people={[]}
+      today="2026-03-02"
+      groups={groupPage(overrides)}
+      currentQuery={currentQuery}
+    />,
+  );
+}
+
+describe('v1.26.0 Lane 3a item 2: the grouped-by-category view', () => {
+  it('renders one header per cluster, each with its name, row count and subtotal', () => {
+    const { container } = renderGrouped();
+    const headers = Array.from(container.querySelectorAll('ul[data-category-groups] summary')).map((node) =>
+      (node.textContent ?? '').replace(/\s+/g, ' ').trim(),
+    );
+    expect(headers).toHaveLength(2);
+    expect(headers[0]).toContain('Groceries');
+    expect(headers[0]).toContain('37 transactions');
+    expect(headers[0]).toContain('$166.00');
+    expect(headers[1]).toContain('Coffee');
+    expect(headers[1]).toContain('4 transactions');
+    expect(headers[1]).toContain('$15.00');
+  });
+
+  it('keeps the order it was handed -- largest absolute total first, never re-sorted here', () => {
+    const { container } = renderGrouped();
+    const headers = Array.from(container.querySelectorAll('ul[data-category-groups] summary')).map((node) =>
+      (node.textContent ?? '').trim(),
+    );
+    expect(headers[0]).toContain('Groceries');
+    expect(headers[1]).toContain('Coffee');
+  });
+
+  it('shows the clusters INSTEAD of the rows -- no table, no card list', () => {
+    const { container } = renderGrouped();
+    expect(container.querySelector('table')).toBeNull();
+    expect(container.querySelector('[data-transaction-cards]')).toBeNull();
+  });
+
+  it('a group header links through to that one cluster in the flat list, exactly and un-grouped', () => {
+    const { container } = renderGrouped();
+    const link = Array.from(container.querySelectorAll('a')).find((a) =>
+      (a.textContent ?? '').startsWith('See all 37 in the list'),
+    );
+    const href = link?.getAttribute('href') ?? '';
+    expect(href).toContain('category=42');
+    expect(href).toContain('exact=1');
+    expect(href).toContain('import=7');
+    expect(href).toContain('source=rule');
+    expect(href).not.toContain('group=');
+  });
+
+  it('the uncategorized cluster drills down on ?category=uncategorized, with no exact flag to be wrong about', () => {
+    const { container } = renderGrouped({
+      groups: [{ categoryId: null, categoryName: 'Uncategorized', parentId: null, count: 5, totalCents: -900 }],
+      groupCount: 1,
+    });
+    const link = Array.from(container.querySelectorAll('a')).find((a) =>
+      (a.textContent ?? '').startsWith('See all 5 in the list'),
+    );
+    expect(link?.getAttribute('href')).toContain('category=uncategorized');
+    expect(link?.getAttribute('href')).not.toContain('exact=');
+  });
+
+  it('the pager counts GROUPS, in words that cannot be read as rows', () => {
+    const { container } = renderGrouped({ page: 1, pageSize: 25, pageCount: 2, groupCount: 40, totalCount: 312 });
+    expect(container.textContent).toContain('Groups 1–25 of 40');
+    expect(container.textContent).toContain('312 transactions in this view');
+    // The shape that would be misread: a bare page number over a list of categories.
+    expect(container.textContent).not.toContain('Page 1 of 2');
+  });
+
+  it('the pager links move gpage and leave every other filter alone', () => {
+    const { container } = renderGrouped({ page: 2, pageSize: 25, pageCount: 3, groupCount: 60, totalCount: 500 });
+    const links = Array.from(container.querySelectorAll('a'));
+    const previous = links.find((a) => (a.textContent ?? '').trim() === 'Previous groups');
+    const next = links.find((a) => (a.textContent ?? '').trim() === 'Next groups');
+    expect(previous?.getAttribute('href')).toContain('gpage=1');
+    expect(next?.getAttribute('href')).toContain('gpage=3');
+    expect(next?.getAttribute('href')).toContain('source=rule');
+  });
+
+  it('offers no pager links at either end of the group list', () => {
+    const { container } = renderGrouped();
+    const links = Array.from(container.querySelectorAll('a')).map((a) => (a.textContent ?? '').trim());
+    expect(links).not.toContain('Previous groups');
+    expect(links).not.toContain('Next groups');
+  });
+
+  it('an ordinary render (no groups prop) still shows the table, unchanged', () => {
+    const { container } = render(
+      <TransactionsClient page={pageWithRow()} accounts={[]} categories={[]} people={[]} today="2026-03-02" />,
+    );
+    expect(container.querySelector('table')).toBeTruthy();
+    expect(container.querySelector('ul[data-category-groups]')).toBeNull();
+  });
+});
+
+describe('v1.26.0 Lane 3a item 4: the group bulk actions', () => {
+  it('states the group’s TRUE count, not the number of rows rendered on this page', async () => {
+    renderGrouped();
+    // The page prop carries exactly ONE row; the group carries 37. The dialog must say 37.
+    fireEvent.click(screen.getAllByRole('button', { name: 'These are all correct' })[0]);
+    expect(screen.getByRole('dialog', { name: /Confirm 37 transactions in Groceries/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Confirm all 37' })).toBeTruthy();
+    expect(screen.getByText(/whole group of 37, not only what is on screen/)).toBeTruthy();
+  });
+
+  it('confirm posts the page’s filter and the cluster, never a list of rendered row ids', async () => {
+    const { bulkConfirmGroupAction } = await import('@/app/(app)/transactions/actions');
+    const spy = vi.mocked(bulkConfirmGroupAction);
+    spy.mockClear();
+    const { container } = renderGrouped();
+    fireEvent.click(screen.getAllByRole('button', { name: 'These are all correct' })[0]);
+    fireEvent.submit(container.querySelector('[data-testid="group-confirm-dialog-backdrop"] form') as HTMLFormElement);
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    const submitted = spy.mock.calls.at(-1)![1] as FormData;
+    expect(submitted.get('scope')).toBe('import=7&source=rule&group=category');
+    expect(submitted.get('groupCategoryId')).toBe('42');
+    expect(submitted.get('ids')).toBeNull();
+  });
+
+  it('confirm: Cancel closes the dialog and writes nothing', async () => {
+    const { bulkConfirmGroupAction } = await import('@/app/(app)/transactions/actions');
+    const spy = vi.mocked(bulkConfirmGroupAction);
+    spy.mockClear();
+    renderGrouped();
+    fireEvent.click(screen.getAllByRole('button', { name: 'These are all correct' })[0]);
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('offers no confirm on the uncategorized cluster -- there is no category there to agree with', () => {
+    renderGrouped({
+      groups: [{ categoryId: null, categoryName: 'Uncategorized', parentId: null, count: 5, totalCents: -900 }],
+      groupCount: 1,
+    });
+    expect(screen.queryByRole('button', { name: 'These are all correct' })).toBeNull();
+    // Recategorize IS offered for it: filing what the rules had no opinion about is the useful case.
+    expect(screen.getByRole('button', { name: 'Recategorize the group…' })).toBeTruthy();
+  });
+
+  it('recategorize states the true count and names the destination it is about to post', async () => {
+    renderGrouped();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Recategorize the group…' })[0]);
+    expect(screen.getByRole('dialog', { name: /Recategorize 37 transactions in Groceries/ })).toBeTruthy();
+    // Opens with nothing chosen: no destination is ever pre-armed, and Save is refused until the
+    // household answers -- see the Recategorize button's own comment for why neither the first
+    // category nor the group's own is a safe default here.
+    expect(screen.getByText('Pick a category to move all 37 transactions into.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Move all 37' })).toHaveProperty('disabled', true);
+    fireEvent.change(screen.getByLabelText('Move them to'), { target: { value: '43' } });
+    expect(screen.getByText('All 37 transactions move from Groceries to Coffee.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Move all 37' })).toHaveProperty('disabled', false);
+  });
+
+  it('recategorize posts the filter, the cluster, the target category and the rule choice', async () => {
+    const { bulkRecategorizeGroupAction } = await import('@/app/(app)/transactions/actions');
+    const spy = vi.mocked(bulkRecategorizeGroupAction);
+    spy.mockClear();
+    const { container } = renderGrouped();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Recategorize the group…' })[0]);
+    fireEvent.change(screen.getByLabelText('Move them to'), { target: { value: '43' } });
+    fireEvent.submit(
+      container.querySelector('[data-testid="group-recategorize-dialog-backdrop"] form') as HTMLFormElement,
+    );
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    const submitted = spy.mock.calls.at(-1)![1] as FormData;
+    expect(submitted.get('scope')).toBe('import=7&source=rule&group=category');
+    expect(submitted.get('groupCategoryId')).toBe('42');
+    expect(submitted.get('categoryId')).toBe('43');
+    // Ticked by default: a correction that does not teach a rule leaves the next import to be
+    // misfiled the same way.
+    expect(submitted.get('createRules')).toBe('on');
+  });
+
+  it('recategorize: Cancel closes the dialog and writes nothing', async () => {
+    const { bulkRecategorizeGroupAction } = await import('@/app/(app)/transactions/actions');
+    const spy = vi.mocked(bulkRecategorizeGroupAction);
+    spy.mockClear();
+    renderGrouped();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Recategorize the group…' })[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('both dialogs warn that a split transaction is left alone, before anything is written', () => {
+    renderGrouped();
+    fireEvent.click(screen.getAllByRole('button', { name: 'These are all correct' })[0]);
+    expect(screen.getByText(/A split transaction is left\s+alone/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Recategorize the group…' })[0]);
+    expect(screen.getByText(/A split transaction is left\s+alone/)).toBeTruthy();
+  });
+});
+
+describe('v1.26.0 Lane 3a item 1: the sort control', () => {
+  function renderSortable(currentQuery: string) {
+    return render(
+      <TransactionsClient
+        page={pageWithRow()}
+        accounts={[]}
+        categories={[]}
+        people={[]}
+        today="2026-03-02"
+        currentQuery={currentQuery}
+      />,
+    );
+  }
+
+  it('offers each sort field as a link that changes only ?sort=', () => {
+    renderSortable('account=3');
+    expect(screen.getByRole('link', { name: 'Date' }).getAttribute('href')).toBe('/transactions?account=3&sort=date');
+    expect(screen.getByRole('link', { name: 'Amount' }).getAttribute('href')).toBe('/transactions?account=3&sort=amount');
+    expect(screen.getByRole('link', { name: 'Category' }).getAttribute('href')).toBe(
+      '/transactions?account=3&sort=category',
+    );
+  });
+
+  it('"Default" is the active option with no ?sort=, and its link DELETES the param rather than spelling it', () => {
+    renderSortable('account=3');
+    const fallback = screen.getByRole('link', { name: 'Default' });
+    expect(fallback.getAttribute('aria-current')).toBe('page');
+    expect(fallback.getAttribute('href')).toBe('/transactions?account=3');
+  });
+
+  it('shows no direction control until a sort is chosen -- a direction alone changes nothing', () => {
+    renderSortable('');
+    expect(screen.queryByRole('link', { name: 'Newest first' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Oldest first' })).toBeNull();
+  });
+
+  it('labels the direction pair for the field being sorted, and marks desc active by default', () => {
+    renderSortable('sort=date');
+    expect(screen.getByRole('link', { name: 'Newest first' }).getAttribute('aria-current')).toBe('page');
+    expect(screen.getByRole('link', { name: 'Oldest first' }).getAttribute('href')).toContain('dir=asc');
+  });
+
+  it('says "Highest/Lowest" for a SIGNED amount rather than promising largest-first', () => {
+    renderSortable('sort=amount');
+    expect(screen.getByRole('link', { name: 'Highest first' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Lowest first' })).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Largest first' })).toBeNull();
+  });
+
+  it('says A–Z for category, with the alphabetical direction offered first', () => {
+    renderSortable('sort=category&dir=asc');
+    expect(screen.getByRole('link', { name: 'A–Z' }).getAttribute('aria-current')).toBe('page');
+    expect(screen.getByRole('link', { name: 'Z–A' })).toBeTruthy();
+  });
+
+  it('a junk ?sort= value leaves "Default" active and no direction row, exactly as if absent', () => {
+    renderSortable('sort=sideways');
+    expect(screen.getByRole('link', { name: 'Default' }).getAttribute('aria-current')).toBe('page');
+    expect(screen.queryByRole('link', { name: 'Newest first' })).toBeNull();
+  });
+
+  it('carries the sort through the filter form, so re-filtering does not silently reset it', () => {
+    const { container } = renderSortable('sort=amount&dir=asc');
+    expect(container.querySelector('input[type="hidden"][name="sort"]')?.getAttribute('value')).toBe('amount');
+    expect(container.querySelector('input[type="hidden"][name="dir"]')?.getAttribute('value')).toBe('asc');
+  });
+});
+
+describe('v1.26.0 Lane 3a item 3: the source filter and the source badge', () => {
+  function renderWithQuery(currentQuery: string, row: Partial<TransactionRow> = {}) {
+    return render(
+      <TransactionsClient
+        page={pageWithRow(row)}
+        accounts={[]}
+        categories={[]}
+        people={[]}
+        today="2026-03-02"
+        currentQuery={currentQuery}
+      />,
+    );
+  }
+
+  it('offers each source as a link that changes only ?source=', () => {
+    renderWithQuery('account=3');
+    expect(screen.getByRole('link', { name: 'Rules' }).getAttribute('href')).toBe('/transactions?account=3&source=rule');
+    expect(screen.getByRole('link', { name: 'Guesses' }).getAttribute('href')).toBe('/transactions?account=3&source=bayes');
+    expect(screen.getByRole('link', { name: 'By hand' }).getAttribute('href')).toBe('/transactions?account=3&source=manual');
+    expect(screen.getByRole('link', { name: 'Nothing yet' }).getAttribute('href')).toBe('/transactions?account=3&source=none');
+  });
+
+  it('clears itself with "Any" -- not a second pill named "All", which the transfer row already owns', () => {
+    renderWithQuery('source=rule');
+    expect(screen.getByRole('link', { name: 'Any' }).getAttribute('href')).toBe('/transactions');
+    expect(screen.getByRole('link', { name: 'Rules' }).getAttribute('aria-current')).toBe('page');
+    // Exactly one "All" on the card: the transfer view's own.
+    expect(screen.getAllByRole('link', { name: 'All' })).toHaveLength(1);
+  });
+
+  it('a junk ?source= value leaves "Any" active rather than refusing', () => {
+    renderWithQuery('source=nonsense');
+    expect(screen.getByRole('link', { name: 'Any' }).getAttribute('aria-current')).toBe('page');
+  });
+
+  it('renders a quiet badge per source on both the table row and the card', () => {
+    const { container } = renderWithQuery('', { source: 'rule' });
+    const badges = Array.from(container.querySelectorAll('span.badge')).filter(
+      (node) => (node.textContent ?? '').trim() === 'set by rule',
+    );
+    // One in the table, one in the card list -- the two renderers this file deliberately keeps in
+    // step (transactionCard's own docblock).
+    expect(badges).toHaveLength(2);
+    expect(badges[0].className).toContain('badge--muted');
+    expect(badges[0].className).not.toContain('badge--amber');
+    expect(badges[0].className).not.toContain('badge--red');
+  });
+
+  it('words each source differently, and never as the bare noun the rename badge uses', () => {
+    for (const [source, label] of [
+      ['rule', 'set by rule'],
+      ['bayes', 'set by guess'],
+      ['manual', 'set by hand'],
+    ] as const) {
+      const { container } = renderWithQuery('', { source });
+      const table = container.querySelector('table')!;
+      expect(
+        Array.from(table.querySelectorAll('span.badge')).some((node) => (node.textContent ?? '').trim() === label),
+      ).toBe(true);
+      // The rename badge's own text, which must never be what this badge says.
+      expect(Array.from(table.querySelectorAll('span.badge')).map((node) => node.textContent)).not.toContain('rule');
+      cleanup();
+    }
+  });
+
+  it('renders no badge for a row nothing has categorized -- the empty category select already says it', () => {
+    const { container } = renderWithQuery('', { source: 'none', categoryId: null, categoryName: null });
+    const texts = Array.from(container.querySelectorAll('span.badge')).map((node) => (node.textContent ?? '').trim());
+    expect(texts.filter((text) => text.startsWith('set by'))).toEqual([]);
+  });
+
+  it('stays a plain span, while the rename badge stays a button -- different in the accessibility tree, not only in colour', () => {
+    const { container } = renderWithQuery('', {
+      source: 'rule',
+      displayDescription: 'Greenfield Market',
+      displaySource: 'rename',
+    });
+    const table = container.querySelector('table')!;
+    const rename = within(table).getByRole('button', { name: 'Why TIM HORTONS shows this name' });
+    expect(rename.textContent).toBe('rule');
+    expect(rename.className).toContain('badge--blue');
+    expect(within(table).queryByRole('button', { name: /set by rule/ })).toBeNull();
+  });
+});
+
+describe('v1.26.0 Lane 3a: what the review filter does and does not offer', () => {
+  function renderReview() {
+    return render(
+      <TransactionsClient
+        page={pageWithRow()}
+        accounts={[]}
+        categories={[]}
+        people={[]}
+        today="2026-03-02"
+        reviewMode
+        currentQuery="review=1"
+      />,
+    );
+  }
+
+  it('offers sort in the queue -- ordering a queue by amount is as reasonable as ordering the list by it', () => {
+    renderReview();
+    expect(screen.getByRole('link', { name: 'Amount' })).toBeTruthy();
+  });
+
+  it('offers neither the grouped view nor the source filter, whose options would be lies inside REVIEW_WHERE', () => {
+    renderReview();
+    expect(screen.queryByRole('link', { name: 'By category' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Rules' })).toBeNull();
   });
 });

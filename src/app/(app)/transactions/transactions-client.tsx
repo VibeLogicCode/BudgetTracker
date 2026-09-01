@@ -38,7 +38,15 @@ import { type ResolvedRange } from '@/lib/date-range';
 import type { LoanLink } from '@/lib/loans';
 import { formatCents, parseAmountToCents, sumCents } from '@/lib/money';
 import type { SplitRow } from '@/lib/splits';
-import type { TransactionPage, TransactionRow } from '@/lib/transactions';
+import type {
+  CategorizationSource,
+  CategoryGroupPage,
+  CategoryGroupRow,
+  SortDirection,
+  TransactionPage,
+  TransactionRow,
+  TransactionSort,
+} from '@/lib/transactions';
 import { LOAN_DIRECTIONS, LOAN_DIRECTION_LABELS } from '@/lib/warranty/constants';
 import {
   acceptAllGuessesAction,
@@ -47,7 +55,11 @@ import {
   assignToLoanAction,
   bulkAssignToLoanAction,
   bulkCategorizeAction,
+  // v1.26.0 Lane 3a item 4: the two group-header actions -- see their own docblocks in actions.ts
+  // for why each posts the page's filter rather than a list of rendered row ids.
+  bulkConfirmGroupAction,
   bulkNoteAction,
+  bulkRecategorizeGroupAction,
   bulkTransferAction,
   createLoanFromTransactionAction,
   renameTransactionAction,
@@ -176,7 +188,13 @@ function filterHref(current: string, key: string, value: string | null): string 
   const params = new URLSearchParams(current);
   if (value === null) params.delete(key);
   else params.set(key, value);
-  params.delete('page');
+  // v1.26.0 Lane 3a: `gpage` joins `page` here for the identical reason -- changing what is being
+  // filtered belongs back at the start of whichever pager is in play, and a group page number left
+  // behind by a filter change points at a page of clusters that no longer exists (the household
+  // would land on an empty grouped view and read it as "the rules did nothing"). `key` itself is
+  // exempt from the reset so the GROUP PAGER's own links, which are `filterHref(..., 'gpage', n)`,
+  // are not silently emptied by the very line meant to reset them.
+  for (const reset of ['page', 'gpage']) if (reset !== key) params.delete(reset);
   const query = params.toString();
   return query.length > 0 ? `/transactions?${query}` : '/transactions';
 }
@@ -220,6 +238,122 @@ const QUEUE_CHIP_OPTIONS: { value: '' | 'suggested' | 'uncategorized'; label: st
   { value: 'uncategorized', label: 'Not categorized', param: 'uncategorized' },
 ];
 
+/**
+ * v1.26.0 Lane 3a item 1. `?sort=` / `?dir=`, same `{ value, label, param }` shape as
+ * TRANSFER_VIEW_OPTIONS/QUEUE_CHIP_OPTIONS above so all four rows feed the same filterHref and the
+ * same PillNav -- only the query key differs.
+ *
+ * "Default" is a real, first-class option rather than an absence someone has to guess at, and its
+ * `param: null` DELETES `?sort=` (filterHref's null-means-delete contract). That matters more here
+ * than for the other rows: `sort` absent is the ONLY value that leaves this page's ordering exactly
+ * as it has always been -- newest first, or oldest first while working the review queue
+ * (TransactionFilter.sort's own doc comment, src/lib/transactions.ts) -- and `?sort=date&dir=desc`
+ * is NOT the same thing (it would override the queue's own oldest-first order). So there has to be
+ * a way back to it, and it has to be a deletion, not a spelling.
+ *
+ * A leftover `?dir=` after clicking Default is left in the URL on purpose. filterHref changes one
+ * param per link by design (its own docblock), and a direction with no sort is inert at every layer
+ * -- orderByFor returns the default branch before it ever reads `direction`, and readFilter
+ * (filter-params.ts) does not even put it on the filter object. Chaining two edits into one href to
+ * tidy a param that changes nothing would mean a second href helper, which this page deliberately
+ * does not have.
+ */
+const SORT_OPTIONS: { value: '' | TransactionSort; label: string; param: string | null }[] = [
+  { value: '', label: 'Default', param: null },
+  { value: 'date', label: 'Date', param: 'date' },
+  { value: 'amount', label: 'Amount', param: 'amount' },
+  { value: 'category', label: 'Category', param: 'category' },
+];
+
+/**
+ * v1.26.0 Lane 3a item 1. The direction row's labels, per sort field. "Ascending/Descending" is
+ * accurate and tells a person nothing. Category's pair says A-Z rather than "first/last" because an
+ * alphabetical run is what it is -- and neither label mentions the uncategorized rows, which sort
+ * LAST in both directions by design (TransactionFilter.direction's own doc comment), so no label
+ * here can promise otherwise.
+ *
+ * Amount says "Highest"/"Lowest", NOT "Largest"/"Smallest", and the difference is not stylistic.
+ * `amount_cents` is SIGNED -- spending is negative -- so descending puts a $1 coffee above a $900
+ * rent payment and income above everything. "Largest first" would be read as "largest spend
+ * first", which is what `dir=asc` actually does, and a label that names the opposite of what the
+ * click delivers is worse than a dry one. Highest and lowest are literally true of a signed column
+ * in both directions.
+ */
+const DIRECTION_LABELS: Record<TransactionSort, Record<SortDirection, string>> = {
+  date: { desc: 'Newest first', asc: 'Oldest first' },
+  amount: { desc: 'Highest first', asc: 'Lowest first' },
+  category: { asc: 'A–Z', desc: 'Z–A' },
+};
+
+/**
+ * v1.26.0 Lane 3a item 3. `?source=`, the filter the audit view exists for: REVIEW_WHERE
+ * (src/lib/categorize/engine.ts) is `category IS NULL OR source = 'bayes'`, so a rule-assigned row
+ * never enters the review queue and, before this release, no surface on this page could show what
+ * the rules had decided. "Rules" is the first non-All option for that reason.
+ *
+ * Labels name what a person did, or did not do -- "By hand", "Nothing yet" -- rather than the
+ * column's own values ('manual', 'none'), which are names for the database's benefit. "Guesses"
+ * matches the wording the row badges and the review queue already use for the classifier.
+ *
+ * The clear-the-filter option is "Any", not "All", and that is not a synonym chosen for variety:
+ * the transfer-view row a few lines up this card already has an option labelled "All", so a second
+ * "All" would put two identically-named pills on one card with different meanings -- ambiguous to
+ * read, and ambiguous to name in a test or to a screen reader walking the two `<nav>` landmarks.
+ * "Set by: Any" also reads as the sentence the label makes, which "Set by: All" does not.
+ */
+const SOURCE_FILTER_OPTIONS: { value: '' | CategorizationSource; label: string; param: string | null }[] = [
+  { value: '', label: 'Any', param: null },
+  { value: 'rule', label: 'Rules', param: 'rule' },
+  { value: 'bayes', label: 'Guesses', param: 'bayes' },
+  { value: 'manual', label: 'By hand', param: 'manual' },
+  { value: 'none', label: 'Nothing yet', param: 'none' },
+];
+
+/**
+ * v1.26.0 Lane 3a item 2. `?group=category`. Two options, one param, same shape as everything
+ * above -- and a mode switch rather than a filter, which is why it reads "List" / "By category"
+ * instead of naming what is being kept.
+ */
+const GROUP_VIEW_OPTIONS: { value: '' | 'category'; label: string; param: string | null }[] = [
+  { value: '', label: 'List', param: null },
+  { value: 'category', label: 'By category', param: 'category' },
+];
+
+/**
+ * v1.26.0 Lane 3a item 3. What each row's badge says about where its category came from.
+ *
+ * THIS IS INFORMATION, NOT A WARNING, and the styling says so: `badge--muted` is this app's one
+ * quiet badge (transparent, dashed outline, `--subtle` text -- globals.css, where its own comment
+ * describes it as the tone that "never gets mistaken for a status the app actually determined").
+ * Fifty amber rows after an import get ignored exactly the way fifty red ones would, which is the
+ * same reasoning bankBadgeButton's docblock already records for declining a colour warning there.
+ *
+ * KEPT DISTINGUISHABLE FROM THE RENAME BADGE, which is the real hazard: this row can already carry
+ * a badge whose text is the single word `rule`, and that one means "a rename rule replaced the
+ * merchant TEXT" -- a different rule kind, about a different column, with a different consequence.
+ * Three separate things keep them apart, so no one of them has to carry it alone:
+ *   - WORDING. "set by rule" names the act (something was set) and reads as a sentence fragment
+ *     about the category; the rename badge is a bare noun, `rule`. Neither string is a prefix or
+ *     substring of the other, so a test (and a person scanning) can tell them apart by text alone.
+ *   - TONE. The rename badge is `badge--blue` -- filled, `--info-soft` -- and every one of these is
+ *     `badge--muted`, outlined and unfilled. Filled versus outlined is the strongest non-colour
+ *     difference the badge vocabulary has, so this survives a colour-blind reader and a greyscale
+ *     screenshot.
+ *   - AFFORDANCE. The rename badge is a BUTTON that opens the bank-text dialog (bankBadgeButton);
+ *     these are plain `<span>`s with nothing to activate. So they differ in the accessibility tree
+ *     too, not merely in appearance: one is announced as a button with a name, the other as text.
+ *
+ * `none` maps to null -- no badge at all. A row with nothing yet has an empty category select
+ * sitting beside it saying the identical thing, and an outlined chip reading "set by nothing" is a
+ * badge that exists to describe an absence the reader is already looking at.
+ */
+const SOURCE_BADGE_LABELS: Record<CategorizationSource, string | null> = {
+  rule: 'set by rule',
+  bayes: 'set by guess',
+  manual: 'set by hand',
+  none: null,
+};
+
 export function TransactionsClient({
   page,
   accounts,
@@ -235,6 +369,8 @@ export function TransactionsClient({
   reviewMode = false,
   reviewCount = 0,
   matchingCounts = {},
+  renameRules = {},
+  groups = null,
   currentQuery = '',
 }: {
   page: TransactionPage;
@@ -271,6 +407,28 @@ export function TransactionsClient({
    *  category to all N matching…" kebab item never appears for a table row. */
   matchingCounts?: Record<number, number>;
   /**
+   * v1.26.0 Lane 1 (owner report: "shows amazon i dont know what orignal entry was so maybe its
+   * wrong maybe its not"). Keyed by transaction id, only for a row whose display_source is
+   * 'rename' AND whose current rename rule could actually be resolved (page.tsx's own doc
+   * comment on this prop has the "why absent, not null" reasoning) -- what bankTextDialog (below)
+   * needs to show the "Rule: contains AMAZON → "Amazon"" line and its Edit/Delete links. Empty
+   * outside review of a rename, the same "extra data about this page's rows" shape loanLinks/
+   * splits already use above.
+   */
+  renameRules?: Record<number, { pattern: string; matchType: string; renameTo: string; ruleId: number }>;
+  /**
+   * v1.26.0 Lane 3a item 2. groupTransactionsByCategory's page of clusters (src/lib/transactions.ts)
+   * for the SAME filter the row list above was built from -- `null` whenever `?group=category` is
+   * off, which is also how this component decides which view to render. One value, not a `groups`
+   * plus a `groupMode` boolean that could disagree with it.
+   *
+   * Every group here carries its FULL count and subtotal, across every row page it spans (that
+   * function's own doc comment). That is what lets a group header state a number the bulk actions
+   * below can honour -- and it is why they post the page's filter rather than the ids of rendered
+   * rows, which are not the same set (see bulkConfirmGroupAction's docblock, actions.ts).
+   */
+  groups?: CategoryGroupPage | null;
+  /**
    * Bug fix (owner report, category chips silently dropping every other filter): the querystring
    * this request arrived with, already parsed by page.tsx (readFilter's own `params`) and handed
    * down as a plain string rather than re-derived from `window.location.search` on the client.
@@ -304,6 +462,15 @@ export function TransactionsClient({
   // Mirrors `renaming` exactly (ruling R13): one nullable slot of state, so opening the note
   // sub-row on a different row always replaces whichever one was already open.
   const [noting, setNoting] = useState<{ id: number; current: string } | null>(null);
+  /**
+   * v1.26.0 Lane 1. Mirrors `noting` exactly: one nullable slot, so opening the bank-text dialog
+   * (bankTextDialog, below) on a different row always replaces whichever one was already open. A
+   * plain row id rather than a small captured object -- unlike renaming/splitting, nothing here
+   * needs to remember a value from the moment the dialog opened; bankTextDialog looks its row up
+   * fresh from `page.rows` (findRow, below) every render, the same way renameDialog/noteDialog/
+   * newLoanDialog/applyAllDialog already do.
+   */
+  const [bankTextRow, setBankTextRow] = useState<number | null>(null);
   // Addendum A, ruling A1: mirrors `noting` exactly -- one nullable slot, so opening the
   // "Assign to loan…" sub-row on a different row always replaces whichever one was open.
   //
@@ -330,11 +497,29 @@ export function TransactionsClient({
   const [bulkLoan, setBulkLoan] = useState<{ itemId: string } | null>(null);
   /** Mirrors `bulkLoan` immediately above: one nullable slot for the bulk note dialog. */
   const [bulkNoting, setBulkNoting] = useState(false);
+  /**
+   * v1.26.0 Lane 3a item 4. The two group-header actions' dialog state -- one nullable slot each,
+   * the same "one editor, replacing whichever was open" shape `bulkLoan`/`bulkNoting` already use,
+   * scoped to one CLUSTER rather than to the `selected` array. The whole CategoryGroupRow is
+   * captured (not just its id) because the dialog has to state the group's name, its true row count
+   * and its subtotal, and those are exactly the numbers the header the person just clicked showed
+   * them -- re-deriving them from `groups` on every render would let the dialog and the header
+   * disagree if the group page ever changed underneath it. `recatGroup.categoryId` is a CONTROLLED
+   * select for the same reason bulkLoan.itemId is: it drives the dialog's own live sentence about
+   * where the group is going, before Save is ever pressed.
+   */
+  const [confirmGroup, setConfirmGroup] = useState<CategoryGroupRow | null>(null);
+  const [recatGroup, setRecatGroup] = useState<{ group: CategoryGroupRow; categoryId: string } | null>(null);
   const [attrState, attrAction] = useActionState(setAttributionAction, initial);
   const [bulkCatState, bulkCatAction] = useActionState(bulkCategorizeAction, initial);
   const [bulkTfrState, bulkTfrAction] = useActionState(bulkTransferAction, initial);
   const [bulkLoanState, bulkLoanAction] = useActionState(bulkAssignToLoanAction, initial);
   const [bulkNoteState, bulkNoteFormAction] = useActionState(bulkNoteAction, initial);
+  // v1.26.0 Lane 3a item 4: one instance each, for the same reason acceptState and acceptAllState
+  // are kept apart below -- two different server functions, and a confirm in flight must not be
+  // able to show a recategorize's error (or vice versa).
+  const [confirmGroupState, confirmGroupFormAction] = useActionState(bulkConfirmGroupAction, initial);
+  const [recatGroupState, recatGroupFormAction] = useActionState(bulkRecategorizeGroupAction, initial);
   const [renameState, renameAction] = useActionState(renameTransactionAction, initial);
   const [assignState, assignLoan] = useActionState(
     (_prev: ActionState, formData: FormData) => assignToLoanAction(formData),
@@ -498,6 +683,51 @@ export function TransactionsClient({
   const activeQueueChip: '' | 'suggested' | 'uncategorized' =
     queueParam === 'suggested' ? 'suggested' : queueParam === 'uncategorized' ? 'uncategorized' : '';
 
+  /**
+   * v1.26.0 Lane 1 item 4 (the owner's actual workflow -- auditing fifty rows after an import,
+   * which per-row clicking does not scale to). Same "read it off currentQuery" idiom as
+   * activeQueueChip/activeTransferView just above -- absent, or a hand-edited junk value, both
+   * mean off; only the literal '1' turns it on. TABLE-only: the card list already shows a
+   * rule-renamed row's bank text unconditionally (transactionCard's own fix, item 1 of this same
+   * task), so this has nothing to add there -- see the toggle link's own comment beside TableWrap
+   * below for where it is read.
+   */
+  const bankTextOn = new URLSearchParams(currentQuery).get('bank') === '1';
+
+  /**
+   * v1.26.0 Lane 3a. The four new params' active values, read off `currentQuery` -- the same
+   * "the SERVER already knows the filter, do not re-derive it from window.location" idiom
+   * activeTransferView/activeQueueChip/bankTextOn above all follow, and the same fall-back-rather-
+   * than-refuse rule: a hand-edited junk value reads as the default option, never as a refusal or
+   * an empty page. The parse deliberately MIRRORS filter-params.ts's own readers rather than
+   * importing them -- that module reaches readEnv()/todayIso() for the date range and belongs to
+   * the server; what is shared between the two sides is the URL CONTRACT, and each side reads the
+   * two or three params it actually renders from.
+   *
+   * `activeGroupView` comes from the `groups` PROP, not from the querystring, on purpose: the prop
+   * is null exactly when page.tsx decided the grouped view is off, so reading it here means the
+   * pill's active state and the view actually rendered cannot disagree -- a URL parse could say
+   * "grouped" while the data said otherwise.
+   */
+  const sortParam = new URLSearchParams(currentQuery).get('sort');
+  const activeSort: '' | TransactionSort =
+    sortParam === 'date' || sortParam === 'amount' || sortParam === 'category' ? sortParam : '';
+  const activeDirection: SortDirection = new URLSearchParams(currentQuery).get('dir') === 'asc' ? 'asc' : 'desc';
+  const sourceParam = new URLSearchParams(currentQuery).get('source');
+  const activeSource: '' | CategorizationSource =
+    sourceParam === 'rule' || sourceParam === 'bayes' || sourceParam === 'manual' || sourceParam === 'none'
+      ? sourceParam
+      : '';
+  const activeGroupView: '' | 'category' = groups !== null ? 'category' : '';
+  /** `?import=<id>`. Shown as a dismissible chip (below) rather than only being honoured silently:
+   *  a batch nobody can see they are inside is a batch they cannot get out of, and the import audit
+   *  link (`/transactions?import=<id>&source=rule&group=category`) is the one filter on this page a
+   *  person arrives at without having clicked a control for it. Digits only, so a junk value falls
+   *  back to "no import filter" and the chip is simply absent -- matching what readFilter does with
+   *  it server-side. */
+  const importParam = new URLSearchParams(currentQuery).get('import');
+  const activeImportId = importParam !== null && /^\d+$/.test(importParam) ? importParam : null;
+
   const toggle = (id: number) => setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   // v1.7.0 bulk-guard fix: Categorize and Mark transfer both silently skip a split
   // transaction now (its money already lives in transaction_splits, not this row's own
@@ -531,12 +761,17 @@ export function TransactionsClient({
     attrState.message ?? bulkCatState.message ?? bulkTfrState.message ??
     renameState.message ?? assignState.message ?? unassignState.message ?? splitState.message ?? noteState.message ??
     bulkLoanState.message ?? bulkNoteState.message ??
+    // v1.26.0 Lane 3a item 4: the two group actions join this same group -- both dialogs close on
+    // submit (groupConfirmDialog/groupRecategorizeDialog's own onSubmit), so the top banner is the
+    // only place either one's result is ever seen, exactly like the two v1.25.0 bulk dialogs above.
+    confirmGroupState.message ?? recatGroupState.message ??
     acceptState.message ?? acceptAllState.message ?? rowTransferState.message;
   const error =
     newLoanState.error ?? applyAllState.error ??
     attrState.error ?? bulkCatState.error ?? bulkTfrState.error ??
     renameState.error ?? assignState.error ?? unassignState.error ?? splitState.error ?? noteState.error ??
     bulkLoanState.error ?? bulkNoteState.error ??
+    confirmGroupState.error ?? recatGroupState.error ??
     acceptState.error ?? acceptAllState.error ?? rowTransferState.error;
 
   // Review round: unlike renaming/noting/splitting (which close their own form onSubmit right
@@ -693,6 +928,67 @@ export function TransactionsClient({
         <NoteGlyph className="h-3.5 w-3.5" />
       </button>
     );
+  }
+
+  /**
+   * v1.26.0 Lane 1 (owner's screenshot: a row reading "Amazon" with a small blue `rule` badge --
+   * "shows amazon i dont know what orignal entry was so maybe its wrong maybe its not"). A
+   * `contains` rename rule can fire on text that is not the brand at all, so a clean display name
+   * alone never lets the household tell a correct rename from a wrong one -- the bank's own
+   * wording used to live only in a `title`, invisible on a phone and to a keyboard user.
+   *
+   * This is the fix for BOTH the table row and the card (transactionCard, below carry exactly the
+   * same control set, per that function's own docblock): every badge that already means "this
+   * row's own name replaced what the bank sent" -- 'renamed' (display_source = 'manual'), 'rule'
+   * (display_source = 'rename'), and the existing per-loan name badge when display_source =
+   * 'loan' -- becomes its own control, rather than a fourth glyph being added beside it. Mechanics
+   * copied from noteIndicator immediately above, not reinvented: `before:absolute
+   * before:-inset-[15px]` grows the badge to a ~44px touch target without the badge's own box (or
+   * the flex `gap-1.5` these badges sit in) growing to match, `title` stays a hover bonus never
+   * the only route, and the accessible name states what activating it does, the same
+   * "Edit note for X" shape noteIndicator's own label uses. Deliberately NOT a colour warning
+   * (the owner's own yellow suggestion, declined by the coordinator): a rename is a normal event
+   * on this page, and the badge already carries "something changed here" without needing to look
+   * alarming to say it -- fifty amber-bordered rows after one import would be ignored exactly the
+   * way fifty red ones would.
+   */
+  function bankBadgeButton(row: TransactionRow, label: React.ReactNode, key?: string) {
+    return (
+      <button
+        key={key}
+        type="button"
+        onClick={(event) => {
+          event.currentTarget.focus();
+          setBankTextRow(row.id);
+        }}
+        title={`Bank text: ${row.rawDescription}`}
+        aria-label={`Why ${row.normalizedMerchant} shows this name`}
+        className="badge badge--blue relative before:absolute before:-inset-[15px] before:content-[''] sm:before:inset-0"
+      >
+        {label}
+      </button>
+    );
+  }
+
+  /**
+   * v1.26.0 Lane 3a item 3. Where THIS row's category came from -- the badge that makes a silent
+   * rule decision visible on the row it was made about. SOURCE_BADGE_LABELS (above this component)
+   * carries the wording, the tone, and the full argument for why this cannot be confused with the
+   * blue `rule` RENAME badge sitting a few pixels away from it.
+   *
+   * Rendered on BOTH renderers (the table row and transactionCard), the rule transactionCard's own
+   * docblock sets for this file: a control or a fact added to one and not the other is how a
+   * feature goes missing on a phone. It REPLACES the table row's old amber `guess` badge rather
+   * than sitting beside it -- that badge said `source === 'bayes'` in a second vocabulary and an
+   * alarm-adjacent tone, so keeping it would have meant two chips making the same claim about one
+   * column, one of them shouting. The review card's own "guessed <category> (margin 0.82)" line is
+   * NOT touched: it carries the confidence figure, which is information this badge does not have
+   * and a triage queue specifically wants.
+   */
+  function sourceBadge(row: TransactionRow) {
+    const label = SOURCE_BADGE_LABELS[row.source];
+    if (label === null) return null;
+    return <span className="badge badge--muted">{label}</span>;
   }
 
   /**
@@ -1056,6 +1352,95 @@ export function TransactionsClient({
   }
 
   /**
+   * v1.26.0 Lane 1. What bankBadgeButton's touch target (above) promises: the bank's own wording
+   * in full, PLUS which of the three display_source values put a different name here and what to
+   * do about it -- "seeing the bank text answers half the question; the other half is what to do
+   * about it" (this task's own brief). 'rename' is the reported case; 'manual' and 'loan' get the
+   * same shell with their own honest wording rather than a copy of the rule case's, since neither
+   * one WAS a rule -- the plain per-row rename path and applyLoanDescription (src/lib/loans.ts,
+   * read for the wording, not called: MUST-13.2's boundary keeps this file out of that lane) both
+   * write display_source themselves, with no rule row behind either.
+   *
+   * The "Rule: …" line and its Edit/Delete links only ever appear when `renameRules` (page.tsx's
+   * own prop, see its doc comment) actually resolved one. A rule can be edited or deleted after it
+   * renamed a row, so a MISSING entry is treated exactly like "the rule list was never available"
+   * -- bank text still shows, the attribution does not (this task's brief: never invent a rule
+   * attribution that could name the wrong rule).
+   *
+   * "Rename just this one" posts through the SAME `renaming` state/renameDialog the row's own
+   * kebab "Rename…" item already opens (setRenaming, above) -- not a second rename path -- closing
+   * this dialog first so the two never render stacked at once. Edit/Delete both link to the same
+   * filtered Settings → Merchant rules URL: two labels because a person arrives with one of two
+   * different intents, one destination because that page's own inline edit form and delete dialog
+   * (v1.24.0) are what the destination is FOR -- duplicating either here is exactly what this
+   * task's brief says not to do.
+   */
+  function bankTextDialog() {
+    if (bankTextRow === null) return null;
+    const row = findRow(bankTextRow);
+    if (!row || row.displaySource === null) return null;
+    const rule = row.displaySource === 'rename' ? renameRules[row.id] : undefined;
+    const heading =
+      row.displaySource === 'rename'
+        ? 'Renamed by a rule'
+        : row.displaySource === 'manual'
+          ? 'Renamed by the household'
+          : 'Named by a linked loan';
+    return (
+      <RowDialog dialogId="bank-text-dialog" key={row.id} title={heading} onClose={() => setBankTextRow(null)}>
+        {/* Selectable and in full, per this task's brief -- the same `code` chip styling
+            renameDialog's own "All matching <code>X</code>" line already uses, not a new look. */}
+        <p className="text-sm text-ink">
+          Bank text: <code className="select-all rounded bg-surface-2 px-1 font-mono text-xs text-ink">{row.rawDescription}</code>
+        </p>
+        {row.displaySource === 'rename' ? (
+          rule ? (
+            <p className="text-sm text-muted">{`Rule: ${rule.matchType} ${rule.pattern} → "${rule.renameTo}"`}</p>
+          ) : (
+            <p className="text-sm text-muted">Which rule set this name could not be determined.</p>
+          )
+        ) : row.displaySource === 'manual' ? (
+          <p className="text-sm text-muted">Someone in the household typed this name in by hand.</p>
+        ) : (
+          <p className="text-sm text-muted">A loan this transaction is linked to set this description automatically.</p>
+        )}
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            className="btn btn--secondary btn--sm"
+            onClick={(event) => {
+              event.currentTarget.focus();
+              setBankTextRow(null);
+              setRenaming({ id: row.id, current: row.displayDescription ?? row.rawDescription, merchant: row.normalizedMerchant });
+            }}
+          >
+            Rename just this one
+          </button>
+          {rule ? (
+            <>
+              <Link
+                href={`/settings/merchant-rules?kind=rename&q=${encodeURIComponent(rule.pattern)}`}
+                className="btn btn--secondary btn--sm"
+              >
+                Edit the rule
+              </Link>
+              <Link
+                href={`/settings/merchant-rules?kind=rename&q=${encodeURIComponent(rule.pattern)}`}
+                className="btn btn--secondary btn--sm"
+              >
+                Delete the rule
+              </Link>
+            </>
+          ) : null}
+          <button type="button" className="btn btn--ghost btn--sm" onClick={() => setBankTextRow(null)}>
+            Close
+          </button>
+        </div>
+      </RowDialog>
+    );
+  }
+
+  /**
    * Refactor lane (2026-08-30): THE single row card. Before this task, this component's contents
    * existed twice -- once written for the review queue's own `<li>`, and completely separately as
    * the table's `<tr>`/`<td>` markup below -- and every control added to one silently never
@@ -1172,21 +1557,43 @@ export function TransactionsClient({
             >
               {row.displayDescription ?? row.normalizedMerchant}
             </strong>
-            {row.normalizedMerchant !==
-            row.rawDescription.trim().replace(/\s+/g, ' ').normalize('NFC').toUpperCase() ? (
+            {/* v1.26.0 Lane 1 item 1 (owner report: "shows amazon i dont know what orignal entry
+                was so maybe its wrong maybe its not"). A rule-renamed row shows the bank text
+                UNCONDITIONALLY -- a `contains` rule can fire on text that is not the brand at
+                all, and a card is where this app asks a person to VERIFY a row, so the bank's own
+                wording belongs on screen with no interaction, not behind the existing heuristic
+                just below (kept, unchanged, for every other row: it already covers the ordinary
+                "the merchant text needed cleaning up" case this task was never about). Muted, not
+                bold, so it never competes with the merchant name on the line above it. */}
+            {row.displaySource === 'rename' ||
+            row.normalizedMerchant !== row.rawDescription.trim().replace(/\s+/g, ' ').normalize('NFC').toUpperCase() ? (
               <>
                 {' '}
                 <span className="text-muted">— {row.rawDescription}</span>
               </>
             ) : null}
-            {row.displaySource === 'manual' ? <span className="badge badge--blue ml-1.5">renamed</span> : null}
-            {row.displaySource === 'rename' ? <span className="badge badge--blue ml-1.5">rule</span> : null}
+            {/* v1.26.0 Lane 1 item 2: the SAME badge-button treatment as the table row below --
+                bankBadgeButton's own docblock explains why this is the shared control set both
+                renderers must carry (transactionCard's own top-of-function docblock), not a
+                table-only afterthought. */}
+            {row.displaySource === 'manual' ? (
+              <span className="ml-1.5 inline-flex">{bankBadgeButton(row, 'renamed')}</span>
+            ) : null}
+            {row.displaySource === 'rename' ? (
+              <span className="ml-1.5 inline-flex">{bankBadgeButton(row, 'rule')}</span>
+            ) : null}
             {/* Same control set as the table row (below): a transfer badge, absent from this card
                before this task even though the table always carried one. */}
             {row.isTransfer ? <span className="badge badge--slate ml-1.5">transfer</span> : null}
-            {(loanLinks[row.id] ?? []).map((link) => (
-              <span key={`loan-badge-${link.id}`} className="badge badge--blue ml-1.5">{link.itemName}</span>
-            ))}
+            {(loanLinks[row.id] ?? []).map((link) =>
+              row.displaySource === 'loan' ? (
+                <span key={`loan-badge-${link.id}`} className="ml-1.5 inline-flex">
+                  {bankBadgeButton(row, link.itemName)}
+                </span>
+              ) : (
+                <span key={`loan-badge-${link.id}`} className="badge badge--blue ml-1.5">{link.itemName}</span>
+              ),
+            )}
           </span>
           {/* Amount + kebab grouped together so the two stay adjacent at the row's trailing edge
               (coordinator fix: the kebab moved here from its own trailing line -- see this
@@ -1204,6 +1611,11 @@ export function TransactionsClient({
           <span aria-hidden="true">·</span>
           <span>{row.accountName}</span>
           {noteIndicator(row)}
+          {/* v1.26.0 Lane 3a item 3: the same badge the table row carries (sourceBadge's own
+              docblock: both renderers or neither), on the card's META line rather than beside the
+              merchant name -- "where this category came from" is context for the row, the same
+              weight as its date and account, not part of its headline. */}
+          {sourceBadge(row)}
           {/* Ruling S5(c): no "uncategorized" fallback badge -- every card in a queue defined as
               "not categorized yet" carried it, which made it noise rather than information. */}
           {row.source === 'bayes' && row.categoryName ? (
@@ -1467,6 +1879,296 @@ export function TransactionsClient({
     );
   }
 
+  /**
+   * v1.26.0 Lane 3a item 2. One group header's destination: the SAME filtered list, drilled into
+   * that one cluster. `{ ...filter, categoryId: group.categoryId, categoryExact: true }` is what
+   * groupTransactionsByCategory's own doc comment (src/lib/transactions.ts) prescribes for a
+   * drill-down, spelled here as the two URL params readFilter turns back into exactly that.
+   *
+   * `exact=1` is load-bearing and not decoration: a cluster keyed by a PARENT category holds only
+   * the money filed DIRECTLY on that parent (which is why its label reads "<name> — not in a
+   * sub-category"), and a plain `?category=<id>` means the parent AND its children -- so without
+   * `exact` a parent group's link would land on a longer list than the header counted, and the
+   * household would read the difference as the app losing track.
+   *
+   * `group` is dropped, so the link lands on the flat LIST rather than a grouped view of one group.
+   * That is this task's expand-vs-link decision made concrete: a group header is a link, and no
+   * group ever fetches its own rows. Expanding N groups inline would mean N row queries on every
+   * render of this page -- fine on a seeded test database, and exactly the thing that is slow on
+   * real history -- and every one of those queries would have to be paginated separately while the
+   * header above it already states the cluster's FULL count, which is two numbers on one screen
+   * that can disagree. The disclosure below therefore reveals the group's ACTIONS, never its rows.
+   *
+   * Composed rather than chained: three params change (category, exact, group), and filterHref
+   * changes one per call by design. So the first two are applied to a copy of the querystring and
+   * the result is handed to filterHref as its `current` -- which still owns the last edit, the
+   * page/gpage reset and the path building. Same shape as categoryChipHref above (a named wrapper
+   * over the one href helper), not a second href helper.
+   */
+  function groupDrillHref(group: CategoryGroupRow): string {
+    const params = new URLSearchParams(currentQuery);
+    if (group.categoryId === null) {
+      params.set('category', 'uncategorized');
+      // No id to be exact about, and a stale `?exact=1` left on would be a param claiming
+      // something about a filter that has no category id in it at all.
+      params.delete('exact');
+    } else {
+      params.set('category', String(group.categoryId));
+      params.set('exact', '1');
+    }
+    return filterHref(params.toString(), 'group', null);
+  }
+
+  /**
+   * v1.26.0 Lane 3a item 2 (owner: "if rules set category grocier i can just scoll and look at all
+   * the groceries 1 shot whiel receiving rather then by just date"). The grouped view: one row per
+   * category cluster, largest absolute total first (groupTransactionsByCategory already returns
+   * them in that order -- no second sort here, which is what stops the screen and the data layer
+   * from ever disagreeing about which cluster is most worth checking).
+   *
+   * A native `<details>`, not a React-state disclosure. Three reasons, in order of weight: this page
+   * has NO client-side router (MonthNav.tsx's own docblock -- every filter is a real navigation), so
+   * per-group open state kept in React would be wiped by the very group-pager click that needs it
+   * most; `<details>` needs no JavaScript at all, so the summary line works on the first paint the
+   * server sends; and its content is a real part of the accessibility tree with a real
+   * expanded/collapsed state, which a `hidden`-classed div toggled by a button is not unless
+   * somebody remembers aria-expanded.
+   *
+   * The PAGER SAYS GROUPS, spelled out as a range. "Page 2 of 3" under a list of categories reads as
+   * rows to anybody who has used the rest of this page, and getting that wrong here is worse than
+   * usual: the household is trying to judge how much the rules did, so a number they misread as
+   * rows is a number that misleads them about the size of the batch. `groupCount` and `totalCount`
+   * are both from CategoryGroupPage, which computes them over the WHOLE filtered set rather than
+   * the visible page.
+   */
+  function groupList(groupPage: CategoryGroupPage) {
+    if (groupPage.groupCount === 0) {
+      return (
+        <Card as="div">
+          <EmptyState
+            icon={TransactionsIcon}
+            title="Nothing matches these filters"
+            action={
+              <Link href="/transactions" className="btn btn--secondary btn--sm">
+                Clear filters
+              </Link>
+            }
+          >
+            No transactions in this view, so there are no categories to group them under.
+          </EmptyState>
+        </Card>
+      );
+    }
+    const firstShown = (groupPage.page - 1) * groupPage.pageSize + 1;
+    const lastShown = Math.min(groupPage.groupCount, groupPage.page * groupPage.pageSize);
+    return (
+      <Card as="div">
+        {/* `data-category-groups`, the same "name the list so a query can find exactly it" idiom
+            `data-transaction-cards` already uses on the card lists below. Load-bearing rather than
+            decorative: PageGuide is itself a <details>/<summary> ("What is this page for?"), so an
+            unscoped `summary` query on this page finds the guide too -- which is precisely the kind
+            of near-miss that makes a test pass while asserting the wrong element. */}
+        <ul data-category-groups>
+          {groupPage.groups.map((group) => (
+            <li key={group.categoryId ?? 'uncategorized'} className="border-b border-line last:border-b-0">
+              <details>
+                {/* Left on `display: list-item` (no `flex` on the summary itself) so the browser's
+                    own disclosure triangle survives -- Chrome drops the marker the moment a summary
+                    becomes a flex container, and a disclosure with no marker is one nobody knows to
+                    click. The flex layout lives on the span INSIDE it instead. */}
+                <summary className="min-h-11 cursor-pointer px-4 py-3 marker:text-subtle sm:min-h-0 sm:px-5">
+                  <span className="inline-flex w-[calc(100%-1.5rem)] flex-wrap items-baseline justify-between gap-x-3 gap-y-1 align-middle">
+                    <span className="font-medium text-ink">{group.categoryName}</span>
+                    <span className="flex items-baseline gap-3 text-sm text-muted">
+                      <span className="tabnum">
+                        {group.count} transaction{group.count === 1 ? '' : 's'}
+                      </span>
+                      <Money cents={group.totalCents} className="font-semibold" />
+                    </span>
+                  </span>
+                </summary>
+                <div className="flex flex-wrap items-center gap-2 border-t border-line bg-surface-2/60 px-4 py-3 sm:px-5">
+                  <Link href={groupDrillHref(group)} className="btn btn--secondary btn--sm">
+                    {`See all ${group.count} in the list`}
+                  </Link>
+                  {/* The uncategorized cluster has no category to confirm -- confirmCategory needs a
+                      real category id, and "these are all correct" about nothing is not a sentence.
+                      Recategorize IS offered for it (and is one of the more useful things here:
+                      everything the rules had no opinion about, filed in one go). */}
+                  {group.categoryId !== null ? (
+                    <button type="button" className="btn btn--secondary btn--sm" onClick={() => setConfirmGroup(group)}>
+                      These are all correct
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="btn btn--secondary btn--sm"
+                    // Opens with NO destination chosen (`categoryId: ''`), deliberately. Seeding the
+                    // first category in the list would pre-arm a move of every row in this cluster
+                    // into a category nobody picked, one stray Enter away; seeding the group's OWN
+                    // category would make the default a no-op behind a button that says "Move all
+                    // 37". So the dialog asks, and its Save stays disabled until it is answered --
+                    // the same "Choose a category" opening state the split editor's own part
+                    // selects use.
+                    onClick={() => setRecatGroup({ group, categoryId: '' })}
+                  >
+                    Recategorize the group…
+                  </button>
+                </div>
+              </details>
+            </li>
+          ))}
+        </ul>
+        <CardFooter>
+          <span className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <span>
+              {`Groups ${firstShown}–${lastShown} of ${groupPage.groupCount} — ${groupPage.totalCount} transaction${groupPage.totalCount === 1 ? '' : 's'} in this view`}
+            </span>
+            {/* Real links, not a client-side pager: `?gpage=` is the group page, and filterHref
+                leaves every other active filter alone (its own docblock) while resetting the ROW
+                page, which a grouped view has no use for. */}
+            {groupPage.page > 1 ? (
+              <Link href={filterHref(currentQuery, 'gpage', String(groupPage.page - 1))} className="btn btn--secondary btn--sm">
+                Previous groups
+              </Link>
+            ) : null}
+            {groupPage.page < groupPage.pageCount ? (
+              <Link href={filterHref(currentQuery, 'gpage', String(groupPage.page + 1))} className="btn btn--secondary btn--sm">
+                Next groups
+              </Link>
+            ) : null}
+          </span>
+        </CardFooter>
+      </Card>
+    );
+  }
+
+  /**
+   * v1.26.0 Lane 3a item 4, dialog one: "These are all correct".
+   *
+   * A page-level decision over a whole cluster, which is exactly the case RowDialog's own docblock
+   * says belongs in a dialog rather than an inline disclosure -- there is no single row left to
+   * anchor it to, and the wording has to be read before agreeing.
+   *
+   * IT STATES THE GROUP'S TRUE COUNT, and the write honours it. `group.count` is the cluster's full
+   * size across every row page (CategoryGroupRow's own doc comment), and the form posts the page's
+   * filter plus which cluster -- not the ids of rendered rows, of which there may be none at all in
+   * this view -- so bulkConfirmGroupAction recomputes the same set server-side. That is the trap
+   * this feature could most easily have fallen into: a dialog promising 34 and a write reaching the
+   * 12 that happened to be on screen.
+   *
+   * Cancel writes nothing, because there is nothing to write until the form is submitted: both
+   * buttons below simply close the dialog, and no state anywhere else on this page has been touched
+   * by opening it.
+   */
+  function groupConfirmDialog() {
+    if (!confirmGroup) return null;
+    const count = confirmGroup.count;
+    const noun = count === 1 ? 'transaction' : 'transactions';
+    return (
+      <RowDialog
+        dialogId="group-confirm-dialog"
+        title={`Confirm ${count} ${noun} in ${confirmGroup.categoryName}`}
+        description={<Money cents={confirmGroup.totalCents} />}
+        onClose={() => setConfirmGroup(null)}
+      >
+        <form action={confirmGroupFormAction} onSubmit={() => setConfirmGroup(null)} className="flex flex-col gap-3">
+          <input type="hidden" name="scope" value={currentQuery} />
+          <input
+            type="hidden"
+            name="groupCategoryId"
+            value={confirmGroup.categoryId === null ? '' : String(confirmGroup.categoryId)}
+          />
+          <p className="text-sm text-ink">
+            {`All ${count} ${noun} stay in ${confirmGroup.categoryName} and are marked set by hand, so a
+            future rule run leaves ${count === 1 ? 'it' : 'them'} alone. Nothing else about ${count === 1 ? 'it' : 'them'} changes.`}
+          </p>
+          <p className="text-sm text-muted">
+            {`This is the whole group of ${count}, not only what is on screen. A split transaction is left
+            alone and the message afterwards says how many were.`}
+          </p>
+          <div className="flex gap-2">
+            <SubmitButton className="w-fit">{`Confirm all ${count}`}</SubmitButton>
+            <button type="button" className="btn btn--ghost btn--sm" onClick={() => setConfirmGroup(null)}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      </RowDialog>
+    );
+  }
+
+  /**
+   * v1.26.0 Lane 3a item 4, dialog two: "Recategorize the group". Mirrors groupConfirmDialog
+   * immediately above -- same posted scope, same whole-group promise, same Cancel-writes-nothing --
+   * plus the two things a move needs that a confirmation does not: where the rows are going, and
+   * whether the correction should teach a rule so the next import files them the same way.
+   *
+   * The target select is CONTROLLED (`recatGroup.categoryId`) for the same reason bulkLoanDialog's
+   * loan select is: it drives the sentence below it live, so the destination named in the copy is
+   * always the one about to be posted rather than whatever was picked first.
+   */
+  function groupRecategorizeDialog() {
+    if (!recatGroup) return null;
+    const { group, categoryId } = recatGroup;
+    const count = group.count;
+    const noun = count === 1 ? 'transaction' : 'transactions';
+    const targetLabel = groupedCategories.find((option) => String(option.id) === categoryId)?.label ?? null;
+    return (
+      <RowDialog
+        dialogId="group-recategorize-dialog"
+        title={`Recategorize ${count} ${noun} in ${group.categoryName}`}
+        description={<Money cents={group.totalCents} />}
+        onClose={() => setRecatGroup(null)}
+      >
+        <form action={recatGroupFormAction} onSubmit={() => setRecatGroup(null)} className="flex flex-col gap-3">
+          <input type="hidden" name="scope" value={currentQuery} />
+          <input type="hidden" name="groupCategoryId" value={group.categoryId === null ? '' : String(group.categoryId)} />
+          <Field label="Move them to">
+            <select
+              name="categoryId"
+              value={categoryId}
+              onChange={(event) => setRecatGroup({ group, categoryId: event.target.value })}
+              autoFocus
+              className={selectClass}
+            >
+              {/* The unchosen state is a real option rather than an empty controlled value with no
+                  matching <option> -- a select whose value matches nothing renders as though the
+                  first category were selected in some browsers, which is exactly the pre-armed
+                  destination this dialog is avoiding. Same leading option the split editor uses. */}
+              <option value="">Choose a category</option>
+              {categoryOptGroups(categoryGroups)}
+            </select>
+          </Field>
+          <label className="flex items-center gap-2 text-sm text-ink">
+            {/* Defaults ON, unlike the confirm dialog which creates no rules at all -- a
+                recategorize is the household telling the app something new, and the pack rule that
+                misfiled this cluster will misfile the next import the same way unless the
+                correction teaches one. Still a checkbox, not forced: a one-off correction should
+                not have to become a standing household rule. */}
+            <input type="checkbox" name="createRules" defaultChecked className="accent-accent" />
+            {' create rules, so the next import files these the same way'}
+          </label>
+          <p className="text-sm text-ink">
+            {targetLabel === null
+              ? `Pick a category to move all ${count} ${noun} into.`
+              : `All ${count} ${noun} move from ${group.categoryName} to ${targetLabel}.`}
+          </p>
+          <p className="text-sm text-muted">
+            {`This is the whole group of ${count}, not only what is on screen. A split transaction is left
+            alone and the message afterwards says how many were.`}
+          </p>
+          <div className="flex gap-2">
+            <SubmitButton disabled={categoryId === ''} className="w-fit">{`Move all ${count}`}</SubmitButton>
+            <button type="button" className="btn btn--ghost btn--sm" onClick={() => setRecatGroup(null)}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      </RowDialog>
+    );
+  }
+
   return (
     // data-page-width: this table needs more than the shell's 6xl reading cap (see globals.css).
     // v1.16.0 Lane C item 3: NOT emitted at all in review mode -- the review filter is one
@@ -1662,12 +2364,23 @@ export function TransactionsClient({
       {noteDialog()}
       {newLoanDialog()}
       {applyAllDialog()}
+      {/* v1.26.0 Lane 1: same "rendered once here, looked up by row id" reasoning as the four row
+          editors just above -- see bankTextDialog's own doc comment for why this is one dialog
+          shell reused across all three display_source values rather than a copy of the rule
+          case's wording. */}
+      {bankTextDialog()}
       {/* v1.25.0 Lane R item R3: the two bulk-action confirm dialogs, same "rendered once here"
           reasoning as the four row editors just above -- see bulkLoanDialog/bulkNoteDialog's own
           doc comments (above transactionCard's return) for why each is a dialog rather than an
           inline disclosure. */}
       {bulkLoanDialog()}
       {bulkNoteDialog()}
+      {/* v1.26.0 Lane 3a item 4: the two group-header confirms, same "rendered once here, told
+          which group by one nullable slot of state" reasoning as every dialog above -- see
+          groupConfirmDialog/groupRecategorizeDialog's own docblocks for why each states the
+          cluster's full count and posts the page's filter rather than the rendered rows' ids. */}
+      {groupConfirmDialog()}
+      {groupRecategorizeDialog()}
 
       <Card as="div">
         <CardBody className="pt-5">
@@ -1688,6 +2401,18 @@ export function TransactionsClient({
             {/* v1.25.0 Lane R item R1: same reasoning as `transfers` just above -- the queue chip
                 row (below) is a set of plain <a> links via PillNav, not a form field. */}
             {activeQueueChip !== '' ? <input type="hidden" name="queue" value={activeQueueChip} /> : null}
+            {/* v1.26.0 Lane 3a: same reasoning as `transfers`/`queue` above, for the five params
+                this release adds -- all five are set by plain <a> links (the pill rows below, and
+                the import-batch chip), none of them is a field on this GET form, so re-submitting
+                the form to change the account would otherwise silently drop the grouped view, the
+                sort and the whole audit batch. `gpage` is deliberately NOT carried: changing a
+                filter belongs back on the first page of groups, which is exactly what filterHref
+                does to it for a link and what its absence does here for a submit. */}
+            {activeGroupView !== '' ? <input type="hidden" name="group" value={activeGroupView} /> : null}
+            {activeSort !== '' ? <input type="hidden" name="sort" value={activeSort} /> : null}
+            {activeSort !== '' ? <input type="hidden" name="dir" value={activeDirection} /> : null}
+            {activeSource !== '' ? <input type="hidden" name="source" value={activeSource} /> : null}
+            {activeImportId !== null ? <input type="hidden" name="import" value={activeImportId} /> : null}
             {/* Fix round (owner ask): one row, at every width, replaces the old "Filters (N)"
                 text button that only showed below `sm` plus a field block that was simply always
                 visible at `sm` and up -- two different shapes for the same fields depending on
@@ -1811,6 +2536,108 @@ export function TransactionsClient({
                 )}
               />
             )}
+
+            {/*
+              v1.26.0 Lane 3a items 1-3. The audit bar: how the list is grouped, how it is sorted,
+              and which categorizer's decisions it shows. ALWAYS VISIBLE, never folded behind the
+              Filters(N) disclosure, for the reason the transfer-view row above records for itself
+              -- a filter somebody arrives at by clicking a link on another page (the import
+              summary's audit link is `?import=<id>&source=rule&group=category`) must be visible
+              and dismissible where they land, or the batch has no way out of it. Each row carries a
+              small visible label as well as PillNav's own `groupLabel`: three unlabelled pill rows
+              stacked on one card is a puzzle, and the labels are what make "Set by: Rules" read as
+              a sentence rather than as five more filter chips.
+
+              Sort is offered in BOTH modes -- ordering a queue by amount is as reasonable as
+              ordering the list by it. The other two are NOT offered in review mode, on the same
+              honesty rule the transfer row above follows: REVIEW_WHERE (src/lib/categorize/
+              engine.ts) is `category IS NULL OR source = 'bayes'`, so inside the queue every
+              `?source=` option but Guesses selects nothing, and every cluster of a queue that is
+              mostly uncategorized rows is the one Uncategorized cluster. Offering controls whose
+              options are lies about what the filtered list can return is what this app declines to
+              do; a hand-typed `?group=category&review=1` is still honoured (page.tsx never checks
+              review mode for it), it just is not advertised.
+            */}
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+              {reviewMode ? null : (
+                <span className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[0.6875rem] font-medium uppercase tracking-wide text-muted">View</span>
+                  <PillNav
+                    groupLabel="How to show the transactions"
+                    options={GROUP_VIEW_OPTIONS.map(
+                      (option): PillNavOption => ({
+                        key: option.value === '' ? 'list' : option.value,
+                        href: filterHref(currentQuery, 'group', option.param),
+                        label: option.label,
+                        active: activeGroupView === option.value,
+                      }),
+                    )}
+                  />
+                </span>
+              )}
+              <span className="flex flex-wrap items-center gap-1.5">
+                <span className="text-[0.6875rem] font-medium uppercase tracking-wide text-muted">Sort</span>
+                <PillNav
+                  groupLabel="Sort the transactions"
+                  options={SORT_OPTIONS.map(
+                    (option): PillNavOption => ({
+                      key: option.value === '' ? 'default' : option.value,
+                      href: filterHref(currentQuery, 'sort', option.param),
+                      label: option.label,
+                      active: activeSort === option.value,
+                    }),
+                  )}
+                />
+                {/* Only once a sort is chosen: with none, the data layer ignores `dir` outright
+                    (orderByFor returns the default branch before it reads direction), so a
+                    direction control there would be two links that change nothing. The pair's
+                    ORDER comes from DIRECTION_LABELS' own key order per field -- newest/largest
+                    first for date and amount, A-Z first for category -- so the option a person
+                    most likely wants is the leftmost one for that field rather than whichever
+                    direction happens to be spelled first in the type. */}
+                {activeSort !== '' ? (
+                  <PillNav
+                    groupLabel="Which way to sort"
+                    options={(Object.keys(DIRECTION_LABELS[activeSort]) as SortDirection[]).map(
+                      (direction): PillNavOption => ({
+                        key: direction,
+                        href: filterHref(currentQuery, 'dir', direction),
+                        label: DIRECTION_LABELS[activeSort][direction],
+                        active: activeDirection === direction,
+                      }),
+                    )}
+                  />
+                ) : null}
+              </span>
+              {reviewMode ? null : (
+                <span className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[0.6875rem] font-medium uppercase tracking-wide text-muted">Set by</span>
+                  <PillNav
+                    groupLabel="Filter by what set the category"
+                    options={SOURCE_FILTER_OPTIONS.map(
+                      (option): PillNavOption => ({
+                        key: option.value === '' ? 'all' : option.value,
+                        href: filterHref(currentQuery, 'source', option.param),
+                        label: option.label,
+                        active: activeSource === option.value,
+                      }),
+                    )}
+                  />
+                </span>
+              )}
+              {/* The import batch, as a chip that clears itself -- the same badge-as-a-link idiom
+                  the "Needs review (N)" control below already uses. This is the only filter on this
+                  page a person can arrive at without having clicked a control for it, so it is also
+                  the only one that has to say "you are inside a batch" out loud. */}
+              {activeImportId !== null ? (
+                <Link
+                  href={filterHref(currentQuery, 'import', null)}
+                  className="badge badge--accent min-h-11 items-center px-3 sm:min-h-0"
+                >
+                  {`Import #${activeImportId} — clear`}
+                </Link>
+              ) : null}
+            </div>
 
             {/* Chip filters (ruling D6): TOP-LEVEL categories only, always visible (not folded
                 behind the disclosure the way account/person/dates/uncategorized stay -- the
@@ -1944,12 +2771,20 @@ export function TransactionsClient({
         </div>
       ) : null}
 
-      {/* Ruling R5: review mode renders the card list INSTEAD of the table -- never both. This is
+      {/* v1.26.0 Lane 3a item 2: the grouped view replaces the rows entirely, the same
+          INSTEAD-not-as-well-as rule review mode has always followed one branch down. It comes
+          first because it is the coarsest choice on the page: "am I looking at clusters or at
+          rows" is decided before "table or cards" and before "queue or list". `groups !== null` is
+          the one signal (page.tsx sets it only when `?group=category` was asked for), so the pill's
+          active state and the view rendered cannot drift apart. */}
+      {groups !== null ? (
+        groupList(groups)
+      ) : /* Ruling R5: review mode renders the card list INSTEAD of the table -- never both. This is
           still true after the single-card-renderer task: review mode is mode-gated (this
           conditional), not width-gated, so it never grows a second tree the way the plain
           Transactions branch below deliberately does (transactionCard's own docblock explains
-          why that one DOES carry two trees, one hidden by width at a time). */}
-      {reviewMode ? (
+          why that one DOES carry two trees, one hidden by width at a time). */
+      reviewMode ? (
         page.rows.length === 0 ? (
           // Ruling S5(a): the reading-measure cap now lives once on ReviewWidth above (v1.16.0
           // Lane C item 3), not repeated on every element inside it -- this Card needs no width
@@ -2074,6 +2909,19 @@ export function TransactionsClient({
         </p>
       <div className="hidden sm:block">
       <Card as="div">
+        {/* v1.26.0 Lane 1 item 4 (the owner's actual workflow: auditing fifty rows after an
+            import, which per-row clicking does not scale to). One link flips `?bank=1` for the
+            WHOLE table -- filterHref (this file's own generalization, see its docblock) keeps
+            every other active filter on the querystring untouched, and the state lives in the
+            URL, not React state or localStorage, so it survives a refresh the same way
+            `transfers`/`queue`/`uncat` already do. Table-only (bankTextOn's own doc comment):
+            the card list a few lines above already shows a rule-renamed row's bank text with no
+            toggle needed at all. */}
+        <div className="flex items-center justify-end border-b border-line px-4 py-2 sm:px-5">
+          <Link href={filterHref(currentQuery, 'bank', bankTextOn ? null : '1')} className="btn btn--secondary btn--sm">
+            {bankTextOn ? 'Hide bank text' : 'Show bank text'}
+          </Link>
+        </div>
         {/* minWidth is the colgroup's own total (3+7+9+15+7+13+11+3 = 68rem). Without it this
             table could not exceed its container, so the scroll container had nothing to scroll
             and the browser shrank every column instead -- see TableWrap's minWidth docblock.
@@ -2178,15 +3026,38 @@ export function TransactionsClient({
                     >
                       {row.displayDescription ?? row.rawDescription}
                     </span>
+                    {/* v1.26.0 Lane 1 item 4: the `?bank=1` table-level toggle (this file's own
+                        `bankTextOn`, see its doc comment) -- reveals every renamed row's bank
+                        text inline, at once, for the "audit fifty rows after an import" workflow
+                        a per-row click does not scale to. "Renamed" here is any row carrying a
+                        display_source, the same test bankBadgeButton's badges below key off of. */}
+                    {bankTextOn && row.displayDescription !== null ? (
+                      <span className="text-muted">— {row.rawDescription}</span>
+                    ) : null}
                     {noteIndicator(row)}
-                    {row.displaySource === 'manual' ? <span className="badge badge--blue">renamed</span> : null}
-                    {row.displaySource === 'rename' ? <span className="badge badge--blue">rule</span> : null}
+                    {/* v1.26.0 Lane 1 item 2: the "renamed"/"rule" badges are now buttons -- see
+                        bankBadgeButton's own docblock (above noteIndicator's neighbour) for the
+                        mechanics and why no new glyph was added instead. */}
+                    {row.displaySource === 'manual' ? bankBadgeButton(row, 'renamed') : null}
+                    {row.displaySource === 'rename' ? bankBadgeButton(row, 'rule') : null}
                     {row.isTransfer ? <span className="badge badge--slate">transfer</span> : null}
-                    {row.source === 'bayes' ? <span className="badge badge--amber">guess</span> : null}
-                    {/* Backlog CA: one badge per loan link, naming the loan. */}
-                    {(loanLinks[row.id] ?? []).map((link) => (
-                      <span key={`loan-badge-${link.id}`} className="badge badge--blue">{link.itemName}</span>
-                    ))}
+                    {/* v1.26.0 Lane 3a item 3: this replaced the amber `guess` badge that used to
+                        be on this line -- see sourceBadge's own docblock for why one quiet badge
+                        covering all four sources beats one loud badge covering one of them. */}
+                    {sourceBadge(row)}
+                    {/* Backlog CA: one badge per loan link, naming the loan. v1.26.0 Lane 1: the
+                        SAME badge becomes the bank-text control when it is also what set this
+                        row's display name (display_source = 'loan') -- see bankBadgeButton's own
+                        docblock for why reusing this existing badge, rather than adding a fourth
+                        text badge, is the "no new glyph" answer for the one display_source with
+                        no badge of its own already. */}
+                    {(loanLinks[row.id] ?? []).map((link) =>
+                      row.displaySource === 'loan' ? (
+                        bankBadgeButton(row, link.itemName, `loan-badge-${link.id}`)
+                      ) : (
+                        <span key={`loan-badge-${link.id}`} className="badge badge--blue">{link.itemName}</span>
+                      ),
+                    )}
                   </span>
                 </td>
                 <AmountCell className="whitespace-nowrap cell-stack-amount" data-label="Amount">
