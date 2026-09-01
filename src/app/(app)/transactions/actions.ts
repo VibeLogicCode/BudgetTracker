@@ -21,8 +21,10 @@ import { getWarrantyItem } from '@/lib/warranty/items';
 import { isLoanRepayment, loanAssignedMessage, loanClampWarning, LOAN_DIRECTIONS } from '@/lib/warranty/constants';
 import { isIsoDate } from '@/lib/dates';
 import {
+  bulkAssignToLoan,
   bulkSetAttribution,
   bulkSetCategory,
+  bulkSetNotes,
   bulkSetTransfer,
   createManualTransaction,
   getTransaction,
@@ -445,6 +447,67 @@ export async function saveNoteAction(_prev: ActionState, formData: FormData): Pr
   updateTransactionNotes(parsed.data.transactionId, note.length === 0 ? null : note);
   revalidatePath('/transactions');
   return { message: 'Note saved.' };
+}
+
+const bulkLoanLinkSchema = z.object({ itemId: z.coerce.number().int().positive() });
+
+/**
+ * v1.25.0 Lane R item R3. Bulk assign-to-loan: the toolbar's confirm dialog already showed a
+ * preview of these same counts before this posted (bulkLoanDialog, transactions-client.tsx) --
+ * this is the write those counts were promising, computed for real via bulkAssignToLoan
+ * (src/lib/transactions.ts), which calls assignTransactionToLoan (src/lib/loans.ts) once per id.
+ * See that function's own doc comment for why a split row is NOT skipped here (unlike
+ * bulkCategorizeAction/bulkTransferAction above) and for exactly what `skipped` counts.
+ */
+export async function bulkAssignToLoanAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  const user = await requireUser();
+  const ids = idList.parse(String(formData.get('ids') ?? ''));
+  if (ids.length === 0) return { error: 'Nothing selected.' };
+  // F12-style fix-round courtesy (assignToLoanAction, above, does the same): checked before the
+  // generic schema parse so an omitted/blank selection reads as a friendly prompt.
+  if (String(formData.get('itemId') ?? '').trim().length === 0) return { error: 'Pick a loan first.' };
+  const parsed = bulkLoanLinkSchema.safeParse({ itemId: formData.get('itemId') });
+  if (!parsed.success) return { error: 'Invalid request.' };
+  // Ruling R2 fix round 2: every id must resolve through the viewer, or nothing is written.
+  if (!allTransactionsVisible(ids, user)) return { error: NOT_YOURS_ERROR };
+
+  const result = bulkAssignToLoan(ids, parsed.data.itemId);
+  revalidatePath('/transactions');
+  revalidatePath('/dashboard');
+  revalidatePath('/reports');
+
+  const item = getWarrantyItem(parsed.data.itemId, user);
+  const loanName = item?.name ?? 'the loan';
+  const changedSentence = `Assigned ${result.changed} transaction${result.changed === 1 ? '' : 's'} to ${loanName}.`;
+  const skipSentence =
+    result.skipped > 0
+      ? `${result.skipped} ${result.skipped === 1 ? 'was' : 'were'} left unchanged (already linked, or not eligible for this loan).`
+      : null;
+  return { message: skipSentence ? `${changedSentence} ${skipSentence}` : changedSentence };
+}
+
+/**
+ * v1.25.0 Lane R item R3. Bulk note: sets the same note on every selected transaction via
+ * bulkSetNotes (src/lib/transactions.ts). Unlike bulkAssignToLoanAction just above (and
+ * bulkCategorizeAction/bulkTransferAction further up), nothing here can be skipped -- see
+ * bulkSetNotes' own doc comment for why a note carries none of the split guard's risk -- so the
+ * message states only a changed count, no skip clause.
+ */
+export async function bulkNoteAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  const user = await requireUser();
+  const ids = idList.parse(String(formData.get('ids') ?? ''));
+  if (ids.length === 0) return { error: 'Nothing selected.' };
+  // Ruling R2 fix round 2: every id must resolve through the viewer, or nothing is written.
+  if (!allTransactionsVisible(ids, user)) return { error: NOT_YOURS_ERROR };
+
+  const note = String(formData.get('notes') ?? '').trim();
+  const changed = bulkSetNotes(ids, note.length === 0 ? null : note);
+  revalidatePath('/transactions');
+  return { message: `Note saved for ${changed} transaction${changed === 1 ? '' : 's'}.` };
 }
 
 /**

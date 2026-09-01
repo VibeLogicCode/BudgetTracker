@@ -1,5 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { sql } from 'drizzle-orm';
+import { and, sql } from 'drizzle-orm';
+import { getDb } from '@/db/client';
+import { transactions } from '@/db/schema';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../../helpers/db';
 import {
   CARD_PAYMENT_PATTERNS,
@@ -18,6 +20,9 @@ import {
   previewRuleReapply,
   rerunEngine,
   resolveRename,
+  REVIEW_SUGGESTED_WHERE,
+  REVIEW_UNCATEGORIZED_WHERE,
+  REVIEW_WHERE,
   reviewQueueCount,
   reviewQueueIds,
   ruleClearIds,
@@ -772,6 +777,83 @@ describe('review queue', () => {
     expect(reviewQueueIds(2, 0)).toHaveLength(2);
     expect(reviewQueueIds(2, 2)).toHaveLength(1);
     expect(reviewQueueCount()).toBe(ids.length);
+  });
+});
+
+/**
+ * v1.25.0 Lane R item R1 (deferred from v1.20.0). REVIEW_SUGGESTED_WHERE/REVIEW_UNCATEGORIZED_WHERE
+ * are the two "?queue=" chip clauses, meant to be composed as `and(REVIEW_WHERE, <clause>)`
+ * (buildWhere, src/lib/transactions.ts) -- never stand alone. This file's own `add()` fixture
+ * always inserts `categorization_source = 'none'`, so these queries update it by hand, the same
+ * raw-SQL idiom the 'review queue' describe block just above already uses.
+ */
+describe('review queue chips (v1.25.0 Lane R item R1): REVIEW_SUGGESTED_WHERE / REVIEW_UNCATEGORIZED_WHERE narrow REVIEW_WHERE', () => {
+  function idsWhere(clause: NonNullable<typeof REVIEW_WHERE>) {
+    return getDb().select({ id: transactions.id }).from(transactions).where(clause).all().map((row) => row.id);
+  }
+
+  it('REVIEW_SUGGESTED_WHERE selects only the bayes-guessed row, not the uncategorized one', () => {
+    const { db, add } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const uncategorized = add('SOME NEW SHOP');
+    const bayesRow = add('ANOTHER SHOP');
+    db.run(sql`update transactions set category_id = ${groceries}, categorization_source = 'bayes' where id = ${bayesRow}`);
+
+    const ids = idsWhere(and(REVIEW_WHERE, REVIEW_SUGGESTED_WHERE)!);
+    expect(ids).toEqual([bayesRow]);
+    expect(ids).not.toContain(uncategorized);
+  });
+
+  it('REVIEW_UNCATEGORIZED_WHERE selects only the uncategorized row, not the bayes-guessed one', () => {
+    const { db, add } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const uncategorized = add('SOME NEW SHOP');
+    const bayesRow = add('ANOTHER SHOP');
+    db.run(sql`update transactions set category_id = ${groceries}, categorization_source = 'bayes' where id = ${bayesRow}`);
+
+    const ids = idsWhere(and(REVIEW_WHERE, REVIEW_UNCATEGORIZED_WHERE)!);
+    expect(ids).toEqual([uncategorized]);
+    expect(ids).not.toContain(bayesRow);
+  });
+
+  it('together the two chips partition REVIEW_WHERE exactly -- their union is the plain queue, and neither overlaps the other', () => {
+    const { db, add } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const uncategorized = add('SOME NEW SHOP');
+    const bayesRow = add('ANOTHER SHOP');
+    db.run(sql`update transactions set category_id = ${groceries}, categorization_source = 'bayes' where id = ${bayesRow}`);
+    const manualRow = add('THIRD SHOP');
+    db.run(sql`update transactions set category_id = ${groceries}, categorization_source = 'manual' where id = ${manualRow}`);
+
+    const plain = idsWhere(REVIEW_WHERE!).sort();
+    const suggested = idsWhere(and(REVIEW_WHERE, REVIEW_SUGGESTED_WHERE)!);
+    const notCategorized = idsWhere(and(REVIEW_WHERE, REVIEW_UNCATEGORIZED_WHERE)!);
+    expect(plain).toEqual([uncategorized, bayesRow].sort());
+    expect([...suggested, ...notCategorized].sort()).toEqual(plain);
+    expect(suggested.some((id) => notCategorized.includes(id))).toBe(false);
+  });
+
+  /**
+   * The genuine-narrowing property the brief calls out: a row REVIEW_WHERE excludes for a
+   * reason that has nothing to do with categoryId/source (a transfer, here) must stay excluded
+   * under EVERY chip, even though it would satisfy REVIEW_UNCATEGORIZED_WHERE evaluated alone
+   * (categoryId is null on a transfer row too). Composing as `and(REVIEW_WHERE, <clause>)`
+   * rather than `<clause>` alone is what buildWhere (src/lib/transactions.ts) actually does; this
+   * proves that composition, not a standalone use of either constant, is what a caller must do.
+   */
+  it('a row REVIEW_WHERE excludes (a transfer) stays excluded under both chips, even though it would match REVIEW_UNCATEGORIZED_WHERE alone', () => {
+    const { add } = setup();
+    const transfer = add('PAYMENT - THANK YOU', 50000);
+    runEngine([transfer]); // flags is_transfer = true, category_id stays null
+
+    // Evaluated ALONE (the bug this composition rule prevents), the transfer row WOULD match --
+    // it has no category. This is the trap: a caller who forgot to AND against REVIEW_WHERE
+    // would silently let transfers leak into the "Not categorized" chip.
+    expect(idsWhere(REVIEW_UNCATEGORIZED_WHERE)).toContain(transfer);
+
+    // Composed correctly (what buildWhere actually does), it does not.
+    expect(idsWhere(and(REVIEW_WHERE, REVIEW_SUGGESTED_WHERE)!)).not.toContain(transfer);
+    expect(idsWhere(and(REVIEW_WHERE, REVIEW_UNCATEGORIZED_WHERE)!)).not.toContain(transfer);
   });
 });
 

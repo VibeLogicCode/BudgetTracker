@@ -3,8 +3,10 @@ import { sql } from 'drizzle-orm';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
 import type { Viewer } from '@/lib/auth/viewer';
 import {
+  bulkAssignToLoan,
   bulkSetAttribution,
   bulkSetCategory,
+  bulkSetNotes,
   bulkSetTransfer,
   countMatchingMerchant,
   createManualTransaction,
@@ -21,6 +23,9 @@ import { listRules, upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { setTransactionDisplayName, upsertRenameRule } from '@/lib/categorize/engine';
 import { nowIso } from '@/lib/clock';
 import { setTransactionSplits } from '@/lib/splits';
+import { loanLinksForTransactions } from '@/lib/loans';
+import { createWarrantyItem } from '@/lib/warranty/items';
+import { createItemType } from '@/lib/warranty/types';
 
 // v1.13.0 ruling R2: listTransactions/getTransaction now require a viewer. Every existing call in
 // this file predates viewer scoping and expects the pre-v1.13.0, household-wide result set, so a
@@ -463,6 +468,138 @@ describe('bulk actions', () => {
     expect(bulkSetCategory([], 1, alice, true, 'admin')).toEqual({ ok: true, changed: 0, skipped: 0 });
     expect(bulkSetTransfer([], true, alice, 'admin')).toEqual({ ok: true, changed: 0, skipped: 0 });
   });
+
+  /**
+   * v1.25.0 Lane R item R3. bulkSetNotes is NOT subject to the split guard bulkSetCategory/
+   * bulkSetTransfer honour above (see this function's own doc comment) -- a note is metadata
+   * about the row, not a claim about which category the money belongs to. Every selected id is
+   * written unconditionally, hence the plain `number` return, the same shape bulkSetAttribution
+   * already uses just above for the same reason.
+   */
+  it('bulk note writes every selected row, INCLUDING a split one -- not subject to the split guard', () => {
+    const { db, sqlite, alice, add } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const gas = categoryIdByName(db, 'Gas');
+    const splitId = add({ description: 'SPLIT MERCHANT' });
+    setTransactionSplits({
+      txnId: splitId,
+      parts: [
+        { categoryId: groceries, amountCents: -700 },
+        { categoryId: gas, amountCents: -300 },
+      ],
+      userId: alice,
+    });
+    const plain = add({ description: 'CONTROL' });
+
+    expect(bulkSetNotes([splitId, plain], 'shared with Bob')).toBe(2);
+    const rows = sqlite.prepare('select id, notes from transactions where id in (?, ?)').all(splitId, plain) as { id: number; notes: string | null }[];
+    expect(rows.every((r) => r.notes === 'shared with Bob')).toBe(true);
+  });
+
+  it('bulk note clears every selected row when given null, and does nothing for an empty id list', () => {
+    const { sqlite, add } = setup();
+    const id = add();
+    bulkSetNotes([id], 'temp');
+    expect(bulkSetNotes([id], null)).toBe(1);
+    expect((sqlite.prepare('select notes from transactions where id = ?').get(id) as { notes: string | null }).notes).toBeNull();
+    expect(bulkSetNotes([], 'x')).toBe(0);
+  });
+});
+
+/**
+ * v1.25.0 Lane R item R3. bulkAssignToLoan calls assignTransactionToLoan (src/lib/loans.ts,
+ * a concurrent lane's file, not edited by this task) once per id -- MUST-13.2/MUST-13.16 and
+ * rulings P4/B10 live there (tests/ops/loan-invariants.test.ts), not re-derived here. A loan-kind
+ * warranty item is seeded via the real createItemType/createWarrantyItem entry points (the same
+ * ones tests/app/transactions-actions.test.ts's own seedLoanItem uses), not raw SQL, so this
+ * exercises the real Dataverse-shaped invariants those functions already enforce.
+ */
+describe('bulkAssignToLoan (v1.25.0 Lane R item R3)', () => {
+  function seedLoan(userId: number, balanceCents = 2_000_000): number {
+    const loanType = createItemType(`Loan ${Math.random().toString(36).slice(2)}`, 'loan');
+    return createWarrantyItem({
+      name: 'Car Loan',
+      vendor: null,
+      model: null,
+      serial: null,
+      purchaseDate: '2026-01-01',
+      warrantyMonths: null,
+      isLifetime: false,
+      priceCents: null,
+      ownerUserId: userId,
+      transactionId: null,
+      typeId: loanType.id,
+      notes: null,
+      principalCents: 3_000_000,
+      interestRateBps: 0,
+      currentBalanceCents: balanceCents,
+      balanceUpdatedAt: nowIso(),
+      loanDirection: 'owed',
+    });
+  }
+
+  it('links every selected transaction to the given loan', () => {
+    const { alice, add } = setup();
+    const itemId = seedLoan(alice);
+    const a = add({ description: 'PAYMENT A', amountCents: -1000 });
+    const b = add({ description: 'PAYMENT B', amountCents: -2000 });
+
+    expect(bulkAssignToLoan([a, b], itemId)).toEqual({ changed: 2, skipped: 0 });
+    const links = loanLinksForTransactions([a, b]);
+    expect(links.get(a)?.[0]?.itemId).toBe(itemId);
+    expect(links.get(b)?.[0]?.itemId).toBe(itemId);
+  });
+
+  it('links a SPLIT transaction too -- NOT subject to the split guard bulkSetCategory/bulkSetTransfer honour', () => {
+    const { db, alice, add } = setup();
+    const itemId = seedLoan(alice);
+    const groceries = categoryIdByName(db, 'Groceries');
+    const gas = categoryIdByName(db, 'Gas');
+    const splitId = add({ description: 'SPLIT MERCHANT', amountCents: -1000 });
+    setTransactionSplits({
+      txnId: splitId,
+      parts: [
+        { categoryId: groceries, amountCents: -700 },
+        { categoryId: gas, amountCents: -300 },
+      ],
+      userId: alice,
+    });
+
+    // assignTransactionToLoan writes to loan_payments only, never category_id/is_transfer, so
+    // the split's own per-part categorization is untouched by this -- see bulkAssignToLoan's own
+    // doc comment (src/lib/transactions.ts) for the fuller justification.
+    expect(bulkAssignToLoan([splitId], itemId)).toEqual({ changed: 1, skipped: 0 });
+    expect(loanLinksForTransactions([splitId]).get(splitId)?.[0]?.itemId).toBe(itemId);
+  });
+
+  it('a row already linked to the SAME loan is reported skipped, not changed, and left as-is', () => {
+    const { alice, add } = setup();
+    const itemId = seedLoan(alice);
+    const id = add({ description: 'PAYMENT A', amountCents: -1000 });
+
+    expect(bulkAssignToLoan([id], itemId)).toEqual({ changed: 1, skipped: 0 });
+    // Second call, same loan: assignTransactionToLoan's own `{ linked: false }` no-op.
+    expect(bulkAssignToLoan([id], itemId)).toEqual({ changed: 0, skipped: 1 });
+  });
+
+  it('a row assignTransactionToLoan refuses outright (a zero-amount transaction) is caught and counted as skipped, without aborting the rest of the batch', () => {
+    const { alice, add } = setup();
+    const itemId = seedLoan(alice);
+    const zero = add({ description: 'ZERO', amountCents: 0 });
+    const ok = add({ description: 'PAYMENT A', amountCents: -1000 });
+
+    // Order matters: the refusing id comes FIRST, proving one row's throw does not abort ids
+    // after it in the same batch.
+    expect(bulkAssignToLoan([zero, ok], itemId)).toEqual({ changed: 1, skipped: 1 });
+    expect(loanLinksForTransactions([ok]).get(ok)?.[0]?.itemId).toBe(itemId);
+    expect(loanLinksForTransactions([zero]).get(zero) ?? []).toHaveLength(0);
+  });
+
+  it('an empty id list changes and skips nothing', () => {
+    const { alice } = setup();
+    const itemId = seedLoan(alice);
+    expect(bulkAssignToLoan([], itemId)).toEqual({ changed: 0, skipped: 0 });
+  });
 });
 
 /**
@@ -499,6 +636,98 @@ describe('listTransactions reviewOnly (ruling R1)', () => {
     const first = add({ date: '2026-03-01', description: 'SHOP A' });
     const second = add({ date: '2026-03-02', description: 'SHOP B' });
     expect(listTransactions({}, VIEWER).rows.map((r) => r.id)).toEqual([second, first]);
+  });
+});
+
+/**
+ * v1.25.0 Lane R item R1 (deferred from v1.20.0). `reviewQueue` chips onto `reviewOnly`
+ * (TransactionFilter's own doc comment) -- these tests are the executable proof of the two
+ * clauses stated in this task's report: a "suggested" row has categoryId set AND source =
+ * 'bayes'; an "uncategorized" row has categoryId null. Meaningless without reviewOnly (see the
+ * last test below), and always composed as `and(REVIEW_WHERE, <clause>)` inside buildWhere --
+ * never a standalone filter -- so a row REVIEW_WHERE itself excludes (a transfer, here) stays
+ * excluded under every chip value, even one it would otherwise satisfy alone.
+ */
+describe('listTransactions reviewOnly + reviewQueue chips (v1.25.0 Lane R item R1)', () => {
+  it('reviewQueue: "suggested" returns only the bayes-guessed row', () => {
+    const { db, add } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const uncategorized = add({ date: '2026-03-01', description: 'SHOP A' });
+    const bayesRow = add({ date: '2026-03-05', description: 'SHOP B', categoryId: groceries, source: 'bayes' });
+
+    const page = listTransactions({ reviewOnly: true, reviewQueue: 'suggested' }, VIEWER);
+    expect(page.rows.map((r) => r.id)).toEqual([bayesRow]);
+    expect(page.rows.map((r) => r.id)).not.toContain(uncategorized);
+  });
+
+  it('reviewQueue: "uncategorized" returns only the row with no category', () => {
+    const { db, add } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const uncategorized = add({ date: '2026-03-01', description: 'SHOP A' });
+    const bayesRow = add({ date: '2026-03-05', description: 'SHOP B', categoryId: groceries, source: 'bayes' });
+
+    const page = listTransactions({ reviewOnly: true, reviewQueue: 'uncategorized' }, VIEWER);
+    expect(page.rows.map((r) => r.id)).toEqual([uncategorized]);
+    expect(page.rows.map((r) => r.id)).not.toContain(bayesRow);
+  });
+
+  it('reviewQueue absent returns both, same as before this task', () => {
+    const { db, add } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const uncategorized = add({ date: '2026-03-01', description: 'SHOP A' });
+    const bayesRow = add({ date: '2026-03-05', description: 'SHOP B', categoryId: groceries, source: 'bayes' });
+
+    const page = listTransactions({ reviewOnly: true }, VIEWER);
+    expect(page.rows.map((r) => r.id).sort()).toEqual([uncategorized, bayesRow].sort());
+  });
+
+  it('a junk reviewQueue value falls back to both, the same as absent', () => {
+    const { db, add } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const uncategorized = add({ date: '2026-03-01', description: 'SHOP A' });
+    const bayesRow = add({ date: '2026-03-05', description: 'SHOP B', categoryId: groceries, source: 'bayes' });
+
+    // TypeScript's own union would reject this at a real call site; readFilter (page.tsx) is
+    // what actually narrows a hand-edited `?queue=` to `'suggested' | 'uncategorized' |
+    // undefined` before it ever reaches this function -- this proves buildWhere itself is just
+    // as forgiving of anything else that slips through, not only the two named values.
+    const page = listTransactions({ reviewOnly: true, reviewQueue: 'nonsense' as never }, VIEWER);
+    expect(page.rows.map((r) => r.id).sort()).toEqual([uncategorized, bayesRow].sort());
+  });
+
+  it('reviewQueue is ignored when reviewOnly is not set -- it only ever narrows the review filter', () => {
+    const { db, add } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const uncategorized = add({ date: '2026-03-01', description: 'SHOP A' });
+    add({ date: '2026-03-02', description: 'SHOP B', categoryId: groceries, source: 'manual' });
+
+    // Not reviewOnly: reviewQueue: 'suggested' must not silently narrow the plain list to
+    // bayes-only rows -- with no bayes rows in scope at all, a leaking clause would return
+    // nothing; the real (unfiltered) answer is both rows.
+    const page = listTransactions({ reviewQueue: 'suggested' }, VIEWER);
+    expect(page.total).toBe(2);
+    expect(page.rows.map((r) => r.id)).toContain(uncategorized);
+  });
+
+  /**
+   * The genuine-narrowing property: a row REVIEW_WHERE excludes for a reason unrelated to
+   * categoryId/source (a transfer) must stay excluded under every chip, even though it has no
+   * category and would therefore satisfy "uncategorized" if that clause were ever used alone
+   * instead of AND'd onto REVIEW_WHERE.
+   */
+  it('a transfer (excluded by REVIEW_WHERE itself) stays excluded under every reviewQueue value', () => {
+    const { add } = setup();
+    const transfer = add({ date: '2026-03-01', description: 'PAYMENT - THANK YOU', isTransfer: true });
+    const control = add({ date: '2026-03-02', description: 'SHOP A' });
+
+    for (const reviewQueue of [undefined, 'suggested', 'uncategorized'] as const) {
+      const page = listTransactions({ reviewOnly: true, reviewQueue }, VIEWER);
+      expect(page.rows.map((r) => r.id)).not.toContain(transfer);
+    }
+    // Sanity: the control row (genuinely uncategorized, not a transfer) IS found by "uncategorized".
+    expect(
+      listTransactions({ reviewOnly: true, reviewQueue: 'uncategorized' }, VIEWER).rows.map((r) => r.id),
+    ).toEqual([control]);
   });
 });
 

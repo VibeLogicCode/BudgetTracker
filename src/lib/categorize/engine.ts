@@ -1201,6 +1201,29 @@ export const REVIEW_WHERE = and(
   sql`not exists (select 1 from ${loanPayments} where ${loanPayments.txnId} = ${transactions.id})`,
 );
 
+/**
+ * v1.25.0 Lane R item R1 (deferred from v1.20.0). The review queue mixes two different jobs --
+ * a row the classifier GUESSED (confirm or correct it) and a row it had no idea about (pick a
+ * category from scratch) -- and REVIEW_WHERE's own second clause, just above, already says
+ * these are the only two ways into the queue: `isNull(categoryId) OR categorizationSource =
+ * 'bayes'`. categorizeTransaction (top of this file) never returns `{ categoryId: null, source:
+ * 'bayes' }` -- its bayes branch only fires when `classify()` returns a guess, and that guess's
+ * categoryId is never null -- and every writer that clears category_id in this codebase
+ * (clearCategory, setTransactionDisplayName's sibling paths, runEngine's own transfer branch)
+ * pairs it with categorization_source = 'none' in the same write, never 'bayes'. So within
+ * REVIEW_WHERE's own scope, "categoryId is set AND source is bayes" and "categoryId is null"
+ * are the two states that OR covers, and they are mutually exclusive and exhaustive.
+ *
+ * These two constants are that split, narrowing REVIEW_WHERE rather than restating or replacing
+ * it -- every caller composes them as `and(REVIEW_WHERE, REVIEW_SUGGESTED_WHERE)` or
+ * `and(REVIEW_WHERE, REVIEW_UNCATEGORIZED_WHERE)` (buildWhere, src/lib/transactions.ts), never
+ * standalone. REVIEW_SUGGESTED_WHERE checks BOTH `categoryId IS NOT NULL` and `source = 'bayes'`
+ * rather than just the source column, so a hypothetical future writer that broke the pairing
+ * above would fall out of both chips instead of silently miscounting into "suggested".
+ */
+export const REVIEW_SUGGESTED_WHERE = and(isNotNull(transactions.categoryId), eq(transactions.categorizationSource, 'bayes'));
+export const REVIEW_UNCATEGORIZED_WHERE = isNull(transactions.categoryId);
+
 export function reviewQueueIds(limit = 100, offset = 0): number[] {
   return getDb()
     .select({ id: transactions.id })

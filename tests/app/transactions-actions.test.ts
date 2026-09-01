@@ -51,7 +51,9 @@ import {
   acceptGuessAction,
   applyToAllMatchingAction,
   assignToLoanAction,
+  bulkAssignToLoanAction,
   bulkCategorizeAction,
+  bulkNoteAction,
   bulkTransferAction,
   createLoanFromTransactionAction,
   manualEntryAction,
@@ -458,6 +460,92 @@ describe('MUST-14.8 … MUST-14.11: assign and unassign', () => {
     const { txnId } = seedLoanAndSpend(2_000_000, -45_000);
     const result = await assignToLoanAction(formData({ transactionId: String(txnId), itemId: '' }));
     expect(result.error).toBe('Pick a loan first.');
+  });
+});
+
+/**
+ * v1.25.0 Lane R item R3. bulkAssignToLoanAction/bulkNoteAction, mirroring the shape of the
+ * split-guard describe block below (bulkTransferAction/bulkCategorizeAction) but proving the
+ * OPPOSITE: a split row is NOT skipped by either new action -- see bulkAssignToLoan/bulkSetNotes'
+ * own doc comments (src/lib/transactions.ts) for the justification this task's report restates.
+ */
+describe('bulkAssignToLoanAction and bulkNoteAction (v1.25.0 Lane R item R3)', () => {
+  it('bulkAssignToLoanAction: links every selected transaction and names the loan in the message', async () => {
+    const { sqlite, addTxn } = setup();
+    const itemId = seedLoanItem({ balanceCents: 2_000_000 });
+    const a = addTxn('PAYMENT A', -1000);
+    const b = addTxn('PAYMENT B', -2000);
+
+    const result = await bulkAssignToLoanAction({}, formData({ ids: `${a},${b}`, itemId: String(itemId) }));
+    expect(result.message).toBe('Assigned 2 transactions to Car Loan.');
+    const rows = sqlite.prepare('select count(*) as c from loan_payments where item_id = ?').get(itemId) as { c: number };
+    expect(rows.c).toBe(2);
+  });
+
+  it('bulkAssignToLoanAction: links a SPLIT transaction too -- not subject to the split guard', async () => {
+    const { db, userId, addTxn } = setup();
+    const itemId = seedLoanItem({ balanceCents: 2_000_000 });
+    const groceries = categoryIdByName(db, 'Groceries');
+    const gas = categoryIdByName(db, 'Gas');
+    const splitId = splitAMerchant(addTxn, groceries, gas, userId, 'ACME SPLIT MERCHANT');
+
+    const result = await bulkAssignToLoanAction({}, formData({ ids: String(splitId), itemId: String(itemId) }));
+    expect(result.message).toBe('Assigned 1 transaction to Car Loan.');
+  });
+
+  it('bulkAssignToLoanAction: a row already linked to the chosen loan is reported as left unchanged, not as an error', async () => {
+    setup();
+    const itemId = seedLoanItem({ balanceCents: 2_000_000 });
+    const { txnId } = seedLoanAndSpend(2_000_000, -45_000);
+    await bulkAssignToLoanAction({}, formData({ ids: String(txnId), itemId: String(itemId) }));
+
+    const result = await bulkAssignToLoanAction({}, formData({ ids: String(txnId), itemId: String(itemId) }));
+    expect(result.message).toBe('Assigned 0 transactions to Car Loan. 1 was left unchanged (already linked, or not eligible for this loan).');
+  });
+
+  it('bulkAssignToLoanAction: requires a loan selection and at least one id', async () => {
+    const { addTxn } = setup();
+    const itemId = seedLoanItem();
+    const id = addTxn();
+    expect((await bulkAssignToLoanAction({}, formData({ ids: '', itemId: String(itemId) }))).error).toBe('Nothing selected.');
+    expect((await bulkAssignToLoanAction({}, formData({ ids: String(id), itemId: '' }))).error).toBe('Pick a loan first.');
+  });
+
+  it('bulkAssignToLoanAction rejects a cross-origin request first', async () => {
+    const { addTxn } = setup();
+    const itemId = seedLoanItem();
+    sameOrigin.value = false;
+    const result = await bulkAssignToLoanAction({}, formData({ ids: String(addTxn()), itemId: String(itemId) }));
+    expect(result.error).toBe(CROSS_ORIGIN_ERROR);
+  });
+
+  it('bulkNoteAction: writes the same note on every selected transaction, INCLUDING a split one', async () => {
+    const { db, userId, sqlite, addTxn } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const gas = categoryIdByName(db, 'Gas');
+    const splitId = splitAMerchant(addTxn, groceries, gas, userId, 'ACME SPLIT MERCHANT');
+    const plain = addTxn('CONTROL');
+
+    const result = await bulkNoteAction({}, formData({ ids: `${splitId},${plain}`, notes: 'shared with Bob' }));
+    expect(result.message).toBe('Note saved for 2 transactions.');
+    const rows = sqlite.prepare('select notes from transactions where id in (?, ?)').all(splitId, plain) as { notes: string | null }[];
+    expect(rows.every((r) => r.notes === 'shared with Bob')).toBe(true);
+  });
+
+  it('bulkNoteAction: an empty note clears every selected row, and an empty id list is refused', async () => {
+    const { sqlite, addTxn } = setup();
+    const id = addTxn();
+    await bulkNoteAction({}, formData({ ids: String(id), notes: 'temp' }));
+    await bulkNoteAction({}, formData({ ids: String(id), notes: '' }));
+    expect((sqlite.prepare('select notes from transactions where id = ?').get(id) as { notes: string | null }).notes).toBeNull();
+    expect((await bulkNoteAction({}, formData({ ids: '', notes: 'x' }))).error).toBe('Nothing selected.');
+  });
+
+  it('bulkNoteAction rejects a cross-origin request first', async () => {
+    setup();
+    sameOrigin.value = false;
+    const result = await bulkNoteAction({}, formData({ ids: '1', notes: 'x' }));
+    expect(result.error).toBe(CROSS_ORIGIN_ERROR);
   });
 });
 

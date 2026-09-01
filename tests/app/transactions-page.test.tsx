@@ -3,7 +3,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, cleanup } from '@testing-library/react';
 import { sql } from 'drizzle-orm';
 import { nowIso } from '@/lib/clock';
-import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
+import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
 
 /**
  * Item BO. No transactions-page test existed before this task -- transactions-client.test.tsx
@@ -267,5 +267,67 @@ describe('TransactionsPage: ?transfers= parses to transferView (Lane A item 2)',
     const { container } = await renderWithTransfers({ transfers: 'nonsense' });
     expect(container.textContent).toContain('TIM HORTONS');
     expect(container.textContent).toContain('PAYMENT - THANK YOU');
+  });
+});
+
+/**
+ * v1.25.0 Lane R item R1 (deferred from v1.20.0). readFilter (page.tsx, not exported) parses
+ * `?queue=` into TransactionFilter.reviewQueue -- proven end-to-end through the real page, same
+ * idiom as the `?transfers=` describe block above. Requires `?review=1`: `?queue=` composes with
+ * the review filter and does nothing on its own (readFilter forces `reviewQueue: undefined`'s
+ * meaning "both" the same way whether or not review mode is active, but the two chip rows only
+ * ever narrow rows REVIEW_WHERE already selects, so a plain, non-review list is unaffected by it
+ * either way -- the point proven here is the review-mode composition, which is the only place a
+ * person can ever reach `?queue=` from the UI).
+ */
+describe('TransactionsPage: ?queue= parses to reviewQueue (Lane R item R1)', () => {
+  let t: TestDb | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  async function renderWithQueue(searchParams: Record<string, string>) {
+    t = createSeededTestDb();
+    const admin = insertTestUser(t.db, { name: 'Alice', username: 'alice', role: 'admin' });
+    const accountId = insertTestAccount(t.db, { type: 'chequing', ownerUserId: null });
+    currentUser.value = { id: admin, name: 'Alice', username: 'alice', role: 'admin', visibility: 'household' };
+    const groceries = categoryIdByName(t.db, 'Groceries');
+    // Suggested: categoryId set, source = 'bayes'.
+    t.db.run(sql`
+      insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, category_id, categorization_source, confidence, created_by, created_at, updated_at)
+      values (${accountId}, '2026-03-02', 'GUESSED SHOP', 'GUESSED SHOP', -500, ${groceries}, 'bayes', 3.1, ${admin}, ${nowIso()}, ${nowIso()})
+    `);
+    // Not categorized: categoryId null, source = 'none'.
+    t.db.run(sql`
+      insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, category_id, categorization_source, created_by, created_at, updated_at)
+      values (${accountId}, '2026-03-02', 'UNKNOWN SHOP', 'UNKNOWN SHOP', -700, null, 'none', ${admin}, ${nowIso()}, ${nowIso()})
+    `);
+    const { default: TransactionsPage } = await import('@/app/(app)/transactions/page');
+    return render(await TransactionsPage({ searchParams: Promise.resolve({ review: '1', ...searchParams }) }));
+  }
+
+  it("'queue=suggested' shows the guessed row and hides the uncategorized one", async () => {
+    const { container } = await renderWithQueue({ queue: 'suggested' });
+    expect(container.textContent).toContain('GUESSED SHOP');
+    expect(container.textContent).not.toContain('UNKNOWN SHOP');
+  });
+
+  it("'queue=uncategorized' shows the uncategorized row and hides the guessed one", async () => {
+    const { container } = await renderWithQueue({ queue: 'uncategorized' });
+    expect(container.textContent).toContain('UNKNOWN SHOP');
+    expect(container.textContent).not.toContain('GUESSED SHOP');
+  });
+
+  it('an absent queue param shows both rows -- the default is "both"', async () => {
+    const { container } = await renderWithQueue({});
+    expect(container.textContent).toContain('GUESSED SHOP');
+    expect(container.textContent).toContain('UNKNOWN SHOP');
+  });
+
+  it('a hand-edited junk value falls back to "both", not a refusal or an empty page', async () => {
+    const { container } = await renderWithQueue({ queue: 'nonsense' });
+    expect(container.textContent).toContain('GUESSED SHOP');
+    expect(container.textContent).toContain('UNKNOWN SHOP');
   });
 });

@@ -15,6 +15,9 @@ vi.mock('@/app/(app)/transactions/actions', () => ({
   setAttributionAction: vi.fn(async () => ({})),
   bulkCategorizeAction: vi.fn(async () => ({})),
   bulkTransferAction: vi.fn(async () => ({})),
+  // v1.25.0 Lane R item R3: the two new bulk actions (assign-to-loan, note).
+  bulkAssignToLoanAction: vi.fn(async () => ({})),
+  bulkNoteAction: vi.fn(async () => ({})),
   renameTransactionAction: vi.fn(async () => ({})),
   assignToLoanAction: vi.fn(async () => ({})),
   unassignFromLoanAction: vi.fn(async () => ({})),
@@ -899,6 +902,156 @@ describe('Bulk toolbar and a split row (v1.7.0 bulk-guard fix, requirement c)', 
     // the assertion that matters is that a split row still gets the control at all.
     const attributionSelect = container.querySelector('tbody select[name="attributedUserId"]');
     expect(attributionSelect).toBeTruthy();
+  });
+});
+
+/**
+ * v1.25.0 Lane R item R3. Bulk assign-to-loan and bulk note -- the two new bulk actions, derived
+ * from the same shared `bulkActions` list as Categorize/Attribute/Mark transfer (see that list's
+ * own doc comment above transactionCard's return in transactions-client.tsx). Both open a
+ * RowDialog confirm before writing anything; neither is subject to the split guard
+ * bulkCategorizeAction/bulkTransferAction honour (see bulkAssignToLoan/bulkSetNotes' own doc
+ * comments, src/lib/transactions.ts, for the justification), which these tests prove by
+ * selecting a split row and finding both actions still offered with no skip warning of their own.
+ */
+describe('Bulk assign-to-loan and bulk note (v1.25.0 Lane R item R3)', () => {
+  const splitRows: SplitRow[] = [
+    { id: 501, txnId: 1, categoryId: 42, amountCents: -300, note: null },
+    { id: 502, txnId: 1, categoryId: 7, amountCents: -200, note: null },
+  ];
+
+  function renderSelected(overrides: Partial<TransactionRow> = {}) {
+    render(
+      <TransactionsClient
+        page={pageWithRow({ id: 1, ...overrides })}
+        accounts={[{ id: 1, name: 'Joint Chequing' }]}
+        categories={[]}
+        people={[]}
+        today="2026-03-02"
+        loanOptions={[{ id: 9, name: 'Car Loan' }]}
+        splits={{ 1: splitRows }}
+      />,
+    );
+    fireEvent.click(rowScope().getByLabelText('Select transaction 1'));
+  }
+
+  it('offers "Assign to loan…" only when the household has a loan (MUST-14.9)', () => {
+    render(
+      <TransactionsClient
+        page={pageWithRow({ id: 1 })}
+        accounts={[{ id: 1, name: 'Joint Chequing' }]}
+        categories={[]}
+        people={[]}
+        today="2026-03-02"
+        loanOptions={[]}
+      />,
+    );
+    fireEvent.click(rowScope().getByLabelText('Select transaction 1'));
+    expect(screen.queryByRole('button', { name: 'Assign to loan…' })).toBeNull();
+  });
+
+  it('offers both bulk actions on a SPLIT row, with no skip warning of their own', () => {
+    renderSelected();
+    expect(screen.getByRole('button', { name: 'Assign to loan…' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Note…' })).toBeTruthy();
+    // The existing split-skip sentence names only Categorize and Mark transfer -- neither new
+    // action is subject to that guard, so it must not grow a second clause mentioning them.
+    expect(screen.getByText(/split and will be skipped/i).textContent).not.toMatch(/loan|note/i);
+  });
+
+  it('Assign to loan… opens a dialog naming the selection and stating the loan select', () => {
+    renderSelected();
+    fireEvent.click(screen.getByRole('button', { name: 'Assign to loan…' }));
+    expect(screen.getByRole('dialog', { name: /Assign 1 transaction to a loan/ })).toBeTruthy();
+    expect(screen.getByLabelText('Loan')).toBeTruthy();
+    expect(screen.getByText(/1 transaction will be linked/)).toBeTruthy();
+  });
+
+  it('Assign to loan…: Cancel closes the dialog and posts nothing', async () => {
+    const { bulkAssignToLoanAction } = await import('@/app/(app)/transactions/actions');
+    const spy = vi.mocked(bulkAssignToLoanAction);
+    spy.mockClear();
+    renderSelected();
+    fireEvent.click(screen.getByRole('button', { name: 'Assign to loan…' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('Assign to loan…: Save posts the selected ids and the chosen loan', async () => {
+    const { bulkAssignToLoanAction } = await import('@/app/(app)/transactions/actions');
+    const spy = vi.mocked(bulkAssignToLoanAction);
+    spy.mockClear();
+    const { container } = render(
+      <TransactionsClient
+        page={pageWithRow({ id: 1 })}
+        accounts={[{ id: 1, name: 'Joint Chequing' }]}
+        categories={[]}
+        people={[]}
+        today="2026-03-02"
+        loanOptions={[{ id: 9, name: 'Car Loan' }, { id: 10, name: 'Boat Loan' }]}
+      />,
+    );
+    fireEvent.click(rowScope().getByLabelText('Select transaction 1'));
+    fireEvent.click(screen.getByRole('button', { name: 'Assign to loan…' }));
+    fireEvent.change(screen.getByLabelText('Loan'), { target: { value: '10' } });
+    fireEvent.submit(container.querySelector('[data-testid="bulk-assign-loan-dialog-backdrop"] form') as HTMLFormElement);
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    const submitted = spy.mock.calls.at(-1)![1] as FormData;
+    expect(submitted.get('ids')).toBe('1');
+    expect(submitted.get('itemId')).toBe('10');
+  });
+
+  it('Assign to loan…: a row already linked to the chosen loan is previewed as "will be left unchanged"', () => {
+    render(
+      <TransactionsClient
+        page={pageWithRow({ id: 1 })}
+        accounts={[{ id: 1, name: 'Joint Chequing' }]}
+        categories={[]}
+        people={[]}
+        today="2026-03-02"
+        loanOptions={[{ id: 9, name: 'Car Loan' }]}
+        loanLinks={{ 1: [{ id: 1, txnId: 1, itemId: 9, itemName: 'Car Loan', amountCents: -500, appliedCents: 500, source: 'manual' }] }}
+      />,
+    );
+    fireEvent.click(rowScope().getByLabelText('Select transaction 1'));
+    fireEvent.click(screen.getByRole('button', { name: 'Assign to loan…' }));
+    expect(screen.getByText(/0 transactions will be linked/)).toBeTruthy();
+    expect(screen.getByText(/already linked to this loan/)).toBeTruthy();
+  });
+
+  it('Note…: Cancel closes the dialog and posts nothing', async () => {
+    const { bulkNoteAction } = await import('@/app/(app)/transactions/actions');
+    const spy = vi.mocked(bulkNoteAction);
+    spy.mockClear();
+    renderSelected();
+    fireEvent.click(screen.getByRole('button', { name: 'Note…' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('Note…: Save posts the selected ids and the typed note', async () => {
+    const { bulkNoteAction } = await import('@/app/(app)/transactions/actions');
+    const spy = vi.mocked(bulkNoteAction);
+    spy.mockClear();
+    const { container } = render(
+      <TransactionsClient
+        page={pageWithRow({ id: 1 })}
+        accounts={[{ id: 1, name: 'Joint Chequing' }]}
+        categories={[]}
+        people={[]}
+        today="2026-03-02"
+      />,
+    );
+    fireEvent.click(rowScope().getByLabelText('Select transaction 1'));
+    fireEvent.click(screen.getByRole('button', { name: 'Note…' }));
+    fireEvent.change(screen.getByLabelText('Note'), { target: { value: 'shared with Bob' } });
+    fireEvent.submit(container.querySelector('[data-testid="bulk-note-dialog-backdrop"] form') as HTMLFormElement);
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    const submitted = spy.mock.calls.at(-1)![1] as FormData;
+    expect(submitted.get('ids')).toBe('1');
+    expect(submitted.get('notes')).toBe('shared with Bob');
   });
 });
 
@@ -2062,6 +2215,131 @@ describe('v1.15.0 ruling S7: the filter controls disclosure', () => {
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     fireEvent.click(toggle);
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  /**
+   * v1.25.0 Lane R item R2: the transfer-view control moved onto PillNav
+   * (src/components/ui/PillNav.tsx), the last hand-rolled `role="group"` instance of that
+   * pattern. Two deliberate changes verified here: a LABELLED `<nav>` LANDMARK instead of
+   * `role="group"` (jumpable by a screen-reader user, unlike a group), and the active option
+   * marked -- both PillNav properties, not reimplemented by hand. The three hrefs themselves
+   * are asserted unchanged from v1.24.0 in the next test.
+   */
+  describe('v1.25.0 Lane R item R2: transfer-view control on PillNav', () => {
+    it('exposes a labelled navigation landmark, not role="group"', () => {
+      const { container } = render(
+        <TransactionsClient page={pageWithRow()} accounts={[]} categories={[]} people={[]} today="2026-03-02" />,
+      );
+      expect(screen.getByRole('navigation', { name: 'Filter by transfer status' })).toBeTruthy();
+      expect(container.querySelector('[role="group"][aria-label="Filter by transfer status"]')).toBeNull();
+    });
+
+    it('marks the active option with aria-current="page" -- "All" by default, "Transfers only" for ?transfers=only', () => {
+      render(
+        <TransactionsClient page={pageWithRow()} accounts={[]} categories={[]} people={[]} today="2026-03-02" />,
+      );
+      expect(screen.getByRole('link', { name: 'All' }).getAttribute('aria-current')).toBe('page');
+      expect(screen.getByRole('link', { name: 'Transfers only' }).getAttribute('aria-current')).toBeNull();
+
+      cleanup();
+      render(
+        <TransactionsClient
+          page={pageWithRow()}
+          accounts={[]}
+          categories={[]}
+          people={[]}
+          today="2026-03-02"
+          currentQuery="transfers=only"
+        />,
+      );
+      expect(screen.getByRole('link', { name: 'Transfers only' }).getAttribute('aria-current')).toBe('page');
+      expect(screen.getByRole('link', { name: 'All' }).getAttribute('aria-current')).toBeNull();
+    });
+
+    it('the three hrefs are unchanged from v1.24.0', () => {
+      render(
+        <TransactionsClient page={pageWithRow()} accounts={[]} categories={[]} people={[]} today="2026-03-02" />,
+      );
+      expect(screen.getByRole('link', { name: 'All' }).getAttribute('href')).toBe('/transactions');
+      expect(screen.getByRole('link', { name: 'Transfers only' }).getAttribute('href')).toBe('/transactions?transfers=only');
+      expect(screen.getByRole('link', { name: 'No transfers' }).getAttribute('href')).toBe('/transactions?transfers=0');
+    });
+
+    it('never renders in review mode -- the queue chips (item R1) take this slot instead', () => {
+      render(
+        <TransactionsClient page={pageWithRow()} accounts={[]} categories={[]} people={[]} today="2026-03-02" reviewMode />,
+      );
+      expect(screen.queryByRole('navigation', { name: 'Filter by transfer status' })).toBeNull();
+    });
+  });
+
+  /**
+   * v1.25.0 Lane R item R1 (deferred from v1.20.0). The review-queue chip row -- All / Suggested
+   * / Not categorized -- takes the transfer-view control's own slot, only in review mode. Reuses
+   * PillNav and filterHref the same way the R2 control does (verified just above); the row-level
+   * suggested/uncategorized filtering itself is exercised end-to-end in
+   * tests/app/transactions-page.test.tsx and tests/lib/transactions.test.ts, so these are about
+   * the RENDERING contract only: labelled landmark, active marking, plain hrefs, no per-chip
+   * counts (this task's own brief: a count needs its own query and is left off).
+   */
+  describe('v1.25.0 Lane R item R1: review-queue chip row', () => {
+    it('renders only in review mode, taking the transfer-view control\'s slot', () => {
+      render(
+        <TransactionsClient page={pageWithRow()} accounts={[]} categories={[]} people={[]} today="2026-03-02" reviewMode />,
+      );
+      expect(screen.getByRole('navigation', { name: 'Filter the review queue' })).toBeTruthy();
+      expect(screen.queryByRole('navigation', { name: 'Filter by transfer status' })).toBeNull();
+    });
+
+    it('labels are plain -- All, Suggested, Not categorized -- with no count appended', () => {
+      render(
+        <TransactionsClient page={pageWithRow()} accounts={[]} categories={[]} people={[]} today="2026-03-02" reviewMode />,
+      );
+      expect(screen.getByRole('link', { name: 'All' })).toBeTruthy();
+      expect(screen.getByRole('link', { name: 'Suggested' })).toBeTruthy();
+      expect(screen.getByRole('link', { name: 'Not categorized' })).toBeTruthy();
+    });
+
+    it('marks "All" active by default and the right chip active for ?queue=', () => {
+      render(
+        <TransactionsClient page={pageWithRow()} accounts={[]} categories={[]} people={[]} today="2026-03-02" reviewMode />,
+      );
+      expect(screen.getByRole('link', { name: 'All' }).getAttribute('aria-current')).toBe('page');
+
+      cleanup();
+      render(
+        <TransactionsClient
+          page={pageWithRow()}
+          accounts={[]}
+          categories={[]}
+          people={[]}
+          today="2026-03-02"
+          reviewMode
+          currentQuery="review=1&queue=suggested"
+        />,
+      );
+      expect(screen.getByRole('link', { name: 'Suggested' }).getAttribute('aria-current')).toBe('page');
+      expect(screen.getByRole('link', { name: 'All' }).getAttribute('aria-current')).toBeNull();
+    });
+
+    it('builds hrefs from filterHref, preserving the rest of the querystring (e.g. review=1)', () => {
+      render(
+        <TransactionsClient
+          page={pageWithRow()}
+          accounts={[]}
+          categories={[]}
+          people={[]}
+          today="2026-03-02"
+          reviewMode
+          currentQuery="review=1"
+        />,
+      );
+      expect(screen.getByRole('link', { name: 'Suggested' }).getAttribute('href')).toBe('/transactions?review=1&queue=suggested');
+      expect(screen.getByRole('link', { name: 'Not categorized' }).getAttribute('href')).toBe(
+        '/transactions?review=1&queue=uncategorized',
+      );
+      expect(screen.getByRole('link', { name: 'All' }).getAttribute('href')).toBe('/transactions?review=1');
+    });
   });
 
   it('opens by default and names the count when the URL already carries a filter', () => {

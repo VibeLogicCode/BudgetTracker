@@ -4,12 +4,19 @@ import { getDb } from '@/db/client';
 import { accounts, categories, transactions, transactionSplits, users } from '@/db/schema';
 import { getAccount } from '@/lib/accounts';
 import { ownerScope, type Viewer } from '@/lib/auth/viewer';
-import { REVIEW_WHERE, confirmCategory, runEngine, setTransferFlag } from '@/lib/categorize/engine';
+import {
+  REVIEW_SUGGESTED_WHERE,
+  REVIEW_UNCATEGORIZED_WHERE,
+  REVIEW_WHERE,
+  confirmCategory,
+  runEngine,
+  setTransferFlag,
+} from '@/lib/categorize/engine';
 import { normalizeMerchant } from '@/lib/categorize/normalize';
 import { ruleOwnedError } from '@/lib/categorize/rules';
 import { nowIso } from '@/lib/clock';
 import { isIsoDate } from '@/lib/dates';
-import { applyPaymentMatchers } from '@/lib/loans';
+import { applyPaymentMatchers, assignTransactionToLoan } from '@/lib/loans';
 
 /**
  * v1.13.0 ruling R4 (item I4). Thrown by createManualTransaction when the row's own category
@@ -74,6 +81,16 @@ export interface TransactionFilter {
    * the viewer's own rows.
    */
   reviewOnly?: boolean;
+  /**
+   * v1.25.0 Lane R item R1 (deferred from v1.20.0). `?queue=suggested` / `?queue=uncategorized`,
+   * a chip filter ALONGSIDE `reviewOnly` -- meaningless (and ignored, see buildWhere below) when
+   * `reviewOnly` is not also set, since these two states only partition REVIEW_WHERE's own scope.
+   * `undefined` (absent, or a hand-edited junk value -- readFilter, page.tsx, never lets anything
+   * else through) means both, today's behaviour. See REVIEW_SUGGESTED_WHERE/
+   * REVIEW_UNCATEGORIZED_WHERE (src/lib/categorize/engine.ts) for what each one actually means
+   * and why it is safe to AND onto REVIEW_WHERE rather than a second, independent definition.
+   */
+  reviewQueue?: 'suggested' | 'uncategorized';
   page?: number;
   pageSize?: number;
 }
@@ -262,7 +279,17 @@ function buildWhere(filter: TransactionFilter, viewer: Viewer): SQL | undefined 
   // return type is `SQL | undefined` regardless of argument count -- REVIEW_WHERE is built from
   // three fixed clauses and is never actually undefined at runtime, but the guard keeps this
   // array's element type honest.
-  if (filter.reviewOnly && REVIEW_WHERE) clauses.push(REVIEW_WHERE);
+  if (filter.reviewOnly && REVIEW_WHERE) {
+    clauses.push(REVIEW_WHERE);
+    // v1.25.0 Lane R item R1: NARROWS REVIEW_WHERE (this file's own `and(...)` below combines
+    // every pushed clause), never stands in for it -- a `?queue=` value only ever adds a clause
+    // on top of the queue REVIEW_WHERE already defines, so a row REVIEW_WHERE excludes (a
+    // transfer, a split, a loan-linked row) stays excluded no matter which chip is active.
+    // Same `and()`-returns-`SQL | undefined` guard as REVIEW_WHERE above: REVIEW_SUGGESTED_WHERE
+    // is built from two fixed clauses and is never actually undefined at runtime either.
+    if (filter.reviewQueue === 'suggested' && REVIEW_SUGGESTED_WHERE) clauses.push(REVIEW_SUGGESTED_WHERE);
+    else if (filter.reviewQueue === 'uncategorized') clauses.push(REVIEW_UNCATEGORIZED_WHERE);
+  }
 
   if (clauses.length === 0) return undefined;
   return and(...clauses);
@@ -448,6 +475,28 @@ export function bulkSetAttribution(ids: number[], attributedUserId: number | nul
 }
 
 /**
+ * v1.25.0 Lane R item R3. Bulk note: sets the same note on every selected row. Like
+ * bulkSetAttribution just above (and for the same reason -- see that function's own doc
+ * comment), this is NOT subject to the split guard confirmCategory/setTransferFlag enforce: a
+ * note is metadata ABOUT the transaction record, never a claim about which category the money
+ * belongs to or whether it is a transfer, so it carries none of the risk that guard exists to
+ * prevent (poisoning the categorizer, or erasing a split's own per-part categorization). The
+ * per-row "Note…" kebab item (transactions-client.tsx) already writes a split row's note today
+ * with no guard of its own -- this is that same behaviour, applied to N rows in one call rather
+ * than a new restriction invented for the bulk path. Every selected id is written, hence the
+ * plain `number` return, the same shape bulkSetAttribution uses above.
+ */
+export function bulkSetNotes(ids: number[], notes: string | null, at?: Date): number {
+  if (ids.length === 0) return 0;
+  const result = getDb()
+    .update(transactions)
+    .set({ notes, updatedAt: nowIso(at) })
+    .where(inArray(transactions.id, ids))
+    .run();
+  return Number(result.changes ?? 0);
+}
+
+/**
  * Return shape for the two bulk actions below. A split transaction's per-row write can be
  * refused outright (see the guard on confirmCategory/setTransferFlag in
  * src/lib/categorize/engine.ts -- the manual counterpart of Task 2b's automatic-engine
@@ -539,6 +588,62 @@ export function bulkSetTransfer(
     throw error;
   }
   return { ok: true, changed, skipped };
+}
+
+/** Return shape for bulkAssignToLoan, below -- a plain object rather than BulkResult: nothing
+ *  here can be refused as `owned_by_another` (loans carry no per-merchant rule ownership), so
+ *  that variant of BulkResult would be dead code a caller still had to handle. */
+export interface BulkLoanResult {
+  changed: number;
+  skipped: number;
+}
+
+/**
+ * v1.25.0 Lane R item R3. Bulk assign-to-loan: links every selected transaction to one loan by
+ * calling assignTransactionToLoan (src/lib/loans.ts) once per id -- the SAME single-transaction
+ * entry point the per-row "Assign to loan…" editor already posts to
+ * (assignToLoanAction/assignLoan, src/app/(app)/transactions/actions.ts +
+ * transactions-client.tsx). MUST-13.2, MUST-13.16 and rulings P4/B10 (tests/ops/
+ * loan-invariants.test.ts) all live inside that one function; calling it per row gets every one
+ * of them for free rather than re-deriving any of them here, and src/lib/loans.ts is a
+ * concurrent lane's file this task does not edit.
+ *
+ * NOT subject to the split guard bulkSetCategory/bulkSetTransfer (above) honour.
+ * assignTransactionToLoan writes to loan_payments only -- never to category_id or is_transfer,
+ * MUST-13.2's own boundary ("a loan payment stays in its spending category") -- and the existing
+ * per-row control already offers "Assign to loan…" on a split transaction with no guard at all
+ * (rowMenu in transactions-client.tsx gates Split…/Create warranty/Mark-transfer-adjacent items
+ * on `row.isTransfer`, never on whether the row has splits, and "Assign to loan…" isn't gated at
+ * all). Skipping a split row here would be a NEW restriction this codebase has never actually
+ * asked for, not a consistency fix -- see this task's own report for the fuller justification.
+ *
+ * `skipped` counts a genuine no-op instead: a row already linked to THIS loan
+ * (assignTransactionToLoan's own `{ linked: false }`, backed by loan_payments' unique index on
+ * (txn_id, item_id)) or a row assignTransactionToLoan refuses outright (a zero-amount
+ * transaction, a row that already pays a bill installment, MUST-13.16) -- both caught here and
+ * counted rather than left to throw and abort every id after them, so one row's refusal never
+ * silently drops the rest of a bulk selection's own changes. Deliberately NOT one
+ * `db.transaction()` the way bulkSetCategory/bulkSetTransfer are: assignTransactionToLoan already
+ * wraps EACH row's own read-balance/link/describe sequence in its own transaction (ruling A4's
+ * "one db transaction" is per assign, not per batch), and unlike an owned-rule refusal (which
+ * must roll back the WHOLE selection, ruling R4 fix round 2) a per-row loan refusal has nothing
+ * to roll back for any OTHER row -- each id's link is independent of every other id's, the same
+ * reasoning acceptAllGuessesAction (src/app/(app)/transactions/actions.ts) already gives for not
+ * wrapping its own per-id loop in one transaction.
+ */
+export function bulkAssignToLoan(ids: number[], itemId: number, at?: Date): BulkLoanResult {
+  let changed = 0;
+  let skipped = 0;
+  for (const id of ids) {
+    try {
+      const result = assignTransactionToLoan({ txnId: id, itemId, at });
+      if (result.linked) changed += 1;
+      else skipped += 1;
+    } catch {
+      skipped += 1;
+    }
+  }
+  return { changed, skipped };
 }
 
 /**

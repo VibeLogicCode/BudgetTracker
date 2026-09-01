@@ -80,6 +80,11 @@ function readFilter(
     // recovery-path value (TransactionFilter.transferView's own doc comment, src/lib/transactions.ts,
     // has the full reasoning); anything else -- absent, or a hand-edited junk value -- is 'all'.
     transferView: one('transfers') === '0' ? 'none' : one('transfers') === 'only' ? 'only' : 'all',
+    // v1.25.0 Lane R item R1: `?queue=` chips onto the review filter (TransactionFilter.reviewQueue's
+    // own doc comment, src/lib/transactions.ts). Anything but the two real values -- absent, or a
+    // hand-edited junk value -- is `undefined`, meaning "both", the same "fall back rather than
+    // refuse" rule `?transfers=` just above already follows.
+    reviewQueue: one('queue') === 'suggested' ? 'suggested' : one('queue') === 'uncategorized' ? 'uncategorized' : undefined,
     page: num('page') ?? 1,
     pageSize: 50,
     reviewOnly: reviewMode,

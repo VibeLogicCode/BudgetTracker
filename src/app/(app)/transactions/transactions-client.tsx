@@ -13,6 +13,7 @@ import { Notice } from '@/components/ui/Notice';
 import { PageGuide } from '@/components/ui/PageGuide';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Pill } from '@/components/ui/Pill';
+import { PillNav, type PillNavOption } from '@/components/ui/PillNav';
 import { ProgressBar } from '@/components/ui/ProgressBar';
 import { AmountCell, TableWrap } from '@/components/ui/Table';
 import { Field, inputClass, labelClass, selectClass } from '@/components/ui/form';
@@ -44,7 +45,9 @@ import {
   acceptGuessAction,
   applyToAllMatchingAction,
   assignToLoanAction,
+  bulkAssignToLoanAction,
   bulkCategorizeAction,
+  bulkNoteAction,
   bulkTransferAction,
   createLoanFromTransactionAction,
   renameTransactionAction,
@@ -198,6 +201,25 @@ const TRANSFER_VIEW_OPTIONS: { value: 'all' | 'only' | 'none'; label: string; pa
   { value: 'none', label: 'No transfers', param: '0' },
 ];
 
+/**
+ * v1.25.0 Lane R item R1 (deferred from v1.20.0). The review queue mixes a row the classifier
+ * GUESSED (source = 'bayes', a category to confirm or correct) with a row it had no idea about
+ * (categoryId null, a category to pick from scratch) -- REVIEW_SUGGESTED_WHERE/
+ * REVIEW_UNCATEGORIZED_WHERE (src/lib/categorize/engine.ts) narrow REVIEW_WHERE to each. Same
+ * `{ value, label, param }` shape as TRANSFER_VIEW_OPTIONS just above, on purpose: both feed the
+ * same filterHref (this file's own generalization of that idiom, see its doc comment) and now
+ * the same PillNav rendering, only the query key (`queue` vs `transfers`) differs.
+ *
+ * Only ever rendered in review mode (`reviewMode`, below) -- `?queue=` composes with `?review=1`,
+ * never stands in for it, the same way REVIEW_SUGGESTED_WHERE/REVIEW_UNCATEGORIZED_WHERE only
+ * ever narrow REVIEW_WHERE inside buildWhere (src/lib/transactions.ts), never stand alone.
+ */
+const QUEUE_CHIP_OPTIONS: { value: '' | 'suggested' | 'uncategorized'; label: string; param: string | null }[] = [
+  { value: '', label: 'All', param: null },
+  { value: 'suggested', label: 'Suggested', param: 'suggested' },
+  { value: 'uncategorized', label: 'Not categorized', param: 'uncategorized' },
+];
+
 export function TransactionsClient({
   page,
   accounts,
@@ -296,9 +318,23 @@ export function TransactionsClient({
   // a typed name does. '' means "New loan…" (the name/direction fields below apply); any other
   // value is an existing loan's id, and Save posts straight to assignToLoanAction instead.
   const [newLoan, setNewLoan] = useState<{ id: number; name: string; itemId: string } | null>(null);
+  /**
+   * v1.25.0 Lane R item R3. The two new bulk actions' own dialog state -- one nullable slot
+   * each, the same "one editor, replacing whichever was open" shape `newLoan`/`noting` already
+   * use above, scoped to the whole `selected` array rather than one row. `bulkLoan.itemId` is a
+   * CONTROLLED select (same reason newLoan.itemId is, above): it drives the dialog's own
+   * changed/skipped preview live as a person picks a different loan, before Save is ever
+   * pressed. `''` only while `loanOptions` is empty (the bulk action itself is not offered then,
+   * see the bulk-actions list below), so a real open always seeds a real id.
+   */
+  const [bulkLoan, setBulkLoan] = useState<{ itemId: string } | null>(null);
+  /** Mirrors `bulkLoan` immediately above: one nullable slot for the bulk note dialog. */
+  const [bulkNoting, setBulkNoting] = useState(false);
   const [attrState, attrAction] = useActionState(setAttributionAction, initial);
   const [bulkCatState, bulkCatAction] = useActionState(bulkCategorizeAction, initial);
   const [bulkTfrState, bulkTfrAction] = useActionState(bulkTransferAction, initial);
+  const [bulkLoanState, bulkLoanAction] = useActionState(bulkAssignToLoanAction, initial);
+  const [bulkNoteState, bulkNoteFormAction] = useActionState(bulkNoteAction, initial);
   const [renameState, renameAction] = useActionState(renameTransactionAction, initial);
   const [assignState, assignLoan] = useActionState(
     (_prev: ActionState, formData: FormData) => assignToLoanAction(formData),
@@ -455,6 +491,13 @@ export function TransactionsClient({
   const activeTransferView: 'all' | 'only' | 'none' =
     transfersParam === 'only' ? 'only' : transfersParam === '0' ? 'none' : 'all';
 
+  // v1.25.0 Lane R item R1: same "read it off currentQuery" idiom as activeTransferView just
+  // above. Anything but the two real values (absent, or a hand-edited junk value) is '', the
+  // QUEUE_CHIP_OPTIONS "All" entry -- server-side readFilter (page.tsx) falls back the same way.
+  const queueParam = new URLSearchParams(currentQuery).get('queue');
+  const activeQueueChip: '' | 'suggested' | 'uncategorized' =
+    queueParam === 'suggested' ? 'suggested' : queueParam === 'uncategorized' ? 'uncategorized' : '';
+
   const toggle = (id: number) => setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   // v1.7.0 bulk-guard fix: Categorize and Mark transfer both silently skip a split
   // transaction now (its money already lives in transaction_splits, not this row's own
@@ -478,15 +521,22 @@ export function TransactionsClient({
   // rowTransferState are plain one-off actions with no editor of their own, so they join the
   // rest of that set at the end, the same as assignState/unassignState. acceptAllState (item 5)
   // joins them there too, for the same reason -- it has no editor of its own to protect either.
+  // v1.25.0 Lane R item R3: bulkLoanState/bulkNoteState join the splitState/noteState group --
+  // both new dialogs close on submit (bulkLoanDialog/bulkNoteDialog's own onSubmit, below), the
+  // same as split/note, not stay-open-on-refusal like newLoanState/applyAllState -- so the top
+  // banner is the only place either one's result is ever seen, and their position here does not
+  // need to protect an inline error the dialog itself no longer shows.
   const notice =
     newLoanState.message ?? applyAllState.message ??
     attrState.message ?? bulkCatState.message ?? bulkTfrState.message ??
     renameState.message ?? assignState.message ?? unassignState.message ?? splitState.message ?? noteState.message ??
+    bulkLoanState.message ?? bulkNoteState.message ??
     acceptState.message ?? acceptAllState.message ?? rowTransferState.message;
   const error =
     newLoanState.error ?? applyAllState.error ??
     attrState.error ?? bulkCatState.error ?? bulkTfrState.error ??
     renameState.error ?? assignState.error ?? unassignState.error ?? splitState.error ?? noteState.error ??
+    bulkLoanState.error ?? bulkNoteState.error ??
     acceptState.error ?? acceptAllState.error ?? rowTransferState.error;
 
   // Review round: unlike renaming/noting/splitting (which close their own form onSubmit right
@@ -1217,6 +1267,206 @@ export function TransactionsClient({
     );
   }
 
+  /**
+   * v1.25.0 Lane R item R3. The bulk toolbar's actions -- Categorize, Attribute, Mark transfer,
+   * Assign to loan, Note -- as ONE list, not five hand-copied blocks. The first three existed
+   * before this task, written inline in the toolbar's own JSX; Assign to loan and Note are the
+   * two this task adds, and bolting them on as two more inline blocks beside the other three is
+   * exactly the copy-and-diverge this refactor exists to stop. The toolbar below renders this
+   * list with one `.map()` (`{bulkActions.map((action) => <Fragment key={action.key}>...`), so a
+   * future sixth bulk action is one entry pushed onto this array, not a sixth hand-copied form.
+   *
+   * Each entry owns its own markup rather than sharing one generic shape: the five controls are
+   * not shape-compatible (three post a plain form directly; the two new ones open a RowDialog
+   * confirm first, since a page-level action across a multi-row SELECTION is exactly the case
+   * RowDialog's own docblock says belongs in one, not an inline disclosure). What is shared is
+   * WHERE they render and IN WHAT ORDER -- one list the toolbar walks once -- not their internal
+   * form fields, which stayed byte-for-byte what they were before this task for the first three.
+   *
+   * Conditionally present entries (`attribute` when not self-scoped, `assign-loan` when the
+   * household has a loan to offer) are filtered out of the array itself, the same "decide once,
+   * here" rule the array's existence is for -- not a per-entry `hidden` flag the renderer has to
+   * re-check.
+   */
+  const bulkActions: { key: string; node: React.ReactNode }[] = [
+    {
+      key: 'categorize',
+      node: (
+        <form action={bulkCatAction} className="flex flex-wrap items-center gap-2">
+          <input type="hidden" name="ids" value={selected.join(',')} />
+          <select name="categoryId" aria-label="Category for the selected transactions" className={selectClass}>
+            {groupedCategories.map((opt) => (
+              <option key={opt.id} value={opt.id}>{'  '.repeat(opt.depth) + opt.label}</option>
+            ))}
+          </select>
+          <label className="flex items-center gap-2 text-sm text-accent-soft-fg">
+            <input type="checkbox" name="createRules" defaultChecked className="accent-accent" /> create rules
+          </label>
+          <SubmitButton>Categorize</SubmitButton>
+        </form>
+      ),
+    },
+    // Item BO: for a self viewer every choice here returns NOT_YOURS_ERROR, so it is not
+    // rendered at all rather than shown-but-ineffective -- the same rule as the person filter
+    // in the disclosure fields above.
+    ...(selfScoped
+      ? []
+      : [
+          {
+            key: 'attribute',
+            node: (
+              <form action={attrAction} className="flex flex-wrap items-center gap-2">
+                <input type="hidden" name="ids" value={selected.join(',')} />
+                <select name="attributedUserId" aria-label="Person for the selected transactions" className={selectClass}>
+                  <option value="">Household/unattributed</option>
+                  {people.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+                <SubmitButton>Attribute</SubmitButton>
+              </form>
+            ),
+          },
+        ]),
+    {
+      key: 'transfer',
+      node: (
+        <form action={bulkTfrAction} className="flex items-center gap-2">
+          <input type="hidden" name="ids" value={selected.join(',')} />
+          <input type="hidden" name="isTransfer" value="1" />
+          <SubmitButton variant="secondary">Mark transfer</SubmitButton>
+        </form>
+      ),
+    },
+    // MUST-14.9: empty for a household with no loans (or none with a balance still owed) --
+    // the bulk action disappears entirely then, the same rule the per-row loanOptions-driven
+    // controls already follow (page.tsx's own doc comment on the prop).
+    ...(loanOptions.length > 0
+      ? [
+          {
+            key: 'assign-loan',
+            node: (
+              <button
+                type="button"
+                className="btn btn--secondary"
+                onClick={() => setBulkLoan({ itemId: String(loanOptions[0].id) })}
+              >
+                Assign to loan…
+              </button>
+            ),
+          },
+        ]
+      : []),
+    {
+      key: 'note',
+      node: (
+        <button type="button" className="btn btn--secondary" onClick={() => setBulkNoting(true)}>
+          Note…
+        </button>
+      ),
+    },
+  ];
+
+  /**
+   * v1.25.0 Lane R item R3. Bulk assign-to-loan's own confirm dialog -- a page-level decision
+   * over a multi-row SELECTION (RowDialog's own docblock: exactly the case that belongs in a
+   * dialog, not an inline disclosure). The changed/skipped preview below is computed CLIENT-SIDE
+   * from `loanLinks`, a prop page.tsx already hands down for every row on this page (no new
+   * query): a selected row already linked to the chosen loan counts toward `skipped`, recomputed
+   * live as the loan select changes, so the count on screen is always for the loan actually
+   * about to be posted. This preview only reflects the ONE thing it can see from here (an
+   * existing link to this same loan) -- assignTransactionToLoan (src/lib/loans.ts) can also
+   * refuse a row for reasons this page has no client-side signal for (a zero-amount transaction,
+   * a row that already pays a bill installment), which bulkAssignToLoan (src/lib/transactions.ts)
+   * still counts into ITS OWN `skipped` when the write actually runs -- so the toast after Save
+   * is the authoritative count; this dialog's number is a best-effort preview, not a guarantee,
+   * the same honesty gap between "eligible" and "wouldChange" previewRerun already accepts
+   * elsewhere in this app (src/lib/categorize/engine.ts).
+   *
+   * Closes on submit (`onSubmit`), the same eager-close idiom noteDialog/renameDialog use, not
+   * newLoanDialog/applyAllDialog's stay-open-on-refusal -- a refusal here has no typed draft
+   * worth preserving (only a <select>), so the top banner (bulkLoanState.error, merged into
+   * `error` above) is where a refusal is seen, same as split/note.
+   */
+  function bulkLoanDialog() {
+    if (!bulkLoan) return null;
+    const alreadyLinked = selected.filter((id) =>
+      (loanLinks[id] ?? []).some((link) => String(link.itemId) === bulkLoan.itemId),
+    ).length;
+    const willChange = selected.length - alreadyLinked;
+    return (
+      <RowDialog
+        dialogId="bulk-assign-loan-dialog"
+        title={`Assign ${selected.length} transaction${selected.length === 1 ? '' : 's'} to a loan`}
+        onClose={() => setBulkLoan(null)}
+      >
+        <form action={bulkLoanAction} onSubmit={() => setBulkLoan(null)} className="flex flex-col gap-3">
+          <input type="hidden" name="ids" value={selected.join(',')} />
+          <Field label="Loan">
+            <select
+              name="itemId"
+              value={bulkLoan.itemId}
+              onChange={(e) => setBulkLoan({ itemId: e.target.value })}
+              autoFocus
+              className={selectClass}
+            >
+              {loanOptions.map((loan) => (
+                <option key={loan.id} value={String(loan.id)}>{loan.name}</option>
+              ))}
+            </select>
+          </Field>
+          <p className="text-sm text-ink">
+            {willChange} transaction{willChange === 1 ? '' : 's'} will be linked.
+            {alreadyLinked > 0
+              ? ` ${alreadyLinked} ${alreadyLinked === 1 ? 'is' : 'are'} already linked to this loan and will be left unchanged.`
+              : ''}
+          </p>
+          <div className="flex gap-2">
+            <SubmitButton disabled={willChange === 0} className="w-fit">Assign</SubmitButton>
+            <button type="button" className="btn btn--ghost btn--sm" onClick={() => setBulkLoan(null)}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      </RowDialog>
+    );
+  }
+
+  /**
+   * v1.25.0 Lane R item R3. Bulk note's own confirm dialog -- mirrors bulkLoanDialog immediately
+   * above. Nothing here can be "skipped" (bulkSetNotes, src/lib/transactions.ts, writes every
+   * selected id unconditionally -- see that function's own doc comment for why a note carries
+   * none of the split guard's risk), so the count stated is simply how many rows will change,
+   * with no skip clause to compute or word.
+   */
+  function bulkNoteDialog() {
+    if (!bulkNoting) return null;
+    return (
+      <RowDialog
+        dialogId="bulk-note-dialog"
+        title={`Note for ${selected.length} transaction${selected.length === 1 ? '' : 's'}`}
+        onClose={() => setBulkNoting(false)}
+      >
+        <form action={bulkNoteFormAction} onSubmit={() => setBulkNoting(false)} className="flex flex-col gap-3">
+          <input type="hidden" name="ids" value={selected.join(',')} />
+          <Field label="Note">
+            <textarea name="notes" rows={3} autoFocus className={inputClass} />
+          </Field>
+          <p className="text-sm text-ink">
+            This note will be set on all {selected.length} selected transaction{selected.length === 1 ? '' : 's'},
+            replacing any note already there.
+          </p>
+          <div className="flex gap-2">
+            <SubmitButton className="w-fit">Save note</SubmitButton>
+            <button type="button" className="btn btn--ghost btn--sm" onClick={() => setBulkNoting(false)}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      </RowDialog>
+    );
+  }
+
   return (
     // data-page-width: this table needs more than the shell's 6xl reading cap (see globals.css).
     // v1.16.0 Lane C item 3: NOT emitted at all in review mode -- the review filter is one
@@ -1412,6 +1662,12 @@ export function TransactionsClient({
       {noteDialog()}
       {newLoanDialog()}
       {applyAllDialog()}
+      {/* v1.25.0 Lane R item R3: the two bulk-action confirm dialogs, same "rendered once here"
+          reasoning as the four row editors just above -- see bulkLoanDialog/bulkNoteDialog's own
+          doc comments (above transactionCard's return) for why each is a dialog rather than an
+          inline disclosure. */}
+      {bulkLoanDialog()}
+      {bulkNoteDialog()}
 
       <Card as="div">
         <CardBody className="pt-5">
@@ -1429,6 +1685,9 @@ export function TransactionsClient({
             {activeTransferView !== 'all' ? (
               <input type="hidden" name="transfers" value={activeTransferView === 'only' ? 'only' : '0'} />
             ) : null}
+            {/* v1.25.0 Lane R item R1: same reasoning as `transfers` just above -- the queue chip
+                row (below) is a set of plain <a> links via PillNav, not a form field. */}
+            {activeQueueChip !== '' ? <input type="hidden" name="queue" value={activeQueueChip} /> : null}
             {/* Fix round (owner ask): one row, at every width, replaces the old "Filters (N)"
                 text button that only showed below `sm` plus a field block that was simply always
                 visible at `sm` and up -- two different shapes for the same fields depending on
@@ -1489,35 +1748,68 @@ export function TransactionsClient({
 
             {/*
               v1.24.0 Lane A item 2 (owner report: "currently once i apply a trasnfer its hard to
-              find that data again"). Three plain links, styled and built exactly like the
-              category chips just below (same Pill, same filterHref) -- ALWAYS visible, never
-              folded behind the Filters(N) disclosure the old two-state checkbox lived in.
-              Burying it there is what made a mis-tagged transfer unreachable in the first place:
-              REVIEW_WHERE (src/lib/categorize/engine.ts) excludes every transfer unconditionally,
-              so once a row was flagged a transfer AND the checkbox's "hide transfers" default hid
-              it from the ordinary list too, nothing on this page could ever show it again.
-              "Transfers only" is that recovery path, and a recovery path that needs discovering
-              through a collapsed disclosure first is not really one.
+              find that data again"). ALWAYS visible, never folded behind the Filters(N)
+              disclosure the old two-state checkbox lived in. Burying it there is what made a
+              mis-tagged transfer unreachable in the first place: REVIEW_WHERE
+              (src/lib/categorize/engine.ts) excludes every transfer unconditionally, so once a
+              row was flagged a transfer AND the checkbox's "hide transfers" default hid it from
+              the ordinary list too, nothing on this page could ever show it again. "Transfers
+              only" is that recovery path, and a recovery path that needs discovering through a
+              collapsed disclosure first is not really one.
+
+              v1.25.0 Lane R item R2: moved onto PillNav (src/components/ui/PillNav.tsx) -- the
+              last hand-rolled `role="group"` instance of "a row of pill-shaped filter links, one
+              marked active", per that component's own docblock. Two deliberate changes, both
+              improvements: the wrapper is now a LABELLED `<nav>` LANDMARK instead of
+              `role="group"` (PillNav's own docblock argues this at length -- `role="group"`
+              cannot be jumped to by a screen-reader user, `<nav>` can), and this keeps PillNav's
+              DEFAULT className -- the segmented-tab look Budgets' ScopePill and Dashboard's
+              PersonPill already render, rather than overriding it back to the old loose Pill-chip
+              row. That is a genuine visual change (an inactive option no longer carries its own
+              grey pill background, only the active one gets the filled `bg-surface` treatment),
+              chosen deliberately: PillNav's per-option classes are not independently overridable
+              (only the group wrapper's `className` is), so keeping the OLD look exactly would
+              have meant not adopting PillNav's item styling at all, just its `<nav>`/
+              aria-current/44px-floor properties -- and this is a strict, mutually-exclusive
+              3-way mode switch (All / Transfers only / No transfers), the same shape as the
+              segmented controls it now matches, not an open multi-value picker like the category
+              chips just below (which stay on Pill -- out of this task's scope). Consistency with
+              the two existing segmented controls was preferred per this task's own brief, and
+              nothing about this row's three short labels needs the looser chip treatment to fit.
 
               NOT rendered in review mode: the review queue is REVIEW_WHERE, which excludes
               transfers unconditionally regardless of this control, so offering a "transfers only"
               or "no transfers" choice there would be a lie about what the filtered list can ever
               return -- every option would either show nothing (transfers only, none) or the same
-              rows (no transfers, redundant with REVIEW_WHERE's own exclusion).
+              rows (no transfers, redundant with REVIEW_WHERE's own exclusion). The review-mode
+              queue chips (v1.25.0 Lane R item R1, just below) take this exact slot instead --
+              `?queue=` composes with `?review=1` the same way `?transfers=` composes with the
+              ordinary list, so the two controls never need to be visible at once.
             */}
-            {reviewMode ? null : (
-              <div role="group" aria-label="Filter by transfer status" className="flex flex-wrap items-center gap-2">
-                {TRANSFER_VIEW_OPTIONS.map((option) => (
-                  <Link
-                    key={option.value}
-                    href={filterHref(currentQuery, 'transfers', option.param)}
-                    aria-current={activeTransferView === option.value ? 'page' : undefined}
-                    className="inline-flex min-h-11 items-center sm:min-h-0"
-                  >
-                    <Pill tone={activeTransferView === option.value ? 'accent' : 'neutral'}>{option.label}</Pill>
-                  </Link>
-                ))}
-              </div>
+            {reviewMode ? (
+              <PillNav
+                groupLabel="Filter the review queue"
+                options={QUEUE_CHIP_OPTIONS.map(
+                  (option): PillNavOption => ({
+                    key: option.value === '' ? 'all' : option.value,
+                    href: filterHref(currentQuery, 'queue', option.param),
+                    label: option.label,
+                    active: activeQueueChip === option.value,
+                  }),
+                )}
+              />
+            ) : (
+              <PillNav
+                groupLabel="Filter by transfer status"
+                options={TRANSFER_VIEW_OPTIONS.map(
+                  (option): PillNavOption => ({
+                    key: option.value,
+                    href: filterHref(currentQuery, 'transfers', option.param),
+                    label: option.label,
+                    active: activeTransferView === option.value,
+                  }),
+                )}
+              />
             )}
 
             {/* Chip filters (ruling D6): TOP-LEVEL categories only, always visible (not folded
@@ -1644,38 +1936,11 @@ export function TransactionsClient({
               skipped by Categorize and Mark transfer.
             </p>
           ) : null}
-          <form action={bulkCatAction} className="flex flex-wrap items-center gap-2">
-            <input type="hidden" name="ids" value={selected.join(',')} />
-            <select name="categoryId" aria-label="Category for the selected transactions" className={selectClass}>
-              {groupedCategories.map((opt) => (
-                <option key={opt.id} value={opt.id}>{'\u00A0\u00A0'.repeat(opt.depth) + opt.label}</option>
-              ))}
-            </select>
-            <label className="flex items-center gap-2 text-sm text-accent-soft-fg">
-              <input type="checkbox" name="createRules" defaultChecked className="accent-accent" /> create rules
-            </label>
-            <SubmitButton>Categorize</SubmitButton>
-          </form>
-          {/* Item BO: for a self viewer every choice here returns NOT_YOURS_ERROR, so it is not
-              rendered at all rather than shown-but-ineffective -- the same rule as the person
-              filter at :382-384. */}
-          {selfScoped ? null : (
-            <form action={attrAction} className="flex flex-wrap items-center gap-2">
-              <input type="hidden" name="ids" value={selected.join(',')} />
-              <select name="attributedUserId" aria-label="Person for the selected transactions" className={selectClass}>
-                <option value="">Household/unattributed</option>
-                {people.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-              <SubmitButton>Attribute</SubmitButton>
-            </form>
-          )}
-          <form action={bulkTfrAction} className="flex items-center gap-2">
-            <input type="hidden" name="ids" value={selected.join(',')} />
-            <input type="hidden" name="isTransfer" value="1" />
-            <SubmitButton variant="secondary">Mark transfer</SubmitButton>
-          </form>
+          {/* v1.25.0 Lane R item R3: one list, walked once -- bulkActions' own doc comment (above
+              transactionCard's return) explains why this is no longer five hand-copied blocks. */}
+          {bulkActions.map((action) => (
+            <Fragment key={action.key}>{action.node}</Fragment>
+          ))}
         </div>
       ) : null}
 
