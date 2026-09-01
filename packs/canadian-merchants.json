@@ -1,8 +1,8 @@
 {
   "format": "budget-tracker-rules",
   "version": 1,
-  "pack_version": 1,
-  "exported_at": "2026-08-31T00:00:00.000Z",
+  "pack_version": 3,
+  "exported_at": "2026-09-01T00:00:00.000Z",
   "categories": [
     {
       "name": "Transport",
@@ -152,6 +152,13 @@
       "color": "#ec4899"
     },
     {
+      "name": "Clothing",
+      "parent": "Shopping",
+      "is_income": false,
+      "icon": "🛍️",
+      "color": "#ec4899"
+    },
+    {
       "name": "Electronics",
       "parent": "Shopping",
       "is_income": false,
@@ -185,7 +192,7 @@
     },
     {
       "pattern": "ESSO",
-      "match_type": "exact",
+      "match_type": "word",
       "rule_kind": "category",
       "category": "Gas",
       "category_parent": "Transport",
@@ -193,7 +200,7 @@
     },
     {
       "pattern": "SHELL",
-      "match_type": "contains",
+      "match_type": "word",
       "rule_kind": "category",
       "category": "Gas",
       "category_parent": "Transport",
@@ -240,6 +247,54 @@
       "rename_to": null
     },
     {
+      "pattern": "CIRCLE K",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Gas",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "COUCHE-TARD",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Gas",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "MOBIL",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Gas",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "IRVING OIL",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Gas",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "IRVING",
+      "match_type": "exact",
+      "rule_kind": "category",
+      "category": "Gas",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "CO-OP GAS BAR",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Gas",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
       "pattern": "TIM HORTONS",
       "match_type": "contains",
       "rule_kind": "category",
@@ -280,6 +335,54 @@
       "rename_to": null
     },
     {
+      "pattern": "BALZAC'S",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Coffee",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "BRIDGEHEAD",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Coffee",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "GOOD EARTH COFFEEHOUSE",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Coffee",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "JJ BEAN",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Coffee",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "BLENZ",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Coffee",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "AROMA ESPRESSO",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Coffee",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
       "pattern": "MCDONALD'S",
       "match_type": "contains",
       "rule_kind": "category",
@@ -305,7 +408,7 @@
     },
     {
       "pattern": "A&W",
-      "match_type": "exact",
+      "match_type": "word",
       "rule_kind": "category",
       "category": "Restaurants",
       "category_parent": "Food",
@@ -329,7 +432,7 @@
     },
     {
       "pattern": "KFC",
-      "match_type": "exact",
+      "match_type": "word",
       "rule_kind": "category",
       "category": "Restaurants",
       "category_parent": "Food",
@@ -569,7 +672,7 @@
     },
     {
       "pattern": "METRO",
-      "match_type": "contains",
+      "match_type": "word",
       "rule_kind": "category",
       "category": "Groceries",
       "category_parent": "Food",
@@ -593,7 +696,7 @@
     },
     {
       "pattern": "IGA",
-      "match_type": "exact",
+      "match_type": "word",
       "rule_kind": "category",
       "category": "Groceries",
       "category_parent": "Food",
@@ -657,7 +760,7 @@
     },
     {
       "pattern": "MAXI",
-      "match_type": "exact",
+      "match_type": "word",
       "rule_kind": "category",
       "category": "Groceries",
       "category_parent": "Food",
@@ -698,6 +801,182 @@
     {
       "pattern": "INDEPENDENT GROCER",
       "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "T&T SUPERMARKET",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "WHOLESALE CLUB",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "FRESHMART",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "FOODLAND",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "RACHELLE-BÉRY",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "RACHELLE-BERY",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "BONICHOIX",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "SUPER C",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "ADONIS",
+      "match_type": "exact",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "PREMIÈRE MOISSON",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "PREMIERE MOISSON",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "MARCHÉ RICHELIEU",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "MARCHE RICHELIEU",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "URBAN FARE",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "BUY-LOW FOODS",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "NESTERS MARKET",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "QUALITY FOODS",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "PRICESMART FOODS",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "CHOICES MARKET",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "CALGARY CO-OP",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "BULK BARN",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "M&M FOOD MARKET",
+      "match_type": "word",
       "rule_kind": "category",
       "category": "Groceries",
       "category_parent": "Food",
@@ -785,7 +1064,7 @@
     },
     {
       "pattern": "FIDO",
-      "match_type": "exact",
+      "match_type": "word",
       "rule_kind": "category",
       "category": "Internet & Phone",
       "category_parent": "Housing",
@@ -874,6 +1153,86 @@
     {
       "pattern": "SHAW DIRECT",
       "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Internet & Phone",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "TEKSAVVY",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Internet & Phone",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "FIZZ",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Internet & Phone",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "XPLORE",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Internet & Phone",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "XPLORNET",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Internet & Phone",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "DISTRIBUTEL",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Internet & Phone",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "VMEDIA",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Internet & Phone",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "BEANFIELD",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Internet & Phone",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "OXIO",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Internet & Phone",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "EBOX",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Internet & Phone",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "VIDÉOTRON",
+      "match_type": "word",
       "rule_kind": "category",
       "category": "Internet & Phone",
       "category_parent": "Housing",
@@ -993,7 +1352,7 @@
     },
     {
       "pattern": "ATCO",
-      "match_type": "contains",
+      "match_type": "word",
       "rule_kind": "category",
       "category": "Utilities",
       "category_parent": "Housing",
@@ -1040,8 +1399,200 @@
       "rename_to": null
     },
     {
+      "pattern": "ALECTRA",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "ELEXICON",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "ENOVA POWER",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "KITCHENER-WILMOT HYDRO",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "WATERLOO NORTH HYDRO",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "LONDON HYDRO",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "ENWIN",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "GRANDBRIDGE ENERGY",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "ENTEGRUS",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "GREATER SUDBURY HYDRO",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "SYNERGY NORTH",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "OSHAWA PUC",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "BURLINGTON HYDRO",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "OAKVILLE HYDRO",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "MILTON HYDRO",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "NIAGARA PENINSULA ENERGY",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "UTILITIES KINGSTON",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "KINGSTON HYDRO",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "NORTH BAY HYDRO",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "BLUEWATER POWER",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "MARITIME ELECTRIC",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "YUKON ENERGY",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "QULLIQ ENERGY",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
+      "pattern": "NORTHWEST TERRITORIES POWER",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Utilities",
+      "category_parent": "Housing",
+      "rename_to": null
+    },
+    {
       "pattern": "PRESTO",
-      "match_type": "contains",
+      "match_type": "word",
       "rule_kind": "category",
       "category": "Transit",
       "category_parent": "Transport",
@@ -1049,7 +1600,7 @@
     },
     {
       "pattern": "TTC",
-      "match_type": "exact",
+      "match_type": "word",
       "rule_kind": "category",
       "category": "Transit",
       "category_parent": "Transport",
@@ -1065,7 +1616,7 @@
     },
     {
       "pattern": "STM",
-      "match_type": "exact",
+      "match_type": "word",
       "rule_kind": "category",
       "category": "Transit",
       "category_parent": "Transport",
@@ -1090,6 +1641,174 @@
     {
       "pattern": "COMPASS CARD",
       "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Transit",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "METROLINX",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Transit",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "MIWAY",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Transit",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "BRAMPTON TRANSIT",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Transit",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "YORK REGION TRANSIT",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Transit",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "DURHAM REGION TRANSIT",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Transit",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "GRAND RIVER TRANSIT",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Transit",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "HAMILTON STREET RAILWAY",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Transit",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "LONDON TRANSIT",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Transit",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "TRANSIT WINDSOR",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Transit",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "CALGARY TRANSIT",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Transit",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "EDMONTON TRANSIT",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Transit",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "WINNIPEG TRANSIT",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Transit",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "SASKATOON TRANSIT",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Transit",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "REGINA TRANSIT",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Transit",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "BC TRANSIT",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Transit",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "HALIFAX TRANSIT",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Transit",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "RTC",
+      "match_type": "exact",
+      "rule_kind": "category",
+      "category": "Transit",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "STL",
+      "match_type": "exact",
+      "rule_kind": "category",
+      "category": "Transit",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "RTL",
+      "match_type": "exact",
+      "rule_kind": "category",
+      "category": "Transit",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "STS",
+      "match_type": "exact",
+      "rule_kind": "category",
+      "category": "Transit",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
+      "pattern": "EXO",
+      "match_type": "exact",
       "rule_kind": "category",
       "category": "Transit",
       "category_parent": "Transport",
@@ -1233,7 +1952,7 @@
     },
     {
       "pattern": "F45",
-      "match_type": "exact",
+      "match_type": "word",
       "rule_kind": "category",
       "category": "Fitness",
       "category_parent": "Health",
@@ -1249,7 +1968,7 @@
     },
     {
       "pattern": "YMCA",
-      "match_type": "exact",
+      "match_type": "word",
       "rule_kind": "category",
       "category": "Fitness",
       "category_parent": "Health",
@@ -1409,7 +2128,7 @@
     },
     {
       "pattern": "XBOX",
-      "match_type": "exact",
+      "match_type": "word",
       "rule_kind": "category",
       "category": "Entertainment",
       "category_parent": "Personal",
@@ -1560,6 +2279,110 @@
       "rename_to": null
     },
     {
+      "pattern": "SPORTCHEK",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "General",
+      "category_parent": "Shopping",
+      "rename_to": null
+    },
+    {
+      "pattern": "SPORT CHEK",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "General",
+      "category_parent": "Shopping",
+      "rename_to": null
+    },
+    {
+      "pattern": "SPORTS EXPERTS",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "General",
+      "category_parent": "Shopping",
+      "rename_to": null
+    },
+    {
+      "pattern": "HOCKEY EXPERTS",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "General",
+      "category_parent": "Shopping",
+      "rename_to": null
+    },
+    {
+      "pattern": "PRO HOCKEY LIFE",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "General",
+      "category_parent": "Shopping",
+      "rename_to": null
+    },
+    {
+      "pattern": "PARTY CITY",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "General",
+      "category_parent": "Shopping",
+      "rename_to": null
+    },
+    {
+      "pattern": "WINNERS",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "General",
+      "category_parent": "Shopping",
+      "rename_to": null
+    },
+    {
+      "pattern": "HOMESENSE",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "General",
+      "category_parent": "Shopping",
+      "rename_to": null
+    },
+    {
+      "pattern": "MARSHALLS",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "General",
+      "category_parent": "Shopping",
+      "rename_to": null
+    },
+    {
+      "pattern": "LEON'S",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "General",
+      "category_parent": "Shopping",
+      "rename_to": null
+    },
+    {
+      "pattern": "SLEEP COUNTRY",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "General",
+      "category_parent": "Shopping",
+      "rename_to": null
+    },
+    {
+      "pattern": "STRUCTUBE",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "General",
+      "category_parent": "Shopping",
+      "rename_to": null
+    },
+    {
+      "pattern": "CHAPTERS",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "General",
+      "category_parent": "Shopping",
+      "rename_to": null
+    },
+    {
       "pattern": "WALMART",
       "match_type": "contains",
       "rule_kind": "rename",
@@ -1686,6 +2509,46 @@
       "category": null,
       "category_parent": null,
       "rename_to": "Giant Tiger"
+    },
+    {
+      "pattern": "CANAC",
+      "match_type": "word",
+      "rule_kind": "rename",
+      "category": null,
+      "category_parent": null,
+      "rename_to": "Canac"
+    },
+    {
+      "pattern": "PATRICK MORIN",
+      "match_type": "exact",
+      "rule_kind": "rename",
+      "category": null,
+      "category_parent": null,
+      "rename_to": "Patrick Morin"
+    },
+    {
+      "pattern": "MARK'S",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Clothing",
+      "category_parent": "Shopping",
+      "rename_to": null
+    },
+    {
+      "pattern": "L'ÉQUIPEUR",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Clothing",
+      "category_parent": "Shopping",
+      "rename_to": null
+    },
+    {
+      "pattern": "L'EQUIPEUR",
+      "match_type": "word",
+      "rule_kind": "category",
+      "category": "Clothing",
+      "category_parent": "Shopping",
+      "rename_to": null
     }
   ]
 }

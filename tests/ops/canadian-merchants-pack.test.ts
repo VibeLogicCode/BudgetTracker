@@ -4,8 +4,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sql } from 'drizzle-orm';
 import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
-import { importRulesPack, parseRulesPack, type RulesPack } from '@/lib/packs';
-import { listRules } from '@/lib/categorize/rules';
+import { importRulesPack, parseRulesPack, type PackRule, type RulesPack } from '@/lib/packs';
+import { listRules, matchTypeAllowedForKind, patternMatches, type MatchType } from '@/lib/categorize/rules';
 import { normalizeMerchant } from '@/lib/categorize/normalize';
 import { nowIso } from '@/lib/clock';
 import { SEED_CATEGORIES } from '@/db/seed';
@@ -14,11 +14,11 @@ import { SEED_CATEGORIES } from '@/db/seed';
  * Guard for packs/canadian-merchants.json (docs/CANADIAN-MERCHANT-RULES-PACK.md explains what
  * the pack itself does and does not assert). This file's whole reason to exist is the one
  * tests/ops/onboarding-coverage.test.ts states for its own guards: a fixture-driven test covers
- * whatever someone chose to write a fixture for, and a hand-authored data file this size (190
- * rules) has no fixture author to catch a typo, a duplicate pattern, or a category name that
- * drifted from src/db/seed.ts. These are the only tests that load the ACTUAL shipped JSON, so
- * they are the only thing standing between a future edit and a pack that silently stops
- * importing cleanly.
+ * whatever someone chose to write a fixture for, and a hand-authored data file this size (297
+ * rules as of pack_version 3) has no fixture author to catch a typo, a duplicate pattern, or a
+ * category name that drifted from src/db/seed.ts. These are the only tests that load the ACTUAL
+ * shipped JSON, so they are the only thing standing between a future edit and a pack that
+ * silently stops importing cleanly.
  *
  * The last describe block (false-positive collisions) exists for a second, distinct reason:
  * structural correctness (parses, uppercase, no dangling category) says nothing about whether a
@@ -201,15 +201,23 @@ describe('shipped pack: an imported rename behaves exactly like one saved on the
 });
 
 describe('shipped pack: known false-positive collisions stay fixed (2026-08-31 coordinator review)', () => {
-  function ruleFor(pattern: string): { pattern: string; match_type: 'exact' | 'contains' } {
+  function ruleFor(pattern: string): { pattern: string; match_type: MatchType } {
     const pack = loadPack();
     const rule = pack.rules.find((r) => r.pattern === pattern);
     if (!rule) throw new Error(`no rule for pattern ${pattern} in the shipped pack -- did the pattern text change?`);
     return rule;
   }
 
-  function ruleMatches(rule: { pattern: string; match_type: 'exact' | 'contains' }, normalized: string): boolean {
-    return rule.match_type === 'exact' ? normalized === rule.pattern : normalized.includes(rule.pattern);
+  /**
+   * v1.25.0 (item 16): delegates to the REAL matcher (patternMatches, src/lib/categorize/rules.ts)
+   * instead of the two-line reimplementation this file used to carry. That copy was fine while
+   * there were only two match types and both were one-liners; with 'word' in play, a guard that
+   * reimplements the matching rules it is guarding can only ever prove that the copy agrees with
+   * itself. The whole value of this describe block is that it runs the collisions through the
+   * production code path -- normalizeMerchant for the merchant text, patternMatches for the rule.
+   */
+  function ruleMatches(rule: { pattern: string; match_type: MatchType }, normalized: string): boolean {
+    return patternMatches(rule.pattern, rule.match_type, normalized);
   }
 
   /**
@@ -236,6 +244,13 @@ describe('shipped pack: known false-positive collisions stay fixed (2026-08-31 c
     { raw: 'E-TRANSFER SENT J NANDO', oldStemContained: 'NANDO', fixedPattern: "NANDO'S" },
     { raw: 'E-TRANSFER SENT M LONGO', oldStemContained: 'LONGO', fixedPattern: "LONGO'S" },
     { raw: 'E-TRANSFER SENT M DOMINO', oldStemContained: 'DOMINO', fixedPattern: "DOMINO'S" },
+    // pack_version 3. Three more of exactly this class, all found in the SHIPPED v2 pack rather
+    // than in a proposed addition -- see the three named tests below for what each one cost.
+    { raw: 'METROLINX GO TRANSIT TORONTO ON', oldStemContained: 'METRO', fixedPattern: 'METRO' },
+    { raw: 'METROPOLITAN SUPPLY CO #12 TORONTO ON', oldStemContained: 'METRO', fixedPattern: 'METRO' },
+    { raw: 'PRESTON HARDWARE OTTAWA ON', oldStemContained: 'PRESTO', fixedPattern: 'PRESTO' },
+    { raw: 'E-TRANSFER SENT SHELLEY SMITH', oldStemContained: 'SHELL', fixedPattern: 'SHELL' },
+    { raw: 'SHELLFISH MARKET #8 HALIFAX NS', oldStemContained: 'SHELL', fixedPattern: 'SHELL' },
   ];
 
   it.each(collisions)('$raw does not match the fixed $fixedPattern rule', ({ raw, oldStemContained, fixedPattern }) => {
@@ -249,16 +264,353 @@ describe('shipped pack: known false-positive collisions stay fixed (2026-08-31 c
     expect(normalizeMerchant("MONTANA'S BBQ #4 OTTAWA ON")).toBe("MONTANA'S BBQ");
   });
 
-  it('the length-based fixes (IGA, MAXI, ESSO, RONA, KFC, A&W, TTC, STM, F45, YMCA, XBOX, FIDO) are all exact, not contains', () => {
-    const shortPatterns = ['IGA', 'MAXI', 'ESSO', 'RONA', 'KFC', 'A&W', 'TTC', 'STM', 'F45', 'YMCA', 'XBOX', 'FIDO'];
+  /**
+   * v1.25.0 (item 16) PROMOTED these from 'exact' to 'word'. They were only ever 'exact' because
+   * matchRule had no boundary-aware option, and 'exact' honoured "prefer a miss over a false
+   * positive" by giving up everything except the bare acronym. ATCO joins them from the other
+   * direction: it was the ONE deliberate short-'contains' exception (documented in
+   * docs/CANADIAN-MERCHANT-RULES-PACK.md, kept broad so one pattern catches ATCO Gas and ATCO
+   * Electric), i.e. a knowingly-accepted collision risk that 'word' removes outright.
+   *
+   * RONA is DELIBERATELY still 'exact' and is asserted so here rather than merely omitted, so
+   * that a future edit promoting it has to argue with this test: Rona is a woman's given name,
+   * and a rename rule is the one kind whose false positive is visible on screen. `word RONA`
+   * would rename "E-TRANSFER SENT RONA <surname>" to "Rona" -- the exact class of collision the
+   * possessive-brand fixes above (HARVEY'S, WENDY'S, KELSEY'S) exist to prevent. No boundary rule
+   * can tell a store from a person; only not being broad can.
+   */
+  it('the short acronyms (IGA, MAXI, ESSO, KFC, A&W, TTC, STM, F45, YMCA, XBOX, FIDO, ATCO) are word rules, not exact or contains', () => {
+    const shortPatterns = ['IGA', 'MAXI', 'ESSO', 'KFC', 'A&W', 'TTC', 'STM', 'F45', 'YMCA', 'XBOX', 'FIDO', 'ATCO'];
     for (const pattern of shortPatterns) {
-      expect(ruleFor(pattern).match_type, `${pattern} should be exact`).toBe('exact');
+      expect(ruleFor(pattern).match_type, `${pattern} should be word`).toBe('word');
     }
   });
 
-  it('no contains pattern in the shipped pack is 4 characters or fewer, except the documented ATCO exception', () => {
+  it('RONA stays exact -- a word rule would rename an e-transfer to a person named Rona', () => {
+    expect(ruleFor('RONA').match_type).toBe('exact');
+    expect(ruleMatches(ruleFor('RONA'), normalizeMerchant('E-TRANSFER SENT RONA WILLIAMS'))).toBe(false);
+  });
+
+  it('no contains pattern in the shipped pack is 4 characters or fewer -- ATCO, the last exception, is a word rule now', () => {
     const pack = loadPack();
     const shortContains = pack.rules.filter((r) => r.match_type === 'contains' && r.pattern.length <= 4).map((r) => r.pattern);
-    expect(shortContains).toEqual(['ATCO']);
+    expect(shortContains).toEqual([]);
+  });
+
+  /**
+   * The promotions have to be shown to have BOUGHT something, or 'word' is just a slower 'exact'.
+   * Each line is the statement text 'exact' could never reach: a real store-format suffix on a
+   * pattern that used to match the bare acronym and nothing else.
+   */
+  const nowReached: { raw: string; pattern: string }[] = [
+    { raw: 'IGA MARCHE #4021 MONTREAL QC', pattern: 'IGA' },
+    { raw: 'ESSO ON THE RUN #77 BARRIE ON', pattern: 'ESSO' },
+    { raw: 'MAXI & CIE #310 LAVAL QC', pattern: 'MAXI' },
+    { raw: 'TTC MONTHLY PASS TORONTO ON', pattern: 'TTC' },
+    { raw: 'STM OPUS RECHARGE MONTREAL QC', pattern: 'STM' },
+    { raw: 'YMCA OF GREATER TORONTO ON', pattern: 'YMCA' },
+    { raw: 'ATCO GAS AND PIPELINES CALGARY AB', pattern: 'ATCO' },
+    { raw: 'A&W RESTAURANT #812 GUELPH ON', pattern: 'A&W' },
+  ];
+
+  it.each(nowReached)('$pattern now reaches $raw, which exact never could', ({ raw, pattern }) => {
+    const normalized = normalizeMerchant(raw);
+    const rule = ruleFor(pattern);
+    expect(normalized).not.toBe(rule.pattern); // else exact would already have matched and this proves nothing
+    expect(ruleMatches(rule, normalized)).toBe(true);
+  });
+
+  /**
+   * pack_version 3 NARROWED three shipped rules (METRO, PRESTO, SHELL: contains -> word), which is
+   * the opposite direction from the promotions above and needs the opposite proof. A narrowing is
+   * only free if it keeps every line the broad rule was there for, so each of these is a realistic
+   * statement line the OLD `contains` rule matched and the new `word` rule still matches -- and
+   * each is deliberately LONGER than its own pattern, so `exact` could not have stood in either.
+   * Without this table, "fix the false positive" and "delete the rule" would pass the same tests.
+   */
+  const wordStillReaches: { raw: string; pattern: string }[] = [
+    { raw: 'METRO PLUS #1234 LAVAL QC', pattern: 'METRO' },
+    { raw: 'PRESTO FARE LOAD TORONTO ON', pattern: 'PRESTO' },
+    { raw: 'SHELL CANADA #4821 BARRIE ON', pattern: 'SHELL' },
+    { raw: 'METROLINX GO TRANSIT TORONTO ON', pattern: 'METROLINX' },
+    { raw: 'COUCHE TARD DEPANNEUR LAVAL QC', pattern: 'COUCHE-TARD' },
+    { raw: 'IRVING OIL BIG STOP MONCTON NB', pattern: 'IRVING OIL' },
+    { raw: 'MOBIL CAR WASH OAKVILLE ON', pattern: 'MOBIL' },
+    { raw: "MARK'S WORK WEARHOUSE #4410 CALGARY AB", pattern: "MARK'S" },
+    { raw: "LEON'S FURNITURE #33 LONDON ON", pattern: "LEON'S" },
+    { raw: "BALZAC'S COFFEE STRATFORD ON", pattern: "BALZAC'S" },
+    { raw: 'TEKSAVVY SOLUTIONS CHATHAM ON', pattern: 'TEKSAVVY' },
+    { raw: 'FIZZ MOBILE MONTREAL QC', pattern: 'FIZZ' },
+  ];
+
+  it.each(wordStillReaches)('word $pattern still reaches $raw', ({ raw, pattern }) => {
+    const normalized = normalizeMerchant(raw);
+    const rule = ruleFor(pattern);
+    expect(rule.match_type).toBe('word');
+    expect(normalized).not.toBe(rule.pattern);
+    expect(ruleMatches(rule, normalized)).toBe(true);
+  });
+
+  /**
+   * A `word` pattern tokenizes the SAME WAY whether the brand is spelled with a hyphen or a space,
+   * because wordBoundaryTokens breaks on both (normalize.ts: "'-', '/', '.', '#' and friends are
+   * JOINERS the bank puts BETWEEN separate words"). That is a real, load-bearing difference from
+   * `contains`, and it is why this pack carries PETRO-CANADA *and* PETRO CANADA as two `contains`
+   * rules but ships COUCHE-TARD and CO-OP GAS BAR as ONE `word` rule each. Asserted rather than
+   * assumed, because the whole saving rests on it.
+   */
+  it('one word rule covers both the hyphenated and the spaced spelling of a brand', () => {
+    const coucheTard = ruleFor('COUCHE-TARD');
+    expect(coucheTard.match_type).toBe('word');
+    expect(ruleMatches(coucheTard, normalizeMerchant('COUCHE-TARD #6612 LAVAL QC'))).toBe(true);
+    expect(ruleMatches(coucheTard, normalizeMerchant('COUCHE TARD #6612 LAVAL QC'))).toBe(true);
+    // The contains rule it is NOT: `contains COUCHE-TARD` would miss the spaced spelling outright.
+    expect(patternMatches('COUCHE-TARD', 'contains', normalizeMerchant('COUCHE TARD #6612 LAVAL QC'))).toBe(false);
+  });
+});
+
+/**
+ * pack_version 3. The two collisions the shipped v2 pack was carrying, each named after what it
+ * actually cost a household, plus the third one found while fixing them. All three are the same
+ * defect -- a `contains` pattern of 5-6 characters, long enough to clear this file's
+ * "no contains shorter than 5 characters" guard and still short enough to sit inside a longer,
+ * unrelated word. Each test asserts the OLD match type WOULD have fired, so it is pinning a real
+ * bug rather than an imagined one, and that the new one does not.
+ */
+describe('shipped pack: the pack_version 3 contains-inside-a-longer-word fixes', () => {
+  function ruleFor(pattern: string): { pattern: string; match_type: MatchType } {
+    const rule = loadPack().rules.find((r) => r.pattern === pattern);
+    if (!rule) throw new Error(`no rule for pattern ${pattern} in the shipped pack -- did the pattern text change?`);
+    return rule;
+  }
+
+  it('METRO does not match METROLINX -- GO Transit fares were being filed as Groceries', () => {
+    const normalized = normalizeMerchant('METROLINX GO TRANSIT TORONTO ON');
+    const metro = ruleFor('METRO');
+    expect(patternMatches('METRO', 'contains', normalized)).toBe(true); // the bug pack_version 2 shipped
+    expect(metro.match_type).toBe('word');
+    expect(patternMatches(metro.pattern, metro.match_type, normalized)).toBe(false);
+  });
+
+  it('PRESTO does not match PRESTON -- a place name and a surname, not a fare card', () => {
+    const normalized = normalizeMerchant('PRESTON HARDWARE OTTAWA ON');
+    const presto = ruleFor('PRESTO');
+    expect(patternMatches('PRESTO', 'contains', normalized)).toBe(true); // the bug pack_version 2 shipped
+    expect(presto.match_type).toBe('word');
+    expect(patternMatches(presto.pattern, presto.match_type, normalized)).toBe(false);
+  });
+
+  it('SHELL does not match SHELLEY -- a given name that carries the brand as a substring', () => {
+    const normalized = normalizeMerchant('E-TRANSFER SENT SHELLEY SMITH');
+    const shell = ruleFor('SHELL');
+    expect(patternMatches('SHELL', 'contains', normalized)).toBe(true); // found while fixing the two above
+    expect(shell.match_type).toBe('word');
+    expect(patternMatches(shell.pattern, shell.match_type, normalized)).toBe(false);
+  });
+});
+
+/**
+ * pack_version 3's structural guard, and the reason it exists rather than another hand-written
+ * list of collisions: METRO/METROLINX was in the pack for three releases, and every check above it
+ * passed. Both halves of that bug were IN THE FILE -- one rule's pattern fired on another rule's
+ * pattern text, and the two meant different things. That is a property the pack can be asked about
+ * directly, so a future edit cannot reintroduce the class by hand.
+ *
+ * WHY "different resolution" and not "different pattern": two rules that mean the SAME thing are
+ * allowed, and required, to overlap. PETRO-CANADA and PETRO CANADA are one merchant spelled two
+ * ways; `word XBOX` sits underneath `contains XBOX GAME PASS` on purpose; RACHELLE-BÉRY and
+ * RACHELLE-BERY are the same grocer with and without the accent a bank may or may not print.
+ * Flagging those would make the guard noise, and noise is how a guard gets deleted. Only a pair
+ * that DISAGREES about where the money goes can misfile anything.
+ */
+describe('shipped pack: no rule fires on another rule\'s pattern text (cross-collision guard)', () => {
+  /** A category rule resolves to a (parent, child) pair; a rename rule resolves to a display name
+   *  and asserts no category at all, which is why the two kinds can never be compared as equal. */
+  function resolutionOf(rule: PackRule): string {
+    return rule.rule_kind === 'rename'
+      ? `rename -> ${rule.rename_to}`
+      : `category -> ${rule.category_parent} > ${rule.category}`;
+  }
+
+  /**
+   * The ONE accepted pair, with the reason spelled out per entry rather than the check being
+   * weakened for everybody. Keyed `matcher|matched`, so an allowance is directional: permitting
+   * AMAZON to see AMAZON PRIME does not also permit the reverse.
+   */
+  const CROSS_COLLISION_ALLOWED: ReadonlyMap<string, string> = new Map([
+    [
+      'AMAZON|AMAZON PRIME',
+      'Deliberate prefix pair, and the overlap IS the design. `contains AMAZON` is a rename-only ' +
+        'rule (no category at all, so it cannot misfile anything), and on a real transaction ' +
+        'matchRule hands AMAZON PRIME the win anyway -- longest matching pattern first, and ' +
+        '"AMAZON PRIME" is longer than "AMAZON". Removing either rule would be worse: without ' +
+        'the rename, every AMZN line keeps its raw text; without the category rule, a Prime ' +
+        'subscription stops being a Subscription.',
+    ],
+  ]);
+
+  function findCrossCollisions(rules: readonly PackRule[], allowed: ReadonlyMap<string, string>): string[] {
+    const found: string[] = [];
+    for (const matcher of rules) {
+      for (const matched of rules) {
+        if (matcher === matched) continue;
+        if (resolutionOf(matcher) === resolutionOf(matched)) continue;
+        if (!patternMatches(matcher.pattern, matcher.match_type, matched.pattern)) continue;
+        if (allowed.has(`${matcher.pattern}|${matched.pattern}`)) continue;
+        found.push(
+          `${matcher.match_type} ${matcher.pattern} (${resolutionOf(matcher)}) fires on the pattern text of ${matched.pattern} (${resolutionOf(matched)})`,
+        );
+      }
+    }
+    return found;
+  }
+
+  it('no pair of rules with different outcomes matches the other\'s pattern', () => {
+    expect(findCrossCollisions(loadPack().rules, CROSS_COLLISION_ALLOWED)).toEqual([]);
+  });
+
+  /**
+   * The check has to be shown to FAIL on the bug it was written for, or "it passes" means nothing:
+   * a check that silently matched no pairs at all -- a typo in resolutionOf, a patternMatches
+   * signature that changed argument order -- would also pass the assertion above forever. The pair
+   * below is the shipped v2 defect reconstructed exactly, in the test rather than in the pack.
+   */
+  it('would FAIL on a deliberately colliding pair, and the allow-list is what accepts one', () => {
+    const colliding: PackRule[] = [
+      { pattern: 'METRO', match_type: 'contains', rule_kind: 'category', category: 'Groceries', category_parent: 'Food', rename_to: null },
+      { pattern: 'METROLINX', match_type: 'word', rule_kind: 'category', category: 'Transit', category_parent: 'Transport', rename_to: null },
+    ];
+
+    const found = findCrossCollisions(colliding, new Map());
+    expect(found).toHaveLength(1);
+    expect(found[0]).toContain('contains METRO');
+    expect(found[0]).toContain('METROLINX');
+
+    expect(findCrossCollisions(colliding, new Map([['METRO|METROLINX', 'accepted for this test']]))).toEqual([]);
+  });
+
+  it('every allow-list entry still names a pair the pack actually has', () => {
+    const patterns = new Set(loadPack().rules.map((r) => r.pattern));
+    const stale = [...CROSS_COLLISION_ALLOWED.keys()].filter((key) => key.split('|').some((p) => !patterns.has(p)));
+    expect(stale).toEqual([]);
+  });
+
+  it('every allow-list entry carries a reason, not just a key', () => {
+    const unexplained = [...CROSS_COLLISION_ALLOWED.entries()].filter(([, why]) => why.trim().length < 40).map(([key]) => key);
+    expect(unexplained).toEqual([]);
+  });
+
+  /**
+   * v1.25.0 (item 16) restricted `word` to category and rename rules, enforced at the form's write
+   * choke point and again in matchRule. The pack is a THIRD way rules reach the table, and the
+   * importer skips an illegal entry silently-but-countably rather than failing the file -- so a
+   * `word` transfer rule smuggled into this JSON would import as a skip, not an error, and the
+   * "imports with zero skipped entries" test above is the only thing that would notice. This says
+   * it directly, against the same predicate matchRule uses.
+   */
+  it('every rule\'s match type is legal for its rule kind', () => {
+    const illegal = loadPack()
+      .rules.filter((rule) => !matchTypeAllowedForKind(rule.match_type, rule.rule_kind))
+      .map((rule) => `${rule.match_type} ${rule.pattern} (${rule.rule_kind})`);
+    expect(illegal).toEqual([]);
+  });
+});
+
+/**
+ * pack_version 3's bilingual coverage rests on one measured fact about normalizeMerchant: it
+ * uppercases and it preserves the Latin-1 accented block (the ALNUM class in normalize.ts exists
+ * for exactly that), and it does NOT fold É to E. So an accented pattern matches accented text and
+ * nothing else, and a bank that prints ASCII gets no match at all from it. Canadian banks print
+ * both. The pack's answer -- already its practice for HYDRO-QUÉBEC and ÉNERGIR, now a rule -- is
+ * to ship BOTH spellings of every accented brand, and the structural test below is what keeps a
+ * future edit from adding the accented half alone and quietly covering nobody.
+ */
+describe('shipped pack: accented patterns ship beside their unaccented spelling', () => {
+  const deaccent = (value: string) => value.normalize('NFD').replace(/\p{Diacritic}/gu, '');
+
+  function resolutionOf(rule: PackRule): string {
+    return rule.rule_kind === 'rename'
+      ? `rename -> ${rule.rename_to}`
+      : `category -> ${rule.category_parent} > ${rule.category}`;
+  }
+
+  it('normalizeMerchant preserves accents and never folds them, so the two spellings are two patterns', () => {
+    expect(normalizeMerchant('RACHELLE-BÉRY #12 MONTREAL QC')).toBe('RACHELLE-BÉRY');
+    expect(normalizeMerchant('VIDÉOTRON MTL QC')).toBe('VIDÉOTRON');
+    // The accented pattern does NOT reach the ASCII spelling, which is the whole reason for the
+    // sibling rule -- BÉRY and BERY are different tokens, not a token and its prefix.
+    expect(patternMatches('RACHELLE-BÉRY', 'word', normalizeMerchant('RACHELLE-BERY #12 MONTREAL QC'))).toBe(false);
+    expect(patternMatches('RACHELLE-BERY', 'word', normalizeMerchant('RACHELLE-BÉRY #12 MONTREAL QC'))).toBe(false);
+    // Each spelling is reached by its own rule, which is why both ship.
+    expect(patternMatches('RACHELLE-BÉRY', 'word', normalizeMerchant('RACHELLE-BÉRY #12 MONTREAL QC'))).toBe(true);
+    expect(patternMatches('RACHELLE-BERY', 'word', normalizeMerchant('RACHELLE-BERY #12 MONTREAL QC'))).toBe(true);
+  });
+
+  it('an apostrophe survives inside an accented Quebec brand too (L\'ÉQUIPEUR is ONE token)', () => {
+    expect(normalizeMerchant("L'ÉQUIPEUR #221 QUEBEC QC")).toBe("L'ÉQUIPEUR");
+    expect(patternMatches("L'ÉQUIPEUR", 'word', normalizeMerchant("L'ÉQUIPEUR #221 QUEBEC QC"))).toBe(true);
+  });
+
+  it('every accented pattern has an unaccented sibling of the same kind and outcome', () => {
+    const pack = loadPack();
+    const orphans = pack.rules
+      .filter((rule) => deaccent(rule.pattern) !== rule.pattern)
+      .filter(
+        (rule) =>
+          !pack.rules.some(
+            (other) =>
+              other.pattern === deaccent(rule.pattern) &&
+              other.rule_kind === rule.rule_kind &&
+              resolutionOf(other) === resolutionOf(rule),
+          ),
+      )
+      .map((rule) => rule.pattern);
+    expect(orphans).toEqual([]);
+  });
+});
+
+/**
+ * pack_version 3 added six `exact` rules on top of RONA, and every one of them is a deliberate
+ * refusal to be broad rather than an oversight. Two reasons, both of which cost real coverage and
+ * are paid anyway:
+ *
+ *   - the brand text IS a person's name (IRVING, ADONIS, PATRICK MORIN). Identical to RONA: no
+ *     boundary rule can tell a store from a person, so the only defence is not being broad.
+ *   - the brand text is a three-letter agency acronym with no verified suffix (RTC, STL, RTL, STS,
+ *     EXO). TTC and STM are `word` because this file can name the statement lines that promotion
+ *     buys (TTC MONTHLY PASS, STM OPUS RECHARGE); for these five it cannot, and a three-letter
+ *     token is the highest-collision-density pattern shape in the pack. `exact` still reaches the
+ *     fare-machine line, because a reference number and a trailing CITY PROVINCE are exactly what
+ *     normalizeMerchant strips.
+ *
+ * Each row asserts what `word` WOULD have done, so the cost of `exact` is stated rather than
+ * assumed -- if a future release can source a real suffix for one of these, the promotion has this
+ * test to argue with.
+ */
+describe('shipped pack: the exact-by-design rules and the collision each one dodges', () => {
+  function ruleFor(pattern: string): { pattern: string; match_type: MatchType } {
+    const rule = loadPack().rules.find((r) => r.pattern === pattern);
+    if (!rule) throw new Error(`no rule for pattern ${pattern} in the shipped pack -- did the pattern text change?`);
+    return rule;
+  }
+
+  const exactByDesign: { pattern: string; reason: string; reaches: string; mustNotReach: string }[] = [
+    { pattern: 'IRVING', reason: 'Irving is a given name and a surname', reaches: 'IRVING #1042 MONCTON NB', mustNotReach: 'E-TRANSFER SENT IRVING BLOOM' },
+    { pattern: 'ADONIS', reason: 'Adonis is a given name', reaches: 'ADONIS #6 LAVAL QC', mustNotReach: 'E-TRANSFER SENT ADONIS PAPPAS' },
+    { pattern: 'PATRICK MORIN', reason: 'the banner is literally a person\'s full name', reaches: 'PATRICK MORIN #12 JOLIETTE QC', mustNotReach: 'E-TRANSFER SENT PATRICK MORIN JR' },
+    { pattern: 'RTC', reason: 'a three-letter acronym with no sourced suffix', reaches: 'RTC 1234567 QUEBEC QC', mustNotReach: 'RTC LOGISTICS GROUP BARRIE ON' },
+    { pattern: 'STL', reason: 'a three-letter acronym with no sourced suffix', reaches: 'STL 4567890 LAVAL QC', mustNotReach: 'STL FREIGHT SYSTEMS MISSISSAUGA ON' },
+    { pattern: 'RTL', reason: 'a three-letter acronym with no sourced suffix', reaches: 'RTL 9876543 LONGUEUIL QC', mustNotReach: 'RTL TOOLING SUPPLY WINDSOR ON' },
+    { pattern: 'STS', reason: 'a three-letter acronym with no sourced suffix', reaches: 'STS 1122334 SHERBROOKE QC', mustNotReach: 'STS SAFETY SUPPLY EDMONTON AB' },
+    { pattern: 'EXO', reason: 'a three-letter acronym with no sourced suffix', reaches: 'EXO 7654321 MONTREAL QC', mustNotReach: 'EXO FITNESS STUDIO TORONTO ON' },
+  ];
+
+  it.each(exactByDesign)('$pattern stays exact because $reason', ({ pattern, reaches, mustNotReach }) => {
+    const rule = ruleFor(pattern);
+    expect(rule.match_type).toBe('exact');
+    expect(patternMatches(rule.pattern, rule.match_type, normalizeMerchant(reaches))).toBe(true);
+    expect(patternMatches(rule.pattern, rule.match_type, normalizeMerchant(mustNotReach))).toBe(false);
+    // The collision is real, not hypothetical: `word` -- this pack's default for a brand -- fires.
+    expect(patternMatches(pattern, 'word', normalizeMerchant(mustNotReach))).toBe(true);
   });
 });
