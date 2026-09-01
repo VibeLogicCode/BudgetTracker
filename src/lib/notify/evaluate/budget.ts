@@ -5,7 +5,7 @@ import { budgetProgress, type BudgetRow } from '@/lib/budgets';
 import { currentMonth } from '@/lib/dates';
 import { getUserSettings, isEventEnabled, notifiableUsers } from '@/lib/notify/config';
 import { CHANNELS, budgetExceededKey, budgetThresholdKey, type BudgetScopeKey } from '@/lib/notify/events';
-import { enqueue } from '@/lib/notify/outbox';
+import { enqueue, enqueuedAnything } from '@/lib/notify/outbox';
 import { renderEvent } from '@/lib/notify/render';
 
 /**
@@ -183,9 +183,13 @@ function fireFor(input: {
       dedupKey: budgetThresholdKey(scope, row.categoryId, month, thresholdPct),
       subject,
       body,
+      // v1.28.0: a PERSONAL budget is one member's, and its dedup key carries no user id (the
+      // outbox index supplies that), so routing it to the family channel would collapse two
+      // members' alerts into one row and drop the second. See enqueue()'s subjectScope docblock.
+      subjectScope: scope,
       at: now,
     });
-    if (result.inserted.length > 0) fired += 1;
+    if (enqueuedAnything(result)) fired += 1;
   }
 
   if (row.spentCents > row.limitCents) {
@@ -203,9 +207,10 @@ function fireFor(input: {
       dedupKey: budgetExceededKey(scope, row.categoryId, month),
       subject,
       body,
+      subjectScope: scope,
       at: now,
     });
-    if (result.inserted.length > 0) fired += 1;
+    if (enqueuedAnything(result)) fired += 1;
   }
 
   return fired;

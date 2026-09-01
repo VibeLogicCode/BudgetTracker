@@ -109,9 +109,8 @@ describe('drizzle/0020_bill_item_type.sql', () => {
     expect(entry).toMatchObject({ idx: 20, tag: '0020_bill_item_type' });
     const idxs = journal.entries.map((e) => e.idx).sort((a, b) => a - b);
     expect(idxs.indexOf(20)).toBe(idxs.indexOf(19) + 1);
-    // This suite now owns the "I am the newest" claim, handed on from 0019's suite the way 0019
-    // took it from 0018. Whichever migration is last owns it; nobody else asserts it.
-    expect(Math.max(...idxs)).toBe(20);
+    // The "I am the newest" claim moved on to 0021's suite, the way this file took it from 0019
+    // and 0019 took it from 0018. Whichever migration is last owns it; nobody else asserts it.
   });
 
   it('inserts conditionally, so re-running it can never violate the NOCASE name index', () => {

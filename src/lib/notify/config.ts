@@ -11,6 +11,39 @@ import { nowIso } from '@/lib/clock';
 import { SMTP_HKDF_INFO, TELEGRAM_HKDF_INFO, decryptSecret, encryptSecret } from '@/lib/notify/crypto';
 import { eventDef, type Channel } from '@/lib/notify/events';
 
+/**
+ * v1.28.0: the household channel API re-exported from here.
+ *
+ * It IMPLEMENTS in src/lib/notify/household.ts -- that module is a self-contained unit with its
+ * own scope predicate, its own row type and its own guards, and folding it into this already
+ * 600-line file would have buried the one predicate (householdWhere) that keeps the family
+ * channel and a member's private one apart. It is EXPORTED from here because config.ts is where
+ * every other notification-target read and write already lives, so a caller has one import path
+ * for "the notification configuration" rather than having to know which half a function fell in.
+ *
+ * There is no cycle: household.ts imports events.ts and @/db, never this file.
+ */
+export {
+  householdTarget,
+  listHouseholdTargets,
+  upsertHouseholdTarget,
+  deleteHouseholdTarget,
+  householdEventPrefs,
+  setHouseholdEventPref,
+  householdEligibleEvents,
+  isHouseholdRouted,
+  householdRoutedChannels,
+  getHouseholdTelegramToken,
+  recordHouseholdTargetOutcome,
+  EMAIL_SECRET_REFUSED,
+  NOT_ADMIN_ERROR,
+  NOT_HOUSEHOLD_ELIGIBLE,
+  NO_DESTINATION_ERROR,
+  TELEGRAM_SECRET_REQUIRED,
+  type NotificationTargetRow,
+  type TargetScope,
+} from '@/lib/notify/household';
+
 export type SmtpPreset = 'brevo' | 'smtp2go' | 'gmail' | 'custom';
 export type SmtpSecurity = 'tls' | 'starttls' | 'none';
 
@@ -169,10 +202,19 @@ export interface TargetRecord {
   lastSuccessAt: string | null;
 }
 
-function toTargetRecord(row: typeof notificationTargets.$inferSelect): TargetRecord {
+/**
+ * v1.28.0: `userId` is passed in rather than read off the row. notification_targets.user_id is
+ * nullable now (NULL = the household channel, drizzle/0021), but every caller of this helper
+ * has already filtered `user_id = <a number>`, so a NULL row can never reach it and TargetRecord
+ * keeps its `userId: number`. The household's own rows are a different type in a different
+ * module (NotificationTargetRow in src/lib/notify/household.ts): widening this one to
+ * `number | null` would have pushed a null check into every personal-channel call site to
+ * describe a row none of them can ever see.
+ */
+function toTargetRecord(row: typeof notificationTargets.$inferSelect, userId: number): TargetRecord {
   return {
     id: row.id,
-    userId: row.userId,
+    userId,
     channel: row.channel,
     destination: row.destination,
     secretSet: (row.secretEncrypted ?? '').length > 0,
@@ -190,7 +232,7 @@ export function getTarget(userId: number, channel: Channel): TargetRecord | null
     .from(notificationTargets)
     .where(and(eq(notificationTargets.userId, userId), eq(notificationTargets.channel, channel)))
     .get();
-  return row ? toTargetRecord(row) : null;
+  return row ? toTargetRecord(row, userId) : null;
 }
 
 export function listTargets(userId: number): TargetRecord[] {
@@ -200,7 +242,7 @@ export function listTargets(userId: number): TargetRecord[] {
     .where(eq(notificationTargets.userId, userId))
     .orderBy(asc(notificationTargets.channel))
     .all()
-    .map(toTargetRecord);
+    .map((row) => toTargetRecord(row, userId));
 }
 
 /** MUST-3.5 / MUST-8.9: each user's OWN token, decrypted server-side, never a parameter. */

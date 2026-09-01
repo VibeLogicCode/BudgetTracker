@@ -54,11 +54,13 @@ describe('AC6 / MUST-3.3: the breakpoint marker never appears inside a comment',
 });
 
 describe('MUST-3.13: the tables and indexes exist after migration', () => {
-  it('creates all five tables', () => {
+  it('creates all six tables', () => {
     const names = t.sqlite
       .prepare(`select name from sqlite_master where type = 'table' and name like 'notification_%' order by name`)
       .all() as { name: string }[];
     expect(names.map((r) => r.name)).toEqual([
+      // v1.28.0 (drizzle/0021): notification_household_prefs joins the original five.
+      'notification_household_prefs',
       'notification_outbox',
       'notification_prefs',
       'notification_smtp',
@@ -67,7 +69,7 @@ describe('MUST-3.13: the tables and indexes exist after migration', () => {
     ]);
   });
 
-  it('creates all four named indexes', () => {
+  it('creates all five named indexes', () => {
     const names = t.sqlite
       .prepare(`select name from sqlite_master where type = 'index' and name like 'notification_%' order by name`)
       .all() as { name: string }[];
@@ -75,6 +77,9 @@ describe('MUST-3.13: the tables and indexes exist after migration', () => {
       'notification_outbox_dedup_uq',
       'notification_outbox_due_idx',
       'notification_outbox_user_idx',
+      // v1.28.0 (drizzle/0021): the PARTIAL unique index that makes a second family Telegram
+      // impossible. tests/db/migration-0021.test.ts proves it is partial and that it bites.
+      'notification_targets_household_channel_uq',
       'notification_targets_user_channel_uq',
     ]);
   });

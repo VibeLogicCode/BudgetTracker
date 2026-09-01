@@ -2,7 +2,7 @@ import { budgetProgress, flattenBudgetRows, type BudgetRow } from '@/lib/budgets
 import { currentMonth, monthEnd, todayIso } from '@/lib/dates';
 import { isEventEnabled } from '@/lib/notify/config';
 import { CHANNELS, budgetPaceKey, type BudgetScopeKey } from '@/lib/notify/events';
-import { enqueue } from '@/lib/notify/outbox';
+import { enqueue, enqueuedAnything } from '@/lib/notify/outbox';
 import { renderEvent } from '@/lib/notify/render';
 import { PACE_MAX_PER_EVALUATION, PACE_MIN_DAY_OF_MONTH, PACE_OVERSHOOT_MIN_PCT } from '@/lib/predict/constants';
 import { projectMonthEnd } from '@/lib/predict/pace';
@@ -80,9 +80,12 @@ function enqueuePaceCandidate(input: { userId: number; month: string; dayOfMonth
     dedupKey: budgetPaceKey(candidate.scope, candidate.row.categoryId, input.month),
     subject,
     body,
+    // v1.28.0: same reasoning as evaluate/budget.ts -- a personal-scope projection is one
+    // member's business and its key is not per-user, so it is never routable.
+    subjectScope: candidate.scope,
     at: input.now,
   });
-  return result.inserted.length > 0 ? 1 : 0;
+  return enqueuedAnything(result) ? 1 : 0;
 }
 
 /**

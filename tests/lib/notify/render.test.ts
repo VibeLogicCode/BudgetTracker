@@ -223,6 +223,7 @@ describe('§10.2: the weekly digest', () => {
     toIso: '2026-08-16',
     householdSpentCents: 128455,
     personalSpentCents: 41230,
+    variant: 'personal',
     topCategories: [
       { name: 'Groceries', cents: 40211 },
       { name: 'Restaurants', cents: 18840 },
@@ -252,6 +253,56 @@ describe('§10.2: the weekly digest', () => {
     expect(body).toContain('LOBLAWS');
     expect(body).toContain('12 transactions still need review.');
     expect(body).toContain('Over budget this month: Restaurants, Coffee.');
+  });
+
+  it('v1.28.0: the household variant names members, adds unattributed, and drops "Your spend"', () => {
+    const { subject, body } = renderEvent({
+      event: 'weekly_digest',
+      variant: 'household',
+      fromIso: '2026-08-10',
+      toIso: '2026-08-16',
+      householdSpentCents: 123456,
+      members: [
+        { name: 'Alex', cents: 70000 },
+        { name: 'Robin', cents: 43456 },
+      ],
+      unattributedCents: 10000,
+      topCategories: [{ name: 'Groceries', cents: 40211 }],
+      topMerchants: [{ name: 'LOBLAWS', cents: 21055 }],
+      reviewCount: 12,
+      overBudget: ['Restaurants'],
+    });
+    expect(subject).toBe('Household weekly summary — 2026-08-10 to 2026-08-16');
+    expect(body).toContain('Household spend: $1,234.56');
+    expect(body).toContain('Who spent it');
+    // padded(), the same two-column helper every other table in this file uses -- so it reads as
+    // a table in a Telegram message and in a plain-text email, with no second style invented.
+    expect(body).toMatch(/^ {2}Alex {10}\$700\.00$/m);
+    expect(body).toMatch(/^ {2}Robin {9}\$434\.56$/m);
+    expect(body).toMatch(/^ {2}Unattributed {2}\$100\.00$/m);
+    // There is no "you" in a group chat.
+    expect(body).not.toContain('Your spend');
+    // Everything after the header block is the shared tail, unchanged.
+    expect(body).toContain('Top categories (household)');
+    expect(body).toContain('12 transactions still need review.');
+    expect(body).toContain('Over budget this month: Restaurants.');
+  });
+
+  it('v1.28.0: an empty household week still sends, with the same sentence', () => {
+    const { body } = renderEvent({
+      event: 'weekly_digest',
+      variant: 'household',
+      fromIso: '2026-08-10',
+      toIso: '2026-08-16',
+      householdSpentCents: 0,
+      members: [{ name: 'Alex', cents: 0 }],
+      unattributedCents: 0,
+      topCategories: [],
+      topMerchants: [],
+      reviewCount: 0,
+      overBudget: [],
+    });
+    expect(body).toBe('No transactions were recorded this week.');
   });
 
   it('an empty week still sends, with its own sentence', () => {
@@ -419,10 +470,26 @@ const SAMPLES_BY_EVENT: Record<string, RenderInput[]> = {
   weekly_digest: [
     {
       event: 'weekly_digest',
+      variant: 'personal',
       fromIso: '2026-08-10',
       toIso: '2026-08-16',
       householdSpentCents: 0,
       personalSpentCents: 0,
+      topCategories: [],
+      topMerchants: [],
+      reviewCount: 0,
+      overBudget: [],
+    },
+    // v1.28.0: the family channel's body is a SECOND body behind the same event id, so it gets
+    // its own sample here rather than riding on the personal one's URL check.
+    {
+      event: 'weekly_digest',
+      variant: 'household',
+      fromIso: '2026-08-10',
+      toIso: '2026-08-16',
+      householdSpentCents: 1000,
+      members: [{ name: 'Alex', cents: 1000 }],
+      unattributedCents: 0,
       topCategories: [],
       topMerchants: [],
       reviewCount: 0,

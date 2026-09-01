@@ -7,7 +7,7 @@ import { daysBetweenIso, todayIso } from '@/lib/dates';
 import { getUserSettings } from '@/lib/notify/config';
 import { staleImportKey } from '@/lib/notify/events';
 import { mondayOfIsoWeek } from '@/lib/notify/evaluate/slots';
-import { enqueue } from '@/lib/notify/outbox';
+import { enqueue, enqueuedAnything } from '@/lib/notify/outbox';
 import { renderEvent } from '@/lib/notify/render';
 
 /**
@@ -100,7 +100,7 @@ export function evaluateStaleImport(input: { userId: number; now: Date; tz: stri
       body,
       at: input.now,
     });
-    if (result.inserted.length > 0) enqueued += 1;
+    if (enqueuedAnything(result)) enqueued += 1;
   }
   return enqueued;
 }

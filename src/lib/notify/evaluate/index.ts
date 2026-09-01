@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { notificationOutbox } from '@/db/schema';
 import { readEnv } from '@/lib/env';
@@ -11,8 +11,9 @@ import { evaluateMonthBoundary } from '@/lib/notify/evaluate/monthly';
 import { evaluateBudgetPace } from '@/lib/notify/evaluate/pace';
 import { evaluateSavingsDaily, evaluateSavingsTargetMet } from '@/lib/notify/evaluate/savings';
 import { evaluateStaleImport } from '@/lib/notify/evaluate/stale';
-import { dailySlot, weeklySlot } from '@/lib/notify/evaluate/slots';
-import { weeklyDigestKey } from '@/lib/notify/events';
+import { dailySlot, mondayOfIsoWeek, weeklySlot } from '@/lib/notify/evaluate/slots';
+import { CHANNELS, householdWeeklyDigestKey, weeklyDigestKey } from '@/lib/notify/events';
+import { householdRoutedChannels } from '@/lib/notify/household';
 
 /**
  * Slot-skip logging is deduped by (kind, userId) so a family sitting outside every slot's
@@ -67,7 +68,33 @@ function digestAlreadySent(userId: number, slotDate: string): boolean {
     .where(and(eq(notificationOutbox.userId, userId), eq(notificationOutbox.dedupKey, weeklyDigestKey(slotDate))))
     .limit(1)
     .get();
-  return row !== undefined;
+  if (row !== undefined) return true;
+
+  // v1.28.0. A digest routed to the family channel writes NO personal row for that channel, so
+  // for a household that routed BOTH channels the check above can never be satisfied and the
+  // recompute it exists to prevent would run on every five-minute tick for the whole 48-hour
+  // catch-up window -- now with the per-member breakdown queries on top.
+  //
+  // The "both channels" condition is not tidiness. Route only Telegram and this user still owes
+  // themselves a personal EMAIL digest; skipping on the strength of the household row would mean
+  // they never got one. Partial routing therefore falls through to the personal check above, which
+  // starts returning true once their own remaining row exists.
+  if (householdRoutedChannels('weekly_digest').length !== CHANNELS.length) return false;
+
+  // The household digest's key is week-bounded (householdWeeklyDigestKey), so this one indexed
+  // probe covers every member's slot in that week, however differently they set their weekday.
+  const householdRow = getDb()
+    .select({ id: notificationOutbox.id })
+    .from(notificationOutbox)
+    .where(
+      and(
+        isNull(notificationOutbox.userId),
+        eq(notificationOutbox.dedupKey, householdWeeklyDigestKey(mondayOfIsoWeek(slotDate))),
+      ),
+    )
+    .limit(1)
+    .get();
+  return householdRow !== undefined;
 }
 
 /**

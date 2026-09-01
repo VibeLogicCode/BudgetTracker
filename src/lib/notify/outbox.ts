@@ -12,7 +12,13 @@ import {
   recordTargetOutcome,
 } from '@/lib/notify/config';
 import { CREDENTIAL_UNREADABLE, NotifyCredentialError, authPlainBase64, scrubSecrets } from '@/lib/notify/crypto';
-import { CHANNELS, type Channel } from '@/lib/notify/events';
+import { CHANNELS, householdDedupKey, isHouseholdEligible, type Channel } from '@/lib/notify/events';
+import {
+  householdTarget,
+  getHouseholdTelegramToken,
+  isHouseholdRouted,
+  recordHouseholdTargetOutcome,
+} from '@/lib/notify/household';
 import { NotifyError, deliver, type DeliveryRequest } from '@/lib/notify/send';
 
 /** §19.16: the numbers, in one place. */
@@ -32,6 +38,14 @@ export const CHANNEL_REMOVED_ERROR = 'Channel was removed before delivery.';
 export const PENDING_EXPIRED_ERROR = 'Not delivered within 24 hours.';
 /** MUST-7.4: written on every row a broken channel group skips without attempting. */
 export const DEFERRED_ERROR = 'Deferred: an earlier send this pass failed for this channel.';
+/**
+ * v1.28.0, the SEND-PATH half of the eligibility guard. setHouseholdEventPref refuses to route
+ * an ineligible event, which covers every path through the app; this covers the one it cannot,
+ * a row written straight into the database file. A queued household send whose event is not
+ * household-eligible is killed here rather than delivered, so no hand edit can put a sign-in
+ * alert into a family group chat.
+ */
+export const HOUSEHOLD_INELIGIBLE_ERROR = 'That event may not be sent to a family channel.';
 
 /** MUST-7.6: 2, 4, 8, 16, 32, 64, 128, 256 minutes, capped at six hours. */
 export function backoffMs(attempts: number): number {
@@ -47,19 +61,88 @@ export function backoffMs(attempts: number): number {
  * MUST-7.2: subject and body are rendered by the CALLER, at evaluation time. Re-rendering
  * at send time after three retries would produce a "budget at 82%" alert that says 91%.
  */
+export interface EnqueueResult {
+  /** Personal rows actually inserted. Unchanged meaning since v1.3.0. */
+  inserted: Channel[];
+  /** Household rows actually inserted by THIS call. Empty on the second member's call. */
+  household: Channel[];
+  /** Channels where the personal send was suppressed because the family channel took it. */
+  suppressed: Channel[];
+}
+
 export function enqueue(input: {
   userId: number;
   eventId: string;
   dedupKey: string;
   subject: string;
   body: string;
+  /**
+   * v1.28.0. WHOSE MONEY this message is about, which is not the same question as who receives
+   * it. 'household' (the default, and true of almost every event) may be routed to the family
+   * channel; 'personal' NEVER is, whatever an admin has switched on.
+   *
+   * This is load-bearing, not belt-and-braces. budgetThresholdKey/budgetPaceKey carry a scope
+   * letter but NO user id -- user_id is already part of the unique index (MUST-3.11) -- so two
+   * members' PERSONAL budget alerts for the same category and month share a dedup key. Routed to
+   * the household channel they would collapse into one row under user_id NULL: the group would
+   * get whichever member fired first, labelled as a personal budget, and the other member's
+   * alert would vanish silently. A personal budget is also nobody else's business.
+   */
+  subjectScope?: 'household' | 'personal';
+  /**
+   * The message the FAMILY channel gets, when it differs from the personal one. Omit it and the
+   * household send reuses `subject`/`body` verbatim, which is right for every event that already
+   * describes the household ("Groceries is over budget" reads the same to one person or five).
+   * Only the weekly digest differs, because a personal digest names YOUR spend and a household
+   * one names everybody's (evaluate/digest.ts).
+   *
+   * `dedupKey` overrides the key for the household row only. Supply one when the personal key
+   * varies per member -- again only the digest, whose key carries the firing member's own slot
+   * date (householdWeeklyDigestKey's docblock has the argument).
+   */
+  household?: { subject: string; body: string; dedupKey?: string };
   at?: Date;
-}): { inserted: Channel[] } {
+}): EnqueueResult {
   const db = getDb();
   const at = nowIso(input.at ?? new Date());
   const inserted: Channel[] = [];
+  const household: Channel[] = [];
+  const suppressed: Channel[] = [];
+  const routable = (input.subjectScope ?? 'household') === 'household';
 
   for (const channel of CHANNELS) {
+    // v1.28.0, decision 4: the family channel REPLACES the personal one for a routed event. Per
+    // channel, so routing the digest to the family Telegram leaves everybody's email digest
+    // alone. The suppression is unconditional -- it does not consult isEventEnabled -- because
+    // the household row is the household's decision, not the sum of five people's toggles, and
+    // a member who has the event switched off must not be able to conjure a second copy into
+    // the group by switching it on.
+    if (routable && isHouseholdRouted(input.eventId, channel)) {
+      suppressed.push(channel);
+      // MUST-3.9 holds unchanged for the family channel: the row IS the guard. The unique index
+      // is (COALESCE(user_id, -1), channel, dedup_key), so every member's evaluation this week
+      // aims at the same slot and only the first one lands. That is what makes "two members,
+      // same event, routed" one message rather than two.
+      const result = db
+        .insert(notificationOutbox)
+        .values({
+          userId: null,
+          channel,
+          eventId: input.eventId,
+          dedupKey: householdDedupKey(input.household?.dedupKey ?? input.dedupKey),
+          subject: input.household?.subject ?? input.subject,
+          body: input.household?.body ?? input.body,
+          status: 'pending',
+          attempts: 0,
+          nextAttemptAt: at,
+          createdAt: at,
+        })
+        .onConflictDoNothing()
+        .run();
+      if (result.changes > 0) household.push(channel);
+      continue;
+    }
+
     if (!isEventEnabled(input.userId, input.eventId, channel)) continue;
     // MUST-3.9: the row that was sent IS the dedup guard. `changes === 0` means
     // "already fired": there is no separate bookkeeping that could drift.
@@ -82,7 +165,17 @@ export function enqueue(input: {
     if (result.changes > 0) inserted.push(channel);
   }
 
-  return { inserted };
+  return { inserted, household, suppressed };
+}
+
+/**
+ * "Did this call put anything on the wire?" -- the question every evaluator's `fired` counter is
+ * actually asking. It has to count the household row too: once the weekly digest is routed, no
+ * member ever gets a personal row for it, and an evaluator reading `inserted.length` alone would
+ * report that it enqueued nothing on the very tick it enqueued the family digest.
+ */
+export function enqueuedAnything(result: EnqueueResult): boolean {
+  return result.inserted.length > 0 || result.household.length > 0;
 }
 
 /** MUST-6.4: the other half of the dormancy bail. */
@@ -124,7 +217,9 @@ export function purgeOldOutboxRows(at: Date = new Date()): number {
 
 export interface DeliveryRow {
   id: number;
-  userId: number;
+  /** v1.28.0: NULL is a household send -- one message to the family channel, addressed to
+   *  nobody. Render it with a household label, never by looking a user up. */
+  userId: number | null;
   channel: Channel;
   eventId: string;
   subject: string;
@@ -135,7 +230,14 @@ export interface DeliveryRow {
   sentAt: string | null;
 }
 
-/** §11.6: served by notification_outbox_user_idx. `userId: null` is the admin's view. */
+/**
+ * §11.6: served by notification_outbox_user_idx. `userId: null` is the admin's view.
+ *
+ * v1.28.0: household sends carry user_id NULL, so they appear in the admin's household-wide
+ * view and NOT in a member's own list. That is deliberate rather than incidental: the family
+ * channel is configured by an admin and its deliveries are the admin's to diagnose, and a
+ * member's list is "what was sent to me", which a group-chat message is not.
+ */
 export function listRecentDeliveries(input: { userId: number | null; limit?: number }): DeliveryRow[] {
   const limit = input.limit ?? 20;
   const base = getDb()
@@ -161,8 +263,10 @@ export function listRecentDeliveries(input: { userId: number | null; limit?: num
 
 type PendingRow = {
   id: number;
-  userId: number;
+  /** NULL = the household channel (v1.28.0). */
+  userId: number | null;
   channel: Channel;
+  eventId: string;
   subject: string;
   body: string;
   attempts: number;
@@ -177,13 +281,23 @@ type PendingRow = {
  * Returns the request to send, or null with the reason the row is dead.
  */
 function buildRequest(row: PendingRow): { request: DeliveryRequest } | { dead: string } {
-  const target = getTarget(row.userId, row.channel);
+  // v1.28.0: `userId` is narrowed once here rather than re-tested (and re-cast) at every use.
+  const { userId } = row;
+  // The send-path eligibility guard. Checked BEFORE the target is resolved, so a hand-written
+  // household row for a security event dies without the family channel ever being looked up, let
+  // alone connected to.
+  if (userId === null && !isHouseholdEligible(row.eventId)) return { dead: HOUSEHOLD_INELIGIBLE_ERROR };
+
+  const target = userId === null ? householdTarget(row.channel) : getTarget(userId, row.channel);
   if (!target || !target.enabled) return { dead: CHANNEL_REMOVED_ERROR };
 
   if (row.channel === 'telegram') {
     let botToken: string;
     try {
-      botToken = getTelegramToken(row.userId);
+      // MUST-3.5: the FAMILY channel's own token for a household send, never a member's. The
+      // household bot is the one that was actually added to the group chat, so a member's token
+      // would fail with "chat not found" even if using it were acceptable, which it is not.
+      botToken = userId === null ? getHouseholdTelegramToken() : getTelegramToken(userId);
     } catch (error) {
       if (error instanceof NotifyCredentialError) return { dead: error.message };
       throw error;
@@ -223,6 +337,23 @@ function buildRequest(row: PendingRow): { request: DeliveryRequest } | { dead: s
       body: row.body,
     },
   };
+}
+
+/**
+ * MUST-7.10's one dispatch point. A household row has no user to record an outcome against, so
+ * it records against the household target instead -- and every caller in drain() goes through
+ * here rather than reaching for row.userId, so neither branch can be forgotten in one place and
+ * remembered in another.
+ */
+function recordOutcomeForRow(
+  row: PendingRow,
+  outcome: { ok: boolean; error?: string; at: Date },
+): void {
+  if (row.userId === null) {
+    recordHouseholdTargetOutcome({ channel: row.channel, ...outcome });
+    return;
+  }
+  recordTargetOutcome({ userId: row.userId, channel: row.channel, ...outcome });
 }
 
 /** MUST-5.5: everything written to last_error goes through here first. */
@@ -308,6 +439,7 @@ async function drain(now: Date): Promise<{ sent: number; failed: number; deferre
       id: notificationOutbox.id,
       userId: notificationOutbox.userId,
       channel: notificationOutbox.channel,
+      eventId: notificationOutbox.eventId,
       subject: notificationOutbox.subject,
       body: notificationOutbox.body,
       attempts: notificationOutbox.attempts,
@@ -350,7 +482,7 @@ async function drain(now: Date): Promise<{ sent: number; failed: number; deferre
           // on.
           if (built.dead === CREDENTIAL_UNREADABLE) {
             if (channel === 'telegram') {
-              recordTargetOutcome({ userId: row.userId, channel, ok: false, error: CREDENTIAL_UNREADABLE, at: now });
+              recordOutcomeForRow(row, { ok: false, error: CREDENTIAL_UNREADABLE, at: now });
             } else {
               recordSmtpOutcome({ ok: false, error: CREDENTIAL_UNREADABLE, at: now });
             }
@@ -364,7 +496,7 @@ async function drain(now: Date): Promise<{ sent: number; failed: number; deferre
         try {
           await deliver(built.request);
           markSent(row.id, attempts, at);
-          recordTargetOutcome({ userId: row.userId, channel, ok: true, at: now });
+          recordOutcomeForRow(row, { ok: true, at: now });
           if (channel === 'email') recordSmtpOutcome({ ok: true, at: now });
           sent += 1;
         } catch (error) {
@@ -375,7 +507,7 @@ async function drain(now: Date): Promise<{ sent: number; failed: number; deferre
           const message = scrubForRow(notifyError.message, built.request);
 
           if (notifyError.scope === 'relay') recordSmtpOutcome({ ok: false, error: message, at: now });
-          else recordTargetOutcome({ userId: row.userId, channel, ok: false, error: message, at: now });
+          else recordOutcomeForRow(row, { ok: false, error: message, at: now });
 
           if (notifyError.permanent) {
             // MUST-7.7: skip backoff entirely and fail on the first attempt.

@@ -84,7 +84,7 @@ export function evaluateComingDue(input: { userId: number; now: Date; tz: string
       body,
       at: input.now,
     });
-    enqueuedRows += result.inserted.length;
+    enqueuedRows += result.inserted.length + result.household.length;
   }
 
   const rows = getDb()
@@ -135,7 +135,7 @@ export function evaluateComingDue(input: { userId: number; now: Date; tz: string
       body,
       at: input.now,
     });
-    enqueuedRows += result.inserted.length;
+    enqueuedRows += result.inserted.length + result.household.length;
   }
   return enqueuedRows;
 }

@@ -5,7 +5,7 @@ import { listCategories } from '@/lib/categories';
 import { addDaysIso, todayIso } from '@/lib/dates';
 import { isEventEnabled, notifiableUsers } from '@/lib/notify/config';
 import { CHANNELS, duplicateChargeKey, subscriptionCreepKey, unusualTransactionKey } from '@/lib/notify/events';
-import { enqueue } from '@/lib/notify/outbox';
+import { enqueue, enqueuedAnything } from '@/lib/notify/outbox';
 import { renderEvent } from '@/lib/notify/render';
 import { creepVerdict, findDuplicates, hasEnoughHouseholdHistory, unusualVerdict, type SpendRow } from '@/lib/predict/anomalies';
 import {
@@ -274,7 +274,7 @@ export function evaluateAnomalies(input: { now: Date; tz: string }): number {
           body,
           at: input.now,
         });
-        if (result.inserted.length > 0) fired += 1;
+        if (enqueuedAnything(result)) fired += 1;
       }
     }
     if (person.duplicate) {
@@ -294,7 +294,7 @@ export function evaluateAnomalies(input: { now: Date; tz: string }): number {
           body,
           at: input.now,
         });
-        if (result.inserted.length > 0) fired += 1;
+        if (enqueuedAnything(result)) fired += 1;
       }
     }
   }
@@ -383,7 +383,7 @@ export function evaluateSubscriptionCreep(input: { userId: number; now: Date; tz
       body,
       at: input.now,
     });
-    if (result.inserted.length > 0) fired += 1;
+    if (enqueuedAnything(result)) fired += 1;
   }
   return fired;
 }

@@ -13,7 +13,11 @@ import {
   duplicateChargeKey,
   eventDef,
   eventsFor,
+  householdDedupKey,
+  householdEligibleEvents,
+  householdWeeklyDigestKey,
   isChannel,
+  isHouseholdEligible,
   isNotificationEventId,
   monthlyDigestKey,
   newSigninKey,
@@ -184,6 +188,7 @@ describe('MUST-6.1: the update_available registry entry', () => {
       audience: 'admin',
       trigger: 'tick',
       defaultEnabled: true,
+      householdEligible: false,
     });
   });
 
@@ -212,6 +217,7 @@ describe('Task 8 (v1.7.0): the sync_failed registry entry', () => {
       audience: 'admin',
       trigger: 'immediate',
       defaultEnabled: true,
+      householdEligible: false,
     });
   });
 
@@ -274,6 +280,7 @@ describe('Task 16 (v1.7.0): the monthly_digest registry entry', () => {
       audience: 'all',
       trigger: 'daily_slot',
       defaultEnabled: false,
+      householdEligible: true,
     });
   });
 
@@ -305,6 +312,7 @@ describe('backlog item 17 / Part 4: the pack_update_available registry entry', (
       audience: 'admin',
       trigger: 'tick',
       defaultEnabled: true,
+      householdEligible: false,
     });
   });
 
@@ -318,5 +326,100 @@ describe('backlog item 17 / Part 4: the pack_update_available registry entry', (
     expect(packUpdateAvailableKey('canadian-merchants', 1)).not.toBe(packUpdateAvailableKey('canadian-merchants', 2));
     expect(packUpdateAvailableKey('canadian-merchants', 1)).not.toBe(updateAvailableKey('1'));
     expect(packUpdateAvailableKey('canadian-merchants', 1)).not.toMatch(/telegram|email|user/);
+  });
+});
+
+
+/**
+ * v1.28.0 Lane 1, Task 2. The whole classification, pinned.
+ *
+ * This table is the guard the brief asks for: a NEW event cannot be added to the registry without
+ * somebody typing its id here and deciding, in one word, whether it belongs in a room the whole
+ * family reads. The alternative -- a rule expressed only in prose -- is how a security event
+ * eventually ends up in a group chat, because `householdEligible: true` is one keystroke and
+ * nothing would have objected.
+ */
+describe('v1.28.0: which events may reach a family channel', () => {
+  const CLASSIFICATION: Record<string, boolean> = {
+    // Household money. What was spent, what is owed, what is budgeted, what was saved.
+    coming_due: true,
+    budget_threshold: true,
+    budget_exceeded: true,
+    budget_pace: true,
+    weekly_digest: true,
+    monthly_digest: true,
+    unusual_transaction: true,
+    subscription_creep: true,
+    duplicate_charge: true,
+    predicted_vs_actual: true,
+    suggested_budget_refresh: true,
+    savings_target_met: true,
+    savings_target_pace: true,
+    savings_month_closed: true,
+    // An account, a session, or an operational outcome. None of it is money, and a group chat is
+    // the wrong place for any of it -- for new_signin most obviously, because the one person who
+    // needs to act on it is the one person the message is about.
+    new_signin: false,
+    password_changed: false,
+    mfa_disabled: false,
+    backup_failed: false,
+    restore_outcome: false,
+    sync_failed: false,
+    update_available: false,
+    pack_update_available: false,
+    // stale_import names a bank ACCOUNT and reports that a job did not happen. It is the data
+    // pipeline's business, not the household's, and the person who needs to act is whoever does
+    // the importing.
+    stale_import: false,
+  };
+
+  it('classifies every event in the registry, and nothing else', () => {
+    expect(NOTIFICATION_EVENTS.map((event) => event.id).sort()).toEqual(Object.keys(CLASSIFICATION).sort());
+  });
+
+  it('matches the classification exactly', () => {
+    for (const event of NOTIFICATION_EVENTS) {
+      expect(event.householdEligible, `${event.id} is classified wrongly`).toBe(CLASSIFICATION[event.id]);
+    }
+  });
+
+  it('keeps every account, session and operational event UNROUTABLE', () => {
+    for (const id of [
+      'new_signin',
+      'password_changed',
+      'mfa_disabled',
+      'backup_failed',
+      'restore_outcome',
+      'sync_failed',
+      'update_available',
+    ]) {
+      expect(isHouseholdEligible(id), `${id} must never be routable to a group chat`).toBe(false);
+      expect(householdEligibleEvents().some((event) => event.id === id)).toBe(false);
+    }
+    expect(isHouseholdEligible('an_event_that_does_not_exist')).toBe(false);
+  });
+
+  it('never marks an admin-only event eligible', () => {
+    // Nothing admin-only is household money. If a future event breaks the pairing it is far
+    // likelier to be a mistake than a new idea, so this fails loudly rather than allowing it.
+    for (const event of householdEligibleEvents()) {
+      expect(event.audience, `${event.id} is admin-only and must not be routable`).toBe('all');
+    }
+  });
+
+  it('wraps a household dedup key exactly once, whatever it is handed', () => {
+    expect(householdDedupKey('digest:2026-08-17')).toBe('hh:digest:2026-08-17');
+    // Idempotent: enqueue() wraps every household key, and householdWeeklyDigestKey hands it one
+    // that is already wrapped. Wrapping twice would dedup against nothing.
+    expect(householdDedupKey(householdDedupKey('x'))).toBe('hh:x');
+    expect(householdDedupKey(householdWeeklyDigestKey('2026-08-17'))).toBe('hh:digest-week:2026-08-17');
+  });
+
+  it('keys the household digest by the WEEK, never by the firing member’s own slot date', () => {
+    // Every member has their own digest_weekday, so wrapping weeklyDigestKey would give a
+    // household with a Monday person and a Friday person two family digests every week.
+    expect(householdWeeklyDigestKey('2026-08-17')).toBe('hh:digest-week:2026-08-17');
+    expect(householdWeeklyDigestKey('2026-08-17')).not.toBe(householdWeeklyDigestKey('2026-08-24'));
+    expect(householdWeeklyDigestKey('2026-08-17')).not.toBe(weeklyDigestKey('2026-08-17'));
   });
 });

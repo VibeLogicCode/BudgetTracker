@@ -91,10 +91,43 @@ export type RenderInput =
   | { event: 'backup_failed'; dateIso: string; error: string }
   | {
       event: 'weekly_digest';
+      /**
+       * v1.28.0. REQUIRED, not optional, and for ruling B15's reason (see coming_due above):
+       * making it required forces every existing call site to write `variant: 'personal'`, which
+       * is a compiler-checked edit rather than a silent default. There is no new event id --
+       * MUST-4.5 makes ids permanent and the weekly digest is one idea and one switch in the
+       * matrix; what changes is who the message is addressed to.
+       */
+      variant: 'personal';
       fromIso: string;
       toIso: string;
       householdSpentCents: number;
       personalSpentCents: number;
+      topCategories: readonly DigestLine[];
+      topMerchants: readonly DigestLine[];
+      reviewCount: number;
+      overBudget: readonly string[];
+    }
+  | {
+      event: 'weekly_digest';
+      /**
+       * The family channel's digest. It carries no `personalSpentCents` because there is no
+       * "you" reading it: a group chat is read by everybody, so "Your spend" would be a
+       * different number for each of them and wrong for all but one. Its place is taken by
+       * `members` plus `unattributedCents`, which together sum to householdSpentCents.
+       */
+      variant: 'household';
+      fromIso: string;
+      toIso: string;
+      householdSpentCents: number;
+      /** One line per person, in users.id order. Named, so the group can see who is who. */
+      members: readonly DigestLine[];
+      /**
+       * The money nobody has claimed. It is a line in its own right rather than a rounding
+       * remainder: in a joint household an unattributed pile is the thing worth a conversation,
+       * and without it the member lines silently fail to add up to the total.
+       */
+      unattributedCents: number;
       topCategories: readonly DigestLine[];
       topMerchants: readonly DigestLine[];
       reviewCount: number;
@@ -315,25 +348,20 @@ function refreshLines(rows: readonly RefreshLine[]): string[] {
   });
 }
 
-function renderDigest(input: Extract<RenderInput, { event: 'weekly_digest' }>): string {
-  const empty =
-    input.householdSpentCents === 0 &&
-    input.personalSpentCents === 0 &&
-    input.topCategories.length === 0 &&
-    input.topMerchants.length === 0;
-  if (empty) {
-    const tail: string[] = ['No transactions were recorded this week.'];
-    if (input.reviewCount > 0) tail.push(`${input.reviewCount} transactions still need review.`);
-    if (input.overBudget.length > 0) {
-      tail.push(`Over budget this month: ${input.overBudget.map((n) => truncateText(n, NAME_MAX)).join(', ')}.`);
-    }
-    return tail.join('\n');
-  }
+type WeeklyDigestInput = Extract<RenderInput, { event: 'weekly_digest' }>;
 
-  const parts: string[] = [
-    `Household spend: ${money(input.householdSpentCents)}`,
-    `Your spend:      ${money(input.personalSpentCents)}`,
-  ];
+/** The tail both digest variants share when the week held nothing at all. */
+function emptyDigestTail(input: WeeklyDigestInput): string {
+  const tail: string[] = ['No transactions were recorded this week.'];
+  if (input.reviewCount > 0) tail.push(`${input.reviewCount} transactions still need review.`);
+  if (input.overBudget.length > 0) {
+    tail.push(`Over budget this month: ${input.overBudget.map((n) => truncateText(n, NAME_MAX)).join(', ')}.`);
+  }
+  return tail.join('\n');
+}
+
+/** The tables and footer both variants share, appended after each one's own header block. */
+function digestTail(input: WeeklyDigestInput, parts: string[]): string {
   if (input.topCategories.length > 0) {
     parts.push('', 'Top categories (household)', ...padded(input.topCategories));
   }
@@ -346,6 +374,50 @@ function renderDigest(input: Extract<RenderInput, { event: 'weekly_digest' }>): 
     parts.push(`Over budget this month: ${input.overBudget.map((n) => truncateText(n, NAME_MAX)).join(', ')}.`);
   }
   return parts.join('\n').trimEnd();
+}
+
+function renderDigest(input: Extract<WeeklyDigestInput, { variant: 'personal' }>): string {
+  const empty =
+    input.householdSpentCents === 0 &&
+    input.personalSpentCents === 0 &&
+    input.topCategories.length === 0 &&
+    input.topMerchants.length === 0;
+  if (empty) return emptyDigestTail(input);
+
+  // Byte-for-byte what v1.3.0 shipped, including the hand-aligned two spaces after "Your spend:".
+  // The household variant below is a SECOND body, not a reshaped first one, precisely so this
+  // string cannot drift while nobody is looking (tests/lib/notify/render.test.ts pins it).
+  return digestTail(input, [
+    `Household spend: ${money(input.householdSpentCents)}`,
+    `Your spend:      ${money(input.personalSpentCents)}`,
+  ]);
+}
+
+/**
+ * v1.28.0: the family channel's digest.
+ *
+ * "showing household level spend to each member spend rather then just your spend" is what the
+ * household asked for, and the per-member block is the whole point: one message in the group chat
+ * that says what the household spent AND who spent it. Built from the SAME padded() two-column
+ * helper as everything else in this file, so it reads as a table in a Telegram message and in a
+ * plain-text email without a second style existing anywhere.
+ *
+ * Unattributed sits inside the same padded block rather than after it, so its figure lines up
+ * with the members' and the column of numbers visibly adds to the total above it.
+ */
+function renderHouseholdDigest(input: Extract<WeeklyDigestInput, { variant: 'household' }>): string {
+  const empty =
+    input.householdSpentCents === 0 &&
+    input.members.every((line) => line.cents === 0) &&
+    input.unattributedCents === 0 &&
+    input.topCategories.length === 0 &&
+    input.topMerchants.length === 0;
+  if (empty) return emptyDigestTail(input);
+
+  const parts: string[] = [`Household spend: ${money(input.householdSpentCents)}`];
+  const who: DigestLine[] = [...input.members, { name: 'Unattributed', cents: input.unattributedCents }];
+  parts.push('', 'Who spent it', ...padded(who));
+  return digestTail(input, parts);
 }
 
 /**
@@ -457,7 +529,15 @@ export function renderEvent(input: RenderInput): { subject: string; body: string
         ].join('\n\n'),
       };
     case 'weekly_digest':
-      return { subject: `Weekly summary — ${input.fromIso} to ${input.toIso}`, body: renderDigest(input) };
+      // The subjects differ on purpose: a member is in the family group chat AND has their own
+      // channel, and "Household weekly summary" is how they tell at a glance which one they are
+      // looking at. The personal subject is unchanged from v1.3.0.
+      return input.variant === 'household'
+        ? {
+            subject: `Household weekly summary — ${input.fromIso} to ${input.toIso}`,
+            body: renderHouseholdDigest(input),
+          }
+        : { subject: `Weekly summary — ${input.fromIso} to ${input.toIso}`, body: renderDigest(input) };
     case 'new_signin': {
       const lines = [
         `${truncateText(input.name, NAME_MAX)} signed in at ${input.atLabel} (${input.tz}) from ${input.ip}.`,

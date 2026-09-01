@@ -148,6 +148,13 @@
       "when": 1756944000000,
       "tag": "0020_bill_item_type",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1757030400000,
+      "tag": "0021_household_channels",
+      "breakpoints": true
     }
   ]
 }

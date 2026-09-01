@@ -2,7 +2,7 @@ import type { Viewer } from '@/lib/auth/viewer';
 import { addMonths, currentMonth, monthEnd, todayIso } from '@/lib/dates';
 import { isEventEnabled, notifiableUsers } from '@/lib/notify/config';
 import { CHANNELS, savingsMonthClosedKey, savingsTargetMetKey, savingsTargetPaceKey } from '@/lib/notify/events';
-import { enqueue } from '@/lib/notify/outbox';
+import { enqueue, enqueuedAnything } from '@/lib/notify/outbox';
 import { renderEvent } from '@/lib/notify/render';
 import { MONTH_REPORT_DAY_MAX, PACE_MIN_DAY_OF_MONTH } from '@/lib/predict/constants';
 import { savingsProgress, savingsStreak } from '@/lib/savings-target';
@@ -74,7 +74,7 @@ export function evaluateSavingsTargetMet(input: { now: Date; tz: string }): numb
       body,
       at: input.now,
     });
-    if (result.inserted.length > 0) fired += 1;
+    if (enqueuedAnything(result)) fired += 1;
   }
   return fired;
 }
@@ -131,7 +131,7 @@ function fireSavingsPace(input: { userId: number; now: Date; tz: string }): numb
     body,
     at: input.now,
   });
-  return result.inserted.length > 0 ? 1 : 0;
+  return enqueuedAnything(result) ? 1 : 0;
 }
 
 /**
@@ -173,7 +173,7 @@ function fireSavingsMonthClosed(input: { userId: number; now: Date; tz: string }
     body,
     at: input.now,
   });
-  return result.inserted.length > 0 ? 1 : 0;
+  return enqueuedAnything(result) ? 1 : 0;
 }
 
 /**

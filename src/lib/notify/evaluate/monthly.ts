@@ -6,7 +6,7 @@ import { addMonths, currentMonth, monthEnd, monthStart, todayIso } from '@/lib/d
 import { isEventEnabled } from '@/lib/notify/config';
 import { CHANNELS, monthlyDigestKey, predictedVsActualKey, suggestedBudgetRefreshKey } from '@/lib/notify/events';
 import { flattenBudgetRows } from '@/lib/notify/evaluate/pace';
-import { enqueue } from '@/lib/notify/outbox';
+import { enqueue, enqueuedAnything } from '@/lib/notify/outbox';
 import { renderEvent, type DigestLine, type PredictedLine, type RefreshLine } from '@/lib/notify/render';
 import {
   MONTH_REPORT_DAY_MAX,
@@ -124,7 +124,7 @@ function firePredictedVsActual(input: { userId: number; month: string; now: Date
     body,
     at: input.now,
   });
-  return result.inserted.length > 0 ? 1 : 0;
+  return enqueuedAnything(result) ? 1 : 0;
 }
 
 /**
@@ -172,7 +172,7 @@ function fireSuggestedRefresh(input: { userId: number; month: string; now: Date 
     body,
     at: input.now,
   });
-  return result.inserted.length > 0 ? 1 : 0;
+  return enqueuedAnything(result) ? 1 : 0;
 }
 
 /**
@@ -223,7 +223,7 @@ function fireMonthlyDigest(input: { userId: number; endedMonth: string; now: Dat
     body,
     at: input.now,
   });
-  return result.inserted.length > 0 ? 1 : 0;
+  return enqueuedAnything(result) ? 1 : 0;
 }
 
 /**

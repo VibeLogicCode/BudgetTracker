@@ -905,23 +905,43 @@ export const notificationSmtp = sqliteTable('notification_smtp', {
 });
 
 /**
- * Where one person is reached on one channel (spec §3.3).
+ * Where one person -- or, since v1.28.0, the whole household -- is reached on one channel
+ * (spec §3.3). Mirrors drizzle/0006_notifications.sql as amended by drizzle/0021.
  *
  * NOT represented here; SQL only:
  *   - CHECK (channel IN ('telegram','email'))
  *   - the channel/secret_encrypted pairing CHECK: a telegram row MUST carry a secret and
  *     an email row MUST NOT. A misconfiguration is loud rather than silent.
+ *   - CHECK (scope IN ('personal','household'))
+ *   - the scope/user_id pairing CHECK: a personal row MUST carry a user_id and a household
+ *     row MUST NOT.
+ *   - notification_targets_household_channel_uq, the PARTIAL unique index
+ *     `(channel) WHERE scope = 'household'`. It is what makes a second family Telegram
+ *     impossible, and it is deliberately not declared here: Drizzle would emit an
+ *     unconditional unique index of the same name, which would forbid every PERSONAL row
+ *     past the first per channel -- the loan_matcher_rules_uq hazard exactly (see that
+ *     table's docblock), a weaker index of the same name being worse than none.
  *
  * `secret_encrypted` is the bot token under HKDF info 'notify-telegram-v1' (MUST-3.5:
  * each user supplies their OWN token, so one blocked bot cannot silence the household).
+ * The household row carries its own token under the same info, never a member's.
+ *
+ * v1.28.0: `user_id` is NULL on a household row and `created_by_user_id` records the admin
+ * who set it up, ON DELETE SET NULL. Deleting that admin must NOT take the family channel
+ * with them -- the other member still depends on it -- so ownership (cascade) and
+ * authorship (audit) are separate columns. drizzle/0021's header argues it at length.
  */
 export const notificationTargets = sqliteTable(
   'notification_targets',
   {
     id: integer('id').primaryKey({ autoIncrement: true }),
-    userId: integer('user_id')
+    /** NULL on a household row: the family channel belongs to nobody in particular. */
+    userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }),
+    scope: text('scope', { enum: ['personal', 'household'] })
       .notNull()
-      .references(() => users.id, { onDelete: 'cascade' }),
+      .default('personal'),
+    /** Audit only, ON DELETE SET NULL. Never used to resolve or authorise a send. */
+    createdByUserId: integer('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
     channel: text('channel', { enum: ['telegram', 'email'] }).notNull(),
     destination: text('destination').notNull(),
     secretEncrypted: text('secret_encrypted'),
@@ -935,6 +955,36 @@ export const notificationTargets = sqliteTable(
     updatedAt: text('updated_at').notNull(),
   },
   (t) => [uniqueIndex('notification_targets_user_channel_uq').on(t.userId, t.channel)],
+);
+
+/**
+ * v1.28.0: which events an admin has routed to a family channel (§3.4's shape, one
+ * household-wide row set instead of one per user).
+ *
+ * NOT represented here; SQL only:
+ *   - CHECK (channel IN ('telegram','email'))
+ *   - CHECK (enabled IN (0,1))
+ *   - the WITHOUT ROWID storage class (the composite PK IS the row)
+ *
+ * MUST-3.6 applies unchanged: `event_id` carries NO CHECK and NO foreign key, so adding an
+ * event stays one append to src/lib/notify/events.ts. Which ids may legally appear here is
+ * the registry's `householdEligible` flag, enforced in code at the write path
+ * (setHouseholdEventPref) and again at the send path (buildRequest), because a CHECK
+ * cannot see a TypeScript array and a hand-edited database is exactly the case that guard
+ * exists for.
+ *
+ * Sparse, like notification_prefs: nothing seeds this table and an ABSENT row means "not
+ * routed". Upgrading therefore changes no delivery until an admin says so.
+ */
+export const notificationHouseholdPrefs = sqliteTable(
+  'notification_household_prefs',
+  {
+    eventId: text('event_id').notNull(),
+    channel: text('channel', { enum: ['telegram', 'email'] }).notNull(),
+    enabled: integer('enabled', { mode: 'boolean' }).notNull().default(false),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.eventId, t.channel] })],
 );
 
 /**
@@ -1003,6 +1053,16 @@ export const notificationUserSettings = sqliteTable('notification_user_settings'
  * separate dedup table, so the guard cannot drift from reality and a crash between
  * "decide to send" and "record that we sent" is impossible: they are one statement.
  *
+ * v1.28.0: that index is now `(COALESCE(user_id, -1), channel, dedup_key)` and exists ONLY
+ * in drizzle/0021_household_channels.sql. A household send is one row addressed to nobody,
+ * so `user_id` is NULL on it -- and SQLite treats NULLs as DISTINCT inside a unique index,
+ * so a plain (user_id, channel, dedup_key) index would let the family group chat receive
+ * one copy per member per tick, which is the whole defect the feature exists to fix. It is
+ * deliberately NOT declared below for the reason loan_matcher_rules_uq is not: a weaker
+ * index with the same name is worse than none, because a future drizzle-kit push could use
+ * it to replace the real one. -1 can never collide with a real user id (users.id is
+ * AUTOINCREMENT, starting at 1).
+ *
  * MUST-7.2: `subject` and `body` are rendered at ENQUEUE time, not send time.
  * MUST-3.10: sent/failed rows are retained as the "Recent deliveries" list and the dedup
  * memory; only runMaintenanceSweep()'s 400-day purge removes them.
@@ -1011,9 +1071,8 @@ export const notificationOutbox = sqliteTable(
   'notification_outbox',
   {
     id: integer('id').primaryKey({ autoIncrement: true }),
-    userId: integer('user_id')
-      .notNull()
-      .references(() => users.id, { onDelete: 'cascade' }),
+    /** NULL means the household channel: one send, addressed to the family room. */
+    userId: integer('user_id').references(() => users.id, { onDelete: 'cascade' }),
     channel: text('channel', { enum: ['telegram', 'email'] }).notNull(),
     eventId: text('event_id').notNull(),
     dedupKey: text('dedup_key').notNull(),
@@ -1027,7 +1086,6 @@ export const notificationOutbox = sqliteTable(
     sentAt: text('sent_at'),
   },
   (t) => [
-    uniqueIndex('notification_outbox_dedup_uq').on(t.userId, t.channel, t.dedupKey),
     index('notification_outbox_due_idx').on(t.status, t.nextAttemptAt),
     index('notification_outbox_user_idx').on(t.userId, t.id),
   ],

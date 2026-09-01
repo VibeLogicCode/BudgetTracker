@@ -22,6 +22,13 @@ export function isChannel(value: string): value is Channel {
 /** `h` for a household budget, `p` for the recipient's personal one (MUST-3.11). */
 export type BudgetScopeKey = 'household' | 'personal';
 
+/**
+ * v1.28.0. Whether a notification_targets row is one person's channel or the household's
+ * single shared one. Declared here rather than next to the table because the settings
+ * matrix is a client component and this module is the client-safe half of notify (MUST-2.1).
+ */
+export type TargetScope = 'personal' | 'household';
+
 export type NotificationAudience = 'all' | 'admin';
 export type NotificationTrigger = 'daily_slot' | 'weekly_slot' | 'tick' | 'immediate';
 
@@ -34,6 +41,28 @@ export interface NotificationEventDef {
   readonly audience: NotificationAudience;
   readonly trigger: NotificationTrigger;
   readonly defaultEnabled: boolean;
+  /**
+   * v1.28.0. Whether an admin may route this event to the household's shared channel.
+   * ORTHOGONAL to `audience`, which says who receives a message; this says whether the
+   * message belongs in a room the whole family reads.
+   *
+   * The line: an event that describes HOUSEHOLD MONEY is eligible -- the digests, the
+   * budget events, the spending alerts, the savings targets, what is coming due. An event
+   * that describes an ACCOUNT, a SESSION or an OPERATIONAL OUTCOME is not. A group chat is
+   * exactly the wrong place for "somebody signed in as you": the person who needs to act on
+   * it is one person, the message names their account, and a shared room is the one place
+   * they cannot un-see it or act on it privately.
+   *
+   * This is not merely a default the UI hides. An ineligible event is UNROUTABLE: refused by
+   * setHouseholdEventPref at the write path and refused again at the send path
+   * (src/lib/notify/outbox.ts's buildRequest), so a hand-edited notification_household_prefs
+   * row cannot post a security event into a group chat.
+   *
+   * Note the invariant tests/lib/notify/events.test.ts asserts: every eligible event has
+   * audience 'all'. Nothing admin-only is household money, and if a future event breaks that
+   * pairing it is far likelier to be a mistake than a new idea.
+   */
+  readonly householdEligible: boolean;
 }
 
 /**
@@ -52,6 +81,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     audience: 'all',
     trigger: 'daily_slot',
     defaultEnabled: true,
+    householdEligible: true,
   },
   {
     id: 'budget_threshold',
@@ -60,6 +90,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     audience: 'all',
     trigger: 'tick',
     defaultEnabled: false,
+    householdEligible: true,
   },
   {
     id: 'budget_exceeded',
@@ -68,6 +99,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     audience: 'all',
     trigger: 'tick',
     defaultEnabled: true,
+    householdEligible: true,
   },
   {
     id: 'backup_failed',
@@ -76,6 +108,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     audience: 'admin',
     trigger: 'immediate',
     defaultEnabled: true,
+    householdEligible: false,
   },
   {
     id: 'weekly_digest',
@@ -84,6 +117,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     audience: 'all',
     trigger: 'weekly_slot',
     defaultEnabled: false,
+    householdEligible: true,
   },
   {
     id: 'new_signin',
@@ -92,6 +126,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     audience: 'all',
     trigger: 'immediate',
     defaultEnabled: true,
+    householdEligible: false,
   },
   {
     id: 'password_changed',
@@ -100,6 +135,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     audience: 'all',
     trigger: 'immediate',
     defaultEnabled: true,
+    householdEligible: false,
   },
   {
     id: 'mfa_disabled',
@@ -108,6 +144,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     audience: 'all',
     trigger: 'immediate',
     defaultEnabled: true,
+    householdEligible: false,
   },
   {
     id: 'restore_outcome',
@@ -116,6 +153,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     audience: 'admin',
     trigger: 'immediate',
     defaultEnabled: true,
+    householdEligible: false,
   },
   {
     id: 'stale_import',
@@ -124,6 +162,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     audience: 'all',
     trigger: 'daily_slot',
     defaultEnabled: false,
+    householdEligible: false,
   },
   {
     id: 'update_available',
@@ -132,6 +171,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     audience: 'admin',
     trigger: 'tick',
     defaultEnabled: true,
+    householdEligible: false,
   },
   {
     id: 'budget_pace',
@@ -140,6 +180,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     audience: 'all',
     trigger: 'daily_slot',
     defaultEnabled: true,
+    householdEligible: true,
   },
   {
     id: 'unusual_transaction',
@@ -148,6 +189,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     audience: 'all',
     trigger: 'tick',
     defaultEnabled: true,
+    householdEligible: true,
   },
   {
     id: 'subscription_creep',
@@ -156,6 +198,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     audience: 'all',
     trigger: 'daily_slot',
     defaultEnabled: true,
+    householdEligible: true,
   },
   {
     id: 'duplicate_charge',
@@ -164,6 +207,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     audience: 'all',
     trigger: 'tick',
     defaultEnabled: true,
+    householdEligible: true,
   },
   {
     id: 'predicted_vs_actual',
@@ -172,6 +216,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     audience: 'all',
     trigger: 'daily_slot',
     defaultEnabled: false,
+    householdEligible: true,
   },
   {
     id: 'suggested_budget_refresh',
@@ -180,6 +225,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     audience: 'all',
     trigger: 'daily_slot',
     defaultEnabled: false,
+    householdEligible: true,
   },
   {
     id: 'sync_failed',
@@ -188,6 +234,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     audience: 'admin',
     trigger: 'immediate',
     defaultEnabled: true,
+    householdEligible: false,
   },
   {
     id: 'monthly_digest',
@@ -196,6 +243,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     audience: 'all',
     trigger: 'daily_slot',
     defaultEnabled: false,
+    householdEligible: true,
   },
   {
     // Lane 2, spec docs/superpowers/plans/2026-08-30-savings-targets.md. Ruling T3: household
@@ -206,6 +254,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     audience: 'all',
     trigger: 'tick',
     defaultEnabled: true,
+    householdEligible: true,
   },
   {
     // Ruling T5: pro-rated against the day of the month, not a projection to month end --
@@ -216,6 +265,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     audience: 'all',
     trigger: 'daily_slot',
     defaultEnabled: true,
+    householdEligible: true,
   },
   {
     id: 'savings_month_closed',
@@ -224,6 +274,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     audience: 'all',
     trigger: 'daily_slot',
     defaultEnabled: true,
+    householdEligible: true,
   },
   {
     // Backlog item 17 / Part 4 (version awareness): "wire a line into the existing notification
@@ -239,6 +290,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     audience: 'admin',
     trigger: 'tick',
     defaultEnabled: true,
+    householdEligible: false,
   },
 ];
 
@@ -256,6 +308,20 @@ export function isNotificationEventId(value: string): boolean {
  */
 export function eventsFor(role: 'admin' | 'member'): readonly NotificationEventDef[] {
   return role === 'admin' ? NOTIFICATION_EVENTS : NOTIFICATION_EVENTS.filter((event) => event.audience === 'all');
+}
+
+/**
+ * v1.28.0: the events an admin may route to a family channel. PURE, so the settings matrix
+ * can render the household column from the same registry the personal one comes from
+ * (MUST-4.4: adding an event is still one append to the array above).
+ */
+export function householdEligibleEvents(): readonly NotificationEventDef[] {
+  return NOTIFICATION_EVENTS.filter((event) => event.householdEligible);
+}
+
+/** The one predicate every household guard calls. An unknown id is never eligible. */
+export function isHouseholdEligible(eventId: string): boolean {
+  return eventDef(eventId)?.householdEligible === true;
 }
 
 /**
@@ -318,6 +384,58 @@ export function backupFailedKey(dateIso: string): string {
 
 export function weeklyDigestKey(slotDateIso: string): string {
   return `digest:${slotDateIso}`;
+}
+
+/**
+ * v1.28.0. Every household send's dedup key is the event's own key wearing this prefix, and
+ * the row it guards carries user_id NULL.
+ *
+ * Uniqueness does NOT depend on the prefix: notification_outbox_dedup_uq is
+ * (COALESCE(user_id, -1), channel, dedup_key), so -1 already gives the household its own
+ * namespace, separate from every real user id. The prefix earns its place twice over anyway:
+ * a household row is self-describing in Settings -> Recent deliveries and in a `select
+ * dedup_key` at 2am, and no future refactor that keys on dedup_key alone -- a purge, an
+ * audit, a "has this already fired" probe -- can silently conflate the family channel's copy
+ * with a member's.
+ *
+ * MUST-3.12 (pruning safety) is inherited from the wrapped key and never weakened: prefixing
+ * a bounded key leaves it bounded.
+ */
+export const HOUSEHOLD_DEDUP_PREFIX = 'hh:';
+
+/**
+ * IDEMPOTENT on purpose. enqueue() wraps every household key with this, and one caller
+ * (householdWeeklyDigestKey) hands it a key that is already wrapped -- so wrapping twice has to
+ * be a no-op rather than producing `hh:hh:digest-week:...`, which would dedup against nothing
+ * and put a second digest in the group chat. Enforcing "wrap exactly once" by convention across
+ * two files is the kind of rule that holds until the third caller.
+ */
+export function householdDedupKey(key: string): string {
+  return key.startsWith(HOUSEHOLD_DEDUP_PREFIX) ? key : `${HOUSEHOLD_DEDUP_PREFIX}${key}`;
+}
+
+export function isHouseholdDedupKey(key: string): boolean {
+  return key.startsWith(HOUSEHOLD_DEDUP_PREFIX);
+}
+
+/**
+ * v1.28.0. The household digest is keyed by the MONDAY of the week it covers, not by the
+ * firing member's slot date -- the one place a household key may not simply wrap the personal
+ * one.
+ *
+ * Every member has their OWN digest_weekday and digest_hour (§3.5), so weeklyDigestKey's slot
+ * date differs per person. Wrapping it would mean a household where one partner picked Monday
+ * and the other Friday gets TWO family digests every week, which is the "N copies in the group
+ * chat" failure this whole feature exists to remove -- just at a slower cadence. Collapsing to
+ * the week makes it exactly one: whichever member's slot comes first that week produces it, and
+ * everybody else's slot finds the key already taken and enqueues nothing.
+ *
+ * `mondayIso` comes from mondayOfIsoWeek() in evaluate/slots.ts, the same helper staleImportKey
+ * is fed from, and carries the same pruning-safety argument: the key advances every week and
+ * never repeats.
+ */
+export function householdWeeklyDigestKey(mondayIso: string): string {
+  return householdDedupKey(`digest-week:${mondayIso}`);
 }
 
 export function newSigninKey(sessionCreatedAt: string): string {
