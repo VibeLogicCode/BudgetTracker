@@ -21,6 +21,50 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.24.0] - 2026-09-01
+
+No migration.
+
+### Added
+
+- **Delete a rule, and clear what it did.** Deleting a merchant rule used to stop it matching new
+  imports while leaving every transaction it had already changed exactly as it left them — so a
+  rule you regretted stayed applied forever. The rule menu now offers both: **Delete rule** on its
+  own, or **Delete and clear**, which returns those transactions to Needs review. Optionally for a
+  date range, so a rule that was wrong last spring can be undone there and left alone since. Both
+  open a dialog that says what will happen and states plainly that it cannot be undone — nothing
+  records a transaction's category from before a rule touched it, so no version of this can put
+  one back.
+- **A date range on Re-run rules.** Running rules was all-or-nothing across your whole history.
+  The dialog now takes a range, and says how many transactions it will look at and roughly how
+  many would actually change before you commit to it.
+- **Transfers filter: All, Transfers only, No transfers.** The old checkbox could only hide
+  transfers, and it sat behind the Filters disclosure — so a transaction wrongly marked a transfer
+  left the review queue and the transaction list at the same moment, with nothing on either screen
+  able to bring it back. The three-state control sits above the table, always visible, and
+  **Transfers only** is the route to a row you need to un-flag. Existing `?transfers=0` links keep
+  working and keep their meaning.
+
+### Changed
+
+- **The review queue says "Needs review".** It shares a page with Transactions, and the header
+  said "Transactions" in both, which made the review filter look like it had not applied.
+- **Deleting a rename rule now explains itself.** It already put every renamed transaction back to
+  the text from your bank; the dialog now says so, and says it applies to all of them rather than
+  offering a date range. Bounding a rename revert would leave the rest carrying a name whose rule
+  no longer exists, which the next rules pass clears anyway.
+- **Every rule confirmation is the same dialog.** The Re-run rules preview was the last panel that
+  unfolded inside the card while the rest of the app dims the page behind it.
+
+### Fixed
+
+- **Two tests were dated, not broken.** A budget-suggestions suite pinned to a literal month
+  started failing every case the morning the calendar rolled past it, and the loan end-to-end test
+  stamped its loan payments from the wall clock while asserting a fixed month's debt figure. Both
+  now derive their months from the clock they are given. No application behaviour changed — but
+  `debtOverTime` buckets payments by `created_at` rather than the transaction date, which is worth
+  revisiting on its own.
+
 ## [1.23.1] - 2026-08-31
 
 No migration.

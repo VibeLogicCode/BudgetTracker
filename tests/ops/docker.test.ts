@@ -245,21 +245,33 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.23.0 release', () => {
+  it('MUST-7.1: the 1.24.0 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.23.1');
+    expect(pkg.version).toBe('1.24.0');
     const changelog = read('CHANGELOG.md');
-    // 1.23.1 is a presentation-only patch on top of 1.23.0; both entries must be present, and
-    // Unreleased still sits above whichever is newest.
+    expect(changelog).toMatch(/^## \[1\.24\.0\] - 2026-09-01$/m);
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.24.0]'));
+    expect(changelog.indexOf('## [1.24.0]')).toBeLessThan(changelog.indexOf('## [1.23.1]'));
+    const entry = changelog.slice(changelog.indexOf('## [1.24.0]'), changelog.indexOf('## [1.23.1]'));
+    expect(entry).toMatch(/No migration/i);
+    // The three invariants this release must never lose: clearing a rule is not an undo, a rename
+    // revert is never date-bounded, and "transfers only" is a route back to a mis-flagged row.
+    expect(entry).toMatch(/cannot be undone/i);
+    expect(entry).toMatch(/Bounding a rename revert/i);
+    expect(entry).toMatch(/Transfers only/);
+  });
+
+  it('MUST-7.1: the 1.23.0 release is still recorded intact (append-only discipline)', () => {
+    const changelog = read('CHANGELOG.md');
+    // 1.23.1 is a presentation-only patch on top of 1.23.0; both entries must stay present.
     expect(changelog).toMatch(/^## \[1\.23\.1\] - 2026-08-31$/m);
     expect(changelog).toMatch(/^## \[1\.23\.0\] - 2026-08-31$/m);
-    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.23.1]'));
     expect(changelog.indexOf('## [1.23.1]')).toBeLessThan(changelog.indexOf('## [1.23.0]'));
     expect(changelog.indexOf('## [1.23.0]')).toBeLessThan(changelog.indexOf('## [1.22.0]'));
     const entry = changelog.slice(changelog.indexOf('## [1.23.0]'), changelog.indexOf('## [1.22.0]'));
     expect(entry).toMatch(/Install the preset rules from inside the app/i);
     expect(entry).toMatch(/One migration \(0017\)/i);
-    // The invariant this release must never lose: an update is announced, never applied.
+    // The invariant that release must never lose: an update is announced, never applied.
     expect(entry).toMatch(/Nothing is ever applied on its own/i);
   });
 
