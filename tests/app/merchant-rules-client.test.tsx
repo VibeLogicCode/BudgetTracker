@@ -9,12 +9,14 @@ import type { MerchantRuleRecord, RuleKind } from '@/lib/categorize/rules';
 vi.mock('@/app/(app)/settings/merchant-rules/actions', () => ({
   saveRuleAction: vi.fn(async () => ({})),
   deleteRuleAction: vi.fn(async () => ({})),
+  deleteRuleAndClearAction: vi.fn(async () => ({})),
   bulkDeleteRulesAction: vi.fn(async () => ({})),
   bulkSetDisabledAction: vi.fn(async () => ({})),
   setRuleDisabledAction: vi.fn(async () => ({})),
   applyRuleNowAction: vi.fn(async () => ({})),
   rerunAllAction: vi.fn(async () => ({})),
   previewRerunAllAction: vi.fn(async () => ({ eligible: 10, wouldChange: 4 })),
+  previewRuleClearAction: vi.fn(async () => ({ affected: 41, kind: 'category' as const })),
   installCanadianPackAction: vi.fn(async () => ({})),
   removeCanadianPackAction: vi.fn(async () => ({})),
   applyCanadianPackUpdateAction: vi.fn(async () => ({})),
@@ -270,21 +272,229 @@ describe('MerchantRulesClient — per-rule Apply now (item 11: scoped, understan
   });
 });
 
-describe('MerchantRulesClient — household-wide Re-run rules gets a preview-then-confirm step (item 11)', () => {
-  it('shows the preview counts before running, and a Cancel that never submits', async () => {
+/**
+ * v1.24.0 (owner ask, 2026-09-01: "when we click re-run it should open a dialogue... blurred popup
+ * with proper disclaimer"). The preview-then-confirm behaviour item 11 built is unchanged; it moved
+ * from an inline strip into a RowDialog and gained the all-time/date-range choice. See
+ * RunRulesDialog's own docblock in merchant-rules-client.tsx (and the retired carve-out in
+ * RowDialog.tsx) for why the earlier "this one stays inline" reasoning was reversed.
+ */
+describe('MerchantRulesClient — Run rules now (dialog 4, RowDialog, v1.24.0)', () => {
+  it('opens a labelled dialog stating the preview counts, and a Cancel that never submits', async () => {
     const { rerunAllAction } = await import('@/app/(app)/settings/merchant-rules/actions');
     render(<MerchantRulesClient {...baseProps()} />);
     fireEvent.click(screen.getByRole('button', { name: 'Re-run rules' }));
-    const confirmButton = await screen.findByRole('button', { name: /re-run now/i });
+    const dialog = screen.getByRole('dialog', { name: /run rules now\?/i });
     // The eligible/wouldChange numbers render split across <strong> tags (real UI, not a test
-    // artifact), so a single getByText regex cannot span them -- check the confirm panel's whole
+    // artifact), so a single getByText regex cannot span them -- check the dialog's whole
     // rendered text instead of one of its child nodes.
-    const panelText = confirmButton.closest('div')!.textContent ?? '';
-    expect(panelText).toMatch(/look at\s*10\s*uncategorized/);
-    expect(panelText).toMatch(/about\s*4\s*would actually change/);
+    await screen.findByText(/would actually change/);
+    const text = dialog.textContent ?? '';
+    expect(text).toMatch(/look at\s*10\s*transaction/);
+    expect(text).toMatch(/about\s*4\s*would actually change/);
+    // The disclosure has to match ELIGIBLE, not flatter it: a hand-categorized row, a split row
+    // and a row a rule already settled are all skipped.
+    expect(text).toMatch(/categorized by hand, split into parts, or that a rule has already settled/);
     fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
-    expect(screen.queryByRole('button', { name: /re-run now/i })).toBeNull();
+    expect(screen.queryByRole('dialog')).toBeNull();
     expect(rerunAllAction).not.toHaveBeenCalled();
+  });
+
+  it('defaults to All time and reveals two date inputs when Date range is chosen', async () => {
+    const { previewRerunAllAction } = await import('@/app/(app)/settings/merchant-rules/actions');
+    render(<MerchantRulesClient {...baseProps()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Re-run rules' }));
+    expect((screen.getByRole('radio', { name: 'All time' }) as HTMLInputElement).checked).toBe(true);
+    expect(screen.queryByLabelText('From')).toBeNull();
+    fireEvent.click(screen.getByRole('radio', { name: 'Date range' }));
+    expect(screen.getByLabelText('From')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('From'), { target: { value: '2026-01-01' } });
+    fireEvent.change(screen.getByLabelText('To'), { target: { value: '2026-03-31' } });
+    // The count is re-previewed for the narrowed range, not left showing the all-time figure.
+    await screen.findByText(/would actually change/);
+    expect(previewRerunAllAction).toHaveBeenCalledWith('2026-01-01', '2026-03-31');
+  });
+
+  it('refuses a backwards range in the dialog rather than after submitting', () => {
+    render(<MerchantRulesClient {...baseProps()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Re-run rules' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Date range' }));
+    fireEvent.change(screen.getByLabelText('From'), { target: { value: '2026-03-31' } });
+    fireEvent.change(screen.getByLabelText('To'), { target: { value: '2026-01-01' } });
+    expect(screen.getByRole('alert').textContent).toMatch(/ends before it starts/);
+    expect((screen.getByRole('button', { name: 'Run rules' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+/**
+ * v1.24.0, dialogs 1-3. The owner's report was that deleting a rule left the transactions it had
+ * already changed exactly as the rule made them, with nothing on screen saying so ("user deletes
+ * the rule but nothing gets fixed"). The fix is two menu items and three dialogs whose copy is
+ * kind-true: a category/transfer clear genuinely cannot be undone (nothing records the previous
+ * category), while a rename revert genuinely can be described as restoring the bank's own text.
+ * The shell RowDialog owes every caller -- role, aria-modal, Escape, backdrop, focus trap,
+ * focus-restore -- is asserted once, in full, against the split editor in
+ * transactions-client.test.tsx; these tests pin THIS content.
+ */
+describe('MerchantRulesClient — Delete this rule? (dialog 1, v1.24.0)', () => {
+  it('replaces the window.confirm with a dialog saying what a plain delete does NOT change', () => {
+    render(<MerchantRulesClient {...baseProps()} />);
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete rule' }));
+    const dialog = screen.getByRole('dialog', { name: /delete this rule\?/i });
+    expect(dialog.textContent).toMatch(/cannot be undone/i);
+    expect(dialog.textContent).toMatch(/Transactions it already changed keep what it gave them/);
+  });
+
+  it('cancelling submits nothing and closes', async () => {
+    const { deleteRuleAction } = await import('@/app/(app)/settings/merchant-rules/actions');
+    render(<MerchantRulesClient {...baseProps()} />);
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete rule' }));
+    fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(deleteRuleAction).not.toHaveBeenCalled();
+  });
+
+  it('a not-a-transfer override also warns that the card-payment patterns can re-flag the merchant', () => {
+    render(
+      <MerchantRulesClient
+        {...baseProps({
+          rows: [rule({ ruleKind: 'not_transfer', categoryId: null })],
+          kindCounts: { category: 0, transfer: 0, rename: 0, not_transfer: 1 },
+        })}
+      />,
+    );
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete rule' }));
+    expect(screen.getByRole('dialog').textContent).toMatch(/card-payment patterns can flag that merchant as a transfer again/);
+  });
+
+  it('never offers the clear option for a not-a-transfer rule -- clearing it would re-flag money as transfers', () => {
+    render(
+      <MerchantRulesClient
+        {...baseProps({
+          rows: [rule({ ruleKind: 'not_transfer', categoryId: null })],
+          kindCounts: { category: 0, transfer: 0, rename: 0, not_transfer: 1 },
+        })}
+      />,
+    );
+    openRowMenu('Actions for TIM HORTONS');
+    expect(screen.queryByRole('menuitem', { name: /clear from transactions/i })).toBeNull();
+  });
+});
+
+describe('MerchantRulesClient — Delete rule and clear it from transactions (dialog 2, v1.24.0)', () => {
+  it('states the server-side count, the no-undo warning and that other rules are not re-run', async () => {
+    render(<MerchantRulesClient {...baseProps()} />);
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: /clear from transactions/i }));
+    expect(screen.getByRole('dialog', { name: /delete rule and clear it from transactions\?/i })).toBeTruthy();
+    await screen.findByText(/41 transactions were categorized by this rule/);
+    const text = screen.getByRole('dialog').textContent ?? '';
+    expect(text).toMatch(/This cannot be undone/);
+    expect(text).toMatch(/returns them to Needs review/);
+    expect(text).toMatch(/is not recorded and cannot be brought back/);
+    expect(text).toMatch(/Other rules are not re-run/);
+  });
+
+  it('re-previews the count against a chosen date range', async () => {
+    const { previewRuleClearAction } = await import('@/app/(app)/settings/merchant-rules/actions');
+    vi.mocked(previewRuleClearAction).mockResolvedValue({ affected: 7, kind: 'category' as const });
+    render(<MerchantRulesClient {...baseProps()} />);
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: /clear from transactions/i }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Date range' }));
+    fireEvent.change(screen.getByLabelText('From'), { target: { value: '2026-02-01' } });
+    await screen.findByText(/7 transactions were categorized by this rule/);
+    expect(previewRuleClearAction).toHaveBeenCalledWith(1, '2026-02-01', null);
+  });
+
+  it('a transfer rule says the flag is being cleared, never a category', async () => {
+    const { previewRuleClearAction } = await import('@/app/(app)/settings/merchant-rules/actions');
+    vi.mocked(previewRuleClearAction).mockResolvedValue({ affected: 3, kind: 'transfer' as const });
+    render(
+      <MerchantRulesClient
+        {...baseProps({
+          rows: [rule({ ruleKind: 'transfer', categoryId: null })],
+          kindCounts: { category: 0, transfer: 1, rename: 0, not_transfer: 0 },
+        })}
+      />,
+    );
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: /clear from transactions/i }));
+    await screen.findByText(/3 transactions are flagged as a transfer by this rule/);
+    const text = screen.getByRole('dialog').textContent ?? '';
+    expect(text).toMatch(/Clearing removes the transfer flag/);
+    expect(text).not.toMatch(/removes their category/);
+  });
+
+  it('cancelling mutates nothing', async () => {
+    const { deleteRuleAndClearAction } = await import('@/app/(app)/settings/merchant-rules/actions');
+    render(<MerchantRulesClient {...baseProps()} />);
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: /clear from transactions/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(deleteRuleAndClearAction).not.toHaveBeenCalled();
+  });
+});
+
+describe('MerchantRulesClient — Delete rule and restore original descriptions (dialog 3, v1.24.0)', () => {
+  it('promises the bank text back, states the count, and offers NO date range', async () => {
+    const { previewRuleClearAction } = await import('@/app/(app)/settings/merchant-rules/actions');
+    vi.mocked(previewRuleClearAction).mockResolvedValue({ affected: 128, kind: 'rename' as const });
+    render(
+      <MerchantRulesClient
+        {...baseProps({
+          rows: [rule({ ruleKind: 'rename', categoryId: null, renameTo: "McDonald's" })],
+          kindCounts: { category: 0, transfer: 0, rename: 1, not_transfer: 0 },
+        })}
+      />,
+    );
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete rule' }));
+    expect(screen.getByRole('dialog', { name: /delete rule and restore original descriptions\?/i })).toBeTruthy();
+    await screen.findByText(/128 of them/);
+    const text = screen.getByRole('dialog').textContent ?? '';
+    expect(text).toMatch(/go back to the text from your bank/);
+    expect(text).toMatch(/No date range/);
+    // A rename revert is genuinely reversible in fact, so it must NOT borrow the other kinds'
+    // "this cannot be undone" warning about the transactions -- only deleting the rule is final.
+    expect(text).toMatch(/Deleting the rule cannot be undone/);
+    expect(screen.queryByRole('radio', { name: 'Date range' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Delete and restore' })).toBeTruthy();
+  });
+
+  it('a rename rule offers ONE delete item, since deleting it already reverts its rows', () => {
+    render(
+      <MerchantRulesClient
+        {...baseProps({
+          rows: [rule({ ruleKind: 'rename', categoryId: null, renameTo: "McDonald's" })],
+          kindCounts: { category: 0, transfer: 0, rename: 1, not_transfer: 0 },
+        })}
+      />,
+    );
+    openRowMenu('Actions for TIM HORTONS');
+    expect(screen.queryByRole('menuitem', { name: /clear from transactions/i })).toBeNull();
+    expect(screen.getByRole('menuitem', { name: 'Delete rule' })).toBeTruthy();
+  });
+
+  it('cancelling mutates nothing', async () => {
+    const { deleteRuleAndClearAction } = await import('@/app/(app)/settings/merchant-rules/actions');
+    render(
+      <MerchantRulesClient
+        {...baseProps({
+          rows: [rule({ ruleKind: 'rename', categoryId: null, renameTo: "McDonald's" })],
+          kindCounts: { category: 0, transfer: 0, rename: 1, not_transfer: 0 },
+        })}
+      />,
+    );
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete rule' }));
+    fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(deleteRuleAndClearAction).not.toHaveBeenCalled();
   });
 });
 

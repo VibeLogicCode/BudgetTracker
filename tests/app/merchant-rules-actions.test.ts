@@ -24,13 +24,15 @@ import {
   bulkDeleteRulesAction,
   bulkSetDisabledAction,
   deleteRuleAction,
+  deleteRuleAndClearAction,
   previewRerunAllAction,
+  previewRuleClearAction,
   rerunAllAction,
   saveRuleAction,
   setRuleDisabledAction,
 } from '@/app/(app)/settings/merchant-rules/actions';
 import { listRules, upsertRuleFromCorrection } from '@/lib/categorize/rules';
-import { upsertRenameRule } from '@/lib/categorize/engine';
+import { rerunEngine, upsertRenameRule } from '@/lib/categorize/engine';
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -49,10 +51,12 @@ function setup() {
   const userId = insertTestUser(current.db, { name: 'Admin', username: 'admin' });
   const accountId = insertTestAccount(current.db);
   currentUser = { id: userId, name: 'Admin', username: 'admin', role: 'admin' };
-  const add = (rawDescription: string) => {
+  /** `date` is optional and defaults to the original fixture date, so every pre-v1.24.0 caller
+   *  reads exactly as it did; the date-range tests below are the reason it exists. */
+  const add = (rawDescription: string, date = '2026-03-02') => {
     const row = current!.db.get<{ id: number }>(sql`
       insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, categorization_source, created_by, created_at, updated_at)
-      values (${accountId}, '2026-03-02', ${rawDescription}, ${normalizeMerchant(rawDescription)}, -1000, 'none', ${userId}, ${nowIso()}, ${nowIso()})
+      values (${accountId}, ${date}, ${rawDescription}, ${normalizeMerchant(rawDescription)}, -1000, 'none', ${userId}, ${nowIso()}, ${nowIso()})
       returning id`);
     return row.id;
   };
@@ -262,5 +266,192 @@ describe('previewRerunAllAction / rerunAllAction (item 11: global Re-run rules)'
     await rerunAllAction({}, new FormData());
     const row = current!.sqlite.prepare('select category_id from transactions where id = ?').get(id) as { category_id: number | null };
     expect(row.category_id).toBe(groceries);
+  });
+});
+
+/**
+ * v1.24.0 (owner ask: "delete rule and un-apply from transactions... all date ranges or user
+ * chooses"). The order these two do their work in is the part worth pinning: attribution is
+ * DERIVED (no rule id is stored on a transaction), so the rule has to still exist while the rows
+ * are being resolved. Deleting first would clear nothing at all and still report success.
+ */
+describe('previewRuleClearAction (v1.24.0: the count the dialog states)', () => {
+  it('reports the rows a clear would touch, and the rule kind, for the whole history', async () => {
+    const { db, add, userId } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    add('TIM HORTONS', '2026-01-15');
+    add('TIM HORTONS', '2026-03-31');
+    upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: userId, actorRole: 'admin' });
+    rerunEngine();
+    const ruleId = listRules('category')[0].id;
+
+    expect(await previewRuleClearAction(ruleId, null, null)).toEqual({ affected: 2, kind: 'category' });
+    expect(await previewRuleClearAction(ruleId, '2026-02-01', null)).toEqual({ affected: 1, kind: 'category' });
+    expect(await previewRuleClearAction(ruleId, '2026-01-15', '2026-01-15')).toEqual({ affected: 1, kind: 'category' });
+  });
+
+  it('reports the backwards range instead of a zero that looks like "nothing to do"', async () => {
+    const { db, userId } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: userId, actorRole: 'admin' });
+    const result = await previewRuleClearAction(listRules('category')[0].id, '2026-03-31', '2026-01-01');
+    expect(result.error).toMatch(/ends before it starts/);
+    expect(result.affected).toBe(0);
+  });
+
+  it('says so when the rule is already gone', async () => {
+    setup();
+    expect(await previewRuleClearAction(999999, null, null)).toMatchObject({ affected: 0, kind: null });
+  });
+
+  it('refuses a non-admin caller', async () => {
+    setup();
+    vi.mocked(requireAdmin).mockRejectedValueOnce(new Error('not admin'));
+    await expect(previewRuleClearAction(1, null, null)).rejects.toThrow(/not admin/);
+  });
+});
+
+describe('deleteRuleAndClearAction (v1.24.0)', () => {
+  it('clears the rows FIRST and then deletes the rule, reporting the real transaction count', async () => {
+    const { db, sqlite, add, userId } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const a = add('TIM HORTONS', '2026-01-15');
+    const b = add('TIM HORTONS', '2026-03-31');
+    upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: userId, actorRole: 'admin' });
+    rerunEngine();
+    const ruleId = listRules('category')[0].id;
+    const read = (id: number) =>
+      sqlite.prepare('select category_id, categorization_source from transactions where id = ?').get(id) as {
+        category_id: number | null;
+        categorization_source: string;
+      };
+    expect(read(a).category_id).toBe(coffee);
+
+    const result = await deleteRuleAndClearAction({}, formData({ ruleId: String(ruleId), from: '', to: '' }));
+    expect(result.message).toMatch(/cleared from 2 transactions/);
+    expect(result.message).toMatch(/back in Needs review/);
+    expect(read(a)).toMatchObject({ category_id: null, categorization_source: 'none' });
+    expect(read(b)).toMatchObject({ category_id: null, categorization_source: 'none' });
+    expect(listRules().find((r) => r.id === ruleId)).toBeUndefined();
+  });
+
+  it('honours a date range and says which range it acted on', async () => {
+    const { db, sqlite, add, userId } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const jan = add('TIM HORTONS', '2026-01-15');
+    const mar = add('TIM HORTONS', '2026-03-31');
+    upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: userId, actorRole: 'admin' });
+    rerunEngine();
+    const ruleId = listRules('category')[0].id;
+
+    const result = await deleteRuleAndClearAction({}, formData({ ruleId: String(ruleId), from: '2026-03-01', to: '2026-03-31' }));
+    expect(result.message).toMatch(/cleared from 1 transaction between 2026-03-01 and 2026-03-31/);
+    const read = (id: number) => sqlite.prepare('select category_id from transactions where id = ?').get(id) as { category_id: number | null };
+    expect(read(mar).category_id).toBeNull();
+    expect(read(jan).category_id).toBe(coffee);
+  });
+
+  it('a rename rule ignores the supplied dates and reverts every row', async () => {
+    const { sqlite, add, userId } = setup();
+    const jan = add('MCDONALDS', '2026-01-05');
+    const mar = add('MCDONALDS', '2026-03-05');
+    const upserted = upsertRenameRule({ pattern: 'MCDONALDS', matchType: 'exact', renameTo: "McDonald's", userId, actorRole: 'admin' });
+    if (!upserted.ok) throw new Error('unexpected refusal');
+
+    const result = await deleteRuleAndClearAction({}, formData({ ruleId: String(upserted.ruleId), from: '2026-03-01', to: '2026-03-31' }));
+    expect(result.message).toMatch(/2 transactions went back to the bank text/);
+    const display = (id: number) =>
+      sqlite.prepare('select display_description from transactions where id = ?').get(id) as { display_description: string | null };
+    expect(display(jan).display_description).toBeNull();
+    expect(display(mar).display_description).toBeNull();
+    expect(listRules('rename')).toHaveLength(0);
+  });
+
+  it('rejects a backwards range with a sentence, and changes nothing', async () => {
+    const { db, sqlite, add, userId } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const id = add('TIM HORTONS', '2026-01-15');
+    upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: userId, actorRole: 'admin' });
+    rerunEngine();
+    const ruleId = listRules('category')[0].id;
+
+    const result = await deleteRuleAndClearAction({}, formData({ ruleId: String(ruleId), from: '2026-03-31', to: '2026-01-01' }));
+    expect(result.error).toMatch(/ends before it starts/);
+    expect(listRules().find((r) => r.id === ruleId)).toBeDefined();
+    const row = sqlite.prepare('select category_id from transactions where id = ?').get(id) as { category_id: number | null };
+    expect(row.category_id).toBe(coffee);
+  });
+
+  it('rejects a malformed date', async () => {
+    const { db, userId } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: userId, actorRole: 'admin' });
+    const result = await deleteRuleAndClearAction({}, formData({ ruleId: String(listRules('category')[0].id), from: 'last tuesday', to: '' }));
+    expect(result.error).toMatch(/YYYY-MM-DD/);
+  });
+
+  it('refuses to clear a not-a-transfer override -- that would re-flag money as transfers', async () => {
+    const { sqlite, add, userId } = setup();
+    const id = add('PAYMENT - THANK YOU', '2026-02-02');
+    rerunEngine();
+    const upserted = upsertRuleFromCorrection({ pattern: 'PAYMENT - THANK YOU', matchType: 'exact', ruleKind: 'not_transfer', categoryId: null, createdBy: userId, actorRole: 'admin' });
+    if (!upserted.ok) throw new Error('unexpected refusal');
+
+    const result = await deleteRuleAndClearAction({}, formData({ ruleId: String(upserted.ruleId), from: '', to: '' }));
+    expect(result.error).toMatch(/can only be deleted/);
+    expect(listRules().find((r) => r.id === upserted.ruleId)).toBeDefined();
+    const row = sqlite.prepare('select is_transfer from transactions where id = ?').get(id) as { is_transfer: number };
+    expect(row.is_transfer).toBe(1);
+  });
+
+  it('errors cleanly when the rule is already gone', async () => {
+    setup();
+    const result = await deleteRuleAndClearAction({}, formData({ ruleId: '999999', from: '', to: '' }));
+    expect(result.error).toMatch(/no longer exists/);
+  });
+
+  it('refuses a non-admin caller', async () => {
+    setup();
+    vi.mocked(requireAdmin).mockRejectedValueOnce(new Error('not admin'));
+    await expect(deleteRuleAndClearAction({}, formData({ ruleId: '1', from: '', to: '' }))).rejects.toThrow(/not admin/);
+  });
+
+  it('leaves deleteRuleAction as the delete-only path: a category rule keeps its rows exactly as they were', async () => {
+    const { db, sqlite, add, userId } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const id = add('TIM HORTONS', '2026-01-15');
+    upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: userId, actorRole: 'admin' });
+    rerunEngine();
+    const ruleId = listRules('category')[0].id;
+
+    const result = await deleteRuleAction({}, formData({ ruleId: String(ruleId) }));
+    expect(result.message).toBe('Rule deleted.');
+    const row = sqlite.prepare('select category_id from transactions where id = ?').get(id) as { category_id: number | null };
+    expect(row.category_id).toBe(coffee);
+  });
+});
+
+describe('previewRerunAllAction / rerunAllAction take a date range too (v1.24.0)', () => {
+  it('previews and runs only the rows in range, and names the range in its message', async () => {
+    const { db, sqlite, add, userId } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const jan = add('TIM HORTONS', '2026-01-15');
+    const mar = add('TIM HORTONS', '2026-03-31');
+    upsertRuleFromCorrection({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: userId, actorRole: 'admin' });
+
+    expect(await previewRerunAllAction()).toEqual({ eligible: 2, wouldChange: 2 });
+    expect(await previewRerunAllAction('2026-03-01', null)).toEqual({ eligible: 1, wouldChange: 1 });
+
+    const result = await rerunAllAction({}, formData({ from: '2026-03-01', to: '2026-03-31' }));
+    expect(result.message).toMatch(/Re-ran the rules between 2026-03-01 and 2026-03-31: 1 of 1 eligible transaction changed/);
+    const read = (id: number) => sqlite.prepare('select category_id from transactions where id = ?').get(id) as { category_id: number | null };
+    expect(read(mar).category_id).toBe(coffee);
+    expect(read(jan).category_id).toBeNull();
+  });
+
+  it('rejects a backwards range rather than running over nothing', async () => {
+    setup();
+    const result = await rerunAllAction({}, formData({ from: '2026-03-31', to: '2026-01-01' }));
+    expect(result.error).toMatch(/ends before it starts/);
   });
 });

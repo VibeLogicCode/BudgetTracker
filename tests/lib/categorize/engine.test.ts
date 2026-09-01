@@ -9,6 +9,7 @@ import {
   buildContext,
   categorizeTransaction,
   clearCategory,
+  clearRuleFromTransactions,
   confirmCategory,
   deleteRenameRule,
   detectTransfer,
@@ -19,7 +20,9 @@ import {
   resolveRename,
   reviewQueueCount,
   reviewQueueIds,
+  ruleClearIds,
   ruleImpactCounts,
+  ruleImpactIds,
   runEngine,
   setRuleDisabled,
   setTransactionDisplayName,
@@ -1112,5 +1115,287 @@ describe('ruling R4, fix round 2 (item BJ): setTransferFlag refuses over the rul
 
     expect(setTransferFlag({ transactionId: txnId, isTransfer: true, userId: memberId, actorRole: 'member' })).toEqual({ ok: true });
     expect(exactRuleOwner(merchant, 'not_transfer')).toBeNull();
+  });
+});
+
+/**
+ * v1.24.0 (owner ask: "user deletes the rule but nothing gets fixed... delete rule and remove it
+ * from transactions, all or for a date range"). Two things are being pinned here, and the first
+ * matters more than it looks: ruleImpactIds must agree EXACTLY with ruleImpactCounts, because the
+ * rules table shows the count and the dialog's button acts on the ids. If those two definitions
+ * ever drift, the app states a number it does not honour -- which is worse than stating none.
+ */
+describe('ruleImpactIds (v1.24.0: the ids behind the "Affects" figure)', () => {
+  function threeMonths() {
+    const fixture = setup();
+    const coffee = categoryIdByName(fixture.db, 'Coffee');
+    const jan = fixture.add('TIM HORTONS', -1000, '2026-01-15');
+    const feb = fixture.add('TIM HORTONS', -1100, '2026-02-01');
+    const mar = fixture.add('TIM HORTONS', -1200, '2026-03-31');
+    const upserted = upsertRuleFromCorrection({
+      pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category',
+      categoryId: coffee, createdBy: fixture.userId, actorRole: 'admin',
+    });
+    if (!upserted.ok) throw new Error('unexpected refusal');
+    runEngine([jan, feb, mar]);
+    return { ...fixture, coffee, jan, feb, mar, ruleId: upserted.ruleId };
+  }
+
+  it('with no scope, returns exactly as many ids as ruleImpactCounts reports for the same rule', () => {
+    const { db, add, ruleId, jan, feb, mar } = threeMonths();
+    // Noise the two definitions must both exclude, in the same way: a hand-decided row and a
+    // row at a merchant this rule does not reach.
+    const manual = add('TIM HORTONS', -700, '2026-02-10');
+    db.run(sql`update transactions set category_id = ${categoryIdByName(db, 'Groceries')}, categorization_source = 'manual' where id = ${manual}`);
+    add('SOME OTHER SHOP', -500, '2026-02-11');
+
+    const ids = ruleImpactIds(ruleId);
+    expect(ids).toEqual([jan, feb, mar]);
+    expect(ids).toHaveLength(ruleImpactCounts().get(ruleId)!);
+  });
+
+  it('a date range narrows it, and BOTH bounds are inclusive', () => {
+    const { ruleId, jan, feb, mar } = threeMonths();
+    expect(ruleImpactIds(ruleId, { from: '2026-02-01', to: '2026-03-31' })).toEqual([feb, mar]);
+    expect(ruleImpactIds(ruleId, { from: '2026-01-15', to: '2026-02-01' })).toEqual([jan, feb]);
+    // One-sided ranges: null/absent means unbounded on that side.
+    expect(ruleImpactIds(ruleId, { from: '2026-03-31' })).toEqual([mar]);
+    expect(ruleImpactIds(ruleId, { to: '2026-01-15' })).toEqual([jan]);
+    expect(ruleImpactIds(ruleId, { from: null, to: null })).toEqual([jan, feb, mar]);
+  });
+
+  it('an unknown ruleId resolves to no ids at all', () => {
+    threeMonths();
+    expect(ruleImpactIds(999999)).toEqual([]);
+  });
+
+  it('rename: matches ruleImpactCounts for the same rule', () => {
+    const { add, userId } = setup();
+    add('MCDONALDS', -900, '2026-01-05');
+    add('MCDONALDS', -900, '2026-02-05');
+    const upserted = upsertRenameRule({ pattern: 'MCDONALDS', matchType: 'exact', renameTo: "McDonald's", userId, actorRole: 'admin' });
+    if (!upserted.ok) throw new Error('unexpected refusal');
+    expect(ruleImpactIds(upserted.ruleId)).toHaveLength(ruleImpactCounts().get(upserted.ruleId)!);
+  });
+
+  it('transfer: matches ruleImpactCounts, which for this kind means the rows NOT yet flagged', () => {
+    const { add, userId } = setup();
+    const id = add('E-TRANSFER SENT J DOE', -5000, '2026-02-02');
+    const upserted = upsertRuleFromCorrection({
+      pattern: 'E-TRANSFER SENT J DOE', matchType: 'exact', ruleKind: 'transfer',
+      categoryId: null, createdBy: userId, actorRole: 'admin',
+    });
+    if (!upserted.ok) throw new Error('unexpected refusal');
+    expect(ruleImpactIds(upserted.ruleId)).toEqual([id]);
+    expect(ruleImpactIds(upserted.ruleId)).toHaveLength(ruleImpactCounts().get(upserted.ruleId)!);
+    // Once flagged, the FORWARD-looking "affects" set is empty -- and the set a CLEAR would write
+    // to is the mirror image. This asymmetry is the whole reason ruleClearIds exists.
+    runEngine([id]);
+    expect(ruleImpactIds(upserted.ruleId)).toEqual([]);
+    expect(ruleClearIds(upserted.ruleId)).toEqual([id]);
+  });
+});
+
+describe('clearRuleFromTransactions (v1.24.0: "we can set those transactions as uncategorized")', () => {
+  function categorized() {
+    const fixture = setup();
+    const coffee = categoryIdByName(fixture.db, 'Coffee');
+    const jan = fixture.add('TIM HORTONS', -1000, '2026-01-15');
+    const feb = fixture.add('TIM HORTONS', -1100, '2026-02-14');
+    const mar = fixture.add('TIM HORTONS', -1200, '2026-03-31');
+    const upserted = upsertRuleFromCorrection({
+      pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category',
+      categoryId: coffee, createdBy: fixture.userId, actorRole: 'admin',
+    });
+    if (!upserted.ok) throw new Error('unexpected refusal');
+    runEngine([jan, feb, mar]);
+    return { ...fixture, coffee, jan, feb, mar, ruleId: upserted.ruleId };
+  }
+
+  it('clears exactly the scoped rows and leaves rows outside the range untouched', () => {
+    const { sqlite, coffee, jan, feb, mar, ruleId } = categorized();
+    const result = clearRuleFromTransactions({ ruleId, scope: { from: '2026-02-01', to: '2026-02-28' } });
+    expect(result).toEqual({ rowsCleared: 1 });
+    expect(readTxn(sqlite, feb)).toMatchObject({ category_id: null, categorization_source: 'none', confidence: null });
+    expect(readTxn(sqlite, jan)).toMatchObject({ category_id: coffee, categorization_source: 'rule' });
+    expect(readTxn(sqlite, mar)).toMatchObject({ category_id: coffee, categorization_source: 'rule' });
+  });
+
+  it('with no scope, clears every row the rule set', () => {
+    const { sqlite, jan, feb, mar, ruleId } = categorized();
+    expect(clearRuleFromTransactions({ ruleId })).toEqual({ rowsCleared: 3 });
+    for (const id of [jan, feb, mar]) {
+      expect(readTxn(sqlite, id)).toMatchObject({ category_id: null, categorization_source: 'none' });
+    }
+  });
+
+  it('a cleared row genuinely comes back to the review queue (REVIEW_WHERE, not just the columns)', () => {
+    const { jan, feb, mar, ruleId } = categorized();
+    expect(reviewQueueCount()).toBe(0); // all three settled by the rule
+    clearRuleFromTransactions({ ruleId });
+    expect(reviewQueueIds().sort()).toEqual([jan, feb, mar].sort());
+    expect(reviewQueueCount()).toBe(3);
+  });
+
+  it('NEVER clears a manually-categorized row, whatever its date', () => {
+    const { db, sqlite, add, ruleId } = categorized();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const manual = add('TIM HORTONS', -700, '2026-02-20');
+    db.run(sql`update transactions set category_id = ${groceries}, categorization_source = 'manual' where id = ${manual}`);
+
+    clearRuleFromTransactions({ ruleId });
+    expect(readTxn(sqlite, manual)).toMatchObject({ category_id: groceries, categorization_source: 'manual' });
+    expect(reviewQueueIds()).not.toContain(manual);
+  });
+
+  it('NEVER clears a split row -- its parts ARE its categorization (spec ruling 2a)', () => {
+    const { db, sqlite, add, coffee, ruleId } = categorized();
+    const split = add('TIM HORTONS', -2000, '2026-02-21');
+    db.run(sql`update transactions set category_id = ${coffee}, categorization_source = 'rule' where id = ${split}`);
+    db.run(sql`insert into transaction_splits (txn_id, category_id, amount_cents, created_at)
+               values (${split}, ${coffee}, -2000, ${nowIso()})`);
+
+    clearRuleFromTransactions({ ruleId });
+    expect(readTxn(sqlite, split)).toMatchObject({ category_id: coffee, categorization_source: 'rule' });
+  });
+
+  it('does NOT untrain: the Bayes set is fed only by manual confirmations, never by a rule', () => {
+    const { db, sqlite, add, userId, ruleId } = categorized();
+    const restaurants = categoryIdByName(db, 'Restaurants');
+    // A manual confirmation is the ONLY thing that ever feeds the Bayes set (confirmCategory's
+    // train() is its single writer), so the training below belongs to a HUMAN decision at this
+    // merchant, not to the rule being cleared. Read straight off the table rather than through
+    // classify(), which needs a runner-up category and a margin over the threshold before it
+    // returns anything -- that gate would make this assertion pass vacuously.
+    const trained = add('TIM HORTONS', -800, '2026-02-22');
+    confirmCategory({ transactionId: trained, categoryId: restaurants, userId, createRule: false, actorRole: 'admin' });
+    const training = () => sqlite.prepare('select token, category_id, count from bayes_tokens order by token, category_id').all();
+    const before = training();
+    expect(before.length).toBeGreaterThan(0);
+
+    clearRuleFromTransactions({ ruleId });
+    expect(training()).toEqual(before);
+  });
+
+  it('does NOT re-run the other rules, so a broader rule cannot silently re-categorize the cleared rows', () => {
+    const { db, sqlite, jan, feb, mar, ruleId, userId } = categorized();
+    const restaurants = categoryIdByName(db, 'Restaurants');
+    upsertRuleFromCorrection({
+      pattern: 'TIM', matchType: 'contains', ruleKind: 'category',
+      categoryId: restaurants, createdBy: userId, actorRole: 'admin',
+    });
+    clearRuleFromTransactions({ ruleId });
+    for (const id of [jan, feb, mar]) {
+      expect(readTxn(sqlite, id)).toMatchObject({ category_id: null, categorization_source: 'none' });
+    }
+  });
+
+  it('transfer: clears the flag on the rows it already flagged, without inventing an override rule', () => {
+    const { sqlite, add, userId } = setup();
+    const jan = add('E-TRANSFER SENT J DOE', -5000, '2026-01-10');
+    const feb = add('E-TRANSFER SENT J DOE', -5000, '2026-02-10');
+    const upserted = upsertRuleFromCorrection({
+      pattern: 'E-TRANSFER SENT J DOE', matchType: 'exact', ruleKind: 'transfer',
+      categoryId: null, createdBy: userId, actorRole: 'admin',
+    });
+    if (!upserted.ok) throw new Error('unexpected refusal');
+    runEngine([jan, feb]);
+    expect(readTxn(sqlite, jan).is_transfer).toBe(1);
+
+    const result = clearRuleFromTransactions({ ruleId: upserted.ruleId, scope: { from: '2026-02-01' } });
+    expect(result).toEqual({ rowsCleared: 1 });
+    expect(readTxn(sqlite, feb).is_transfer).toBe(0);
+    expect(readTxn(sqlite, jan).is_transfer).toBe(1);
+    // setTransferFlag's rule housekeeping (which would have created a 'not_transfer' override)
+    // is deliberately NOT on this path -- a bulk revert must not author a brand-new rule.
+    expect(listRules('not_transfer')).toHaveLength(0);
+  });
+
+  it('not_transfer: returns 0 and writes nothing -- re-flagging rows AS transfers is not a revert', () => {
+    const { sqlite, add, userId } = setup();
+    const id = add('PAYMENT - THANK YOU', 50000, '2026-02-02');
+    runEngine([id]);
+    expect(readTxn(sqlite, id).is_transfer).toBe(1);
+    const upserted = upsertRuleFromCorrection({
+      pattern: 'PAYMENT - THANK YOU', matchType: 'exact', ruleKind: 'not_transfer',
+      categoryId: null, createdBy: userId, actorRole: 'admin',
+    });
+    if (!upserted.ok) throw new Error('unexpected refusal');
+
+    expect(clearRuleFromTransactions({ ruleId: upserted.ruleId })).toEqual({ rowsCleared: 0 });
+    expect(readTxn(sqlite, id).is_transfer).toBe(1);
+    expect(ruleClearIds(upserted.ruleId)).toEqual([]);
+  });
+
+  it('rename: IGNORES the date range and reverts every row, because a bounded revert would unwind later', () => {
+    const { sqlite, add, userId } = setup();
+    const jan = add('MCDONALDS', -900, '2026-01-05');
+    const mar = add('MCDONALDS', -900, '2026-03-05');
+    const upserted = upsertRenameRule({ pattern: 'MCDONALDS', matchType: 'exact', renameTo: "McDonald's", userId, actorRole: 'admin' });
+    if (!upserted.ok) throw new Error('unexpected refusal');
+    const display = (id: number) =>
+      sqlite.prepare('select display_description, display_source from transactions where id = ?').get(id) as {
+        display_description: string | null;
+        display_source: string | null;
+      };
+    expect(display(jan).display_description).toBe("McDonald's");
+
+    // A range that names only March: both rows still revert, and the rule is gone.
+    expect(clearRuleFromTransactions({ ruleId: upserted.ruleId, scope: { from: '2026-03-01' } })).toEqual({ rowsCleared: 2 });
+    expect(display(jan)).toMatchObject({ display_description: null, display_source: null });
+    expect(display(mar)).toMatchObject({ display_description: null, display_source: null });
+    expect(listRules('rename')).toHaveLength(0);
+  });
+
+  it('an unknown ruleId clears nothing', () => {
+    const { sqlite, jan, coffee } = categorized();
+    expect(clearRuleFromTransactions({ ruleId: 999999 })).toEqual({ rowsCleared: 0 });
+    expect(readTxn(sqlite, jan)).toMatchObject({ category_id: coffee });
+  });
+});
+
+/**
+ * v1.24.0: "date should be on re-apply logic too". A bounded re-apply is safe for every kind
+ * because re-applying only ever ADDS -- which is exactly why the bound is offered here and refused
+ * for a rename revert.
+ */
+describe('scoped re-apply (v1.24.0: a date range on eligibleForRerun / rerunEngine / applyRuleNow)', () => {
+  function twoMonths() {
+    const fixture = setup();
+    const coffee = categoryIdByName(fixture.db, 'Coffee');
+    const jan = fixture.add('TIM HORTONS', -1000, '2026-01-15');
+    const mar = fixture.add('TIM HORTONS', -1200, '2026-03-31');
+    const upserted = upsertRuleFromCorrection({
+      pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category',
+      categoryId: coffee, createdBy: fixture.userId, actorRole: 'admin',
+    });
+    if (!upserted.ok) throw new Error('unexpected refusal');
+    return { ...fixture, coffee, jan, mar, ruleId: upserted.ruleId };
+  }
+
+  it('eligibleForRerun honours both bounds inclusively, and still honours accountId', () => {
+    const { accountId, jan, mar } = twoMonths();
+    expect(eligibleForRerun()).toEqual([jan, mar]);
+    expect(eligibleForRerun({ from: '2026-02-01' })).toEqual([mar]);
+    expect(eligibleForRerun({ to: '2026-01-15' })).toEqual([jan]);
+    expect(eligibleForRerun({ from: '2026-01-15', to: '2026-03-31' })).toEqual([jan, mar]);
+    expect(eligibleForRerun({ accountId, from: '2026-03-31' })).toEqual([mar]);
+    expect(eligibleForRerun({ accountId: accountId + 999, from: '2026-01-01' })).toEqual([]);
+  });
+
+  it('rerunEngine only looks at the rows in range', () => {
+    const { sqlite, coffee, jan, mar } = twoMonths();
+    const result = rerunEngine({ from: '2026-02-01' });
+    expect(result).toMatchObject({ processed: 1, changed: 1 });
+    expect(readTxn(sqlite, mar).category_id).toBe(coffee);
+    expect(readTxn(sqlite, jan).category_id).toBeNull();
+  });
+
+  it('previewRuleReapply and applyRuleNow take the same range, and agree with each other', () => {
+    const { sqlite, coffee, jan, mar, ruleId } = twoMonths();
+    expect(previewRuleReapply(ruleId, { from: '2026-02-01' })).toEqual({ eligible: 1, wouldChange: 1 });
+    expect(applyRuleNow(ruleId, { from: '2026-02-01' })).toMatchObject({ processed: 1, changed: 1 });
+    expect(readTxn(sqlite, mar).category_id).toBe(coffee);
+    expect(readTxn(sqlite, jan).category_id).toBeNull();
   });
 });

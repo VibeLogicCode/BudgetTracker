@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray, isNotNull, isNull, lte, ne, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { loanPayments, transactions, transactionSplits } from '@/db/schema';
 import { nowIso } from '@/lib/clock';
@@ -271,18 +271,59 @@ export function runEngine(txnIds: number[]): EngineResult {
   return result;
 }
 
-export function eligibleForRerun(scope: { accountId?: number } = {}): number[] {
-  const where = scope.accountId === undefined ? ELIGIBLE : and(ELIGIBLE, eq(transactions.accountId, scope.accountId));
+/**
+ * v1.24.0 (owner ask: "can we do date range on this... date should be on re-apply logic too").
+ * Inclusive ISO `YYYY-MM-DD` bounds on transactions.date; null/undefined on either side means
+ * unbounded on that side, so `{}` is "all time" and stays the default everywhere.
+ *
+ * One shape for both directions of the same question -- what a rule is about to ADD (a scoped
+ * re-apply: eligibleForRerun/rerunEngine/eligibleForRuleReapply/previewRuleReapply/applyRuleNow)
+ * and what it is about to REMOVE (ruleImpactIds/ruleClearIds/clearRuleFromTransactions) -- because
+ * a person setting "from / to" in one dialog and then the other must not have to learn that the
+ * two ends of the range mean something different depending on which button they pressed.
+ *
+ * Always applied as SQL `gte`/`lte`, never as a JavaScript filter over materialized ids: the
+ * bounded case exists precisely because the unbounded one is large, and narrowing after fetching
+ * every id would give up the whole point (transactions_date_idx, schema.ts, serves it).
+ */
+export interface RuleScope {
+  /** Inclusive lower bound on transactions.date, or null/undefined for "no lower bound". */
+  from?: string | null;
+  /** Inclusive upper bound on transactions.date, or null/undefined for "no upper bound". */
+  to?: string | null;
+}
+
+/**
+ * The two optional date predicates, ready to spread into an `and(...)`. drizzle's `and` drops
+ * `undefined` members, so an unbounded side costs nothing and no caller needs a branch.
+ * Deliberately one helper rather than the same two ternaries repeated at each of the six call
+ * sites below -- the bug this shape prevents is one call site quietly using `>` where the others
+ * use `>=`, which is invisible until somebody's boundary transaction goes missing.
+ */
+function dateBounds(scope: RuleScope) {
+  return [
+    scope.from ? gte(transactions.date, scope.from) : undefined,
+    scope.to ? lte(transactions.date, scope.to) : undefined,
+  ] as const;
+}
+
+export function eligibleForRerun(scope: RuleScope & { accountId?: number } = {}): number[] {
   return getDb()
     .select({ id: transactions.id })
     .from(transactions)
-    .where(where)
+    .where(
+      and(
+        ELIGIBLE,
+        scope.accountId === undefined ? undefined : eq(transactions.accountId, scope.accountId),
+        ...dateBounds(scope),
+      ),
+    )
     .orderBy(asc(transactions.id))
     .all()
     .map((row) => row.id);
 }
 
-export function rerunEngine(scope: { accountId?: number } = {}): EngineResult {
+export function rerunEngine(scope: RuleScope & { accountId?: number } = {}): EngineResult {
   return runEngine(eligibleForRerun(scope));
 }
 
@@ -339,10 +380,16 @@ export function previewRerun(txnIds: number[]): RerunPreview {
  * text". category rules DO need the full simulation -- categorizeTransaction checks for a
  * transfer FIRST, so a merchant a transfer rule also claims must not be attributed to a category
  * rule that would never actually fire for it.
+ *
+ * v1.24.0: takes a RuleScope. A BOUNDED re-apply is safe for every kind because re-applying only
+ * ever ADDS -- a row outside the range is simply not looked at, and nothing about it is left
+ * inconsistent by having been skipped. (That is exactly the asymmetry that makes a bounded CLEAR
+ * unsafe for renames; see clearRuleFromTransactions' own docblock.) The bound is handed to
+ * eligibleForRerun, so it is applied in SQL before any id is materialized.
  */
-function eligibleForRuleReapply(rule: MerchantRuleRecord): number[] {
+function eligibleForRuleReapply(rule: MerchantRuleRecord, scope: RuleScope = {}): number[] {
   if (rule.ruleKind === 'rename') return [];
-  const ids = eligibleForRerun();
+  const ids = eligibleForRerun(scope);
   if (ids.length === 0) return [];
   const rows = selectRowsByIds(ids);
   const eligible = rows.filter((row) => (row.categoryId === null || row.source === 'bayes') && row.hasSplits === 0);
@@ -361,10 +408,10 @@ function eligibleForRuleReapply(rule: MerchantRuleRecord): number[] {
 }
 
 /** Per-rule "Apply now" preview: the confirm text before the click. */
-export function previewRuleReapply(ruleId: number): RerunPreview {
+export function previewRuleReapply(ruleId: number, scope: RuleScope = {}): RerunPreview {
   const rule = listRules().find((r) => r.id === ruleId);
   if (!rule) return { eligible: 0, wouldChange: 0 };
-  return previewRerun(eligibleForRuleReapply(rule));
+  return previewRerun(eligibleForRuleReapply(rule, scope));
 }
 
 /**
@@ -373,10 +420,10 @@ export function previewRuleReapply(ruleId: number): RerunPreview {
  * writing a second categorization loop -- the "never overwrite a human decision" invariant lives
  * in ELIGIBLE/eligibleForRerun once, and every caller of runEngine inherits it for free.
  */
-export function applyRuleNow(ruleId: number): EngineResult {
+export function applyRuleNow(ruleId: number, scope: RuleScope = {}): EngineResult {
   const rule = listRules().find((r) => r.id === ruleId);
   if (!rule) return { processed: 0, categorized: 0, transfers: 0, skipped: 0, changed: 0 };
-  return runEngine(eligibleForRuleReapply(rule));
+  return runEngine(eligibleForRuleReapply(rule, scope));
 }
 
 /**
@@ -495,6 +542,247 @@ export function ruleImpactCounts(ctx: CategorizeContext = buildContext()): Map<n
   }
 
   return counts;
+}
+
+/**
+ * v1.24.0 (owner ask: "user deletes the rule but nothing gets fixed... delete rule and remove it
+ * from transactions"). The IDS behind ruleImpactCounts' figure for ONE rule, optionally bounded to
+ * a date range. Not a second definition of "affects": each branch below is the same predicate
+ * ruleImpactCounts' own branch for that kind uses, narrowed from `count(*)` to a list of ids and
+ * from every rule to this one. That sameness is the whole point -- the dialog that says "41
+ * transactions were categorized by this rule" reads its 41 from here, and the rules table's
+ * "Affects" column reads its 41 from ruleImpactCounts, so a divergence between the two functions
+ * would be a number on screen that the button underneath it does not honour.
+ * tests/lib/categorize/engine.test.ts pins the equality directly for exactly that reason.
+ *
+ *  - category: non-manual, non-split rows re-simulated through categorizeTransaction and kept
+ *    when THIS rule is the one that wins. Deliberately WIDER than ELIGIBLE (which treats an
+ *    already-'rule'-sourced row as settled) -- see ruleImpactCounts' own docblock: a rule that
+ *    already set 200 rows is affecting all 200 right now, and a 'rule'-sourced row is precisely
+ *    what somebody clearing this rule wants cleared. One simulation per DISTINCT merchant, cached:
+ *    categorizeTransaction reads nothing but the merchant text and the rule list, exactly as
+ *    ruleImpactCounts' `group by normalized_merchant` already assumes.
+ *  - transfer: rows carrying this exact merchant text whose stored is_transfer is currently
+ *    FALSE -- what flipping the flag on would change. Note this is the FORWARD-looking set, which
+ *    is what "Affects" means for this kind and is NOT the set a clear writes to; ruleClearIds
+ *    (below) explains that polarity flip at length.
+ *  - not_transfer: rows with that exact merchant text currently flagged TRUE.
+ *  - rename: rows currently carrying display_source = 'rename' whose merchant this rule resolves.
+ *
+ * The splits check stays inside `.where()`, never the select list -- a drizzle column reference
+ * interpolated into a raw `sql` fragment used as a SELECT-list value is not table-qualified, so
+ * the correlated subquery's bare `id` would resolve against transaction_splits' OWN id column and
+ * match every row the moment ANY split exists anywhere. transactionHasSplits' docblock (below)
+ * carries the long version of this warning; selectRowsByIds carries the version for the same trap
+ * hit from the other direction.
+ *
+ * Read-only; never called from a path that writes (clearRuleFromTransactions calls it BEFORE
+ * opening its transaction, and passes the resulting ids in).
+ */
+export function ruleImpactIds(ruleId: number, scope: RuleScope = {}, ctx: CategorizeContext = buildContext()): number[] {
+  const db = getDb();
+  const rule = ctx.rules.find((r) => r.id === ruleId);
+  if (!rule) return [];
+  const bounds = dateBounds(scope);
+
+  if (rule.ruleKind === 'transfer' || rule.ruleKind === 'not_transfer') {
+    // Exact-match-only kinds, so attribution needs no simulation -- the unique index on
+    // (pattern, match_type, rule_kind) makes "this rule's own rows" just "this exact merchant
+    // text", the same shortcut ruleImpactCounts and eligibleForRuleReapply already take.
+    return db
+      .select({ id: transactions.id })
+      .from(transactions)
+      .where(
+        and(
+          eq(transactions.normalizedMerchant, rule.pattern),
+          eq(transactions.isTransfer, rule.ruleKind === 'not_transfer'),
+          ...bounds,
+        ),
+      )
+      .orderBy(asc(transactions.id))
+      .all()
+      .map((row) => row.id);
+  }
+
+  if (rule.ruleKind === 'rename') {
+    const rows = db
+      .select({ id: transactions.id, normalizedMerchant: transactions.normalizedMerchant })
+      .from(transactions)
+      .where(and(eq(transactions.displaySource, 'rename'), ...bounds))
+      .orderBy(asc(transactions.id))
+      .all();
+    const resolved = new Map<string, boolean>();
+    return rows
+      .filter((row) => {
+        let hit = resolved.get(row.normalizedMerchant);
+        if (hit === undefined) {
+          hit = matchRule(row.normalizedMerchant, 'rename', ctx.rules)?.id === ruleId;
+          resolved.set(row.normalizedMerchant, hit);
+        }
+        return hit;
+      })
+      .map((row) => row.id);
+  }
+
+  const rows = db
+    .select({ id: transactions.id, normalizedMerchant: transactions.normalizedMerchant })
+    .from(transactions)
+    .where(
+      and(
+        ne(transactions.categorizationSource, 'manual'),
+        sql`not exists (select 1 from ${transactionSplits} where ${transactionSplits.txnId} = ${transactions.id})`,
+        ...bounds,
+      ),
+    )
+    .orderBy(asc(transactions.id))
+    .all();
+  const verdict = new Map<string, boolean>();
+  return rows
+    .filter((row) => {
+      let hit = verdict.get(row.normalizedMerchant);
+      if (hit === undefined) {
+        const outcome = categorizeTransaction({ id: 0, normalizedMerchant: row.normalizedMerchant }, ctx);
+        hit = !outcome.isTransfer && outcome.matchedRuleId === ruleId;
+        verdict.set(row.normalizedMerchant, hit);
+      }
+      return hit;
+    })
+    .map((row) => row.id);
+}
+
+/**
+ * The rows a CLEAR would actually write to -- which is ruleImpactIds for a category rule and
+ * deliberately NOT ruleImpactIds for a transfer rule.
+ *
+ * v1.24.0 finding, worth spelling out because it looks like an inconsistency and is not: "affects"
+ * and "clear" point in OPPOSITE directions for the transfer kind. ruleImpactCounts defines a
+ * transfer rule's impact as the currently-UNFLAGGED rows carrying its merchant text -- what
+ * applying it would change -- because that column exists to answer "is this rule doing anything?"
+ * for a rule whose work is still ahead of it. Un-applying it is the mirror image: the rows it
+ * already flagged, i.e. the currently-FLAGGED ones. Using the "affects" set to clear would set
+ * is_transfer = false on rows where it is already false and leave every genuinely flagged row
+ * alone -- a button that reports success and changes nothing. So the polarity flips here, and
+ * previewRuleClearAction states THIS count rather than the "Affects" column's, so the dialog's
+ * number and the write agree. For every other kind the two sets coincide and this is a pass-through.
+ *
+ * `rename` drops the scope on the floor (see clearRuleFromTransactions for why a bounded rename
+ * revert is not a thing this codebase offers), so the preview count and the write agree there too.
+ * `not_transfer` is empty because clearing it is refused outright.
+ */
+export function ruleClearIds(ruleId: number, scope: RuleScope = {}, ctx: CategorizeContext = buildContext()): number[] {
+  const rule = ctx.rules.find((r) => r.id === ruleId);
+  if (!rule) return [];
+  if (rule.ruleKind === 'not_transfer') return [];
+  if (rule.ruleKind === 'rename') return ruleImpactIds(ruleId, {}, ctx);
+  if (rule.ruleKind === 'category') return ruleImpactIds(ruleId, scope, ctx);
+  return getDb()
+    .select({ id: transactions.id })
+    .from(transactions)
+    .where(and(eq(transactions.normalizedMerchant, rule.pattern), eq(transactions.isTransfer, true), ...dateBounds(scope)))
+    .orderBy(asc(transactions.id))
+    .all()
+    .map((row) => row.id);
+}
+
+/**
+ * v1.24.0, the owner's actual ask: "when we add a merchant rule and reapply, if the user messes up
+ * the transactions get updated. User deletes the rule but nothing gets fixed... delete rule and
+ * remove it from transactions, all or for a date range."
+ *
+ * THERE IS NO UNDO, and that is a fact about the schema, not a choice: nothing anywhere records a
+ * transaction's category from BEFORE a rule touched it (categorization_source is only
+ * 'rule' | 'bayes' | 'manual' | 'none' and no rule id is ever stored -- schema.ts's transactions
+ * table), so "put it back the way it was" is not information this application has. Clearing
+ * therefore means UNCATEGORIZED: category_id = NULL, source = 'none', confidence = NULL, which is
+ * exactly the state REVIEW_WHERE (below) selects, so every cleared row reappears in Needs review
+ * for a person to decide deliberately. The dialogs say all of this in plain words before the click
+ * -- that is the only "safety" available here, and pretending otherwise would be worse.
+ *
+ * Nothing is re-run afterward. Asked for literally ("we can set those transactions as
+ * uncategorized"), and right on its own terms: re-running the remaining rules would let a broader
+ * rule immediately re-categorize the very rows just cleared, so the button would look like it had
+ * done nothing at all. A person who wants the other rules applied presses Run rules, deliberately,
+ * and can see what that will do first.
+ *
+ * By kind:
+ *  - category: clears the ruleClearIds/ruleImpactIds rows. Does NOT untrain: every row in scope is
+ *    non-manual by construction, and the Bayes training set is only ever fed by a MANUAL decision
+ *    (confirmCategory's train() call is its only writer), so there is nothing of this rule's doing
+ *    in it to remove -- untraining here would corrupt counts that some human's confirmation, not
+ *    this rule, put there.
+ *  - transfer: writes is_transfer = false directly, on the currently-flagged rows (ruleClearIds'
+ *    polarity note). Deliberately NOT routed through setTransferFlag: that function does RULE
+ *    HOUSEKEEPING as part of its job (it creates the opposite-kind 'not_transfer' override, or
+ *    deletes the 'transfer' rule, per merchant), which is exactly right for one person un-flagging
+ *    one row and exactly wrong for a bulk revert whose whole purpose is to remove ONE rule and
+ *    leave the rest of the rule set untouched -- it would invent a brand-new override rule as a
+ *    side effect of deleting one.
+ *  - not_transfer: NOT SUPPORTED, returns 0 and writes nothing. "Clearing" a not_transfer override
+ *    would mean re-flagging its rows AS transfers, which is not a revert but a stronger positive
+ *    claim -- and transfers are excluded from every report and budget, so it would silently move
+ *    money out of every total. Delete-only for this kind; the UI does not offer the option, and
+ *    this guard is here so a stale form or a second session cannot reach it anyway.
+ *  - rename: the scope is IGNORED, always all rows, delegating to the deleteRenameRule flow (delete
+ *    the rule, then applyRenameRules over everything). A rename is stored as display_description +
+ *    display_source = 'rename' and applyRenameRules recomputes that from the rule set on every
+ *    pass, clearing any row whose rule no longer resolves. So a "bounded" rename revert would
+ *    leave the out-of-range rows carrying a display name whose rule is gone, and the NEXT rename
+ *    pass -- triggered by saving, disabling or deleting any other rename rule -- would clear them
+ *    too, silently, days later. All-or-nothing is the only stable answer, so the rename dialog
+ *    shows no date fields at all. It is also the one kind that is genuinely reversible in fact:
+ *    the bank's own text lives untouched in transactions.raw_description and a rename
+ *    only ever wrote the display columns, which is why that dialog's copy promises the original
+ *    descriptions back instead of warning about a category that cannot be recovered.
+ */
+export function clearRuleFromTransactions(input: { ruleId: number; scope?: RuleScope; at?: Date }): { rowsCleared: number } {
+  const ctx = buildContext();
+  const rule = ctx.rules.find((r) => r.id === input.ruleId);
+  if (!rule) return { rowsCleared: 0 };
+  if (rule.ruleKind === 'not_transfer') return { rowsCleared: 0 };
+  if (rule.ruleKind === 'rename') {
+    return { rowsCleared: deleteRenameRule({ pattern: rule.pattern, matchType: rule.matchType }).rowsCleared };
+  }
+
+  const ids = ruleClearIds(input.ruleId, input.scope ?? {}, ctx);
+  if (ids.length === 0) return { rowsCleared: 0 };
+
+  const at = nowIso(input.at ?? new Date());
+  let rowsCleared = 0;
+  // One unit of work: a crash midway through a 4000-row clear must not leave half the range
+  // uncategorized and half still carrying the rule's category, which is a state no screen in the
+  // app would explain.
+  getDb().transaction((tx) => {
+    for (let offset = 0; offset < ids.length; offset += ID_CHUNK) {
+      const chunk = ids.slice(offset, offset + ID_CHUNK);
+      // Chunked because SQLite has a bound-parameter ceiling and an unchunked id list has already
+      // bitten this codebase once (see the note in dedup.ts that ID_CHUNK itself points at).
+      rowsCleared +=
+        rule.ruleKind === 'category'
+          ? tx
+              .update(transactions)
+              .set({ categoryId: null, categorizationSource: 'none', confidence: null, updatedAt: at })
+              .where(
+                and(
+                  inArray(transactions.id, chunk),
+                  // Only rows that actually still carry something to clear, so the count returned
+                  // is the honest "N transactions changed" the result message states. The id set
+                  // is deliberately wider than this (it is the "Affects" set -- see
+                  // ruleImpactIds): a row this rule WOULD categorize but has not yet, because
+                  // nobody has re-run since the rule was written, is genuinely affected by the
+                  // rule and genuinely has nothing to clear.
+                  or(isNotNull(transactions.categoryId), ne(transactions.categorizationSource, 'none')),
+                ),
+              )
+              .run().changes
+          : tx
+              .update(transactions)
+              .set({ isTransfer: false, updatedAt: at })
+              .where(and(inArray(transactions.id, chunk), eq(transactions.isTransfer, true)))
+              .run().changes;
+    }
+  });
+
+  return { rowsCleared };
 }
 
 /**

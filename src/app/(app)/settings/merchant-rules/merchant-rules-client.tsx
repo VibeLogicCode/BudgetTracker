@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useActionState, useState } from 'react';
+import { useActionState, useEffect, useState } from 'react';
 import { FormError } from '@/components/FormError';
 import { SubmitButton } from '@/components/SubmitButton';
 import { Card, CardBody, CardFooter } from '@/components/ui/Card';
@@ -31,7 +31,9 @@ import {
   bulkDeleteRulesAction,
   bulkSetDisabledAction,
   deleteRuleAction,
+  deleteRuleAndClearAction,
   previewRerunAllAction,
+  previewRuleClearAction,
   rerunAllAction,
   saveRuleAction,
   setRuleDisabledAction,
@@ -104,6 +106,296 @@ function categoryLabelFor(id: number | null, categories: CategoryRecord[]): stri
   return parent ? `${parent.name} › ${category.name}` : category.name;
 }
 
+/**
+ * v1.24.0 (owner ask): "all date ranges or user chooses". One control, two dialogs -- Delete and
+ * clear, and Run rules -- because a person setting a range in one of them and then the other must
+ * meet the same two fields in the same order, not two different inventions.
+ *
+ * Deliberately NOT src/components/ui/DateRangePicker.tsx, which was checked first. That component
+ * is built for a page's `<form method="get">` (MUST-12.2: "a form control, not a router"): it is
+ * preset-driven (`range=this_month`, resolved SERVER-side against the app timezone), uses
+ * `defaultValue` so nothing re-renders as you type, and submits by pressing the page's own Search
+ * button. Both of those are wrong inside a dialog whose entire purpose is a live count that has to
+ * change AS the range changes -- that needs controlled inputs and no navigation at all -- and the
+ * two ends here are literal bounds handed to a server action, not a preset id anything resolves.
+ * Reusing it would have meant adding a second, contradictory mode to a component whose docblock
+ * pins its one mode down hard.
+ */
+type ScopeMode = 'all' | 'range';
+
+interface ScopeState {
+  mode: ScopeMode;
+  from: string;
+  to: string;
+}
+
+/**
+ * The dates as the SERVER will see them ('' means unbounded) plus the one client-side check worth
+ * making: a transposed pair. Both mutating actions refuse it again server-side (parseScope in
+ * actions.ts); this is here so the person is told in the dialog instead of after submitting, and
+ * so the preview call is not fired for a range that cannot mean anything.
+ */
+function scopeBounds(scope: ScopeState): { from: string; to: string; backwards: boolean } {
+  const from = scope.mode === 'range' ? scope.from : '';
+  const to = scope.mode === 'range' ? scope.to : '';
+  return { from, to, backwards: from !== '' && to !== '' && from > to };
+}
+
+function ScopeChoice({
+  name,
+  scope,
+  onChange,
+  backwards,
+}: {
+  /** Distinct radio-group name per dialog, so two mounted shells could never share a selection. */
+  name: string;
+  scope: ScopeState;
+  onChange: (next: ScopeState) => void;
+  backwards: boolean;
+}) {
+  return (
+    <div className="flex flex-col gap-3">
+      <fieldset className="flex flex-col gap-2">
+        <legend className="field-label">Apply to</legend>
+        <label className="flex min-h-11 items-center gap-2 text-sm text-ink sm:min-h-0">
+          <input
+            type="radio"
+            name={name}
+            value="all"
+            checked={scope.mode === 'all'}
+            onChange={() => onChange({ ...scope, mode: 'all' })}
+            className="accent-accent"
+          />
+          All time
+        </label>
+        <label className="flex min-h-11 items-center gap-2 text-sm text-ink sm:min-h-0">
+          <input
+            type="radio"
+            name={name}
+            value="range"
+            checked={scope.mode === 'range'}
+            onChange={() => onChange({ ...scope, mode: 'range' })}
+            className="accent-accent"
+          />
+          Date range
+        </label>
+      </fieldset>
+      {scope.mode === 'range' ? (
+        <div className="flex flex-wrap gap-3">
+          <Field label="From">
+            <input type="date" value={scope.from} onChange={(event) => onChange({ ...scope, from: event.target.value })} className={inputClass} />
+          </Field>
+          <Field label="To">
+            <input type="date" value={scope.to} onChange={(event) => onChange({ ...scope, to: event.target.value })} className={inputClass} />
+          </Field>
+        </div>
+      ) : null}
+      {backwards ? (
+        <p role="alert" className="text-xs font-medium text-negative-soft-fg">
+          That date range ends before it starts -- swap the From and To dates.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Dialogs 2 and 3 of v1.24.0, one component because the flow is identical and only the honest
+ * wording differs by kind:
+ *
+ *  - category / transfer: "this cannot be undone", because it genuinely cannot -- no column
+ *    anywhere records what a row's category (or transfer flag) was before a rule set it, so there
+ *    is nothing to restore from (see clearRuleFromTransactions in src/lib/categorize/engine.ts).
+ *    These two get the date range.
+ *  - rename: "descriptions go back to the text from your bank", because for a rename that is the
+ *    literal truth -- raw_description was never touched and the display columns are recomputed
+ *    from the rule set on every pass. So "cannot be undone" attaches to DELETING THE RULE here,
+ *    never to the transactions, and the copy must not borrow the other kinds' warning. No date
+ *    range at all: a bounded rename revert silently unwinds on the next rename pass, which is why
+ *    the engine refuses to offer one.
+ *
+ * The count is fetched from the server rather than reused from the row's own "Affects" figure, even
+ * though the two agree for category and rename rules: for a TRANSFER rule they are opposite sets
+ * ("Affects" is the rows the rule would still flag; clearing touches the rows it already flagged --
+ * see ruleClearIds' docblock), and one dialog stating a number the button does not honour is worse
+ * than a moment of "Checking…".
+ */
+function ClearRuleDialog({
+  rule,
+  action,
+  onClose,
+}: {
+  rule: MerchantRuleRecord;
+  action: (formData: FormData) => void;
+  onClose: () => void;
+}) {
+  const isRename = rule.ruleKind === 'rename';
+  const [scope, setScope] = useState<ScopeState>({ mode: 'all', from: '', to: '' });
+  const { from, to, backwards } = scopeBounds(scope);
+  const [affected, setAffected] = useState<number | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (backwards) return;
+    // `live` guards against a slower earlier response landing after a faster later one and
+    // pinning a count that belongs to a range the person has already changed.
+    let live = true;
+    setAffected(null);
+    void previewRuleClearAction(rule.id, from === '' ? null : from, to === '' ? null : to).then((result) => {
+      if (!live) return;
+      setAffected(result.affected);
+      setPreviewError(result.error ?? null);
+    });
+    return () => {
+      live = false;
+    };
+  }, [rule.id, from, to, backwards]);
+
+  const count = affected === null ? null : `${affected} transaction${affected === 1 ? '' : 's'}`;
+
+  return (
+    <RowDialog
+      dialogId="clear-rule-dialog"
+      title={isRename ? 'Delete rule and restore original descriptions?' : 'Delete rule and clear it from transactions?'}
+      onClose={onClose}
+    >
+      {isRename ? (
+        <>
+          <p className="text-sm text-ink">
+            Deleting the rule cannot be undone. Descriptions it changed go back to the text from your bank.
+          </p>
+          <p className="text-sm text-ink">
+            Applies to every transaction this rule renamed{affected === null ? '' : ` -- ${affected} of them`}. No date range.
+          </p>
+        </>
+      ) : (
+        <>
+          <p className="text-sm text-ink">
+            <strong className="font-semibold">This cannot be undone.</strong>{' '}
+            {count === null
+              ? 'Checking how many transactions this rule has changed…'
+              : rule.ruleKind === 'transfer'
+                ? `${count} ${affected === 1 ? 'is' : 'are'} flagged as a transfer by this rule.`
+                : `${count} ${affected === 1 ? 'was' : 'were'} categorized by this rule.`}
+          </p>
+          {rule.ruleKind === 'transfer' ? (
+            <p className="text-sm text-ink">
+              Clearing removes the transfer flag, so they count as ordinary money again in every report and budget.
+              Whether they were flagged before this rule existed is not recorded and cannot be brought back.
+            </p>
+          ) : (
+            <p className="text-sm text-ink">
+              Clearing removes their category and returns them to Needs review. The category they had before this rule
+              is not recorded and cannot be brought back.
+            </p>
+          )}
+          <p className="text-sm text-ink">
+            Other rules are not re-run, so these stay {rule.ruleKind === 'transfer' ? 'unflagged' : 'uncategorized'} until
+            you run rules again.
+          </p>
+          <ScopeChoice name="clear-rule-scope" scope={scope} onChange={setScope} backwards={backwards} />
+        </>
+      )}
+      {previewError ? (
+        <p role="alert" className="text-xs font-medium text-negative-soft-fg">
+          {previewError}
+        </p>
+      ) : null}
+      <div className="flex gap-2">
+        <form action={action} onSubmit={onClose}>
+          <input type="hidden" name="ruleId" value={String(rule.id)} />
+          <input type="hidden" name="from" value={isRename ? '' : from} />
+          <input type="hidden" name="to" value={isRename ? '' : to} />
+          <SubmitButton variant="danger" size="sm" disabled={backwards || previewError !== null}>
+            {isRename ? 'Delete and restore' : 'Delete and clear'}
+          </SubmitButton>
+        </form>
+        <button type="button" className="btn btn--secondary btn--sm" onClick={onClose}>
+          Cancel
+        </button>
+      </div>
+    </RowDialog>
+  );
+}
+
+/**
+ * Dialog 4 of v1.24.0, and a deliberate REVERSAL of the note that used to sit on this page's
+ * inline "Re-run rules" panel (and is quoted in RowDialog.tsx's own when-to-use docblock as the
+ * worked example of a page-level panel that correctly stayed inline). That reasoning was sound on
+ * its own terms -- a re-run only ever adds, so there was nothing destructive to weigh -- but the
+ * owner asked for the dialog anyway (2026-09-01: "when we click re-run it should open a dialogue
+ * saying re-runs rules for all or specific date range... blurred popup with proper disclaimer"),
+ * and the reason is one this file could not see from inside its own decision: with delete-and-clear
+ * now asking the SAME "all time or a date range" question in a blurred dialog, leaving the re-run
+ * as an inline strip would teach that the two idioms mean different degrees of seriousness. One
+ * confirm idiom across the page is worth more than one panel's correctness in isolation.
+ *
+ * The counts are still previewed before the click, exactly as the inline panel did -- that part was
+ * never the problem -- only now they are recomputed whenever the range changes.
+ */
+function RunRulesDialog({ action, onClose }: { action: (formData: FormData) => void; onClose: () => void }) {
+  const [scope, setScope] = useState<ScopeState>({ mode: 'all', from: '', to: '' });
+  const { from, to, backwards } = scopeBounds(scope);
+  const [preview, setPreview] = useState<{ eligible: number; wouldChange: number } | null>(null);
+
+  useEffect(() => {
+    if (backwards) return;
+    let live = true;
+    setPreview(null);
+    void previewRerunAllAction(from === '' ? null : from, to === '' ? null : to).then((result) => {
+      if (live) setPreview(result);
+    });
+    return () => {
+      live = false;
+    };
+  }, [from, to, backwards]);
+
+  return (
+    <RowDialog dialogId="run-rules-dialog" title="Run rules now?" onClose={onClose}>
+      {/*
+        This wording is written from ELIGIBLE and applyRenameRules (src/lib/categorize/engine.ts),
+        not the other way round. "Transactions you haven't set by hand" would have been too
+        generous: the engine also skips a row a rule has already settled (source = 'rule' with a
+        category) and any row with splits, whose parts ARE its categorization. And renames are
+        already retroactive at save time, so a run genuinely has little left to do for them.
+      */}
+      <p className="text-sm text-ink">
+        Category rules are applied to transactions that are still uncategorized or were only auto-guessed. Anything you
+        categorized by hand, split into parts, or that a rule has already settled is left exactly as it is.
+      </p>
+      <p className="text-sm text-ink">
+        Renames are applied the moment you save a rename rule, so a run has little left to do for them.
+      </p>
+      <p className="text-sm text-ink">
+        {preview === null ? (
+          'Checking what a run would change…'
+        ) : preview.eligible === 0 ? (
+          'Nothing to run -- no eligible transaction is waiting.'
+        ) : (
+          <>
+            This will look at <strong className="font-semibold">{preview.eligible}</strong> transaction
+            {preview.eligible === 1 ? '' : 's'}; about <strong className="font-semibold">{preview.wouldChange}</strong>{' '}
+            would actually change.
+          </>
+        )}
+      </p>
+      <ScopeChoice name="run-rules-scope" scope={scope} onChange={setScope} backwards={backwards} />
+      <div className="flex gap-2">
+        <form action={action} onSubmit={onClose}>
+          <input type="hidden" name="from" value={from} />
+          <input type="hidden" name="to" value={to} />
+          <SubmitButton size="sm" disabled={backwards}>
+            Run rules
+          </SubmitButton>
+        </form>
+        <button type="button" className="btn btn--secondary btn--sm" onClick={onClose}>
+          Cancel
+        </button>
+      </div>
+    </RowDialog>
+  );
+}
+
 export function MerchantRulesClient({
   categories,
   rows,
@@ -157,6 +449,7 @@ export function MerchantRulesClient({
   const [disableState, setDisabled] = useActionState(setRuleDisabledAction, initial);
   const [applyState, applyNow] = useActionState(applyRuleNowAction, initial);
   const [rerunState, rerunAll] = useActionState(rerunAllAction, initial);
+  const [clearState, deleteAndClear] = useActionState(deleteRuleAndClearAction, initial);
 
   const [selected, setSelected] = useState<number[]>([]);
   const toggle = (id: number) => setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -168,10 +461,14 @@ export function MerchantRulesClient({
 
   const [editing, setEditing] = useState<RuleFormValues | null>(null);
   const [confirmingBulkDelete, setConfirmingBulkDelete] = useState(false);
-  const [rerunPreview, setRerunPreview] = useState<'idle' | 'loading' | { eligible: number; wouldChange: number }>('idle');
+  /** v1.24.0. Three nullable slots, one per dialog -- the same idiom `editing` already uses, so
+   *  each dialog is only ever mounted while it is open (RowDialog's own mount-once contract). */
+  const [deletingRule, setDeletingRule] = useState<MerchantRuleRecord | null>(null);
+  const [clearingRule, setClearingRule] = useState<MerchantRuleRecord | null>(null);
+  const [runningRules, setRunningRules] = useState(false);
 
-  const notice = saveState.message ?? deleteState.message ?? bulkDeleteState.message ?? bulkDisableState.message ?? disableState.message ?? applyState.message ?? rerunState.message;
-  const error = saveState.error ?? deleteState.error ?? bulkDeleteState.error ?? bulkDisableState.error ?? disableState.error ?? applyState.error ?? rerunState.error;
+  const notice = saveState.message ?? deleteState.message ?? bulkDeleteState.message ?? bulkDisableState.message ?? disableState.message ?? applyState.message ?? rerunState.message ?? clearState.message;
+  const error = saveState.error ?? deleteState.error ?? bulkDeleteState.error ?? bulkDisableState.error ?? disableState.error ?? applyState.error ?? rerunState.error ?? clearState.error;
 
   const selectedRules = rows.filter((rule) => selected.includes(rule.id));
   // Only rows on THIS page are resolvable to a real record for the confirm text below -- a
@@ -182,10 +479,46 @@ export function MerchantRulesClient({
     .filter((rule) => rule.ruleKind === 'rename')
     .reduce((sum, rule) => sum + (impactCounts[rule.id] ?? 0), 0);
 
-  async function loadRerunPreview() {
-    setRerunPreview('loading');
-    const result = await previewRerunAllAction();
-    setRerunPreview(result);
+  /**
+   * Dialog 1 of v1.24.0, replacing the `window.confirm` that RowMenuForm used to put up for this
+   * row's Delete. It says the one thing the old one-liner could not fit and the owner asked for:
+   * that the transactions this rule already changed KEEP what it gave them -- which is exactly why
+   * the second menu item (Delete and clear) has to exist at all.
+   *
+   * Never offered for a rename rule. A rename delete already reverts every row it set
+   * (deleteRuleAction -> deleteRenameRule), so this dialog's third sentence would be a plain lie
+   * for that kind; a rename row's single Delete opens the clear dialog instead, whose copy is
+   * written for what actually happens.
+   */
+  function deleteRuleDialog() {
+    if (!deletingRule) return null;
+    const isOverride = deletingRule.ruleKind === 'not_transfer';
+    return (
+      <RowDialog dialogId="delete-rule-dialog" title="Delete this rule?" onClose={() => setDeletingRule(null)}>
+        <p className="text-sm text-ink">
+          Deleting a rule cannot be undone. The rule stops matching future imports. Transactions it already changed keep
+          what it gave them.
+        </p>
+        {isOverride ? (
+          // Kind-true and worth the extra line: a not_transfer rule's whole job is vetoing the
+          // built-in card-payment patterns (detectTransfer, src/lib/categorize/engine.ts), so
+          // deleting it hands that merchant straight back to them.
+          <p className="text-sm text-ink">
+            Without this override, the card-payment patterns can flag that merchant as a transfer again the next time
+            rules run.
+          </p>
+        ) : null}
+        <div className="flex gap-2">
+          <form action={removeRule} onSubmit={() => setDeletingRule(null)}>
+            <input type="hidden" name="ruleId" value={String(deletingRule.id)} />
+            <SubmitButton variant="danger" size="sm">Delete rule</SubmitButton>
+          </form>
+          <button type="button" className="btn btn--secondary btn--sm" onClick={() => setDeletingRule(null)}>
+            Cancel
+          </button>
+        </div>
+      </RowDialog>
+    );
   }
 
   /**
@@ -338,7 +671,11 @@ export function MerchantRulesClient({
         <p>
           <strong className="font-semibold text-ink">Disable</strong> is a switch you can flip back; it stops a
           rule from matching without losing it, and reverts a rename rule&apos;s rows exactly like deleting one
-          would. <strong className="font-semibold text-ink">Delete</strong> is for a genuine mistake. A row marked{' '}
+          would. <strong className="font-semibold text-ink">Delete rule</strong> is for a genuine mistake: the rule
+          stops matching, and the transactions it already changed keep what it gave them.{' '}
+          <strong className="font-semibold text-ink">Delete rule and clear from transactions</strong> also takes the
+          category (or the transfer flag) back off those transactions and returns them to Needs review -- that part
+          cannot be undone, so it tells you how many are involved and asks first. A row marked{' '}
           <strong className="font-semibold text-ink">redundant</strong> is an exact rule a broader contains rule
           already covers with the identical outcome -- safe to prune.
         </p>
@@ -386,28 +723,14 @@ export function MerchantRulesClient({
           </div>
 
           <div className="flex flex-wrap items-center gap-3 border-t border-line pt-3">
-            {rerunPreview === 'idle' ? (
-              <button type="button" className="btn btn--secondary btn--sm" onClick={() => void loadRerunPreview()}>
-                Re-run rules
-              </button>
-            ) : rerunPreview === 'loading' ? (
-              <span className="text-sm text-muted">Checking what a re-run would change…</span>
-            ) : rerunPreview.eligible === 0 ? (
-              <span className="text-sm text-muted">Nothing to re-run -- no eligible transaction is waiting.</span>
-            ) : (
-              <div className="flex flex-wrap items-center gap-2 rounded-md border border-line p-3 text-sm">
-                <span className="text-ink">
-                  This will look at <strong className="font-semibold">{rerunPreview.eligible}</strong> uncategorized/rule-guessed
-                  transaction{rerunPreview.eligible === 1 ? '' : 's'}; about{' '}
-                  <strong className="font-semibold">{rerunPreview.wouldChange}</strong> would actually change. A hand-categorized
-                  transaction is never touched.
-                </span>
-                <form action={rerunAll} onSubmit={() => setRerunPreview('idle')}>
-                  <SubmitButton size="sm">Re-run now</SubmitButton>
-                </form>
-                <button type="button" className="btn btn--ghost btn--sm" onClick={() => setRerunPreview('idle')}>Cancel</button>
-              </div>
-            )}
+            {/* Label unchanged ("Re-run rules"): the page guide above names this control, and the
+                dialog it now opens explains itself in full. */}
+            <button type="button" className="btn btn--secondary btn--sm" onClick={() => setRunningRules(true)}>
+              Re-run rules
+            </button>
+            <span className="text-sm text-muted">
+              For all time, or a date range you choose.
+            </span>
           </div>
         </CardBody>
       </Card>
@@ -529,17 +852,37 @@ export function MerchantRulesClient({
                         <RowMenuForm action={setDisabled} fields={{ ruleId: String(rule.id), disabled: disabled ? '0' : '1' }}>
                           {disabled ? 'Enable' : 'Disable'}
                         </RowMenuForm>
-                        <RowMenuForm
-                          action={removeRule}
-                          fields={{ ruleId: String(rule.id) }}
-                          confirm={
-                            rule.ruleKind === 'rename' && impact > 0
-                              ? `Delete this rule? ${impact} transaction${impact === 1 ? '' : 's'} will revert to the bank's wording.`
-                              : 'Delete this rule? This cannot be undone.'
-                          }
-                        >
-                          Delete
-                        </RowMenuForm>
+                        {/*
+                          v1.24.0. Two delete items for a category or transfer rule -- "the rule
+                          only" and "the rule and what it did" -- because those are two genuinely
+                          different acts and the old single Delete quietly did the first while a
+                          person expected the second (the owner's report: "user deletes the rule
+                          but nothing gets fixed").
+
+                          A RENAME rule keeps ONE item: deleting it already reverts every row it
+                          set, so a "delete only" choice does not exist for that kind and offering
+                          one would be a menu entry that cannot do what it says.
+
+                          A NOT_TRANSFER rule keeps ONE item too, for the opposite reason: clearing
+                          it would mean re-flagging its rows AS transfers, which is a stronger
+                          claim than a revert and would drop that money out of every report and
+                          budget. Delete-only, and the engine refuses it as well
+                          (clearRuleFromTransactions) so a stale form cannot reach it.
+
+                          Both items now open a RowDialog. The window.confirm they replace could
+                          not hold the disclosure this decision needs, and the owner asked for the
+                          same blurred popup the notes editor uses.
+                        */}
+                        {rule.ruleKind === 'rename' ? (
+                          <RowMenuButton onSelect={() => setClearingRule(rule)}>Delete rule</RowMenuButton>
+                        ) : (
+                          <RowMenuButton onSelect={() => setDeletingRule(rule)}>Delete rule</RowMenuButton>
+                        )}
+                        {rule.ruleKind === 'category' || rule.ruleKind === 'transfer' ? (
+                          <RowMenuButton onSelect={() => setClearingRule(rule)}>
+                            Delete rule and clear from transactions
+                          </RowMenuButton>
+                        ) : null}
                       </RowMenu>
                     </td>
                   </tr>
@@ -580,6 +923,13 @@ export function MerchantRulesClient({
 
       {ruleDialog()}
       {bulkDeleteDialog()}
+      {deleteRuleDialog()}
+      {/* `key` on the rule id: RowDialog's mount-once contract (its own docblock) means switching
+          which row a mounted dialog acts on must force a remount, not reuse one instance. */}
+      {clearingRule ? (
+        <ClearRuleDialog key={clearingRule.id} rule={clearingRule} action={deleteAndClear} onClose={() => setClearingRule(null)} />
+      ) : null}
+      {runningRules ? <RunRulesDialog action={rerunAll} onClose={() => setRunningRules(false)} /> : null}
     </div>
   );
 }

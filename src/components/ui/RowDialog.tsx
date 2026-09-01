@@ -83,10 +83,20 @@ import { Card, CardBody, CardHeader } from '@/components/ui/Card';
  * merchant-rules-client.tsx's bulk-delete confirmation are the worked example of the second case
  * (see their own docblocks for the conversion). Their PERSISTENT status line ("installed, v1 ·
  * 182 of 190 present") is not a decision at all and deliberately stays outside any dialog --
- * only the yes/no moment belongs in one. A page-level panel that only ever previews a safe,
- * reversible, non-destructive operation with nothing to lose (merchant-rules-client.tsx's own
- * "Re-run rules" preview is the example that was checked and left alone) is not "a confirm" in
- * this sense either, and has no obligation to become a dialog just for being page-level.
+ * only the yes/no moment belongs in one.
+ *
+ * The one carve-out this docblock used to name -- "a page-level panel that only ever previews a
+ * safe, reversible, non-destructive operation with nothing to lose has no obligation to become a
+ * dialog", with merchant-rules-client.tsx's inline "Re-run rules" preview as its worked example --
+ * was RETIRED in v1.24.0 at the owner's ask, and the reason is worth keeping rather than quietly
+ * deleting. The reasoning was locally sound: a re-run only ever adds, so there was nothing
+ * destructive to weigh. What it could not see is that the same page's Delete-and-clear now asks
+ * the SAME question ("all time, or a date range?") in a dialog, and leaving the re-run inline
+ * would teach that the two idioms signal different degrees of seriousness when they do not. So
+ * the line above is now simply: page-level decisions are dialogs. "Safe" is a reason to write
+ * calmer COPY inside the dialog, not a reason to use a different shell -- and a page-level
+ * READOUT that asks for no decision at all still belongs outside one, exactly as the pack's
+ * status line does. See RunRulesDialog in merchant-rules-client.tsx for the conversion.
  */
 const DIALOG_FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';

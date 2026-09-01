@@ -12,12 +12,15 @@ import {
 } from '@/lib/canadian-pack';
 import {
   applyRuleNow,
+  clearRuleFromTransactions,
   deleteRenameRule,
   eligibleForRerun,
   previewRerun,
   rerunEngine,
+  ruleClearIds,
   setRuleDisabled,
   upsertRenameRule,
+  type RuleScope,
 } from '@/lib/categorize/engine';
 import {
   deleteRule,
@@ -25,6 +28,7 @@ import {
   ruleOwnedError,
   upsertRuleFromCorrection,
   type MerchantRuleRecord,
+  type RuleKind,
 } from '@/lib/categorize/rules';
 
 export interface RuleActionState {
@@ -118,6 +122,133 @@ export async function deleteRuleAction(_prev: RuleActionState, formData: FormDat
   deleteRule(target.id);
   revalidatePath('/settings/merchant-rules');
   return { message: 'Rule deleted.' };
+}
+
+/**
+ * v1.24.0. An `<input type="date">` submits '' when empty and a real `YYYY-MM-DD` otherwise, so
+ * '' is normalized to null (unbounded) BEFORE zod sees it -- otherwise every "All time" submission
+ * would fail the format check it is not supposed to be subject to.
+ */
+function optionalDate(value: FormDataEntryValue | string | null | undefined): string | null {
+  const text = typeof value === 'string' ? value.trim() : '';
+  return text.length === 0 ? null : text;
+}
+
+/**
+ * Both ends optional; both, when present, a real ISO date. `from > to` is REFUSED with a sentence
+ * rather than accepted as an empty range: an empty range silently clears/re-runs nothing, so a
+ * transposed pair would look exactly like "there was nothing to do" -- which is the one answer a
+ * person cannot tell from a bug. ISO `YYYY-MM-DD` strings compare correctly as strings, so this
+ * needs no Date parsing (and must not do any: it would drag a timezone into a pure text
+ * comparison -- see src/lib/dates.ts on why this codebase keeps dates as ISO text).
+ */
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+const scopeSchema = z
+  .object({
+    from: z.string().regex(ISO_DATE, 'Use a YYYY-MM-DD date.').nullable(),
+    to: z.string().regex(ISO_DATE, 'Use a YYYY-MM-DD date.').nullable(),
+  })
+  .refine((scope) => scope.from === null || scope.to === null || scope.from <= scope.to, {
+    message: 'That date range ends before it starts -- swap the From and To dates.',
+  });
+
+function parseScope(from: unknown, to: unknown): { ok: true; scope: RuleScope } | { ok: false; error: string } {
+  const parsed = scopeSchema.safeParse({ from: optionalDate(from as string | null), to: optionalDate(to as string | null) });
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? 'Invalid date range.' };
+  return { ok: true, scope: parsed.data };
+}
+
+/** "All time" or "between X and Y", for a result message that repeats back what was actually done. */
+function scopeWording(scope: RuleScope): string {
+  if (scope.from && scope.to) return ` between ${scope.from} and ${scope.to}`;
+  if (scope.from) return ` dated ${scope.from} or later`;
+  if (scope.to) return ` dated ${scope.to} or earlier`;
+  return '';
+}
+
+const plural = (n: number) => (n === 1 ? '' : 's');
+
+/**
+ * v1.24.0. The count the "Delete rule and clear it from transactions" dialog states, recomputed
+ * every time the date range changes. Plain RPC, not form-bound, exactly like previewRerunAllAction
+ * below -- it writes nothing and is called from client code on every range edit.
+ *
+ * Reads ruleClearIds, NOT ruleImpactCounts: for a transfer rule those two point in opposite
+ * directions (see ruleClearIds' own docblock -- "affects" is the rows the rule would still flag,
+ * clearing touches the rows it already flagged), and the number in the dialog has to be the one
+ * the button underneath it will actually honour.
+ *
+ * `kind` comes back so the dialog can pick its wording from the server's own view of the rule
+ * rather than only from the row it was rendered with; `null` means the rule is already gone. An
+ * unusable range (transposed, or a malformed date the date input cannot actually produce) reports
+ * 0 with the reason in `error` -- the client refuses to submit while that is set, and
+ * deleteRuleAndClearAction refuses again server-side, so nothing rests on this preview alone.
+ */
+export async function previewRuleClearAction(
+  ruleId: number,
+  from: string | null,
+  to: string | null,
+): Promise<{ affected: number; kind: RuleKind | null; error?: string }> {
+  await requireAdmin();
+  const target = findRuleOr(ruleId);
+  if (!target) return { affected: 0, kind: null, error: 'That rule no longer exists.' };
+  const scope = parseScope(from, to);
+  if (!scope.ok) return { affected: 0, kind: target.ruleKind, error: scope.error };
+  // A rename revert is all-or-nothing (clearRuleFromTransactions' docblock), so the range is
+  // dropped here too -- the preview must count what the write will really touch.
+  const effective = target.ruleKind === 'rename' ? {} : scope.scope;
+  return { affected: ruleClearIds(target.id, effective).length, kind: target.ruleKind };
+}
+
+/**
+ * v1.24.0, the owner's ask in full: "delete rule and un-apply from transactions... showing user
+ * this cannot be undone, this will update transactions, all date ranges or user chooses".
+ *
+ * CLEAR FIRST, DELETE SECOND, and the order is load-bearing: attribution is derived, never stored
+ * (no rule id lives on a transaction -- see ruleImpactIds), so the rule must still exist for
+ * categorizeTransaction to resolve `matchedRuleId` to it. Deleting first would leave the rows it
+ * set completely unattributable and clear nothing at all.
+ *
+ * A rename rule takes today's path unchanged and ignores the dates: clearRuleFromTransactions
+ * delegates to deleteRenameRule, which deletes the rule and then reapplies the rename pass over
+ * every row -- so the deleteRule below is a no-op for that kind (a delete of an id that is already
+ * gone), kept unconditional rather than branched so no future kind can slip through undeleted.
+ */
+export async function deleteRuleAndClearAction(_prev: RuleActionState, formData: FormData): Promise<RuleActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  await requireAdmin();
+  const parsed = z.object({ ruleId: z.coerce.number().int().positive() }).safeParse({ ruleId: formData.get('ruleId') });
+  if (!parsed.success) return { error: 'Invalid request.' };
+  const scope = parseScope(formData.get('from'), formData.get('to'));
+  if (!scope.ok) return { error: scope.error };
+
+  const target = findRuleOr(parsed.data.ruleId);
+  if (!target) return { error: 'That rule no longer exists.' };
+  if (target.ruleKind === 'not_transfer') {
+    // Never offered by the UI; refused here so a stale form or a second session cannot reach it.
+    // Re-flagging rows AS transfers would move money out of every report -- see
+    // clearRuleFromTransactions' docblock. Delete-only for this kind.
+    return { error: 'A "not a transfer" rule can only be deleted -- clearing it would re-flag those transactions as transfers.' };
+  }
+
+  const effective = target.ruleKind === 'rename' ? {} : scope.scope;
+  const { rowsCleared } = clearRuleFromTransactions({ ruleId: target.id, scope: effective });
+  deleteRule(target.id);
+  revalidatePath('/settings/merchant-rules');
+  revalidatePath('/transactions');
+
+  if (target.ruleKind === 'rename') {
+    return { message: `Rename rule deleted; ${rowsCleared} transaction${plural(rowsCleared)} went back to the bank text.` };
+  }
+  const where = scopeWording(effective);
+  if (rowsCleared === 0) return { message: `Rule deleted. No transaction${where} needed clearing.` };
+  if (target.ruleKind === 'transfer') {
+    return { message: `Rule deleted and the transfer flag cleared on ${rowsCleared} transaction${plural(rowsCleared)}${where}.` };
+  }
+  return {
+    message: `Rule deleted and cleared from ${rowsCleared} transaction${plural(rowsCleared)}${where} -- ${rowsCleared === 1 ? 'it is' : 'they are'} back in Needs review.`,
+  };
 }
 
 const idList = z
@@ -237,21 +368,38 @@ export async function applyRuleNowAction(_prev: RuleActionState, formData: FormD
  * per-rule scope to keep it narrow the way Apply now's does. Not bound to a <form> the way the
  * mutating actions above are -- called directly from client code as a plain RPC (any exported
  * async function in a 'use server' file is callable that way, form or no form).
+ *
+ * v1.24.0: takes an optional date range ("so when we click re-run it should open a dialogue saying
+ * re-runs rules for all or specific date range"). Both parameters default to null, so every
+ * existing caller and the unbounded case are unchanged. An unusable range reports zeros -- the
+ * dialog refuses to submit while its own check says the range is backwards, and rerunAllAction
+ * refuses again with a sentence, so nothing rests on this preview alone.
  */
-export async function previewRerunAllAction(): Promise<{ eligible: number; wouldChange: number }> {
+export async function previewRerunAllAction(
+  from: string | null = null,
+  to: string | null = null,
+): Promise<{ eligible: number; wouldChange: number }> {
   await requireAdmin();
-  return previewRerun(eligibleForRerun());
+  const scope = parseScope(from, to);
+  if (!scope.ok) return { eligible: 0, wouldChange: 0 };
+  return previewRerun(eligibleForRerun(scope.scope));
 }
 
-export async function rerunAllAction(_prev: RuleActionState, _formData: FormData): Promise<RuleActionState> {
+export async function rerunAllAction(_prev: RuleActionState, formData: FormData): Promise<RuleActionState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
 
   await requireAdmin();
-  const result = rerunEngine();
+  const scope = parseScope(formData.get('from'), formData.get('to'));
+  if (!scope.ok) return { error: scope.error };
+
+  const result = rerunEngine(scope.scope);
   revalidatePath('/settings/merchant-rules');
   revalidatePath('/transactions');
-  if (result.processed === 0) return { message: 'Nothing to re-run -- no eligible transaction is waiting.' };
-  return { message: `Re-ran the rules: ${result.changed} of ${result.processed} eligible transaction${result.processed === 1 ? '' : 's'} changed.` };
+  const where = scopeWording(scope.scope);
+  if (result.processed === 0) return { message: `Nothing to re-run -- no eligible transaction${where} is waiting.` };
+  return {
+    message: `Re-ran the rules${where}: ${result.changed} of ${result.processed} eligible transaction${plural(result.processed)} changed.`,
+  };
 }
 
 /**
