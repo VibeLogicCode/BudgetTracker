@@ -448,8 +448,14 @@ describe('a v1.11.x database (no 0011 applied) boots and migrates cleanly', () =
       // EVERY row survives, with the same ids. This is what makes 0011 a real rebuild rather
       // than 0010's deliberate row loss -- read 0010_balances.sql's header for why that
       // shortcut was allowed exactly once and must not be copied.
+      //
+      // This is containment, not exact equality: the pre-migration db here only ever saw
+      // 0000-0010, so re-opening it against the real drizzle/ folder applies EVERY pending
+      // migration in one pass -- not just 0011. A later one of those (0020) seeds its own new
+      // 'Bill' row, which is legitimate and must not make this test stale. What actually needs
+      // proving is that nothing from `before` was lost, not that nothing was ever added.
       const after = upgraded.sqlite.prepare('select id, name, kind from warranty_item_types order by id').all();
-      expect(after).toEqual(before);
+      expect(after).toEqual(expect.arrayContaining(before));
 
       // The item still resolves through its type.
       const joined = upgraded.sqlite
@@ -490,13 +496,17 @@ describe('a v1.11.x database (no 0011 applied) boots and migrates cleanly', () =
     try {
       // A row written AFTER 0011 had already run must survive a reboot -- if the rebuild
       // re-applied, DROP TABLE would have taken the type (and, by cascade, its item and its
-      // installments) with it.
-      const { n } = again.sqlite.prepare('select count(*) as n from bill_installments').get() as { n: number };
+      // installments) with it. Check the SPECIFIC rows this test wrote, rather than counting
+      // every kind = 'bill' type: migration 0020 seeds its own 'Bill' type, and a raw count
+      // would conflate that unrelated row with the one this test is actually pinning.
+      const type = again.sqlite.prepare('select id from warranty_item_types where id = ?').get(typeId);
+      expect(type).toEqual({ id: typeId });
+      const item = again.sqlite.prepare('select id from warranty_items where id = ?').get(itemId);
+      expect(item).toEqual({ id: itemId });
+      const { n } = again.sqlite
+        .prepare('select count(*) as n from bill_installments where item_id = ?')
+        .get(itemId) as { n: number };
       expect(n).toBe(1);
-      const types = again.sqlite.prepare(`select count(*) as n from warranty_item_types where kind = 'bill'`).get() as {
-        n: number;
-      };
-      expect(types.n).toBe(1);
     } finally {
       again.sqlite.close();
     }

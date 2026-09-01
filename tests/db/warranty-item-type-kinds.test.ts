@@ -80,7 +80,15 @@ describe('migration 0004 — fresh database', () => {
 
   it('backfills kind = subscription for the pre-existing Subscription row, warranty for Laptop/Appliance', () => {
     current = createTestDb();
-    const rows = current.sqlite.prepare('select name, kind from warranty_item_types order by id').all() as {
+    // Scoped to the five names 0003+0004 actually seed, not the whole table -- a later
+    // migration (0020) seeds its own 'Bill' type, which has nothing to do with 0004's backfill
+    // and would otherwise make this test stale the moment it landed.
+    const rows = current.sqlite
+      .prepare(
+        `select name, kind from warranty_item_types
+           where name in ('Laptop', 'Appliance', 'Subscription', 'Contract', 'Loan') order by id`,
+      )
+      .all() as {
       name: string;
       kind: string;
     }[];
@@ -119,14 +127,24 @@ describe('migration 0004 — fresh database', () => {
 
   it('is idempotent across a normal reboot (migrate() runs on every openDatabase call)', () => {
     current = createTestDb();
-    current.sqlite.close();
-    const reopened = openDatabase(current.path);
-    const names = reopened.sqlite
+    const before = current.sqlite
       .prepare('select name from warranty_item_types order by name')
       .all()
       .map((r) => (r as { name: string }).name);
-    expect(names).toEqual(['Appliance', 'Contract', 'Laptop', 'Loan', 'Subscription']);
-    reopened.sqlite.close();
+    current.sqlite.close();
+    const reopened = openDatabase(current.path);
+    try {
+      // The point is idempotency across the reboot -- the same set before and after -- not
+      // pinning today's exact seeded list, which a later migration (0020's 'Bill') is free to
+      // extend without making this test stale.
+      const names = reopened.sqlite
+        .prepare('select name from warranty_item_types order by name')
+        .all()
+        .map((r) => (r as { name: string }).name);
+      expect(names).toEqual(before);
+    } finally {
+      reopened.sqlite.close();
+    }
   });
 });
 

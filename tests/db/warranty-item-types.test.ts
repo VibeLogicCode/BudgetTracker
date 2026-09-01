@@ -174,11 +174,15 @@ describe('migration 0003 — constraints', () => {
 
   it('deletes an unused type cleanly', () => {
     current = createTestDb();
+    // Baseline captured from the live seed rather than hardcoded: the full migration chain
+    // seeds Laptop/Appliance/Subscription (0003), Contract/Loan (0004), and Bill (0020) -- see
+    // tests/db/warranty-item-type-kinds.test.ts and tests/db/migration-0011.test.ts. What this
+    // test actually cares about is that the insert-then-delete round trip leaves no residue,
+    // not the exact seeded count, which the next migration to seed a type would otherwise break.
+    const before = (current.sqlite.prepare('select count(*) as c from warranty_item_types').get() as { c: number }).c;
     const id = insertType(current, 'Unused');
     current.sqlite.prepare('delete from warranty_item_types where id = ?').run(id);
-    // 5, not 3: the full migration chain (0003 + 0004) seeds Laptop/Appliance/Subscription
-    // AND Contract/Loan -- see tests/db/warranty-item-type-kinds.test.ts.
-    expect(current.sqlite.prepare('select count(*) as c from warranty_item_types').get()).toEqual({ c: 5 });
+    expect(current.sqlite.prepare('select count(*) as c from warranty_item_types').get()).toEqual({ c: before });
   });
 
   it('does NOT re-tokenize the FTS row when only type_id changes', () => {

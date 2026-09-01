@@ -90,13 +90,14 @@ function seedLoanWithRuleAndPayment(): { typeId: number; itemId: number; txnId: 
 }
 
 describe('listItemTypes', () => {
-  it('returns the seeded types (including v1.2.2 Contract/Loan) ordered case-insensitively by name', () => {
+  it('returns the seeded types (including v1.2.2 Contract/Loan and v1.27.0 Bill) ordered case-insensitively by name', () => {
     setup();
     createItemType('zebra', 'warranty');
     createItemType('Anvil', 'warranty');
     expect(listItemTypes().map((t) => t.name)).toEqual([
       'Anvil',
       'Appliance',
+      'Bill',
       'Contract',
       'Laptop',
       'Loan',
@@ -120,6 +121,7 @@ describe('listItemTypes', () => {
       Subscription: 'subscription',
       Contract: 'contract',
       Loan: 'loan',
+      Bill: 'bill',
     });
   });
 });
@@ -159,9 +161,13 @@ describe('createItemType', () => {
 
   it('rejects a duplicate that differs only in case, with a readable message', () => {
     setup();
+    const before = listItemTypes().length;
     expect(() => createItemType('laptop', 'warranty')).toThrowError(/already exists/i);
     expect(() => createItemType('LAPTOP', 'warranty')).toThrowError(/Laptop/);
-    expect(listItemTypes()).toHaveLength(5);
+    // The point is that the rejected attempts left no phantom row behind -- compare against
+    // the seeded baseline captured above, not a hardcoded count that the next seeded type
+    // (e.g. migration 0020's Bill) would otherwise make stale.
+    expect(listItemTypes()).toHaveLength(before);
   });
 });
 
@@ -347,7 +353,10 @@ describe('typeUsageCount / listItemTypesWithUsage', () => {
     expect(typeUsageCount(laptop)).toBe(2);
     expect(typeUsageCount(appliance)).toBe(1);
     const usage = Object.fromEntries(listItemTypesWithUsage().map((t) => [t.name, t.usageCount]));
-    expect(usage).toEqual({ Appliance: 1, Contract: 0, Laptop: 2, Loan: 0, Subscription: 0 });
+    // Scoped to the names this test actually put items against -- not the whole seeded set, so
+    // a later migration's own seed type (e.g. 0020's Bill, which naturally has a usageCount of
+    // 0 here too) does not need to be listed just to keep this test passing.
+    expect(usage).toMatchObject({ Appliance: 1, Contract: 0, Laptop: 2, Loan: 0, Subscription: 0 });
   });
 });
 

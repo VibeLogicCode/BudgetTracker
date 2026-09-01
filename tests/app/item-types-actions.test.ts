@@ -28,8 +28,8 @@ const CROSS_ORIGIN = new Headers({ origin: 'http://evil.local', host: 'nas.local
 
 // v1.2.2: the seed now inserts five types (Laptop/Appliance/Subscription from 0003, plus
 // Contract/Loan added by 0004) -- see tests/db/warranty-item-type-kinds.test.ts for the
-// migration-level assertion of this exact set.
-const SEEDED_NAMES = ['Appliance', 'Contract', 'Laptop', 'Loan', 'Subscription'];
+// migration-level assertion of this exact set. v1.27.0 (migration 0020) adds a sixth: Bill.
+const SEEDED_NAMES = ['Appliance', 'Bill', 'Contract', 'Laptop', 'Loan', 'Subscription'];
 
 let current: TestDb | null = null;
 afterEach(() => {

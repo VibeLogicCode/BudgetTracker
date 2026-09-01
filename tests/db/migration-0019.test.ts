@@ -63,7 +63,7 @@ describe('drizzle/0019_import_audit.sql', () => {
     expect(indexes).toContain('transactions_import_idx');
   });
 
-  it('records itself in the journal, immediately after 0018, and is the newest', () => {
+  it('records itself in the journal, immediately after 0018', () => {
     const journal = JSON.parse(fs.readFileSync(path.join(root, 'drizzle/meta/_journal.json'), 'utf8')) as {
       entries: { idx: number; tag: string }[];
     };
@@ -71,9 +71,9 @@ describe('drizzle/0019_import_audit.sql', () => {
     expect(entry).toMatchObject({ idx: 19, tag: '0019_import_audit' });
     const idxs = journal.entries.map((e) => e.idx).sort((a, b) => a - b);
     expect(idxs.indexOf(19)).toBe(idxs.indexOf(18) + 1);
-    // This suite now owns the "I am the newest" claim, handed on from 0018's suite the way 0017
-    // handed it to 0018. Whichever migration is last owns it; nobody else asserts it.
-    expect(Math.max(...idxs)).toBe(19);
+    // The "I am the newest" claim moved on to 0020's suite, the way this file took it from 0018
+    // and 0018 took it from 0017. Whichever migration is last owns it, and nobody else asserts it
+    // -- otherwise every new migration breaks a test that was never about the new migration.
   });
 
   it('the breakpoint marker never appears inside a comment', () => {

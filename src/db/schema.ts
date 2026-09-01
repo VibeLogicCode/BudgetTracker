@@ -835,7 +835,10 @@ export const warrantyReceipts = sqliteTable(
 
 /**
  * Admin-maintained item types (spec section 19.2, amended v1.2.2 section 19 -- kinds).
- * Mirrors drizzle/0003_warranty_item_types.sql and drizzle/0004_item_type_kinds.sql.
+ * Mirrors drizzle/0003_warranty_item_types.sql, drizzle/0004_item_type_kinds.sql and
+ * drizzle/0020_bill_item_type.sql (which seeds the 'Bill' row 0011 forgot when it widened
+ * `kind` to admit 'bill' -- the feature shipped complete but unreachable without creating the
+ * type by hand).
  *
  * NOT represented here -- these exist ONLY in those raw SQL files (MUST-3.4 / MUST-19.3):
  *   - CHECK (is_subscription IN (0,1)) and CHECK (length(trim(name)) BETWEEN 1 AND 60)  (0003)
