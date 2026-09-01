@@ -518,8 +518,15 @@ export function MerchantRulesClient({
   redundantCount: number;
   /** Sparse: absent means 0 (item 12's ruleImpactCounts never stores a zero entry). */
   impactCounts: Record<number, number>;
-  /** ruleId -> the contains rule id that already covers it (item 10's redundancy detection). */
-  redundantByRuleId: Record<number, number>;
+  /**
+   * ruleId -> the rule that already covers it with the identical outcome (item 10's redundancy
+   * detection, widened for 'word' -- see findRedundantRules' own docblock in
+   * src/lib/categorize/rules.ts for the coverage matrix). Carries the covering rule's OWN pattern
+   * and match type, not just its id: a household cannot judge "is this safe to delete" from a
+   * number alone, and the covering rule is frequently off the current page, so the row has to be
+   * handed everything it needs to name it without a second lookup.
+   */
+  redundantByRuleId: Record<number, { id: number; pattern: string; matchType: MatchType }>;
   rulesPackRows: RulesExportRow[];
   canadianPack: CanadianPackState;
   canadianInstallPreview: CanadianPackInstallPreview | null;
@@ -784,8 +791,8 @@ export function MerchantRulesClient({
           <strong className="font-semibold text-ink">Delete rule and clear from transactions</strong> also takes the
           category (or the transfer flag) back off those transactions and returns them to Needs review -- that part
           cannot be undone, so it tells you how many are involved and asks first. A row marked{' '}
-          <strong className="font-semibold text-ink">redundant</strong> is an exact rule a broader contains rule
-          already covers with the identical outcome -- safe to prune.
+          <strong className="font-semibold text-ink">redundant</strong> is already matched by a broader rule with
+          the identical outcome -- filter to it below for what that means and what to do about it.
         </p>
       </PageGuide>
 
@@ -819,8 +826,14 @@ export function MerchantRulesClient({
             {kindChip(KIND_LABEL.transfer, 'transfer', kindCounts.transfer)}
             {kindChip(KIND_LABEL.not_transfer, 'not_transfer', kindCounts.not_transfer)}
             {redundantCount > 0 ? (
+              // v1.27.0, owner finding: a redundant rule changes NO categorization today --
+              // longest-pattern-wins means the covering rule already produces the identical
+              // outcome, so this is a tidy-up, not a fault. 'warning' carried the same visual
+              // weight as something broken, which is exactly the confusion the owner reported
+              // ("a yellow banner catches eye but i dont know what to do"). Same tone as the
+              // Preset chip below when active -- neither filter is flagging a problem.
               <Link href={chipHref(currentQuery, { redundant: redundantOnly ? null : '1' })} className="inline-flex min-h-11 items-center sm:min-h-0">
-                <Pill tone={redundantOnly ? 'warning' : 'neutral'}>{`Redundant (${redundantCount})`}</Pill>
+                <Pill tone={redundantOnly ? 'accent' : 'neutral'}>{`Redundant (${redundantCount})`}</Pill>
               </Link>
             ) : null}
             {presetCount > 0 ? (
@@ -864,6 +877,41 @@ export function MerchantRulesClient({
             ) : null}
             <button type="button" className="btn btn--ghost btn--sm" onClick={() => setSelected([])}>Clear selection</button>
           </div>
+        </div>
+      ) : null}
+
+      {/*
+        v1.27.0, owner finding: the redundant explanation used to live in the last sentence of a
+        long PageGuide paragraph, and the chip itself said nothing -- an eye-catching filter with
+        no explanation in view and no action offered. This is IN VIEW the moment the filter is
+        active, states both halves of why a household should care (nothing changes today; the
+        risk is later), and offers the one action that follows from it.
+
+        "Delete these N" reuses the SAME bulk-delete path the multi-select toolbar above already
+        uses (setSelected + confirmingBulkDelete -> bulkDeleteDialog -> bulkDelete), rather than a
+        second delete mechanism: it selects every redundant rule (redundantByRuleId carries every
+        one of them, not just this page's -- see that prop's own docblock) and opens the same
+        confirm. That dialog already states the count and, for a rename rule among the selection,
+        the transactions that would revert.
+      */}
+      {redundantOnly && redundantCount > 0 ? (
+        <div className="flex flex-col gap-3 rounded-lg border border-line bg-neutral-soft px-4 py-3">
+          <p className="text-sm text-ink">
+            Each of these rules matches text a broader rule already resolves to the identical outcome, so deleting
+            them changes nothing about how transactions are categorized today. The reason to still care: if you
+            later edit the broader rule to a different category, a redundant rule underneath it keeps overriding it
+            for that one merchant string -- silently, with no sign on screen that your edit did not take effect.
+          </p>
+          <button
+            type="button"
+            className="btn btn--secondary btn--sm w-fit"
+            onClick={() => {
+              setSelected(Object.keys(redundantByRuleId).map(Number));
+              setConfirmingBulkDelete(true);
+            }}
+          >
+            {`Delete these ${redundantCount}`}
+          </button>
         </div>
       ) : null}
 
@@ -922,7 +970,20 @@ export function MerchantRulesClient({
                         <span className="ml-2 badge badge--blue" title={`Installed by the ${rule.packSource} preset pack, v${rule.packVersion}`}>preset</span>
                       ) : null}
                       {coveredBy !== undefined ? (
-                        <span className="ml-2 badge badge--amber" title={`Already covered by rule #${coveredBy}`}>redundant</span>
+                        // v1.27.0, owner finding: this used to name only a rule ID, in a `title`
+                        // attribute nobody sees without hovering -- a household cannot judge "is
+                        // this safe to delete" without seeing WHAT covers it. Both the badge and
+                        // the covering rule's own pattern/match type are in view here, not just on
+                        // hover (the title is kept too, for anyone who does hover).
+                        <span
+                          className="ml-2 inline-flex items-center gap-1"
+                          title={`Already covered by the ${coveredBy.matchType} rule "${coveredBy.pattern}"`}
+                        >
+                          <span className="badge badge--amber">redundant</span>
+                          <span className="text-[11px] font-normal text-muted">
+                            {`covered by ${coveredBy.matchType} "${coveredBy.pattern}"`}
+                          </span>
+                        </span>
                       ) : null}
                     </td>
                     <td className="text-xs text-muted" data-label="Match">{rule.matchType}</td>

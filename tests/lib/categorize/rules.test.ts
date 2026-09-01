@@ -1,11 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createSeededTestDb, categoryIdByName, insertTestUser, type TestDb } from '../../helpers/db';
 import { createUser } from '@/lib/auth/users';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   bumpRuleUsage,
   deleteExactRule,
   deleteRule,
-  findRedundantExactRules,
+  findRedundantRules,
   listRules,
   matchRule,
   matchTypeAllowedForKind,
@@ -13,8 +16,10 @@ import {
   setRuleDisabledFlag,
   upsertRuleFromCorrection,
   WORD_MATCH_KINDS,
+  type MatchType,
   type MerchantRuleRecord,
 } from '@/lib/categorize/rules';
+import { parseRulesPack } from '@/lib/packs';
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -429,11 +434,21 @@ describe('word match type: restricted to category and rename kinds', () => {
   });
 });
 
-// v1.21.0 (item 10): "once contains WALMART exists, every exact WALMART <store> <city> rule
-// under it is dead weight still evaluated on every match". Pure over an already-fetched list --
-// no DB access -- so these tests build MerchantRuleRecord fixtures directly rather than through
-// upsertRuleFromCorrection.
-describe('findRedundantExactRules', () => {
+/**
+ * v1.21.0 (item 10): "once contains WALMART exists, every exact WALMART <store> <city> rule
+ * under it is dead weight still evaluated on every match". Pure over an already-fetched list --
+ * no DB access -- so these tests build MerchantRuleRecord fixtures directly rather than through
+ * upsertRuleFromCorrection.
+ *
+ * v1.27.0 (owner finding): renamed from findRedundantExactRules -- the old name stopped being
+ * true the moment 'word' shipped as the pack's default match type, since an exact rule sitting
+ * under a word rule (the now-common case) went completely undetected. See the function's own
+ * docblock (src/lib/categorize/rules.ts) for the full coverage matrix and the proof behind each
+ * cell; the describe blocks below are organized the same way -- one per matrix cell that IS
+ * covered, one proving the ones that are NOT covered stay unflagged even when a naive reading of
+ * the pattern text might suggest otherwise.
+ */
+describe('findRedundantRules', () => {
   function fixture(over: Partial<MerchantRuleRecord>): MerchantRuleRecord {
     return {
       id: 1, pattern: 'X', matchType: 'exact', ruleKind: 'category', categoryId: null, renameTo: null,
@@ -442,44 +457,279 @@ describe('findRedundantExactRules', () => {
     };
   }
 
-  it('flags an exact rule already covered by a contains rule with the same category', () => {
-    const contains = fixture({ id: 1, pattern: 'WALMART', matchType: 'contains', categoryId: 5 });
-    const exact = fixture({ id: 2, pattern: 'WALMART SUPERCENTER TORONTO', matchType: 'exact', categoryId: 5 });
-    expect(findRedundantExactRules([contains, exact])).toEqual([{ ruleId: 2, coveredByRuleId: 1 }]);
+  describe('exact covered by contains (pre-existing case)', () => {
+    it('flags an exact rule already covered by a contains rule with the same category', () => {
+      const contains = fixture({ id: 1, pattern: 'WALMART', matchType: 'contains', categoryId: 5 });
+      const exact = fixture({ id: 2, pattern: 'WALMART SUPERCENTER TORONTO', matchType: 'exact', categoryId: 5 });
+      expect(findRedundantRules([contains, exact])).toEqual([
+        { ruleId: 2, coveredByRuleId: 1, coveredByPattern: 'WALMART', coveredByMatchType: 'contains' },
+      ]);
+    });
+
+    it('does not flag an exact rule the contains pattern does not actually cover', () => {
+      const contains = fixture({ id: 1, pattern: 'SHELL', matchType: 'contains', categoryId: 5 });
+      const exact = fixture({ id: 2, pattern: 'WALMART SUPERCENTER TORONTO', matchType: 'exact', categoryId: 5 });
+      expect(findRedundantRules([contains, exact])).toEqual([]);
+    });
   });
 
-  it('does NOT flag it when the contains rule disagrees on the category', () => {
-    const contains = fixture({ id: 1, pattern: 'WALMART', matchType: 'contains', categoryId: 5 });
-    const exact = fixture({ id: 2, pattern: 'WALMART SUPERCENTER TORONTO', matchType: 'exact', categoryId: 9 });
-    expect(findRedundantExactRules([contains, exact])).toEqual([]);
+  describe('exact covered by word (the v1.25.0 regression this widening fixes)', () => {
+    it('flags an exact rule already covered by a word rule with the same category', () => {
+      const word = fixture({ id: 1, pattern: 'IGA', matchType: 'word', categoryId: 5 });
+      const exact = fixture({ id: 2, pattern: 'IGA MARCHE PLUS', matchType: 'exact', categoryId: 5 });
+      expect(findRedundantRules([word, exact])).toEqual([
+        { ruleId: 2, coveredByRuleId: 1, coveredByPattern: 'IGA', coveredByMatchType: 'word' },
+      ]);
+    });
+
+    it('does not flag an exact rule when the word pattern is not a token run inside it', () => {
+      // IGA occupies no whole token of MICHIGAN -- exactly the MICHIGAN collision 'word' exists
+      // to avoid (see patternMatches' own docblock).
+      const word = fixture({ id: 1, pattern: 'IGA', matchType: 'word', categoryId: 5 });
+      const exact = fixture({ id: 2, pattern: 'MICHIGAN', matchType: 'exact', categoryId: 5 });
+      expect(findRedundantRules([word, exact])).toEqual([]);
+    });
   });
 
-  it('does not flag an exact rule the contains pattern does not actually cover', () => {
-    const contains = fixture({ id: 1, pattern: 'SHELL', matchType: 'contains', categoryId: 5 });
-    const exact = fixture({ id: 2, pattern: 'WALMART SUPERCENTER TORONTO', matchType: 'exact', categoryId: 5 });
-    expect(findRedundantExactRules([contains, exact])).toEqual([]);
+  describe('contains covered by a broader contains', () => {
+    it('flags a longer contains rule already covered by a shorter contains rule with the same category', () => {
+      const broad = fixture({ id: 1, pattern: 'WALMART', matchType: 'contains', categoryId: 5 });
+      const narrow = fixture({ id: 2, pattern: 'WALMART SUPERCENTER', matchType: 'contains', categoryId: 5 });
+      expect(findRedundantRules([broad, narrow])).toEqual([
+        { ruleId: 2, coveredByRuleId: 1, coveredByPattern: 'WALMART', coveredByMatchType: 'contains' },
+      ]);
+    });
+
+    it('does not flag two contains rules whose patterns are not substrings of one another', () => {
+      const a = fixture({ id: 1, pattern: 'SHELL', matchType: 'contains', categoryId: 5 });
+      const b = fixture({ id: 2, pattern: 'WALMART', matchType: 'contains', categoryId: 5 });
+      expect(findRedundantRules([a, b])).toEqual([]);
+    });
+
+    it('never flags a contains rule against itself', () => {
+      const contains = fixture({ id: 1, pattern: 'WALMART', matchType: 'contains', categoryId: 5 });
+      expect(findRedundantRules([contains])).toEqual([]);
+    });
   });
 
-  it('never flags an already-disabled exact rule, or one only a disabled contains rule covers', () => {
-    const contains = fixture({ id: 1, pattern: 'WALMART', matchType: 'contains', categoryId: 5, disabledAt: '2026-01-01T00:00:00.000Z' });
-    const exact = fixture({ id: 2, pattern: 'WALMART SUPERCENTER TORONTO', matchType: 'exact', categoryId: 5 });
-    expect(findRedundantExactRules([contains, exact])).toEqual([]);
-    const exactDisabled = fixture({ id: 3, pattern: 'WALMART SUPERCENTER TORONTO', matchType: 'exact', categoryId: 5, disabledAt: '2026-01-01T00:00:00.000Z' });
-    const liveContains = fixture({ id: 4, pattern: 'WALMART', matchType: 'contains', categoryId: 5 });
-    expect(findRedundantExactRules([liveContains, exactDisabled])).toEqual([]);
+  describe('word covered by a broader word', () => {
+    it('flags a longer word rule already covered by a shorter word rule with the same category', () => {
+      const broad = fixture({ id: 1, pattern: 'IGA', matchType: 'word', categoryId: 5 });
+      const narrow = fixture({ id: 2, pattern: 'IGA MARCHE', matchType: 'word', categoryId: 5 });
+      expect(findRedundantRules([broad, narrow])).toEqual([
+        { ruleId: 2, coveredByRuleId: 1, coveredByPattern: 'IGA', coveredByMatchType: 'word' },
+      ]);
+    });
+
+    it('does not flag two word rules whose token runs do not nest', () => {
+      const a = fixture({ id: 1, pattern: 'SHELL', matchType: 'word', categoryId: 5 });
+      const b = fixture({ id: 2, pattern: 'IGA MARCHE', matchType: 'word', categoryId: 5 });
+      expect(findRedundantRules([a, b])).toEqual([]);
+    });
+  });
+
+  /**
+   * The matrix cells that are deliberately NOT covered, asserted even where the SAME outcome and
+   * a superficially matching pattern text are both present -- so a future edit cannot "fix" these
+   * into false positives by mistake. See findRedundantRules' own docblock for the unsoundness
+   * proof each one is guarding.
+   */
+  describe('the cells the coverage matrix refuses, even with the same outcome', () => {
+    it('never flags a contains rule as covered by a word rule (WALMART/MART: word MART misses embedded MART)', () => {
+      const word = fixture({ id: 1, pattern: 'MART', matchType: 'word', categoryId: 5 });
+      const contains = fixture({ id: 2, pattern: 'MART', matchType: 'contains', categoryId: 5 });
+      expect(findRedundantRules([word, contains])).toEqual([]);
+    });
+
+    it('never flags a word rule as covered by a contains rule, even under the identical pattern text', () => {
+      // word PETRO CANADA reaches "PETRO-CANADA" (hyphen); contains PETRO CANADA (space-joined,
+      // literal) never would -- the two match types disagree about what a boundary is.
+      const contains = fixture({ id: 1, pattern: 'PETRO CANADA', matchType: 'contains', categoryId: 5 });
+      const word = fixture({ id: 2, pattern: 'PETRO CANADA', matchType: 'word', categoryId: 5 });
+      expect(findRedundantRules([contains, word])).toEqual([]);
+    });
+
+    // Deliberately DIFFERENT pattern lengths from one another: an equal-text exact/contains pair
+    // (both "WALMART") would also exercise the SEPARATE, legitimate exact-covered-by-contains
+    // direction (the exact rule as the narrow one), which is not what this test is isolating.
+    it('never flags a contains rule as covered by an exact rule', () => {
+      const exact = fixture({ id: 1, pattern: 'WALMART', matchType: 'exact', categoryId: 5 });
+      const contains = fixture({ id: 2, pattern: 'WALMART SUPERCENTER', matchType: 'contains', categoryId: 5 });
+      expect(findRedundantRules([exact, contains])).toEqual([]);
+    });
+
+    it('never flags a word rule as covered by an exact rule', () => {
+      const exact = fixture({ id: 1, pattern: 'IGA', matchType: 'exact', categoryId: 5 });
+      const word = fixture({ id: 2, pattern: 'IGA MARCHE', matchType: 'word', categoryId: 5 });
+      expect(findRedundantRules([exact, word])).toEqual([]);
+    });
+  });
+
+  /** "Different outcome never flagged" over every eligible (narrow, broad) match-type pair. */
+  describe('a different outcome is never flagged, for every match-type pair', () => {
+    it.each([
+      { narrowType: 'exact' as MatchType, broadType: 'contains' as MatchType, narrowPattern: 'WALMART SUPERCENTER TORONTO', broadPattern: 'WALMART' },
+      { narrowType: 'exact' as MatchType, broadType: 'word' as MatchType, narrowPattern: 'IGA MARCHE PLUS', broadPattern: 'IGA' },
+      { narrowType: 'contains' as MatchType, broadType: 'contains' as MatchType, narrowPattern: 'WALMART SUPERCENTER', broadPattern: 'WALMART' },
+      { narrowType: 'word' as MatchType, broadType: 'word' as MatchType, narrowPattern: 'IGA MARCHE', broadPattern: 'IGA' },
+    ])('$narrowType covered by $broadType', ({ narrowType, broadType, narrowPattern, broadPattern }) => {
+      const broad = fixture({ id: 1, pattern: broadPattern, matchType: broadType, categoryId: 5 });
+      const narrow = fixture({ id: 2, pattern: narrowPattern, matchType: narrowType, categoryId: 9 });
+      expect(findRedundantRules([broad, narrow])).toEqual([]);
+    });
+  });
+
+  /** "A disabled rule on either side is never flagged", across the match types the widening added. */
+  describe('a disabled rule on either side is never flagged', () => {
+    it('never flags an already-disabled exact rule, or one only a disabled contains rule covers', () => {
+      const contains = fixture({ id: 1, pattern: 'WALMART', matchType: 'contains', categoryId: 5, disabledAt: '2026-01-01T00:00:00.000Z' });
+      const exact = fixture({ id: 2, pattern: 'WALMART SUPERCENTER TORONTO', matchType: 'exact', categoryId: 5 });
+      expect(findRedundantRules([contains, exact])).toEqual([]);
+      const exactDisabled = fixture({ id: 3, pattern: 'WALMART SUPERCENTER TORONTO', matchType: 'exact', categoryId: 5, disabledAt: '2026-01-01T00:00:00.000Z' });
+      const liveContains = fixture({ id: 4, pattern: 'WALMART', matchType: 'contains', categoryId: 5 });
+      expect(findRedundantRules([liveContains, exactDisabled])).toEqual([]);
+    });
+
+    it('never flags a disabled word rule as covering, or a disabled exact rule as covered', () => {
+      const disabledWord = fixture({ id: 1, pattern: 'IGA', matchType: 'word', categoryId: 5, disabledAt: '2026-01-01T00:00:00.000Z' });
+      const exact = fixture({ id: 2, pattern: 'IGA MARCHE', matchType: 'exact', categoryId: 5 });
+      expect(findRedundantRules([disabledWord, exact])).toEqual([]);
+      const liveWord = fixture({ id: 3, pattern: 'IGA', matchType: 'word', categoryId: 5 });
+      const disabledExact = fixture({ id: 4, pattern: 'IGA MARCHE', matchType: 'exact', categoryId: 5, disabledAt: '2026-01-01T00:00:00.000Z' });
+      expect(findRedundantRules([liveWord, disabledExact])).toEqual([]);
+    });
   });
 
   it('matches rename rules on renameTo rather than categoryId', () => {
     const contains = fixture({ id: 1, pattern: 'WALMART', matchType: 'contains', ruleKind: 'rename', renameTo: 'Walmart' });
     const exact = fixture({ id: 2, pattern: 'WALMART SUPERCENTER TORONTO', matchType: 'exact', ruleKind: 'rename', renameTo: 'Walmart' });
-    expect(findRedundantExactRules([contains, exact])).toEqual([{ ruleId: 2, coveredByRuleId: 1 }]);
+    expect(findRedundantRules([contains, exact])).toEqual([
+      { ruleId: 2, coveredByRuleId: 1, coveredByPattern: 'WALMART', coveredByMatchType: 'contains' },
+    ]);
     const differentTarget = fixture({ id: 3, pattern: 'WALMART SUPERCENTER TORONTO', matchType: 'exact', ruleKind: 'rename', renameTo: 'Wally World' });
-    expect(findRedundantExactRules([contains, differentTarget])).toEqual([]);
+    expect(findRedundantRules([contains, differentTarget])).toEqual([]);
   });
 
-  it('never flags a contains rule against itself, or two contains rules against each other', () => {
-    const contains = fixture({ id: 1, pattern: 'WALMART', matchType: 'contains', categoryId: 5 });
-    expect(findRedundantExactRules([contains])).toEqual([]);
+  it('prefers the longest covering pattern when more than one rule covers the same narrow rule', () => {
+    // Neither coverer is a substring of the other (SUPERCENTER does not contain WALMART or vice
+    // versa), so each covers ONLY the narrow rule, not each other -- isolating the tie-break.
+    const shortCover = fixture({ id: 1, pattern: 'WALMART', matchType: 'contains', categoryId: 5 });
+    const longCover = fixture({ id: 2, pattern: 'SUPERCENTER', matchType: 'contains', categoryId: 5 });
+    const narrow = fixture({ id: 3, pattern: 'WALMART SUPERCENTER', matchType: 'contains', categoryId: 5 });
+    expect(findRedundantRules([shortCover, longCover, narrow])).toEqual([
+      { ruleId: 3, coveredByRuleId: 2, coveredByPattern: 'SUPERCENTER', coveredByMatchType: 'contains' },
+    ]);
+  });
+
+  /**
+   * The best available check on the coverage matrix above: the REAL shipped pack, 297 rules of
+   * real data (packs/canadian-merchants.json, read-only -- this test never writes to it). Every
+   * category/parent name is mapped to a synthetic numeric id (findRedundantRules only ever
+   * compares outcomes for EQUALITY, so what the id actually IS does not matter, only that two
+   * rules resolving to the same category get the same one).
+   *
+   * "No false positive" is checked two ways:
+   *   1. every flagged pair genuinely has the covering rule's pattern as a real match against the
+   *      narrow rule's own pattern text, via patternMatches -- the same production function the
+   *      page itself runs through, not a re-derivation;
+   *   2. a stress pass per flagged pair: several synthetic merchant strings built around the
+   *      narrow pattern (embedded in a longer token with no boundary, joined by a hyphen instead
+   *      of a space, prefixed and suffixed by noise) -- whenever the narrow rule's own matcher
+   *      matches one of these, the covering rule's matcher must match it too. This is what would
+   *      have caught the WALMART/MART and PETRO-CANADA/PETRO CANADA failure modes the matrix's
+   *      docblock argues about by hand, if the implementation had gotten either one wrong.
+   */
+  describe('the real pack produces no false positive (packs/canadian-merchants.json)', () => {
+    function loadPackFixtures(): MerchantRuleRecord[] {
+      const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+      const raw = JSON.parse(fs.readFileSync(path.join(root, 'packs/canadian-merchants.json'), 'utf8'));
+      const pack = parseRulesPack(raw);
+      const categoryIds = new Map<string, number>();
+      let nextId = 1;
+      const idFor = (parent: string | null, category: string | null) => {
+        const key = `${parent ?? ''}|${category ?? ''}`;
+        if (!categoryIds.has(key)) categoryIds.set(key, categoryIds.size + 1);
+        return categoryIds.get(key)!;
+      };
+      return pack.rules.map((rule) => ({
+        id: nextId++,
+        pattern: rule.pattern,
+        matchType: rule.match_type,
+        ruleKind: rule.rule_kind === 'category' || rule.rule_kind === 'rename' ? rule.rule_kind : 'category',
+        categoryId: rule.rule_kind === 'category' ? idFor(rule.category_parent, rule.category) : null,
+        renameTo: rule.rename_to,
+        createdBy: null, hitCount: 0, lastUsedAt: null, createdAt: '2026-01-01T00:00:00.000Z',
+        lastModifiedBy: null, disabledAt: null, packSource: null, packVersion: null, installedAt: null,
+      }));
+    }
+
+    /** Same tokenizer the production matcher uses, imported indirectly through patternMatches --
+     *  used here only to build a stress text's word-joined variant. */
+    function stressTexts(pattern: string): string[] {
+      return [
+        `X${pattern}X`, // embedded in a larger token, no boundary on either side
+        `${pattern}X`,
+        `X${pattern}`,
+        `PREFIX-${pattern}-SUFFIX`, // hyphen-joined noise, stresses word/contains boundary rules
+        `PREFIX ${pattern} SUFFIX`, // space-joined noise
+        pattern,
+      ];
+    }
+
+    it('flags nothing whose covering rule does not really match the narrow rule\'s own pattern text', () => {
+      const rules = loadPackFixtures();
+      const flagged = findRedundantRules(rules);
+      for (const entry of flagged) {
+        const narrow = rules.find((r) => r.id === entry.ruleId)!;
+        expect(patternMatches(entry.coveredByPattern, entry.coveredByMatchType, narrow.pattern)).toBe(true);
+      }
+    });
+
+    it('flags nothing where a stress text the narrow rule matches is missed by the covering rule', () => {
+      const rules = loadPackFixtures();
+      const flagged = findRedundantRules(rules);
+      const misses: string[] = [];
+      for (const entry of flagged) {
+        const narrow = rules.find((r) => r.id === entry.ruleId)!;
+        for (const text of stressTexts(narrow.pattern)) {
+          const narrowMatches = patternMatches(narrow.pattern, narrow.matchType, text);
+          if (!narrowMatches) continue;
+          const coveringMatches = patternMatches(entry.coveredByPattern, entry.coveredByMatchType, text);
+          if (!coveringMatches) {
+            misses.push(`${narrow.matchType} "${narrow.pattern}" (#${narrow.id}) matches "${text}" but its claimed coverer ${entry.coveredByMatchType} "${entry.coveredByPattern}" does not`);
+          }
+        }
+      }
+      expect(misses).toEqual([]);
+    });
+
+    /**
+     * The two checks above prove no false positive; this proves they are not vacuously true
+     * because the pack has nothing to flag at all -- it does not, and that is a GOOD property of
+     * a hand-curated pack (docs/CANADIAN-MERCHANT-RULES-PACK.md and the cross-collision guard
+     * both argue for a pack with no redundant entries in the first place, not one that needs
+     * tidying). So this adds ONE synthetic rule, built to be redundant under a real pack rule
+     * (same category, a pattern the real rule's own tokens run inside), and confirms the pipeline
+     * catches it against the real 297-rule backdrop.
+     */
+    it('a synthetic rule laid on top of a real pack rule is correctly caught', () => {
+      const rules = loadPackFixtures();
+      const broad = rules.find((r) => r.matchType === 'word' && r.ruleKind === 'category');
+      if (!broad) throw new Error('expected at least one word category rule in the shipped pack');
+      const synthetic: MerchantRuleRecord = {
+        ...broad,
+        id: Math.max(...rules.map((r) => r.id)) + 1,
+        pattern: `${broad.pattern} EXTRA SUFFIX STORE`,
+        matchType: 'exact',
+      };
+      const flagged = findRedundantRules([...rules, synthetic]);
+      expect(flagged).toContainEqual({
+        ruleId: synthetic.id,
+        coveredByRuleId: broad.id,
+        coveredByPattern: broad.pattern,
+        coveredByMatchType: 'word',
+      });
+    });
   });
 });
 

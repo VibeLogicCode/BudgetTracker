@@ -461,49 +461,127 @@ export function setRuleDisabledFlag(id: number, disabled: boolean, at: Date = ne
 
 export interface RedundantRule {
   ruleId: number;
-  /** The contains rule that already produces this rule's exact same outcome. */
+  /** The rule that already produces this rule's exact same outcome -- exact, contains or word. */
   coveredByRuleId: number;
+  /** Denormalized off the covering rule so a caller (the merchant-rules page) can name it on the
+   *  redundant row without a second lookup -- see this file's `findRedundantRules` for why the
+   *  household needs to see WHICH rule and HOW it matches, not just that a covering rule exists. */
+  coveredByPattern: string;
+  coveredByMatchType: MatchType;
 }
 
 /**
  * v1.21.0 (item 10): "once `contains WALMART` exists, every exact `WALMART <store> <city>` rule
- * under it is dead weight still evaluated on every match". matchRule already gives an exact rule
- * priority over any contains rule (see its own docblock), so an exact rule flagged here changes
- * NOTHING if deleted -- the covering contains rule already resolves every transaction that exact
- * rule ever did, to the identical outcome. "Identical outcome" is kind-specific: the same
- * categoryId for a category rule, the same renameTo for a rename rule; transfer and not_transfer
- * carry no further outcome to disagree on, so kind alone (and the substring relationship) is
- * enough for those two.
+ * under it is dead weight still evaluated on every match". matchRule already gives the LONGEST
+ * matching pattern priority (see its own docblock), so a rule flagged here changes NOTHING if
+ * deleted -- the covering rule already resolves every transaction the narrower rule ever did, to
+ * the identical outcome. "Identical outcome" is kind-specific: the same categoryId for a category
+ * rule, the same renameTo for a rename rule; transfer and not_transfer carry no further outcome
+ * to disagree on, so kind alone is enough for those two.
  *
  * Deliberately pure (no DB access): the merchant-rules page calls this once per render over the
  * rules it already has, the same way it already computes impact counts, rather than this
  * function re-fetching its own copy of the list.
  *
- * v1.25.0 (item 16): 'word' coverers are deliberately OUT OF SCOPE here. A `word IGA` rule does
- * cover an `exact IGA MARCHE` rule with the same outcome, so this now under-reports slightly --
- * an honest under-report (nothing correct is ever flagged as dead weight) rather than a second,
- * token-aware containment check bolted onto a function whose whole contract is "deleting this
- * changes NOTHING". Widen it when somebody actually has a shelf of word rules to tidy.
+ * v1.25.0 (item 16) shipped the 'word' match type and left it OUT OF SCOPE here on purpose --
+ * "widen it when somebody actually has a shelf of word rules to tidy". 'word' is now the DEFAULT
+ * for pack brand rules (297 of them), so an exact rule sitting under a word rule is the common
+ * case, not an edge case, and the old exact-under-contains-only check missed every one of them.
+ * This widens the check to ask the REAL matcher (patternMatches) whether one rule covers another,
+ * for every pair of match types where that question has a sound, general answer -- not by
+ * re-deriving a second string test the way the old `.includes()` line did, which is exactly the
+ * kind of parallel implementation that drifted from matchRule once 'word' shipped.
+ *
+ * THE COVERAGE MATRIX, and the proof behind each cell (rows = the NARROWER rule being checked for
+ * redundancy, columns = the BROADER rule that might cover it):
+ *
+ *              covered by exact   covered by contains   covered by word
+ *   exact            --                 YES                  YES
+ *   contains          NO                YES                   NO
+ *   word              NO                 NO                   YES
+ *
+ * The check for every YES cell is the SAME formula: does `patternMatches(broad.pattern,
+ * broad.matchType, narrow.pattern)` -- i.e. does the broad rule match the narrow rule's OWN
+ * pattern text, treated as if it were a transaction's normalized merchant text? That formula is
+ * only trustworthy when it is provably equivalent to "the broad rule matches EVERY text the
+ * narrow rule could ever match", not merely this one text -- which is exactly why the NO cells
+ * are refused despite nothing stopping the same formula from being *computed* there too:
+ *
+ *   - exact (narrow) x anything (broad): an exact rule matches exactly ONE text -- its own
+ *     pattern. Checking the broad rule against that one text is therefore both NECESSARY and
+ *     SUFFICIENT, whatever the broad type. Always sound.
+ *
+ *   - contains (narrow) x contains (broad): a contains rule matches every text that has its
+ *     pattern as a raw substring, which is an unbounded family, but substring-of is transitive --
+ *     if broad.pattern is a substring of narrow.pattern, and narrow.pattern is a substring of
+ *     some transaction text T (that is what "narrow matches T" means), then broad.pattern is a
+ *     substring of T too. Sound for ALL T, not just narrow.pattern itself.
+ *
+ *   - word (narrow) x word (broad): the same transitivity argument, one level up: word matching
+ *     is "the pattern's tokens are a consecutive run within the text's tokens" (hasTokenRun). If
+ *     broad's tokens are a consecutive run within narrow's tokens, and narrow's tokens are a
+ *     consecutive run within T's tokens, then broad's tokens are a consecutive run within T's
+ *     tokens too -- a run-within-a-run is still a run, at the offset the two runs compose to.
+ *     Sound for ALL T.
+ *
+ *   - contains (narrow) x word (broad): UNSOUND, and the shipped pack proves why. `word MART`
+ *     matches the pack's own pattern text `contains MART` under the naive formula (MART's tokens
+ *     are trivially "a run" within MART's own tokens) -- but `contains MART` also matches
+ *     "WALMART", where MART sits INSIDE a larger token with no boundary on either side, which
+ *     `word MART` by design does not match (that boundary check is the entire point of 'word' --
+ *     see this file's own docblock on the type). A text the narrow rule matches is not
+ *     necessarily one the broad rule matches, so this cell would produce a false "redundant"
+ *     claim -- exactly the failure this widening must not introduce.
+ *
+ *   - word (narrow) x contains (broad): also UNSOUND, for a different reason -- normalization.
+ *     wordBoundaryTokens treats '-', '/', '.' and space alike as boundaries (see normalize.ts),
+ *     so `word PETRO CANADA` matches both "PETRO-CANADA" and "PETRO CANADA" in the transaction
+ *     text. But `contains PETRO CANADA` (the narrow pattern's own text, space-joined) is a raw
+ *     substring test: it matches "PETRO CANADA" and NOT "PETRO-CANADA" (different literal
+ *     characters). So a text the narrow word rule matches (the hyphenated spelling) can be one no
+ *     contains rule built from the same pattern text would ever reach -- the two match types
+ *     disagree about what a "boundary" even is, so pattern text alone cannot answer the question.
+ *     (A single-TOKEN word pattern happens to be safe here, since its one token IS a literal
+ *     substring of anything it matches -- but this function does not special-case it: adding a
+ *     token-count branch just to reach a case no test in this codebase asks for is exactly the
+ *     kind of unproven cleverness the brief warns against. Under-reporting that case is a correct,
+ *     honest miss.)
+ *
+ * Every case where certainty is not provable is left unflagged, per the guiding rule: a false
+ * "redundant" claim invites someone to delete a rule that was doing real work, so the conservative
+ * direction is the only safe one.
  */
-export function findRedundantExactRules(rules: MerchantRuleRecord[]): RedundantRule[] {
+function coverageEligible(narrowType: MatchType, broadType: MatchType): boolean {
+  if (narrowType === 'exact') return true;
+  if (narrowType === 'contains') return broadType === 'contains';
+  return broadType === 'word'; // narrowType === 'word'
+}
+
+export function findRedundantRules(rules: MerchantRuleRecord[]): RedundantRule[] {
   const out: RedundantRule[] = [];
-  for (const exact of rules) {
-    if (exact.matchType !== 'exact' || exact.disabledAt !== null) continue;
+  for (const narrow of rules) {
+    if (narrow.disabledAt !== null) continue;
     let best: MerchantRuleRecord | null = null;
-    for (const contains of rules) {
-      if (contains.matchType !== 'contains' || contains.ruleKind !== exact.ruleKind) continue;
-      if (contains.disabledAt !== null || contains.pattern.length === 0) continue;
-      if (!exact.pattern.includes(contains.pattern)) continue;
+    for (const broad of rules) {
+      if (broad.id === narrow.id) continue;
+      if (broad.disabledAt !== null || broad.ruleKind !== narrow.ruleKind) continue;
+      if (!coverageEligible(narrow.matchType, broad.matchType)) continue;
+      // The real matcher, not a second hand-rolled string test -- see this function's own
+      // docblock for why treating narrow.pattern as "the text" is a sound proof of full coverage
+      // for exactly the cells the coverage matrix marks YES, and only those.
+      if (!patternMatches(broad.pattern, broad.matchType, narrow.pattern)) continue;
       const sameOutcome =
-        exact.ruleKind === 'category'
-          ? contains.categoryId === exact.categoryId
-          : exact.ruleKind === 'rename'
-            ? contains.renameTo === exact.renameTo
+        narrow.ruleKind === 'category'
+          ? broad.categoryId === narrow.categoryId
+          : narrow.ruleKind === 'rename'
+            ? broad.renameTo === narrow.renameTo
             : true; // transfer / not_transfer: kind is the whole outcome
       if (!sameOutcome) continue;
-      if (best === null || contains.pattern.length > best.pattern.length) best = contains;
+      if (best === null || broad.pattern.length > best.pattern.length) best = broad;
     }
-    if (best !== null) out.push({ ruleId: exact.id, coveredByRuleId: best.id });
+    if (best !== null) {
+      out.push({ ruleId: narrow.id, coveredByRuleId: best.id, coveredByPattern: best.pattern, coveredByMatchType: best.matchType });
+    }
   }
   return out;
 }

@@ -103,9 +103,15 @@ describe('MerchantRulesClient — rendering the row', () => {
     expect(screen.getByRole('menuitem', { name: /enable/i })).toBeTruthy();
   });
 
-  it('shows a redundant badge when the rule is covered by a contains rule', () => {
-    render(<MerchantRulesClient {...baseProps({ redundantByRuleId: { 1: 42 } })} />);
-    expect(screen.getByTitle('Already covered by rule #42')).toBeTruthy();
+  /**
+   * v1.27.0, owner finding: this used to name only the covering rule's ID, in a `title` attribute
+   * nobody sees without hovering -- a household cannot judge "is this safe to delete" from a
+   * number alone. The row now shows the covering rule's own pattern and match type in view.
+   */
+  it('shows a redundant badge naming the covering rule\'s pattern and match type, in view', () => {
+    render(<MerchantRulesClient {...baseProps({ redundantByRuleId: { 1: { id: 42, pattern: 'IGA', matchType: 'word' } } })} />);
+    expect(screen.getByText('covered by word "IGA"')).toBeTruthy();
+    expect(screen.getByTitle('Already covered by the word rule "IGA"')).toBeTruthy();
   });
 
   it('renders a rename rule showing its rename target, not a category', () => {
@@ -151,9 +157,93 @@ describe('MerchantRulesClient — filter chips and search (item 10)', () => {
     expect(screen.getByText('Redundant (4)')).toBeTruthy();
   });
 
+  /**
+   * v1.27.0, owner finding: "a yellow banner catches eye but i dont know what to do" -- a
+   * redundant rule changes NO categorization today, so 'warning' overstated it. Checked on the
+   * rendered class list rather than a snapshot, since Pill's TONE_CLASS map is what actually
+   * decides the colour (see Pill.tsx).
+   */
+  it('the Redundant chip is never warning-toned, active or not', () => {
+    const { rerender } = render(<MerchantRulesClient {...baseProps({ redundantCount: 4, redundantOnly: false })} />);
+    expect(screen.getByText('Redundant (4)').className).not.toMatch(/warning/);
+    rerender(<MerchantRulesClient {...baseProps({ redundantCount: 4, redundantOnly: true })} />);
+    expect(screen.getByText('Redundant (4)').className).not.toMatch(/warning/);
+  });
+
   it('the search box carries the current search value', () => {
     render(<MerchantRulesClient {...baseProps({ searchValue: 'WALMART' })} />);
     expect((screen.getByLabelText(/search by pattern/i) as HTMLInputElement).value).toBe('WALMART');
+  });
+});
+
+/**
+ * v1.27.0, owner finding in full: "what do redunent rules do in mecharant rules page? do they
+ * have any negative impact? can we tell user in a better what what it is as currently a yellow
+ * banner catches eye but i dont know what to do". The explanation used to be the last sentence of
+ * a long PageGuide paragraph, out of view unless that panel was expanded, and the chip itself said
+ * nothing. This block pins the in-view explanation (both halves) and the Delete these N action
+ * that follows from it -- reusing the SAME bulk-delete confirm the multi-select toolbar already
+ * uses, not a second delete mechanism.
+ */
+describe('MerchantRulesClient — the redundant filter explains itself and offers an action (v1.27.0)', () => {
+  function redundantProps(overrides: Partial<Parameters<typeof MerchantRulesClient>[0]> = {}) {
+    return baseProps({
+      redundantCount: 3,
+      redundantOnly: true,
+      rows: [rule({ id: 1 }), rule({ id: 2, pattern: 'WENDYS' })],
+      // Rule 3 is redundant but not on THIS page -- redundantByRuleId carries every redundant
+      // rule regardless of pagination (see that prop's own docblock), and Delete these N has to
+      // act on all of them, not just the ones currently rendered.
+      redundantByRuleId: {
+        1: { id: 10, pattern: 'WAL', matchType: 'contains' },
+        2: { id: 10, pattern: 'WAL', matchType: 'contains' },
+        3: { id: 10, pattern: 'WAL', matchType: 'contains' },
+      },
+      ...overrides,
+    });
+  }
+
+  it('renders no explanation or Delete action when the filter is not active', () => {
+    render(<MerchantRulesClient {...redundantProps({ redundantOnly: false })} />);
+    expect(screen.queryByText(/changes nothing about how transactions are categorized today/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /delete these/i })).toBeNull();
+  });
+
+  it('states both halves -- nothing changes today, and the later risk if the broader rule is edited', () => {
+    render(<MerchantRulesClient {...redundantProps()} />);
+    expect(screen.getByText(/changes nothing about how transactions are categorized today/i)).toBeTruthy();
+    expect(screen.getByText(/keeps overriding it for that one merchant string/i)).toBeTruthy();
+  });
+
+  it('offers Delete these N, naming the total redundant count', () => {
+    render(<MerchantRulesClient {...redundantProps()} />);
+    expect(screen.getByRole('button', { name: 'Delete these 3' })).toBeTruthy();
+  });
+
+  it('Delete these N opens the SAME bulk-delete confirm dialog used by multi-select, stating the count and every redundant id -- including one off the current page', () => {
+    render(<MerchantRulesClient {...redundantProps()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Delete these 3' }));
+    const dialog = screen.getByRole('dialog', { name: /delete 3 rules/i });
+    const idsInput = dialog.querySelector('input[name="ids"]') as HTMLInputElement | null;
+    expect(idsInput?.value).toBe('1,2,3');
+  });
+
+  it('Cancel writes nothing', async () => {
+    const { bulkDeleteRulesAction } = await import('@/app/(app)/settings/merchant-rules/actions');
+    render(<MerchantRulesClient {...redundantProps()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Delete these 3' }));
+    fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(bulkDeleteRulesAction).not.toHaveBeenCalled();
+  });
+
+  it('confirming deletes exactly those rules', async () => {
+    const { bulkDeleteRulesAction } = await import('@/app/(app)/settings/merchant-rules/actions');
+    render(<MerchantRulesClient {...redundantProps()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Delete these 3' }));
+    fireEvent.click(screen.getByRole('button', { name: /delete permanently/i }));
+    expect(bulkDeleteRulesAction).toHaveBeenCalled();
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 });
 

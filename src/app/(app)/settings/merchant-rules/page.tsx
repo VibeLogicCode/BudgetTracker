@@ -7,7 +7,7 @@ import {
 } from '@/lib/canadian-pack';
 import { listCategories } from '@/lib/categories';
 import { ruleImpactCounts } from '@/lib/categorize/engine';
-import { findRedundantExactRules, listRules, type MerchantRuleRecord, type RuleKind } from '@/lib/categorize/rules';
+import { findRedundantRules, listRules, type MatchType, type MerchantRuleRecord, type RuleKind } from '@/lib/categorize/rules';
 import { previewRulesPackExport } from '@/lib/packs';
 import { MerchantRulesClient } from './merchant-rules-client';
 
@@ -56,8 +56,8 @@ export default async function MerchantRulesPage({
   const categories = listCategories({ includeArchived: true });
   const allRules = listRules();
   const impactCounts = ruleImpactCounts();
-  const redundant = findRedundantExactRules(allRules);
-  const redundantByRuleId = new Map(redundant.map((r) => [r.ruleId, r.coveredByRuleId]));
+  const redundant = findRedundantRules(allRules);
+  const redundantByRuleId = new Map(redundant.map((r) => [r.ruleId, r]));
   const presetCount = allRules.filter((rule) => rule.packSource !== null).length;
 
   const kindCounts: Record<RuleKind, number> = { category: 0, transfer: 0, rename: 0, not_transfer: 0 };
@@ -83,8 +83,12 @@ export default async function MerchantRulesPage({
     const value = impactCounts.get(rule.id);
     if (value !== undefined) impactRecord[rule.id] = value;
   }
-  const redundantRecord: Record<number, number> = {};
-  for (const [ruleId, coveredByRuleId] of redundantByRuleId) redundantRecord[ruleId] = coveredByRuleId;
+  /** What the redundant badge needs to name the covering rule ON the row -- see the docblock on
+   *  merchant-rules-client.tsx's own `redundantByRuleId` prop for why a bare id is not enough. */
+  const redundantRecord: Record<number, { id: number; pattern: string; matchType: MatchType }> = {};
+  for (const [ruleId, info] of redundantByRuleId) {
+    redundantRecord[ruleId] = { id: info.coveredByRuleId, pattern: info.coveredByPattern, matchType: info.coveredByMatchType };
+  }
 
   // Only ever computed on the branch that needs it: previewCanadianPackInstall/
   // previewCanadianPackRemoval/canadianPackUpdateDiff each re-derive their own figures from
