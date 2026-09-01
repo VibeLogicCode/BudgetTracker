@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { accounts, imports, transactionImports, transactions, users } from '@/db/schema';
 import { nowIso } from '@/lib/clock';
@@ -368,6 +368,106 @@ export function getImport(importId: number): { id: number; importedBy: number; f
       .where(eq(imports.id, importId))
       .get() ?? null
   );
+}
+
+/** v1.26.0 Lane 2 item 4. One import the household has not yet looked at. See unreviewedRuleImports. */
+export interface UnreviewedImportRow {
+  importId: number;
+  accountId: number;
+  accountName: string;
+  filename: string;
+  createdAt: string;
+  /**
+   * How many of THIS import's rows are still carrying `categorization_source = 'rule'`. Never 0 --
+   * an import with none is not in the list at all (the join below is an inner join).
+   */
+  ruleRowCount: number;
+}
+
+/**
+ * v1.26.0 Lane 2 item 4. "Which imports have rule assignments nobody has looked at, and how many" --
+ * the read behind "you have 2 imports you never checked", so the app can say that instead of relying
+ * on the household remembering to look.
+ *
+ * An import qualifies when BOTH are true:
+ *   - `imports.rules_reviewed_at` is NULL. Nothing else is tested -- see the long argument in
+ *     drizzle/0019_import_audit.sql for why comparing transactions.updated_at against this stamp
+ *     would un-dismiss an import because somebody typed a note.
+ *   - at least one row it INSERTED still carries `categorization_source = 'rule'`. `import_id`, not
+ *     transaction_imports, for the reasons TransactionFilter.importId (src/lib/transactions.ts)
+ *     sets out -- and identical to what `listTransactions({ source: 'rule', importId })` will show,
+ *     which is the whole point: the banner's count and the audit view's list are the same question
+ *     asked of the same two columns, so they cannot disagree. Served by transactions_import_idx.
+ *
+ * "Still carrying" is what makes the count self-clearing. A rule-assigned row a person has since
+ * confirmed or corrected is stamped 'manual' by confirmCategory (src/lib/categorize/engine.ts), so
+ * it leaves this count on its own; an import whose every rule row has been dealt with individually
+ * disappears from this list without anybody pressing dismiss. And an import whose rows were all
+ * deleted by an undo cannot appear, because the undo deleted the imports row too.
+ *
+ * Newest first, by id -- the same order listImportHistory uses, and the useful one: the import a
+ * person is most likely to still care about is the one they just did. No limit: this list is bounded
+ * by imports the household has genuinely never checked, and capping it would let the banner
+ * under-report the very backlog it exists to report.
+ *
+ * Not viewer-scoped, deliberately, and to be called only from an admin/household surface. An import
+ * is an account-level event performed by one person on a whole statement, not a per-person one --
+ * imports.imported_by records who ran it, and listImportHistory, getImport and undoImport (this
+ * file) are all likewise unscoped, with the decision about who may act left to the route
+ * (v1.13.0 ruling R3, src/app/api/import/undo/route.ts).
+ */
+export function unreviewedRuleImports(): UnreviewedImportRow[] {
+  return getDb()
+    .select({
+      importId: imports.id,
+      accountId: imports.accountId,
+      accountName: accounts.name,
+      filename: imports.filename,
+      createdAt: imports.createdAt,
+      ruleRowCount: sql<number>`count(${transactions.id})`,
+    })
+    .from(imports)
+    .innerJoin(accounts, eq(accounts.id, imports.accountId))
+    // INNER join, and the source test lives in the join condition rather than the WHERE: both
+    // together are what makes "has at least one unreviewed rule row" the membership test. Moving
+    // `categorization_source = 'rule'` into the WHERE would read the same but is not the same --
+    // it would still work here only because the join is inner, and would silently start listing
+    // every unreviewed import with a count of 0 the moment anyone made it a left join.
+    .innerJoin(transactions, and(eq(transactions.importId, imports.id), eq(transactions.categorizationSource, 'rule')))
+    .where(isNull(imports.rulesReviewedAt))
+    .groupBy(imports.id)
+    .orderBy(desc(imports.id))
+    .all();
+}
+
+/**
+ * v1.26.0 Lane 2 item 4. Dismiss (or un-dismiss) one import's rule-assignment audit.
+ *
+ * Returns false for an unknown importId -- the same "no such row" answer getTransaction gives
+ * (src/lib/transactions.ts), so a route can 404 a stale id instead of reporting a success that
+ * wrote nothing.
+ *
+ * `reviewed: false` clears the marker and is the RECOVERY path, not a curiosity: dismissing a batch
+ * is one click on a banner, and without a way back an accidental click would hide an import's rule
+ * assignments permanently with no filter anywhere that could surface them as unchecked again. Same
+ * argument TransactionFilter.transferView's `'only'` state already makes for a mis-flagged transfer.
+ * Note it clears the marker outright rather than restoring some earlier value -- there is no history
+ * here and inventing one would be a second, unasked-for feature.
+ *
+ * Re-marking an already-reviewed import overwrites the stamp with the newer time: this column means
+ * "when somebody last looked", and for the only read that consults it (unreviewedRuleImports above,
+ * which tests IS NULL) the two readings are indistinguishable anyway.
+ *
+ * `at` follows the codebase's optional-Date idiom so a test can pin the stamp; nowIso (src/lib/clock.ts)
+ * is the only clock this file reads.
+ */
+export function markImportRulesReviewed(input: { importId: number; reviewed?: boolean; at?: Date }): boolean {
+  const result = getDb()
+    .update(imports)
+    .set({ rulesReviewedAt: input.reviewed === false ? null : nowIso(input.at) })
+    .where(eq(imports.id, input.importId))
+    .run();
+  return Number(result.changes ?? 0) > 0;
 }
 
 export interface UndoPreview {

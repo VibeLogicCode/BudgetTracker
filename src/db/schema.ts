@@ -147,6 +147,27 @@ export const imports = sqliteTable(
     rowsDuplicate: integer('rows_duplicate').notNull().default(0),
     rowsError: integer('rows_error').notNull().default(0),
     createdAt: text('created_at').notNull(),
+    /**
+     * v1.26.0 Lane 2, added by drizzle/0019_import_audit.sql. Declared last because ALTER
+     * TABLE ADD COLUMN appends physically -- same convention as importProfiles.isActive and
+     * merchantRules.packOriginKey, so the mirror stays readable against
+     * `pragma table_info(imports)`.
+     *
+     * When somebody looked at what the RULES did to this import. NULL means nobody has, which
+     * is the state a fresh imports row carries with no write of its own (src/lib/import/flow.ts
+     * deliberately sets nothing here -- see its own comment). Read by unreviewedRuleImports()
+     * and written by markImportRulesReviewed(), both in src/lib/import/commit.ts.
+     *
+     * The marker is on the IMPORT, not on the transaction, and the read tests only for NULL.
+     * Both calls are argued at length in the migration's own header; the short version is that
+     * the thing being dismissed is a batch, that a fresh import must be unreviewed without
+     * anybody remembering to write anything, that undoImport deletes this row and therefore
+     * this marker along with it, and that transactions.updated_at moves for reasons
+     * (bulkSetNotes, bulkSetAttribution, setTransactionSplits) that have nothing to do with
+     * categorization, so comparing against it would un-dismiss an import because somebody
+     * typed a note.
+     */
+    rulesReviewedAt: text('rules_reviewed_at'),
   },
   (t) => [index('imports_account_idx').on(t.accountId, t.createdAt)],
 );

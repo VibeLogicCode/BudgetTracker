@@ -53,7 +53,11 @@ describe('drizzle/0018_pack_origin_key.sql', () => {
     expect(entry).toMatchObject({ idx: 18, tag: '0018_pack_origin_key' });
     const idxs = journal.entries.map((e) => e.idx).sort((a, b) => a - b);
     expect(idxs.indexOf(18)).toBe(idxs.indexOf(17) + 1);
-    expect(Math.max(...idxs)).toBe(18);
+    // No "and 18 is the newest" assertion here any more (v1.26.0, Lane 2 item 4) -- handed on
+    // exactly the way 0017's suite handed it to this one. That claim belongs to whichever migration
+    // is currently last: 0019 added a column of its own and its own suite asserts
+    // Math.max(...idxs) === 19, as this file did while 0018 held the position. An assertion a later,
+    // correct migration must break is a maintenance tax, not a guard.
   });
 
   it('the breakpoint marker never appears inside a comment', () => {

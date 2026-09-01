@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, isNull, lte, ne, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, or, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '@/db/client';
 import { accounts, categories, transactions, transactionSplits, users } from '@/db/schema';
@@ -17,6 +17,7 @@ import { ruleOwnedError } from '@/lib/categorize/rules';
 import { nowIso } from '@/lib/clock';
 import { isIsoDate } from '@/lib/dates';
 import { applyPaymentMatchers, assignTransactionToLoan } from '@/lib/loans';
+import { EFFECTIVE_AMOUNT, EFFECTIVE_CATEGORY } from '@/lib/splits';
 
 /**
  * v1.13.0 ruling R4 (item I4). Thrown by createManualTransaction when the row's own category
@@ -91,9 +92,105 @@ export interface TransactionFilter {
    * and why it is safe to AND onto REVIEW_WHERE rather than a second, independent definition.
    */
   reviewQueue?: 'suggested' | 'uncategorized';
+  /**
+   * v1.26.0 Lane 2 item 2. Restrict to rows carrying one `categorization_source` value. The full
+   * set the column allows (src/db/schema.ts: the enum is the whole storage domain, and there is no
+   * SQL CHECK behind it) -- not just `'rule'` -- because a filter that accepts only the value
+   * today's caller wants is a filter the next caller has to widen, and the other three are all
+   * answerable questions ("what did Bayes guess", "what have we confirmed by hand", "what has
+   * nothing said anything about").
+   *
+   * `'rule'` is the audit case this release exists for: REVIEW_WHERE (src/lib/categorize/engine.ts)
+   * is `category IS NULL OR source = 'bayes'`, so a rule-assigned row is treated as settled and
+   * NEVER enters the review queue -- which is correct (rules must not create as much work as they
+   * save) and left the household with no surface at all that showed what the rules had done. This
+   * field plus `importId` below is that surface: "show me what the rules did to that import".
+   *
+   * Deliberately one value, not an array. Every caller so far asks about exactly one source, and a
+   * set-valued filter would need its own empty-set decision (no rows? all rows?) for no question
+   * anybody has.
+   */
+  source?: CategorizationSource;
+  /**
+   * v1.26.0 Lane 2 item 2. Restrict to one import batch, served by the existing
+   * `transactions_import_idx` (migration 0000, on import_id alone) with no join and no new index.
+   *
+   * `transactions.import_id` -- the import that INSERTED the row -- is authoritative here, NOT the
+   * `transaction_imports` join table, and the two genuinely can disagree. commitImport
+   * (src/lib/import/commit.ts) writes import_id once, on insert, and additionally links EVERY row
+   * it handled into transaction_imports including rows it recognised as duplicates of an earlier
+   * import -- deliberately, because that association is what makes undo safe for overlapping
+   * date-range exports (partitionByAssociation). So re-importing an overlapping statement gives an
+   * already-present row a second transaction_imports row while its import_id still names the
+   * import that first brought it in.
+   *
+   * The household's question is "what happened in that import" -- the rows it ADDED, which is
+   * exactly `imports.rows_added` and exactly what the import summary screen already told them.
+   * A duplicate row was not added by the second import; it was already there and its rule
+   * assignment was already part of the first import's batch. Auditing it again under the second
+   * import would show the household rows they had already dismissed, which is the one thing a
+   * dismissible batch must not do.
+   *
+   * One consequence, stated rather than hidden: undoing an import sets import_id to NULL on any row
+   * that SURVIVES the undo (imports.import_id is ON DELETE SET NULL, and a row shared with a second
+   * import is kept). Such a row keeps its transaction_imports link to the surviving import but
+   * belongs to no batch by this filter. That is the honest answer -- the batch it was audited under
+   * no longer exists, and the surviving import never added it -- and it is a row the household has
+   * already seen twice.
+   */
+  importId?: number | null;
+  /**
+   * v1.26.0 Lane 2 item 1. Which column orders the list. `undefined` -- the ONLY default -- leaves
+   * listTransactions' order exactly as it has always been: newest first, or oldest first while
+   * `reviewOnly` is set (working a queue front-to-back). `direction` below is read only when this
+   * is set, so a caller that passes a direction and no sort changes nothing.
+   *
+   * `'category'` sorts by category NAME, never by id -- an id order is meaningless to a person. It
+   * needs no join of its own: baseQuery already LEFT JOINs `categories` on `transactions.categoryId`
+   * to select `categoryName` for the row, and that join is on a primary key so it matches at most
+   * one row and cannot fan a transaction out into several. A correlated `(select name from
+   * categories where id = category_id)` in the ORDER BY would have produced the identical order at
+   * the cost of a second lookup per row for a column already in hand.
+   *
+   * That also settles which category a SPLIT transaction sorts by: its own `category_id`, the same
+   * value the list DISPLAYS in that row's category cell -- not its parts'. A split has no single
+   * category (that is what makes it a split), so sorting it by anything other than what the row
+   * shows would put it somewhere the reader cannot account for. In practice a split row's own
+   * category_id is usually NULL (setTransactionSplits never invents or overwrites it, see
+   * src/lib/splits.ts), so it lands with the uncategorized rows -- last, per `direction` below.
+   * The GROUPED aggregate is the surface that decomposes a split across its parts'
+   * categories (groupTransactionsByCategory, below); the flat list is one row per transaction.
+   */
+  sort?: TransactionSort;
+  /**
+   * v1.26.0 Lane 2 item 1. Read only when `sort` is set (see above); defaults to `'desc'` there,
+   * matching the page's own long-standing newest-first default rather than inventing a second one.
+   *
+   * Under `sort: 'category'` an UNCATEGORIZED row sorts LAST in BOTH directions, which is why this
+   * is not simply an ASC/DESC flip. "No category" is not a name: it does not belong at either end
+   * of an alphabet, and SQLite would otherwise put it first under ASC and last under DESC purely
+   * because NULL sorts low -- so half the time the reader's first screenful would be rows with
+   * nothing in the column they just asked to sort by. Last in both directions makes the answer to
+   * "sort by category" the same shape whichever way it is pointed: named categories in the order
+   * asked, then the rows that have none.
+   */
+  direction?: SortDirection;
   page?: number;
   pageSize?: number;
 }
+
+/**
+ * v1.26.0 Lane 2 item 2. The whole domain of `transactions.categorization_source`, mirrored from
+ * src/db/schema.ts and identical to TransactionRow.source below -- exported so a caller
+ * (a route's zod schema, a URL reader) can enumerate the accepted values instead of restating them.
+ */
+export type CategorizationSource = 'rule' | 'bayes' | 'manual' | 'none';
+
+/** v1.26.0 Lane 2 item 1. See TransactionFilter.sort. */
+export type TransactionSort = 'date' | 'amount' | 'category';
+
+/** v1.26.0 Lane 2 item 1. See TransactionFilter.direction. */
+export type SortDirection = 'asc' | 'desc';
 
 export interface TransactionRow {
   id: number;
@@ -291,8 +388,60 @@ function buildWhere(filter: TransactionFilter, viewer: Viewer): SQL | undefined 
     else if (filter.reviewQueue === 'uncategorized') clauses.push(REVIEW_UNCATEGORIZED_WHERE);
   }
 
+  // v1.26.0 Lane 2 item 2. Both plain equality on an indexed transactions column, both pushed onto
+  // the same array every other filter uses -- so they compose with the rest (and with each other:
+  // `{ source: 'rule', importId: 7 }` is the audit view's whole query) rather than being a second
+  // entry point with its own rules. See their own doc comments on TransactionFilter above for why
+  // import_id and not transaction_imports.
+  if (filter.source !== undefined) clauses.push(eq(transactions.categorizationSource, filter.source));
+  if (typeof filter.importId === 'number') clauses.push(eq(transactions.importId, filter.importId));
+
   if (clauses.length === 0) return undefined;
   return and(...clauses);
+}
+
+/**
+ * v1.26.0 Lane 2 item 1. The ORDER BY for listTransactions, in one place so the default and the
+ * three chosen sorts cannot drift apart.
+ *
+ * `filter.sort === undefined` returns EXACTLY what this function's caller did before this release:
+ * `desc(date), desc(id)`, or `asc(date), asc(id)` while reviewOnly is set. Ruling R1's oldest-first
+ * queue order is a property of the queue, not a sort the reader picked, so it stays the default for
+ * that filter and is overridable by an explicit `sort` like any other default.
+ *
+ * EVERY branch ends in `id`, and that is not decoration. Without a unique final key, SQLite is free
+ * to return rows with equal sort keys in any order it likes, and it does not have to pick the same
+ * order twice -- so two rows on the same date (extremely common: one statement, one day) or with the
+ * same amount (a $4.50 coffee twice) can swap places between the query for page 1 and the query for
+ * page 2, which means LIMIT/OFFSET can show one of them on both pages and the other on neither. The
+ * household would see a duplicated row and a silently missing row, on a page whose `total` says
+ * neither happened. `id` is the primary key, so appending it makes the full ordering a total order
+ * and pagination reproducible. Same reason the pre-existing default already carried it.
+ *
+ * The tiebreaker follows the requested direction rather than being pinned ascending, matching the
+ * existing default's own desc/desc and asc/asc pairs: determinism is what pagination needs, and
+ * either choice is deterministic.
+ */
+function orderByFor(filter: TransactionFilter): SQL[] {
+  if (filter.sort === undefined) {
+    return filter.reviewOnly
+      ? [asc(transactions.date), asc(transactions.id)]
+      : [desc(transactions.date), desc(transactions.id)];
+  }
+  const dir = filter.direction === 'asc' ? asc : desc;
+  switch (filter.sort) {
+    case 'amount':
+      return [dir(transactions.amountCents), dir(transactions.id)];
+    case 'category':
+      // Uncategorized last in BOTH directions (see TransactionFilter.direction). A leading
+      // always-ascending 0/1 rank does that in one expression: named rows rank 0 and sort among
+      // themselves by name in the asked-for direction, and the nameless ones all rank 1 and land
+      // after them whichever way `dir` points. `categories.name` is the column baseQuery already
+      // left-joins for the row's own categoryName -- no second join, no correlated lookup.
+      return [sql`case when ${categories.name} is null then 1 else 0 end`, dir(categories.name), dir(transactions.id)];
+    case 'date':
+      return [dir(transactions.date), dir(transactions.id)];
+  }
 }
 
 /**
@@ -313,15 +462,224 @@ export function listTransactions(filter: TransactionFilter, viewer: Viewer): Tra
   const total = totalRow?.c ?? 0;
 
   const query = baseQuery();
-  // Ruling R1: oldest-first while working the queue, same order listReviewQueue always used;
-  // newest-first (unchanged) otherwise.
+  // v1.26.0 Lane 2 item 1: the order moved into orderByFor (above), which returns the identical
+  // default -- ruling R1's oldest-first while working the queue, newest-first otherwise -- when no
+  // `sort` is asked for. See that function for why every ordering ends in `id`.
   const rows = (where ? query.where(where) : query)
-    .orderBy(...(filter.reviewOnly ? [asc(transactions.date), asc(transactions.id)] : [desc(transactions.date), desc(transactions.id)]))
+    .orderBy(...orderByFor(filter))
     .limit(pageSize)
     .offset((page - 1) * pageSize)
     .all();
 
   return { rows, total, page, pageSize, pageCount: Math.max(1, Math.ceil(total / pageSize)) };
+}
+
+/** v1.26.0 Lane 2 item 3. One category cluster within a filtered set. See CategoryGroupPage. */
+export interface CategoryGroupRow {
+  /** null is the uncategorized cluster; `categoryName` is already labelled for it. */
+  categoryId: number | null;
+  /**
+   * The DISPLAY label, not the raw column: 'Uncategorized' for the null group, and
+   * '<name> — not in a sub-category' for a parent category that also has children. Both labels are
+   * lifted verbatim from categoryBreakdown (src/lib/reports.ts) rather than reinvented -- see
+   * groupTransactionsByCategory's own comment for why the second one matters here too.
+   */
+  categoryName: string;
+  /** The category's own parent, for a caller that wants to nest. null for a top-level or the null group. */
+  parentId: number | null;
+  /** DISTINCT transactions in this cluster, not join rows -- see groupTransactionsByCategory. */
+  count: number;
+  /** Signed net, integer cents. Negative is spending, matching every other total in this app. */
+  totalCents: number;
+}
+
+/**
+ * v1.26.0 Lane 2 item 3. A page of category clusters, plus the totals for the WHOLE filtered set.
+ * See groupTransactionsByCategory for what is and is not double-counted.
+ */
+export interface CategoryGroupPage {
+  groups: CategoryGroupRow[];
+  /** Group pagination -- NOT row pagination. `filter.page`/`filter.pageSize` are ignored. */
+  page: number;
+  pageSize: number;
+  pageCount: number;
+  /** How many clusters the filter produces in total, across every page. */
+  groupCount: number;
+  /**
+   * DISTINCT transactions in the whole filtered set -- byte-identical to
+   * listTransactions(filter, viewer).total for the same filter and viewer, because it is the same
+   * count query. Deliberately NOT the sum of `groups[].count`, which can be larger: a split
+   * transaction is one row in the list and a member of every one of its parts' clusters.
+   */
+  totalCount: number;
+  /**
+   * Signed net across every cluster, integer cents. This one DOES equal the sum of
+   * `groups[].totalCents`: a split's parts sum exactly to its parent's amount (the invariant
+   * setTransactionSplits enforces, src/lib/splits.ts), so decomposing a transaction across
+   * categories moves money between clusters without creating or destroying any.
+   */
+  totalCents: number;
+}
+
+/**
+ * v1.26.0 Lane 2 item 3. "For this filter, which categories, how many rows each, how much each" --
+ * ordered largest absolute total first, so the cluster most worth checking is at the top.
+ *
+ * The audit view's reason for existing: a filter of `{ source: 'rule', importId: N }` answers "what
+ * did the rules do to that import" as a handful of clusters a person can scan and dismiss, instead
+ * of 300 rows they will not read. Largest ABSOLUTE total, not largest negative: a rule that
+ * misfiled an income deposit is exactly as worth checking as one that misfiled a big expense, and
+ * signed ordering would bury it at the bottom under every ordinary purchase.
+ *
+ * A SEPARATE function from listTransactions, on purpose. The paginated row query returns one row
+ * per TRANSACTION and its `total`/`pageCount` depend on that; grouping needs a LEFT JOIN onto
+ * transaction_splits that returns one row per split PART. Making one query serve both would mean
+ * either a grouped query that cannot page rows or a row query whose totals are inflated by splits
+ * -- the exact double-count this codebase has already paid for. Two queries, two shapes, one shared
+ * `buildWhere`.
+ *
+ * SPLIT-AWARE, which is the thing most likely to be silently wrong here. `EFFECTIVE_CATEGORY` /
+ * `EFFECTIVE_AMOUNT` (src/lib/splits.ts) over a LEFT JOIN of transaction_splits is the same idiom
+ * categoryBreakdown (src/lib/reports.ts) and personSpendSplit already use: a split transaction
+ * contributes each PART to that part's own category at that part's own amount, and a transaction
+ * with no splits falls through the coalesce to its own two columns unchanged. A $50 transaction
+ * split $30 Health / $20 Groceries therefore adds $30 to Health and $20 to Groceries -- never $50
+ * to both (which is what a naive join plus `sum(amount_cents)` does, and it looks plausible in
+ * every test that has no split in it), and never $50 to its own stale top-level category.
+ *
+ * `count` is `count(distinct transactions.id)`, not `count(*)`. Two things force it: nothing forbids
+ * a split from putting two parts in the SAME category (setTransactionSplits dedupes categoryIds only
+ * for its existence/archived check), so `count(*)` would report one transaction as two rows in that
+ * cluster; and "count" on a screen that says "N transactions, $X" has to mean transactions. The sum
+ * still adds BOTH parts, which is correct -- the money really is doubled up in that category, the
+ * transaction is not.
+ *
+ * EVERY existing filter is honoured, because the WHERE comes from `buildWhere` -- the identical
+ * clause list listTransactions builds, from the identical `filter` object, including the viewer's
+ * ownerScope. There is no second filter path to keep in step and therefore no way for the groups to
+ * describe a different set than the list: if they could disagree, the numbers on screen would be a
+ * lie, which is the failure mode this codebase has paid for repeatedly. The one restatement is
+ * `totalCount`, which runs the same `count(*)` query listTransactions runs for its own `total`.
+ *
+ * One consequence of being split-aware while the filter is split-aware, stated rather than
+ * discovered: `categoryId` (categoryMatchClause) selects a split transaction if ANY of its parts
+ * match, and this function then decomposes that whole transaction, so the OTHER parts' categories
+ * appear as clusters too. That is the honest breakdown of the transactions in view -- the list shows
+ * that transaction, and this says where its money actually went -- and it is what categoryBreakdown
+ * already does for a filtered date range. It cannot arise in the audit case at all: splitting a row
+ * stamps `categorization_source = 'manual'` (src/lib/splits.ts), so no row with splits can ever
+ * match `source: 'rule'`.
+ *
+ * PAGINATION IS BY GROUP, never by row, and it is driven by the THIRD argument -- `filter.page` and
+ * `filter.pageSize` are ignored here. That separation is the point: the caller passes ONE filter
+ * object to both listTransactions and this function, and the row page it is currently showing must
+ * not silently decide which clusters it is told about. Paging by group is also the only option that
+ * does not defeat the feature: the row list pages at 50, so a cluster straddling a row-page boundary
+ * would show the household half of it with no sign there was more -- whereas a group is the unit
+ * being scanned, and every group here carries its FULL count and subtotal no matter how many pages
+ * of rows it spans. `pageSize` defaults to 25 groups and clamps to 1..200, the same clamp
+ * listTransactions applies to rows.
+ *
+ * Grouping happens in ONE query with no LIMIT, and the page is sliced in memory. That is
+ * deliberate, not laziness: the number of clusters is bounded by the size of the category tree plus
+ * one (a household-managed list of tens -- the seed ships about forty), so a second COUNT query for
+ * `groupCount` would cost more than materialising the groups, and slicing locally is what lets
+ * `groupCount`/`totalCents` describe the whole filtered set rather than just the visible page.
+ *
+ * `viewer` is REQUIRED for the same reason it is on listTransactions (v1.13.0 ruling R2): an
+ * optional viewer lets a forgotten call site compile into a silent leak.
+ */
+export function groupTransactionsByCategory(
+  filter: TransactionFilter,
+  viewer: Viewer,
+  paging?: { page?: number; pageSize?: number },
+): CategoryGroupPage {
+  const pageSize = Math.min(200, Math.max(1, paging?.pageSize && paging.pageSize > 0 ? paging.pageSize : 25));
+  const page = Math.max(1, paging?.page ?? 1);
+  const where = buildWhere(filter, viewer);
+
+  const rows = getDb()
+    .select({
+      categoryId: EFFECTIVE_CATEGORY,
+      categoryName: categories.name,
+      parentId: categories.parentId,
+      count: sql<number>`count(distinct ${transactions.id})`,
+      totalCents: sql<number>`sum(${EFFECTIVE_AMOUNT})`,
+    })
+    .from(transactions)
+    .leftJoin(transactionSplits, eq(transactionSplits.txnId, transactions.id))
+    // Joined on EFFECTIVE_CATEGORY, not on transactions.categoryId: a split part's cluster must be
+    // named after the PART's category. No isArchived filter -- a since-archived category still has
+    // to name the money already filed under it, the same archived-inclusive choice
+    // descendantCategoryIds and foldRollup (src/lib/budgets.ts) already make.
+    .leftJoin(categories, eq(categories.id, EFFECTIVE_CATEGORY))
+    .where(where)
+    // Grouped by id AND name so two categories that happen to share a name stay two clusters.
+    .groupBy(EFFECTIVE_CATEGORY, categories.name)
+    .all();
+
+  // The same count listTransactions computes for its own `total`, over the same WHERE and with no
+  // splits join -- so "N transactions" on the group header and "N" on the list can never disagree.
+  const totalRow = getDb()
+    .select({ c: sql<number>`count(*)` })
+    .from(transactions)
+    .where(where)
+    .get();
+
+  // v1.21.0 item 2's label, carried here for the same reason reports.ts carries it: a cluster keyed
+  // by a PARENT category id is only the money filed DIRECTLY on that parent, never on its children,
+  // and printing the parent's bare name next to that figure reads exactly like the parent's total.
+  // `parentIds` is "category ids that are somebody's parentId"; a top-level category with no
+  // children has nothing to be confused with and keeps its plain name.
+  const parentIds = new Set(
+    getDb()
+      .select({ parentId: categories.parentId })
+      .from(categories)
+      .where(isNotNull(categories.parentId))
+      .all()
+      .map((row) => row.parentId as number),
+  );
+
+  const groups: CategoryGroupRow[] = rows.map((row) => {
+    const name = row.categoryName;
+    const label =
+      name === null
+        ? 'Uncategorized'
+        : row.categoryId !== null && parentIds.has(row.categoryId)
+          ? `${name} — not in a sub-category`
+          : name;
+    return {
+      categoryId: row.categoryId,
+      categoryName: label,
+      parentId: row.parentId,
+      count: row.count,
+      // sum() over an empty group cannot happen (a group exists because a row is in it), but SQLite
+      // types it nullable, so coalesce in TS rather than pretend.
+      totalCents: row.totalCents ?? 0,
+    };
+  });
+
+  // Largest absolute total first. Then name, then id -- a total order, for exactly the reason the
+  // row list's ORDER BY ends in `id` (see orderByFor): without it, two clusters with equal absolute
+  // totals could swap between the call that renders group page 1 and the call that renders page 2,
+  // and the slice below would show one twice and the other never.
+  groups.sort(
+    (a, b) =>
+      Math.abs(b.totalCents) - Math.abs(a.totalCents) ||
+      a.categoryName.localeCompare(b.categoryName) ||
+      (a.categoryId ?? -1) - (b.categoryId ?? -1),
+  );
+
+  const groupCount = groups.length;
+  return {
+    groups: groups.slice((page - 1) * pageSize, page * pageSize),
+    page,
+    pageSize,
+    pageCount: Math.max(1, Math.ceil(groupCount / pageSize)),
+    groupCount,
+    totalCount: totalRow?.c ?? 0,
+    totalCents: groups.reduce((sum, group) => sum + group.totalCents, 0),
+  };
 }
 
 /**

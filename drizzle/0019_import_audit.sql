@@ -1,0 +1,117 @@
+-- WARNING: this migration is hand-maintained, not drizzle-kit-generated.
+-- Read the header of drizzle/0000_init.sql and the docblock in drizzle.config.ts before
+-- adding another one: there is no 0000_snapshot.json, so `drizzle-kit generate` would
+-- diff against an empty baseline and re-emit the whole schema. Hand-author the SQL,
+-- append the matching entry to drizzle/meta/_journal.json, and mirror the tables in
+-- src/db/schema.ts -- in that order.
+--
+-- NOTE ON SEPARATORS: drizzle's migrator splits this file on the breakpoint marker written
+-- between each statement below, and on nothing else, and it does NOT skip comments. That
+-- marker must therefore never appear inside a comment -- including this one, which is why
+-- it is described here rather than quoted -- or the file is shredded into fragments that
+-- will not parse.
+--
+-- THE FOREIGN-KEY PRAGMA IS NOT IN THIS FILE, ON PURPOSE -- see 0011's header. src/db/client.ts's
+-- openDatabase() disables foreign keys around the whole migration pass and re-enables them (plus a
+-- foreign_key_check) immediately after. Do not put a pragma here.
+--
+-- One nullable column, ADDITIVE ONLY, same ALTER-TABLE-ADD-COLUMN shape as 0018's one and 0017's
+-- three. No table rebuild: nothing about this change can collide with imports_account_idx, which
+-- names (account_id, created_at) and not this column.
+--
+-- ============================================================================================
+-- THE DEFECT (v1.26.0, Lane 2)
+-- ============================================================================================
+-- Rules auto-categorize on import, and a rule-assigned row NEVER enters the review queue:
+-- REVIEW_WHERE (src/lib/categorize/engine.ts) is `is_transfer = 0 AND (category_id IS NULL OR
+-- categorization_source = 'bayes')`, so `categorization_source = 'rule'` is treated as settled and
+-- is never offered for confirmation. The owner's objection, verbatim: "rules are supposed to auto
+-- cateogrize on import but i still need to confirm or deny no? i dont just want to auto apply rules
+-- and never see what happened on my import."
+--
+-- v1.25.0 sharpened it. The preset pack installs 107 rules the household never wrote, and writing
+-- (or accepting) a rule is consent to a PATTERN, not to every future application of it. Before this
+-- release there was no surface anywhere that showed what the rules had actually done to an import.
+--
+-- Confirmation must NOT become mandatory. If every rule-assigned row needed confirming, rules would
+-- create exactly as much work as they save and the queue would be rubber-stamped -- worse than not
+-- asking at all. So the audit is a BATCH that is inspectable and dismissible, and this column is
+-- what makes "dismissible" durable: without it the app can only ever nag, or rely on the household
+-- remembering which imports they had already looked at.
+--
+-- ============================================================================================
+-- WHY THE MARKER LIVES ON THE IMPORT AND NOT ON THE TRANSACTION
+-- ============================================================================================
+-- The alternative considered was a per-transaction marker (a `rule_reviewed_at` on transactions, or
+-- a join table of reviewed transaction ids). Rejected, for four reasons:
+--
+--   1. The thing being dismissed is a BATCH. "Have I looked at this import" is one question with
+--      one answer; a per-row marker stores N answers to reconstruct that one, and reconstructing it
+--      means "every rule-assigned row in the import is marked", which is a scan and an aggregate
+--      where this is a single column read.
+--   2. Per-row state would have to be WRITTEN on every row of the import for no extra answer. A
+--      600-row statement would take 600 writes to record one decision.
+--   3. A NEW import needs no write at all here. A fresh imports row carries NULL in this column, so
+--      it is unreviewed by construction -- there is nothing for src/lib/import/flow.ts to remember
+--      to do, and therefore nothing for a future import path (SimpleFIN, OFX, a restore) to forget.
+--      That is the whole reason this is nullable with no default rather than a NOT NULL column with
+--      a sentinel.
+--   4. undoImport (src/lib/import/commit.ts) deletes the imports row itself, so the marker goes
+--      with it and there is no dangling state to clean up. A per-transaction marker would SURVIVE
+--      an undo on every row the undo keeps (a row shared with a second, overlapping import is kept,
+--      not deleted -- partitionByAssociation's `shared` list) and would then be a reviewed-flag
+--      pointing at a review of a batch that no longer exists.
+--
+-- Marking one import reviewed says nothing about any other import: the column is per-row on a table
+-- whose rows are imports, so a new import cannot clear an older one's state and an older one cannot
+-- pre-dismiss a new one.
+--
+-- ============================================================================================
+-- WHY A TIMESTAMP AND NOT A BOOLEAN -- AND WHY THE READ STILL ONLY TESTS FOR NULL
+-- ============================================================================================
+-- Stored as the same ISO-8601 text every other timestamp in this schema uses (nowIso(),
+-- src/lib/clock.ts), not an integer flag, because "when" is strictly more information than
+-- "whether" at identical cost, and the audit view wants to say WHEN a batch was cleared.
+--
+-- unreviewedRuleImports() (src/lib/import/commit.ts) nevertheless tests `rules_reviewed_at IS NULL`
+-- and NOTHING ELSE. The tempting extra clause -- also treat an import as unreviewed again when one
+-- of its rows has `updated_at` later than this timestamp, so a re-run of the rules over an
+-- already-dismissed import comes back -- is deliberately NOT here, because transactions.updated_at
+-- is bumped by writes that have nothing to do with categorization: bulkSetNotes and
+-- bulkSetAttribution (src/lib/transactions.ts) both touch it, and setTransactionSplits
+-- (src/lib/splits.ts) bumps it unconditionally on purpose so the budget evaluator's fingerprint
+-- notices a cleared split. An import would therefore un-dismiss itself because somebody typed a
+-- note, which is a false nag on a surface whose entire justification is that it must not nag.
+--
+-- The honest answer for a re-categorized row needs no second clause anyway. unreviewedRuleImports()
+-- counts rows that are STILL `categorization_source = 'rule'`, so a row a person has since
+-- confirmed or corrected (confirmCategory stamps 'manual') has left the rule-assigned set and the
+-- import's count falls on its own; an import whose every rule row has been dealt with individually
+-- disappears from the list without anyone pressing "dismiss". And a household that deliberately
+-- re-runs the rules over old rows pressed "Run rules" and gets that run's own report
+-- (EngineResult.changed, v1.21.0 item 11) -- it does not need this column to tell it what it just
+-- asked for.
+ALTER TABLE `imports` ADD `rules_reviewed_at` text;
+--> statement-breakpoint
+-- ONE-TIME CATCH-UP for every import that already exists, in the same spirit as 0018's backfill and
+-- 0016 PART 2's uppercase pass. NULL means "nobody has looked at this import's rule assignments",
+-- and on an upgrade that is factually true of every historical import -- but acting on it would
+-- greet a household that has been importing since v1.0.0 with "you have 47 imports you never
+-- checked", about statements they closed months ago and about rule applications they have already
+-- lived with. That is precisely the rubber-stamp failure this feature exists to avoid, produced by
+-- the feature's own first boot.
+--
+-- So the feature starts counting from NOW: everything that happened before it existed is recorded
+-- as already seen. Stamped with SQLite's own clock rather than a literal, and %f is what makes the
+-- format byte-compatible with nowIso()'s toISOString() (millisecond precision, trailing Z) so a
+-- reader cannot tell a backfilled stamp from one the app wrote.
+--
+-- The `IS NULL` guard is belt-and-braces -- drizzle records each migration in __drizzle_migrations
+-- and never re-runs it, so this cannot fire twice -- but it states the intent in the SQL itself:
+-- this pass may only ever fill an EMPTY marker, never overwrite a real one.
+--
+-- Pinned by 'stamps every import that predates it as already reviewed' in
+-- tests/db/migration-0019.test.ts.
+UPDATE `imports`
+SET `rules_reviewed_at` = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+WHERE `rules_reviewed_at` IS NULL;

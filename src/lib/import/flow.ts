@@ -20,6 +20,20 @@ export interface CommitFlowResult {
   rowsDuplicate: number;
   rowsError: number;
   needsReview: number;
+  /**
+   * v1.26.0 Lane 2 item 4. How many of the rows this import ADDED came out of the engine carrying
+   * `categorization_source = 'rule'` -- the number the owner's objection is about ("i dont just want
+   * to auto apply rules and never see what happened on my import"). Distinct from
+   * EngineResult.categorized, which counts rule and Bayes assignments together, and from
+   * `needsReview` above, which by construction EXCLUDES every one of these rows: REVIEW_WHERE
+   * (src/lib/categorize/engine.ts) treats a rule assignment as settled, which is exactly why it
+   * needs reporting somewhere else.
+   *
+   * Reported at the moment of import so the result screen can offer the audit view straight away,
+   * rather than making the UI go and ask unreviewedRuleImports (src/lib/import/commit.ts) for a
+   * number this call already has in hand. 0 is the common and unremarkable answer.
+   */
+  rulesApplied: number;
   /** SHOULD-3.6, passed straight through from CommitResult — see its doc comment. */
   attributionSummary: string | null;
   engine: EngineResult;
@@ -136,6 +150,26 @@ export function commitStagedImport(input: {
     needsReview = row?.c ?? 0;
   }
 
+  // v1.26.0 Lane 2 item 4. A second small count over the same id list rather than a CASE folded
+  // into the one above: that query is the definition of `needsReview` and has its own history, and
+  // this question ("which rows did a RULE claim") is the complement of it, not a variation on it.
+  //
+  // NOTHING IS WRITTEN TO imports.rules_reviewed_at HERE, on purpose. A fresh import must be
+  // UNREVIEWED, and the column is nullable with no default precisely so that is the state a new
+  // imports row already has -- so there is nothing for this function to remember to do, and nothing
+  // for the other paths that create imports rows (SimpleFIN sync, a restore) to forget. Writing a
+  // timestamp here would mark every import as already checked at the instant it arrived, which is
+  // the exact opposite of the feature. See drizzle/0019_import_audit.sql's own header.
+  let rulesApplied = 0;
+  if (committed.insertedTransactionIds.length > 0) {
+    const row = getDb()
+      .select({ c: sql<number>`count(*)` })
+      .from(transactions)
+      .where(and(inArray(transactions.id, committed.insertedTransactionIds), eq(transactions.categorizationSource, 'rule')))
+      .get();
+    rulesApplied = row?.c ?? 0;
+  }
+
   // MUST-13.7: a post-commit side effect outside the commit transaction, exactly as
   // runEngine already is. applyPaymentMatchers is internally guarded (MUST-13.5) and returns 0
   // on failure rather than throwing an import away; the loanMatchReport out-param is how
@@ -151,6 +185,7 @@ export function commitStagedImport(input: {
     rowsDuplicate: committed.rowsDuplicate,
     rowsError: committed.rowsError,
     needsReview,
+    rulesApplied,
     attributionSummary: committed.attributionSummary,
     engine,
     engineFailed,
