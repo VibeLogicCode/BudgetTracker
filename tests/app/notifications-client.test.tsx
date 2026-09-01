@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, cleanup, fireEvent, waitFor } from '@testing-library/react';
+import { render, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
 import { NotificationsClient, type NotificationsPageData } from '@/app/(app)/settings/notifications/notifications-client';
 import { SMTP_PRESETS } from '@/lib/notify/config';
-import { NOTIFICATION_EVENTS, eventsFor } from '@/lib/notify/events';
+import { NOTIFICATION_EVENTS, eventsFor, householdEligibleEvents } from '@/lib/notify/events';
 
 const detect = vi.hoisted(() => vi.fn());
 vi.mock('@/app/(app)/settings/notifications/actions', () => ({
@@ -16,6 +16,13 @@ vi.mock('@/app/(app)/settings/notifications/actions', () => ({
   testTargetAction: vi.fn(async () => ({})),
   savePreferencesAction: vi.fn(async () => ({})),
   detectTelegramChatIdAction: detect,
+  // v1.28.0 Lane 2 (family channels).
+  saveHouseholdTelegramTargetAction: vi.fn(async () => ({})),
+  saveHouseholdEmailTargetAction: vi.fn(async () => ({})),
+  removeHouseholdTargetAction: vi.fn(async () => ({})),
+  testHouseholdTargetAction: vi.fn(async () => ({})),
+  saveHouseholdPreferencesAction: vi.fn(async () => ({})),
+  detectHouseholdTelegramChatIdAction: vi.fn(async () => ({})),
 }));
 
 afterEach(() => {
@@ -44,6 +51,33 @@ function props(over: Partial<NotificationsPageData> = {}): NotificationsPageData
     settings: SETTINGS,
     deliveries: [],
     presets: SMTP_PRESETS,
+    // v1.28.0 Lane 2 (family channels): mirrors page.tsx's own real narrowing -- a member's
+    // copy carries no `targets` at all, matching how `smtp` above is withheld from one too.
+    household: {
+      targets: role === 'admin' ? { telegram: null, email: null } : null,
+      eligibleEvents: householdEligibleEvents(),
+      prefs: {},
+    },
+    ...over,
+  };
+}
+
+function householdTargetFixture(
+  over: Partial<NonNullable<NotificationsPageData['household']['targets']>['telegram']> = {},
+) {
+  return {
+    id: 1,
+    scope: 'household' as const,
+    userId: null,
+    createdByUserId: 1,
+    channel: 'telegram' as const,
+    destination: '-1001234567890',
+    secretSet: false,
+    enabled: true,
+    verifiedAt: null,
+    lastError: null,
+    lastErrorAt: null,
+    lastSuccessAt: null,
     ...over,
   };
 }
@@ -164,6 +198,7 @@ describe('MUST-11.3: the matrix is generated from the registry', () => {
       audience: 'all',
       trigger: 'tick',
       defaultEnabled: false,
+      householdEligible: false,
     } as const;
     const { container } = render(<NotificationsClient {...props({ events: [...eventsFor('admin'), future] })} />);
     expect(container.textContent).toContain('On pace to overshoot');
@@ -253,8 +288,8 @@ describe('MUST-11.3: the matrix is generated from the registry', () => {
 
 describe('MUST-11.2: Detect chat ID', () => {
   it('MUST-8.11: is disabled with its hint before a token is saved', () => {
-    const { getByText, container } = render(<NotificationsClient {...props()} />);
-    const button = getByText('Detect chat ID') as HTMLButtonElement;
+    const { container } = render(<NotificationsClient {...props()} />);
+    const button = personalTelegram(container).getByText('Detect chat ID') as HTMLButtonElement;
     expect(button.disabled).toBe(true);
     expect(container.textContent).toContain('Save your bot token first');
   });
@@ -266,18 +301,18 @@ describe('MUST-11.2: Detect chat ID', () => {
         { chatId: '-1001234567890', title: 'Morgan Family', kind: 'group', lastMessageAt: '2026-08-16T12:00:00.000Z' },
       ],
     });
-    const { getByText, container, getByLabelText } = render(
+    const { container } = render(
       <NotificationsClient
         {...props({ targets: { telegram: target({ channel: 'telegram', destination: '', secretSet: true }), email: null } })}
       />,
     );
-    fireEvent.click(getByText('Detect chat ID'));
+    fireEvent.click(personalTelegram(container).getByText('Detect chat ID'));
     await waitFor(() => expect(container.querySelectorAll('input[type="radio"]')).toHaveLength(2));
     expect(container.textContent).toContain('Morgan Family');
     expect(container.textContent).toContain('-1001234567890');
 
     fireEvent.click(container.querySelectorAll('input[type="radio"]')[1] as HTMLInputElement);
-    expect((getByLabelText(/chat id/i) as HTMLInputElement).value).toBe('-1001234567890');
+    expect((personalTelegram(container).getByLabelText(/chat id/i) as HTMLInputElement).value).toBe('-1001234567890');
     // Nothing is saved until Save is pressed.
     const actions = await import('@/app/(app)/settings/notifications/actions');
     expect(actions.saveTelegramTargetAction).not.toHaveBeenCalled();
@@ -290,7 +325,7 @@ describe('MUST-11.2: Detect chat ID', () => {
 
     detect.mockResolvedValue({ chats: [] });
     const first = render(<NotificationsClient {...withToken} />);
-    fireEvent.click(first.getByText('Detect chat ID'));
+    fireEvent.click(personalTelegram(first.container).getByText('Detect chat ID'));
     await waitFor(() =>
       expect(first.container.textContent).toContain(
         'No messages yet. Open Telegram, find your bot, send it any message, then press this again.',
@@ -302,7 +337,7 @@ describe('MUST-11.2: Detect chat ID', () => {
       error: 'That bot token was rejected by Telegram. Check you pasted the whole thing, then save it again.',
     });
     const second = render(<NotificationsClient {...withToken} />);
-    fireEvent.click(second.getByText('Detect chat ID'));
+    fireEvent.click(personalTelegram(second.container).getByText('Detect chat ID'));
     await waitFor(() =>
       expect(second.container.textContent).toContain(
         'That bot token was rejected by Telegram. Check you pasted the whole thing, then save it again.',
@@ -337,6 +372,20 @@ function telegramEnabledCheckbox(container: HTMLElement): HTMLInputElement {
   const chatIdInput = container.querySelector('#telegram-chat') as HTMLInputElement;
   const form = chatIdInput.closest('form') as HTMLFormElement;
   return form.querySelector('input[name="enabled"]') as HTMLInputElement;
+}
+
+/**
+ * v1.28.0 Lane 2 (family channels): the admin page now also renders a "Family Telegram" card
+ * with its own "Family chat ID" field and "Detect family chat ID" / "Send family test message"
+ * buttons -- distinctly LABELLED (see notifications-client.tsx's own comment on
+ * HouseholdTelegramFields), but a loose case-insensitive regex like /chat id/i still matches
+ * both "Chat ID" and "Family chat ID" as a substring, and every query below predates that
+ * second card. Scoping to the `#telegram-channel` wrapper (the personal Telegram Card's own
+ * id, present since before this feature) is what keeps these pinned to the PERSONAL control
+ * they were written to test, the same fix telegramEnabledCheckbox above already uses.
+ */
+function personalTelegram(container: HTMLElement) {
+  return within(container.querySelector('#telegram-channel') as HTMLElement);
 }
 
 describe('Round 2 fix (HIGH): the Telegram Enabled checkbox defaults to the saved state and is disabled without a chat ID', () => {
@@ -375,8 +424,8 @@ describe('Round 2 fix (HIGH): the Telegram Enabled checkbox defaults to the save
   });
 
   it('typing a chat ID into the field re-enables the checkbox', () => {
-    const { container, getByLabelText } = render(<NotificationsClient {...props()} />);
-    const chatIdInput = getByLabelText(/chat id/i) as HTMLInputElement;
+    const { container } = render(<NotificationsClient {...props()} />);
+    const chatIdInput = personalTelegram(container).getByLabelText(/chat id/i) as HTMLInputElement;
     expect(telegramEnabledCheckbox(container).disabled).toBe(true);
     fireEvent.change(chatIdInput, { target: { value: '5551234' } });
     expect(telegramEnabledCheckbox(container).disabled).toBe(false);
@@ -392,7 +441,9 @@ describe('Round 2 fix (MED): Send test message is disabled without a saved chat 
         })}
       />,
     );
-    expect((withoutDestination.getByText('Send test message') as HTMLButtonElement).disabled).toBe(true);
+    expect((personalTelegram(withoutDestination.container).getByText('Send test message') as HTMLButtonElement).disabled).toBe(
+      true,
+    );
     cleanup();
 
     const withDestination = render(
@@ -402,7 +453,9 @@ describe('Round 2 fix (MED): Send test message is disabled without a saved chat 
         })}
       />,
     );
-    expect((withDestination.getByText('Send test message') as HTMLButtonElement).disabled).toBe(false);
+    expect((personalTelegram(withDestination.container).getByText('Send test message') as HTMLButtonElement).disabled).toBe(
+      false,
+    );
   });
 });
 
@@ -522,7 +575,7 @@ describe('§11.6: recent deliveries', () => {
 describe('review fix (MED-LOW): Detect chat ID recovers from a rejected action', () => {
   it('re-enables the button and shows an inline error instead of sticking at "Working…"', async () => {
     detect.mockRejectedValue(new Error('network dropped'));
-    const { getByText, container } = render(
+    const { container } = render(
       <NotificationsClient
         {...props({ targets: { telegram: target({ channel: 'telegram', destination: '', secretSet: true }), email: null } })}
       />,
@@ -531,7 +584,7 @@ describe('review fix (MED-LOW): Detect chat ID recovers from a rejected action',
     // "press Detect chat ID" is a different string), but re-querying by text after the click
     // would not need to change either way — grabbing the same node keeps the assertion below
     // about this element regardless of its label at that instant ("Working…" vs "Detect chat ID").
-    const button = getByText('Detect chat ID') as HTMLButtonElement;
+    const button = personalTelegram(container).getByText('Detect chat ID') as HTMLButtonElement;
     fireEvent.click(button);
     await waitFor(() => expect(button.disabled).toBe(false));
     expect(button.textContent).toBe('Detect chat ID');
@@ -569,11 +622,11 @@ describe('review fix (LOW): stale local state does not survive a Remove', () => 
     const configured = props({
       targets: { telegram: target({ channel: 'telegram', destination: '5551234', secretSet: true }), email: null },
     });
-    const { getByLabelText, rerender } = render(<NotificationsClient {...configured} />);
-    expect((getByLabelText(/chat id/i) as HTMLInputElement).value).toBe('5551234');
+    const { container, rerender } = render(<NotificationsClient {...configured} />);
+    expect((personalTelegram(container).getByLabelText(/chat id/i) as HTMLInputElement).value).toBe('5551234');
 
     rerender(<NotificationsClient {...props({ targets: { telegram: null, email: null } })} />);
-    expect((getByLabelText(/chat id/i) as HTMLInputElement).value).toBe('');
+    expect((personalTelegram(container).getByLabelText(/chat id/i) as HTMLInputElement).value).toBe('');
   });
 });
 
@@ -628,5 +681,190 @@ describe('MUST-5.3: no credential ever reaches these props', () => {
     expect(serialized).not.toMatch(/"botToken"/);
     expect(serialized).not.toMatch(/"secretEncrypted"/);
     expect(serialized).toContain('"secretSet":true');
+  });
+
+  it('v1.28.0 Lane 2: the same holds for the family channel -- serialized props and the rendered token field', () => {
+    const data = props({
+      household: {
+        targets: { telegram: householdTargetFixture({ secretSet: true }), email: null },
+        eligibleEvents: householdEligibleEvents(),
+        prefs: {},
+      },
+    });
+    const serialized = JSON.stringify(data);
+    expect(serialized).not.toMatch(/"botToken"/);
+    expect(serialized).not.toMatch(/"secretEncrypted"/);
+    expect(serialized).toContain('"secretSet":true');
+
+    const { container } = render(<NotificationsClient {...data} />);
+    const tokenField = container.querySelector('#household-telegram-token') as HTMLInputElement;
+    expect(tokenField.value).toBe('');
+    expect(tokenField.placeholder).toBe('•••••••• (saved)');
+  });
+});
+
+describe('v1.28.0 Lane 2: the "Family channels" section', () => {
+  it('renders for an admin, and its controls are entirely absent for a member', () => {
+    const admin = render(<NotificationsClient {...props({ role: 'admin' })} />);
+    expect(admin.container.textContent).toContain('Family channels');
+    expect(admin.container.textContent).toContain('Family Telegram');
+    expect(admin.container.textContent).toContain('Family email');
+    cleanup();
+
+    const member = render(<NotificationsClient {...props({ role: 'member' })} />);
+    expect(member.container.textContent).not.toContain('Family Telegram');
+    expect(member.container.textContent).not.toContain('Family email');
+    expect(member.container.querySelector('input[name^="household-pref:"]')).toBeNull();
+    expect(member.container.querySelector('#household-telegram-token')).toBeNull();
+  });
+
+  it('a member sees nothing about the family channel when nothing is routed away from them -- no zero state', () => {
+    const { container } = render(<NotificationsClient {...props({ role: 'member' })} />);
+    expect(container.textContent).not.toContain('Family channel');
+  });
+
+  it('a member sees a read-only explanation naming exactly what is routed away from them once an admin has routed something', () => {
+    const eligible = householdEligibleEvents();
+    const comingDue = eligible.find((event) => event.id === 'coming_due')!;
+    const { container } = render(
+      <NotificationsClient
+        {...props({
+          role: 'member',
+          household: {
+            targets: null,
+            eligibleEvents: eligible,
+            prefs: { [comingDue.id]: { telegram: false, email: true } },
+          },
+        })}
+      />,
+    );
+    expect(container.textContent).toContain('Family channel');
+    expect(container.textContent).toContain(comingDue.label);
+    // No controls -- read-only, per the brief's own choice of wording.
+    expect(container.querySelector('input[name^="household-pref:"]')).toBeNull();
+    expect(container.querySelector('#household-telegram-token')).toBeNull();
+  });
+
+  it('states the routing consequence in view, for both an admin and a member who is affected by it', () => {
+    const SENTENCE =
+      "Turn one of these on and that event goes to the family channel instead of to each person's own notifications — not both.";
+    const admin = render(<NotificationsClient {...props({ role: 'admin' })} />);
+    expect(admin.container.textContent).toContain(SENTENCE);
+    cleanup();
+
+    const eligible = householdEligibleEvents();
+    const comingDue = eligible.find((event) => event.id === 'coming_due')!;
+    const member = render(
+      <NotificationsClient
+        {...props({
+          role: 'member',
+          household: { targets: null, eligibleEvents: eligible, prefs: { [comingDue.id]: { telegram: false, email: true } } },
+        })}
+      />,
+    );
+    expect(member.container.textContent).toContain(SENTENCE);
+  });
+
+  it('the routing matrix lists exactly householdEligibleEvents() -- an excluded security event has no control', () => {
+    const eligible = householdEligibleEvents();
+    const { container } = render(
+      <NotificationsClient {...props({ household: { targets: { telegram: null, email: null }, eligibleEvents: eligible, prefs: {} } })} />,
+    );
+    for (const event of eligible) {
+      expect(container.querySelector(`input[name="household-pref:${event.id}:telegram"]`)).not.toBeNull();
+      expect(container.querySelector(`input[name="household-pref:${event.id}:email"]`)).not.toBeNull();
+    }
+    // new_signin is a security event -- householdEligibleEvents() excludes it (household.ts's
+    // own contract), and this asserts the matrix never invents a control it was not handed.
+    expect(eligible.some((event) => event.id === 'new_signin')).toBe(false);
+    expect(container.querySelector('input[name="household-pref:new_signin:telegram"]')).toBeNull();
+    expect(container.querySelector('input[name="household-pref:new_signin:email"]')).toBeNull();
+  });
+
+  it('a column for an unconfigured family channel is disabled and explains why, exactly like the personal matrix', () => {
+    const eligible = householdEligibleEvents();
+    const comingDue = eligible.find((event) => event.id === 'coming_due')!;
+    const { container } = render(
+      <NotificationsClient
+        {...props({
+          household: { targets: { telegram: null, email: householdTargetFixture({ channel: 'email' }) }, eligibleEvents: eligible, prefs: {} },
+        })}
+      />,
+    );
+    const telegramBox = container.querySelector(`input[name="household-pref:${comingDue.id}:telegram"]`) as HTMLInputElement;
+    const emailBox = container.querySelector(`input[name="household-pref:${comingDue.id}:email"]`) as HTMLInputElement;
+    expect(telegramBox.disabled).toBe(true);
+    expect(telegramBox.title).toBe('Set up this channel first.');
+    expect(emailBox.disabled).toBe(false);
+  });
+
+  it('removing a family channel opens a RowDialog naming what stops arriving; Cancel writes nothing, confirming calls removeHouseholdTargetAction', async () => {
+    const eligible = householdEligibleEvents();
+    const comingDue = eligible.find((event) => event.id === 'coming_due')!;
+    const { container, getByText } = render(
+      <NotificationsClient
+        {...props({
+          household: {
+            targets: { telegram: householdTargetFixture(), email: null },
+            eligibleEvents: eligible,
+            prefs: { [comingDue.id]: { telegram: true, email: false } },
+          },
+        })}
+      />,
+    );
+    // Exactly one "Remove" button exists before the dialog opens: the personal Telegram/Email
+    // cards render none of their own (their targets are null in this fixture), so this is the
+    // family Telegram one.
+    fireEvent.click(getByText('Remove'));
+    const dialog = container.querySelector('[role="dialog"]') as HTMLElement;
+    expect(dialog).not.toBeNull();
+    expect(dialog.textContent).toContain(comingDue.label);
+
+    const actionsModule = await import('@/app/(app)/settings/notifications/actions');
+    fireEvent.click(within(dialog).getByText('Cancel'));
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(actionsModule.removeHouseholdTargetAction).not.toHaveBeenCalled();
+
+    fireEvent.click(getByText('Remove'));
+    const reopened = container.querySelector('[role="dialog"]') as HTMLElement;
+    fireEvent.click(within(reopened).getByText('Remove'));
+    await waitFor(() => expect(actionsModule.removeHouseholdTargetAction).toHaveBeenCalledTimes(1));
+    const submitted = vi.mocked(actionsModule.removeHouseholdTargetAction).mock.calls[0]?.[0] as FormData;
+    expect(submitted.get('channel')).toBe('telegram');
+  });
+
+  it('setting a family Telegram channel submits to saveHouseholdTelegramTargetAction', async () => {
+    const { container } = render(<NotificationsClient {...props()} />);
+    const tokenField = container.querySelector('#household-telegram-token') as HTMLInputElement;
+    const chatField = container.querySelector('#household-telegram-chat') as HTMLInputElement;
+    fireEvent.change(tokenField, { target: { value: '123456789:AAHk3f-EXAMPLE-tokenxxxxxxxxxxxxxxxxxx' } });
+    fireEvent.change(chatField, { target: { value: '-1001234567890' } });
+    fireEvent.click(tokenField.closest('form')!.querySelector('button[type="submit"]')!);
+
+    const actionsModule = await import('@/app/(app)/settings/notifications/actions');
+    await waitFor(() => expect(actionsModule.saveHouseholdTelegramTargetAction).toHaveBeenCalledTimes(1));
+    const submitted = vi.mocked(actionsModule.saveHouseholdTelegramTargetAction).mock.calls[0]?.[1] as FormData;
+    expect(submitted.get('destination')).toBe('-1001234567890');
+    expect(submitted.get('botToken')).toBe('123456789:AAHk3f-EXAMPLE-tokenxxxxxxxxxxxxxxxxxx');
+  });
+
+  it('toggling a routing checkbox and saving submits to saveHouseholdPreferencesAction', async () => {
+    const eligible = householdEligibleEvents();
+    const comingDue = eligible.find((event) => event.id === 'coming_due')!;
+    const { container } = render(
+      <NotificationsClient
+        {...props({
+          household: { targets: { telegram: null, email: householdTargetFixture({ channel: 'email' }) }, eligibleEvents: eligible, prefs: {} },
+        })}
+      />,
+    );
+    const emailBox = container.querySelector(`input[name="household-pref:${comingDue.id}:email"]`) as HTMLInputElement;
+    fireEvent.click(emailBox);
+    fireEvent.click(emailBox.closest('form')!.querySelector('button[type="submit"]')!);
+
+    const actionsModule = await import('@/app/(app)/settings/notifications/actions');
+    await waitFor(() => expect(actionsModule.saveHouseholdPreferencesAction).toHaveBeenCalledTimes(1));
+    const submitted = vi.mocked(actionsModule.saveHouseholdPreferencesAction).mock.calls[0]?.[1] as FormData;
+    expect(submitted.get(`household-pref:${comingDue.id}:email`)).toBe('on');
   });
 });

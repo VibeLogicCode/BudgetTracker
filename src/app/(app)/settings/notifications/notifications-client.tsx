@@ -2,26 +2,38 @@
 
 import { useActionState, useState } from 'react';
 import { BellIcon } from '@/components/icons';
+import { Button } from '@/components/ui/Button';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { AlertIcon, ClockIcon, ConfirmIcon, type IconComponent } from '@/components/ui/icons';
 import { Notice } from '@/components/ui/Notice';
+import { RowDialog } from '@/components/ui/RowDialog';
 import { TableWrap } from '@/components/ui/Table';
 import { Field, hintClass, inputClass, selectClass } from '@/components/ui/form';
 import { SubmitButton } from '@/components/SubmitButton';
 import type { SmtpPreset, SmtpRecord, TargetRecord, UserSettings } from '@/lib/notify/config';
 import type { SMTP_PRESETS } from '@/lib/notify/config';
-import type { NotificationEventDef } from '@/lib/notify/events';
-import type { DeliveryRow } from '@/lib/notify/outbox';
+import type { Channel, NotificationEventDef } from '@/lib/notify/events';
 import { eventDef } from '@/lib/notify/events';
+// v1.28.0 Lane 2 (family channels): the household row shape lives in its own module, distinct
+// from the personal TargetRecord above (src/lib/notify/household.ts's own docblock explains
+// why the two are not shared).
+import type { NotificationTargetRow } from '@/lib/notify/household';
+import type { DeliveryRow } from '@/lib/notify/outbox';
 import {
+  detectHouseholdTelegramChatIdAction,
   detectTelegramChatIdAction,
+  removeHouseholdTargetAction,
   removeSmtpAction,
   removeTargetAction,
   saveEmailTargetAction,
+  saveHouseholdEmailTargetAction,
+  saveHouseholdPreferencesAction,
+  saveHouseholdTelegramTargetAction,
   savePreferencesAction,
   saveSmtpAction,
   saveTelegramTargetAction,
+  testHouseholdTargetAction,
   testSmtpAction,
   testTargetAction,
   type DetectChatIdState,
@@ -48,6 +60,21 @@ export interface NotificationsPageData {
    */
   deliveries: (Omit<DeliveryRow, 'subject' | 'attempts'> & { userName: string })[];
   presets: typeof SMTP_PRESETS;
+  /**
+   * v1.28.0 Lane 2: the family (household) channels. Set by an admin (decision 1); routed
+   * per eligible event, per channel (decision 2). `targets` is withheld from a member's
+   * payload entirely -- the same §11.3 withholding `smtp` above already gets -- because a
+   * member has no controls to render and no business seeing the family channel's destination
+   * or secret state, only the CONSEQUENCE of it (which events go there instead of to them).
+   */
+  household: {
+    targets: { telegram: NotificationTargetRow | null; email: NotificationTargetRow | null } | null;
+    /** Already role-narrowed server-side, mirroring how `events` above is `eventsFor(role)` --
+     *  a member's copy carries only the events their OWN role could ever receive personally. */
+    eligibleEvents: readonly NotificationEventDef[];
+    /** Resolved booleans, default false (not routed) when a pair was never touched. */
+    prefs: Record<string, { telegram: boolean; email: boolean }>;
+  };
 }
 
 const CHANNELS = ['telegram', 'email'] as const;
@@ -62,6 +89,14 @@ const BACKUP_SENTENCE =
   'The SMTP password and every bot token are stored encrypted in the database, which means they are inside the unencrypted backup archive along with everything else.'; // MUST-5.8
 const DORMANT =
   'Notifications are off. This app makes no outbound connection until you configure a channel here.'; // §11.2
+/**
+ * v1.28.0 Lane 2, decision 4. The one sentence the brief requires "in view, not in a
+ * collapsed guide" beside the routing matrix -- and, read-only, beside the member's own
+ * summary of what an admin has routed away from them. Asserted verbatim by both call sites'
+ * tests, so its exact wording is pinned here once rather than typed twice.
+ */
+const HOUSEHOLD_INSTEAD_OF_SENTENCE =
+  "Turn one of these on and that event goes to the family channel instead of to each person's own notifications — not both.";
 /** Could not reach the server at all (network drop, dev-server restart), distinct from the
  * server-returned `{ error }` shape DetectChatIdState already carries. */
 const DETECT_UNREACHABLE = 'Could not reach the server. Check your connection and try again.';
@@ -412,6 +447,261 @@ function TelegramFields({
   );
 }
 
+/**
+ * v1.28.0 Lane 2. The family Telegram half of "Family channels" -- deliberately built by
+ * reusing TelegramFields' own idiom (same field order, same Detect-chat-id flow, same
+ * Unverified/last-error/last-success readouts) rather than a from-scratch form, per the
+ * brief's own "not a parallel implementation" instruction. Two differences from the personal
+ * version, both because a household row has no owning user: there is no per-user Enabled
+ * checkbox (the household API's own upsertHouseholdTarget takes no `enabled` field -- once a
+ * destination exists, the per-EVENT routing matrix is what decides whether anything actually
+ * goes to it), and Remove opens a RowDialog (`onRemove`) instead of submitting inline, since
+ * removing the household's only Telegram target is the destructive, page-level kind of
+ * decision RowDialog's own docblock reserves a dialog for (it acts on data shared by every
+ * member, not a row one person owns).
+ */
+function HouseholdTelegramFields({
+  telegram,
+  telegramState,
+  saveTelegram,
+  runTelegramTest,
+  telegramTestState,
+  onRemove,
+  suggestedDestination,
+}: {
+  telegram: NotificationTargetRow | null;
+  telegramState: NotificationsState;
+  saveTelegram: (formData: FormData) => void;
+  runTelegramTest: (formData: FormData) => void;
+  telegramTestState: NotificationsState;
+  onRemove: () => void;
+  /**
+   * The admin's OWN personal Telegram chat ID, offered as a starting point for a brand-new
+   * family channel -- never applied once one already exists. This exists because of the
+   * household API's own constraint (src/lib/notify/household.ts: upsertHouseholdTarget refuses
+   * ANY empty destination, so there is no household equivalent of the personal form's
+   * token-only save while Detect chat ID is used to discover one). The owner's own bug report
+   * is the common case this answers directly: a bot already running in a group chat shared
+   * with a spouse IS that admin's own personal Telegram destination already -- so prefilling
+   * from it turns "you must already know the chat ID" into "here is a likely guess, confirm or
+   * change it."
+   */
+  suggestedDestination?: string;
+}) {
+  const [chatId, setChatId] = useState(telegram?.destination ?? suggestedDestination ?? '');
+  const [detected, setDetected] = useState<DetectChatIdState | null>(null);
+  const [detecting, setDetecting] = useState(false);
+  const [detectError, setDetectError] = useState<string | null>(null);
+
+  async function detect() {
+    setDetecting(true);
+    setDetectError(null);
+    try {
+      setDetected(await detectHouseholdTelegramChatIdAction());
+    } catch {
+      setDetectError(DETECT_UNREACHABLE);
+    } finally {
+      setDetecting(false);
+    }
+  }
+
+  return (
+    <>
+      {telegramState.error ? <Notice tone="error">{telegramState.error}</Notice> : null}
+      {telegramState.message ? <Notice tone="success">{telegramState.message}</Notice> : null}
+      {telegram && telegram.verifiedAt === null ? (
+        <p className={hintClass}>Unverified — press Send family test message to prove it works.</p>
+      ) : null}
+      {telegram?.lastError ? (
+        <Notice tone="error">
+          {telegram.lastError} ({telegram.lastErrorAt ? formatStamp(telegram.lastErrorAt) : telegram.lastErrorAt})
+        </Notice>
+      ) : null}
+      {telegram?.lastSuccessAt ? <p className={hintClass}>Last successful send: {formatStamp(telegram.lastSuccessAt)}</p> : null}
+
+      {/*
+        Every label and button below is prefixed "family" -- not decorative, but the fix for a
+        real collision: this section sits on the same page as the personal Telegram card above,
+        which has its own "Bot token" / "Chat ID" fields and "Detect chat ID" / "Send test
+        message" buttons. Two controls sharing one accessible name is already a bad time for a
+        screen-reader or voice-control user asking for "Chat ID" (which one?); giving each its
+        own name fixes that for everyone, not just this file's own getByLabelText/getByText
+        queries (tests/app/notifications-client.test.tsx pins the PERSONAL ones as unique).
+      */}
+      <form action={saveTelegram} className="flex flex-col gap-4">
+        <Field
+          label="Family bot token"
+          htmlFor="household-telegram-token"
+          hint={telegram?.secretSet ? 'Leave blank to keep the saved token.' : undefined}
+        >
+          <input
+            id="household-telegram-token"
+            name="botToken"
+            type="password"
+            autoComplete="off"
+            className={inputClass}
+            placeholder={telegram?.secretSet ? PASSWORD_PLACEHOLDER : ''}
+            defaultValue=""
+          />
+        </Field>
+        <Field
+          label="Family chat ID"
+          htmlFor="household-telegram-chat"
+          hint={
+            !telegram
+              ? suggestedDestination
+                ? 'Prefilled from your own Telegram channel above — the family channel is usually the same chat. Change it if not.'
+                : 'A bot token and a chat ID are needed together here — there is no token-only save like the Telegram card above. Not sure of the number? Set up the personal Telegram channel above with the same bot first and press its Detect chat ID; the number it finds will be suggested here too.'
+              : undefined
+          }
+        >
+          <input
+            id="household-telegram-chat"
+            name="destination"
+            inputMode="numeric"
+            className={inputClass}
+            value={chatId}
+            onChange={(event) => setChatId(event.target.value)}
+          />
+        </Field>
+        <div>
+          <SubmitButton>Save</SubmitButton>
+        </div>
+      </form>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          className="btn btn--secondary"
+          disabled={!telegram?.secretSet || detecting}
+          onClick={detect}
+        >
+          {detecting ? 'Working…' : 'Detect family chat ID'}
+        </button>
+        {!telegram?.secretSet ? <span className={hintClass}>Save the family bot token first</span> : null}
+      </div>
+      {detectError ? <Notice tone="error">{detectError}</Notice> : null}
+      {detected?.error ? <Notice tone="error">{detected.error}</Notice> : null}
+      {detected?.chats?.length === 0 ? (
+        <Notice tone="info">
+          No messages yet. Add the bot to the family chat, send it any message, then press this again.
+        </Notice>
+      ) : null}
+      {detected?.chats && detected.chats.length > 0 ? (
+        <ul className="flex flex-col gap-1.5">
+          {detected.chats.map((chat) => (
+            <li key={chat.chatId}>
+              <label className="flex flex-wrap items-center gap-2 text-sm text-ink">
+                <input type="radio" name="household-detected-chat" value={chat.chatId} onChange={() => setChatId(chat.chatId)} />
+                <span className="font-semibold">{chat.title}</span>
+                <span className="text-muted">{KIND_LABEL[chat.kind]}</span>
+                <span className="text-subtle">{chat.chatId}</span>
+                {chat.lastMessageAt ? <span className="text-subtle">last message {formatStamp(chat.lastMessageAt)}</span> : null}
+              </label>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      <div className="flex flex-wrap gap-2">
+        <form action={runTelegramTest}>
+          <input type="hidden" name="channel" value="telegram" />
+          <SubmitButton variant="secondary" disabled={!telegram?.destination}>
+            Send family test message
+          </SubmitButton>
+        </form>
+        {telegram ? (
+          <Button variant="danger" onClick={onRemove}>
+            Remove
+          </Button>
+        ) : null}
+      </div>
+      {telegramTestState.error ? <Notice tone="error">{telegramTestState.error}</Notice> : null}
+      {telegramTestState.message ? <Notice tone="success">{telegramTestState.message}</Notice> : null}
+    </>
+  );
+}
+
+/**
+ * The family email half. Simpler than HouseholdTelegramFields: an email destination needs no
+ * secret and no Detect step, so this mirrors the personal Email card's own body exactly,
+ * including gating Send test / Remove behind `relayConfigured` the same way (§11.3: nothing
+ * can send, personal or household, until an admin has set up the relay). No Enabled checkbox
+ * here either, for the same reason as the Telegram half above.
+ */
+function HouseholdEmailFields({
+  email,
+  emailState,
+  saveEmail,
+  runEmailTest,
+  emailTestState,
+  relayConfigured,
+  onRemove,
+}: {
+  email: NotificationTargetRow | null;
+  emailState: NotificationsState;
+  saveEmail: (formData: FormData) => void;
+  runEmailTest: (formData: FormData) => void;
+  emailTestState: NotificationsState;
+  relayConfigured: boolean;
+  onRemove: () => void;
+}) {
+  return (
+    <>
+      {emailState.error ? <Notice tone="error">{emailState.error}</Notice> : null}
+      {emailState.message ? <Notice tone="success">{emailState.message}</Notice> : null}
+      {email && email.verifiedAt === null ? (
+        <p className={hintClass}>Unverified — press Send family test email to prove it works.</p>
+      ) : null}
+      {email?.lastError ? (
+        <Notice tone="error">
+          {email.lastError} ({email.lastErrorAt ? formatStamp(email.lastErrorAt) : email.lastErrorAt})
+        </Notice>
+      ) : null}
+      {email?.lastSuccessAt ? <p className={hintClass}>Last successful send: {formatStamp(email.lastSuccessAt)}</p> : null}
+
+      {/* "Family" prefixes here for the same reason HouseholdTelegramFields' own comment gives:
+          the personal Email card above already has an "Email address" field and a "Send test
+          email" button, so a shared name would be ambiguous for anyone querying by label or
+          text, not only this file's own tests. */}
+      <form action={saveEmail} className="flex flex-col gap-4">
+        <Field label="Family email address" htmlFor="household-email-destination">
+          <input
+            id="household-email-destination"
+            name="destination"
+            type="email"
+            className={inputClass}
+            defaultValue={email?.destination ?? ''}
+          />
+        </Field>
+        <div>
+          <SubmitButton>Save</SubmitButton>
+        </div>
+      </form>
+
+      {relayConfigured ? (
+        <div className="flex flex-wrap gap-2">
+          <form action={runEmailTest}>
+            <input type="hidden" name="channel" value="email" />
+            <SubmitButton variant="secondary" disabled={!email}>
+              Send family test email
+            </SubmitButton>
+          </form>
+          {email ? (
+            <Button variant="danger" onClick={onRemove}>
+              Remove
+            </Button>
+          ) : null}
+        </div>
+      ) : (
+        <Notice tone="info">{NO_RELAY}</Notice>
+      )}
+      {emailTestState.error ? <Notice tone="error">{emailTestState.error}</Notice> : null}
+      {emailTestState.message ? <Notice tone="success">{emailTestState.message}</Notice> : null}
+    </>
+  );
+}
+
 export function NotificationsClient(data: NotificationsPageData) {
   const [smtpState, saveSmtp] = useActionState<NotificationsState, FormData>(saveSmtpAction, {});
   const [telegramState, saveTelegram] = useActionState<NotificationsState, FormData>(saveTelegramTargetAction, {});
@@ -440,6 +730,82 @@ export function NotificationsClient(data: NotificationsPageData) {
     (_prev, formData) => removeTargetAction(formData),
     {},
   );
+
+  // v1.28.0 Lane 2: family channels. Same useActionState wrapping as every save/test/remove
+  // pair above, for the same reason (a plain dispatch is what `<form action>` needs).
+  const [householdTelegramState, saveHouseholdTelegram] = useActionState<NotificationsState, FormData>(
+    saveHouseholdTelegramTargetAction,
+    {},
+  );
+  const [householdEmailState, saveHouseholdEmail] = useActionState<NotificationsState, FormData>(
+    saveHouseholdEmailTargetAction,
+    {},
+  );
+  const [householdTelegramTestState, runHouseholdTelegramTest] = useActionState<NotificationsState, FormData>(
+    (_prev, formData) => testHouseholdTargetAction(formData),
+    {},
+  );
+  const [householdEmailTestState, runHouseholdEmailTest] = useActionState<NotificationsState, FormData>(
+    (_prev, formData) => testHouseholdTargetAction(formData),
+    {},
+  );
+  const [householdTelegramRemoveState, runHouseholdTelegramRemove] = useActionState<NotificationsState, FormData>(
+    (_prev, formData) => removeHouseholdTargetAction(formData),
+    {},
+  );
+  const [householdEmailRemoveState, runHouseholdEmailRemove] = useActionState<NotificationsState, FormData>(
+    (_prev, formData) => removeHouseholdTargetAction(formData),
+    {},
+  );
+  const [householdPrefsState, saveHouseholdPrefs] = useActionState<NotificationsState, FormData>(
+    saveHouseholdPreferencesAction,
+    {},
+  );
+  // Which family channel's Remove dialog is open, if any -- the same nullable-slot idiom
+  // RowDialog's own callers already use (merchant-rules-client.tsx's `deletingRule`), so this
+  // dialog is only ever mounted while it is actually open.
+  const [removingHouseholdChannel, setRemovingHouseholdChannel] = useState<Channel | null>(null);
+
+  // Which of the household's eligible events are currently routed to a given channel -- used
+  // both by the removal dialog (naming what stops arriving) and the member's read-only view
+  // (naming what is arriving elsewhere).
+  function routedToHousehold(channel: Channel): readonly NotificationEventDef[] {
+    return data.household.eligibleEvents.filter((event) => data.household.prefs[event.id]?.[channel] ?? false);
+  }
+
+  function householdRemoveDialog() {
+    const channel = removingHouseholdChannel;
+    if (!channel) return null;
+    const label = channel === 'telegram' ? 'Telegram' : 'email';
+    const routed = routedToHousehold(channel);
+    const removeAction = channel === 'telegram' ? runHouseholdTelegramRemove : runHouseholdEmailRemove;
+    return (
+      <RowDialog
+        dialogId="remove-household-channel-dialog"
+        title={`Remove the family ${label} channel?`}
+        onClose={() => setRemovingHouseholdChannel(null)}
+      >
+        <p className="text-sm text-ink">
+          {routed.length > 0
+            ? `${routed.map((event) => event.label).join(', ')} ${routed.length === 1 ? 'is' : 'are'} routed here. Once this is removed, ${
+                routed.length === 1 ? 'it goes' : 'they go'
+              } back to each person individually.`
+            : 'Nothing is currently routed to it, so removing it changes nothing anyone receives.'}
+        </p>
+        <div className="flex gap-2">
+          <form action={removeAction} onSubmit={() => setRemovingHouseholdChannel(null)}>
+            <input type="hidden" name="channel" value={channel} />
+            <SubmitButton variant="danger" size="sm">
+              Remove
+            </SubmitButton>
+          </form>
+          <button type="button" className="btn btn--secondary btn--sm" onClick={() => setRemovingHouseholdChannel(null)}>
+            Cancel
+          </button>
+        </div>
+      </RowDialog>
+    );
+  }
 
   const dormant =
     !(data.targets.telegram?.enabled ?? false) && !(data.targets.email?.enabled ?? false);
@@ -640,6 +1006,134 @@ export function NotificationsClient(data: NotificationsPageData) {
           </form>
         </CardBody>
       </Card>
+
+      {/*
+        v1.28.0 Lane 2: family channels. Admin-only controls; a member sees a read-only
+        statement instead of nothing, because a member whose personal digest just stopped
+        arriving deserves to know why, and "why" is exactly what an admin's own routing
+        choice already knows. Nothing renders for a member when nothing is routed away from
+        them -- an always-present "nothing is routed" card would be the zero-state this
+        codebase's design language asks to avoid; a member only ever sees this card once an
+        admin's choice actually affects their own notifications. Placed AFTER the personal
+        matrix above (rather than beside the other two personal channel cards) so the
+        existing "the preference matrix is the FIRST table on the page" tests keep meaning
+        the personal one -- this section's own routing matrix is a second, later table.
+      */}
+      {data.role === 'admin' ? (
+        <Card>
+          <CardHeader
+            title="Family channels"
+            description="One Telegram chat and one email address for the whole household, set by an admin."
+          />
+          <CardBody className="flex flex-col gap-5">
+            <div className="grid gap-5 sm:grid-cols-2">
+              <div className="flex flex-col gap-4">
+                <h3 className="text-sm font-semibold text-ink">Family Telegram</h3>
+                <HouseholdTelegramFields
+                  key={data.household.targets?.telegram ? 'set' : 'unset'}
+                  telegram={data.household.targets?.telegram ?? null}
+                  telegramState={householdTelegramState}
+                  saveTelegram={saveHouseholdTelegram}
+                  runTelegramTest={runHouseholdTelegramTest}
+                  telegramTestState={householdTelegramTestState}
+                  onRemove={() => setRemovingHouseholdChannel('telegram')}
+                  suggestedDestination={data.targets.telegram?.destination || undefined}
+                />
+              </div>
+              <div className="flex flex-col gap-4">
+                <h3 className="text-sm font-semibold text-ink">Family email</h3>
+                <HouseholdEmailFields
+                  key={data.household.targets?.email ? 'set' : 'unset'}
+                  email={data.household.targets?.email ?? null}
+                  emailState={householdEmailState}
+                  saveEmail={saveHouseholdEmail}
+                  runEmailTest={runHouseholdEmailTest}
+                  emailTestState={householdEmailTestState}
+                  relayConfigured={data.relayConfigured}
+                  onRemove={() => setRemovingHouseholdChannel('email')}
+                />
+              </div>
+            </div>
+
+            {/* Decision 2: per eligible event, per channel, an admin picks whether it routes
+                to the family channel. householdEligibleEvents() already excludes security and
+                operational events -- nothing here decides that a second time. */}
+            {data.household.eligibleEvents.length > 0 ? (
+              <div className="flex flex-col gap-3 border-t border-line pt-5">
+                <h3 className="text-sm font-semibold text-ink">Route to the family channel</h3>
+                {householdPrefsState.error ? <Notice tone="error">{householdPrefsState.error}</Notice> : null}
+                {householdPrefsState.message ? <Notice tone="success">{householdPrefsState.message}</Notice> : null}
+                <form action={saveHouseholdPrefs} className="flex flex-col gap-4">
+                  <TableWrap responsive>
+                    <thead>
+                      <tr>
+                        <th className="text-left">Event</th>
+                        <th>Telegram</th>
+                        <th>Email</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.household.eligibleEvents.map((event) => (
+                        <tr key={event.id}>
+                          <td className="text-left cell-stack-headline" data-label="Event">
+                            <span className="font-semibold text-ink">{event.label}</span>
+                            <span className="block text-muted">{event.blurb}</span>
+                          </td>
+                          {CHANNELS.map((channel) => {
+                            const configured = data.household.targets?.[channel] != null;
+                            return (
+                              <td key={channel} className="text-center" data-label={channel === 'telegram' ? 'Telegram' : 'Email'}>
+                                <input
+                                  type="checkbox"
+                                  name={`household-pref:${event.id}:${channel}`}
+                                  defaultChecked={data.household.prefs[event.id]?.[channel] ?? false}
+                                  disabled={!configured}
+                                  title={configured ? undefined : NO_CHANNEL_TOOLTIP}
+                                  aria-label={`${event.label} to the family channel on ${channel}`}
+                                />
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </TableWrap>
+                  {/* Decision 4, stated in view rather than left to a collapsed guide. */}
+                  <p className="text-sm text-ink">{HOUSEHOLD_INSTEAD_OF_SENTENCE}</p>
+                  <div>
+                    <SubmitButton>Save routing</SubmitButton>
+                  </div>
+                </form>
+              </div>
+            ) : null}
+          </CardBody>
+        </Card>
+      ) : (
+        (() => {
+          const routedTelegram = routedToHousehold('telegram');
+          const routedEmail = routedToHousehold('email');
+          if (routedTelegram.length === 0 && routedEmail.length === 0) return null;
+          return (
+            <Card>
+              <CardHeader title="Family channel" description="Set up by an admin, for the whole household." />
+              <CardBody className="flex flex-col gap-2">
+                <p className="text-sm text-ink">{HOUSEHOLD_INSTEAD_OF_SENTENCE}</p>
+                {routedTelegram.length > 0 ? (
+                  <p className="text-sm text-muted">
+                    On Telegram: {routedTelegram.map((event) => event.label).join(', ')} — sent to the family chat instead of to you.
+                  </p>
+                ) : null}
+                {routedEmail.length > 0 ? (
+                  <p className="text-sm text-muted">
+                    By email: {routedEmail.map((event) => event.label).join(', ')} — sent to the family address instead of to you.
+                  </p>
+                ) : null}
+              </CardBody>
+            </Card>
+          );
+        })()
+      )}
+      {householdRemoveDialog()}
 
       {/* §11.6: read-only. No retry button: the pump owns retries. */}
       <Card>

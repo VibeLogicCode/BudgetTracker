@@ -23,6 +23,20 @@ import {
 } from '@/lib/notify/config';
 import { NotifyCredentialError, scrubSecrets } from '@/lib/notify/crypto';
 import { CHANNELS, eventsFor, isChannel, type Channel } from '@/lib/notify/events';
+// v1.28.0 Lane 2 (family channels): the household channel layer. Server-only (it imports
+// @/db), and this is "one import path for the whole contract" per that module's own docblock
+// -- householdEligibleEvents is re-exported from events.ts here for exactly that reason, so
+// this file never needs a second import line for it.
+import {
+  householdTarget,
+  upsertHouseholdTarget,
+  deleteHouseholdTarget,
+  householdEventPrefs,
+  setHouseholdEventPref,
+  householdEligibleEvents,
+  getHouseholdTelegramToken,
+  recordHouseholdTargetOutcome,
+} from '@/lib/notify/household';
 import { checkDetectChat, checkTestSend } from '@/lib/notify/ratelimit';
 import { deliver, NotifyError } from '@/lib/notify/send';
 import { fetchTelegramChats, type TelegramChat } from '@/lib/notify/send/telegram';
@@ -87,6 +101,32 @@ const telegramSchema = z.object({
 const emailTargetSchema = z.object({
   destination: z.string().email().max(254),
   enabled: z.boolean(),
+});
+
+/**
+ * v1.28.0 Lane 2. Deliberately its OWN shape rather than a reuse of `telegramSchema` above:
+ * the household form carries no per-user `enabled` field at all (see the docblock on
+ * `saveHouseholdTelegramTargetAction`), so folding it into the personal schema would leave a
+ * field this form never submits sitting in the parsed type unused.
+ *
+ * UNLIKE the personal form, `destination` is REQUIRED here, not "empty is valid for a
+ * token-only save": upsertHouseholdTarget (src/lib/notify/household.ts) refuses ANY empty
+ * destination outright (NO_DESTINATION_ERROR), for both channels, so there is no household
+ * equivalent of the personal chicken-and-egg token-only save. `botToken` stays optional --
+ * blank means "keep the stored token" on an update (MUST-5.6), and is only hard-required by
+ * the library on a brand-new household Telegram row (TELEGRAM_SECRET_REQUIRED, surfaced via
+ * `result.reason` below).
+ */
+const householdTelegramSchema = z.object({
+  destination: z.string().regex(/^-?\d{1,20}$/, 'Chat ID must be a number, optionally starting with a minus sign.'),
+  botToken: z
+    .string()
+    .regex(/^\d{5,15}:[A-Za-z0-9_-]{20,80}$/, 'That does not look like a bot token. Copy the whole line BotFather sent.')
+    .or(z.literal('')),
+});
+
+const householdEmailSchema = z.object({
+  destination: z.string().email().max(254),
 });
 
 const knobsSchema = z.object({
@@ -438,4 +478,215 @@ export async function detectTelegramChatIdAction(): Promise<DetectChatIdState> {
     const raw = error instanceof Error ? error.message : 'Telegram could not be reached.';
     return { error: scrubSecrets(raw, [botToken]) };
   }
+}
+
+/**
+ * ================= v1.28.0 Lane 2: family (household) channels =================
+ *
+ * One Telegram chat and one email address, shared by the whole household, set by an admin
+ * (decision 1). Every action below gates on requireAdmin() -- a member has no path to any of
+ * these, matching the "admin-only" section notifications-client.tsx renders.
+ *
+ * The library (src/lib/notify/**, a concurrent lane) already enforces "exactly one target per
+ * channel" -- see upsertHouseholdTarget's {ok:false, reason} shape below -- so this file does
+ * NOT re-derive the personal channel's bespoke chicken-and-egg edge cases (the differing
+ * "onboarding" vs "removal" messages saveTelegramTargetAction works out by hand). Any rule the
+ * library wants to enforce comes back as `reason` and is surfaced verbatim.
+ */
+
+export async function saveHouseholdTelegramTargetAction(_prev: NotificationsState, formData: FormData): Promise<NotificationsState> {
+  const blocked = await guard();
+  if (blocked) return blocked;
+  const admin = await requireAdmin();
+
+  const parsed = householdTelegramSchema.safeParse({
+    destination: text(formData, 'destination'),
+    botToken: text(formData, 'botToken'),
+  });
+  if (!parsed.success) return { error: firstIssue(parsed.error) };
+
+  // MUST-5.6-style convention, carried over from the personal form: a blank token field means
+  // "keep whatever is already stored", never "clear it" -- so it is passed as `undefined`
+  // (the "not provided" state of `secret?: string | null`), not `null`. The credential itself
+  // is never assigned to a variable that outlives this call and never appears in the returned
+  // state below, so it cannot be rendered back into the page, placed in a prop, or logged.
+  const secret = parsed.data.botToken.length > 0 ? parsed.data.botToken : undefined;
+  const result = upsertHouseholdTarget({
+    channel: 'telegram',
+    destination: parsed.data.destination,
+    secret,
+    actorUserId: admin.id,
+  });
+  if (!result.ok) return { error: result.reason };
+  revalidatePath(PATH);
+  return { message: 'Family Telegram saved. Press Send test message to prove it works.' };
+}
+
+export async function saveHouseholdEmailTargetAction(_prev: NotificationsState, formData: FormData): Promise<NotificationsState> {
+  const blocked = await guard();
+  if (blocked) return blocked;
+  const admin = await requireAdmin();
+
+  const parsed = householdEmailSchema.safeParse({ destination: text(formData, 'destination') });
+  if (!parsed.success) return { error: firstIssue(parsed.error) };
+
+  const result = upsertHouseholdTarget({ channel: 'email', destination: parsed.data.destination, actorUserId: admin.id });
+  if (!result.ok) return { error: result.reason };
+  revalidatePath(PATH);
+  return { message: 'Family email saved. Press Send test email to prove it works.' };
+}
+
+export async function removeHouseholdTargetAction(formData: FormData): Promise<NotificationsState> {
+  const blocked = await guard();
+  if (blocked) return blocked;
+  await requireAdmin();
+
+  const channel = text(formData, 'channel');
+  if (!isChannel(channel)) return { error: 'Unknown channel.' };
+
+  deleteHouseholdTarget(channel);
+  revalidatePath(PATH);
+  return { message: channel === 'telegram' ? 'Family Telegram removed.' : 'Family email removed.' };
+}
+
+export async function testHouseholdTargetAction(formData: FormData): Promise<NotificationsState> {
+  const blocked = await guard();
+  if (blocked) return blocked;
+  const admin = await requireAdmin();
+
+  const channel = text(formData, 'channel');
+  if (!isChannel(channel)) return { error: 'Unknown channel.' };
+  return runHouseholdTest(admin.id, channel);
+}
+
+/**
+ * The household mirror of runTest() above. Differs in exactly two ways, both because the
+ * target this sends to has no owning user: (1) it reads `householdTarget(channel)` instead of
+ * `getTarget(userId, channel)`, and (2) the credential + outcome-recording calls are
+ * src/lib/notify/household.ts's own household-scoped pair (getHouseholdTelegramToken,
+ * recordHouseholdTargetOutcome) rather than their per-user counterparts. Email needs no
+ * household-specific secret at all -- the household inbox is just another destination for the
+ * same admin-configured relay (getSmtp/getSmtpPassword), so that half of this function is
+ * exactly runTest()'s relay-send path with the destination swapped.
+ *
+ * The test-send quota (checkTestSend) and the Detect-chat-id quota (checkDetectChat) below are
+ * both keyed on the ACTING ADMIN's own user id -- there is no household-scoped bucket in
+ * src/lib/notify/ratelimit.ts (also a concurrent-lane file this task may not touch), and an
+ * admin's own per-user bucket is a reasonable place to charge an action only an admin can take.
+ */
+async function runHouseholdTest(adminUserId: number, channel: Channel): Promise<NotificationsState> {
+  const target = householdTarget(channel);
+  if (!target) return { error: 'Set this channel up first.' };
+  if (channel === 'telegram' && target.destination.length === 0) return { error: 'Set this channel up first.' };
+
+  const relay = channel === 'email' ? getSmtp() : null;
+  if (channel === 'email' && (relay === null || !relay.enabled)) return { error: NO_RELAY_ERROR };
+
+  const verdict = checkTestSend(adminUserId, channel);
+  if (!verdict.allowed) return { error: `Too many test messages. Try again in ${verdict.retryAfterMinutes} minutes.` };
+
+  const subject = 'Budget Tracker test message';
+  const body = 'This is a test from Budget Tracker. If you can read it, the family channel works.';
+
+  let credential: string | undefined;
+  try {
+    if (channel === 'telegram') {
+      credential = getHouseholdTelegramToken();
+      await deliver({ channel: 'telegram', destination: target.destination, botToken: credential, subject, body });
+    } else {
+      credential = getSmtpPassword();
+      await deliver({
+        channel: 'email',
+        destination: target.destination,
+        smtp: {
+          host: relay!.host,
+          port: relay!.port,
+          security: relay!.security,
+          username: relay!.username,
+          password: credential,
+          fromEmail: relay!.fromEmail,
+          fromName: relay!.fromName,
+        },
+        subject,
+        body,
+      });
+    }
+  } catch (error) {
+    const raw = error instanceof Error ? error.message : 'The test could not be sent.';
+    const message = scrubSecrets(raw, credential ? [credential] : []);
+    if (error instanceof NotifyError && error.scope === 'relay') recordSmtpOutcome({ ok: false, error: message });
+    else recordHouseholdTargetOutcome({ channel, ok: false, error: message });
+    revalidatePath(PATH);
+    return { error: message };
+  }
+
+  recordHouseholdTargetOutcome({ channel, ok: true, verify: true });
+  if (channel === 'email') recordSmtpOutcome({ ok: true });
+  revalidatePath(PATH);
+  return channel === 'telegram'
+    ? { message: 'Test message sent. Check the family chat.' }
+    : { message: `Test email sent to ${target.destination}. Check the inbox.` };
+}
+
+/**
+ * Household mirror of detectTelegramChatIdAction. Same MUST-12.8-style posture -- no
+ * parameters, admin comes from the session -- except the token it decrypts belongs to the
+ * household row, not the caller's own personal one, which is exactly why this is a SEPARATE
+ * action rather than a scope flag on the personal one: reusing that action would give an
+ * admin's own click a way to read whichever token a stray extra argument named.
+ */
+export async function detectHouseholdTelegramChatIdAction(): Promise<DetectChatIdState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+  const admin = await requireAdmin();
+
+  const target = householdTarget('telegram');
+  if (!target || !target.secretSet) return { error: TOKEN_FIRST };
+
+  const verdict = checkDetectChat(admin.id);
+  if (!verdict.allowed) return { error: `Too many attempts. Try again in ${verdict.retryAfterMinutes} minutes.` };
+
+  let botToken: string;
+  try {
+    botToken = getHouseholdTelegramToken();
+  } catch (error) {
+    if (error instanceof NotifyCredentialError) return { error: error.message };
+    throw error;
+  }
+
+  try {
+    return { chats: await fetchTelegramChats(botToken) };
+  } catch (error) {
+    const raw = error instanceof Error ? error.message : 'Telegram could not be reached.';
+    return { error: scrubSecrets(raw, [botToken]) };
+  }
+}
+
+/**
+ * The routing matrix's Save button, one call per (eligible event, configured channel) --
+ * mirrors savePreferencesAction's own loop (applyPref per event per writable channel) exactly,
+ * including the same "an unconfigured channel is never touched" reasoning: a checkbox for a
+ * channel with no household target renders disabled and never submits, so absence there must
+ * stay silent rather than being written as "off".
+ */
+export async function saveHouseholdPreferencesAction(_prev: NotificationsState, formData: FormData): Promise<NotificationsState> {
+  const blocked = await guard();
+  if (blocked) return blocked;
+  await requireAdmin();
+
+  const writableChannels = CHANNELS.filter((channel) => householdTarget(channel) !== null);
+
+  let firstError: string | undefined;
+  for (const event of householdEligibleEvents()) {
+    for (const channel of writableChannels) {
+      const result = setHouseholdEventPref({
+        eventId: event.id,
+        channel,
+        enabled: checkbox(formData, `household-pref:${event.id}:${channel}`),
+      });
+      if (!result.ok && firstError === undefined) firstError = result.reason;
+    }
+  }
+  if (firstError) return { error: firstError };
+  revalidatePath(PATH);
+  return { message: 'Saved.' };
 }
