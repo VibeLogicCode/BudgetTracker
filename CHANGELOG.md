@@ -21,6 +21,62 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.25.0] - 2026-09-01
+
+One migration (0018): one nullable column on merchant rules recording which preset-pack entry a
+rule descends from. Existing rules are backfilled from what they already carry; nothing you wrote
+is touched.
+
+### Added
+
+- **Whole-word rule matching.** A new match type sits between "exact" and "contains": `IGA` now
+  matches `IGA MARCHE` but never `MICHIGAN`. The old two types could only be safe by being narrow
+  — short brand names had to be pinned to the exact statement text and missed every variation.
+- **The preset pack covers 297 merchants, up from 190.** 107 additions across gas, groceries,
+  coffee, utilities, internet, transit and shopping, each one a brand established from a company's
+  own banner list rather than guessed from a statement. Brands that could not be verified were left
+  out, and real brands whose names are ordinary words — `ROOTS`, `GARAGE`, `THE BRICK`,
+  `ON THE RUN` — were left out too, because a rule that fires wrongly is worse than one that never
+  fires.
+- **Filter the review queue by what it knows.** Rows the app guessed and rows it had no idea about
+  are different jobs; **Suggested** and **Not categorized** now separate them.
+- **Bulk assign to loan, and bulk note.** Both alongside the bulk actions already there, sharing one
+  action list rather than being bolted on beside it.
+
+### Fixed
+
+- **Three preset rules were matching the wrong things.** `METRO` also matched **METROLINX**, so GO
+  Transit fares were filed as Groceries. `PRESTO` matched **PRESTON**, a place and a surname.
+  `SHELL` matched **SHELLEY** — a given name, so an e-transfer to a person could be filed as gas.
+  All three are whole-word now, and a new check makes the whole class of mistake impossible to
+  reintroduce: no two pack rules with different outcomes may match each other's text. It caught a
+  fourth collision in this release's own additions before they shipped.
+- **The debt chart put payments in the month you imported them, not the month you paid them.** A
+  statement imported late shifted its payments into the wrong month. The payoff-date projection had
+  the same fault, which made a catch-up import look like one enormous month of payments followed by
+  two empty ones.
+- **A successful restore could be reported as FAILED.** Counting receipt rows for the summary
+  happened inside the commit's own error handling, so if that one read failed, a restore that had
+  fully succeeded was recorded as failed, its working directory renamed, and the operator handed
+  recovery text telling them to roll the database back. The count is now isolated from the commit,
+  which is what the surrounding code already promised.
+- **Editing a preset rule's pattern made the next pack update offer the original back.** Saving a
+  pack rule under your own pattern creates a separate rule, and deleting the pack's row — which the
+  form tells you to do — discarded the only record of where it came from. Rules now remember which
+  pack entry they descend from, and an update reports them as *not added back* instead of quietly
+  restoring a rule you had replaced.
+
+### Changed
+
+- **The review queue, the scope switcher and the transfers filter are one control now.** Three
+  independent implementations of "a row of pills where one is active" became one, so the transfers
+  filter picks up the segmented look the other two already had, and all three gained a keyboard
+  landmark and a full-size touch target.
+- **Deleting a rule that categorized nothing no longer warns like it will.** With nothing to clear,
+  the dialog says so in one line and offers the ordinary delete instead of three paragraphs of
+  consequence and a red button. The "other rules are not re-run" note is now written as the
+  conditional it always was — it only ever applied when a second rule also matched.
+
 ## [1.24.0] - 2026-09-01
 
 No migration.

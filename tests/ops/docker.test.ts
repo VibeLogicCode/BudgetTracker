@@ -245,12 +245,28 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.24.0 release', () => {
+  it('MUST-7.1: the 1.25.0 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.24.0');
+    expect(pkg.version).toBe('1.25.0');
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toMatch(/^## \[1\.25\.0\] - 2026-09-01$/m);
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.25.0]'));
+    expect(changelog.indexOf('## [1.25.0]')).toBeLessThan(changelog.indexOf('## [1.24.0]'));
+    const entry = changelog.slice(changelog.indexOf('## [1.25.0]'), changelog.indexOf('## [1.24.0]'));
+    // The migration this release ships must be NAMED in its own entry -- an unannounced schema
+    // change is the one thing a self-hosted household cannot review before pulling the image.
+    expect(entry).toMatch(/One migration \(0018\)/i);
+    // The three invariants this release must never lose: whole-word matching exists because a
+    // brand name inside a longer word was misfiling money, a successful restore must never be
+    // reported as failed, and a replaced pack rule must not be silently restored.
+    expect(entry).toMatch(/METROLINX/);
+    expect(entry).toMatch(/successful restore could be reported as FAILED/i);
+    expect(entry).toMatch(/not added back/i);
+  });
+
+  it('MUST-7.1: the 1.24.0 release is still recorded intact (append-only discipline)', () => {
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.24\.0\] - 2026-09-01$/m);
-    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.24.0]'));
     expect(changelog.indexOf('## [1.24.0]')).toBeLessThan(changelog.indexOf('## [1.23.1]'));
     const entry = changelog.slice(changelog.indexOf('## [1.24.0]'), changelog.indexOf('## [1.23.1]'));
     expect(entry).toMatch(/No migration/i);
