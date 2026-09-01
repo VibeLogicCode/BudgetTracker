@@ -87,9 +87,16 @@ interface RuleFormValues {
   ruleKind: RuleKind;
   categoryId: number | null;
   renameTo: string;
+  /**
+   * v1.25.0 (item 18). Whether the row being edited is currently claimed by a preset pack
+   * (packSource non-null), which decides one extra sentence in the dialog's re-key note below.
+   * Read off the row rather than recomputed, and false for a new rule, since a rule nobody has
+   * written yet cannot belong to a pack.
+   */
+  isPreset: boolean;
 }
 
-const BLANK: RuleFormValues = { id: null, pattern: '', matchType: 'exact', ruleKind: 'category', categoryId: null, renameTo: '' };
+const BLANK: RuleFormValues = { id: null, pattern: '', matchType: 'exact', ruleKind: 'category', categoryId: null, renameTo: '', isPreset: false };
 
 /**
  * Deliberately NOT an import of categoryLabel from @/lib/categories: that module reaches
@@ -223,10 +230,19 @@ function ScopeChoice({
 function ClearRuleDialog({
   rule,
   action,
+  deleteAction,
   onClose,
 }: {
   rule: MerchantRuleRecord;
   action: (formData: FormData) => void;
+  /**
+   * v1.25.0. The ORDINARY delete (deleteRuleAction), used when the server comes back with an
+   * affected count of zero. Not a styling detail: at zero this dialog's whole subject -- clearing
+   * transactions -- has nothing to act on, so the thing being agreed to really is a plain delete,
+   * and it should submit the action that says so and return "Rule deleted." rather than a
+   * clear-and-delete that reports having cleared nothing.
+   */
+  deleteAction: (formData: FormData) => void;
   onClose: () => void;
 }) {
   const isRename = rule.ruleKind === 'rename';
@@ -253,13 +269,55 @@ function ClearRuleDialog({
 
   const count = affected === null ? null : `${affected} transaction${affected === 1 ? '' : 's'}`;
 
+  /**
+   * v1.25.0, owner finding: the v1.24.0 dialog gave a count of ZERO the full treatment -- "This
+   * cannot be undone. 0 transactions were categorized by this rule.", three paragraphs of
+   * consequence, a date-range picker and a red Delete and clear -- for an action that would change
+   * nothing. Every one of those is a claim about data that is not there, and a red button on a
+   * no-op teaches a person to distrust red buttons on the ones that are not.
+   *
+   * Guarded on previewError being absent so an unusable date range (transposed, per scopeSchema)
+   * keeps the full form and its own error, rather than reading its enforced 0 as "nothing to do".
+   * The switch happens only once a real count has ARRIVED (affected is null while in flight), so
+   * the scope radios cannot be unmounted from under someone mid-edit -- changing the range resets
+   * affected to null, and this must not blank the control that change came from.
+   *
+   * WHY THE ROW MENU STILL OFFERS THIS at zero, rather than hiding it: the only count the menu has
+   * in hand is the row's own "Affects" figure, and for a TRANSFER rule that number points the
+   * opposite way from this one by design (ruleImpactCounts counts the rows the rule would still
+   * flag; clearing touches the rows it already flagged -- see ruleClearIds' docblock). The clear
+   * count also depends on a date range that only exists inside the dialog. Hiding the item on a
+   * number that can legitimately disagree with the one the dialog computes would put a second
+   * source of truth in front of the first, which is the exact failure this area keeps repeating. The
+   * real count arrives here, so zero is answered here.
+   */
+  const nothingToClear = affected === 0 && previewError === null;
+
   return (
     <RowDialog
       dialogId="clear-rule-dialog"
-      title={isRename ? 'Delete rule and restore original descriptions?' : 'Delete rule and clear it from transactions?'}
+      title={
+        nothingToClear
+          ? // Deliberately the same words as the ordinary delete dialog's title: at zero that is
+            // precisely what this is, and a title still promising to "clear it from transactions"
+            // would be the untrue half of the screen.
+            'Delete this rule?'
+          : isRename
+            ? 'Delete rule and restore original descriptions?'
+            : 'Delete rule and clear it from transactions?'
+      }
       onClose={onClose}
     >
-      {isRename ? (
+      {nothingToClear ? (
+        <p className="text-sm text-ink">
+          {isRename
+            ? 'This rule has not renamed any transactions, so there are no descriptions to restore.'
+            : rule.ruleKind === 'transfer'
+              ? 'No transactions are flagged as a transfer by this rule, so there is nothing to clear.'
+              : 'No transactions were categorized by this rule, so there is nothing to clear.'}{' '}
+          Deleting it removes the rule and nothing else.
+        </p>
+      ) : isRename ? (
         <>
           <p className="text-sm text-ink">
             Deleting the rule cannot be undone. Descriptions it changed go back to the text from your bank.
@@ -289,9 +347,27 @@ function ClearRuleDialog({
               is not recorded and cannot be brought back.
             </p>
           )}
+          {/* v1.25.0, owner finding: this paragraph used to read "Other rules are not re-run, so
+              these stay uncategorized until you run rules again" -- unqualified, directly under a
+              bold "This cannot be undone", and read as "deleting one rule un-categorizes
+              everything". It never meant that: clearing only ever touches the rows this one rule
+              accounts for (ruleClearIds). What it actually describes is the narrow shadowing case
+              -- a second, broader rule that also matches one of those rows (TIM HORTONS -> Coffee
+              over a broader TIM -> Fast Food) does not take over on its own.
+
+              STATED CONDITIONALLY rather than with the real number, and that is a scope limit
+              rather than a preference: computing "how many of these rows would another rule claim"
+              means re-simulating the affected rows with this rule removed from the rule set, which
+              needs their normalized_merchant text. The exported engine functions that could supply
+              it (ruleImpactIds per remaining rule) would cost one full pass per rule on every
+              keystroke in the date field, and the cheap version belongs beside ruleClearIds in
+              src/lib/categorize/engine.ts -- a file this lane does not own. Reported rather than
+              reached across; "if" is honest about a case that may not apply, where the old sentence
+              was not. */}
           <p className="text-sm text-ink">
-            Other rules are not re-run, so these stay {rule.ruleKind === 'transfer' ? 'unflagged' : 'uncategorized'} until
-            you run rules again.
+            If another rule also matches one of these, it will not take over automatically -- other rules are not
+            re-run, so they stay {rule.ruleKind === 'transfer' ? 'unflagged' : 'uncategorized'} until you run rules
+            again.
           </p>
           <ScopeChoice name="clear-rule-scope" scope={scope} onChange={setScope} backwards={backwards} />
         </>
@@ -302,12 +378,20 @@ function ClearRuleDialog({
         </p>
       ) : null}
       <div className="flex gap-2">
-        <form action={action} onSubmit={onClose}>
+        <form action={nothingToClear ? deleteAction : action} onSubmit={onClose}>
           <input type="hidden" name="ruleId" value={String(rule.id)} />
-          <input type="hidden" name="from" value={isRename ? '' : from} />
-          <input type="hidden" name="to" value={isRename ? '' : to} />
-          <SubmitButton variant="danger" size="sm" disabled={backwards || previewError !== null}>
-            {isRename ? 'Delete and restore' : 'Delete and clear'}
+          {nothingToClear ? null : (
+            <>
+              <input type="hidden" name="from" value={isRename ? '' : from} />
+              <input type="hidden" name="to" value={isRename ? '' : to} />
+            </>
+          )}
+          <SubmitButton
+            variant={nothingToClear ? 'primary' : 'danger'}
+            size="sm"
+            disabled={backwards || previewError !== null}
+          >
+            {nothingToClear ? 'Delete rule' : isRename ? 'Delete and restore' : 'Delete and clear'}
           </SubmitButton>
         </form>
         <button type="button" className="btn btn--secondary btn--sm" onClick={onClose}>
@@ -580,10 +664,24 @@ export function MerchantRulesClient({
         onClose={() => setEditing(null)}
       >
         <form action={saveRule} onSubmit={() => setEditing(null)} className="flex flex-col gap-3">
+          {/* v1.25.0 (item 18). Which row this dialog was opened on -- absent for a new rule. It
+              does NOT make the save an update-by-id (the note further down still holds, and the
+              action still upserts on the key): it is the only way a save that lands under a NEW key
+              can tell the pack "the rule you installed lives here now", so the next pack update
+              leaves the household's version alone instead of offering the original back. */}
+          {editing.id === null ? null : <input type="hidden" name="fromRuleId" value={editing.id} />}
           <Field label="Pattern" hint="Compared against the UPPERCASE normalized merchant text -- any case you type is uppercased on save.">
             <input name="pattern" defaultValue={editing.pattern} placeholder="WALMART" required autoFocus className={inputClass} />
           </Field>
-          <Field label="Match">
+          {/* v1.25.0 (item 16). "Whole word" is written for a person, and the helper text uses the
+              two REAL merchants from the bug it fixes (IGA/MICHIGAN) rather than FOO/BAR: the
+              whole difficulty of this field is that "contains" sounds harmless until you have
+              seen it match inside a longer word once. The option values stay the stored enum
+              values -- the label is prose, the value is data. */}
+          <Field
+            label="Match"
+            hint="exact: the whole merchant text, nothing else. contains: anywhere in the text, even inside a longer word. Whole word: matches IGA in IGA MARCHE, but never inside MICHIGAN — available for category and rename rules."
+          >
             <select
               name="matchType"
               defaultValue={editing.matchType}
@@ -591,6 +689,7 @@ export function MerchantRulesClient({
             >
               <option value="exact">exact</option>
               <option value="contains">contains</option>
+              <option value="word">Whole word</option>
             </select>
           </Field>
           <Field label="Kind" hint="A rename changes only what you see; a category rule changes budgeting. They are different commitments.">
@@ -624,6 +723,15 @@ export function MerchantRulesClient({
             <p className="text-xs text-subtle">
               Changing the pattern, match or kind creates a separate rule rather than renaming this one in place --
               save it under its new pattern, then delete this row from the table if it should not also remain.
+              {/* v1.25.0 (item 18). Before this release, following the advice above on a preset rule
+                  was a trap: deleting the pack's row left the update flow with no way to tell the
+                  replacement apart from a rule written from scratch, so the next update added the
+                  original straight back. The condition on the promise is exact -- an origin is only
+                  carried onto a row this save CREATES, so a pattern that already has a rule of its
+                  own is updated in place and inherits nothing (planPackOriginCarry, src/lib/packs.ts). */}
+              {editing.isPreset
+                ? ' This rule came from the preset pack: save it under a pattern you do not already have a rule for, and a later pack update leaves your version alone instead of adding this one back.'
+                : ''}
             </p>
           ) : null}
           <div className="flex gap-2">
@@ -839,6 +947,7 @@ export function MerchantRulesClient({
                               ruleKind: rule.ruleKind,
                               categoryId: rule.categoryId,
                               renameTo: rule.renameTo ?? '',
+                              isPreset: rule.packSource !== null,
                             })
                           }
                         >
@@ -927,7 +1036,13 @@ export function MerchantRulesClient({
       {/* `key` on the rule id: RowDialog's mount-once contract (its own docblock) means switching
           which row a mounted dialog acts on must force a remount, not reuse one instance. */}
       {clearingRule ? (
-        <ClearRuleDialog key={clearingRule.id} rule={clearingRule} action={deleteAndClear} onClose={() => setClearingRule(null)} />
+        <ClearRuleDialog
+          key={clearingRule.id}
+          rule={clearingRule}
+          action={deleteAndClear}
+          deleteAction={removeRule}
+          onClose={() => setClearingRule(null)}
+        />
       ) : null}
       {runningRules ? <RunRulesDialog action={rerunAll} onClose={() => setRunningRules(false)} /> : null}
     </div>

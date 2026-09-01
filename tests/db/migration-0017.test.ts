@@ -57,7 +57,11 @@ describe('drizzle/0017_pack_provenance.sql', () => {
     expect(entry).toMatchObject({ idx: 17, tag: '0017_pack_provenance' });
     const idxs = journal.entries.map((e) => e.idx).sort((a, b) => a - b);
     expect(idxs.indexOf(17)).toBe(idxs.indexOf(16) + 1);
-    expect(Math.max(...idxs)).toBe(17);
+    // No "and 17 is the newest" assertion here any more (v1.25.0, item 18). That claim belongs to
+    // whichever migration is currently last, not to this one: 0018 added a column of its own and
+    // its own suite asserts Math.max(...idxs) === 18, exactly as this file did while 0017 held that
+    // position. 0016's suite has always checked only the immediately-after relation, for the same
+    // reason -- an assertion a later, correct migration must break is a maintenance tax, not a guard.
   });
 
   it('the breakpoint marker never appears inside a comment', () => {

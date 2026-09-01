@@ -1,0 +1,115 @@
+-- WARNING: this migration is hand-maintained, not drizzle-kit-generated.
+-- Read the header of drizzle/0000_init.sql and the docblock in drizzle.config.ts before
+-- adding another one: there is no 0000_snapshot.json, so `drizzle-kit generate` would
+-- diff against an empty baseline and re-emit the whole schema. Hand-author the SQL,
+-- append the matching entry to drizzle/meta/_journal.json, and mirror the tables in
+-- src/db/schema.ts -- in that order.
+--
+-- NOTE ON SEPARATORS: drizzle's migrator splits this file on the breakpoint marker written
+-- between each statement below, and on nothing else, and it does NOT skip comments. That
+-- marker must therefore never appear inside a comment -- including this one, which is why
+-- it is described here rather than quoted -- or the file is shredded into fragments that
+-- will not parse.
+--
+-- Where a rule CAME FROM, as distinct from who owns it now (v1.25.0, backlog item 18). One
+-- nullable column, ADDITIVE ONLY, same ALTER-TABLE-ADD-COLUMN shape as 0017's three and 0016's
+-- disabled_at. No table rebuild is needed here -- unlike 0016 PART 2, nothing about this change
+-- can collide with merchant_rules_pattern_uq, because it writes a column the index does not name.
+--
+-- THE FOREIGN-KEY PRAGMA IS NOT IN THIS FILE, ON PURPOSE -- see 0011's header. src/db/client.ts's
+-- openDatabase() disables foreign keys around the whole migration pass and re-enables them (plus a
+-- foreign_key_check) immediately after. Do not put a pragma here.
+--
+-- ============================================================================================
+-- THE DEFECT (v1.25.0, item 18)
+-- ============================================================================================
+-- 0017 gave a rule three provenance columns, and the pack update flow in src/lib/canadian-pack.ts
+-- reads them as a LIVE CLAIM: pack_source non-NULL means "the pack owns this row right now", and
+-- an edit through the form clears all three precisely so that "the household changed this preset
+-- rule" is recorded without a fourth column (see upsertRuleFromCorrection's `pack` docblock).
+--
+-- That works while the rule keeps its KEY. A rule's identity is (pattern, match_type, rule_kind)
+-- -- merchant_rules_pattern_uq, mirrored by ruleKeyOf() in src/lib/packs.ts -- and saveRuleAction is
+-- an UPSERT on exactly that key with no row id in it. So changing a preset rule's PATTERN through
+-- the form does not move the row: it writes a SECOND row under the new key and leaves the pack's
+-- original in place, stamped. The form says so in as many words ("Changing the pattern, match or
+-- kind creates a separate rule rather than renaming this one in place -- save it under its new
+-- pattern, then delete this row from the table if it should not also remain").
+--
+-- A household that follows that instruction ends up, before this migration, with the pack's own
+-- rule DELETED and their replacement carrying no trace of where it came from. The next update then
+-- finds no row under the pack's pattern, classifies it as a fresh ADDITION indistinguishable from
+-- a genuinely new merchant, and writes it back -- so the deliberately-replaced rule returns and
+-- competes with the replacement through matchRule's longest-pattern-wins. Verified end to end
+-- before this column was written; the regression test is the first `it` under
+-- 'an update re-adds a pack rule the household replaced under a different pattern' in
+-- tests/lib/canadian-pack.test.ts, which now asserts the fixed behaviour and records in its own
+-- words what it used to observe.
+--
+-- ============================================================================================
+-- WHY A FOURTH COLUMN AND NOT A HEURISTIC
+-- ============================================================================================
+-- The three 0017 columns cannot answer this, and not by accident: they are a claim the household
+-- is supposed to be able to revoke, and revoking it is what an edit means. "Where did this row
+-- come from" is a different question with a different lifetime -- a historical fact no later edit
+-- can falsify -- so it gets its own column rather than a fourth meaning bolted onto pack_source.
+--
+-- It stores the pack rule's whole KEY, not just its pattern, and that is load-bearing rather than
+-- tidy: v1.25.0 item 16 promoted twelve pack rules from match_type 'exact' to 'word', and
+-- tests/lib/canadian-pack.test.ts pins that such a promotion presents as one addition plus one
+-- removal, deliberately, because match_type is part of a rule's identity and not part of its
+-- outcome. Matching a pack rule against a stored origin PATTERN alone would silently reclassify
+-- every one of those twelve as a household edit of the exact rule and quietly stop offering the
+-- word rule at all -- reversing a decision already made this release. Comparing whole keys keeps
+-- 'IGA|exact|category' and 'IGA|word|category' the two different rules they are.
+--
+-- Nothing ever PARSES this string, only compares it to a freshly built key, so the '|' separator
+-- carries no meaning a pattern containing a '|' could confuse: ruleKeyOf() builds the same bytes on
+-- both sides of the comparison either way.
+--
+-- ============================================================================================
+-- WHO WRITES IT (and why the form never does)
+-- ============================================================================================
+-- Two writers, both outside src/lib/categorize/rules.ts:
+--   - the pack itself, on install and on a successful update: every row it stamps records its own
+--     key (src/lib/canadian-pack.ts's rememberPackOrigin);
+--   - saveRuleAction, when a form save re-keys a rule that HAS an origin and thereby creates a new
+--     row: the new row inherits the origin (src/lib/packs.ts's planPackOriginCarry, decided before
+--     the write, then applyPackOriginCarry after it).
+--
+-- upsertRuleFromCorrection -- the one write choke point every other path funnels through -- does
+-- not name this column in either its INSERT `values` or its onConflictDoUpdate `set`. That is not
+-- an oversight and not an exception carved into it: SQLite leaves an unnamed column alone on
+-- UPDATE and NULL on INSERT, so an ordinary form edit clears the three stamp columns (as it must)
+-- and preserves this one (as it must) with no special case written anywhere. The stamp says who
+-- owns the row now; the origin says where it started; an edit changes the first and cannot change
+-- the second.
+--
+-- The pack can therefore never CLAIM a row through this column. A row only ever acquires an origin
+-- by being written by the pack, or by descending from a row that was -- and canadianPackState,
+-- installedCanadianPackRows, previewCanadianPackRemoval and removeCanadianPack all still filter on
+-- pack_source alone, so a row carrying an origin but no stamp is the household's in every sense
+-- that has consequences: it is never counted as present, never re-stamped, and never deleted by
+-- "Remove all". The one thing the origin can do is make an update do LESS -- decline to add a rule
+-- back -- never more.
+ALTER TABLE `merchant_rules` ADD `pack_origin_key` text;
+--> statement-breakpoint
+-- ONE-TIME CATCH-UP for a database migrated under 0017, in the same spirit as 0016 PART 2's
+-- uppercase pass: a row that is stamped RIGHT NOW is, by definition, sitting under the key the
+-- pack last wrote it under -- an edit that moved it would have cleared the stamp on the row it
+-- wrote, and the pack's own row would still be here, stamped, under its own key. So its current
+-- key IS its origin and recording that is a statement of fact, not a guess.
+--
+-- An UNSTAMPED row is deliberately left NULL, including one that is in truth a pre-0018 pattern
+-- edit of a preset rule. There is no evidence in the database to tell that row apart from a rule
+-- the household wrote from scratch that happens to look similar, and inventing one would risk the
+-- pack claiming a rule it never wrote -- the single thing this feature may never do. NULL means
+-- "no recorded origin", and every reader treats such a row as purely the household's, which for a
+-- pre-0018 edit means that one rule keeps the old behaviour (its pack entry is offered as an
+-- addition) exactly once, and behaves correctly from the next edit onward. Pinned by
+-- 'backfills every stamped row with its own key and leaves every unstamped row NULL' in
+-- tests/db/migration-0018.test.ts, and behaviourally by 'a stamped row carrying no recorded origin
+-- is treated as the household own work' in tests/lib/canadian-pack.test.ts.
+UPDATE `merchant_rules`
+SET `pack_origin_key` = `pattern` || '|' || `match_type` || '|' || `rule_kind`
+WHERE `pack_source` IS NOT NULL AND `pack_origin_key` IS NULL;

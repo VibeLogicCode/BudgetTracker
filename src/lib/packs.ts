@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '@/db/client';
 import { merchantRules } from '@/db/schema';
@@ -10,6 +10,7 @@ import { categoryLabel, createCategory, listCategories, type CategoryRecord } fr
 import { applyRenameRules, buildContext } from '@/lib/categorize/engine';
 import {
   listRules,
+  matchTypeAllowedForKind,
   upsertRuleFromCorrection,
   type MatchType,
   type MerchantRuleRecord,
@@ -109,6 +110,25 @@ function isImportableRuleKind(kind: string): kind is RuleKind {
   return (IMPORTABLE_RULE_KINDS as readonly string[]).includes(kind);
 }
 
+/**
+ * v1.25.0 (item 16). One predicate for BOTH loops below (previewRulesPackImport and
+ * importRulesPack), because the preview's `skippedRules` and the import's `rulesSkipped` are the
+ * same promise made twice and a pack whose preview says "nothing skipped" must not then skip
+ * something.
+ *
+ * Two ways an entry is skipped rather than rejected:
+ *   - an unsupported rule_kind ('not_transfer', or anything this install has never heard of) --
+ *     controller ruling (a), unchanged since the format shipped;
+ *   - match_type 'word' on a kind that cannot carry it (transfer). See WORD_MATCH_KINDS in
+ *     src/lib/categorize/rules.ts for why transfer/not_transfer are exact-match-only. Skipping is
+ *     the right treatment for exactly the reason ruling (a) gave for the first case: a pack
+ *     written against a different install's idea of what a rule may be is not a MALFORMED file,
+ *     and one unsupported entry must never cost a household the other 189.
+ */
+function isImportableRule(rule: PackRule): boolean {
+  return isImportableRuleKind(rule.rule_kind) && matchTypeAllowedForKind(rule.match_type, rule.rule_kind);
+}
+
 const packCategorySchema = z.object({
   name: z.string().trim().min(1).max(60),
   parent: z.string().trim().min(1).max(60).nullable().optional().transform((v) => v ?? null),
@@ -130,7 +150,7 @@ const packCategorySchema = z.object({
 const packRuleSchema = z
   .object({
     pattern: z.string().trim().min(1).max(200),
-    match_type: z.enum(['exact', 'contains']),
+    match_type: z.enum(['exact', 'contains', 'word']),
     rule_kind: z
       .string()
       .trim()
@@ -453,7 +473,7 @@ export function previewRulesPackImport(input: unknown): RulesImportPlan {
   const conflicts: RulesImportConflict[] = [];
 
   for (const rule of pack.rules) {
-    if (!isImportableRuleKind(rule.rule_kind)) {
+    if (!isImportableRule(rule)) {
       skippedRules += 1;
       continue;
     }
@@ -589,7 +609,7 @@ export function importRulesPack(
   let renameRulesWritten = false;
 
   for (const rule of pack.rules) {
-    if (!isImportableRuleKind(rule.rule_kind)) {
+    if (!isImportableRule(rule)) {
       rulesSkipped += 1;
       continue;
     }
@@ -677,6 +697,161 @@ export function importRulesPack(
   if (renameRulesWritten) applyRenameRules(undefined, buildContext());
 
   return { rulesAdded, rulesOverwritten, rulesKept, rulesSkipped, categoriesCreated };
+}
+
+// -------------------------------------------- rule provenance across a re-key
+
+/**
+ * v1.25.0 (backlog item 18). A rule row's IDENTITY, as one string: exactly the three columns
+ * merchant_rules_pattern_uq enforces, in that order. src/lib/canadian-pack.ts's update walk keys
+ * every one of its maps on this, and merchant_rules.pack_origin_key stores it -- one definition,
+ * because the whole of item 18 is that a stored origin and a freshly computed key have to compare
+ * equal or the pack mistakes an edited rule for a missing one.
+ *
+ * Never parsed, only compared, so the '|' separator carries no meaning that a pattern containing a
+ * '|' could confuse: both sides of every comparison are built by this function.
+ */
+export function ruleKeyOf(row: { pattern: string; matchType: MatchType; ruleKind: RuleKind }): string {
+  return `${row.pattern}|${row.matchType}|${row.ruleKind}`;
+}
+
+/**
+ * Every row that HAS a recorded origin, by row id. Read with its own select rather than off
+ * MerchantRuleRecord because listRules' record type (src/lib/categorize/rules.ts) does not carry
+ * this column -- deliberately: the three 0017 stamp columns are provenance every reader of a rule
+ * consults, and this one is consulted at exactly one decision point (below), so it does not belong
+ * in the shape every caller of listRules receives.
+ */
+export function packOriginKeyById(): Map<number, string> {
+  const rows = getDb()
+    .select({ id: merchantRules.id, originKey: merchantRules.packOriginKey })
+    .from(merchantRules)
+    .all();
+  const map = new Map<number, string>();
+  for (const row of rows) {
+    if (row.originKey !== null) map.set(row.id, row.originKey);
+  }
+  return map;
+}
+
+/**
+ * Record "this row is where pack `source` put it" on every row that pack currently claims and that
+ * has no origin recorded yet. Called after an install and after a successful update
+ * (src/lib/canadian-pack.ts), NOT from upsertRuleFromCorrection -- see that function's `pack`
+ * docblock and drizzle/0018_pack_origin_key.sql's header for why keeping this column out of the
+ * shared upsert is what makes an ordinary form edit clear the stamp and preserve the origin with
+ * no special case anywhere.
+ *
+ * `IS NULL` in the WHERE, not an unconditional SET, so this can only ever ADD a fact and never
+ * rewrite one. For a row the pack just wrote the two agree anyway (its own key IS its origin);
+ * the guard matters for a row whose origin was inherited from somewhere else, which must keep
+ * pointing at where it actually started.
+ *
+ * Returns how many rows it recorded, for tests and for nothing else.
+ */
+export function rememberPackOrigin(source: string): number {
+  const result = getDb()
+    .update(merchantRules)
+    .set({
+      packOriginKey: sql`${merchantRules.pattern} || '|' || ${merchantRules.matchType} || '|' || ${merchantRules.ruleKind}`,
+    })
+    .where(and(eq(merchantRules.packSource, source), isNull(merchantRules.packOriginKey)))
+    .run();
+  return result.changes;
+}
+
+/**
+ * v1.25.0 (backlog item 18), first half. Decide -- BEFORE the write happens -- whether the row a
+ * form save is about to create should inherit a pack origin, and return the origin it should carry
+ * (or null for "nothing to carry").
+ *
+ * WHY BEFORE: saveRuleAction is an UPSERT on (pattern, match_type, rule_kind) with no row id in
+ * it, so changing a rule's pattern does not move the row -- it writes a SECOND row under the new
+ * key and leaves the original where it was (the form says so in as many words). Whether the target
+ * key already had a row of its own is therefore the difference between "the household re-keyed a
+ * preset rule, and the new row descends from it" and "the household's existing, unrelated rule
+ * just got updated" -- and that question can only be answered before the upsert has blurred the
+ * two. Writing an origin onto a row that already existed would let the pack claim a rule the
+ * household wrote themselves, which is the one thing this feature may never do.
+ *
+ * Returns null, i.e. carries nothing, whenever any of these holds:
+ *   - the save is a brand-new rule, not an edit (`fromRuleId` null);
+ *   - the row being edited no longer exists;
+ *   - that row has no recorded origin -- it is the household's own work, or it predates
+ *     drizzle/0018_pack_origin_key.sql (see that file on why a NULL there is never guessed at);
+ *   - the save does not actually re-key anything (same pattern, match type and kind), in which case
+ *     the upsert updates that very row in place and its origin is already correct;
+ *   - a row already exists under the target key, per WHY BEFORE above.
+ */
+export function planPackOriginCarry(input: {
+  fromRuleId: number | null;
+  pattern: string;
+  matchType: MatchType;
+  ruleKind: RuleKind;
+}): string | null {
+  if (input.fromRuleId === null) return null;
+  const db = getDb();
+  const from = db
+    .select({
+      pattern: merchantRules.pattern,
+      matchType: merchantRules.matchType,
+      ruleKind: merchantRules.ruleKind,
+      originKey: merchantRules.packOriginKey,
+    })
+    .from(merchantRules)
+    .where(eq(merchantRules.id, input.fromRuleId))
+    .get();
+  if (from === undefined || from.originKey === null) return null;
+
+  // Same normalization the write itself applies (upsertRuleFromCorrection uppercases every pattern
+  // at the choke point, v1.21.0 item 9), so "did this save re-key anything" is asked about the key
+  // that will actually be stored, not the raw text typed into the form.
+  const target = { pattern: input.pattern.trim().toUpperCase(), matchType: input.matchType, ruleKind: input.ruleKind };
+  if (ruleKeyOf(target) === ruleKeyOf(from)) return null;
+
+  const collision = db
+    .select({ id: merchantRules.id })
+    .from(merchantRules)
+    .where(
+      and(
+        eq(merchantRules.pattern, target.pattern),
+        eq(merchantRules.matchType, target.matchType),
+        eq(merchantRules.ruleKind, target.ruleKind),
+      ),
+    )
+    .get();
+  if (collision !== undefined) return null;
+
+  return from.originKey;
+}
+
+/**
+ * Second half: write the origin planPackOriginCarry decided on onto the row the save has since
+ * created. Split in two rather than done in one call for the ordering reason spelled out above --
+ * the decision needs the table as it was, the write needs the table as it is.
+ *
+ * Still guarded with `IS NULL`, even though the row it targets was created moments ago by the very
+ * save that prompted this: the guard costs nothing and makes "an origin is only ever added, never
+ * rewritten" true of every statement in this file rather than true only of the ones that remembered.
+ */
+export function applyPackOriginCarry(input: {
+  pattern: string;
+  matchType: MatchType;
+  ruleKind: RuleKind;
+  originKey: string;
+}): void {
+  getDb()
+    .update(merchantRules)
+    .set({ packOriginKey: input.originKey })
+    .where(
+      and(
+        eq(merchantRules.pattern, input.pattern.trim().toUpperCase()),
+        eq(merchantRules.matchType, input.matchType),
+        eq(merchantRules.ruleKind, input.ruleKind),
+        isNull(merchantRules.packOriginKey),
+      ),
+    )
+    .run();
 }
 
 // ------------------------------------------------------------------ profiles

@@ -48,6 +48,7 @@ function updateDiffFixture(over: Partial<CanadianPackUpdateDiff> = {}): Canadian
     changed: [],
     removed: [],
     skippedEdited: [],
+    editedAway: [],
     unchangedCount: 180,
     ...over,
   };
@@ -255,6 +256,51 @@ describe('MerchantRulesClient — the rule dialog (RowDialog, item 10)', () => {
   });
 });
 
+/**
+ * v1.25.0 (backlog item 18). Both halves of the same promise, at the two surfaces that make it:
+ * the rule dialog, which is where a household decides to replace a preset rule, and the update
+ * review, which is where the pack would otherwise put the original back. Every assertion here is
+ * about a sentence, not a layout, because the recurring failure in this area has been a dialog
+ * that said something the code did not do.
+ */
+describe('MerchantRulesClient — replacing a preset rule under a new pattern (item 18)', () => {
+  it('the edit dialog submits the row id, which is what lets a re-key inherit the preset origin', () => {
+    render(<MerchantRulesClient {...baseProps({ rows: [rule({ id: 42, pattern: 'TIM HORTONS', packSource: 'canadian-merchants', packVersion: 2 })] })} />);
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: /^edit$/i }));
+    const dialog = screen.getByRole('dialog', { name: /edit rule for "tim hortons"/i });
+    const hidden = dialog.querySelector('input[name="fromRuleId"]') as HTMLInputElement | null;
+    expect(hidden).not.toBeNull();
+    expect(hidden?.value).toBe('42');
+  });
+
+  it('a brand-new rule submits no row id -- there is nothing for it to descend from', () => {
+    render(<MerchantRulesClient {...baseProps()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'New rule' }));
+    const dialog = screen.getByRole('dialog', { name: /new merchant rule/i });
+    expect(dialog.querySelector('input[name="fromRuleId"]')).toBeNull();
+  });
+
+  it('only a preset rule is told that a later pack update will leave the replacement alone', () => {
+    render(<MerchantRulesClient {...baseProps({ rows: [rule({ pattern: 'TIM HORTONS', packSource: 'canadian-merchants', packVersion: 2 })] })} />);
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: /^edit$/i }));
+    const dialog = screen.getByRole('dialog', { name: /edit rule for "tim hortons"/i });
+    expect(dialog.textContent).toMatch(/creates a separate rule rather than renaming this one in place/i);
+    expect(dialog.textContent).toMatch(/came from the preset pack/i);
+    expect(dialog.textContent).toMatch(/leaves your version alone instead of adding this one back/i);
+  });
+
+  it('a rule the household wrote gets the re-key note without any preset promise attached to it', () => {
+    render(<MerchantRulesClient {...baseProps({ rows: [rule({ pattern: 'CORNER STORE', packSource: null })] })} />);
+    openRowMenu('Actions for CORNER STORE');
+    fireEvent.click(screen.getByRole('menuitem', { name: /^edit$/i }));
+    const dialog = screen.getByRole('dialog', { name: /edit rule for "corner store"/i });
+    expect(dialog.textContent).toMatch(/creates a separate rule rather than renaming this one in place/i);
+    expect(dialog.textContent).not.toMatch(/preset pack/i);
+  });
+});
+
 describe('MerchantRulesClient — per-rule Apply now (item 11: scoped, understandable, safe)', () => {
   it('offers Apply now, labelled with the live impact figure already on the row, for an enabled non-rename rule', async () => {
     const { applyRuleNowAction } = await import('@/app/(app)/settings/merchant-rules/actions');
@@ -395,7 +441,109 @@ describe('MerchantRulesClient — Delete rule and clear it from transactions (di
     expect(text).toMatch(/This cannot be undone/);
     expect(text).toMatch(/returns them to Needs review/);
     expect(text).toMatch(/is not recorded and cannot be brought back/);
-    expect(text).toMatch(/Other rules are not re-run/);
+    expect(text).toMatch(/other rules are not\s+re-run/i);
+  });
+
+  /**
+   * v1.25.0, owner finding 1. The old sentence ("Other rules are not re-run, so these stay
+   * uncategorized until you run rules again") was unqualified and read as "deleting one rule
+   * un-categorizes everything". Clearing only ever touches the rows this one rule accounts for, and
+   * the paragraph actually describes shadowing -- a second rule that also matches one of them not
+   * taking over on its own. The wording is now conditional, so it stops asserting a case that may
+   * not apply. See the comment above it in merchant-rules-client.tsx for why the real number is not
+   * stated here.
+   */
+  it('states the shadowing consequence conditionally, never as an unqualified threat', async () => {
+    render(<MerchantRulesClient {...baseProps()} />);
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: /clear from transactions/i }));
+    await screen.findByText(/41 transactions were categorized by this rule/);
+    const text = screen.getByRole('dialog').textContent ?? '';
+    expect(text).toMatch(/If another rule also matches one of these, it will not take over automatically/);
+    // The unqualified claim the owner read as "everything becomes uncategorized" must be gone.
+    expect(text).not.toMatch(/so these stay uncategorized until you run rules again/);
+  });
+
+  /**
+   * v1.25.0, owner finding 2. A count of zero used to get "This cannot be undone. 0 transactions
+   * were categorized by this rule.", three paragraphs of consequence, a date-range picker and a red
+   * Delete and clear -- for an action that would change nothing.
+   */
+  describe('a count of zero is a no-op, and says so', () => {
+    async function openAtZero(over: Partial<MerchantRuleRecord> = {}, kind: RuleKind = 'category') {
+      const { previewRuleClearAction } = await import('@/app/(app)/settings/merchant-rules/actions');
+      vi.mocked(previewRuleClearAction).mockResolvedValue({ affected: 0, kind });
+      render(
+        <MerchantRulesClient
+          {...baseProps({
+            rows: [rule(over)],
+            kindCounts: {
+              category: kind === 'category' ? 1 : 0,
+              transfer: kind === 'transfer' ? 1 : 0,
+              rename: kind === 'rename' ? 1 : 0,
+              not_transfer: 0,
+            },
+          })}
+        />,
+      );
+      openRowMenu('Actions for TIM HORTONS');
+      fireEvent.click(
+        screen.getByRole('menuitem', { name: kind === 'rename' ? 'Delete rule' : /clear from transactions/i }),
+      );
+      return screen.findByText(/nothing to clear|no descriptions to restore/i);
+    }
+
+    it('a category rule says there is nothing to clear, in one line', async () => {
+      await openAtZero();
+      const text = screen.getByRole('dialog').textContent ?? '';
+      expect(text).toMatch(/No transactions were categorized by this rule, so there is nothing to clear/);
+      expect(text).toMatch(/Deleting it removes the rule and nothing else/);
+      // None of the consequence paragraphs, and not the leading warning that reads as nonsense at 0.
+      expect(text).not.toMatch(/This cannot be undone/);
+      expect(text).not.toMatch(/returns them to Needs review/);
+      expect(text).not.toMatch(/If another rule also matches/);
+    });
+
+    it('offers an ordinary delete, never a destructive-styled button, and no date range', async () => {
+      const { deleteRuleAction, deleteRuleAndClearAction } = await import('@/app/(app)/settings/merchant-rules/actions');
+      await openAtZero();
+      // No date range: there is nothing for a range to narrow.
+      expect(screen.queryByRole('radio', { name: 'Date range' })).toBeNull();
+      expect(screen.queryByRole('radio', { name: 'All time' })).toBeNull();
+
+      const button = screen.getByRole('button', { name: 'Delete rule' });
+      expect(screen.queryByRole('button', { name: /delete and clear/i })).toBeNull();
+      expect(button.className).not.toMatch(/danger/);
+
+      // And it submits the ORDINARY delete, so the result message does not report clearing nothing.
+      fireEvent.click(button);
+      expect(deleteRuleAndClearAction).not.toHaveBeenCalled();
+      expect(deleteRuleAction).toHaveBeenCalled();
+    });
+
+    it('a transfer rule at zero uses its own wording, not the category one', async () => {
+      await openAtZero({ ruleKind: 'transfer', categoryId: null }, 'transfer');
+      const text = screen.getByRole('dialog').textContent ?? '';
+      expect(text).toMatch(/No transactions are flagged as a transfer by this rule, so there is nothing to clear/);
+      expect(text).not.toMatch(/were categorized by this rule/);
+      expect(text).not.toMatch(/Clearing removes the transfer flag/);
+      expect(screen.queryByRole('button', { name: /delete and clear/i })).toBeNull();
+    });
+
+    it('a rename rule at zero promises nothing about descriptions it never changed', async () => {
+      await openAtZero({ ruleKind: 'rename', categoryId: null, renameTo: "McDonald's" }, 'rename');
+      const text = screen.getByRole('dialog').textContent ?? '';
+      expect(text).toMatch(/This rule has not renamed any transactions, so there are no descriptions to restore/);
+      expect(text).not.toMatch(/go back to the text from your bank/);
+      expect(screen.queryByRole('button', { name: /delete and restore/i })).toBeNull();
+      expect(screen.getByRole('button', { name: 'Delete rule' })).toBeTruthy();
+    });
+
+    it('the title stops promising to clear transactions when there are none', async () => {
+      await openAtZero();
+      expect(screen.queryByRole('dialog', { name: /clear it from transactions/i })).toBeNull();
+      expect(screen.getByRole('dialog', { name: /delete this rule\?/i })).toBeTruthy();
+    });
   });
 
   it('re-previews the count against a chosen date range', async () => {
@@ -673,6 +821,73 @@ describe('MerchantRulesClient — Canadian pack panel: update review (RowDialog)
     expect(dialog.textContent).toMatch(/1 rule left alone/);
     expect(dialog.textContent).toContain('TIM HORTONS');
     expect(dialog.textContent).toMatch(/175 rules unchanged/);
+  });
+
+  /**
+   * v1.25.0 (item 18). The section that has to be true of walkCanadianPackUpdate: these entries are
+   * exactly the ones it moved OUT of `added`, and applyCanadianPackUpdate has no loop that writes
+   * them -- so "not added back" and "left exactly as it is" are both statements about code, not
+   * reassurance. The match type is named only when it is the thing that changed, which is what
+   * keeps a re-key of the match type alone from rendering as "IGA — you have IGA".
+   */
+  it('the "not added back" section names the pack rule and what the household has instead', () => {
+    render(
+      <MerchantRulesClient
+        {...baseProps({
+          canadianPack: updateAvailableState,
+          canadianUpdateDiff: updateDiffFixture({
+            editedAway: [
+              {
+                pattern: 'TIM HORTONS',
+                matchType: 'exact',
+                ruleKind: 'category',
+                categoryLabel: 'Coffee',
+                renameTo: null,
+                savedAs: [{ pattern: 'TIM HORTON', matchType: 'exact' }],
+              },
+            ],
+          }),
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Update' }));
+    const dialog = screen.getByRole('dialog', { name: /update the canadian merchant pack to v2/i });
+    expect(dialog.textContent).toMatch(/1 not added back:/);
+    expect(dialog.textContent).toMatch(/you have saved this pack rule as a rule of your own/i);
+    expect(dialog.textContent).toMatch(/your version is left exactly as it is/i);
+    expect(dialog.textContent).toContain('TIM HORTONS');
+    expect(dialog.textContent).toContain('TIM HORTON');
+  });
+
+  it('names the match type when that is what the household changed, so the line still explains itself', () => {
+    render(
+      <MerchantRulesClient
+        {...baseProps({
+          canadianPack: updateAvailableState,
+          canadianUpdateDiff: updateDiffFixture({
+            editedAway: [
+              {
+                pattern: 'IGA',
+                matchType: 'exact',
+                ruleKind: 'category',
+                categoryLabel: 'Groceries',
+                renameTo: null,
+                savedAs: [{ pattern: 'IGA', matchType: 'word' }],
+              },
+            ],
+          }),
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Update' }));
+    const dialog = screen.getByRole('dialog', { name: /update the canadian merchant pack to v2/i });
+    expect(dialog.textContent).toContain('IGA (word)');
+  });
+
+  it('the "not added back" section is absent when nothing was re-keyed', () => {
+    render(<MerchantRulesClient {...baseProps({ canadianPack: updateAvailableState, canadianUpdateDiff: updateDiffFixture() })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Update' }));
+    expect(screen.getByRole('dialog').textContent).not.toMatch(/not added back/i);
   });
 
   it('the "also delete" checkbox appears only when something was removed, and toggles', () => {

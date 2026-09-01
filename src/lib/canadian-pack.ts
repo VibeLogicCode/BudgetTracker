@@ -31,9 +31,12 @@ import { renderEvent } from '@/lib/notify/render';
 import {
   findCategory,
   importRulesPack,
+  packOriginKeyById,
   parseRulesPack,
   previewRulesPackImport,
+  rememberPackOrigin,
   resolveParentName,
+  ruleKeyOf,
   type PackRule,
   type RulesPack,
 } from '@/lib/packs';
@@ -73,10 +76,6 @@ let parsed: RulesPack | null = null;
 export function canadianRulesPack(): RulesPack {
   if (parsed === null) parsed = parseRulesPack(rawCanadianPack);
   return parsed;
-}
-
-function keyOf(row: { pattern: string; matchType: MatchType; ruleKind: RuleKind }): string {
-  return `${row.pattern}|${row.matchType}|${row.ruleKind}`;
 }
 
 /** Every currently-stamped row this pack wrote and nobody has since edited or deleted. */
@@ -168,10 +167,18 @@ export function installCanadianPack(
   version: number = CANADIAN_PACK_VERSION,
 ): ReturnType<typeof importRulesPack> {
   const installedAt = nowIso(at);
-  return importRulesPack(input, {
+  const result = importRulesPack(input, {
     onConflict: 'keep',
     stamp: { source: CANADIAN_PACK_ID, version, installedAt },
   });
+  // v1.25.0 (item 18). Record where every row this pack now claims was put, so a later form save
+  // that re-keys one can pass that origin to the row it creates and the update flow can tell "you
+  // replaced this rule" apart from "you have never seen this rule". Runs AFTER the import rather
+  // than inside it because it is keyed off pack_source, which is exactly the set of rows the import
+  // decided to write: a conflict-kept row was never stamped, so it is never given an origin either
+  // and stays wholly the household's. See rememberPackOrigin (src/lib/packs.ts).
+  rememberPackOrigin(CANADIAN_PACK_ID);
+  return result;
 }
 
 export interface CanadianPackRemovalPreview {
@@ -195,10 +202,20 @@ export interface CanadianPackRemovalResult {
   transactionsReverted: number;
 }
 
-/** Deletes ONLY currently-stamped rows -- a rule the household edited since install lost its
- *  stamp the moment it was edited (see upsertRuleFromCorrection's `pack` docblock) and is
- *  therefore invisible to installedCanadianPackRows(), so this can never delete a rule that is,
- *  by this point, theirs. */
+/**
+ * Deletes ONLY currently-stamped rows -- a rule the household edited since install lost its
+ * stamp the moment it was edited (see upsertRuleFromCorrection's `pack` docblock) and is
+ * therefore invisible to installedCanadianPackRows(), so this can never delete a rule that is,
+ * by this point, theirs.
+ *
+ * v1.25.0 (item 18) does NOT widen that. pack_origin_key is deliberately not consulted here, and
+ * both previewCanadianPackRemoval above and this function still filter on pack_source alone: a row
+ * carrying an origin but no stamp is a rule the household re-keyed and now depends on, so "Remove
+ * all" must leave it -- and its count must not appear in the dialog's "Remove N preset rules"
+ * either, or the sentence would promise a deletion that does not happen. The origin is read at
+ * exactly one decision point (walkCanadianPackUpdate below), where its only power is to make an
+ * update write LESS than it otherwise would.
+ */
 export function removeCanadianPack(): CanadianPackRemovalResult {
   const rows = installedCanadianPackRows();
   let transactionsReverted = 0;
@@ -230,6 +247,35 @@ export interface CanadianPackChangedEntry {
   after: string;
 }
 
+/**
+ * v1.25.0 (backlog item 18). A pack rule that has NO row under its own key, but which the
+ * household demonstrably still has -- under a pattern (or match type, or kind) of their own,
+ * recorded in merchant_rules.pack_origin_key when the form save re-keyed it. Never written by an
+ * update: reported so the confirm screen can say "not added back, you have your own version of
+ * this" instead of offering the pack's original as a fresh addition and quietly reinstating a rule
+ * that was deliberately replaced.
+ */
+export interface CanadianPackEditedAwayEntry {
+  /** The PACK's pattern -- the entry this is about, as the pack itself names it. */
+  pattern: string;
+  matchType: MatchType;
+  ruleKind: RuleKind;
+  categoryLabel: string | null;
+  renameTo: string | null;
+  /**
+   * The live rule(s) the household now has this pack entry saved as. Never empty (an entry only
+   * exists because at least one such row was found), and a list rather than a single value because
+   * nothing stops a rule being re-keyed twice, each save leaving another row that descends from the
+   * same pack entry.
+   *
+   * Carries matchType alongside the pattern because a re-key is not always a pattern change: the
+   * origin is a whole key, so promoting the pack's `IGA` from exact to whole-word through the form
+   * lands here too, with the SAME pattern. The confirm screen needs both to write a true sentence
+   * about it rather than "you have IGA" under a heading about IGA.
+   */
+  savedAs: { pattern: string; matchType: MatchType }[];
+}
+
 export interface CanadianPackUpdateDiff {
   fromVersion: number | null;
   toVersion: number;
@@ -245,6 +291,14 @@ export interface CanadianPackUpdateDiff {
    * of silently doing nothing.
    */
   skippedEdited: CanadianPackDiffEntry[];
+  /**
+   * v1.25.0 (item 18). The same promise skippedEdited makes -- "your version is left alone" -- on
+   * different evidence, and a separate list rather than folded into that one because the two need
+   * different sentences. skippedEdited means A ROW EXISTS UNDER THIS PACK PATTERN and the pack no
+   * longer claims it; this means NO ROW EXISTS under the pack pattern at all, and the reason to
+   * leave it alone is a row somewhere else that came from it.
+   */
+  editedAway: CanadianPackEditedAwayEntry[];
   unchangedCount: number;
 }
 
@@ -279,33 +333,67 @@ function resolvePackRules(pack: RulesPack, categories: CategoryRecord[]): Resolv
  * by canadianPackUpdateDiff (reporting) and applyCanadianPackUpdate (writing) -- one walk, one
  * definition of added/changed/unchanged/skipped, rather than the preview and the apply drifting
  * apart because they were computed two different ways.
+ *
+ * v1.25.0 (item 18) adds a SECOND lookup beside byKey, and the order the two are consulted in is
+ * the whole fix. A rule's key is its identity, so a pack rule with no row under its key used to be
+ * an addition, full stop -- which is right for a genuinely new merchant and wrong for one the
+ * household re-keyed and then deleted the pack's original of, exactly as the form's own hint tells
+ * them to. movedByOrigin catches the second case by asking merchant_rules.pack_origin_key "does
+ * some row here descend from this pack entry", and it is consulted ONLY when byKey has already come
+ * up empty, so it can never override, reclassify or lay claim to a row that is sitting under the
+ * pack's own key.
  */
 function walkCanadianPackUpdate(pack: RulesPack): {
   added: ResolvedPackRule[];
   changed: { rule: ResolvedPackRule; existing: MerchantRuleRecord }[];
   unchanged: { rule: ResolvedPackRule; existing: MerchantRuleRecord }[];
   skippedEdited: ResolvedPackRule[];
+  editedAway: { rule: ResolvedPackRule; rows: MerchantRuleRecord[] }[];
   removed: MerchantRuleRecord[];
 } {
   const categories = listCategories({ includeArchived: true });
   const resolved = resolvePackRules(pack, categories);
 
   const allRules = listRules();
-  const byKey = new Map(allRules.map((row) => [keyOf(row), row]));
-  const stampedKeys = new Set(installedCanadianPackRows().map((row) => keyOf(row)));
+  const byKey = new Map(allRules.map((row) => [ruleKeyOf(row), row]));
+  const stampedKeys = new Set(installedCanadianPackRows().map((row) => ruleKeyOf(row)));
+
+  // Rows that record an origin DIFFERENT from where they now sit -- i.e. rows the household
+  // re-keyed. A row still sitting on its own origin is excluded on purpose: it is found by byKey
+  // above and classified there, and admitting it here would give a second, weaker path to the same
+  // row. Grouped into a list because a rule can be re-keyed more than once, each save leaving
+  // another descendant of the same pack entry.
+  const originKeys = packOriginKeyById();
+  const movedByOrigin = new Map<string, MerchantRuleRecord[]>();
+  for (const row of allRules) {
+    const origin = originKeys.get(row.id);
+    if (origin === undefined || origin === ruleKeyOf(row)) continue;
+    const group = movedByOrigin.get(origin);
+    if (group === undefined) movedByOrigin.set(origin, [row]);
+    else group.push(row);
+  }
 
   const added: ResolvedPackRule[] = [];
   const changed: { rule: ResolvedPackRule; existing: MerchantRuleRecord }[] = [];
   const unchanged: { rule: ResolvedPackRule; existing: MerchantRuleRecord }[] = [];
   const skippedEdited: ResolvedPackRule[] = [];
+  const editedAway: { rule: ResolvedPackRule; rows: MerchantRuleRecord[] }[] = [];
   const packKeys = new Set<string>();
 
   for (const rule of resolved) {
-    const key = keyOf(rule);
+    const key = ruleKeyOf(rule);
     packKeys.add(key);
     const existing = byKey.get(key);
 
     if (!existing) {
+      const moved = movedByOrigin.get(key);
+      if (moved !== undefined) {
+        // The household has this pack rule, re-keyed. Adding the pack's original back would
+        // resurrect a rule they deliberately replaced and set the two competing through matchRule's
+        // longest-pattern-wins -- the defect item 18 exists to fix.
+        editedAway.push({ rule, rows: moved });
+        continue;
+      }
       added.push(rule);
       continue;
     }
@@ -321,9 +409,9 @@ function walkCanadianPackUpdate(pack: RulesPack): {
     else changed.push({ rule, existing });
   }
 
-  const removed = installedCanadianPackRows().filter((row) => !packKeys.has(keyOf(row)));
+  const removed = installedCanadianPackRows().filter((row) => !packKeys.has(ruleKeyOf(row)));
 
-  return { added, changed, unchanged, skippedEdited, removed };
+  return { added, changed, unchanged, skippedEdited, editedAway, removed };
 }
 
 /** `pack`/`toVersion` default to the real bundle -- see canadianPackState's docblock for why they
@@ -363,6 +451,10 @@ export function canadianPackUpdateDiff(pack: RulesPack = canadianRulesPack(), to
       renameTo: row.renameTo,
     })),
     skippedEdited: walk.skippedEdited.map(toEntry),
+    editedAway: walk.editedAway.map(({ rule, rows }) => ({
+      ...toEntry(rule),
+      savedAs: rows.map((row) => ({ pattern: row.pattern, matchType: row.matchType })),
+    })),
     unchangedCount: walk.unchanged.length,
   };
 }
@@ -372,6 +464,8 @@ export interface CanadianPackUpdateResult {
   changed: number;
   unchanged: number;
   skippedEdited: number;
+  /** v1.25.0 (item 18). Pack rules NOT added back because the household has them re-keyed. */
+  editedAway: number;
   removedOffered: number;
   removedDeleted: number;
   transactionsReverted: number;
@@ -395,6 +489,11 @@ export interface CanadianPackUpdateResult {
  * claims it, so it becomes an ordinary household rule from this point on, the same way an edited
  * one already does. When true, it is deleted the same way removeCanadianPack() deletes one
  * (rename rules revert their transactions; the returned transactionsReverted covers exactly this).
+ *
+ * v1.25.0 (item 18): walk.editedAway has no loop below, and that absence is the feature. A pack
+ * rule the household re-keyed is not added, not changed and not stamped -- their row is left exactly
+ * as it is, and the count is returned only so the confirm screen's "not added back" line and this
+ * function's behaviour cannot disagree.
  *
  * Every row this function WRITES (added + changed + unchanged) is stamped/re-stamped at
  * `toVersion`, INCLUDING the unchanged ones whose content does not actually change -- a cheap
@@ -462,6 +561,13 @@ export function applyCanadianPackUpdate(input: {
     removedDeleted += 1;
   }
 
+  // v1.25.0 (item 18), same reason as installCanadianPack's call: an ADDED row has just acquired a
+  // stamp and no origin yet, so record where the pack put it. Placed after the removal loop rather
+  // than beside the writes because that loop clears the stamp on a row the pack no longer names --
+  // and a row this pack does not claim must not be given an origin by a pass keyed off pack_source.
+  // Its own origin, if it had one, is untouched: rememberPackOrigin only ever fills in a NULL.
+  rememberPackOrigin(CANADIAN_PACK_ID);
+
   if (renameTouched) applyRenameRules(undefined, buildContext());
 
   return {
@@ -469,6 +575,7 @@ export function applyCanadianPackUpdate(input: {
     changed: walk.changed.length,
     unchanged: walk.unchanged.length,
     skippedEdited: walk.skippedEdited.length,
+    editedAway: walk.editedAway.length,
     removedOffered: walk.removed.length,
     removedDeleted,
     transactionsReverted,

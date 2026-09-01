@@ -181,6 +181,36 @@ export function CanadianPackPanel({
             {updateDiff.skippedEdited.map((e) => e.pattern).join(', ')}
           </p>
         ) : null}
+        {/* v1.25.0 (item 18). Every clause here is checkable against walkCanadianPackUpdate: these
+            entries are the ones it moved OUT of `added`, applyCanadianPackUpdate has no loop that
+            writes them, and `savedAs` is read straight off the live rows that carry the pack entry's
+            origin key. "not added back" rather than "left alone" on purpose -- the sentence has to
+            name the thing that would otherwise have happened, because an admin who reads this list
+            is deciding whether the pack is about to undo a replacement they made deliberately. */}
+        {updateDiff.editedAway.length > 0 ? (
+          <div className="text-xs text-muted">
+            <strong className="font-semibold text-ink">
+              {updateDiff.editedAway.length} not added back:
+            </strong>{' '}
+            you have saved {updateDiff.editedAway.length === 1 ? 'this pack rule' : 'these pack rules'} as{' '}
+            {updateDiff.editedAway.length === 1 ? 'a rule' : 'rules'} of your own, so your{' '}
+            {updateDiff.editedAway.length === 1 ? 'version is' : 'versions are'} left exactly as{' '}
+            {updateDiff.editedAway.length === 1 ? 'it is' : 'they are'}.
+            <ul className="mt-1 list-inside list-disc">
+              {updateDiff.editedAway.map((e) => (
+                <li key={`${e.pattern}-${e.matchType}-${e.ruleKind}`}>
+                  <code className="font-mono">{e.pattern}</code> — you have{' '}
+                  <code className="font-mono">
+                    {/* The match type is named only when it is the thing that changed, which a
+                        re-key of the match type alone makes necessary: without it the line would
+                        read "IGA — you have IGA" and explain nothing. */}
+                    {e.savedAs.map((row) => (row.matchType === e.matchType ? row.pattern : `${row.pattern} (${row.matchType})`)).join(', ')}
+                  </code>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
         <p className="text-xs text-muted">{updateDiff.unchangedCount} rule{updateDiff.unchangedCount === 1 ? '' : 's'} unchanged.</p>
         <p className="text-xs text-muted">A disabled rule stays disabled. Nothing here is applied until you press Apply update below.</p>
         {updateDiff.removed.length > 0 ? (

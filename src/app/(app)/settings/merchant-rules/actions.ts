@@ -25,11 +25,14 @@ import {
 import {
   deleteRule,
   listRules,
+  matchTypeAllowedForKind,
   ruleOwnedError,
   upsertRuleFromCorrection,
+  WORD_MATCH_KIND_ERROR,
   type MerchantRuleRecord,
   type RuleKind,
 } from '@/lib/categorize/rules';
+import { applyPackOriginCarry, planPackOriginCarry } from '@/lib/packs';
 
 export interface RuleActionState {
   error?: string;
@@ -52,10 +55,24 @@ export async function saveRuleAction(_prev: RuleActionState, formData: FormData)
   const parsed = z
     .object({
       pattern: z.string().trim().min(1).max(200),
-      matchType: z.enum(['exact', 'contains']),
+      matchType: z.enum(['exact', 'contains', 'word']),
       ruleKind: z.enum(['category', 'transfer', 'rename', 'not_transfer']),
       categoryId: z.string(),
       renameTo: z.string().trim().max(200),
+      /**
+       * v1.25.0 (item 18). The row the dialog was OPENED on, when it was opened on one -- '' for
+       * "New merchant rule". This action is, and stays, an upsert on (pattern, match_type,
+       * rule_kind) with no row id in its write: nothing here selects a row to update, and the form
+       * says as much ("Changing the pattern, match or kind creates a separate rule rather than
+       * renaming this one in place"). This field is not a step toward changing that -- it answers a
+       * narrower question the write itself cannot: if this save creates a NEW row because the key
+       * moved, what did the person think they were editing? That is the only way a rule the pack
+       * installed can pass its origin on to the household's replacement, which is what stops the
+       * next pack update offering the original back as a fresh addition. Optional, and a stale or
+       * bogus id degrades to exactly the pre-v1.25.0 behaviour rather than an error -- see
+       * planPackOriginCarry (src/lib/packs.ts), which returns null for every case it cannot vouch for.
+       */
+      fromRuleId: z.coerce.number().int().positive().nullable(),
     })
     .safeParse({
       pattern: formData.get('pattern') ?? '',
@@ -63,8 +80,41 @@ export async function saveRuleAction(_prev: RuleActionState, formData: FormData)
       ruleKind: formData.get('ruleKind') ?? 'category',
       categoryId: String(formData.get('categoryId') ?? ''),
       renameTo: String(formData.get('renameTo') ?? ''),
+      fromRuleId: blankToNull(formData.get('fromRuleId')),
     });
   if (!parsed.success) return { error: 'Invalid rule.' };
+
+  // v1.25.0 (item 16). Checked here rather than folded into the zod object above so the person
+  // gets the actual sentence instead of this action's generic 'Invalid rule.' -- the whole point
+  // of the restriction is that it needs explaining, and "invalid" explains nothing. The form's
+  // two selects are independent (plain HTML, no cross-field JS), so this combination is genuinely
+  // reachable by picking "Whole word" and then "transfer". See WORD_MATCH_KINDS' docblock for why
+  // it is refused rather than supported.
+  if (!matchTypeAllowedForKind(parsed.data.matchType, parsed.data.ruleKind)) {
+    return { error: WORD_MATCH_KIND_ERROR };
+  }
+
+  // v1.25.0 (item 18). Decided BEFORE either write below, because the answer depends on whether a
+  // row already exists under the key this save is about to write, and the upsert is precisely what
+  // makes that unanswerable afterward. See planPackOriginCarry (src/lib/packs.ts) for every case it
+  // declines -- among them "a row is already there", which is what keeps a rule the household wrote
+  // themselves from ever being handed a pack origin it did not come from.
+  const originCarry = planPackOriginCarry({
+    fromRuleId: parsed.data.fromRuleId,
+    pattern: parsed.data.pattern,
+    matchType: parsed.data.matchType,
+    ruleKind: parsed.data.ruleKind,
+  });
+  /** Called only on a write that actually happened -- never after a refusal, which wrote no row. */
+  const carryOrigin = () => {
+    if (originCarry === null) return;
+    applyPackOriginCarry({
+      pattern: parsed.data.pattern,
+      matchType: parsed.data.matchType,
+      ruleKind: parsed.data.ruleKind,
+      originKey: originCarry,
+    });
+  };
 
   // Rename rules go through the engine so the change is applied retroactively.
   if (parsed.data.ruleKind === 'rename') {
@@ -77,6 +127,7 @@ export async function saveRuleAction(_prev: RuleActionState, formData: FormData)
       actorRole: admin.role,
     });
     if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
+    carryOrigin();
     revalidatePath('/settings/merchant-rules');
     revalidatePath('/transactions');
     return { message: `Rename rule saved and applied to ${result.rowsUpdated} transaction${result.rowsUpdated === 1 ? '' : 's'}.` };
@@ -94,6 +145,7 @@ export async function saveRuleAction(_prev: RuleActionState, formData: FormData)
     actorRole: admin.role,
   });
   if (!upserted.ok) return { error: ruleOwnedError(upserted.ownerName) };
+  carryOrigin();
   revalidatePath('/settings/merchant-rules');
   return { message: 'Rule saved.' };
 }
@@ -125,13 +177,23 @@ export async function deleteRuleAction(_prev: RuleActionState, formData: FormDat
 }
 
 /**
+ * An absent or empty form field as null, for every zod field on this route that is genuinely
+ * optional. Hoisted out of optionalDate below (v1.25.0, item 18) once saveRuleAction's fromRuleId
+ * needed the same '' -> null step for something that is not a date at all -- one definition of
+ * "blank means nothing was submitted", rather than a second copy that could drift from it.
+ */
+function blankToNull(value: FormDataEntryValue | string | null | undefined): string | null {
+  const text = typeof value === 'string' ? value.trim() : '';
+  return text.length === 0 ? null : text;
+}
+
+/**
  * v1.24.0. An `<input type="date">` submits '' when empty and a real `YYYY-MM-DD` otherwise, so
  * '' is normalized to null (unbounded) BEFORE zod sees it -- otherwise every "All time" submission
  * would fail the format check it is not supposed to be subject to.
  */
 function optionalDate(value: FormDataEntryValue | string | null | undefined): string | null {
-  const text = typeof value === 'string' ? value.trim() : '';
-  return text.length === 0 ? null : text;
+  return blankToNull(value);
 }
 
 /**
@@ -462,6 +524,12 @@ export async function applyCanadianPackUpdateAction(_prev: RuleActionState, form
 
   const bits = [`${result.added} added`, `${result.changed} updated`, `${result.unchanged} unchanged`];
   if (result.skippedEdited > 0) bits.push(`${result.skippedEdited} left alone (you had edited them)`);
+  // v1.25.0 (item 18). Reported here as well as in the review dialog, and separately from
+  // skippedEdited, because the two are different facts about what this run just did: one rule was
+  // present and left untouched, the other was NOT ADDED at all. Rolling them together would make
+  // "N added" the only line an admin could check the outcome against, and that number deliberately
+  // excludes these.
+  if (result.editedAway > 0) bits.push(`${result.editedAway} not added back (you have your own version)`);
   if (result.removedDeleted > 0) bits.push(`${result.removedDeleted} deleted (no longer in the pack)`);
   else if (result.removedOffered > 0) bits.push(`${result.removedOffered} no longer in the pack (kept, un-tracked)`);
   const revertedNote =

@@ -1,8 +1,27 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
-import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
+import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
+
+/**
+ * v1.25.0 (backlog item 18) is the reason this file mocks anything at all. Every other block below
+ * drives the library directly, and deliberately -- but item 18 is about what happens when a rule
+ * is re-keyed THROUGH THE FORM, and the whole defect lived in the gap between what the form
+ * actually does (an upsert on the key, so a pattern change writes a second row) and what the pack
+ * update flow assumed it did. Reaching for upsertRuleFromCorrection here instead would reproduce
+ * the assumption rather than the behaviour, so saveRuleAction and deleteRuleAction are called for
+ * real, with only their auth/CSRF/revalidate edges stubbed -- the same three stubs
+ * tests/app/merchant-rules-actions.test.ts uses, for the same reason.
+ */
+let currentUser = { id: 1, name: 'Admin', username: 'admin', role: 'admin' as const };
+vi.mock('@/lib/auth/session', () => ({ requireAdmin: vi.fn(async () => currentUser) }));
+vi.mock('next/headers', () => ({
+  headers: async () => new Headers({ origin: 'http://nas.local:3000', host: 'nas.local:3000' }),
+}));
+vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
+
+import { deleteRuleAction, saveRuleAction } from '@/app/(app)/settings/merchant-rules/actions';
 import { RULES_PACK_FORMAT, type RulesPack } from '@/lib/packs';
-import { deleteRule, listRules, setRuleDisabledFlag, upsertRuleFromCorrection } from '@/lib/categorize/rules';
+import { deleteRule, listRules, matchRule, setRuleDisabledFlag, upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { applyRenameRules, buildContext } from '@/lib/categorize/engine';
 import { normalizeMerchant } from '@/lib/categorize/normalize';
 import { saveEmailTarget, saveSmtp } from '@/lib/notify/config';
@@ -25,7 +44,8 @@ import {
  * applyCanadianPackUpdate, canadianPackState) takes an optional pack/version override for exactly
  * this reason: a synthetic two-version pack pair, fixed for the life of this file, is what lets
  * "added/changed/removed/unchanged" be asserted precisely without the test drifting every time
- * someone edits the real 190-rule pack for an unrelated reason.
+ * someone edits the real bundled pack for an unrelated reason -- which happens: v1.25.0 alone took
+ * it from 190 rules to 297.
  */
 
 function pack(rules: RulesPack['rules']): RulesPack {
@@ -60,6 +80,105 @@ function addTxn(db: TestDb['db'], accountId: number, userId: number, normalizedM
     returning id`);
   return row.id;
 }
+
+/**
+ * v1.25.0 (backlog item 16) bumped the real pack to pack_version 2 and, for twelve rules, changed
+ * nothing but the MATCH TYPE (eleven 'exact' short acronyms and 'ATCO' promoted to 'word'). This
+ * block pins how that presents to somebody who already installed v1, because the answer is NOT
+ * "changed" and that is worth stating out loud rather than discovering during a release.
+ *
+ * WHY: walkCanadianPackUpdate keys everything on keyOf(), which is
+ * `pattern|matchType|ruleKind` -- match_type is part of a rule's IDENTITY, not part of its
+ * outcome, exactly as merchant_rules_pattern_uq treats it. So `IGA/word/category` is not a
+ * modified `IGA/exact/category`; it is a rule the database does not have (-> added) sitting beside
+ * one the new pack no longer names (-> removed). `changed` is reserved for a rule whose key is the
+ * same and whose OUTCOME moved (a different category, a different rename target), which is the
+ * only case where "before -> after" is a sentence that can be written at all.
+ *
+ * IS THAT A PROBLEM? No, and the assertions below are what establish it:
+ *   - the confirm screen already lists `removed` explicitly, with deletion offered as an
+ *     unchecked box, so nothing is hidden -- an admin sees "IGA is new" and "IGA is no longer in
+ *     the pack" together, which is a true if slightly odd description of a promotion;
+ *   - with deleteRemoved: false (the default) the old exact row survives with its stamp CLEARED,
+ *     i.e. it becomes an ordinary household rule. It is not a duplicate that fights the new one:
+ *     both carry the same category, and matchRule's precedence gives the exact row the exact
+ *     merchant text and the word row every variation of it. The union of the two is strictly what
+ *     the new pack intends plus one redundant row;
+ *   - with deleteRemoved: true the old row goes and only the word rule remains.
+ *
+ * Making it report as `changed` would mean teaching walkCanadianPackUpdate to pair a removal with
+ * an addition on pattern+kind alone and call it a rename of the match type. That is a real
+ * feature (and would need to decide what happens when a household edited one side of the pair),
+ * not a papering-over, so it is recorded here rather than smuggled in under this item.
+ */
+describe('canadianPackUpdateDiff: a match-type promotion presents as added + removed, not changed', () => {
+  const WORD_V1 = pack([
+    { pattern: 'IGA', match_type: 'exact', rule_kind: 'category', category: 'Groceries', category_parent: 'Food', rename_to: null },
+  ]);
+  const WORD_V2 = pack([
+    { pattern: 'IGA', match_type: 'word', rule_kind: 'category', category: 'Groceries', category_parent: 'Food', rename_to: null },
+  ]);
+
+  it('reports the word rule as added and the exact rule as removed, with nothing under changed', () => {
+    current = createSeededTestDb();
+    installCanadianPack(new Date('2026-01-01T00:00:00.000Z'), WORD_V1, 1);
+
+    const diff = canadianPackUpdateDiff(WORD_V2, 2);
+    expect(diff.added).toEqual([
+      { pattern: 'IGA', matchType: 'word', ruleKind: 'category', categoryLabel: 'Food › Groceries', renameTo: null },
+    ]);
+    expect(diff.removed).toEqual([
+      { pattern: 'IGA', matchType: 'exact', ruleKind: 'category', categoryLabel: 'Food › Groceries', renameTo: null },
+    ]);
+    expect(diff.changed).toEqual([]);
+    expect(diff.unchangedCount).toBe(0);
+    expect(diff.skippedEdited).toEqual([]);
+  });
+
+  it('leaves the superseded exact rule in place but UNSTAMPED when removals are not deleted', () => {
+    current = createSeededTestDb();
+    installCanadianPack(new Date('2026-01-01T00:00:00.000Z'), WORD_V1, 1);
+
+    applyCanadianPackUpdate({ deleteRemoved: false, pack: WORD_V2, toVersion: 2 });
+
+    const rows = listRules().map((r) => ({ pattern: r.pattern, matchType: r.matchType, packSource: r.packSource, packVersion: r.packVersion }));
+    expect(rows).toEqual([
+      { pattern: 'IGA', matchType: 'exact', packSource: null, packVersion: null },
+      { pattern: 'IGA', matchType: 'word', packSource: CANADIAN_PACK_ID, packVersion: 2 },
+    ]);
+    // The pack now claims exactly one row, so "installed v2, 1 of 1 present" is honest.
+    expect(canadianPackState(WORD_V2, 2)).toMatchObject({ installed: true, installedVersion: 2, presentCount: 1, totalCount: 1, updateAvailable: false });
+  });
+
+  it('deletes the superseded exact rule when removals ARE deleted, leaving only the word rule', () => {
+    current = createSeededTestDb();
+    installCanadianPack(new Date('2026-01-01T00:00:00.000Z'), WORD_V1, 1);
+
+    const result = applyCanadianPackUpdate({ deleteRemoved: true, pack: WORD_V2, toVersion: 2 });
+
+    expect(result).toMatchObject({ added: 1, changed: 0, removedOffered: 1, removedDeleted: 1 });
+    expect(listRules().map((r) => r.matchType)).toEqual(['word']);
+  });
+
+  /**
+   * The reason the redundant pair is tolerable rather than merely visible: both rows agree, and
+   * matchRule's precedence means the pack's intent is what actually fires either way.
+   */
+  it('the redundant pair categorizes identically, so the promotion is safe even if nobody deletes anything', () => {
+    current = createSeededTestDb();
+    installCanadianPack(new Date('2026-01-01T00:00:00.000Z'), WORD_V1, 1);
+    applyCanadianPackUpdate({ deleteRemoved: false, pack: WORD_V2, toVersion: 2 });
+
+    const ctx = buildContext();
+    const groceries = current.db.get<{ id: number }>(sql`select id from categories where name = 'Groceries' limit 1`).id;
+    // The bare acronym: the exact row wins on the type tie-break, same outcome.
+    expect(matchRule('IGA', 'category', ctx.rules)?.categoryId).toBe(groceries);
+    // The store-format line exact could never reach: the word row, which is the whole point.
+    expect(matchRule(normalizeMerchant('IGA MARCHE #4021 MONTREAL QC'), 'category', ctx.rules)?.categoryId).toBe(groceries);
+    // And the collision this item exists to kill stays dead.
+    expect(matchRule(normalizeMerchant('MICHIGAN AVE SHOP #55 WINDSOR ON'), 'category', ctx.rules)).toBeNull();
+  });
+});
 
 describe('installCanadianPack: stamping and conflicts', () => {
   it('stamps only the rows it wrote, and never a conflict-kept row', () => {
@@ -325,5 +444,314 @@ describe('notifyCanadianPackUpdateAvailable: wired into the existing notificatio
 
     notifyCanadianPackUpdateAvailable(new Date(), canadianPackState(V2, 2));
     expect(outboxRows()).toEqual([]); // adminUserIds() never named this member in the first place
+  });
+});
+
+/**
+ * v1.25.0 (backlog item 18). WHAT WAS ACTUALLY WRONG, in the order it was found -- because the
+ * brief that produced this block described a slightly different mechanism and the code turned out
+ * to be worse than that:
+ *
+ *   1. saveRuleAction does not rename a rule in place. It is an UPSERT on
+ *      (pattern, match_type, rule_kind) -- ruleKeyOf, mirroring merchant_rules_pattern_uq -- with
+ *      no row id anywhere in its write. So changing a preset rule's pattern writes a SECOND row
+ *      under the new key and leaves the pack's original exactly where it was, still stamped. The
+ *      form says so in as many words ("Changing the pattern, match or kind creates a separate rule
+ *      rather than renaming this one in place -- save it under its new pattern, then delete this
+ *      row from the table if it should not also remain"). Right after such a "rename", the update
+ *      diff reported `unchanged: 1` -- the pack was perfectly content, and the household had two
+ *      competing rules.
+ *   2. Following that instruction is what broke. Once the pack's own row is deleted, its provenance
+ *      goes with it: nothing tied the replacement to the entry it came from. The next update found
+ *      no row under the pack's pattern, classified it as an ADDITION indistinguishable from a
+ *      genuinely new merchant, and wrote it back stamped at the new version -- so the household
+ *      ended up holding BOTH their replacement and the original they had deliberately removed,
+ *      quietly competing through matchRule's longest-pattern-wins. Nothing in the confirm dialog
+ *      hinted at it: `skippedEdited` was empty, `removed` was empty, and "1 added: TIM HORTONS"
+ *      read exactly like a new merchant.
+ *
+ * The fix is merchant_rules.pack_origin_key (drizzle/0018_pack_origin_key.sql): a rule records the
+ * pack KEY it descends from, the pack writes it on every row it stamps, and a form save that
+ * re-keys such a rule passes it to the row it creates. The first test below is the regression --
+ * it performs exactly the sequence above and asserts what the code does NOW, having first been
+ * written to assert what it used to do.
+ *
+ * NOT CONTRADICTED: the match-type block at the top of this file still holds. That one is about the
+ * PACK changing its own match type between versions, where added-plus-removed is the right and
+ * pinned answer. This block is about the HOUSEHOLD changing a key. The origin stores a whole key
+ * precisely so the two cannot be confused -- 'IGA|exact|category' and 'IGA|word|category' stay two
+ * different rules, so a pack-side promotion is never mistaken for a household edit.
+ */
+describe('an update re-adds a pack rule the household replaced under a different pattern', () => {
+  const PRESET_V1 = pack([
+    { pattern: 'TIM HORTONS', match_type: 'exact', rule_kind: 'category', category: 'Coffee', category_parent: 'Food', rename_to: null },
+    // A second rule nobody touches, so the pack stays "installed": canadianPackState reads
+    // installedVersion off the stamped rows, and with a one-rule pack, deleting the only stamped
+    // row reports the pack as not installed at all -- there would be no update flow left to test.
+    { pattern: 'AAA KEEP', match_type: 'exact', rule_kind: 'category', category: 'Coffee', category_parent: 'Food', rename_to: null },
+  ]);
+  const PRESET_V2 = pack([
+    ...PRESET_V1.rules,
+    { pattern: 'ZZZ NEW', match_type: 'exact', rule_kind: 'category', category: 'Coffee', category_parent: 'Food', rename_to: null },
+  ]);
+
+  function form(fields: Record<string, string>): FormData {
+    const fd = new FormData();
+    for (const [key, value] of Object.entries(fields)) fd.set(key, value);
+    return fd;
+  }
+
+  function asAdmin(): number {
+    const userId = insertTestUser(current!.db, { name: 'Admin', username: 'admin' });
+    currentUser = { id: userId, name: 'Admin', username: 'admin', role: 'admin' };
+    return userId;
+  }
+
+  /** pattern -> pack_origin_key, read straight off the column (MerchantRuleRecord does not carry it). */
+  function origins(): Map<string, string | null> {
+    const rows = current!.sqlite
+      .prepare('select pattern, pack_origin_key as origin from merchant_rules')
+      .all() as { pattern: string; origin: string | null }[];
+    return new Map(rows.map((row) => [row.pattern, row.origin]));
+  }
+
+  /** The real form path: save the rule under a new key, then delete the row left behind. */
+  async function replaceThroughTheForm(from: string, to: string, over: Record<string, string> = {}): Promise<void> {
+    const original = listRules().find((rule) => rule.pattern === from)!;
+    const saved = await saveRuleAction(
+      {},
+      form({
+        pattern: to,
+        matchType: original.matchType,
+        ruleKind: original.ruleKind,
+        categoryId: original.categoryId === null ? '' : String(original.categoryId),
+        renameTo: original.renameTo ?? '',
+        fromRuleId: String(original.id),
+        ...over,
+      }),
+    );
+    expect(saved.error).toBeUndefined();
+    const deleted = await deleteRuleAction({}, form({ ruleId: String(original.id) }));
+    expect(deleted.error).toBeUndefined();
+  }
+
+  it('REGRESSION: the replaced rule is reported as not-added-back, never as an addition', async () => {
+    current = createSeededTestDb();
+    asAdmin();
+    installCanadianPack(new Date('2026-01-01T00:00:00.000Z'), PRESET_V1, 1);
+
+    await replaceThroughTheForm('TIM HORTONS', 'TIM HORTON');
+    // The form really did write a new row, and the origin came with it.
+    expect(origins().get('TIM HORTON')).toBe('TIM HORTONS|exact|category');
+
+    const diff = canadianPackUpdateDiff(PRESET_V2, 2);
+    // BEFORE item 18 this read ['TIM HORTONS', 'ZZZ NEW'] -- the pack's own rule offered back as a
+    // new merchant, with the household's replacement already sitting in the table.
+    expect(diff.added.map((e) => e.pattern)).toEqual(['ZZZ NEW']);
+    expect(diff.editedAway).toEqual([
+      {
+        pattern: 'TIM HORTONS',
+        matchType: 'exact',
+        ruleKind: 'category',
+        categoryLabel: 'Food › Coffee',
+        renameTo: null,
+        savedAs: [{ pattern: 'TIM HORTON', matchType: 'exact' }],
+      },
+    ]);
+    expect(diff.removed).toEqual([]);
+    expect(diff.skippedEdited).toEqual([]);
+    expect(diff.unchangedCount).toBe(1); // AAA KEEP
+  });
+
+  it('applying the update writes nothing for it, so the replacement is never joined by the original', async () => {
+    current = createSeededTestDb();
+    asAdmin();
+    installCanadianPack(new Date('2026-01-01T00:00:00.000Z'), PRESET_V1, 1);
+    await replaceThroughTheForm('TIM HORTONS', 'TIM HORTON');
+
+    const result = applyCanadianPackUpdate({ deleteRemoved: false, pack: PRESET_V2, toVersion: 2 });
+    expect(result).toMatchObject({ added: 1, changed: 0, unchanged: 1, editedAway: 1, removedOffered: 0, removedDeleted: 0 });
+
+    expect(listRules().map((rule) => rule.pattern).sort()).toEqual(['AAA KEEP', 'TIM HORTON', 'ZZZ NEW']);
+    const replacement = listRules().find((rule) => rule.pattern === 'TIM HORTON')!;
+    expect(replacement.packSource).toBeNull(); // still theirs -- the pack did not reclaim it
+    expect(replacement.categoryId).toBe(categoryIdByName(current.db, 'Coffee'));
+  });
+
+  it('a rule the household wrote from scratch is never claimed by the pack', async () => {
+    current = createSeededTestDb();
+    asAdmin();
+    const coffee = categoryIdByName(current.db, 'Coffee');
+    installCanadianPack(new Date('2026-01-01T00:00:00.000Z'), PRESET_V1, 1);
+
+    // A brand-new rule of their own: the dialog sends no fromRuleId at all for "New merchant rule".
+    await saveRuleAction({}, form({ pattern: 'CORNER STORE', matchType: 'contains', ruleKind: 'category', categoryId: String(coffee), renameTo: '' }));
+    // And re-keying THAT rule must not conjure an origin either -- it has none to inherit.
+    const own = listRules().find((rule) => rule.pattern === 'CORNER STORE')!;
+    await saveRuleAction({}, form({ pattern: 'CORNER SHOP', matchType: 'contains', ruleKind: 'category', categoryId: String(coffee), renameTo: '', fromRuleId: String(own.id) }));
+    expect(origins().get('CORNER STORE')).toBeNull();
+    expect(origins().get('CORNER SHOP')).toBeNull();
+
+    // Deleting a preset rule outright -- no replacement, they simply do not want it -- is NOT a
+    // re-key, and the pack still offers it back. Unchanged pre-existing behaviour, stated here so
+    // the difference between "I replaced this" and "I deleted this" stays a deliberate one.
+    const preset = listRules().find((rule) => rule.pattern === 'TIM HORTONS')!;
+    await deleteRuleAction({}, form({ ruleId: String(preset.id) }));
+    const diff = canadianPackUpdateDiff(PRESET_V2, 2);
+    expect(diff.editedAway).toEqual([]);
+    expect(diff.added.map((e) => e.pattern).sort()).toEqual(['TIM HORTONS', 'ZZZ NEW']);
+  });
+
+  it('a replacement saved over a pattern the household already had a rule for inherits nothing', async () => {
+    current = createSeededTestDb();
+    asAdmin();
+    const coffee = categoryIdByName(current.db, 'Coffee');
+    installCanadianPack(new Date('2026-01-01T00:00:00.000Z'), PRESET_V1, 1);
+
+    // Their own rule first, then they edit the preset rule and type that same pattern. The upsert
+    // updates THEIR row in place; nothing new is created, so there is no descendant to record and
+    // their rule must not be handed the pack's history.
+    await saveRuleAction({}, form({ pattern: 'CORNER STORE', matchType: 'exact', ruleKind: 'category', categoryId: String(coffee), renameTo: '' }));
+    const preset = listRules().find((rule) => rule.pattern === 'TIM HORTONS')!;
+    await saveRuleAction({}, form({ pattern: 'CORNER STORE', matchType: 'exact', ruleKind: 'category', categoryId: String(coffee), renameTo: '', fromRuleId: String(preset.id) }));
+
+    expect(origins().get('CORNER STORE')).toBeNull();
+    await deleteRuleAction({}, form({ ruleId: String(preset.id) }));
+    const diff = canadianPackUpdateDiff(PRESET_V2, 2);
+    expect(diff.editedAway).toEqual([]);
+    expect(diff.added.map((e) => e.pattern).sort()).toEqual(['TIM HORTONS', 'ZZZ NEW']);
+  });
+
+  /**
+   * A rename rule does not reach the same write as a category rule: saveRuleAction routes it through
+   * upsertRenameRule (src/lib/categorize/engine.ts) so the change is applied to existing
+   * transactions, and deleteRuleAction routes its deletion through deleteRenameRule so they revert.
+   * The origin has to survive both, or item 18 would hold for two rule kinds out of three.
+   */
+  it('a re-keyed rename rule is recognised too, through its own write path', async () => {
+    current = createSeededTestDb();
+    asAdmin();
+    const RENAME_V1 = pack([
+      { pattern: 'CCC RENAME', match_type: 'exact', rule_kind: 'rename', category: null, category_parent: null, rename_to: 'Ccc Co' },
+      { pattern: 'AAA KEEP', match_type: 'exact', rule_kind: 'category', category: 'Coffee', category_parent: 'Food', rename_to: null },
+    ]);
+    const RENAME_V2 = pack([
+      ...RENAME_V1.rules,
+      { pattern: 'ZZZ NEW', match_type: 'exact', rule_kind: 'category', category: 'Coffee', category_parent: 'Food', rename_to: null },
+    ]);
+    installCanadianPack(new Date('2026-01-01T00:00:00.000Z'), RENAME_V1, 1);
+
+    await replaceThroughTheForm('CCC RENAME', 'CCC RENAMED', { renameTo: 'Ccc Company' });
+    expect(origins().get('CCC RENAMED')).toBe('CCC RENAME|exact|rename');
+
+    const diff = canadianPackUpdateDiff(RENAME_V2, 2);
+    expect(diff.added.map((e) => e.pattern)).toEqual(['ZZZ NEW']);
+    expect(diff.editedAway).toHaveLength(1);
+    expect(diff.editedAway[0]).toMatchObject({
+      pattern: 'CCC RENAME',
+      ruleKind: 'rename',
+      renameTo: 'Ccc Co',
+      savedAs: [{ pattern: 'CCC RENAMED', matchType: 'exact' }],
+    });
+
+    applyCanadianPackUpdate({ deleteRemoved: false, pack: RENAME_V2, toVersion: 2 });
+    // The pack's own rename is NOT put back, so it cannot out-rank the household's on pattern
+    // length and quietly retitle their transactions again.
+    expect(listRules().map((rule) => rule.pattern).sort()).toEqual(['AAA KEEP', 'CCC RENAMED', 'ZZZ NEW']);
+    const replacement = listRules().find((rule) => rule.pattern === 'CCC RENAMED')!;
+    expect(replacement.renameTo).toBe('Ccc Company');
+    expect(replacement.packSource).toBeNull();
+  });
+
+  it('a match-type change made by the household is recognised the same way a pattern change is', async () => {
+    current = createSeededTestDb();
+    asAdmin();
+    installCanadianPack(new Date('2026-01-01T00:00:00.000Z'), PRESET_V1, 1);
+
+    // Same pattern, different match type -- a re-key all the same, because the key is all three
+    // columns. This is the case that makes storing the whole key rather than the pattern matter.
+    await replaceThroughTheForm('TIM HORTONS', 'TIM HORTONS', { matchType: 'word' });
+
+    const diff = canadianPackUpdateDiff(PRESET_V2, 2);
+    expect(diff.added.map((e) => e.pattern)).toEqual(['ZZZ NEW']);
+    expect(diff.editedAway).toHaveLength(1);
+    expect(diff.editedAway[0]).toMatchObject({
+      pattern: 'TIM HORTONS',
+      matchType: 'exact',
+      savedAs: [{ pattern: 'TIM HORTONS', matchType: 'word' }],
+    });
+  });
+
+  it('removing the pack deletes its own rows and never the replacement', async () => {
+    current = createSeededTestDb();
+    asAdmin();
+    installCanadianPack(new Date('2026-01-01T00:00:00.000Z'), PRESET_V1, 1);
+    await replaceThroughTheForm('TIM HORTONS', 'TIM HORTON');
+
+    // The count the dialog states is the count "Remove permanently" honours: one stamped row is
+    // left (AAA KEEP), and the replacement is not in it even though it carries a pack origin.
+    expect(previewCanadianPackRemoval()).toEqual({ ruleCount: 1, transactionsRevert: 0 });
+    expect(removeCanadianPack()).toEqual({ deleted: 1, transactionsReverted: 0 });
+
+    const remaining = listRules();
+    expect(remaining.map((rule) => rule.pattern)).toEqual(['TIM HORTON']);
+    // The origin survives removal, which is the point of it being a historical fact rather than a
+    // claim: re-installing the pack later must still recognise this row as its rule's descendant.
+    expect(origins().get('TIM HORTON')).toBe('TIM HORTONS|exact|category');
+  });
+
+  it('a re-key, an update, then a second update is stable -- no drift and no duplicate', async () => {
+    current = createSeededTestDb();
+    asAdmin();
+    installCanadianPack(new Date('2026-01-01T00:00:00.000Z'), PRESET_V1, 1);
+    await replaceThroughTheForm('TIM HORTONS', 'TIM HORTON');
+
+    const first = applyCanadianPackUpdate({ deleteRemoved: false, pack: PRESET_V2, toVersion: 2 });
+    expect(first).toMatchObject({ added: 1, editedAway: 1 });
+    const afterFirst = listRules().map((rule) => ({ pattern: rule.pattern, packSource: rule.packSource, packVersion: rule.packVersion }));
+
+    // The version comparison is satisfied by the rows the pack DOES claim, so it does not sit there
+    // permanently offering an update it can never finish.
+    expect(canadianPackState(PRESET_V2, 2)).toMatchObject({ installed: true, installedVersion: 2, updateAvailable: false, presentCount: 2 });
+
+    // And re-running the same update changes nothing at all.
+    const second = applyCanadianPackUpdate({ deleteRemoved: false, pack: PRESET_V2, toVersion: 2 });
+    expect(second).toMatchObject({ added: 0, changed: 0, unchanged: 2, editedAway: 1, removedOffered: 0 });
+    expect(listRules().map((rule) => ({ pattern: rule.pattern, packSource: rule.packSource, packVersion: rule.packVersion }))).toEqual(afterFirst);
+    expect(canadianPackUpdateDiff(PRESET_V2, 2).editedAway).toHaveLength(1);
+  });
+
+  it('install records an origin on every row it stamps and never on a conflict-kept row', () => {
+    current = createSeededTestDb();
+    const userId = asAdmin();
+    const restaurants = current.db.get<{ id: number }>(sql`select id from categories where name = 'Restaurants' limit 1`).id;
+    // The household's own BBB GROCER, which V1 also names: importRulesPack keeps theirs and never
+    // stamps it, so it must never acquire an origin either.
+    upsertRuleFromCorrection({ pattern: 'BBB GROCER', matchType: 'exact', ruleKind: 'category', categoryId: restaurants, createdBy: userId, actorRole: 'admin' });
+
+    installCanadianPack(new Date('2026-01-01T00:00:00.000Z'), V1, 1);
+
+    const recorded = origins();
+    expect(recorded.get('AAA COFFEE')).toBe('AAA COFFEE|exact|category');
+    expect(recorded.get('CCC RENAME')).toBe('CCC RENAME|exact|rename');
+    expect(recorded.get('DDD OLD')).toBe('DDD OLD|exact|category');
+    expect(recorded.get('BBB GROCER')).toBeNull();
+  });
+
+  it('a stamped row carrying no recorded origin is treated as the household own work', async () => {
+    current = createSeededTestDb();
+    asAdmin();
+    installCanadianPack(new Date('2026-01-01T00:00:00.000Z'), PRESET_V1, 1);
+    // Stand in for a database that came through 0017 and was re-keyed BEFORE 0018 existed: stamped
+    // rows, no origins. drizzle/0018_pack_origin_key.sql refuses to invent one for an unstamped
+    // row, so that one rule keeps the old behaviour exactly once rather than being guessed at.
+    current.sqlite.prepare('update merchant_rules set pack_origin_key = null').run();
+
+    await replaceThroughTheForm('TIM HORTONS', 'TIM HORTON');
+    expect(origins().get('TIM HORTON')).toBeNull();
+
+    const diff = canadianPackUpdateDiff(PRESET_V2, 2);
+    expect(diff.editedAway).toEqual([]);
+    expect(diff.added.map((e) => e.pattern).sort()).toEqual(['TIM HORTONS', 'ZZZ NEW']);
   });
 });
