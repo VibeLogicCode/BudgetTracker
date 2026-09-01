@@ -21,6 +21,36 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.27.0] - 2026-09-01
+
+One migration (0020): seeds a "Bill" item type. If you already made your own Bill type, yours is
+left exactly as it is — name, casing and kind untouched.
+
+### Added
+
+- **Bills are discoverable.** The bill schedule has been complete since v1.12.0, but no "Bill" item
+  type was ever seeded, so the only way to reach it was to already know it existed and create the
+  type by hand. Every other kind — Laptop, Appliance, Subscription, Contract, Loan — has always
+  arrived ready to use.
+- **Prune redundant rules in one action.** The redundant filter now explains itself where you can
+  see it and offers **Delete these N**, and each row names the rule that already covers it.
+
+### Fixed
+
+- **Filing a transaction against a loan no longer teaches a rule.** Assigning one reimbursement to
+  a loan quietly created an exact merchant rule, so the next purchase from that shop was flagged a
+  transfer forever. A transfer rule belongs to a merchant that is always a transfer — a payroll
+  deposit, a card payment. A loan payment is identified by the loan it is linked to, and the shop is
+  incidental. The transaction is still kept out of spending; nothing is learned from it.
+- **Redundant-rule detection had gone blind to whole-word rules.** It only ever looked for an exact
+  rule covered by a *contains* rule, so once whole-word matching arrived in v1.25.0 — and became the
+  default for preset brands — most genuine overlaps stopped being reported. It now asks the real
+  matcher, and refuses to flag a pair it cannot prove: `contains MART` matches WALMART where
+  `word MART` does not, and calling those redundant would have invited you to delete a working rule.
+- **A budget row with carried-over money no longer breaks the column alignment.** The carried note
+  was laid out among the controls, so on that one row the amount box shifted and **Roll over
+  unspent** dropped to its own line. Notes now sit below the controls and cannot move them.
+
 ## [1.26.0] - 2026-09-01
 
 One migration (0019): one nullable column on imports, recording when you last checked what the

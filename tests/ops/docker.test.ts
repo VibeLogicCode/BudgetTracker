@@ -245,12 +245,25 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.26.0 release', () => {
+  it('MUST-7.1: the 1.27.0 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.26.0');
+    expect(pkg.version).toBe('1.27.0');
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toMatch(/^## \[1\.27\.0\] - 2026-09-01$/m);
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.27.0]'));
+    expect(changelog.indexOf('## [1.27.0]')).toBeLessThan(changelog.indexOf('## [1.26.0]'));
+    const entry = changelog.slice(changelog.indexOf('## [1.27.0]'), changelog.indexOf('## [1.26.0]'));
+    // \s+ not a literal space: this file is hard-wrapped, so an asserted phrase can land across a
+    // line break plus indentation.
+    expect(entry).toMatch(/One migration \(0020\)/i);
+    // The invariant this release must never lose: a loan assignment is a statement about one
+    // transaction, never about the merchant.
+    expect(entry).toMatch(/no\s+longer\s+teaches\s+a\s+rule/i);
+  });
+
+  it('MUST-7.1: the 1.26.0 release is still recorded intact (append-only discipline)', () => {
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.26\.0\] - 2026-09-01$/m);
-    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.26.0]'));
     expect(changelog.indexOf('## [1.26.0]')).toBeLessThan(changelog.indexOf('## [1.25.0]'));
     const entry = changelog.slice(changelog.indexOf('## [1.26.0]'), changelog.indexOf('## [1.25.0]'));
     // An unannounced schema change is the one thing a self-hosted household cannot review before
