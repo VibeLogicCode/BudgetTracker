@@ -14,7 +14,18 @@ import {
 } from '@/lib/loans';
 import type { Viewer } from '@/lib/auth/viewer';
 import { categoryBreakdown } from '@/lib/reports';
-import { setupLoanTest, type LoanTestContext } from '../lib/loans/fixtures';
+import { NOW, setupLoanTest, type LoanTestContext } from '../lib/loans/fixtures';
+
+/**
+ * Every loan link in this suite is stamped with the fixture's own frozen NOW rather than the
+ * wall clock. applyPaymentMatchers writes loan_payments.created_at from its `at` argument, and
+ * debtOverTime buckets payments by that column (substr(created_at, 1, 7)) -- so leaving it to
+ * default to `new Date()` meant the two August payments below landed in whatever month the
+ * suite happened to run in. Once that was no longer 2026-08, the assertion at the end of the
+ * first test read them as payments made AFTER its endMonth and added them back to the
+ * reconstruction, failing with 2_000_000 for a loan whose stored balance was correct at
+ * 1_910_000. Nothing about the loan pipeline was wrong; the test was dated.
+ */
 
 // v1.13.0 ruling R2 (Task 6 fix round 1): categoryBreakdown now takes a viewer as its last
 // argument. A household viewer's ownerScope() is always null, so passing this constant reproduces
@@ -46,7 +57,7 @@ function row(over: { rawDescription: string; amountCents: number; date: string }
 function importRows(filename: string, rows: CandidateRow[]) {
   const hashed = computeRowHashes(ctx.accountId, rows);
   const committed = commitImport({ accountId: ctx.accountId, profileId: null, filename, importedBy: ctx.userId, rows: hashed, errors: [] });
-  const loanLinksCreated = applyPaymentMatchers(committed.insertedTransactionIds);
+  const loanLinksCreated = applyPaymentMatchers(committed.insertedTransactionIds, new Date(NOW));
   return { ...committed, loanLinksCreated };
 }
 
@@ -73,7 +84,7 @@ it('MUST-19.5: create -> rule -> import -> undo -> re-import -> manual assign ->
   // exists to report on; linking must not additionally change how it is reported).
   const breakdownBeforeLink = categoryBreakdown({ from: '2026-01-01', to: '2026-12-31' }, HOUSEHOLD);
 
-  const loanLinksCreated = applyPaymentMatchers(committed.insertedTransactionIds);
+  const loanLinksCreated = applyPaymentMatchers(committed.insertedTransactionIds, new Date(NOW));
   expect(loanLinksCreated).toBe(2);
   expect(ctx.balanceOf(itemId)).toBe(2_000_000 - 90_000);
 
@@ -123,7 +134,7 @@ it('AC5: a 500-row import with NO loan rules performs exactly one extra (dormanc
     return original(sqlText);
   }) as typeof ctx.t.sqlite.prepare);
 
-  const loanLinksCreated = applyPaymentMatchers(committed.insertedTransactionIds);
+  const loanLinksCreated = applyPaymentMatchers(committed.insertedTransactionIds, new Date(NOW));
   expect(loanLinksCreated).toBe(0);
   // The ONE indexed read of activeRules() -- MUST-13.3's dormancy bail -- and nothing else:
   // a household with no loan rules pays one query per import, not a query per row.

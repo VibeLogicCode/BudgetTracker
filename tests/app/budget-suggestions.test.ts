@@ -3,6 +3,8 @@ import { sql } from 'drizzle-orm';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
 import { clearBudget, effectiveBudget, resolveBudget, setRollover, upsertBudget } from '@/lib/budgets';
 import { nowIso } from '@/lib/clock';
+import { addMonths, currentMonth } from '@/lib/dates';
+import { readEnv } from '@/lib/env';
 
 let currentUser: { id: number; name: string; username: string; role: 'admin' | 'member' } = {
   id: 1,
@@ -42,9 +44,23 @@ function formData(fields: Record<string, string>): FormData {
   return fd;
 }
 
-/** Six flat months of spend for a category, ending the month before TARGET. */
-const TARGET = '2026-08';
-const WINDOW_MONTHS = ['2026-02', '2026-03', '2026-04', '2026-05', '2026-06', '2026-07'];
+/**
+ * Six flat months of spend for a category, ending the month before TARGET.
+ *
+ * TARGET is derived from the clock rather than hard-coded, because both suggestion actions
+ * refuse any month that is not the current one (NOT_CURRENT_MONTH_ERROR in
+ * src/app/(app)/budgets/actions.ts, which computes it as `currentMonth(new Date(), readEnv().tz)`
+ * -- reproduced verbatim here so the two can never disagree). A literal month passed this suite
+ * for as long as it happened to BE the current month and then failed every test in the file the
+ * morning the calendar rolled over, which says nothing about the suggestion maths these tests
+ * exist to pin down.
+ */
+const TARGET = currentMonth(new Date(), readEnv().tz);
+const WINDOW_MONTHS = [6, 5, 4, 3, 2, 1].map((back) => addMonths(TARGET, -back));
+/** The month immediately before TARGET -- the last month of WINDOW_MONTHS. */
+const PREV_MONTH = addMonths(TARGET, -1);
+/** A month EARLIER than the whole six-month window, for "leaves earlier rows alone" cases. */
+const BEFORE_WINDOW = addMonths(TARGET, -7);
 
 function setup() {
   current = createSeededTestDb();
@@ -126,12 +142,12 @@ describe('MUST-7.7: applying at month M writes effective_month M and leaves earl
     const { db, flatSix } = setup();
     const groceries = categoryIdByName(db, 'Groceries');
     flatSix(groceries, 60000);
-    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-01', amountCents: 12345 });
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: BEFORE_WINDOW, amountCents: 12345 });
 
     await applySuggestionAction({}, formData({ scope: 'household', userId: '', month: TARGET, categoryId: String(groceries) }));
 
-    expect(resolveBudget('household', null, groceries, '2026-01')).toBe(12345);
-    expect(resolveBudget('household', null, groceries, '2026-07')).toBe(12345);
+    expect(resolveBudget('household', null, groceries, BEFORE_WINDOW)).toBe(12345);
+    expect(resolveBudget('household', null, groceries, PREV_MONTH)).toBe(12345);
     expect(resolveBudget('household', null, groceries, TARGET)).toBe(60000);
   });
 });
@@ -147,7 +163,7 @@ describe('MUST-7.8: apply-all never overwrites a typed limit', () => {
     // Three rows end up with a suggestion: the two children and their rolled-up parent Food
     // at $900.00 a month. Only Restaurants already has a limit, so two are set and one is
     // skipped.
-    upsertBudget({ scope: 'household', userId: null, categoryId: restaurants, month: '2026-06', amountCents: 11100 });
+    upsertBudget({ scope: 'household', userId: null, categoryId: restaurants, month: addMonths(TARGET, -2), amountCents: 11100 });
 
     const state = await applyAllSuggestionsAction({}, formData({ scope: 'household', userId: '', month: TARGET }));
 
@@ -192,8 +208,8 @@ describe('MUST-4.6: under three months of history there are no suggestions at al
   it('refuses every category on a two-month household', async () => {
     const { db, spend } = setup();
     const groceries = categoryIdByName(db, 'Groceries');
-    spend({ categoryId: groceries, amountCents: -60000, date: '2026-06-10' });
-    spend({ categoryId: groceries, amountCents: -60000, date: '2026-07-10' });
+    spend({ categoryId: groceries, amountCents: -60000, date: `${addMonths(TARGET, -2)}-10` });
+    spend({ categoryId: groceries, amountCents: -60000, date: `${PREV_MONTH}-10` });
 
     const state = await applySuggestionAction(
       {},
@@ -264,8 +280,8 @@ describe('cheap test additions from the Task 5 review', () => {
  * suggestion logic runs.
  */
 describe('MUST-6.6: only the current month can be suggested against', () => {
-  const NEXT = '2026-09';
-  const PAST = '2026-07';
+  const NEXT = addMonths(TARGET, 1);
+  const PAST = PREV_MONTH;
 
   it('applySuggestionAction refuses a next-month key and writes nothing', async () => {
     const { db, flatSix } = setup();
@@ -370,17 +386,17 @@ describe('v1.7.0 Task 11: a suggested-budget apply is never inflated by an exist
     const groceries = categoryIdByName(db, 'Groceries');
     flatSix(groceries, 60000); // six flat months of spend -> a suggestion of 60000 (MUST-7.4 above)
 
-    setRollover({ scope: 'household', userId: null, categoryId: groceries, enabled: true, startMonth: '2026-07' });
-    // July: a $1600 base against July's $600 flatSix spend leaves a genuine $1000 leftover,
-    // carried into the target month (August).
-    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-07', amountCents: 160000 });
-    // August itself is explicitly cleared, so resolveBudget(TARGET) is null and the apply path
+    setRollover({ scope: 'household', userId: null, categoryId: groceries, enabled: true, startMonth: PREV_MONTH });
+    // The month before TARGET: a $1600 base against its $600 flatSix spend leaves a genuine
+    // $1000 leftover, carried into the target month.
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: PREV_MONTH, amountCents: 160000 });
+    // TARGET itself is explicitly cleared, so resolveBudget(TARGET) is null and the apply path
     // is not skipped -- while the carry (computed only over months BEFORE target) survives.
     clearBudget({ scope: 'household', userId: null, categoryId: groceries, month: TARGET });
 
     const before = effectiveBudget('household', null, groceries, TARGET);
     expect(before.baseCents).toBeNull();
-    expect(before.carryCents).toBe(100000); // 160000 base - 60000 July spend
+    expect(before.carryCents).toBe(100000); // 160000 base - 60000 previous-month spend
 
     const state = await applySuggestionAction(
       {},
@@ -397,8 +413,8 @@ describe('v1.7.0 Task 11: a suggested-budget apply is never inflated by an exist
     const groceries = categoryIdByName(db, 'Groceries');
     flatSix(groceries, 60000);
 
-    setRollover({ scope: 'household', userId: null, categoryId: groceries, enabled: true, startMonth: '2026-07' });
-    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-07', amountCents: 160000 });
+    setRollover({ scope: 'household', userId: null, categoryId: groceries, enabled: true, startMonth: PREV_MONTH });
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: PREV_MONTH, amountCents: 160000 });
     clearBudget({ scope: 'household', userId: null, categoryId: groceries, month: TARGET });
     expect(effectiveBudget('household', null, groceries, TARGET).carryCents).toBe(100000);
 
@@ -414,8 +430,8 @@ describe('v1.7.0 Task 11: a suggested-budget apply is never inflated by an exist
     const { db, flatSix } = setup();
     const groceries = categoryIdByName(db, 'Groceries');
     flatSix(groceries, 60000);
-    setRollover({ scope: 'household', userId: null, categoryId: groceries, enabled: true, startMonth: '2026-07' });
-    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-07', amountCents: 160000 });
+    setRollover({ scope: 'household', userId: null, categoryId: groceries, enabled: true, startMonth: PREV_MONTH });
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: PREV_MONTH, amountCents: 160000 });
     upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: TARGET, amountCents: 12345 });
     expect(effectiveBudget('household', null, groceries, TARGET).carryCents).toBe(100000);
 
@@ -446,14 +462,14 @@ describe('v1.7.0 Task 11: a suggested-budget apply is never inflated by an exist
  * CONCLUSION: current behaviour already holds; no fix was needed. These tests pin it.
  */
 describe('v1.7.0 Task 11: the current-month guard holds even when the category has rollover on', () => {
-  const NEXT_MONTH = '2026-09';
-  const PAST_MONTH = '2026-07';
+  const NEXT_MONTH = addMonths(TARGET, 1);
+  const PAST_MONTH = PREV_MONTH;
 
   it('applySuggestionAction still refuses a non-current month', async () => {
     const { db, flatSix } = setup();
     const groceries = categoryIdByName(db, 'Groceries');
     flatSix(groceries, 60000);
-    setRollover({ scope: 'household', userId: null, categoryId: groceries, enabled: true, startMonth: '2026-01' });
+    setRollover({ scope: 'household', userId: null, categoryId: groceries, enabled: true, startMonth: BEFORE_WINDOW });
 
     const state = await applySuggestionAction(
       {},
@@ -467,7 +483,7 @@ describe('v1.7.0 Task 11: the current-month guard holds even when the category h
     const { db, flatSix } = setup();
     const groceries = categoryIdByName(db, 'Groceries');
     flatSix(groceries, 60000);
-    setRollover({ scope: 'household', userId: null, categoryId: groceries, enabled: true, startMonth: '2026-01' });
+    setRollover({ scope: 'household', userId: null, categoryId: groceries, enabled: true, startMonth: BEFORE_WINDOW });
 
     const state = await applySuggestionAction(
       {},
@@ -481,7 +497,7 @@ describe('v1.7.0 Task 11: the current-month guard holds even when the category h
     const { db, flatSix } = setup();
     const groceries = categoryIdByName(db, 'Groceries');
     flatSix(groceries, 60000);
-    setRollover({ scope: 'household', userId: null, categoryId: groceries, enabled: true, startMonth: '2026-01' });
+    setRollover({ scope: 'household', userId: null, categoryId: groceries, enabled: true, startMonth: BEFORE_WINDOW });
 
     const state = await applyAllSuggestionsAction({}, formData({ scope: 'household', userId: '', month: NEXT_MONTH }));
     expect(state.error).toBe('Suggestions are only available for the current month.');
@@ -492,7 +508,7 @@ describe('v1.7.0 Task 11: the current-month guard holds even when the category h
     const { db, flatSix } = setup();
     const groceries = categoryIdByName(db, 'Groceries');
     flatSix(groceries, 60000);
-    setRollover({ scope: 'household', userId: null, categoryId: groceries, enabled: true, startMonth: '2026-01' });
+    setRollover({ scope: 'household', userId: null, categoryId: groceries, enabled: true, startMonth: BEFORE_WINDOW });
 
     const state = await applyAllSuggestionsAction({}, formData({ scope: 'household', userId: '', month: PAST_MONTH }));
     expect(state.error).toBe('Suggestions are only available for the current month.');
