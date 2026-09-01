@@ -76,18 +76,24 @@ function anchorBalanceAt(name: string, at: string): void {
   t.sqlite.prepare('update warranty_items set balance_updated_at = ? where name = ?').run(at, name);
 }
 
-/** Inserts a transaction and its linked loan_payments row, dated `createdAt` -- the column
- *  debtOverTime groups by. A negative `signedAmountCents` is a payment (a decrement, undone by
- *  adding applied_cents back); a positive one is a disbursement (an increment, undone by
- *  subtracting it), mirroring reverseLoanLinksForTransactions's own sign recovery. */
-function link(itemId: number, opts: { signedAmountCents: number; appliedCents: number; createdAt: string }): void {
+/** Inserts a transaction and its linked loan_payments row. `createdAt` is when the LINK ROW was
+ *  written (the import wall-clock); `txnDate` -- the column debtOverTime now groups by (v1.25.0)
+ *  -- is the transaction's own real date and defaults to `createdAt`'s own day, so every
+ *  pre-existing call site (which never distinguished the two) is unaffected. Passing a `txnDate`
+ *  that differs from `createdAt` is exactly how the late-import regression tests below simulate
+ *  a statement imported months after the payment it carries actually happened. A negative
+ *  `signedAmountCents` is a payment (a decrement, undone by adding applied_cents back); a
+ *  positive one is a disbursement (an increment, undone by subtracting it), mirroring
+ *  reverseLoanLinksForTransactions's own sign recovery. */
+function link(itemId: number, opts: { signedAmountCents: number; appliedCents: number; createdAt: string; txnDate?: string }): void {
+  const txnDate = opts.txnDate ?? opts.createdAt.slice(0, 10);
   const txn = t.sqlite
     .prepare(
       `insert into transactions
          (account_id, date, raw_description, normalized_merchant, amount_cents, is_transfer, created_by, created_at, updated_at)
        values (?, ?, 'Payment', 'PAYMENT', ?, 0, ?, ?, ?) returning id`,
     )
-    .get(accountId, opts.createdAt.slice(0, 10), opts.signedAmountCents, userId, opts.createdAt, opts.createdAt) as { id: number };
+    .get(accountId, txnDate, opts.signedAmountCents, userId, opts.createdAt, opts.createdAt) as { id: number };
   t.sqlite
     .prepare(`insert into loan_payments (txn_id, item_id, amount_cents, applied_cents, source, created_at) values (?, ?, ?, ?, 'manual', ?)`)
     .run(txn.id, itemId, Math.abs(opts.signedAmountCents), opts.appliedCents, opts.createdAt);
@@ -201,6 +207,37 @@ describe('MUST-15.7: the reconstruction, clause by clause', () => {
     const series = debtOverTime(3, { endMonth: '2026-08', today: '2026-08-18' });
     expect(series.every((p) => p.owedCents === null)).toBe(true);
     expect(series.map((p) => p.month)).toEqual(['2026-06', '2026-07', '2026-08']);
+  });
+});
+
+describe('v1.25.0: buckets by the linked transaction date, not loan_payments.created_at', () => {
+  it('a payment imported two months late still lands in its transaction month -- the owner-reported regression', () => {
+    // Anchor is well before every month this test inspects, so none of MAY through AUGUST reads
+    // as "unknown" (MUST-15.7's own anchor clause, exercised separately above) -- the only thing
+    // this test is isolating is which month the PAYMENT lands in.
+    const itemId = seedItem({ name: 'Loan', createdAt: '2024-01-01T00:00:00.000Z', balanceCents: 1_000_000, balanceUpdatedAt: '2024-01-01T00:00:00.000Z' });
+    // The payment happened in June; the statement carrying it wasn't imported (the loan_payments
+    // row wasn't written) until August -- two months later.
+    link(itemId, { signedAmountCents: -45_000, appliedCents: 45_000, txnDate: '2026-06-15', createdAt: '2026-08-15T00:00:00.000Z' });
+    const series = debtOverTime(6, { endMonth: '2026-08', today: '2026-08-18' });
+    // Before the fix, bucketing by created_at (August) meant June and July were reconstructed as
+    // though the payment hadn't happened yet (1,045,000), only "catching up" in August. June and
+    // July must already show the post-payment balance; only May (truly before the payment) shows
+    // the pre-payment figure.
+    expect(series.find((p) => p.month === '2026-05')!.owedCents).toBe(1_045_000);
+    expect(series.find((p) => p.month === '2026-06')!.owedCents).toBe(1_000_000);
+    expect(series.find((p) => p.month === '2026-07')!.owedCents).toBe(1_000_000);
+    expect(series.find((p) => p.month === '2026-08')!.owedCents).toBe(1_000_000);
+  });
+
+  it('two payments landing in the same transaction month, imported at different times, sum together in that month', () => {
+    const itemId = seedItem({ name: 'Loan', createdAt: '2024-01-01T00:00:00.000Z', balanceCents: 1_000_000, balanceUpdatedAt: '2024-01-01T00:00:00.000Z' });
+    // One imported the same day; one imported six weeks later. Both are transactions dated in June.
+    link(itemId, { signedAmountCents: -20_000, appliedCents: 20_000, txnDate: '2026-06-05', createdAt: '2026-06-05T00:00:00.000Z' });
+    link(itemId, { signedAmountCents: -25_000, appliedCents: 25_000, txnDate: '2026-06-20', createdAt: '2026-08-10T00:00:00.000Z' });
+    const series = debtOverTime(6, { endMonth: '2026-08', today: '2026-08-18' });
+    expect(series.find((p) => p.month === '2026-05')!.owedCents).toBe(1_045_000);
+    expect(series.find((p) => p.month === '2026-06')!.owedCents).toBe(1_000_000);
   });
 });
 

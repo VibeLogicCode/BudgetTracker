@@ -1437,6 +1437,18 @@ export interface PayoffProjection {
  * not at the full amount, or a household that pays twice a year would be told its loan behaves
  * like one paid every month.
  *
+ * v1.25.0 (owner-reported regression): the same fix as debtOverTime's own v1.25.0 paragraph in
+ * this file (see its docblock for the full argument) -- the pace below is bucketed, and the
+ * window is bounded, by the linked TRANSACTION's own date (transactions.date), never
+ * loan_payments.created_at (the day the row was WRITTEN, i.e. the day a statement was
+ * imported). A catch-up import of several months' statements used to pile every payment into
+ * whichever single month it happened to be IMPORTED in -- often outside the trailing window
+ * entirely -- so the pace, and the "months remaining" derived from it, swung around the import
+ * date instead of tracking when the household actually paid. The `transactions` join this
+ * function already has (see DIRECTION RULE above) is reused for the date too, with no COALESCE
+ * fallback to created_at: loan_payments.txn_id is NOT NULL, so every row has a real transaction
+ * to date it by.
+ *
  * ABSURD-PACE BOUND (fix-round, F-payoff): a projection more than 1200 months (100 years) out
  * returns null instead of a month. A pace of a few cents against a large balance divides out to
  * a payoff centuries away; isMonthKey (src/lib/dates.ts) requires EXACTLY a 4-digit year, so a
@@ -1467,7 +1479,10 @@ export function payoffProjection(itemId: number, today: string): PayoffProjectio
 
   const rows = getDb()
     .select({
-      month: sql<string>`substr(${loanPayments.createdAt}, 1, 7)`,
+      // v1.25.0: bucketed by the linked TRANSACTION's own date, not loan_payments.created_at --
+      // see the docblock above for the full argument, and debtOverTime's own docblock for the
+      // full argument this one is the same fix as.
+      month: sql<string>`substr(${transactions.date}, 1, 7)`,
       total: sql<number>`sum(${loanPayments.appliedCents})`,
     })
     .from(loanPayments)
@@ -1476,11 +1491,11 @@ export function payoffProjection(itemId: number, today: string): PayoffProjectio
       and(
         eq(loanPayments.itemId, itemId),
         sql`${transactions.amountCents} < 0`,
-        sql`substr(${loanPayments.createdAt}, 1, 7) >= ${months[0]}`,
-        sql`substr(${loanPayments.createdAt}, 1, 7) <= ${months[months.length - 1]}`,
+        sql`substr(${transactions.date}, 1, 7) >= ${months[0]}`,
+        sql`substr(${transactions.date}, 1, 7) <= ${months[months.length - 1]}`,
       ),
     )
-    .groupBy(sql`substr(${loanPayments.createdAt}, 1, 7)`)
+    .groupBy(sql`substr(${transactions.date}, 1, 7)`)
     .all();
 
   const byMonth = new Map(rows.map((row) => [row.month, row.total ?? 0]));
@@ -1626,7 +1641,7 @@ export interface DebtPoint {
  *       this month, which discarded whatever it was before; anything plotted here would be
  *       invented)
  *   - otherwise -> L.current_balance_cents + SUM(the signed undo of applied_cents) over rows
- *       with created_at > E
+ *       whose LINKED TRANSACTION's own date is > E
  *
  * The month's owedCents is the sum UNLESS any loan contributed unknown, in which case it is
  * null and the line breaks. A total that silently drops a loan for some months and includes
@@ -1647,6 +1662,21 @@ export interface DebtPoint {
  * SUBTRACTS applied_cents back. The join below folds that sign into the per-month sum, rather
  * than summing applied_cents unsigned, so a disbursement walked backwards is not mistaken for
  * a payment.
+ *
+ * v1.25.0 (owner-reported regression): the per-payment date this reconstruction buckets by, and
+ * walks against, is the LINKED TRANSACTION's own `date` (transactions.date -- the real calendar
+ * day the money moved), never loan_payments.created_at (the day the row was WRITTEN, which for
+ * an imported statement is the day the import ran). This is the exact confusion v1.21.0 already
+ * removed from link()'s own chronological replay (recomputeBalance's docblock far above, and
+ * this file's top-of-file docblock) -- it survived here because debtOverTime does its own SQL
+ * aggregation rather than reusing recomputeBalance's in-memory one. A statement imported two
+ * months late used to attribute its payment to the import month instead of the month it
+ * actually happened in, corrupting the reconstruction for every month in between the two.
+ * loan_payments.txn_id is NOT NULL (drizzle/0007_loans.sql, unchanged by every migration since
+ * -- verified here rather than assumed) so every loan_payments row names a real transaction with
+ * a real date; the INNER JOIN to `transactions` this query already needs for amount_cents' sign
+ * is reused for the date too, with no COALESCE back to created_at -- there is no loan_payments
+ * row this schema can produce that lacks a linked transaction to date it by.
  *
  * v1.14.0 (spec BU, rulings P5, P6): a second, independent reconstruction over loans pointed the
  * other way, as its own series (DebtPoint.lentCents). Of the two SQL queries above, the per-month
@@ -1698,14 +1728,17 @@ export function debtOverTime(months: number, opts: { endMonth?: string; today?: 
   const applied = getDb()
     .select({
       itemId: loanPayments.itemId,
-      month: sql<string>`substr(${loanPayments.createdAt}, 1, 7)`,
+      // v1.25.0: bucketed by the linked TRANSACTION's own date, not loan_payments.created_at --
+      // see the docblock above for the full argument. loan_payments.txn_id is NOT NULL, so the
+      // INNER JOIN already below (needed for amount_cents' sign) always has a date to give.
+      month: sql<string>`substr(${transactions.date}, 1, 7)`,
       // Signed undo delta: +applied_cents for a payment (undo a decrement), -applied_cents
       // for a disbursement (undo an increment) -- see the sign-recovery note above.
       total: sql<number>`sum(case when ${transactions.amountCents} < 0 then ${loanPayments.appliedCents} else -${loanPayments.appliedCents} end)`,
     })
     .from(loanPayments)
     .innerJoin(transactions, eq(transactions.id, loanPayments.txnId))
-    .groupBy(loanPayments.itemId, sql`substr(${loanPayments.createdAt}, 1, 7)`)
+    .groupBy(loanPayments.itemId, sql`substr(${transactions.date}, 1, 7)`)
     .all();
 
   const byItem = new Map<number, Map<string, number>>();
@@ -1746,10 +1779,12 @@ export function debtOverTime(months: number, opts: { endMonth?: string; today?: 
       }
       let balance = loan.balanceCents;
       for (const [paymentMonth, cents] of byItem.get(loan.itemId) ?? []) {
-        // "created_at > E" is the whole of every LATER month, since E is a month end. The SQL
-        // sum is the undo delta in the OWED frame; loanSignedDelta re-expresses it in the loan's
-        // own frame. For 'owed' it is the identity, which is why the query above did not have to
-        // change (ruling P5).
+        // "the transaction's own month > E's month" is the whole of every LATER month, since E
+        // is a month end (v1.25.0: paymentMonth is keyed off transactions.date now, not
+        // loan_payments.created_at -- see the docblock above). The SQL sum is the undo delta in
+        // the OWED frame; loanSignedDelta re-expresses it in the loan's own frame. For 'owed' it
+        // is the identity, which is why the query above did not have to change for THAT (ruling
+        // P5).
         if (paymentMonth > month) balance += loanSignedDelta(loan.direction, cents);
       }
       if (owedSide) owedTotal = (owedTotal ?? 0) + balance;

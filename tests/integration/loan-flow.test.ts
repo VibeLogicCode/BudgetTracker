@@ -18,13 +18,18 @@ import { NOW, setupLoanTest, type LoanTestContext } from '../lib/loans/fixtures'
 
 /**
  * Every loan link in this suite is stamped with the fixture's own frozen NOW rather than the
- * wall clock. applyPaymentMatchers writes loan_payments.created_at from its `at` argument, and
- * debtOverTime buckets payments by that column (substr(created_at, 1, 7)) -- so leaving it to
- * default to `new Date()` meant the two August payments below landed in whatever month the
- * suite happened to run in. Once that was no longer 2026-08, the assertion at the end of the
- * first test read them as payments made AFTER its endMonth and added them back to the
- * reconstruction, failing with 2_000_000 for a loan whose stored balance was correct at
- * 1_910_000. Nothing about the loan pipeline was wrong; the test was dated.
+ * wall clock. applyPaymentMatchers writes loan_payments.created_at from its `at` argument.
+ *
+ * v1.25.0: debtOverTime no longer buckets payments by created_at -- it now reads the linked
+ * transaction's own `date` (see src/lib/loans.ts's docblock on debtOverTime for the full
+ * argument), so the August-dated rows below (`row({ ..., date: '2026-08-0x' })`) land in the
+ * chart's August bucket because that IS when they happened, regardless of what the wall clock
+ * read at the moment `applyPaymentMatchers` ran. The `new Date(NOW)` argument stays, though, and
+ * for a reason independent of debtOverTime: loan_payments.created_at still feeds other reads in
+ * src/lib/loans.ts (listLoans' lastPaymentAt, payoffProjection's trailing-pace window), and a
+ * test suite whose "now" drifts with the wall clock is fragile on principle -- pinning it keeps
+ * every stamp this suite writes reproducible, not just the one debtOverTime used to be
+ * sensitive to.
  */
 
 // v1.13.0 ruling R2 (Task 6 fix round 1): categoryBreakdown now takes a viewer as its last

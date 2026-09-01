@@ -209,3 +209,69 @@ describe('direction on the read model (rulings P6, P9, P10)', () => {
     expect(row?.payoffFraction).toBeCloseTo(0.75, 5);
   });
 });
+
+/**
+ * v1.25.0 (owner-reported regression): payoffProjection's own instance of the bug
+ * tests/lib/loans/debt-over-time.test.ts's own v1.25.0 block pins for debtOverTime -- a
+ * payment's pace-window bucketing must key off the linked TRANSACTION's own date, never
+ * loan_payments.created_at (the day the row was WRITTEN, i.e. the day a statement was
+ * imported). Independent control over the transaction's date and the link row's created_at --
+ * mirroring debt-over-time.test.ts's own local `link` helper -- is what lets these tests
+ * simulate a late import without going through the real matcher/rule machinery. Local to this
+ * file, not fixtures.ts (shared across five other loan suites) or tests/lib/loan-payoff.test.ts
+ * (a sibling lane's file, not touched here).
+ */
+describe('v1.25.0: payoffProjection paces by the linked transaction date, not loan_payments.created_at', () => {
+  const TODAY = '2026-08-15'; // thisMonth = 2026-08; the 6-month window is 2026-02 .. 2026-07.
+
+  function insertPaymentAt(itemId: number, appliedCents: number, txnDate: string, createdAt: string): void {
+    const txnId = ctx.spend('LOAN PAYMENT', -appliedCents, { date: txnDate });
+    ctx.t.sqlite
+      .prepare(
+        `insert into loan_payments (txn_id, item_id, amount_cents, applied_cents, source, created_at)
+         values (?, ?, ?, ?, 'manual', ?)`,
+      )
+      .run(txnId, itemId, appliedCents, appliedCents, createdAt);
+  }
+
+  it('a payment whose transaction falls inside the trailing window still counts toward the pace even when its row was created after the window closed', () => {
+    const { itemId } = ctx.seedLoan({ balanceCents: 2_000_000 });
+    // The payment happened in June; the statement carrying it wasn't imported (the loan_payments
+    // row wasn't written) until August -- one month after the window closes.
+    insertPaymentAt(itemId, 60_000, '2026-06-15', '2026-08-10T00:00:00.000Z');
+    const result = payoffProjection(itemId, TODAY);
+    expect(result).not.toBeNull();
+    expect(result!.monthlyAppliedCents).toBe(10_000); // 60,000 / 6, exactly.
+  });
+
+  it('a payment whose transaction falls outside the trailing window is excluded even when its row was created inside the window', () => {
+    const { itemId } = ctx.seedLoan({ balanceCents: 2_000_000 });
+    // The payment happened in January, one month before the window opens; the row itself was
+    // written (backfilled, or corrected) in June, squarely inside the window.
+    insertPaymentAt(itemId, 999_999, '2026-01-15', '2026-06-10T00:00:00.000Z');
+    // If this payment were wrongly included, the mean would be far from 0 and the result would
+    // not be null.
+    expect(payoffProjection(itemId, TODAY)).toBeNull();
+  });
+
+  it('a catch-up import of three months of statements paces identically to the same three payments imported on time', () => {
+    const onTime = ctx.seedLoan({ balanceCents: 2_000_000 });
+    for (const month of ['02', '03', '04']) {
+      insertPaymentAt(onTime.itemId, 20_000, `2026-${month}-10`, `2026-${month}-10T00:00:00.000Z`);
+    }
+
+    // The same three payments, same three transaction months -- but every statement carrying
+    // them was imported in one batch on a single later day, well inside the current
+    // (in-progress, excluded) month.
+    const caughtUp = ctx.seedLoan({ balanceCents: 2_000_000 });
+    for (const month of ['02', '03', '04']) {
+      insertPaymentAt(caughtUp.itemId, 20_000, `2026-${month}-10`, '2026-08-01T00:00:00.000Z');
+    }
+
+    const onTimeResult = payoffProjection(onTime.itemId, TODAY);
+    const caughtUpResult = payoffProjection(caughtUp.itemId, TODAY);
+    expect(onTimeResult).not.toBeNull();
+    expect(caughtUpResult).toEqual(onTimeResult);
+    expect(caughtUpResult!.monthlyAppliedCents).toBe(10_000); // (20,000 x 3) / 6, exactly.
+  });
+});
