@@ -245,12 +245,24 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.27.0 release', () => {
+  it('MUST-7.1: the 1.28.0 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.27.0');
+    expect(pkg.version).toBe('1.28.0');
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toMatch(/^## \[1\.28\.0\] - 2026-09-01$/m);
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.28.0]'));
+    expect(changelog.indexOf('## [1.28.0]')).toBeLessThan(changelog.indexOf('## [1.27.0]'));
+    const entry = changelog.slice(changelog.indexOf('## [1.28.0]'), changelog.indexOf('## [1.27.0]'));
+    expect(entry).toMatch(/One migration \(0021\)/i);
+    // The invariants this release must never lose: a routed event REPLACES the personal copy, and
+    // a security event can never reach a shared room. \s+ because the file is hard-wrapped.
+    expect(entry).toMatch(/instead\s+of/i);
+    expect(entry).toMatch(/can\s+never\s+be\s+sent\s+to\s+a\s+family\s+channel/i);
+  });
+
+  it('MUST-7.1: the 1.27.0 release is still recorded intact (append-only discipline)', () => {
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.27\.0\] - 2026-09-01$/m);
-    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.27.0]'));
     expect(changelog.indexOf('## [1.27.0]')).toBeLessThan(changelog.indexOf('## [1.26.0]'));
     const entry = changelog.slice(changelog.indexOf('## [1.27.0]'), changelog.indexOf('## [1.26.0]'));
     // \s+ not a literal space: this file is hard-wrapped, so an asserted phrase can land across a

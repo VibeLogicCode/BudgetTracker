@@ -21,6 +21,47 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.28.0] - 2026-09-01
+
+One migration (0021): notification channels gain a scope, so a household can have shared channels
+alongside personal ones. Every channel you already have becomes a personal one; nothing you receive
+today changes until an admin sets a family channel up.
+
+### Added
+
+- **A family Telegram and a family email, shared by the household.** Until now a channel belonged
+  to one person, so a household running its bot in a group chat had no way to add a second
+  destination — and if two people pointed their own channels at the same group, the group got two
+  of everything. There is now exactly one family channel per medium, set by an admin, and the
+  database will not accept a second.
+- **Choose which notifications go to the family channel.** Per event, per channel. An event routed
+  there is sent to the family channel **instead of** to each person individually, so the group gets
+  one message and nobody gets a duplicate.
+- **The family digest names who spent what.** Household total, each member's own spend, and the
+  money nobody has attributed yet — which is usually the line worth chasing. Personal digests are
+  unchanged.
+
+### Security
+
+- **Sign-ins, password changes and MFA changes can never be sent to a family channel**, along with
+  backup, restore, sync and update notices. A group chat is the wrong place for a security alert.
+  These events are not merely left unchecked — they are refused when routing is saved, refused
+  again when a notification is queued, and refused a third time before a queued message is sent, so
+  a hand-edited database cannot put one in a group either.
+- **A member's own privacy setting cannot change what the family digest says.** The digest is one
+  message about the household rather than a per-person render, so whoever's schedule happens to
+  fire first cannot decide what everyone else reads.
+
+### Fixed
+
+- **A household with two people on different digest days would have received two family digests a
+  week.** The family digest is now keyed to the calendar week rather than to whoever's schedule
+  produced it.
+- **A budget alert about one person could have silenced the same alert about another.** Budget
+  threshold and pace alerts identify their subject by scope, not by person, so two members crossing
+  the same threshold could collapse into a single message. Personal alerts are now never routable
+  to a shared channel, whatever is switched on.
+
 ## [1.27.0] - 2026-09-01
 
 One migration (0020): seeds a "Bill" item type. If you already made your own Bill type, yours is
