@@ -245,12 +245,24 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.29.0 release', () => {
+  it('MUST-7.1: the 1.29.1 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.29.0');
+    expect(pkg.version).toBe('1.29.1');
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toMatch(/^## \[1\.29\.1\] - 2026-09-01$/m);
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.29.1]'));
+    expect(changelog.indexOf('## [1.29.1]')).toBeLessThan(changelog.indexOf('## [1.29.0]'));
+    const patch = changelog.slice(changelog.indexOf('## [1.29.1]'), changelog.indexOf('## [1.29.0]'));
+    // A patch whose whole reason for existing is a page that would not load must say so plainly,
+    // and must say that nothing was lost -- that is the question a household actually has when a
+    // settings page has been erroring. \s+ because the file is hard-wrapped.
+    expect(patch).toMatch(/would\s+not\s+load/i);
+    expect(patch).toMatch(/Nothing\s+was\s+saved,\s+changed\s+or\s+lost/i);
+  });
+
+  it('MUST-7.1: the 1.29.0 release is still recorded intact (append-only discipline)', () => {
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.29\.0\] - 2026-09-01$/m);
-    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.29.0]'));
     expect(changelog.indexOf('## [1.29.0]')).toBeLessThan(changelog.indexOf('## [1.28.0]'));
     const entry = changelog.slice(changelog.indexOf('## [1.29.0]'), changelog.indexOf('## [1.28.0]'));
     // Every release that ships a schema change names it; this one ships none, and saying so is

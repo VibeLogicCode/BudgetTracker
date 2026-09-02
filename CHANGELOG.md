@@ -21,6 +21,23 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.29.1] - 2026-09-01
+
+No migration. One fix, for a page v1.29.0 broke.
+
+### Fixed
+
+- **The notification settings page would not load on v1.29.0.** The new tabs check the `?tab=`
+  value in the address before rendering, and that check was written in the same file as the page's
+  interactive parts. Next replaces everything in such a file with a placeholder when the server
+  asks for it, so the page called a placeholder instead of the check and stopped with "Something
+  went wrong on this page". The check now lives in a plain file both halves can use. Nothing was
+  saved, changed or lost while the page was failing — it never got as far as reading anything.
+- **Added a guard so a page cannot break this way again.** Both the type checker and all 5,600
+  tests passed on the broken version, because neither draws the boundary between server and
+  browser that Next does. The build now refuses a page that reaches across it for anything other
+  than a component.
+
 ## [1.29.0] - 2026-09-01
 
 No migration. Notification settings move behind four tabs, and the cash runway figure on the
