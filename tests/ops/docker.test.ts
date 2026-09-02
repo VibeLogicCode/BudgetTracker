@@ -245,12 +245,30 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.28.0 release', () => {
+  it('MUST-7.1: the 1.29.0 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.28.0');
+    expect(pkg.version).toBe('1.29.0');
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toMatch(/^## \[1\.29\.0\] - 2026-09-01$/m);
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.29.0]'));
+    expect(changelog.indexOf('## [1.29.0]')).toBeLessThan(changelog.indexOf('## [1.28.0]'));
+    const entry = changelog.slice(changelog.indexOf('## [1.29.0]'), changelog.indexOf('## [1.28.0]'));
+    // Every release that ships a schema change names it; this one ships none, and saying so is
+    // what lets a self-hosted household skip the pre-pull database review entirely.
+    expect(entry).toMatch(/No migration/i);
+    // The invariant behind the tabs: each one is a real address, not a client-side panel toggle --
+    // so it can be bookmarked and the back button works. No \s+ needed: this one is inside a
+    // backticked code span, which the prose wrapper never breaks across a line.
+    expect(entry).toMatch(/\?tab=telegram/);
+    // The two halves of the runway fix that must never be lost: the divisor follows the household's
+    // real history, and an interior quiet month is real signal rather than missing data.
+    expect(entry).toMatch(/months\s+you\s+actually\s+have/i);
+    expect(entry).toMatch(/quiet\s+month\s+in\s+the\s+middle/i);
+  });
+
+  it('MUST-7.1: the 1.28.0 release is still recorded intact (append-only discipline)', () => {
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.28\.0\] - 2026-09-01$/m);
-    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.28.0]'));
     expect(changelog.indexOf('## [1.28.0]')).toBeLessThan(changelog.indexOf('## [1.27.0]'));
     const entry = changelog.slice(changelog.indexOf('## [1.28.0]'), changelog.indexOf('## [1.27.0]'));
     expect(entry).toMatch(/One migration \(0021\)/i);

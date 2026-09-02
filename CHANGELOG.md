@@ -21,6 +21,33 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.29.0] - 2026-09-01
+
+No migration. Notification settings move behind four tabs, and the cash runway figure on the
+dashboard stops being flattering.
+
+### Changed
+
+- **Notification settings is four tabs instead of one long scroll.** Email, Telegram, Events and
+  Deliveries. Everything about email is on the Email tab and everything about Telegram is on the
+  Telegram tab — personal and family settings for a medium now sit together, rather than the family
+  ones living in a separate card near the bottom of the page. Each tab is a real address
+  (`?tab=telegram`), so one can be bookmarked, linked to, and reached with the back button.
+- **The outbound email form is roughly half as tall.** Server and port, username and password, and
+  from address and from name are paired across two columns; the port field is no longer a
+  three-character box stretched across the full width of the card. On a phone they still stack one
+  per row.
+
+### Fixed
+
+- **Cash runway was overstated on any household with less than six months of history.** The average
+  monthly spend behind it was divided by six whether or not there were six months of data to
+  divide, so every month before your first import counted as a month you spent nothing. Three
+  months of real history produced a runway roughly twice as long as the truth. The average is now
+  taken over the months you actually have, and the tile states how many that is. A genuinely quiet
+  month in the middle of your history still counts — only the empty run before your first
+  transaction is left out.
+
 ## [1.28.0] - 2026-09-01
 
 One migration (0021): notification channels gain a scope, so a household can have shared channels
