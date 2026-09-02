@@ -10,7 +10,7 @@ import { eventsFor } from '@/lib/notify/events';
 // setHouseholdEventPref (the write paths) live in actions.ts, not here.
 import { listHouseholdTargets, householdEventPrefs, householdEligibleEvents } from '@/lib/notify/household';
 import { listRecentDeliveries, type DeliveryRow } from '@/lib/notify/outbox';
-import { NotificationsClient, type NotificationsPageData } from './notifications-client';
+import { NotificationsClient, isNotificationTab, type NotificationsPageData } from './notifications-client';
 
 export const dynamic = 'force-dynamic';
 
@@ -40,8 +40,21 @@ export function toDeliveryForClient(
   };
 }
 
-export default async function NotificationsPage() {
+export default async function NotificationsPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const user = await requireUser();
+
+  // v1.29.0 (four URL-driven tabs, replacing six long cards on one scroll). Same
+  // fallback-on-malformed-input idiom dashboard/page.tsx already uses for `?month=`: a missing
+  // or garbage `?tab=` is a reason to show the default tab, never a reason to throw. See
+  // notifications-client.tsx's own docblock on NotificationTab for why this is a URL at all
+  // rather than client state.
+  const params = await searchParams;
+  const rawTab = Array.isArray(params.tab) ? params.tab[0] : params.tab;
+  const tab = isNotificationTab(rawTab) ? rawTab : 'email';
 
   // MUST-3.7: the page renders EFFECTIVE values, resolved once here so the client never
   // re-implements the fallback rule.
@@ -98,6 +111,7 @@ export default async function NotificationsPage() {
 
   const data: NotificationsPageData = {
     role: user.role,
+    tab,
     // MUST-5.3: getSmtp() returns passwordSet, never the password; getTarget() returns
     // secretSet, never the token. §11.3: members see none of the relay's configuration,
     // only whether one exists, so their email card can explain itself.

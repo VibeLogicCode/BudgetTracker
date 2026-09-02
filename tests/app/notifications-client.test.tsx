@@ -1,7 +1,11 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
-import { NotificationsClient, type NotificationsPageData } from '@/app/(app)/settings/notifications/notifications-client';
+import {
+  NotificationsClient,
+  isNotificationTab,
+  type NotificationsPageData,
+} from '@/app/(app)/settings/notifications/notifications-client';
 import { SMTP_PRESETS } from '@/lib/notify/config';
 import { NOTIFICATION_EVENTS, eventsFor, householdEligibleEvents } from '@/lib/notify/events';
 
@@ -43,6 +47,11 @@ function props(over: Partial<NotificationsPageData> = {}): NotificationsPageData
   const role = over.role ?? 'admin';
   return {
     role,
+    // v1.29.0: four URL-driven tabs replace six cards on one scroll. 'email' is page.tsx's own
+    // default when `?tab=` is absent or malformed, so it is this fixture's default too -- every
+    // existing test written before tabs existed keeps rendering the same content it always did
+    // unless it explicitly asks for a different tab below.
+    tab: over.tab ?? 'email',
     smtp: null,
     relayConfigured: over.smtp != null,
     targets: { telegram: null, email: null },
@@ -182,7 +191,7 @@ describe('MUST-11.1 / §11.3: the admin SMTP section', () => {
 
 describe('MUST-11.3: the matrix is generated from the registry', () => {
   it('renders one row per event with a Telegram and an Email checkbox', () => {
-    const { container } = render(<NotificationsClient {...props()} />);
+    const { container } = render(<NotificationsClient {...props({ tab: 'events' })} />);
     for (const event of NOTIFICATION_EVENTS) {
       expect(container.textContent).toContain(event.label);
       expect(container.querySelector(`input[name="pref:${event.id}:telegram"]`)).not.toBeNull();
@@ -200,19 +209,21 @@ describe('MUST-11.3: the matrix is generated from the registry', () => {
       defaultEnabled: false,
       householdEligible: false,
     } as const;
-    const { container } = render(<NotificationsClient {...props({ events: [...eventsFor('admin'), future] })} />);
+    const { container } = render(<NotificationsClient {...props({ tab: 'events', events: [...eventsFor('admin'), future] })} />);
     expect(container.textContent).toContain('On pace to overshoot');
     expect(container.querySelector('input[name="pref:on_pace_overshoot:email"]')).not.toBeNull();
   });
 
   it('MUST-4.3: admin-only rows are absent for a member', () => {
-    const { container } = render(<NotificationsClient {...props({ role: 'member' })} />);
+    const { container } = render(<NotificationsClient {...props({ role: 'member', tab: 'events' })} />);
     expect(container.textContent).not.toContain('The nightly backup failed');
     expect(container.textContent).not.toContain('A restore finished');
   });
 
   it('a column for an unconfigured channel is disabled and explains why', () => {
-    const { container } = render(<NotificationsClient {...props({ targets: { telegram: null, email: target() } })} />);
+    const { container } = render(
+      <NotificationsClient {...props({ tab: 'events', targets: { telegram: null, email: target() } })} />,
+    );
     const telegram = container.querySelector('input[name="pref:coming_due:telegram"]') as HTMLInputElement;
     const email = container.querySelector('input[name="pref:coming_due:email"]') as HTMLInputElement;
     expect(telegram.disabled).toBe(true);
@@ -224,6 +235,7 @@ describe('MUST-11.3: the matrix is generated from the registry', () => {
     const { container } = render(
       <NotificationsClient
         {...props({
+          tab: 'events',
           targets: { telegram: null, email: target() },
           prefs: { 'coming_due:email': false, 'weekly_digest:email': true },
         })}
@@ -235,21 +247,21 @@ describe('MUST-11.3: the matrix is generated from the registry', () => {
   });
 
   it('MUST-11.4: the always-visible sentence about what the messages contain', () => {
-    const { container } = render(<NotificationsClient {...props()} />);
+    const { container } = render(<NotificationsClient {...props({ tab: 'events' })} />);
     expect(container.textContent).toContain(
       'Messages contain amounts, category names and merchant names, and are delivered by Telegram or by your email provider.',
     );
   });
 
   it('MUST-5.8: the page says these credentials are inside the unencrypted backup', () => {
-    const { container } = render(<NotificationsClient {...props()} />);
+    const { container } = render(<NotificationsClient {...props({ tab: 'events' })} />);
     expect(container.textContent).toMatch(/backup/i);
   });
 
   it('MUST-17.2: the six v1.4.0 events render for a member with no component edit', () => {
     // The file's convention, at every one of its existing render sites: props() returns the
     // whole NotificationsPageData and is spread. There is no `data` prop.
-    render(<NotificationsClient {...props({ role: 'member' })} />);
+    render(<NotificationsClient {...props({ role: 'member', tab: 'events' })} />);
     for (const id of [
       'budget_pace',
       'unusual_transaction',
@@ -278,7 +290,7 @@ describe('MUST-11.3: the matrix is generated from the registry', () => {
   });
 
   it('renders the five knobs with their defaults in the hint text', () => {
-    const { container, getByLabelText } = render(<NotificationsClient {...props()} />);
+    const { container, getByLabelText } = render(<NotificationsClient {...props({ tab: 'events' })} />);
     for (const name of ['comingDueDays', 'budgetThresholdPct', 'staleImportWeeks', 'dailyHour', 'digestWeekday', 'digestHour']) {
       expect(container.querySelector(`[name="${name}"]`)).not.toBeNull();
     }
@@ -288,7 +300,7 @@ describe('MUST-11.3: the matrix is generated from the registry', () => {
 
 describe('MUST-11.2: Detect chat ID', () => {
   it('MUST-8.11: is disabled with its hint before a token is saved', () => {
-    const { container } = render(<NotificationsClient {...props()} />);
+    const { container } = render(<NotificationsClient {...props({ tab: 'telegram' })} />);
     const button = personalTelegram(container).getByText('Detect chat ID') as HTMLButtonElement;
     expect(button.disabled).toBe(true);
     expect(container.textContent).toContain('Save your bot token first');
@@ -303,7 +315,10 @@ describe('MUST-11.2: Detect chat ID', () => {
     });
     const { container } = render(
       <NotificationsClient
-        {...props({ targets: { telegram: target({ channel: 'telegram', destination: '', secretSet: true }), email: null } })}
+        {...props({
+          tab: 'telegram',
+          targets: { telegram: target({ channel: 'telegram', destination: '', secretSet: true }), email: null },
+        })}
       />,
     );
     fireEvent.click(personalTelegram(container).getByText('Detect chat ID'));
@@ -320,6 +335,7 @@ describe('MUST-11.2: Detect chat ID', () => {
 
   it('MUST-8.10: renders the exact empty-state and error sentences', async () => {
     const withToken = props({
+      tab: 'telegram',
       targets: { telegram: target({ channel: 'telegram', destination: '', secretSet: true }), email: null },
     });
 
@@ -350,7 +366,10 @@ describe('Fix: the Chat ID field explains the token-first flow while it is still
   it('shows the hint when there is no destination yet, and hides it once one is saved', () => {
     const empty = render(
       <NotificationsClient
-        {...props({ targets: { telegram: target({ channel: 'telegram', destination: '', secretSet: true }), email: null } })}
+        {...props({
+          tab: 'telegram',
+          targets: { telegram: target({ channel: 'telegram', destination: '', secretSet: true }), email: null },
+        })}
       />,
     );
     expect(empty.container.textContent).toContain('Fill this in after saving the token above');
@@ -358,7 +377,10 @@ describe('Fix: the Chat ID field explains the token-first flow while it is still
 
     const filled = render(
       <NotificationsClient
-        {...props({ targets: { telegram: target({ channel: 'telegram', destination: '5551234', secretSet: true }), email: null } })}
+        {...props({
+          tab: 'telegram',
+          targets: { telegram: target({ channel: 'telegram', destination: '5551234', secretSet: true }), email: null },
+        })}
       />,
     );
     expect(filled.container.textContent).not.toContain('Fill this in after saving the token above');
@@ -390,7 +412,7 @@ function personalTelegram(container: HTMLElement) {
 
 describe('Round 2 fix (HIGH): the Telegram Enabled checkbox defaults to the saved state and is disabled without a chat ID', () => {
   it('is unchecked and disabled for a brand-new target — the exact state guides.tsx step 6 leaves the form in', () => {
-    const { container } = render(<NotificationsClient {...props()} />);
+    const { container } = render(<NotificationsClient {...props({ tab: 'telegram' })} />);
     const checkbox = telegramEnabledCheckbox(container);
     expect(checkbox.checked).toBe(false);
     expect(checkbox.disabled).toBe(true);
@@ -401,6 +423,7 @@ describe('Round 2 fix (HIGH): the Telegram Enabled checkbox defaults to the save
     const { container } = render(
       <NotificationsClient
         {...props({
+          tab: 'telegram',
           targets: { telegram: target({ channel: 'telegram', destination: '', secretSet: true, enabled: false }), email: null },
         })}
       />,
@@ -414,6 +437,7 @@ describe('Round 2 fix (HIGH): the Telegram Enabled checkbox defaults to the save
     const { container } = render(
       <NotificationsClient
         {...props({
+          tab: 'telegram',
           targets: { telegram: target({ channel: 'telegram', destination: '5551234', secretSet: true, enabled: true }), email: null },
         })}
       />,
@@ -424,7 +448,7 @@ describe('Round 2 fix (HIGH): the Telegram Enabled checkbox defaults to the save
   });
 
   it('typing a chat ID into the field re-enables the checkbox', () => {
-    const { container } = render(<NotificationsClient {...props()} />);
+    const { container } = render(<NotificationsClient {...props({ tab: 'telegram' })} />);
     const chatIdInput = personalTelegram(container).getByLabelText(/chat id/i) as HTMLInputElement;
     expect(telegramEnabledCheckbox(container).disabled).toBe(true);
     fireEvent.change(chatIdInput, { target: { value: '5551234' } });
@@ -437,6 +461,7 @@ describe('Round 2 fix (MED): Send test message is disabled without a saved chat 
     const withoutDestination = render(
       <NotificationsClient
         {...props({
+          tab: 'telegram',
           targets: { telegram: target({ channel: 'telegram', destination: '', secretSet: true, enabled: false }), email: null },
         })}
       />,
@@ -449,6 +474,7 @@ describe('Round 2 fix (MED): Send test message is disabled without a saved chat 
     const withDestination = render(
       <NotificationsClient
         {...props({
+          tab: 'telegram',
           targets: { telegram: target({ channel: 'telegram', destination: '5551234', secretSet: true, enabled: true }), email: null },
         })}
       />,
@@ -463,7 +489,10 @@ describe('MUST-11.8: the guide closing line matches the rendered button label', 
   it('asserts against the button, not a duplicated literal', () => {
     const { getByText, container } = render(
       <NotificationsClient
-        {...props({ targets: { telegram: target({ channel: 'telegram', destination: '1', secretSet: true }), email: null } })}
+        {...props({
+          tab: 'telegram',
+          targets: { telegram: target({ channel: 'telegram', destination: '1', secretSet: true }), email: null },
+        })}
       />,
     );
     const label = (getByText('Send test message') as HTMLButtonElement).textContent ?? '';
@@ -488,6 +517,7 @@ describe('§11.6: recent deliveries', () => {
     const { container, queryByText } = render(
       <NotificationsClient
         {...props({
+          tab: 'deliveries',
           deliveries: [
             {
               id: 3,
@@ -513,6 +543,7 @@ describe('§11.6: recent deliveries', () => {
     const { container } = render(
       <NotificationsClient
         {...props({
+          tab: 'deliveries',
           deliveries: [
             {
               id: 1,
@@ -545,19 +576,19 @@ describe('§11.6: recent deliveries', () => {
       createdAt: '2026-08-17T12:00:00.000Z',
       sentAt: null,
     });
-    const sent = render(<NotificationsClient {...props({ deliveries: [row('sent')] })} />);
+    const sent = render(<NotificationsClient {...props({ tab: 'deliveries', deliveries: [row('sent')] })} />);
     const sentBadge = sent.container.querySelector('.badge');
     expect(sentBadge?.textContent).toBe('Sent');
     expect(sentBadge?.className).toContain('badge--green');
     cleanup();
 
-    const failed = render(<NotificationsClient {...props({ deliveries: [row('failed')] })} />);
+    const failed = render(<NotificationsClient {...props({ tab: 'deliveries', deliveries: [row('failed')] })} />);
     const failedBadge = failed.container.querySelector('.badge');
     expect(failedBadge?.textContent).toBe('Failed');
     expect(failedBadge?.className).toContain('badge--red');
     cleanup();
 
-    const pending = render(<NotificationsClient {...props({ deliveries: [row('pending')] })} />);
+    const pending = render(<NotificationsClient {...props({ tab: 'deliveries', deliveries: [row('pending')] })} />);
     const pendingBadge = pending.container.querySelector('.badge');
     expect(pendingBadge?.textContent).toBe('Pending');
     expect(pendingBadge?.className).toContain('badge--amber');
@@ -566,7 +597,7 @@ describe('§11.6: recent deliveries', () => {
   it('review fix (LOW): shows an EmptyState instead of an empty table when there are zero rows', () => {
     // The page has one other <table> (the event/channel matrix), so scope the "no table"
     // assertion to the deliveries table specifically by checking its header cell is absent.
-    const { container, queryByText } = render(<NotificationsClient {...props({ deliveries: [] })} />);
+    const { container, queryByText } = render(<NotificationsClient {...props({ tab: 'deliveries', deliveries: [] })} />);
     expect(container.textContent).toContain('Nothing sent yet.');
     expect(queryByText('When')).toBeNull();
   });
@@ -577,7 +608,10 @@ describe('review fix (MED-LOW): Detect chat ID recovers from a rejected action',
     detect.mockRejectedValue(new Error('network dropped'));
     const { container } = render(
       <NotificationsClient
-        {...props({ targets: { telegram: target({ channel: 'telegram', destination: '', secretSet: true }), email: null } })}
+        {...props({
+          tab: 'telegram',
+          targets: { telegram: target({ channel: 'telegram', destination: '', secretSet: true }), email: null },
+        })}
       />,
     );
     // Captured once, before the click: an exact-text query still resolves uniquely (guides.tsx's
@@ -620,12 +654,13 @@ describe('review fix (LOW): stale local state does not survive a Remove', () => 
 
   it('the Telegram Chat ID field clears once data.targets.telegram goes from set to null', () => {
     const configured = props({
+      tab: 'telegram',
       targets: { telegram: target({ channel: 'telegram', destination: '5551234', secretSet: true }), email: null },
     });
     const { container, rerender } = render(<NotificationsClient {...configured} />);
     expect((personalTelegram(container).getByLabelText(/chat id/i) as HTMLInputElement).value).toBe('5551234');
 
-    rerender(<NotificationsClient {...props({ targets: { telegram: null, email: null } })} />);
+    rerender(<NotificationsClient {...props({ tab: 'telegram', targets: { telegram: null, email: null } })} />);
     expect((personalTelegram(container).getByLabelText(/chat id/i) as HTMLInputElement).value).toBe('');
   });
 });
@@ -665,9 +700,11 @@ describe('review fix (MED): the admin payload never carries a delivery subject o
 
 describe('v1.15.0 (responsive rows, ruling S3): the preference matrix headline', () => {
   it('the Event cell of the first row carries cell-stack-headline', () => {
-    const { container } = render(<NotificationsClient {...props()} />);
-    // The preferences matrix is the first <table> in the page (SMTP/Telegram/Email above it
-    // render no table of their own); Recent deliveries is the second.
+    const { container } = render(<NotificationsClient {...props({ tab: 'events' })} />);
+    // v1.29.0: the preference matrix and the (admin-only) routing matrix both now live on the
+    // Events tab, having moved off a page that used to also carry SMTP/Telegram/Email/
+    // deliveries -- none of which render a table of their own. The preference matrix is still
+    // the FIRST <table> on this tab; the routing matrix, when it renders at all, is the second.
     const matrix = container.querySelectorAll('table')[0];
     const headlineCell = matrix.querySelector('tbody tr td:first-child');
     expect(headlineCell?.className).toContain('cell-stack-headline');
@@ -685,6 +722,7 @@ describe('MUST-5.3: no credential ever reaches these props', () => {
 
   it('v1.28.0 Lane 2: the same holds for the family channel -- serialized props and the rendered token field', () => {
     const data = props({
+      tab: 'telegram',
       household: {
         targets: { telegram: householdTargetFixture({ secretSet: true }), email: null },
         eligibleEvents: householdEligibleEvents(),
@@ -703,23 +741,37 @@ describe('MUST-5.3: no credential ever reaches these props', () => {
   });
 });
 
-describe('v1.28.0 Lane 2: the "Family channels" section', () => {
+describe('v1.28.0 Lane 2 / v1.29.0 split: the family channel cards', () => {
+  // v1.29.0: the single "Family channels" card (one heading, three sub-sections) was split
+  // three ways across the Email/Telegram/Events tabs -- see notifications-client.tsx's own
+  // docblock beside the Family email card for why. There is no longer one render that shows
+  // every family control at once, so what used to be one assertion against one render is now
+  // one assertion per tab that actually carries it -- nothing here is weaker, each render
+  // covers exactly the sub-section its own tab now owns.
   it('renders for an admin, and its controls are entirely absent for a member', () => {
-    const admin = render(<NotificationsClient {...props({ role: 'admin' })} />);
-    expect(admin.container.textContent).toContain('Family channels');
-    expect(admin.container.textContent).toContain('Family Telegram');
-    expect(admin.container.textContent).toContain('Family email');
+    const adminTelegram = render(<NotificationsClient {...props({ role: 'admin', tab: 'telegram' })} />);
+    expect(adminTelegram.container.textContent).toContain('Family Telegram');
     cleanup();
 
-    const member = render(<NotificationsClient {...props({ role: 'member' })} />);
-    expect(member.container.textContent).not.toContain('Family Telegram');
-    expect(member.container.textContent).not.toContain('Family email');
-    expect(member.container.querySelector('input[name^="household-pref:"]')).toBeNull();
-    expect(member.container.querySelector('#household-telegram-token')).toBeNull();
+    const adminEmail = render(<NotificationsClient {...props({ role: 'admin', tab: 'email' })} />);
+    expect(adminEmail.container.textContent).toContain('Family email');
+    cleanup();
+
+    const memberTelegram = render(<NotificationsClient {...props({ role: 'member', tab: 'telegram' })} />);
+    expect(memberTelegram.container.textContent).not.toContain('Family Telegram');
+    expect(memberTelegram.container.querySelector('#household-telegram-token')).toBeNull();
+    cleanup();
+
+    const memberEmail = render(<NotificationsClient {...props({ role: 'member', tab: 'email' })} />);
+    expect(memberEmail.container.textContent).not.toContain('Family email');
+    cleanup();
+
+    const memberEvents = render(<NotificationsClient {...props({ role: 'member', tab: 'events' })} />);
+    expect(memberEvents.container.querySelector('input[name^="household-pref:"]')).toBeNull();
   });
 
   it('a member sees nothing about the family channel when nothing is routed away from them -- no zero state', () => {
-    const { container } = render(<NotificationsClient {...props({ role: 'member' })} />);
+    const { container } = render(<NotificationsClient {...props({ role: 'member', tab: 'email' })} />);
     expect(container.textContent).not.toContain('Family channel');
   });
 
@@ -730,6 +782,7 @@ describe('v1.28.0 Lane 2: the "Family channels" section', () => {
       <NotificationsClient
         {...props({
           role: 'member',
+          tab: 'email',
           household: {
             targets: null,
             eligibleEvents: eligible,
@@ -748,7 +801,10 @@ describe('v1.28.0 Lane 2: the "Family channels" section', () => {
   it('states the routing consequence in view, for both an admin and a member who is affected by it', () => {
     const SENTENCE =
       "Turn one of these on and that event goes to the family channel instead of to each person's own notifications — not both.";
-    const admin = render(<NotificationsClient {...props({ role: 'admin' })} />);
+    // For an admin the sentence sits beside the routing matrix (Events tab); for an affected
+    // member it sits on the read-only summary card (Email tab) -- the two places that sentence
+    // now lives since the split.
+    const admin = render(<NotificationsClient {...props({ role: 'admin', tab: 'events' })} />);
     expect(admin.container.textContent).toContain(SENTENCE);
     cleanup();
 
@@ -758,6 +814,7 @@ describe('v1.28.0 Lane 2: the "Family channels" section', () => {
       <NotificationsClient
         {...props({
           role: 'member',
+          tab: 'email',
           household: { targets: null, eligibleEvents: eligible, prefs: { [comingDue.id]: { telegram: false, email: true } } },
         })}
       />,
@@ -768,7 +825,9 @@ describe('v1.28.0 Lane 2: the "Family channels" section', () => {
   it('the routing matrix lists exactly householdEligibleEvents() -- an excluded security event has no control', () => {
     const eligible = householdEligibleEvents();
     const { container } = render(
-      <NotificationsClient {...props({ household: { targets: { telegram: null, email: null }, eligibleEvents: eligible, prefs: {} } })} />,
+      <NotificationsClient
+        {...props({ tab: 'events', household: { targets: { telegram: null, email: null }, eligibleEvents: eligible, prefs: {} } })}
+      />,
     );
     for (const event of eligible) {
       expect(container.querySelector(`input[name="household-pref:${event.id}:telegram"]`)).not.toBeNull();
@@ -787,6 +846,7 @@ describe('v1.28.0 Lane 2: the "Family channels" section', () => {
     const { container } = render(
       <NotificationsClient
         {...props({
+          tab: 'events',
           household: { targets: { telegram: null, email: householdTargetFixture({ channel: 'email' }) }, eligibleEvents: eligible, prefs: {} },
         })}
       />,
@@ -804,6 +864,7 @@ describe('v1.28.0 Lane 2: the "Family channels" section', () => {
     const { container, getByText } = render(
       <NotificationsClient
         {...props({
+          tab: 'telegram',
           household: {
             targets: { telegram: householdTargetFixture(), email: null },
             eligibleEvents: eligible,
@@ -812,9 +873,9 @@ describe('v1.28.0 Lane 2: the "Family channels" section', () => {
         })}
       />,
     );
-    // Exactly one "Remove" button exists before the dialog opens: the personal Telegram/Email
-    // cards render none of their own (their targets are null in this fixture), so this is the
-    // family Telegram one.
+    // Exactly one "Remove" button exists before the dialog opens: the personal Telegram card
+    // renders none of its own (its target is null in this fixture), so this is the family
+    // Telegram one.
     fireEvent.click(getByText('Remove'));
     const dialog = container.querySelector('[role="dialog"]') as HTMLElement;
     expect(dialog).not.toBeNull();
@@ -834,7 +895,7 @@ describe('v1.28.0 Lane 2: the "Family channels" section', () => {
   });
 
   it('setting a family Telegram channel submits to saveHouseholdTelegramTargetAction', async () => {
-    const { container } = render(<NotificationsClient {...props()} />);
+    const { container } = render(<NotificationsClient {...props({ tab: 'telegram' })} />);
     const tokenField = container.querySelector('#household-telegram-token') as HTMLInputElement;
     const chatField = container.querySelector('#household-telegram-chat') as HTMLInputElement;
     fireEvent.change(tokenField, { target: { value: '123456789:AAHk3f-EXAMPLE-tokenxxxxxxxxxxxxxxxxxx' } });
@@ -854,6 +915,7 @@ describe('v1.28.0 Lane 2: the "Family channels" section', () => {
     const { container } = render(
       <NotificationsClient
         {...props({
+          tab: 'events',
           household: { targets: { telegram: null, email: householdTargetFixture({ channel: 'email' }) }, eligibleEvents: eligible, prefs: {} },
         })}
       />,
@@ -866,5 +928,68 @@ describe('v1.28.0 Lane 2: the "Family channels" section', () => {
     await waitFor(() => expect(actionsModule.saveHouseholdPreferencesAction).toHaveBeenCalledTimes(1));
     const submitted = vi.mocked(actionsModule.saveHouseholdPreferencesAction).mock.calls[0]?.[1] as FormData;
     expect(submitted.get(`household-pref:${comingDue.id}:email`)).toBe('on');
+  });
+});
+
+describe('v1.29.0: four URL-driven tabs', () => {
+  it('isNotificationTab accepts exactly the four tab values and rejects anything else', () => {
+    expect(isNotificationTab('email')).toBe(true);
+    expect(isNotificationTab('telegram')).toBe(true);
+    expect(isNotificationTab('events')).toBe(true);
+    expect(isNotificationTab('deliveries')).toBe(true);
+    expect(isNotificationTab('sms')).toBe(false);
+    expect(isNotificationTab('')).toBe(false);
+    expect(isNotificationTab(undefined)).toBe(false);
+    expect(isNotificationTab(42)).toBe(false);
+  });
+
+  it('each tab renders its own distinctive heading and none of the others', () => {
+    const email = render(<NotificationsClient {...props({ tab: 'email' })} />);
+    expect(email.container.textContent).toContain('Outbound email (SMTP)');
+    expect(email.container.textContent).not.toContain('What you get told about');
+    expect(email.container.textContent).not.toContain('Recent deliveries');
+    cleanup();
+
+    const telegram = render(<NotificationsClient {...props({ tab: 'telegram' })} />);
+    expect(telegram.container.textContent).toContain('Family Telegram');
+    expect(telegram.container.textContent).not.toContain('Outbound email (SMTP)');
+    expect(telegram.container.textContent).not.toContain('What you get told about');
+    cleanup();
+
+    const events = render(<NotificationsClient {...props({ tab: 'events' })} />);
+    expect(events.container.textContent).toContain('What you get told about');
+    expect(events.container.textContent).not.toContain('Recent deliveries');
+    expect(events.container.textContent).not.toContain('Outbound email (SMTP)');
+    cleanup();
+
+    const deliveries = render(<NotificationsClient {...props({ tab: 'deliveries' })} />);
+    expect(deliveries.container.textContent).toContain('Recent deliveries');
+    expect(deliveries.container.textContent).not.toContain('What you get told about');
+    expect(deliveries.container.textContent).not.toContain('Outbound email (SMTP)');
+  });
+
+  it('the PillNav marks exactly one option aria-current="page", matching the passed tab', () => {
+    const { container } = render(<NotificationsClient {...props({ tab: 'events' })} />);
+    const current = container.querySelectorAll('nav a[aria-current="page"]');
+    expect(current).toHaveLength(1);
+    expect(current[0]?.textContent).toBe('Events');
+  });
+
+  it('the PillNav renders all four options in order, each linking to its own ?tab=', () => {
+    const { container } = render(<NotificationsClient {...props({ tab: 'email' })} />);
+    const nav = container.querySelector('nav[aria-label="Which notification settings to show"]') as HTMLElement;
+    const links = within(nav).getAllByRole('link');
+    expect(links.map((link) => link.textContent)).toEqual(['Email', 'Telegram', 'Events', 'Deliveries']);
+    expect(links.map((link) => link.getAttribute('href'))).toEqual([
+      '/settings/notifications?tab=email',
+      '/settings/notifications?tab=telegram',
+      '/settings/notifications?tab=events',
+      '/settings/notifications?tab=deliveries',
+    ]);
+  });
+
+  it('a member on the Email tab does not see the "Outbound email (SMTP)" heading', () => {
+    const { container } = render(<NotificationsClient {...props({ role: 'member', tab: 'email' })} />);
+    expect(container.textContent).not.toContain('Outbound email (SMTP)');
   });
 });

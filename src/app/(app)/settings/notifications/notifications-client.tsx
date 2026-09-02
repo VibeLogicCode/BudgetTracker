@@ -7,6 +7,7 @@ import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { AlertIcon, ClockIcon, ConfirmIcon, type IconComponent } from '@/components/ui/icons';
 import { Notice } from '@/components/ui/Notice';
+import { PillNav } from '@/components/ui/PillNav';
 import { RowDialog } from '@/components/ui/RowDialog';
 import { TableWrap } from '@/components/ui/Table';
 import { Field, hintClass, inputClass, selectClass } from '@/components/ui/form';
@@ -41,8 +42,45 @@ import {
 } from './actions';
 import { EmailGuide, GuidePanel, TelegramGuide } from './guides';
 
+/**
+ * v1.29.0 (notifications page restructure). Six long cards on one scroll became four short
+ * URL-driven pages instead of four `useState`-driven panels, for the same reason nothing else
+ * in this app switches views with client state: this app has no client-side router, on
+ * purpose, so a "tab" that lives only in React state is not a URL -- it cannot be bookmarked,
+ * cannot be linked to from elsewhere on the page (see the Recent deliveries empty state
+ * below), and the back button does not undo it. PillNav's own docblock makes the identical
+ * argument for why it renders `aria-current="page"` rather than `"true"`: that attribute is
+ * only honest when each option genuinely IS a distinct page, which is exactly what a
+ * `?tab=` link is and a panel toggle is not. Reusing PillNav completely unchanged -- rather
+ * than reaching for a second, ARIA-`tablist`-flavoured widget -- is what keeps that argument
+ * true here instead of merely quotable; see the deliberate absence of `role="tablist"` below
+ * for the other half of that same reasoning.
+ *
+ * `isNotificationTab` exists because `?tab=` arrives as arbitrary user-suppliable text, not a
+ * typed value: page.tsx's searchParams read follows the exact fallback-on-malformed-input
+ * idiom dashboard/page.tsx already uses for `?month=` -- a missing or garbage tab name is a
+ * reason to show the default tab, never a reason to throw.
+ */
+export type NotificationTab = 'email' | 'telegram' | 'events' | 'deliveries';
+
+export const NOTIFICATION_TABS: readonly NotificationTab[] = ['email', 'telegram', 'events', 'deliveries'];
+
+export function isNotificationTab(value: unknown): value is NotificationTab {
+  return typeof value === 'string' && (NOTIFICATION_TABS as readonly string[]).includes(value);
+}
+
+const TAB_LABEL: Record<NotificationTab, string> = {
+  email: 'Email',
+  telegram: 'Telegram',
+  events: 'Events',
+  deliveries: 'Deliveries',
+};
+
 export interface NotificationsPageData {
   role: 'admin' | 'member';
+  /** Which of the four URL-driven sections is active -- see NotificationTab's own docblock
+   *  just above. Read from `?tab=` by page.tsx, defaulting to `'email'`. */
+  tab: NotificationTab;
   /** Admins only: a member never receives the relay record (§11.3). */
   smtp: SmtpRecord | null;
   /** Everyone: whether an enabled relay exists, so a member's email card explains itself. */
@@ -174,70 +212,90 @@ function SmtpFields({
     <>
       {smtpState.error ? <Notice tone="error">{smtpState.error}</Notice> : null}
       {smtpState.message ? <Notice tone="success">{smtpState.message}</Notice> : null}
+      {/*
+        v1.29.0: eight-plus full-width fields (the worst offender a 3-character Port input
+        stretched the width of the container) become four paired rows -- the same `grid gap-4
+        sm:grid-cols-2` idiom this codebase already uses for a field pair (users-manager.tsx's
+        "Add a user" card, settings/page.tsx's admin link grid, and this very file's routing
+        table wrapper), not a new layout system. Encryption pairs with Preset rather than
+        sitting alone on its own row: it has no natural partner among the remaining fields
+        (Server/Port and Username/Password and From address/From name are each already a
+        matched pair), and a lone full-width row would waste exactly the space this change
+        exists to reclaim. Below `sm` every pair stacks back to one field per row, which is
+        correct for a phone-width form.
+      */}
       <form action={saveSmtp} className="flex flex-col gap-4">
-        <Field label="Preset" htmlFor="smtp-preset">
-          <select
-            id="smtp-preset"
-            name="preset"
-            className={selectClass}
-            value={preset}
-            onChange={(event) => choosePreset(event.target.value as SmtpPreset)}
-          >
-            <option value="brevo">Brevo</option>
-            <option value="smtp2go">SMTP2GO</option>
-            <option value="gmail">Gmail</option>
-            <option value="custom">Custom SMTP</option>
-          </select>
-        </Field>
-        <Field label="Server" htmlFor="smtp-host">
-          <input id="smtp-host" name="host" className={inputClass} value={host} onChange={(e) => setHost(e.target.value)} />
-        </Field>
-        <Field label="Port" htmlFor="smtp-port">
-          <input id="smtp-port" name="port" inputMode="numeric" className={inputClass} value={port} onChange={(e) => setPort(e.target.value)} />
-        </Field>
-        <Field label="Encryption" htmlFor="smtp-security">
-          <select
-            id="smtp-security"
-            name="security"
-            className={selectClass}
-            value={security}
-            onChange={(e) => setSecurity(e.target.value as typeof security)}
-          >
-            <option value="starttls">STARTTLS</option>
-            <option value="tls">TLS</option>
-            <option value="none">None</option>
-          </select>
-        </Field>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Preset" htmlFor="smtp-preset">
+            <select
+              id="smtp-preset"
+              name="preset"
+              className={selectClass}
+              value={preset}
+              onChange={(event) => choosePreset(event.target.value as SmtpPreset)}
+            >
+              <option value="brevo">Brevo</option>
+              <option value="smtp2go">SMTP2GO</option>
+              <option value="gmail">Gmail</option>
+              <option value="custom">Custom SMTP</option>
+            </select>
+          </Field>
+          <Field label="Encryption" htmlFor="smtp-security">
+            <select
+              id="smtp-security"
+              name="security"
+              className={selectClass}
+              value={security}
+              onChange={(e) => setSecurity(e.target.value as typeof security)}
+            >
+              <option value="starttls">STARTTLS</option>
+              <option value="tls">TLS</option>
+              <option value="none">None</option>
+            </select>
+          </Field>
+        </div>
         {/* MUST-8.16 */}
         {security === 'none' ? (
           <Notice tone="warning">
             Credentials and message contents will cross the network unencrypted. Only use this for a relay on your own LAN.
           </Notice>
         ) : null}
-        <Field label="Username" htmlFor="smtp-username">
-          <input id="smtp-username" name="username" className={inputClass} defaultValue={smtp?.username ?? ''} />
-        </Field>
-        <Field
-          label="Password"
-          htmlFor="smtp-password"
-          hint={smtp?.passwordSet ? 'Leave blank to keep the saved password.' : undefined}
-        >
-          <input
-            id="smtp-password"
-            name="password"
-            type="password"
-            autoComplete="new-password"
-            className={inputClass}
-            placeholder={smtp?.passwordSet ? PASSWORD_PLACEHOLDER : ''}
-            defaultValue=""
-          />
-        </Field>
-        <Field label="From address" htmlFor="smtp-from">
-          <input id="smtp-from" name="fromEmail" className={inputClass} defaultValue={smtp?.fromEmail ?? ''} />
-        </Field>
-        <Field label="From name" htmlFor="smtp-from-name">
-          <input id="smtp-from-name" name="fromName" className={inputClass} defaultValue={smtp?.fromName ?? 'Budget Tracker'} />
-        </Field>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Server" htmlFor="smtp-host">
+            <input id="smtp-host" name="host" className={inputClass} value={host} onChange={(e) => setHost(e.target.value)} />
+          </Field>
+          <Field label="Port" htmlFor="smtp-port">
+            <input id="smtp-port" name="port" inputMode="numeric" className={inputClass} value={port} onChange={(e) => setPort(e.target.value)} />
+          </Field>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Username" htmlFor="smtp-username">
+            <input id="smtp-username" name="username" className={inputClass} defaultValue={smtp?.username ?? ''} />
+          </Field>
+          <Field
+            label="Password"
+            htmlFor="smtp-password"
+            hint={smtp?.passwordSet ? 'Leave blank to keep the saved password.' : undefined}
+          >
+            <input
+              id="smtp-password"
+              name="password"
+              type="password"
+              autoComplete="new-password"
+              className={inputClass}
+              placeholder={smtp?.passwordSet ? PASSWORD_PLACEHOLDER : ''}
+              defaultValue=""
+            />
+          </Field>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="From address" htmlFor="smtp-from">
+            <input id="smtp-from" name="fromEmail" className={inputClass} defaultValue={smtp?.fromEmail ?? ''} />
+          </Field>
+          <Field label="From name" htmlFor="smtp-from-name">
+            <input id="smtp-from-name" name="fromName" className={inputClass} defaultValue={smtp?.fromName ?? 'Budget Tracker'} />
+          </Field>
+        </div>
         <label className="flex items-center gap-2 text-sm text-ink">
           <input type="checkbox" name="enabled" defaultChecked={smtp?.enabled ?? true} />
           Enabled
@@ -824,224 +882,121 @@ export function NotificationsClient(data: NotificationsPageData) {
         </Notice>
       ))}
 
-      {/* §11.3: admins only. A member never sees this card at all. */}
-      {data.role === 'admin' ? (
-        <Card>
-          <CardHeader title="Outbound email (SMTP)" description="One relay for the whole household." />
-          <CardBody className="flex flex-col gap-4">
-            {/* Review fix (LOW): keyed so a Remove (data.smtp -> null) or a first Save
-                (null -> a record) remounts this subtree instead of leaving stale local state
-                (host/port/security/preset) showing the deleted relay's values. */}
-            <SmtpFields
-              key={data.smtp ? 'set' : 'unset'}
-              smtp={data.smtp}
-              presets={data.presets}
-              smtpState={smtpState}
-              saveSmtp={saveSmtp}
-              runSmtpTest={runSmtpTest}
-              runSmtpRemove={runSmtpRemove}
-              smtpTestState={smtpTestState}
-              smtpRemoveState={smtpRemoveState}
-            />
-          </CardBody>
-        </Card>
-      ) : null}
+      <PillNav
+        groupLabel="Which notification settings to show"
+        options={NOTIFICATION_TABS.map((key) => ({
+          key,
+          href: `/settings/notifications?tab=${key}`,
+          label: TAB_LABEL[key],
+          active: data.tab === key,
+        }))}
+      />
 
-      {/* §11.4: everyone. Two sub-cards; each shows its own last_error, last_success_at,
-          and an Unverified badge until verified_at is set. */}
-      <div id="telegram-channel">
-      <Card>
-        <CardHeader title="Telegram" description="Your own bot, messaging your own chat." />
-        <CardBody className="flex flex-col gap-4">
-          {/* Review fix (LOW): same remount-on-Remove/Save reasoning as SmtpFields above. */}
-          <TelegramFields
-            key={data.targets.telegram ? 'set' : 'unset'}
-            telegram={data.targets.telegram}
-            telegramState={telegramState}
-            saveTelegram={saveTelegram}
-            runTelegramTest={runTelegramTest}
-            runTelegramRemove={runTelegramRemove}
-            telegramTestState={telegramTestState}
-            telegramRemoveState={telegramRemoveState}
-          />
-        </CardBody>
-      </Card>
-      </div>
-
-      <Card>
-        <CardHeader title="Email" description="Where the household relay sends your messages." />
-        <CardBody className="flex flex-col gap-4">
-          {emailState.error ? <Notice tone="error">{emailState.error}</Notice> : null}
-          {emailState.message ? <Notice tone="success">{emailState.message}</Notice> : null}
-          {data.targets.email && data.targets.email.verifiedAt === null ? (
-            <p className={hintClass}>Unverified — press Send test email to prove it works.</p>
-          ) : null}
-          {data.targets.email?.lastError ? (
-            <Notice tone="error">
-              {data.targets.email.lastError} ({data.targets.email.lastErrorAt ? formatStamp(data.targets.email.lastErrorAt) : data.targets.email.lastErrorAt})
-            </Notice>
-          ) : null}
-          {data.targets.email?.lastSuccessAt ? (
-            <p className={hintClass}>Last successful send: {formatStamp(data.targets.email.lastSuccessAt)}</p>
-          ) : null}
-
-          <form action={saveEmail} className="flex flex-col gap-4">
-            <Field label="Email address" htmlFor="email-destination">
-              <input
-                id="email-destination"
-                name="destination"
-                type="email"
-                className={inputClass}
-                defaultValue={data.targets.email?.destination ?? ''}
-              />
-            </Field>
-            <label className="flex items-center gap-2 text-sm text-ink">
-              <input type="checkbox" name="enabled" defaultChecked={data.targets.email?.enabled ?? true} />
-              Enabled
-            </label>
-            <div>
-              <SubmitButton>Save</SubmitButton>
-            </div>
-          </form>
-
-          {/* §11.3: where a member's email channel is unusable for want of a relay. */}
-          {data.relayConfigured ? (
-            <div className="flex flex-wrap gap-2">
-              <form action={runEmailTest}>
-                <input type="hidden" name="channel" value="email" />
-                <SubmitButton variant="secondary" disabled={!data.targets.email}>
-                  Send test email
-                </SubmitButton>
-              </form>
-              {data.targets.email ? (
-                <form action={runEmailRemove}>
-                  <input type="hidden" name="channel" value="email" />
-                  <SubmitButton variant="danger">Remove</SubmitButton>
-                </form>
-              ) : null}
-            </div>
-          ) : (
-            <Notice tone="info">{NO_RELAY}</Notice>
-          )}
-          {emailTestState.error ? <Notice tone="error">{emailTestState.error}</Notice> : null}
-          {emailTestState.message ? <Notice tone="success">{emailTestState.message}</Notice> : null}
-          {emailRemoveState.message ? <Notice tone="success">{emailRemoveState.message}</Notice> : null}
-        </CardBody>
-      </Card>
-
-      {/* §11.5: the matrix, generated from data.events. NO event is named in JSX. */}
-      <Card>
-        <CardHeader title="What you get told about" description="Per event, per channel." />
-        <CardBody className="flex flex-col gap-4">
-          {prefsState.error ? <Notice tone="error">{prefsState.error}</Notice> : null}
-          {prefsState.message ? <Notice tone="success">{prefsState.message}</Notice> : null}
-          <form action={savePrefs} className="flex flex-col gap-4">
-            <TableWrap responsive>
-              <thead>
-                <tr>
-                  <th className="text-left">Event</th>
-                  <th>Telegram</th>
-                  <th>Email</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.events.map((event) => (
-                  <tr key={event.id}>
-                    {/* v1.15.0 (responsive rows): the event name is what tells one row from
-                        another in this matrix, so it is the phone card's headline. No
-                        cell-stack-amount: nothing on this row is money. */}
-                    <td className="text-left cell-stack-headline" data-label="Event">
-                      <span className="font-semibold text-ink">{event.label}</span>
-                      <span className="block text-muted">{event.blurb}</span>
-                    </td>
-                    {CHANNELS.map((channel) => {
-                      const configured = data.targets[channel]?.enabled ?? false;
-                      return (
-                        <td key={channel} className="text-center" data-label={channel === 'telegram' ? 'Telegram' : 'Email'}>
-                          <input
-                            type="checkbox"
-                            name={`pref:${event.id}:${channel}`}
-                            defaultChecked={data.prefs[`${event.id}:${channel}`] ?? event.defaultEnabled}
-                            disabled={!configured}
-                            title={configured ? undefined : NO_CHANNEL_TOOLTIP}
-                            aria-label={`${event.label} on ${channel}`}
-                          />
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </TableWrap>
-            <p className="text-sm text-muted">{PRIVACY_SENTENCE}</p>
-            <p className={hintClass}>{BACKUP_SENTENCE}</p>
-            {/* The five knobs, each with its default in the hint text. */}
-            <Field label="Days before a due date to warn" htmlFor="comingDueDays" hint="Default 14.">
-              <input id="comingDueDays" name="comingDueDays" inputMode="numeric" className={inputClass} defaultValue={String(data.settings.comingDueDays)} />
-            </Field>
-            <Field label="Budget warning threshold (%)" htmlFor="budgetThresholdPct" hint="Default 80. 100 is the separate over-budget alert.">
-              <input id="budgetThresholdPct" name="budgetThresholdPct" inputMode="numeric" className={inputClass} defaultValue={String(data.settings.budgetThresholdPct)} />
-            </Field>
-            <Field label="Weeks without an import before nagging" htmlFor="staleImportWeeks" hint="Default 3.">
-              <input id="staleImportWeeks" name="staleImportWeeks" inputMode="numeric" className={inputClass} defaultValue={String(data.settings.staleImportWeeks)} />
-            </Field>
-            <Field label="Daily message hour" htmlFor="dailyHour" hint="Default 8 (24-hour clock).">
-              <input id="dailyHour" name="dailyHour" inputMode="numeric" className={inputClass} defaultValue={String(data.settings.dailyHour)} />
-            </Field>
-            <Field label="Weekly summary day" htmlFor="digestWeekday" hint="Default Monday.">
-              <select id="digestWeekday" name="digestWeekday" className={selectClass} defaultValue={String(data.settings.digestWeekday)}>
-                {['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((day, index) => (
-                  <option key={day} value={String(index)}>
-                    {day}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Weekly summary hour" htmlFor="digestHour" hint="Default 8 (24-hour clock).">
-              <input id="digestHour" name="digestHour" inputMode="numeric" className={inputClass} defaultValue={String(data.settings.digestHour)} />
-            </Field>
-            <div>
-              <SubmitButton>Save</SubmitButton>
-            </div>
-          </form>
-        </CardBody>
-      </Card>
-
-      {/*
-        v1.28.0 Lane 2: family channels. Admin-only controls; a member sees a read-only
-        statement instead of nothing, because a member whose personal digest just stopped
-        arriving deserves to know why, and "why" is exactly what an admin's own routing
-        choice already knows. Nothing renders for a member when nothing is routed away from
-        them -- an always-present "nothing is routed" card would be the zero-state this
-        codebase's design language asks to avoid; a member only ever sees this card once an
-        admin's choice actually affects their own notifications. Placed AFTER the personal
-        matrix above (rather than beside the other two personal channel cards) so the
-        existing "the preference matrix is the FIRST table on the page" tests keep meaning
-        the personal one -- this section's own routing matrix is a second, later table.
-      */}
-      {data.role === 'admin' ? (
-        <Card>
-          <CardHeader
-            title="Family channels"
-            description="One Telegram chat and one email address for the whole household, set by an admin."
-          />
-          <CardBody className="flex flex-col gap-5">
-            <div className="grid gap-5 sm:grid-cols-2">
-              <div className="flex flex-col gap-4">
-                <h3 className="text-sm font-semibold text-ink">Family Telegram</h3>
-                <HouseholdTelegramFields
-                  key={data.household.targets?.telegram ? 'set' : 'unset'}
-                  telegram={data.household.targets?.telegram ?? null}
-                  telegramState={householdTelegramState}
-                  saveTelegram={saveHouseholdTelegram}
-                  runTelegramTest={runHouseholdTelegramTest}
-                  telegramTestState={householdTelegramTestState}
-                  onRemove={() => setRemovingHouseholdChannel('telegram')}
-                  suggestedDestination={data.targets.telegram?.destination || undefined}
+      {data.tab === 'email' ? (
+        <>
+          {/* §11.3: admins only. A member never sees this card at all. */}
+          {data.role === 'admin' ? (
+            <Card>
+              <CardHeader title="Outbound email (SMTP)" description="One relay for the whole household." />
+              <CardBody className="flex flex-col gap-4">
+                {/* Review fix (LOW): keyed so a Remove (data.smtp -> null) or a first Save
+                    (null -> a record) remounts this subtree instead of leaving stale local state
+                    (host/port/security/preset) showing the deleted relay's values. */}
+                <SmtpFields
+                  key={data.smtp ? 'set' : 'unset'}
+                  smtp={data.smtp}
+                  presets={data.presets}
+                  smtpState={smtpState}
+                  saveSmtp={saveSmtp}
+                  runSmtpTest={runSmtpTest}
+                  runSmtpRemove={runSmtpRemove}
+                  smtpTestState={smtpTestState}
+                  smtpRemoveState={smtpRemoveState}
                 />
-              </div>
-              <div className="flex flex-col gap-4">
-                <h3 className="text-sm font-semibold text-ink">Family email</h3>
+              </CardBody>
+            </Card>
+          ) : null}
+
+          <Card>
+            <CardHeader title="Email" description="Where the household relay sends your messages." />
+            <CardBody className="flex flex-col gap-4">
+              {emailState.error ? <Notice tone="error">{emailState.error}</Notice> : null}
+              {emailState.message ? <Notice tone="success">{emailState.message}</Notice> : null}
+              {data.targets.email && data.targets.email.verifiedAt === null ? (
+                <p className={hintClass}>Unverified — press Send test email to prove it works.</p>
+              ) : null}
+              {data.targets.email?.lastError ? (
+                <Notice tone="error">
+                  {data.targets.email.lastError} ({data.targets.email.lastErrorAt ? formatStamp(data.targets.email.lastErrorAt) : data.targets.email.lastErrorAt})
+                </Notice>
+              ) : null}
+              {data.targets.email?.lastSuccessAt ? (
+                <p className={hintClass}>Last successful send: {formatStamp(data.targets.email.lastSuccessAt)}</p>
+              ) : null}
+
+              <form action={saveEmail} className="flex flex-col gap-4">
+                <Field label="Email address" htmlFor="email-destination">
+                  <input
+                    id="email-destination"
+                    name="destination"
+                    type="email"
+                    className={inputClass}
+                    defaultValue={data.targets.email?.destination ?? ''}
+                  />
+                </Field>
+                <label className="flex items-center gap-2 text-sm text-ink">
+                  <input type="checkbox" name="enabled" defaultChecked={data.targets.email?.enabled ?? true} />
+                  Enabled
+                </label>
+                <div>
+                  <SubmitButton>Save</SubmitButton>
+                </div>
+              </form>
+
+              {/* §11.3: where a member's email channel is unusable for want of a relay. */}
+              {data.relayConfigured ? (
+                <div className="flex flex-wrap gap-2">
+                  <form action={runEmailTest}>
+                    <input type="hidden" name="channel" value="email" />
+                    <SubmitButton variant="secondary" disabled={!data.targets.email}>
+                      Send test email
+                    </SubmitButton>
+                  </form>
+                  {data.targets.email ? (
+                    <form action={runEmailRemove}>
+                      <input type="hidden" name="channel" value="email" />
+                      <SubmitButton variant="danger">Remove</SubmitButton>
+                    </form>
+                  ) : null}
+                </div>
+              ) : (
+                <Notice tone="info">{NO_RELAY}</Notice>
+              )}
+              {emailTestState.error ? <Notice tone="error">{emailTestState.error}</Notice> : null}
+              {emailTestState.message ? <Notice tone="success">{emailTestState.message}</Notice> : null}
+              {emailRemoveState.message ? <Notice tone="success">{emailRemoveState.message}</Notice> : null}
+            </CardBody>
+          </Card>
+
+          {/*
+            v1.28.0 Lane 2 / v1.29.0 split: the family EMAIL half of what used to be one
+            "Family channels" card sharing all three sub-sections. Splitting it three ways
+            (this file's other two halves are the Family Telegram card on the Telegram tab and
+            the routing-matrix card on the Events tab) is what the page-length problem actually
+            was: one card answering three different questions ("where do MY messages go",
+            "where does the household's email go", "which events get routed away from me") is
+            why this page was too long to scan in the first place, not a formatting issue a
+            grid could fix. Each question now lives beside the other cards that answer the
+            same one. Admin-only controls; a member sees the SAME unified read-only summary as
+            before (naming both channels together, not split three ways) below, because it is
+            one statement of fact about what already happened to their notifications, not a
+            control surface -- splitting a sentence nobody can act on would not make it easier
+            to find.
+          */}
+          {data.role === 'admin' ? (
+            <Card>
+              <CardHeader title="Family email" description="One address for the whole household." />
+              <CardBody className="flex flex-col gap-4">
                 <HouseholdEmailFields
                   key={data.household.targets?.email ? 'set' : 'unset'}
                   email={data.household.targets?.email ?? null}
@@ -1052,15 +1007,179 @@ export function NotificationsClient(data: NotificationsPageData) {
                   relayConfigured={data.relayConfigured}
                   onRemove={() => setRemovingHouseholdChannel('email')}
                 />
-              </div>
-            </div>
+              </CardBody>
+            </Card>
+          ) : (
+            (() => {
+              const routedTelegram = routedToHousehold('telegram');
+              const routedEmail = routedToHousehold('email');
+              if (routedTelegram.length === 0 && routedEmail.length === 0) return null;
+              return (
+                <Card>
+                  <CardHeader title="Family channel" description="Set up by an admin, for the whole household." />
+                  <CardBody className="flex flex-col gap-2">
+                    <p className="text-sm text-ink">{HOUSEHOLD_INSTEAD_OF_SENTENCE}</p>
+                    {routedTelegram.length > 0 ? (
+                      <p className="text-sm text-muted">
+                        On Telegram: {routedTelegram.map((event) => event.label).join(', ')} — sent to the family chat instead of to you.
+                      </p>
+                    ) : null}
+                    {routedEmail.length > 0 ? (
+                      <p className="text-sm text-muted">
+                        By email: {routedEmail.map((event) => event.label).join(', ')} — sent to the family address instead of to you.
+                      </p>
+                    ) : null}
+                  </CardBody>
+                </Card>
+              );
+            })()
+          )}
+        </>
+      ) : null}
 
-            {/* Decision 2: per eligible event, per channel, an admin picks whether it routes
-                to the family channel. householdEligibleEvents() already excludes security and
-                operational events -- nothing here decides that a second time. */}
-            {data.household.eligibleEvents.length > 0 ? (
-              <div className="flex flex-col gap-3 border-t border-line pt-5">
-                <h3 className="text-sm font-semibold text-ink">Route to the family channel</h3>
+      {data.tab === 'telegram' ? (
+        <>
+          {/* §11.4: everyone. Two sub-cards; each shows its own last_error, last_success_at,
+              and an Unverified badge until verified_at is set. */}
+          <div id="telegram-channel">
+          <Card>
+            <CardHeader title="Telegram" description="Your own bot, messaging your own chat." />
+            <CardBody className="flex flex-col gap-4">
+              {/* Review fix (LOW): same remount-on-Remove/Save reasoning as SmtpFields above. */}
+              <TelegramFields
+                key={data.targets.telegram ? 'set' : 'unset'}
+                telegram={data.targets.telegram}
+                telegramState={telegramState}
+                saveTelegram={saveTelegram}
+                runTelegramTest={runTelegramTest}
+                runTelegramRemove={runTelegramRemove}
+                telegramTestState={telegramTestState}
+                telegramRemoveState={telegramRemoveState}
+              />
+            </CardBody>
+          </Card>
+          </div>
+
+          {/* v1.28.0 Lane 2 / v1.29.0 split: the family TELEGRAM half -- see the docblock
+              beside the Family email card on the Email tab for why this used to share a card
+              with that one and no longer does. */}
+          {data.role === 'admin' ? (
+            <Card>
+              <CardHeader title="Family Telegram" description="One chat for the whole household." />
+              <CardBody className="flex flex-col gap-4">
+                <HouseholdTelegramFields
+                  key={data.household.targets?.telegram ? 'set' : 'unset'}
+                  telegram={data.household.targets?.telegram ?? null}
+                  telegramState={householdTelegramState}
+                  saveTelegram={saveHouseholdTelegram}
+                  runTelegramTest={runHouseholdTelegramTest}
+                  telegramTestState={householdTelegramTestState}
+                  onRemove={() => setRemovingHouseholdChannel('telegram')}
+                  suggestedDestination={data.targets.telegram?.destination || undefined}
+                />
+              </CardBody>
+            </Card>
+          ) : null}
+        </>
+      ) : null}
+
+      {data.tab === 'events' ? (
+        <>
+          {/* §11.5: the matrix, generated from data.events. NO event is named in JSX. */}
+          <Card>
+            <CardHeader title="What you get told about" description="Per event, per channel." />
+            <CardBody className="flex flex-col gap-4">
+              {prefsState.error ? <Notice tone="error">{prefsState.error}</Notice> : null}
+              {prefsState.message ? <Notice tone="success">{prefsState.message}</Notice> : null}
+              <form action={savePrefs} className="flex flex-col gap-4">
+                <TableWrap responsive>
+                  <thead>
+                    <tr>
+                      <th className="text-left">Event</th>
+                      <th>Telegram</th>
+                      <th>Email</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.events.map((event) => (
+                      <tr key={event.id}>
+                        {/* v1.15.0 (responsive rows): the event name is what tells one row from
+                            another in this matrix, so it is the phone card's headline. No
+                            cell-stack-amount: nothing on this row is money. */}
+                        <td className="text-left cell-stack-headline" data-label="Event">
+                          <span className="font-semibold text-ink">{event.label}</span>
+                          <span className="block text-muted">{event.blurb}</span>
+                        </td>
+                        {CHANNELS.map((channel) => {
+                          const configured = data.targets[channel]?.enabled ?? false;
+                          return (
+                            <td key={channel} className="text-center" data-label={channel === 'telegram' ? 'Telegram' : 'Email'}>
+                              <input
+                                type="checkbox"
+                                name={`pref:${event.id}:${channel}`}
+                                defaultChecked={data.prefs[`${event.id}:${channel}`] ?? event.defaultEnabled}
+                                disabled={!configured}
+                                title={configured ? undefined : NO_CHANNEL_TOOLTIP}
+                                aria-label={`${event.label} on ${channel}`}
+                              />
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </TableWrap>
+                <p className="text-sm text-muted">{PRIVACY_SENTENCE}</p>
+                <p className={hintClass}>{BACKUP_SENTENCE}</p>
+                {/* The five knobs, each with its default in the hint text. */}
+                <Field label="Days before a due date to warn" htmlFor="comingDueDays" hint="Default 14.">
+                  <input id="comingDueDays" name="comingDueDays" inputMode="numeric" className={inputClass} defaultValue={String(data.settings.comingDueDays)} />
+                </Field>
+                <Field label="Budget warning threshold (%)" htmlFor="budgetThresholdPct" hint="Default 80. 100 is the separate over-budget alert.">
+                  <input id="budgetThresholdPct" name="budgetThresholdPct" inputMode="numeric" className={inputClass} defaultValue={String(data.settings.budgetThresholdPct)} />
+                </Field>
+                <Field label="Weeks without an import before nagging" htmlFor="staleImportWeeks" hint="Default 3.">
+                  <input id="staleImportWeeks" name="staleImportWeeks" inputMode="numeric" className={inputClass} defaultValue={String(data.settings.staleImportWeeks)} />
+                </Field>
+                <Field label="Daily message hour" htmlFor="dailyHour" hint="Default 8 (24-hour clock).">
+                  <input id="dailyHour" name="dailyHour" inputMode="numeric" className={inputClass} defaultValue={String(data.settings.dailyHour)} />
+                </Field>
+                <Field label="Weekly summary day" htmlFor="digestWeekday" hint="Default Monday.">
+                  <select id="digestWeekday" name="digestWeekday" className={selectClass} defaultValue={String(data.settings.digestWeekday)}>
+                    {['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((day, index) => (
+                      <option key={day} value={String(index)}>
+                        {day}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Weekly summary hour" htmlFor="digestHour" hint="Default 8 (24-hour clock).">
+                  <input id="digestHour" name="digestHour" inputMode="numeric" className={inputClass} defaultValue={String(data.settings.digestHour)} />
+                </Field>
+                <div>
+                  <SubmitButton>Save</SubmitButton>
+                </div>
+              </form>
+            </CardBody>
+          </Card>
+
+          {/*
+            v1.28.0 Lane 2 / v1.29.0 split: the ROUTING half of what used to be one "Family
+            channels" card -- see the docblock beside the Family email card on the Email tab
+            for why it no longer shares a card with the two target halves. Admin-only; a
+            member's read-only equivalent lives on the Email tab (that card's own docblock
+            says why it is not, itself, split three ways). Nothing renders here at all when
+            householdEligibleEvents() is empty -- there is no routing control without an
+            eligible event to route, and an always-present empty card would be the zero-state
+            this codebase's design language asks to avoid.
+          */}
+          {data.role === 'admin' && data.household.eligibleEvents.length > 0 ? (
+            <Card>
+              <CardHeader
+                title="Route to the family channel"
+                description="A routed event goes to the family channel instead of to you."
+              />
+              <CardBody className="flex flex-col gap-4">
                 {householdPrefsState.error ? <Notice tone="error">{householdPrefsState.error}</Notice> : null}
                 {householdPrefsState.message ? <Notice tone="success">{householdPrefsState.message}</Notice> : null}
                 <form action={saveHouseholdPrefs} className="flex flex-col gap-4">
@@ -1104,86 +1223,67 @@ export function NotificationsClient(data: NotificationsPageData) {
                     <SubmitButton>Save routing</SubmitButton>
                   </div>
                 </form>
-              </div>
-            ) : null}
-          </CardBody>
-        </Card>
-      ) : (
-        (() => {
-          const routedTelegram = routedToHousehold('telegram');
-          const routedEmail = routedToHousehold('email');
-          if (routedTelegram.length === 0 && routedEmail.length === 0) return null;
-          return (
-            <Card>
-              <CardHeader title="Family channel" description="Set up by an admin, for the whole household." />
-              <CardBody className="flex flex-col gap-2">
-                <p className="text-sm text-ink">{HOUSEHOLD_INSTEAD_OF_SENTENCE}</p>
-                {routedTelegram.length > 0 ? (
-                  <p className="text-sm text-muted">
-                    On Telegram: {routedTelegram.map((event) => event.label).join(', ')} — sent to the family chat instead of to you.
-                  </p>
-                ) : null}
-                {routedEmail.length > 0 ? (
-                  <p className="text-sm text-muted">
-                    By email: {routedEmail.map((event) => event.label).join(', ')} — sent to the family address instead of to you.
-                  </p>
-                ) : null}
               </CardBody>
             </Card>
-          );
-        })()
-      )}
-      {householdRemoveDialog()}
+          ) : null}
+        </>
+      ) : null}
 
-      {/* §11.6: read-only. No retry button: the pump owns retries. */}
-      <Card>
-        <CardHeader title="Recent deliveries" description="The last twenty messages this app tried to send." />
-        {data.deliveries.length === 0 ? (
-          <EmptyState
-            icon={BellIcon}
-            title="Nothing sent yet."
-            action={
-              <a href="#telegram-channel" className="btn btn--primary btn--sm">
-                Set up a channel
-              </a>
-            }
-          >
-            Deliveries appear here once a channel is set up and an event fires.
-          </EmptyState>
-        ) : (
-          <CardBody>
-            <TableWrap responsive>
-              <thead>
-                <tr>
-                  <th className="text-left">When</th>
-                  {data.role === 'admin' ? <th className="text-left">Who</th> : null}
-                  <th className="text-left">Event</th>
-                  <th className="text-left">Channel</th>
-                  <th className="text-left">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.deliveries.map((row) => (
-                  <tr key={row.id}>
-                    <td data-label="When">{formatStamp(row.sentAt ?? row.createdAt)}</td>
-                    {data.role === 'admin' ? <td data-label="Who">{row.userName}</td> : null}
-                    {/* v1.15.0 (responsive rows): the event is what tells one delivery from
-                        another -- When is nearly as specific, but the event is the thing a
-                        person is actually looking for in this log -- so it is the headline. No
-                        cell-stack-amount: a delivery carries no money of its own. */}
-                    <td className="cell-stack-headline" data-label="Event">{eventDef(row.eventId)?.label ?? row.eventId}</td>
-                    <td data-label="Channel">{row.channel}</td>
-                    <td data-label="Status">
-                      <DeliveryStatusBadge status={row.status} />
-                      {row.lastError ? <span className="block text-muted">{row.lastError}</span> : null}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </TableWrap>
-          </CardBody>
-        )}
-      </Card>
+      {data.tab === 'deliveries' ? (
+        <>
+          {/* §11.6: read-only. No retry button: the pump owns retries. */}
+          <Card>
+            <CardHeader title="Recent deliveries" description="The last twenty messages this app tried to send." />
+            {data.deliveries.length === 0 ? (
+              <EmptyState
+                icon={BellIcon}
+                title="Nothing sent yet."
+                action={
+                  <a href="/settings/notifications?tab=telegram#telegram-channel" className="btn btn--primary btn--sm">
+                    Set up a channel
+                  </a>
+                }
+              >
+                Deliveries appear here once a channel is set up and an event fires.
+              </EmptyState>
+            ) : (
+              <CardBody>
+                <TableWrap responsive>
+                  <thead>
+                    <tr>
+                      <th className="text-left">When</th>
+                      {data.role === 'admin' ? <th className="text-left">Who</th> : null}
+                      <th className="text-left">Event</th>
+                      <th className="text-left">Channel</th>
+                      <th className="text-left">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.deliveries.map((row) => (
+                      <tr key={row.id}>
+                        <td data-label="When">{formatStamp(row.sentAt ?? row.createdAt)}</td>
+                        {data.role === 'admin' ? <td data-label="Who">{row.userName}</td> : null}
+                        {/* v1.15.0 (responsive rows): the event is what tells one delivery from
+                            another -- When is nearly as specific, but the event is the thing a
+                            person is actually looking for in this log -- so it is the headline. No
+                            cell-stack-amount: a delivery carries no money of its own. */}
+                        <td className="cell-stack-headline" data-label="Event">{eventDef(row.eventId)?.label ?? row.eventId}</td>
+                        <td data-label="Channel">{row.channel}</td>
+                        <td data-label="Status">
+                          <DeliveryStatusBadge status={row.status} />
+                          {row.lastError ? <span className="block text-muted">{row.lastError}</span> : null}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </TableWrap>
+              </CardBody>
+            )}
+          </Card>
+        </>
+      ) : null}
+
+      {householdRemoveDialog()}
     </div>
   );
 }
