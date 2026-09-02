@@ -256,6 +256,44 @@ export function cashflowTrend(
   });
 }
 
+/**
+ * v1.21.0 plan, item 5, defect 1. `cashflowTrend` seeds every month key in its requested range
+ * with 0 by contract (above) -- it has no way to tell "the household earned $0 and spent $0 this
+ * month" apart from "this month is before the household's first transaction", so it does not try;
+ * that is this function's job instead. Ten such months, on a household a few weeks old, used to
+ * squeeze one real month of data into the last few percent of a 12-wide chart.
+ *
+ * Trims only the LEADING run of zero-both months, never an interior or trailing one: once real
+ * history has started, a later genuinely-quiet month is indistinguishable from "no data" by this
+ * same test, and only the former is the defect being fixed here -- a real zero month stays on the
+ * chart. Every dropped row would have plotted a flat, informationless baseline bar anyway (income
+ * 0, spend 0, so net 0 too), so the cumulative-saved running total SavingsChart derives from
+ * whatever survives this trim is unaffected: a dropped row could only ever have contributed 0 to
+ * it. That same asymmetry is what makes the trim safe for an AVERAGE and not only for a chart: an
+ * interior quiet month is a month the household genuinely lived through and spent nothing in, so
+ * it belongs in the divisor, while a leading one is a month that never happened for this
+ * household at all.
+ *
+ * Lives here rather than in src/app/(app)/dashboard/page.tsx, where it was first written: a
+ * second consumer now needs the identical judgement about which leading months are real -- the
+ * runway average (src/lib/runway.ts) divides by exactly the months this trim keeps, and a
+ * six-month divisor over three months of history halves the average and doubles the runway. Two
+ * copies of this rule is how the chart and the runway would eventually disagree about when a
+ * household's history starts, which is the defect, not the fix.
+ *
+ * The move changes nothing about `cashflowTrend` itself: its zero-fill contract (one row per
+ * requested month, always) is untouched and still correct for the callers that want exactly
+ * that -- Reports' own cash flow card follows a date range the person picking it chose on
+ * purpose, and every month in it is a month they asked to see. This remains a separate, opt-in
+ * helper applied BY the callers whose window is a fixed trailing-N-months-ending-today, the one
+ * shape where a household's youth produces a wall of leading zeros nobody asked for. It is
+ * deliberately not new behaviour inside `cashflowTrend`.
+ */
+export function trimLeadingEmptyMonths(rows: MonthTrendRow[]): MonthTrendRow[] {
+  const firstReal = rows.findIndex((row) => row.incomeCents !== 0 || row.spendCents !== 0);
+  return firstReal === -1 ? [] : rows.slice(firstReal);
+}
+
 // Re-exported so every existing importer of savingsRate/SavingsRate from '@/lib/reports' keeps
 // working unchanged -- the actual implementation lives in @/lib/savings-rate (client-bundle fix,
 // 2026-08-23): a 'use client' component (reports-client.tsx) needs this function, and importing

@@ -14,7 +14,7 @@ import { unreviewedRuleImports } from '@/lib/import/commit';
 import { listLoans } from '@/lib/loans';
 import { netWorthHint, netWorthOverTime } from '@/lib/networth';
 import { onboardingSteps } from '@/lib/onboarding';
-import { cashflowTrend, categoryBreakdown, topMerchants, type MonthTrendRow } from '@/lib/reports';
+import { cashflowTrend, categoryBreakdown, topMerchants, trimLeadingEmptyMonths } from '@/lib/reports';
 import { cashRunway, cashRunwayHint, type CashRunway } from '@/lib/runway';
 import { savingsProgress, type SavingsProgress } from '@/lib/savings-target';
 import { expiringSoonItems } from '@/lib/warranty/search';
@@ -69,32 +69,6 @@ function deltaProps(curr: number, prev: number, goodWhenUp: boolean): { delta?: 
   return { delta: `${sign}${pct.toFixed(1)}% vs last month`, deltaTone: tone };
 }
 
-/**
- * v1.21.0 plan, item 5, defect 1. `cashflowTrend` seeds every month key in its requested range
- * with 0 by contract (src/lib/reports.ts) -- it has no way to tell "the household earned $0 and
- * spent $0 this month" apart from "this month is before the household's first transaction", so it
- * does not try; that is this function's job instead. Ten such months, on a household a few weeks
- * old, used to squeeze one real month of data into the last few percent of a 12-wide chart.
- *
- * Trims only the LEADING run of zero-both months, never an interior or trailing one: once real
- * history has started, a later genuinely-quiet month is indistinguishable from "no data" by this
- * same test, and only the former is the defect being fixed here -- a real zero month stays on the
- * chart. Every dropped row would have plotted a flat, informationless baseline bar anyway (income
- * 0, spend 0, so net 0 too), so the cumulative-saved running total SavingsChart derives from
- * whatever survives this trim is unaffected: a dropped row could only ever have contributed 0 to
- * it.
- *
- * Lives here rather than in src/lib/reports.ts: cashflowTrend's own contract (zero-fill every
- * requested month) is correct and shared by callers that need exactly that, e.g. Reports' own
- * cash flow card, which follows a range the person picking it already chose on purpose -- this
- * trim is specific to the dashboard's own fixed trailing-N-months-ending-today window, the one
- * place a household's youth actually produces a wall of leading zeros nobody asked to see.
- */
-function trimLeadingEmptyMonths(rows: MonthTrendRow[]): MonthTrendRow[] {
-  const firstReal = rows.findIndex((row) => row.incomeCents !== 0 || row.spendCents !== 0);
-  return firstReal === -1 ? [] : rows.slice(firstReal);
-}
-
 export const dynamic = 'force-dynamic';
 
 export default async function DashboardPage({
@@ -130,9 +104,11 @@ export default async function DashboardPage({
   // person-pill scoping is unaffected; only which month is the rightmost bar is fixed.
   const trend = cashflowTrend(12, { endMonth: currentMonth(), attributedUserId: scopeUserId }, viewer);
   // Item 5 (2026-08-30 plan): drop the leading run of months before this scope's first
-  // transaction -- see trimLeadingEmptyMonths' own docblock. `monthsOfHistory` (below) is exactly
-  // how many of the requested 12 survive, and is what the card's own title and description read
-  // instead of a hardcoded "12-month" claim that stopped being true the day this trim was added.
+  // transaction -- see trimLeadingEmptyMonths' own docblock (src/lib/reports.ts, where it now
+  // lives so the runway average can share the same judgement). `monthsOfHistory` (below) is
+  // exactly how many of the requested 12 survive, and is what the card's own title and
+  // description read instead of a hardcoded "12-month" claim that stopped being true the day this
+  // trim was added.
   const trimmedTrend = trimLeadingEmptyMonths(trend);
   const monthsOfHistory = trimmedTrend.length;
   // Item 1 (2026-08-30 plan): the dashboard's 12-month card now renders the same SavingsChart
@@ -736,8 +712,8 @@ export default async function DashboardPage({
         <Card className={selfScoped ? 'lg:col-span-5' : 'lg:col-span-3'}>
           <CardHeader
             // Item 5 (2026-08-30 plan): no longer a hardcoded "12-month" -- see
-            // trimLeadingEmptyMonths' docblock above for why a household with less than 12
-            // months of its own history should never be told it is looking at 12.
+            // trimLeadingEmptyMonths' docblock (src/lib/reports.ts) for why a household with
+            // less than 12 months of its own history should never be told it is looking at 12.
             title={cashflowCardTitle}
             // Ruling T7: this chart does NOT follow the chosen month (see `trend` above) --
             // always the trailing N months ending today, so the note only needs to appear

@@ -507,6 +507,14 @@ describe('DashboardPage — ruling T7 (month filter)', () => {
 
     const runwayTile = screen.getByText('Cash runway').closest('div');
     expect(runwayTile?.textContent).toContain('As of today');
+    // This fixture's only spend is a single $40 transaction in the previous month, so exactly one
+    // of the six trailing months the runway asks for has any data. The tile says so, and still
+    // shows the figure: the average is $40 over 1 month, never $40 spread across 6 (the leading
+    // five months predate this household entirely -- see cashRunway's own trim, src/lib/runway.ts).
+    expect(runwayTile?.textContent).toContain('$40.00 average monthly spend');
+    expect(runwayTile?.textContent).toContain('based on 1 month of history');
+    expect(runwayTile?.textContent).not.toContain('1 months');
+    expect(runwayTile?.textContent).toContain('months covered');
   });
 
   // Ruling T3: household scope only -- a self viewer gets neither tile, the same gate net worth
