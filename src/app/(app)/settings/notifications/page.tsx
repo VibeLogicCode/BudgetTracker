@@ -10,7 +10,12 @@ import { eventsFor } from '@/lib/notify/events';
 // setHouseholdEventPref (the write paths) live in actions.ts, not here.
 import { listHouseholdTargets, householdEventPrefs, householdEligibleEvents } from '@/lib/notify/household';
 import { listRecentDeliveries, type DeliveryRow } from '@/lib/notify/outbox';
-import { NotificationsClient, isNotificationTab, type NotificationsPageData } from './notifications-client';
+import { NotificationsClient, type NotificationsPageData } from './notifications-client';
+// From ./tabs, never from ./notifications-client: that module is `'use client'`, and Next hands a
+// Server Component a client reference for every one of its exports rather than the value itself,
+// so calling isNotificationTab across that boundary throws at request time. v1.29.0 shipped
+// exactly that crash. Only the component and `import type` may cross the line above.
+import { DEFAULT_NOTIFICATION_TAB, isNotificationTab } from './tabs';
 
 export const dynamic = 'force-dynamic';
 
@@ -54,7 +59,7 @@ export default async function NotificationsPage({
   // rather than client state.
   const params = await searchParams;
   const rawTab = Array.isArray(params.tab) ? params.tab[0] : params.tab;
-  const tab = isNotificationTab(rawTab) ? rawTab : 'email';
+  const tab = isNotificationTab(rawTab) ? rawTab : DEFAULT_NOTIFICATION_TAB;
 
   // MUST-3.7: the page renders EFFECTIVE values, resolved once here so the client never
   // re-implements the fallback rule.

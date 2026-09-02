@@ -3,9 +3,12 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
 import {
   NotificationsClient,
-  isNotificationTab,
   type NotificationsPageData,
 } from '@/app/(app)/settings/notifications/notifications-client';
+// From the plain ./tabs module, mirroring what page.tsx must do: a Server Component cannot call
+// a function it imported from a 'use client' file, so the tab vocabulary does not live in
+// notifications-client.tsx. See tabs.ts's docblock (v1.29.1 fix).
+import { isNotificationTab } from '@/app/(app)/settings/notifications/tabs';
 import { SMTP_PRESETS } from '@/lib/notify/config';
 import { NOTIFICATION_EVENTS, eventsFor, householdEligibleEvents } from '@/lib/notify/events';
 

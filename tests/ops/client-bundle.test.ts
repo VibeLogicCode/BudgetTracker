@@ -288,3 +288,161 @@ describe("a 'use client' file never value-imports the database/server module gra
     });
   });
 });
+
+/**
+ * Parses the VALUE bindings one import statement pulls in, BY NAME. parseImportEdges above
+ * deliberately answers only "is this a value edge at all", which is the right question for the
+ * bundle guard; this guard needs the names themselves, so it reads them here rather than
+ * widening a guard that is already load-bearing.
+ *
+ * Returns null for a shape whose bindings cannot be enumerated -- `import * as ns`, `export *`,
+ * or an unrecognised shape carrying a `from` clause -- so the caller fails closed on it.
+ */
+function valueBindingNames(stmt: string): string[] | null {
+  if (/^(?:import|export)\s+type\b/.test(stmt)) return [];
+  if (/\*\s+as\s+[A-Za-z_$][\w$]*/.test(stmt)) return null;
+  if (/^export\s+\*\s+from/.test(stmt)) return null;
+
+  const names: string[] = [];
+  const defaultMatch = stmt.match(/^import\s+(?!type\b)([A-Za-z_$][\w$]*)\s*(?:,|from)/);
+  if (defaultMatch) names.push(defaultMatch[1]);
+
+  const braceMatch = stmt.match(/\{([\s\S]*)\}/);
+  if (braceMatch) {
+    for (const raw of braceMatch[1].split(',')) {
+      const spec = raw.trim();
+      if (spec.length === 0) continue;
+      if (/^type\s/.test(spec)) continue; // erased under isolatedModules -- crosses the boundary safely
+      const name = spec.split(/\s+as\s+/)[0].trim();
+      if (name.length > 0) names.push(name);
+    }
+    return names;
+  }
+  if (defaultMatch) return names;
+  return null; // a `from` clause in a shape this reader does not enumerate -- fail closed
+}
+
+/** Resolves a relative specifier against the importing file -- the one shape resolveAtImport
+ *  skips, and the shape every `./x-client` page import in this app actually uses. */
+function resolveRelative(fromFile: string, specifier: string): string | null {
+  if (!specifier.startsWith('.')) return null;
+  const base = path.join(ROOT, path.dirname(fromFile), specifier);
+  const candidates = [`${base}.ts`, `${base}.tsx`, path.join(base, 'index.ts'), path.join(base, 'index.tsx')];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return path.relative(ROOT, candidate).split(path.sep).join('/');
+  }
+  return null;
+}
+
+/** A component, by this codebase's own naming convention -- the only kind of binding a server
+ *  file may take across the client boundary as a value. */
+function looksLikeComponent(name: string): boolean {
+  return /^[A-Z]/.test(name);
+}
+
+describe('a server file never value-imports a runtime helper from a client module', () => {
+  /**
+   * v1.29.1 defect fix, and the bug this guard exists for. v1.29.0's
+   * src/app/(app)/settings/notifications/page.tsx did:
+   *
+   *   import { NotificationsClient, isNotificationTab } from './notifications-client';
+   *
+   * and called isNotificationTab() to validate `?tab=`. notifications-client.tsx is `'use
+   * client'`, and Next hands a server-side importer a client REFERENCE for every export of such
+   * a module rather than the value itself -- so the name that arrived was a reference proxy, not
+   * the function, and calling it threw at request time. The Notifications page 500'd for every
+   * visitor on a freshly published image.
+   *
+   * `tsc --noEmit` passed (the types are real and correct) and the whole vitest suite passed
+   * (vitest imports the module directly, with no client/server boundary in between). Like the
+   * bundle guard above, this is a class of defect that exists only once Next draws the boundary
+   * -- which nothing in this repo's test run does -- so it needs a source-level guard or it is
+   * not caught at all until a person opens the page.
+   *
+   * The rule: a non-client file may value-import ONLY components (PascalCase, by this
+   * codebase's own convention) from a `'use client'` module. `import type` is always fine --
+   * isolatedModules erases it before Next ever sees it. Anything else -- a helper, a constant, a
+   * validator, a lookup table -- belongs in a plain module carrying no directive, which both
+   * sides can import; see src/app/(app)/settings/notifications/tabs.ts, written as the fix for
+   * this exact bug, and the mirror-image splits src/lib/savings-rate.ts and src/lib/env-tz.ts.
+   */
+  const violations: string[] = [];
+  const crossings: string[] = [];
+
+  for (const file of walk('src')) {
+    const source = readSource(file);
+    if (isUseClientFile(source)) continue; // client -> client is legal and unremarkable
+    const clean = stripComments(source);
+    const statementRe = /\b(?:import|export)\b[^;]*?;/g;
+    let match: RegExpExecArray | null;
+    while ((match = statementRe.exec(clean))) {
+      const stmt = match[0];
+      const fromMatch = stmt.match(/from\s*['"]([^'"]+)['"]/);
+      if (!fromMatch) continue;
+      const target = resolveAtImport(fromMatch[1]) ?? resolveRelative(file, fromMatch[1]);
+      if (target === null) continue;
+      if (!isUseClientFile(readSource(target))) continue;
+
+      crossings.push(`${file} -> ${target}`);
+      const names = valueBindingNames(stmt);
+      if (names === null) {
+        violations.push(
+          `${file}: takes a namespace or wildcard export from the client module ${target}; ` +
+            'name the components explicitly instead.',
+        );
+        continue;
+      }
+      for (const name of names) {
+        if (looksLikeComponent(name)) continue;
+        violations.push(
+          `${file}: value-imports \`${name}\` from the 'use client' module ${target}. Next gives a ` +
+            'server-side importer a client reference for that name, not the value, so calling it throws ' +
+            'at request time. Move it into a plain module with no directive (see ' +
+            'src/app/(app)/settings/notifications/tabs.ts) and import it from there, or make it an ' +
+            '`import type` if that is all it needs to be.',
+        );
+      }
+    }
+  }
+
+  it('finds the real server-to-client import edges (a scan that matches nothing proves nothing)', () => {
+    expect(crossings.length).toBeGreaterThanOrEqual(10);
+    expect(crossings).toContain(
+      'src/app/(app)/settings/notifications/page.tsx -> src/app/(app)/settings/notifications/notifications-client.tsx',
+    );
+  });
+
+  it('no server file value-imports a non-component binding from a client module', () => {
+    expect(violations).toEqual([]);
+  });
+
+  // Proves the binding reader before trusting it against the real tree -- the same discipline as
+  // the scanner-correctness block above.
+  describe('binding reader correctness (synthetic fixtures, one per import shape)', () => {
+    it('reads plain, mixed, aliased and default bindings', () => {
+      expect(valueBindingNames(`import { NotificationsClient } from './x';`)).toEqual(['NotificationsClient']);
+      expect(valueBindingNames(`import { NotificationsClient, isNotificationTab } from './x';`)).toEqual([
+        'NotificationsClient',
+        'isNotificationTab',
+      ]);
+      expect(valueBindingNames(`import { Client, type Props } from './x';`)).toEqual(['Client']);
+      expect(valueBindingNames(`import { isTab as check } from './x';`)).toEqual(['isTab']);
+      expect(valueBindingNames(`import Client from './x';`)).toEqual(['Client']);
+      expect(valueBindingNames(`import Client, { helper } from './x';`)).toEqual(['Client', 'helper']);
+    });
+
+    it('treats a fully type-only import as crossing nothing', () => {
+      expect(valueBindingNames(`import type { Props } from './x';`)).toEqual([]);
+    });
+
+    it('fails closed on shapes it cannot enumerate', () => {
+      expect(valueBindingNames(`import * as tabs from './x';`)).toBeNull();
+      expect(valueBindingNames(`export * from './x';`)).toBeNull();
+    });
+
+    it('classifies components against helpers the way the guard relies on', () => {
+      expect(looksLikeComponent('NotificationsClient')).toBe(true);
+      expect(looksLikeComponent('isNotificationTab')).toBe(false);
+    });
+  });
+});

@@ -41,6 +41,7 @@ import {
   type NotificationsState,
 } from './actions';
 import { EmailGuide, GuidePanel, TelegramGuide } from './guides';
+import { NOTIFICATION_TABS, TAB_LABEL, type NotificationTab } from './tabs';
 
 /**
  * v1.29.0 (notifications page restructure). Six long cards on one scroll became four short
@@ -56,25 +57,10 @@ import { EmailGuide, GuidePanel, TelegramGuide } from './guides';
  * true here instead of merely quotable; see the deliberate absence of `role="tablist"` below
  * for the other half of that same reasoning.
  *
- * `isNotificationTab` exists because `?tab=` arrives as arbitrary user-suppliable text, not a
- * typed value: page.tsx's searchParams read follows the exact fallback-on-malformed-input
- * idiom dashboard/page.tsx already uses for `?month=` -- a missing or garbage tab name is a
- * reason to show the default tab, never a reason to throw.
+ * The tab vocabulary itself lives in ./tabs, NOT here -- page.tsx has to validate `?tab=` on
+ * the server, and a Server Component cannot call a function it imported from a `'use client'`
+ * module. See that file's docblock; it is a v1.29.1 fix for a crash v1.29.0 shipped.
  */
-export type NotificationTab = 'email' | 'telegram' | 'events' | 'deliveries';
-
-export const NOTIFICATION_TABS: readonly NotificationTab[] = ['email', 'telegram', 'events', 'deliveries'];
-
-export function isNotificationTab(value: unknown): value is NotificationTab {
-  return typeof value === 'string' && (NOTIFICATION_TABS as readonly string[]).includes(value);
-}
-
-const TAB_LABEL: Record<NotificationTab, string> = {
-  email: 'Email',
-  telegram: 'Telegram',
-  events: 'Events',
-  deliveries: 'Deliveries',
-};
 
 export interface NotificationsPageData {
   role: 'admin' | 'member';
