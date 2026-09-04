@@ -1,33 +1,14 @@
 import { eq, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { accounts, imports } from '@/db/schema';
-import { findUserById } from '@/lib/auth/users';
-import { isSelfScoped, type Viewer } from '@/lib/auth/viewer';
+import { viewerFor } from '@/lib/auth/users';
+import { isSelfScoped } from '@/lib/auth/viewer';
 import { daysBetweenIso, todayIso } from '@/lib/dates';
 import { getUserSettings } from '@/lib/notify/config';
 import { staleImportKey } from '@/lib/notify/events';
 import { mondayOfIsoWeek } from '@/lib/notify/evaluate/slots';
 import { enqueue, enqueuedAnything } from '@/lib/notify/outbox';
 import { renderEvent } from '@/lib/notify/render';
-
-/**
- * Mirrors digest.ts's own viewerFor exactly (kept local rather than shared for the same reason
- * that module's docblock gives).
- *
- * v1.13.1 (item BT, the same defect BK already fixed in digest.ts/monthly.ts but named those two
- * files only). Returns null when the recipient's own row is gone by the time this runs (a deleted
- * account mid-batch), rather than falling back to a household-scoped viewer. The fallback used to
- * stand in for the missing row so one deletion could not sink the whole run -- the run is still
- * fine without it, since skipping this one recipient is not a crash. What the fallback got wrong
- * is the scope it guessed: evaluateStaleImport's own ruling R2 guard below exists specifically so
- * a self-scoped recipient is never told about an account they cannot see, and a household-shaped
- * fallback for a vanished self-scoped user silently defeated that guard for the one case it most
- * needed to hold.
- */
-function viewerFor(userId: number): Viewer | null {
-  const user = findUserById(userId);
-  return user ? { id: user.id, role: user.role, visibility: user.visibility } : null;
-}
 
 /**
  * Decision 10 (unchanged): an install with ZERO imports never fires. A brand-new install must not nag

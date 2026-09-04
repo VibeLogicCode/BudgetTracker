@@ -1,6 +1,6 @@
 import { budgetProgress, flattenBudgetRows, type BudgetRow } from '@/lib/budgets';
-import { findUserById } from '@/lib/auth/users';
-import { isSelfScoped, type Viewer } from '@/lib/auth/viewer';
+import { viewerFor } from '@/lib/auth/users';
+import { isSelfScoped } from '@/lib/auth/viewer';
 import { currentMonth, monthEnd, todayIso } from '@/lib/dates';
 import { isEventEnabled } from '@/lib/notify/config';
 import { CHANNELS, budgetPaceKey, type BudgetScopeKey } from '@/lib/notify/events';
@@ -9,26 +9,6 @@ import { enqueue, enqueuedAnything } from '@/lib/notify/outbox';
 import { renderEvent } from '@/lib/notify/render';
 import { PACE_MAX_PER_EVALUATION, PACE_MIN_DAY_OF_MONTH, PACE_OVERSHOOT_MIN_PCT } from '@/lib/predict/constants';
 import { projectMonthEnd } from '@/lib/predict/pace';
-
-/**
- * S-18 fix (v1.13.0 ruling R2, applied one layer down). This evaluator runs once per user
- * (unlike evaluate/budget.ts, which batches every participant in one pass), so it has no
- * NotifiableUser row of its own to read visibility off -- it needs its own lookup instead.
- *
- * Deliberately its OWN copy rather than importing digest.ts's or monthly.ts's identical-looking
- * helper: each of these four evaluators is investigated and fixed independently, and none
- * exports the other three's internals as test-only surface. See digest.ts's own viewerFor
- * docblock for the fuller reasoning; monthly.ts's copy states the same "kept local rather than
- * shared" choice explicitly.
- *
- * Returns null when the recipient's own row is gone by the time this runs (a deleted account
- * mid-batch) -- matching the other three evaluators' item BK precedent: sending nothing is safe,
- * guessing a scope for a viewer this function cannot identify is not.
- */
-function viewerFor(userId: number): Viewer | null {
-  const user = findUserById(userId);
-  return user ? { id: user.id, role: user.role, visibility: user.visibility } : null;
-}
 
 /**
  * MUST-10.8: no fingerprint. This runs at most once per user per day by construction, and its
@@ -151,13 +131,13 @@ export function evaluateBudgetPace(input: { userId: number; now: Date; tz: strin
   const dayOfMonth = Number(today.slice(8, 10));
   // MUST-9.6 condition 1, checked before any budget or user read. Review round 1 (minor 2): the
   // viewerFor() lookup below used to sit ABOVE this line, which made the old wording ("before any
-  // query") false -- findUserById ran on the 1st of the month for every user, only to be thrown
-  // away. The enabled-ness check above is now the one query that precedes this guard, and it is
-  // the check that decides whether this evaluation happens at all.
+  // query") false -- viewerFor's own user read ran on the 1st of the month for every user, only
+  // to be thrown away. The enabled-ness check above is now the one query that precedes this
+  // guard, and it is the check that decides whether this evaluation happens at all.
   if (dayOfMonth < PACE_MIN_DAY_OF_MONTH) return 0;
 
   const viewer = viewerFor(input.userId);
-  // Item BK precedent (see this file's own viewerFor docblock): 0 already means "nothing
+  // Item BK precedent (see viewerFor's docblock, src/lib/auth/users.ts): 0 already means "nothing
   // enqueued" to every caller.
   if (viewer === null) return 0;
   const selfScoped = isSelfScoped(viewer);

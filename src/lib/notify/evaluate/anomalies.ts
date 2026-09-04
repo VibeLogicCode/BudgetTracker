@@ -48,7 +48,7 @@ interface SliceRow extends SpendRow {
  * MUST-10.10: a household with no user having either tick event enabled skips the fingerprint
  * query entirely. Zero enabled participants means zero queries.
  *
- * v1.31.0 owner ruling (item M-8, docs/reviews/2026-09-02-review-for-opus.md): the recipient
+ * v1.31.0 owner ruling (item M-8, .superpowers/sdd/2026-09-02-review-for-opus/whole-branch-review.md): the recipient
  * list for these two events narrows to `role === 'admin'`. Checked FIRST, before either event's
  * isEventEnabled query, so a household of five with one admin costs four fewer queries than
  * checking role last would.
@@ -251,7 +251,7 @@ function findUnusual(slice: SliceRow[], today: string): UnusualFinding[] {
  * gut the feature: an anomaly alert is only useful when it names the charge somebody did not
  * recognise.
  *
- * v1.31.0 owner ruling (item M-8, docs/reviews/2026-09-02-review-for-opus.md): what changes is
+ * v1.31.0 owner ruling (item M-8, .superpowers/sdd/2026-09-02-review-for-opus/whole-branch-review.md): what changes is
  * WHO is told, not what they are told. participants() above filters the recipient list to
  * `role === 'admin'`, so a household's children -- and any other non-admin member -- receive
  * neither event any more, personally or otherwise. The two rejected alternatives: scoping the

@@ -1,6 +1,6 @@
 import { budgetProgress, type BudgetRow } from '@/lib/budgets';
-import { findUserById, listUsers } from '@/lib/auth/users';
-import { isSelfScoped, type Viewer } from '@/lib/auth/viewer';
+import { listUsers, viewerFor } from '@/lib/auth/users';
+import { HOUSEHOLD_VIEWER, isSelfScoped } from '@/lib/auth/viewer';
 import { reviewQueueCount } from '@/lib/categorize/engine';
 import { addDaysIso, currentMonth } from '@/lib/dates';
 import { categoryBreakdown, topMerchants } from '@/lib/reports';
@@ -12,71 +12,6 @@ import { renderEvent, type DigestLine } from '@/lib/notify/render';
 
 const TOP_CATEGORIES = 5;
 const TOP_MERCHANTS = 3;
-
-/**
- * v1.13.0 ruling R2 (Task 6 fix round 1, controller ruling): every reports.ts aggregate this
- * evaluator calls now takes a viewer, and a self-visibility viewer is silently forced to their
- * own scope regardless of what is asked (src/lib/reports.ts's scopeFor). Building the viewer from
- * the RECIPIENT's own user record -- not a hardcoded household viewer -- is what makes a
- * household/admin recipient's digest byte-identical to before, and a self-visibility recipient's
- * digest carry only their own attributed figures through every line below, never the true
- * household total (R2: no household totals reach a self viewer through any channel).
- *
- * S-18 fix (v1.13.0 ruling R2, review follow-up): the claim above used to be false for exactly
- * one line -- `overBudget` was read from `budgetProgress(month, 'household', null)`
- * unconditionally, the one figure in this function that did not go through `viewer` at all,
- * because budgetProgress takes no viewer parameter to force it (it is one of
- * HOUSEHOLD_ONLY_AT_PAGE's own callers now -- see tests/ops/visibility-invariants.test.ts). Fixed
- * below by branching on `isSelfScoped(viewer)`: a self-scoped recipient's `overBudget` now comes
- * from `budgetProgress(month, 'personal', viewer.id)` instead, naming only categories THEY are
- * over on. Rejected alternative: leaving it household-scoped and filtering the resulting names
- * against the recipient's own transactions after the fact -- budgetProgress's rollup already
- * folds a category's children into its parent, so a name-level filter would either still leak a
- * parent category's household total (a self-scoped member spent under one of its children) or
- * require re-deriving the category tree here a second time. Querying personal scope directly is
- * the one query budgetProgress already exists to answer.
- *
- * v1.13.1 (item BK). Returns null -- and the evaluator sends NOTHING -- if the user row is gone by
- * the time this runs (a deleted account mid-batch). It used to fall back to a household-scoped
- * admin viewer so one missing row could not crash the batch, which is still the right instinct;
- * the wrong part was the shape of the fallback. A self-scoped recipient whose row vanished in
- * the window their digest fired would have carried household-wide figures in that one delivery,
- * which is the single thing ruling R2 exists to prevent. Skipping still cannot crash the batch.
- */
-function viewerFor(userId: number): Viewer | null {
-  const user = findUserById(userId);
-  return user ? { id: user.id, role: user.role, visibility: user.visibility } : null;
-}
-
-/**
- * v1.28.0. The viewer the HOUSEHOLD digest is rendered with, and the answer to "can a member's
- * visibility setting change what the family channel says": no, structurally.
- *
- * viewerFor() builds a viewer from the RECIPIENT, and scopeFor() in reports.ts silently forces a
- * self-visibility viewer to their own rows (ruling R2). That is exactly right for a message
- * addressed to one person and exactly wrong for one message addressed to a room: whichever
- * member's slot happened to fire first would decide what everybody else reads, and a household
- * with one self-scoped member would get a "household total" that was really that member's spend.
- * So the household digest is rendered through this synthetic household-scoped viewer instead --
- * it is not a per-viewer render at all, and no member's setting is consulted.
- *
- * The honest consequence, and the household's own decision (v1.28.0 decision 3): routing the
- * digest to the family channel PUTS household figures and per-member spend in a room every member
- * reads. Ruling R2 keeps household totals away from a self-scoped viewer's screen; it cannot
- * govern a group chat an admin deliberately pointed the household's bot at. Nobody's personal
- * digest changes -- a self-scoped member who is still receiving one still sees only their own
- * figures -- and no PERSONAL-scope event is ever routable at all (enqueue's subjectScope).
- *
- * EXPORTED for finding I-1's fix (v1.30.0 whole-branch review): evaluate/monthly.ts's family-
- * channel monthly digest needs the identical viewer for the identical reason, and the argument
- * above is the whole justification for the constant existing. A sixth hand-built
- * `{ id: 0, role: 'admin', visibility: 'household' }` one file over would be a second copy of a
- * security-relevant projection with nothing tying it to this one -- the shape the review's own
- * item M-1 already flags for viewerFor -- and, worse, a copy separated from the reasoning that
- * makes it legitimate. Rejected alternative: a new shared module for one constant, which buys
- * nothing this export does not and leaves the argument with no natural home.
- */
-export const HOUSEHOLD_VIEWER: Viewer = { id: 0, role: 'admin', visibility: 'household' };
 
 function overBudgetNames(rows: BudgetRow[], acc: string[] = []): string[] {
   for (const row of rows) {
@@ -182,8 +117,33 @@ export function evaluateWeeklyDigest(input: { userId: number; slotDate: string; 
 }
 
 /**
- * The family channel's digest: the household total, one line per person, and the unattributed
- * pile. Every figure comes from categoryBreakdown() through HOUSEHOLD_VIEWER, so the lines are a
+ * v1.28.0. WHY the household digest is rendered through HOUSEHOLD_VIEWER (src/lib/auth/viewer.ts)
+ * rather than through a recipient's own viewer, and the answer to "can a member's visibility
+ * setting change what the family channel says": no, structurally.
+ *
+ * viewerFor() builds a viewer from the RECIPIENT, and scopeFor() in reports.ts silently forces a
+ * self-visibility viewer to their own rows (ruling R2). That is exactly right for a message
+ * addressed to one person and exactly wrong for one message addressed to a room: whichever
+ * member's slot happened to fire first would decide what everybody else reads, and a household
+ * with one self-scoped member would get a "household total" that was really that member's spend.
+ * So the household digest is rendered through the synthetic household-scoped viewer instead --
+ * it is not a per-viewer render at all, and no member's setting is consulted.
+ *
+ * The honest consequence, and the household's own decision (v1.28.0 decision 3): routing the
+ * digest to the family channel PUTS household figures and per-member spend in a room every member
+ * reads. Ruling R2 keeps household totals away from a self-scoped viewer's screen; it cannot
+ * govern a group chat an admin deliberately pointed the household's bot at. Nobody's personal
+ * digest changes -- a self-scoped member who is still receiving one still sees only their own
+ * figures -- and no PERSONAL-scope event is ever routable at all (enqueue's subjectScope).
+ *
+ * v1.31.0 item M-1: the constant itself used to be declared and exported HERE, and finding I-1's
+ * fix imported it into evaluate/monthly.ts to stop a second hand-built copy appearing there. That
+ * export was the right instinct pointed at the wrong home -- savings.ts and loans.ts had each
+ * already hand-built their own -- so the constant now lives in src/lib/auth/viewer.ts beside the
+ * ownerScope rule that reads it, and this comment keeps the argument that justifies USING it here.
+ *
+ * WHAT it builds: the household total, one line per person, and the unattributed pile. Every
+ * figure comes from categoryBreakdown() through HOUSEHOLD_VIEWER, so the lines are a
  * true partition of the total -- personClause() in reports.ts splits on attributed_user_id with
  * `= id` per person and `IS NULL` for unattributed, and those are exhaustive and disjoint.
  *

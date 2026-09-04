@@ -553,7 +553,8 @@ export function budgetProgress(month: string, scope: BudgetScope = 'household', 
   // the walk below already relies on an absent parent id matching no row's parentId (see
   // the `allChildren` line), so widening the top-level test to "parentId is null OR its
   // parent isn't present" is tolerant of existing data with no migration. Half 2
-  // (src/lib/categories.ts createCategory/setCategoryIncome) stops any NEW ones from being made.
+  // (src/lib/categories.ts createCategory) stops any NEW ones from being made -- item M-5 deleted
+  // half 2's flip-time twin, setCategoryIncome, which guarded a path no caller ever took.
   const presentIds = new Set(all.map((category) => category.id));
   const isTopLevel = (category: CategoryRecord) => category.parentId === null || !presentIds.has(category.parentId);
 

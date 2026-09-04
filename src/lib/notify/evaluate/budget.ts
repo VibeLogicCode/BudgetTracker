@@ -171,7 +171,7 @@ function computeParticipants(): Map<number, Participant> {
       // admin clause -- an admin's row can never legitimately carry 'self' (setUserVisibility
       // refuses it), but a hand-edited database row must not lock a self-scoped reading onto an
       // admin either -- now lives in one place rather than two that could drift apart.
-      selfScoped: isSelfScoped({ id: user.id, role: user.role, visibility: user.visibility }),
+      selfScoped: isSelfScoped(user),
     });
   }
   return everyone;

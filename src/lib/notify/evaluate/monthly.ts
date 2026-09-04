@@ -1,11 +1,10 @@
 import { budgetProgress, budgetTotals, resolveBudget, type BudgetScope } from '@/lib/budgets';
-import { findUserById } from '@/lib/auth/users';
-import { isSelfScoped, type Viewer } from '@/lib/auth/viewer';
+import { viewerFor } from '@/lib/auth/users';
+import { HOUSEHOLD_VIEWER, isSelfScoped, type Viewer } from '@/lib/auth/viewer';
 import { listCategories } from '@/lib/categories';
 import { addMonths, currentMonth, monthEnd, monthStart, todayIso } from '@/lib/dates';
 import { isEventEnabled } from '@/lib/notify/config';
 import { CHANNELS, monthlyDigestKey, predictedVsActualKey, suggestedBudgetRefreshKey } from '@/lib/notify/events';
-import { HOUSEHOLD_VIEWER } from '@/lib/notify/evaluate/digest';
 import { flattenBudgetRows } from '@/lib/notify/evaluate/pace';
 import { householdRoutedChannels } from '@/lib/notify/household';
 import { enqueue, enqueuedAnything } from '@/lib/notify/outbox';
@@ -20,37 +19,6 @@ import { suggestionsFor } from '@/lib/predict/history';
 import { cashflowTrend, topMerchants } from '@/lib/reports';
 
 const MONTHLY_DIGEST_TOP_MERCHANTS = 5;
-
-/**
- * v1.13.0 ruling R2 (Task 6 fix round 1, controller ruling): fireMonthlyDigest's cashflowTrend/
- * topMerchants calls now take a viewer, built from the RECIPIENT's own user record so a
- * household/admin recipient's digest is byte-identical to before and a self-visibility recipient
- * sees only their own attributed figures (src/lib/reports.ts's scopeFor forces the self scope
- * regardless of what is asked). Mirrors digest.ts's own viewerFor exactly; kept local rather than
- * shared since both files are Task 6's alone and neither exports test-only surface for the other.
- *
- * S-18 fix (v1.13.0 ruling R2, review follow-up): now also called from firePredictedVsActual and
- * fireSuggestedRefresh, this file's other two per-user sends -- neither used to consult a viewer
- * at all, because neither calls a reports.ts aggregate; both build their household section from
- * budgetProgress()/suggestionsFor(), which take no viewer to force a self-scoped narrowing (they
- * are HOUSEHOLD_ONLY_AT_PAGE's own callers now -- tests/ops/visibility-invariants.test.ts). Each
- * of the three call sites below branches on `isSelfScoped(viewer)` itself rather than gaining a
- * shared "self-scoped monthly send" helper: the three household reads are shaped too differently
- * (a comparison list, a refresh list, a single totals pair) for one helper to narrow all three
- * without either an awkward union return type or three near-identical near-copies of it.
- *
- * v1.13.1 (item BK). Returns null when the recipient's own row is gone by the time this runs (a
- * deleted account mid-batch), and the caller sends nothing rather than guessing a scope. A
- * household-scoped fallback used to stand in for the missing row so one deletion could not sink
- * the whole batch -- the batch is still fine without it, since sending nothing for this one
- * recipient is not a crash. What the fallback got wrong is the scope it guessed: 'household' for
- * a recipient who may have been self-scoped, which is exactly the household-wide leak ruling R2
- * exists to close off.
- */
-function viewerFor(userId: number): Viewer | null {
-  const user = findUserById(userId);
-  return user ? { id: user.id, role: user.role, visibility: user.visibility } : null;
-}
 
 /**
  * The two month-boundary reports. Both run on the user's daily slot and both need no
@@ -365,10 +333,12 @@ function fireMonthlyDigest(input: { userId: number; endedMonth: string; now: Dat
  * exactly one argument and there is nothing left in this function that can quietly stay
  * household-wide for a self-scoped recipient.
  *
- * HOUSEHOLD_VIEWER is imported from evaluate/digest.ts rather than rebuilt here: the argument for
- * why a synthetic household-scoped viewer is the right thing to render a room's message with is
- * written out in full at its declaration, and a sixth hand-built copy of a security-relevant
- * viewer with nothing tying it to that argument is the shape item M-1 already flags.
+ * HOUSEHOLD_VIEWER is imported from src/lib/auth/viewer.ts rather than rebuilt here (v1.31.0
+ * item M-1 moved it there from evaluate/digest.ts, which is where the argument for why a
+ * synthetic household-scoped viewer is the right thing to render a ROOM's message with still
+ * lives, above buildHouseholdDigest). A hand-built copy of a security-relevant viewer with
+ * nothing tying it to that argument is the shape item M-1 exists to stop, and
+ * tests/ops/viewer-construction.test.ts now does stop it.
  */
 function renderMonthlyDigestFor(endedMonth: string, viewer: Viewer): { subject: string; body: string } {
   // cashflowTrend(1, {endMonth}) always returns exactly one row, for endedMonth itself.

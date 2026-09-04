@@ -38,7 +38,9 @@ import { checkUpdateCheckNow, checkUpdateReview } from '@/lib/update/ratelimit';
 import { classify, parseSemver, type UpdateSeverity } from '@/lib/update/semver';
 import { dismissVersion, readUpdateState, setAutoApply, setUpdateChecksEnabled } from '@/lib/update/state';
 import { watchtowerConfig } from '@/lib/update/watchtower';
+import { nowIso } from '@/lib/clock';
 import { APP_VERSION } from '@/lib/version';
+import { pendingApplyMessage } from './pending-apply-message';
 
 export interface ProfileFormState {
   error?: string;
@@ -251,12 +253,26 @@ export interface UpdateActionState {
    *
    * Rather than spend time proving WHY the props do not arrive — force-dynamic semantics, the
    * reverse proxy in front of the NAS, or something else entirely, none of it knowable from
-   * source — these six fields let the two actions that change availability hand the client
-   * exactly what they just wrote, so updates-client.tsx's resolveView() has a second, always-
-   * fresh source to prefer over whatever props it was last rendered with. Optional, because
-   * enableUpdateChecksAction/disableUpdateChecksAction/dismissUpdateAction still return only
-   * { message } or { error } — only checkForUpdateNowAction and applyUpdateAction populate
-   * these, and only AFTER their own write.
+   * source — these fields let each action hand the client exactly what it just wrote, so
+   * updates-client.tsx's resolveView() has a second, always-fresh source to prefer over whatever
+   * props it was last rendered with.
+   *
+   * v1.31.0 item M-3. Task 3d populated these on checkForUpdateNowAction and applyUpdateAction
+   * ONLY, and the review's own words for shipping that were "shipping two fixed and four not
+   * will read as a partial fix": if the props genuinely do not arrive on this install then
+   * enableUpdateChecksAction, disableUpdateChecksAction, setAutoApplyAction and
+   * dismissUpdateAction have the identical symptom, each returning { message } and each read from
+   * props on the next render. "Not now" was the visible one — `dismissed` was derived from
+   * props.dismissedVersion, so the button appeared inert. All six now return
+   * currentAvailability() after their own write, and the three fields the other four actually
+   * move (`enabled`, `autoApply`, `dismissedVersion`) are part of that one payload rather than a
+   * second helper: a second precedence helper beside resolveView would be the very defect this
+   * batch of fixes is about.
+   *
+   * Still optional, and still populated only AFTER a write. An action that refuses before
+   * writing (a cross-origin request, a failed schema parse, "Turn update checks on first")
+   * returns { error } alone, because it has nothing fresher to report than the props already on
+   * screen.
    */
   latestVersion?: string | null;
   latestPublishedAt?: string | null;
@@ -264,18 +280,46 @@ export interface UpdateActionState {
   severity?: UpdateSeverity;
   applyRequestedVersion?: string | null;
   applyRequestedAt?: string | null;
+  enabled?: boolean;
+  autoApply?: boolean;
+  dismissedVersion?: string | null;
+  /**
+   * When currentAvailability() read the state, so resolveView can rank SIX action results by
+   * recency instead of by a hardcoded order. With two results the order could be argued from
+   * what each action writes; with six it cannot — press Enable then Check and the enable
+   * result's (correctly wiped) `latestVersion: null` is a defined value that would beat the
+   * check result's real answer under any fixed ordering, and reversing the order breaks the
+   * opposite sequence. A stamp settles it without a fixed opinion. ISO-8601 UTC, so a plain
+   * string comparison is a chronological one.
+   */
+  resolvedAt?: string;
 }
 
 /**
  * Task 3d: the same severity/availability computation UpdatesCard's server component does
  * (parseSemver + classify against APP_VERSION), read straight from readUpdateState() so a
  * caller can hand the client the state it just committed. Callers must invoke this AFTER their
- * own write — recordCheckOutcome / recordApplyRequested / reconcilePendingApply — never before,
- * or it would hand back the stale state this whole task exists to stop happening.
+ * own write — recordCheckOutcome / recordApplyRequested / reconcilePendingApply /
+ * setUpdateChecksEnabled / setAutoApply / dismissVersion — never before, or it would hand back
+ * the stale state this whole task exists to stop happening.
+ *
+ * v1.31.0 item M-3: ONE payload covering every state-derived field the card renders, not one
+ * shape per action. readUpdateState() is a single read of the whole `update.` key space, so what
+ * comes back is internally consistent by construction — there is no arrangement of these fields
+ * the database was never actually in, which is what lets resolveView prefer a whole result.
  */
 function currentAvailability(): Pick<
   UpdateActionState,
-  'latestVersion' | 'latestPublishedAt' | 'lastCheckedAt' | 'severity' | 'applyRequestedVersion' | 'applyRequestedAt'
+  | 'latestVersion'
+  | 'latestPublishedAt'
+  | 'lastCheckedAt'
+  | 'severity'
+  | 'applyRequestedVersion'
+  | 'applyRequestedAt'
+  | 'enabled'
+  | 'autoApply'
+  | 'dismissedVersion'
+  | 'resolvedAt'
 > {
   const state = readUpdateState();
   const current = parseSemver(APP_VERSION);
@@ -288,6 +332,10 @@ function currentAvailability(): Pick<
     severity,
     applyRequestedVersion: state.applyRequestedVersion,
     applyRequestedAt: state.applyRequestedAt,
+    enabled: state.enabled,
+    autoApply: state.autoApply,
+    dismissedVersion: state.dismissedVersion,
+    resolvedAt: nowIso(),
   };
 }
 
@@ -333,7 +381,11 @@ export async function enableUpdateChecksAction(_prev: UpdateActionState, formDat
   // MUST-10.3: the caller's id comes from the session, never from a field.
   setUpdateChecksEnabled({ enabled: true, userId: user.id });
   revalidatePath(UPDATE_PATH);
-  return { message: 'Update checks are on. This app will ask GitHub once a day whether a newer version is published.' };
+  // Item M-3: read AFTER the write, the same rule checkForUpdateNowAction below already follows.
+  return {
+    message: 'Update checks are on. This app will ask GitHub once a day whether a newer version is published.',
+    ...currentAvailability(),
+  };
 }
 
 export async function disableUpdateChecksAction(_prev: UpdateActionState, formData: FormData): Promise<UpdateActionState> {
@@ -343,7 +395,12 @@ export async function disableUpdateChecksAction(_prev: UpdateActionState, formDa
   // MUST-3.4: this wipes every update. key but the flag. Off means off.
   setUpdateChecksEnabled({ enabled: false, userId: user.id });
   revalidatePath(UPDATE_PATH);
-  return { message: 'Update checks are off. Nothing about updates leaves this machine now.' };
+  // Item M-3: MUST-3.4's wipe is exactly why this has to hand state back — every availability
+  // field the card was rendering is gone now, and props alone would keep showing them.
+  return {
+    message: 'Update checks are off. Nothing about updates leaves this machine now.',
+    ...currentAvailability(),
+  };
 }
 
 export async function setAutoApplyAction(_prev: UpdateActionState, formData: FormData): Promise<UpdateActionState> {
@@ -354,7 +411,7 @@ export async function setAutoApplyAction(_prev: UpdateActionState, formData: For
   // An HTML checkbox posts 'on' when ticked and nothing at all when not.
   setAutoApply(formData.get('autoApply') !== null);
   revalidatePath(UPDATE_PATH);
-  return { message: 'Saved.' };
+  return { message: 'Saved.', ...currentAvailability() };
 }
 
 export async function checkForUpdateNowAction(_prev: UpdateActionState, formData: FormData): Promise<UpdateActionState> {
@@ -446,11 +503,12 @@ export async function applyUpdateAction(_prev: UpdateActionState, formData: Form
     // Task 3d (symptom B): applyUpdate()'s single-flight guard fired — this exact request was
     // already recorded as in flight by an earlier submit (a double-click, a second tab, a
     // stale form resubmit). Map it to the SAME sentence the pending notice in
-    // updates-client.tsx renders (pendingApplyMessage below), so a duplicate submit never
-    // reads as either a fresh failure or a fresh success — it is neither, the first request is
-    // still the one in flight.
+    // updates-client.tsx renders -- item M-2: pendingApplyMessage is now ONE definition in
+    // ./pending-apply-message, imported by both, rather than two hand-kept copies -- so a
+    // duplicate submit never reads as either a fresh failure or a fresh success — it is
+    // neither, the first request is still the one in flight.
     if (result.outcome === 'already-pending') {
-      return { message: pendingApplyMessage(parsed.data), ...availability };
+      return { message: pendingApplyMessage(parsed.data, APP_VERSION), ...availability };
     }
     // MUST-9.8: two of the three fixed sentences. The third is the scrubbed error below.
     return {
@@ -473,16 +531,6 @@ export async function applyUpdateAction(_prev: UpdateActionState, formData: Form
   }
 }
 
-/**
- * Task 3d (symptom B): the literal sentence updates-client.tsx's pending notice renders for the
- * exact same condition (an apply already in flight for this version). Duplicated rather than
- * shared, because a 'use server' file may only export async functions — there is no way to
- * hand a plain string-builder across that boundary. Keep the two wordings in lockstep.
- */
-function pendingApplyMessage(version: string): string {
-  return `Watchtower is pulling ${version}. This page will stop responding for a minute while the container restarts, then come back on the new version. Reload in a minute or two. If this card still says v${APP_VERSION} after 30 minutes, the update did not land and the reason will appear here.`;
-}
-
 /** §9.3 item 6 / MUST-5.9. Suppresses only the card's prominence — never the check, never the dedup. */
 export async function dismissUpdateAction(_prev: UpdateActionState, formData: FormData): Promise<UpdateActionState> {
   const blocked = await updateGuard();
@@ -492,7 +540,7 @@ export async function dismissUpdateAction(_prev: UpdateActionState, formData: Fo
   if (raw.length === 0) {
     dismissVersion('');
     revalidatePath(UPDATE_PATH);
-    return { message: 'Showing this again.' };
+    return { message: 'Showing this again.', ...currentAvailability() };
   }
   const parsed = versionSchema.safeParse(raw);
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Invalid request.' };
@@ -505,5 +553,10 @@ export async function dismissUpdateAction(_prev: UpdateActionState, formData: Fo
   if (state.latestVersion !== parsed.data) return { error: STALE_VERSION_ERROR };
   dismissVersion(parsed.data);
   revalidatePath(UPDATE_PATH);
-  return { message: `Skipping ${parsed.data} for now. You will still be told when a newer version is published.` };
+  // Item M-3: `dismissed` in updates-client.tsx came from props.dismissedVersion, so without
+  // this "Not now" was visibly inert on an install where the props do not arrive.
+  return {
+    message: `Skipping ${parsed.data} for now. You will still be told when a newer version is published.`,
+    ...currentAvailability(),
+  };
 }

@@ -1,5 +1,5 @@
-import { findUserById } from '@/lib/auth/users';
-import { isSelfScoped, type Viewer } from '@/lib/auth/viewer';
+import { viewerFor } from '@/lib/auth/users';
+import { HOUSEHOLD_VIEWER, isSelfScoped } from '@/lib/auth/viewer';
 import { addMonths, currentMonth, monthEnd, todayIso } from '@/lib/dates';
 import { isEventEnabled, notifiableUsers } from '@/lib/notify/config';
 import { CHANNELS, savingsMonthClosedKey, savingsTargetMetKey, savingsTargetPaceKey } from '@/lib/notify/events';
@@ -14,10 +14,13 @@ import { savingsProgress, savingsStreak } from '@/lib/savings-target';
  *
  * Ruling T3: a savings target is household-scoped only, never per-person, so every evaluator
  * below reads the SAME pooled figure for every recipient rather than re-scoping per viewer the
- * way the monthly digest's household/personal split does (evaluate/monthly.ts's viewerFor).
- * `id: 0` on the placeholder viewer is never read: ownerScope (src/lib/auth/viewer.ts) resolves
- * visibility 'household' to "no restriction" without consulting it, the same placeholder shape
- * src/lib/loans.ts's loansTotalOwedCents() already uses for an identical whole-household total.
+ * way the monthly digest's household/personal split does (viewerFor, src/lib/auth/users.ts).
+ * Every read below therefore goes through HOUSEHOLD_VIEWER (src/lib/auth/viewer.ts), whose
+ * `id: 0` is never consulted: ownerScope resolves visibility 'household' to "no restriction"
+ * without reading it. v1.31.0 item M-1: this file used to declare that viewer itself, as
+ * `HOUSEHOLD_WIDE`, while evaluate/digest.ts exported an identical `HOUSEHOLD_VIEWER` and
+ * src/lib/loans.ts's loansTotalOwedCents() hand-built a third for the identical whole-household
+ * reason -- three copies of one security-relevant literal, now one.
  *
  * S-18 fix, round 1 (v1.13.0 ruling R2, new scope): T3 justifies the READ SHAPE above and says
  * nothing about DELIVERY. Every send below carried the household's netCents and targetCents to
@@ -42,8 +45,6 @@ import { savingsProgress, savingsStreak } from '@/lib/savings-target';
  * so nothing here recomputes income, spend, net, or the streak; this file only decides WHEN to
  * fire and renders what savingsProgress/savingsStreak already computed.
  */
-const HOUSEHOLD_WIDE: Viewer = { id: 0, role: 'admin', visibility: 'household' };
-
 /**
  * Every notifiable user with at least one channel enabled for `eventId`, each carrying the one
  * fact the send below has to know about them. isSelfScoped() itself rather than a second copy of
@@ -55,23 +56,10 @@ function participantsFor(eventId: string): { userId: number; selfScoped: boolean
     .filter((user) => CHANNELS.some((channel) => isEventEnabled(user.id, eventId, channel)))
     .map((user) => ({
       userId: user.id,
-      selfScoped: isSelfScoped({ id: user.id, role: user.role, visibility: user.visibility }),
+      selfScoped: isSelfScoped(user),
     }));
 }
 
-/**
- * The recipient's own scope, for the two per-user sends below. Its own local copy, matching the
- * shape evaluate/digest.ts, evaluate/pace.ts and evaluate/monthly.ts each already carry -- see
- * digest.ts's viewerFor docblock for the fuller argument; none of the four exports its internals
- * as test-only surface for the others.
- *
- * Returns null when the recipient's row is gone by the time this runs (a deleted account
- * mid-batch): item BK's precedent, sending nothing rather than guessing a scope.
- */
-function viewerFor(userId: number): Viewer | null {
-  const user = findUserById(userId);
-  return user ? { id: user.id, role: user.role, visibility: user.visibility } : null;
-}
 
 /**
  * `savings_target_met` (tick trigger). No fingerprint cache the way evaluateBudgets'/
@@ -93,7 +81,7 @@ export function evaluateSavingsTargetMet(input: { now: Date; tz: string }): numb
   if (participants.length === 0) return 0;
 
   const month = currentMonth(input.now, input.tz);
-  const progress = savingsProgress(month, HOUSEHOLD_WIDE);
+  const progress = savingsProgress(month, HOUSEHOLD_VIEWER);
   if (progress.targetCents === null || !progress.met) return 0;
 
   // One render, shared across every recipient: ruling T3 means there is no per-person figure
@@ -165,7 +153,7 @@ function fireSavingsPace(input: { userId: number; now: Date; tz: string }): numb
   // From monthEnd, so February is 29 days in a leap year without a leap-year rule here --
   // the same reasoning evaluate/pace.ts's own daysInMonth line documents.
   const daysInMonth = Number(monthEnd(month).slice(8, 10));
-  const progress = savingsProgress(month, HOUSEHOLD_WIDE);
+  const progress = savingsProgress(month, HOUSEHOLD_VIEWER);
   if (progress.targetCents === null) return 0;
 
   const proRatedTargetCents = Math.round((progress.targetCents * dayOfMonth) / daysInMonth);
@@ -218,10 +206,10 @@ function fireSavingsMonthClosed(input: { userId: number; now: Date; tz: string }
   if (selfScoped && householdRoutedChannels('savings_month_closed').length === 0) return 0;
 
   const closedMonth = addMonths(currentMonth(input.now, input.tz), -1);
-  const progress = savingsProgress(closedMonth, HOUSEHOLD_WIDE);
+  const progress = savingsProgress(closedMonth, HOUSEHOLD_VIEWER);
   if (progress.targetCents === null) return 0;
 
-  const streak = savingsStreak(closedMonth, HOUSEHOLD_WIDE);
+  const streak = savingsStreak(closedMonth, HOUSEHOLD_VIEWER);
   const { subject, body } = renderEvent({
     event: 'savings_month_closed',
     month: closedMonth,

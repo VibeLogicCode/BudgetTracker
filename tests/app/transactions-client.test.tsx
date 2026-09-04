@@ -2473,6 +2473,27 @@ describe('Task 3c: rows fold below sm only when their own filter is at default',
     expect(document.getElementById('transactions-filter-fields')?.className).toContain('hidden');
   });
 
+  /**
+   * v1.31.0 item M-4. Task 3c gave the transfer/queue row a brand-new wrapper (the other four
+   * folded rows appended rowVisibility to a `<span>` that already existed around their pills), and
+   * a default flex wrapper made the segmented `<nav>` a row flex ITEM -- so it shrank from the full
+   * column width it had as a direct child of the form to its own content width, at every
+   * breakpoint, in a release whose own claim was "unchanged at `sm` and up". `flex-col` restores
+   * `align-items: stretch`. Asserted on the class because that is the only thing jsdom can see:
+   * it computes no layout, so the width itself is not observable here.
+   */
+  it('item M-4: the transfer/queue wrapper is a COLUMN flex, so the segmented nav still spans the row', () => {
+    render(
+      <TransactionsClient page={pageWithRow()} accounts={[]} categories={categories} people={[]} today="2026-03-02" />,
+    );
+    expect(transferRow().className).toContain('flex-col');
+    // The other four wrap pills that were already inside a row flex before Task 3c, so their
+    // geometry did not move and must not be "fixed" to match this one.
+    for (const row of [viewRow(), sortRow(), setByRow()]) {
+      expect(row.className).not.toContain('flex-col');
+    }
+  });
+
   it('?source=rule -- the import-audit landing case -- keeps the Set-by row visible while every other folding row still hides', () => {
     render(
       <TransactionsClient

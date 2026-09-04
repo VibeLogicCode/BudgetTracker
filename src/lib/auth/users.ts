@@ -3,6 +3,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '@/db/client';
 import { users } from '@/db/schema';
+import type { Viewer } from '@/lib/auth/viewer';
 import { nowIso } from '@/lib/clock';
 import { hashPassword, passwordSchema } from './password';
 
@@ -87,6 +88,51 @@ export function listUsers(): UserRecord[] {
 
 export function findUserById(id: number): UserRecord | null {
   return getDb().select(PUBLIC_COLUMNS).from(users).where(eq(users.id, id)).get() ?? null;
+}
+
+/**
+ * v1.31.0 item M-1. THE reader-scope projection of a user row: the one function that turns a
+ * user id into the Viewer every scoped read (src/lib/reports.ts's scopeFor, ownerScope,
+ * isSelfScoped) is asked through. Returns null -- and every caller then does NOTHING rather than
+ * guessing a scope -- when the row is gone by the time this runs.
+ *
+ * It lived FIVE times, byte-identical, in notify/evaluate/{digest,monthly,pace,savings,stale}.ts,
+ * plus two more inline `{ id, role, visibility }` constructions in evaluate/budget.ts and
+ * evaluate/savings.ts. Each of the five carried a docblock defending the duplication -- "kept
+ * local", "none exports the other three's internals as test-only surface" -- and the defence was
+ * weak: this is a three-line pure projection of a user row, `findUserById` is right here, and
+ * seven copies of a security-relevant projection with nothing tying them together is precisely the
+ * shape that produced S-18 (a household budget total reaching a self-scoped recipient's own
+ * notification). tests/ops/viewer-construction.test.ts now stops an eighth.
+ *
+ * Here rather than in src/lib/auth/viewer.ts because it needs a database read and that module is
+ * deliberately dependency-free so a client component may import the Viewer type
+ * (tests/ops/client-bundle.test.ts). The two inline sites did not need this function at all: both
+ * already hold a `NotifiableUser`, which is structurally a Viewer plus a name, so they now pass
+ * the row straight to isSelfScoped() rather than re-projecting it.
+ *
+ * THE REASONING THE FIVE COPIES CARRIED, kept because it is the argument for each half of the
+ * shape above:
+ *
+ * - v1.13.0 ruling R2: every reports.ts aggregate an evaluator calls takes a viewer, and a
+ *   self-visibility viewer is silently forced to their own scope regardless of what is asked
+ *   (scopeFor). Building the viewer from the RECIPIENT's own row -- not a hardcoded household
+ *   viewer -- is what makes a household/admin recipient's message byte-identical to before and a
+ *   self-visibility recipient's message carry only their own attributed figures.
+ * - S-18 (ruling R2 follow-up): the aggregates that take NO viewer to force
+ *   (budgetProgress, suggestionsFor, savingsProgress -- HOUSEHOLD_ONLY_AT_PAGE's callers, see
+ *   tests/ops/visibility-invariants.test.ts) cannot be narrowed by handing them this viewer, so
+ *   each call site branches on `isSelfScoped(viewer)` itself and asks a different question.
+ * - v1.13.1 items BK and BT: returning null instead of falling back to a household-scoped admin
+ *   viewer. The fallback existed so one deleted row could not sink a whole batch, which is the
+ *   right instinct; the wrong part was its shape. A self-scoped recipient whose row vanished in
+ *   the window their message fired would have carried household-wide figures in that one
+ *   delivery -- the single thing ruling R2 exists to prevent. Skipping still cannot crash a batch:
+ *   0 already means "nothing was enqueued" to every caller.
+ */
+export function viewerFor(userId: number): Viewer | null {
+  const user = findUserById(userId);
+  return user ? { id: user.id, role: user.role, visibility: user.visibility } : null;
 }
 
 export function findUserByUsername(username: string): UserWithSecrets | null {

@@ -3,8 +3,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { UpdatesClient, type UpdatesViewProps } from '@/app/(app)/settings/updates-client';
-import { applyUpdateAction, checkForUpdateNowAction, reviewUpdateAction } from '@/app/(app)/settings/actions';
+import {
+  applyUpdateAction,
+  checkForUpdateNowAction,
+  dismissUpdateAction,
+  enableUpdateChecksAction,
+  reviewUpdateAction,
+} from '@/app/(app)/settings/actions';
 
 vi.mock('@/app/(app)/settings/actions', () => ({
   enableUpdateChecksAction: vi.fn(async () => ({})),
@@ -360,5 +367,144 @@ describe('Task 3d, symptom B: the pending block replaces the apply buttons', () 
     );
     expect(document.body.textContent?.toLowerCase()).not.toContain('bearer');
     expect(document.body.textContent?.toLowerCase()).not.toContain('token');
+  });
+});
+
+/**
+ * v1.31.0 item M-3. Task 3d fixed the stale-props symptom for Check now and Update now only; the
+ * other four update actions returned { message } alone and were still read from props on the next
+ * render, so on an install where the props do not arrive they appeared to do nothing until a
+ * manual reload. "Not now" was the visible one: `dismissed` came from props.dismissedVersion.
+ *
+ * Each test renders with props that NEVER change and moves the UI through the action's own
+ * resolved value alone -- the same construction Task 3d's own symptom-A test uses.
+ */
+describe('item M-3: the other four update actions also hand back what they just wrote', () => {
+  it('Not now hides the offer with NO prop change', async () => {
+    vi.mocked(dismissUpdateAction).mockResolvedValueOnce({
+      message: 'Skipping 1.4.0 for now. You will still be told when a newer version is published.',
+      latestVersion: '1.4.0',
+      severity: 'minor',
+      dismissedVersion: '1.4.0',
+      resolvedAt: '2026-08-18T09:35:00.000Z',
+    });
+    render(<UpdatesClient {...base} severity="minor" latestVersion="1.4.0" />);
+    expect(screen.getByRole('button', { name: 'Not now' })).toBeTruthy();
+
+    submit('Not now');
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Show again' })).toBeTruthy());
+    expect(screen.queryByRole('button', { name: 'Not now' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Update now' })).toBeNull();
+  });
+
+  it('Enable update checks leaves the off state with NO prop change', async () => {
+    vi.mocked(enableUpdateChecksAction).mockResolvedValueOnce({
+      message: 'Update checks are on. This app will ask GitHub once a day whether a newer version is published.',
+      enabled: true,
+      severity: 'none',
+      latestVersion: null,
+      resolvedAt: '2026-08-18T09:35:00.000Z',
+    });
+    render(<UpdatesClient {...base} enabled={false} autoApply={false} lastCheckedAt={null} />);
+    expect(screen.getByRole('button', { name: 'Enable update checks' })).toBeTruthy();
+
+    submit('Enable update checks');
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Enable update checks' })).toBeNull());
+    expect(screen.getByRole('button', { name: 'Check now' })).toBeTruthy();
+  });
+
+  it('ranks two action results by resolvedAt, not by the order resolveView lists them', async () => {
+    // Enable wipes every `update.` key (MUST-3.4), so its payload's `latestVersion: null` is a
+    // DEFINED value. Check runs afterwards and finds 9.9.9. Under the old fixed ordering the
+    // enable result sat wherever it was listed and could beat the later, truer answer; the
+    // resolvedAt stamps make the later write win regardless of listing order.
+    vi.mocked(enableUpdateChecksAction).mockResolvedValueOnce({
+      message: 'Update checks are on. This app will ask GitHub once a day whether a newer version is published.',
+      enabled: true,
+      latestVersion: null,
+      severity: 'none',
+      resolvedAt: '2026-08-18T09:35:00.000Z',
+    });
+    vi.mocked(checkForUpdateNowAction).mockResolvedValueOnce({
+      message: 'Version 9.9.9 is available.',
+      enabled: true,
+      latestVersion: '9.9.9',
+      severity: 'minor',
+      resolvedAt: '2026-08-18T09:36:00.000Z',
+    });
+    render(<UpdatesClient {...base} enabled={false} autoApply={false} lastCheckedAt={null} />);
+
+    submit('Enable update checks');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Check now' })).toBeTruthy());
+
+    submit('Check now');
+    await waitFor(() => expect(screen.getByText('Version 9.9.9 is available')).toBeTruthy());
+    expect(screen.queryByText('Up to date (v1.3.1)')).toBeNull();
+  });
+});
+
+/**
+ * v1.31.0 item M-6. `pending` compares a wall-clock reading against a server-written timestamp,
+ * and UpdatesClient is rendered on the SERVER for the initial HTML and again on hydration. While
+ * it read Date.now() during render, a request landing within a few hundred milliseconds of
+ * MUST-7.6's 30-minute boundary produced different markup on the two sides -- pending notice vs.
+ * `Update now` -- which is a hydration mismatch. The window is narrow; the determinism is not
+ * optional.
+ *
+ * The contract these two tests pin together: the SERVER render never depends on the clock, and the
+ * pending state arrives from an effect afterwards. Before the fix the first test would have found
+ * the pending sentence in the server HTML (the clock says pending) while a hydrating client a few
+ * hundred ms later could compute the opposite.
+ */
+describe('item M-6: pending is not derived from the clock during the first render', () => {
+  const NOW = new Date('2026-08-18T09:30:00.000Z');
+  const fiveMinutesAgo = new Date(NOW.getTime() - 5 * 60_000).toISOString();
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('the server render does not read the clock, at either side of the 30-minute boundary', () => {
+    const props = {
+      ...base,
+      severity: 'minor' as const,
+      latestVersion: '1.4.0',
+      applyRequestedVersion: '1.4.0',
+      applyRequestedAt: fiveMinutesAgo,
+    };
+    // Inside the 30-minute window by the clock, and 31 minutes outside it. Both server renders
+    // must agree, because neither may read the clock at all.
+    const inside = renderToStaticMarkup(<UpdatesClient {...props} />);
+    vi.setSystemTime(new Date(NOW.getTime() + 31 * 60_000));
+    const outside = renderToStaticMarkup(<UpdatesClient {...props} />);
+    // Asserted on the two branch markers rather than on the whole markup: a whole-string compare
+    // fails with two 2KB blobs a reader has to diff by eye, and these two strings are exactly what
+    // the branch decides between.
+    for (const html of [inside, outside]) {
+      expect(html, 'the server render derived `pending` from the clock').not.toContain('Watchtower is pulling');
+      expect(html, 'the server render derived `pending` from the clock').toContain('Update now');
+    }
+  });
+
+  it('the pending notice arrives after the effect, on the client', () => {
+    render(
+      <UpdatesClient
+        {...base}
+        severity="minor"
+        latestVersion="1.4.0"
+        applyRequestedVersion="1.4.0"
+        applyRequestedAt={fiveMinutesAgo}
+      />,
+    );
+    // render() flushes effects, so by here the clock HAS been read -- on the client only.
+    expect(screen.getByText(/Watchtower is pulling 1\.4\.0/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Update now' })).toBeNull();
   });
 });

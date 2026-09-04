@@ -6,18 +6,22 @@ import { saveEmailTarget, saveSmtp, setPref } from '@/lib/notify/config';
 import { resetOutboxPumpForTests } from '@/lib/notify/outbox';
 import { resetNotifySenderForTests, setNotifySenderForTests } from '@/lib/notify/send';
 
-// Item BK's own test needs findUserById mockable independently of fireMonthlyDigest's and
+// Item BK's own test needs viewerFor mockable independently of fireMonthlyDigest's and
 // enqueue()'s separate isEventEnabled() guards (config.ts), which run their own raw `users`
 // query and would otherwise mask viewerFor()'s behaviour: a REAL row deletion would ALSO trip
 // those live-user checks and return 0 regardless of what viewerFor does, proving nothing about
-// this fix. Spying on findUserById reproduces the race the docblock actually describes -- gone
+// this fix. Spying on viewerFor reproduces the race the docblock actually describes -- gone
 // at the moment viewerFor's OWN lookup runs -- without also making isEventEnabled see it as gone.
 vi.mock('@/lib/auth/users', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/users')>();
-  return { ...actual, findUserById: vi.fn(actual.findUserById) };
+  // v1.31.0 item M-1: viewerFor now LIVES in this module (it used to be five local copies, one
+  // per evaluator), so the spy goes on viewerFor itself rather than on the findUserById it calls.
+  // Mocking findUserById here would no longer reach it: viewerFor resolves that name through its
+  // own module scope, not through this mocked namespace object.
+  return { ...actual, viewerFor: vi.fn(actual.viewerFor) };
 });
 
-import { findUserById, setUserVisibility } from '@/lib/auth/users';
+import { setUserVisibility, viewerFor } from '@/lib/auth/users';
 import { evaluateMonthBoundary } from '@/lib/notify/evaluate/monthly';
 
 let t: TestDb;
@@ -31,7 +35,7 @@ beforeEach(() => {
   creatorId = insertTestUser(t.db, { username: 'creator' });
   resetOutboxPumpForTests();
   setNotifySenderForTests(async () => {});
-  vi.mocked(findUserById).mockClear();
+  vi.mocked(viewerFor).mockClear();
 });
 
 afterEach(() => {
@@ -448,13 +452,13 @@ describe('item BK: viewerFor skips rather than falling back to a household scope
     setPref(userId, 'predicted_vs_actual', 'email', false);
     setPref(userId, 'suggested_budget_refresh', 'email', false);
 
-    // findUserById is stubbed to return null for exactly the one call viewerFor makes, leaving
+    // viewerFor is stubbed to return null for exactly the one call the evaluator makes, leaving
     // the real users/prefs rows untouched -- a real row deletion would ALSO trip
     // fireMonthlyDigest's own independent isEventEnabled() live-user check (config.ts), which
     // would return 0 regardless of what viewerFor does and prove nothing about this fix. This
     // reproduces the race the docblock actually describes: gone at the moment viewerFor's own
     // lookup runs.
-    vi.mocked(findUserById).mockReturnValueOnce(null);
+    vi.mocked(viewerFor).mockReturnValueOnce(null);
     expect(evaluateMonthBoundary({ userId, now: new Date('2026-08-01T09:00:00Z'), tz: TZ })).toBe(0);
     expect(keys()).toEqual([]);
   });

@@ -558,8 +558,8 @@ describe('budgetProgress — C-01: archiving a parent must not erase its live ch
  * the walk only ever iterates `parentId === null` rows -- it can never surface on its own
  * either. Half 1's fix treats a category whose parent is absent from `all` as top-level.
  *
- * Inserted directly via SQL: half 2 (src/lib/categories.ts, setCategoryIncome/createCategory)
- * now refuses to let a NEW category end up in this exact shape, so this fixture recreates an
+ * Inserted directly via SQL: half 2 (src/lib/categories.ts, createCategory) refuses to let a
+ * NEW category end up in this exact shape, so this fixture recreates an
  * EXISTING database's pre-fix state -- the same reason other tests in this file reach for
  * `sqlite.prepare(...)` rather than the public mutators for an archived-with-no-guard state.
  */

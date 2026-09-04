@@ -2630,8 +2630,25 @@ export function TransactionsClient({
                 back at default, same as every row rowVisibility (above) covers -- see that
                 helper's doc comment for why an unconditional fold was rejected. `reviewMode`'s own
                 queue-chip branch and the ordinary transfer-view branch share one row, so one
-                wrapper (rather than two) picks whichever branch's own active state applies. */}
-            <div className={rowVisibility(reviewMode ? activeQueueChip !== '' : activeTransferView !== 'all')}>
+                wrapper (rather than two) picks whichever branch's own active state applies.
+
+                `flex-col`, and item M-4 is why. This is the ONE folded row that needed a brand-new
+                wrapper -- the other four appended rowVisibility to a `<span>` that already existed
+                around their pills, so their geometry did not move. `PillNav` renders a `<nav>` that
+                is itself `flex flex-wrap ... rounded-full border ... p-1` and, as a direct child of
+                this `flex flex-col` form, stretched to the full column width. Putting it inside a
+                default (row) flex wrapper silently shrank the segmented bar to its content width at
+                EVERY breakpoint, contradicting Task 3c's own "unchanged at `sm` and up" claim in a
+                defects-only release. `flex-col` restores stretch, because a column flex container's
+                items default to `align-items: stretch`.
+
+                Rejected: the review's own suggested `w-full` on this wrapper, which is a no-op --
+                the wrapper is already a stretched flex item of the column, so it was never the
+                narrow element; the `<nav>` inside it was. Also rejected: passing the classes
+                through `PillNav`'s `className`, which REPLACES rather than appends (by design), so
+                both branches below would have had to restate the whole default chrome -- two more
+                copies of one look, which is the defect this release is about. */}
+            <div className={`${rowVisibility(reviewMode ? activeQueueChip !== '' : activeTransferView !== 'all')} flex-col`}>
               {reviewMode ? (
                 <PillNav
                   groupLabel="Filter the review queue"

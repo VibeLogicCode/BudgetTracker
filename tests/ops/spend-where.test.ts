@@ -4,7 +4,7 @@ import path from 'node:path';
 
 const ROOT = process.cwd();
 
-/** Same walk() shape as tests/ops/client-bundle.test.ts, scoped to src/lib per this guard's brief. */
+/** Same walk() shape as tests/ops/client-bundle.test.ts. */
 function walk(dir: string): string[] {
   const full = path.join(ROOT, dir);
   return fs.readdirSync(full, { withFileTypes: true }).flatMap((entry) => {
@@ -22,18 +22,26 @@ function stripComments(source: string): string {
 }
 
 /**
- * C-02 (Task 1): the literal `eq(transactions.isTransfer, false)` may appear under src/lib/ only
- * in spend-where.ts (NOT_TRANSFER's own definition) or in a file on this allowlist. Everywhere
- * else, "is this row spend" means the WHOLE rule -- transfers AND loan-principal movements --
- * via `SPEND_ROW_WHERE`, not transfers alone; the literal a bare filter is exactly the shape of
+ * C-02 (Task 1): the literal `eq(transactions.isTransfer, false)` may appear anywhere under src/
+ * only in spend-where.ts (NOT_TRANSFER's own definition) or in a file on this allowlist.
+ * Everywhere else, "is this row spend" means the WHOLE rule -- transfers AND loan-principal
+ * movements -- via `SPEND_ROW_WHERE`, not transfers alone; a bare filter is exactly the shape of
  * the bug this task fixes (see spend-where.ts's own docblock for the measured defect).
  *
+ * v1.31.0 item M-7: the walk covers ALL of src/, not just src/lib/. It used to say src/lib and
+ * its own comment said "scoped to src/lib per this guard's brief", which made its stated scope
+ * narrower than its stated purpose: a money aggregate written in a page, a route handler or a
+ * server action under src/app is exactly as wrong as one written in a library, and would not have
+ * been seen. There were zero such occurrences under src/app when the walk was widened, so this
+ * closed a coverage hole rather than a live defect -- which is the only moment a guard can be
+ * widened cheaply, and the reason to do it then.
+ *
  * Structured as an INVERTED denylist, not the report's original "ban the literal everywhere"
- * design: 14 of the 20 occurrences under src/lib/ found while writing this guard are legitimate
- * "does this household have any data at all" probes or eligibility/review-queue checks, not
- * money aggregates, and a flat ban would have failed on every one of them. Each entry names the
- * ONE sentence that makes it not a money aggregate, so a reviewer can check the reasoning
- * without re-deriving it, and so a NEW bare occurrence must be justified the same way or fixed.
+ * design: 14 of the 20 occurrences found while writing this guard are legitimate "does this
+ * household have any data at all" probes or eligibility/review-queue checks, not money
+ * aggregates, and a flat ban would have failed on every one of them. Each entry names the ONE
+ * sentence that makes it not a money aggregate, so a reviewer can check the reasoning without
+ * re-deriving it, and so a NEW bare occurrence must be justified the same way or fixed.
  */
 const ALLOWED_BARE_TRANSFER_FILTERS: Record<string, string> = {
   'src/lib/tax.ts': "taxYears() asks whether a year has any data at all, not what was spent in it",
@@ -47,7 +55,7 @@ const ALLOWED_BARE_TRANSFER_FILTERS: Record<string, string> = {
 const BARE_TRANSFER_FILTER = /eq\(\s*transactions\.isTransfer\s*,\s*false\s*\)/g;
 
 describe('a bare `eq(transactions.isTransfer, false)` never substitutes for SPEND_ROW_WHERE in a money aggregate (C-02)', () => {
-  const files = walk('src/lib');
+  const files = walk('src');
   const countsByFile = new Map<string, number>();
   for (const file of files) {
     const source = stripComments(fs.readFileSync(path.join(ROOT, file), 'utf8'));
@@ -74,7 +82,7 @@ describe('a bare `eq(transactions.isTransfer, false)` never substitutes for SPEN
     expect(offenders).toEqual([]);
   });
 
-  it('every allowlist entry still names a file that actually exists under src/lib', () => {
+  it('every allowlist entry still names a file that actually exists under src', () => {
     for (const file of Object.keys(ALLOWED_BARE_TRANSFER_FILTERS)) {
       expect(fs.existsSync(path.join(ROOT, file)), `${file} is allowlisted but no longer exists`).toBe(true);
     }

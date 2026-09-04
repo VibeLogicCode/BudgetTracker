@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useActionState, useState } from 'react';
+import { useActionState, useEffect, useState } from 'react';
 import { FormError } from '@/components/FormError';
 import { renderEmphasis } from '@/components/render-emphasis';
 import { SubmitButton } from '@/components/SubmitButton';
@@ -19,6 +19,7 @@ import {
   type ReviewUpdateState,
   type UpdateActionState,
 } from './actions';
+import { pendingApplyMessage } from './pending-apply-message';
 
 export interface UpdatesViewProps {
   currentVersion: string;
@@ -69,40 +70,61 @@ function stamp(iso: string | null): string {
  */
 const APPLY_CONFIRM_MAX_AGE_MS = 30 * 60_000;
 
-interface ResolvedAvailability {
-  latestVersion: string | null;
-  latestPublishedAt: string | null;
-  lastCheckedAt: string | null;
-  severity: UpdateSeverity;
-  applyRequestedVersion: string | null;
-  applyRequestedAt: string | null;
-}
+/** Every field the card renders that comes from update state rather than from the build. */
+type ResolvedAvailability = Pick<
+  UpdatesViewProps,
+  | 'latestVersion'
+  | 'latestPublishedAt'
+  | 'lastCheckedAt'
+  | 'severity'
+  | 'applyRequestedVersion'
+  | 'applyRequestedAt'
+  | 'enabled'
+  | 'autoApply'
+  | 'dismissedVersion'
+>;
+
+/** The fields resolveView picks over, named once so the loop below and the type agree. */
+const RESOLVED_KEYS = [
+  'latestVersion',
+  'latestPublishedAt',
+  'lastCheckedAt',
+  'severity',
+  'applyRequestedVersion',
+  'applyRequestedAt',
+  'enabled',
+  'autoApply',
+  'dismissedVersion',
+] as const;
 
 /**
- * Task 3d (symptom A). checkForUpdateNowAction and applyUpdateAction now hand back exactly what
- * they just wrote (actions.ts's UpdateActionState fields); this is the ONE place that decides
- * which source wins when props, a check result and an apply result might all disagree. Freshest
- * action result first, because it is the most recent write this tab has any knowledge of;
- * props last, because they may be from a render Next never refreshed (the owner's report).
+ * Task 3d (symptom A). Every update action now hands back exactly what it just wrote
+ * (actions.ts's UpdateActionState fields); this is the ONE place that decides which source wins
+ * when props and several action results might all disagree. An action result beats props,
+ * because props may be from a render Next never refreshed (the owner's report); among action
+ * results the freshest wins.
  *
- * `??` is deliberate, not `||`: an action that ran and found nothing (severity 'none',
- * latestVersion null) still WINS, because those are defined values, not absent ones — a stale
- * "version available" from props must not survive a check that just proved there is nothing to
- * offer.
+ * `!== undefined` is deliberate, not a truthiness or `||` test: an action that ran and found
+ * nothing (severity 'none', latestVersion null, dismissedVersion null) still WINS, because those
+ * are defined values, not absent ones — a stale "version available" from props must not survive
+ * a check that just proved there is nothing to offer.
+ *
+ * v1.31.0 item M-3: SIX action states, not two, and ranked by each result's own `resolvedAt`
+ * stamp rather than by the order they are listed in. With two the hardcoded order was arguable;
+ * with six it is not — press Enable then Check and the enable result's correctly-wiped
+ * `latestVersion: null` is a defined value that would beat the check result's real answer under
+ * any fixed ordering, while reversing the order breaks the opposite sequence. Sorting is stable,
+ * so a result with no stamp (an action that refused before writing, or a test that hands back a
+ * partial payload) keeps its listed position behind the stamped ones and still beats props.
  */
-function resolveView(
-  props: UpdatesViewProps,
-  states: { checkState: UpdateActionState; applyState: UpdateActionState },
-): ResolvedAvailability {
-  const { checkState, applyState } = states;
-  return {
-    latestVersion: checkState.latestVersion ?? applyState.latestVersion ?? props.latestVersion,
-    latestPublishedAt: checkState.latestPublishedAt ?? applyState.latestPublishedAt ?? props.latestPublishedAt,
-    lastCheckedAt: checkState.lastCheckedAt ?? applyState.lastCheckedAt ?? props.lastCheckedAt,
-    severity: checkState.severity ?? applyState.severity ?? props.severity,
-    applyRequestedVersion: checkState.applyRequestedVersion ?? applyState.applyRequestedVersion ?? props.applyRequestedVersion,
-    applyRequestedAt: checkState.applyRequestedAt ?? applyState.applyRequestedAt ?? props.applyRequestedAt,
-  };
+function resolveView(props: UpdatesViewProps, states: readonly UpdateActionState[]): ResolvedAvailability {
+  const ranked = [...states].sort((a, b) => (b.resolvedAt ?? '').localeCompare(a.resolvedAt ?? ''));
+  const resolved = {} as Record<(typeof RESOLVED_KEYS)[number], unknown>;
+  for (const key of RESOLVED_KEYS) {
+    const winner = ranked.find((state) => state[key] !== undefined);
+    resolved[key] = winner === undefined ? props[key] : winner[key];
+  }
+  return resolved as ResolvedAvailability;
 }
 
 export function UpdatesClient(props: UpdatesViewProps) {
@@ -121,6 +143,42 @@ export function UpdatesClient(props: UpdatesViewProps) {
   const messages = [enableState, disableState, autoState, checkState, applyState, dismissState];
   const message = messages.map((s) => s.message).find((m) => m !== undefined);
   const error = messages.map((s) => s.error).find((e) => e !== undefined) ?? review.error;
+
+  // Task 3d (symptom A) / item M-3: resolved, not props, from here down — see resolveView above.
+  // Hoisted ABOVE the "checks are off" branch because `enabled` is now resolved too: pressing
+  // Enable used to leave that branch rendered until the page was reloaded by hand.
+  const resolved = resolveView(props, messages);
+
+  /**
+   * Item M-6. `pending` compares a wall-clock reading against a server-written timestamp, and
+   * UpdatesClient is rendered on the SERVER for the initial HTML and again on hydration. Reading
+   * Date.now() during render therefore produced two different answers for a request landing
+   * within a few hundred milliseconds of MUST-7.6's 30-minute boundary — pending notice in the
+   * HTML, `Update now` button after hydration, which is a hydration mismatch React resolves by
+   * discarding and re-rendering the tree.
+   *
+   * Fixed by not reading the clock during the first render at all: `null` until an effect has
+   * run, which is a value the server and the hydrating client agree on by construction. The
+   * effect re-reads on every change to the pending stamp, so a fresh apply result computes
+   * against a fresh clock rather than against mount time.
+   *
+   * The docblock below is unchanged and still right: this sets no timer, no interval and no
+   * poll. An effect that runs once per state change is not a poll, and MUST-9.9's concern is
+   * repeatedly asking a container that is about to be replaced, not reading the browser's clock.
+   *
+   * The honest cost: on a hard page load while an apply IS in flight, the first paint shows
+   * `Update now` for one frame before the effect swaps in the pending notice. Rejected
+   * alternative: having UpdatesCard (the Server Component) compute the boolean and pass it as a
+   * prop, which removes even that flash. It also puts the 30-minute rule in a second place — the
+   * server would own the props path and this component would still need the clock for the
+   * post-action path, where `applyRequestedAt` comes from an action result the server never saw.
+   * One rule in one place, with a one-frame flash, beat two rules that must agree.
+   */
+  const [clockMs, setClockMs] = useState<number | null>(null);
+  const applyStamp = resolved.applyRequestedAt;
+  useEffect(() => {
+    setClockMs(Date.now());
+  }, [applyStamp]);
 
   /**
    * Backlog item 17 / Part 4: independent of whether APP update checks are on/off (this is a
@@ -144,7 +202,7 @@ export function UpdatesClient(props: UpdatesViewProps) {
     );
 
   // MUST-9.3: the off state. One button, no other control.
-  if (!props.enabled) {
+  if (!resolved.enabled) {
     return (
       <Card>
         <CardHeader title="Updates" description={`Budget Tracker v${props.currentVersion} · update checks are off.`} />
@@ -168,11 +226,11 @@ export function UpdatesClient(props: UpdatesViewProps) {
     );
   }
 
-  // Task 3d (symptom A): resolved, not props, from here down — see resolveView() above.
-  const resolved = resolveView(props, { checkState, applyState });
   const severity = resolved.severity;
   const offered = severity !== 'none' && resolved.latestVersion !== null ? resolved.latestVersion : null;
-  const dismissed = offered !== null && props.dismissedVersion === offered;
+  // Item M-3: resolved, not props. dismissUpdateAction hands back the dismissedVersion it just
+  // wrote, so "Not now" takes effect without a manual reload.
+  const dismissed = offered !== null && resolved.dismissedVersion === offered;
 
   /**
    * Task 3d (symptom B). MUST-9.9 forbids polling a container that is about to be replaced —
@@ -190,17 +248,18 @@ export function UpdatesClient(props: UpdatesViewProps) {
     offered !== null &&
     resolved.applyRequestedVersion === offered &&
     resolved.applyRequestedAt !== null &&
-    Date.now() - Date.parse(resolved.applyRequestedAt) < APPLY_CONFIRM_MAX_AGE_MS;
+    clockMs !== null &&
+    clockMs - Date.parse(resolved.applyRequestedAt) < APPLY_CONFIRM_MAX_AGE_MS;
 
-  const pendingNotice = (
-    <Notice tone="info" title={`Update requested ${stamp(resolved.applyRequestedAt)}`}>
-      <p>
-        Watchtower is pulling {offered}. This page will stop responding for a minute while the container restarts,
-        then come back on the new version. Reload in a minute or two. If this card still says v{props.currentVersion}{' '}
-        after 30 minutes, the update did not land and the reason will appear here.
-      </p>
-    </Notice>
-  );
+  // Item M-2: ONE definition of this sentence (./pending-apply-message), the same function
+  // actions.ts returns when applyUpdate's single-flight guard fires for this same condition. It
+  // used to be this JSX and a template literal over there, kept in step by a comment.
+  const pendingNotice =
+    offered === null ? null : (
+      <Notice tone="info" title={`Update requested ${stamp(resolved.applyRequestedAt)}`}>
+        <p>{pendingApplyMessage(offered, props.currentVersion)}</p>
+      </Notice>
+    );
 
   return (
     <Card>
@@ -237,7 +296,7 @@ export function UpdatesClient(props: UpdatesViewProps) {
           </form>
           <form action={saveAuto} className="flex items-center gap-2">
             <label className="flex items-center gap-2 text-sm text-muted">
-              <input type="checkbox" name="autoApply" defaultChecked={props.autoApply} />
+              <input type="checkbox" name="autoApply" defaultChecked={resolved.autoApply} />
               Install small updates automatically
             </label>
             <SubmitButton className="btn btn--ghost btn--sm">Save</SubmitButton>

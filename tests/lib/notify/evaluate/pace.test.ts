@@ -254,7 +254,7 @@ describe('v1.7.0 Task 11: rollover carry keeps a covered category off the pace a
  * scopes' candidates for every user regardless of visibility, so a self-scoped recipient (a
  * household uses this for a child's account) got a household pace projection by push -- its
  * category name, limit and projected month-end figure -- with no crafted request involved. Fixed
- * with this file's own local viewerFor (findUserById): round 1 marks a self-scoped recipient's
+ * with viewerFor (src/lib/auth/users.ts): round 1 marks a self-scoped recipient's
  * household candidates familyChannelOnly (outbox.ts) so the routed family-channel row survives
  * and the personal copy does not, and skips the household read outright when the event is routed
  * to no family channel at all.

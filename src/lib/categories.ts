@@ -65,8 +65,20 @@ export function createCategory(input: {
     // C-05 half 2: a non-income category with an income parent has no surviving top-level
     // ancestor in budgetProgress's walk (src/lib/budgets.ts) -- Half 1 there makes any
     // EXISTING row in that shape render tolerantly, but nothing should be able to create a
-    // NEW one. Only refuses an EXPLICIT override (isIncome inherits the parent's value above
-    // when the caller omits it, so an ordinary child never trips this).
+    // NEW one. It refuses only an EXPLICIT override: isIncome inherits the parent's value above
+    // when the caller omits it, so an ordinary child never trips this.
+    //
+    // v1.31.0 item M-5: there is exactly ONE caller that always passes isIncome explicitly, and
+    // the docblock used to imply there were none. src/lib/packs.ts's ensureCategory passes
+    // `isIncome: meta?.is_income ?? false`, so a pack declaring a child under an income parent
+    // without `is_income: true` reaches this throw with an explicit `false` it never meant. Left
+    // as a throw rather than softened to inheritance, because the throw is no longer what a pack
+    // importer meets: v1.31.0's R-04(b) added `assertPackFitsCategoryTree`, which refuses that
+    // exact shape BEFORE the first write, as a PackFormatError the route turns into a 400 naming
+    // the offending category and telling the reader to declare `"is_income": true` or re-parent
+    // it. Softening the rule here would have removed the backstop under that pre-flight while
+    // leaving the pre-flight's own message the only thing standing between a pack and a
+    // half-imported tree.
     if (parent.isIncome && !isIncome) {
       throw new Error('A spend category cannot be created under an income category.');
     }
@@ -104,24 +116,22 @@ export function setCategoryTaxRelevant(id: number, taxRelevant: boolean): void {
   getDb().update(categories).set({ taxRelevant }).where(eq(categories.id, id)).run();
 }
 
-/**
- * C-05 half 2 (controller ruling R2): the other half of createCategory's guard above.
- * createCategory only ever checks the ONE row it is inserting, so it cannot stop an existing,
- * already-non-income PARENT from being flipped to income out from under children it already
- * has -- that flip has to be checked against the CURRENT tree, not the caller's input, so it
- * lives in its own function rather than folded into createCategory's input-shaped checks.
+/*
+ * v1.31.0 item M-5: `setCategoryIncome` USED TO LIVE HERE, as C-05 half 2's flip-time guard --
+ * createCategory only checks the ONE row it is inserting, so it could not stop an existing
+ * non-income parent from being flipped to income out from under children it already had.
+ *
+ * Deleted, not kept as pre-emption, because there is no flip path to guard: nothing outside its
+ * own tests ever called it. The categories manager RENDERS the income/spend badge
+ * (settings/managers/managers-client.tsx) and offers no control that changes `is_income` on an
+ * existing category, and no action, route, importer or backup path writes that column either --
+ * only createCategory sets it, at insert time. Its docblock nonetheless read as though a live
+ * flip path existed, which is worse than silence: a reviewer checking whether the invariant is
+ * covered would have concluded it was, on both halves.
+ *
+ * Same reasoning that deleted `categorySpendWithRollup` in v1.30.0: an exported function on no
+ * guard list is a route somebody can call tomorrow, and an unused export with a guard inside it
+ * is a guard nothing has ever exercised against the real tree. If a flip control is ever added,
+ * it needs this function AND a test that drives it through the action, not a resurrection of an
+ * export nobody called -- so the argument is recorded here and the code is not.
  */
-export function setCategoryIncome(id: number, isIncome: boolean): void {
-  const db = getDb();
-  const category = db.select().from(categories).where(eq(categories.id, id)).get();
-  if (!category) throw new Error(`No category ${id}`);
-  if (isIncome && !category.isIncome) {
-    const hasNonIncomeChild = listCategories({ includeArchived: true }).some(
-      (row) => row.parentId === id && !row.isIncome,
-    );
-    if (hasNonIncomeChild) {
-      throw new Error('Cannot mark this category as income while it has a non-income sub-category.');
-    }
-  }
-  db.update(categories).set({ isIncome }).where(eq(categories.id, id)).run();
-}

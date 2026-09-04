@@ -90,7 +90,14 @@ const ENQUEUE_SITES: EnqueueSite[] = [
     householdDerivedBody: true,
     familyChannelOnly: 'absent',
     why: "evaluateSubscriptionCreep groups the household's charges by merchant with no attribution filter, so the merchant, date, new amount and baseline in this body can all be another member's.",
-    exception: 'Ruling R16 / MUST-9.36, as for the two sites above.',
+    exception:
+      "MUST-9.36 alone, and NOT the M-8 resolution the two sites above carry -- that ruling narrowed "
+      + "participants(), and subscription_creep does not go through participants(): evaluateSubscriptionCreep is "
+      + "called once per notifiable user and enqueues to input.userId, so its recipient list is unchanged. "
+      + "MUST-9.36's household-wide rule (docs/superpowers/specs/2026-08-18-predictive-dateranges-design.md:622) "
+      + "therefore still governs this event exactly as shipped -- a standing spec decision, not an open "
+      + "conflict awaiting a ruling. Ruling R16 is spent: it parked item M-8 for v1.30.0 and the owner ruled on "
+      + "it in v1.31.0.",
   },
   {
     file: 'src/lib/notify/evaluate/budget.ts',

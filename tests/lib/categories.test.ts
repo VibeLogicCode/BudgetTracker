@@ -8,7 +8,6 @@ import {
   createCategory,
   listCategories,
   renameCategory,
-  setCategoryIncome,
   setCategoryTaxRelevant,
 } from '@/lib/categories';
 
@@ -131,17 +130,24 @@ describe('C-05 half 2: a non-income category must never be parented by an income
     expect(listCategories().find((c) => c.id === id)).toMatchObject({ isIncome: true });
   });
 
-  it('refuses flipping a parent to income while it still has a non-income child', () => {
+  /**
+   * v1.31.0 item M-5: the two flip-time tests that used to sit here are gone with the function
+   * they drove. `setCategoryIncome` had no caller outside them -- nothing in this app changes
+   * `is_income` on an existing category -- so what they proved was that an unreachable guard
+   * worked, which is the same standing `categorySpendWithRollup` was deleted for in v1.30.0. The
+   * create-time guard above is the whole of the invariant that is actually reachable today.
+   */
+  it('refuses an EXPLICIT non-income override even when it merely restates the default', () => {
     current = createSeededTestDb();
-    const food = categoryIdByName(current.db, 'Food'); // has Groceries/Restaurants/Coffee, all non-income
-    expect(() => setCategoryIncome(food, true)).toThrowError(/non-income/i);
-    expect(listCategories().find((c) => c.id === food)?.isIncome).toBe(false);
-  });
-
-  it('allows flipping a childless category to income', () => {
-    current = createSeededTestDb();
-    const kids = categoryIdByName(current.db, 'Kids'); // no children
-    setCategoryIncome(kids, true);
-    expect(listCategories().find((c) => c.id === kids)?.isIncome).toBe(true);
+    // The one shape that reaches this from real code: src/lib/packs.ts's importer always passes
+    // is_income explicitly (`meta?.is_income ?? false`), so a pack child of an income parent that
+    // declares nothing arrives here as a deliberate-looking `false`. v1.31.0's R-04(b) pre-flight
+    // (assertPackFitsCategoryTree) is what a pack importer actually meets; this stays the backstop
+    // underneath it.
+    const income = categoryIdByName(current.db, 'Income');
+    expect(() => createCategory({ name: 'Reimbursements', parentId: income, isIncome: false })).toThrowError(
+      /spend category cannot be created under an income category/i,
+    );
+    expect(listCategories().some((c) => c.name === 'Reimbursements')).toBe(false);
   });
 });
