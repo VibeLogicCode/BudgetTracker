@@ -116,8 +116,10 @@ describe('.github/workflows/test.yml', () => {
   // "on:" and would otherwise match the same "  <word>:" shape jobs use under "jobs:").
   const jobsBlock = workflow.slice(workflow.indexOf('\njobs:'));
 
-  it('has exactly one job, named "test" -- the invariant the checks below rely on to mean anything', () => {
-    expect(jobNames(jobsBlock)).toEqual(['test']);
+  // O-01 / R9: a second job, "smoke", was added to boot the built app and issue real
+  // requests -- the invariant the checks below (for BOTH jobs) rely on to mean anything.
+  it('has exactly two jobs, "test" and "smoke", in that order', () => {
+    expect(jobNames(jobsBlock)).toEqual(['test', 'smoke']);
   });
 
   it('vendors the scanner assets before both the typecheck and the test run, as three REAL steps inside the SAME job\'s steps list', () => {
@@ -152,5 +154,44 @@ describe('.github/workflows/test.yml', () => {
     const ciIndex = workflow.indexOf('npm ci');
     expect(ciIndex).toBeGreaterThan(-1);
     expect(ciIndex).toBeLessThan(workflow.indexOf('vendor-scanner-assets.mjs'));
+  });
+
+  // O-01 / R9: the boot-and-request smoke test job.
+  describe('the "smoke" job', () => {
+    const smokeJob = jobBlock(jobsBlock, 'smoke');
+    const smokeSteps = steps(smokeJob);
+
+    it('needs the "test" job, so a broken unit test fails fast without also paying for a build', () => {
+      expect(smokeJob).toMatch(/needs:\s*\[[^\]]*\btest\b[^\]]*\]/);
+    });
+
+    it('carries a bounded timeout, so a hung server or a stuck health-check wait cannot run away', () => {
+      expect(smokeJob).toMatch(/timeout-minutes:\s*\d+/);
+    });
+
+    it('vendors the scanner assets, then runs `next build`, as real steps in this job (not reused from "test")', () => {
+      const vendorStep = smokeSteps.findIndex((step) => runs(step, 'vendor-scanner-assets.mjs'));
+      const buildStep = smokeSteps.findIndex((step) => runs(step, 'npm run build'));
+      expect(vendorStep).toBeGreaterThan(-1);
+      expect(buildStep).toBeGreaterThan(-1);
+      expect(vendorStep).toBeLessThan(buildStep);
+    });
+
+    it('boots the standalone server and runs the route battery via scripts/smoke-test.mjs', () => {
+      const smokeStep = smokeSteps.findIndex((step) => runs(step, 'scripts/smoke-test.mjs'));
+      expect(smokeStep).toBeGreaterThan(-1);
+      // Must run after the build that produces .next/standalone/server.js, which
+      // scripts/smoke-test.mjs refuses to run without (see the script's own guard).
+      const buildStep = smokeSteps.findIndex((step) => runs(step, 'npm run build'));
+      expect(buildStep).toBeLessThan(smokeStep);
+    });
+
+    it('installs dependencies with npm ci in this job too -- a separate runner has no node_modules of its own', () => {
+      expect(smokeJob).toMatch(/run:\s*npm ci/);
+    });
+
+    it('references the actual script file, so a rename here cannot silently stop testing anything', () => {
+      expect(fs.existsSync(path.join(root, 'scripts/smoke-test.mjs'))).toBe(true);
+    });
   });
 });

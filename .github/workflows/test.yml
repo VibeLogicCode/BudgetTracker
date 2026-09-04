@@ -2,9 +2,17 @@
 # workflow existed, release-image.yml's guard job was the only thing CI ever ran -- it
 # vendors and checks the OCR/scanner assets but never invokes vitest, so every gate this
 # project has passed to date (the full suite, tsc, `next build`) was run locally by whoever
-# was doing the release. This closes that gap for the suite and the type check; `next build`
-# stays a release-time step (see docs/superpowers/plans/2026-08-18-ocr-engine-swap.md, Task 13)
-# because it is slow and the release task already runs it before every tag.
+# was doing the release.
+#
+# Review 2026-09-02, finding O-01 / ruling R9: `tsc`, vitest and `next build` all pass on a
+# page that throws on every request -- v1.29.0 shipped exactly that (a Server Component
+# value-importing a non-component binding from a 'use client' module), because nothing here
+# ever started the app and issued a real request. `next build` alone cannot catch that class:
+# every page in this app is `force-dynamic`, so build never pre-renders (and therefore never
+# executes) any of them. The `smoke` job below is the fix -- it is the first thing in this
+# repo that boots the real standalone server and GETs every route the way a person or an API
+# client would. See scripts/smoke-test.mjs for the full rationale and docs/reviews/
+# 2026-09-02-review-for-opus.md's "Proposed smoke test" section for the spec it implements.
 name: Test suite
 
 on:
@@ -59,3 +67,53 @@ jobs:
       # passed -- see the same flag used by the release task's full-gate run.
       - name: Run the test suite
         run: npx vitest run --no-file-parallelism
+
+  # Boot-and-request smoke test (O-01 / R9). A second job, not a step in `test` above: it needs
+  # `npm run build`, which is materially slower than tsc+vitest and was deliberately kept out of
+  # this workflow until now (see the top-of-file comment) -- as its own job it runs in parallel
+  # with `test` rather than adding its cost serially to the job every push already waits on.
+  # `needs: [test]` still gates it behind a green suite, so a broken unit test fails fast without
+  # also paying for a build. release-image.yml calls this workflow via workflow_call and its
+  # `build` job needs `[guard, test]` (the local job name for this whole reusable workflow) --
+  # a reusable workflow call only reports success once every job inside it succeeds, so this job
+  # gates the image push too, with no second copy of these steps.
+  smoke:
+    name: Boot-and-request smoke test
+    needs: [test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # public/scanner/ is generated and gitignored, so it must exist before Next collects
+      # public/ into the build -- same ordering the Dockerfile's builder stage uses.
+      - name: Vendor the scanner assets
+        run: node scripts/vendor-scanner-assets.mjs
+
+      # First time `next build` runs in this workflow (R10: intended, not an oversight). The
+      # placeholder mirrors the Dockerfile's build-stage SECRET_KEY: a fixed, public,
+      # build-stage-only string, needed only so a module that reads env at import time can
+      # load during the build -- never carried into the smoke run below, which mints its own.
+      - name: Build
+        env:
+          SECRET_KEY: build-time-placeholder-secret-key-0123456789
+        run: npm run build
+
+      # Seeds a throwaway database under the OS temp dir, boots .next/standalone/server.js,
+      # and GETs all 28 page routes and the 8 safe API GETs (authenticated, unauthenticated,
+      # and once with a garbage session cookie), asserts the 12 POST-only routes 405 on GET,
+      # checks the CSP nonce header on a real response, checks the server log for
+      # console.error output, and verifies SIGTERM shuts the process down cleanly. See
+      # scripts/smoke-test.mjs for the full route list and the reasoning behind each check.
+      - name: Boot the standalone server and hit every route
+        run: node scripts/smoke-test.mjs
