@@ -82,6 +82,9 @@ function bannedNumbers(): Set<number> {
   return out;
 }
 
+/** A real line break, spelled without an escape so this file stays easy to edit by hand. */
+const NEWLINE = String.fromCharCode(10);
+
 function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
 }
@@ -95,6 +98,37 @@ function numericLiterals(source: string): number[] {
 describe('MUST-4.41: the pinned constant table', () => {
   it.each(Object.entries(TABLE))('%s equals the spec value', (name, expected) => {
     expect((C as Record<string, unknown>)[name]).toEqual(expected);
+  });
+
+  /**
+   * v1.31.0 item M-4: THE POSITIVE CONTROL, which this guard shipped without.
+   *
+   * The check below asserts an empty offender list built from a directory walk and a regex. Both
+   * can fail silently: a renamed directory, an `endsWith` that no longer matches, a typo in
+   * numericLiterals' character class, or a TABLE that stopped yielding numbers all leave
+   * `offenders` empty and the assertion green forever, protecting nothing. Every guard added in
+   * v1.31.0 carries a control like this one; this file predates the convention, and M-4 is the
+   * observation that "it passes" and "it works" had become indistinguishable here.
+   *
+   * Three things are pinned, because they are the three ways the scan can go vacuous: the walk
+   * finds the stage files, the banned set is populated, and the detector still sees a planted
+   * literal it is supposed to catch.
+   */
+  it('the scan is not vacuous: files walked, numbers banned, detector live', () => {
+    const scanned = fs.readdirSync(ONNX_DIR).filter((entry) => entry !== 'constants.ts' && entry.endsWith('.ts'));
+    expect(scanned.length).toBeGreaterThanOrEqual(10);
+    expect(scanned).toContain('preprocess.ts');
+
+    const banned = bannedNumbers();
+    expect(banned.size).toBeGreaterThanOrEqual(20);
+    expect(banned.has(C.DET_LIMIT_SIDE_LEN)).toBe(true);
+    expect(banned.has(255)).toBe(true);
+
+    // The defect, reconstructed: a stage file reaching for the number instead of the constant.
+    const planted = ['const target = 736;', 'const scale = 1 / 255;'].join(NEWLINE);
+    expect(numericLiterals(planted).filter((value) => banned.has(value))).toEqual([736, 255]);
+    // ...and prose about the number is not the number (the stage files explain these in comments).
+    expect(numericLiterals('// DET_LIMIT_SIDE_LEN is 736 for RapidOCR v3.9.2.')).toEqual([]);
   });
 
   it('every other file under onnx/ reaches for the constant, never the number', () => {

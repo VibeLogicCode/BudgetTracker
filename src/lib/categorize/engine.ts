@@ -3,8 +3,8 @@ import { getDb } from '@/db/client';
 import { loanPayments, transactions, transactionSplits } from '@/db/schema';
 import { nowIso } from '@/lib/clock';
 // Ruling R24 (R-03): the ONE definition of which display_description writer outranks which.
-import { displaySourcesAbove, type DisplaySource } from '@/lib/display-source';
-import { applyPaymentMatchers } from '@/lib/loans';
+import { displaySourceMayWrite, displaySourcesAbove, type DisplaySource } from '@/lib/display-source';
+import { applyPaymentMatchers, restoreLoanDescription } from '@/lib/loans';
 import { classify, train, untrain } from './bayes';
 import { tokenize } from './normalize';
 import {
@@ -1562,7 +1562,31 @@ export function applyRenameRules(txnIds?: number[], ctx: CategorizeContext = bui
   return changed;
 }
 
-/** "This transaction only": manual always wins and is never overwritten by a rule. */
+/**
+ * "This transaction only": manual outranks every rule, and is never overwritten by one.
+ *
+ * PRECEDENCE IS READ, NOT ASSUMED (ruling R24, finding B-1). This is the THIRD writer of
+ * display_description, and the ruling that declared the order enumerated only the other two --
+ * applyRenameRules above and applyLoanDescription (src/lib/loans.ts). It consulted
+ * src/lib/display-source.ts on neither of its two paths, and its CLEAR path nulled both columns
+ * unconditionally: renaming a loan-linked row to nothing (the dialog invites it -- "Leave it empty
+ * to go back to the bank's wording") destroyed the loan label, applyRenameRules then stamped the
+ * merchant's name over it, and unlinking repaired nothing because revertLoanDescription only
+ * clears a row still labelled 'loan'. A live car payment read as an ordinary purchase on the loan
+ * pages, and the only way back was to unlink and re-link.
+ *
+ * So both paths now go through displaySourceMayWrite. With 'manual' at the top of
+ * DISPLAY_SOURCE_PRECEDENCE the gate refuses nothing today, and that is deliberate rather than
+ * decorative: the alternative -- leaving the top-ranked writer to KNOW it is top-ranked -- is
+ * precisely the assumption that broke here, and it would break again the moment a source is added
+ * above 'manual'. tests/ops/display-source-writers.test.ts is what makes it stay true.
+ *
+ * CLEARING HANDS THE ROW DOWN THE ORDER, not to the rules. The step below 'manual' is 'loan', so
+ * restoreLoanDescription (src/lib/loans.ts) gets the row first and relabels it when a manual loan
+ * link is still there; applyRenameRules then leaves that label alone by the same precedence, and
+ * takes the row only when no link claims it. Asking loans.ts rather than rebuilding the label here
+ * keeps the loan wording, its direction rule and its own gate in the one file that owns them.
+ */
 export function setTransactionDisplayName(input: {
   transactionId: number;
   displayDescription: string | null;
@@ -1571,19 +1595,28 @@ export function setTransactionDisplayName(input: {
 }): void {
   const trimmed = input.displayDescription === null ? null : input.displayDescription.trim();
   const db = getDb();
+  const at = nowIso(input.at);
+
+  const row = db
+    .select({ displaySource: transactions.displaySource })
+    .from(transactions)
+    .where(eq(transactions.id, input.transactionId))
+    .get();
+  if (row === undefined || !displaySourceMayWrite('manual', row.displaySource)) return;
 
   if (trimmed === null || trimmed.length === 0) {
-    // Clearing a manual rename hands the row back to the rules.
     db.update(transactions)
-      .set({ displayDescription: null, displaySource: null, updatedAt: nowIso(input.at ?? new Date()) })
+      .set({ displayDescription: null, displaySource: null, updatedAt: at })
       .where(eq(transactions.id, input.transactionId))
       .run();
+    // Down the precedence order, one step at a time: the loan link first, then the rules.
+    restoreLoanDescription(input.transactionId, input.at);
     applyRenameRules([input.transactionId]);
     return;
   }
 
   db.update(transactions)
-    .set({ displayDescription: trimmed, displaySource: 'manual', updatedAt: nowIso(input.at ?? new Date()) })
+    .set({ displayDescription: trimmed, displaySource: 'manual', updatedAt: at })
     .where(eq(transactions.id, input.transactionId))
     .run();
 }

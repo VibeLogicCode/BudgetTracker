@@ -530,7 +530,17 @@ export async function installCanadianPackAction(_prev: RuleActionState, _formDat
     result.rulesKept > 0
       ? ` ${result.rulesKept} pattern${result.rulesKept === 1 ? '' : 's'} you already had ${result.rulesKept === 1 ? 'was' : 'were'} left as-is.`
       : '';
-  return { message: `Installed ${result.rulesAdded} preset rule${result.rulesAdded === 1 ? '' : 's'}.${keptNote}` };
+  // v1.31.0 M-3: a preset rule the household already has AND has switched off takes the pack
+  // importer's "same outcome, nothing to write" path. Leaving it off is correct -- switching a
+  // rule off is a decision -- but this message used to report the install as a plain success with
+  // no hint that one of its rules is inert, which is a true sentence that leaves a false
+  // impression. The inert entries are named for the same reason the skipped ones are.
+  const inert = result.rulesInertDetail.map((entry) => entry.pattern);
+  const inertNote =
+    inert.length > 0
+      ? ` ${inert.length} rule${inert.length === 1 ? '' : 's'} you already had ${inert.length === 1 ? 'is' : 'are'} switched off and stayed off: ${inert.join(', ')}.`
+      : '';
+  return { message: `Installed ${result.rulesAdded} preset rule${result.rulesAdded === 1 ? '' : 's'}.${keptNote}${inertNote}` };
 }
 
 /**

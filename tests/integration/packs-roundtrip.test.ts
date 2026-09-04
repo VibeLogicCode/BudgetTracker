@@ -129,12 +129,17 @@ describe('rules pack round trip onto a fresh database', () => {
     // v1.31.0 R-12 added rulesSkippedDetail -- the skipped entries by NAME, not just a count. An
     // export this install wrote skips nothing, so it must come back empty; asserted rather than
     // dropped from the object, because "a round trip skips nothing" is the property here.
+    // v1.31.0 M-3 added rulesUnchanged and rulesInertDetail: a re-import of an identical file
+    // writes nothing, and now SAYS so as a count rather than as the absence of one. Nothing in
+    // this round trip is switched off, so the named list is empty.
     expect(again).toEqual({
       rulesAdded: 0,
       rulesOverwritten: 0,
       rulesKept: 0,
       rulesSkipped: 0,
       rulesSkippedDetail: [],
+      rulesUnchanged: before,
+      rulesInertDetail: [],
       categoriesCreated: 0,
     });
     expect(listRules().length).toBe(before);

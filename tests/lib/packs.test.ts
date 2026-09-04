@@ -462,6 +462,52 @@ describe('importRulesPack', () => {
     setup();
     const result = importRulesPack(packFrom([{ pattern: 'TIM HORTONS', match_type: 'exact', category: 'Coffee' }], [{ name: 'Coffee', parent: 'Food' }]));
     expect(result).toMatchObject({ rulesAdded: 0, rulesOverwritten: 0, rulesKept: 0 });
+    // v1.31.0 M-3: and it lands in the `unchanged` bucket rather than in none of them. Before
+    // M-3 this entry was counted as neither added, overwritten, kept nor skipped, so the four
+    // reported numbers did not account for the file.
+    expect(result.rulesUnchanged).toBe(1);
+    expect(result.rulesInertDetail).toEqual([]);
+  });
+
+  /**
+   * v1.31.0 M-3. The receiver has the pack's rule, with the pack's outcome, and has switched it
+   * OFF. The import takes its "nothing to write" path -- correctly, a disable is a decision -- and
+   * used to report the entry nowhere at all, so the household was shown a successful import with
+   * an inert rule inside it and no way to find out.
+   */
+  it('names an identical rule the household has switched off, and leaves it off', () => {
+    setup();
+    const before = listRules('category').find((r) => r.pattern === 'TIM HORTONS');
+    setRuleDisabledFlag((before as { id: number }).id, true, new Date('2026-08-20T12:00:00.000Z'));
+
+    const pack = packFrom([{ pattern: 'TIM HORTONS', match_type: 'exact', category: 'Coffee' }], [{ name: 'Coffee', parent: 'Food' }]);
+    const plan = previewRulesPackImport(pack);
+    expect(plan.unchanged).toBe(1);
+    expect(plan.inert.map((entry) => entry.pattern)).toEqual(['TIM HORTONS']);
+    expect(plan.inert[0].reason).toContain('switched off');
+
+    const result = importRulesPack(pack);
+    expect(result).toMatchObject({ rulesAdded: 0, rulesOverwritten: 0, rulesKept: 0, rulesSkipped: 0, rulesUnchanged: 1 });
+    // The preview's promise and the apply's report are one calculation, not two similar ones.
+    expect(result.rulesInertDetail).toEqual(plan.inert);
+    // And the disable is respected: importing a pack does not switch a household's rule back on.
+    const after = listRules('category').find((r) => r.pattern === 'TIM HORTONS');
+    expect((after as { disabledAt: string | null }).disabledAt).not.toBeNull();
+  });
+
+  it('reports a DIFFERING disabled rule as an ordinary conflict, not as inert', () => {
+    // Only the sameOutcome path was unreported. A disabled rule the pack disagrees with still
+    // goes through keep/overwrite, and must not be double-counted here.
+    const { groceries } = setup();
+    const before = listRules('category').find((r) => r.pattern === 'TIM HORTONS');
+    setRuleDisabledFlag((before as { id: number }).id, true, new Date('2026-08-20T12:00:00.000Z'));
+    const pack = packFrom([{ pattern: 'TIM HORTONS', match_type: 'exact', category: 'Groceries' }], [{ name: 'Groceries', parent: 'Food' }]);
+
+    expect(previewRulesPackImport(pack).inert).toEqual([]);
+    const result = importRulesPack(pack, { onConflict: 'overwrite' });
+    expect(result).toMatchObject({ rulesAdded: 0, rulesOverwritten: 1, rulesKept: 0, rulesUnchanged: 0 });
+    expect(result.rulesInertDetail).toEqual([]);
+    expect(listRules('category').find((r) => r.pattern === 'TIM HORTONS')?.categoryId).toBe(groceries);
   });
 
   it('treats (pattern, match_type, rule_kind) as the identity, not pattern alone', () => {

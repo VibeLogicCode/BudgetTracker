@@ -1,7 +1,15 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../helpers/db';
-import { applyPaymentMatchers, assignTransactionToLoan, recomputeLoanBalance, saveLoanRule, unassignTransactionFromLoan } from '@/lib/loans';
+import {
+  applyPaymentMatchers,
+  assignTransactionToLoan,
+  recomputeLoanBalance,
+  restoreLoanDescription,
+  saveLoanRule,
+  unassignTransactionFromLoan,
+} from '@/lib/loans';
+import { applyRenameRules, setTransactionDisplayName, upsertRenameRule } from '@/lib/categorize/engine';
 import { addInstallment } from '@/lib/warranty/installments';
 import { setupLoanTest } from './fixtures';
 
@@ -304,5 +312,113 @@ describe('item 13 (v1.21.0 backlog): the row is labelled for what it is', () => 
     assignTransactionToLoan({ txnId: second, itemId });
     unassignTransactionFromLoan({ txnId: second, itemId });
     expect(displaySourceOf(second)).toEqual({ displayDescription: 'My own name', displaySource: 'manual' });
+  });
+});
+
+/**
+ * v1.31.0 finding B-1, the release blocker: the THIRD writer of display_description
+ * (setTransactionDisplayName, src/lib/categorize/engine.ts) consulted the precedence module on
+ * neither of its paths, and its clear branch nulled both columns unconditionally. The reproduction
+ * below is the reviewer's, against a seeded database: link a loan, empty the rename dialog on that
+ * row, and the loan label was replaced by the merchant name -- then unlinking repaired nothing,
+ * because revertLoanDescription only clears a row still labelled 'loan'.
+ */
+describe('B-1: clearing a hand-typed name hands the row down the precedence order, not to the rules', () => {
+  let ctx: ReturnType<typeof setupLoanTest>;
+  afterEach(() => ctx?.t.cleanup());
+
+  function labelOf(txnId: number): { text: string | null; source: string | null } {
+    return ctx.t.sqlite
+      .prepare('select display_description as text, display_source as source from transactions where id = ?')
+      .get(txnId) as { text: string | null; source: string | null };
+  }
+
+  /** A loan-linked WALMART payment that a rename rule also matches -- both claims live at once. */
+  function contested(): { txnId: number; itemId: number } {
+    ctx = setupLoanTest();
+    const { itemId } = ctx.seedLoan({ name: 'Car Loan', balanceCents: 2_000_000 });
+    const txnId = ctx.spend('WALMART', -50_000);
+    const rule = upsertRenameRule({
+      pattern: 'WALMART',
+      matchType: 'contains',
+      renameTo: 'Walmart',
+      userId: ctx.userId,
+      actorRole: 'admin',
+    });
+    if (!rule.ok) throw new Error('unexpected refusal');
+    expect(labelOf(txnId)).toEqual({ text: 'Walmart', source: 'rename' });
+    assignTransactionToLoan({ txnId, itemId });
+    expect(labelOf(txnId)).toEqual({ text: 'Repayment from Car Loan', source: 'loan' });
+    return { txnId, itemId };
+  }
+
+  it('keeps the loan label when the rename dialog is emptied on a linked row', () => {
+    const { txnId } = contested();
+
+    // What the dialog does: "Leave it empty to go back to the bank's wording".
+    setTransactionDisplayName({ transactionId: txnId, displayDescription: '   ', userId: ctx.userId });
+
+    // Before the fix this read { text: 'Walmart', source: 'rename' } -- a live loan payment
+    // looking like an ordinary purchase on every loan page.
+    expect(labelOf(txnId)).toEqual({ text: 'Repayment from Car Loan', source: 'loan' });
+  });
+
+  it('is repairable by unlinking, which it was not before', () => {
+    const { txnId, itemId } = contested();
+    setTransactionDisplayName({ transactionId: txnId, displayDescription: null, userId: ctx.userId });
+
+    unassignTransactionFromLoan({ txnId, itemId });
+    // unassignFromLoanAction runs this for the unlinked id; the label falls to the rename rule.
+    applyRenameRules([txnId]);
+    expect(labelOf(txnId)).toEqual({ text: 'Walmart', source: 'rename' });
+  });
+
+  it('still hands an UNLINKED row straight to the rules', () => {
+    ctx = setupLoanTest();
+    const plain = ctx.spend('WALMART', -50_000);
+    const rule = upsertRenameRule({
+      pattern: 'WALMART',
+      matchType: 'contains',
+      renameTo: 'Walmart',
+      userId: ctx.userId,
+      actorRole: 'admin',
+    });
+    if (!rule.ok) throw new Error('unexpected refusal');
+    setTransactionDisplayName({ transactionId: plain, displayDescription: 'Weekly shop', userId: ctx.userId });
+    expect(labelOf(plain)).toEqual({ text: 'Weekly shop', source: 'manual' });
+
+    setTransactionDisplayName({ transactionId: plain, displayDescription: null, userId: ctx.userId });
+    expect(labelOf(plain)).toEqual({ text: 'Walmart', source: 'rename' });
+  });
+
+  it('invents no label for a row linked only by a matcher RULE, which never labelled it', () => {
+    // The rule/backfill path links without labelling (only assignTransactionToLoan labels), so
+    // restoring from any live link would put a loan label on a row that never wore one.
+    ctx = setupLoanTest();
+    const { itemId } = ctx.seedLoan({ name: 'Car Loan', balanceCents: 2_000_000 });
+    saveLoanRule({ itemId, merchantContains: 'WALMART', accountId: null, enabled: true });
+    const txnId = ctx.spend('WALMART', -50_000);
+    expect(applyPaymentMatchers([txnId], new Date(NOW))).toBe(1);
+    expect(labelOf(txnId)).toEqual({ text: null, source: null });
+
+    setTransactionDisplayName({ transactionId: txnId, displayDescription: 'Weekly shop', userId: ctx.userId });
+    setTransactionDisplayName({ transactionId: txnId, displayDescription: null, userId: ctx.userId });
+    expect(labelOf(txnId)).toEqual({ text: null, source: null });
+    expect(restoreLoanDescription(txnId, new Date(NOW))).toBe(false);
+  });
+
+  it('restores the NEWEST manual link, which is the label the row was showing', () => {
+    ctx = setupLoanTest();
+    const first = ctx.seedLoan({ name: 'Car Loan', balanceCents: 2_000_000 });
+    const second = ctx.seedLoan({ name: 'Boat Loan', balanceCents: 500_000 });
+    // MUST-11.16: a combined payment may legitimately be assigned to two loans.
+    const txnId = ctx.spend('CHEQUE 118', -50_000);
+    assignTransactionToLoan({ txnId, itemId: first.itemId });
+    assignTransactionToLoan({ txnId, itemId: second.itemId });
+    expect(labelOf(txnId)).toEqual({ text: 'Repayment from Boat Loan', source: 'loan' });
+
+    setTransactionDisplayName({ transactionId: txnId, displayDescription: 'Two loans at once', userId: ctx.userId });
+    setTransactionDisplayName({ transactionId: txnId, displayDescription: null, userId: ctx.userId });
+    expect(labelOf(txnId)).toEqual({ text: 'Repayment from Boat Loan', source: 'loan' });
   });
 });

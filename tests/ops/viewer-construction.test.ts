@@ -87,6 +87,45 @@ function viewerLiteralsIn(source: string): string[] {
 /** `function viewerFor`, `const viewerFor =`, and the arrow/method forms of the same name. */
 const VIEWER_FOR_DECLARATION = /(?:function|const|let|var)\s+viewerFor\b/g;
 
+/**
+ * v1.31.0 item M-5: the hole in the rule above, closed.
+ *
+ * `viewerLiteralsIn` requires EXACTLY Viewer's three keys, and that boundary is right for the
+ * reason its own docblock gives -- a wider object carrying the three is a row being passed
+ * THROUGH, which is the behaviour this guard wants to encourage. But `{ ...user, visibility:
+ * 'household' }` has one literal key plus a spread, so it is neither: it is a viewer somebody
+ * BUILT, by taking a real row and overriding the one field that decides whether a query is
+ * narrowed to a single person's rows. It is also the shape most likely to be typed by someone
+ * deliberately widening a viewer, which is the edit that most needs a reader -- S-18 was a
+ * household total reaching a self-scoped recipient.
+ *
+ * So a SECOND, narrower detector: an innermost literal containing a spread AND `role:` or
+ * `visibility:`. Not "a spread and any key" (every `{ ...prev, month }` state update in the client
+ * would fire), and not "a spread" alone (`{ ...user }` overrides nothing and narrows nothing).
+ *
+ * WHAT IT STILL DOES NOT CATCH, stated rather than left implied (the precedent is
+ * tests/ops/transactions-href.test.ts's own docblock): a widening built in two steps -- `const
+ * viewer = { ...user }; viewer.visibility = 'household';` -- or one assembled through
+ * `Object.assign`. Both read as more than an object literal to a person, and a regex over
+ * innermost braces cannot follow either. The assertion here is about the shape somebody types.
+ */
+function spreadWidenedViewersIn(source: string): string[] {
+  return (source.match(OBJECT_LITERAL) ?? []).filter((literal) => {
+    if (!literal.includes('...')) return false;
+    const keys = [...literal.matchAll(LITERAL_KEY)].map((match) => match[1]);
+    return keys.includes('role') || keys.includes('visibility');
+  });
+}
+
+/**
+ * The one spread-plus-`role` literal under src/ today, which is NOT a viewer -- listed with its
+ * argument rather than silently exempted, the same way ALLOWED_VIEWER_CONSTRUCTION's entries are.
+ */
+const ALLOWED_SPREAD_WIDENING: Record<string, string> = {
+  'src/lib/auth/users.ts':
+    "createFirstAdmin's `{ ...input, role: 'admin' }` is the argument to createUserSchema.parse -- a user being CREATED, not a reader boundary. It carries no visibility, never reaches scopeFor/ownerScope/isSelfScoped, and is the one place in this codebase that DECIDES a role rather than reading one",
+};
+
 describe('a Viewer is constructed in exactly one place per reason (M-1)', () => {
   const files = walk('src');
   const literalsByFile = new Map<string, number>();
@@ -123,6 +162,39 @@ describe('a Viewer is constructed in exactly one place per reason (M-1)', () => 
     expect(offenders).toEqual([]);
   });
 
+  it('no file builds a viewer by spreading a row and overriding role or visibility (M-5)', () => {
+    const offenders: string[] = [];
+    for (const file of files) {
+      const source = stripComments(fs.readFileSync(path.join(ROOT, file), 'utf8'));
+      const literals = spreadWidenedViewersIn(source);
+      if (literals.length === 0) continue;
+      if (Object.prototype.hasOwnProperty.call(ALLOWED_SPREAD_WIDENING, file)) continue;
+      offenders.push(
+        `${file} (${literals.length} literal${literals.length === 1 ? '' : 's'}): a viewer built by ` +
+          'spreading a row and overriding `role` or `visibility` is a viewer somebody widened by ' +
+          'hand. Use HOUSEHOLD_VIEWER (@/lib/auth/viewer) for the household-wide reader, or ' +
+          'viewerFor(userId) (@/lib/auth/users) for one person, or pass the row itself -- Viewer is ' +
+          'structural. If this object is not a reader boundary, add it to ALLOWED_SPREAD_WIDENING ' +
+          'with the reason. S-18 is what one un-fixed copy of a scoping decision cost.',
+      );
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('the spread detector fails on the widening it exists to catch (M-5 positive control)', () => {
+    // Non-vacuity: the assertion above is an empty list, so a typo in the detector would leave it
+    // green forever. The shape M-5 named is rebuilt here rather than left in the tree.
+    expect(spreadWidenedViewersIn("const viewer = { ...user, visibility: 'household' };")).toHaveLength(1);
+    expect(spreadWidenedViewersIn("scopeFor({ ...session.user, role: 'admin' })")).toHaveLength(1);
+    // ...and the three shapes it must NOT fire on: a plain pass-through spread, an unrelated state
+    // update, and the three-key literal the other detector already owns.
+    expect(spreadWidenedViewersIn('const copy = { ...user };')).toEqual([]);
+    expect(spreadWidenedViewersIn("setState({ ...prev, month: '2026-09' })")).toEqual([]);
+    expect(spreadWidenedViewersIn("const viewer = { id, role, visibility: 'self' };")).toEqual([]);
+    // Both detectors on one source is what M-1 plus M-5 asserts together.
+    expect(viewerLiteralsIn("const viewer = { id: 1, role: 'member', visibility: 'self' };")).toHaveLength(1);
+  });
+
   it('viewerFor is declared exactly once, in src/lib/auth/users.ts', () => {
     expect([...declarationsByFile.keys()]).toEqual([VIEWER_FOR_HOME]);
     expect(
@@ -132,7 +204,7 @@ describe('a Viewer is constructed in exactly one place per reason (M-1)', () => 
   });
 
   it('every allowlist entry still names a file that exists', () => {
-    for (const file of Object.keys(ALLOWED_VIEWER_CONSTRUCTION)) {
+    for (const file of [...Object.keys(ALLOWED_VIEWER_CONSTRUCTION), ...Object.keys(ALLOWED_SPREAD_WIDENING)]) {
       expect(fs.existsSync(path.join(ROOT, file)), `${file} is allowlisted but no longer exists`).toBe(true);
     }
     expect(fs.existsSync(path.join(ROOT, VIEWER_FOR_HOME))).toBe(true);

@@ -156,12 +156,20 @@ describe('shipped pack: imports cleanly into a freshly seeded database', () => {
     // v1.31.0 R-12 added rulesSkippedDetail: the skipped entries BY NAME, not just a count. The
     // shipped pack skips nothing, so it must come back empty -- asserted rather than left out of
     // the object, because "no skips" is the property this test is here to pin.
+    //
+    // v1.31.0 M-3 added rulesUnchanged and rulesInertDetail, and they are what "all zero" above
+    // actually meant: every rule of the pack is already here with the same outcome. The bucket
+    // that used to hold none of them now holds all of them, which is the whole of M-3 -- the four
+    // numbers did not account for the file. None is switched off in a fresh database, so the
+    // named list is empty.
     expect(second).toEqual({
       rulesAdded: 0,
       rulesOverwritten: 0,
       rulesKept: 0,
       rulesSkipped: 0,
       rulesSkippedDetail: [],
+      rulesUnchanged: listRules().length,
+      rulesInertDetail: [],
       categoriesCreated: 0,
     });
     expect(listRules().length).toBe(rowCountAfterFirst);

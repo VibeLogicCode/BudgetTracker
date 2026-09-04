@@ -202,6 +202,31 @@ function skipReason(rule: PackRule): string | null {
   return null;
 }
 
+/**
+ * v1.31.0 finding M-3: the OTHER way an entry can be reported without being written -- the
+ * receiver already has this exact rule, with this exact outcome, and has switched it OFF.
+ *
+ * Respecting the local disable is right and is not what M-3 is about: a household that turned a
+ * rule off means it. What was wrong is that the import said nothing. The entry took the
+ * `sameOutcome` path and was counted as neither added, overwritten, kept nor skipped, so the
+ * household saw "Added 12 rules, overwrote 0, kept 0" and had no way to learn that one of the
+ * rules it had just "imported" was inert. This release has five times refused to state a figure it
+ * could not support; a success message that omits the one thing the person needs to know is the
+ * same fault in a sentence rather than a number.
+ *
+ * Reported through RulesImportSkip because it answers the same question in the same shape -- an
+ * entry, named, with the reason it changed nothing -- and a second near-identical type for that
+ * would be this repo's own signature defect.
+ */
+function inertRuleEntry(rule: PackRule, pattern: string): RulesImportSkip {
+  return {
+    pattern,
+    matchType: rule.match_type,
+    ruleKind: rule.rule_kind,
+    reason: 'you already have this rule, with the same outcome, switched off -- an import does not switch it back on',
+  };
+}
+
 /** Every entry this pack will NOT write, named, in file order. One walk for both the preview and
  *  the apply -- see RulesImportSkip's docblock. */
 function skippedRulesIn(pack: RulesPack): RulesImportSkip[] {
@@ -800,6 +825,10 @@ export interface RulesImportPlan {
    *  `skippedRules` counts, each with the reason -- so a household can see WHICH rule was
    *  dropped rather than only how many were. See RulesImportSkip. */
   skipped: RulesImportSkip[];
+  /** v1.31.0 M-3: of the `unchanged` entries, the ones switched OFF here -- named, because an
+   *  import that leaves a rule inert and reports nothing tells the household its pack landed when
+   *  part of it did nothing. See inertRuleEntry. */
+  inert: RulesImportSkip[];
   conflicts: RulesImportConflict[];
   /**
    * v1.31.0 R-04: what the import will actually create, counted by the same enumeration the
@@ -845,6 +874,10 @@ export function previewRulesPackImport(input: unknown): RulesImportPlan {
   const conflicts: RulesImportConflict[] = [];
   // R-12: named, not merely counted -- and by the same walk the apply uses.
   const skipped = skippedRulesIn(pack);
+  // M-3: the unchanged entries that are also switched off here, named, by the same rule the apply
+  // applies -- inertRuleEntry. The preview's promise and the import's behaviour must not be two
+  // similar calculations, which is why isImportableRule and skippedRulesIn were extracted at all.
+  const inert: RulesImportSkip[] = [];
 
   for (const rule of pack.rules) {
     if (!isImportableRule(rule)) continue;
@@ -865,6 +898,7 @@ export function previewRulesPackImport(input: unknown): RulesImportPlan {
     if (rule.rule_kind === 'rename') {
       if ((match.renameTo ?? null) === (rule.rename_to ?? null)) {
         unchanged += 1;
+        if (match.disabledAt !== null) inert.push(inertRuleEntry(rule, pattern));
         continue;
       }
       conflicts.push({
@@ -888,6 +922,7 @@ export function previewRulesPackImport(input: unknown): RulesImportPlan {
     const willCreateCategory = rule.category !== null && incoming === null;
     if (!willCreateCategory && (match.categoryId ?? null) === (incoming?.id ?? null)) {
       unchanged += 1;
+      if (match.disabledAt !== null) inert.push(inertRuleEntry(rule, pattern));
       continue;
     }
     conflicts.push({
@@ -906,6 +941,7 @@ export function previewRulesPackImport(input: unknown): RulesImportPlan {
     transferRules,
     skippedRules: skipped.length,
     skipped,
+    inert,
     conflicts,
     newCategories,
     archivedCategories,
@@ -924,6 +960,13 @@ export interface RulesImportResult {
   /** v1.31.0 R-12: the same entries, named, so the result message can say which. Identical to
    *  the preview's `skipped` for the same file, by construction (skippedRulesIn builds both). */
   rulesSkippedDetail: RulesImportSkip[];
+  /** v1.31.0 M-3: entries the receiver already had with the same outcome, so nothing was written.
+   *  Previously counted in NO bucket at all -- neither added, overwritten, kept nor skipped -- which
+   *  made the four reported numbers fail to account for the file. Matches the preview's `unchanged`. */
+  rulesUnchanged: number;
+  /** v1.31.0 M-3: of those, the ones switched off here, named. Identical to the preview's `inert`
+   *  for the same file and the same database, by construction (inertRuleEntry builds both). */
+  rulesInertDetail: RulesImportSkip[];
   categoriesCreated: number;
 }
 
@@ -1025,6 +1068,9 @@ function importRulesPackWithin(
   let rulesAdded = 0;
   let rulesOverwritten = 0;
   let rulesKept = 0;
+  // M-3: the fifth outcome, which used to be reported as none of the other four.
+  let rulesUnchanged = 0;
+  const rulesInertDetail: RulesImportSkip[] = [];
   // R-12: the same walk the preview reports from, so "which rules were skipped" cannot be two
   // different answers for one file.
   const rulesSkippedDetail = skippedRulesIn(pack);
@@ -1058,7 +1104,13 @@ function importRulesPackWithin(
     }
 
     const existing = db
-      .select({ id: merchantRules.id, categoryId: merchantRules.categoryId, renameTo: merchantRules.renameTo })
+      .select({
+        id: merchantRules.id,
+        categoryId: merchantRules.categoryId,
+        renameTo: merchantRules.renameTo,
+        // M-3: NULL means enabled (see the column's own docblock in src/db/schema.ts).
+        disabledAt: merchantRules.disabledAt,
+      })
       .from(merchantRules)
       .where(
         and(
@@ -1077,7 +1129,14 @@ function importRulesPackWithin(
         rule.rule_kind === 'rename'
           ? (existing.renameTo ?? null) === (rule.rename_to ?? null)
           : (existing.categoryId ?? null) === (category?.id ?? null);
-      if (sameOutcome) continue;
+      if (sameOutcome) {
+        // M-3: nothing to write, and now nothing unaccounted for either. A rule the receiver has
+        // switched off is left off -- deliberately, it is their decision -- but it is NAMED, so the
+        // household is not shown a successful import with an inert rule inside it.
+        rulesUnchanged += 1;
+        if (existing.disabledAt !== null) rulesInertDetail.push(inertRuleEntry(rule, pattern));
+        continue;
+      }
       if (onConflict === 'keep') {
         rulesKept += 1;
         continue;
@@ -1137,6 +1196,8 @@ function importRulesPackWithin(
     rulesKept,
     rulesSkipped: rulesSkippedDetail.length,
     rulesSkippedDetail,
+    rulesUnchanged,
+    rulesInertDetail,
     categoriesCreated,
   };
 }

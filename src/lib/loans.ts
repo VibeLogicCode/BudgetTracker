@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { accounts, billInstallments, loanMatcherRules, loanPayments, transactions, users, warrantyItemTypes, warrantyItems } from '@/db/schema';
 import { canActOnOwner, ownerScope, HOUSEHOLD_VIEWER, NOT_YOURS_ERROR, type Viewer } from '@/lib/auth/viewer';
@@ -850,13 +850,14 @@ function applyLoanDescription(
   direction: LoanDirection,
   signedAmountCents: number,
   at: string,
-): void {
+): boolean {
   const row = tx.select({ displaySource: transactions.displaySource }).from(transactions).where(eq(transactions.id, txnId)).get();
-  if (row === undefined || !displaySourceMayWrite('loan', row.displaySource)) return;
+  if (row === undefined || !displaySourceMayWrite('loan', row.displaySource)) return false;
   tx.update(transactions)
     .set({ displayDescription: loanLinkedDescription(direction, itemName, signedAmountCents), displaySource: 'loan', updatedAt: at })
     .where(eq(transactions.id, txnId))
     .run();
+  return true;
 }
 
 /**
@@ -876,6 +877,55 @@ function revertLoanDescription(tx: ReturnType<typeof getDb>, txnId: number, at: 
   const row = tx.select({ displaySource: transactions.displaySource }).from(transactions).where(eq(transactions.id, txnId)).get();
   if (row === undefined || row.displaySource !== 'loan') return;
   tx.update(transactions).set({ displayDescription: null, displaySource: null, updatedAt: at }).where(eq(transactions.id, txnId)).run();
+}
+
+/**
+ * v1.31.0 finding B-1: re-derives this file's own label for a row that still has a manual loan
+ * link, for the one caller that can legitimately take that label away -- the clear branch of
+ * setTransactionDisplayName (src/lib/categorize/engine.ts).
+ *
+ * WHY IT HAS TO EXIST. Clearing a hand-typed name hands the row DOWN the precedence order
+ * (DISPLAY_SOURCE_PRECEDENCE, src/lib/display-source.ts), and the step below 'manual' is 'loan',
+ * not 'rename'. The clear branch used to null both columns and call applyRenameRules straight
+ * afterwards, so a live loan payment came back wearing the merchant's name -- and unlinking could
+ * not repair it, because revertLoanDescription above only clears a row still labelled 'loan'. The
+ * household's only route back was to unlink and re-link, with nothing on screen to suggest it.
+ *
+ * WHY ONLY A `source = 'manual'` LINK. assignTransactionToLoan is the ONLY path that labels a row
+ * at all -- the rule and backfill paths link without labelling (see link(), which writes no
+ * description) -- so restoring from any live link would INVENT a label the row never carried and
+ * make an unrelated clear look like it had labelled the row itself. The newest manual link wins,
+ * which is exactly what the row was showing before the clear: each assign overwrites the last
+ * one's label.
+ *
+ * WHY HERE RATHER THAN IN engine.ts. The label text, the direction rule behind it
+ * (loanLinkedDescription -> isLoanRepayment) and the precedence gate all already live in this
+ * file; rebuilding any of them at the caller would be a second copy of this file's own answer,
+ * which is the defect ruling R24 exists to stop. engine.ts already imports this module, so the
+ * dependency runs the way it already ran.
+ *
+ * Returns whether a label was written -- a caller that has just cleared a row should be able to
+ * say which source now owns it rather than assume.
+ */
+export function restoreLoanDescription(txnId: number, at?: Date): boolean {
+  const stamp = nowIso(at);
+  return getDb().transaction((tx) => {
+    const link = tx
+      .select({
+        itemName: warrantyItems.name,
+        direction: warrantyItems.loanDirection,
+        amountCents: transactions.amountCents,
+      })
+      .from(loanPayments)
+      .innerJoin(warrantyItems, eq(warrantyItems.id, loanPayments.itemId))
+      .innerJoin(transactions, eq(transactions.id, loanPayments.txnId))
+      .where(and(eq(loanPayments.txnId, txnId), eq(loanPayments.source, 'manual')))
+      .orderBy(desc(loanPayments.id))
+      .limit(1)
+      .get();
+    if (link === undefined) return false;
+    return applyLoanDescription(tx, txnId, link.itemName, link.direction, link.amountCents, stamp);
+  });
 }
 
 /**

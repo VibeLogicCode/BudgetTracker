@@ -22,6 +22,10 @@ interface ImportPreview {
   /** v1.31.0 R-12: the skipped entries BY NAME, each with its reason. A count on its own told a
    *  household four rules would not arrive and gave them no way to find out which four. */
   skipped: { pattern: string; matchType: string; ruleKind: string; reason: string }[];
+  /** v1.31.0 M-3: of the `unchanged` entries, the ones this install has switched OFF. They are
+   *  left off -- that is the household's own decision -- but saying nothing made a partly-inert
+   *  import look like a complete one. */
+  inert: { pattern: string; matchType: string; ruleKind: string; reason: string }[];
   conflicts: {
     pattern: string;
     matchType: string;
@@ -36,12 +40,13 @@ interface ImportPreview {
   archivedCategories: string[];
 }
 
-/** v1.31.0 R-12. The patterns the server said it skipped, read defensively off an untyped JSON
- *  body: this panel already treats the response as `Record<string, unknown>` (R-04's fix), and a
- *  count with no names was the defect, so a missing or malformed list degrades to "say nothing
- *  extra" rather than to a thrown render. */
-function skippedNames(body: Record<string, unknown>): string[] {
-  const detail = body.rulesSkippedDetail;
+/** v1.31.0 R-12, widened by M-3 to take the key. The patterns the server named under `key`, read
+ *  defensively off an untyped JSON body: this panel already treats the response as
+ *  `Record<string, unknown>` (R-04's fix), and a count with no names was the defect, so a missing
+ *  or malformed list degrades to "say nothing extra" rather than to a thrown render. One reader
+ *  for both lists rather than a second copy of the same five lines. */
+function namedPatterns(body: Record<string, unknown>, key: 'rulesSkippedDetail' | 'rulesInertDetail'): string[] {
+  const detail = body[key];
   if (!Array.isArray(detail)) return [];
   return detail
     .map((entry) => (entry !== null && typeof entry === 'object' ? (entry as { pattern?: unknown }).pattern : null))
@@ -113,11 +118,18 @@ export function RulesPackPanel({ rows }: { rows: RulesExportRow[] }) {
     }
     setPreview(null);
     const count = (key: string) => Number(body[key] ?? 0);
+    const skipped = namedPatterns(body, 'rulesSkippedDetail');
+    // M-3: the rules that were already here, unchanged -- and the ones among them this install has
+    // switched off, which the import deliberately left off and used to mention nowhere at all.
+    const inert = namedPatterns(body, 'rulesInertDetail');
     setNotice(
-      `Added ${count('rulesAdded')} rules, overwrote ${count('rulesOverwritten')}, kept ${count('rulesKept')} existing, created ${count('categoriesCreated')} categories.` +
+      `Added ${count('rulesAdded')} rules, overwrote ${count('rulesOverwritten')}, kept ${count('rulesKept')} existing, left ${count('rulesUnchanged')} unchanged, created ${count('categoriesCreated')} categories.` +
         // R-12: the apply message names them too, not only the preview -- an import reached
         // through "Import" without a Preview click is the case where a bare count is least useful.
-        (skippedNames(body).length > 0 ? ` Skipped ${skippedNames(body).length}: ${skippedNames(body).join(', ')}.` : ''),
+        (skipped.length > 0 ? ` Skipped ${skipped.length}: ${skipped.join(', ')}.` : '') +
+        (inert.length > 0
+          ? ` ${inert.length} of the unchanged ${inert.length === 1 ? 'rule is' : 'rules are'} switched off here and stayed off: ${inert.join(', ')}.`
+          : ''),
     );
     window.location.reload();
   }
@@ -241,6 +253,18 @@ export function RulesPackPanel({ rows }: { rows: RulesExportRow[] }) {
                   ))}
                 </ul>
               </>
+            ) : null}
+            {/* M-3: an identical rule the household has switched off is left off, and said so
+                before the click. Its own paragraph rather than a line in the counts above,
+                because "already identical" reads as "nothing to do here" and for these entries
+                that is exactly the misunderstanding. */}
+            {preview.inert.length > 0 ? (
+              <p>
+                {preview.inert.length} of the {preview.unchanged} identical rule
+                {preview.unchanged === 1 ? '' : 's'} {preview.inert.length === 1 ? 'is' : 'are'} switched off here and will stay
+                off: {preview.inert.map((entry) => entry.pattern).join(', ')}. Turn{' '}
+                {preview.inert.length === 1 ? 'it' : 'them'} back on in the rules list if you want the pack&apos;s version to fire.
+              </p>
             ) : null}
             {preview.newCategories.length > 0 ? <p>Categories to create: {preview.newCategories.join(', ')}</p> : null}
             {/* R-13: an archived category is still used (findCategory prefers a live one and only

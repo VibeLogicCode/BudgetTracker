@@ -32,11 +32,29 @@
  * it cannot be tested, and a person cannot learn it. ("rename > loan" was the other candidate and
  * was refused with the argument above.)
  *
- * HOW IT STAYS ONE DEFINITION. Both writers ask this module rather than restating the order:
- * `applyRenameRules` excludes `displaySourcesAbove('rename')` in its own SELECT, and
- * `applyLoanDescription` gates its write on `displaySourceMayWrite('loan', row.displaySource)`.
- * Adding a fourth source therefore means editing this array and nothing else -- and any writer
- * that forgets to consult it is the one thing a reader of this file should look for.
+ * HOW IT STAYS ONE DEFINITION -- AND HOW THAT WAS ALREADY WRONG ONCE. Ruling R24 said "both
+ * writers" and named two. There are FOUR functions that write these two columns, and the count in
+ * this docblock was itself the defect: `setTransactionDisplayName`'s clear branch (v1.31.0 finding
+ * B-1) nulled both columns unconditionally, consulting nothing, so emptying the rename dialog on a
+ * loan-linked row destroyed the loan label and unlinking could not put it back. A sentence naming
+ * the writers is not a mechanism, which is why the enumeration now lives in
+ * tests/ops/display-source-writers.test.ts -- one entry per writer with its reason, asserted
+ * against every write of either column under src/, so a FIFTH writer cannot appear unremarked the
+ * way the third did. What that guard holds today:
+ *
+ *   - `applyRenameRules` (categorize/engine.ts) excludes `displaySourcesAbove('rename')` in its
+ *     own SELECT, so a row labelled above it is never even read.
+ *   - `setTransactionDisplayName` (categorize/engine.ts) gates both its write and its clear on
+ *     `displaySourceMayWrite('manual', ...)`, and on clearing hands the row to the next source
+ *     DOWN the order (the loan link) before the rename rules see it.
+ *   - `applyLoanDescription` (loans.ts) gates its write on `displaySourceMayWrite('loan', ...)`.
+ *   - `revertLoanDescription` (loans.ts) is the one exception, argued in the guard rather than
+ *     merely allowed: it clears only a row still labelled `'loan'`, which is an OWNERSHIP test and
+ *     strictly stronger than precedence. Written as `displaySourceMayWrite('loan', ...)` it would
+ *     clear a rename on unlink -- a label no loan ever set.
+ *
+ * Adding a fifth source means editing the array below and nothing else -- and any writer that
+ * forgets to consult it is the one thing a reader of this file should look for.
  *
  * Deliberately its OWN module rather than a constant in engine.ts: engine.ts already imports
  * src/lib/loans.ts (`applyPaymentMatchers`), so loans.ts importing from engine.ts would close an
