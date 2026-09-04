@@ -769,6 +769,112 @@ describe('ImportClient — Lane 3b: the post-commit offer to check what rules di
   });
 });
 
+// F-03 (v1.31.0): "did I miss a statement?" -- CommitFlowResult.discrepancy (src/lib/import/
+// flow.ts) reaches this screen's post-commit summary, following the same append pattern
+// loanMatchFailed/attributionSummary already use above. The controlling rule under test is
+// silence, not reassurance: discrepancy null must never render anything, for either of the two
+// different reasons it can be null (see flow.ts's own doc comment on the field).
+describe('ImportClient — F-03: the post-commit balance check', () => {
+  it('appends the reconciliation sentence to the summary when the newest statement disagreed', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockImplementationOnce(async () => ({ ok: true, json: async () => previewBody({ totalRows: 4 }) }))
+        .mockImplementationOnce(async () => ({
+          ok: true,
+          json: async () => ({
+            rowsAdded: 4,
+            rowsDuplicate: 0,
+            rowsError: 0,
+            needsReview: 1,
+            engineFailed: false,
+            loanMatchFailed: false,
+            discrepancy: {
+              accountId: 10,
+              fromDate: '2026-07-01',
+              toDate: '2026-07-20',
+              expectedCents: 80000,
+              impliedCents: 85000,
+              deltaCents: 5000,
+            },
+          }),
+        })),
+    );
+
+    const { container, getByRole } = render(
+      <ImportClient
+        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
+        profiles={PROFILES}
+        history={[]}
+        simplefinManaged={[]}
+      />,
+    );
+    fireEvent.submit(container.querySelector('form')!);
+    await waitFor(() => expect(container.textContent).toContain('Preview —'));
+    fireEvent.click(getByRole('button', { name: /^Import \d+ transactions$/ }));
+
+    await waitFor(() => expect(container.textContent).toContain('4 added'));
+    expect(container.textContent).toContain('Your statement balance for 2026-07-20 is $50.00 lower');
+    expect(container.textContent).toContain('between 2026-07-01 and 2026-07-20');
+  });
+
+  it('says nothing extra when discrepancy is null -- never "checked", never "balance agreed"', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockImplementationOnce(async () => ({ ok: true, json: async () => previewBody({ totalRows: 4 }) }))
+        .mockImplementationOnce(async () => ({
+          ok: true,
+          json: async () => ({
+            rowsAdded: 4,
+            rowsDuplicate: 0,
+            rowsError: 0,
+            needsReview: 1,
+            engineFailed: false,
+            loanMatchFailed: false,
+            discrepancy: null,
+          }),
+        })),
+    );
+
+    const { container, getByRole } = render(
+      <ImportClient
+        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
+        profiles={PROFILES}
+        history={[]}
+        simplefinManaged={[]}
+      />,
+    );
+    fireEvent.submit(container.querySelector('form')!);
+    await waitFor(() => expect(container.textContent).toContain('Preview —'));
+    fireEvent.click(getByRole('button', { name: /^Import \d+ transactions$/ }));
+
+    await waitFor(() => expect(container.textContent).toContain('4 added'));
+    expect(container.textContent).not.toContain('statement balance');
+    expect(container.textContent).not.toContain('checked');
+  });
+});
+
+// F-03 (v1.31.0): the History table's "View rows" link -- the rows THIS import added, reached
+// through transactionsHref (src/lib/transaction-links.ts) rather than a hand-built querystring.
+describe('ImportClient — F-03: History "View rows" link', () => {
+  it('links each History row to exactly its own import, with no date or person filter riding along', () => {
+    const { getByRole } = render(
+      <ImportClient
+        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
+        profiles={PROFILES}
+        history={HISTORY}
+        simplefinManaged={[]}
+      />,
+    );
+
+    const link = getByRole('link', { name: /view rows/i });
+    expect(link.getAttribute('href')).toBe('/transactions?import=77');
+  });
+});
+
 // MUST-6.1/6.2 (spec 2026-08-22 v1.6.0): the preview screen's per-card-value assignment UI.
 describe('ImportClient — per-card assignment UI (MUST-6.1, MUST-6.2)', () => {
   const PEOPLE = [

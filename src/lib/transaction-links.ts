@@ -12,6 +12,12 @@ import { rangeParams, type ResolvedRange } from '@/lib/date-range';
  * or one person's rows to somebody who asked about the household. v1.30.0 shipped three separate
  * fixes for paths that forgot a person scope; this module exists so a link cannot.
  *
+ * F-03 (v1.31.0) added the `import` target below (the import screen's History "View rows" link)
+ * for the identical reason: `?import=<id>` was already a supported filter before this module grew
+ * a case for it, so without one the History row would have been the SECOND hand-built copy of
+ * that querystring next to the rule-review card's -- exactly the drift this file exists to stop.
+ *
+
  * Both parameters are REQUIRED and `scope` carries both of its fields with no defaults, so a
  * call site cannot omit the scope by omitting an argument -- it has to write down what range and
  * what person the figure was built with, and `range: null` (every date) is a decision somebody
@@ -68,7 +74,16 @@ export type TransactionsLinkTarget =
    * See TransactionFilter.categoryExact (src/lib/transactions.ts) for the reader's half.
    */
   | { kind: 'category'; categoryId: number | null; exact?: boolean }
-  | { kind: 'merchant'; merchant: string };
+  | { kind: 'merchant'; merchant: string }
+  /**
+   * F-03 (v1.31.0). "The rows THIS import added" -- a History row on the import screen. Unlike
+   * `category`/`merchant`, an import id already fully identifies its own rows regardless of date
+   * or person, so the natural call is `{ range: null, person: null }`: the id is the whole
+   * question, and a caller narrowing it with a range or person would be asking something the
+   * History row never claimed. See TransactionFilter.importId (src/lib/transactions.ts) for the
+   * reader's half.
+   */
+  | { kind: 'import'; importId: number };
 
 /** rangeParams() for a preset (one definition of "a range as query parameters", MUST-11.8), and
  *  the same `custom` shape it produces for a card carrying its own two dates. */
@@ -96,8 +111,10 @@ export function transactionsHref(scope: TransactionsLinkScope, target: Transacti
     // breakdown's null-id bucket is a figure like any other and links like one.
     params.set('category', target.categoryId === null ? 'uncategorized' : String(target.categoryId));
     if (target.exact) params.set('exact', '1');
-  } else {
+  } else if (target.kind === 'merchant') {
     params.set('q', target.merchant);
+  } else {
+    params.set('import', String(target.importId));
   }
 
   return `/transactions?${params.toString()}`;

@@ -1,4 +1,5 @@
 import { acceptsTransactions, getAccount } from '@/lib/accounts';
+import { reconcileAccount, type Discrepancy } from '@/lib/balance-reconcile';
 import { runEngine, type EngineResult } from '@/lib/categorize/engine';
 import { applyPaymentMatchers } from '@/lib/loans';
 import { isSimplefinManaged } from '@/lib/simplefin/connection';
@@ -6,7 +7,7 @@ import { commitImport } from './commit';
 import { computeRowHashes } from './dedup';
 import type { ImportMapping } from './mapping';
 import { looksLikeOfx, parseOfx } from './ofx';
-import { parseCsv } from './parse';
+import { closingBalancesByDate, parseCsv } from './parse';
 import { forkProfileIfBuiltin, setAccountProfile } from './presets';
 import { deleteStagedFile, readStagedFile } from './staging';
 import { getDb } from '@/db/client';
@@ -42,6 +43,20 @@ export interface CommitFlowResult {
   loanLinksCreated: number;
   /** F5 fix-round: true when applyPaymentMatchers's own internal catch (MUST-13.5) fired. */
   loanMatchFailed: boolean;
+  /**
+   * F-03 (v1.31.0). "Did I miss a statement?" -- reconcileAccount's (src/lib/balance-reconcile.ts)
+   * verdict on the NEWEST statement date THIS import itself supplied a closing balance for, never
+   * a stale discrepancy left over from months ago surfacing on an unrelated import. See this
+   * field's assignment below for the full reasoning; null covers three different truths on
+   * purpose and the summary must stay SILENT for every one of them, never "checked" or "balance
+   * agreed" -- (1) this account's mapping has no balance column (or the file was OFX, which has
+   * none at all), so there was never a date to check; (2) there was one, and it agrees; (3) there
+   * is only one csv snapshot on file so far, nothing yet to compare it against. A false
+   * reassurance is worse than silence here -- v1.30.0 shipped a fix for exactly that class of
+   * defect (a notification claiming a household came in "$0.00 over" when the true figure was
+   * $113.40).
+   */
+  discrepancy: Discrepancy | null;
 }
 
 export function commitStagedImport(input: {
@@ -115,6 +130,29 @@ export function commitStagedImport(input: {
     // which has no file to detect direction from and omits this) ever has one to pass.
     dateOrder: parsed.dateOrder,
   });
+
+  // F-03 (v1.31.0). closingBalancesByDate (src/lib/import/parse.ts) recomputed here over the
+  // SAME parsed.rows/dateOrder commitImport was just handed above -- not a second parse, just a
+  // second read of the map commitImport already used to decide what to write to
+  // account_balance_snapshots. It is empty whenever this account cannot reconcile at all: every
+  // OFX row is stamped balanceCents: null unconditionally (ofx.ts's own doc comment -- OFX has
+  // no per-row running balance), and every CSV row is null whenever mapping.balanceCol is null.
+  // That is deliberate and is the WHOLE gate -- there is no separate "does this mapping have a
+  // balance column" check anywhere in this function, because an empty map already produces
+  // exactly the silence ruling requires, with no second place for that rule to drift from this
+  // one's.
+  //
+  // commitImport already wrote this date's 'csv' snapshot (commit.ts, inside the same db
+  // transaction the rows landed in) before returning, so reconcileAccount below is guaranteed to
+  // see it. Only the NEWEST date this import itself supplied is considered -- never any older
+  // discrepancy already sitting in this account's history, which reconcileAccount would also
+  // return but which has nothing to do with the statement this import just claimed to cover.
+  let discrepancy: Discrepancy | null = null;
+  const closingBalances = closingBalancesByDate(parsed.rows, parsed.dateOrder);
+  if (closingBalances.size > 0) {
+    const newestDate = [...closingBalances.keys()].sort().at(-1) as string;
+    discrepancy = reconcileAccount({ accountId: input.accountId }).find((d) => d.toDate === newestDate) ?? null;
+  }
 
   // Spec section 5 step 5: transfer detection + categorizer run after the insert.
   // The rows are already committed at this point, so a failure here must
@@ -191,5 +229,6 @@ export function commitStagedImport(input: {
     engineFailed,
     loanLinksCreated,
     loanMatchFailed: loanMatchReport.failed,
+    discrepancy,
   };
 }

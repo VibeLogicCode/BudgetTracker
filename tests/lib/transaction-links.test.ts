@@ -116,4 +116,16 @@ describe('transactionsHref — the figure the link is under', () => {
       "MO'S DINER & CO",
     );
   });
+
+  // F-03 (v1.31.0): the import screen's History "View rows" link. An import id already fully
+  // identifies its own rows, so the call site passes `{ range: null, person: null }` -- this
+  // just confirms the reader agrees that a bare importId is enough, with no date or person
+  // filter riding along uninvited.
+  it('an import row filters on the import id alone', () => {
+    const href = transactionsHref({ range: null, person: null }, { kind: 'import', importId: 77 });
+    expect(href).toBe('/transactions?import=77');
+    const filter = filterFromHref(href);
+    expect(filter.importId).toBe(77);
+    expect({ from: filter.from, to: filter.to }).toEqual({ from: null, to: null });
+  });
 });

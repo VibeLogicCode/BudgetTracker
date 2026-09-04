@@ -78,6 +78,95 @@ describe('commitStagedImport — engine-failure isolation (review finding 2)', (
 
     expect(result.engineFailed).toBe(false);
     expect(result.engine).toEqual({ processed: 9, categorized: 0, transfers: 1, skipped: 0 });
+    // F-03 (v1.31.0): the real fixture's own closing balances are internally consistent day
+    // over day (it is a genuine bank export), so the newest pair this import supplied agrees
+    // and the summary has nothing to say.
+    expect(result.discrepancy).toBeNull();
+  });
+});
+
+// F-03 (v1.31.0). "Did I miss a statement?" -- reconcileAccount (src/lib/balance-reconcile.ts)
+// already exists and is exercised on its own in tests/lib/balance-reconcile.test.ts; what is new
+// here is ONLY the wiring: does commitStagedImport call it for the right date, and does it stay
+// silent for every account that cannot reconcile at all. A hand-built 'signed' mapping (rather
+// than a built-in preset) keeps each fixture to the exact three columns this needs.
+describe('commitStagedImport — F-03: the post-commit balance check', () => {
+  const SIGNED_WITH_BALANCE = {
+    hasHeader: false,
+    headerRows: 0,
+    dateCol: 0,
+    dateFormat: 'YYYY-MM-DD',
+    descCols: [1],
+    amountMode: 'signed' as const,
+    amountCol: 2,
+    debitCol: null,
+    creditCol: null,
+    signConvention: 'negative_is_spend' as const,
+    encoding: 'auto' as const,
+    skipRules: null,
+    cardCol: null,
+    balanceCol: 3,
+  };
+  const NO_BALANCE_COL = { ...SIGNED_WITH_BALANCE, balanceCol: null };
+
+  it('reports the newest pair when this import\'s own statement balance disagrees with the transactions since the last one', () => {
+    runEngineMock.mockImplementation((ids: number[]) => ({ processed: ids.length, categorized: 0, transfers: 0, skipped: 0 }));
+    const { userId, accountId, profileId } = setup();
+
+    // First statement: anchors the account at $900.00 on 2026-07-01.
+    commitStagedImport({
+      stagingId: writeStagedFile(Buffer.from('2026-07-01,FIRST ROW,-100.00,900.00\n')),
+      filename: 'first.csv',
+      accountId,
+      profileId,
+      mapping: SIGNED_WITH_BALANCE,
+      userId,
+    });
+
+    // Second statement: a real $50.00 spend on 2026-07-20 would leave $850.00, but this
+    // (deliberately wrong) statement claims $800.00 -- a $50.00 gap only the bank's own
+    // statement column could catch.
+    const result = commitStagedImport({
+      stagingId: writeStagedFile(Buffer.from('2026-07-20,SECOND ROW,-50.00,800.00\n')),
+      filename: 'second.csv',
+      accountId,
+      profileId,
+      mapping: SIGNED_WITH_BALANCE,
+      userId,
+    });
+
+    expect(result.discrepancy).toEqual({
+      accountId,
+      fromDate: '2026-07-01',
+      toDate: '2026-07-20',
+      expectedCents: 80000,
+      impliedCents: 85000,
+      deltaCents: 5000,
+    });
+  });
+
+  it('stays silent -- never "checked" -- for an account whose mapping has no balance column at all', () => {
+    runEngineMock.mockImplementation((ids: number[]) => ({ processed: ids.length, categorized: 0, transfers: 0, skipped: 0 }));
+    const { userId, accountId, profileId } = setup();
+
+    commitStagedImport({
+      stagingId: writeStagedFile(Buffer.from('2026-07-01,FIRST ROW,-100.00\n')),
+      filename: 'first.csv',
+      accountId,
+      profileId,
+      mapping: NO_BALANCE_COL,
+      userId,
+    });
+    const result = commitStagedImport({
+      stagingId: writeStagedFile(Buffer.from('2026-07-20,SECOND ROW,-50.00\n')),
+      filename: 'second.csv',
+      accountId,
+      profileId,
+      mapping: NO_BALANCE_COL,
+      userId,
+    });
+
+    expect(result.discrepancy).toBeNull();
   });
 });
 

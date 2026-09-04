@@ -17,6 +17,16 @@ import { Field, hintClass, inputClass, selectClass } from '@/components/ui/form'
 import type { ImportMapping } from '@/lib/import/mapping';
 import type { CardValueSummary, PreviewResult } from '@/lib/import/preview';
 import type { ImportHistoryRow } from '@/lib/import/commit';
+// F-03 (v1.31.0): the sentence half of the post-commit balance check. Pure module (formatCents
+// plus a TYPE import of Discrepancy) so this 'use client' file never drags balance-reconcile.ts
+// -- and its @/db/client import -- into the browser bundle. See discrepancy-message.ts's own
+// docblock for the full reasoning.
+import { discrepancyMessage } from '@/lib/discrepancy-message';
+import type { Discrepancy } from '@/lib/balance-reconcile';
+// F-03: the History row's "View rows" link goes through this, never a hand-built
+// `?import=<id>` -- see this module's own docblock for why (two copies of the same
+// querystring had already drifted apart once).
+import { transactionsHref } from '@/lib/transaction-links';
 import { saveMappingAction, setCardPersonAction } from './actions';
 import type { SaveMappingState } from './actions';
 
@@ -346,7 +356,16 @@ export function ImportClient({
       // NEW-5 fix-round: applyPaymentMatchers is internally guarded (MUST-13.5) the same way
       // runEngine is caught above, so a matcher failure never fails the import either — it
       // just needs the same honest note engineFailed already gets.
-      setSummary(body.loanMatchFailed ? `${withAttribution} Loan payment matching failed for these rows.` : withAttribution);
+      const withLoanNote = body.loanMatchFailed ? `${withAttribution} Loan payment matching failed for these rows.` : withAttribution;
+      // F-03 (v1.31.0): CommitFlowResult.discrepancy is null for every account that cannot
+      // reconcile at all (no balance column on the mapping, or an OFX file, which has none
+      // either -- flow.ts's own doc comment on this field has the full list), AND for a clean
+      // statement that agreed. Both read exactly the same here on purpose -- silence, never
+      // "checked" or "balance agreed" -- because nothing on this screen can tell the two apart,
+      // and guessing wrong in the reassuring direction is the mistake v1.30.0 had to fix once
+      // already (a notification claiming "$0.00 over" when the real gap was $113.40).
+      const discrepancy = (body.discrepancy ?? null) as Discrepancy | null;
+      setSummary(discrepancy ? `${withLoanNote} ${discrepancyMessage(discrepancy)}` : withLoanNote);
       // v1.26.0 Lane 3b: an OFFER, not a gate -- only when a rule actually claimed a row.
       // Zero is the common case and means there is nothing to audit, so it renders nothing
       // rather than a link to a screen that would just say so.
@@ -848,14 +867,30 @@ export function ImportClient({
                   <td className="tabnum text-right text-muted" data-label="Dupes">{row.rowsDuplicate}</td>
                   <td className="tabnum text-right text-muted" data-label="Errors">{row.rowsError}</td>
                   <td className="text-right cell-stack-actions" data-label="">
-                    <button
-                      type="button"
-                      onClick={() => void undo(row.id)}
-                      disabled={busy}
-                      className="btn btn--secondary btn--sm"
-                    >
-                      Undo
-                    </button>
+                    {/* F-03 (v1.31.0): "the rows THIS import added" -- the arrival path
+                        transactions-client.tsx's own mobile-fold comment already calls out
+                        (`activeImportId`, rendered as a dismissible chip regardless of the
+                        filter disclosure's own open/closed state). transactionsHref, never a
+                        hand-built `?import=<id>` -- see that module's docblock. Stacked above
+                        Undo, not beside it: the fixed-width actions column (colgroup above) is
+                        too narrow for two side-by-side buttons, and stacking needs no widening
+                        of every other row's column. */}
+                    <div className="flex flex-col items-end gap-1.5">
+                      <a
+                        href={transactionsHref({ range: null, person: null }, { kind: 'import', importId: row.id })}
+                        className="btn btn--secondary btn--sm min-h-11 sm:min-h-0"
+                      >
+                        View rows
+                      </a>
+                      <button
+                        type="button"
+                        onClick={() => void undo(row.id)}
+                        disabled={busy}
+                        className="btn btn--secondary btn--sm"
+                      >
+                        Undo
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}

@@ -15,6 +15,13 @@ import { RowMenu, RowMenuButton, RowMenuForm } from '@/components/ui/RowMenu';
 import { SettingsIcon } from '@/components/icons';
 import { todayIso } from '@/lib/dates';
 import { formatCents } from '@/lib/money';
+// v1.31.0 F-03: moved to its own pure module so import-client.tsx's post-commit summary (also
+// 'use client') can render the identical sentence without value-importing balance-reconcile.ts
+// itself (which reaches @/db/client -- see discrepancy-message.ts's own docblock for why that
+// matters). Imported (not just re-exported) because this file's own JSX below still calls it;
+// re-exported by name so this file's callers, and its test, are unaffected by the move.
+import { discrepancyMessage } from '@/lib/discrepancy-message';
+export { discrepancyMessage };
 import { createAccountAction, setAccountActiveAction, updateAccountAction, type AccountsFormState } from './actions';
 // Type-only (ruling P4): this file is 'use client' and must never VALUE-import
 // src/lib/balance-reconcile.ts, which reaches @/db/client to run reconcileAccount. `import
@@ -73,7 +80,8 @@ export interface AccountRow {
    * v1.8.0 Task 5 (spec 2026-08-23), resolved by page.tsx via reconcileAccount()
    * (src/lib/balance-reconcile.ts). Ruling R7: reconciliation reports, it never corrects, so
    * this array IS the entire feature's UI surface -- one plain-language line per entry (see
-   * discrepancyMessage below), rendered directly under the account, and nothing at all when the
+   * discrepancyMessage, imported above from src/lib/discrepancy-message.ts), rendered directly
+   * under the account, and nothing at all when the
    * array is empty. No badge and no nav count anywhere else in the app reflects this: it is a
    * diagnostic a household member reads when troubleshooting a number that looks wrong, not an
    * alert that demands attention.
@@ -98,26 +106,6 @@ const initialState: AccountsFormState = {};
 
 const rowInput = 'field-control w-auto px-2 py-1 text-xs';
 const rowButton = 'btn btn--secondary btn--sm';
-
-/**
- * The entire text of ruling R7's diagnostic (spec 2026-08-23, v1.8.0 Task 5): report the gap,
- * name both statement dates, and go no further -- never guess which transaction is missing, and
- * never say the account "lost" or "gained" money, since nothing here knows which side is wrong.
- * `deltaCents` is impliedCents - expectedCents (src/lib/balance-reconcile.ts's own docblock):
- * positive means this app's OWN imported transactions add up to MORE than the bank says the
- * account holds on `toDate` -- the statement reads LOWER than our rows account for -- and
- * negative is the exact mirror. Exported so tests can assert on the sentence directly rather
- * than re-deriving it from rendered DOM text.
- */
-export function discrepancyMessage(discrepancy: Discrepancy): string {
-  const { fromDate, toDate, deltaCents } = discrepancy;
-  const direction = deltaCents > 0 ? 'lower' : 'higher';
-  const amount = formatCents(Math.abs(deltaCents));
-  return (
-    `Your statement balance for ${toDate} is ${amount} ${direction} than your imported transactions account for ` +
-    `— an import is probably missing rows between ${fromDate} and ${toDate}.`
-  );
-}
 
 /**
  * Lane 4 (2026-08-30 one-design-language plan): the hero value MetricCard wants -- the balance
