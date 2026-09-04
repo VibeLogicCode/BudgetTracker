@@ -245,12 +245,38 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.30.0 release', () => {
+  it('MUST-7.1: the 1.31.0 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.30.0');
+    expect(pkg.version).toBe('1.31.0');
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toMatch(/^## \[1\.31\.0\] - 2026-09-04$/m);
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.31.0]'));
+    expect(changelog.indexOf('## [1.31.0]')).toBeLessThan(changelog.indexOf('## [1.30.0]'));
+    const release = changelog.slice(changelog.indexOf('## [1.31.0]'), changelog.indexOf('## [1.30.0]'));
+    // Ten features and twenty-five fixes ship with no schema change, and saying so is what lets a
+    // self-hosted household skip the pre-pull database review.
+    expect(release).toMatch(/No migration/i);
+    // The release's four headline additions, in the words a household would use for them. Each is
+    // a capability somebody would notice missing if a later refactor dropped it.
+    expect(release).toMatch(/links to the rows behind it/i);
+    expect(release).toMatch(/Income by source/i);
+    expect(release).toMatch(/Which devices are signed in as me/i);
+    // The Recurring card's honesty is the invariant, not the card: it must never assert a
+    // subscription it cannot evidence, and a fix round was needed because the badge did exactly
+    // that from a two-gap median. \s+ because the file is hard-wrapped.
+    expect(release).toMatch(/rhythm\s+is\s+not\s+a\s+subscription/i);
+    // The two defects whose user-visible symptom must never be reintroduced: a destructive action
+    // that under-reported what it would touch, and a label fight that made a row read differently
+    // on different days.
+    expect(release).toMatch(/stranded\s+rows/i);
+    expect(release).toMatch(/fought\s+over\s+the\s+same\s+row/i);
+    // The build gate this release added. Nothing in CI had ever started the application before it.
+    expect(release).toMatch(/boots\s+the\s+application\s+and\s+requests\s+every\s+route/i);
+  });
+
+  it('MUST-7.1: the 1.30.0 release is still recorded intact (append-only discipline)', () => {
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.30\.0\] - 2026-09-03$/m);
-    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.30.0]'));
     expect(changelog.indexOf('## [1.30.0]')).toBeLessThan(changelog.indexOf('## [1.29.1]'));
     const entry = changelog.slice(changelog.indexOf('## [1.30.0]'), changelog.indexOf('## [1.29.1]'));
     // A defect-only release ships no schema change, and saying so is what lets a self-hosted

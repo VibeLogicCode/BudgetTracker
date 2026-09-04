@@ -21,6 +21,81 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.31.0] - 2026-09-04
+
+No migration. Ten additions, twenty-five fixes, and one new gate in the build.
+
+The additions answer questions the app already invited but never answered: why is this number what
+it is, how much is this filtered list, what do we pay every month, and did that statement actually
+balance. The fixes are the rule engine, which had never been reviewed before now.
+
+### Added
+
+- **Every reported number links to the rows behind it.** Category and merchant names on Reports and
+  the dashboard now open the transaction list, carrying that card's own date range and person
+  filter. The tax-year rows produce the exact list needed for filing, which the CSV export cannot.
+  Transactions rows gain "Show all from this merchant".
+- **A total on every filtered view.** The Transactions footer reads "127 transactions · $4,812.30
+  out · $612.00 in". Two figures rather than one net, because on a credit card your payment to the
+  card is money in and a single net would hide it. This also answers "what did we spend on this
+  account" with no new report: filter by account, read the total.
+- **Find a transaction by its amount.** Type an amount into the search box and it finds it. No new
+  control; the box just learned to recognise money. The CSV export understands it too.
+- **Income by source.** A card on Reports splitting money in the way spending has always been split
+  — salary, CCB, GST credit, interest, side income. That split has been in the database since the
+  first import and has never been visible. It is also the honest denominator behind the savings rate
+  the dashboard shows.
+- **Same period last year.** Two columns on the category breakdown: last year's figure and the
+  change. Hidden when the earlier window has no rows at all, rather than printing a zero that reads
+  like a real comparison.
+- **Recurring charges.** A card showing which merchants charge on a regular monthly or yearly
+  rhythm, what you last paid, and whether an item or rule already covers it, with a Track button for
+  the ones that do not. A rhythm is not a subscription — a once-a-month shop or a bill that varies
+  looks the same from here — so every row shows its own evidence and the app never claims otherwise.
+  Nothing is stored; it reads charges you already have.
+- **Six months of spent-versus-limit on each budget card**, inside the section that already expands.
+  A limit on its own is a number with nothing to compare it to.
+- **After an import, whether the statement balance agreed.** When the closing balance disagrees with
+  what was imported, the summary says so and names the dates to check. Accounts that cannot be
+  reconciled say nothing at all rather than implying they were checked. Each History row gains
+  "View rows".
+- **Which devices are signed in as me.** Settings lists your own sessions — device, last seen, this
+  device — with a per-row Sign out. Previously the only option was signing out everywhere,
+  including the device in your hand.
+- **Quick add gets a Note field**, and the help page stops describing a form that no longer exists.
+
+### Fixed
+
+- **"Delete rule and clear from transactions" stranded rows.** For a rule matching on "contains", it
+  previewed one number, cleared that many, and left every other matched row still flagged a
+  transfer — invisible to every report and budget — with the rule gone. "Affects" and "Apply now"
+  under-reported the same way.
+- **A rename rule and a loan label fought over the same row**, so a transaction could read
+  differently on different days depending on which ran last. An explicit link on a row now beats a
+  pattern rule, decided in one place.
+- **A rule saved with no category was accepted silently** and then blocked every other rule for that
+  merchant, so the merchant stopped being categorised by anything with no error shown.
+- **Importing a rule pack was not all-or-nothing**, so a bad entry could leave your rules in a state
+  nobody chose, and the preview could disagree with what apply actually did.
+- **Exported rule packs recorded disabled rules as live**, so an export could not be re-imported to
+  the state it came from.
+- **A bulk rename took 2.3x longer than it needed to**, running one full pass over the table per
+  rule.
+- A pack with one unrecognised entry no longer refuses the whole file; it skips and names what it
+  skipped. A link on the warranty page pointed at a parameter the transactions page does not read,
+  so it silently showed everything. Plus nine further rule-engine fixes and the eight items deferred
+  from v1.30.0.
+
+### Changed
+
+- **Anomaly alerts now go to admins only.** An unusual or duplicate charge names another member's
+  merchant and amount, and previously reached every member including children. The warning is worth
+  keeping whole, so the audience narrowed rather than the figures.
+- **The build now boots the application and requests every route before an image is published.**
+  Nothing in the pipeline had ever started the app: v1.29.0 shipped a page that threw on every
+  request with the whole test suite green. 87 checks now cover every page and route, in both
+  signed-in and signed-out states.
+
 ## [1.30.0] - 2026-09-03
 
 No migration. Ten fixes from a full review of the application: three that decide who can see
