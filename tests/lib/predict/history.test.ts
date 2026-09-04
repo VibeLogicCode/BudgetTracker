@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../../helpers/db';
 import { budgetProgress, type BudgetRow } from '@/lib/budgets';
 import { nowIso } from '@/lib/clock';
+import { assignTransactionToLoan } from '@/lib/loans';
 import { categorySeries, firstDataMonth, isAllNoSpend, seasonalReference, suggestionsFor } from '@/lib/predict/history';
 import type { SuggestionResult } from '@/lib/predict/suggest';
 
@@ -48,6 +49,21 @@ function setup() {
     return row.id;
   };
   return { db: current.db, alice, bob, joint, spend, child };
+}
+
+/** A loan-kind warranty_items row, same fixture shape as tests/lib/reports.test.ts's own
+ *  seedLoanItem (C-02: this module's spend must agree with budgets.ts's per MUST-3.1/3.2). */
+function seedLoanItem(ownerUserId: number, direction: 'owed' | 'lent'): number {
+  const now = nowIso();
+  const typeId = current!.db.get<{ id: number }>(sql`
+    insert into warranty_item_types (name, is_subscription, kind, created_at)
+    values (${`Loan type ${Math.random().toString(36).slice(2, 8)}`}, 0, 'loan', ${now})
+    returning id`).id;
+  return current!.db.get<{ id: number }>(sql`
+    insert into warranty_items
+      (name, purchase_date, is_lifetime, owner_user_id, type_id, loan_direction, current_balance_cents, balance_updated_at, created_at, updated_at)
+    values (${'Test loan'}, '2026-01-01', 0, ${ownerUserId}, ${typeId}, ${direction}, ${5_000_000}, ${now}, ${now}, ${now})
+    returning id`).id;
 }
 
 const WINDOW = ['2026-02', '2026-03', '2026-04', '2026-05', '2026-06', '2026-07'];
@@ -173,6 +189,24 @@ describe('MUST-3.2: the series is budgetProgress, row for row', () => {
     expect(pick(series, categoryIdByName(db, 'Kids'))?.monthlyCents).toEqual([0, 0, 0, 0, 0, 0]);
     // Income is gone entirely, at both levels.
     expect(series.some((row) => row.categoryName === 'Income' || row.categoryName === 'Salary')).toBe(false);
+  });
+});
+
+describe('C-02: loan principal movements are excluded from prediction history too', () => {
+  it('a categorized lend-out contributes nothing to the category series, matching budgetProgress', () => {
+    const { db, alice, spend } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const loanId = seedLoanItem(alice, 'lent');
+    const txnId = spend({ categoryId: groceries, amountCents: -600_000, date: '2026-07-05' });
+    assignTransactionToLoan({ txnId, itemId: loanId });
+
+    // Before this fix, `cells()` filtered on transfers alone, so this $6,000 lend-out would have
+    // inflated a suggested Groceries budget the same way it inflated the Budgets card -- MUST-3.2
+    // promises the two never disagree.
+    const series = categorySeries({ months: ['2026-07'], scope: 'household', userId: null });
+    expect(pick(series, groceries)?.monthlyCents).toEqual([0]);
+    const progress = flatten(budgetProgress('2026-07', 'household', null));
+    expect(progress.find((row) => row.categoryId === groceries)?.spentCents).toBe(0);
   });
 });
 

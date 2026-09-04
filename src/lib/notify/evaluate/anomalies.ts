@@ -20,6 +20,7 @@ import {
   UNUSUAL_MAX_PER_EVALUATION,
   UNUSUAL_MIN_ABS_CENTS,
 } from '@/lib/predict/constants';
+import { SPEND_ROW_WHERE } from '@/lib/spend-where';
 
 /**
  * MUST-10.4: evaluateAnomalies runs on EVERY tick, so it needs the same guard evaluateBudgets
@@ -97,7 +98,14 @@ function earliestTransactionDate(): string | null {
   return row?.first ?? null;
 }
 
-/** The one slice read (MUST-10.9), oldest first so MUST-9.13's cap takes the oldest five. */
+/**
+ * The one slice read (MUST-10.9), oldest first so MUST-9.13's cap takes the oldest five.
+ *
+ * C-02 fix: `SPEND_ROW_WHERE` (src/lib/spend-where.ts) excludes loan-principal movements
+ * alongside transfers, the twin of insights.ts's own readSlice -- a categorised lend-out is
+ * money out and would otherwise fire an unusual_transaction notification the moment Budgets and
+ * Reports both correctly say $0.
+ */
 function readSlice(sliceStart: string): SliceRow[] {
   return getDb()
     .select({
@@ -110,7 +118,7 @@ function readSlice(sliceStart: string): SliceRow[] {
     })
     .from(transactions)
     .innerJoin(accounts, eq(accounts.id, transactions.accountId))
-    .where(and(gte(transactions.date, sliceStart), eq(transactions.isTransfer, false), lt(transactions.amountCents, 0)))
+    .where(and(gte(transactions.date, sliceStart), ...SPEND_ROW_WHERE, lt(transactions.amountCents, 0)))
     .orderBy(asc(transactions.date), asc(transactions.id))
     .all();
 }
@@ -139,7 +147,7 @@ function categoryBaselineRows(
     .where(
       and(
         gte(transactions.date, yearStart),
-        eq(transactions.isTransfer, false),
+        ...SPEND_ROW_WHERE,
         lt(transactions.amountCents, 0),
         eq(transactions.categoryId, categoryId),
       ),
@@ -162,7 +170,7 @@ function merchantBaselineMagnitudes(candidate: SliceRow, yearStart: string): num
     .where(
       and(
         gte(transactions.date, yearStart),
-        eq(transactions.isTransfer, false),
+        ...SPEND_ROW_WHERE,
         lt(transactions.amountCents, 0),
         ne(transactions.id, candidate.id),
         eq(transactions.normalizedMerchant, candidate.merchant),
@@ -323,7 +331,7 @@ export function evaluateSubscriptionCreep(input: { userId: number; now: Date; tz
   const recentMerchants = getDb()
     .selectDistinct({ merchant: transactions.normalizedMerchant })
     .from(transactions)
-    .where(and(gte(transactions.date, recentStart), eq(transactions.isTransfer, false), lt(transactions.amountCents, 0)))
+    .where(and(gte(transactions.date, recentStart), ...SPEND_ROW_WHERE, lt(transactions.amountCents, 0)))
     .all()
     .map((row) => row.merchant);
   if (recentMerchants.length === 0) return 0;
@@ -340,7 +348,7 @@ export function evaluateSubscriptionCreep(input: { userId: number; now: Date; tz
     .where(
       and(
         gte(transactions.date, yearStart),
-        eq(transactions.isTransfer, false),
+        ...SPEND_ROW_WHERE,
         lt(transactions.amountCents, 0),
         inArray(transactions.normalizedMerchant, recentMerchants),
       ),

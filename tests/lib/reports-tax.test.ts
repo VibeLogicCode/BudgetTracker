@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
 import { UNATTRIBUTED_LABEL } from '@/lib/reports';
 import { createCategory } from '@/lib/categories';
+import { assignTransactionToLoan } from '@/lib/loans';
 import { taxYearCsv, taxYearReport, taxYears } from '@/lib/tax';
 import { setTransactionSplits } from '@/lib/splits';
 import { nowIso } from '@/lib/clock';
@@ -56,6 +57,21 @@ function setup() {
   };
 
   return { db: current.db, sqlite: current.sqlite, alice, bob, account, add, flag };
+}
+
+/** A loan-kind warranty_items row, same fixture shape as tests/lib/reports.test.ts's own
+ *  seedLoanItem and tests/lib/budgets.test.ts's copy of it (C-02). */
+function seedLoanItem(ownerUserId: number, direction: 'owed' | 'lent'): number {
+  const now = nowIso();
+  const typeId = current!.db.get<{ id: number }>(sql`
+    insert into warranty_item_types (name, is_subscription, kind, created_at)
+    values (${`Loan type ${Math.random().toString(36).slice(2, 8)}`}, 0, 'loan', ${now})
+    returning id`).id;
+  return current!.db.get<{ id: number }>(sql`
+    insert into warranty_items
+      (name, purchase_date, is_lifetime, owner_user_id, type_id, loan_direction, current_balance_cents, balance_updated_at, created_at, updated_at)
+    values (${'Test loan'}, '2026-01-01', 0, ${ownerUserId}, ${typeId}, ${direction}, ${5_000_000}, ${now}, ${now}, ${now})
+    returning id`).id;
 }
 
 describe('taxYears', () => {
@@ -263,6 +279,22 @@ describe('taxYearReport — date range, sorting and empty years', () => {
     flag(groceries);
     add({ categoryId: groceries, amountCents: -1000, date: '2026-03-01' });
     expect(taxYearReport(2020)).toEqual([]);
+  });
+});
+
+describe('taxYearReport — loan principal movements are excluded too (C-02)', () => {
+  it('a lend-out filed under a tax-relevant category does not appear in the year report', () => {
+    const { db, alice, add, flag } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    flag(groceries);
+    const loanId = seedLoanItem(alice, 'lent');
+    const txnId = add({ categoryId: groceries, amountCents: -600_000, date: '2026-03-10' });
+    assignTransactionToLoan({ txnId, itemId: loanId });
+
+    // Before this fix, this row had never been excluded here either -- taxYearReport, like
+    // budgets.ts, filtered on transfers alone -- so a $6,000 lend-out categorised as Groceries
+    // would have inflated a household's tax-year total the same way it inflated Budgets.
+    expect(taxYearReport(2026)).toEqual([]);
   });
 });
 

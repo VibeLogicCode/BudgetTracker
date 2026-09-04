@@ -6,6 +6,7 @@ import { nowIso } from '@/lib/clock';
 import { addMonths, isMonthKey, monthEnd, monthRange, monthStart } from '@/lib/dates';
 import { netSpentCents, pctOf } from '@/lib/money';
 import { EFFECTIVE_AMOUNT, EFFECTIVE_CATEGORY } from '@/lib/splits';
+import { SPEND_ROW_WHERE } from '@/lib/spend-where';
 
 export type BudgetScope = 'household' | 'personal';
 
@@ -136,6 +137,14 @@ export function clearBudget(input: { scope: BudgetScope; userId: number | null; 
  * columns, so a split transaction is counted once, at its parts, never at its own lump
  * category/amount and never at both. The date/transfer/attribution predicates below
  * deliberately keep reading the PARENT's columns -- a split has no date or owner of its own.
+ *
+ * C-02 fix: `SPEND_ROW_WHERE` (src/lib/spend-where.ts) is both halves of "a row that counts as
+ * spend" -- transfers AND loan-principal movements (lending out, being repaid on a loan we
+ * lent, borrowing on a loan we owe) are excluded, the same rule reports.ts's rangeClauses
+ * applies. Before this, a loan-linked row that had already picked up a category from an import
+ * rule counted here even though reports.ts correctly read it as $0 -- see NOT_PRINCIPAL_
+ * MOVEMENT's own docblock for exactly which movement stays spend (repaying a debt we owe,
+ * MUST-13.2) and why.
  */
 export function categorySpend(
   month: string,
@@ -148,7 +157,7 @@ export function categorySpend(
   const clauses = [
     gte(transactions.date, monthStart(month)),
     lte(transactions.date, monthEnd(month)),
-    eq(transactions.isTransfer, false),
+    ...SPEND_ROW_WHERE,
     sql`${EFFECTIVE_CATEGORY} is not null`,
   ];
   if (opts.scope !== 'household' && opts.attributedUserId !== undefined && opts.attributedUserId !== null) {
@@ -207,7 +216,7 @@ export function categoryTransactions(
   const clauses = [
     gte(transactions.date, monthStart(month)),
     lte(transactions.date, monthEnd(month)),
-    eq(transactions.isTransfer, false),
+    ...SPEND_ROW_WHERE,
     sql`${EFFECTIVE_CATEGORY} = ${categoryId}`,
   ];
   if (opts.scope !== 'household' && opts.attributedUserId !== undefined && opts.attributedUserId !== null) {
@@ -282,7 +291,7 @@ function categorySpendWithRollupSeries(
   const clauses = [
     gte(transactions.date, monthStart(months[0] as string)),
     lte(transactions.date, monthEnd(months[months.length - 1] as string)),
-    eq(transactions.isTransfer, false),
+    ...SPEND_ROW_WHERE,
     sql`${EFFECTIVE_CATEGORY} is not null`,
   ];
   if (scope === 'personal' && userId !== null) clauses.push(eq(transactions.attributedUserId, userId));

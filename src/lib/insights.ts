@@ -12,6 +12,7 @@ import {
   type SpendRow,
 } from '@/lib/predict/anomalies';
 import { DUPLICATE_LOOKBACK_DAYS, DUPLICATE_WINDOW_DAYS, UNUSUAL_BASELINE_DAYS, UNUSUAL_LOOKBACK_DAYS } from '@/lib/predict/constants';
+import { SPEND_ROW_WHERE } from '@/lib/spend-where';
 
 /**
  * v1.13.0 ruling R6 (item AJ / PROD-2). The maths already existed and was tested; it was
@@ -44,8 +45,15 @@ export interface InsightRow {
 /** The card is a nudge, not a report. Eight rows is a glance; forty is a second inbox. */
 export const INSIGHTS_MAX_ROWS = 8;
 
+/**
+ * C-02 fix: `SPEND_ROW_WHERE` (src/lib/spend-where.ts) excludes both transfers and
+ * loan-principal movements. A $6,000 lend-out categorised under Groceries is money out and,
+ * before this fix, surfaced here as "Needs a look: $6,000 unusual charge" while Budgets and
+ * Reports both correctly said $0 -- the same disagreement this task exists to remove, on a
+ * third surface.
+ */
 function readSlice(sliceStart: string, scope: number | null): SpendRow[] {
-  const clauses = [gte(transactions.date, sliceStart), eq(transactions.isTransfer, false), lt(transactions.amountCents, 0)];
+  const clauses = [gte(transactions.date, sliceStart), ...SPEND_ROW_WHERE, lt(transactions.amountCents, 0)];
   if (scope !== null) clauses.push(eq(transactions.attributedUserId, scope));
   return getDb()
     .select({

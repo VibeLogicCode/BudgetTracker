@@ -80,6 +80,14 @@ describe('MUST-13.2: loan payments are invisible to every spend calculation', ()
    * from "correctly excluding a loan disbursement that was never spend to begin with", so the
    * position has to carry the distinction a plain string match cannot.
    *
+   * Task 1 (C-02, 2026-09-02 review) moved `NOT_PRINCIPAL_MOVEMENT` OUT of reports.ts and into
+   * its own leaf module, src/lib/spend-where.ts, precisely so budgets.ts (and predict/history.ts,
+   * tax.ts, insights.ts, notify/evaluate/anomalies.ts) could compose the same rule without
+   * importing reports.ts at all. reports.ts is therefore now exactly like budgets.ts above: it
+   * reads `SPEND_ROW_WHERE` by NAME (an import, not the table) and never touches the link table
+   * directly. The position-aware carve-out this test used to apply to reports.ts now applies to
+   * spend-where.ts instead -- same reasoning, moved with the code.
+   *
    * What MUST-13.2 protects, restated, is still absolute: repaying a debt the household OWES --
    * a car payment, money that leaves and is never seen again -- must count as ordinary spend, in
    * every budget and every report, forever. Nothing below touches that.
@@ -88,18 +96,26 @@ describe('MUST-13.2: loan payments are invisible to every spend calculation', ()
    * the four ways money can move against a loan, three convert cash into a receivable or a
    * receivable into cash -- lending money out, being repaid, and borrowing -- and none of those
    * change how much the household earned or consumed; only the fourth, repaying a loan the
-   * household itself owes, is real consumption. `NOT_PRINCIPAL_MOVEMENT` (src/lib/reports.ts) is
-   * the ONE place in this file allowed to read the link table, and it exists to compute exactly
-   * that three-way exclusion, as a correlated SQL predicate rather than a materialized id list --
-   * see its own docblock for the full classification, why it is correlated (not a JS-side scan
+   * household itself owes, is real consumption. `NOT_PRINCIPAL_MOVEMENT` (src/lib/spend-where.ts)
+   * is the ONE place allowed to read the link table, and it exists to compute exactly that
+   * three-way exclusion, as a correlated SQL predicate rather than a materialized id list -- see
+   * its own docblock for the full classification, why it is correlated (not a JS-side scan
    * repeated at every rangeClauses call site, and no unbounded bind parameters), and the
    * MUST-11.16 tie-break it derives carefully (an existential OR, not the universal-quantifier
    * NOT EXISTS that reads almost the same but gets that tie-break backwards). A car payment
    * (money out, an 'owed' loan) always fails its exclusion test and stays counted; no other
-   * place in reports.ts may read this table to decide what counts as spend.
+   * place may read this table to decide what counts as spend.
    */
-  it('reports.ts reads the link table only inside NOT_PRINCIPAL_MOVEMENT, never anywhere else', () => {
+  it('reports.ts never reads the link table at all -- it composes NOT_PRINCIPAL_MOVEMENT by name, via SPEND_ROW_WHERE', () => {
     const source = read('src/lib/reports.ts');
+    expect({ file: 'src/lib/reports.ts', hit: /loan_payments|loanPayments/.test(source) }).toEqual({
+      file: 'src/lib/reports.ts',
+      hit: false,
+    });
+  });
+
+  it('spend-where.ts reads the link table only inside NOT_PRINCIPAL_MOVEMENT, never anywhere else', () => {
+    const source = read('src/lib/spend-where.ts');
     const start = source.indexOf('const NOT_PRINCIPAL_MOVEMENT');
     expect(start).toBeGreaterThan(-1);
 
@@ -129,8 +145,8 @@ describe('MUST-13.2: loan payments are invisible to every spend calculation', ()
       where: 'inside NOT_PRINCIPAL_MOVEMENT',
       hit: true,
     });
-    expect({ where: 'elsewhere in reports.ts', hit: /loan_payments|loanPayments/.test(outside) }).toEqual({
-      where: 'elsewhere in reports.ts',
+    expect({ where: 'elsewhere in spend-where.ts', hit: /loan_payments|loanPayments/.test(outside) }).toEqual({
+      where: 'elsewhere in spend-where.ts',
       hit: false,
     });
   });

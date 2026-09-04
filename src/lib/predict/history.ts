@@ -7,6 +7,7 @@ import { netSpentCents } from '@/lib/money';
 import { historyMonths, seasonalApplies } from '@/lib/predict/window';
 import { seasonalFactor, suggestBudget, type SuggestionResult } from '@/lib/predict/suggest';
 import { EFFECTIVE_AMOUNT, EFFECTIVE_CATEGORY } from '@/lib/splits';
+import { SPEND_ROW_WHERE } from '@/lib/spend-where';
 
 /**
  * The ONLY module under src/lib/predict/ that touches the database (MUST-2.1). Server-only:
@@ -47,6 +48,12 @@ export interface SeasonalSeries {
  * columns, so a split transaction is counted once, at its parts -- the date/transfer/
  * attribution predicates keep reading the parent's own columns, since a split has no date or
  * owner of its own.
+ *
+ * C-02 fix: `SPEND_ROW_WHERE` (src/lib/spend-where.ts) replaces a bare transfer-only filter here
+ * -- MUST-3.1/3.2 at the top of this file promise this module's spend agrees with budgets.ts,
+ * and a loan-linked row that budgets.ts now excludes as principal (not spend) must be excluded
+ * from a suggestion's history too, or a suggested budget would be inflated by a $6,000 lend-out
+ * that budgetProgress never counted.
  */
 function cells(
   months: string[],
@@ -59,7 +66,7 @@ function cells(
   const clauses = [
     gte(transactions.date, monthStart(months[0])),
     lte(transactions.date, monthEnd(months[months.length - 1])),
-    eq(transactions.isTransfer, false),
+    ...SPEND_ROW_WHERE,
     isNotNull(EFFECTIVE_CATEGORY),
   ];
   if (scope === 'personal') {

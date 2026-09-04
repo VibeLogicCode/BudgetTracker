@@ -5,6 +5,7 @@ import { categoryWithDescendants, listCategories } from '@/lib/categories';
 import { netSpentCents } from '@/lib/money';
 import { toCsv, UNATTRIBUTED_LABEL } from '@/lib/reports';
 import { EFFECTIVE_AMOUNT, EFFECTIVE_CATEGORY } from '@/lib/splits';
+import { SPEND_ROW_WHERE } from '@/lib/spend-where';
 
 /**
  * Tax-relevant categories + the tax-year report (spec 2026-08-22, v1.7.0, Task 15). Split out
@@ -66,8 +67,10 @@ export function taxYears(): number[] {
  * Split-aware (Task 3's pattern, reused rather than reimplemented): LEFT JOIN
  * transaction_splits and group by EFFECTIVE_CATEGORY/EFFECTIVE_AMOUNT (src/lib/splits.ts) so a
  * split transaction is counted once, at its parts' own categories -- never at its parent's own
- * lump category/amount, and never at both. Transfers are excluded, matching every other
- * aggregate in this app.
+ * lump category/amount, and never at both. `SPEND_ROW_WHERE` (src/lib/spend-where.ts, C-02 fix)
+ * excludes both transfers and loan-principal movements, matching every other spend aggregate in
+ * this app -- a lend-out filed under a tax-relevant category is not deductible spend any more
+ * than it is budget spend.
  *
  * A category only appears here when its coverage (itself, plus every child when it is itself a
  * parent) actually has at least one matching transaction this year -- this is what makes "a
@@ -94,7 +97,7 @@ export function taxYearReport(year: number): TaxYearRow[] {
     })
     .from(transactions)
     .leftJoin(transactionSplits, eq(transactionSplits.txnId, transactions.id))
-    .where(and(gte(transactions.date, from), lte(transactions.date, to), eq(transactions.isTransfer, false)))
+    .where(and(gte(transactions.date, from), lte(transactions.date, to), ...SPEND_ROW_WHERE))
     .groupBy(EFFECTIVE_CATEGORY, transactions.attributedUserId)
     .all();
 

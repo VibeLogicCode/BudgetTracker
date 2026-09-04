@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
 import { budgetProgress, budgetTotals, categorySpend, categoryTransactions, clearBudget, copyBudgetsFromPreviousMonth, flattenBudgetRows, resolveBudget, upsertBudget } from '@/lib/budgets';
 import { nowIso } from '@/lib/clock';
+import { assignTransactionToLoan } from '@/lib/loans';
 // Lane 1 (2026-08-30 plan): categoryTransactions is split-aware, the same way categorySpend
 // (immediately below) already is -- one test proves it by actually splitting a transaction,
 // rather than trusting that reusing EFFECTIVE_CATEGORY/EFFECTIVE_AMOUNT was enough.
@@ -27,6 +28,24 @@ function setup() {
     return row.id;
   };
   return { db: current.db, sqlite: current.sqlite, alice, bob, joint, spend };
+}
+
+/**
+ * A loan-kind warranty_items row (item 8a fixture), same shape as reports.test.ts's own
+ * seedLoanItem -- these tests mirror that file's "loan principal movements are excluded from
+ * spend/income" describe block, applied to budgets.ts instead of reports.ts (C-02).
+ */
+function seedLoanItem(ownerUserId: number, direction: 'owed' | 'lent'): number {
+  const now = nowIso();
+  const typeId = current!.db.get<{ id: number }>(sql`
+    insert into warranty_item_types (name, is_subscription, kind, created_at)
+    values (${`Loan type ${Math.random().toString(36).slice(2, 8)}`}, 0, 'loan', ${now})
+    returning id`).id;
+  return current!.db.get<{ id: number }>(sql`
+    insert into warranty_items
+      (name, purchase_date, is_lifetime, owner_user_id, type_id, loan_direction, current_balance_cents, balance_updated_at, created_at, updated_at)
+    values (${'Test loan'}, '2026-01-01', 0, ${ownerUserId}, ${typeId}, ${direction}, ${5_000_000}, ${now}, ${now}, ${now})
+    returning id`).id;
 }
 
 describe('resolveBudget', () => {
@@ -603,5 +622,94 @@ describe('flattenBudgetRows (moved here from notify/evaluate/pace.ts, ruling P2)
     });
     const names = flattenBudgetRows(budgetProgress('2026-03')).map((row) => row.categoryName);
     expect(names.indexOf('Food')).toBeLessThan(names.indexOf('Groceries'));
+  });
+});
+
+/**
+ * C-02 (Task 1). Mirrors tests/lib/reports.test.ts:778-845's "loan principal movements are
+ * excluded from spend/income" describe block one for one, applied to budgets.ts's own aggregates
+ * instead of reports.ts's -- before this fix, ONLY reports.ts applied NOT_PRINCIPAL_MOVEMENT, so
+ * a loan-linked row that had already picked up a category from an import rule read as $0 spend
+ * on Reports and thousands of dollars of spend (or a phantom refund) on Budgets, on the same
+ * dashboard. Every fixture below files the loan-linked row under Groceries (not left
+ * uncategorized), because that is the measured defect: ELIGIBLE (src/lib/categorize/engine.ts)
+ * does not exclude loan-linked rows from auto-categorisation, so "gets a category, then gets
+ * linked to a loan" is the common path, not an exotic one.
+ */
+describe('loan principal movements are excluded from budget spend too (C-02)', () => {
+  it('a categorized lend-out is not spend', () => {
+    const { alice, db, spend } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const loanId = seedLoanItem(alice, 'lent');
+    const txnId = spend({ categoryId: groceries, amountCents: -600_000, date: '2026-03-10' });
+    assignTransactionToLoan({ txnId, itemId: loanId });
+
+    // Before item 8a reached budgets.ts, this read 600000 -- Groceries at $6,000.00 against
+    // whatever limit was set, a fabricated overspend.
+    expect(categorySpend('2026-03').get(groceries) ?? 0).toBe(0);
+  });
+
+  it('being repaid on a lent loan is not a phantom refund that shrinks real spend', () => {
+    const { alice, db, spend } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const loanId = seedLoanItem(alice, 'lent');
+    spend({ categoryId: groceries, amountCents: -5000, date: '2026-03-05' }); // real $50 spend
+    const repaymentTxnId = spend({ categoryId: groceries, amountCents: 600_000, date: '2026-03-11' });
+    assignTransactionToLoan({ txnId: repaymentTxnId, itemId: loanId });
+
+    // Before item 8a reached budgets.ts, this netted to -595000 -- Groceries reading a $5,950
+    // "refund" vastly larger than anything actually bought, and (via effectiveBudget's rollover
+    // walk) manufacturing a phantom carry into next month.
+    expect(categorySpend('2026-03').get(groceries)).toBe(5000);
+  });
+
+  it('MUST-13.2 still holds: repaying a debt we owe IS spend', () => {
+    const { alice, db, spend } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const loanId = seedLoanItem(alice, 'owed');
+    const txnId = spend({ categoryId: groceries, amountCents: -50_000, date: '2026-03-10' });
+    assignTransactionToLoan({ txnId, itemId: loanId });
+
+    // This is the ONE loan movement NOT_PRINCIPAL_MOVEMENT deliberately leaves alone -- a fix
+    // that excluded it too would be wrong, not merely incomplete.
+    expect(categorySpend('2026-03').get(groceries)).toBe(50_000);
+  });
+
+  it('MUST-11.16 tie-break survives the move: a transaction funding two loans stays counted the moment ANY link is an owed repayment', () => {
+    const { alice, db, spend } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const owedLoanId = seedLoanItem(alice, 'owed');
+    const lentLoanId = seedLoanItem(alice, 'lent');
+    const txnId = spend({ categoryId: groceries, amountCents: -50_000, date: '2026-03-10' });
+    assignTransactionToLoan({ txnId, itemId: owedLoanId });
+    assignTransactionToLoan({ txnId, itemId: lentLoanId });
+
+    expect(categorySpend('2026-03').get(groceries)).toBe(50_000);
+  });
+
+  it('the drill-down agrees with the total: categoryTransactions lists exactly the rows categorySpend summed', () => {
+    const { alice, db, spend } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const loanId = seedLoanItem(alice, 'lent');
+    const txnId = spend({ categoryId: groceries, amountCents: -600_000, date: '2026-03-10' });
+    assignTransactionToLoan({ txnId, itemId: loanId });
+
+    expect(categorySpend('2026-03').get(groceries) ?? 0).toBe(0);
+    expect(categoryTransactions('2026-03', groceries)).toEqual([]);
+  });
+
+  it('budgetTotals(budgetProgress(...)) reflects it: a $6,000 lend-out never inflates the Budgets card', () => {
+    const { alice, db, spend } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-03', amountCents: 50000 });
+    const loanId = seedLoanItem(alice, 'lent');
+    const txnId = spend({ categoryId: groceries, amountCents: -600_000, date: '2026-03-10' });
+    assignTransactionToLoan({ txnId, itemId: loanId });
+
+    const rows = budgetProgress('2026-03');
+    const groceriesRow = rows.flatMap((r) => r.children).find((r) => r.categoryId === groceries)!;
+    expect(groceriesRow.spentCents).toBe(0);
+    expect(groceriesRow.overBudget).toBe(false);
+    expect(budgetTotals(rows)).toMatchObject({ budgetedSpentCents: 0, totalSpentCents: 0 });
   });
 });
