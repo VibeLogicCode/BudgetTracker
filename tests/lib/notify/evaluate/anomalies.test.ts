@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { categoryIdByName, createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../../helpers/db';
+import { setUserVisibility } from '@/lib/auth/users';
 import { addDaysIso, todayIso } from '@/lib/dates';
 import { saveEmailTarget, saveSmtp, setPref } from '@/lib/notify/config';
+import { setHouseholdEventPref, upsertHouseholdTarget } from '@/lib/notify/household';
 import * as outboxModule from '@/lib/notify/outbox';
 import { resetOutboxPumpForTests } from '@/lib/notify/outbox';
 import { resetNotifySenderForTests, setNotifySenderForTests } from '@/lib/notify/send';
@@ -31,8 +33,8 @@ afterEach(() => {
   t.cleanup();
 });
 
-function emailUser(): number {
-  const userId = insertTestUser(t.db, { username: `u${Math.random().toString(36).slice(2, 8)}` });
+function emailUser(role: 'admin' | 'member' = 'admin'): number {
+  const userId = insertTestUser(t.db, { username: `u${Math.random().toString(36).slice(2, 8)}`, role });
   saveSmtp({
     preset: 'brevo',
     host: 'h',
@@ -160,7 +162,11 @@ describe('MUST-9.10: unusual_transaction end to end', () => {
     expect(keys()).toEqual(ids.slice(0, 5).map((id) => `unusual:${id}`));
   });
 
-  it('MUST-9.36: the same charge reaches every user with the event enabled', () => {
+  it('MUST-9.36: the same charge reaches every admin with the event enabled', () => {
+    // v1.31.0 owner ruling (item M-8): the audience narrows to role 'admin', not to "every
+    // notifiable user" as MUST-9.36 originally read. Both users below are admins (emailUser()'s
+    // default), so this still proves the fan-out over MULTIPLE recipients; the narrowing itself
+    // is pinned separately below.
     const sam = emailUser();
     const alex = emailUser();
     seedHistory();
@@ -523,5 +529,112 @@ describe('evaluator-to-renderer wiring', () => {
     const body = (t.sqlite.prepare('select body from notification_outbox limit 1').get() as { body: string }).body;
     expect(body).toContain('Joint Chequing');
     expect(body).toContain('Groceries');
+  });
+});
+
+/**
+ * v1.31.0 owner ruling (item M-8, docs/reviews/2026-09-02-review-for-opus.md). v1.30.0 closed
+ * every OTHER path by which household money figures reached a self-scoped member by push,
+ * leaving unusual_transaction and duplicate_charge alone as documented, intentional exceptions
+ * (MUST-9.36 -- "a large charge is a household fact"). The owner has now ruled: narrow the
+ * AUDIENCE to admins rather than scope the figures (which would gut the feature: an anomaly
+ * alert is only useful when it names the charge somebody did not recognise) or drop the feature
+ * (which would lose a genuine early warning). Role is the axis, not visibility -- an admin whose
+ * row says visibility 'self' stays unrestricted (micro-ruling M1) -- so these tests exercise
+ * every combination: a household-visibility member, a self-scoped member, a household-visibility
+ * admin and a self-scoped admin.
+ */
+describe('owner ruling (v1.31.0, item M-8): unusual_transaction and duplicate_charge narrow to admins', () => {
+  it('a household-visibility member and a self-scoped member get neither event; every admin, self-scoped or not, gets both unchanged', () => {
+    const admin = emailUser('admin');
+    const adminSelf = emailUser('admin');
+    // setUserVisibility refuses the admin+self pairing (micro-ruling M1), so the row is written
+    // directly -- this IS the hand-edited-database case that refusal exists for, and per the
+    // ruling this admin must be treated as unrestricted regardless.
+    t.db.run(sql`update users set visibility = 'self' where id = ${adminSelf}`);
+    const member = emailUser('member');
+    const memberSelf = emailUser('member');
+    setUserVisibility(memberSelf, 'self');
+
+    seedHistory();
+    const groceries = categoryIdByName(t.db, 'Groceries');
+    seedMerchantBaseline('CANADIAN TIRE', groceries);
+    const outlier = charge({ merchant: 'CANADIAN TIRE', cents: 41288, date: '2026-08-14', categoryId: groceries });
+    const first = charge({ merchant: 'BELL CANADA', cents: 8950, date: '2026-08-12' });
+    const second = charge({ merchant: 'BELL CANADA', cents: 8950, date: '2026-08-13' });
+
+    // Proves the scenario actually produced deliveries, without pinning an exact count: the
+    // count alone cannot tell "nobody ineligible got a row" apart from "nobody got anything at
+    // all", which is exactly why the assertions below read the outbox rows themselves.
+    expect(evaluateAnomalies({ now: NOW, tz: TZ })).toBeGreaterThan(0);
+
+    const rows = t.sqlite
+      .prepare('select user_id, dedup_key, body from notification_outbox order by id')
+      .all() as { user_id: number | null; dedup_key: string; body: string }[];
+
+    // The bug this pins: a non-admin -- household-visibility or self-scoped -- used to receive
+    // both events, naming a charge that may not even be theirs. Asserted on the actual outbox
+    // rows (the rendered body), not on evaluateAnomalies' return value.
+    expect(rows.filter((r) => r.user_id === member)).toEqual([]);
+    expect(rows.filter((r) => r.user_id === memberSelf)).toEqual([]);
+
+    // Every admin, self-scoped or not, still gets both events, unchanged.
+    for (const adminId of [admin, adminSelf]) {
+      const adminRows = rows.filter((r) => r.user_id === adminId);
+      expect(adminRows.map((r) => r.dedup_key).sort()).toEqual(
+        [`unusual:${outlier}`, `dupe:${first}:${second}`].sort(),
+      );
+      expect(adminRows.some((r) => r.body.includes('CANADIAN TIRE'))).toBe(true);
+      expect(adminRows.some((r) => r.body.includes('BELL CANADA'))).toBe(true);
+    }
+
+    // No stray recipients: the four rows above (two admins x two events) are the whole outbox.
+    expect(rows).toHaveLength(4);
+  });
+});
+
+describe('owner ruling (v1.31.0, item M-8): the family channel keeps working for a household-eligible anomaly event', () => {
+  /**
+   * The trap two earlier agents hit on this exact subsystem (v1.30.0's two S-18 corrections):
+   * narrowing a per-user delivery must not silence the shared family channel. unusual_transaction
+   * is householdEligible (events.ts), so an admin may still route it to the family room exactly
+   * as before this ruling -- that is a distinct, admin-opted-into decision from the personal
+   * audience this ruling narrows. This household's only non-admin is self-scoped, the case v1.30.0
+   * round 0 got wrong for budget alerts (skipping the household loop for them silenced the room).
+   */
+  it('is byte-identical whether or not a self-scoped member is even in the household', () => {
+    const admin = emailUser('admin');
+    const selfMember = emailUser('member');
+    setUserVisibility(selfMember, 'self');
+
+    expect(
+      upsertHouseholdTarget({ channel: 'email', destination: 'family@example.invalid', actorUserId: creatorId }).ok,
+    ).toBe(true);
+    expect(setHouseholdEventPref({ eventId: 'unusual_transaction', channel: 'email', enabled: true }).ok).toBe(true);
+
+    seedHistory();
+    const groceries = categoryIdByName(t.db, 'Groceries');
+    seedMerchantBaseline('CANADIAN TIRE', groceries);
+    const outlier = charge({ merchant: 'CANADIAN TIRE', cents: 41288, date: '2026-08-14', categoryId: groceries });
+
+    expect(evaluateAnomalies({ now: NOW, tz: TZ })).toBe(1);
+
+    const rows = t.sqlite
+      .prepare('select user_id, channel, dedup_key, body from notification_outbox order by id')
+      .all() as { user_id: number | null; channel: string; dedup_key: string; body: string }[];
+
+    const familyRows = rows.filter((r) => r.user_id === null);
+    expect(familyRows).toHaveLength(1);
+    expect(familyRows[0].channel).toBe('email');
+    expect(familyRows[0].dedup_key).toBe(`hh:unusual:${outlier}`);
+    expect(familyRows[0].body).toContain('CANADIAN TIRE');
+    expect(familyRows[0].body).toContain('Joint Chequing');
+
+    // No personal copy for anybody: the admin's email is routed to the family channel instead
+    // (v1.28.0 decision 4), and the self-scoped member is off the recipient list entirely (this
+    // ruling) -- so removing them from the household changes nothing about the row above.
+    expect(rows.filter((r) => r.user_id === admin)).toEqual([]);
+    expect(rows.filter((r) => r.user_id === selfMember)).toEqual([]);
+    expect(rows).toHaveLength(1);
   });
 });

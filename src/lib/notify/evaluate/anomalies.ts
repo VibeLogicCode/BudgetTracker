@@ -47,10 +47,24 @@ interface SliceRow extends SpendRow {
 /**
  * MUST-10.10: a household with no user having either tick event enabled skips the fingerprint
  * query entirely. Zero enabled participants means zero queries.
+ *
+ * v1.31.0 owner ruling (item M-8, docs/reviews/2026-09-02-review-for-opus.md): the recipient
+ * list for these two events narrows to `role === 'admin'`. Checked FIRST, before either event's
+ * isEventEnabled query, so a household of five with one admin costs four fewer queries than
+ * checking role last would.
+ *
+ * Deliberately role, not visibility: an admin whose row says `visibility: 'self'` is treated as
+ * unrestricted everywhere else in this codebase (micro-ruling M1, and ownerScope's own shape --
+ * see src/lib/auth/viewer.ts), and a household can reasonably have one. Filtering on visibility
+ * here would both under-filter (a household-visibility adult who is not an admin would still see
+ * another member's merchant and amount, which is exactly the leak this ruling closes) and
+ * over-filter (a self-scoped admin would wrongly lose an alert MUST-9.36 says they are entitled
+ * to act on).
  */
 function participants(): AnomalyParticipant[] {
   const out: AnomalyParticipant[] = [];
   for (const user of notifiableUsers()) {
+    if (user.role !== 'admin') continue;
     const unusual = CHANNELS.some((channel) => isEventEnabled(user.id, 'unusual_transaction', channel));
     const duplicate = CHANNELS.some((channel) => isEventEnabled(user.id, 'duplicate_charge', channel));
     if (!unusual && !duplicate) continue;
@@ -230,10 +244,29 @@ function findUnusual(slice: SliceRow[], today: string): UnusualFinding[] {
 }
 
 /**
- * MUST-9.36: unusual_transaction and duplicate_charge are household-wide. The same transaction
- * is reported to every user with the event enabled, with no attribution filter, because a
- * large charge is a household fact and filtering it by attributed_user_id would hide exactly
- * the charges nobody has claimed yet.
+ * MUST-9.36: unusual_transaction and duplicate_charge stay household-wide in what they NAME. The
+ * merchant, amount and account are read from readSlice() with no attribution filter, because a
+ * large charge is a household fact and filtering it by attributed_user_id would hide exactly the
+ * charges nobody has claimed yet -- scoping those figures to one person's own transactions would
+ * gut the feature: an anomaly alert is only useful when it names the charge somebody did not
+ * recognise.
+ *
+ * v1.31.0 owner ruling (item M-8, docs/reviews/2026-09-02-review-for-opus.md): what changes is
+ * WHO is told, not what they are told. participants() above filters the recipient list to
+ * `role === 'admin'`, so a household's children -- and any other non-admin member -- receive
+ * neither event any more, personally or otherwise. The two rejected alternatives: scoping the
+ * figures per recipient (rejected above, as it guts the feature) and dropping the two events
+ * outright (rejected because a duplicate or unusually large charge on a household card is a
+ * genuine early warning worth keeping). MUST-9.36's "household fact" reasoning is therefore
+ * narrowed in AUDIENCE, not overturned: it survives intact for the people who can act on it.
+ *
+ * Both events are householdEligible (events.ts), so an admin may additionally route either to
+ * the family channel exactly as before this ruling -- that is a distinct, admin-opted-into
+ * decision (setHouseholdEventPref) from the personal-delivery audience this ruling narrows, and
+ * nothing here disables it. See enqueue()'s familyChannelOnly docblock and
+ * tests/ops/enqueue-family-channel.test.ts for why no such flag is needed at this call site:
+ * with recipients already admin-only, and an admin never self-scoped for this purpose (above),
+ * there is no self-scoped personal delivery left for familyChannelOnly to withhold.
  */
 export function evaluateAnomalies(input: { now: Date; tz: string }): number {
   const people = participants();
