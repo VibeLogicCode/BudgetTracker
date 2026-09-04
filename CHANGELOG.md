@@ -21,6 +21,58 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.30.0] - 2026-09-03
+
+No migration. Ten fixes from a full review of the application: three that decide who can see
+whose money, five that made a number wrong or a page hard to use, and two on the update and
+notification machinery. Nothing was saved, changed or lost by any of the defects below, and no
+setting needs revisiting after the upgrade.
+
+### Security
+
+- **A household member set to "self" could read anyone's transactions.** Opening a category from
+  the budgets page calls a server action, and that action checked only that you were signed in.
+  Anyone able to reach it could ask for the whole household's transactions in a category, or for
+  one named person's, and get merchant, date and amount back. Server actions are reachable on their
+  own, so the budgets page's own careful scoping was never protecting this. The drill-down is now
+  narrowed by the viewer who asked, and a self-scoped member asking for somebody else gets an empty
+  list rather than their own spending relabelled under another person's name.
+- **Notifications pushed household figures to members who cannot see them on screen.** A child's
+  account set to "self" sees only their own money everywhere in the app, but budget alerts, the
+  pace alert, the weekly digest and the monthly digest were all built from household totals and
+  sent to them by email or Telegram — category names, amounts and limits. Savings alerts leaked the
+  household's pooled net and target the same way. Each of those now uses the recipient's own scope,
+  or is left out where there is no personal equivalent. Alerts about a member's own budgets are
+  unchanged, and the shared family channel still receives the household figures it always did.
+- **Four warranty actions did not check the viewer.** Re-running receipt scanning, deleting a loan
+  rule, removing an instalment and marking one paid resolved their target row without asking whose
+  it was.
+
+### Fixed
+
+- **An archived parent category hid its live children.** Archiving a parent removed the whole group
+  from the budgets page and from the spend history, so live child categories underneath it vanished
+  along with money that had actually been spent. Parents and children are now kept whenever they
+  carry spending or a budget, archived or not.
+- **Loan principal counted as spending in some totals and not others.** The rule for what counts as
+  spend existed in six modules and had drifted between them, so the same month could report
+  different figures on different pages. There is now one definition and every total reads it.
+- **A scheduled notification check could leave its guard stuck.** If the dormancy check threw, the
+  tick flag was never reset and scheduled notifications stopped until a restart.
+- **"Check now" reported an update without showing it, and "Update now" could fire repeatedly.**
+  The card said "Up to date" even when the check had just found a new version, until the page was
+  reloaded by hand; and the Update now button stayed live after a request, so every further click
+  sent another update trigger. The card now updates from the check itself, and once an update has
+  been requested the buttons are replaced by a note saying what is happening. A repeat request for
+  the same version is refused by the server, so a stale tab cannot trigger a second one.
+
+### Changed
+
+- **The transactions filters no longer crowd a phone.** Six rows of controls sat above the
+  transactions at every screen width, pushing the data most of a screen down. Below tablet width a
+  row now appears only when the Filters panel is open or that row's own filter is set — so arriving
+  from an import audit link still shows the filter you arrived with, and still lets you clear it.
+
 ## [1.29.1] - 2026-09-01
 
 No migration. One fix, for a page v1.29.0 broke.

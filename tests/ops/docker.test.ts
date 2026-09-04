@@ -245,12 +245,36 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.29.1 release', () => {
+  it('MUST-7.1: the 1.30.0 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.29.1');
+    expect(pkg.version).toBe('1.30.0');
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toMatch(/^## \[1\.30\.0\] - 2026-09-03$/m);
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.30.0]'));
+    expect(changelog.indexOf('## [1.30.0]')).toBeLessThan(changelog.indexOf('## [1.29.1]'));
+    const entry = changelog.slice(changelog.indexOf('## [1.30.0]'), changelog.indexOf('## [1.29.1]'));
+    // A defect-only release ships no schema change, and saying so is what lets a self-hosted
+    // household skip the pre-pull database review entirely.
+    expect(entry).toMatch(/No migration/i);
+    // The two halves of the release's headline security fix, neither of which may be lost: a
+    // self-scoped member could READ another member's rows, and the answer is an empty list rather
+    // than their own spending shown under somebody else's name. \s+ because the file is hard-wrapped.
+    expect(entry).toMatch(/could\s+read\s+anyone's\s+transactions/i);
+    expect(entry).toMatch(/relabelled\s+under\s+another\s+person's\s+name/i);
+    // The notification fix is only correct if it withheld the leak WITHOUT silencing the shared
+    // room -- the first implementation did exactly that, so the changelog records the distinction.
+    expect(entry).toMatch(/family\s+channel\s+still\s+receives/i);
+    // The update card's two symptoms, in the words a household would use for them.
+    expect(entry).toMatch(/Update\s+now/);
+    expect(entry).toMatch(/refused\s+by\s+the\s+server/i);
+    // Same promise this project makes on every defect release: the bugs were visibility and
+    // arithmetic, never data loss.
+    expect(entry).toMatch(/Nothing\s+was\s+saved,\s+changed\s+or\s+lost/i);
+  });
+
+  it('MUST-7.1: the 1.29.1 release is still recorded intact (append-only discipline)', () => {
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.29\.1\] - 2026-09-01$/m);
-    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.29.1]'));
     expect(changelog.indexOf('## [1.29.1]')).toBeLessThan(changelog.indexOf('## [1.29.0]'));
     const patch = changelog.slice(changelog.indexOf('## [1.29.1]'), changelog.indexOf('## [1.29.0]'));
     // A patch whose whole reason for existing is a page that would not load must say so plainly,
