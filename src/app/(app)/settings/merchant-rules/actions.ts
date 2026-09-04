@@ -23,6 +23,7 @@ import {
   type RuleScope,
 } from '@/lib/categorize/engine';
 import {
+  CATEGORY_RULE_NEEDS_CATEGORY_ERROR,
   deleteRule,
   listRules,
   matchTypeAllowedForKind,
@@ -133,14 +134,28 @@ export async function saveRuleAction(_prev: RuleActionState, formData: FormData)
     return { message: `Rename rule saved and applied to ${result.rowsUpdated} transaction${result.rowsUpdated === 1 ? '' : 's'}.` };
   }
 
+  // v1.31.0 R-02 (P2). The Category select offers "(none)" for every kind, because transfer,
+  // not_transfer and rename rules genuinely have none -- so "category" plus an untouched select
+  // was accepted, and produced a rule that WON its merchant in matchRule and then had nothing to
+  // file it as: the merchant silently stopped being categorised by anything, including by the
+  // shorter rule that would have. Refused here in words rather than folded into the zod object
+  // above, for the same reason as the WORD_MATCH_KIND_ERROR check: 'Invalid rule.' explains
+  // nothing, and the whole failure was that nothing was explained. matchRule skips such a row too
+  // (ruleOutcomeMissing, src/lib/categorize/rules.ts) -- this is the boundary that stops one being
+  // saved in the first place.
+  const categoryId =
+    parsed.data.ruleKind === 'transfer' || parsed.data.ruleKind === 'not_transfer' || parsed.data.categoryId === ''
+      ? null
+      : Number(parsed.data.categoryId);
+  if (parsed.data.ruleKind === 'category' && categoryId === null) {
+    return { error: CATEGORY_RULE_NEEDS_CATEGORY_ERROR };
+  }
+
   const upserted = upsertRuleFromCorrection({
     pattern: parsed.data.pattern,
     matchType: parsed.data.matchType,
     ruleKind: parsed.data.ruleKind,
-    categoryId:
-      parsed.data.ruleKind === 'transfer' || parsed.data.ruleKind === 'not_transfer' || parsed.data.categoryId === ''
-        ? null
-        : Number(parsed.data.categoryId),
+    categoryId,
     createdBy: admin.id,
     actorRole: admin.role,
   });

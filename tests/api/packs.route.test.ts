@@ -197,6 +197,66 @@ describe('POST /api/packs/rules/import', () => {
     expect(await applied.json()).toMatchObject({ applied: true, rulesAdded: 1, rulesSkipped: 0 });
     expect(listRules('rename').find((r) => r.pattern === 'MCDONALDS')?.renameTo).toBe("McDonald's");
   });
+
+  /**
+   * v1.31.0 R-04. An unexpected failure used to be rethrown, which Next turns into a 500 with an
+   * HTML body -- and the panel's `await response.json()` then threw on that HTML from inside a
+   * floating `void send('apply')`, so the person who chose the file saw nothing happen at all.
+   * The import is atomic now, so "Nothing was changed" is a true sentence and the route says it.
+   */
+  it('500s with a readable JSON error, not an HTML rethrow, when a write fails unexpectedly', async () => {
+    const { adminToken } = setup();
+    // A failure that is neither a format error nor predictable up front: the database itself
+    // refusing the insert. No module is mocked -- the real route and the real importRulesPack run.
+    current!.sqlite.exec(
+      "create trigger boom before insert on merchant_rules when new.pattern = 'BOOM' begin select raise(abort, 'boom'); end",
+    );
+    const pack = JSON.stringify({
+      format: 'budget-tracker-rules',
+      version: 1,
+      categories: [],
+      rules: [
+        { pattern: 'FIRST OK', match_type: 'exact', category: 'Coffee', category_parent: 'Food' },
+        { pattern: 'BOOM', match_type: 'exact', category: 'Coffee', category_parent: 'Food' },
+      ],
+    });
+    const before = listRules().length;
+
+    const errors: unknown[] = [];
+    const spy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => void errors.push(args));
+    const response = await rulesImport(
+      uploadRequest('http://nas.local:3000/api/packs/rules/import', pack, adminToken, { mode: 'apply' }),
+    );
+    spy.mockRestore();
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: 'Import failed. Nothing was changed.' });
+    // The detail goes to the server log, not to a person holding user-supplied JSON.
+    expect(errors).toHaveLength(1);
+    // ...and the claim the message makes is true: the earlier rule is not there.
+    expect(listRules().length).toBe(before);
+    expect(listRules().map((row) => row.pattern)).not.toContain('FIRST OK');
+  });
+
+  it('400s a pack whose parent is already a child here, with the reason and no writes', async () => {
+    const { adminToken } = setup();
+    // The seed has Food > Coffee, so "Coffee" cannot be a parent in this database. This used to
+    // throw a raw Error mid-loop -- a 500 with an HTML body -- after earlier rows were written.
+    const pack = JSON.stringify({
+      format: 'budget-tracker-rules',
+      version: 1,
+      categories: [{ name: 'Latte', parent: 'Coffee' }],
+      rules: [{ pattern: 'BREVILLE', match_type: 'exact', category: 'Latte', category_parent: 'Coffee' }],
+    });
+    const before = listRules().length;
+    const response = await rulesImport(
+      uploadRequest('http://nas.local:3000/api/packs/rules/import', pack, adminToken, { mode: 'apply' }),
+    );
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toMatch(/two levels deep/);
+    expect(listRules().length).toBe(before);
+  });
+
 });
 
 describe('profiles pack routes', () => {

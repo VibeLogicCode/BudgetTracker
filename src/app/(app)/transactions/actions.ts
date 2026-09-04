@@ -39,6 +39,7 @@ import {
 import { filterFromQuery } from './filter-params';
 import {
   applyCategoryToMatching,
+  applyRenameRules,
   clearCategory,
   confirmCategory,
   setTransactionDisplayName,
@@ -1001,6 +1002,15 @@ export async function unassignFromLoanAction(formData: FormData): Promise<Action
     return { error: error instanceof Error ? error.message : 'Could not unassign that transaction.' };
   }
   if (!unassigned) return { error: 'That transaction is not linked to this loan.' };
+
+  // v1.31.0 R-03 / ruling R24. Unlinking cleared the loan label (revertLoanDescription), which
+  // hands this row back to the rules -- and under R24 a rename rule was never allowed to touch it
+  // while the link existed, so if one matches this merchant its text has to be applied NOW rather
+  // than at whatever unrelated pass happens to run next (saving a rule, installing a pack, a
+  // re-run). Scoped to the one id, in the action layer rather than in src/lib/loans.ts, so that
+  // file keeps the MUST-13.2 boundary its own header describes. Harmless when no rename matches:
+  // applyRenameRules only clears what a rule set, and the loan label is already gone.
+  applyRenameRules([parsed.data.transactionId]);
 
   revalidatePath('/transactions');
   revalidatePath('/dashboard');

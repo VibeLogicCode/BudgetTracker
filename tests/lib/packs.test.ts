@@ -1,7 +1,11 @@
 import { describe, it, expect, afterEach } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 import { sql } from 'drizzle-orm';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
 import {
+  MAX_PACK_CATEGORIES,
+  MAX_PACK_RULES,
   PACK_VERSION,
   PROFILES_PACK_FORMAT,
   PackFormatError,
@@ -686,5 +690,241 @@ describe('profiles pack', () => {
     };
     expect(() => importProfilesPack(pack)).toThrowError(PackFormatError);
     expect(getProfileByName('Broken')).toBeNull();
+  });
+});
+
+/**
+ * v1.31.0 review finding R-02 (P2), the pack half. A category entry with no category is malformed,
+ * exactly as a rename entry with no rename_to already was: such a rule wins its merchant in
+ * matchRule and then has nothing to file it as, silently blocking every other rule for that
+ * merchant. The shipped pack has been guarded against the shape since v1.22.0; a household's own
+ * pack was not.
+ */
+describe('v1.31.0 R-02: a pack category rule with no category is malformed', () => {
+  const packWith = (rules: unknown[]) => ({
+    format: RULES_PACK_FORMAT,
+    version: 1,
+    exported_at: '2026-08-15T12:00:00.000Z',
+    categories: [],
+    rules,
+  });
+
+  it('refuses an explicit category kind with category: null', () => {
+    setup();
+    expect(() => parseRulesPack(packWith([{ pattern: 'TIM HORTONS', match_type: 'exact', rule_kind: 'category', category: null }]))).toThrow(
+      PackFormatError,
+    );
+    expect(() => parseRulesPack(packWith([{ pattern: 'TIM HORTONS', match_type: 'exact', rule_kind: 'category', category: null }]))).toThrow(
+      /needs a category/,
+    );
+  });
+
+  it('refuses an entry that names neither -- rule_kind defaults to category', () => {
+    setup();
+    expect(() => parseRulesPack(packWith([{ pattern: 'TIM HORTONS', match_type: 'exact' }]))).toThrow(/needs a category/);
+  });
+
+  it('leaves the kinds whose outcome is not a category alone', () => {
+    setup();
+    const pack = packWith([
+      { pattern: 'E-TRANSFER SENT J DOE', match_type: 'exact', rule_kind: 'transfer', category: null },
+      { pattern: 'MCDONALDS', match_type: 'exact', rule_kind: 'rename', category: null, rename_to: "McDonald's" },
+      { pattern: 'ACME PAYROLL', match_type: 'exact', rule_kind: 'not_transfer', category: null },
+    ]);
+    expect(parseRulesPack(pack).rules).toHaveLength(3);
+  });
+
+  it('the shipped Canadian pack still parses (no category rule in it is outcome-less)', () => {
+    setup();
+    const shipped = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'packs/canadian-merchants.json'), 'utf8'));
+    expect(parseRulesPack(shipped).rules.length).toBeGreaterThan(200);
+  });
+});
+
+/**
+ * v1.31.0 review finding R-04 (P2). Two halves, and the second is the serious one:
+ *
+ *  (a) the preview walked pack.categories while the import ALSO created a category for every
+ *      rule's `category`, so a pack whose rules name categories it never declares previewed as
+ *      "Categories to create: (none)" and then created them. categoriesReferencedBy is now the one
+ *      enumeration both sides use.
+ *  (b) apply was not atomic, so a pack that failed partway left the household's rule set in a
+ *      state nobody chose, with no record of where it stopped -- and the route answered 500 with
+ *      an HTML body the panel could not read, so the person saw nothing at all.
+ */
+describe('v1.31.0 R-04: the preview counts what apply will create, and apply is all-or-nothing', () => {
+  const packOf = (rules: unknown[], categories: unknown[] = []) => ({
+    format: RULES_PACK_FORMAT,
+    version: 1,
+    exported_at: '2026-08-15T12:00:00.000Z',
+    categories,
+    rules,
+  });
+  const categoryNames = () => listCategories({ includeArchived: true }).map((row) => row.name).sort();
+
+  it('previews a category only a RULE names -- the under-report, exactly as reported', () => {
+    setup();
+    const pack = packOf([{ pattern: 'PET VALU', match_type: 'exact', category: 'Pets' }]);
+    expect(previewRulesPackImport(pack).newCategories).toEqual(['Pets']);
+  });
+
+  it('preview and apply agree on the whole set, declared or merely referenced', () => {
+    setup();
+    const pack = packOf(
+      [
+        { pattern: 'PET VALU', match_type: 'exact', category: 'Pets' },
+        { pattern: 'CINEPLEX', match_type: 'exact', category: 'Movies', category_parent: 'Fun' },
+        // A skipped entry must leave NO category behind it.
+        { pattern: 'ACME PAYROLL', match_type: 'exact', rule_kind: 'not_transfer', category: 'Never Created' },
+      ],
+      [{ name: 'Declared', parent: null, is_income: false, icon: null, color: null }],
+    );
+
+    const plan = previewRulesPackImport(pack);
+    expect(plan.newCategories.sort()).toEqual(['Declared', 'Fun', 'Movies', 'Pets']);
+    expect(plan.skippedRules).toBe(1);
+
+    const before = categoryNames();
+    const result = importRulesPack(pack);
+    // The count the person was shown IS the count that happened.
+    expect(result.categoriesCreated).toBe(plan.newCategories.length);
+    expect(categoryNames().filter((name) => !before.includes(name)).sort()).toEqual(['Declared', 'Fun', 'Movies', 'Pets']);
+    expect(categoryNames()).not.toContain('Never Created');
+  });
+
+  it('says "(income)" beside a new income category, which a bare name would not', () => {
+    setup();
+    const pack = packOf([{ pattern: 'SIDE GIG', match_type: 'exact', category: 'Consulting' }], [
+      { name: 'Consulting', parent: null, is_income: true, icon: null, color: null },
+    ]);
+    expect(previewRulesPackImport(pack).newCategories).toEqual(['Consulting (income)']);
+  });
+
+  it('a rename entry carrying a category creates nothing and stores no categoryId', () => {
+    setup();
+    const pack = packOf([{ pattern: 'MCDONALDS', match_type: 'exact', rule_kind: 'rename', category: 'Pets', rename_to: "McDonald's" }]);
+    expect(previewRulesPackImport(pack).newCategories).toEqual([]);
+    importRulesPack(pack);
+    expect(categoryNames()).not.toContain('Pets');
+    expect(listRules('rename').find((row) => row.pattern === 'MCDONALDS')?.categoryId).toBeNull();
+  });
+
+  it('refuses -- before writing anything -- a pack whose parent is already a child here', () => {
+    const { sqlite } = setup();
+    // The seed has Food › Coffee, so "Coffee" cannot be a parent in THIS database. The pack is
+    // otherwise perfectly ordinary, and carries two rules that would have been written first.
+    const pack = packOf(
+      [
+        { pattern: 'SECOND CUP', match_type: 'exact', category: 'Coffee', category_parent: 'Food' },
+        { pattern: 'BREVILLE', match_type: 'exact', category: 'Latte', category_parent: 'Coffee' },
+      ],
+      [{ name: 'Latte', parent: 'Coffee', is_income: false, icon: null, color: null }],
+    );
+    const rulesBefore = listRules().length;
+    const before = categoryNames();
+
+    expect(() => importRulesPack(pack)).toThrow(PackFormatError);
+    expect(() => previewRulesPackImport(pack)).toThrow(/two levels deep/);
+    expect(listRules().length).toBe(rulesBefore);
+    expect(categoryNames()).toEqual(before);
+    expect((sqlite.prepare("select count(*) as c from categories where name = 'Latte'").get() as { c: number }).c).toBe(0);
+  });
+
+  it('refuses a pack that builds its own third level out of rule references alone', () => {
+    setup();
+    // Neither entry is DECLARED, so assertNoDeepNesting (pack-vs-itself, declarations only) never
+    // saw this: "Latte" arrives as a child of Coffee from one rule and is used as a parent by the
+    // next, and findCategory's fallback then handed that child to createCategory as a parent.
+    const pack = packOf([
+      { pattern: 'SECOND CUP', match_type: 'exact', category: 'Latte', category_parent: 'Coffee' },
+      { pattern: 'BREVILLE', match_type: 'exact', category: 'Cup', category_parent: 'Latte' },
+    ]);
+    expect(() => importRulesPack(pack)).toThrow(/two levels deep/);
+  });
+
+  it('refuses a spend category under an income parent instead of throwing mid-loop', () => {
+    setup();
+    // The seed's Income category is income; createCategory refuses a non-income child of it
+    // (C-05 half 2), and the importer always passes is_income explicitly, so this would have
+    // thrown a raw Error -- a 500 with an HTML body -- after earlier rows were written.
+    const pack = packOf([
+      { pattern: 'ACME CORP', match_type: 'exact', category: 'Groceries' },
+      { pattern: 'SOME SHOP', match_type: 'exact', category: 'Widgets', category_parent: 'Income' },
+    ]);
+    expect(() => importRulesPack(pack)).toThrow(PackFormatError);
+    expect(() => importRulesPack(pack)).toThrow(/income category here/);
+    expect(categoryNames()).not.toContain('Widgets');
+  });
+
+  it('refuses a declared is_income that contradicts a category already here', () => {
+    setup();
+    const pack = packOf([{ pattern: 'ACME PAY', match_type: 'exact', category: 'Income' }], [
+      { name: 'Income', parent: null, is_income: false, icon: null, color: null },
+    ]);
+    expect(() => previewRulesPackImport(pack)).toThrow(/already income here/);
+  });
+
+  it('does not call a rule "already identical" when the category is one it will create', () => {
+    const { userId } = setup();
+    // A pre-v1.31.0 row: a category rule with no category (the form refuses one now, R-02).
+    upsertRuleFromCorrection({
+      pattern: 'PET VALU', matchType: 'exact', ruleKind: 'category', categoryId: null,
+      createdBy: userId, actorRole: 'admin',
+    });
+    const pack = packOf([{ pattern: 'PET VALU', match_type: 'exact', category: 'Pets' }]);
+
+    // Old behaviour: `incoming?.id ?? null` was null because Pets does not exist yet, the existing
+    // row's category_id is null too, so the preview said "already identical" -- and the import then
+    // created Pets, bound it, and resolved a conflict the person was never shown.
+    const plan = previewRulesPackImport(pack);
+    expect({ unchanged: plan.unchanged, conflicts: plan.conflicts.length }).toEqual({ unchanged: 0, conflicts: 1 });
+    expect(plan.newCategories).toEqual(['Pets']);
+  });
+
+  it('rolls back EVERY write when one fails partway -- the half-applied pack', () => {
+    const { sqlite } = setup();
+    // A failure that is not a format error and not predictable up front: the write itself refused
+    // by the database. A trigger is the honest way to arrange one -- no module is mocked, so the
+    // real importRulesPack runs and the real transaction is what has to hold.
+    sqlite.exec(
+      "create trigger boom before insert on merchant_rules when new.pattern = 'BOOM' begin select raise(abort, 'boom'); end",
+    );
+    const pack = packOf(
+      [
+        { pattern: 'FIRST OK', match_type: 'exact', category: 'Pets' },
+        { pattern: 'BOOM', match_type: 'exact', category: 'Pets' },
+      ],
+      [],
+    );
+    const rulesBefore = listRules().length;
+    const before = categoryNames();
+
+    expect(() => importRulesPack(pack)).toThrow();
+
+    // Before v1.31.0: 'FIRST OK' and the Pets category were both committed and stayed.
+    expect(listRules().map((row) => row.pattern)).not.toContain('FIRST OK');
+    expect(listRules().length).toBe(rulesBefore);
+    expect(categoryNames()).toEqual(before);
+    expect((sqlite.prepare("select count(*) as c from categories where name = 'Pets'").get() as { c: number }).c).toBe(0);
+  });
+
+  it('caps the counts a single pack may carry, on the raw arrays', () => {
+    setup();
+    const many = Array.from({ length: MAX_PACK_RULES + 1 }, (_, i) => ({
+      pattern: `MERCHANT ${i}`,
+      match_type: 'exact',
+      category: 'Groceries',
+    }));
+    expect(() => parseRulesPack(packOf(many))).toThrow(PackFormatError);
+    expect(() => parseRulesPack(packOf(many))).toThrow(new RegExp(String(MAX_PACK_RULES)));
+
+    const manyCategories = Array.from({ length: MAX_PACK_CATEGORIES + 1 }, (_, i) => ({
+      name: `Cat ${i}`,
+      parent: null,
+      is_income: false,
+      icon: null,
+      color: null,
+    }));
+    expect(() => parseRulesPack(packOf([], manyCategories))).toThrow(new RegExp(String(MAX_PACK_CATEGORIES)));
   });
 });

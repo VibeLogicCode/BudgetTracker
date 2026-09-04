@@ -90,6 +90,23 @@ export function matchTypeAllowedForKind(matchType: MatchType, ruleKind: RuleKind
 export const WORD_MATCH_KIND_ERROR =
   'Whole word applies to category and rename rules only. A transfer or not-a-transfer rule is about one description you have actually seen, so it takes Exact or Contains.';
 
+/**
+ * v1.31.0 review finding R-02 (P2). One wording, one place (MUST-19.11) -- saveRuleAction and the
+ * pack importer's schema both say exactly this, the same discipline WORD_MATCH_KIND_ERROR above
+ * already keeps for the other refusal a person can walk into on the rules form.
+ *
+ * The defect it closes was SILENT, which is the whole reason it needed a sentence rather than a
+ * tolerated null: the form's Category select offers "(none)" for every kind (it has to -- transfer,
+ * not_transfer and rename rules genuinely have no category), so picking "category" and leaving the
+ * select alone saved a rule that matchRule then returned as the WINNER for its merchant while
+ * having nothing to file it as. categorizeTransaction fell through to Bayes, a shorter rule that
+ * WOULD have categorized the merchant never got asked, and the rule's own "Affects" column read 0
+ * -- so the household saw a rule, no error, and a merchant that had quietly stopped being
+ * categorised by anything.
+ */
+export const CATEGORY_RULE_NEEDS_CATEGORY_ERROR =
+  'A category rule needs a category. Pick one, or change the kind to transfer, not-a-transfer or rename.';
+
 export interface MerchantRuleRecord {
   id: number;
   pattern: string;
@@ -228,6 +245,33 @@ const MATCH_TYPE_SPECIFICITY: Record<MatchType, number> = { exact: 3, word: 2, c
  * v1.31.0 (R-01) ruleClearIds and eligibleForRuleReapply do too, through the one shared
  * ruleAttributor in engine.ts.
  */
+/**
+ * v1.31.0 R-02. Does this row carry the OUTCOME its kind needs in order to do anything at all?
+ *
+ * A category rule's outcome is a category id; a rename rule's is a non-empty target text. A row
+ * missing its own outcome is dead on arrival -- and, worse than merely dead, it SHADOWS: matchRule
+ * ranks by pattern length and returns one winner per (merchant, kind), so an empty
+ * `exact TIM HORTONS` category rule beat `contains TIM -> Coffee` and left TIM HORTONS
+ * uncategorized with nothing on screen to explain it (see CATEGORY_RULE_NEEDS_CATEGORY_ERROR).
+ *
+ * transfer and not_transfer are absent from this check on purpose: for those two the KIND is the
+ * whole outcome, exactly as findRedundantRules' "identical outcome" test already says, so there is
+ * nothing further for such a row to be missing.
+ *
+ * This is the read-side half of a rule refused at three points, deliberately, and the three are
+ * not redundant: saveRuleAction refuses it with a sentence a person can act on, the pack schema
+ * refuses the file, and matchRule (the choke point every match funnels through, the same argument
+ * the disabled-row and WORD_MATCH_KINDS skips make) makes a row that reached the table by some
+ * other route -- a hand-edited database, a backup from a build that allowed it -- unable to fire
+ * or to shadow. Skipping is right rather than "match and fall through" because falling through is
+ * precisely what hid the defect: the row won and then declined to act.
+ */
+export function ruleOutcomeMissing(rule: Pick<MerchantRuleRecord, 'ruleKind' | 'categoryId' | 'renameTo'>): boolean {
+  if (rule.ruleKind === 'category') return rule.categoryId === null;
+  if (rule.ruleKind === 'rename') return rule.renameTo === null || rule.renameTo.trim().length === 0;
+  return false;
+}
+
 export function matchRule(
   normalizedMerchant: string,
   kind: RuleKind,
@@ -238,6 +282,9 @@ export function matchRule(
     if (rule.ruleKind !== kind) continue;
     if (rule.disabledAt !== null) continue;
     if (!matchTypeAllowedForKind(rule.matchType, rule.ruleKind)) continue;
+    // v1.31.0 R-02: a rule with no outcome must not WIN and then do nothing -- see
+    // ruleOutcomeMissing above for the merchant that stopped being categorised because it did.
+    if (ruleOutcomeMissing(rule)) continue;
     if (!patternMatches(rule.pattern, rule.matchType, normalizedMerchant)) continue;
     if (best === null || outranks(rule, best)) best = rule;
   }

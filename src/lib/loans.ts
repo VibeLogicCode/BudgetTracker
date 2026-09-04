@@ -1,8 +1,10 @@
 import { and, asc, eq, gte, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { accounts, billInstallments, loanMatcherRules, loanPayments, transactions, users, warrantyItemTypes, warrantyItems } from '@/db/schema';
-import { canActOnOwner, ownerScope, NOT_YOURS_ERROR, type Viewer } from '@/lib/auth/viewer';
+import { canActOnOwner, ownerScope, HOUSEHOLD_VIEWER, NOT_YOURS_ERROR, type Viewer } from '@/lib/auth/viewer';
 import { nowIso } from '@/lib/clock';
+// v1.31.0 R-03 / ruling R24: which display_description writer outranks which, defined once.
+import { displaySourceMayWrite } from '@/lib/display-source';
 import { addDaysIso, addMonths, addMonthsClamped, daysBetweenIso, monthEnd, monthOf, monthRange, todayIso } from '@/lib/dates';
 import type { RateVerdict } from '@/lib/notify/ratelimit';
 import { meanCents } from '@/lib/predict/stats';
@@ -826,12 +828,20 @@ function loanLinkedDescription(direction: LoanDirection, itemName: string, signe
 
 /**
  * Item 13 (v1.21.0 backlog): "set display_description automatically... with its OWN
- * display_source value ('loan'), distinct from 'manual' and 'rename'." Precedence mirrors
- * applyRenameRules' own rule (src/lib/categorize/engine.ts, read for the pattern, not called --
- * see the docblock at the top of this file for why this stays a narrow, argued exception to
- * MUST-13.2's transactions-table boundary): display_source = 'manual' means a person typed a name
- * for THIS row by hand, and nothing automatic -- a rename rule or a loan link alike -- may ever
- * overwrite it.
+ * display_source value ('loan'), distinct from 'manual' and 'rename'."
+ *
+ * v1.31.0 R-03 / ruling R24: precedence is no longer MIRRORED here from applyRenameRules'
+ * docblock -- it is READ from DISPLAY_SOURCE_PRECEDENCE (src/lib/display-source.ts), the one
+ * definition both writers of display_description now consult. The old copy said it mirrored
+ * applyRenameRules' rule and did not: each refused only 'manual', so each overwrote the other and
+ * the label a row showed depended on which pass ran last. The order is manual > loan > rename >
+ * unset, so this function may write over a rename (a bulk text-matched preference) and over its
+ * own earlier loan label, and never over 'manual' (a name a person typed for THIS row).
+ *
+ * Still a narrow, argued exception to MUST-13.2's transactions-table boundary -- see the docblock
+ * at the top of this file. src/lib/display-source.ts is pure, DB-free and imports nothing, so
+ * consulting it does not widen what this file reaches for (engine.ts stays un-imported here:
+ * engine.ts imports THIS file, so the dependency only runs one way).
  */
 function applyLoanDescription(
   tx: ReturnType<typeof getDb>,
@@ -842,7 +852,7 @@ function applyLoanDescription(
   at: string,
 ): void {
   const row = tx.select({ displaySource: transactions.displaySource }).from(transactions).where(eq(transactions.id, txnId)).get();
-  if (row === undefined || row.displaySource === 'manual') return;
+  if (row === undefined || !displaySourceMayWrite('loan', row.displaySource)) return;
   tx.update(transactions)
     .set({ displayDescription: loanLinkedDescription(direction, itemName, signedAmountCents), displaySource: 'loan', updatedAt: at })
     .where(eq(transactions.id, txnId))
@@ -856,6 +866,11 @@ function applyLoanDescription(
  * null, 'manual' or 'rename') is left exactly as it was; only a row THIS file set is handed back
  * to raw, the same way clearing a rename rule hands a row back to the bank's own wording pending
  * whatever the rules engine next decides for it.
+ *
+ * v1.31.0 R-03: "pending whatever the rules engine next decides" is now IMMEDIATE rather than
+ * whenever some unrelated pass next runs -- unassignFromLoanAction calls applyRenameRules for the
+ * unlinked id straight after this. The call is in the action, not here, so this file still never
+ * reaches into the categorization engine (MUST-13.2 boundary, top of this file).
  */
 function revertLoanDescription(tx: ReturnType<typeof getDb>, txnId: number, at: string): void {
   const row = tx.select({ displaySource: transactions.displaySource }).from(transactions).where(eq(transactions.id, txnId)).get();
@@ -1601,15 +1616,19 @@ export function listLoans(today: string, viewer: Viewer): LoanSummary[] {
  * Whole-household total, same reasoning as netWorthOverTime and safeToSpend: a loan total has no
  * per-person attribution to restrict (dashboard/page.tsx's own comment on the `listLoans` call it
  * makes directly says the same thing). Not in this task's exported-viewer interface list, so this
- * stays viewer-free; the placeholder viewer below is 'household' visibility, which ownerScope
+ * stays viewer-free; HOUSEHOLD_VIEWER is 'household' visibility, which ownerScope
  * (src/lib/auth/viewer.ts) resolves to null -- no restriction -- without ever reading its id.
+ *
+ * v1.31.0 item M-1: that viewer used to be a local literal here, one of three hand-built copies
+ * (notify/evaluate/digest.ts's exported HOUSEHOLD_VIEWER and notify/evaluate/savings.ts's
+ * HOUSEHOLD_WIDE were the others). One definition now, guarded by
+ * tests/ops/viewer-construction.test.ts.
  */
 export function loansTotalOwedCents(): number {
-  const householdWide: Viewer = { id: 0, role: 'admin', visibility: 'household' };
   // v1.14.0 (spec BU, ruling P6): money someone owes the household is not a debt the household
   // owes, so a loan pointed the other way does not belong in this total -- src/lib/networth.ts
   // reads this function and correctly stops counting those loans without being edited itself.
-  return listLoans(todayIso(), householdWide)
+  return listLoans(todayIso(), HOUSEHOLD_VIEWER)
     .filter((loan) => loan.loanDirection === 'owed')
     .reduce((sum, loan) => sum + (loan.currentBalanceCents ?? 0), 0);
 }

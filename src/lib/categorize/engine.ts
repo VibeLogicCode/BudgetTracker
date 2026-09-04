@@ -1,7 +1,9 @@
-import { and, asc, eq, gte, inArray, isNotNull, isNull, lte, ne, or, sql } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray, isNotNull, isNull, lte, ne, notInArray, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { loanPayments, transactions, transactionSplits } from '@/db/schema';
 import { nowIso } from '@/lib/clock';
+// Ruling R24 (R-03): the ONE definition of which display_description writer outranks which.
+import { displaySourcesAbove, type DisplaySource } from '@/lib/display-source';
 import { applyPaymentMatchers } from '@/lib/loans';
 import { classify, train, untrain } from './bayes';
 import { tokenize } from './normalize';
@@ -107,6 +109,11 @@ export function categorizeTransaction(txn: EngineTxn, ctx: CategorizeContext): C
   }
 
   const rule = matchRule(txn.normalizedMerchant, 'category', ctx.rules);
+  // v1.31.0 R-02: matchRule can no longer HAND BACK a category rule with no category -- it skips
+  // one at the choke point (ruleOutcomeMissing, rules.ts), so a shorter rule that can actually
+  // file the merchant gets its turn instead of being shadowed by a winner that then declines to
+  // act. The null test below stays because categoryId is typed `number | null` and this branch
+  // needs the narrowing; it is no longer the silent fall-through R-02 named.
   if (rule && rule.categoryId !== null) {
     return { categoryId: rule.categoryId, source: 'rule', confidence: null, isTransfer: false, matchedRuleId: rule.id };
   }
@@ -1344,7 +1351,14 @@ export function reviewQueueCount(): number {
 
 // ------------------------------------------------- merchant renames (v1.4)
 
-/** The rename text a merchant resolves to, or null when no rename rule matches. */
+/**
+ * The rename text a merchant resolves to, or null when no rename rule matches.
+ *
+ * v1.31.0 R-02: a rename rule with no target text is skipped by matchRule itself now
+ * (ruleOutcomeMissing, rules.ts) rather than winning here and resolving to null -- so a merchant
+ * covered by both an empty rename rule and a shorter real one gets the real one's text. The
+ * emptiness test below is kept for the narrowing, and says the same thing as the skip.
+ */
 export function resolveRename(normalizedMerchant: string, ctx: CategorizeContext): string | null {
   const rule = matchRule(normalizedMerchant, 'rename', ctx.rules);
   if (!rule || rule.renameTo === null || rule.renameTo.length === 0) return null;
@@ -1354,10 +1368,23 @@ export function resolveRename(normalizedMerchant: string, ctx: CategorizeContext
 /**
  * Applies rename rules to the given rows (all rows when txnIds is omitted).
  *
- * Precedence is manual > rename > unset:
- *   - display_source = 'manual' rows are NEVER read or written here.
+ * PRECEDENCE IS manual > loan > rename > unset, and it is NOT restated here -- it is
+ * DISPLAY_SOURCE_PRECEDENCE (src/lib/display-source.ts), which this function reads through
+ * `displaySourcesAbove('rename')` below. See that module for ruling R24's argument and for the
+ * defect that made it necessary: this docblock used to say "manual > rename > unset", written
+ * before display_source = 'loan' existed, and the SELECT below excluded only 'manual' -- so a
+ * rename pass overwrote the loan label on a linked transaction, after which unlinking reverted
+ * nothing and the loan pages showed the merchant name instead of "Loan to <name>".
+ *
+ *   - a row labelled by a source ABOVE 'rename' (manual, loan) is never read or written here.
  *   - a matching rule sets display_description + display_source = 'rename'.
  *   - a row previously set by a rule that no longer matches is cleared back to raw.
+ *
+ * On unlink, the row is handed BACK to the rules: revertLoanDescription clears the 'loan' label
+ * and unassignFromLoanAction (src/app/(app)/transactions/actions.ts) then calls this function for
+ * that one id, so the rename reappears immediately rather than at the next unrelated pass. That
+ * call lives in the action rather than in src/lib/loans.ts to respect the MUST-13.2 boundary that
+ * file's own header describes.
  *
  * raw_description and normalized_merchant are never written, so the frozen dedup
  * hash and every categorizer input are untouched by anything in this function.
@@ -1378,12 +1405,17 @@ export function applyRenameRules(txnIds?: number[], ctx: CategorizeContext = bui
     id: number;
     normalizedMerchant: string;
     displayDescription: string | null;
-    displaySource: 'manual' | 'rename' | 'loan' | null;
+    displaySource: DisplaySource | null;
   }[] = [];
 
+  // Ruling R24: every source ABOVE 'rename' is out of scope for this pass -- not a hard-coded
+  // 'manual', which is what let a rename overwrite a loan label. notInArray() rather than ne() so
+  // adding a fourth source to DISPLAY_SOURCE_PRECEDENCE needs no edit here.
+  const outranksRename = notInArray(transactions.displaySource, displaySourcesAbove('rename'));
+
   if (scope === undefined) {
-    rows.push(...db.select(columns).from(transactions).where(ne(transactions.displaySource, 'manual')).all());
-    // ne() drops NULLs in SQL three-valued logic, so fetch NULL display_source rows too.
+    rows.push(...db.select(columns).from(transactions).where(outranksRename).all());
+    // notInArray() drops NULLs in SQL three-valued logic, so fetch NULL display_source rows too.
     rows.push(...db.select(columns).from(transactions).where(isNull(transactions.displaySource)).all());
   } else {
     for (let offset = 0; offset < scope.length; offset += ID_CHUNK) {
@@ -1392,10 +1424,10 @@ export function applyRenameRules(txnIds?: number[], ctx: CategorizeContext = bui
         ...db
           .select(columns)
           .from(transactions)
-          .where(and(inArray(transactions.id, chunk), ne(transactions.displaySource, 'manual')))
+          .where(and(inArray(transactions.id, chunk), outranksRename))
           .all(),
       );
-      // ne() drops NULLs in SQL three-valued logic, so fetch NULL display_source rows too.
+      // notInArray() drops NULLs in SQL three-valued logic, so fetch NULL display_source rows too.
       rows.push(
         ...db
           .select(columns)

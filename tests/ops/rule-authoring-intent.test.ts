@@ -39,11 +39,17 @@ import { fileURLToPath } from 'node:url';
  *      that made both bugs invisible.
  *   4. The flags introduced for this bug class stay required, with no default.
  *   5. The loan path specifically passes `false`.
+ *   6. Only an argued list of files may reach the merchant_rules TABLE at all -- v1.31.0 R-05,
+ *      DETECTOR 3. Rules 1-5 all scan for helper NAMES, and this file used to justify that by
+ *      asserting rules.ts was "the only file that touches the merchant_rules table", which was
+ *      false when it was written: two pack files write that table directly. A file that imports
+ *      the table can author a rule while saying no name any scan here knows.
  *
  * Every detector below is a pure function of source TEXT, so the last describe block can run each
  * one over a deliberately broken snippet constructed inside the test and prove it reports the
  * offence. That block is not decoration: a guard that cannot fail reads as protection while
- * providing none, which is worse than no guard at all.
+ * providing none, which is worse than no guard at all -- and so is a guard whose STATED REASON is
+ * false, which is what rule 6 is here to correct rather than merely to add.
  */
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -74,8 +80,20 @@ function srcFiles(dir = path.join(root, 'src'), acc: string[] = []): string[] {
 const relative = (file: string) => path.relative(root, file).replace(/\\/g, '/');
 
 /**
- * Helpers that CHANGE WHAT A RULE SAYS ABOUT A MERCHANT. All five live in
- * src/lib/categorize/rules.ts, which is the only file that touches the merchant_rules table.
+ * Helpers that CHANGE WHAT A RULE SAYS ABOUT A MERCHANT. All four are defined in
+ * src/lib/categorize/rules.ts, which owns those HELPERS -- and, as of v1.31.0, that is all this
+ * sentence claims.
+ *
+ * IT USED TO CLAIM MORE, AND THE CLAIM WAS FALSE: "which is the only file that touches the
+ * merchant_rules table". src/lib/packs.ts and src/lib/canadian-pack.ts both import the
+ * `merchantRules` table from @/db/schema and write it with `db.update(...)` directly -- hit-count
+ * resets, pack provenance stamps, origin keys. So a FIFTH surface could import the table and call
+ * `getDb().insert(merchantRules)` and author a rule without ever saying a name the scan below
+ * knows, while this file read as protection against exactly that. Review finding R-05 (P2). A
+ * guard whose stated reason is false is worse than no guard, because it tells the next reader the
+ * question was settled when it was not examined -- this file's own opening docblock says so, one
+ * paragraph up. DETECTOR 3 (below) is the coverage that sentence was promising; the premise here
+ * is now narrowed to what is true.
  *
  * `bumpRuleUsage` is deliberately NOT here, and the line matters. It increments hit_count and
  * stamps last_used_at -- import-time bookkeeping about how often a rule fired. It cannot change
@@ -133,11 +151,19 @@ function matchDelimiter(source: string, open: number, opener: string, closer: st
  * Still a formatting assumption, so it is not trusted blind: the completeness check below asserts
  * an EXACT list of names, which is what turns any regression in this parser into a red test rather
  * than a quietly weakened guard.
+ *
+ * v1.31.0 R-05 widened the pattern from `^export function NAME(` to also take `export async
+ * function`. The old regex missed it, and missed it silently: an `export async function` in
+ * engine.ts that called upsertRuleFromCorrection was simply not a function as far as DETECTOR 1
+ * was concerned, so "a fourth appearing fails, loudly" (this file's own promise, twice) was untrue
+ * for one of the two ways a fourth would most plausibly be written. `export const NAME = (...) =>`
+ * is the other, and it is handled by exportedArrowFunctions below rather than here, because its
+ * body is found a different way.
  */
 function exportedFunctions(source: string): { name: string; signature: string; body: string }[] {
   const bare = stripComments(source);
   const result: { name: string; signature: string; body: string }[] = [];
-  const re = /^export function (\w+)\s*\(/gm;
+  const re = /^export (?:async )?function (\w+)\s*\(/gm;
   let match: RegExpExecArray | null;
   while ((match = re.exec(bare)) !== null) {
     const openParen = match.index + match[0].length - 1;
@@ -169,12 +195,78 @@ function exportedFunctions(source: string): { name: string; signature: string; b
   return result;
 }
 
+/**
+ * The OTHER shape a module-level export takes: `export const NAME = (args) => { ... }`, async or
+ * not. v1.31.0 R-05: invisible to exportedFunctions above, and this repo writes plenty of them, so
+ * a rule-authoring path written this way passed every assertion in this file.
+ *
+ * The body is found from the arrow rather than from the parameter list, because there is no return
+ * type to trip over: brace-match a block body; for a concise (expression) body, take everything to
+ * the first `;` outside any bracket.
+ *
+ * WHAT THIS DOES NOT CATCH, said plainly rather than left for somebody to discover: an explicitly
+ * ANNOTATED const (`export const f: Handler = (x) => ...`), because a type annotation may itself
+ * contain `=>` and no regex tells the two arrows apart; a helper reached through a variable
+ * (`const fn = deleteRule; fn(1)`); an export re-exported from another module (`export { tidy }
+ * from './x'` -- the DEFINING file is the one that calls the helper, so the file allow-list is what
+ * covers that); or a call assembled from strings. All four are still caught by the file allow-list,
+ * which scans whole files rather than exports -- that check is the floor, and this one only adds
+ * "and say which path it is" on top of it.
+ */
+function exportedArrowFunctions(source: string): { name: string; signature: string; body: string }[] {
+  const bare = stripComments(source);
+  const result: { name: string; signature: string; body: string }[] = [];
+  const re = /^export const (\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|\w+)\s*=>\s*/gm;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(bare)) !== null) {
+    const after = match.index + match[0].length;
+    let body: string;
+    if (bare[after] === '{') {
+      const close = matchDelimiter(bare, after, '{', '}');
+      body = bare.slice(after, close === -1 ? bare.length : close + 1);
+    } else {
+      let depth = 0;
+      let end = after;
+      for (; end < bare.length; end += 1) {
+        const ch = bare[end] as string;
+        if ('([{'.includes(ch)) depth += 1;
+        else if (')]}'.includes(ch)) depth -= 1;
+        else if (ch === ';' && depth === 0) break;
+      }
+      body = bare.slice(after, end);
+    }
+    result.push({ name: match[1] as string, signature: match[0], body });
+  }
+  return result;
+}
+
+/** Every module-level export whose body this file can read, in either shape. */
+function allExports(source: string): { name: string; signature: string; body: string }[] {
+  return [...exportedFunctions(source), ...exportedArrowFunctions(source)];
+}
+
 /** DETECTOR 1 (rule 2): which exported functions in a file can author a merchant rule. */
 function ruleAuthoringPaths(source: string): string[] {
-  return exportedFunctions(source)
+  return allExports(source)
     .filter((fn) => callsAnyHelper(fn.body))
     .map((fn) => fn.name)
     .sort();
+}
+
+/**
+ * DETECTOR 3 (v1.31.0 R-05): which files reach the merchant_rules TABLE, rather than a helper.
+ *
+ * This is the coverage the premise above used to assert and never had. A file that imports
+ * `merchantRules` from @/db/schema can insert, update or delete a rule row with no helper name
+ * anywhere in it -- `getDb().update(merchantRules).set({ categoryId })` authors a rule as
+ * thoroughly as upsertRuleFromCorrection does, and two files already do write that table directly.
+ * So the same "argued list, or fail" treatment the helpers get, applied one layer down.
+ *
+ * The name is matched as a whole word so `merchantRulesSomething` cannot satisfy it, and comments
+ * are stripped so this file's own subjects may keep discussing the table.
+ */
+function touchesRuleTable(source: string): boolean {
+  return /(?<![.\w])merchantRules(?![\w])/.test(stripComments(source));
 }
 
 /**
@@ -314,6 +406,84 @@ describe('v1.27.0 item 1: only an argued list of files may author a merchant rul
     expect(stale).toEqual([]);
     const unexplained = [...ALLOWED_AUTHORS.entries()].filter(([, why]) => why.trim().length < 60).map(([rel]) => rel);
     expect(unexplained).toEqual([]);
+  });
+});
+
+describe('v1.31.0 R-05: only an argued list of files may reach the merchant_rules TABLE', () => {
+  /**
+   * DETECTOR 3's allow-list, and the reason this describe block exists at all: the helper scan
+   * above was sold as covering "the only file that touches the merchant_rules table", and two
+   * files were already writing that table with no helper name in sight. Each entry names what it
+   * writes DIRECTLY -- not what it does in general -- so a reviewer can check the claim against
+   * the code rather than take the file's word for it.
+   *
+   * A new entry is not forbidden. It is a decision that has to be written down, and the question
+   * to answer first is the governing principle at the top of this file: authoring a rule row by
+   * hand is authoring a rule, whichever API you reach for.
+   */
+  const ALLOWED_TABLE_WRITERS: ReadonlyMap<string, string> = new Map([
+    [
+      'src/db/schema.ts',
+      'Declares the merchantRules table itself, plus the pattern/match_type/rule_kind unique index ' +
+        'every helper above upserts against. A definition necessarily names what it defines.',
+    ],
+    [
+      'src/lib/categorize/rules.ts',
+      'Owns the table: every insert, delete and disabled_at flip in this app goes through the four ' +
+        'helpers defined here, which is what makes the helper scan above meaningful at all.',
+    ],
+    [
+      'src/lib/packs.ts',
+      'Pack import writes the table directly for the bookkeeping the shared upsert does not carry: ' +
+        'a hit_count/last_used_at reset on a re-imported row (importRulesPack), and the ' +
+        'pack_origin_key provenance in rememberPackOrigin / applyPackOriginCarry. Rule CONTENT ' +
+        'still goes through upsertRuleFromCorrection -- see the ALLOWED_AUTHORS reason above.',
+    ],
+    [
+      'src/lib/canadian-pack.ts',
+      "The shipped pack's installer/upgrader stamps and un-stamps pack_source/pack_version/" +
+        'installed_at with raw updates (an unchanged row needs nothing else written; a row the pack ' +
+        'no longer claims becomes an ordinary household rule). Content changes go through the ' +
+        'helpers, as its own comments state.',
+    ],
+  ]);
+
+  it('no file outside the allow-list reaches the merchant_rules table', () => {
+    const offenders = srcFiles()
+      .filter((file) => touchesRuleTable(fs.readFileSync(file, 'utf8')))
+      .map(relative)
+      .filter((rel) => !ALLOWED_TABLE_WRITERS.has(rel))
+      .sort();
+    expect(
+      offenders,
+      'This file imports the merchantRules TABLE. A rule row written by hand -- ' +
+        'getDb().insert(merchantRules) or .update(merchantRules).set({ categoryId }) -- authors a ' +
+        'household-wide rule exactly as upsertRuleFromCorrection does, and it says none of the ' +
+        'helper names the scan above looks for. Either write rule CONTENT through the helpers in ' +
+        'src/lib/categorize/rules.ts, or add this file to ALLOWED_TABLE_WRITERS with a reason ' +
+        'naming what it writes directly and why that is not rule content.',
+    ).toEqual([]);
+  });
+
+  it('every allow-list entry still reaches the table, and carries a real reason', () => {
+    // The same stale-entry check the helper allow-list gets: a list of files somebody once
+    // mentioned is not a guard.
+    const stale = [...ALLOWED_TABLE_WRITERS.keys()].filter((rel) => !touchesRuleTable(read(rel))).sort();
+    expect(stale).toEqual([]);
+    const unexplained = [...ALLOWED_TABLE_WRITERS.entries()].filter(([, why]) => why.trim().length < 60).map(([rel]) => rel);
+    expect(unexplained).toEqual([]);
+  });
+
+  it('the two lists agree about the files that do both', () => {
+    // Not a redundancy: a file that writes rule CONTENT must be argued in both places, and it is
+    // the pair of lists disagreeing that says somebody added one and forgot the other.
+    for (const rel of ['src/lib/categorize/rules.ts', 'src/lib/packs.ts', 'src/lib/canadian-pack.ts']) {
+      expect({ rel, helpers: callsAnyHelper(stripComments(read(rel))), table: touchesRuleTable(read(rel)) }).toEqual({
+        rel,
+        helpers: true,
+        table: true,
+      });
+    }
   });
 });
 
@@ -507,6 +677,59 @@ describe('v1.27.0 item 1: the guard fails on a deliberately bad case', () => {
       '}): void {}',
     ].join('\n');
     expect(callSitesMissingFlag(declaration, 'setTransferFlag', 'learnRule')).toEqual([]);
+  });
+
+  it('DETECTOR 1 spots an `export async function`, the shape it used to miss (R-05)', () => {
+    // The regex was `^export function NAME(`, so this was not a function at all as far as the
+    // guard was concerned -- and "a fourth appearing fails, loudly" was untrue for it.
+    const asyncPath = [
+      'export async function markAll(input: { ids: number[] }): Promise<void> {',
+      '  for (const id of input.ids) {',
+      '    upsertRuleFromCorrection({ pattern: merchantOf(id), ruleKind: "transfer" });',
+      '  }',
+      '}',
+    ].join('\n');
+    expect(ruleAuthoringPaths(asyncPath)).toEqual(['markAll']);
+    expect(RULE_AUTHORING_PATHS.has('markAll')).toBe(false);
+  });
+
+  it('DETECTOR 1 spots an `export const NAME = () => {}`, the other shape it missed (R-05)', () => {
+    const arrowBlock = ['export const tidy = (id: number) => {', '  deleteRule(id);', '};'].join('\n');
+    expect(ruleAuthoringPaths(arrowBlock)).toEqual(['tidy']);
+
+    // Concise body, and an async one, both of which a block-brace-only reader would drop.
+    const arrowExpression = 'export const nuke = (id: number) => deleteRule(id);';
+    expect(ruleAuthoringPaths(arrowExpression)).toEqual(['nuke']);
+    const asyncArrow = [
+      'export const clean = async (id: number) => {',
+      '  await Promise.resolve();',
+      '  deleteExactRule("X", "transfer");',
+      '};',
+    ].join('\n');
+    expect(ruleAuthoringPaths(asyncArrow)).toEqual(['clean']);
+
+    // ...and an ordinary exported const is not mistaken for a path.
+    expect(ruleAuthoringPaths('export const LIMIT = 5;')).toEqual([]);
+    expect(ruleAuthoringPaths('export const label = (id: number) => `rule ${String(id)}`;')).toEqual([]);
+  });
+
+  it('DETECTOR 3 spots a file that writes the merchant_rules TABLE with no helper in sight (R-05)', () => {
+    // The FALSE PREMISE, reconstructed: this file authors a rule and says none of the four helper
+    // names, so every check that scans for those names passes on it.
+    const tableWriter = [
+      "import { merchantRules } from '@/db/schema';",
+      'export function fileEverythingAsGroceries(categoryId: number): void {',
+      '  getDb().update(merchantRules).set({ categoryId }).run();',
+      '}',
+    ].join('\n');
+    expect(callsAnyHelper(stripComments(tableWriter))).toBe(false);
+    expect(touchesRuleTable(tableWriter)).toBe(true);
+    expect(ruleAuthoringPaths(tableWriter)).toEqual([]);
+
+    // ...and it is not fooled by prose, by a longer identifier, or by a property of that name.
+    expect(touchesRuleTable(['// merchantRules is written only in rules.ts', 'export const x = 1;'].join('\n'))).toBe(false);
+    expect(touchesRuleTable('const merchantRulesCount = 3;')).toBe(false);
+    expect(touchesRuleTable('const n = plan.merchantRules;')).toBe(false);
   });
 
   it('the file allow-list check fails on a file that is not on it', () => {

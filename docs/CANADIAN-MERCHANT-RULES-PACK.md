@@ -124,7 +124,9 @@ asserts:
   `SEED_CATEGORIES` (`src/db/seed.ts`) — nothing dangling, nothing silently created;
 - every pattern is uppercase, and every `(pattern, match_type, rule_kind)` triple is unique;
 - every rename entry carries a non-empty `rename_to`, and every category entry carries a
-  category;
+  category — as of v1.31.0 (review finding R-02) `parseRulesPack` refuses both shapes for ANY
+  pack, not just this one, so these two assertions now guard against a regression in THIS file
+  rather than being the only thing standing between a household and a rule that cannot do its job;
 - importing it twice writes nothing the second time and creates no duplicate rows;
 - an imported rename changes a matching transaction's display immediately (the same retroactive
   apply a hand-saved rename gets), and never touches a transaction a household member already

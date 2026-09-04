@@ -66,21 +66,34 @@ export function RulesPackPanel({ rows }: { rows: RulesExportRow[] }) {
     form.append('file', file);
     form.append('mode', mode);
     form.append('onConflict', onConflict);
-    const response = await fetch('/api/packs/rules/import', { method: 'POST', body: form });
-    const body = await response.json();
+    // v1.31.0 R-04: both the fetch AND the JSON parse are inside the try. Neither used to be, and
+    // `send` is called from a floating `void send('apply')`, so a 500 with an HTML body (which is
+    // what an unexpected server error is) rejected here unhandled and the person saw the panel
+    // simply do nothing. A response this component cannot read is still something it has to say.
+    let response: Response;
+    let body: Record<string, unknown>;
+    try {
+      response = await fetch('/api/packs/rules/import', { method: 'POST', body: form });
+      body = await response.json();
+    } catch {
+      setError('Import failed. Nothing was changed. Check the file and try again.');
+      setPreview(null);
+      return;
+    }
     if (!response.ok) {
-      setError(body.error ?? 'Import failed.');
+      setError(typeof body.error === 'string' ? body.error : 'Import failed.');
       setPreview(null);
       return;
     }
     if (mode === 'preview') {
-      setPreview(body as ImportPreview);
+      setPreview(body as unknown as ImportPreview);
       return;
     }
     setPreview(null);
+    const count = (key: string) => Number(body[key] ?? 0);
     setNotice(
-      `Added ${body.rulesAdded} rules, overwrote ${body.rulesOverwritten}, kept ${body.rulesKept} existing, created ${body.categoriesCreated} categories.` +
-        (body.rulesSkipped > 0 ? ` Skipped ${body.rulesSkipped} rules this install can't import.` : ''),
+      `Added ${count('rulesAdded')} rules, overwrote ${count('rulesOverwritten')}, kept ${count('rulesKept')} existing, created ${count('categoriesCreated')} categories.` +
+        (count('rulesSkipped') > 0 ? ` Skipped ${count('rulesSkipped')} rules this install can't import.` : ''),
     );
     window.location.reload();
   }

@@ -31,7 +31,7 @@ import {
   saveRuleAction,
   setRuleDisabledAction,
 } from '@/app/(app)/settings/merchant-rules/actions';
-import { listRules, upsertRuleFromCorrection } from '@/lib/categorize/rules';
+import { CATEGORY_RULE_NEEDS_CATEGORY_ERROR, listRules, upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { rerunEngine, upsertRenameRule } from '@/lib/categorize/engine';
 
 let current: TestDb | null = null;
@@ -95,6 +95,36 @@ describe('saveRuleAction', () => {
       formData({ pattern: 'MCDONALDS', matchType: 'exact', ruleKind: 'rename', categoryId: '', renameTo: '   ' }),
     );
     expect(result.error).toMatch(/display name/);
+  });
+
+  /**
+   * v1.31.0 R-02 (P2). The Category select offers "(none)" for every kind, so "category" plus an
+   * untouched select saved a rule that WON its merchant in matchRule and then had nothing to file
+   * it as -- the merchant silently stopped being categorised by anything, including by the shorter
+   * rule that would have. Refused here in the sentence rules.ts exports, and nowhere silently.
+   */
+  it('refuses a category rule with no category, and writes nothing', async () => {
+    setup();
+    const result = await saveRuleAction(
+      {},
+      formData({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: '', renameTo: '' }),
+    );
+    expect(result.error).toBe(CATEGORY_RULE_NEEDS_CATEGORY_ERROR);
+    expect(result.message).toBeUndefined();
+    expect(listRules()).toHaveLength(0);
+  });
+
+  it('still accepts the kinds whose outcome is not a category with an empty select', async () => {
+    setup();
+    expect(
+      (await saveRuleAction({}, formData({ pattern: 'E-TRANSFER', matchType: 'contains', ruleKind: 'transfer', categoryId: '', renameTo: '' })))
+        .message,
+    ).toBeTruthy();
+    expect(
+      (await saveRuleAction({}, formData({ pattern: 'VISA PAYMENT', matchType: 'exact', ruleKind: 'not_transfer', categoryId: '', renameTo: '' })))
+        .message,
+    ).toBeTruthy();
+    expect(listRules()).toHaveLength(2);
   });
 
   it('rejects an empty pattern', async () => {

@@ -38,7 +38,7 @@ import { deleteRule, exactRuleOwner, listRules, matchRule, upsertRuleFromCorrect
 import { classify, train } from '@/lib/categorize/bayes';
 import { normalizeMerchant, tokenize } from '@/lib/categorize/normalize';
 import { nowIso } from '@/lib/clock';
-import { unassignTransactionFromLoan } from '@/lib/loans';
+import { assignTransactionToLoan, unassignTransactionFromLoan } from '@/lib/loans';
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -1766,5 +1766,130 @@ describe('v1.31.0 R-01: transfer attribution simulates the match instead of assu
     expect(ruleImpactIds(override.ruleId)).toEqual([released]);
     // Clearing a not_transfer override stays refused -- re-flagging rows AS transfers is not a revert.
     expect(ruleClearIds(override.ruleId)).toEqual([]);
+  });
+});
+
+/**
+ * v1.31.0 review finding R-02 (P2). A category rule with no category used to be accepted, WIN its
+ * merchant in matchRule (longest pattern first), and then decline to act -- so the shorter rule
+ * that would have filed the merchant never got asked, the null rule's own "Affects" column read 0,
+ * and the household saw a rule, no error, and a merchant that had silently stopped being
+ * categorised by anything.
+ */
+describe('v1.31.0 R-02: a rule with no outcome can neither fire nor shadow', () => {
+  it('a null-category rule no longer blocks the shorter rule that can actually file the merchant', () => {
+    const { db, userId } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    // The shadowing rule: longer pattern, so matchRule ranks it first -- and no category.
+    upsertRuleFromCorrection({
+      pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: null,
+      createdBy: userId, actorRole: 'admin',
+    });
+    upsertRuleFromCorrection({
+      pattern: 'TIM', matchType: 'contains', ruleKind: 'category', categoryId: coffee,
+      createdBy: userId, actorRole: 'admin',
+    });
+
+    const ctx = buildContext();
+    expect(matchRule('TIM HORTONS', 'category', ctx.rules)?.pattern).toBe('TIM');
+    expect(
+      categorizeTransaction({ id: 1, normalizedMerchant: 'TIM HORTONS' }, ctx),
+    ).toMatchObject({ categoryId: coffee, source: 'rule' });
+  });
+
+  it('the same for a rename rule with no target text', () => {
+    const { userId } = setup();
+    // upsertRenameRule refuses an empty target, so this row is written the way one that predates
+    // the guard (or a hand-edited database) would be: through the shared upsert, kind 'rename'.
+    upsertRuleFromCorrection({
+      pattern: 'WALMART SUPERCENTRE', matchType: 'contains', ruleKind: 'rename', categoryId: null,
+      renameTo: '   ', createdBy: userId, actorRole: 'admin',
+    });
+    upsertRenameRule({ pattern: 'WALMART', matchType: 'contains', renameTo: 'Walmart', userId, actorRole: 'admin' });
+
+    expect(resolveRename('WALMART SUPERCENTRE #1234', buildContext())).toBe('Walmart');
+  });
+
+  it('a transfer rule is untouched by the check -- its kind IS its outcome', () => {
+    const { userId } = setup();
+    upsertRuleFromCorrection({
+      pattern: 'E-TRANSFER', matchType: 'contains', ruleKind: 'transfer', categoryId: null,
+      createdBy: userId, actorRole: 'admin',
+    });
+    expect(detectTransfer('E-TRANSFER SENT J DOE', buildContext())).toBe(true);
+  });
+});
+
+/**
+ * v1.31.0 review finding R-03 (P2), controller ruling R24: manual > loan > rename > unset.
+ *
+ * Both writers of display_description refused only 'manual', so each overwrote the other and the
+ * label a row showed depended on which pass ran last. Under R24 the explicit per-row loan link
+ * wins over the bulk text-matched rename, and the order lives in ONE place
+ * (DISPLAY_SOURCE_PRECEDENCE, src/lib/display-source.ts) that both writers read.
+ */
+describe('v1.31.0 R-03 / ruling R24: a loan label outranks a rename rule', () => {
+  const readDisplay = (sqlite: TestDb['sqlite'], id: number) =>
+    sqlite.prepare('select display_description as text, display_source as source from transactions where id = ?').get(id) as {
+      text: string | null;
+      source: string | null;
+    };
+
+  /** A loan-kind warranty item, the same raw-SQL shape linkToLoan above uses. */
+  function seedLoan(db: TestDb['db'], userId: number): number {
+    const now = nowIso();
+    const typeId = db.get<{ id: number }>(sql`select id from warranty_item_types where name = 'Loan' collate nocase limit 1`).id;
+    return db.get<{ id: number }>(sql`
+      insert into warranty_items (name, purchase_date, is_lifetime, owner_user_id, type_id, loan_direction, current_balance_cents, balance_updated_at, created_at, updated_at)
+      values ('Car Loan', '2026-01-01', 0, ${userId}, ${typeId}, 'owed', 2000000, ${now}, ${now}, ${now}) returning id`).id;
+  }
+
+  it('no rename pass overwrites it -- not applyRenameRules, not runEngine', () => {
+    const { db, sqlite, userId, add } = setup();
+    const txnId = add('WALMART #1234 TORONTO ON');
+    upsertRenameRule({ pattern: 'WALMART', matchType: 'contains', renameTo: 'Walmart', userId, actorRole: 'admin' });
+    expect(readDisplay(sqlite, txnId)).toEqual({ text: 'Walmart', source: 'rename' });
+
+    const itemId = seedLoan(db, userId);
+    assignTransactionToLoan({ txnId, itemId });
+    const labelled = readDisplay(sqlite, txnId);
+    expect(labelled.source).toBe('loan');
+    expect(labelled.text).toContain('Car Loan');
+
+    // Every pass that used to rewrite it: a bare rename sweep, and the engine's own per-row pass.
+    applyRenameRules();
+    expect(readDisplay(sqlite, txnId)).toEqual(labelled);
+    applyRenameRules([txnId]);
+    expect(readDisplay(sqlite, txnId)).toEqual(labelled);
+    runEngine([txnId]);
+    expect(readDisplay(sqlite, txnId)).toEqual(labelled);
+    // ...and saving/deleting an unrelated rename rule, which runs a full sweep of its own.
+    upsertRenameRule({ pattern: 'LOBLAWS', matchType: 'contains', renameTo: 'Loblaws', userId, actorRole: 'admin' });
+    deleteRenameRule({ pattern: 'LOBLAWS', matchType: 'contains' });
+    expect(readDisplay(sqlite, txnId)).toEqual(labelled);
+  });
+
+  it('unlinking hands the row back to the rules, and the rename reappears', () => {
+    const { db, sqlite, userId, add } = setup();
+    const txnId = add('WALMART #1234 TORONTO ON');
+    upsertRenameRule({ pattern: 'WALMART', matchType: 'contains', renameTo: 'Walmart', userId, actorRole: 'admin' });
+    const itemId = seedLoan(db, userId);
+    assignTransactionToLoan({ txnId, itemId });
+
+    expect(unassignTransactionFromLoan({ txnId, itemId })).toBe(true);
+    // revertLoanDescription cleared the loan label; the rename is what should be there now, and
+    // unassignFromLoanAction is what runs this pass in the app (see its own comment).
+    expect(readDisplay(sqlite, txnId)).toEqual({ text: null, source: null });
+    applyRenameRules([txnId]);
+    expect(readDisplay(sqlite, txnId)).toEqual({ text: 'Walmart', source: 'rename' });
+  });
+
+  it('a manual name still outranks a loan link, the level above', () => {
+    const { db, sqlite, userId, add } = setup();
+    const txnId = add('WALMART #1234 TORONTO ON');
+    setTransactionDisplayName({ transactionId: txnId, displayDescription: 'Sam pays me back', userId });
+    const itemId = seedLoan(db, userId);
+    assignTransactionToLoan({ txnId, itemId });
+    expect(readDisplay(sqlite, txnId)).toEqual({ text: 'Sam pays me back', source: 'manual' });
   });
 });

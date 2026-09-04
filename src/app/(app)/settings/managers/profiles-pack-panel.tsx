@@ -27,19 +27,30 @@ export function ProfilesPackPanel({ rows }: { rows: ProfilesExportRow[] }) {
     const form = new FormData();
     form.append('file', file);
     form.append('mode', mode);
-    const response = await fetch('/api/packs/profiles/import', { method: 'POST', body: form });
-    const body = await response.json();
+    // v1.31.0 R-04's sibling: the fetch AND the JSON parse both inside the try. A 500 with an HTML
+    // body -- which is what an unexpected server error is -- rejected here unhandled, and this
+    // panel's caller does not await `send`, so the person saw it do nothing at all.
+    let response: Response;
+    let body: Record<string, unknown>;
+    try {
+      response = await fetch('/api/packs/profiles/import', { method: 'POST', body: form });
+      body = await response.json();
+    } catch {
+      setError('Import failed. Nothing was changed. Check the file and try again.');
+      setPreview(null);
+      return;
+    }
     if (!response.ok) {
-      setError(body.error ?? 'Import failed.');
+      setError(typeof body.error === 'string' ? body.error : 'Import failed.');
       setPreview(null);
       return;
     }
     if (mode === 'preview') {
-      setPreview(body as { totalProfiles: number; willRename: { from: string; to: string }[] });
+      setPreview(body as unknown as { totalProfiles: number; willRename: { from: string; to: string }[] });
       return;
     }
     setPreview(null);
-    setNotice(`Imported ${body.added.length} profiles.`);
+    setNotice(`Imported ${Array.isArray(body.added) ? body.added.length : 0} profiles.`);
     window.location.reload();
   }
 

@@ -9,6 +9,7 @@ import { categoryLabel, createCategory, listCategories, type CategoryRecord } fr
 // retroactively, exactly as upsertRenameRule does for the form path (src/lib/categorize/engine.ts).
 import { applyRenameRules, buildContext } from '@/lib/categorize/engine';
 import {
+  CATEGORY_RULE_NEEDS_CATEGORY_ERROR,
   listRules,
   matchTypeAllowedForKind,
   upsertRuleFromCorrection,
@@ -189,7 +190,33 @@ const packRuleSchema = z
         path: ['rename_to'],
       });
     }
-  });
+    // v1.31.0 R-02 (P2), the mirror of the rename guard directly above and treated identically,
+    // including the wording discipline: a category entry with no category is MALFORMED, not an
+    // unsupported kind, because such a rule would win its merchant in matchRule and then have
+    // nothing to file it as -- silently stopping every other rule for that merchant, the form's
+    // own defect arriving by file instead. The shipped pack has been guarded against this shape
+    // since v1.22.0 (tests/ops/canadian-merchants-pack.test.ts); a household's own pack was not.
+    // One wording, one place: CATEGORY_RULE_NEEDS_CATEGORY_ERROR is the sentence saveRuleAction
+    // returns. rule_kind defaults to 'category', so an entry naming neither is caught here too.
+    if (rule.rule_kind === 'category' && rule.category === null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${CATEGORY_RULE_NEEDS_CATEGORY_ERROR} (pattern "${rule.pattern}")`,
+        path: ['category'],
+      });
+    }
+  })
+  /**
+   * v1.31.0 R-04(c). A rename's outcome is its target TEXT; it has no category, and rules.ts's
+   * upsert nulls `renameTo` for a non-rename but has never nulled `categoryId` for a rename. So a
+   * rename entry carrying `category: "Pets"` used to CREATE Pets and store its id on a rename row
+   * -- a category nothing files into, invented by a field that means nothing for this kind.
+   * Dropped here, at the boundary, so neither the preview's category list nor the importer's
+   * creation loop has to remember the exception.
+   */
+  .transform((rule) =>
+    rule.rule_kind === 'rename' ? { ...rule, category: null, category_parent: null } : rule,
+  );
 
 function checkEnvelope(input: unknown, format: string, label: string): Record<string, unknown> {
   if (input === null || typeof input !== 'object' || Array.isArray(input)) {
@@ -246,8 +273,41 @@ function assertNoDeepNesting(pack: { categories: PackCategory[]; rules: PackRule
   }
 }
 
+/**
+ * v1.31.0 R-04. A ceiling on a file this route ingests from a person, checked on the RAW arrays
+ * before a single entry is parsed or a single category is created.
+ *
+ * MAX_FILE_BYTES (the route's own defence, borrowed from the CSV importer) bounds the bytes, not
+ * the work: 5 MB of `{"pattern":"A","match_type":"exact","category":"A"}` is tens of thousands of
+ * rules, and every one of them could name a category to create -- so the previous behaviour on a
+ * hand-written or hostile pack was an unbounded number of writes with a preview that had reported
+ * "(none)". These numbers are deliberately far above anything real (the shipped Canadian pack is
+ * the largest this project has ever produced: 297 rules and 24 categories) and are about refusing
+ * absurdity with a sentence, not about tuning.
+ */
+export const MAX_PACK_RULES = 5_000;
+export const MAX_PACK_CATEGORIES = 500;
+
+function assertPackSize(record: Record<string, unknown>): void {
+  const count = (value: unknown) => (Array.isArray(value) ? value.length : 0);
+  const rules = count(record.rules);
+  const categories = count(record.categories);
+  if (rules > MAX_PACK_RULES) {
+    throw new PackFormatError(
+      `This rules pack has ${rules} rules, more than this install will import at once (${MAX_PACK_RULES}). Split it into smaller packs.`,
+    );
+  }
+  if (categories > MAX_PACK_CATEGORIES) {
+    throw new PackFormatError(
+      `This rules pack declares ${categories} categories, more than this install will import at once (${MAX_PACK_CATEGORIES}). Split it into smaller packs.`,
+    );
+  }
+}
+
 export function parseRulesPack(input: unknown): RulesPack {
   const record = checkEnvelope(input, RULES_PACK_FORMAT, 'rules');
+  // Before the element-by-element parse below, not after: the point is to not do the work.
+  assertPackSize(record);
   const parsed = z
     .object({
       exported_at: z.string().optional().transform((v) => v ?? ''),
@@ -268,8 +328,18 @@ export function parseRulesPack(input: unknown): RulesPack {
   };
 }
 
+/** The profiles pack's ceiling, for MAX_PACK_RULES' reason and checked the same way -- on the raw
+ *  array, before a single mapping is parsed. A household has a handful of banks. */
+export const MAX_PACK_PROFILES = 200;
+
 export function parseProfilesPack(input: unknown): ProfilesPack {
   const record = checkEnvelope(input, PROFILES_PACK_FORMAT, 'profiles');
+  const declared = Array.isArray(record.profiles) ? record.profiles.length : 0;
+  if (declared > MAX_PACK_PROFILES) {
+    throw new PackFormatError(
+      `This profiles pack has ${declared} profiles, more than this install will import at once (${MAX_PACK_PROFILES}). Split it into smaller packs.`,
+    );
+  }
   const parsed = z
     .object({
       exported_at: z.string().optional().transform((v) => v ?? ''),
@@ -427,6 +497,131 @@ export function resolveParentName(pack: RulesPack, rule: PackRule): string | nul
   return entry?.parent ?? null;
 }
 
+/** One category this pack needs to exist, as the (name, parent) pair that identifies it here. */
+export interface PackCategoryRef {
+  name: string;
+  parent: string | null;
+  /** The pack's own `categories[]` entry for it (icon/colour/is_income), when it declares one. */
+  declared: PackCategory | null;
+}
+
+/**
+ * v1.31.0 R-04. EVERY category this pack needs, declared or merely referenced by a rule, parents
+ * before children -- and the ONE enumeration both the preview and the import walk.
+ *
+ * THE DEFECT THIS CLOSES. The preview listed `pack.categories` only, while the import called
+ * ensureCategory for every rule's `category` as well. A pack whose rules name categories it never
+ * declares -- a hand-written one, or a hostile one, which is exactly what this route exists to
+ * ingest -- previewed as "Categories to create: (none)" and then created them. Two similar
+ * calculations of the same promise, drifting; the same shape isImportableRule was already
+ * extracted for ("the preview's skippedRules and the import's rulesSkipped are the same promise
+ * made twice"), applied to categories as that comment's own reasoning asks.
+ *
+ * SKIPPED RULES CONTRIBUTE NOTHING, deliberately: an entry the importer will not write
+ * (not_transfer, an unknown kind, `word` on a transfer) must not leave a category behind it, and
+ * that is only true by construction if the same isImportableRule predicate gates both walks.
+ * Renames contribute nothing either, because packRuleSchema has already nulled their `category`.
+ *
+ * ORDER. Parentless refs first, then the rest, so a child never reaches ensureCategory before the
+ * parent it names. (assertNoDeepNesting has already refused a pack that uses a declared CHILD as
+ * a parent, so "parents first" is a total order here rather than a topological sort.)
+ */
+export function categoriesReferencedBy(pack: RulesPack): PackCategoryRef[] {
+  const declaredBy = (name: string, parent: string | null): PackCategory | null =>
+    pack.categories.find((c) => lower(c.name) === lower(name) && lower(c.parent ?? '') === lower(parent ?? '')) ?? null;
+
+  const refs: PackCategoryRef[] = [];
+  const seen = new Set<string>();
+  const note = (name: string, parent: string | null) => {
+    const key = `${lower(parent ?? '')}|${lower(name)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    refs.push({ name, parent, declared: declaredBy(name, parent) });
+  };
+
+  for (const category of pack.categories) {
+    if (category.parent !== null) note(category.parent, null);
+    note(category.name, category.parent);
+  }
+  for (const rule of pack.rules) {
+    if (!isImportableRule(rule) || rule.category === null) continue;
+    const parentName = resolveParentName(pack, rule);
+    if (parentName !== null) note(parentName, null);
+    note(rule.category, parentName);
+  }
+
+  return [...refs.filter((ref) => ref.parent === null), ...refs.filter((ref) => ref.parent !== null)];
+}
+
+/**
+ * v1.31.0 R-04(b). Refuse, BEFORE anything is written, every pack whose categories cannot be
+ * created in THIS database -- rather than discovering it from createCategory's raw throw partway
+ * through the loop.
+ *
+ * The two shapes, both reachable from a pack that parses cleanly and looks reasonable:
+ *
+ *   1. A would-be parent that is already a CHILD here. `{name: "Latte", parent: "Coffee"}` is
+ *      fine in a flat install and impossible in one where Coffee is `Food > Coffee`, because this
+ *      app's category model is two levels and createCategory throws "Categories are limited to
+ *      two levels". assertNoDeepNesting checks the pack against ITSELF and cannot see this; only
+ *      the receiving database can answer it.
+ *   2. A spend category under an income parent. createCategory refuses that outright (C-05 half 2
+ *      -- such a row has no surviving top-level ancestor in budgetProgress's walk), and the
+ *      importer always passes is_income EXPLICITLY, so an undeclared child of an existing income
+ *      parent lands on that refusal rather than inheriting.
+ *
+ * Plus one that writes nothing but means something: a DECLARED is_income that contradicts a
+ * category of that name already here. Nothing throws in that case today -- the existing row is
+ * simply used -- but the pack is making a positive claim about money that disagrees with the
+ * household's own, and importing rules that file spending into a category every spend report
+ * excludes (or the reverse) is not a thing to do quietly. An undeclared reference makes no claim
+ * and is not checked.
+ *
+ * PackFormatError, not Error, because that is the class the route turns into a 400 with the
+ * message shown to the person who chose the file; a raw Error reached them as a 500 with an HTML
+ * body and a panel that displayed nothing at all.
+ */
+export function assertPackFitsCategoryTree(refs: PackCategoryRef[], all: CategoryRecord[]): void {
+  for (const ref of refs) {
+    const existing = findCategory(all, ref.name, ref.parent);
+
+    if (ref.parent !== null) {
+      // The pack's OWN second level, which assertNoDeepNesting cannot see: it reads declarations
+      // only, so a pack that puts one RULE's category under a name another rule's category
+      // introduced as a child slipped past it -- and then findCategory's "any candidate will do"
+      // fallback handed ensureCategory that child as a parent, so createCategory threw "limited to
+      // two levels" mid-loop, after the child had been created.
+      const packParent = refs.find((other) => lower(other.name) === lower(ref.parent as string) && other.parent !== null);
+      if (packParent !== undefined) {
+        throw new PackFormatError(
+          `This rules pack nests categories more than two levels deep ("${ref.name}" sits under "${ref.parent}", which the pack itself puts under "${packParent.parent}"), which isn't supported.`,
+        );
+      }
+      const sameName = all.filter((row) => lower(row.name) === lower(ref.parent as string));
+      if (sameName.length > 0 && !sameName.some((row) => row.parentId === null)) {
+        const owner = all.find((row) => row.id === sameName[0].parentId);
+        throw new PackFormatError(
+          `This rules pack puts "${ref.name}" under "${ref.parent}", but "${ref.parent}" is already a sub-category` +
+            `${owner ? ` of "${owner.name}"` : ''} here, and categories only go two levels deep. Rename or re-parent it in the pack first.`,
+        );
+      }
+      const parentHere = sameName.find((row) => row.parentId === null) ?? null;
+      const declaredIncome = ref.declared?.is_income ?? false;
+      if (existing === null && parentHere !== null && parentHere.isIncome && !declaredIncome) {
+        throw new PackFormatError(
+          `This rules pack puts "${ref.name}" under "${ref.parent}", which is an income category here. A spend category cannot live under an income one; declare "${ref.name}" with "is_income": true in the pack, or point it somewhere else.`,
+        );
+      }
+    }
+
+    if (existing !== null && ref.declared !== null && existing.isIncome !== ref.declared.is_income) {
+      throw new PackFormatError(
+        `This rules pack declares "${ref.name}" as ${ref.declared.is_income ? 'income' : 'spending'}, but "${categoryLabel(existing.id, all)}" is already ${existing.isIncome ? 'income' : 'spending'} here. Importing it would file money on the wrong side of every report, so nothing was changed.`,
+      );
+    }
+  }
+}
+
 export interface RulesImportConflict {
   pattern: string;
   matchType: MatchType;
@@ -446,6 +641,13 @@ export interface RulesImportPlan {
   /** Controller ruling (a): entries with an unsupported/unrecognised rule_kind (not_transfer, or anything this install doesn't know) — never written, always counted. rename is importable and never counted here. */
   skippedRules: number;
   conflicts: RulesImportConflict[];
+  /**
+   * v1.31.0 R-04: what the import will actually create, counted by the same enumeration the
+   * import creates from (categoriesReferencedBy) rather than by a second walk of `pack.categories`
+   * that missed every category a rule merely referenced. An income category is labelled
+   * "<name> (income)" — a pack can otherwise route spending into a category every spend report
+   * excludes, and a bare name on the confirmation screen would not say so.
+   */
   newCategories: string[];
 }
 
@@ -454,20 +656,14 @@ export function previewRulesPackImport(input: unknown): RulesImportPlan {
   const all = listCategories({ includeArchived: true });
   const existing = listRules();
 
-  const newCategories: string[] = [];
-  const seenNew = new Set<string>();
-  const noteCategory = (name: string, parentName: string | null) => {
-    if (findCategory(all, name, parentName)) return;
-    const key = `${lower(parentName ?? '')}|${lower(name)}`;
-    if (seenNew.has(key)) return;
-    seenNew.add(key);
-    newCategories.push(name);
-  };
+  // R-04: refuse here too, not only on apply, so "Preview" answers the question the person
+  // actually asked ("will this work?") instead of reporting a plan that cannot be carried out.
+  const refs = categoriesReferencedBy(pack);
+  assertPackFitsCategoryTree(refs, all);
 
-  for (const category of pack.categories) {
-    if (category.parent !== null) noteCategory(category.parent, null);
-    noteCategory(category.name, category.parent);
-  }
+  const newCategories = refs
+    .filter((ref) => findCategory(all, ref.name, ref.parent) === null)
+    .map((ref) => (ref.declared?.is_income ? `${ref.name} (income)` : ref.name));
 
   let newRules = 0;
   let unchanged = 0;
@@ -511,7 +707,14 @@ export function previewRulesPackImport(input: unknown): RulesImportPlan {
       continue;
     }
     const incoming = rule.category === null ? null : findCategory(all, rule.category, resolveParentName(pack, rule));
-    if ((match.categoryId ?? null) === (incoming?.id ?? null)) {
+    // v1.31.0 R-04, the smaller half of the same drift. A category this import is about to CREATE
+    // cannot be the one the existing row already points at, so a rule naming it is not
+    // "already identical" however the ids compare -- and comparing `incoming?.id ?? null` alone
+    // reported exactly that for an existing rule with no category beside a pack entry whose
+    // category does not exist yet, which the import then resolved as a conflict. Same enumeration
+    // decides both: categoriesReferencedBy listed it as a creation two blocks up.
+    const willCreateCategory = rule.category !== null && incoming === null;
+    if (!willCreateCategory && (match.categoryId ?? null) === (incoming?.id ?? null)) {
       unchanged += 1;
       continue;
     }
@@ -558,10 +761,38 @@ export function importRulesPack(
   const onConflict = opts.onConflict ?? 'keep';
   const stamp = opts.stamp ?? null;
 
+  /**
+   * v1.31.0 R-04, and the half that mattered most: ALL OR NOTHING.
+   *
+   * Before this, a pack that failed partway -- a category this database cannot create, a rule
+   * whose write threw -- left the categories loop's earlier creations and the rules loop's earlier
+   * rows committed, the route answered 500 with an HTML body that the panel's `await
+   * response.json()` then choked on (so the person saw NOTHING), and the next Preview reported the
+   * half-applied state as "already present". A rule set nobody chose, with no record of where it
+   * stopped.
+   *
+   * Same pattern as commitImport and undoImport (src/lib/import/commit.ts): one db.transaction
+   * around the whole unit of work, with the helpers called inside it -- createCategory,
+   * upsertRuleFromCorrection and applyRenameRules each reach for getDb() themselves, and
+   * better-sqlite3 hands back the SAME underlying connection, so their writes are inside this
+   * transaction and roll back with it. applyRenameRules opening its own transaction is safe for
+   * the reason runEngine already relies on: better-sqlite3 nests via SAVEPOINT.
+   *
+   * The counters live inside the callback and are returned from it, so a rollback cannot leave a
+   * caller holding numbers describing writes that were undone.
+   */
+  return getDb().transaction(() => importRulesPackWithin(pack, onConflict, stamp));
+}
+
+function importRulesPackWithin(
+  pack: RulesPack,
+  onConflict: 'keep' | 'overwrite',
+  stamp: PackProvenance | null,
+): RulesImportResult {
   let all = listCategories({ includeArchived: true });
   let categoriesCreated = 0;
 
-  const ensureCategory = (name: string, parentName: string | null, meta?: PackCategory): CategoryRecord => {
+  const ensureCategory = (name: string, parentName: string | null, meta?: PackCategory | null): CategoryRecord => {
     const found = findCategory(all, name, parentName);
     if (found) return found;
 
@@ -589,12 +820,17 @@ export function importRulesPack(
     return created;
   };
 
-  // Parents first, then children, so a child never races its parent.
-  for (const category of pack.categories.filter((c) => c.parent === null)) {
-    ensureCategory(category.name, null, category);
-  }
-  for (const category of pack.categories.filter((c) => c.parent !== null)) {
-    ensureCategory(category.name, category.parent, category);
+  // R-04: ONE enumeration, shared with the preview -- every category this pack needs, declared or
+  // merely referenced by an importable rule, parents first (categoriesReferencedBy). The preview's
+  // "Categories to create" is now a filter over this same list, so the two agree by construction
+  // rather than by two similar walks that can drift.
+  const refs = categoriesReferencedBy(pack);
+  // Every reason this pack cannot land, decided before the first write -- see
+  // assertPackFitsCategoryTree. Inside the transaction as well as in the preview, because the
+  // database can change between the two.
+  assertPackFitsCategoryTree(refs, all);
+  for (const ref of refs) {
+    ensureCategory(ref.name, ref.parent, ref.declared);
   }
 
   const db = getDb();
@@ -623,7 +859,16 @@ export function importRulesPack(
     // fresh "added" on every re-import instead of "kept"/"unchanged".
     const pattern = rule.pattern.trim().toUpperCase();
     const parentName = resolveParentName(pack, rule);
-    const category = rule.category === null ? null : ensureCategory(rule.category, parentName);
+    // A LOOKUP, never a create: categoriesReferencedBy above enumerated this exact (name, parent)
+    // pair from this same rule through this same resolveParentName, so it already exists. If it
+    // somehow does not, the two have drifted -- which is the bug R-04 was, and it must be loud
+    // rather than silently create a category the preview never mentioned.
+    const category = rule.category === null ? null : findCategory(all, rule.category, parentName);
+    if (rule.category !== null && category === null) {
+      throw new Error(
+        `Pack import: category "${rule.category}" was not created up front for rule "${rule.pattern}" -- categoriesReferencedBy and this loop disagree.`,
+      );
+    }
 
     const existing = db
       .select({ id: merchantRules.id, categoryId: merchantRules.categoryId, renameTo: merchantRules.renameTo })
@@ -927,12 +1172,19 @@ export interface ProfilesImportResult {
 
 export function importProfilesPack(input: unknown): ProfilesImportResult {
   const pack = parseProfilesPack(input);
-  const added: { name: string; renamedFrom: string | null }[] = [];
-  for (const profile of pack.profiles) {
-    const name = availableProfileName(profile.name);
-    // Imported profiles are always non-builtin: createProfile hard-codes isBuiltin=false.
-    createProfile({ name, institution: profile.institution, mapping: profile.mapping });
-    added.push({ name, renamedFrom: name === profile.name ? null : profile.name });
-  }
-  return { added };
+  // v1.31.0 R-04's sibling, applied rather than re-argued: this is the same route family taking the
+  // same user-supplied JSON, and a loop of independent createProfile calls left half a pack behind
+  // on any mid-loop failure exactly as the rules importer did. One transaction, all or nothing.
+  // availableProfileName reads through the same connection, so a name claimed earlier in this loop
+  // is still seen by the next iteration.
+  return getDb().transaction(() => {
+    const added: { name: string; renamedFrom: string | null }[] = [];
+    for (const profile of pack.profiles) {
+      const name = availableProfileName(profile.name);
+      // Imported profiles are always non-builtin: createProfile hard-codes isBuiltin=false.
+      createProfile({ name, institution: profile.institution, mapping: profile.mapping });
+      added.push({ name, renamedFrom: name === profile.name ? null : profile.name });
+    }
+    return { added };
+  });
 }

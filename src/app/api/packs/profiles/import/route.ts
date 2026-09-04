@@ -44,6 +44,10 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ applied: false, ...previewProfilesPackImport(pack) });
   } catch (error) {
     if (error instanceof PackFormatError) return Response.json({ error: error.message }, { status: error.status });
-    throw error;
+    // v1.31.0 R-04's sibling, same treatment as the rules import route: a rethrow reaches the
+    // panel as a 500 with an HTML body, which its `await response.json()` cannot read, so the
+    // person sees nothing. importProfilesPack is atomic now, so "Nothing was changed" is true.
+    console.error('[packs] profiles import failed', error);
+    return Response.json({ error: 'Import failed. Nothing was changed.' }, { status: 500 });
   }
 }

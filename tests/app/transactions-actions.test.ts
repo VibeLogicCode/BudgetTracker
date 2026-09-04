@@ -7,7 +7,7 @@ import { nowIso } from '@/lib/clock';
 import { createWarrantyItem, getWarrantyItem } from '@/lib/warranty/items';
 import { createItemType } from '@/lib/warranty/types';
 import { setTransactionSplits } from '@/lib/splits';
-import { confirmCategory, runEngine } from '@/lib/categorize/engine';
+import { confirmCategory, runEngine, upsertRenameRule } from '@/lib/categorize/engine';
 import { listRules, ruleOwnedError, upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { NOT_YOURS_ERROR } from '@/lib/auth/viewer';
 
@@ -472,6 +472,45 @@ describe('MUST-14.8 … MUST-14.11: assign and unassign', () => {
  * OPPOSITE: a split row is NOT skipped by either new action -- see bulkAssignToLoan/bulkSetNotes'
  * own doc comments (src/lib/transactions.ts) for the justification this task's report restates.
  */
+/**
+ * v1.31.0 R-03 / ruling R24. A loan link outranks a rename rule while it exists, so unlinking has
+ * to hand the row BACK to the rules -- here, at the action layer, because src/lib/loans.ts keeps
+ * the MUST-13.2 boundary its own header describes and must not reach into the engine.
+ */
+describe('unassignFromLoanAction: unlinking hands the row back to the rename rules (R-03)', () => {
+  it('the rename reappears immediately, not at the next unrelated pass', async () => {
+    const { sqlite, userId } = setup();
+    const { itemId, txnId } = seedLoanAndSpend(2_000_000, -45_000);
+    const rename = upsertRenameRule({ pattern: 'HONDA', matchType: 'contains', renameTo: 'Honda Finance', userId, actorRole: 'admin' });
+    if (!rename.ok) throw new Error('unexpected refusal');
+    const read = () =>
+      sqlite.prepare('select display_description as text, display_source as source from transactions where id = ?').get(txnId) as {
+        text: string | null;
+        source: string | null;
+      };
+    expect(read()).toEqual({ text: 'Honda Finance', source: 'rename' });
+
+    await assignToLoanAction(formData({ transactionId: String(txnId), itemId: String(itemId) }));
+    // R24: the deliberate per-row link wins while it exists.
+    expect(read().source).toBe('loan');
+
+    const result = await unassignFromLoanAction(formData({ transactionId: String(txnId), itemId: String(itemId) }));
+    expect(result.error).toBeUndefined();
+    expect(read()).toEqual({ text: 'Honda Finance', source: 'rename' });
+  });
+
+  it('a row no rename rule covers goes back to the bank text, not to a stale label', async () => {
+    const { sqlite } = setup();
+    const { itemId, txnId } = seedLoanAndSpend(2_000_000, -45_000);
+    await assignToLoanAction(formData({ transactionId: String(txnId), itemId: String(itemId) }));
+    await unassignFromLoanAction(formData({ transactionId: String(txnId), itemId: String(itemId) }));
+    expect(sqlite.prepare('select display_description as text, display_source as source from transactions where id = ?').get(txnId)).toEqual({
+      text: null,
+      source: null,
+    });
+  });
+});
+
 describe('bulkAssignToLoanAction and bulkNoteAction (v1.25.0 Lane R item R3)', () => {
   it('bulkAssignToLoanAction: links every selected transaction and names the loan in the message', async () => {
     const { sqlite, addTxn } = setup();

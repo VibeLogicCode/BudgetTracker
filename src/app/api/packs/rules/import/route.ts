@@ -54,6 +54,14 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ applied: false, ...previewRulesPackImport(pack) });
   } catch (error) {
     if (error instanceof PackFormatError) return Response.json({ error: error.message }, { status: error.status });
-    throw error;
+    // v1.31.0 R-04. Anything else used to be rethrown, which Next turns into a 500 with an HTML
+    // body -- and the panel's `await response.json()` then threw on that HTML from inside a
+    // floating `void send('apply')`, so the person who chose the file saw nothing at all happen.
+    // The import is atomic now (importRulesPack wraps itself in one transaction), so reaching
+    // here means nothing was written and saying so is true. The message stays deliberately dull:
+    // an unexpected error's own text on a route fed user-supplied JSON is not something to hand
+    // back verbatim, so the detail goes to the server log and the person gets a sentence.
+    console.error('[packs] rules import failed', error);
+    return Response.json({ error: 'Import failed. Nothing was changed.' }, { status: 500 });
   }
 }
