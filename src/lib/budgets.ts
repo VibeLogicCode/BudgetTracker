@@ -564,7 +564,7 @@ export function budgetProgress(month: string, scope: BudgetScope = 'household', 
       return { parent, allChildren, renderChildren };
     })
     // C-01. `spendByCategory` is each category's OWN direct spend, never the rollup (see
-    // foldRollup below) -- a parent whose spending sits entirely in its children reads 0
+    // foldRollup above) -- a parent whose spending sits entirely in its children reads 0
     // there, so the naive "archived + no direct spend" test used to drop the parent AND,
     // since the walk only ever iterates top-level rows, every live child underneath it too:
     // one click on Settings -> Managers zeroed budgetedLimitCents/budgetedSpentCents/

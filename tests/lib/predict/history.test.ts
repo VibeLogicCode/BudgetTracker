@@ -140,24 +140,18 @@ describe('MUST-3.2: the series is budgetProgress, row for row', () => {
   });
 
   /**
-   * task-2-brief.md (C-01): this used to assert budgetProgress() ALSO dropped Kids's live,
-   * spending child the moment Kids (its archived parent) had no DIRECT spend of its own --
-   * pinning the exact bug that fix corrects (`spendByCategory` is a category's own spend only,
-   * never the rollup, so an archived parent whose spending sits entirely in a child used to be
-   * dropped and take the live child down with it). budgetProgress() now keeps an archived
-   * parent alive whenever ANY child survives the child predicate -- "Kids leftover" is not
-   * itself archived, so it always survives regardless of spend -- so `progress` now keeps both
-   * rows.
-   *
-   * `categorySeries`'s own `rollup()` (src/lib/predict/history.ts) was NOT touched by this
-   * fix, and its archived-parent test (that file's line 141, `own.every(cents => cents === 0)`)
-   * reads only the parent's own cell -- the identical shape of bug, one file over -- so `series`
-   * still drops both. That is a genuine NEW divergence from this file's own MUST-3.2 promise
-   * ("the series is budgetProgress, row for row") that this fix exposes rather than closes:
-   * task-2-brief.md scopes both of ITS defects to budgetProgress in src/lib/budgets.ts only, so
-   * this is flagged to the controller as a follow-up finding rather than silently fixed here.
+   * task-2-fix-1-brief.md (C-13): the divergence the docblock this replaces used to pin is
+   * closed. `rollup()`'s archived-parent test used to read only the parent's own cell
+   * (`own.every(cents => cents === 0)`) -- the identical shape of the C-01 bug `budgetProgress()`
+   * had just been fixed for, one file over -- so an archived parent whose spending sat entirely
+   * in a live child was dropped, and the child went with it, because the walk only ever iterates
+   * top-level rows. `rollup()` now asks the same question `budgetProgress()` does: keep an
+   * archived parent when its own cell carries spend anywhere in the window, OR any child
+   * survives the child rule (see rollup()'s own docblock for the resolved-limit clause this
+   * function still deliberately omits, and why). "Kids leftover" is not itself archived, so it
+   * always survives the child rule regardless of spend -- both surfaces now keep both rows.
    */
-  it('keeps a live child of an archived top-level parent in progress; categorySeries, carrying the same bug unfixed in its own rollup(), still drops both', () => {
+  it('keeps a live child of an archived top-level parent in both categorySeries and budgetProgress', () => {
     const { db, spend, child } = setup();
     const kids = categoryIdByName(db, 'Kids');
     db.run(sql`update categories set is_archived = 1 where id = ${kids}`);
@@ -166,9 +160,22 @@ describe('MUST-3.2: the series is budgetProgress, row for row', () => {
 
     const series = categorySeries({ months: ['2026-07'], scope: 'household', userId: null });
     const progress = flatten(budgetProgress('2026-07', 'household', null));
-    expect(series.some((row) => row.categoryId === kids || row.categoryId === leftover)).toBe(false);
+    expect(pick(series, kids)?.monthlyCents).toEqual([5000]);
+    expect(pick(series, leftover)?.monthlyCents).toEqual([5000]);
     expect(progress.find((row) => row.categoryId === kids)?.spentCents).toBe(5000);
     expect(progress.find((row) => row.categoryId === leftover)?.spentCents).toBe(5000);
+  });
+
+  it('MUST-3.2: categorySeries and flatten(budgetProgress(...)) agree on the exact set of category ids for an archived parent with a live spending child', () => {
+    const { db, spend, child } = setup();
+    const kids = categoryIdByName(db, 'Kids');
+    db.run(sql`update categories set is_archived = 1 where id = ${kids}`);
+    const leftover = child('Kids leftover', kids);
+    spend({ categoryId: leftover, amountCents: -5000, date: '2026-07-05' });
+
+    const series = categorySeries({ months: ['2026-07'], scope: 'household', userId: null });
+    const progress = flatten(budgetProgress('2026-07', 'household', null));
+    expect(new Set(series.map((row) => row.categoryId))).toEqual(new Set(progress.map((row) => row.categoryId)));
   });
 
   it('surfaces an archived top-level category with its own spend, rolling in a live child that gets its own row', () => {

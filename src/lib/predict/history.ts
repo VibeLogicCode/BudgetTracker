@@ -107,8 +107,9 @@ function cells(
  *   - a child is its own row carrying only its own cell, UNLESS it is archived and carries no
  *     spend anywhere in the window, in which case it only rolls up (v1.12.1, item S / MON-1 --
  *     see below);
- *   - an archived top-level category surfaces only when its OWN cell is non-zero, which over
- *     a window means non-zero in at least one month of it;
+ *   - an archived top-level category surfaces when its OWN cell carries spend anywhere in the
+ *     window, OR any child survives the child rule just above (task-2-fix-1-brief.md, C-13 --
+ *     see below); nothing else keeps it;
  *   - nothing rolls up more than one level, because budgetProgress does not either.
  *
  * The result is flat and in budgetProgress()'s order (each top-level row, then its rendered
@@ -123,12 +124,38 @@ function cells(
  * this module predicts spend, it does not resolve budgets -- and a multi-month window (the
  * common case; only the MUST-3.2 test ever calls this with a single month) has no one "current
  * month" to resolve a limit against the way budgetProgress's single `month` argument does. So
- * an archived child surfaces here whenever ANY month in the window carries real spend, and
- * still rolls up silently, with no row of its own, when the whole window is zero -- which is
- * exactly budgetProgress()'s outcome on every fixture MUST-3.2 pins, because every one of them
- * that gives an archived child a limit also gives it spend. `suggestionsFor` skips every
- * archived row regardless (controller ruling, Task 5 review), so this divergence can never
- * surface a suggestion budgetProgress wouldn't also show a limit for.
+ * a child surfaces here whenever it isn't archived, or ANY month in the window carries real
+ * spend, and still rolls up silently, with no row of its own, when it is archived and the whole
+ * window is zero.
+ *
+ * C-13 fix (task-2-fix-1-brief.md): budgetProgress()'s archived-PARENT rule carries the same
+ * shape as its child rule one level up, and until this fix this function only ever tested the
+ * parent's own cell -- an archived parent whose spending sat entirely in a live child was
+ * dropped, and the child went with it, because the walk only ever iterates top-level rows. The
+ * archived-parent test now also keeps a parent alive when any child survives the child rule
+ * above -- computed once, as `renderChildren`, and reused both for the keep decision and for the
+ * rows actually pushed, so there is no second child predicate to drift from the first.
+ *
+ * budgetProgress() has a THIRD clause C-13 does not ask this function to add: a resolved limit
+ * of its own, via resolveBudget(). This function deliberately does not implement it. This is the
+ * only module under predict/ that touches the database (this file's own top docblock,
+ * MUST-2.1/2.2), and CategorySeries has no `limitCents` field and never will -- this module
+ * predicts spend, it does not resolve budgets (see the paragraph above). Wiring resolveBudget()
+ * in would mean importing src/lib/budgets.ts, a dependency this file has never had, to pay for
+ * one query per top-level category per month in the window -- against a file whose only other
+ * query is the single grouped one MUST-4.8 requires -- for a clause `suggestionsFor` could never
+ * act on anyway, since it skips every archived row regardless (controller ruling, Task 5
+ * review) before a suggestion is ever computed for one. So an archived parent with a resolved
+ * limit, no spend, and no live child -- the one case the third clause alone would save -- still
+ * rolls up silently here with no row of its own; that is not a case `suggestionsFor` needs, and
+ * `categorySeries`'s other callers are read-only history, not a page a person acts on the way
+ * they act on a Budgets row.
+ *
+ * Both copies now implement the same two-clause test for an archived parent (own spend, or a
+ * surviving child); budgetProgress() alone adds the third, limit, clause this file omits for the
+ * reason above. They are pinned equal on the case that matters -- an archived parent with a live
+ * spending child -- by the MUST-3.2 tests below, which assert `categorySeries` and
+ * `flatten(budgetProgress(...))` agree on the exact set of category ids.
  */
 function rollup(months: string[], byCategory: Map<number, Map<string, number>>): CategorySeries[] {
   const all = listCategories({ includeArchived: true }).filter((category) => !category.isIncome);
@@ -138,7 +165,17 @@ function rollup(months: string[], byCategory: Map<number, Map<string, number>>):
   for (const parent of all.filter((category) => category.parentId === null)) {
     const children: CategoryRecord[] = all.filter((category) => category.parentId === parent.id);
     const own = months.map((month) => cell(parent.id, month));
-    if (parent.isArchived && own.every((cents) => cents === 0)) continue;
+    const childSeries = children.map((child) => ({
+      child,
+      monthlyCents: months.map((month) => cell(child.id, month)),
+    }));
+    const renderChildren = childSeries.filter(
+      ({ child, monthlyCents }) => !child.isArchived || monthlyCents.some((cents) => cents !== 0),
+    );
+    // C-13: same question budgetProgress() asks one level down -- own spend anywhere in the
+    // window, OR any child surviving the rule above -- so a live child can never be dropped
+    // just because its archived parent's own cell happens to read zero.
+    if (parent.isArchived && own.every((cents) => cents === 0) && renderChildren.length === 0) continue;
 
     out.push({
       categoryId: parent.id,
@@ -149,15 +186,13 @@ function rollup(months: string[], byCategory: Map<number, Map<string, number>>):
         (month, index) => own[index] + children.reduce((sum, child) => sum + cell(child.id, month), 0),
       ),
     });
-    for (const child of children) {
-      const childMonthly = months.map((month) => cell(child.id, month));
-      if (child.isArchived && childMonthly.every((cents) => cents === 0)) continue;
+    for (const { child, monthlyCents } of renderChildren) {
       out.push({
         categoryId: child.id,
         categoryName: child.name,
         parentId: parent.id,
         isArchived: child.isArchived,
-        monthlyCents: childMonthly,
+        monthlyCents,
       });
     }
   }
