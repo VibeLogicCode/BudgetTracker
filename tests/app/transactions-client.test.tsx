@@ -2380,6 +2380,113 @@ describe('v1.15.0 ruling S7: the filter controls disclosure', () => {
 });
 
 /**
+ * Task 3c (owner report, phone screenshot from Transactions): ruling S7's disclosure above only
+ * ever gated the four selects (Account/Category/Person/Dates) -- the transfer/queue row, the
+ * View/Sort/Set-by rows and the top-level category chips stayed visible unconditionally at every
+ * width, which is exactly what stacked six control rows above a phone's data. Below `sm` each of
+ * those rows now folds independently via `rowVisibility` (transactions-client.tsx), but only when
+ * ITS OWN filter is at default. An unconditional fold (the obvious fix) was considered and
+ * rejected: the dashboard's import-audit link (`?import=<id>&source=rule&group=category`) lands a
+ * phone user directly inside an already-filtered batch, and a folded row with no way to reopen it
+ * would strand them there -- see rowVisibility's own doc comment for the argument in full.
+ */
+describe('Task 3c: rows fold below sm only when their own filter is at default', () => {
+  const categories = [
+    { id: 1, name: 'Housing', parentId: null, isArchived: false, sortOrder: 0 },
+    { id: 2, name: 'Groceries', parentId: null, isArchived: false, sortOrder: 1 },
+  ];
+
+  function transferRow() {
+    return screen.getByRole('navigation', { name: 'Filter by transfer status' }).parentElement as HTMLElement;
+  }
+  function viewRow() {
+    return screen.getByRole('navigation', { name: 'How to show the transactions' }).parentElement as HTMLElement;
+  }
+  function sortRow() {
+    return screen.getByRole('navigation', { name: 'Sort the transactions' }).parentElement as HTMLElement;
+  }
+  function setByRow() {
+    return screen.getByRole('navigation', { name: 'Filter by what set the category' }).parentElement as HTMLElement;
+  }
+  function chipsRow() {
+    return screen.getByRole('group', { name: 'Filter by category' });
+  }
+
+  it('with no filters active, every folded row carries the hidden-below-sm class, and so does the four-select container -- and every one still carries sm:flex, so the desktop layout is untouched', () => {
+    render(
+      <TransactionsClient page={pageWithRow()} accounts={[]} categories={categories} people={[]} today="2026-03-02" />,
+    );
+    for (const row of [transferRow(), viewRow(), sortRow(), setByRow(), chipsRow()]) {
+      expect(row.className).toContain('hidden');
+      expect(row.className).toContain('sm:flex');
+    }
+    expect(document.getElementById('transactions-filter-fields')?.className).toContain('hidden');
+  });
+
+  it('?source=rule -- the import-audit landing case -- keeps the Set-by row visible while every other folding row still hides', () => {
+    render(
+      <TransactionsClient
+        page={pageWithRow()}
+        accounts={[]}
+        categories={categories}
+        people={[]}
+        today="2026-03-02"
+        currentQuery="source=rule"
+      />,
+    );
+    expect(setByRow().className).not.toContain('hidden');
+    expect(setByRow().className).toContain('flex');
+    expect(transferRow().className).toContain('hidden');
+    expect(viewRow().className).toContain('hidden');
+    expect(sortRow().className).toContain('hidden');
+    expect(chipsRow().className).toContain('hidden');
+  });
+
+  it('the funnel badge counts a filter hidden behind a folded row (?group=category)', () => {
+    window.history.pushState({}, '', '/transactions?group=category');
+    render(
+      <TransactionsClient
+        page={pageWithRow()}
+        accounts={[]}
+        categories={categories}
+        people={[]}
+        today="2026-03-02"
+        currentQuery="group=category"
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Filters (1)' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Filters' })).toBeNull();
+  });
+
+  it('opening the Filters disclosure reveals every folded row, regardless of its own filter', () => {
+    render(
+      <TransactionsClient page={pageWithRow()} accounts={[]} categories={categories} people={[]} today="2026-03-02" />,
+    );
+    expect(transferRow().className).toContain('hidden');
+    fireEvent.click(screen.getByRole('button', { name: 'Filters' }));
+    for (const row of [transferRow(), viewRow(), sortRow(), setByRow(), chipsRow()]) {
+      expect(row.className).not.toContain('hidden');
+    }
+  });
+
+  it('folding a row is CSS only, never a conditional unmount -- the form still submits the same values, and every link inside a folded row stays in the DOM', () => {
+    render(
+      <TransactionsClient page={pageWithRow()} accounts={[]} categories={categories} people={[]} today="2026-03-02" />,
+    );
+    // Default state: none of these rows are visible below `sm` (every filter is at default) --
+    // but their controls are still real elements, exactly as mounted as they would be at `sm`
+    // and up, so a hand-edited URL (or the `sm:flex` desktop layout) always finds them.
+    expect(transferRow().className).toContain('hidden');
+    expect(screen.getByRole('link', { name: 'Transfers only' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'No transfers' })).toBeTruthy();
+    expect(within(viewRow()).getByRole('link', { name: 'By category' })).toBeTruthy();
+    expect(within(sortRow()).getByRole('link', { name: 'Amount' })).toBeTruthy();
+    expect(within(setByRow()).getByRole('link', { name: 'Rules' })).toBeTruthy();
+    expect(within(chipsRow()).getByText('Housing')).toBeTruthy();
+  });
+});
+
+/**
  * Owner report (item 3): the visible "Search" label pushed the field down a line, which left the
  * Filters icon beside it floating above centre with a dead band around it -- the label added
  * nothing the new placeholder does not already say, so it is gone, and the field keeps its

@@ -574,6 +574,21 @@ export function TransactionsClient({
       // still counts here and still opens the disclosure, exactly like `category` does).
       params.get('transfers') === '0' || params.get('transfers') === 'only' ? params.get('transfers') : null,
       params.get('range') || params.get('from') || params.get('to') ? '1' : null,
+      // Fix round (owner report, phone screenshot): the audit bar (View/Sort/Set by) and the
+      // review queue's chip row read their own filter off these four params the same way the
+      // seven above already do, and this task made three of those rows fold below `sm` when
+      // they're at default -- so this count has to know about all four now, or the funnel reads
+      // "no filters" while one of THOSE rows is quietly filtering, which is the exact bug this
+      // task exists to close. 'group' and 'source' are plain presence checks, same as `person`/`q`
+      // above -- there is no "default value" spelling for either to exclude. 'sort' and 'queue'
+      // are checked against their real values only, mirroring activeSort's/activeQueueChip's own
+      // parses below, so a hand-edited junk value can't inflate the count.
+      params.get('group'),
+      params.get('source'),
+      params.get('sort') === 'date' || params.get('sort') === 'amount' || params.get('sort') === 'category'
+        ? params.get('sort')
+        : null,
+      params.get('queue') === 'suggested' || params.get('queue') === 'uncategorized' ? params.get('queue') : null,
     ].filter((value) => value !== null && value !== '').length;
     if (count > 0) {
       setActiveFilterCount(count);
@@ -727,6 +742,29 @@ export function TransactionsClient({
    *  it server-side. */
   const importParam = new URLSearchParams(currentQuery).get('import');
   const activeImportId = importParam !== null && /^\d+$/.test(importParam) ? importParam : null;
+
+  // Fix round (owner report, phone screenshot): six stacked control rows sat above the data at
+  // every width, because ruling S7's disclosure (`filtersOpen`, above) only ever gated the four
+  // selects -- this helper extends the SAME idea to the rest of the rows below it, without
+  // touching the one ruling S7 already covers.
+  //
+  // Below `sm`, a row shows when EITHER the disclosure is open OR that row's own filter is not at
+  // its default -- never unconditionally hidden. Folding the audit bar (View/Sort/Set by) and the
+  // transfer/queue row behind the funnel regardless of state was the obvious fix, and it was
+  // considered and REJECTED here for the reason the audit bar's own comment (below) gives in full:
+  // the dashboard's import-audit link (`?import=<id>&source=rule&group=category`) lands a phone
+  // user directly inside a filtered batch, and a row that is unconditionally hidden leaves them no
+  // way back out except discovering "Filters" first -- which someone who has never opened this
+  // page has no reason to go looking for. Keying visibility to "is this row doing something"
+  // instead means the row that matters is exactly the row that stays on screen, whichever one
+  // that turns out to be.
+  //
+  // `sm:flex` keeps every row exactly as visible as it is today at `sm` and up; this only changes
+  // what happens below it. CSS class, never a conditional unmount -- same reason the disclosure's
+  // own fields give a few hundred lines down: a hidden row's inputs/links stay in the DOM, so
+  // what the form submits (or what a link points at) never depends on whether the row happens to
+  // be on screen at this particular width.
+  const rowVisibility = (rowIsActive: boolean) => `${filtersOpen || rowIsActive ? 'flex' : 'hidden'} sm:flex`;
 
   const toggle = (id: number) => setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   // v1.7.0 bulk-guard fix: Categorize and Mark transfer both silently skip a split
@@ -2525,42 +2563,45 @@ export function TransactionsClient({
               `?queue=` composes with `?review=1` the same way `?transfers=` composes with the
               ordinary list, so the two controls never need to be visible at once.
             */}
-            {reviewMode ? (
-              <PillNav
-                groupLabel="Filter the review queue"
-                options={QUEUE_CHIP_OPTIONS.map(
-                  (option): PillNavOption => ({
-                    key: option.value === '' ? 'all' : option.value,
-                    href: filterHref(currentQuery, 'queue', option.param),
-                    label: option.label,
-                    active: activeQueueChip === option.value,
-                  }),
-                )}
-              />
-            ) : (
-              <PillNav
-                groupLabel="Filter by transfer status"
-                options={TRANSFER_VIEW_OPTIONS.map(
-                  (option): PillNavOption => ({
-                    key: option.value,
-                    href: filterHref(currentQuery, 'transfers', option.param),
-                    label: option.label,
-                    active: activeTransferView === option.value,
-                  }),
-                )}
-              />
-            )}
+            {/* Fix round (owner report, phone screenshot): folds below `sm` once its own filter is
+                back at default, same as every row rowVisibility (above) covers -- see that
+                helper's doc comment for why an unconditional fold was rejected. `reviewMode`'s own
+                queue-chip branch and the ordinary transfer-view branch share one row, so one
+                wrapper (rather than two) picks whichever branch's own active state applies. */}
+            <div className={rowVisibility(reviewMode ? activeQueueChip !== '' : activeTransferView !== 'all')}>
+              {reviewMode ? (
+                <PillNav
+                  groupLabel="Filter the review queue"
+                  options={QUEUE_CHIP_OPTIONS.map(
+                    (option): PillNavOption => ({
+                      key: option.value === '' ? 'all' : option.value,
+                      href: filterHref(currentQuery, 'queue', option.param),
+                      label: option.label,
+                      active: activeQueueChip === option.value,
+                    }),
+                  )}
+                />
+              ) : (
+                <PillNav
+                  groupLabel="Filter by transfer status"
+                  options={TRANSFER_VIEW_OPTIONS.map(
+                    (option): PillNavOption => ({
+                      key: option.value,
+                      href: filterHref(currentQuery, 'transfers', option.param),
+                      label: option.label,
+                      active: activeTransferView === option.value,
+                    }),
+                  )}
+                />
+              )}
+            </div>
 
             {/*
               v1.26.0 Lane 3a items 1-3. The audit bar: how the list is grouped, how it is sorted,
-              and which categorizer's decisions it shows. ALWAYS VISIBLE, never folded behind the
-              Filters(N) disclosure, for the reason the transfer-view row above records for itself
-              -- a filter somebody arrives at by clicking a link on another page (the import
-              summary's audit link is `?import=<id>&source=rule&group=category`) must be visible
-              and dismissible where they land, or the batch has no way out of it. Each row carries a
-              small visible label as well as PillNav's own `groupLabel`: three unlabelled pill rows
-              stacked on one card is a puzzle, and the labels are what make "Set by: Rules" read as
-              a sentence rather than as five more filter chips.
+              and which categorizer's decisions it shows. Each row carries a small visible label as
+              well as PillNav's own `groupLabel`: three unlabelled pill rows stacked on one card is
+              a puzzle, and the labels are what make "Set by: Rules" read as a sentence rather than
+              as five more filter chips.
 
               Sort is offered in BOTH modes -- ordering a queue by amount is as reasonable as
               ordering the list by it. The other two are NOT offered in review mode, on the same
@@ -2571,10 +2612,20 @@ export function TransactionsClient({
               options are lies about what the filtered list can return is what this app declines to
               do; a hand-typed `?group=category&review=1` is still honoured (page.tsx never checks
               review mode for it), it just is not advertised.
+
+              Fix round (owner report, phone screenshot): View/Sort/Set by each fold below `sm`
+              once THEIR OWN filter is back at default (rowVisibility, above) -- three independent
+              folds, not one shared with the row around them, because a phone screen showing "Set
+              by: Rules" has no reason to also show an idle "View" row. The import-batch chip just
+              below stays the one exception, unconditionally visible at every width: it is the
+              filter a person arrives at without clicking a control for it (the import summary's
+              audit link is `?import=<id>&source=rule&group=category`), so it must be visible and
+              dismissible wherever they land, never behind a fold of any kind -- see rowVisibility's
+              own doc comment for why folding it was considered and rejected.
             */}
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
               {reviewMode ? null : (
-                <span className="flex flex-wrap items-center gap-1.5">
+                <span className={`${rowVisibility(activeGroupView !== '')} flex-wrap items-center gap-1.5`}>
                   <span className="text-[0.6875rem] font-medium uppercase tracking-wide text-muted">View</span>
                   <PillNav
                     groupLabel="How to show the transactions"
@@ -2589,7 +2640,7 @@ export function TransactionsClient({
                   />
                 </span>
               )}
-              <span className="flex flex-wrap items-center gap-1.5">
+              <span className={`${rowVisibility(activeSort !== '')} flex-wrap items-center gap-1.5`}>
                 <span className="text-[0.6875rem] font-medium uppercase tracking-wide text-muted">Sort</span>
                 <PillNav
                   groupLabel="Sort the transactions"
@@ -2624,7 +2675,7 @@ export function TransactionsClient({
                 ) : null}
               </span>
               {reviewMode ? null : (
-                <span className="flex flex-wrap items-center gap-1.5">
+                <span className={`${rowVisibility(activeSource !== '')} flex-wrap items-center gap-1.5`}>
                   <span className="text-[0.6875rem] font-medium uppercase tracking-wide text-muted">Set by</span>
                   <PillNav
                     groupLabel="Filter by what set the category"
@@ -2653,20 +2704,26 @@ export function TransactionsClient({
               ) : null}
             </div>
 
-            {/* Chip filters (ruling D6): TOP-LEVEL categories only, always visible (not folded
-                behind the disclosure the way account/person/dates/uncategorized stay -- the
-                transfer-view control just above is the same kind of always-visible link row, for
-                the same reason), wrapping rather than scrolling, with a "+n" expander for the
-                rest. Plain <Link>s, not a second form field named "category" -- the existing
-                select further down keeps that name, so two controls submitting under it at once
-                (and the browser sending TWO values for one querystring key) never arises. Each
-                href is built from `currentQuery` (categoryChipHref above, page.tsx's own comment
-                on that prop), so clicking one only ever changes `category` and leaves
-                account/person/dates/search/uncat/transfers/review exactly as they were -- the
-                same "just this one param" contract the existing "Needs review" link below already
-                keeps for `review`. */}
+            {/* Chip filters (ruling D6): TOP-LEVEL categories only, not folded behind the four-select
+                disclosure the way account/person/dates/uncategorized stay, wrapping rather than
+                scrolling, with a "+n" expander for the rest. Plain <Link>s, not a second form field
+                named "category" -- the existing select further down keeps that name, so two
+                controls submitting under it at once (and the browser sending TWO values for one
+                querystring key) never arises. Each href is built from `currentQuery`
+                (categoryChipHref above, page.tsx's own comment on that prop), so clicking one only
+                ever changes `category` and leaves account/person/dates/search/uncat/transfers/review
+                exactly as they were -- the same "just this one param" contract the existing "Needs
+                review" link below already keeps for `review`.
+
+                Fix round (owner report, phone screenshot): below `sm` this row now folds like every
+                other row rowVisibility (above) covers, once no category chip is active -- see that
+                helper's own doc comment for the reasoning. */}
             {topLevelChips.length > 0 ? (
-              <div role="group" aria-label="Filter by category" className="flex flex-wrap items-center gap-2">
+              <div
+                role="group"
+                aria-label="Filter by category"
+                className={`${rowVisibility(activeCategoryChip !== '')} flex-wrap items-center gap-2`}
+              >
                 <Link href={categoryChipHref(currentQuery, null)} className="inline-flex min-h-11 items-center sm:min-h-0">
                   <Pill tone={activeCategoryChip === '' ? 'accent' : 'neutral'}>All</Pill>
                 </Link>
