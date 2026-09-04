@@ -36,6 +36,7 @@ vi.mock('next/cache', () => ({
 
 import { copyPreviousMonthAction, setLimitAction, setRolloverAction, setSavingsTargetAction } from '@/app/(app)/budgets/actions';
 import { categoryTransactionsAction } from '@/app/(app)/budgets/category-transactions-action';
+import { categoryHistoryAction } from '@/app/(app)/budgets/category-history-action';
 import { rolloverIdsFor } from '@/app/(app)/budgets/page';
 // Lane 1 (src/lib/savings-target.ts): not mocked here, same as every other library import in
 // this file -- these tests read the real row a save wrote, the same way resolveBudget above
@@ -511,5 +512,122 @@ describe('categoryTransactionsAction — task-3 (S-01): a self-scoped member cou
     const household = await categoryTransactionsAction({ scope: 'household', userId: null, month: '2026-03', categoryId: groceries });
     if (!('rows' in household)) throw new Error(`expected rows, got error: ${household.error}`);
     expect(household.rows.map((r) => r.merchant)).toEqual(['BOB ELECTRONICS']);
+  });
+});
+
+/**
+ * F-06 (2026-09-02 review, v1.31.0): the budget card's six-month "spent vs limit" strip. Same
+ * setup()/formData() fixtures as setLimitAction's own tests above, plus a local `spend` helper
+ * (categoryId and date both caller-supplied, unlike seedWithTransactions' fixed-to-Groceries one)
+ * so a rollup test can post spend to a parent AND its children the same way
+ * tests/lib/budget-rollover.test.ts's own "child rollup" case does.
+ */
+describe('categoryHistoryAction — F-06: the six-month spend/limit strip', () => {
+  function setupWithSpend() {
+    const base = setup();
+    const joint = insertTestAccount(base.db, { name: 'Joint Chequing' });
+    const spend = (over: { categoryId: number; amountCents: number; date: string; attributedUserId?: number | null }) => {
+      base.db.run(sql`
+        insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, category_id, categorization_source, is_transfer, attributed_user_id, created_by, created_at, updated_at)
+        values (${joint}, ${over.date}, 'X', 'X', ${over.amountCents}, ${over.categoryId}, 'manual', 0, ${over.attributedUserId ?? null}, ${base.alice}, ${nowIso()}, ${nowIso()})
+      `);
+    };
+    return { ...base, joint, spend };
+  }
+
+  it("returns exactly the six months ending at the requested month, in order, with resolveBudget's own (base, not rollover-adjusted) limit", async () => {
+    const { groceries } = setupWithSpend();
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2025-10', amountCents: 20000 });
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-02', amountCents: 25000 });
+
+    const result = await categoryHistoryAction({ scope: 'household', userId: null, month: '2026-03', categoryId: groceries });
+    if (!('months' in result)) throw new Error(`expected months, got error: ${result.error}`);
+    expect(result.months.map((m) => m.month)).toEqual(['2025-10', '2025-11', '2025-12', '2026-01', '2026-02', '2026-03']);
+    expect(result.months.map((m) => m.limitCents)).toEqual([20000, 20000, 20000, 20000, 25000, 25000]);
+  });
+
+  it("sums a parent's own spend plus its children's, archived child included -- a month with real spend must stay visible even once the category carrying it is archived (must not reintroduce the C-01/C-05 bug budgetProgress fixed in v1.30.0)", async () => {
+    const { db, sqlite, spend } = setupWithSpend();
+    const food = categoryIdByName(db, 'Food');
+    const groceriesId = categoryIdByName(db, 'Groceries');
+    const coffee = categoryIdByName(db, 'Coffee');
+    spend({ categoryId: food, amountCents: -2000, date: '2026-03-05' });
+    spend({ categoryId: groceriesId, amountCents: -3000, date: '2026-03-06' });
+    spend({ categoryId: coffee, amountCents: -1000, date: '2026-03-07' });
+    // Archived AFTER the spend, exactly like the rollover test this mirrors.
+    sqlite.prepare('update categories set is_archived = 1 where id = ?').run(coffee);
+
+    const result = await categoryHistoryAction({ scope: 'household', userId: null, month: '2026-03', categoryId: food });
+    if (!('months' in result)) throw new Error(`expected months, got error: ${result.error}`);
+    expect(result.months.find((m) => m.month === '2026-03')?.spentCents).toBe(6000);
+  });
+
+  it('a self-scoped member asking for scope "household" gets an empty strip, not the real household figures', async () => {
+    const { alice, groceries } = setupWithSpend();
+    setUserVisibility(alice, 'self');
+    currentUser = { id: alice, name: 'Alice', username: 'alice', role: 'member', visibility: 'self' };
+    const result = await categoryHistoryAction({ scope: 'household', userId: null, month: '2026-03', categoryId: groceries });
+    if (!('months' in result)) throw new Error(`expected months, got error: ${result.error}`);
+    expect(result.months).toEqual([]);
+  });
+
+  it("a self-scoped member asking for another member's personal scope gets an empty strip -- never that member's real figures, and never the requester's own figures relabelled as the answer", async () => {
+    const { alice, bob, groceries, spend } = setupWithSpend();
+    spend({ categoryId: groceries, amountCents: -1200, date: '2026-03-10', attributedUserId: alice });
+    spend({ categoryId: groceries, amountCents: -9900, date: '2026-03-11', attributedUserId: bob });
+    setUserVisibility(alice, 'self');
+    currentUser = { id: alice, name: 'Alice', username: 'alice', role: 'member', visibility: 'self' };
+    const result = await categoryHistoryAction({ scope: 'personal', userId: bob, month: '2026-03', categoryId: groceries });
+    if (!('months' in result)) throw new Error(`expected months, got error: ${result.error}`);
+    expect(result.months).toEqual([]);
+  });
+
+  it('a self-scoped member asking for their OWN personal scope is unaffected', async () => {
+    const { alice, groceries, spend } = setupWithSpend();
+    spend({ categoryId: groceries, amountCents: -1200, date: '2026-03-10', attributedUserId: alice });
+    setUserVisibility(alice, 'self');
+    currentUser = { id: alice, name: 'Alice', username: 'alice', role: 'member', visibility: 'self' };
+    const result = await categoryHistoryAction({ scope: 'personal', userId: alice, month: '2026-03', categoryId: groceries });
+    if (!('months' in result)) throw new Error(`expected months, got error: ${result.error}`);
+    expect(result.months.find((m) => m.month === '2026-03')?.spentCents).toBe(1200);
+  });
+
+  it('a household-visibility member is unaffected -- both scopes still resolve to real figures', async () => {
+    const { alice, bob, groceries, spend } = setupWithSpend();
+    spend({ categoryId: groceries, amountCents: -1200, date: '2026-03-10', attributedUserId: alice });
+    spend({ categoryId: groceries, amountCents: -9900, date: '2026-03-11', attributedUserId: bob });
+    currentUser = { id: alice, name: 'Alice', username: 'alice', role: 'member', visibility: 'household' };
+
+    const household = await categoryHistoryAction({ scope: 'household', userId: null, month: '2026-03', categoryId: groceries });
+    if (!('months' in household)) throw new Error(`expected months, got error: ${household.error}`);
+    expect(household.months.find((m) => m.month === '2026-03')?.spentCents).toBe(11100);
+
+    const personal = await categoryHistoryAction({ scope: 'personal', userId: bob, month: '2026-03', categoryId: groceries });
+    if (!('months' in personal)) throw new Error(`expected months, got error: ${personal.error}`);
+    expect(personal.months.find((m) => m.month === '2026-03')?.spentCents).toBe(9900);
+  });
+
+  it('an admin is unaffected, including admin + visibility: self (micro-ruling M1)', async () => {
+    const { admin, bob, groceries, spend } = setupWithSpend();
+    spend({ categoryId: groceries, amountCents: -9900, date: '2026-03-11', attributedUserId: bob });
+    currentUser = { id: admin, name: 'Admin', username: 'admin', role: 'admin', visibility: 'self' };
+    const result = await categoryHistoryAction({ scope: 'personal', userId: bob, month: '2026-03', categoryId: groceries });
+    if (!('months' in result)) throw new Error(`expected months, got error: ${result.error}`);
+    expect(result.months.find((m) => m.month === '2026-03')?.spentCents).toBe(9900);
+  });
+
+  it('rejects a cross-origin request before touching the database', async () => {
+    const { groceries } = setupWithSpend();
+    mockHeaders = CROSS_ORIGIN;
+    const result = await categoryHistoryAction({ scope: 'household', userId: null, month: '2026-03', categoryId: groceries });
+    expect('error' in result && result.error).toMatch(/cross-origin/i);
+  });
+
+  it('rejects a malformed month or category id', async () => {
+    const { groceries } = setupWithSpend();
+    const badMonth = await categoryHistoryAction({ scope: 'household', userId: null, month: 'not-a-month', categoryId: groceries });
+    expect('error' in badMonth && badMonth.error).toBeTruthy();
+    const badCategory = await categoryHistoryAction({ scope: 'household', userId: null, month: '2026-03', categoryId: -1 });
+    expect('error' in badCategory && badCategory.error).toBeTruthy();
   });
 });

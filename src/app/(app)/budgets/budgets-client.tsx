@@ -41,6 +41,10 @@ import {
 // reason to follow either one into src/lib/budgets.ts's own @/db/client import. See that file's
 // own doc comment for the rest of the reasoning.
 import { categoryTransactionsAction } from './category-transactions-action';
+// F-06 (2026-09-02 review): a NEW file, same reasoning as category-transactions-action.ts's own
+// doc comment -- imported by a relative specifier so tests/ops/client-bundle.test.ts's walk of
+// this file's @/-qualified value imports never has a reason to follow it into src/lib/budgets.ts.
+import { categoryHistoryAction, type CategoryHistoryMonth } from './category-history-action';
 
 const initial: BudgetActionState = {};
 
@@ -295,6 +299,112 @@ function pillTone(pct: number): PillTone {
 function totalPct(limitCents: number, spentCents: number): number {
   if (limitCents === 0) return spentCents > 0 ? 100 : 0;
   return Math.round((spentCents / limitCents) * 100);
+}
+
+const SHORT_MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/**
+ * '2026-08' -> 'Aug', the F-06 six-month strip's own column head -- deliberately shorter than
+ * dates.ts's monthLabel() ('August 2026'). Six of those side by side on a phone-width card would
+ * either wrap every column or force the strip into horizontal scroll, and the card's own eyebrow
+ * (monthLabel(month), already on screen above it) already names the year, so repeating it six
+ * times below would be pure noise. Same pure-string lookup monthLabel() itself uses, deliberately
+ * not Intl.DateTimeFormat: a month key carries no day or zone, and handing a synthesised Date to a
+ * formatter is exactly how dates.ts's own doc comment says a heading ends up a month off somewhere
+ * east of UTC.
+ */
+function shortMonthLabel(month: string): string {
+  const index = Number(month.slice(5, 7));
+  return SHORT_MONTH_NAMES[index - 1] ?? month;
+}
+
+/**
+ * F-06 (2026-09-02 review): "is Groceries always over, or was August a one-off" -- six months,
+ * spent against limit, an over/under mark, no chart. Fetched on demand the moment the card's own
+ * breakdown/transactions region opens, the identical "smallest query that works" reasoning
+ * CategoryTransactionsPanel documents -- a household that opens one card out of a dozen never
+ * fetches the other eleven months' worth of history.
+ *
+ * Deliberately its own small list, not folded into ChildBreakdownRow or the MetricCard's `bar`
+ * slot: this is the PARENT card's own six-month view of `row.categoryId` alone (rollup-aware via
+ * categorySpendWithRollupSeries, so a parent's strip already folds its children's spend in the
+ * same way its headline does) -- children get no strip of their own, matching the controller's
+ * "one component in a card that already expands", not a row every child renders too.
+ */
+function CategoryHistoryStrip({
+  scope,
+  userId,
+  month,
+  categoryId,
+  categoryName,
+}: {
+  scope: BudgetScope;
+  userId: number | null;
+  month: string;
+  categoryId: number;
+  categoryName: string;
+}) {
+  type StripState =
+    | { status: 'loading' }
+    | { status: 'error'; message: string }
+    | { status: 'loaded'; months: CategoryHistoryMonth[] };
+  const [state, setState] = useState<StripState>({ status: 'loading' });
+
+  useEffect(() => {
+    let cancelled = false;
+    setState({ status: 'loading' });
+    categoryHistoryAction({ scope, userId, month, categoryId })
+      .then((result) => {
+        if (cancelled) return;
+        setState('error' in result ? { status: 'error', message: result.error } : { status: 'loaded', months: result.months });
+      })
+      .catch(() => {
+        if (!cancelled) setState({ status: 'error', message: 'Could not load history. Try again.' });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [scope, userId, month, categoryId]);
+
+  if (state.status === 'loading') {
+    return <p className="px-4 pb-3 text-xs text-muted sm:px-5">Loading six-month history…</p>;
+  }
+  if (state.status === 'error') {
+    return (
+      <p role="alert" className="px-4 pb-3 text-xs font-medium text-negative-soft-fg sm:px-5">
+        {state.message}
+      </p>
+    );
+  }
+  // category-history-action.ts's own doc comment: a self-scoped viewer's request that does not
+  // already name their own personal scope -- never reachable through this card's own props, only
+  // a crafted one -- reads back as an empty array here. Rendering nothing is the right answer for
+  // that case, same as a brand new category with no six months of data behind it yet.
+  if (state.months.length === 0) return null;
+
+  return (
+    <ul
+      aria-label={`${categoryName} spent versus limit, the last six months`}
+      className="grid grid-cols-3 gap-2 px-4 pb-3 sm:grid-cols-6 sm:px-5"
+    >
+      {state.months.map((entry) => {
+        const hasLimit = entry.limitCents !== null;
+        const over = hasLimit && entry.spentCents > (entry.limitCents as number);
+        return (
+          <li key={entry.month} className="rounded-md border border-line px-2 py-1.5 text-center">
+            <p className="text-xs text-subtle">{shortMonthLabel(entry.month)}</p>
+            <p className="text-xs font-semibold text-ink">{formatCents(entry.spentCents)}</p>
+            <p className="text-xs text-muted">{hasLimit ? `of ${formatCents(entry.limitCents as number)}` : 'no limit'}</p>
+            {hasLimit ? (
+              <Pill tone={over ? 'negative' : 'positive'} className="mt-1">
+                {over ? 'Over' : 'Under'}
+              </Pill>
+            ) : null}
+          </li>
+        );
+      })}
+    </ul>
+  );
 }
 
 /**
@@ -611,6 +721,12 @@ function BudgetCategoryCard({
         </button>
       }
     >
+      {/* F-06: the six-month strip lives INSIDE the region "View breakdown"/"View transactions"
+          already opens, never a row every collapsed card renders (controller note) -- gated on
+          isOpen alone, same as CategoryTransactionsPanel below, so a closed card fetches nothing. */}
+      {isOpen ? (
+        <CategoryHistoryStrip scope={scope} userId={userId} month={month} categoryId={row.categoryId} categoryName={row.categoryName} />
+      ) : null}
       {hasChildren ? (
         // Ruling U2/U3, carried over from the table this replaces: a closed breakdown's children
         // stay in the DOM -- hidden via the real HTML attribute, not conditionally unmounted --

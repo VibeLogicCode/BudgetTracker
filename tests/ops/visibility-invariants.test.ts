@@ -90,7 +90,7 @@ const EXEMPT: { file: string; fn: string; why: string }[] = [
   {
     file: 'src/lib/budgets.ts',
     fn: 'categorySpendWithRollupSeries',
-    why: 'internal resolver, not even exported -- investigated for task-3 (S-01) alongside categoryTransactions above. Its only caller is effectiveBudget (this file), itself called only from buildRow inside budgetProgress: the identical viewer-derived scope/userId chain categorySpend\'s own exemption above describes. No page or route calls it directly.',
+    why: "internal resolver, no viewer of its own -- investigated for task-3 (S-01) alongside categoryTransactions above, and exported for F-06 (2026-09-02 review, v1.31.0). Its first caller is still effectiveBudget (this file), itself called only from buildRow inside budgetProgress: the identical viewer-derived scope/userId chain categorySpend's own exemption above describes. F-06 added a second caller, budgets/category-history-action.ts's six-month history strip, which does NOT lean on that chain -- it receives the client's own scope/userId, unvalidated, the same shape categoryTransactionsAction's task-3 bug had. It carries the gate itself, the same 'no viewer, caller narrows' shape HOUSEHOLD_ONLY_AT_PAGE names for budgetProgress: it resolves ownerScope(viewer) first, and returns an EMPTY history (never a rewrite to the viewer's own scope) the moment a self-scoped, non-admin viewer's request does not already name their own personal scope -- so a household figure or another member's never reaches them, mislabelled as their own card or otherwise.",
   },
 ];
 

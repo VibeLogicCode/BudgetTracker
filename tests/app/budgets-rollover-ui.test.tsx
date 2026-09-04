@@ -34,6 +34,14 @@ vi.mock('@/app/(app)/budgets/category-transactions-action', () => ({
   categoryTransactionsAction: vi.fn(async () => ({ rows: [] })),
 }));
 
+// F-06 (2026-09-02 review): same defensive reasoning as category-transactions-action.ts above --
+// every render mounts BudgetCategoryCard, and this file never opens "View breakdown"/"View
+// transactions" (every test here works behind Edit limits instead), but mocking it keeps that
+// true by construction rather than by nobody clicking it yet.
+vi.mock('@/app/(app)/budgets/category-history-action', () => ({
+  categoryHistoryAction: vi.fn(async () => ({ months: [] })),
+}));
+
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();

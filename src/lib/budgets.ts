@@ -275,8 +275,16 @@ function foldRollup(categoryId: number, childIds: number[], spendByCategory: Map
  * would be a query per category per month. Same batch-then-fold-over-the-month-axis shape as
  * debtOverTime in src/lib/loans.ts: two queries (the category tree, and the transactions
  * grouped by month), then a fold over the requested month keys -- no per-month query.
+ *
+ * Exported for F-06 (2026-09-02 review, v1.31.0): budgets/category-history-action.ts is now a
+ * SECOND caller, alongside effectiveBudget, for the budget card's six-month spend strip -- the
+ * same one-query series this function already computed for rollover's lookback is exactly the
+ * per-category, per-month, child-rolled spend that strip needs, so it reuses this rather than
+ * writing the rollup rule a third time. Still takes no viewer, same as budgetProgress
+ * (HOUSEHOLD_ONLY_AT_PAGE, tests/ops/visibility-invariants.test.ts) -- category-history-action.ts
+ * carries the narrowing itself, the way every caller in that list does.
  */
-function categorySpendWithRollupSeries(
+export function categorySpendWithRollupSeries(
   scope: BudgetScope,
   userId: number | null,
   categoryId: number,

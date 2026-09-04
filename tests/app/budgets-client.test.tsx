@@ -28,6 +28,16 @@ vi.mock('@/app/(app)/budgets/category-transactions-action', () => ({
   categoryTransactionsAction: vi.fn(async () => ({ rows: [] })),
 }));
 
+// F-06 (2026-09-02 review): the six-month history strip's own fetch-on-open module, mocked the
+// same defensive way as category-transactions-action.ts above -- every card mounts, and an
+// unmocked module would otherwise reach requireUser() and the real database the moment a test
+// opens "View breakdown"/"View transactions". Default resolves to no months, matched by the
+// component's own "nothing to show" branch, so a test that does not care about the strip sees
+// nothing extra; the describe block below overrides this per test to assert on the real render.
+vi.mock('@/app/(app)/budgets/category-history-action', () => ({
+  categoryHistoryAction: vi.fn(async () => ({ months: [] })),
+}));
+
 afterEach(() => cleanup());
 
 function makeRow(overrides: Partial<BudgetRow> = {}): BudgetRow {
@@ -1154,5 +1164,97 @@ describe('v1.18.0 Lane 2 item 3: the zero-state header replaces the three-zero s
       />,
     );
     expect(queryByText(/No budgets set for/)).toBeNull();
+  });
+});
+
+/**
+ * F-06 (2026-09-02 review): the six-month spent-versus-limit strip, inside the region "View
+ * breakdown"/"View transactions" already opens. A leaf category (makeRow's default has no
+ * children) is the simplest card to prove this against -- opening it flips `isOpen` the same way
+ * a parent's "View breakdown" does, and CategoryHistoryStrip does not care which branch put it
+ * there.
+ */
+describe('F-06: the six-month history strip', () => {
+  it('is not fetched at all before the card is opened', async () => {
+    const { categoryHistoryAction } = await import('@/app/(app)/budgets/category-history-action');
+    vi.mocked(categoryHistoryAction).mockClear();
+    renderBudgets(null);
+    expect(categoryHistoryAction).not.toHaveBeenCalled();
+  });
+
+  it('fetches with the card\'s own scope/userId/month/categoryId once opened, and renders month, spend, limit and an over/under mark', async () => {
+    const { categoryHistoryAction } = await import('@/app/(app)/budgets/category-history-action');
+    vi.mocked(categoryHistoryAction).mockResolvedValueOnce({
+      months: [
+        { month: '2025-10', spentCents: 4000, limitCents: 20000 },
+        { month: '2025-11', spentCents: 21000, limitCents: 20000 },
+        { month: '2025-12', spentCents: 15000, limitCents: 20000 },
+        { month: '2026-01', spentCents: 0, limitCents: 20000 },
+        { month: '2026-02', spentCents: 22500, limitCents: null },
+        { month: '2026-03', spentCents: 5000, limitCents: 20000 },
+      ],
+    });
+
+    const { getByRole, findByText } = renderBudgets(null);
+    fireEvent.click(getByRole('button', { name: 'View transactions' }));
+
+    expect(categoryHistoryAction).toHaveBeenCalledWith({
+      scope: 'household',
+      userId: null,
+      month: '2026-03',
+      categoryId: 1,
+    });
+
+    // A month within limit shows "Under"; a month that overspent shows "Over"; a month with no
+    // resolved limit shows neither -- computed straight off the two figures, not restated by the
+    // action, so this doubles as a check on the component's own over/under arithmetic.
+    expect(await findByText('Nov')).toBeTruthy();
+    expect(getByRole('list', { name: 'Groceries spent versus limit, the last six months' })).toBeTruthy();
+    const overCell = getByRole('list', { name: /Groceries spent versus limit/ }).querySelector('li:nth-child(2)') as HTMLElement;
+    expect(within(overCell).getByText('$210.00')).toBeTruthy();
+    expect(within(overCell).getByText('Over')).toBeTruthy();
+    const underCell = getByRole('list', { name: /Groceries spent versus limit/ }).querySelector('li:nth-child(1)') as HTMLElement;
+    expect(within(underCell).getByText('Under')).toBeTruthy();
+    const noLimitCell = getByRole('list', { name: /Groceries spent versus limit/ }).querySelector('li:nth-child(5)') as HTMLElement;
+    expect(within(noLimitCell).getByText('no limit')).toBeTruthy();
+    expect(within(noLimitCell).queryByText('Over')).toBeNull();
+    expect(within(noLimitCell).queryByText('Under')).toBeNull();
+  });
+
+  it('renders nothing extra when the action reports an empty history (the self-scoped-narrowing case, or a brand new category)', async () => {
+    const { categoryHistoryAction } = await import('@/app/(app)/budgets/category-history-action');
+    vi.mocked(categoryHistoryAction).mockResolvedValueOnce({ months: [] });
+
+    const { getByRole, queryByRole } = renderBudgets(null);
+    fireEvent.click(getByRole('button', { name: 'View transactions' }));
+    await waitFor(() => expect(categoryHistoryAction).toHaveBeenCalled());
+    expect(queryByRole('list', { name: /spent versus limit/ })).toBeNull();
+  });
+
+  it('surfaces a load failure inline rather than silently showing nothing', async () => {
+    const { categoryHistoryAction } = await import('@/app/(app)/budgets/category-history-action');
+    vi.mocked(categoryHistoryAction).mockResolvedValueOnce({ error: 'Could not load history. Try again.' });
+
+    const { getByRole, findByRole } = renderBudgets(null);
+    fireEvent.click(getByRole('button', { name: 'View transactions' }));
+    expect((await findByRole('alert')).textContent).toContain('Could not load history. Try again.');
+  });
+
+  it("a parent's 'View breakdown' fetches the PARENT's own category id, not one of its children's", async () => {
+    const { categoryHistoryAction } = await import('@/app/(app)/budgets/category-history-action');
+    vi.mocked(categoryHistoryAction).mockResolvedValueOnce({ months: [] });
+
+    const { getByRole } = render(
+      <BudgetsClient
+        month="2026-03"
+        currentUserId={1}
+        household={[housingGroupRow()]}
+        householdTotals={{ budgetedLimitCents: 200000, budgetedSpentCents: 150000, totalSpentCents: 150000 }}
+        personal={[]}
+      />,
+    );
+    fireEvent.click(getByRole('button', { name: 'View breakdown' }));
+    await waitFor(() => expect(categoryHistoryAction).toHaveBeenCalled());
+    expect(categoryHistoryAction).toHaveBeenCalledWith({ scope: 'household', userId: null, month: '2026-03', categoryId: 10 });
   });
 });
