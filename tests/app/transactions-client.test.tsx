@@ -74,6 +74,21 @@ function openRowMenu(name: string) {
   fireEvent.click(rowScope().getByRole('button', { name: new RegExp(`^${escaped}`) }));
 }
 
+/**
+ * F-02 (v1.31.0). TransactionPage.outCents/inCents are now required fields, so every hand-built
+ * fixture in this file needs a value for them -- derived from the rows it is handed rather than a
+ * placeholder 0, so a footer assertion added later can trust a fixture it did not itself write.
+ */
+function sumSigned(rows: TransactionRow[]): { outCents: number; inCents: number } {
+  let outCents = 0;
+  let inCents = 0;
+  for (const row of rows) {
+    if (row.amountCents < 0) outCents += row.amountCents;
+    else if (row.amountCents > 0) inCents += row.amountCents;
+  }
+  return { outCents, inCents };
+}
+
 function pageWithRow(overrides: Partial<TransactionRow> = {}): TransactionPage {
   const row: TransactionRow = {
     id: 1,
@@ -96,7 +111,7 @@ function pageWithRow(overrides: Partial<TransactionRow> = {}): TransactionPage {
     importId: null,
     ...overrides,
   };
-  return { total: 1, page: 1, pageSize: 50, pageCount: 1, rows: [row] };
+  return { total: 1, page: 1, pageSize: 50, pageCount: 1, rows: [row], ...sumSigned([row]) };
 }
 
 describe('TransactionsClient — archived-category silent-clear hazard', () => {
@@ -497,7 +512,7 @@ describe('Split editor (v1.7.0 Task 4)', () => {
   function twoRowPage(): TransactionPage {
     const a = pageWithRow({ id: 1, amountCents: -500 }).rows[0];
     const b = pageWithRow({ id: 2, amountCents: -700 }).rows[0];
-    return { total: 2, page: 1, pageSize: 50, pageCount: 1, rows: [a, b] };
+    return { total: 2, page: 1, pageSize: 50, pageCount: 1, rows: [a, b], ...sumSigned([a, b]) };
   }
 
   it('shows a "Split · N parts" badge instead of the category select for a split row', () => {
@@ -1351,16 +1366,11 @@ describe('v1.13.0 ruling R2: a self-scoped viewer never sees the person filter p
 
 describe('TransactionsClient — two identical charges are tellable apart (item M)', () => {
   it('puts the row date and amount in the kebab name', () => {
-    const page: TransactionPage = {
-      total: 2,
-      page: 1,
-      pageSize: 50,
-      pageCount: 1,
-      rows: [
-        pageWithRow({ id: 1, date: '2026-08-03', amountCents: -412 }).rows[0],
-        pageWithRow({ id: 2, date: '2026-08-03', amountCents: -1099 }).rows[0],
-      ],
-    };
+    const rows = [
+      pageWithRow({ id: 1, date: '2026-08-03', amountCents: -412 }).rows[0],
+      pageWithRow({ id: 2, date: '2026-08-03', amountCents: -1099 }).rows[0],
+    ];
+    const page: TransactionPage = { total: 2, page: 1, pageSize: 50, pageCount: 1, rows, ...sumSigned(rows) };
     render(<TransactionsClient page={page} accounts={[]} categories={[]} people={[]} today="2026-08-16" />);
     // Sighted users disambiguate by position, amount and date; none of that was in the name.
     // rowScope(): outside review mode this page also carries the mobile card's own kebab for
@@ -1429,18 +1439,13 @@ describe('Assign to new loan — Addendum A', () => {
     today: '2026-03-02',
   };
   const transferOnlyProps = { ...baseProps, page: pageWithRow({ isTransfer: true }) };
+  const twoRowRows = [
+    pageWithRow({ id: 1 }).rows[0],
+    pageWithRow({ id: 2, rawDescription: 'SECOND ROW', normalizedMerchant: 'SECOND ROW' }).rows[0],
+  ];
   const twoRowProps = {
     ...baseProps,
-    page: {
-      total: 2,
-      page: 1,
-      pageSize: 50,
-      pageCount: 1,
-      rows: [
-        pageWithRow({ id: 1 }).rows[0],
-        pageWithRow({ id: 2, rawDescription: 'SECOND ROW', normalizedMerchant: 'SECOND ROW' }).rows[0],
-      ],
-    },
+    page: { total: 2, page: 1, pageSize: 50, pageCount: 1, rows: twoRowRows, ...sumSigned(twoRowRows) },
   };
 
   it('is offered on a normal row even when the household has no loans yet', () => {
@@ -1563,17 +1568,12 @@ describe('Assign to new loan — a refusal keeps the editor open (review round)'
 });
 
 describe('Assign to new loan — create result priority (review round)', () => {
+  const priorityRows = [
+    pageWithRow({ id: 1 }).rows[0],
+    pageWithRow({ id: 2, rawDescription: 'SECOND ROW', normalizedMerchant: 'SECOND ROW' }).rows[0],
+  ];
   const twoRowProps = {
-    page: {
-      total: 2,
-      page: 1,
-      pageSize: 50,
-      pageCount: 1,
-      rows: [
-        pageWithRow({ id: 1 }).rows[0],
-        pageWithRow({ id: 2, rawDescription: 'SECOND ROW', normalizedMerchant: 'SECOND ROW' }).rows[0],
-      ],
-    },
+    page: { total: 2, page: 1, pageSize: 50, pageCount: 1, rows: priorityRows, ...sumSigned(priorityRows) },
     accounts: [{ id: 1, name: 'Joint Chequing' }],
     categories: [],
     people: [],
@@ -1776,7 +1776,7 @@ describe('Review mode (ruling R5): the card list replaces the table', () => {
   });
 
   it('an empty queue shows the review empty state with its two links, not the table empty state', () => {
-    const empty: TransactionPage = { total: 0, page: 1, pageSize: 50, pageCount: 1, rows: [] };
+    const empty: TransactionPage = { total: 0, page: 1, pageSize: 50, pageCount: 1, rows: [], outCents: 0, inCents: 0 };
     const { container } = render(
       <TransactionsClient page={empty} accounts={[]} categories={categories} people={[]} today="2026-08-16" reviewMode />,
     );
@@ -2547,9 +2547,9 @@ describe('Owner report (item 3): the search field has no visible label but keeps
     render(
       <TransactionsClient page={pageWithRow()} accounts={[]} categories={[]} people={[]} today="2026-03-02" />,
     );
-    const input = screen.getByRole('textbox', { name: 'Search by merchant name or description' }) as HTMLInputElement;
+    const input = screen.getByRole('textbox', { name: 'Search by merchant name, description, or an amount' }) as HTMLInputElement;
     expect(input.name).toBe('q');
-    expect(input.getAttribute('placeholder')).toBe('Search by merchant name or description');
+    expect(input.getAttribute('placeholder')).toBe('Search by merchant name, description, or an amount');
     // The old visible label text is gone outright, not merely restyled -- ruling: a placeholder
     // this specific is not a second copy of it.
     expect(screen.queryByText('Search', { selector: 'span' })).toBeNull();
@@ -2559,7 +2559,7 @@ describe('Owner report (item 3): the search field has no visible label but keeps
     render(
       <TransactionsClient page={pageWithRow()} accounts={[]} categories={[]} people={[]} today="2026-03-02" />,
     );
-    const input = screen.getByRole('textbox', { name: 'Search by merchant name or description' });
+    const input = screen.getByRole('textbox', { name: 'Search by merchant name, description, or an amount' });
     const filterButton = screen.getByRole('button', { name: 'Filters' });
     // Same immediate row container -- the fix for "the icon floats above centre" is that both
     // controls are direct children of the one flex row, not one of them nested inside an extra
@@ -2567,6 +2567,40 @@ describe('Owner report (item 3): the search field has no visible label but keeps
     expect(input.parentElement).toBe(filterButton.parentElement);
     expect(input.className).toContain('min-h-11');
     expect(filterButton.className).toContain('h-11');
+  });
+});
+
+/**
+ * F-02 (v1.31.0, owner's question: "how much went on the Visa this month?"). The flat list's own
+ * footer, on both render paths (the mobile card list and the desktop table share one `page` prop
+ * but render it in two DOM subtrees -- transactionCard's own docblock explains why) and in review
+ * mode's single card-list tree.
+ *
+ * Each fixture below sets `outCents`/`inCents` to values that DISAGREE with what a client-side
+ * re-sum of `page.rows` would produce (the single row is -$5.00), so a passing assertion proves
+ * the component prints what the server sent rather than recomputing its own total.
+ */
+describe('F-02: a total on every filtered Transactions view', () => {
+  it('prints the two-figure total on the mobile card footer and the desktop table footer alike', () => {
+    const page = { ...pageWithRow(), outCents: -481230, inCents: 61200 };
+    const { container } = render(<TransactionsClient page={page} accounts={[]} categories={[]} people={[]} today="2026-03-02" />);
+    // Both trees render at once (one hidden by CSS, not by React), so the text appears twice.
+    const matches = (container.textContent ?? '').match(/\$4,812\.30 out · \$612\.00 in/g) ?? [];
+    expect(matches).toHaveLength(2);
+  });
+
+  it('prints the two-figure total on the review queue footer too', () => {
+    const page = { ...pageWithRow(), outCents: -481230, inCents: 61200 };
+    render(<TransactionsClient page={page} accounts={[]} categories={[]} people={[]} today="2026-03-02" reviewMode />);
+    expect(screen.getByText(/\$4,812\.30 out · \$612\.00 in/)).toBeTruthy();
+  });
+
+  it('never nets the two figures into one -- money out and money in both print even when one is zero', () => {
+    const page = { ...pageWithRow(), outCents: 0, inCents: 90000 };
+    render(<TransactionsClient page={page} accounts={[]} categories={[]} people={[]} today="2026-03-02" />);
+    // A netted figure would print "$900.00 in" alone (or worse, "$900.00" unlabeled) -- both
+    // words are required so a `transfers=all` reader can tell a payment IN from spending OUT.
+    expect(screen.getAllByText(/\$0\.00 out · \$900\.00 in/).length).toBeGreaterThan(0);
   });
 });
 
@@ -2683,7 +2717,7 @@ describe('Date grouping (item 3): rows group under a day header', () => {
     const a = pageWithRow({ id: 1, date: '2026-08-29' }).rows[0];
     const b = pageWithRow({ id: 2, date: '2026-08-29', rawDescription: 'SECOND', normalizedMerchant: 'SECOND' }).rows[0];
     const c = pageWithRow({ id: 3, date: '2026-08-28', rawDescription: 'THIRD', normalizedMerchant: 'THIRD' }).rows[0];
-    return { total: 3, page: 1, pageSize: 50, pageCount: 1, rows: [a, b, c] };
+    return { total: 3, page: 1, pageSize: 50, pageCount: 1, rows: [a, b, c], ...sumSigned([a, b, c]) };
   }
 
   it('the table prints one day header per date, not one per row', () => {
@@ -2809,7 +2843,7 @@ describe('Review mode: confirm-progress bar and Accept all suggestions (item 5)'
         }).rows[0],
       );
     }
-    return { total, page: 1, pageSize: 50, pageCount: 1, rows };
+    return { total, page: 1, pageSize: 50, pageCount: 1, rows, ...sumSigned(rows) };
   }
 
   it('reads 0/M confirmed on first render, M being the filtered total', () => {
@@ -3154,29 +3188,24 @@ describe('v1.26.0 Lane 1: bank text (owner report -- "shows amazon i dont know w
   });
 
   function bankTextFixture(): TransactionPage {
-    return {
-      total: 3,
-      page: 1,
-      pageSize: 50,
-      pageCount: 1,
-      rows: [
-        pageWithRow({
-          id: 1,
-          displayDescription: 'Amazon',
-          displaySource: 'rename',
-          rawDescription: 'AMZN MKTP CA*5H1CF8BE0',
-          normalizedMerchant: 'AMAZON',
-        }).rows[0],
-        pageWithRow({
-          id: 2,
-          displayDescription: 'Coffee run',
-          displaySource: 'manual',
-          rawDescription: 'TIM HORTONS #4021',
-          normalizedMerchant: 'TIM HORTONS',
-        }).rows[0],
-        pageWithRow({ id: 3, rawDescription: 'GROCERY MART', normalizedMerchant: 'GROCERY MART' }).rows[0],
-      ],
-    };
+    const rows = [
+      pageWithRow({
+        id: 1,
+        displayDescription: 'Amazon',
+        displaySource: 'rename',
+        rawDescription: 'AMZN MKTP CA*5H1CF8BE0',
+        normalizedMerchant: 'AMAZON',
+      }).rows[0],
+      pageWithRow({
+        id: 2,
+        displayDescription: 'Coffee run',
+        displaySource: 'manual',
+        rawDescription: 'TIM HORTONS #4021',
+        normalizedMerchant: 'TIM HORTONS',
+      }).rows[0],
+      pageWithRow({ id: 3, rawDescription: 'GROCERY MART', normalizedMerchant: 'GROCERY MART' }).rows[0],
+    ];
+    return { total: 3, page: 1, pageSize: 50, pageCount: 1, rows, ...sumSigned(rows) };
   }
 
   it('?bank=1 reveals bank text for every renamed row in the table; absent, none; a junk value behaves as absent', () => {
@@ -3423,6 +3452,9 @@ function groupPage(overrides: Partial<CategoryGroupPage> = {}): CategoryGroupPag
     groupCount: groups.length,
     totalCount: 41,
     totalCents: -181_00,
+    // F-02: both groups are pure spend in this fixture, so outCents mirrors totalCents.
+    outCents: -181_00,
+    inCents: 0,
     ...overrides,
   };
 }
@@ -3527,6 +3559,18 @@ describe('v1.26.0 Lane 3a item 2: the grouped-by-category view', () => {
     );
     expect(container.querySelector('table')).toBeTruthy();
     expect(container.querySelector('ul[data-category-groups]')).toBeNull();
+  });
+
+  /**
+   * F-02 (v1.31.0). The grouped view's own footer, not just the flat list's -- and asserted
+   * against a `outCents`/`inCents` pair that DISAGREES with what a client-side re-sum of the
+   * rendered groups would produce, so this cannot pass by accident: it proves the component
+   * prints the numbers the server sent rather than recomputing its own (wrong, non-split-aware)
+   * total from `groupPage.groups`.
+   */
+  it('F-02: prints the two-figure total the server computed, not a client-side re-sum', () => {
+    const { container } = renderGrouped({ outCents: -481230, inCents: 61200 });
+    expect(container.textContent).toContain('$4,812.30 out · $612.00 in');
   });
 });
 

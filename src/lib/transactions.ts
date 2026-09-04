@@ -17,6 +17,9 @@ import { ruleOwnedError } from '@/lib/categorize/rules';
 import { nowIso } from '@/lib/clock';
 import { isIsoDate } from '@/lib/dates';
 import { applyPaymentMatchers, assignTransactionToLoan } from '@/lib/loans';
+// F-07 (v1.31.0). See buildWhere's search clause below for why this is the ONLY new import the
+// feature needs -- the split editor already proved this parser handles a person's typed amount.
+import { parseAmountToCents } from '@/lib/money';
 import { EFFECTIVE_AMOUNT, EFFECTIVE_CATEGORY } from '@/lib/splits';
 
 /**
@@ -220,6 +223,29 @@ export interface TransactionPage {
   page: number;
   pageSize: number;
   pageCount: number;
+  /**
+   * F-02 (v1.31.0, owner's question: "how much went on the Visa this month?"). Signed sums over
+   * the WHOLE filtered set (every page, not just `rows`), same `where` as `total` -- see
+   * listTransactions for why that is one query, not two.
+   *
+   * `outCents` is spending: the sum of every NEGATIVE `amountCents` row, so it is itself negative
+   * (or zero). `inCents` is the sum of every POSITIVE row. Two figures, never netted into one,
+   * because a `transferView: 'all'` view of a credit card includes the payment TO the card as a
+   * positive row -- netting it against the card's own spending would make that payment vanish
+   * into a smaller "spent" number instead of showing up as the money it plainly is. See
+   * groupTransactionsByCategory's own doc comment for why this pair is NOT `SPEND_ROW_WHERE`
+   * (src/lib/spend-where.ts): that module answers "does this count as spend at all" for budgets
+   * and reports, a question this filtered view deliberately does not ask -- a `transfers=all`
+   * reader wants to see every row the list shows summed, not a curated subset of them.
+   *
+   * NOT split-aware -- the parent row's own `amountCents`, the same column the flat list itself
+   * displays and the same one `total`'s `where` already runs over. `groupTransactionsByCategory`'s
+   * `outCents`/`inCents` are the split-aware pair for the surface that decomposes a transaction
+   * across categories; this is the flat list's own total, on purpose (see that function's doc
+   * comment for the fuller reasoning it already carries about the two surfaces).
+   */
+  outCents: number;
+  inCents: number;
 }
 
 export const manualTransactionSchema = z.object({
@@ -352,7 +378,28 @@ function buildWhere(filter: TransactionFilter, viewer: Viewer): SQL | undefined 
   if (filter.to) clauses.push(lte(transactions.date, filter.to));
 
   if (filter.search && filter.search.trim().length > 0) {
-    const needle = `%${escapeLikeNeedle(filter.search.trim().toUpperCase())}%`;
+    const trimmedSearch = filter.search.trim();
+    const needle = `%${escapeLikeNeedle(trimmedSearch.toUpperCase())}%`;
+    /**
+     * F-07 (v1.31.0, owner's question: "Where is that $47.13 charge the bank called about?"). The
+     * bank gives a person an amount, not a name, and the search box only ever matched text -- so
+     * one more OR arm, added only when the trimmed query itself parses as money.
+     *
+     * `parseAmountToCents` (src/lib/money.ts) is reused rather than re-derived: it is already the
+     * app's one reader of "money a person typed" (the split editor's own amount fields), so a typed
+     * "$47.13", "47.13" or "(47.13)" all resolve to the same 4713 this reaches for. `abs()` on the
+     * column, not a signed match, because a person calling about a charge does not know or care
+     * whether the ledger stores it negative -- the bank told them a magnitude, and $47.13 flags both
+     * a $47.13 purchase and, on the rare chance one exists, a $47.13 refund.
+     *
+     * Rejected: a SEPARATE amount field/URL parameter alongside `q`. The controller notes are
+     * explicit that this needs no new control -- sort-by-amount (v1.26.0) already exists for
+     * someone scanning by eye, and a second box would just be a second place to type the same
+     * number the search box already accepts every other kind of query in. `parseAmountToCents`
+     * returning null for plain text (e.g. "COSTCO") is exactly what keeps this arm silent for
+     * every search that was never about an amount, with no extra state to keep in sync.
+     */
+    const amountCents = parseAmountToCents(trimmedSearch);
     const clause = or(
       sql`upper(${transactions.rawDescription}) like ${needle} escape ${LIKE_ESCAPE}`,
       sql`upper(${transactions.normalizedMerchant}) like ${needle} escape ${LIKE_ESCAPE}`,
@@ -363,6 +410,8 @@ function buildWhere(filter: TransactionFilter, viewer: Viewer): SQL | undefined 
       // duplicate rather than a fix. No FTS5 index: ruling R13 says LIKE, and the warranty side's
       // index exists because it also covers OCR'd receipt text, which has no analogue here.
       sql`upper(coalesce(${transactions.notes}, '')) like ${needle} escape ${LIKE_ESCAPE}`,
+      // or() drops `undefined` arms silently (drizzle-orm), so a non-money query adds nothing here.
+      amountCents === null ? undefined : sql`abs(${transactions.amountCents}) = ${amountCents}`,
     );
     if (clause) clauses.push(clause);
   }
@@ -454,12 +503,22 @@ export function listTransactions(filter: TransactionFilter, viewer: Viewer): Tra
   const page = Math.max(1, filter.page ?? 1);
   const where = buildWhere(filter, viewer);
 
+  // F-02 (v1.31.0): the count and the two filtered sums ride the SAME query as `where` -- one more
+  // pass over an already-scanned set of rows, not a second query, and (the point of doing it here
+  // rather than in a caller) the identical `where` the row page below runs, so the footer can never
+  // sum a wider or narrower set than the rows it sits under.
   const totalRow = getDb()
-    .select({ c: sql<number>`count(*)` })
+    .select({
+      c: sql<number>`count(*)`,
+      outCents: sql<number>`coalesce(sum(case when ${transactions.amountCents} < 0 then ${transactions.amountCents} else 0 end), 0)`,
+      inCents: sql<number>`coalesce(sum(case when ${transactions.amountCents} > 0 then ${transactions.amountCents} else 0 end), 0)`,
+    })
     .from(transactions)
     .where(where)
     .get();
   const total = totalRow?.c ?? 0;
+  const outCents = totalRow?.outCents ?? 0;
+  const inCents = totalRow?.inCents ?? 0;
 
   const query = baseQuery();
   // v1.26.0 Lane 2 item 1: the order moved into orderByFor (above), which returns the identical
@@ -471,7 +530,7 @@ export function listTransactions(filter: TransactionFilter, viewer: Viewer): Tra
     .offset((page - 1) * pageSize)
     .all();
 
-  return { rows, total, page, pageSize, pageCount: Math.max(1, Math.ceil(total / pageSize)) };
+  return { rows, total, page, pageSize, pageCount: Math.max(1, Math.ceil(total / pageSize)), outCents, inCents };
 }
 
 /** v1.26.0 Lane 2 item 3. One category cluster within a filtered set. See CategoryGroupPage. */
@@ -519,6 +578,23 @@ export interface CategoryGroupPage {
    * categories moves money between clusters without creating or destroying any.
    */
   totalCents: number;
+  /**
+   * F-02 (v1.31.0). The split-aware pair of TransactionPage.outCents/inCents -- see that field's
+   * own doc comment for why the two figures are never netted into one. `totalCents` above already
+   * exists and IS split-aware (its own doc comment), but it is a net; recovering "how much went
+   * out" from a net figure alone is impossible the moment a `transfers: 'all'` view mixes spending
+   * with an incoming card payment, which is the exact case this pair exists to keep visible.
+   *
+   * Deliberately NOT `groups.reduce` over each cluster's own `totalCents`, bucketed by that
+   * cluster's sign. A single category can hold both a purchase and a refund (a return filed to the
+   * same category it was bought under), and a cluster's own net could land positive while still
+   * containing real spending -- bucketing at the CLUSTER level would silently fold that spending
+   * into "in". These are summed the same way TransactionPage's pair is: bucketed by the SIGN OF
+   * EACH ROW (here, each split PART, via EFFECTIVE_AMOUNT) before summing, which is the only
+   * bucketing that cannot disagree with what a person would get by tallying the list by hand.
+   */
+  outCents: number;
+  inCents: number;
 }
 
 /**
@@ -626,6 +702,21 @@ export function groupTransactionsByCategory(
     .where(where)
     .get();
 
+  // F-02 (v1.31.0). CategoryGroupRow.outCents/inCents's own doc comment argues why this cannot be
+  // `groups.reduce` bucketed by each cluster's net -- so it is instead its own query, joined and
+  // bucketed the same way the `rows` query above is (EFFECTIVE_AMOUNT over the transactionSplits
+  // LEFT JOIN), just with no GROUP BY: one pass bucketing every PART by its own sign, over the
+  // identical `where` every other total in this function already shares.
+  const totalsBySignRow = getDb()
+    .select({
+      outCents: sql<number>`coalesce(sum(case when ${EFFECTIVE_AMOUNT} < 0 then ${EFFECTIVE_AMOUNT} else 0 end), 0)`,
+      inCents: sql<number>`coalesce(sum(case when ${EFFECTIVE_AMOUNT} > 0 then ${EFFECTIVE_AMOUNT} else 0 end), 0)`,
+    })
+    .from(transactions)
+    .leftJoin(transactionSplits, eq(transactionSplits.txnId, transactions.id))
+    .where(where)
+    .get();
+
   // v1.21.0 item 2's label, carried here for the same reason reports.ts carries it: a cluster keyed
   // by a PARENT category id is only the money filed DIRECTLY on that parent, never on its children,
   // and printing the parent's bare name next to that figure reads exactly like the parent's total.
@@ -679,6 +770,8 @@ export function groupTransactionsByCategory(
     groupCount,
     totalCount: totalRow?.c ?? 0,
     totalCents: groups.reduce((sum, group) => sum + group.totalCents, 0),
+    outCents: totalsBySignRow?.outCents ?? 0,
+    inCents: totalsBySignRow?.inCents ?? 0,
   };
 }
 

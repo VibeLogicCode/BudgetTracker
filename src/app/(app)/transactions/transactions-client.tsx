@@ -36,7 +36,7 @@ import { RowDialog } from '@/components/ui/RowDialog';
 import { categoryOptionGroups, categoryOptions, type CategoryLike, type CategoryOptionGroup } from '@/lib/category-order';
 import { type ResolvedRange } from '@/lib/date-range';
 import type { LoanLink } from '@/lib/loans';
-import { formatCents, parseAmountToCents, sumCents } from '@/lib/money';
+import { absCents, formatCents, parseAmountToCents, sumCents } from '@/lib/money';
 // F-01 (v1.31.0): the same builder Reports and the dashboard link their figures with. Reaching
 // for it here rather than writing `?q=${encodeURIComponent(...)}` inline is the whole point of
 // the module -- see its docblock on why a second, hand-built definition is the defect shape.
@@ -157,6 +157,37 @@ function formatDayHeader(date: string): string {
  *  previous element, never a full grouping pass that would have to preserve that same order back. */
 function startsNewDay(rows: TransactionRow[], index: number): boolean {
   return index === 0 || rows[index - 1].date !== rows[index].date;
+}
+
+/**
+ * F-02 (v1.31.0, owner's question: "how much went on the Visa this month?"). The "N transactions"
+ * text every footer on this page already showed answered a count, never a sum -- this appends the
+ * sum, as TWO figures rather than one net.
+ *
+ * `absCents` on both: `outCents` arrives negative (it is a sum of negative rows) and `inCents`
+ * arrives non-negative, so printing them raw would read "-$4,812.30 out", a double negative no
+ * plain-language footer should carry -- "out"/"in" already say the direction, the same way `Money`
+ * itself only adds colour, never a redundant sign, when a caller already states the direction in
+ * words.
+ *
+ * Never netted into one figure. See TransactionPage.outCents/inCents's own doc comment
+ * (src/lib/transactions.ts) for why: a `transfers=all` view of a credit card counts the payment TO
+ * the card as money in, and netting it against the same period's spending would make that payment
+ * vanish into a smaller "spent" number instead of showing up as the money it plainly is.
+ */
+function outInWords(outCents: number, inCents: number): string {
+  return `${formatCents(absCents(outCents))} out · ${formatCents(absCents(inCents))} in`;
+}
+
+/**
+ * F-02. The flat-list pager text, byte-identical across review mode, the mobile card list and the
+ * desktop table -- ONE function so the three copies (each width/mode's own footer, see the render
+ * branches below) cannot drift the way a hand-repeated string invites. `page.total` is already the
+ * WHOLE filtered set's count (listTransactions' own doc comment); `outCents`/`inCents` are that
+ * same set's two sums, computed over the identical `where`.
+ */
+function pageFooterWords(page: TransactionPage): string {
+  return `Page ${page.page} of ${page.pageCount} — ${page.total} transaction${page.total === 1 ? '' : 's'} · ${outInWords(page.outCents, page.inCents)}`;
 }
 
 /** Chip filters (ruling D6) show roughly this many top-level categories before folding the rest
@@ -2098,7 +2129,11 @@ export function TransactionsClient({
         <CardFooter>
           <span className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <span>
-              {`Groups ${firstShown}–${lastShown} of ${groupPage.groupCount} — ${groupPage.totalCount} transaction${groupPage.totalCount === 1 ? '' : 's'} in this view`}
+              {/* F-02: the same two-figure suffix the flat list's own footer carries
+                  (pageFooterWords), over CategoryGroupPage's split-aware outCents/inCents -- see
+                  that field's own doc comment for why this is NOT `groups.reduce` over each
+                  cluster's net. */}
+              {`Groups ${firstShown}–${lastShown} of ${groupPage.groupCount} — ${groupPage.totalCount} transaction${groupPage.totalCount === 1 ? '' : 's'} in this view · ${outInWords(groupPage.outCents, groupPage.inCents)}`}
             </span>
             {/* Real links, not a client-side pager: `?gpage=` is the group page, and filterHref
                 leaves every other active filter alone (its own docblock) while resetting the ROW
@@ -2539,10 +2574,14 @@ export function TransactionsClient({
                 (AUTO_SAVE_CONTROL's idiom elsewhere in this file), so the two sit at the same
                 height on the same row instead of the input being shorter and off-centre.
               */}
+              {/* F-07 (v1.31.0, owner's question: "Where is that $47.13 charge the bank called
+                  about?"). No new control -- this box already learns to recognise money in
+                  buildWhere (src/lib/transactions.ts), so the placeholder gains "or an amount"
+                  rather than a second field beside it. */}
               <input
                 name="q"
-                placeholder="Search by merchant name or description"
-                aria-label="Search by merchant name or description"
+                placeholder="Search by merchant name, description, or an amount"
+                aria-label="Search by merchant name, description, or an amount"
                 className={`${inputClass} min-h-11 min-w-[12rem] flex-1 sm:min-h-0`}
               />
             </div>
@@ -2956,9 +2995,7 @@ export function TransactionsClient({
                 </Fragment>
               ))}
             </ul>
-            <p className="text-sm text-muted">
-              Page {page.page} of {page.pageCount} — {page.total} transactions
-            </p>
+            <p className="text-sm text-muted">{pageFooterWords(page)}</p>
           </>
         )
       ) : page.rows.length === 0 ? (
@@ -2999,9 +3036,7 @@ export function TransactionsClient({
             </Fragment>
           ))}
         </ul>
-        <p className="text-sm text-muted sm:hidden">
-          Page {page.page} of {page.pageCount} — {page.total} transactions
-        </p>
+        <p className="text-sm text-muted sm:hidden">{pageFooterWords(page)}</p>
       <div className="hidden sm:block">
       <Card as="div">
         {/* v1.26.0 Lane 1 item 4 (the owner's actual workflow: auditing fifty rows after an
@@ -3241,9 +3276,7 @@ export function TransactionsClient({
         {/* No "Nothing matches these filters" check here any more -- that empty state is now
             hoisted above this whole card/table split (shared, not duplicated across two hidden
             trees), and this branch only ever renders once page.rows.length > 0 already. */}
-        <CardFooter>
-          Page {page.page} of {page.pageCount} — {page.total} transactions
-        </CardFooter>
+        <CardFooter>{pageFooterWords(page)}</CardFooter>
       </Card>
       </div>
       </>

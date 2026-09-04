@@ -75,6 +75,53 @@ describe('listTransactions', () => {
     expect(listTransactions({ pageSize: 5, page: 3 }, VIEWER).rows).toHaveLength(2);
   });
 
+  /**
+   * F-02 (v1.31.0, owner's question: "how much went on the Visa this month?"). outCents/inCents
+   * sum the WHOLE filtered set -- every page, not just the rows a paginated call returns -- over
+   * the identical `where` `total` already runs.
+   */
+  it('F-02: outCents/inCents sum the whole filtered set, not just the visible page', () => {
+    const { add } = setup();
+    add({ description: 'GROCERY', amountCents: -3000 });
+    add({ description: 'COFFEE', amountCents: -700 });
+    add({ description: 'REFUND', amountCents: 500 });
+    add({ description: 'DEPOSIT', amountCents: 20000 });
+
+    const page = listTransactions({ pageSize: 2, page: 1 }, VIEWER);
+    expect(page.total).toBe(4);
+    expect(page.rows).toHaveLength(2);
+    expect(page.outCents).toBe(-3700);
+    expect(page.inCents).toBe(20500);
+  });
+
+  it("F-02: outCents/inCents obey a self viewer's owner scope, exactly like total does", () => {
+    const { alice, bob, add } = setup();
+    add({ description: 'ALICE SHOP', amountCents: -1000, attributedUserId: alice });
+    add({ description: 'BOB SHOP', amountCents: -5000, attributedUserId: bob });
+
+    const selfViewer: Viewer = { id: alice, role: 'member', visibility: 'self' };
+    const page = listTransactions({}, selfViewer);
+    expect(page.total).toBe(1);
+    expect(page.outCents).toBe(-1000);
+    expect(page.inCents).toBe(0);
+  });
+
+  /**
+   * F-02's whole reason for two figures instead of one net: a `transferView: 'all'` view of a
+   * credit card counts the payment TO the card as money in. Netting it against the same period's
+   * spending would make that payment vanish into a smaller "spent" figure instead of showing up
+   * as the real money it is.
+   */
+  it('F-02: transfers=all counts a card payment as money in, never netted against spending', () => {
+    const { add } = setup();
+    add({ description: 'CARD PAYMENT', amountCents: 9000, isTransfer: true });
+    add({ description: 'GROCERY', amountCents: -3000 });
+
+    const page = listTransactions({ transferView: 'all' }, VIEWER);
+    expect(page.outCents).toBe(-3000);
+    expect(page.inCents).toBe(9000);
+  });
+
   it('joins the account, category and attributed user names', () => {
     const { db, alice, joint, add } = setup();
     const coffee = categoryIdByName(db, 'Coffee');
@@ -195,6 +242,29 @@ describe('listTransactions', () => {
     add({ description: 'AB STORE' });
     // The escape character itself has to be escaped, or "A\" would consume the next char.
     expect(listTransactions({ search: 'A\\B' }, VIEWER).rows.map((r) => r.id)).toEqual([withSlash]);
+  });
+
+  /**
+   * F-07 (v1.31.0, owner's question: "Where is that $47.13 charge the bank called about?"). No
+   * new control, no new URL param -- the search box itself learns to recognise money, matching by
+   * MAGNITUDE (abs(amount_cents)) so a person who only knows what the bank told them finds the
+   * charge whichever sign it happens to be stored as.
+   */
+  it('F-07: a search that parses as money also matches rows by amount, magnitude only', () => {
+    const { add } = setup();
+    const spend = add({ description: 'UNKNOWN MERCHANT', amountCents: -4713 });
+    const refund = add({ description: 'ANOTHER MERCHANT', amountCents: 4713 });
+    add({ description: 'DECOY', amountCents: -1000 });
+
+    expect(listTransactions({ search: '$47.13' }, VIEWER).rows.map((r) => r.id).sort()).toEqual([spend, refund].sort());
+    expect(listTransactions({ search: '47.13' }, VIEWER).rows.map((r) => r.id).sort()).toEqual([spend, refund].sort());
+  });
+
+  it('F-07: text that does not parse as money adds no amount match, and still finds by name', () => {
+    const { add } = setup();
+    const costco = add({ description: 'COSTCO WHOLESALE', amountCents: -4713 });
+    expect(listTransactions({ search: 'costco' }, VIEWER).rows.map((r) => r.id)).toEqual([costco]);
+    expect(listTransactions({ search: 'zzz-not-a-merchant' }, VIEWER).rows).toEqual([]);
   });
 
   it('filters uncategorized and unattributed as first-class values', () => {
@@ -1039,6 +1109,50 @@ describe('groupTransactionsByCategory (v1.26.0 Lane 2 item 3)', () => {
     expect(page.groups.reduce((sum, group) => sum + group.count, 0)).toBe(3);
     // And the list agrees about the size of the set the groups describe.
     expect(listTransactions({}, VIEWER).total).toBe(page.totalCount);
+    // F-02: split-aware, same as totalCents -- every part here is spending, so it all lands in
+    // outCents and inCents stays at zero.
+    expect(page.outCents).toBe(-6500);
+    expect(page.inCents).toBe(0);
+  });
+
+  /**
+   * F-02 (v1.31.0). CategoryGroupPage.outCents/inCents's own doc comment argues these cannot be
+   * derived from `groups.reduce` bucketed by each CLUSTER's net -- this is that argument, proven:
+   * one category holding both a purchase and a refund whose net happens to land positive. Bucketing
+   * by the cluster's own sign would fold the $30 spend into "in"; bucketing by each ROW's own sign
+   * (what this asserts) keeps it as spend.
+   */
+  it("F-02: outCents/inCents are bucketed by each row's own sign, never by a cluster's net", () => {
+    const { db, add } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    add({ description: 'MARKET', amountCents: -3000, categoryId: groceries, source: 'manual' });
+    add({ description: 'MARKET REFUND', amountCents: 5000, categoryId: groceries, source: 'manual' });
+
+    const page = groupTransactionsByCategory({}, VIEWER);
+    const groceriesGroup = page.groups.find((group) => group.categoryName === 'Groceries')!;
+    // The cluster's own net is positive -- exactly the case a net-of-cluster bucketing gets wrong.
+    expect(groceriesGroup.totalCents).toBe(2000);
+    expect(page.outCents).toBe(-3000);
+    expect(page.inCents).toBe(5000);
+  });
+
+  it('F-02: outCents/inCents are split-aware, matching the same per-part decomposition totalCents uses', () => {
+    const { db, alice, add } = setup();
+    const pharmacy = categoryIdByName(db, 'Pharmacy');
+    const groceries = categoryIdByName(db, 'Groceries');
+    const splitTxn = add({ description: 'BIG BOX', amountCents: -5000 });
+    setTransactionSplits({
+      txnId: splitTxn,
+      parts: [
+        { categoryId: pharmacy, amountCents: -3000 },
+        { categoryId: groceries, amountCents: -2000 },
+      ],
+      userId: alice,
+    });
+
+    const page = groupTransactionsByCategory({}, VIEWER);
+    expect(page.outCents).toBe(-5000);
+    expect(page.inCents).toBe(0);
   });
 
   it('counts two parts filed under the SAME category as one transaction, but sums both', () => {
@@ -1213,7 +1327,18 @@ describe('groupTransactionsByCategory (v1.26.0 Lane 2 item 3)', () => {
   it('is empty, not broken, for a filter that matches nothing', () => {
     setup();
     const page = groupTransactionsByCategory({ source: 'rule', importId: 999999 }, VIEWER);
-    expect(page).toEqual({ groups: [], page: 1, pageSize: 25, pageCount: 1, groupCount: 0, totalCount: 0, totalCents: 0 });
+    expect(page).toEqual({
+      groups: [],
+      page: 1,
+      pageSize: 25,
+      pageCount: 1,
+      groupCount: 0,
+      totalCount: 0,
+      totalCents: 0,
+      // F-02: an empty filtered set has nothing to sum either direction.
+      outCents: 0,
+      inCents: 0,
+    });
   });
 });
 
