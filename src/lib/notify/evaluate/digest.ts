@@ -66,8 +66,17 @@ function viewerFor(userId: number): Viewer | null {
  * govern a group chat an admin deliberately pointed the household's bot at. Nobody's personal
  * digest changes -- a self-scoped member who is still receiving one still sees only their own
  * figures -- and no PERSONAL-scope event is ever routable at all (enqueue's subjectScope).
+ *
+ * EXPORTED for finding I-1's fix (v1.30.0 whole-branch review): evaluate/monthly.ts's family-
+ * channel monthly digest needs the identical viewer for the identical reason, and the argument
+ * above is the whole justification for the constant existing. A sixth hand-built
+ * `{ id: 0, role: 'admin', visibility: 'household' }` one file over would be a second copy of a
+ * security-relevant projection with nothing tying it to this one -- the shape the review's own
+ * item M-1 already flags for viewerFor -- and, worse, a copy separated from the reasoning that
+ * makes it legitimate. Rejected alternative: a new shared module for one constant, which buys
+ * nothing this export does not and leaves the argument with no natural home.
  */
-const HOUSEHOLD_VIEWER: Viewer = { id: 0, role: 'admin', visibility: 'household' };
+export const HOUSEHOLD_VIEWER: Viewer = { id: 0, role: 'admin', visibility: 'household' };
 
 function overBudgetNames(rows: BudgetRow[], acc: string[] = []): string[] {
   for (const row of rows) {

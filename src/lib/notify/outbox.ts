@@ -120,6 +120,14 @@ export function enqueue(input: {
    * Meaningless together with subjectScope 'personal': nothing is routable, so nothing at all
    * would be enqueued. No caller pairs them, and none should -- a personal-scope send carries no
    * household figure to withhold in the first place.
+   *
+   * v1.30.0 finding I-1 added a SECOND, narrower use, in evaluate/monthly.ts: there the personal
+   * body carries no household figure at all, and the flag withholds an EMPTY one -- a self-scoped
+   * member with no attributed spend has nothing of their own to be told, but still contributes the
+   * family channel's message, which is built separately and passed as `household` above. Both uses
+   * mean the same thing to this loop ("family row yes, personal row no") and both are only ever
+   * set for a self-scoped recipient. tests/ops/enqueue-family-channel.test.ts is the named list of
+   * which call site is which, and why (finding I-2).
    */
   familyChannelOnly?: boolean;
   at?: Date;
