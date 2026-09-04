@@ -347,6 +347,6 @@ describe('notifiableUsers', () => {
   it('lists active users with their roles and skips deactivated ones', () => {
     const a = insertTestUser(t.db, { username: 'active', role: 'admin', name: 'Ada' });
     insertTestUser(t.db, { username: 'gone', role: 'member', isActive: false });
-    expect(notifiableUsers()).toEqual([{ id: a, name: 'Ada', role: 'admin' }]);
+    expect(notifiableUsers()).toEqual([{ id: a, name: 'Ada', role: 'admin', visibility: 'household' }]);
   });
 });

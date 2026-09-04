@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { categoryIdByName, createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../../helpers/db';
+import { setUserVisibility } from '@/lib/auth/users';
 import { effectiveBudget, setRollover, upsertBudget } from '@/lib/budgets';
 import { saveEmailTarget, saveSmtp, setPref } from '@/lib/notify/config';
+import { setHouseholdEventPref, upsertHouseholdTarget } from '@/lib/notify/household';
 import { resetOutboxPumpForTests } from '@/lib/notify/outbox';
 import { resetNotifySenderForTests, setNotifySenderForTests } from '@/lib/notify/send';
 import { evaluateBudgetPace } from '@/lib/notify/evaluate/pace';
@@ -28,8 +30,8 @@ afterEach(() => {
   t.cleanup();
 });
 
-function emailUser(): number {
-  const userId = insertTestUser(t.db, { username: `u${Math.random().toString(36).slice(2, 8)}` });
+function emailUser(role: 'admin' | 'member' = 'admin'): number {
+  const userId = insertTestUser(t.db, { username: `u${Math.random().toString(36).slice(2, 8)}`, role });
   saveSmtp({
     preset: 'brevo',
     host: 'h',
@@ -244,5 +246,94 @@ describe('v1.7.0 Task 11: rollover carry keeps a covered category off the pace a
     spend(groceries, 40000);
     expect(evaluateBudgetPace({ userId, now: NOW, tz: TZ })).toBe(0);
     expect(keys()).toEqual([]);
+  });
+});
+
+/**
+ * S-18 fix (v1.13.0 ruling R2, applied one layer down): evaluateBudgetPace used to build BOTH
+ * scopes' candidates for every user regardless of visibility, so a self-scoped recipient (a
+ * household uses this for a child's account) got a household pace projection by push -- its
+ * category name, limit and projected month-end figure -- with no crafted request involved. Fixed
+ * with this file's own local viewerFor (findUserById): round 1 marks a self-scoped recipient's
+ * household candidates familyChannelOnly (outbox.ts) so the routed family-channel row survives
+ * and the personal copy does not, and skips the household read outright when the event is routed
+ * to no family channel at all.
+ */
+describe('S-18 fix (v1.13.0 ruling R2): a self-scoped recipient never receives a household pace alert', () => {
+  it('gets no household figure, keeps their own personal pace alert, and leaves a household-visibility member, an admin, and an admin whose row says self, unchanged', () => {
+    const self = emailUser('member');
+    setUserVisibility(self, 'self');
+    const control = emailUser(); // household-visibility admin -- the "everyone else" byte-identical check
+    // Review round 1 (minor 5): admin + visibility 'self', the pairing no test covered. Written
+    // straight into the row because setUserVisibility refuses it (micro-ruling M1) -- the
+    // hand-edited-database case isSelfScoped's admin clause exists for. An admin is never
+    // self-scoped, so this recipient must be treated exactly like `control`.
+    const adminSelf = emailUser();
+    t.db.run(sql`update users set visibility = 'self' where id = ${adminSelf}`);
+    const groceries = categoryIdByName(t.db, 'Groceries');
+    const gas = categoryIdByName(t.db, 'Gas');
+
+    // Household budget, someone else's (unattributed) spend -- self must never see this.
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-08', amountCents: 60000 });
+    spend(groceries, 26000); // projects to 111 percent of the $600 household limit
+
+    // self's OWN personal budget, self's own spend -- self must still see this.
+    upsertBudget({ scope: 'personal', userId: self, categoryId: gas, month: '2026-08', amountCents: 60000 });
+    spend(gas, 26000, self); // the identical projection, personal scope
+
+    expect(evaluateBudgetPace({ userId: self, now: NOW, tz: TZ })).toBe(1);
+    expect(evaluateBudgetPace({ userId: control, now: NOW, tz: TZ })).toBe(1);
+    expect(evaluateBudgetPace({ userId: adminSelf, now: NOW, tz: TZ })).toBe(1);
+
+    const rows = t.sqlite
+      .prepare('select user_id, dedup_key, body from notification_outbox order by id')
+      .all() as { user_id: number; dedup_key: string; body: string }[];
+    const selfRows = rows.filter((r) => r.user_id === self);
+    const controlRows = rows.filter((r) => r.user_id === control);
+
+    // The bug this pins: self used to also receive `pace:h:${groceries}:2026-08`, naming
+    // "Groceries" in the body.
+    expect(selfRows.map((r) => r.dedup_key)).toEqual([`pace:p:${gas}:2026-08`]);
+    expect(selfRows[0].body).not.toContain('Groceries');
+    expect(selfRows[0].body).toContain('Gas');
+
+    // Byte-identical for everyone else: the household-visibility control still gets the
+    // household pace alert, naming "Groceries", unchanged.
+    expect(controlRows.map((r) => r.dedup_key)).toEqual([`pace:h:${groceries}:2026-08`]);
+    expect(controlRows[0].body).toContain('Groceries');
+
+    // ...and so does the admin whose row says 'self'.
+    const adminSelfRows = rows.filter((r) => r.user_id === adminSelf);
+    expect(adminSelfRows.map((r) => r.dedup_key)).toEqual([`pace:h:${groceries}:2026-08`]);
+    expect(adminSelfRows[0].body).toContain('Groceries');
+  });
+
+  /**
+   * The regression review round 1 exists to prevent, for budget_pace: round 0 dropped the
+   * household scope from a self-scoped recipient's `scopes` array, and on a routed channel that
+   * scope is the only thing that feeds the family room. A household whose one opted-in member is
+   * self-scoped lost its family pace alerts entirely.
+   */
+  it('still feeds the family channel when the only opted-in recipient is self-scoped', () => {
+    const self = emailUser('member');
+    setUserVisibility(self, 'self');
+    // creatorId is an active admin with no notification target of its own: it can set the family
+    // channel up without becoming a recipient itself.
+    expect(
+      upsertHouseholdTarget({ channel: 'email', destination: 'family@example.invalid', actorUserId: creatorId }).ok,
+    ).toBe(true);
+    expect(setHouseholdEventPref({ eventId: 'budget_pace', channel: 'email', enabled: true }).ok).toBe(true);
+
+    const groceries = categoryIdByName(t.db, 'Groceries');
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-08', amountCents: 60000 });
+    spend(groceries, 26000); // projects to 111 percent of the $600 household limit
+
+    expect(evaluateBudgetPace({ userId: self, now: NOW, tz: TZ })).toBe(1);
+
+    const rows = t.sqlite
+      .prepare('select user_id, dedup_key, body from notification_outbox order by id')
+      .all() as { user_id: number | null; dedup_key: string; body: string }[];
+    expect(rows.map((r) => [r.user_id, r.dedup_key])).toEqual([[null, `hh:pace:h:${groceries}:2026-08`]]);
+    expect(rows[0].body).toContain('Groceries');
   });
 });

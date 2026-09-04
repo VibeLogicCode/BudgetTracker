@@ -270,6 +270,51 @@ describe('routing and suppression', () => {
     ]);
   });
 
+  /**
+   * S-18 fix round 1 (v1.30.0). familyChannelOnly's contract at the level enqueue() actually
+   * decides it: the ROUTED channel still writes the household row -- the room's message, user_id
+   * NULL -- and the unrouted channel writes NOTHING, where without the flag it would have written
+   * this recipient's personal copy. That per-channel asymmetry is exactly why the flag lives here
+   * rather than at the evaluator: gating the whole enqueue on householdRoutedChannels() instead
+   * would still write the email row this test proves is withheld.
+   */
+  it('familyChannelOnly writes the family row and withholds the personal copy, per channel', () => {
+    const admin = member({ name: 'Alex' });
+    relay();
+    familyChannels(admin);
+    setHouseholdEventPref({ eventId: 'weekly_digest', channel: 'telegram', enabled: true });
+
+    const result = enqueue({
+      userId: admin,
+      eventId: 'weekly_digest',
+      dedupKey: 'digest:2026-08-17',
+      subject: 'S',
+      body: 'B',
+      familyChannelOnly: true,
+    });
+    expect(result.household).toEqual(['telegram']);
+    expect(result.suppressed).toEqual(['telegram']);
+    expect(result.inserted, 'the email copy this recipient would otherwise have received').toEqual([]);
+    expect(outbox().map((row) => [row.channel, row.user_id])).toEqual([['telegram', null]]);
+  });
+
+  it('familyChannelOnly with nothing routed enqueues nothing at all', () => {
+    const admin = member();
+    relay();
+    familyChannels(admin); // the channels exist; no event is routed to them
+
+    const result = enqueue({
+      userId: admin,
+      eventId: 'weekly_digest',
+      dedupKey: 'digest:2026-08-17',
+      subject: 'S',
+      body: 'B',
+      familyChannelOnly: true,
+    });
+    expect(result).toEqual({ inserted: [], household: [], suppressed: [] });
+    expect(outbox()).toEqual([]);
+  });
+
   it('two members, same event, routed: still one message', () => {
     const alex = member({ name: 'Alex' });
     const robin = member({ role: 'member', name: 'Robin' });

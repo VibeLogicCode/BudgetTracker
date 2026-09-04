@@ -208,7 +208,17 @@ export type RenderInput =
       month: string;
       household: readonly PredictedLine[];
       personal: readonly PredictedLine[];
-      totalDeltaCents: number;
+      /**
+       * Review round 1 (item 3): NULLABLE, and null omits the total sentence entirely. The
+       * sentence is a positive factual claim about HOUSEHOLD state ("across every household
+       * category with a suggestion, August came in $X over"), so a recipient whose message
+       * correctly carries no Household block has no true value to put in it. It used to be
+       * passed 0 for a self-scoped recipient, which rendered "$0.00 over" while the real
+       * household delta was $113.40 -- a false zero, not the vacuously-true zero a household
+       * with no suggested top-level category produces. Those two cases have to render
+       * differently, so the type distinguishes them.
+       */
+      totalDeltaCents: number | null;
     }
   | {
       event: 'suggested_budget_refresh';
@@ -689,10 +699,15 @@ export function renderEvent(input: RenderInput): { subject: string; body: string
       const blocks: string[] = [];
       if (input.household.length > 0) blocks.push(['Household', ...predictedLines(input.household)].join('\n'));
       if (input.personal.length > 0) blocks.push(['Yours', ...predictedLines(input.personal)].join('\n'));
-      blocks.push(
-        `Across every household category with a suggestion, ${label} came in ${money(Math.abs(input.totalDeltaCents))} ` +
-          `${input.totalDeltaCents >= 0 ? 'over' : 'under'} what the last six months pointed at.`,
-      );
+      // null means "this recipient gets no household figures at all" -- no sentence, rather than
+      // a sentence asserting zero. See totalDeltaCents's own docblock above.
+      const totalDeltaCents = input.totalDeltaCents;
+      if (totalDeltaCents !== null) {
+        blocks.push(
+          `Across every household category with a suggestion, ${label} came in ${money(Math.abs(totalDeltaCents))} ` +
+            `${totalDeltaCents >= 0 ? 'over' : 'under'} what the last six months pointed at.`,
+        );
+      }
       // MUST-9.27: nothing was stored in advance, and the message says so rather than letting
       // the reader take "predicted" for a recorded forecast.
       blocks.push('The expected figures are recomputed from the six months before that one. Nothing was recorded in advance.');

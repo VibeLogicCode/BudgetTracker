@@ -260,15 +260,17 @@ export function categoryTransactions(
  * The rollup rule, in exactly one place (spec 2026-08-22, v1.7.0, Task 10): a category's own
  * spend plus every id in `childIds` -- archived children included, because callers pass the
  * archived-inclusive list, never the render-only one, so an archived child's spend is never
- * silently dropped. buildRow and categorySpendWithRollup both fold through this, so the rule
- * can only drift by editing this one function.
+ * silently dropped. buildRow is this function's only caller now; categorySpendWithRollupSeries
+ * below applies the identical rule independently, in its own batched form, rather than calling
+ * this function (see its own doc comment) -- so this rule itself can only drift by editing
+ * foldRollup directly.
  */
 function foldRollup(categoryId: number, childIds: number[], spendByCategory: Map<number, number>): number {
   return childIds.reduce((sum, id) => sum + (spendByCategory.get(id) ?? 0), spendByCategory.get(categoryId) ?? 0);
 }
 
 /**
- * Same rule as categorySpendWithRollup/foldRollup, batched over many months in ONE query
+ * Same rule as foldRollup, applied independently and batched over many months in ONE query
  * instead of one call per month. Without this, effectiveBudget's up-to-24-month lookback
  * would be a query per category per month. Same batch-then-fold-over-the-month-axis shape as
  * debtOverTime in src/lib/loans.ts: two queries (the category tree, and the transactions
@@ -493,9 +495,11 @@ function buildRow(
   );
   // Rollup rule: a parent counts its own transactions plus ALL children's — including
   // an archived child's, which is never rendered as its own row (rollupChildren is
-  // archived-inclusive; renderChildren, used only for display, is not). foldRollup is the
-  // ONE place this rule lives; categorySpendWithRollup (used by effectiveBudget's carry walk)
-  // shares it too, so the two can never silently drift apart (Task 10).
+  // archived-inclusive; renderChildren, used only for display, is not). foldRollup is the ONE
+  // place this rule lives for THIS path; categorySpendWithRollupSeries, which effectiveBudget's
+  // carry walk uses, applies the identical rule independently in its own batched form rather
+  // than calling foldRollup (both functions' own doc comments say so), so the rule as it applies
+  // here can only change by editing foldRollup itself (Task 10).
   const spentCents = foldRollup(
     category.id,
     rollupChildren.map((child) => child.id),

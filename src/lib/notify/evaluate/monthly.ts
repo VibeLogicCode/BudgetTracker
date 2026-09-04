@@ -1,6 +1,6 @@
-import { budgetProgress, budgetTotals, resolveBudget } from '@/lib/budgets';
+import { budgetProgress, budgetTotals, resolveBudget, type BudgetScope } from '@/lib/budgets';
 import { findUserById } from '@/lib/auth/users';
-import { type Viewer } from '@/lib/auth/viewer';
+import { isSelfScoped, type Viewer } from '@/lib/auth/viewer';
 import { listCategories } from '@/lib/categories';
 import { addMonths, currentMonth, monthEnd, monthStart, todayIso } from '@/lib/dates';
 import { isEventEnabled } from '@/lib/notify/config';
@@ -27,9 +27,19 @@ const MONTHLY_DIGEST_TOP_MERCHANTS = 5;
  * regardless of what is asked). Mirrors digest.ts's own viewerFor exactly; kept local rather than
  * shared since both files are Task 6's alone and neither exports test-only surface for the other.
  *
+ * S-18 fix (v1.13.0 ruling R2, review follow-up): now also called from firePredictedVsActual and
+ * fireSuggestedRefresh, this file's other two per-user sends -- neither used to consult a viewer
+ * at all, because neither calls a reports.ts aggregate; both build their household section from
+ * budgetProgress()/suggestionsFor(), which take no viewer to force a self-scoped narrowing (they
+ * are HOUSEHOLD_ONLY_AT_PAGE's own callers now -- tests/ops/visibility-invariants.test.ts). Each
+ * of the three call sites below branches on `isSelfScoped(viewer)` itself rather than gaining a
+ * shared "self-scoped monthly send" helper: the three household reads are shaped too differently
+ * (a comparison list, a refresh list, a single totals pair) for one helper to narrow all three
+ * without either an awkward union return type or three near-identical near-copies of it.
+ *
  * v1.13.1 (item BK). Returns null when the recipient's own row is gone by the time this runs (a
- * deleted account mid-batch), and fireMonthlyDigest sends nothing rather than guessing a scope.
- * A household-scoped fallback used to stand in for the missing row so one deletion could not sink
+ * deleted account mid-batch), and the caller sends nothing rather than guessing a scope. A
+ * household-scoped fallback used to stand in for the missing row so one deletion could not sink
  * the whole batch -- the batch is still fine without it, since sending nothing for this one
  * recipient is not a crash. What the fallback got wrong is the scope it guessed: 'household' for
  * a recipient who may have been self-scoped, which is exactly the household-wide leak ruling R2
@@ -45,7 +55,9 @@ function viewerFor(userId: number): Viewer | null {
  * fingerprint (MUST-10.8): the three-day window plus a monthly dedup key already bound them.
  *
  * MUST-9.35: both render BOTH scopes into one message per user, a household section and a
- * "Yours" section, which is why their keys carry only the month.
+ * "Yours" section, which is why their keys carry only the month. S-18 fix (ruling R2): for a
+ * self-scoped recipient the household section is omitted rather than run and discarded -- see
+ * each function's own S-18 comment below -- so their message carries the "Yours" section alone.
  */
 
 interface ScopedPredicted {
@@ -92,9 +104,18 @@ function comparePredicted(
 function firePredictedVsActual(input: { userId: number; month: string; now: Date }): number {
   if (!CHANNELS.some((channel) => isEventEnabled(input.userId, 'predicted_vs_actual', channel))) return 0;
 
-  const household = comparePredicted(input.month, 'household', null);
+  const viewer = viewerFor(input.userId);
+  // Item BK: 0 already means "nothing enqueued" to every caller of this function.
+  if (viewer === null) return 0;
+
+  // S-18 fix (v1.13.0 ruling R2): a self-scoped recipient never gets the household comparison
+  // run at all -- omitted outright, the same "no household figure leaves this file, even
+  // unrendered" rule HOUSEHOLD_ONLY_AT_PAGE names for budgetProgress's other callers. `personal`
+  // is unaffected either way: it is this recipient's OWN comparison, computed the same for
+  // every recipient regardless of visibility.
+  const household = isSelfScoped(viewer) ? null : comparePredicted(input.month, 'household', null);
   const personal = comparePredicted(input.month, 'personal', input.userId);
-  const all = [...household.lines, ...personal.lines];
+  const all = [...(household?.lines ?? []), ...personal.lines];
   // MUST-9.26: a category with a limit and no suggestion has no expected figure to compare
   // against, so no line, so nothing to send.
   if (all.length === 0) return 0;
@@ -114,7 +135,15 @@ function firePredictedVsActual(input: { userId: number; month: string; now: Date
     // MEDIUM fix: household's total alone (top-level rows only, see comparePredicted). Adding
     // personal on top double-counted every attributed dollar, since personal spend is already
     // inside its household top-level row.
-    totalDeltaCents: household.totalDeltaCents,
+    // S-18 fix, round 1: NULL for a self-scoped recipient, so render.ts drops the sentence
+    // instead of asserting a total. Round 0 passed 0 here and reused the branch a household with
+    // no suggested top-level category already takes -- but those two zeros mean different things:
+    // that one is vacuously true, this one told the recipient the household came in $0.00 over
+    // when it was really $113.40 over. There is no per-person analogue of "every household
+    // category" to substitute (comparePredicted's totalDeltaCents accumulator is deliberately
+    // household-only; see its doc comment above), and this recipient's message correctly has no
+    // Household block, so the honest render is no sentence at all.
+    totalDeltaCents: household?.totalDeltaCents ?? null,
   });
   const result = enqueue({
     userId: input.userId,
@@ -152,7 +181,16 @@ function refreshFor(month: string, scope: 'household' | 'personal', userId: numb
 function fireSuggestedRefresh(input: { userId: number; month: string; now: Date }): number {
   if (!CHANNELS.some((channel) => isEventEnabled(input.userId, 'suggested_budget_refresh', channel))) return 0;
 
-  const household = refreshFor(input.month, 'household', null);
+  const viewer = viewerFor(input.userId);
+  // Item BK: 0 already means "nothing enqueued" to every caller of this function.
+  if (viewer === null) return 0;
+
+  // S-18 fix (v1.13.0 ruling R2): a self-scoped recipient never gets the household refresh list
+  // run at all -- omitted outright, never run and discarded. `personal` is unaffected: it is
+  // this recipient's own suggestions, computed the same for every recipient regardless of
+  // visibility, and `changedCount` below is honest either way -- it only ever counts what this
+  // recipient's own message actually carries.
+  const household = isSelfScoped(viewer) ? [] : refreshFor(input.month, 'household', null);
   const personal = refreshFor(input.month, 'personal', input.userId);
   const changedCount = household.length + personal.length;
   if (changedCount === 0) return 0;
@@ -185,6 +223,18 @@ function fireSuggestedRefresh(input: { userId: number; month: string; now: Date 
  * (limitCents there is already the rollover-EFFECTIVE limit as of commit 3538d91, which is
  * exactly the number the Budgets page shows), and topMerchants for the merchant lines. No new
  * aggregate query is written here.
+ *
+ * S-18 fix (v1.13.0 ruling R2): unlike cashflowTrend/topMerchants just above, budgetTotals(
+ * budgetProgress(...)) took no viewer at all and always read household scope, so this was the
+ * one figure in this message that stayed household-wide for every recipient regardless of
+ * visibility. There is no separate "Yours" budgets line in this digest's render (renderEvent's
+ * monthly_digest case has exactly one budgetedLimitCents/budgetedSpentCents pair, not a
+ * household/personal split the way predicted_vs_actual and suggested_budget_refresh have), so
+ * dropping the figure for a self-scoped recipient would have meant losing the whole "Budgets:"
+ * line rather than narrowing it -- the section IS the household read, but it also has an exact
+ * personal equivalent one call away. The fix picks the scope from the viewer instead: 'personal'
+ * (their own budgeted limit vs their own spend) for a self-scoped recipient, 'household' (this
+ * line's original call, byte-identical) for everyone else.
  */
 function fireMonthlyDigest(input: { userId: number; endedMonth: string; now: Date }): number {
   if (!CHANNELS.some((channel) => isEventEnabled(input.userId, 'monthly_digest', channel))) return 0;
@@ -194,7 +244,8 @@ function fireMonthlyDigest(input: { userId: number; endedMonth: string; now: Dat
   if (viewer === null) return 0;
   // cashflowTrend(1, {endMonth}) always returns exactly one row, for endedMonth itself.
   const [trend] = cashflowTrend(1, { endMonth: input.endedMonth }, viewer);
-  const totals = budgetTotals(budgetProgress(input.endedMonth));
+  const totalsScope: BudgetScope = isSelfScoped(viewer) ? 'personal' : 'household';
+  const totals = budgetTotals(budgetProgress(input.endedMonth, totalsScope, totalsScope === 'personal' ? viewer.id : null));
   const topMerchantLines: DigestLine[] = topMerchants(
     {
       from: monthStart(input.endedMonth),

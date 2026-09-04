@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { categoryIdByName, createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../helpers/db';
+import { setUserVisibility } from '@/lib/auth/users';
 import { saveEmailTarget, saveSmtp } from '@/lib/notify/config';
+import { setHouseholdEventPref, upsertHouseholdTarget } from '@/lib/notify/household';
 import { evaluateSavingsDaily, evaluateSavingsTargetMet } from '@/lib/notify/evaluate/savings';
 import { resetOutboxPumpForTests } from '@/lib/notify/outbox';
 import { resetNotifySenderForTests, setNotifySenderForTests } from '@/lib/notify/send';
@@ -34,8 +36,8 @@ afterEach(() => {
   t.cleanup();
 });
 
-function emailUser(): number {
-  const userId = insertTestUser(t.db, { username: `u${Math.random().toString(36).slice(2, 8)}` });
+function emailUser(role: 'admin' | 'member' = 'admin'): number {
+  const userId = insertTestUser(t.db, { username: `u${Math.random().toString(36).slice(2, 8)}`, role });
   saveSmtp({
     preset: 'brevo',
     host: 'h',
@@ -215,6 +217,125 @@ describe('savings_month_closed', () => {
     expect(evaluateSavingsDaily({ userId, now: new Date('2026-08-01T09:00:00Z'), tz: TZ })).toBe(1);
     const body = (t.sqlite.prepare('select body from notification_outbox limit 1').get() as { body: string }).body;
     expect(body).not.toContain('month running');
+  });
+});
+
+/**
+ * S-18 fix round 1 (v1.13.0 ruling R2, new scope). This file's three events pushed the
+ * HOUSEHOLD's netCents and targetCents into a per-recipient send for every notifiable user,
+ * self-scoped members included -- a household uses self scope for a child's account, and
+ * evaluateSavingsTargetMet renders once and fans that identical body out over notifiableUsers().
+ * Structurally the same leak as S-18's budget evaluators; the original sweep missed this file
+ * because it uses none of the six symbols that sweep grepped for.
+ *
+ * Ruling T3 justifies the READ SHAPE (a savings target is household-scoped only, never
+ * per-person) and says nothing about DELIVERY. All three events are householdEligible, so the
+ * family channel is fine and the per-user copy is not: the fix is enqueue's familyChannelOnly at
+ * each call site. A savings target has no personal analogue to narrow to, so for a self-scoped
+ * recipient the personal send is omitted outright rather than scoped to zero -- a "$0.00 target"
+ * sentence would be a false statement about household state, not a narrowed one.
+ */
+describe('S-18 round 1 (ruling R2): household savings figures never reach a self-scoped member personally', () => {
+  const MET_TICK = new Date('2026-08-12T12:00:00Z');
+  const PACE_SLOT = new Date('2026-08-10T12:00:00Z');
+  const CLOSED_SLOT = new Date('2026-08-01T09:00:00Z');
+
+  /** An admin whose row says visibility 'self' -- setUserVisibility refuses the pairing
+   *  (micro-ruling M1), so this is the hand-edited-database case isSelfScoped's admin clause
+   *  exists for, and the answer must be "not self-scoped". */
+  function adminWithSelfRow(): number {
+    const userId = emailUser();
+    t.db.run(sql`update users set visibility = 'self' where id = ${userId}`);
+    return userId;
+  }
+
+  function rows(): { user_id: number | null; dedup_key: string; body: string }[] {
+    return t.sqlite.prepare('select user_id, dedup_key, body from notification_outbox order by id').all() as {
+      user_id: number | null;
+      dedup_key: string;
+      body: string;
+    }[];
+  }
+
+  /** creatorId is an active admin with no notification target of its own, so isEventEnabled is
+   *  false for it everywhere and it never becomes a participant -- but it can still be the admin
+   *  who sets the family channel up, which is what upsertHouseholdTarget asks for. */
+  function routeToFamilyEmail(eventId: string): void {
+    expect(
+      upsertHouseholdTarget({ channel: 'email', destination: 'family@example.invalid', actorUserId: creatorId }).ok,
+    ).toBe(true);
+    expect(setHouseholdEventPref({ eventId, channel: 'email', enabled: true }).ok).toBe(true);
+  }
+
+  it('savings_target_met: the self-scoped member gets no personal copy, everybody else is unchanged', () => {
+    const self = emailUser('member');
+    setUserVisibility(self, 'self');
+    const control = emailUser(); // household-visibility admin
+    const adminSelf = adminWithSelfRow();
+    saveSavingsTarget({ month: '2026-08', mode: 'amount', value: 100000 });
+    seedMetMonth('2026-08'); // nets $2,000 against the $1,000 target
+
+    expect(evaluateSavingsTargetMet({ now: MET_TICK, tz: TZ })).toBe(2);
+
+    // The bug this pins: `self` used to receive savings-met:2026-08 as well, its body naming the
+    // household's $2,000.00 net and $1,000.00 target -- figures a self-scoped member may not see
+    // on any screen, delivered by push to their own inbox.
+    expect(rows().filter((r) => r.user_id === self)).toEqual([]);
+    expect(rows().map((r) => r.user_id).sort((a, b) => Number(a) - Number(b))).toEqual(
+      [control, adminSelf].sort((a, b) => a - b),
+    );
+    expect(rows().every((r) => r.body.includes('$2,000.00') && r.body.includes('$1,000.00'))).toBe(true);
+  });
+
+  it('savings_target_met: a household whose only opted-in member is self-scoped still reaches the family channel', () => {
+    const self = emailUser('member');
+    setUserVisibility(self, 'self');
+    routeToFamilyEmail('savings_target_met');
+    saveSavingsTarget({ month: '2026-08', mode: 'amount', value: 100000 });
+    seedMetMonth('2026-08');
+
+    expect(evaluateSavingsTargetMet({ now: MET_TICK, tz: TZ })).toBe(1);
+    expect(rows().map((r) => [r.user_id, r.dedup_key])).toEqual([[null, 'hh:savings-met:2026-08']]);
+    expect(rows()[0].body).toContain('$2,000.00');
+  });
+
+  it('savings_target_pace: no personal copy for the self-scoped member, unchanged for everybody else', () => {
+    const self = emailUser('member');
+    setUserVisibility(self, 'self');
+    const control = emailUser();
+    saveSavingsTarget({ month: '2026-08', mode: 'amount', value: 310000 });
+    const salary = categoryIdByName(t.db, 'Salary');
+    txn(salary, 40000, '2026-08-08'); // day 10 needs $1,000 saved; only $400 is
+
+    expect(evaluateSavingsDaily({ userId: self, now: PACE_SLOT, tz: TZ })).toBe(0);
+    expect(evaluateSavingsDaily({ userId: control, now: PACE_SLOT, tz: TZ })).toBe(1);
+    expect(rows().map((r) => [r.user_id, r.dedup_key])).toEqual([[control, 'savings-pace:2026-08']]);
+    expect(rows()[0].body).toContain('$3,100.00');
+  });
+
+  it('savings_month_closed: no personal copy for the self-scoped member, unchanged for everybody else', () => {
+    const self = emailUser('member');
+    setUserVisibility(self, 'self');
+    const control = emailUser();
+    saveSavingsTarget({ month: '2026-07', mode: 'amount', value: 100000 });
+    seedMetMonth('2026-07');
+
+    expect(evaluateSavingsDaily({ userId: self, now: CLOSED_SLOT, tz: TZ })).toBe(0);
+    expect(evaluateSavingsDaily({ userId: control, now: CLOSED_SLOT, tz: TZ })).toBe(1);
+    expect(rows().map((r) => [r.user_id, r.dedup_key])).toEqual([[control, 'savings-closed:2026-07']]);
+    expect(rows()[0].body).toContain('$2,000.00');
+  });
+
+  it('savings_month_closed: a self-scoped-only household still reaches the family channel', () => {
+    const self = emailUser('member');
+    setUserVisibility(self, 'self');
+    routeToFamilyEmail('savings_month_closed');
+    saveSavingsTarget({ month: '2026-07', mode: 'amount', value: 100000 });
+    seedMetMonth('2026-07');
+
+    expect(evaluateSavingsDaily({ userId: self, now: CLOSED_SLOT, tz: TZ })).toBe(1);
+    expect(rows().map((r) => [r.user_id, r.dedup_key])).toEqual([[null, 'hh:savings-closed:2026-07']]);
+    expect(rows()[0].body).toContain('$2,000.00');
   });
 });
 

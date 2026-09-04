@@ -1,6 +1,6 @@
 import { budgetProgress, type BudgetRow } from '@/lib/budgets';
 import { findUserById, listUsers } from '@/lib/auth/users';
-import { type Viewer } from '@/lib/auth/viewer';
+import { isSelfScoped, type Viewer } from '@/lib/auth/viewer';
 import { reviewQueueCount } from '@/lib/categorize/engine';
 import { addDaysIso, currentMonth } from '@/lib/dates';
 import { categoryBreakdown, topMerchants } from '@/lib/reports';
@@ -21,6 +21,20 @@ const TOP_MERCHANTS = 3;
  * household/admin recipient's digest byte-identical to before, and a self-visibility recipient's
  * digest carry only their own attributed figures through every line below, never the true
  * household total (R2: no household totals reach a self viewer through any channel).
+ *
+ * S-18 fix (v1.13.0 ruling R2, review follow-up): the claim above used to be false for exactly
+ * one line -- `overBudget` was read from `budgetProgress(month, 'household', null)`
+ * unconditionally, the one figure in this function that did not go through `viewer` at all,
+ * because budgetProgress takes no viewer parameter to force it (it is one of
+ * HOUSEHOLD_ONLY_AT_PAGE's own callers now -- see tests/ops/visibility-invariants.test.ts). Fixed
+ * below by branching on `isSelfScoped(viewer)`: a self-scoped recipient's `overBudget` now comes
+ * from `budgetProgress(month, 'personal', viewer.id)` instead, naming only categories THEY are
+ * over on. Rejected alternative: leaving it household-scoped and filtering the resulting names
+ * against the recipient's own transactions after the fact -- budgetProgress's rollup already
+ * folds a category's children into its parent, so a name-level filter would either still leak a
+ * parent category's household total (a self-scoped member spent under one of its children) or
+ * require re-deriving the category tree here a second time. Querying personal scope directly is
+ * the one query budgetProgress already exists to answer.
  *
  * v1.13.1 (item BK). Returns null -- and the evaluator sends NOTHING -- if the user row is gone by
  * the time this runs (a deleted account mid-batch). It used to fall back to a household-scoped
@@ -105,7 +119,28 @@ export function evaluateWeeklyDigest(input: { userId: number; slotDate: string; 
   }));
 
   const reviewCount = reviewQueueCount();
-  const overBudget = overBudgetNames(budgetProgress(currentMonth(input.now), 'household', null));
+  const month = currentMonth(input.now);
+  // Resolved BEFORE the household read below, not after it (review round 1, minor 4). Only built
+  // when the digest is actually routed: an unrouted household pays for none of the per-member
+  // queries in buildHouseholdDigest, and its evaluation is exactly what it was before v1.28.0.
+  const routed = householdRoutedChannels('weekly_digest');
+  const selfScoped = isSelfScoped(viewer);
+  // The true household list -- byte-identical to what this call always computed before the S-18
+  // fix. It is what the family channel's digest below is built from (buildHouseholdDigest is
+  // addressed to the whole room, never to `input.userId` alone), so a household/admin
+  // recipient's evaluation still runs it unconditionally: it is also their own overBudget.
+  //
+  // Review round 1 (minor 4): for a SELF-SCOPED recipient it feeds the family channel and
+  // nothing else, so with no routed channel it feeds nothing -- and a wasted 24-month
+  // budgetProgress on every such member's weekly slot is the cost. Skipped outright in that
+  // case rather than run and discarded, which is also HOUSEHOLD_ONLY_AT_PAGE's own rule.
+  const householdOverBudget =
+    selfScoped && routed.length === 0 ? [] : overBudgetNames(budgetProgress(month, 'household', null));
+  // S-18 fix (v1.13.0 ruling R2): the RECIPIENT's own personal digest never sees the household
+  // list -- a self-scoped recipient's overBudget names only categories THEY are over on.
+  // household/admin recipients are unaffected: overBudget === householdOverBudget for them,
+  // the exact value and the exact query this line always ran.
+  const overBudget = selfScoped ? overBudgetNames(budgetProgress(month, 'personal', viewer.id)) : householdOverBudget;
 
   const { subject, body } = renderEvent({
     event: 'weekly_digest',
@@ -120,13 +155,10 @@ export function evaluateWeeklyDigest(input: { userId: number; slotDate: string; 
     overBudget,
   });
 
-  // Only built when the digest is actually routed: an unrouted household pays for none of the
-  // per-member queries below, and its evaluation is exactly what it was before v1.28.0.
-  const routed = householdRoutedChannels('weekly_digest');
   const household =
     routed.length === 0
       ? undefined
-      : buildHouseholdDigest({ from, to, slotDate: input.slotDate, reviewCount, overBudget });
+      : buildHouseholdDigest({ from, to, slotDate: input.slotDate, reviewCount, overBudget: householdOverBudget });
 
   const result = enqueue({
     userId: input.userId,

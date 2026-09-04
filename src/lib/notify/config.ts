@@ -567,12 +567,20 @@ export interface NotifiableUser {
   id: number;
   name: string;
   role: 'admin' | 'member';
+  /**
+   * S-18 fix (v1.13.0 ruling R2, applied one layer down). Without this column no evaluator
+   * downstream can even ask whether a recipient is self-scoped, which is why household budget
+   * figures were reaching a self-scoped recipient's own notifications: nothing here could
+   * distinguish them from a household-visibility member. See evaluate/budget.ts's Participant
+   * and evaluate/pace.ts's own local viewerFor for what each does with this once it can be asked.
+   */
+  visibility: 'household' | 'self';
 }
 
 /** MUST-14.6: evaluation skips deactivated members without deleting their configuration. */
 export function notifiableUsers(): NotifiableUser[] {
   return getDb()
-    .select({ id: users.id, name: users.name, role: users.role })
+    .select({ id: users.id, name: users.name, role: users.role, visibility: users.visibility })
     .from(users)
     .where(eq(users.isActive, true))
     .orderBy(asc(users.id))

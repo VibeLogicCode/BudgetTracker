@@ -1,11 +1,34 @@
 import { budgetProgress, flattenBudgetRows, type BudgetRow } from '@/lib/budgets';
+import { findUserById } from '@/lib/auth/users';
+import { isSelfScoped, type Viewer } from '@/lib/auth/viewer';
 import { currentMonth, monthEnd, todayIso } from '@/lib/dates';
 import { isEventEnabled } from '@/lib/notify/config';
 import { CHANNELS, budgetPaceKey, type BudgetScopeKey } from '@/lib/notify/events';
+import { householdRoutedChannels } from '@/lib/notify/household';
 import { enqueue, enqueuedAnything } from '@/lib/notify/outbox';
 import { renderEvent } from '@/lib/notify/render';
 import { PACE_MAX_PER_EVALUATION, PACE_MIN_DAY_OF_MONTH, PACE_OVERSHOOT_MIN_PCT } from '@/lib/predict/constants';
 import { projectMonthEnd } from '@/lib/predict/pace';
+
+/**
+ * S-18 fix (v1.13.0 ruling R2, applied one layer down). This evaluator runs once per user
+ * (unlike evaluate/budget.ts, which batches every participant in one pass), so it has no
+ * NotifiableUser row of its own to read visibility off -- it needs its own lookup instead.
+ *
+ * Deliberately its OWN copy rather than importing digest.ts's or monthly.ts's identical-looking
+ * helper: each of these four evaluators is investigated and fixed independently, and none
+ * exports the other three's internals as test-only surface. See digest.ts's own viewerFor
+ * docblock for the fuller reasoning; monthly.ts's copy states the same "kept local rather than
+ * shared" choice explicitly.
+ *
+ * Returns null when the recipient's own row is gone by the time this runs (a deleted account
+ * mid-batch) -- matching the other three evaluators' item BK precedent: sending nothing is safe,
+ * guessing a scope for a viewer this function cannot identify is not.
+ */
+function viewerFor(userId: number): Viewer | null {
+  const user = findUserById(userId);
+  return user ? { id: user.id, role: user.role, visibility: user.visibility } : null;
+}
 
 /**
  * MUST-10.8: no fingerprint. This runs at most once per user per day by construction, and its
@@ -61,7 +84,15 @@ function candidateFor(input: {
   return { scope: input.scope, row, projectedCents, overshootCents: projectedCents - row.limitCents };
 }
 
-function enqueuePaceCandidate(input: { userId: number; month: string; dayOfMonth: number; now: Date; candidate: PaceCandidate }): number {
+function enqueuePaceCandidate(input: {
+  userId: number;
+  month: string;
+  dayOfMonth: number;
+  now: Date;
+  candidate: PaceCandidate;
+  /** The RECIPIENT's own scope, resolved once by the caller. See the familyChannelOnly line. */
+  selfScoped: boolean;
+}): number {
   const { candidate } = input;
   const { subject, body } = renderEvent({
     event: 'budget_pace',
@@ -83,6 +114,11 @@ function enqueuePaceCandidate(input: { userId: number; month: string; dayOfMonth
     // v1.28.0: same reasoning as evaluate/budget.ts -- a personal-scope projection is one
     // member's business and its key is not per-user, so it is never routable.
     subjectScope: candidate.scope,
+    // S-18 round 1: a self-scoped recipient's HOUSEHOLD projection may become the family-channel
+    // row but never a personal delivery to them. Guarded on the candidate's scope, not on
+    // selfScoped alone: a personal-scope send is not routable at all, so pairing the two would
+    // enqueue nothing and delete this recipient's own pace alerts along with the leak.
+    familyChannelOnly: input.selfScoped && candidate.scope === 'household',
     at: input.now,
   });
   return enqueuedAnything(result) ? 1 : 0;
@@ -90,9 +126,17 @@ function enqueuePaceCandidate(input: { userId: number; month: string; dayOfMonth
 
 /**
  * MUST-9.6: the user's daily slot, the CURRENT MONTH only, over the same two scopes
- * evaluateBudgets() walks. Household rows are delivered to every user with the event enabled
- * (this function is called once per user, so that happens across calls); personal rows are
- * evaluated per user and delivered only to that user.
+ * evaluateBudgets() walks. Household rows are delivered to every HOUSEHOLD-VISIBILITY (or
+ * admin) user with the event enabled (this function is called once per user, so that happens
+ * across calls); personal rows are evaluated per user and delivered only to that user.
+ *
+ * S-18 fix (v1.13.0 ruling R2, applied one layer down), round 1: a self-scoped recipient's
+ * household projections still fire, because on a routed channel that send IS the family-channel
+ * row -- one message to the room, not to them (enqueue's userId: null branch). What they never
+ * get is the PERSONAL delivery carrying those figures, withheld by enqueue's familyChannelOnly.
+ * Round 0 dropped the household scope from their `scopes` array outright, which removed a
+ * family-channel contribution and protected nobody. With NO routed channel there is no room to
+ * feed, so the household read is skipped entirely rather than run and discarded -- see below.
  *
  * MEDIUM fix (final-fix-wave item 3): capped at PACE_MAX_PER_EVALUATION, largest overshoot
  * first, mirroring UNUSUAL_MAX_PER_EVALUATION / CREEP_MAX_PER_EVALUATION /
@@ -105,15 +149,34 @@ export function evaluateBudgetPace(input: { userId: number; now: Date; tz: strin
 
   const today = todayIso(input.now, input.tz);
   const dayOfMonth = Number(today.slice(8, 10));
-  // MUST-9.6 condition 1, checked before any query.
+  // MUST-9.6 condition 1, checked before any budget or user read. Review round 1 (minor 2): the
+  // viewerFor() lookup below used to sit ABOVE this line, which made the old wording ("before any
+  // query") false -- findUserById ran on the 1st of the month for every user, only to be thrown
+  // away. The enabled-ness check above is now the one query that precedes this guard, and it is
+  // the check that decides whether this evaluation happens at all.
   if (dayOfMonth < PACE_MIN_DAY_OF_MONTH) return 0;
+
+  const viewer = viewerFor(input.userId);
+  // Item BK precedent (see this file's own viewerFor docblock): 0 already means "nothing
+  // enqueued" to every caller.
+  if (viewer === null) return 0;
+  const selfScoped = isSelfScoped(viewer);
 
   const month = currentMonth(input.now, input.tz);
   // MUST-8.2: from monthEnd, so February is 29 days in 2028 without a leap-year rule here.
   const daysInMonth = Number(monthEnd(month).slice(8, 10));
 
+  // S-18 fix (v1.13.0 ruling R2), round 1: for a self-scoped recipient the household rows exist
+  // SOLELY to feed the family channel (enqueue's familyChannelOnly, set below), so with nothing
+  // routed there is no room to feed and the up-to-24-month household read is skipped outright
+  // rather than run and discarded -- HOUSEHOLD_ONLY_AT_PAGE's own "no household figure leaves
+  // this file, even unrendered" rule, and the same routed-first ordering evaluate/digest.ts uses.
+  // Everyone else keeps both scopes unconditionally, exactly as before either round of this fix.
+  const wantsHousehold = !selfScoped || householdRoutedChannels('budget_pace').length > 0;
   const scopes: { scope: BudgetScopeKey; rows: BudgetRow[] }[] = [
-    { scope: 'household', rows: flattenBudgetRows(budgetProgress(month, 'household', null)) },
+    ...(wantsHousehold
+      ? [{ scope: 'household' as const, rows: flattenBudgetRows(budgetProgress(month, 'household', null)) }]
+      : []),
     { scope: 'personal', rows: flattenBudgetRows(budgetProgress(month, 'personal', input.userId)) },
   ];
 
@@ -128,7 +191,7 @@ export function evaluateBudgetPace(input: { userId: number; now: Date; tz: strin
 
   let fired = 0;
   for (const candidate of candidates.slice(0, PACE_MAX_PER_EVALUATION)) {
-    fired += enqueuePaceCandidate({ userId: input.userId, month, dayOfMonth, now: input.now, candidate });
+    fired += enqueuePaceCandidate({ userId: input.userId, month, dayOfMonth, now: input.now, candidate, selfScoped });
   }
   return fired;
 }

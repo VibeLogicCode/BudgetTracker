@@ -88,6 +88,19 @@ function seedHistory(): { groceries: number; food: number } {
   return { groceries, food };
 }
 
+/**
+ * Same six-flat-months-then-a-July-overspend shape as seedHistory() above, parameterised over
+ * category and attribution so a test can seed a household series and a self-scoped recipient's
+ * OWN series on two different categories in the same DB -- necessary to assert on the rendered
+ * body which one leaked, rather than on an intermediate.
+ */
+function seedCategoryHistory(categoryId: number, attributedUserId: number | null = null): void {
+  for (const month of ['2026-01', '2026-02', '2026-03', '2026-04', '2026-05', '2026-06']) {
+    spend(categoryId, 60000, `${month}-10`, attributedUserId);
+  }
+  spend(categoryId, 71340, '2026-07-10', attributedUserId);
+}
+
 function keys(): string[] {
   return (t.sqlite.prepare('select dedup_key from notification_outbox order by id').all() as { dedup_key: string }[]).map(
     (r) => r.dedup_key,
@@ -444,5 +457,160 @@ describe('item BK: viewerFor skips rather than falling back to a household scope
     vi.mocked(findUserById).mockReturnValueOnce(null);
     expect(evaluateMonthBoundary({ userId, now: new Date('2026-08-01T09:00:00Z'), tz: TZ })).toBe(0);
     expect(keys()).toEqual([]);
+  });
+});
+
+/**
+ * S-18 fix (v1.13.0 ruling R2, applied one layer down): each of this file's three per-user
+ * sends read a household figure that was never scoped by the recipient's own visibility --
+ * comparePredicted('household', null) here, refreshFor('household', null) in
+ * fireSuggestedRefresh, and budgetTotals(budgetProgress(endedMonth)) (household by default) in
+ * fireMonthlyDigest. Fixed by consulting viewerFor(input.userId) at each site: the first two
+ * omit the household read outright for a self-scoped recipient (their own household-shaped
+ * section has no personal equivalent to fall back to, but they already get a separate personal
+ * section, so nothing is lost); the third substitutes 'personal' scope for the one figure this
+ * digest has no separate "Yours" line for, so the Budgets line narrows rather than disappearing.
+ */
+describe("S-18 fix (v1.13.0 ruling R2): predicted_vs_actual's household comparison never reaches a self-scoped recipient", () => {
+  it('drops the household section AND its total sentence, keeps the personal one, and leaves a household-visibility member, an admin, and an admin whose row says self, unchanged', () => {
+    const self = optedInUser('member');
+    setUserVisibility(self, 'self');
+    setPref(self, 'suggested_budget_refresh', 'email', false);
+    const groceries = categoryIdByName(t.db, 'Groceries');
+    const gas = categoryIdByName(t.db, 'Gas');
+    seedCategoryHistory(groceries); // household: unattributed history, someone else's money
+    seedCategoryHistory(gas, self); // self's OWN personal history, same shape
+
+    expect(evaluateMonthBoundary({ userId: self, now: new Date('2026-08-01T09:00:00Z'), tz: TZ })).toBe(1);
+    const selfBody = (t.sqlite.prepare('select body from notification_outbox limit 1').get() as { body: string }).body;
+    // The bug this pins: self used to also receive the household "Groceries"/"Food" comparison.
+    expect(selfBody).not.toContain('Groceries');
+    expect(selfBody).not.toContain('Food');
+    expect(selfBody).not.toContain('Household');
+    // Review round 1 (item 3): the total sentence is GONE, not zeroed. It is a positive factual
+    // claim about household state ("across every household category with a suggestion, July came
+    // in $X over"), and the real delta in this fixture is $113.40 -- so rendering "$0.00 over",
+    // as round 0 did, stated something false inside a message that correctly carries no
+    // Household block at all. A vacuously-true zero (a household with no suggested top-level
+    // category) and a false zero are different facts and must render differently.
+    expect(selfBody).not.toContain('Across every household category with a suggestion');
+    expect(selfBody).not.toContain('what the last six months pointed at');
+    // The feature: self's own Gas/Transport comparison is untouched -- same $113.40 shape as
+    // Groceries/Food would have shown, just attributed to the recipient's own category instead.
+    expect(selfBody).toContain('Yours');
+    expect(selfBody).toContain('Gas');
+    expect(selfBody).toContain('$113.40 difference');
+
+    // Byte-identical for everyone else.
+    t.sqlite.prepare('delete from notification_outbox').run();
+    const control = optedInUser(); // household-visibility admin
+    setPref(control, 'suggested_budget_refresh', 'email', false);
+    expect(evaluateMonthBoundary({ userId: control, now: new Date('2026-08-01T09:00:00Z'), tz: TZ })).toBe(1);
+    const controlBody = (t.sqlite.prepare('select body from notification_outbox limit 1').get() as { body: string }).body;
+    expect(controlBody).toContain('Household');
+    expect(controlBody).toContain('Groceries');
+    expect(controlBody).toContain('$113.40');
+    // ...total sentence included: it is dropped for a self-scoped recipient and for nobody else.
+    // $226.80, not $113.40: comparePredicted's total counts TOP-LEVEL household rows only, and
+    // this fixture seeds two of them (Food, over Groceries; Transport, over Gas), each $113.40
+    // over. That is the figure the self-scoped recipient's message used to render as $0.00.
+    expect(controlBody).toContain('came in $226.80 over what the last six months pointed at');
+
+    // Review round 1 (minor 5): admin + visibility 'self'. optedInUser() already defaults to
+    // role 'admin', so `control` above was doing both jobs at once and nothing covered this
+    // pairing. setUserVisibility refuses it (micro-ruling M1), so the row is written directly --
+    // the hand-edited-database case isSelfScoped's admin clause exists for. An admin is never
+    // self-scoped, so this recipient's message must match control's.
+    t.sqlite.prepare('delete from notification_outbox').run();
+    const adminSelf = optedInUser();
+    setPref(adminSelf, 'suggested_budget_refresh', 'email', false);
+    t.db.run(sql`update users set visibility = 'self' where id = ${adminSelf}`);
+    expect(evaluateMonthBoundary({ userId: adminSelf, now: new Date('2026-08-01T09:00:00Z'), tz: TZ })).toBe(1);
+    const adminSelfBody = (t.sqlite.prepare('select body from notification_outbox limit 1').get() as { body: string }).body;
+    expect(adminSelfBody).toBe(controlBody);
+  });
+});
+
+describe("S-18 fix (v1.13.0 ruling R2): suggested_budget_refresh's household list never reaches a self-scoped recipient", () => {
+  it('drops the household section, keeps the personal one, and leaves a household-visibility member, an admin, and an admin whose row says self, unchanged', () => {
+    const self = optedInUser('member');
+    setUserVisibility(self, 'self');
+    setPref(self, 'predicted_vs_actual', 'email', false);
+    const groceries = categoryIdByName(t.db, 'Groceries');
+    const gas = categoryIdByName(t.db, 'Gas');
+    seedCategoryHistory(groceries); // household: unattributed history, someone else's money
+    seedCategoryHistory(gas, self); // self's OWN personal history, same shape
+
+    expect(evaluateMonthBoundary({ userId: self, now: new Date('2026-08-01T09:00:00Z'), tz: TZ })).toBe(1);
+    const selfBody = (t.sqlite.prepare('select body from notification_outbox limit 1').get() as { body: string }).body;
+    expect(selfBody).not.toContain('Groceries');
+    expect(selfBody).not.toContain('Food');
+    expect(selfBody).not.toContain('Household');
+    expect(selfBody).toContain('Yours');
+    expect(selfBody).toContain('Gas');
+
+    // Byte-identical for everyone else.
+    t.sqlite.prepare('delete from notification_outbox').run();
+    const control = optedInUser();
+    setPref(control, 'predicted_vs_actual', 'email', false);
+    expect(evaluateMonthBoundary({ userId: control, now: new Date('2026-08-01T09:00:00Z'), tz: TZ })).toBe(1);
+    const controlBody = (t.sqlite.prepare('select body from notification_outbox limit 1').get() as { body: string }).body;
+    expect(controlBody).toContain('Household');
+    expect(controlBody).toContain('Groceries');
+
+    // Review round 1 (minor 5): admin + visibility 'self', written straight into the row because
+    // setUserVisibility refuses the pairing. An admin is never self-scoped.
+    t.sqlite.prepare('delete from notification_outbox').run();
+    const adminSelf = optedInUser();
+    setPref(adminSelf, 'predicted_vs_actual', 'email', false);
+    t.db.run(sql`update users set visibility = 'self' where id = ${adminSelf}`);
+    expect(evaluateMonthBoundary({ userId: adminSelf, now: new Date('2026-08-01T09:00:00Z'), tz: TZ })).toBe(1);
+    const adminSelfBody = (t.sqlite.prepare('select body from notification_outbox limit 1').get() as { body: string }).body;
+    expect(adminSelfBody).toBe(controlBody);
+  });
+});
+
+describe("S-18 fix (v1.13.0 ruling R2): the monthly digest's Budgets line uses the recipient's own scope for a self-scoped recipient", () => {
+  it('substitutes the personal totals rather than dropping the line, and leaves a household-visibility member, an admin, and an admin whose row says self, unchanged', () => {
+    const self = optedInUser('member');
+    setUserVisibility(self, 'self');
+    enableMonthlyDigest(self);
+    setPref(self, 'predicted_vs_actual', 'email', false);
+    setPref(self, 'suggested_budget_refresh', 'email', false);
+
+    const groceries = categoryIdByName(t.db, 'Groceries');
+    const gas = categoryIdByName(t.db, 'Gas');
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-07', amountCents: 50000 });
+    spend(groceries, 60000, '2026-07-10'); // someone else's/unattributed $600 against a $500 household limit
+    upsertBudget({ scope: 'personal', userId: self, categoryId: gas, month: '2026-07', amountCents: 20000 });
+    spend(gas, 15000, '2026-07-10', self); // self's own $150 against a $200 personal limit
+
+    expect(evaluateMonthBoundary({ userId: self, now: new Date('2026-08-01T09:00:00Z'), tz: TZ })).toBe(1);
+    const selfBody = (t.sqlite.prepare('select body from notification_outbox limit 1').get() as { body: string }).body;
+    // self's OWN budgeted figures -- never the household's $600 of $500.
+    expect(selfBody).toContain('Budgets: $150.00 of $200.00 spent, $50.00 left.');
+    expect(selfBody).not.toContain('$600.00');
+    expect(selfBody).not.toContain('$500.00');
+
+    // Byte-identical for everyone else.
+    t.sqlite.prepare('delete from notification_outbox').run();
+    const control = optedInUser();
+    enableMonthlyDigest(control);
+    setPref(control, 'predicted_vs_actual', 'email', false);
+    setPref(control, 'suggested_budget_refresh', 'email', false);
+    expect(evaluateMonthBoundary({ userId: control, now: new Date('2026-08-01T09:00:00Z'), tz: TZ })).toBe(1);
+    const controlBody = (t.sqlite.prepare('select body from notification_outbox limit 1').get() as { body: string }).body;
+    expect(controlBody).toContain('Budgets: $600.00 of $500.00 spent, $100.00 over.');
+
+    // Review round 1 (minor 5): admin + visibility 'self'. The household Budgets line stands.
+    t.sqlite.prepare('delete from notification_outbox').run();
+    const adminSelf = optedInUser();
+    enableMonthlyDigest(adminSelf);
+    setPref(adminSelf, 'predicted_vs_actual', 'email', false);
+    setPref(adminSelf, 'suggested_budget_refresh', 'email', false);
+    t.db.run(sql`update users set visibility = 'self' where id = ${adminSelf}`);
+    expect(evaluateMonthBoundary({ userId: adminSelf, now: new Date('2026-08-01T09:00:00Z'), tz: TZ })).toBe(1);
+    const adminSelfBody = (t.sqlite.prepare('select body from notification_outbox limit 1').get() as { body: string }).body;
+    expect(adminSelfBody).toContain('Budgets: $600.00 of $500.00 spent, $100.00 over.');
   });
 });

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { categoryIdByName, createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../../helpers/db';
+import { upsertBudget } from '@/lib/budgets';
 import { normalizeMerchant } from '@/lib/categorize/normalize';
 import { saveEmailTarget, saveSmtp, setPref } from '@/lib/notify/config';
 import { resetOutboxPumpForTests } from '@/lib/notify/outbox';
@@ -156,6 +157,52 @@ describe('ruling R2: a self-visibility recipient never receives the true househo
     expect(body()).toContain('Your spend:      $10.00');
     // The true combined household total ($10 + $90) must never appear anywhere in this recipient's digest.
     expect(body()).not.toContain('$100.00');
+  });
+});
+
+/**
+ * S-18 fix (v1.13.0 ruling R2, review follow-up): every OTHER line in evaluateWeeklyDigest
+ * already went through `viewer` (the describe block above), but `overBudget` was read from
+ * budgetProgress(month, 'household', null) unconditionally -- the one line that did not, and
+ * so the one household figure that reached a self-scoped recipient's own digest by push. Fixed
+ * by branching on isSelfScoped(viewer): a self-scoped recipient's overBudget now comes from
+ * budgetProgress(month, 'personal', viewer.id) instead.
+ */
+describe('S-18 fix (v1.13.0 ruling R2): overBudget names only the recipient\'s own over-budget categories', () => {
+  it('a self-scoped recipient sees no household over-budget category, but does see their own', () => {
+    const userId = emailUser('member');
+    setUserVisibility(userId, 'self');
+    const groceries = categoryIdByName(t.db, 'Groceries');
+    const gas = categoryIdByName(t.db, 'Gas');
+
+    // A household budget, blown by someone else's (unattributed) spend -- must never reach
+    // this recipient's "Over budget this month" line.
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-08', amountCents: 10000 });
+    spend(groceries, 20000, '2026-08-12'); // $200.00 against a $100.00 household limit
+
+    // This recipient's OWN personal budget, blown by their own spend -- must still appear.
+    upsertBudget({ scope: 'personal', userId, categoryId: gas, month: '2026-08', amountCents: 5000 });
+    spend(gas, 9000, '2026-08-12', userId); // $90.00 against a $50.00 personal limit
+
+    expect(evaluateWeeklyDigest({ userId, slotDate: '2026-08-17', now: NOW })).toBe(1);
+    expect(body()).not.toContain('Groceries');
+    expect(body()).toContain('Over budget this month: Gas');
+  });
+
+  it('a household-visibility member and an admin see the household over-budget category unchanged', () => {
+    const member = emailUser('member'); // household-visibility (the default), not self-scoped
+    const admin = emailUser('admin');
+    const groceries = categoryIdByName(t.db, 'Groceries');
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-08', amountCents: 10000 });
+    spend(groceries, 20000, '2026-08-12');
+
+    expect(evaluateWeeklyDigest({ userId: member, slotDate: '2026-08-17', now: NOW })).toBe(1);
+    const memberBody = (t.sqlite.prepare('select body from notification_outbox where user_id = ?').get(member) as { body: string }).body;
+    expect(memberBody).toContain('Over budget this month: Groceries');
+
+    expect(evaluateWeeklyDigest({ userId: admin, slotDate: '2026-08-17', now: NOW })).toBe(1);
+    const adminBody = (t.sqlite.prepare('select body from notification_outbox where user_id = ?').get(admin) as { body: string }).body;
+    expect(adminBody).toContain('Over budget this month: Groceries');
   });
 });
 

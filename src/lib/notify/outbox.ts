@@ -101,6 +101,27 @@ export function enqueue(input: {
    * date (householdWeeklyDigestKey's docblock has the argument).
    */
   household?: { subject: string; body: string; dedupKey?: string };
+  /**
+   * v1.30.0 (S-18 fix, round 1). "This recipient contributes the FAMILY-CHANNEL row, but must
+   * receive no personal copy of it." Set for a SELF-SCOPED recipient on a household-scope send
+   * (evaluate/budget.ts, evaluate/pace.ts, evaluate/savings.ts): household figures are the
+   * room's business and stay the room's, while the member's own inbox gets nothing carrying
+   * them (v1.13.0 ruling R2).
+   *
+   * The distinction has to live HERE, not at the call site, because the routed/personal split is
+   * PER CHANNEL and this loop is the only place that knows it. Round 0 of the S-18 fix skipped
+   * the whole household send for a self-scoped participant instead, which on a routed channel
+   * removed their contribution to the family channel and protected nobody -- in a household
+   * where every participant with the event enabled is self-scoped, family budget alerts stopped
+   * entirely. The other rejected shape, gating the call on householdRoutedChannels() at the
+   * evaluator, still leaks on the OTHER channel whenever an admin has routed an event to one of
+   * the two and not both.
+   *
+   * Meaningless together with subjectScope 'personal': nothing is routable, so nothing at all
+   * would be enqueued. No caller pairs them, and none should -- a personal-scope send carries no
+   * household figure to withhold in the first place.
+   */
+  familyChannelOnly?: boolean;
   at?: Date;
 }): EnqueueResult {
   const db = getDb();
@@ -142,6 +163,11 @@ export function enqueue(input: {
       if (result.changes > 0) household.push(channel);
       continue;
     }
+
+    // Not routed on this channel, so the only row it could produce is the PERSONAL one -- and
+    // that is exactly the delivery familyChannelOnly exists to withhold. Placed after the routed
+    // branch above, never before it: the family-channel row must still be written.
+    if (input.familyChannelOnly) continue;
 
     if (!isEventEnabled(input.userId, input.eventId, channel)) continue;
     // MUST-3.9: the row that was sent IS the dedup guard. `changes === 0` means

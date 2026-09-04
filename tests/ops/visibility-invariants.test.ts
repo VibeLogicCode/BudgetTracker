@@ -97,21 +97,39 @@ const EXEMPT: { file: string; fn: string; why: string }[] = [
 /**
  * Third named list (v1.13.0 whole-branch review, item M-d). These read-models are, by design,
  * household-wide with NO viewer parameter at all -- unlike REQUIRE_VIEWER's functions, which
- * scope themselves down for a self viewer, these three have no self-scoped shape to fall back
+ * scope themselves down for a self viewer, the five below have no self-scoped shape to fall back
  * to (see item C1's own fix, src/app/(app)/reports/page.tsx: a self viewer gets NO category
- * baselines, not a household-scoped call run and discarded). The guarantee they carry is
- * different from both REQUIRE_VIEWER and EXEMPT above: the PAGE that calls them must gate the
- * call itself -- skip it OUTRIGHT for a self viewer, never run it and throw the result away --
- * rather than trusting the function to refuse on its own, because it structurally cannot: it
- * has no viewer to refuse with. This list exists so a future page that starts calling one of
- * these directly is one grep away from the rule it must uphold, and each reason names exactly
- * which page currently carries that gate.
+ * baselines, not a household-scoped call run and discarded).
+ *
+ * The guarantee they carry is different from both REQUIRE_VIEWER and EXEMPT above: the CALLER
+ * gates, not the function, because the function structurally cannot -- it has no viewer to refuse
+ * with. The list's name is historical (S-18, v1.30.0): pages were the only callers when it was
+ * written, and four notification evaluators have since joined them, which is why the rule is
+ * stated in terms of callers rather than pages. Two gate shapes satisfy it, and every entry's
+ * reason below says which one each caller uses:
+ *
+ *   1. SKIP THE CALL OUTRIGHT for a self-scoped viewer -- never run it and throw the result away.
+ *      Every page caller does this, and so does a notification evaluator whose household read has
+ *      no audience (evaluate/pace.ts and evaluate/digest.ts skip theirs when the event is routed
+ *      to no family channel).
+ *   2. RUN IT, BUT DELIVER IT ONLY TO THE FAMILY CHANNEL. Available to a notification evaluator
+ *      alone, and only for a household-eligible event (src/lib/notify/events.ts): enqueue's
+ *      familyChannelOnly writes the household row -- user_id NULL, householdTarget(channel), one
+ *      message to a room an admin deliberately pointed the household's bot at -- and suppresses
+ *      the self-scoped member's own personal copy. Ruling R2 governs what reaches a member's
+ *      screen or inbox; it does not govern that room (evaluate/digest.ts's HOUSEHOLD_VIEWER
+ *      docblock, v1.28.0 decision 3, has the argument). Gate shape 1 alone was tried first and
+ *      was wrong: it removed the family channel's only contributor in a household whose opted-in
+ *      members are all self-scoped, silencing a shipped feature while protecting nobody.
+ *
+ * This list exists so a future caller of one of these is one grep away from the rule it must
+ * uphold, and each reason names exactly which callers currently carry that gate, and how.
  */
 const HOUSEHOLD_ONLY_AT_PAGE: { file: string; fn: string; why: string }[] = [
   {
     file: 'src/lib/predict/history.ts',
     fn: 'suggestionsFor',
-    why: "no viewer parameter at all. budgets/page.tsx and reports/page.tsx both skip the scope: 'household' call OUTRIGHT for a self viewer (item C1) rather than running it and discarding the result -- the same 'no household figure leaves this file, even unrendered' reasoning both pages document inline.",
+    why: "no viewer parameter at all. budgets/page.tsx and reports/page.tsx both skip the scope: 'household' call OUTRIGHT for a self viewer (item C1) rather than running it and discarding the result -- the same 'no household figure leaves this file, even unrendered' reasoning both pages document inline. Gate shape 1 again in notify/evaluate/monthly.ts, which S-18 added: comparePredicted (called for scope 'household' by firePredictedVsActual) and refreshFor (by fireSuggestedRefresh) are both skipped outright for a self-scoped recipient, so neither a household suggestion figure nor the total derived from it is computed for them, let alone rendered. The two remaining callers, budgets/actions.ts's applySuggestionAction and applySuggestionsAction, are WRITE paths: they resolve scope through their own MUST-7.6 authz check and return only an error or a set/skipped count, never a suggestion figure.",
   },
   {
     file: 'src/lib/tax.ts',
@@ -127,6 +145,16 @@ const HOUSEHOLD_ONLY_AT_PAGE: { file: string; fn: string; why: string }[] = [
     file: 'src/lib/loans.ts',
     fn: 'debtOverTime',
     why: 'no viewer parameter at all -- sums every loan balance household-wide with no per-owner split. reports/page.tsx only calls it when showHouseholdTotals is true, and the Debt over time card is dropped entirely for a self viewer.',
+  },
+  // S-18 fix (v1.13.0 ruling R2, review follow-up): added AFTER the fix that makes this `why`
+  // true, not before -- an exemption whose stated reason is false is worse than none (this
+  // release already had to correct one). budgetProgress is the keystone the two EXEMPT entries
+  // above (categorySpend, categorySpendWithRollupSeries) both lean on: it has no viewer of its
+  // own, so every caller -- page or notify evaluator -- carries the gate itself.
+  {
+    file: 'src/lib/budgets.ts',
+    fn: 'budgetProgress',
+    why: "no viewer parameter at all. Page callers use gate shape 1: budgets/page.tsx and dashboard/page.tsx both skip the household call OUTRIGHT for a self viewer (item C1's own 'no household figure leaves this file, even unrendered' reasoning), and bills.ts's safeToSpend resolves ownerScope(viewer) FIRST and calls budgetProgress(month, 'personal', scope) instead of the household form whenever it is non-null. The four notify evaluators carry the gate one layer down (S-18, this ruling, applied to notifications), each with the shape its own message allows. Shape 2, because budget_threshold/budget_exceeded/budget_pace are household-eligible and their household rows ARE the family channel's message: evaluate/budget.ts and evaluate/pace.ts still fire those rows for a self-scoped participant but pass enqueue's familyChannelOnly, so the row reaches the family channel and never that member's own inbox. Shape 1 wherever there is no family channel to feed or no household-shaped message to send: evaluate/pace.ts and evaluate/digest.ts skip the household read entirely for a self-scoped recipient when the event is routed nowhere; evaluate/digest.ts scopes that recipient's own overBudget line to their personal scope; evaluate/monthly.ts skips its predicted_vs_actual and suggested_budget_refresh household reads outright and substitutes personal scope for the monthly digest's one Budgets line. No household category name, amount or limit reaches a self-scoped recipient through a PER-USER notification on any of these paths.",
   },
 ];
 
@@ -146,8 +174,11 @@ describe('household-only readers gated at the page (item M-d)', () => {
     for (const entry of HOUSEHOLD_ONLY_AT_PAGE) expect(entry.why.length).toBeGreaterThan(40);
   });
 
-  it('the list cannot shrink below 4 entries', () => {
-    expect(HOUSEHOLD_ONLY_AT_PAGE.length).toBeGreaterThanOrEqual(4);
+  // Raised from 4 to 5 (S-18 fix, v1.13.0 ruling R2 review follow-up): budgetProgress joined
+  // this list once its own fix landed, so a future deletion of any one of the five now trips
+  // this rather than silently going unnoticed.
+  it('the list cannot shrink below 5 entries', () => {
+    expect(HOUSEHOLD_ONLY_AT_PAGE.length).toBeGreaterThanOrEqual(5);
   });
 });
 
