@@ -44,6 +44,33 @@ export const CARD_PAYMENT_PATTERNS: readonly string[] = [
   'TRANSFER FROM C/C',
 ];
 
+/**
+ * v1.31.0 (review finding R-07, P3). Does this merchant text hit the card-payment list at all --
+ * the ONE definition, for the two places that ask.
+ *
+ * It was written twice: detectTransfer walked CARD_PAYMENT_PATTERNS with a `for` loop and an
+ * early `return true`, and setTransferFlag asked the same question with a `.some((pattern) =>
+ * ...includes(pattern))`. Same semantics on the day they were written, and nothing tying them
+ * together -- so `includes` becoming a word-boundary test on one side (the obvious future edit
+ * here: `TFR-TO` matching inside a longer token is the list's weakest entry) would silently leave
+ * the other side matching substrings.
+ *
+ * The two are not interchangeable callers, which is exactly why they must not be two predicates.
+ * detectTransfer's ORDER is load-bearing -- a not_transfer override wins outright, THEN this list,
+ * then a learned transfer rule -- and setTransferFlag's `else if (matchesCardPaymentPattern(...))`
+ * branch exists solely to author the not_transfer override that detectTransfer's first step will
+ * honour. A person un-flagging a row is telling us this list was wrong about that text; the branch
+ * only reaches the right conclusion while both sides agree on what "this list matched" means.
+ *
+ * Raw substring, no boundary, deliberately unchanged from what both copies did: these are whole
+ * descriptor phrases a bank prints ('PAYMENT - THANK YOU'), and the two `TFR-`/`C/C` entries carry
+ * punctuation that a token split would have to special-case. Narrowing it is a behaviour change
+ * with real rows behind it, not a tidy-up, so it is not smuggled in here.
+ */
+export function matchesCardPaymentPattern(normalizedMerchant: string): boolean {
+  return CARD_PAYMENT_PATTERNS.some((pattern) => normalizedMerchant.includes(pattern));
+}
+
 export interface EngineTxn {
   id: number;
   normalizedMerchant: string;
@@ -93,9 +120,10 @@ export function detectTransfer(normalizedMerchant: string, ctx: CategorizeContex
   // every future import/re-run.
   if (matchRule(normalizedMerchant, 'not_transfer', ctx.rules) !== null) return false;
 
-  for (const pattern of CARD_PAYMENT_PATTERNS) {
-    if (normalizedMerchant.includes(pattern)) return true;
-  }
+  // R-07: the card-payment list is consulted through matchesCardPaymentPattern, which
+  // setTransferFlag's not_transfer branch also uses -- see that function's docblock for why the
+  // two must stay one predicate rather than two that agree today.
+  if (matchesCardPaymentPattern(normalizedMerchant)) return true;
   // Whatever match type the transfer rule carries -- setTransferFlag only ever LEARNS an exact
   // one, but the rules form and a pack may both write a 'contains' transfer rule and matchRule
   // fires it as a substring match. attributedRuleId (below) is what keeps attribution honest
@@ -158,6 +186,28 @@ const ELIGIBLE = and(
   sql`not exists (select 1 from ${transactionSplits} where ${transactionSplits.txnId} = ${transactions.id})`,
 );
 
+/**
+ * ELIGIBLE, asked of a row already in hand -- the JavaScript half of the SAME predicate, and
+ * deliberately adjacent to it so the two can be read as one thing.
+ *
+ * v1.31.0 (review finding R-06, P3). It was not one thing. `(row.categoryId === null ||
+ * row.source === 'bayes') && row.hasSplits === 0` was typed out three times (runEngine,
+ * previewRerun, eligibleForRuleReapply) beside the SQL above, and the docblock on `hasSplits`
+ * below claimed the opposite -- "ONE predicate serves both paths, instead of two that agree today
+ * and drift tomorrow". v1.12.1 had made the JS copy COMPLETE (it added the splits half, which was
+ * genuinely missing); it did not make it single. Three copies of a two-clause predicate is not a
+ * hypothetical drift risk: the splits clause was the clause that went missing the first time.
+ *
+ * The two halves still cannot be literally the same expression -- one is a drizzle `SQL` handed to
+ * `.where()`, the other runs over rows already fetched -- so what binds them is this comment plus
+ * adjacency plus the fact that every JS caller now goes through this function and no other.
+ * `hasSplits` is a number rather than a boolean because that is the shape selectRowsByIds derives
+ * from its membership query; see its own note.
+ */
+function isEligibleRow(row: { categoryId: number | null; source: string; hasSplits: number }): boolean {
+  return (row.categoryId === null || row.source === 'bayes') && row.hasSplits === 0;
+}
+
 /** Chunked well under SQLite's bound-parameter ceiling — see the note in dedup.ts. */
 const ID_CHUNK = 400;
 
@@ -175,8 +225,14 @@ function selectRowsByIds(ids: number[]) {
      * v1.12.1 (item BC / MON-6). ELIGIBLE (above) carries the splits half of the predicate and its
      * docblock explains at length why. runEngine re-derived eligibility in JavaScript and
      * reproduced only the category half, so the guard the comment describes as living on ELIGIBLE
-     * did not apply on that path at all. Selecting the flag here means ONE predicate serves both
-     * paths, instead of two that agree today and drift tomorrow.
+     * did not apply on that path at all. Selecting the flag here is what makes the splits half
+     * ANSWERABLE off a fetched row at all.
+     *
+     * v1.31.0 (R-06) corrects what this comment used to claim. It said selecting the flag meant
+     * "ONE predicate serves both paths, instead of two that agree today and drift tomorrow", and
+     * that was not true: the flag was available, and three separate call sites then each spelled
+     * the two-clause test out for themselves. isEligibleRow (beside ELIGIBLE, above) is the one
+     * predicate this sentence was promising, and it is now the only reader of this field.
      */
     hasSplits: number;
   }[] = [];
@@ -237,9 +293,7 @@ export function runEngine(txnIds: number[]): EngineResult {
     // already confirmed can still need its display name refreshed.
     applyRenameRules(txnIds, ctx);
 
-    const eligible = rows.filter(
-      (row) => (row.categoryId === null || row.source === 'bayes') && row.hasSplits === 0,
-    );
+    const eligible = rows.filter(isEligibleRow);
     const skipped = rows.length - eligible.length;
 
     const at = new Date();
@@ -364,7 +418,7 @@ export function previewRerun(txnIds: number[]): RerunPreview {
   if (txnIds.length === 0) return { eligible: 0, wouldChange: 0 };
   const rows = selectRowsByIds(txnIds);
   const ctx = buildContext();
-  const eligible = rows.filter((row) => (row.categoryId === null || row.source === 'bayes') && row.hasSplits === 0);
+  const eligible = rows.filter(isEligibleRow);
   let wouldChange = 0;
   for (const row of eligible) {
     const outcome = categorizeTransaction({ id: row.id, normalizedMerchant: row.normalizedMerchant }, ctx);
@@ -469,10 +523,15 @@ function eligibleForRuleReapply(rule: MerchantRuleRecord, scope: RuleScope = {})
   if (rule.ruleKind === 'rename') return [];
   const ids = eligibleForRerun(scope);
   if (ids.length === 0) return [];
+  // v1.31.0 (R-06): NO second eligibility filter here. These ids came out of eligibleForRerun,
+  // which is ELIGIBLE applied in SQL, so re-testing isEligibleRow over the fetched rows was pure
+  // duplication -- the exact "two that agree today and drift tomorrow" shape, with the added twist
+  // that a future edit to ELIGIBLE alone would leave this path silently narrower than every other
+  // caller of eligibleForRerun. The rows are still fetched, because attribution needs their
+  // merchant text.
   const rows = selectRowsByIds(ids);
-  const eligible = rows.filter((row) => (row.categoryId === null || row.source === 'bayes') && row.hasSplits === 0);
   const attributedTo = ruleAttributor(rule.ruleKind, buildContext());
-  return eligible.filter((row) => attributedTo(row.normalizedMerchant) === rule.id).map((row) => row.id);
+  return rows.filter((row) => attributedTo(row.normalizedMerchant) === rule.id).map((row) => row.id);
 }
 
 /** Per-rule "Apply now" preview: the confirm text before the click. */
@@ -730,6 +789,13 @@ export function ruleClearIds(ruleId: number, scope: RuleScope = {}, ctx: Categor
   const rule = ctx.rules.find((r) => r.id === ruleId);
   if (!rule) return [];
   if (rule.ruleKind === 'not_transfer') return [];
+  // v1.31.0 (R-08). THIS LINE is where "a rename revert ignores the date range" is decided, and as
+  // of this release it is the only place that decides it. previewRuleClearAction and
+  // deleteRuleAndClearAction each used to drop the scope themselves before calling in here, so one
+  // decision was written in four places and a future "bounded rename revert is supported now"
+  // change would have had to find all four. Both actions now pass their scope through unchanged.
+  // The WRITE side agrees by construction rather than by a second copy: clearRuleFromTransactions
+  // hands a rename to deleteRenameRule, which has no range parameter to ignore.
   if (rule.ruleKind === 'rename') return ruleImpactIds(ruleId, {}, ctx);
   if (rule.ruleKind === 'category') return ruleImpactIds(ruleId, scope, ctx);
   return getDb()
@@ -1126,7 +1192,10 @@ export function setTransferFlag(input: {
   if (!row) throw new Error(`No transaction ${input.transactionId}`);
   if (transactionHasSplits(input.transactionId)) return { ok: false, reason: 'has_splits' };
 
-  const matchesCardPattern = CARD_PAYMENT_PATTERNS.some((pattern) => row.normalizedMerchant.includes(pattern));
+  // R-07: one definition of "the card-payment list matched this text", shared with
+  // detectTransfer -- the not_transfer branch below only reaches the right conclusion while both
+  // sides agree on what a match is.
+  const matchesCardPattern = matchesCardPaymentPattern(row.normalizedMerchant);
 
   // v1.13.1 ruling R4, fix round 2 (item BJ): the OPPOSITE-kind rule this flip would remove as
   // housekeeping below (deleteExactRule at the end of this function) -- 'not_transfer' when
@@ -1360,9 +1429,32 @@ export function reviewQueueCount(): number {
  * emptiness test below is kept for the narrowing, and says the same thing as the skip.
  */
 export function resolveRename(normalizedMerchant: string, ctx: CategorizeContext): string | null {
+  return resolveRenameRule(normalizedMerchant, ctx)?.renameTo ?? null;
+}
+
+/**
+ * WHICH rename rule a merchant resolves to -- resolveRename's own answer, before it is narrowed to
+ * the text. The two are one function with two projections, which is the point.
+ *
+ * v1.31.0 (review finding R-09, P3). Three surfaces asked "does this merchant have a rename?" and
+ * three answered it differently: this file treated `null` and `''` alike, /transactions' page
+ * tested `rule.renameTo !== null` only (so an empty target would have rendered an attribution card
+ * for a rename of ""), and reports.ts's topMerchants wrote `rule?.renameTo ?? row.normalizedMerchant`
+ * (so an empty target would have folded a whole merchant bucket under the display name ""). All
+ * three are latent today -- every writer refuses an empty target, and as of R-02 matchRule skips
+ * such a row at the choke point (ruleOutcomeMissing, rules.ts) -- which is exactly why they are
+ * P3 and exactly why they are worth collapsing now rather than after somebody relaxes a writer.
+ *
+ * So this is the shared definition the other two now call, rather than a fourth writing of it.
+ * The emptiness test is kept here even though matchRule can no longer hand back such a row: it is
+ * what gives the `string` return type its narrowing, and it says the same thing ruleOutcomeMissing
+ * says, in the one place a caller that needs the RULE (its pattern, its id -- rename attribution
+ * on the transactions row) can get it without asking a second question.
+ */
+export function resolveRenameRule(normalizedMerchant: string, ctx: CategorizeContext): MerchantRuleRecord | null {
   const rule = matchRule(normalizedMerchant, 'rename', ctx.rules);
   if (!rule || rule.renameTo === null || rule.renameTo.length === 0) return null;
-  return rule.renameTo;
+  return rule;
 }
 
 /**
@@ -1540,4 +1632,96 @@ export function deleteRenameRule(input: { pattern: string; matchType: MatchType 
   deleteRule(existing.id);
   const rowsCleared = applyRenameRules(undefined, buildContext());
   return { ruleId: existing.id, rowsCleared };
+}
+
+// ------------------------------------------- many rules at once (v1.31.0 R-10)
+
+/**
+ * v1.31.0 (review finding R-10, P3). MANY RULES, ONE RENAME PASS.
+ *
+ * THE DEFECT. `importRulesPack` batches this on purpose and says so -- "a pack with many renames
+ * pays for one full pass instead of one per rule" (src/lib/packs.ts) -- and every path that
+ * DELETES or DISABLES rules in bulk did the opposite: bulkDeleteRulesAction called
+ * deleteRenameRule per rule, bulkSetDisabledAction called setRuleDisabled per rule,
+ * removeCanadianPack deleted 18 stamped rename rules one at a time, and the pack update's removal
+ * loop did the same and then paid for one MORE pass at the end. Each pass reads every non-manual
+ * transaction twice (applyRenameRules, above) and writes inside its own transaction. Same idea as
+ * the importer's, implemented twice, with the batched half the one nobody reached for.
+ *
+ * MEASURED, not asserted -- the precedent 43229e1 set in this release. 21,000 transactions, 18
+ * stamped `contains` rename rules covering every row, `removeCanadianPack()`: BEFORE 1717 ms
+ * (median of 1780 / 1620 / 1717), AFTER 749 ms (median of 744 / 874 / 749). 2.3x, saving ~970 ms.
+ *
+ * AND THE REASON IT IS 2.3x AND NOT 18x IS WORTH WRITING DOWN, because the naive prediction is
+ * wrong in an instructive way: the WRITES do not go away. Every one of those 21,000 rows still
+ * has its display columns cleared exactly once -- the old code just spread those writes across
+ * eighteen passes instead of doing them in one. What the batch removes is seventeen redundant
+ * full-table READS (applyRenameRules reads every non-manual row twice per pass) and seventeen
+ * transaction commits. So the saving scales with the number of rules, not with the number of rows
+ * changed, and a household whose renames cover only a slice of the table sees a bigger multiple
+ * than this measurement does. That is also why "Remove all" on the shipped pack felt slow (the
+ * sweep report's own improvement note 10).
+ *
+ * THE COUNT IS THE SINGLE PASS'S, and it is MORE honest than the sum it replaces, not merely
+ * cheaper. Summing per-rule counts double-counts wherever two deleted rename rules overlap: with
+ * rule A gone, rows it used to win are re-resolved to rule B and cleared again by B's own pass.
+ * One pass over the final rule set answers the question the message actually asks -- how many
+ * transactions went back to the bank's text.
+ *
+ * ONE UNIT OF WORK. Wrapped in a transaction, which the per-rule loops never were: a bulk delete
+ * that stops halfway used to leave rules gone and their rows still carrying display names no rule
+ * explains. applyRenameRules opening its own transaction inside this one is safe for the reason
+ * runEngine already depends on -- better-sqlite3 nests via SAVEPOINT -- and deleteRule reaches for
+ * getDb() itself, which hands back the same connection, so its writes are inside this transaction
+ * and roll back with it.
+ *
+ * Ids that name no rule are skipped, not an error: a second session may have deleted one between
+ * the page render and the click, and `deleted` reports what actually happened.
+ */
+export function deleteRules(ruleIds: number[]): { deleted: number; rowsCleared: number } {
+  if (ruleIds.length === 0) return { deleted: 0, rowsCleared: 0 };
+  return getDb().transaction(() => {
+    const known = listRules();
+    let deleted = 0;
+    let renameDeleted = false;
+    for (const id of ruleIds) {
+      const rule = known.find((candidate) => candidate.id === id);
+      if (!rule) continue;
+      deleteRule(rule.id);
+      if (rule.ruleKind === 'rename') renameDeleted = true;
+      deleted += 1;
+    }
+    // Only when a rename actually went: for a batch of category/transfer rules there is nothing
+    // retroactive to do, exactly as setRuleDisabled and clearRuleFromTransactions already argue.
+    return { deleted, rowsCleared: renameDeleted ? applyRenameRules(undefined, buildContext()) : 0 };
+  });
+}
+
+/**
+ * setRuleDisabled for a batch, R-10's other half and for the same measured reason. Disabling five
+ * rename rules used to run five full retroactive passes; re-enabling them ran five more.
+ *
+ * `rowsChanged` is the single pass's own figure, which is what makes the message honest for
+ * enabling as well as disabling -- see deleteRules above on why a sum over overlapping rules is
+ * the wrong number rather than just a slower one. Every non-rename kind contributes nothing
+ * retroactively, which is setRuleDisabled's own long-standing ruling and is not restated here.
+ */
+export function setRulesDisabled(input: { ruleIds: number[]; disabled: boolean; at?: Date }): {
+  touched: number;
+  rowsChanged: number;
+} {
+  if (input.ruleIds.length === 0) return { touched: 0, rowsChanged: 0 };
+  return getDb().transaction(() => {
+    const known = listRules();
+    let touched = 0;
+    let renameTouched = false;
+    for (const id of input.ruleIds) {
+      const rule = known.find((candidate) => candidate.id === id);
+      if (!rule) continue;
+      setRuleDisabledFlag(rule.id, input.disabled, input.at);
+      if (rule.ruleKind === 'rename') renameTouched = true;
+      touched += 1;
+    }
+    return { touched, rowsChanged: renameTouched ? applyRenameRules(undefined, buildContext()) : 0 };
+  });
 }

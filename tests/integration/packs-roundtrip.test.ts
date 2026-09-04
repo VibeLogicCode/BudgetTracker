@@ -126,7 +126,17 @@ describe('rules pack round trip onto a fresh database', () => {
     importRulesPack(rules);
     const before = listRules().length;
     const again = importRulesPack(rules);
-    expect(again).toEqual({ rulesAdded: 0, rulesOverwritten: 0, rulesKept: 0, rulesSkipped: 0, categoriesCreated: 0 });
+    // v1.31.0 R-12 added rulesSkippedDetail -- the skipped entries by NAME, not just a count. An
+    // export this install wrote skips nothing, so it must come back empty; asserted rather than
+    // dropped from the object, because "a round trip skips nothing" is the property here.
+    expect(again).toEqual({
+      rulesAdded: 0,
+      rulesOverwritten: 0,
+      rulesKept: 0,
+      rulesSkipped: 0,
+      rulesSkippedDetail: [],
+      categoriesCreated: 0,
+    });
     expect(listRules().length).toBe(before);
   });
 

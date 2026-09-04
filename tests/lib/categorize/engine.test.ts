@@ -14,12 +14,15 @@ import {
   clearRuleFromTransactions,
   confirmCategory,
   deleteRenameRule,
+  deleteRules,
   detectTransfer,
   eligibleForRerun,
+  matchesCardPaymentPattern,
   previewRerun,
   previewRuleReapply,
   rerunEngine,
   resolveRename,
+  resolveRenameRule,
   REVIEW_SUGGESTED_WHERE,
   REVIEW_UNCATEGORIZED_WHERE,
   REVIEW_WHERE,
@@ -30,6 +33,7 @@ import {
   ruleImpactIds,
   runEngine,
   setRuleDisabled,
+  setRulesDisabled,
   setTransactionDisplayName,
   setTransferFlag,
   upsertRenameRule,
@@ -1777,13 +1781,36 @@ describe('v1.31.0 R-01: transfer attribution simulates the match instead of assu
  * categorised by anything.
  */
 describe('v1.31.0 R-02: a rule with no outcome can neither fire nor shadow', () => {
+  /**
+   * The offending row is written STRAIGHT TO THE TABLE, and as of v1.31.0 R-09 that is the only
+   * way it can be written at all -- which is the point of both findings taken together.
+   *
+   * These two tests used to build their subject through upsertRuleFromCorrection, under a comment
+   * saying that stood in for "a row that predates the guard, or a hand-edited database". It did
+   * not: upsertRuleFromCorrection is this app's write choke point, so the comment was describing
+   * a back door as if it were a museum piece while the door was open. R-09 shut it (the upsert now
+   * throws for a kind whose outcome is missing, using the same ruleOutcomeMissing predicate
+   * matchRule uses to skip one). So the row is inserted the way ruleOutcomeMissing's own docblock
+   * says such a row arrives -- raw SQL, no helper -- and the READ-side backstop is now tested
+   * against the only state that can actually reach it.
+   */
+  const insertRawRule = (
+    sqlite: TestDb['sqlite'],
+    row: { pattern: string; matchType: string; ruleKind: string; categoryId: number | null; renameTo: string | null },
+  ) =>
+    sqlite
+      .prepare(
+        `insert into merchant_rules (pattern, match_type, rule_kind, category_id, rename_to, hit_count, created_at)
+         values (?, ?, ?, ?, ?, 0, '2026-01-01T00:00:00.000Z')`,
+      )
+      .run(row.pattern, row.matchType, row.ruleKind, row.categoryId, row.renameTo);
+
   it('a null-category rule no longer blocks the shorter rule that can actually file the merchant', () => {
-    const { db, userId } = setup();
+    const { db, sqlite, userId } = setup();
     const coffee = categoryIdByName(db, 'Coffee');
     // The shadowing rule: longer pattern, so matchRule ranks it first -- and no category.
-    upsertRuleFromCorrection({
-      pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: null,
-      createdBy: userId, actorRole: 'admin',
+    insertRawRule(sqlite, {
+      pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: null, renameTo: null,
     });
     upsertRuleFromCorrection({
       pattern: 'TIM', matchType: 'contains', ruleKind: 'category', categoryId: coffee,
@@ -1798,12 +1825,12 @@ describe('v1.31.0 R-02: a rule with no outcome can neither fire nor shadow', () 
   });
 
   it('the same for a rename rule with no target text', () => {
-    const { userId } = setup();
-    // upsertRenameRule refuses an empty target, so this row is written the way one that predates
-    // the guard (or a hand-edited database) would be: through the shared upsert, kind 'rename'.
-    upsertRuleFromCorrection({
-      pattern: 'WALMART SUPERCENTRE', matchType: 'contains', ruleKind: 'rename', categoryId: null,
-      renameTo: '   ', createdBy: userId, actorRole: 'admin',
+    const { sqlite, userId } = setup();
+    // Every writer in the app refuses a rename with no target -- upsertRenameRule throws, the
+    // form returns a sentence, the pack schema fails the file, and (R-09) the shared upsert throws
+    // too. So this row is written the one way it could ever exist: raw.
+    insertRawRule(sqlite, {
+      pattern: 'WALMART SUPERCENTRE', matchType: 'contains', ruleKind: 'rename', categoryId: null, renameTo: '   ',
     });
     upsertRenameRule({ pattern: 'WALMART', matchType: 'contains', renameTo: 'Walmart', userId, actorRole: 'admin' });
 
@@ -1891,5 +1918,269 @@ describe('v1.31.0 R-03 / ruling R24: a loan label outranks a rename rule', () =>
     const itemId = seedLoan(db, userId);
     assignTransactionToLoan({ txnId, itemId });
     expect(readDisplay(sqlite, txnId)).toEqual({ text: 'Sam pays me back', source: 'manual' });
+  });
+});
+
+/**
+ * v1.31.0 review finding R-07 (P3). Card-payment matching was written twice -- detectTransfer's
+ * `for` loop and setTransferFlag's `.some(...)` -- so a future narrowing of one would have left the
+ * other matching substrings. matchesCardPaymentPattern is the one definition.
+ *
+ * The property worth pinning is not "the helper works" (its body is one line); it is that the TWO
+ * CALLERS AGREE, because that is what the duplication put at risk. setTransferFlag's `else if`
+ * branch exists solely to author the not_transfer override that detectTransfer's FIRST step
+ * honours, so if the two ever disagreed about what "the list matched" means, un-flagging a card
+ * payment would write no override and the very next re-run would silently re-flag the row.
+ */
+describe('v1.31.0 R-07: one card-payment predicate, and both callers agree', () => {
+  it('detectTransfer flags exactly the texts matchesCardPaymentPattern claims', () => {
+    setup();
+    const ctx = buildContext();
+    for (const pattern of CARD_PAYMENT_PATTERNS) {
+      const text = `${pattern} SOMETHING ELSE`;
+      expect({ pattern, helper: matchesCardPaymentPattern(text), engine: detectTransfer(text, ctx) }).toEqual({
+        pattern,
+        helper: true,
+        engine: true,
+      });
+    }
+    expect(matchesCardPaymentPattern('CORNER STORE')).toBe(false);
+    expect(detectTransfer('CORNER STORE', ctx)).toBe(false);
+  });
+
+  it('un-flagging a card-payment row writes the not_transfer override the same predicate demands', () => {
+    const { userId, add } = setup();
+    const id = add('PAYMENT - THANK YOU');
+    const merchant = normalizeMerchant('PAYMENT - THANK YOU');
+    expect(matchesCardPaymentPattern(merchant)).toBe(true);
+
+    // The branch under test: `learnRule: true`, isTransfer false, on a merchant the LIST claims
+    // rather than a rule. Deleting a nonexistent transfer rule would leave the list re-catching it
+    // on the next re-run, so an override has to be authored instead.
+    expect(setTransferFlag({ transactionId: id, isTransfer: false, userId, actorRole: 'admin', learnRule: true }).ok).toBe(true);
+    expect(listRules('not_transfer').map((rule) => rule.pattern)).toEqual([merchant]);
+    // ...and that override is the first thing detectTransfer honours, so the row stays un-flagged.
+    expect(detectTransfer(merchant, buildContext())).toBe(false);
+  });
+});
+
+/**
+ * v1.31.0 review finding R-06 (P3). ELIGIBLE's JavaScript twin was typed out three times beside
+ * it, and eligibleForRuleReapply re-applied it to ids that had ALREADY come out of the SQL
+ * predicate. isEligibleRow is now the one JS spelling, and that redundant filter is gone.
+ *
+ * So the property to pin is that dropping the filter dropped nothing: a manually decided row and a
+ * split row are still out of scope for "Apply now" -- because eligibleForRerun's own SQL says so,
+ * which was the point.
+ */
+describe('v1.31.0 R-06: one eligibility predicate, and removing the duplicate filter changed nothing', () => {
+  it('Apply now still never reaches a manually decided row or a split row', () => {
+    const { db, sqlite, userId, add } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const groceries = categoryIdByName(db, 'Groceries');
+
+    const untouched = add('TIM HORTONS #123');
+    const manual = add('TIM HORTONS #456');
+    const split = add('TIM HORTONS #789');
+
+    confirmCategory({ transactionId: manual, categoryId: groceries, userId, createRule: false, actorRole: 'admin' });
+    sqlite
+      .prepare(
+        "insert into transaction_splits (txn_id, category_id, amount_cents, created_at) values (?, ?, -1000, '2026-01-01T00:00:00.000Z')",
+      )
+      .run(split, groceries);
+
+    upsertRuleFromCorrection({
+      pattern: 'TIM HORTONS',
+      matchType: 'contains',
+      ruleKind: 'category',
+      categoryId: coffee,
+      createdBy: userId,
+      actorRole: 'admin',
+    });
+    const ruleId = listRules('category').find((rule) => rule.pattern === 'TIM HORTONS')!.id;
+
+    expect(previewRuleReapply(ruleId)).toEqual({ eligible: 1, wouldChange: 1 });
+    expect(applyRuleNow(ruleId).processed).toBe(1);
+    expect(readTxn(sqlite, untouched).category_id).toBe(coffee);
+    expect(readTxn(sqlite, manual).category_id).toBe(groceries);
+    expect(readTxn(sqlite, split).category_id).toBeNull();
+  });
+});
+
+/**
+ * v1.31.0 review finding R-09 (P3). "Does this merchant have a rename?" was answered in three
+ * places three ways, and the shared upsert stored whatever renameTo a caller passed for a rename,
+ * including null. resolveRenameRule is the one definition; the upsert now refuses an outcome-less
+ * rule with the same programmer-error treatment it already gave an illegal `word` kind.
+ */
+describe('v1.31.0 R-09: one rename resolution, and the upsert refuses a rule with no outcome', () => {
+  it('resolveRenameRule and resolveRename are the same answer, projected two ways', () => {
+    const { userId } = setup();
+    upsertRenameRule({ pattern: 'WALMART', matchType: 'contains', renameTo: 'Walmart', userId, actorRole: 'admin' });
+    const ctx = buildContext();
+
+    const rule = resolveRenameRule('WALMART SUPERCENTRE #1234', ctx);
+    expect({ pattern: rule?.pattern, renameTo: rule?.renameTo }).toEqual({ pattern: 'WALMART', renameTo: 'Walmart' });
+    expect(resolveRename('WALMART SUPERCENTRE #1234', ctx)).toBe('Walmart');
+
+    expect(resolveRenameRule('CORNER STORE', ctx)).toBeNull();
+    expect(resolveRename('CORNER STORE', ctx)).toBeNull();
+  });
+
+  it('refuses a rename with an empty target -- the null the upsert used to store', () => {
+    const { userId } = setup();
+    for (const renameTo of [null, '', '   ']) {
+      expect(() =>
+        upsertRuleFromCorrection({
+          pattern: 'WALMART',
+          matchType: 'contains',
+          ruleKind: 'rename',
+          categoryId: null,
+          renameTo,
+          createdBy: userId,
+          actorRole: 'admin',
+        }),
+      ).toThrow(/needs a non-empty renameTo/);
+    }
+    expect(listRules('rename')).toEqual([]);
+  });
+
+  it('refuses a category rule with no category, through the same shared predicate', () => {
+    const { userId } = setup();
+    // ruleOutcomeMissing, not a second emptiness test written at the write side -- which is the
+    // whole of R-09: ONE definition of "this rule has no outcome", read by the matcher that skips
+    // such a row and by the writer that now refuses to create one.
+    expect(() =>
+      upsertRuleFromCorrection({
+        pattern: 'TIM HORTONS',
+        matchType: 'exact',
+        ruleKind: 'category',
+        categoryId: null,
+        createdBy: userId,
+        actorRole: 'admin',
+      }),
+    ).toThrow(/needs a category/);
+    expect(listRules('category')).toEqual([]);
+  });
+
+  it('leaves transfer and not_transfer alone -- for those the kind IS the outcome', () => {
+    const { userId } = setup();
+    expect(() =>
+      upsertRuleFromCorrection({
+        pattern: 'E-TRANSFER',
+        matchType: 'contains',
+        ruleKind: 'transfer',
+        categoryId: null,
+        createdBy: userId,
+        actorRole: 'admin',
+      }),
+    ).not.toThrow();
+    expect(listRules('transfer')).toHaveLength(1);
+  });
+});
+
+/**
+ * v1.31.0 review finding R-10 (P3). Every bulk delete/disable ran one full retroactive rename pass
+ * PER RULE, where importRulesPack had batched the identical work since it shipped. deleteRules and
+ * setRulesDisabled are that batching; the measured before/after is in deleteRules' own docblock.
+ *
+ * These tests pin the OUTCOME, which is what a household sees: the same rows revert, the reported
+ * count is the single pass's, and a batch with no rename in it pays for no pass at all.
+ */
+describe('v1.31.0 R-10: many rules, one rename pass', () => {
+  const readLabel = (sqlite: TestDb['sqlite'], id: number) =>
+    sqlite.prepare('select display_description as text, display_source as source from transactions where id = ?').get(id) as {
+      text: string | null;
+      source: string | null;
+    };
+
+  it('reverts every row of every deleted rename rule and reports the single pass total', () => {
+    const { sqlite, userId, add } = setup();
+    const a = add('AAA STORE #1');
+    const b = add('BBB STORE #2');
+    upsertRenameRule({ pattern: 'AAA', matchType: 'contains', renameTo: 'Aaa Co', userId, actorRole: 'admin' });
+    upsertRenameRule({ pattern: 'BBB', matchType: 'contains', renameTo: 'Bbb Co', userId, actorRole: 'admin' });
+    expect(readLabel(sqlite, a).text).toBe('Aaa Co');
+    expect(readLabel(sqlite, b).text).toBe('Bbb Co');
+
+    expect(deleteRules(listRules('rename').map((rule) => rule.id))).toEqual({ deleted: 2, rowsCleared: 2 });
+    expect(listRules('rename')).toEqual([]);
+    expect(readLabel(sqlite, a)).toEqual({ text: null, source: null });
+    expect(readLabel(sqlite, b)).toEqual({ text: null, source: null });
+  });
+
+  it('runs no rename pass at all for a batch with no rename rule in it', () => {
+    const { db, userId } = setup();
+    upsertRuleFromCorrection({
+      pattern: 'TIM HORTONS',
+      matchType: 'exact',
+      ruleKind: 'category',
+      categoryId: categoryIdByName(db, 'Coffee'),
+      createdBy: userId,
+      actorRole: 'admin',
+    });
+    // rowsCleared 0 is the observable form of "no pass ran" -- deleting a category rule changes
+    // nothing retroactively, which is setRuleDisabled's own long-standing ruling.
+    expect(deleteRules(listRules('category').map((rule) => rule.id))).toEqual({ deleted: 1, rowsCleared: 0 });
+  });
+
+  it('skips an id that names no rule rather than failing the batch', () => {
+    const { userId } = setup();
+    upsertRenameRule({ pattern: 'AAA', matchType: 'contains', renameTo: 'Aaa Co', userId, actorRole: 'admin' });
+    const real = listRules('rename')[0].id;
+    // A second session may have deleted one between the page render and the click.
+    expect(deleteRules([real, real + 9999]).deleted).toBe(1);
+  });
+
+  it('disables and re-enables a set of rename rules, one pass each way', () => {
+    const { sqlite, userId, add } = setup();
+    const a = add('AAA STORE #1');
+    const b = add('BBB STORE #2');
+    upsertRenameRule({ pattern: 'AAA', matchType: 'contains', renameTo: 'Aaa Co', userId, actorRole: 'admin' });
+    upsertRenameRule({ pattern: 'BBB', matchType: 'contains', renameTo: 'Bbb Co', userId, actorRole: 'admin' });
+    const ids = listRules('rename').map((rule) => rule.id);
+
+    expect(setRulesDisabled({ ruleIds: ids, disabled: true })).toEqual({ touched: 2, rowsChanged: 2 });
+    expect(readLabel(sqlite, a).text).toBeNull();
+    expect(readLabel(sqlite, b).text).toBeNull();
+
+    expect(setRulesDisabled({ ruleIds: ids, disabled: false })).toEqual({ touched: 2, rowsChanged: 2 });
+    expect(readLabel(sqlite, a).text).toBe('Aaa Co');
+    expect(readLabel(sqlite, b).text).toBe('Bbb Co');
+  });
+
+  it('leaves the same rows behind as the per-rule loop it replaced', () => {
+    // The equivalence that matters: batching must not change WHICH rows revert. Two OVERLAPPING
+    // rename rules, deleted one at a time versus deleted as a batch -- the surviving display state
+    // has to be identical. The COUNTS legitimately differ, and deleteRules' docblock says why: a
+    // per-rule sum double-counts a row re-resolved to the second rule once the first is gone. This
+    // asserts the state, which is what a household actually reads off the screen.
+    const perRule = (() => {
+      const first = setup();
+      const id = first.add('WALMART SUPERCENTRE #1');
+      upsertRenameRule({ pattern: 'WALMART', matchType: 'contains', renameTo: 'Walmart', userId: first.userId, actorRole: 'admin' });
+      upsertRenameRule({
+        pattern: 'WALMART SUPERCENTRE',
+        matchType: 'contains',
+        renameTo: 'Walmart Supercentre',
+        userId: first.userId,
+        actorRole: 'admin',
+      });
+      for (const rule of listRules('rename')) deleteRenameRule({ pattern: rule.pattern, matchType: rule.matchType });
+      const after = readLabel(first.sqlite, id);
+      current?.cleanup();
+      current = null;
+      return after;
+    })();
+
+    const { sqlite, userId, add } = setup();
+    const id = add('WALMART SUPERCENTRE #1');
+    upsertRenameRule({ pattern: 'WALMART', matchType: 'contains', renameTo: 'Walmart', userId, actorRole: 'admin' });
+    upsertRenameRule({ pattern: 'WALMART SUPERCENTRE', matchType: 'contains', renameTo: 'Walmart Supercentre', userId, actorRole: 'admin' });
+    deleteRules(listRules('rename').map((rule) => rule.id));
+
+    expect(readLabel(sqlite, id)).toEqual(perRule);
+    expect(readLabel(sqlite, id)).toEqual({ text: null, source: null });
   });
 });

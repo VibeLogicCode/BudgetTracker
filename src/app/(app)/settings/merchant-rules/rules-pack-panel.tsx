@@ -19,6 +19,9 @@ interface ImportPreview {
   unchanged: number;
   transferRules: number;
   skippedRules: number;
+  /** v1.31.0 R-12: the skipped entries BY NAME, each with its reason. A count on its own told a
+   *  household four rules would not arrive and gave them no way to find out which four. */
+  skipped: { pattern: string; matchType: string; ruleKind: string; reason: string }[];
   conflicts: {
     pattern: string;
     matchType: string;
@@ -28,6 +31,21 @@ interface ImportPreview {
     incomingRenameTo?: string | null;
   }[];
   newCategories: string[];
+  /** v1.31.0 R-13: categories a rule will bind to that are ARCHIVED here -- money filed into one
+   *  of these shows up in no spend report, so it is said before the click, not after. */
+  archivedCategories: string[];
+}
+
+/** v1.31.0 R-12. The patterns the server said it skipped, read defensively off an untyped JSON
+ *  body: this panel already treats the response as `Record<string, unknown>` (R-04's fix), and a
+ *  count with no names was the defect, so a missing or malformed list degrades to "say nothing
+ *  extra" rather than to a thrown render. */
+function skippedNames(body: Record<string, unknown>): string[] {
+  const detail = body.rulesSkippedDetail;
+  if (!Array.isArray(detail)) return [];
+  return detail
+    .map((entry) => (entry !== null && typeof entry === 'object' ? (entry as { pattern?: unknown }).pattern : null))
+    .filter((pattern): pattern is string => typeof pattern === 'string');
 }
 
 const fileInputClass =
@@ -52,6 +70,10 @@ export function RulesPackPanel({ rows }: { rows: RulesExportRow[] }) {
     if (row.ruleKind === 'rename') return includeRenames;
     return true;
   });
+  // v1.31.0 R-14: a disabled rule is LISTED (so its absence from the file is explained) but never
+  // exported and never counted -- see exportRulesPack, which drops it, and RulesExportRow.disabled
+  // for why marking beats hiding.
+  const exportable = visible.filter((row) => !row.disabled);
   const exportHref = `/api/packs/rules/export?includeTransfers=${includeTransfers ? '1' : '0'}&includeRenames=${includeRenames ? '1' : '0'}&exclude=${excluded.join(',')}`;
   const toggle = (id: number) => setExcluded((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
 
@@ -93,7 +115,9 @@ export function RulesPackPanel({ rows }: { rows: RulesExportRow[] }) {
     const count = (key: string) => Number(body[key] ?? 0);
     setNotice(
       `Added ${count('rulesAdded')} rules, overwrote ${count('rulesOverwritten')}, kept ${count('rulesKept')} existing, created ${count('categoriesCreated')} categories.` +
-        (count('rulesSkipped') > 0 ? ` Skipped ${count('rulesSkipped')} rules this install can't import.` : ''),
+        // R-12: the apply message names them too, not only the preview -- an import reached
+        // through "Import" without a Preview click is the case where a bare count is least useful.
+        (skippedNames(body).length > 0 ? ` Skipped ${skippedNames(body).length}: ${skippedNames(body).join(', ')}.` : ''),
     );
     window.location.reload();
   }
@@ -135,14 +159,20 @@ export function RulesPackPanel({ rows }: { rows: RulesExportRow[] }) {
         <ul className="max-h-64 overflow-y-auto rounded-md border border-line bg-surface p-2">
           {visible.map((row) => (
             <li key={row.ruleId} className="flex items-center gap-2 py-0.5">
-              <input
-                type="checkbox"
-                checked={!excluded.includes(row.ruleId)}
-                onChange={() => toggle(row.ruleId)}
-                aria-label={`Include ${row.pattern}`}
-                className="accent-accent"
-              />
-              <code className="font-mono text-xs text-ink">{row.pattern}</code>
+              {row.disabled ? (
+                /* R-14: no checkbox. There is nothing to untick -- this rule is not in the file
+                   either way -- and offering one would imply it otherwise would be. */
+                <span aria-hidden className="inline-block w-4" />
+              ) : (
+                <input
+                  type="checkbox"
+                  checked={!excluded.includes(row.ruleId)}
+                  onChange={() => toggle(row.ruleId)}
+                  aria-label={`Include ${row.pattern}`}
+                  className="accent-accent"
+                />
+              )}
+              <code className={`font-mono text-xs ${row.disabled ? 'text-subtle line-through' : 'text-ink'}`}>{row.pattern}</code>
               <span className="text-xs text-subtle">
                 {row.matchType}
                 {row.ruleKind === 'transfer'
@@ -150,13 +180,14 @@ export function RulesPackPanel({ rows }: { rows: RulesExportRow[] }) {
                   : row.ruleKind === 'rename'
                     ? ` → renamed to "${row.renameTo ?? ''}"`
                     : ` → ${row.categoryLabel ?? 'Uncategorized'}`}
+                {row.disabled ? ' · (disabled, not exported)' : ''}
               </span>
             </li>
           ))}
           {visible.length === 0 ? <li className="px-1 py-2 text-xs text-subtle">No rules to export yet.</li> : null}
         </ul>
         <a href={exportHref} className="btn btn--primary w-fit">
-          Download rules pack ({visible.length - excluded.filter((id) => visible.some((row) => row.ruleId === id)).length} rules)
+          Download rules pack ({exportable.length - excluded.filter((id) => exportable.some((row) => row.ruleId === id)).length} rules)
         </a>
       </div>
 
@@ -192,10 +223,36 @@ export function RulesPackPanel({ rows }: { rows: RulesExportRow[] }) {
               {preview.totalRules} rules in the file: <strong className="font-semibold text-ink">{preview.newRules} new</strong>,{' '}
               {preview.conflicts.length} conflicts, {preview.unchanged} already identical, {preview.transferRules} transfer rules.
             </p>
-            {preview.skippedRules > 0 ? (
-              <p>{preview.skippedRules} rules use a kind this install doesn&apos;t import (e.g. not_transfer) and will be skipped.</p>
+            {/* v1.31.0 R-12: named, not just counted. Which rule was dropped is the only version
+                of this sentence a household can act on -- and the reason differs per entry (a
+                kind this install will never import, versus a match type from a newer build,
+                versus a pack-authoring mistake the sender can fix). */}
+            {preview.skipped.length > 0 ? (
+              <>
+                <p>
+                  {preview.skipped.length} rule{preview.skipped.length === 1 ? '' : 's'} will be skipped -- nothing about{' '}
+                  {preview.skipped.length === 1 ? 'it' : 'them'} is written:
+                </p>
+                <ul className="list-inside list-disc">
+                  {preview.skipped.map((skip, index) => (
+                    <li key={`${skip.pattern}-${skip.matchType}-${skip.ruleKind}-${index}`}>
+                      <code className="font-mono">{skip.pattern}</code> ({skip.matchType} {skip.ruleKind}) — {skip.reason}
+                    </li>
+                  ))}
+                </ul>
+              </>
             ) : null}
             {preview.newCategories.length > 0 ? <p>Categories to create: {preview.newCategories.join(', ')}</p> : null}
+            {/* R-13: an archived category is still used (findCategory prefers a live one and only
+                falls back), but never silently -- a rule filing into a retired category files
+                money where no spend report shows it. */}
+            {preview.archivedCategories.length > 0 ? (
+              <p>
+                Rules will be filed into {preview.archivedCategories.length === 1 ? 'an archived category' : 'archived categories'}:{' '}
+                {preview.archivedCategories.join(', ')} — spending filed there appears in no report until you un-archive{' '}
+                {preview.archivedCategories.length === 1 ? 'it' : 'them'}.
+              </p>
+            ) : null}
             {preview.conflicts.length > 0 ? (
               <ul className="mt-1 list-inside list-disc">
                 {preview.conflicts.map((conflict) => (

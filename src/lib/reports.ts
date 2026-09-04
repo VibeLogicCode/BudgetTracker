@@ -3,7 +3,8 @@ import { getDb } from '@/db/client';
 import { categories, transactions, transactionSplits, users } from '@/db/schema';
 import { ownerScope, type Viewer } from '@/lib/auth/viewer';
 import { listCategories } from '@/lib/categories';
-import { listRules, matchRule } from '@/lib/categorize/rules';
+import { resolveRename } from '@/lib/categorize/engine';
+import { listRules } from '@/lib/categorize/rules';
 import { addMonths, monthEnd, monthOf, monthRange, monthStart } from '@/lib/dates';
 import { netSpentCents } from '@/lib/money';
 import { savingsRate, type SavingsRate } from '@/lib/savings-rate';
@@ -479,9 +480,11 @@ export interface TopMerchantRow {
  * its own label and is deliberately skipped by the rename engine (its `display_source` is
  * 'manual', not 'rename'), so grouping on the stored display value would tear that one row away
  * from the vendor bucket it belongs in even though its `normalized_merchant` matches the rule
- * exactly like every other row at that store. Running `matchRule` against each bucket's raw
+ * exactly like every other row at that store. Resolving the rename against each bucket's raw
  * normalized key -- never against a transaction's own possibly-hand-edited display text --
- * groups it correctly regardless of what a person typed over it.
+ * groups it correctly regardless of what a person typed over it. (v1.31.0 R-09: through
+ * `resolveRename`, the engine's own definition, rather than this file's former local
+ * `matchRule(...)?.renameTo ?? merchant`.)
  *
  * Folded at the RAW bucket level, before `netSpentCents`/the `> 0` filter, not after: the SQL
  * query below already nets refunds against charges PER RAW normalized_merchant (a return at
@@ -533,8 +536,12 @@ export function topMerchants(input: DateRange & { limit?: number; attributedUser
   const renameRules = listRules('rename');
   const folded = new Map<string, { total: number; count: number }>();
   for (const row of rows) {
-    const rule = matchRule(row.normalizedMerchant, 'rename', renameRules);
-    const displayName = rule?.renameTo ?? row.normalizedMerchant;
+    // v1.31.0 (review finding R-09, P3): resolveRename, not a local `rule?.renameTo ?? merchant`.
+    // That expression was a third writing of "does this merchant have a rename?" -- and the one
+    // that failed worst if a writer ever let an empty target through, because it would have
+    // folded a whole merchant bucket under the display name "". One definition, in the engine,
+    // beside applyRenameRules which is what actually stamps these names onto rows.
+    const displayName = resolveRename(row.normalizedMerchant, { rules: renameRules }) ?? row.normalizedMerchant;
     const bucket = folded.get(displayName) ?? { total: 0, count: 0 };
     bucket.total += row.total ?? 0;
     bucket.count += row.count;

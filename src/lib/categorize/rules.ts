@@ -399,6 +399,35 @@ export function upsertRuleFromCorrection(input: {
     throw new Error(`${WORD_MATCH_KIND_ERROR} (rule_kind "${input.ruleKind}")`);
   }
 
+  // v1.31.0 (review finding R-09, P3). A rule with no OUTCOME is refused here too, and
+  // deliberately in the same shape and for the same reason as the match-type refusal directly
+  // above: a programmer error, thrown rather than returned.
+  //
+  // The predicate is ruleOutcomeMissing -- the same one matchRule uses to skip such a row on the
+  // read side -- not a fresh `renameTo === ''` test written here. That is the whole point: R-09 is
+  // about "is this rename target empty?" having been answered in four different places, and a
+  // fifth answer living in the write choke point would be the defect, not the fix. It covers both
+  // kinds that HAVE an outcome to be missing: a rename with no target and a category rule with no
+  // category.
+  //
+  // Latent today, and stated as latent rather than sold as a bug fix: every writer already
+  // refuses this in words a person can act on -- saveRuleAction returns
+  // 'A rename rule needs a display name.' / CATEGORY_RULE_NEEDS_CATEGORY_ERROR, upsertRenameRule
+  // throws on an empty target before it gets here, and the pack schema fails the file
+  // (packRuleSchema's superRefine). So reaching this line means a NEW caller was written that
+  // trusted whatever a caller handed it, which is exactly what upsertRuleFromCorrection was doing
+  // for `renameTo`: it stored whatever it was given, including null, for a rename. Writing the row
+  // anyway was never an option, for the reason the match-type note above gives: a rule matchRule
+  // will never honour is dead on arrival, and a rule that is dead-but-present is precisely the
+  // v1.21.0 item 9 / R-02 defect class.
+  if (ruleOutcomeMissing({ ruleKind: input.ruleKind, categoryId: input.categoryId, renameTo: input.renameTo ?? null })) {
+    throw new Error(
+      input.ruleKind === 'rename'
+        ? `A rename rule needs a non-empty renameTo (pattern "${input.pattern}").`
+        : `${CATEGORY_RULE_NEEDS_CATEGORY_ERROR} (pattern "${input.pattern}")`,
+    );
+  }
+
   const db = getDb();
   const renameTo = input.ruleKind === 'rename' ? (input.renameTo ?? null) : null;
   const packSource = input.pack?.source ?? null;

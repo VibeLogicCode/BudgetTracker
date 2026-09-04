@@ -33,6 +33,7 @@ import {
 } from '@/app/(app)/settings/merchant-rules/actions';
 import { CATEGORY_RULE_NEEDS_CATEGORY_ERROR, listRules, upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { rerunEngine, upsertRenameRule } from '@/lib/categorize/engine';
+import { archiveCategory, listCategories } from '@/lib/categories';
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -483,5 +484,142 @@ describe('previewRerunAllAction / rerunAllAction take a date range too (v1.24.0)
     setup();
     const result = await rerunAllAction({}, formData({ from: '2026-03-31', to: '2026-01-01' }));
     expect(result.error).toMatch(/ends before it starts/);
+  });
+});
+
+/**
+ * v1.31.0 review finding R-08 (P3). "A rename revert ignores the date range" was written FOUR
+ * times: twice in this file (previewRuleClearAction and deleteRuleAndClearAction each dropped the
+ * scope themselves) and twice in the engine, which enforces it in both the count and the write.
+ * The two copies here are gone; the engine is the single authority.
+ *
+ * The property that has to survive is the one the deleted comment claimed -- "the preview must
+ * count what the write will really touch" -- so it is asserted directly instead of restated.
+ */
+describe('v1.31.0 R-08: the engine alone decides that a rename revert ignores the date range', () => {
+  it('the preview count and the write agree for a rename, with a range that excludes its rows', async () => {
+    const { userId, add } = setup();
+    // Both rows are dated 2026-03-02; the range below asks for January only, so a scope that was
+    // honoured would count and clear nothing.
+    const a = add('WALMART SUPERCENTRE #1');
+    const b = add('WALMART SUPERCENTRE #2');
+    upsertRenameRule({ pattern: 'WALMART', matchType: 'contains', renameTo: 'Walmart', userId, actorRole: 'admin' });
+    const ruleId = listRules('rename')[0].id;
+
+    const preview = await previewRuleClearAction(ruleId, '2026-01-01', '2026-01-31');
+    expect({ affected: preview.affected, kind: preview.kind }).toEqual({ affected: 2, kind: 'rename' });
+
+    const result = await deleteRuleAndClearAction(
+      {},
+      formData({ ruleId: String(ruleId), from: '2026-01-01', to: '2026-01-31' }),
+    );
+    expect(result.message).toMatch(/2 transactions went back to the bank text/);
+    for (const id of [a, b]) {
+      const row = current!.sqlite.prepare('select display_source from transactions where id = ?').get(id) as {
+        display_source: string | null;
+      };
+      expect(row.display_source).toBeNull();
+    }
+  });
+
+  it('still honours the range for a category rule, where a bounded clear IS supported', async () => {
+    const { db, userId, add } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const inRange = add('TIM HORTONS #1', '2026-01-15');
+    const outOfRange = add('TIM HORTONS #2', '2026-03-02');
+    upsertRuleFromCorrection({
+      pattern: 'TIM HORTONS',
+      matchType: 'contains',
+      ruleKind: 'category',
+      categoryId: coffee,
+      createdBy: userId,
+      actorRole: 'admin',
+    });
+    const ruleId = listRules('category').find((rule) => rule.pattern === 'TIM HORTONS')!.id;
+    rerunEngine();
+
+    const preview = await previewRuleClearAction(ruleId, '2026-01-01', '2026-01-31');
+    expect(preview.affected).toBe(1);
+    await deleteRuleAndClearAction({}, formData({ ruleId: String(ruleId), from: '2026-01-01', to: '2026-01-31' }));
+
+    const read = (id: number) =>
+      (current!.sqlite.prepare('select category_id from transactions where id = ?').get(id) as { category_id: number | null }).category_id;
+    expect(read(inRange)).toBeNull();
+    expect(read(outOfRange)).toBe(coffee);
+  });
+});
+
+/**
+ * v1.31.0 review finding R-13 (P3), save half. `categoryId` arrived as `z.string()` and went
+ * straight into `Number(...)`: no existence check and no archived check. A nonexistent id reached
+ * a column with `foreign_keys = ON` behind it, so SQLite raised a constraint error, nothing caught
+ * it, and a form submission answered 500. An archived id was accepted outright, and a rule filing
+ * money into a retired category files it where no spend report shows it.
+ */
+describe('v1.31.0 R-13: saveRuleAction validates the category it is handed', () => {
+  it('refuses an id no category has, in words, and writes nothing', async () => {
+    const { db } = setup();
+    const highest = Math.max(...listCategories({ includeArchived: true }).map((row) => row.id));
+    const result = await saveRuleAction(
+      {},
+      formData({ pattern: 'GHOST CAFE', matchType: 'exact', ruleKind: 'category', categoryId: String(highest + 500), renameTo: '' }),
+    );
+    expect(result.error).toMatch(/no longer exists/);
+    expect(listRules().some((rule) => rule.pattern === 'GHOST CAFE')).toBe(false);
+    expect(db).toBeDefined();
+  });
+
+  it('refuses a non-numeric id rather than writing NaN into the column', async () => {
+    setup();
+    const result = await saveRuleAction(
+      {},
+      formData({ pattern: 'GHOST CAFE', matchType: 'exact', ruleKind: 'category', categoryId: 'abc', renameTo: '' }),
+    );
+    expect(result.error).toBe('Invalid rule.');
+    expect(listRules()).toEqual([]);
+  });
+
+  it('refuses an ARCHIVED category and names it', async () => {
+    const { db } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    archiveCategory(coffee, true);
+
+    const result = await saveRuleAction(
+      {},
+      formData({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: String(coffee), renameTo: '' }),
+    );
+    expect(result.error).toMatch(/"Coffee" is archived/);
+    expect(listRules()).toEqual([]);
+  });
+
+  it('still accepts a live category, and still accepts "(none)" for a kind that has none', async () => {
+    const { db } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    expect(
+      (
+        await saveRuleAction(
+          {},
+          formData({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: String(coffee), renameTo: '' }),
+        )
+      ).message,
+    ).toBe('Rule saved.');
+    expect(
+      (
+        await saveRuleAction(
+          {},
+          formData({ pattern: 'E-TRANSFER', matchType: 'contains', ruleKind: 'transfer', categoryId: '', renameTo: '' }),
+        )
+      ).message,
+    ).toBe('Rule saved.');
+    expect(listRules().map((rule) => rule.pattern).sort()).toEqual(['E-TRANSFER', 'TIM HORTONS']);
+  });
+
+  it('still gives the R-02 sentence for a category rule with no category, not this one', async () => {
+    setup();
+    const result = await saveRuleAction(
+      {},
+      formData({ pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: '', renameTo: '' }),
+    );
+    expect(result.error).toBe(CATEGORY_RULE_NEEDS_CATEGORY_ERROR);
   });
 });

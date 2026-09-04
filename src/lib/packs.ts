@@ -112,6 +112,36 @@ function isImportableRuleKind(kind: string): kind is RuleKind {
 }
 
 /**
+ * v1.31.0 (review finding R-12, P3), controller ruling: skip-and-report, consistently.
+ *
+ * THE INCONSISTENCY. `rule_kind` accepted any string and an unrecognised one was skipped and
+ * counted (ruling (a), above). `match_type` was a strict `z.enum` in the same object, so ONE entry
+ * carrying a fifth match type from a future build failed the ENTIRE file -- 296 good rules refused
+ * because of one. Two ways of treating the same situation, an arm's length apart in the same
+ * schema, and the harsher one applied to the field a newer build is more likely to extend.
+ *
+ * An unknown value in either field means the same thing: this pack was written by a build that
+ * knows something this one does not. Ruling (a)'s argument for skipping applies word for word --
+ * "a pack written against a different install's idea of what a rule may be is not a MALFORMED
+ * file, and one unsupported entry must never cost a household the other 189".
+ *
+ * WHAT IS STILL A HARD REJECT, so the boundary does not read as "anything goes": a match type
+ * that is not a non-empty string at all, an entry whose kind HAS an outcome and is missing it (a
+ * rename with no target, a category rule with no category -- packRuleSchema's superRefine), a
+ * pack version this install does not understand, a category tree it cannot build. Those are
+ * malformed or impossible, not merely unfamiliar.
+ *
+ * The cast in packRuleSchema is safe for exactly the reason the rule_kind cast beside it is:
+ * nothing reads `match_type` as a MatchType until isImportableRule has been asked, and every
+ * walk that writes or counts is gated on it (importRulesPack, previewRulesPackImport,
+ * categoriesReferencedBy).
+ */
+const IMPORTABLE_MATCH_TYPES: readonly MatchType[] = ['exact', 'contains', 'word'];
+function isImportableMatchType(matchType: string): matchType is MatchType {
+  return (IMPORTABLE_MATCH_TYPES as readonly string[]).includes(matchType);
+}
+
+/**
  * v1.25.0 (item 16). One predicate for BOTH loops below (previewRulesPackImport and
  * importRulesPack), because the preview's `skippedRules` and the import's `rulesSkipped` are the
  * same promise made twice and a pack whose preview says "nothing skipped" must not then skip
@@ -130,7 +160,59 @@ function isImportableRuleKind(kind: string): kind is RuleKind {
  *     and one unsupported entry must never cost a household the other 189.
  */
 function isImportableRule(rule: PackRule): boolean {
-  return isImportableRuleKind(rule.rule_kind) && matchTypeAllowedForKind(rule.match_type, rule.rule_kind);
+  return (
+    isImportableRuleKind(rule.rule_kind) &&
+    isImportableMatchType(rule.match_type) &&
+    matchTypeAllowedForKind(rule.match_type, rule.rule_kind)
+  );
+}
+
+/**
+ * v1.31.0 (R-12), controller ruling: "report the skipped entries by name". A count alone told a
+ * household that four rules would not be imported and gave them no way to find out which four --
+ * so a pack that silently dropped the one rule they actually wanted looked like a success.
+ *
+ * The reason is per-entry rather than a single sentence for the batch because the three reasons
+ * call for different actions: an unsupported KIND means this install will never import that entry
+ * (not_transfer is deliberate and permanent), an unrecognised MATCH TYPE means the sender's build
+ * is newer than this one, and 'word' on a transfer kind is a pack-authoring mistake the sender can
+ * fix. Both the preview and the apply return this same list, built by this same function, for the
+ * reason isImportableRule itself was extracted: the preview's promise and the import's behaviour
+ * must not be two similar calculations.
+ */
+export interface RulesImportSkip {
+  pattern: string;
+  matchType: string;
+  ruleKind: string;
+  reason: string;
+}
+
+function skipReason(rule: PackRule): string | null {
+  if (!isImportableRuleKind(rule.rule_kind)) {
+    return rule.rule_kind === 'not_transfer'
+      ? "a \"not a transfer\" rule describes this install's own accounts and is never shared"
+      : `this install does not recognise the rule kind "${rule.rule_kind}"`;
+  }
+  if (!isImportableMatchType(rule.match_type)) {
+    return `this install does not recognise the match type "${rule.match_type}"`;
+  }
+  if (!matchTypeAllowedForKind(rule.match_type, rule.rule_kind)) {
+    return `"${rule.match_type}" is not a match type a ${rule.rule_kind} rule can carry`;
+  }
+  return null;
+}
+
+/** Every entry this pack will NOT write, named, in file order. One walk for both the preview and
+ *  the apply -- see RulesImportSkip's docblock. */
+function skippedRulesIn(pack: RulesPack): RulesImportSkip[] {
+  const skips: RulesImportSkip[] = [];
+  for (const rule of pack.rules) {
+    const reason = skipReason(rule);
+    if (reason !== null) {
+      skips.push({ pattern: rule.pattern, matchType: rule.match_type, ruleKind: rule.rule_kind, reason });
+    }
+  }
+  return skips;
 }
 
 const packCategorySchema = z.object({
@@ -151,10 +233,22 @@ const packCategorySchema = z.object({
 // (previewRulesPackImport / importRulesPack), never rejected. 'rename' IS validated at this
 // layer (see the superRefine below): a rename with no target is a genuinely malformed entry, not
 // an unsupported kind.
+//
+// v1.31.0 R-12: match_type now gets the identical treatment, for the identical reason. It was a
+// strict z.enum sitting an arm's length from that paragraph, so one unfamiliar match type failed
+// the whole file while one unfamiliar KIND was skipped and counted. See IMPORTABLE_MATCH_TYPES.
 const packRuleSchema = z
   .object({
     pattern: z.string().trim().min(1).max(200),
-    match_type: z.enum(['exact', 'contains', 'word']),
+    // v1.31.0 R-12: any non-empty string, exactly as rule_kind below, and skipped downstream
+    // rather than failing the file. See IMPORTABLE_MATCH_TYPES above for the argument and for
+    // what is still a hard reject. max(32) so an absurd value cannot ride into a skip message.
+    match_type: z
+      .string()
+      .trim()
+      .min(1)
+      .max(32)
+      .transform((v) => v as MatchType),
     rule_kind: z
       .string()
       .trim()
@@ -382,8 +476,20 @@ export interface RulesExportRow {
    */
   renameTo: string | null;
   hitCount: number;
+  /**
+   * v1.31.0 (review finding R-14, P3). The household has this rule turned OFF, so it will not be
+   * written into the file -- but it IS shown in the panel's list, marked, rather than silently
+   * absent: "these seven rules are not going" is information, and a row that vanishes with no
+   * explanation reads as a bug.
+   */
+  disabled: boolean;
 }
 
+/**
+ * Which rules may leave this install at all, by KIND. Disabled-ness is deliberately NOT decided
+ * here -- see exportRulesPack (which drops disabled rows) and previewRulesPackExport (which keeps
+ * them so it can say so).
+ */
 function exportableRules(opts: { includeTransferRules: boolean; includeRenameRules: boolean }): MerchantRuleRecord[] {
   const rules = listRules();
   return rules.filter((rule) => {
@@ -411,6 +517,7 @@ export function previewRulesPackExport(
     categoryLabel: rule.categoryId === null ? null : categoryLabel(rule.categoryId, all),
     renameTo: rule.renameTo,
     hitCount: rule.hitCount,
+    disabled: rule.disabledAt !== null,
   }));
 }
 
@@ -429,7 +536,28 @@ export function exportRulesPack(
   const selected = exportableRules({
     includeTransferRules: opts.includeTransferRules === true,
     includeRenameRules: opts.includeRenameRules === true,
-  }).filter((rule) => !excluded.has(rule.id));
+  })
+    /**
+     * v1.31.0 (review finding R-14, P3). A DISABLED rule never leaves.
+     *
+     * THE BUG, in the controller's own words: a re-imported export must round-trip to the same
+     * state. The format has no `disabled` field and `importRulesPack` never writes `disabled_at`
+     * (deliberately -- see its own notes), so a disabled rule handed to another install arrived
+     * ENABLED and started firing there. A household disables a rule to stop it filing money; the
+     * pack was quietly undoing that decision on the receiving side.
+     *
+     * EXCLUDING was chosen over adding a `disabled` field to the format, which was the other
+     * option and is refused for two reasons. First, honesty about what is being shared: an export
+     * is "here are the rules I run", and a rule the household switched off is not one of them --
+     * carrying it across as a switched-off row exports a decision the receiving household never
+     * made and cannot see the reason for. Second, the format is versioned and a new field means
+     * PACK_VERSION 2, which every older install would then refuse outright (checkEnvelope) -- a
+     * breaking change to fix a rule nobody wants sent. The household can re-enable and re-export
+     * if they did mean to share it, and previewRulesPackExport lists the row marked "(disabled,
+     * not exported)" so they can see that is the choice in front of them.
+     */
+    .filter((rule) => rule.disabledAt === null)
+    .filter((rule) => !excluded.has(rule.id));
 
   const referenced = new Map<string, PackCategory>();
   const remember = (category: CategoryRecord) => {
@@ -479,12 +607,37 @@ export function exportRulesPack(
  * same name/parent matching logic drifting from this one over time.
  */
 export function findCategory(all: CategoryRecord[], name: string, parentName: string | null): CategoryRecord | null {
-  const candidates = all.filter((row) => lower(row.name) === lower(name));
+  // v1.31.0 (review finding R-13, P3). A LIVE category wins over an archived one of the same name.
+  //
+  // THE DEFECT. Both callers hand this function `listCategories({ includeArchived: true })`, and
+  // it had no notion of archived at all -- so `.find(...)` returned whichever row the sort order
+  // put first. A household that archived "Coffee" and made a new one keeps two rows called
+  // Coffee, and an imported rule could bind to the retired one: every future statement from that
+  // merchant filed into a category no report shows, with the pack reporting success. The same
+  // signature as R-02's defect -- a rule that looks installed and quietly stops money being
+  // visible.
+  //
+  // PREFERENCE, NOT REFUSAL, and this is the owner call the finding asked for. When only an
+  // archived row exists, that row is still returned: refusing would make importing a pack into a
+  // household that has archived a category fail with nothing to do about it except un-archive by
+  // hand, and CREATING a second row of the same name is worse -- two categories called Coffee is
+  // the mess this preference exists to navigate, not one to manufacture. So the archived row is
+  // used, and it is ANNOUNCED: categoriesReferencedBy/previewRulesPackImport label such an entry
+  // "<name> (archived)" in the preview's own list, so nobody learns it afterwards. Un-archiving it
+  // silently was the third option and is refused outright: that is a change to what every spend
+  // report shows, made as a side effect of importing rules.
+  //
+  // Ordering only; every branch below picks from the same candidate set as before, so a household
+  // with no archived categories sees byte-identical behaviour.
+  const preferLive = (a: CategoryRecord, b: CategoryRecord) => Number(a.isArchived) - Number(b.isArchived);
+  const candidates = all.filter((row) => lower(row.name) === lower(name)).sort(preferLive);
   if (candidates.length === 0) return null;
   if (parentName === null) {
     return candidates.find((row) => row.parentId === null) ?? candidates[0];
   }
-  const parent = all.find((row) => lower(row.name) === lower(parentName) && row.parentId === null);
+  const parent = all
+    .filter((row) => lower(row.name) === lower(parentName) && row.parentId === null)
+    .sort(preferLive)[0];
   if (!parent) return candidates.find((row) => row.parentId === null) ?? null;
   return candidates.find((row) => row.parentId === parent.id) ?? null;
 }
@@ -638,8 +791,15 @@ export interface RulesImportPlan {
   newRules: number;
   unchanged: number;
   transferRules: number;
-  /** Controller ruling (a): entries with an unsupported/unrecognised rule_kind (not_transfer, or anything this install doesn't know) — never written, always counted. rename is importable and never counted here. */
+  /** Controller ruling (a) + v1.31.0 R-12: entries this install will not write -- an unsupported
+   *  rule_kind (not_transfer, or anything it doesn't know), an unrecognised match_type, or 'word'
+   *  on a kind that cannot carry it. Never written, always counted. rename is importable and
+   *  never counted here. */
   skippedRules: number;
+  /** v1.31.0 R-12 (controller ruling: "report the skipped entries by name"). The same entries
+   *  `skippedRules` counts, each with the reason -- so a household can see WHICH rule was
+   *  dropped rather than only how many were. See RulesImportSkip. */
+  skipped: RulesImportSkip[];
   conflicts: RulesImportConflict[];
   /**
    * v1.31.0 R-04: what the import will actually create, counted by the same enumeration the
@@ -649,6 +809,14 @@ export interface RulesImportPlan {
    * excludes, and a bare name on the confirmation screen would not say so.
    */
   newCategories: string[];
+  /**
+   * v1.31.0 (review finding R-13, P3). Categories this import will bind rules to that are
+   * ARCHIVED here -- announced rather than silently used. findCategory now prefers a live row of
+   * the same name and only falls back to an archived one when that is all there is (see its
+   * docblock for why falling back beats refusing and beats creating a duplicate); this is the
+   * "and say so" half. Empty for every ordinary import.
+   */
+  archivedCategories: string[];
 }
 
 export function previewRulesPackImport(input: unknown): RulesImportPlan {
@@ -661,21 +829,25 @@ export function previewRulesPackImport(input: unknown): RulesImportPlan {
   const refs = categoriesReferencedBy(pack);
   assertPackFitsCategoryTree(refs, all);
 
-  const newCategories = refs
-    .filter((ref) => findCategory(all, ref.name, ref.parent) === null)
-    .map((ref) => (ref.declared?.is_income ? `${ref.name} (income)` : ref.name));
+  const resolved = refs.map((ref) => ({ ref, existing: findCategory(all, ref.name, ref.parent) }));
+  const newCategories = resolved
+    .filter((row) => row.existing === null)
+    .map(({ ref }) => (ref.declared?.is_income ? `${ref.name} (income)` : ref.name));
+  // R-13: the categories that DO exist but are retired. A rule filed into one of these files
+  // money where no spend report shows it, so the confirmation screen names them.
+  const archivedCategories = resolved
+    .filter((row) => row.existing !== null && row.existing.isArchived)
+    .map(({ ref, existing }) => categoryLabel((existing as CategoryRecord).id, all) || ref.name);
 
   let newRules = 0;
   let unchanged = 0;
   let transferRules = 0;
-  let skippedRules = 0;
   const conflicts: RulesImportConflict[] = [];
+  // R-12: named, not merely counted -- and by the same walk the apply uses.
+  const skipped = skippedRulesIn(pack);
 
   for (const rule of pack.rules) {
-    if (!isImportableRule(rule)) {
-      skippedRules += 1;
-      continue;
-    }
+    if (!isImportableRule(rule)) continue;
     if (rule.rule_kind === 'transfer') transferRules += 1;
     // v1.21.0 (item 9) uppercases every pattern at the write choke point (upsertRuleFromCorrection),
     // so a stored row is always uppercase. A hand-authored pack (this shipped Canadian pack among
@@ -727,15 +899,31 @@ export function previewRulesPackImport(input: unknown): RulesImportPlan {
     });
   }
 
-  return { totalRules: pack.rules.length, newRules, unchanged, transferRules, skippedRules, conflicts, newCategories };
+  return {
+    totalRules: pack.rules.length,
+    newRules,
+    unchanged,
+    transferRules,
+    skippedRules: skipped.length,
+    skipped,
+    conflicts,
+    newCategories,
+    archivedCategories,
+  };
 }
 
 export interface RulesImportResult {
   rulesAdded: number;
   rulesOverwritten: number;
   rulesKept: number;
-  /** Controller ruling (a): entries skipped because their rule_kind isn't importable (not_transfer, or unrecognised). rename is importable and never counted here. */
+  /** Controller ruling (a) + v1.31.0 R-12: entries skipped because this install will not write
+   *  them -- an unimportable rule_kind (not_transfer, or unrecognised), an unrecognised
+   *  match_type, or 'word' on a kind that cannot carry it. rename is importable and never
+   *  counted here. */
   rulesSkipped: number;
+  /** v1.31.0 R-12: the same entries, named, so the result message can say which. Identical to
+   *  the preview's `skipped` for the same file, by construction (skippedRulesIn builds both). */
+  rulesSkippedDetail: RulesImportSkip[];
   categoriesCreated: number;
 }
 
@@ -837,7 +1025,9 @@ function importRulesPackWithin(
   let rulesAdded = 0;
   let rulesOverwritten = 0;
   let rulesKept = 0;
-  let rulesSkipped = 0;
+  // R-12: the same walk the preview reports from, so "which rules were skipped" cannot be two
+  // different answers for one file.
+  const rulesSkippedDetail = skippedRulesIn(pack);
   // Required care item 2: an imported rename has to be APPLIED retroactively, the same way
   // saving one on the form does (upsertRenameRule runs applyRenameRules after its write). The
   // import path writes straight to the table via upsertRuleFromCorrection below, which does NOT
@@ -848,10 +1038,7 @@ function importRulesPackWithin(
   let renameRulesWritten = false;
 
   for (const rule of pack.rules) {
-    if (!isImportableRule(rule)) {
-      rulesSkipped += 1;
-      continue;
-    }
+    if (!isImportableRule(rule)) continue;
 
     // Same normalization as previewRulesPackImport, and for the same reason: the actual write
     // below (upsertRuleFromCorrection) uppercases internally regardless, but the "does this row
@@ -944,7 +1131,14 @@ function importRulesPackWithin(
   // case needed here.
   if (renameRulesWritten) applyRenameRules(undefined, buildContext());
 
-  return { rulesAdded, rulesOverwritten, rulesKept, rulesSkipped, categoriesCreated };
+  return {
+    rulesAdded,
+    rulesOverwritten,
+    rulesKept,
+    rulesSkipped: rulesSkippedDetail.length,
+    rulesSkippedDetail,
+    categoriesCreated,
+  };
 }
 
 // -------------------------------------------- rule provenance across a re-key

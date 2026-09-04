@@ -4,13 +4,14 @@ import { acceptsTransactions, listAccounts } from '@/lib/accounts';
 import { listCategories } from '@/lib/categories';
 import { findUserById, listAttributablePeople } from '@/lib/auth/users';
 import { loanLinksForTransactions, listLoans } from '@/lib/loans';
-import { reviewQueueCount } from '@/lib/categorize/engine';
+import { resolveRenameRule, reviewQueueCount } from '@/lib/categorize/engine';
 // v1.26.0 Lane 1 (owner report: "shows amazon i dont know what orignal entry was so maybe its
-// wrong maybe its not"). Read-only import from src/lib/categorize/rules.ts -- a concurrent
-// lane's file this task's brief says not to TOUCH, which importing its own already-exported,
-// already-pure listRules/matchRule is not: nothing there is edited. See renameRules below for
-// why this is the one honest way to answer "which rule renamed this row" at all.
-import { listRules, matchRule } from '@/lib/categorize/rules';
+// wrong maybe its not"). Read-only imports: listRules for the rule set, and (v1.31.0 R-09)
+// resolveRenameRule from the engine for the resolution itself -- this page used to spell the
+// resolution out with matchRule plus its own emptiness test, which was a second definition of
+// the same question. See renameRules below for why this is the one honest way to answer "which
+// rule renamed this row" at all.
+import { listRules } from '@/lib/categorize/rules';
 import { splitsForTransactions } from '@/lib/splits';
 import { countMatchingMerchant, groupTransactionsByCategory, listTransactions } from '@/lib/transactions';
 import { todayIso } from '@/lib/dates';
@@ -104,10 +105,12 @@ export default async function TransactionsPage({
    * v1.26.0 Lane 1. Which rename rule (if any) produced a renamed row's display name -- there is
    * no rule_id column on the transaction itself (TransactionRow.displaySource, src/lib/
    * transactions.ts, only records THAT a rule acted, never which one), so this is resolved the
-   * exact same way the engine resolves it for its own bookkeeping: matchRule(row.
-   * normalizedMerchant, 'rename', rules), the identical call applyRenameRules/resolveRename
-   * (src/lib/categorize/engine.ts) already make to keep a renamed row's display text in sync with
-   * the current rule set. A row is simply ABSENT from this map when that resolves to nothing --
+   * exact same way the engine resolves it for its own bookkeeping: resolveRenameRule(row.
+   * normalizedMerchant, ctx) (src/lib/categorize/engine.ts), which is the very function
+   * resolveRename -- and therefore applyRenameRules -- uses to keep a renamed row's display text
+   * in sync with the current rule set. v1.31.0 R-09: it used to be this page's own matchRule call
+   * plus its own `renameTo !== null` test, which is how "does this merchant have a rename?" came
+   * to be answered three different ways in three files. A row is simply ABSENT from this map when that resolves to nothing --
    * the rule that renamed it may since have been edited or deleted -- and the client treats a
    * missing entry exactly like "the rule list was never available": bank text still shows, the
    * rule attribution does not (this task's own brief: never invent an attribution that could name
@@ -118,8 +121,15 @@ export default async function TransactionsPage({
     const rules = listRules('rename');
     for (const row of page.rows) {
       if (row.displaySource !== 'rename') continue;
-      const rule = matchRule(row.normalizedMerchant, 'rename', rules);
-      if (rule && rule.renameTo !== null) {
+      // v1.31.0 (review finding R-09, P3): resolveRenameRule, the engine's own definition, in
+      // place of this page's former `matchRule(...)` + `rule.renameTo !== null`. That test was a
+      // second writing of "does this merchant have a rename?" and a LOOSER one than the engine's
+      // -- it accepted `renameTo === ''`, which would have rendered an attribution card for a
+      // rename to nothing. resolveRenameRule hands back the winning RULE, so this page still gets
+      // the pattern and id it needs to name the rule, from the same call that decides there IS
+      // one.
+      const rule = resolveRenameRule(row.normalizedMerchant, { rules });
+      if (rule !== null && rule.renameTo !== null) {
         renameRules[row.id] = { pattern: rule.pattern, matchType: rule.matchType, renameTo: rule.renameTo, ruleId: rule.id };
       }
     }

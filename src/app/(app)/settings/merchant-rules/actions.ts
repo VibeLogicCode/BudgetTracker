@@ -5,6 +5,7 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { isSameOrigin } from '@/lib/auth/csrf';
 import { requireAdmin } from '@/lib/auth/session';
+import { listCategories } from '@/lib/categories';
 import {
   applyCanadianPackUpdate,
   installCanadianPack,
@@ -14,11 +15,13 @@ import {
   applyRuleNow,
   clearRuleFromTransactions,
   deleteRenameRule,
+  deleteRules,
   eligibleForRerun,
   previewRerun,
   rerunEngine,
   ruleClearIds,
   setRuleDisabled,
+  setRulesDisabled,
   upsertRenameRule,
   type RuleScope,
 } from '@/lib/categorize/engine';
@@ -58,7 +61,15 @@ export async function saveRuleAction(_prev: RuleActionState, formData: FormData)
       pattern: z.string().trim().min(1).max(200),
       matchType: z.enum(['exact', 'contains', 'word']),
       ruleKind: z.enum(['category', 'transfer', 'rename', 'not_transfer']),
-      categoryId: z.string(),
+      /**
+       * v1.31.0 (review finding R-13, P3). Was `z.string()`, and the value was then handed to a
+       * bare `Number(...)`. '' means "(none)" and is normalized to null before zod sees it
+       * (blankToNull, the same '' -> null step fromRuleId uses); anything else must be a positive
+       * integer, so 'abc' becomes 'Invalid rule.' here rather than `NaN` reaching a column with
+       * `foreign_keys = ON` behind it. EXISTENCE and ARCHIVED-ness are checked below, in words --
+       * see the block after the parse.
+       */
+      categoryId: z.coerce.number().int().positive().nullable(),
       renameTo: z.string().trim().max(200),
       /**
        * v1.25.0 (item 18). The row the dialog was OPENED on, when it was opened on one -- '' for
@@ -79,7 +90,7 @@ export async function saveRuleAction(_prev: RuleActionState, formData: FormData)
       pattern: formData.get('pattern') ?? '',
       matchType: formData.get('matchType') ?? 'exact',
       ruleKind: formData.get('ruleKind') ?? 'category',
-      categoryId: String(formData.get('categoryId') ?? ''),
+      categoryId: blankToNull(formData.get('categoryId')),
       renameTo: String(formData.get('renameTo') ?? ''),
       fromRuleId: blankToNull(formData.get('fromRuleId')),
     });
@@ -144,11 +155,33 @@ export async function saveRuleAction(_prev: RuleActionState, formData: FormData)
   // (ruleOutcomeMissing, src/lib/categorize/rules.ts) -- this is the boundary that stops one being
   // saved in the first place.
   const categoryId =
-    parsed.data.ruleKind === 'transfer' || parsed.data.ruleKind === 'not_transfer' || parsed.data.categoryId === ''
-      ? null
-      : Number(parsed.data.categoryId);
+    parsed.data.ruleKind === 'transfer' || parsed.data.ruleKind === 'not_transfer' ? null : parsed.data.categoryId;
   if (parsed.data.ruleKind === 'category' && categoryId === null) {
     return { error: CATEGORY_RULE_NEEDS_CATEGORY_ERROR };
+  }
+
+  // v1.31.0 (review finding R-13, P3). The id is checked to EXIST and to be UNARCHIVED before it
+  // is written, and refused with a sentence.
+  //
+  // Nothing checked either before. The picker the form renders drops archived rows
+  // (categoryTree/category-order.ts), so the happy path was fine -- but the row it rendered goes
+  // stale the moment somebody archives that category in another tab, and a POST can name any
+  // number at all. A nonexistent id then reached a column with `foreign_keys = ON` behind it
+  // (src/db/client.ts), so SQLite raised a constraint error, nothing caught it, and the person
+  // got a 500 from a form submission -- the same "the panel simply did nothing" failure shape
+  // R-04 fixed on the import route, arriving through the rules form instead.
+  //
+  // ARCHIVED is refused rather than tolerated because archiving is how this app retires a
+  // category -- there is no delete (archiveCategory, src/lib/categories.ts: "Archive only --
+  // transactions, rules and budgets reference categories forever"). A rule that files future
+  // statements into a retired category files them where no spend report shows them, which is the
+  // R-02 defect's own signature: a rule that looks saved and quietly stops money being visible.
+  if (categoryId !== null) {
+    const category = listCategories({ includeArchived: true }).find((row) => row.id === categoryId);
+    if (!category) return { error: 'That category no longer exists. Pick another one.' };
+    if (category.isArchived) {
+      return { error: `"${category.name}" is archived, so a rule cannot file anything into it. Un-archive it first, or pick another category.` };
+    }
   }
 
   const upserted = upsertRuleFromCorrection({
@@ -271,10 +304,14 @@ export async function previewRuleClearAction(
   if (!target) return { affected: 0, kind: null, error: 'That rule no longer exists.' };
   const scope = parseScope(from, to);
   if (!scope.ok) return { affected: 0, kind: target.ruleKind, error: scope.error };
-  // A rename revert is all-or-nothing (clearRuleFromTransactions' docblock), so the range is
-  // dropped here too -- the preview must count what the write will really touch.
-  const effective = target.ruleKind === 'rename' ? {} : scope.scope;
-  return { affected: ruleClearIds(target.id, effective).length, kind: target.ruleKind };
+  // v1.31.0 (R-08): the scope is passed through UNCHANGED. "A rename revert ignores the date
+  // range" is the engine's decision and the engine enforces it in both directions -- ruleClearIds
+  // drops the scope for a rename, and clearRuleFromTransactions delegates that kind to
+  // deleteRenameRule, which never had a range to begin with. This action used to restate it, as
+  // did deleteRuleAndClearAction below, so one decision was written in four places and a future
+  // "bounded rename revert is supported now" change would have had to find all four. The
+  // preview still counts exactly what the write will touch, because both read the same authority.
+  return { affected: ruleClearIds(target.id, scope.scope).length, kind: target.ruleKind };
 }
 
 /**
@@ -309,8 +346,9 @@ export async function deleteRuleAndClearAction(_prev: RuleActionState, formData:
     return { error: 'A "not a transfer" rule can only be deleted -- clearing it would re-flag those transactions as transfers.' };
   }
 
-  const effective = target.ruleKind === 'rename' ? {} : scope.scope;
-  const { rowsCleared } = clearRuleFromTransactions({ ruleId: target.id, scope: effective });
+  // R-08: passed through unchanged, for the reason previewRuleClearAction states -- the engine
+  // is the one authority on a rename ignoring the range.
+  const { rowsCleared } = clearRuleFromTransactions({ ruleId: target.id, scope: scope.scope });
   deleteRule(target.id);
   revalidatePath('/settings/merchant-rules');
   revalidatePath('/transactions');
@@ -318,7 +356,11 @@ export async function deleteRuleAndClearAction(_prev: RuleActionState, formData:
   if (target.ruleKind === 'rename') {
     return { message: `Rename rule deleted; ${rowsCleared} transaction${plural(rowsCleared)} went back to the bank text.` };
   }
-  const where = scopeWording(effective);
+  // R-08 leaves the WORDING branch exactly where it was: the rename message is returned above
+  // and never reaches this line, so from here `scope.scope` and the old `effective` are the same
+  // value. What the sentence says about a range is a message concern; what the write does with
+  // one is the engine's.
+  const where = scopeWording(scope.scope);
   if (rowsCleared === 0) return { message: `Rule deleted. No transaction${where} needed clearing.` };
   if (target.ruleKind === 'transfer') {
     return { message: `Rule deleted and the transfer flag cleared on ${rowsCleared} transaction${plural(rowsCleared)}${where}.` };
@@ -346,19 +388,14 @@ export async function bulkDeleteRulesAction(_prev: RuleActionState, formData: Fo
   const parsed = idList.safeParse(formData.get('ids') ?? '');
   if (!parsed.success || parsed.data.length === 0) return { error: 'No rules selected.' };
 
-  let deleted = 0;
-  let transactionsReverted = 0;
-  for (const id of parsed.data) {
-    const target = findRuleOr(id);
-    if (!target) continue;
-    if (target.ruleKind === 'rename') {
-      const result = deleteRenameRule({ pattern: target.pattern, matchType: target.matchType });
-      transactionsReverted += result.rowsCleared;
-    } else {
-      deleteRule(target.id);
-    }
-    deleted += 1;
-  }
+  // v1.31.0 (R-10): ONE call, ONE retroactive rename pass. This loop used to call
+  // deleteRenameRule per selected rule, and each of those runs a full pass over every non-manual
+  // transaction -- so deleting fourteen preset renames after a pack install read the whole table
+  // twenty-eight times. deleteRules (src/lib/categorize/engine.ts) is where that batching now
+  // lives, beside the pass it batches and beside importRulesPack's identical argument for doing
+  // it; its docblock carries the measured before/after and the reason its single count is a
+  // truer number than the sum this action used to build.
+  const { deleted, rowsCleared: transactionsReverted } = deleteRules(parsed.data);
 
   revalidatePath('/settings/merchant-rules');
   revalidatePath('/transactions');
@@ -401,13 +438,9 @@ export async function bulkSetDisabledAction(_prev: RuleActionState, formData: Fo
     .safeParse({ ids: formData.get('ids') ?? '', disabled: formData.get('disabled') });
   if (!parsed.success || parsed.data.ids.length === 0) return { error: 'No rules selected.' };
 
-  let touched = 0;
-  let rowsChanged = 0;
-  for (const id of parsed.data.ids) {
-    const result = setRuleDisabled({ ruleId: id, disabled: parsed.data.disabled === '1' });
-    touched += 1;
-    rowsChanged += result.rowsChanged;
-  }
+  // R-10, the same fix as bulkDeleteRulesAction above: one pass for the whole selection instead
+  // of one per rename rule in it. See setRulesDisabled's docblock.
+  const { touched, rowsChanged } = setRulesDisabled({ ruleIds: parsed.data.ids, disabled: parsed.data.disabled === '1' });
   revalidatePath('/settings/merchant-rules');
   revalidatePath('/transactions');
   const verb = parsed.data.disabled === '1' ? 'Disabled' : 'Enabled';

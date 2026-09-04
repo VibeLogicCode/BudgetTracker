@@ -166,6 +166,78 @@ describe('POST /api/packs/rules/import', () => {
     expect(formDataSpy).not.toHaveBeenCalled();
   });
 
+  /**
+   * v1.31.0 review finding R-15 (P3). The Content-Length check above is a number the CLIENT
+   * supplies, and it was the ONLY size check on this route: `Number(null ?? '')` is NaN, and
+   * `Number.isFinite(NaN)` is false, so a request with no Content-Length -- which is exactly what
+   * chunked transfer encoding sends -- skipped the check entirely and handed an unbounded body to
+   * formData(). Admin-only, hence P3, but "the cap only applies if you declare your own size" is
+   * not a cap.
+   *
+   * The file's own size is authoritative and known without reading a byte, which is how the CSV
+   * upload routes this route's comment cites as precedent already do it
+   * (import/raw-preview/route.ts, import/preview/route.ts).
+   */
+  it('413s on the FILE size when no content-length is declared at all (R-15)', async () => {
+    const { adminToken } = setup();
+    const oversized = 'x'.repeat(MAX_FILE_BYTES + 1);
+    const form = new FormData();
+    form.append('file', new File([oversized], 'pack.json', { type: 'application/json' }));
+    // No content-length header: the header check cannot fire, so only the file's own size can.
+    const request = new Request('http://nas.local:3000/api/packs/rules/import', {
+      method: 'POST',
+      headers: headers(adminToken),
+      body: form,
+    });
+    expect(request.headers.get('content-length')).toBeNull();
+
+    const response = await rulesImport(request);
+    expect(response.status).toBe(413);
+    expect((await response.json()).code).toBe('file_too_large');
+  });
+
+  it('413s the profiles route the same way -- the identical gap, one directory over (R-15)', async () => {
+    const { adminToken } = setup();
+    const form = new FormData();
+    form.append('file', new File(['y'.repeat(MAX_FILE_BYTES + 1)], 'pack.json', { type: 'application/json' }));
+    const response = await profilesImport(
+      new Request('http://nas.local:3000/api/packs/profiles/import', { method: 'POST', headers: headers(adminToken), body: form }),
+    );
+    expect(response.status).toBe(413);
+    expect((await response.json()).code).toBe('file_too_large');
+  });
+
+  /**
+   * R-12 at the route boundary: the whole reason skip-and-report matters is that this route
+   * ingests a file somebody else's install wrote. One entry from a newer build must not cost the
+   * household the rest of the pack.
+   */
+  it('imports the rest of a pack whose one entry names an unrecognised match_type (R-12)', async () => {
+    const { adminToken } = setup();
+    const pack = JSON.stringify({
+      format: 'budget-tracker-rules',
+      version: 1,
+      categories: [],
+      rules: [
+        { pattern: 'FUTURE FUZZY', match_type: 'fuzzy', rule_kind: 'category', category: 'Coffee', category_parent: 'Food' },
+        { pattern: 'STARBUCKS', match_type: 'contains', rule_kind: 'category', category: 'Coffee', category_parent: 'Food' },
+      ],
+    });
+
+    const preview = await rulesImport(uploadRequest('http://nas.local:3000/api/packs/rules/import', pack, adminToken));
+    expect(preview.status).toBe(200);
+    const plan = await preview.json();
+    expect({ newRules: plan.newRules, skipped: plan.skippedRules }).toEqual({ newRules: 1, skipped: 1 });
+    expect(plan.skipped.map((entry: { pattern: string }) => entry.pattern)).toEqual(['FUTURE FUZZY']);
+
+    const applied = await rulesImport(
+      uploadRequest('http://nas.local:3000/api/packs/rules/import', pack, adminToken, { mode: 'apply' }),
+    );
+    expect(applied.status).toBe(200);
+    expect((await applied.json()).rulesAdded).toBe(1);
+    expect(listRules().some((rule) => rule.pattern === 'STARBUCKS')).toBe(true);
+  });
+
   // Controller ruling (a) — revised 2026-08-31: rename is importable now. not_transfer is the
   // kind that stays permanently unsupported on import (it describes this install's own account
   // wiring), so it is what exercises the "skip gracefully, don't 400 the whole pack" path here.

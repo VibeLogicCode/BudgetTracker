@@ -37,6 +37,15 @@ function stripComments(source: string): string {
  * found (NeedsALookCard.tsx) and folded in. That is the defect shape this review lineage keeps
  * paying for: one idea implemented more than once with nothing tying the copies together.
  *
+ * WHAT WAS ON THIS LIST AND IS NOT ANY MORE. warranty-detail-client.tsx carried an entry whose
+ * stated reason was "left alone here only because another lane held this file open at the time
+ * (reported, not fixed)". That is an allowlist entry justified by scheduling rather than by the
+ * code, and it was hiding a real bug: one of its three links built `?search=<merchant>`, and
+ * `search` is not a parameter the transactions page reads, so it silently landed on an unfiltered
+ * list. All three now go through transactionsHref and the entry is gone -- an allowlist entry
+ * whose reason has expired is the same defect this release has now corrected five times, and the
+ * stale-entry check below is what says so out loud rather than leaving it to a reader.
+ *
  * SHAPE: an INVERTED ALLOWLIST, the same design as tests/ops/spend-where.test.ts, and for the same
  * measured reason. A flat ban would fail today on eight files, and most of them are legitimate --
  * the review-queue mode switch (`?review=1`) carries no figure and has no scope to drop, the
@@ -85,10 +94,6 @@ const ALLOWED_HAND_BUILT: Record<string, string> = {
     "builds its OWN page's querystring from its own filter state (hrefWithParams) plus the " +
     "'/transactions?review=1' toggle -- this is the page linking to itself with the filters it is " +
     'already showing, which is where the scope comes FROM rather than something to re-derive',
-  'src/app/(app)/warranties/[id]/warranty-detail-client.tsx':
-    "three merchant searches hand-built as '?q=' and '?search=' from a warranty's linked transaction " +
-    'and its instalment rows; a genuine fourth-copy candidate to fold into transactionsHref, left ' +
-    'alone here only because another lane held this file open at the time (reported, not fixed)',
   'src/components/app-shell/nav.ts':
     "REVIEW_NAV_HREF, the single definition of the review link the nav and AppShell both compare " +
     'against; a nav destination, not a figure',

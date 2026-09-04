@@ -29,10 +29,24 @@ export async function POST(request: Request): Promise<Response> {
   const form = await request.formData();
   const file = form.get('file');
   if (!(file instanceof File)) return Response.json({ error: 'No file was uploaded.' }, { status: 400 });
+  // v1.31.0 R-15, the same gap this route's sibling had: the Content-Length check above is a
+  // number the client supplies and is skipped outright when the header is absent (chunked
+  // transfer), so the file's own size -- authoritative, and known without reading a byte, the way
+  // the CSV routes cited above already check it -- is the actual limit.
+  if (file.size > MAX_FILE_BYTES) {
+    return Response.json({ error: `File is larger than ${MAX_FILE_BYTES} bytes`, code: 'file_too_large' }, { status: 413 });
+  }
+
+  const text = await file.text();
+  // Belt and braces: `file.size` is bytes on the wire, `text.length` is UTF-16 code units, so
+  // neither bounds the other. What the parser has to survive is the decoded string.
+  if (text.length > MAX_FILE_BYTES) {
+    return Response.json({ error: `File is larger than ${MAX_FILE_BYTES} bytes`, code: 'file_too_large' }, { status: 413 });
+  }
 
   let pack: unknown;
   try {
-    pack = JSON.parse(await file.text());
+    pack = JSON.parse(text);
   } catch {
     return Response.json({ error: 'That file is not valid JSON.' }, { status: 400 });
   }

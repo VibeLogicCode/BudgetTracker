@@ -20,6 +20,24 @@ import { BellIcon } from '@/components/icons';
 import { Field, inputClass, labelClass, selectClass, textareaClass } from '@/components/ui/form';
 import { AutoSaveSelect } from '@/components/ui/AutoSave';
 import { formatCents } from '@/lib/money';
+/**
+ * v1.31.0 (controller-added alongside the P3 sweep). All three "show me this transaction" links
+ * on this page go through transactionsHref, the ONE builder of a `/transactions?...` link
+ * (F-01, src/lib/transaction-links.ts).
+ *
+ * THE DEFECT THAT FORCED IT. The instalment-ledger link built `?search=<merchant>` -- and
+ * `search` is not a parameter the transactions page reads. It reads `q` (readFilter,
+ * src/app/(app)/transactions/filter-params.ts), which the other two links on this same page
+ * happened to spell correctly. So clicking a merchant in the ledger landed on an UNFILTERED
+ * transaction list, with no error and nothing to say the filter had been dropped -- the exact
+ * failure F-01's docblock predicts for a hand-built querystring, in its quietest form.
+ *
+ * `{ range: null, person: null }` on all three, spelled out rather than defaulted: these are
+ * "show me every row for this merchant / this description", the same meaning the transactions row
+ * menu's own "Show all from this merchant" link carries. There is no figure above them whose
+ * window they have to match.
+ */
+import { transactionsHref } from '@/lib/transaction-links';
 import type { ItemLedger, ItemLedgerRow, LoanRule } from '@/lib/loans';
 import {
   BILLING_CYCLE_LABELS,
@@ -518,7 +536,7 @@ export function WarrantyDetailClient({
                 <Detail label="Transaction">
                   {linkedTransaction ? (
                     <Link
-                      href={`/transactions?q=${encodeURIComponent(linkedTransaction.description)}`}
+                      href={transactionsHref({ range: null, person: null }, { kind: 'merchant', merchant: linkedTransaction.description })}
                       className="text-accent-text underline underline-offset-2"
                     >
                       {linkedTransaction.date} · {linkedTransaction.description}
@@ -666,7 +684,7 @@ export function WarrantyDetailClient({
                     direction={row.amountCents > 0 ? 'in' : 'out'}
                     title={
                       <Link
-                        href={`/transactions?search=${encodeURIComponent(row.merchant)}`}
+                        href={transactionsHref({ range: null, person: null }, { kind: 'merchant', merchant: row.merchant })}
                         className="hover:text-accent-text hover:underline hover:underline-offset-2"
                       >
                         {row.merchant}
@@ -789,7 +807,7 @@ export function WarrantyDetailClient({
                           {row.paidTxn === null ? null : (
                             <span className="mt-1 block text-xs text-muted">
                               Paid by{' '}
-                              <Link href={`/transactions?q=${encodeURIComponent(row.paidTxn.description)}`}>
+                              <Link href={transactionsHref({ range: null, person: null }, { kind: 'merchant', merchant: row.paidTxn.description })}>
                                 {row.paidTxn.date} · {row.paidTxn.description}
                               </Link>
                               {Math.abs(row.paidTxn.amountCents) === row.amountCents ? null : (

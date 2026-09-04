@@ -181,7 +181,10 @@ describe('WarrantyDetailClient', () => {
       item: item({ transactionId: 55 }),
       linkedTransaction: { id: 55, date: '2026-08-16', description: 'HOME DEPOT' },
     });
-    expect(container.querySelector('a[href="/transactions?q=HOME+DEPOT"]') ?? container.innerHTML).toBeTruthy();
+    /* `?? container.innerHTML` used to sit here as the failure message, which made the assertion
+       VACUOUS: querySelector returning null fell back to a non-empty HTML string, which is
+       truthy, so this passed whatever the href was. Asserted on the element directly instead. */
+    expect(container.querySelector('a[href="/transactions?q=HOME+DEPOT"]')).not.toBeNull();
     cleanup();
 
     renderDetail({ item: item({ transactionId: 55 }), linkedTransaction: null, linkRemoved: true });
@@ -790,6 +793,32 @@ describe('the Installments card offers Record payment', () => {
     // Unmark takes its place -- the row still has a kebab, just not this item.
     expect(screen.getByRole('menuitem', { name: /^unmark$/i })).toBeTruthy();
   });
+
+  /**
+   * v1.31.0 (controller-added). The instalment's "Paid by" link is the third of this page's three
+   * transaction links; all three now go through transactionsHref (the one builder of a
+   * /transactions? link), so all three carry `q` -- the parameter the transactions page actually
+   * reads. The ledger link next to it used to build `?search=`, which the page ignores, and this
+   * assertion is here so the other two cannot drift back to a spelling nobody reads.
+   */
+  it('links a paid instalment to its transaction with the q the page reads', () => {
+    renderDetail({
+      item: billItem,
+      installments: [
+        {
+          id: 102,
+          itemId: 42,
+          dueDate: '2026-07-01',
+          amountCents: 15000,
+          paidAt: '2026-07-02T00:00:00.000Z',
+          paidTxnId: 55,
+          paidTxn: { id: 55, date: '2026-07-02', description: 'Muni Tax', amountCents: -15000 },
+          state: 'paid',
+        },
+      ],
+    });
+    expect(screen.getByRole('link', { name: /Muni Tax/ }).getAttribute('href')).toBe('/transactions?q=Muni+Tax');
+  });
 });
 
 describe('WarrantyDetailClient — inapplicable product fields (item R, ruling P6)', () => {
@@ -912,9 +941,18 @@ describe('the Linked transactions card (item 6)', () => {
     expect(screen.getByText(/2026-08-10/)).toBeTruthy();
     expect(screen.getByText(/Joint Chequing/)).toBeTruthy();
     expect(screen.getByText('rule')).toBeTruthy();
-    // The merchant links to /transactions?search=<merchant> so the row is one click away.
-    // encodeURIComponent (not a query-string '+' encoder), so a space becomes %20.
-    expect(screen.getByRole('link', { name: 'HONDA FIN' }).getAttribute('href')).toBe('/transactions?search=HONDA%20FIN');
+    /**
+     * The merchant links to the transactions list filtered to it, so the row is one click away.
+     *
+     * v1.31.0 (controller-added): the parameter is `q`, and this assertion is the point of the
+     * fix. It used to read `?search=HONDA%20FIN` -- and `search` is not a parameter the
+     * transactions page reads (readFilter, src/app/(app)/transactions/filter-params.ts, reads
+     * `q`), so this link silently landed on an unfiltered list and this test asserted that it
+     * did. All three links on this page now go through transactionsHref, the one builder of a
+     * /transactions? link, which is why a space arrives as URLSearchParams' `+` rather than
+     * encodeURIComponent's %20.
+     */
+    expect(screen.getByRole('link', { name: 'HONDA FIN' }).getAttribute('href')).toBe('/transactions?q=HONDA+FIN');
   });
 
   it('marks a manual link "by hand" and an installment link "installment"', () => {

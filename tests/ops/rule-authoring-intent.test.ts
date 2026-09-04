@@ -319,6 +319,28 @@ const RULE_AUTHORING_PATHS: ReadonlyMap<string, IntentDeclaration> = new Map<str
         'is no per-row action to mistake it for.',
     },
   ],
+  [
+    'deleteRules',
+    {
+      declaredBy: NAME_DECLARES_IT,
+      why:
+        'v1.31.0 R-10. Takes a LIST of ruleIds and nothing else -- no transactionId anywhere in ' +
+        'its signature -- and its name is the plural of the delete it performs. It exists so a ' +
+        'bulk delete pays for ONE retroactive rename pass instead of one per rule (the batching ' +
+        'importRulesPack already argued for itself); the statement being made is "remove these ' +
+        'rules", which is the multi-rule spelling of deleteRenameRule above.',
+    },
+  ],
+  [
+    'setRulesDisabled',
+    {
+      declaredBy: NAME_DECLARES_IT,
+      why:
+        'v1.31.0 R-10, and setRuleDisabled\'s reason in the plural: a list of ruleIds, no ' +
+        'transactionId, reached only from the rules page\'s multi-select. Same one-pass batching ' +
+        'as deleteRules, same absence of any per-row control it could be mistaken for.',
+    },
+  ],
 ]);
 
 /**

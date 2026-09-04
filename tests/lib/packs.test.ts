@@ -21,7 +21,7 @@ import {
   previewRulesPackExport,
   previewRulesPackImport,
 } from '@/lib/packs';
-import { listRules, upsertRuleFromCorrection } from '@/lib/categorize/rules';
+import { listRules, setRuleDisabledFlag, upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { listCategories } from '@/lib/categories';
 import { normalizeMerchant } from '@/lib/categorize/normalize';
 import { nowIso } from '@/lib/clock';
@@ -865,12 +865,17 @@ describe('v1.31.0 R-04: the preview counts what apply will create, and apply is 
   });
 
   it('does not call a rule "already identical" when the category is one it will create', () => {
-    const { userId } = setup();
-    // A pre-v1.31.0 row: a category rule with no category (the form refuses one now, R-02).
-    upsertRuleFromCorrection({
-      pattern: 'PET VALU', matchType: 'exact', ruleKind: 'category', categoryId: null,
-      createdBy: userId, actorRole: 'admin',
-    });
+    const { sqlite } = setup();
+    // A pre-v1.31.0 row: a category rule with no category. Written raw, because every writer in
+    // the app now refuses one -- the form returns a sentence (R-02) and the shared upsert throws
+    // (R-09) -- so raw SQL is the only way such a row can exist, which is exactly what "a
+    // pre-v1.31.0 row" means.
+    sqlite
+      .prepare(
+        `insert into merchant_rules (pattern, match_type, rule_kind, category_id, hit_count, created_at)
+         values ('PET VALU', 'exact', 'category', null, 0, '2026-01-01T00:00:00.000Z')`,
+      )
+      .run();
     const pack = packOf([{ pattern: 'PET VALU', match_type: 'exact', category: 'Pets' }]);
 
     // Old behaviour: `incoming?.id ?? null` was null because Pets does not exist yet, the existing
@@ -926,5 +931,185 @@ describe('v1.31.0 R-04: the preview counts what apply will create, and apply is 
       color: null,
     }));
     expect(() => parseRulesPack(packOf([], manyCategories))).toThrow(new RegExp(String(MAX_PACK_CATEGORIES)));
+  });
+});
+
+/**
+ * v1.31.0 review finding R-12 (P3), controller ruling: skip-and-report, consistently.
+ *
+ * An unknown `rule_kind` was skipped and counted; an unknown `match_type` failed the whole file.
+ * Both mean "this pack came from a build that knows something this one does not", so both are now
+ * skipped -- and both are now REPORTED BY NAME, because a count told a household four rules would
+ * not arrive and gave them no way to find out which four.
+ */
+describe('v1.31.0 R-12: an unrecognised match_type is skipped and named, not fatal', () => {
+  const packOf = (rules: unknown[]) => ({
+    format: RULES_PACK_FORMAT,
+    version: 1,
+    exported_at: '2026-08-15T12:00:00.000Z',
+    categories: [],
+    rules,
+  });
+
+  it('imports every other rule in a pack whose one bad entry names a match type from the future', () => {
+    const { coffee } = setup();
+    const pack = packOf([
+      { pattern: 'FUTURE FUZZY', match_type: 'fuzzy', rule_kind: 'category', category: 'Coffee', category_parent: 'Food' },
+      { pattern: 'STARBUCKS', match_type: 'contains', rule_kind: 'category', category: 'Coffee', category_parent: 'Food' },
+    ]);
+
+    // The whole point: 'fuzzy' used to make parseRulesPack throw, so STARBUCKS never landed.
+    const plan = previewRulesPackImport(pack);
+    expect({ newRules: plan.newRules, skipped: plan.skippedRules }).toEqual({ newRules: 1, skipped: 1 });
+
+    const result = importRulesPack(pack);
+    expect({ added: result.rulesAdded, skipped: result.rulesSkipped }).toEqual({ added: 1, skipped: 1 });
+    expect(listRules().find((rule) => rule.pattern === 'STARBUCKS')?.categoryId).toBe(coffee);
+    expect(listRules().some((rule) => rule.pattern === 'FUTURE FUZZY')).toBe(false);
+  });
+
+  it('names the skipped entry and says why, in the preview and in the result', () => {
+    setup();
+    const pack = packOf([
+      { pattern: 'FUTURE FUZZY', match_type: 'fuzzy', rule_kind: 'category', category: 'Coffee', category_parent: 'Food' },
+      { pattern: 'MY OWN ACCOUNT', match_type: 'exact', rule_kind: 'not_transfer' },
+      { pattern: 'WORD TRANSFER', match_type: 'word', rule_kind: 'transfer' },
+    ]);
+
+    const plan = previewRulesPackImport(pack);
+    expect(plan.skipped.map((skip) => skip.pattern)).toEqual(['FUTURE FUZZY', 'MY OWN ACCOUNT', 'WORD TRANSFER']);
+    // The three reasons are genuinely different actions for the household, which is why the reason
+    // is per entry rather than one sentence for the batch.
+    expect(plan.skipped[0].reason).toMatch(/does not recognise the match type "fuzzy"/);
+    expect(plan.skipped[1].reason).toMatch(/never shared/);
+    expect(plan.skipped[2].reason).toMatch(/not a match type a transfer rule can carry/);
+
+    // The apply reports the identical list -- the preview's promise and the import's behaviour are
+    // one walk (skippedRulesIn), not two similar calculations.
+    expect(importRulesPack(pack).rulesSkippedDetail).toEqual(plan.skipped);
+  });
+
+  it('still rejects outright what is malformed rather than merely unfamiliar', () => {
+    setup();
+    // Not "a newer build knows something": a match type that is not a string at all, and a
+    // category rule with no category. Both stay hard rejections.
+    expect(() =>
+      previewRulesPackImport(packOf([{ pattern: 'X', match_type: 7, rule_kind: 'category', category: 'Coffee' }])),
+    ).toThrow(PackFormatError);
+    expect(() => previewRulesPackImport(packOf([{ pattern: 'X', match_type: 'fuzzy', rule_kind: 'category' }]))).toThrow(
+      PackFormatError,
+    );
+  });
+});
+
+/**
+ * v1.31.0 review finding R-13 (P3), import half. An imported rule could bind to an ARCHIVED
+ * category: both callers pass `includeArchived: true` and findCategory had no notion of archived,
+ * so whichever row sorted first won. Money then filed into a retired category, which no spend
+ * report shows, with the import reporting success.
+ */
+describe('v1.31.0 R-13: an import prefers a live category and announces an archived one', () => {
+  const packOf = (rules: unknown[]) => ({
+    format: RULES_PACK_FORMAT,
+    version: 1,
+    exported_at: '2026-08-15T12:00:00.000Z',
+    categories: [],
+    rules,
+  });
+
+  const addCategory = (sqlite: TestDb['sqlite'], name: string, parentId: number, archived: boolean, order: number) =>
+    (
+      sqlite
+        .prepare(
+          'insert into categories (name, parent_id, is_income, is_archived, sort_order, tax_relevant) values (?, ?, 0, ?, ?, 0) returning id',
+        )
+        .get(name, parentId, archived ? 1 : 0, order) as { id: number }
+    ).id;
+
+  it('binds to the LIVE category when a household has an archived one of the same name', () => {
+    const { db, sqlite } = setup();
+    // The reachable shape of "two categories called the same thing": categories_name_parent_uq
+    // forbids two under the SAME parent, so the pair sits under different ones. A household that
+    // moved Espresso out of Food and into Personal, archiving the old row, has exactly this.
+    // Sort order puts the ARCHIVED one first, which is what the old `candidates[0]` took.
+    addCategory(sqlite, 'Espresso', categoryIdByName(db, 'Food'), true, 1);
+    const liveId = addCategory(sqlite, 'Espresso', categoryIdByName(db, 'Personal'), false, 2);
+
+    // No category_parent, and the pack declares no categories, so resolveParentName gives null --
+    // the branch where findCategory falls back to "any candidate will do".
+    const pack = packOf([{ pattern: 'CAFFE X', match_type: 'exact', rule_kind: 'category', category: 'Espresso' }]);
+    // Nothing to create: the name already exists here, twice.
+    expect(previewRulesPackImport(pack).newCategories).toEqual([]);
+    importRulesPack(pack);
+    expect(listRules().find((rule) => rule.pattern === 'CAFFE X')?.categoryId).toBe(liveId);
+  });
+
+  it('says so, before the click, when the only category of that name is archived', () => {
+    const { db, sqlite } = setup();
+    const food = categoryIdByName(db, 'Food');
+    addCategory(sqlite, 'Fondue', food, true, 1);
+
+    const pack = packOf([
+      { pattern: 'FONDUE HOUSE', match_type: 'exact', rule_kind: 'category', category: 'Fondue', category_parent: 'Food' },
+    ]);
+    const plan = previewRulesPackImport(pack);
+    // Not "new" -- it exists -- and not silent either. Un-archiving it as a side effect of
+    // importing rules was the third option and is deliberately refused; see findCategory.
+    expect(plan.newCategories).toEqual([]);
+    expect(plan.archivedCategories).toEqual(['Food › Fondue']);
+  });
+
+  it('reports no archived categories for an ordinary import', () => {
+    setup();
+    const pack = packOf([
+      { pattern: 'NEW ONE', match_type: 'exact', rule_kind: 'category', category: 'Coffee', category_parent: 'Food' },
+    ]);
+    expect(previewRulesPackImport(pack).archivedCategories).toEqual([]);
+  });
+});
+
+/**
+ * v1.31.0 review finding R-14 (P3), controller ruling: a re-imported export must round-trip to the
+ * same state. It did not -- the format has no `disabled` field and the importer never writes
+ * `disabled_at`, so a rule the household had switched OFF arrived at the other install switched
+ * ON and started filing money there.
+ */
+describe('v1.31.0 R-14: a disabled rule never leaves in a pack', () => {
+  /** setup()'s TIM HORTONS rule, switched off. */
+  const disableOne = (pattern: string) => {
+    const rule = listRules().find((row) => row.pattern === pattern);
+    expect(rule, `no rule ${pattern}`).toBeDefined();
+    setRuleDisabledFlag((rule as { id: number }).id, true);
+  };
+
+  it('is absent from the exported file', () => {
+    setup();
+    disableOne('TIM HORTONS');
+    const patterns = exportRulesPack().rules.map((rule) => rule.pattern);
+    expect(patterns).not.toContain('TIM HORTONS');
+    expect(patterns).toContain('LOBLAWS');
+  });
+
+  it('round-trips: importing an export leaves the receiving install running the same rules', () => {
+    setup();
+    disableOne('TIM HORTONS');
+    const file = JSON.parse(JSON.stringify(exportRulesPack())) as unknown;
+
+    // A second install, seeded and with no rules of its own.
+    current!.cleanup();
+    current = createSeededTestDb();
+    importRulesPack(file);
+    // The rule the sender had switched off does not exist here at all -- which IS the round-trip:
+    // what the sender runs is what the receiver runs. It used to arrive enabled and start firing.
+    expect(listRules().some((rule) => rule.pattern === 'TIM HORTONS')).toBe(false);
+    expect(listRules().some((rule) => rule.pattern === 'LOBLAWS')).toBe(true);
+  });
+
+  it('is still LISTED for the panel, marked disabled, so its absence is explained not hidden', () => {
+    setup();
+    disableOne('TIM HORTONS');
+    const rows = previewRulesPackExport();
+    expect(rows.find((row) => row.pattern === 'TIM HORTONS')?.disabled).toBe(true);
+    expect(rows.find((row) => row.pattern === 'LOBLAWS')?.disabled).toBe(false);
   });
 });
