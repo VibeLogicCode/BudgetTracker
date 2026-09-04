@@ -49,6 +49,12 @@ export function UpdatesCard() {
       dismissedVersion={state.dismissedVersion}
       lastAppliedAt={state.lastAppliedAt}
       lastApplyError={state.lastApplyError}
+      // Task 3d (symptom B): recordApplyRequested (state.ts) commits these BEFORE the
+      // Watchtower fetch (MUST-7.4), so the database already knows an apply is in flight the
+      // instant this server component next renders. Passing them through is what lets the
+      // client render the pending block instead of a live Update now button.
+      applyRequestedVersion={state.applyRequestedVersion}
+      applyRequestedAt={state.applyRequestedAt}
       severity={severity}
       canApplyInApp={watchtowerConfig() !== null}
       watchtowerError={watchtowerConfigError()}

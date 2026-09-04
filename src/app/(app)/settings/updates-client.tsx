@@ -31,6 +31,11 @@ export interface UpdatesViewProps {
   dismissedVersion: string | null;
   lastAppliedAt: string | null;
   lastApplyError: string | null;
+  /** Task 3d (symptom B): committed BEFORE the Watchtower fetch (MUST-7.4) — non-null here
+   *  means the database already knows an apply is in flight, whether or not this render is
+   *  the one that triggered it. See resolveView() and the pending block below. */
+  applyRequestedVersion: string | null;
+  applyRequestedAt: string | null;
   severity: UpdateSeverity;
   /** MUST-7.3: the card receives this boolean and NOTHING else about Watchtower. */
   canApplyInApp: boolean;
@@ -51,6 +56,53 @@ const SEVERITY_BADGE: Record<Exclude<UpdateSeverity, 'none'>, string> = {
 /** notify §11.4's amendment, and the app's ONE timestamp convention. No relative strings. */
 function stamp(iso: string | null): string {
   return iso === null ? 'Never' : iso.slice(0, 16).replace('T', ' ');
+}
+
+/**
+ * Mirrors state.ts's export of the same name (MUST-7.6's 30-minute apply-confirm window).
+ * That module reads and writes the settings table through @/lib/settings -> @/db/client, which
+ * pulls better-sqlite3 — a native module — into anything that imports it. That is exactly the
+ * MUST-2.1 client-bundle hazard semver.ts's own docblock names for this very file: importing
+ * state.ts here to reuse one integer would pull the database client into the browser build.
+ * Duplicating the constant is the smaller, and the only safe, cost. Keep it in lockstep with
+ * state.ts if that value ever changes.
+ */
+const APPLY_CONFIRM_MAX_AGE_MS = 30 * 60_000;
+
+interface ResolvedAvailability {
+  latestVersion: string | null;
+  latestPublishedAt: string | null;
+  lastCheckedAt: string | null;
+  severity: UpdateSeverity;
+  applyRequestedVersion: string | null;
+  applyRequestedAt: string | null;
+}
+
+/**
+ * Task 3d (symptom A). checkForUpdateNowAction and applyUpdateAction now hand back exactly what
+ * they just wrote (actions.ts's UpdateActionState fields); this is the ONE place that decides
+ * which source wins when props, a check result and an apply result might all disagree. Freshest
+ * action result first, because it is the most recent write this tab has any knowledge of;
+ * props last, because they may be from a render Next never refreshed (the owner's report).
+ *
+ * `??` is deliberate, not `||`: an action that ran and found nothing (severity 'none',
+ * latestVersion null) still WINS, because those are defined values, not absent ones — a stale
+ * "version available" from props must not survive a check that just proved there is nothing to
+ * offer.
+ */
+function resolveView(
+  props: UpdatesViewProps,
+  states: { checkState: UpdateActionState; applyState: UpdateActionState },
+): ResolvedAvailability {
+  const { checkState, applyState } = states;
+  return {
+    latestVersion: checkState.latestVersion ?? applyState.latestVersion ?? props.latestVersion,
+    latestPublishedAt: checkState.latestPublishedAt ?? applyState.latestPublishedAt ?? props.latestPublishedAt,
+    lastCheckedAt: checkState.lastCheckedAt ?? applyState.lastCheckedAt ?? props.lastCheckedAt,
+    severity: checkState.severity ?? applyState.severity ?? props.severity,
+    applyRequestedVersion: checkState.applyRequestedVersion ?? applyState.applyRequestedVersion ?? props.applyRequestedVersion,
+    applyRequestedAt: checkState.applyRequestedAt ?? applyState.applyRequestedAt ?? props.applyRequestedAt,
+  };
 }
 
 export function UpdatesClient(props: UpdatesViewProps) {
@@ -116,9 +168,39 @@ export function UpdatesClient(props: UpdatesViewProps) {
     );
   }
 
-  const severity = props.severity;
-  const offered = severity !== 'none' && props.latestVersion !== null ? props.latestVersion : null;
+  // Task 3d (symptom A): resolved, not props, from here down — see resolveView() above.
+  const resolved = resolveView(props, { checkState, applyState });
+  const severity = resolved.severity;
+  const offered = severity !== 'none' && resolved.latestVersion !== null ? resolved.latestVersion : null;
   const dismissed = offered !== null && props.dismissedVersion === offered;
+
+  /**
+   * Task 3d (symptom B). MUST-9.9 forbids polling a container that is about to be replaced —
+   * it does NOT forbid rendering the pending state the database already holds. This reads
+   * Date.now() exactly once, at render, the same way any other derived value in this component
+   * is computed; it sets no timer, no interval, no auto-reload. The rejected alternative was a
+   * client poll re-checking apply status every few seconds specifically to grey out this
+   * button — precisely the thing MUST-9.9 exists to prevent, since the container that would
+   * have to answer that poll is the one about to die. The block below retires itself the next
+   * time ANY server action runs (a fresh check, a fresh apply) or the page is reloaded by hand,
+   * because reconcilePendingApply (state.ts) clears the flag on the next boot or check tick —
+   * never because this component watched for it.
+   */
+  const pending =
+    offered !== null &&
+    resolved.applyRequestedVersion === offered &&
+    resolved.applyRequestedAt !== null &&
+    Date.now() - Date.parse(resolved.applyRequestedAt) < APPLY_CONFIRM_MAX_AGE_MS;
+
+  const pendingNotice = (
+    <Notice tone="info" title={`Update requested ${stamp(resolved.applyRequestedAt)}`}>
+      <p>
+        Watchtower is pulling {offered}. This page will stop responding for a minute while the container restarts,
+        then come back on the new version. Reload in a minute or two. If this card still says v{props.currentVersion}{' '}
+        after 30 minutes, the update did not land and the reason will appear here.
+      </p>
+    </Notice>
+  );
 
   return (
     <Card>
@@ -138,8 +220,8 @@ export function UpdatesClient(props: UpdatesViewProps) {
       <CardBody className="flex flex-col gap-4">
         {canadianPackNotice}
         <p className="text-sm text-subtle">
-          Last checked {stamp(props.lastCheckedAt)}
-          {props.latestPublishedAt === null ? null : ` · published ${stamp(props.latestPublishedAt)}`}
+          Last checked {stamp(resolved.lastCheckedAt)}
+          {resolved.latestPublishedAt === null ? null : ` · published ${stamp(resolved.latestPublishedAt)}`}
           {props.lastAppliedAt === null ? null : ` · last updated ${stamp(props.lastAppliedAt)}`}
         </p>
 
@@ -262,12 +344,20 @@ export function UpdatesClient(props: UpdatesViewProps) {
                   starts.
                 </Notice>
                 <div className="flex flex-wrap items-center gap-3">
-                  <form action={apply}>
-                    <input type="hidden" name="version" value={offered} />
-                    {/* MUST-9.5: the version is in the LABEL, so a stale panel cannot install
-                        something the reader did not read about. */}
-                    <SubmitButton className="btn btn--primary">Install {offered}</SubmitButton>
-                  </form>
+                  {pending ? (
+                    // Task 3d (symptom B): in place of the "Install X" button ONLY — the rest
+                    // of this panel (notes, warning, Cancel) is untouched, because a request
+                    // already fired from here and the reader may still want to re-read what
+                    // they confirmed.
+                    pendingNotice
+                  ) : (
+                    <form action={apply}>
+                      <input type="hidden" name="version" value={offered} />
+                      {/* MUST-9.5: the version is in the LABEL, so a stale panel cannot install
+                          something the reader did not read about. */}
+                      <SubmitButton className="btn btn--primary">Install {offered}</SubmitButton>
+                    </form>
+                  )}
                   <button type="button" className="btn btn--ghost" onClick={() => setPanelOpen(false)}>
                     Cancel
                   </button>
@@ -275,6 +365,11 @@ export function UpdatesClient(props: UpdatesViewProps) {
               </div>
             )}
           </div>
+        ) : pending ? (
+          // Task 3d (symptom B): in place of the Update now / Not now row entirely — no
+          // button lives here while the database says a request for THIS version is already
+          // in flight, so a stale tab cannot fire a second one.
+          pendingNotice
         ) : (
           <div className="flex flex-wrap items-center gap-3">
             <form action={apply}>

@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createTestDb, insertTestUser, type TestDb } from '../../helpers/db';
-import { UPDATE_CHECK_INTERVAL_MS, dueForCheck, runUpdateCheck } from '@/lib/update/check';
+import { UPDATE_CHECK_INTERVAL_MS, applyUpdate, dueForCheck, runUpdateCheck } from '@/lib/update/check';
 import { setSetting } from '@/lib/settings';
 import { APPLY_CONFIRM_MAX_AGE_MS } from '@/lib/update/state';
-import { APPLY_MAX, resetUpdateRateLimitsForTests } from '@/lib/update/ratelimit';
+import { APPLY_MAX, checkUpdateApply, resetUpdateRateLimitsForTests } from '@/lib/update/ratelimit';
 import { classify, parseSemver } from '@/lib/update/semver';
 import { readUpdateState, setAutoApply, setUpdateChecksEnabled } from '@/lib/update/state';
 import { saveEmailTarget, saveSmtp } from '@/lib/notify/config';
@@ -220,7 +220,7 @@ describe('MUST-5.5 / MUST-5.9: the stamp and the dismissal', () => {
 });
 
 describe('Fix round finding 4: the APPLY bucket bounds the internal auto-apply path too', () => {
-  it('auto-apply on, 5 rapid manual checks — Watchtower is triggered at most APPLY_MAX times', async () => {
+  it('auto-apply on, 5 rapid manual checks for the SAME version — Watchtower is triggered exactly once', async () => {
     withWatchtower(true);
     setAutoApply(true);
     const next = `v${APP_VERSION.split('.').slice(0, 2).join('.')}.${Number(APP_VERSION.split('.')[2]) + 1}`;
@@ -230,23 +230,32 @@ describe('Fix round finding 4: the APPLY bucket bounds the internal auto-apply p
       await runUpdateCheck({ now: new Date(), manual: true });
     }
 
-    // Without the internal gate, a spammed Check-now button would drive one real
-    // /v1/update request per call — five, here — against a container that is (once the
-    // first one lands) already mid-replacement.
+    // Task 3d (symptom B): before the single-flight guard, this was bounded only by the APPLY
+    // rate-limit bucket (up to APPLY_MAX real requests). The guard now recognises ticks 2-5 as
+    // the SAME version already recorded as in flight and short-circuits them before the rate
+    // limiter is even consulted, so a spammed Check-now button drives exactly ONE real
+    // /v1/update request against a container that is (once that one lands) already
+    // mid-replacement — not up to three. A blanket lock across DIFFERENT versions is exercised
+    // by the next test.
     expect(watchtowerCalls).toBeLessThanOrEqual(APPLY_MAX);
-    expect(watchtowerCalls).toBe(APPLY_MAX);
+    expect(watchtowerCalls).toBe(1);
   });
 
-  it('a rate-limited auto-apply attempt falls through to the notify path rather than erroring', async () => {
+  it('a rate-limited auto-apply attempt (a run of DIFFERENT versions) falls through to the notify path rather than erroring', async () => {
     withWatchtower(true);
     setAutoApply(true);
-    const next = `v${APP_VERSION.split('.').slice(0, 2).join('.')}.${Number(APP_VERSION.split('.')[2]) + 1}`;
-    stubRelease(next);
+    const [major, minor, patch] = APP_VERSION.split('.').map(Number);
 
+    // Task 3d (symptom B): each tick targets a DIFFERENT version so the single-flight guard —
+    // per-version, not a blanket lock — never intervenes. That is what actually exhausts the
+    // APPLY rate-limit bucket here; a repeated identical version is the scenario the test
+    // above covers, and single-flight defuses it before the bucket is ever touched.
     for (let i = 0; i < APPLY_MAX; i += 1) {
+      stubRelease(`v${major}.${minor}.${patch + 1 + i}`);
       const result = await runUpdateCheck({ now: new Date(), manual: true });
       expect(result.applied).toBe(true);
     }
+    stubRelease(`v${major}.${minor}.${patch + 1 + APPLY_MAX}`);
     const refused = await runUpdateCheck({ now: new Date(), manual: true });
     expect(refused.applied).toBe(false);
     expect(refused.error).toBeNull();
@@ -324,5 +333,67 @@ describe('Fix wave item 1: the pinned-tag scenario -- acceptance is not applicat
     expect(state.applyRequestedVersion).toBeNull();
     expect(state.lastApplyFailedVersion).toBeNull();
     expect(watchtowerCalls).toBe(0);
+  });
+});
+
+/**
+ * Task 3d, symptom B (part 5): a second Update-now press for the same version, inside the
+ * 30-minute confirm window, must not reach Watchtower again and must not spend a second
+ * rate-limit token. The check runs BEFORE checkUpdateApply() is consumed, so a duplicate
+ * request costs the install nothing beyond the one real attempt.
+ */
+describe('Task 3d, symptom B: applyUpdate is single-flight per version', () => {
+  it('a second applyUpdate call for the SAME version inside the window is short-circuited: one fetch, one rate-limit token', async () => {
+    withWatchtower(true);
+    stubRelease(`v${APP_VERSION}`); // installs the fetch stub; the github branch is unused here
+    const at = new Date('2026-08-18T00:00:00.000Z');
+
+    const first = await applyUpdate({ version: '9.9.9', now: at });
+    expect(first.outcome).toBe('accepted');
+    expect(watchtowerCalls).toBe(1);
+
+    const second = await applyUpdate({ version: '9.9.9', now: new Date(at.getTime() + 5 * 60_000) });
+    expect(second.outcome).toBe('already-pending');
+    expect(second.retryAfterMinutes).toBe(0);
+    expect(watchtowerCalls).toBe(1); // NOT a second Watchtower request
+
+    // Exactly one APPLY token was spent by the pair above (checkUpdateApply() itself runs on
+    // the real clock, same as applyUpdate's own internal call): APPLY_MAX - 1 direct takes
+    // still succeed, and the one after that is refused.
+    for (let i = 0; i < APPLY_MAX - 1; i += 1) {
+      expect(checkUpdateApply().allowed).toBe(true);
+    }
+    expect(checkUpdateApply().allowed).toBe(false);
+  });
+
+  it('a request for a DIFFERENT version inside the same window is NOT blocked -- the guard is per-version', async () => {
+    withWatchtower(true);
+    stubRelease(`v${APP_VERSION}`);
+    const at = new Date('2026-08-18T00:00:00.000Z');
+
+    const first = await applyUpdate({ version: '9.9.9', now: at });
+    expect(first.outcome).toBe('accepted');
+    expect(watchtowerCalls).toBe(1);
+
+    const second = await applyUpdate({ version: '9.9.8', now: new Date(at.getTime() + 5 * 60_000) });
+    expect(second.outcome).toBe('accepted');
+    expect(watchtowerCalls).toBe(2);
+  });
+
+  it('past the 30-minute window, the same version is no longer treated as pending', async () => {
+    withWatchtower(true);
+    stubRelease(`v${APP_VERSION}`);
+    const at = new Date('2026-08-18T00:00:00.000Z');
+
+    const first = await applyUpdate({ version: '9.9.9', now: at });
+    expect(first.outcome).toBe('accepted');
+    expect(watchtowerCalls).toBe(1);
+
+    const second = await applyUpdate({
+      version: '9.9.9',
+      now: new Date(at.getTime() + APPLY_CONFIRM_MAX_AGE_MS + 60_000),
+    });
+    expect(second.outcome).toBe('accepted');
+    expect(watchtowerCalls).toBe(2);
   });
 });

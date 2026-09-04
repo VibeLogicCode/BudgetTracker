@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { APPLY_CONFIRM_MAX_AGE_MS } from '@/lib/update/state';
 
 const ROOT = process.cwd();
 
@@ -445,4 +446,55 @@ describe('a server file never value-imports a runtime helper from a client modul
       expect(looksLikeComponent('isNotificationTab')).toBe(false);
     });
   });
+});
+
+/**
+ * A client component may not import a server module merely to reuse a constant -- that is the
+ * MUST-2.1 hazard the rest of this file guards, and updates-client.tsx correctly duplicates
+ * APPLY_CONFIRM_MAX_AGE_MS rather than importing state.ts (which reaches @/db/client and pulls
+ * better-sqlite3 into the browser build).
+ *
+ * Duplication is the right call there and the wrong thing to leave unpinned. The duplicate's own
+ * docblock ends "Keep it in lockstep with state.ts if that value ever changes" -- an instruction
+ * addressed to human memory, which is what every other guard in this directory exists because of.
+ * v1.30.0's review found the same shape three times over (one spend rule in six modules, one
+ * archived-parent rule in two functions, one rename resolved by two call paths), so a second
+ * definition of a value gets a test, not a comment.
+ *
+ * The assertion is on the literal in the SOURCE, not on an imported binding, because importing
+ * the client module here would defeat the very separation the duplication buys.
+ */
+describe('duplicated client-side constants stay in lockstep with their server definition', () => {
+  const DUPLICATES: readonly { file: string; name: string; actual: number; why: string }[] = [
+    {
+      file: 'src/app/(app)/settings/updates-client.tsx',
+      name: 'APPLY_CONFIRM_MAX_AGE_MS',
+      actual: APPLY_CONFIRM_MAX_AGE_MS,
+      why: 'src/lib/update/state.ts reaches @/db/client; importing it into a client component would pull better-sqlite3 into the browser build (MUST-2.1).',
+    },
+  ];
+
+  for (const { file, name, actual, why } of DUPLICATES) {
+    it(`${file} declares ${name} with the same value as its server definition`, () => {
+      const source = fs.readFileSync(path.join(ROOT, file), 'utf8');
+      const marker = `const ${name} =`;
+      const start = source.indexOf(marker);
+
+      // A miss means the duplicate was renamed or deleted, not that the values agree. Failing
+      // here is correct: this entry should then be removed from the list deliberately.
+      expect(start, `${file} no longer declares ${name}. ${why}`).toBeGreaterThanOrEqual(0);
+
+      const literal = source.slice(start + marker.length, source.indexOf(';', start)).trim();
+      // Multiplied numeric literals only (`30 * 60_000`), parsed rather than evaluated: a guard
+      // that runs eval() over source it just read is a worse thing to own than the drift it
+      // catches. A duplicate written any other way fails here and should be kept simple instead.
+      const duplicated = literal
+        .split('*')
+        .reduce((product, term) => product * Number(term.trim().replace(/_/g, '')), 1);
+      expect(
+        duplicated,
+        `${file} has ${name} = ${literal}, but the server definition is ${actual}. ${why}`,
+      ).toBe(actual);
+    });
+  }
 });

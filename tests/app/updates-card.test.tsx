@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import fs from 'node:fs';
 import path from 'node:path';
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/react';
 import { UpdatesClient, type UpdatesViewProps } from '@/app/(app)/settings/updates-client';
 import { applyUpdateAction, checkForUpdateNowAction, reviewUpdateAction } from '@/app/(app)/settings/actions';
@@ -37,6 +37,8 @@ const base: UpdatesViewProps = {
   dismissedVersion: null,
   lastAppliedAt: null,
   lastApplyError: null,
+  applyRequestedVersion: null,
+  applyRequestedAt: null,
   severity: 'none',
   canApplyInApp: true,
   watchtowerError: null,
@@ -262,5 +264,101 @@ describe('item H: updates-client.tsx passes server actions to useActionState dir
     render(<UpdatesClient {...base} />);
     submit('Check now');
     await waitFor(() => expect(screen.getByText('You are on the newest published version.')).toBeTruthy());
+  });
+});
+
+describe('Task 3d, symptom A: the client prefers the freshest action result over stale props', () => {
+  it('Check now resolving a new version updates the header and offers Update now with NO prop change', async () => {
+    // base is rendered as-is below -- props never change. Only checkForUpdateNowAction's OWN
+    // resolved value (what actions.ts's checkForUpdateNowAction now returns after its write)
+    // moves the UI. This is the bug: before the fix, offered/severity/dismissed were derived
+    // from props alone, so this exact scenario left the header reading "Up to date" and no
+    // Update now button until the page was reloaded by hand.
+    vi.mocked(checkForUpdateNowAction).mockResolvedValueOnce({
+      message: 'Version 9.9.9 is available.',
+      latestVersion: '9.9.9',
+      severity: 'minor',
+      lastCheckedAt: '2026-08-18T09:35:00.000Z',
+    });
+    render(<UpdatesClient {...base} />);
+    expect(screen.getByText('Up to date (v1.3.1)')).toBeTruthy();
+
+    submit('Check now');
+
+    await waitFor(() => expect(screen.getByText('Version 9.9.9 is available')).toBeTruthy());
+    expect(screen.queryByText('Up to date (v1.3.1)')).toBeNull();
+    expect(screen.getByText('Minor update')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Update now' })).toBeTruthy();
+  });
+});
+
+describe('Task 3d, symptom B: the pending block replaces the apply buttons', () => {
+  const NOW = new Date('2026-08-18T09:30:00.000Z');
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('an apply requested 5 minutes ago hides Update now and the pending notice names the version', () => {
+    const fiveMinutesAgo = new Date(NOW.getTime() - 5 * 60_000).toISOString();
+    render(
+      <UpdatesClient
+        {...base}
+        severity="minor"
+        latestVersion="1.4.0"
+        applyRequestedVersion="1.4.0"
+        applyRequestedAt={fiveMinutesAgo}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'Update now' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Not now' })).toBeNull();
+    expect(screen.getByText(/Watchtower is pulling 1\.4\.0/)).toBeTruthy();
+  });
+
+  it('an apply requested 31 minutes ago no longer counts as pending — Update now is back', () => {
+    const thirtyOneMinutesAgo = new Date(NOW.getTime() - 31 * 60_000).toISOString();
+    render(
+      <UpdatesClient
+        {...base}
+        severity="minor"
+        latestVersion="1.4.0"
+        applyRequestedVersion="1.4.0"
+        applyRequestedAt={thirtyOneMinutesAgo}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Update now' })).toBeTruthy();
+    expect(screen.queryByText(/Watchtower is pulling 1\.4\.0/)).toBeNull();
+  });
+
+  it('a pending request for a DIFFERENT version does not suppress the button for this one', () => {
+    render(
+      <UpdatesClient
+        {...base}
+        severity="minor"
+        latestVersion="1.4.0"
+        applyRequestedVersion="1.3.9"
+        applyRequestedAt={new Date(NOW.getTime() - 5 * 60_000).toISOString()}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Update now' })).toBeTruthy();
+  });
+
+  it('MUST-7.3: the pending notice never carries a token, only the version and a timestamp', () => {
+    render(
+      <UpdatesClient
+        {...base}
+        severity="minor"
+        latestVersion="1.4.0"
+        applyRequestedVersion="1.4.0"
+        applyRequestedAt={new Date(NOW.getTime() - 5 * 60_000).toISOString()}
+      />,
+    );
+    expect(document.body.textContent?.toLowerCase()).not.toContain('bearer');
+    expect(document.body.textContent?.toLowerCase()).not.toContain('token');
   });
 });

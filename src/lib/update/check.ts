@@ -7,6 +7,7 @@ import { UpdateCheckError, fetchLatestRelease } from '@/lib/update/github';
 import { checkUpdateApply } from '@/lib/update/ratelimit';
 import { classify, parseSemver, type UpdateSeverity } from '@/lib/update/semver';
 import {
+  APPLY_CONFIRM_MAX_AGE_MS,
   readUpdateState,
   recordApplyOutcome,
   recordApplyRequested,
@@ -37,9 +38,15 @@ export interface UpdateCheckResult {
  * each of the two callers below folds it into whatever shape they already return for "did not
  * apply this time" (the internal auto-apply path treats it like Watchtower being absent; the
  * button action surfaces the same "Too many attempts" sentence it always has).
+ *
+ * Task 3d (symptom B): 'already-pending' is the third such outcome, returned by the
+ * single-flight guard below — a second request for a version already mid-apply, inside the
+ * confirm window. It is `!== 'rate-limited'`, so the auto-apply caller's existing
+ * `result.outcome !== 'rate-limited'` check already treats it as "an apply is happening",
+ * which is correct: one already is. applyUpdateAction maps it to its own sentence.
  */
 export interface ApplyOutcome {
-  outcome: TriggerOutcome | 'rate-limited';
+  outcome: TriggerOutcome | 'rate-limited' | 'already-pending';
   /** Only meaningful when outcome === 'rate-limited'; 0 otherwise. */
   retryAfterMinutes: number;
 }
@@ -75,6 +82,27 @@ export async function applyUpdate(input: { version: string; now?: Date }): Promi
   const at = input.now ?? new Date();
   const config = watchtowerConfig();
   if (config === null) throw new WatchtowerError('This install has no Watchtower companion to ask.', { permanent: true });
+
+  // Task 3d (symptom B), single-flight: a second request for the SAME version, inside the
+  // confirm window, means the FIRST call already recorded an apply in flight — a duplicate
+  // click, a second tab, a stale form resubmit. This runs BEFORE checkUpdateApply() below is
+  // consumed, deliberately: a duplicate request should not burn quota meant for genuine
+  // attempts, and it must not reach Watchtower a second time while the first request may still
+  // be mid-flight against a container that is (by definition) already replacing itself.
+  //
+  // The rejected alternative was disabling the button client-side by polling this same state —
+  // exactly what MUST-9.9 forbids, because the container answering that poll is the one about
+  // to die. This guard is what makes the button-less pending UI (updates-client.tsx) honest
+  // instead: nothing client-side has to watch anything, because the server refuses the repeat
+  // outright.
+  const pending = readUpdateState();
+  if (
+    pending.applyRequestedVersion === input.version &&
+    pending.applyRequestedAt !== null &&
+    at.getTime() - Date.parse(pending.applyRequestedAt) < APPLY_CONFIRM_MAX_AGE_MS
+  ) {
+    return { outcome: 'already-pending', retryAfterMinutes: 0 };
+  }
 
   // Fix round finding 4 (round 3): the APPLY bucket is consumed HERE, inside the one function
   // every triggerUpdate() call passes through, not at each caller's site. Two call-site

@@ -201,17 +201,25 @@ describe('MUST-10.9 / MUST-10.10: a rate-limited action performs no egress', () 
     // Proves the refactor that moved the APPLY-bucket check inside applyUpdate() itself
     // preserved the exact message applyUpdateAction used to produce from its own, now-removed
     // local check.
+    //
+    // Task 3d (symptom B): a DIFFERENT version each time, so the single-flight guard added in
+    // that task — per-version, not a blanket lock — never intervenes. A repeat of the SAME
+    // version is a different, now-guarded, scenario ("a second applyUpdateAction for the same
+    // version is honest" above): single-flight would return 'already-pending' before the rate
+    // limiter is even consulted, so the bucket would never actually reach APPLY_MAX this way.
     process.env.WATCHTOWER_URL = 'http://watchtower:8080/v1/update';
     process.env.WATCHTOWER_TOKEN = 'a-fine-token-value-long-enough';
     await actions.enableUpdateChecksAction({}, new FormData());
-    recordCheckOutcome({ at: new Date(), latestVersion: '1.4.0' });
     stubWatchtower(200);
 
     for (let i = 0; i < APPLY_MAX; i += 1) {
-      const result = await actions.applyUpdateAction({}, form({ version: '1.4.0' }));
+      const version = `1.4.${i}`;
+      recordCheckOutcome({ at: new Date(), latestVersion: version });
+      const result = await actions.applyUpdateAction({}, form({ version }));
       expect(result.message).toBeDefined();
     }
-    const refused = await actions.applyUpdateAction({}, form({ version: '1.4.0' }));
+    recordCheckOutcome({ at: new Date(), latestVersion: `1.4.${APPLY_MAX}` });
+    const refused = await actions.applyUpdateAction({}, form({ version: `1.4.${APPLY_MAX}` }));
     expect(refused.error).toMatch(/^Too many attempts\. Try again in \d+ minutes\.$/);
     expect(refused.message).toBeUndefined();
   });
@@ -307,5 +315,56 @@ describe('the update actions take (prevState, formData) so React can process the
     fd.set('version', '9.9.9');
     await expect(actions.applyUpdateAction({}, fd)).resolves.toBeTruthy();
     await expect(actions.dismissUpdateAction({}, fd)).resolves.toBeTruthy();
+  });
+});
+
+describe('Task 3d (symptom A): the actions return what they computed', () => {
+  it('checkForUpdateNowAction returns latestVersion/severity/lastCheckedAt/applyRequestedVersion/applyRequestedAt after its own write', async () => {
+    await actions.enableUpdateChecksAction({}, new FormData());
+    const next = `v${APP_VERSION.split('.').slice(0, 2).join('.')}.${Number(APP_VERSION.split('.')[2]) + 1}`;
+    stubRelease(next);
+    const result = await actions.checkForUpdateNowAction({}, new FormData());
+    expect(result.message).toBe(`Version ${next.slice(1)} is available.`);
+    expect(result.latestVersion).toBe(next.slice(1));
+    expect(result.severity).toBe('patch');
+    expect(result.lastCheckedAt).not.toBeNull();
+    expect(result.applyRequestedVersion).toBeNull();
+    expect(result.applyRequestedAt).toBeNull();
+  });
+
+  it('applyUpdateAction returns the fresh applyRequestedVersion/applyRequestedAt after a successful request', async () => {
+    process.env.WATCHTOWER_URL = 'http://watchtower:8080/v1/update';
+    process.env.WATCHTOWER_TOKEN = 'a-fine-token-value-long-enough';
+    await actions.enableUpdateChecksAction({}, new FormData());
+    recordCheckOutcome({ at: new Date(), latestVersion: '9.9.9' });
+    stubWatchtower(200);
+    const result = await actions.applyUpdateAction({}, form({ version: '9.9.9' }));
+    expect(result.message).toBeDefined();
+    expect(result.applyRequestedVersion).toBe('9.9.9');
+    expect(result.applyRequestedAt).not.toBeNull();
+  });
+});
+
+describe('Task 3d (symptom B): a second applyUpdateAction for the same version is honest, not a duplicate request', () => {
+  it('the already-pending outcome maps to the exact sentence the pending notice shows, with no second Watchtower call', async () => {
+    process.env.WATCHTOWER_URL = 'http://watchtower:8080/v1/update';
+    process.env.WATCHTOWER_TOKEN = 'a-fine-token-value-long-enough';
+    await actions.enableUpdateChecksAction({}, new FormData());
+    recordCheckOutcome({ at: new Date(), latestVersion: '9.9.9' });
+    stubWatchtower(200);
+
+    const first = await actions.applyUpdateAction({}, form({ version: '9.9.9' }));
+    expect(first.message).toBeDefined();
+    const before = fetchCalls.length;
+
+    const second = await actions.applyUpdateAction({}, form({ version: '9.9.9' }));
+    expect(fetchCalls.length).toBe(before);
+    expect(second.error).toBeUndefined();
+    expect(second.message).toBe(
+      'Watchtower is pulling 9.9.9. This page will stop responding for a minute while the container restarts, ' +
+        `then come back on the new version. Reload in a minute or two. If this card still says v${APP_VERSION} ` +
+        'after 30 minutes, the update did not land and the reason will appear here.',
+    );
+    expect(second.applyRequestedVersion).toBe('9.9.9');
   });
 });

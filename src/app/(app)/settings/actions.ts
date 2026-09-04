@@ -27,8 +27,10 @@ import { raiseAccountSecurityEvent } from '@/lib/notify/raise';
 import { applyUpdate, runUpdateCheck } from '@/lib/update/check';
 import { boundRelease, fetchRemoteChangelog } from '@/lib/update/github';
 import { checkUpdateCheckNow, checkUpdateReview } from '@/lib/update/ratelimit';
+import { classify, parseSemver, type UpdateSeverity } from '@/lib/update/semver';
 import { dismissVersion, readUpdateState, setAutoApply, setUpdateChecksEnabled } from '@/lib/update/state';
 import { watchtowerConfig } from '@/lib/update/watchtower';
+import { APP_VERSION } from '@/lib/version';
 
 export interface ProfileFormState {
   error?: string;
@@ -195,6 +197,52 @@ export async function disableTotpAction(_prev: ProfileFormState, formData: FormD
 export interface UpdateActionState {
   error?: string;
   message?: string;
+  /**
+   * Task 3d (symptom A). The design bet, recorded in the v1.13.1 comment below, was that Next
+   * re-streams fresh server-component props as part of the action response. The owner's report
+   * is that on this install they do not arrive: Check now says a version is available while the
+   * card header still reads "Up to date" until the page is reloaded by hand.
+   *
+   * Rather than spend time proving WHY the props do not arrive — force-dynamic semantics, the
+   * reverse proxy in front of the NAS, or something else entirely, none of it knowable from
+   * source — these six fields let the two actions that change availability hand the client
+   * exactly what they just wrote, so updates-client.tsx's resolveView() has a second, always-
+   * fresh source to prefer over whatever props it was last rendered with. Optional, because
+   * enableUpdateChecksAction/disableUpdateChecksAction/dismissUpdateAction still return only
+   * { message } or { error } — only checkForUpdateNowAction and applyUpdateAction populate
+   * these, and only AFTER their own write.
+   */
+  latestVersion?: string | null;
+  latestPublishedAt?: string | null;
+  lastCheckedAt?: string | null;
+  severity?: UpdateSeverity;
+  applyRequestedVersion?: string | null;
+  applyRequestedAt?: string | null;
+}
+
+/**
+ * Task 3d: the same severity/availability computation UpdatesCard's server component does
+ * (parseSemver + classify against APP_VERSION), read straight from readUpdateState() so a
+ * caller can hand the client the state it just committed. Callers must invoke this AFTER their
+ * own write — recordCheckOutcome / recordApplyRequested / reconcilePendingApply — never before,
+ * or it would hand back the stale state this whole task exists to stop happening.
+ */
+function currentAvailability(): Pick<
+  UpdateActionState,
+  'latestVersion' | 'latestPublishedAt' | 'lastCheckedAt' | 'severity' | 'applyRequestedVersion' | 'applyRequestedAt'
+> {
+  const state = readUpdateState();
+  const current = parseSemver(APP_VERSION);
+  const remote = state.latestVersion === null ? null : parseSemver(state.latestVersion);
+  const severity: UpdateSeverity = current !== null && remote !== null ? classify(current, remote) : 'none';
+  return {
+    latestVersion: state.latestVersion,
+    latestPublishedAt: state.latestPublishedAt,
+    lastCheckedAt: state.lastCheckedAt,
+    severity,
+    applyRequestedVersion: state.applyRequestedVersion,
+    applyRequestedAt: state.applyRequestedAt,
+  };
 }
 
 export interface ReviewUpdateState {
@@ -279,10 +327,13 @@ export async function checkForUpdateNowAction(_prev: UpdateActionState, formData
   // small update; anything else would be a surprising second policy.
   const result = await runUpdateCheck({ now: new Date(), manual: true });
   revalidatePath(UPDATE_PATH);
-  if (result.error !== null) return { error: result.error };
-  if (result.applied) return { message: `Version ${result.latestVersion} is being installed now.` };
-  if (result.latestVersion === null) return { message: 'You are on the newest published version.' };
-  return { message: `Version ${result.latestVersion} is available.` };
+  // Task 3d (symptom A): read AFTER runUpdateCheck's writes, so this reflects exactly what the
+  // check just committed rather than the render that is about to go stale again.
+  const availability = currentAvailability();
+  if (result.error !== null) return { error: result.error, ...availability };
+  if (result.applied) return { message: `Version ${result.latestVersion} is being installed now.`, ...availability };
+  if (result.latestVersion === null) return { message: 'You are on the newest published version.', ...availability };
+  return { message: `Version ${result.latestVersion} is available.`, ...availability };
 }
 
 /**
@@ -336,12 +387,24 @@ export async function applyUpdateAction(_prev: UpdateActionState, formData: Form
   try {
     const result = await applyUpdate({ version: parsed.data, now: new Date() });
     revalidatePath(UPDATE_PATH);
+    // Task 3d (symptom A): read AFTER applyUpdate's write, same reasoning as
+    // checkForUpdateNowAction above.
+    const availability = currentAvailability();
     // Fix round finding 4 (round 3): the APPLY bucket now lives inside applyUpdate() itself —
     // the single choke point every triggerUpdate() call passes through — rather than in a
     // duplicate check here. This is the same "Too many attempts" sentence that local check
     // used to return, just sourced from applyUpdate()'s own verdict now.
     if (result.outcome === 'rate-limited') {
-      return { error: `Too many attempts. Try again in ${result.retryAfterMinutes} minutes.` };
+      return { error: `Too many attempts. Try again in ${result.retryAfterMinutes} minutes.`, ...availability };
+    }
+    // Task 3d (symptom B): applyUpdate()'s single-flight guard fired — this exact request was
+    // already recorded as in flight by an earlier submit (a double-click, a second tab, a
+    // stale form resubmit). Map it to the SAME sentence the pending notice in
+    // updates-client.tsx renders (pendingApplyMessage below), so a duplicate submit never
+    // reads as either a fresh failure or a fresh success — it is neither, the first request is
+    // still the one in flight.
+    if (result.outcome === 'already-pending') {
+      return { message: pendingApplyMessage(parsed.data), ...availability };
     }
     // MUST-9.8: two of the three fixed sentences. The third is the scrubbed error below.
     return {
@@ -349,17 +412,29 @@ export async function applyUpdateAction(_prev: UpdateActionState, formData: Form
         result.outcome === 'accepted'
           ? `Update requested. Watchtower is pulling ${parsed.data} and will restart this app in a moment. Reload this page in a minute or two.`
           : `Update requested. This app is being replaced right now, so it could not wait for a reply. Reload this page in a minute or two — the version at the bottom of this card will tell you whether it worked.`,
+      ...availability,
     };
   } catch (error) {
     revalidatePath(UPDATE_PATH);
+    const availability = currentAvailability();
     // MUST-7.3 / MUST-10.11: this is the ORIGINAL error applyUpdate() re-throws, not a
     // scrubbed copy — applyUpdate() only scrubs the copy it persists to
     // update.last_apply_error, before re-throwing the error it caught unchanged. The actual
     // guarantee lives further upstream, in watchtower.ts's triggerUpdate(): every message it
     // can throw already passed through its clean()/scrubSecrets call at the point of the
     // throw, so nothing reaching here ever carried the token to begin with.
-    return { error: error instanceof Error ? error.message : 'The update could not be requested.' };
+    return { error: error instanceof Error ? error.message : 'The update could not be requested.', ...availability };
   }
+}
+
+/**
+ * Task 3d (symptom B): the literal sentence updates-client.tsx's pending notice renders for the
+ * exact same condition (an apply already in flight for this version). Duplicated rather than
+ * shared, because a 'use server' file may only export async functions — there is no way to
+ * hand a plain string-builder across that boundary. Keep the two wordings in lockstep.
+ */
+function pendingApplyMessage(version: string): string {
+  return `Watchtower is pulling ${version}. This page will stop responding for a minute while the container restarts, then come back on the new version. Reload in a minute or two. If this card still says v${APP_VERSION} after 30 minutes, the update did not land and the reason will appear here.`;
 }
 
 /** §9.3 item 6 / MUST-5.9. Suppresses only the card's prominence — never the check, never the dedup. */
