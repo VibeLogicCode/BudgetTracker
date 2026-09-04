@@ -8,8 +8,10 @@ import {
   createSession,
   destroyAllSessionsForUser,
   destroySession,
+  destroySessionForUser,
   generateSessionToken,
   hashSessionToken,
+  listSessionsForUser,
   purgeExpiredSessions,
   sessionCookieOptions,
   shouldUseSecureCookie,
@@ -150,6 +152,57 @@ describe('session teardown', () => {
     expect(purged).toBe(1);
     const remaining = current.sqlite.prepare('select count(*) as c from sessions').get() as { c: number };
     expect(remaining.c).toBe(1);
+  });
+});
+
+describe('F-09: listSessionsForUser', () => {
+  it('returns only this user\'s sessions, never another\'s, ordered newest-last-seen-first', () => {
+    current = createTestDb();
+    const alice = insertTestUser(current.db, { username: 'alice' });
+    const bob = insertTestUser(current.db, { username: 'bob' });
+    createSession(alice, { userAgent: 'alice-old', at: new Date('2026-01-01T00:00:00.000Z') });
+    createSession(alice, { userAgent: 'alice-new', at: new Date('2026-01-02T00:00:00.000Z') });
+    createSession(bob, { userAgent: 'bob-only' });
+
+    const rows = listSessionsForUser(alice);
+    expect(rows.map((r) => r.userAgent)).toEqual(['alice-new', 'alice-old']);
+    expect(rows.some((r) => r.userAgent === 'bob-only')).toBe(false);
+  });
+
+  it('the id it hands out is the token HASH, never the raw token -- a page prop must not be able to sign anyone in', () => {
+    current = createTestDb();
+    const userId = insertTestUser(current.db, { username: 'alice' });
+    const { token } = createSession(userId, { userAgent: 'vitest', ip: '10.0.0.5' });
+
+    const [row] = listSessionsForUser(userId);
+    expect(row.id).toBe(hashSessionToken(token));
+    expect(row.id).not.toBe(token);
+    expect(row.id).not.toContain(token);
+    expect(row.ip).toBe('10.0.0.5');
+    expect(row.userAgent).toBe('vitest');
+  });
+});
+
+describe('F-09: destroySessionForUser', () => {
+  it('destroys the matching session for that user, by its opaque id', () => {
+    current = createTestDb();
+    const userId = insertTestUser(current.db, { username: 'alice' });
+    const { token } = createSession(userId);
+    const id = hashSessionToken(token);
+    destroySessionForUser(userId, id);
+    expect(validateSession(token)).toBeNull();
+  });
+
+  it('is a no-op when the id belongs to a different user -- a member cannot end a session by guessing another user\'s id', () => {
+    current = createTestDb();
+    const alice = insertTestUser(current.db, { username: 'alice' });
+    const bob = insertTestUser(current.db, { username: 'bob' });
+    const bobSession = createSession(bob);
+    const bobSessionId = hashSessionToken(bobSession.token);
+
+    destroySessionForUser(alice, bobSessionId);
+
+    expect(validateSession(bobSession.token)).not.toBeNull();
   });
 });
 

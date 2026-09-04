@@ -878,6 +878,40 @@ describe('v1.12.1: a row edit on /transactions edits ONE row (item U / UX-2, rul
  * Controller fix round 1: this task's own report flagged these three as missing. Each proves
  * RED by hand-reverting the guard it covers (see task-10-fix-report.md for the transcripts).
  */
+describe('manualEntryAction — F-10 (v1.31.0): quick-add\'s own Note field', () => {
+  it('a posted note is saved on the new row, trimmed', async () => {
+    const { sqlite, accountId } = setup();
+
+    const result = await manualEntryAction(
+      {},
+      formData({
+        amount: '12.34',
+        direction: 'spend',
+        accountId: String(accountId),
+        date: '2026-03-02',
+        description: 'Coffee',
+        notes: '  split with Bob  ',
+      }),
+    );
+
+    expect(result.message).toBeTruthy();
+    const row = sqlite.prepare('select notes from transactions order by id desc limit 1').get() as { notes: string | null };
+    expect(row.notes).toBe('split with Bob');
+  });
+
+  it('an empty note is stored as null, exactly like before this field existed', async () => {
+    const { sqlite, accountId } = setup();
+
+    await manualEntryAction(
+      {},
+      formData({ amount: '12.34', direction: 'spend', accountId: String(accountId), date: '2026-03-02', description: 'Coffee' }),
+    );
+
+    const row = sqlite.prepare('select notes from transactions order by id desc limit 1').get() as { notes: string | null };
+    expect(row.notes).toBeNull();
+  });
+});
+
 describe('manualEntryAction — ruling R10: an asset account refuses transactions', () => {
   it('returns {error} inline and inserts no transaction row', async () => {
     const { sqlite } = setup();

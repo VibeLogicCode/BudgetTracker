@@ -170,9 +170,10 @@ export async function manualEntryAction(_prev: ActionState, formData: FormData):
       // person picker for a self viewer, so this is the write-side backstop for that same rule.
       attributedUserId: scope !== null ? scope : attributedRaw === '' ? null : Number(attributedRaw),
       // Ruling R13: the column, the action and the help page's promise all existed; only this
-      // line was missing. It was `notes: null` from v1.0.0 to v1.12.1. Quick-add itself never
-      // shows a notes field (R7's six-control budget has no room), so this is always '' there
-      // and null here -- the note sub-row in the kebab is where a note actually gets typed.
+      // line was missing. It was `notes: null` from v1.0.0 to v1.12.1. F-10 (v1.31.0) gave
+      // quick-add its own optional Note field (QuickAddTransaction.tsx), so `rawNote` can now
+      // arrive non-empty straight from this same form -- the row-menu "Note..." sub-row (the
+      // kebab) stays the way to add or change one after the row already exists.
       notes: rawNote.length === 0 ? null : rawNote,
       userId: user.id,
       // v1.13.0 ruling R4 (item I4): the ACTOR's role, not a hardcoded 'admin' -- so a member's

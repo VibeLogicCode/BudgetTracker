@@ -181,10 +181,10 @@ export const HELP_SECTIONS: HelpSection[] = [
           kept underneath, so duplicate detection and the categorizer are unaffected.
         </P>
         <P>
-          Cash and anything the bank will never send you can be typed in by hand at the bottom of
-          the page. Money moving between two of your own accounts should be marked as a{' '}
-          <B>transfer</B>, which keeps it out of spending totals while still counting toward each
-          account&rsquo;s balance.
+          Cash and anything the bank will never send you can be typed in by hand with{' '}
+          <B>Quick add</B>, including an optional note for why it happened. Money moving between
+          two of your own accounts should be marked as a <B>transfer</B>, which keeps it out of
+          spending totals while still counting toward each account&rsquo;s balance.
         </P>
       </>
     ),

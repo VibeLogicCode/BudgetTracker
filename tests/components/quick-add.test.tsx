@@ -115,6 +115,31 @@ describe('QuickAddTransaction (ruling R7)', () => {
 });
 
 /**
+ * F-10 (v1.31.0). Quick-add used to post a hidden `notes=""` (there was no field a person could
+ * type into), which is why the help page's promise that manual entry can carry a note only came
+ * true via a second step -- the row menu's "Note..." after the row already existed.
+ * manualTransactionSchema has always accepted `notes` (src/lib/transactions.ts); this is the
+ * missing input.
+ */
+describe('F-10: quick-add gets its own optional Note field', () => {
+  it('renders a real, optional Note input a person can type into -- not the old hidden notes=""', () => {
+    render(<QuickAddTransaction {...props} />);
+    const note = screen.getByLabelText('Note', { exact: false }) as HTMLInputElement;
+    expect(note.tagName).toBe('INPUT');
+    expect(note.type).toBe('text');
+    expect(note.required).toBe(false);
+    setNativeInputValue(note, 'Split with Jordan');
+    expect(note.value).toBe('Split with Jordan');
+  });
+
+  it('posts exactly one notes field -- the old hidden notes="" placeholder is gone, not duplicated', () => {
+    render(<QuickAddTransaction {...props} />);
+    expect(document.querySelectorAll('input[name="notes"]')).toHaveLength(1);
+    expect(document.querySelector('input[type="hidden"][name="notes"]')).toBeNull();
+  });
+});
+
+/**
  * v1.15.0 ruling S6: `collapsible` folds Quick add into a disclosure, closed by default, on
  * Transactions. Default false, so every test above (which never passes it) proves BOTH variants'
  * render stays exactly as it was before this ruling.

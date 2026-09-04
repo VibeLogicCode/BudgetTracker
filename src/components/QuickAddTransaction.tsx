@@ -217,7 +217,14 @@ export function QuickAddTransaction({
           </select>
         </Field>
       ) : null}
-      <input type="hidden" name="notes" value="" />
+      {/* F-10 (v1.31.0 backlog item AL, the deferred half): manualTransactionSchema has always
+          accepted `notes` (src/lib/transactions.ts), but this form used to post a hidden
+          notes="" -- the one way a cash row's "why" got typed in was a second step (the row
+          menu's "Note..." after the row already existed). Optional, and last, because it is the
+          field skipped the most and should not push the required ones around on a phone. */}
+      <Field label="Note" className="sm:col-span-6" hint="Optional -- why this was okay, for later.">
+        <input name="notes" className={inputClass} />
+      </Field>
       <div className="sm:col-span-6">
         <SubmitButton className="w-fit">Add</SubmitButton>
         <FormError message={state.error} />

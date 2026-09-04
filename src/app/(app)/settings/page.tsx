@@ -1,7 +1,9 @@
 import Link from 'next/link';
-import { requireUser } from '@/lib/auth/session';
+import { getCurrentSessionId, listSessionsForUser, requireUser } from '@/lib/auth/session';
 import { findUserByUsername } from '@/lib/auth/users';
 import { countUnusedRecoveryCodes } from '@/lib/auth/totp';
+import { readEnv } from '@/lib/env';
+import { USER_AGENT_MAX, truncateText } from '@/lib/notify/render';
 import {
   ArrowRightIcon,
   BellIcon,
@@ -20,6 +22,7 @@ import { isOcrFailingSystemically } from '@/lib/warranty/ocr/health';
 import { readEffectiveOcrEngine, readOcrEngineState } from '@/lib/warranty/ocr/onnx/probe';
 import { AboutPanel } from './about-panel';
 import { ProfileForms } from './profile-forms';
+import { SessionsList, type SessionRowView } from './sessions-list';
 import { UpdatesCard } from './updates-card';
 
 export const dynamic = 'force-dynamic';
@@ -51,6 +54,21 @@ export default async function SettingsPage() {
   const user = await requireUser();
   const record = findUserByUsername(user.username);
   const recoveryLeft = countUnusedRecoveryCodes(user.id);
+
+  // F-09: this member's OWN sessions only -- listSessionsForUser is scoped to userId, never the
+  // household. TRUST_PROXY decides whether `ip` means the member's own address; when it is off
+  // every session's ip is 'unknown' anyway (clientIpFromHeaders never trusts a client-supplied
+  // header without it), so the column is left off entirely rather than printing a value that
+  // cannot be trusted -- the same "omit rather than mislead" rule three v1.30.0 fixes rest on.
+  const trustProxy = readEnv().trustProxy;
+  const currentSessionId = await getCurrentSessionId();
+  const sessionRows: SessionRowView[] = listSessionsForUser(user.id).map((session) => ({
+    id: session.id,
+    device: session.userAgent ? truncateText(session.userAgent, USER_AGENT_MAX) : 'Unknown device',
+    ip: trustProxy ? (session.ip ?? 'unknown') : null,
+    lastSeenAt: session.lastSeenAt,
+    isCurrent: session.id === currentSessionId,
+  }));
 
   return (
     <div className="flex flex-col gap-4 sm:gap-5">
@@ -95,15 +113,18 @@ export default async function SettingsPage() {
       </Card>
 
       <Card>
-        <CardHeader title="Sessions" description="Signs you out on every device, including this one." />
+        <CardHeader title="Sessions" description="Every device currently signed in as you." />
         <CardBody>
-          <form action="/api/auth/logout" method="post">
-            <input type="hidden" name="scope" value="all" />
-            <button type="submit" className="btn btn--secondary">
-              <SignOutIcon className="h-4 w-4" />
-              Log out everywhere
-            </button>
-          </form>
+          <div className="flex flex-col gap-4">
+            <SessionsList sessions={sessionRows} showIp={trustProxy} />
+            <form action="/api/auth/logout" method="post">
+              <input type="hidden" name="scope" value="all" />
+              <button type="submit" className="btn btn--secondary">
+                <SignOutIcon className="h-4 w-4" />
+                Log out everywhere
+              </button>
+            </form>
+          </div>
         </CardBody>
       </Card>
 

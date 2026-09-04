@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
-import { and, eq, lt, ne } from 'drizzle-orm';
+import { and, desc, eq, lt, ne } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { sessions, users } from '@/db/schema';
 import { nowIso } from '@/lib/clock';
@@ -108,6 +108,57 @@ export function destroySession(token: string): void {
   getDb().delete(sessions).where(eq(sessions.tokenHash, hashSessionToken(token))).run();
 }
 
+/**
+ * F-09 (v1.31.0). One row per live session, for the "which devices are signed in as me" card.
+ * `id` is `sessions.tokenHash` -- the row's own primary key, already the opaque identifier this
+ * table uses to name a session everywhere else (destroySession takes a raw token and hashes it
+ * itself; this is the read-side mirror). It is NOT the session token: a SHA-256 hash of 256
+ * random bits is one-way, so handing it to a page prop or a hidden form field cannot be turned
+ * back into a bearer credential, unlike the token itself, which must never reach either. See
+ * destroySessionForUser below for the write side of the same id.
+ *
+ * Scoped to `userId` and nothing else -- this is a member's OWN sessions, never the household's
+ * (an admin gets no wider a list here; that would be a new privilege this release did not agree
+ * to add). Ordered newest-active-first, the same ordering a person would want when scanning for
+ * a device they do not recognise.
+ */
+export interface SessionSummary {
+  id: string;
+  userAgent: string | null;
+  ip: string | null;
+  createdAt: string;
+  lastSeenAt: string;
+}
+
+export function listSessionsForUser(userId: number): SessionSummary[] {
+  return getDb()
+    .select({
+      id: sessions.tokenHash,
+      userAgent: sessions.userAgent,
+      ip: sessions.ip,
+      createdAt: sessions.createdAt,
+      lastSeenAt: sessions.lastSeenAt,
+    })
+    .from(sessions)
+    .where(eq(sessions.userId, userId))
+    .orderBy(desc(sessions.lastSeenAt))
+    .all();
+}
+
+/**
+ * F-09's per-row "Sign out". Takes the opaque id listSessionsForUser handed out (tokenHash), not
+ * a raw token -- there is no raw token to take, the caller only ever held the hash. Scoped to
+ * `userId` in the WHERE clause, not just checked after the fact: without it, a member could sign
+ * out a session id that turned out to belong to someone else simply by guessing or observing
+ * another row's id, the same class of hole ownerScope exists to close on every other table.
+ */
+export function destroySessionForUser(userId: number, sessionId: string): void {
+  getDb()
+    .delete(sessions)
+    .where(and(eq(sessions.tokenHash, sessionId), eq(sessions.userId, userId)))
+    .run();
+}
+
 export function destroyAllSessionsForUser(userId: number): number {
   const result = getDb().delete(sessions).where(eq(sessions.userId, userId)).run();
   return Number(result.changes ?? 0);
@@ -187,6 +238,19 @@ export async function getCurrentUser(): Promise<SessionUser | null> {
   const token = store.get(SESSION_COOKIE_NAME)?.value;
   if (!token) return null;
   return validateSession(token);
+}
+
+/**
+ * F-09: which of listSessionsForUser's rows is "this device". Returns the SAME hash
+ * listSessionsForUser exposes as `id` -- never the cookie's raw token -- so a caller can mark a
+ * row current, and destroySessionForUser's own id, purely by string equality, with no bearer
+ * value ever leaving this module.
+ */
+export async function getCurrentSessionId(): Promise<string | null> {
+  const store = await cookies();
+  const token = store.get(SESSION_COOKIE_NAME)?.value;
+  if (!token) return null;
+  return hashSessionToken(token);
 }
 
 export async function requireUser(): Promise<SessionUser> {

@@ -29,13 +29,20 @@ vi.mock('next/cache', () => ({
   revalidatePath: vi.fn(),
 }));
 
+vi.mock('next/navigation', () => ({
+  redirect: (url: string) => {
+    throw Object.assign(new Error(`NEXT_REDIRECT:${url}`), { digest: `NEXT_REDIRECT;replace;${url};307;` });
+  },
+}));
+
 import {
   beginTotpEnrollmentAction,
   changePasswordAction,
   confirmTotpEnrollmentAction,
   disableTotpAction,
+  signOutSessionAction,
 } from '@/app/(app)/settings/actions';
-import { SESSION_COOKIE_NAME, createSession } from '@/lib/auth/session';
+import { SESSION_COOKIE_NAME, createSession, hashSessionToken, validateSession } from '@/lib/auth/session';
 import { createUser, findUserById } from '@/lib/auth/users';
 import {
   consumeTotpCounter,
@@ -191,5 +198,64 @@ describe('v1.12.1: turning off two-factor costs a password (item AA / SEC-4)', (
     expect(result.message).toContain('off');
     expect(db.get<{ on: number }>(sql`select totp_enabled as "on" from users where id = ${userId}`).on).toBe(0);
     expect(db.get<{ n: number }>(sql`select count(*) as n from sessions where user_id = ${userId}`).n).toBe(1);
+  });
+});
+
+describe('F-09: signOutSessionAction -- Settings -> Sessions per-row "Sign out"', () => {
+  it('signs out a DIFFERENT device, leaving the caller signed in and the cookie untouched', async () => {
+    const { db, userId, myToken } = await setupWithTwoSessions();
+    const other = db.get<{ token_hash: string }>(
+      sql`select token_hash from sessions where user_id = ${userId} and token_hash != ${hashSessionToken(myToken)}`,
+    );
+
+    const result = await withSession(myToken, () => signOutSessionAction({}, formData({ sessionId: other.token_hash })));
+
+    expect(result.error).toBeUndefined();
+    expect(result.message).toMatch(/signed out/i);
+    // The caller's own session is still live -- ending someone else's row must never end this one.
+    expect(validateSession(myToken)).not.toBeNull();
+    expect(db.get<{ n: number }>(sql`select count(*) as n from sessions where user_id = ${userId}`).n).toBe(1);
+  });
+
+  it('signing out THIS device clears the cookie and redirects to /login, same as /api/auth/logout', async () => {
+    const { token: myToken } = await signedInUser();
+    const sessionId = hashSessionToken(myToken);
+    cookieJar.set(SESSION_COOKIE_NAME, myToken);
+
+    await expect(signOutSessionAction({}, formData({ sessionId }))).rejects.toThrow(/NEXT_REDIRECT/);
+
+    expect(validateSession(myToken)).toBeNull();
+    // clearSessionCookie() overwrites the cookie value before the redirect throws.
+    expect(cookieJar.get(SESSION_COOKIE_NAME)).toBe('');
+    cookieJar.delete(SESSION_COOKIE_NAME);
+  });
+
+  it('does not end another user\'s session even if its id is guessed or reused', async () => {
+    const { token: myToken } = await signedInUser();
+    const stranger = await createUser({ name: 'Bob', username: 'bob', password: PASSWORD, role: 'member' });
+    const strangerSession = createSession(stranger.id);
+    const strangerSessionId = hashSessionToken(strangerSession.token);
+
+    const result = await withSession(myToken, () => signOutSessionAction({}, formData({ sessionId: strangerSessionId })));
+
+    // Scoped by userId, so this reports success without having deleted anything real --
+    // exactly like any other write against an id that does not belong to the caller.
+    expect(result.error).toBeUndefined();
+    expect(validateSession(strangerSession.token)).not.toBeNull();
+  });
+
+  it('refuses when no device is chosen', async () => {
+    const { token: myToken } = await signedInUser();
+    const result = await withSession(myToken, () => signOutSessionAction({}, formData({})));
+    expect(result.error).toMatch(/choose a device/i);
+  });
+
+  it('the success result never contains the raw session token -- only the opaque tokenHash id ever travels through this action', async () => {
+    const { db, userId, myToken } = await setupWithTwoSessions();
+    const other = db.get<{ token_hash: string }>(
+      sql`select token_hash from sessions where user_id = ${userId} and token_hash != ${hashSessionToken(myToken)}`,
+    );
+    const result = await withSession(myToken, () => signOutSessionAction({}, formData({ sessionId: other.token_hash })));
+    expect(JSON.stringify(result)).not.toContain(myToken);
   });
 });

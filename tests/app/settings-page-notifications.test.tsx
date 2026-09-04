@@ -15,6 +15,12 @@ const currentUser = vi.hoisted(() => ({
 
 vi.mock('@/lib/auth/session', () => ({
   requireUser: async () => currentUser.value,
+  // F-09: unrelated to what this file tests (the notifications entry point and the
+  // admin-only Updates card) -- an empty session list and no "current device" match keep
+  // page.tsx's new Sessions card rendering without pulling a real database session into
+  // every test in this file.
+  listSessionsForUser: () => [],
+  getCurrentSessionId: async () => null,
 }));
 vi.mock('@/lib/auth/users', () => ({
   findUserByUsername: () => null,

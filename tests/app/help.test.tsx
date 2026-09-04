@@ -164,6 +164,14 @@ describe('the help page covers the v1.13.0 household features', () => {
   }
 });
 
+describe('the help page: F-10, quick-add\'s note field replaces the stale "bottom of the page" wording', () => {
+  it('the transactions section names Quick add, not a form at the bottom of the page (backlog item AL / v1.31.0)', () => {
+    const text = textOf(section('transactions').body);
+    expect(text).toContain('Quick add, including an optional note');
+    expect(text).not.toMatch(/at the bottom of the page/);
+  });
+});
+
 describe('the help page explains loan direction (spec BU)', () => {
   const all = () => textOf(<>{[HELP_ROUTINE, ...HELP_SECTIONS].map((s) => <div key={s.id}>{s.body}</div>)}</>);
 

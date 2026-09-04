@@ -1,11 +1,19 @@
 'use server';
 
 import { cookies, headers } from 'next/headers';
+import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { isSameOrigin } from '@/lib/auth/csrf';
 import { passwordSchema, verifyPassword } from '@/lib/auth/password';
-import { requireAdmin, requireUser, destroyOtherSessionsForUser } from '@/lib/auth/session';
+import {
+  clearSessionCookie,
+  destroyOtherSessionsForUser,
+  destroySessionForUser,
+  hashSessionToken,
+  requireAdmin,
+  requireUser,
+} from '@/lib/auth/session';
 import { SESSION_COOKIE_NAME } from '@/lib/auth/session-constants';
 import {
   clearTotpEnrollment,
@@ -192,6 +200,44 @@ export async function disableTotpAction(_prev: ProfileFormState, formData: FormD
   raiseAccountSecurityEvent({ userId: user.id, event: 'mfa_disabled', at: new Date() });
   revalidatePath('/settings');
   return { message: 'Two-factor authentication is off. Every other session was signed out.' };
+}
+
+/**
+ * F-09's per-row "Sign out" (Settings -> Sessions). `sessionId` is the opaque id
+ * listSessionsForUser handed the page -- sessions.tokenHash, never a raw token -- so this action
+ * never receives, holds or logs anything that could itself sign somebody in.
+ *
+ * destroySessionForUser is scoped to THIS caller's own userId, so posting another member's
+ * session id (guessed, or read out of a shared browser's history) deletes nothing rather than
+ * ending a stranger's session -- the same ownership check every other per-row action in this
+ * file already makes, just against sessions instead of a household table.
+ *
+ * Ending your OWN current device is allowed -- it is simply what "sign out" on this row means --
+ * and is the one case that must also clear the browser's cookie and leave the page, matching
+ * what /api/auth/logout already does for the "Log out everywhere" button beside this list.
+ * Ending any OTHER row must never touch the caller's own cookie or session, which is why the
+ * comparison below is against the CURRENT session's own hash, not against the row being deleted.
+ */
+export async function signOutSessionAction(_prev: ProfileFormState, formData: FormData): Promise<ProfileFormState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  const user = await requireUser();
+  const sessionId = String(formData.get('sessionId') ?? '').trim();
+  if (sessionId.length === 0) return { error: 'Choose a device to sign out.' };
+
+  const store = await cookies();
+  const currentToken = store.get(SESSION_COOKIE_NAME)?.value ?? null;
+  const isCurrentDevice = currentToken !== null && hashSessionToken(currentToken) === sessionId;
+
+  destroySessionForUser(user.id, sessionId);
+
+  if (isCurrentDevice) {
+    await clearSessionCookie();
+    redirect('/login');
+  }
+
+  revalidatePath('/settings');
+  return { message: 'That device was signed out.' };
 }
 
 export interface UpdateActionState {
