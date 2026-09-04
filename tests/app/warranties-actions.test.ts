@@ -704,6 +704,29 @@ describe('attachReceiptsAction / deleteReceiptAction / reRunOcrAction', () => {
     expect((await reRunOcrAction({}, formData({ receiptId: '99999' }))).error).toBeTruthy();
     expect((await deleteReceiptAction({}, formData({ receiptId: 'abc' }))).error).toBeTruthy();
   });
+
+  // S-02: reRunOcrAction discarded requireUser()'s return and never checked the receipt's
+  // parent item at all -- a self-scoped member could re-run OCR on any household member's
+  // receipt. The receipt-missing wording is reused for the refusal (not NOT_YOURS_ERROR),
+  // closing the same existence-oracle leak api/warranties/receipts/[id]/route.ts already
+  // closes by answering 404 rather than 403.
+  it('refuses for a self-scoped viewer who cannot see the receipt\'s item, and the OCR state is untouched', async () => {
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    writeSidecar(stagingId, { status: 'failed', error: 'OCR timed out.' });
+    const to = await redirectPath(() =>
+      createWarrantyAction(
+        {},
+        formData(baseFields({ staged: JSON.stringify([{ stagingId, originalFilename: 'a.jpg' }]) })),
+      ),
+    );
+    const receipt = listWarrantyReceipts(Number(to.split('/').pop()))[0];
+
+    const strangerId = insertTestUser(current!.db, { name: 'Stranger', role: 'member' });
+    currentUser = { id: strangerId, name: 'Stranger', username: 'stranger', role: 'member', visibility: 'self' };
+    const result = await reRunOcrAction({}, formData({ receiptId: String(receipt.id) }));
+    expect(result.error).toBe('That receipt no longer exists.');
+    expect(getWarrantyReceipt(receipt.id)?.ocrStatus).toBe('failed');
+  });
 });
 
 describe('MUST-14.4 / MUST-14.7 / MUST-14.14: the loan readers and the rule actions', () => {
@@ -971,6 +994,20 @@ describe('F10 fix-round: deleteLoanRuleAction verifies the rule belongs to itemI
     const result = await deleteLoanRuleAction(formData({ id: String(ruleId), itemId: String(itemId) }));
     expect(result.message).toBeTruthy();
     expect(listLoanRules(itemId)).toHaveLength(0);
+  });
+
+  // S-02: deleteLoanRuleAction discarded requireUser()'s return and never checked the item at
+  // all -- a self-scoped member could delete any household member's loan matching rule.
+  it('refuses for a self-scoped viewer who cannot see the item, and the rule is untouched', async () => {
+    const itemId = seedLoanItem();
+    await saveLoanRuleAction({}, formData({ itemId: String(itemId), merchantContains: 'HONDA FIN' }));
+    const ruleId = listLoanRules(itemId)[0]!.id;
+
+    const strangerId = insertTestUser(current!.db, { name: 'Stranger', role: 'member' });
+    currentUser = { id: strangerId, name: 'Stranger', username: 'stranger', role: 'member', visibility: 'self' };
+    const result = await deleteLoanRuleAction(formData({ id: String(ruleId), itemId: String(itemId) }));
+    expect(result.error).toBe('That item no longer exists.');
+    expect(listLoanRules(itemId)).toHaveLength(1);
   });
 });
 

@@ -66,14 +66,23 @@ export function runNightlyTick(now: Date = new Date()): void {
 export function runNotifyTick(now: Date = new Date()): void {
   // MUST-6.3: the single-flight guard is the tick's actual first statement.
   if (ticking) return;
-  // MUST-6.4: the dormancy bail, right after the single-flight guard above. Two indexed
-  // reads against tables that are empty on a dormant install. Nothing below this line
-  // executes, so no evaluator runs, no renderer runs, and no transport module is even
-  // reached.
-  if (!hasAnyEnabledTarget() && countPendingOutbox() === 0) return;
 
   ticking = true;
   try {
+    // MUST-6.4: the dormancy bail, right after the single-flight guard above. Two indexed
+    // reads against tables that are empty on a dormant install. Nothing below this line
+    // executes, so no evaluator runs, no renderer runs, and no transport module is even
+    // reached.
+    //
+    // O-03 fix: hasAnyEnabledTarget()/countPendingOutbox() are DATABASE reads -- either can
+    // throw (a locked database, a full disk, a corrupted page) -- so this bail moved inside
+    // the try that now surrounds it, the same fix runNightlyJob's own comment already
+    // documents ("If that guarantee ever changed, a throw here would propagate out of the
+    // cron callback uncaught") and runUpdateTick/runSimplefinTick already carry for their own
+    // gates. `ticking` above is a module-level boolean, not a DB read, so it cannot throw and
+    // correctly stays outside.
+    if (!hasAnyEnabledTarget() && countPendingOutbox() === 0) return;
+
     if (!bootExpiryDone) {
       bootExpiryDone = true;
       const expired = expireStalePending(now);

@@ -15,6 +15,7 @@ import {
 } from '@/lib/scheduler';
 import * as backupModule from '@/lib/backup';
 import { saveEmailTarget, saveSmtp } from '@/lib/notify/config';
+import * as configModule from '@/lib/notify/config';
 import * as evaluateModule from '@/lib/notify/evaluate';
 import { drainOutboxForTests } from '@/lib/notify/outbox';
 import * as raiseModule from '@/lib/notify/raise';
@@ -103,6 +104,25 @@ describe('MUST-6.1 / MUST-6.4: the notification tick', () => {
       evaluate.mockRestore();
       resetNotifySenderForTests();
       t.cleanup();
+    }
+  });
+
+  // O-03: hasAnyEnabledTarget()/countPendingOutbox() are database reads sitting ABOVE
+  // runNotifyTick's own try/catch -- a throw there (a locked database, a full disk, a
+  // corrupted page) used to propagate out of the cron callback uncaught, instead of being
+  // caught and logged the same way every sibling job in this file handles its own failure.
+  it("O-03: a throwing dormancy read does not escape runNotifyTick, and is logged like every sibling job", () => {
+    const boom = new Error('database is locked');
+    const spy = vi.spyOn(configModule, 'hasAnyEnabledTarget').mockImplementation(() => {
+      throw boom;
+    });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(() => runNotifyTick(new Date())).not.toThrow();
+      expect(errorSpy).toHaveBeenCalledWith('[notify] tick failed', boom);
+    } finally {
+      spy.mockRestore();
+      errorSpy.mockRestore();
     }
   });
 

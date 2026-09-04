@@ -1,14 +1,19 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createTestDb, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
 
-const USER = { id: 1, name: 'Alice', username: 'user-1', role: 'admin' as const };
+const USER = { id: 1, name: 'Alice', username: 'user-1', role: 'admin' as const, visibility: 'household' as const };
 const SAME_ORIGIN = new Headers({ origin: 'http://nas.local:3000', host: 'nas.local:3000' });
 const CROSS_ORIGIN = new Headers({ origin: 'http://evil.local', host: 'nas.local:3000' });
 let mockHeaders = SAME_ORIGIN;
+// S-02: mutable so a test can swap in a self-scoped stranger without a second mock module --
+// same pattern tests/app/warranties-actions.test.ts's `currentUser` already uses. Every
+// existing test leaves this at USER (an admin, so ownerScope() is null regardless of
+// visibility) and is unaffected.
+let currentUser: { id: number; name: string; username: string; role: 'admin' | 'member'; visibility: 'household' | 'self' } = USER;
 
 vi.mock('@/lib/auth/session', () => ({
-  requireUser: vi.fn(async () => USER),
-  requireAdmin: vi.fn(async () => USER),
+  requireUser: vi.fn(async () => currentUser),
+  requireAdmin: vi.fn(async () => currentUser),
 }));
 vi.mock('next/headers', () => ({ headers: async () => mockHeaders }));
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
@@ -30,6 +35,7 @@ afterEach(() => {
   current?.cleanup();
   current = null;
   mockHeaders = SAME_ORIGIN;
+  currentUser = USER;
 });
 
 function fd(fields: Record<string, string>): FormData {
@@ -128,6 +134,37 @@ describe('setInstallmentPaidAction', () => {
     const result = await setInstallmentPaidAction({}, fd({ id: String(id), itemId: '9999', paid: 'true' }));
     expect(result.error).toBe('That installment no longer exists.');
   });
+
+  // S-02: the ownership gate used to sit inside the `if (paid)` branch only, so marking was
+  // checked and un-marking was not. Two cases, because the unmark path is the one that was
+  // unguarded.
+  it('refuses a self-scoped viewer marking paid, and the row stays unpaid', async () => {
+    const { itemId, userId } = setup();
+    await addInstallmentAction({}, fd({ itemId: String(itemId), dueDate: '2026-09-30', amount: '1200.00' }));
+    const id = listInstallments(itemId, TODAY, 30)[0]!.id;
+
+    const strangerId = insertTestUser(current!.db, { username: 'stranger', role: 'member' });
+    expect(strangerId).not.toBe(userId);
+    currentUser = { id: strangerId, name: 'Stranger', username: 'stranger', role: 'member', visibility: 'self' };
+    const result = await setInstallmentPaidAction({}, fd({ id: String(id), itemId: String(itemId), paid: 'true' }));
+    expect(result.error).toBe('That item no longer exists.');
+    expect(listInstallments(itemId, TODAY, 30)[0]!.state).not.toBe('paid');
+  });
+
+  it('refuses a self-scoped viewer unmarking paid, and the row stays paid', async () => {
+    const { itemId, userId } = setup();
+    await addInstallmentAction({}, fd({ itemId: String(itemId), dueDate: '2026-09-30', amount: '1200.00' }));
+    const id = listInstallments(itemId, TODAY, 30)[0]!.id;
+    await setInstallmentPaidAction({}, fd({ id: String(id), itemId: String(itemId), paid: 'true' }));
+    expect(listInstallments(itemId, TODAY, 30)[0]!.state).toBe('paid');
+
+    const strangerId = insertTestUser(current!.db, { username: 'stranger', role: 'member' });
+    expect(strangerId).not.toBe(userId);
+    currentUser = { id: strangerId, name: 'Stranger', username: 'stranger', role: 'member', visibility: 'self' };
+    const result = await setInstallmentPaidAction({}, fd({ id: String(id), itemId: String(itemId), paid: 'false' }));
+    expect(result.error).toBe('That item no longer exists.');
+    expect(listInstallments(itemId, TODAY, 30)[0]!.paidAt).not.toBeNull();
+  });
 });
 
 describe('removeInstallmentAction', () => {
@@ -141,6 +178,21 @@ describe('removeInstallmentAction', () => {
     expect((await removeInstallmentAction({}, fd({ id: String(id), itemId: String(itemId) }))).error).toBe(
       'That installment no longer exists.',
     );
+  });
+
+  // S-02: removeInstallmentAction discarded requireUser()'s return and never checked the item
+  // at all -- a self-scoped member could delete any household member's bill installment.
+  it('refuses for a self-scoped viewer who cannot see the item, and the row is untouched', async () => {
+    const { itemId, userId } = setup();
+    await addInstallmentAction({}, fd({ itemId: String(itemId), dueDate: '2026-09-30', amount: '1200.00' }));
+    const id = listInstallments(itemId, TODAY, 30)[0]!.id;
+
+    const strangerId = insertTestUser(current!.db, { username: 'stranger', role: 'member' });
+    expect(strangerId).not.toBe(userId);
+    currentUser = { id: strangerId, name: 'Stranger', username: 'stranger', role: 'member', visibility: 'self' };
+    const result = await removeInstallmentAction({}, fd({ id: String(id), itemId: String(itemId) }));
+    expect(result.error).toBe('That item no longer exists.');
+    expect(listInstallments(itemId, TODAY, 30)).toHaveLength(1);
   });
 });
 

@@ -549,12 +549,20 @@ export async function reRunOcrAction(
   formData: FormData,
 ): Promise<WarrantyActionState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
-  await requireUser();
+  const user = await requireUser();
 
   const id = idField.safeParse(formData.get('receiptId'));
   if (!id.success) return { error: 'Invalid request.' };
   const receipt = getWarrantyReceipt(id.data);
   if (receipt === null) return { error: 'That receipt no longer exists.' };
+
+  // S-02 fix: a receipt has no owner of its own -- same as deleteReceiptAction, the check
+  // resolves the parent item. The receipt-missing wording is reused deliberately (not
+  // NOT_YOURS_ERROR): a distinct "not yours" message here would be a second existence oracle
+  // for receipt ids, the exact leak api/warranties/receipts/[id]/route.ts already closes by
+  // answering 404 rather than 403.
+  const item = getWarrantyItem(receipt.warrantyItemId, user);
+  if (!item || !canActOnOwner(item.ownerUserId, user)) return { error: 'That receipt no longer exists.' };
 
   // MUST-7.16: idempotent and safe to click repeatedly. A second click on a claimed row
   // is a no-op inside enqueueOcrJob(). M5: errors as return values, never thrown.
@@ -639,11 +647,14 @@ export async function saveLoanRuleAction(_prev: WarrantyActionState, formData: F
 
 export async function deleteLoanRuleAction(formData: FormData): Promise<WarrantyActionState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
-  await requireUser();
+  const user = await requireUser();
   const parsed = z
     .object({ id: z.coerce.number().int().positive(), itemId: z.coerce.number().int().positive() })
     .safeParse({ id: formData.get('id'), itemId: formData.get('itemId') });
   if (!parsed.success) return { error: 'Invalid request.' };
+  // S-02 fix: the viewer gate every sibling action in this file uses -- a self-scoped member
+  // must not even learn whether itemId names a rule-bearing item they cannot see.
+  if (!getWarrantyItem(parsed.data.itemId, user)) return { error: 'That item no longer exists.' };
   // F10 fix-round: the rule must actually belong to the claimed itemId, not merely exist
   // somewhere -- a mismatched (tampered, or a stale-tab race against a rule that moved) pair
   // would otherwise delete an unrelated rule and revalidate the wrong item's page. Checking
@@ -718,9 +729,12 @@ export async function removeInstallmentAction(
   formData: FormData,
 ): Promise<WarrantyActionState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
-  await requireUser();
+  const user = await requireUser();
   const parsed = installmentRefSchema.safeParse({ id: formData.get('id'), itemId: formData.get('itemId') });
   if (!parsed.success) return { error: 'Invalid request.' };
+  // S-02 fix: the viewer gate every sibling action in this file uses, BEFORE findInstallment --
+  // a self-scoped member must not be able to delete another owner's installment.
+  if (!getWarrantyItem(parsed.data.itemId, user)) return { error: 'That item no longer exists.' };
 
   // Ruling B7: NO kind check here. Removing a stored row must stay possible after a type's kind
   // has been flipped away from bill, or ruling B6's kept rows would be unreachable as well as
@@ -756,9 +770,14 @@ export async function setInstallmentPaidAction(
 
   if (findInstallment(parsed.data.itemId, parsed.data.id) === undefined) return { error: INSTALLMENT_GONE };
 
+  // S-02 fix: this gate used to sit inside the `if (paid)` branch only, so marking was checked
+  // and un-marking was not -- a self-scoped member could un-mark another owner's installment.
+  // Hoisted out so it runs on BOTH paths; installmentsAllowedForKind stays inside `if (paid)`
+  // (ruling B7 is unchanged -- un-marking must survive a kind flip).
+  const item = getWarrantyItem(parsed.data.itemId, user);
+  if (!item) return { error: 'That item no longer exists.' };
+
   if (paid) {
-    const item = getWarrantyItem(parsed.data.itemId, user);
-    if (!item) return { error: 'That item no longer exists.' };
     if (!installmentsAllowedForKind(item.kind)) return { error: INSTALLMENT_KIND_ERROR };
     // Two people marking the same row: the second UPDATE is a no-op and markInstallmentPaid
     // still reports true, because the desired state holds. That is success, not a race to

@@ -58,7 +58,7 @@ const EXEMPT: { file: string; fn: string; why: string }[] = [
   {
     file: 'src/lib/warranty/items.ts',
     fn: 'getWarrantyReceipt',
-    why: 'internal resolver: warranties/actions.ts (deleteReceiptAction) and api/warranties/receipts/[id]/route.ts use it only to find the receipt\'s parent item id, then check canActOnOwner(getWarrantyItem(item.id, viewer)) before acting on or returning it.',
+    why: 'internal resolver: warranties/actions.ts (deleteReceiptAction, reRunOcrAction) and api/warranties/receipts/[id]/route.ts use it only to find the receipt\'s parent item id, then check canActOnOwner(getWarrantyItem(item.id, viewer)) before acting on or returning it.',
   },
   {
     file: 'src/lib/warranty/items.ts',
