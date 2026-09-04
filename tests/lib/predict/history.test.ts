@@ -139,7 +139,25 @@ describe('MUST-3.2: the series is budgetProgress, row for row', () => {
     expect(pick(series, gone)).toBeUndefined();
   });
 
-  it('drops an archived top-level category with no own spend, and its spending child, from series and progress alike', () => {
+  /**
+   * task-2-brief.md (C-01): this used to assert budgetProgress() ALSO dropped Kids's live,
+   * spending child the moment Kids (its archived parent) had no DIRECT spend of its own --
+   * pinning the exact bug that fix corrects (`spendByCategory` is a category's own spend only,
+   * never the rollup, so an archived parent whose spending sits entirely in a child used to be
+   * dropped and take the live child down with it). budgetProgress() now keeps an archived
+   * parent alive whenever ANY child survives the child predicate -- "Kids leftover" is not
+   * itself archived, so it always survives regardless of spend -- so `progress` now keeps both
+   * rows.
+   *
+   * `categorySeries`'s own `rollup()` (src/lib/predict/history.ts) was NOT touched by this
+   * fix, and its archived-parent test (that file's line 141, `own.every(cents => cents === 0)`)
+   * reads only the parent's own cell -- the identical shape of bug, one file over -- so `series`
+   * still drops both. That is a genuine NEW divergence from this file's own MUST-3.2 promise
+   * ("the series is budgetProgress, row for row") that this fix exposes rather than closes:
+   * task-2-brief.md scopes both of ITS defects to budgetProgress in src/lib/budgets.ts only, so
+   * this is flagged to the controller as a follow-up finding rather than silently fixed here.
+   */
+  it('keeps a live child of an archived top-level parent in progress; categorySeries, carrying the same bug unfixed in its own rollup(), still drops both', () => {
     const { db, spend, child } = setup();
     const kids = categoryIdByName(db, 'Kids');
     db.run(sql`update categories set is_archived = 1 where id = ${kids}`);
@@ -149,7 +167,8 @@ describe('MUST-3.2: the series is budgetProgress, row for row', () => {
     const series = categorySeries({ months: ['2026-07'], scope: 'household', userId: null });
     const progress = flatten(budgetProgress('2026-07', 'household', null));
     expect(series.some((row) => row.categoryId === kids || row.categoryId === leftover)).toBe(false);
-    expect(progress.some((row) => row.categoryId === kids || row.categoryId === leftover)).toBe(false);
+    expect(progress.find((row) => row.categoryId === kids)?.spentCents).toBe(5000);
+    expect(progress.find((row) => row.categoryId === leftover)?.spentCents).toBe(5000);
   });
 
   it('surfaces an archived top-level category with its own spend, rolling in a live child that gets its own row', () => {

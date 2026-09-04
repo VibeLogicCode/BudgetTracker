@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
 import { budgetProgress, budgetTotals, categorySpend, categoryTransactions, clearBudget, copyBudgetsFromPreviousMonth, flattenBudgetRows, resolveBudget, upsertBudget } from '@/lib/budgets';
+import { archiveCategory } from '@/lib/categories';
 import { nowIso } from '@/lib/clock';
 import { assignTransactionToLoan } from '@/lib/loans';
 // Lane 1 (2026-08-30 plan): categoryTransactions is split-aware, the same way categorySpend
@@ -474,6 +475,99 @@ describe('budgetProgress — review finding 2: archived-category spend', () => {
     sqlite.prepare('update categories set is_archived = 1 where id = ?').run(kids);
     const rows = budgetProgress('2026-03');
     expect(rows.some((r) => r.categoryId === kids)).toBe(false);
+  });
+});
+
+/**
+ * C-01 (task-2-brief.md): `spendByCategory` is each category's own DIRECT spend, never the
+ * rollup (see foldRollup in src/lib/budgets.ts) -- a parent whose spending sits entirely in its
+ * children read 0 there, so the naive "archived + no direct spend" top-level test used to drop
+ * the parent AND, since the walk only ever iterates top-level rows, every live child beneath it
+ * too. One click on Settings -> Managers to archive a parent silently zeroed
+ * budgetedLimitCents/budgetedSpentCents/totalSpentCents for the whole subtree and killed every
+ * budget_threshold alert for it. This is the v1.12.1 / item S / MON-1 bug (archiving making a
+ * LIMIT vanish while SPEND kept counting) one level up -- fixed by asking the child predicate's
+ * own three-way question about the parent too, over the rollup rather than the direct map.
+ */
+describe('budgetProgress — C-01: archiving a parent must not erase its live children', () => {
+  it('keeps a live child (and its limit) fully counted before and after its parent is archived', () => {
+    const { db, spend } = setup();
+    const food = categoryIdByName(db, 'Food');
+    const groceries = categoryIdByName(db, 'Groceries');
+    const restaurants = categoryIdByName(db, 'Restaurants');
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-03', amountCents: 50000 });
+    spend({ categoryId: groceries, amountCents: -60000 });
+    spend({ categoryId: restaurants, amountCents: -20000 });
+
+    const before = budgetTotals(budgetProgress('2026-03'));
+    expect(before).toEqual({ budgetedLimitCents: 50000, budgetedSpentCents: 60000, totalSpentCents: 80000 });
+
+    archiveCategory(food, true);
+
+    const rows = budgetProgress('2026-03');
+    const after = budgetTotals(rows);
+    // BEFORE the fix this read {budgetedLimitCents: 0, budgetedSpentCents: 0, totalSpentCents: 0}
+    // -- Food had no direct spend of its own (all of it sits on Groceries/Restaurants), so the
+    // old test dropped Food and took the whole subtree down with it.
+    expect(after).toEqual({ budgetedLimitCents: 50000, budgetedSpentCents: 60000, totalSpentCents: 80000 });
+    const foodRow = rows.find((r) => r.categoryId === food);
+    expect(foodRow?.children.some((c) => c.categoryId === groceries)).toBe(true);
+  });
+
+  it('still drops an archived parent whose entire subtree carries neither spend nor a limit (the dead-clutter rule survives)', () => {
+    const { db, sqlite } = setup();
+    const fees = categoryIdByName(db, 'Fees');
+    const bankFees = categoryIdByName(db, 'Bank Fees');
+    const interest = categoryIdByName(db, 'Interest');
+    sqlite.prepare('update categories set is_archived = 1 where id in (?, ?, ?)').run(fees, bankFees, interest);
+
+    const rows = budgetProgress('2026-03');
+    expect(rows.some((r) => r.categoryId === fees)).toBe(false);
+  });
+
+  it('keeps an archived parent that carries only a resolved limit of its own (no spend, no surviving child)', () => {
+    const { db, sqlite } = setup();
+    const kids = categoryIdByName(db, 'Kids'); // seeded with no children
+    upsertBudget({ scope: 'household', userId: null, categoryId: kids, month: '2026-03', amountCents: 30000 });
+    sqlite.prepare('update categories set is_archived = 1 where id = ?').run(kids);
+
+    const rows = budgetProgress('2026-03');
+    const kidsRow = rows.find((r) => r.categoryId === kids);
+    expect(kidsRow).toBeDefined();
+    expect(kidsRow).toMatchObject({ isArchived: true, limitCents: 30000, spentCents: 0 });
+  });
+});
+
+/**
+ * C-05 (task-2-brief.md): income categories are stripped from `all` before the parent/child
+ * walk (finding 7), so a non-income category whose PARENT is itself an income category (e.g.
+ * filed directly under "Salary") has no surviving top-level ancestor left in `all` at all, and
+ * the walk only ever iterates `parentId === null` rows -- it can never surface on its own
+ * either. Half 1's fix treats a category whose parent is absent from `all` as top-level.
+ *
+ * Inserted directly via SQL: half 2 (src/lib/categories.ts, setCategoryIncome/createCategory)
+ * now refuses to let a NEW category end up in this exact shape, so this fixture recreates an
+ * EXISTING database's pre-fix state -- the same reason other tests in this file reach for
+ * `sqlite.prepare(...)` rather than the public mutators for an archived-with-no-guard state.
+ */
+describe('budgetProgress — C-05: a non-income child under an income parent', () => {
+  it('yields a row with its own limit and spend, rather than vanishing entirely', () => {
+    const { db, sqlite, spend } = setup();
+    const salary = categoryIdByName(db, 'Salary');
+    const workExpenses = sqlite
+      .prepare('insert into categories (name, parent_id, is_income, sort_order) values (?, ?, 0, 999) returning id')
+      .get('Work expenses', salary) as { id: number };
+
+    upsertBudget({ scope: 'household', userId: null, categoryId: workExpenses.id, month: '2026-03', amountCents: 20000 });
+    spend({ categoryId: workExpenses.id, amountCents: -12345 });
+
+    const rows = budgetProgress('2026-03');
+    const row = rows.find((r) => r.categoryId === workExpenses.id);
+    expect(row).toBeDefined();
+    expect(row).toMatchObject({ limitCents: 20000, spentCents: 12345 });
+    // Nothing else in this fresh, seeded-only fixture spends or budgets, so the totals pin the
+    // exact numbers from the brief's measured defect, not just "a row exists somewhere".
+    expect(budgetTotals(rows)).toEqual({ budgetedLimitCents: 20000, budgetedSpentCents: 12345, totalSpentCents: 12345 });
   });
 });
 

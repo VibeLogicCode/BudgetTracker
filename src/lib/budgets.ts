@@ -533,18 +533,26 @@ export function budgetProgress(month: string, scope: BudgetScope = 'household', 
     attributedUserId: scope === 'personal' ? userId : undefined,
   });
 
+  // C-05 half 1: an income category never reaches `all` above, so a non-income category
+  // whose PARENT happens to be an income category (e.g. a spend category filed directly
+  // under "Salary") has no surviving parent row in `all` at all -- its parentId names
+  // nobody `all` still contains. Treat that as top-level rather than silently dropping it:
+  // the walk below already relies on an absent parent id matching no row's parentId (see
+  // the `allChildren` line), so widening the top-level test to "parentId is null OR its
+  // parent isn't present" is tolerant of existing data with no migration. Half 2
+  // (src/lib/categories.ts createCategory/setCategoryIncome) stops any NEW ones from being made.
+  const presentIds = new Set(all.map((category) => category.id));
+  const isTopLevel = (category: CategoryRecord) => category.parentId === null || !presentIds.has(category.parentId);
+
   return all
-    .filter((category) => category.parentId === null)
-    // An archived top-level category only surfaces if it still carries real spend this
-    // month (a read-only "(archived)" row) — otherwise it would just be dead clutter.
-    .filter((category) => !category.isArchived || (spendByCategory.get(category.id) ?? 0) !== 0)
+    .filter((category) => isTopLevel(category))
     .map((parent) => {
       const allChildren = all.filter((row) => row.parentId === parent.id);
       // v1.12.1 (item S / MON-1). This used to be a blanket `!row.isArchived`, while allChildren
       // (the rollup) kept archived rows -- so archiving a child made its LIMIT disappear from
       // every number while its SPEND went on counting against the parent, and the parent flipped
       // to over budget for no visible reason anybody could see on the page. The rule is now the
-      // archived-TOP-LEVEL rule from four lines up, applied one level down: an archived child
+      // archived-TOP-LEVEL rule below, applied one level down: an archived child
       // surfaces when it still carries a resolved limit or real spend this month, and is dropped
       // when it carries neither.
       const renderChildren = allChildren.filter(
@@ -553,8 +561,30 @@ export function budgetProgress(month: string, scope: BudgetScope = 'household', 
           (spendByCategory.get(row.id) ?? 0) !== 0 ||
           resolveBudget(scope, userId, row.id, month) !== null,
       );
-      return buildRow(parent, spendByCategory, scope, userId, month, renderChildren, allChildren);
-    });
+      return { parent, allChildren, renderChildren };
+    })
+    // C-01. `spendByCategory` is each category's OWN direct spend, never the rollup (see
+    // foldRollup below) -- a parent whose spending sits entirely in its children reads 0
+    // there, so the naive "archived + no direct spend" test used to drop the parent AND,
+    // since the walk only ever iterates top-level rows, every live child underneath it too:
+    // one click on Settings -> Managers zeroed budgetedLimitCents/budgetedSpentCents/
+    // totalSpentCents for the whole subtree and silenced every budget_threshold alert for it.
+    // This is the v1.12.1 / item S / MON-1 bug (archiving making a LIMIT vanish while SPEND
+    // kept counting) one level up. The fix asks the child predicate's own question, over the
+    // rollup rather than the direct map: keep an archived parent when it has direct spend of
+    // its own, OR any child survives the predicate above, OR it carries a resolved limit of
+    // its own -- an archived parent with a live limit and no spend yet is exactly as real as
+    // an archived child in the same state (controller ruling).
+    .filter(
+      ({ parent, renderChildren }) =>
+        !parent.isArchived ||
+        (spendByCategory.get(parent.id) ?? 0) !== 0 ||
+        renderChildren.length > 0 ||
+        resolveBudget(scope, userId, parent.id, month) !== null,
+    )
+    .map(({ parent, allChildren, renderChildren }) =>
+      buildRow(parent, spendByCategory, scope, userId, month, renderChildren, allChildren),
+    );
 }
 
 /**

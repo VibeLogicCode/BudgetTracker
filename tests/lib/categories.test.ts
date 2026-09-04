@@ -8,6 +8,7 @@ import {
   createCategory,
   listCategories,
   renameCategory,
+  setCategoryIncome,
   setCategoryTaxRelevant,
 } from '@/lib/categories';
 
@@ -102,5 +103,45 @@ describe('taxRelevant flag', () => {
     expect(foodNode.taxRelevant).toBe(true);
     expect(foodNode.children.find((c) => c.id === groceries)?.taxRelevant).toBe(true);
     expect(foodNode.children.find((c) => c.name === 'Coffee')?.taxRelevant).toBe(false);
+  });
+});
+
+/**
+ * C-05 half 2 (controller ruling R2): the create-time and flip-time guards for the invariant
+ * budgetProgress's Half 1 (src/lib/budgets.ts) only makes existing violations of render
+ * tolerantly, rather than fixing -- a non-income category must never end up parented by an
+ * income one. Two independent ways that shape can arise, two independent guards.
+ */
+describe('C-05 half 2: a non-income category must never be parented by an income one', () => {
+  it('refuses creating a non-income category under an income parent', () => {
+    current = createSeededTestDb();
+    // "Income" itself, not "Salary" -- Salary is already a level-2 category, and
+    // createCategory's separate two-level-nesting guard rejects a child under it first, which
+    // would prove nothing about THIS guard.
+    const income = categoryIdByName(current.db, 'Income');
+    expect(() => createCategory({ name: 'Work expenses', parentId: income, isIncome: false })).toThrowError(
+      /income/i,
+    );
+  });
+
+  it('still allows an income child under an income parent (the ordinary, unflagged case)', () => {
+    current = createSeededTestDb();
+    const income = categoryIdByName(current.db, 'Income');
+    const id = createCategory({ name: 'Bonus', parentId: income });
+    expect(listCategories().find((c) => c.id === id)).toMatchObject({ isIncome: true });
+  });
+
+  it('refuses flipping a parent to income while it still has a non-income child', () => {
+    current = createSeededTestDb();
+    const food = categoryIdByName(current.db, 'Food'); // has Groceries/Restaurants/Coffee, all non-income
+    expect(() => setCategoryIncome(food, true)).toThrowError(/non-income/i);
+    expect(listCategories().find((c) => c.id === food)?.isIncome).toBe(false);
+  });
+
+  it('allows flipping a childless category to income', () => {
+    current = createSeededTestDb();
+    const kids = categoryIdByName(current.db, 'Kids'); // no children
+    setCategoryIncome(kids, true);
+    expect(listCategories().find((c) => c.id === kids)?.isIncome).toBe(true);
   });
 });

@@ -441,6 +441,27 @@ describe('DEFECT regression: fingerprint must react to budget_rollover and in-pl
  * tests below pin it: each sets up a category whose BASE alone would have crossed the line,
  * then shows a rollover carry that covers the difference keeps the evaluator silent.
  */
+/**
+ * C-01 regression (task-2-brief.md, test 6 -- "the consequence that matters most"). Before the
+ * fix, archiving a parent with no direct spend of its own dropped it AND every live child
+ * beneath it from budgetProgress() entirely, so `flatten(budgetProgress(...))` in this file
+ * never even reached Groceries's own row -- no budget_threshold notification could ever fire
+ * for it again, silently, with no error and no visible sign why on the page.
+ */
+describe('C-01 regression: an archived parent must not silence a live child\'s budget alert', () => {
+  it('still fires the threshold for a child whose parent category was archived', () => {
+    emailUser();
+    const food = categoryIdByName(t.db, 'Food');
+    const groceries = categoryIdByName(t.db, 'Groceries');
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-08', amountCents: 50000 }); // $500
+    t.db.run(sql`update categories set is_archived = 1 where id = ${food}`);
+
+    spend(groceries, 41000); // 82% of the $500 limit -- past the 80% default threshold
+    expect(evaluateBudgets({ now: NOW, tz: TZ })).toBe(1);
+    expect(keys()).toEqual([`budget:h:${groceries}:2026-08:80`]);
+  });
+});
+
 describe('v1.7.0 Task 11: rollover carry keeps a covered category from false-alarming', () => {
   it('budget_threshold does not fire when the carry keeps spend under the percentage', () => {
     emailUser();

@@ -62,6 +62,14 @@ export function createCategory(input: {
     if (!parent) throw new Error(`No category ${input.parentId}`);
     if (parent.parentId !== null) throw new Error('Categories are limited to two levels');
     if (input.isIncome === undefined) isIncome = parent.isIncome;
+    // C-05 half 2: a non-income category with an income parent has no surviving top-level
+    // ancestor in budgetProgress's walk (src/lib/budgets.ts) -- Half 1 there makes any
+    // EXISTING row in that shape render tolerantly, but nothing should be able to create a
+    // NEW one. Only refuses an EXPLICIT override (isIncome inherits the parent's value above
+    // when the caller omits it, so an ordinary child never trips this).
+    if (parent.isIncome && !isIncome) {
+      throw new Error('A spend category cannot be created under an income category.');
+    }
   }
   const maxOrder = listCategories({ includeArchived: true }).reduce((max, row) => Math.max(max, row.sortOrder), 0);
   const row = db
@@ -94,4 +102,26 @@ export function archiveCategory(id: number, archived: boolean): void {
  *  taxYearReport (src/lib/tax.ts) for what flagging a parent versus a child means. */
 export function setCategoryTaxRelevant(id: number, taxRelevant: boolean): void {
   getDb().update(categories).set({ taxRelevant }).where(eq(categories.id, id)).run();
+}
+
+/**
+ * C-05 half 2 (controller ruling R2): the other half of createCategory's guard above.
+ * createCategory only ever checks the ONE row it is inserting, so it cannot stop an existing,
+ * already-non-income PARENT from being flipped to income out from under children it already
+ * has -- that flip has to be checked against the CURRENT tree, not the caller's input, so it
+ * lives in its own function rather than folded into createCategory's input-shaped checks.
+ */
+export function setCategoryIncome(id: number, isIncome: boolean): void {
+  const db = getDb();
+  const category = db.select().from(categories).where(eq(categories.id, id)).get();
+  if (!category) throw new Error(`No category ${id}`);
+  if (isIncome && !category.isIncome) {
+    const hasNonIncomeChild = listCategories({ includeArchived: true }).some(
+      (row) => row.parentId === id && !row.isIncome,
+    );
+    if (hasNonIncomeChild) {
+      throw new Error('Cannot mark this category as income while it has a non-income sub-category.');
+    }
+  }
+  db.update(categories).set({ isIncome }).where(eq(categories.id, id)).run();
 }
