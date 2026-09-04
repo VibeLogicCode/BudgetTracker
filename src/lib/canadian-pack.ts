@@ -14,7 +14,6 @@ import { merchantRules } from '@/db/schema';
 import rawCanadianPack from '../../packs/canadian-merchants.json';
 import { categoryLabel, listCategories, type CategoryRecord } from '@/lib/categories';
 import {
-  deleteRule,
   listRules,
   upsertRuleFromCorrection,
   type MatchType,
@@ -22,7 +21,9 @@ import {
   type PackProvenance,
   type RuleKind,
 } from '@/lib/categorize/rules';
-import { applyRenameRules, buildContext, deleteRenameRule, ruleImpactCounts } from '@/lib/categorize/engine';
+// v1.31.0 R-10: deleteRules replaces this file's former per-rule deleteRule/deleteRenameRule
+// calls -- one retroactive rename pass for a whole removal set instead of one per rename rule.
+import { applyRenameRules, buildContext, deleteRules, ruleImpactCounts } from '@/lib/categorize/engine';
 import { nowIso } from '@/lib/clock';
 import { adminUserIds } from '@/lib/notify/config';
 import { packUpdateAvailableKey } from '@/lib/notify/events';
@@ -218,15 +219,15 @@ export interface CanadianPackRemovalResult {
  */
 export function removeCanadianPack(): CanadianPackRemovalResult {
   const rows = installedCanadianPackRows();
-  let transactionsReverted = 0;
-  for (const rule of rows) {
-    if (rule.ruleKind === 'rename') {
-      transactionsReverted += deleteRenameRule({ pattern: rule.pattern, matchType: rule.matchType }).rowsCleared;
-    } else {
-      deleteRule(rule.id);
-    }
-  }
-  return { deleted: rows.length, transactionsReverted };
+  // v1.31.0 (R-10). One call, one retroactive rename pass. This loop used to call
+  // deleteRenameRule once per stamped rename rule, and the shipped pack carries eighteen of them
+  // -- eighteen full passes over every non-manual transaction, each reading the table twice and
+  // committing its own transaction. That is why "Remove all" felt slow on a real household. The
+  // batching lives in deleteRules (src/lib/categorize/engine.ts), beside the pass it batches;
+  // its docblock carries the measured before/after and explains why the single pass's count is a
+  // truer answer than the per-rule sum this function used to add up.
+  const { deleted, rowsCleared } = deleteRules(rows.map((rule) => rule.id));
+  return { deleted, transactionsReverted: rowsCleared };
 }
 
 // ------------------------------------------------------------- version updates
@@ -520,6 +521,43 @@ export function applyCanadianPackUpdate(input: {
   const db = getDb();
   const stamp: PackProvenance = { source: CANADIAN_PACK_ID, version: toVersion, installedAt };
 
+  /**
+   * v1.31.0 (R-10). REMOVALS FIRST, and the order is what makes the count honest.
+   *
+   * This loop used to sit AFTER the added/changed writes and call deleteRenameRule per removed
+   * rename rule -- one full retroactive pass each -- and then the whole function paid for one
+   * MORE pass at the end. So the shipped pack's own update ran (removed renames + 1) passes over
+   * every non-manual transaction where two are enough.
+   *
+   * Simply batching them where the loop used to sit would have been wrong, not just tidy: with
+   * the new renames already written, the single removal pass's `changed` count would include rows
+   * this update RENAMED, and `transactionsReverted` is reported to the admin as "N transactions
+   * went back to the bank's wording". Removing first means this pass sees only the reverts, and
+   * the trailing pass at the end of the function picks up everything the added/changed renames
+   * now claim. walk.removed and walk.added/changed are disjoint by construction (keyOf: removed
+   * is "stamped here, not in the new pack", added is "in the new pack, not here"), so nothing
+   * depends on which of the two runs first.
+   *
+   * rememberPackOrigin still runs after BOTH, for the reason its own comment gives.
+   */
+  const removedIds: number[] = [];
+  for (const row of walk.removed) {
+    if (!input.deleteRemoved) {
+      // The pack no longer claims this row -- clear its stamp so it becomes an ordinary household
+      // rule (same treatment an edited row already gets), rather than leaving a stale pointer at a
+      // pack version that no longer lists it.
+      db.update(merchantRules)
+        .set({ packSource: null, packVersion: null, installedAt: null })
+        .where(eq(merchantRules.id, row.id))
+        .run();
+      continue;
+    }
+    removedIds.push(row.id);
+  }
+  const removal = deleteRules(removedIds);
+  const removedDeleted = removal.deleted;
+  const transactionsReverted = removal.rowsCleared;
+
   let renameTouched = false;
 
   for (const rule of walk.added) {
@@ -540,31 +578,12 @@ export function applyCanadianPackUpdate(input: {
       .run();
   }
 
-  let removedDeleted = 0;
-  let transactionsReverted = 0;
-  for (const row of walk.removed) {
-    if (!input.deleteRemoved) {
-      // The pack no longer claims this row -- clear its stamp so it becomes an ordinary household
-      // rule (same treatment an edited row already gets), rather than leaving a stale pointer at a
-      // pack version that no longer lists it.
-      db.update(merchantRules)
-        .set({ packSource: null, packVersion: null, installedAt: null })
-        .where(eq(merchantRules.id, row.id))
-        .run();
-      continue;
-    }
-    if (row.ruleKind === 'rename') {
-      transactionsReverted += deleteRenameRule({ pattern: row.pattern, matchType: row.matchType }).rowsCleared;
-    } else {
-      deleteRule(row.id);
-    }
-    removedDeleted += 1;
-  }
-
   // v1.25.0 (item 18), same reason as installCanadianPack's call: an ADDED row has just acquired a
   // stamp and no origin yet, so record where the pack put it. Placed after the removal loop rather
   // than beside the writes because that loop clears the stamp on a row the pack no longer names --
   // and a row this pack does not claim must not be given an origin by a pass keyed off pack_source.
+  // (v1.31.0 R-10 moved that loop ABOVE the writes; this call still runs after both, which is what
+  // the sentence was actually protecting.)
   // Its own origin, if it had one, is untouched: rememberPackOrigin only ever fills in a NULL.
   rememberPackOrigin(CANADIAN_PACK_ID);
 

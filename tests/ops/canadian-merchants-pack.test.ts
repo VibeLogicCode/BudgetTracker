@@ -153,7 +153,17 @@ describe('shipped pack: imports cleanly into a freshly seeded database', () => {
     const rowCountAfterFirst = listRules().length;
 
     const second = importRulesPack(raw);
-    expect(second).toEqual({ rulesAdded: 0, rulesOverwritten: 0, rulesKept: 0, rulesSkipped: 0, categoriesCreated: 0 });
+    // v1.31.0 R-12 added rulesSkippedDetail: the skipped entries BY NAME, not just a count. The
+    // shipped pack skips nothing, so it must come back empty -- asserted rather than left out of
+    // the object, because "no skips" is the property this test is here to pin.
+    expect(second).toEqual({
+      rulesAdded: 0,
+      rulesOverwritten: 0,
+      rulesKept: 0,
+      rulesSkipped: 0,
+      rulesSkippedDetail: [],
+      categoriesCreated: 0,
+    });
     expect(listRules().length).toBe(rowCountAfterFirst);
   });
 });
