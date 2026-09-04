@@ -1,7 +1,7 @@
 {
   "format": "budget-tracker-rules",
   "version": 1,
-  "pack_version": 3,
+  "pack_version": 4,
   "exported_at": "2026-09-01T00:00:00.000Z",
   "categories": [
     {
@@ -191,6 +191,14 @@
       "rename_to": null
     },
     {
+      "pattern": "PETROCAN",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Gas",
+      "category_parent": "Transport",
+      "rename_to": null
+    },
+    {
       "pattern": "ESSO",
       "match_type": "word",
       "rule_kind": "category",
@@ -296,6 +304,14 @@
     },
     {
       "pattern": "TIM HORTONS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Coffee",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "TIM HORTON'S",
       "match_type": "contains",
       "rule_kind": "category",
       "category": "Coffee",
@@ -632,6 +648,14 @@
     },
     {
       "pattern": "LOBLAWS",
+      "match_type": "contains",
+      "rule_kind": "category",
+      "category": "Groceries",
+      "category_parent": "Food",
+      "rename_to": null
+    },
+    {
+      "pattern": "LOBLAW",
       "match_type": "contains",
       "rule_kind": "category",
       "category": "Groceries",
@@ -2391,8 +2415,24 @@
       "rename_to": "Walmart"
     },
     {
+      "pattern": "WAL-MART",
+      "match_type": "contains",
+      "rule_kind": "rename",
+      "category": null,
+      "category_parent": null,
+      "rename_to": "Walmart"
+    },
+    {
       "pattern": "SUPERSTORE",
       "match_type": "contains",
+      "rule_kind": "rename",
+      "category": null,
+      "category_parent": null,
+      "rename_to": "Real Canadian Superstore"
+    },
+    {
+      "pattern": "RCSS",
+      "match_type": "word",
       "rule_kind": "rename",
       "category": null,
       "category_parent": null,
@@ -2424,6 +2464,14 @@
     },
     {
       "pattern": "CANADIAN TIRE",
+      "match_type": "contains",
+      "rule_kind": "rename",
+      "category": null,
+      "category_parent": null,
+      "rename_to": "Canadian Tire"
+    },
+    {
+      "pattern": "CDN TIRE",
       "match_type": "contains",
       "rule_kind": "rename",
       "category": null,
@@ -2464,6 +2512,14 @@
     },
     {
       "pattern": "SHOPPERS DRUG MART",
+      "match_type": "contains",
+      "rule_kind": "rename",
+      "category": null,
+      "category_parent": null,
+      "rename_to": "Shoppers Drug Mart"
+    },
+    {
+      "pattern": "SHOPPERSDRUGMART",
       "match_type": "contains",
       "rule_kind": "rename",
       "category": null,

@@ -20,16 +20,18 @@ vi.mock('next/headers', () => ({
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 
 import { deleteRuleAction, saveRuleAction } from '@/app/(app)/settings/merchant-rules/actions';
-import { RULES_PACK_FORMAT, type RulesPack } from '@/lib/packs';
-import { deleteRule, listRules, matchRule, setRuleDisabledFlag, upsertRuleFromCorrection } from '@/lib/categorize/rules';
+import { RULES_PACK_FORMAT, type PackRule, type RulesPack } from '@/lib/packs';
+import { deleteRule, listRules, matchRule, patternMatches, setRuleDisabledFlag, upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { applyRenameRules, buildContext } from '@/lib/categorize/engine';
 import { normalizeMerchant } from '@/lib/categorize/normalize';
 import { saveEmailTarget, saveSmtp } from '@/lib/notify/config';
 import {
   CANADIAN_PACK_ID,
+  CANADIAN_PACK_VERSION,
   applyCanadianPackUpdate,
   canadianPackState,
   canadianPackUpdateDiff,
+  canadianRulesPack,
   installCanadianPack,
   installedCanadianPackRows,
   notifyCanadianPackUpdateAvailable,
@@ -753,5 +755,162 @@ describe('an update re-adds a pack rule the household replaced under a different
     const diff = canadianPackUpdateDiff(PRESET_V2, 2);
     expect(diff.editedAway).toEqual([]);
     expect(diff.added.map((e) => e.pattern).sort()).toEqual(['TIM HORTONS', 'ZZZ NEW']);
+  });
+});
+
+/**
+ * v1.31.0. pack_version 3 -> 4: seven new rows for merchant/format-variant gaps the 2026-09-02
+ * vendor research (.superpowers/sdd/2026-09-02-review-for-opus/rules-vendor-research.md)
+ * corroborated but the shipped pack did not yet catch -- PETROCAN (Petro-Canada's no-hyphen
+ * abbreviated form), bare LOBLAW (the shipped pack only had the plural LOBLAWS), the hyphenated
+ * legacy WAL-MART spelling, the glued SHOPPERSDRUGMART POS form, RCSS and CDN TIRE (both
+ * rename-only, mirroring the SUPERSTORE/CANADIAN TIRE rows they are additional spellings of), and
+ * the apostrophe form TIM HORTON'S.
+ *
+ * Every block below DOES load the real bundled packs/canadian-merchants.json (via
+ * canadianRulesPack()/installCanadianPack() with no pack override), which is the opposite of this
+ * file's own stated convention above ("these tests deliberately do NOT install the real shipped
+ * pack"). That convention protects the DIFF/UPDATE MECHANISM tests (added/changed/removed/
+ * unchanged) from drifting every time the real pack's row count changes for an unrelated reason;
+ * it is silent on whether THIS pack's new CONTENT is correct, which is exactly what these blocks
+ * exist to pin -- the same reason tests/ops/canadian-merchants-pack.test.ts (out of scope for this
+ * change; a different in-flight lane owns it) loads the real file rather than a fixture for its
+ * own structural guard.
+ */
+describe('v1.31.0 pack additions: the shipped pack still parses and installs cleanly', () => {
+  const added = ['PETROCAN', "TIM HORTON'S", 'LOBLAW', 'WAL-MART', 'RCSS', 'CDN TIRE', 'SHOPPERSDRUGMART'];
+
+  it('pack_version is 4 and carries all seven new patterns', () => {
+    expect(CANADIAN_PACK_VERSION).toBe(4);
+    const patterns = canadianRulesPack().rules.map((r) => r.pattern);
+    expect(patterns).toEqual(expect.arrayContaining(added));
+  });
+
+  it('installs into a freshly seeded database through the real import path -- zero skips, zero categories created', () => {
+    current = createSeededTestDb();
+    const result = installCanadianPack(new Date('2026-09-04T00:00:00.000Z'));
+    expect(result.rulesSkipped).toBe(0);
+    expect(result.categoriesCreated).toBe(0);
+    expect(result.rulesAdded).toBe(canadianRulesPack().rules.length);
+    // Confirms the seven rows actually landed as rows, not merely as text in the JSON.
+    const installedPatterns = installedCanadianPackRows().map((r) => r.pattern);
+    expect(installedPatterns).toEqual(expect.arrayContaining(added));
+  });
+});
+
+/**
+ * Each row is a real statement-line shape the vendor research cites (or, for TIM HORTON'S, the
+ * apostrophe-rendering variance already established elsewhere in this pack -- see the pack's own
+ * apostrophed entries: MARY BROWN'S, HARVEY'S, DOMINO'S). Run through normalizeMerchant +
+ * patternMatches -- the real production code path, not a re-implementation of it -- mirroring
+ * tests/ops/canadian-merchants-pack.test.ts's own `nowReached` idiom.
+ */
+describe('v1.31.0 pack additions: each new pattern reaches the statement line it exists for', () => {
+  function ruleFor(pattern: string): PackRule {
+    const rule = canadianRulesPack().rules.find((r) => r.pattern === pattern);
+    if (!rule) throw new Error(`no rule for pattern ${pattern} -- did the pattern text change?`);
+    return rule;
+  }
+
+  const reaches: { raw: string; pattern: string }[] = [
+    { raw: 'PETROCAN-1417 N TR, GOLDEN', pattern: 'PETROCAN' },
+    { raw: "TIM HORTON'S #0845A LONDON ON", pattern: "TIM HORTON'S" },
+    { raw: 'LOBLAW SUPERMARKET #10 TORONTO ON', pattern: 'LOBLAW' }, // the form LOBLAWS (plural) cannot reach
+    { raw: 'LOBLAW #1011', pattern: 'LOBLAW' },
+    { raw: 'WAL-MART #1102 SYLVAN LAKE CAN', pattern: 'WAL-MART' }, // the hyphenated legacy form WALMART misses
+    { raw: 'RCSS #1009 OTTAWA, ON', pattern: 'RCSS' },
+    { raw: 'CDN TIRE STORE #00611 CALGARY CAN', pattern: 'CDN TIRE' },
+    { raw: 'CDN TIRE GASBAR #01127 BROCKVILLE CAN', pattern: 'CDN TIRE' },
+    { raw: 'MAGASIN CDN TIRE #0040 MONTREAL QC', pattern: 'CDN TIRE' }, // French storefront prefix
+    { raw: 'SHOPPERSDRUGMART0872 NORTH YORK ON', pattern: 'SHOPPERSDRUGMART' },
+  ];
+
+  it.each(reaches)('$pattern reaches $raw', ({ raw, pattern }) => {
+    const normalized = normalizeMerchant(raw);
+    const rule = ruleFor(pattern);
+    expect(patternMatches(rule.pattern, rule.match_type, normalized)).toBe(true);
+  });
+
+  it('RCSS and CDN TIRE are rename-only, matching the SUPERSTORE/CANADIAN TIRE rows they are additional spellings of', () => {
+    expect(ruleFor('RCSS')).toMatchObject({ rule_kind: 'rename', rename_to: 'Real Canadian Superstore', category: null });
+    expect(ruleFor('CDN TIRE')).toMatchObject({ rule_kind: 'rename', rename_to: 'Canadian Tire', category: null });
+  });
+
+  it('RCSS is a word rule, not contains -- it is 4 characters, and this pack ships no contains pattern that short', () => {
+    expect(ruleFor('RCSS').match_type).toBe('word');
+  });
+});
+
+/**
+ * Scoped version of tests/ops/canadian-merchants-pack.test.ts's cross-collision guard (out of
+ * scope to edit directly), run here against the real shipped pack so this change is not merely
+ * trusting that guard to catch a mistake in these seven rows specifically. Same rule as that
+ * file's: two rules that resolve to the SAME outcome are allowed, and expected, to overlap
+ * (LOBLAW sits under LOBLAWS on purpose, same as PETRO-CANADA/PETRO CANADA); only a pair that
+ * disagrees about where the money goes is a collision.
+ */
+describe('v1.31.0 pack additions: no new pattern collides with an existing rule of a different outcome', () => {
+  function resolutionOf(rule: PackRule): string {
+    return rule.rule_kind === 'rename' ? `rename -> ${rule.rename_to}` : `category -> ${rule.category_parent} > ${rule.category}`;
+  }
+
+  const added = ['PETROCAN', "TIM HORTON'S", 'LOBLAW', 'WAL-MART', 'RCSS', 'CDN TIRE', 'SHOPPERSDRUGMART'];
+
+  it('fires on no other rule\'s pattern text, and no other rule fires on its pattern text, unless the outcome agrees', () => {
+    const rules = canadianRulesPack().rules;
+    const collisions: string[] = [];
+    for (const patternText of added) {
+      const newRule = rules.find((r) => r.pattern === patternText)!;
+      for (const other of rules) {
+        if (other === newRule) continue;
+        if (resolutionOf(other) === resolutionOf(newRule)) continue;
+        if (patternMatches(newRule.pattern, newRule.match_type, other.pattern)) {
+          collisions.push(`${newRule.match_type} ${newRule.pattern} (${resolutionOf(newRule)}) fires on ${other.pattern} (${resolutionOf(other)})`);
+        }
+        if (patternMatches(other.pattern, other.match_type, newRule.pattern)) {
+          collisions.push(`${other.match_type} ${other.pattern} (${resolutionOf(other)}) fires on ${newRule.pattern} (${resolutionOf(newRule)})`);
+        }
+      }
+    }
+    expect(collisions).toEqual([]);
+  });
+});
+
+/**
+ * The collision this task's brief names as the model (`contains IGA` matching MICHIGAN), applied
+ * to a candidate this pass considered and REJECTED rather than shipped -- proof that the collision
+ * test above is not vacuous, per the brief's own instruction to show a bad version failing and
+ * then fix it.
+ *
+ * The vendor research found a real Canadian statement line for Crave (Bell Media's streaming
+ * service), `CRAVE TORONTO ON`, that the shipped pack's existing `contains CRAVE TV` rule does not
+ * reach, and suggested matching bare CRAVE to close the gap. CRAVE is also an ordinary English
+ * word that unrelated Canadian businesses use in their own names (bakeries, cafes and restaurants
+ * routinely brand themselves "Crave"). Unlike IGA -- where `word` fixed the collision because IGA
+ * is not itself a common word -- `word CRAVE` does not fix this one: "Crave" is still a whole,
+ * boundary-respecting token in "CRAVE BURGER CO TORONTO ON". No match type closes the gap safely,
+ * so this pass ships nothing for bare CRAVE and the gap stays open for the household's own rule or
+ * the Bayes classifier (see this change's report for the fuller reasoning).
+ */
+describe('v1.31.0 pack additions: a rejected candidate (bare CRAVE) proves the collision check can fail', () => {
+  const unrelatedRestaurant = normalizeMerchant('CRAVE BURGER CO TORONTO ON');
+
+  it('a deliberately bad CRAVE rule -- contains OR word -- fires on an unrelated restaurant named "Crave"', () => {
+    expect(patternMatches('CRAVE', 'contains', unrelatedRestaurant)).toBe(true);
+    // Unlike IGA/MICHIGAN, word-bounding does not save it: CRAVE is a whole word in both strings.
+    expect(patternMatches('CRAVE', 'word', unrelatedRestaurant)).toBe(true);
+  });
+
+  it('the real shipped pack ships no bare CRAVE rule, so the unrelated restaurant is not miscategorized', () => {
+    const pack = canadianRulesPack();
+    expect(pack.rules.find((r) => r.pattern === 'CRAVE')).toBeUndefined();
+
+    // Every CRAVE-related rule the pack DOES ship, run for real: none of them claims this
+    // unrelated restaurant.
+    const craveRules = pack.rules.filter((r) => r.pattern.includes('CRAVE'));
+    expect(craveRules.length).toBeGreaterThan(0); // sanity: CRAVE TV is still in the pack
+    for (const rule of craveRules) {
+      expect(patternMatches(rule.pattern, rule.match_type, unrelatedRestaurant)).toBe(false);
+    }
   });
 });
