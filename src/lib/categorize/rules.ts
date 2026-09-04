@@ -27,10 +27,15 @@ import { nowIso } from '@/lib/clock';
  */
 export type MatchType = 'exact' | 'contains' | 'word';
 /**
- * 'not_transfer' is an exact-match-only override: it teaches the engine that a
- * pattern which CARD_PAYMENT_PATTERNS would otherwise auto-flag is NOT actually
- * a transfer for this merchant, without disabling the pattern list for anyone
- * else (see detectTransfer in engine.ts).
+ * 'not_transfer' is an override: it teaches the engine that a pattern which
+ * CARD_PAYMENT_PATTERNS would otherwise auto-flag is NOT actually a transfer for
+ * this merchant, without disabling the pattern list for anyone else (see
+ * detectTransfer in engine.ts).
+ *
+ * EXACT BY DEFAULT, NOT EXACT-ONLY, and the distinction cost a P1 (v1.31.0, R-01). setTransferFlag
+ * is the only path that LEARNS one and it hard-codes matchType: 'exact'; the rules form can write
+ * a 'contains' one, and matchRule honours it. A pack cannot -- IMPORTABLE_RULE_KINDS (packs.ts)
+ * excludes this kind in both directions, because it describes one install's own account wiring.
  */
 export type RuleKind = 'category' | 'transfer' | 'rename' | 'not_transfer';
 
@@ -38,32 +43,38 @@ export type RuleKind = 'category' | 'transfer' | 'rename' | 'not_transfer';
  * v1.25.0 (item 16). The ONLY two kinds a 'word' rule may carry, and this is a deliberate
  * restriction rather than an unfinished one.
  *
- * transfer and not_transfer are exact-match-only kinds, and four separate places in
- * src/lib/categorize/engine.ts do not merely DOCUMENT that -- they depend on it to attribute rows
- * to a rule without simulating anything, by asking SQL for
- * `normalized_merchant = rule.pattern`:
+ * WHAT THIS DOES NOT SAY, since it said it until v1.31.0 and the claim was false the whole time:
+ * transfer and not_transfer are NOT exact-match-only kinds. The check below refuses exactly one
+ * thing -- 'word' -- so the rules form and the pack importer have always accepted a 'contains'
+ * transfer rule, and matchRule has always fired it as a substring match. This docblock used to
+ * assert the opposite and cite four functions in src/lib/categorize/engine.ts
+ * (eligibleForRuleReapply, ruleImpactCounts, ruleImpactIds, ruleClearIds) as DEPENDING on it,
+ * because each looked its rows up by `normalized_merchant = rule.pattern`. Nothing enforced the
+ * invariant those four rested on, so a 'contains' transfer rule read as "Affects 0" and, worse,
+ * "Delete rule and clear from transactions" un-flagged only the exact-text rows and stranded every
+ * substring-matched one as a transfer -- outside every report and budget -- with the rule gone.
+ * Review finding R-01 (P1). All four now simulate the match (attributedRuleId, engine.ts), so
+ * attribution is honest for whatever match type a rule actually carries, and nothing in engine.ts
+ * depends on this list any more.
  *
- *   - eligibleForRuleReapply  (which rows "Apply now" is allowed to touch)
- *   - ruleImpactCounts        (the "Affects" column)
- *   - ruleImpactIds           (the ids behind that number, which the confirm dialog states)
- *   - ruleClearIds            (the rows a CLEAR actually writes to)
+ * THE OTHER FIX WAS CONSIDERED AND REFUSED (controller ruling R22): narrowing this check so
+ * transfer kinds accept only 'exact' would have made the old claim true. Rejected, and not
+ * closely. 'contains' transfer rules are a shipped capability with existing household rows and
+ * this repo's own tests behind them, so narrowing needed a hygiene migration and would break them;
+ * and a docblock asserting an invariant nothing enforces is precisely the failure shape this
+ * release lineage keeps paying for, so making the claim true once would have left the identical
+ * trap armed for the next match type somebody adds.
  *
- * A `word` transfer rule would silently invalidate all four at once: the rule would fire on
- * IGA MARCHE while every one of those queries still only ever finds rows whose merchant text is
- * exactly IGA. The failure mode is not a wrong count on a screen -- it is a "Clear this rule"
- * button that reports success and leaves flagged rows behind, and an "Apply now" whose preview
- * disagrees with what it does. Fixing them properly means giving transfer attribution the same
- * full categorizeTransaction simulation the category kind already needs, in four functions whose
- * docblocks all argue at length for the shortcut.
- *
- * Weighed against that: nobody wants a `word` transfer rule. A transfer rule is learned from one
+ * SO WHY DOES THE 'word' RESTRICTION SURVIVE? On the half of the original argument that never
+ * relied on the shortcut: nobody wants a `word` transfer rule. A transfer rule is learned from one
  * specific e-transfer/payment description (setTransferFlag hard-codes matchType: 'exact' and says
  * why: "a contains rule learned from an e-transfer description would over-match every unrelated
  * e-transfer"), and a not_transfer rule is a targeted veto of ONE pattern the card-payment list
  * would otherwise catch. Broadening either by token is the opposite of what both are for. The
- * feature this item asked for -- a short merchant acronym that stays broad without colliding --
- * is entirely a category-and-rename need, which is also exactly what packs/canadian-merchants.json
- * carries.
+ * feature item 16 asked for -- a short merchant acronym that stays broad without colliding -- is
+ * entirely a category-and-rename need, which is also exactly what packs/canadian-merchants.json
+ * carries. That is a product argument, and it stands on its own; it is no longer load-bearing for
+ * correctness anywhere.
  *
  * Enforced at the write choke point (upsertRuleFromCorrection throws) and again at the read choke
  * point (matchRule skips), so a row that reaches the table by some route neither of those covers
@@ -77,7 +88,7 @@ export function matchTypeAllowedForKind(matchType: MatchType, ruleKind: RuleKind
 
 /** One wording, one place (MUST-19.11) -- the form and the pack importer both say exactly this. */
 export const WORD_MATCH_KIND_ERROR =
-  'Whole word applies to category and rename rules only. A transfer or not-a-transfer rule matches one exact merchant text on purpose.';
+  'Whole word applies to category and rename rules only. A transfer or not-a-transfer rule is about one description you have actually seen, so it takes Exact or Contains.';
 
 export interface MerchantRuleRecord {
   id: number;
@@ -212,8 +223,10 @@ const MATCH_TYPE_SPECIFICITY: Record<MatchType, number> = { exact: 3, word: 2, c
  * of the loop -- and rejected: it would mean patternMatches could no longer be a pure
  * (pattern, matchType, text) function, and its purity is what lets the pack's ops guard assert
  * collisions against the REAL matcher instead of a copy. Hoist it if a profile ever says so; the
- * two callers that walk every transaction (ruleImpactCounts, ruleImpactIds) already cache their
- * verdict per DISTINCT merchant, which is the larger win and is already taken.
+ * callers that walk every transaction all cache their verdict per DISTINCT merchant, which is the
+ * larger win and is already taken -- ruleImpactCounts and ruleImpactIds always did, and as of
+ * v1.31.0 (R-01) ruleClearIds and eligibleForRuleReapply do too, through the one shared
+ * ruleAttributor in engine.ts.
  */
 export function matchRule(
   normalizedMerchant: string,

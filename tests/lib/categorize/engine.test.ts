@@ -34,7 +34,7 @@ import {
   setTransferFlag,
   upsertRenameRule,
 } from '@/lib/categorize/engine';
-import { exactRuleOwner, listRules, matchRule, upsertRuleFromCorrection } from '@/lib/categorize/rules';
+import { deleteRule, exactRuleOwner, listRules, matchRule, upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { classify, train } from '@/lib/categorize/bayes';
 import { normalizeMerchant, tokenize } from '@/lib/categorize/normalize';
 import { nowIso } from '@/lib/clock';
@@ -1635,5 +1635,136 @@ describe('scoped re-apply (v1.24.0: a date range on eligibleForRerun / rerunEngi
     expect(applyRuleNow(ruleId, { from: '2026-02-01' })).toMatchObject({ processed: 1, changed: 1 });
     expect(readTxn(sqlite, mar).category_id).toBe(coffee);
     expect(readTxn(sqlite, jan).category_id).toBeNull();
+  });
+});
+
+/**
+ * v1.31.0 R-01 (P1). `matchTypeAllowedForKind` refuses only `word` on a transfer kind, so the
+ * rules form and the pack importer have always accepted a `contains` transfer rule, and matchRule
+ * has always fired it as a substring match -- while all four attribution functions looked rows up
+ * by `normalized_merchant = rule.pattern`, on the strength of six docblocks asserting an invariant
+ * nothing enforced. The visible damage was the delete-and-clear button: it previewed the exact-text
+ * rows, un-flagged only those, and stranded every substring-matched row as a transfer -- excluded
+ * from every report and budget -- with the rule gone and nothing left to attribute them to.
+ *
+ * These tests pin attribution to what the engine ACTUALLY does (matchRule + detectTransfer), for
+ * every match type the app accepts, so the fix cannot regress into the shortcut again.
+ */
+describe('v1.31.0 R-01: transfer attribution simulates the match instead of assuming exact', () => {
+  function containsPaymentTransfer() {
+    const fixture = setup();
+    // Three merchants the rule matches and only ONE of which equals its pattern. The first is also
+    // in CARD_PAYMENT_PATTERNS, which is deliberate: the card list flags it either way, and the
+    // rule still claims it, exactly as an exact rule on that text does today.
+    const thankYou = fixture.add('PAYMENT - THANK YOU', 50000, '2026-01-10');
+    const cc = fixture.add('CC PAYMENT 1234', 25000, '2026-02-10');
+    const bare = fixture.add('PAYMENT', 10000, '2026-03-10');
+    const upserted = upsertRuleFromCorrection({
+      pattern: 'PAYMENT', matchType: 'contains', ruleKind: 'transfer',
+      categoryId: null, createdBy: fixture.userId, actorRole: 'admin',
+    });
+    if (!upserted.ok) throw new Error('unexpected refusal');
+    return { ...fixture, thankYou, cc, bare, ruleId: upserted.ruleId };
+  }
+
+  it('counts, ids and re-apply scope all reach every substring-matched row, not just the exact one', () => {
+    const { sqlite, thankYou, cc, bare, ruleId } = containsPaymentTransfer();
+
+    // "Affects", for a transfer rule, is the FORWARD-looking set: rows not yet flagged that
+    // applying the rule would flip. All three qualify; the shortcut saw only `bare`.
+    expect(ruleImpactCounts().get(ruleId) ?? 0).toBe(3);
+    expect(ruleImpactIds(ruleId)).toEqual([thankYou, cc, bare]);
+    expect(previewRuleReapply(ruleId)).toEqual({ eligible: 3, wouldChange: 3 });
+
+    runEngine([thankYou, cc, bare]);
+    for (const id of [thankYou, cc, bare]) expect(readTxn(sqlite, id).is_transfer).toBe(1);
+
+    // Now the forward-looking set is empty and the CLEAR set is its mirror image -- all three.
+    expect(ruleImpactCounts().get(ruleId) ?? 0).toBe(0);
+    expect(ruleClearIds(ruleId)).toEqual([thankYou, cc, bare]);
+  });
+
+  it('delete-and-clear leaves NO row still flagged by the rule it deleted', () => {
+    const { sqlite, thankYou, cc, bare, ruleId } = containsPaymentTransfer();
+    runEngine([thankYou, cc, bare]);
+
+    // The order deleteRuleAndClearAction uses, and it is load-bearing: attribution is derived, so
+    // the rule must still exist while the rows are being resolved.
+    expect(clearRuleFromTransactions({ ruleId })).toEqual({ rowsCleared: 3 });
+    deleteRule(ruleId);
+
+    for (const id of [thankYou, cc, bare]) expect(readTxn(sqlite, id).is_transfer).toBe(0);
+    expect(listRules('transfer')).toHaveLength(0);
+    // No override rule invented as a side effect of a bulk revert.
+    expect(listRules('not_transfer')).toHaveLength(0);
+  });
+
+  it('a date range still narrows the clear, and rows outside it keep their flag', () => {
+    const { sqlite, thankYou, cc, bare, ruleId } = containsPaymentTransfer();
+    runEngine([thankYou, cc, bare]);
+    expect(clearRuleFromTransactions({ ruleId, scope: { from: '2026-02-01' } })).toEqual({ rowsCleared: 2 });
+    expect(readTxn(sqlite, thankYou).is_transfer).toBe(1);
+    expect(readTxn(sqlite, cc).is_transfer).toBe(0);
+    expect(readTxn(sqlite, bare).is_transfer).toBe(0);
+  });
+
+  it('an exact transfer rule behaves exactly as it always has -- this is a strict widening', () => {
+    const { sqlite, add, userId } = setup();
+    const exact = add('E-TRANSFER SENT J DOE', -5000, '2026-02-02');
+    const longer = add('E-TRANSFER SENT J DOE RENT', -5000, '2026-02-03');
+    const upserted = upsertRuleFromCorrection({
+      pattern: 'E-TRANSFER SENT J DOE', matchType: 'exact', ruleKind: 'transfer',
+      categoryId: null, createdBy: userId, actorRole: 'admin',
+    });
+    if (!upserted.ok) throw new Error('unexpected refusal');
+
+    expect(ruleImpactCounts().get(upserted.ruleId) ?? 0).toBe(1);
+    expect(ruleImpactIds(upserted.ruleId)).toEqual([exact]);
+    expect(previewRuleReapply(upserted.ruleId)).toEqual({ eligible: 1, wouldChange: 1 });
+    runEngine([exact, longer]);
+    expect(readTxn(sqlite, longer).is_transfer).toBe(0);
+    expect(ruleClearIds(upserted.ruleId)).toEqual([exact]);
+  });
+
+  it('a not_transfer override still wins over a contains transfer rule that also matches', () => {
+    const { sqlite, thankYou, cc, bare, ruleId, userId } = containsPaymentTransfer();
+    const override = upsertRuleFromCorrection({
+      pattern: 'PAYMENT - THANK YOU', matchType: 'exact', ruleKind: 'not_transfer',
+      categoryId: null, createdBy: userId, actorRole: 'admin',
+    });
+    if (!override.ok) throw new Error('unexpected refusal');
+
+    // detectTransfer refuses the merchant outright, so the transfer rule cannot claim its row --
+    // an "Affects" figure that counted it would promise a flip that will never happen.
+    expect(detectTransfer('PAYMENT - THANK YOU', buildContext())).toBe(false);
+    expect(ruleImpactIds(ruleId)).toEqual([cc, bare]);
+    expect(ruleImpactCounts().get(ruleId) ?? 0).toBe(2);
+
+    runEngine([thankYou, cc, bare]);
+    expect(readTxn(sqlite, thankYou).is_transfer).toBe(0);
+    expect(ruleClearIds(ruleId)).toEqual([cc, bare]);
+    expect(clearRuleFromTransactions({ ruleId })).toEqual({ rowsCleared: 2 });
+    expect(readTxn(sqlite, thankYou).is_transfer).toBe(0);
+  });
+
+  it('a contains not_transfer rule is attributed the same way, by simulation', () => {
+    const { sqlite, add, userId } = setup();
+    // Two merchants the card-payment list flags, one of which a contains override releases.
+    const released = add('VISA PAYMENT MONTREAL', 40000, '2026-02-05');
+    const kept = add('AMEX PAYMENT', 30000, '2026-02-06');
+    runEngine([released, kept]);
+    expect(readTxn(sqlite, released).is_transfer).toBe(1);
+
+    const override = upsertRuleFromCorrection({
+      pattern: 'VISA PAYMENT', matchType: 'contains', ruleKind: 'not_transfer',
+      categoryId: null, createdBy: userId, actorRole: 'admin',
+    });
+    if (!override.ok) throw new Error('unexpected refusal');
+
+    // "Affects" for not_transfer is the currently-FLAGGED rows it releases: the substring one too.
+    expect(ruleImpactCounts().get(override.ruleId) ?? 0).toBe(1);
+    expect(ruleImpactIds(override.ruleId)).toEqual([released]);
+    // Clearing a not_transfer override stays refused -- re-flagging rows AS transfers is not a revert.
+    expect(ruleClearIds(override.ruleId)).toEqual([]);
   });
 });

@@ -780,8 +780,8 @@ export function MerchantRulesClient({
           use <strong className="font-semibold text-ink">Apply now</strong> on its own row or{' '}
           <strong className="font-semibold text-ink">Re-run rules</strong> below to catch up older data -- neither
           one ever overwrites a transaction you categorized by hand. A{' '}
-          <strong className="font-semibold text-ink">not a transfer</strong> rule is an exact-match override that
-          stops one merchant from being auto-flagged as a card payment.
+          <strong className="font-semibold text-ink">not a transfer</strong> rule is an override that stops a
+          merchant from being auto-flagged as a card payment.
         </p>
         <p>
           <strong className="font-semibold text-ink">Disable</strong> is a switch you can flip back; it stops a

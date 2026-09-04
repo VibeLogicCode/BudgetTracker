@@ -94,7 +94,10 @@ export function detectTransfer(normalizedMerchant: string, ctx: CategorizeContex
   for (const pattern of CARD_PAYMENT_PATTERNS) {
     if (normalizedMerchant.includes(pattern)) return true;
   }
-  // Learned transfer rules are exact-match only, by design.
+  // Whatever match type the transfer rule carries -- setTransferFlag only ever LEARNS an exact
+  // one, but the rules form and a pack may both write a 'contains' transfer rule and matchRule
+  // fires it as a substring match. attributedRuleId (below) is what keeps attribution honest
+  // about that, rather than a docblock asking every reader to assume otherwise.
   return matchRule(normalizedMerchant, 'transfer', ctx.rules) !== null;
 }
 
@@ -364,6 +367,77 @@ export function previewRerun(txnIds: number[]): RerunPreview {
 }
 
 /**
+ * WHICH RULE OF `kind` A MERCHANT TEXT CURRENTLY RESOLVES TO -- the single definition of
+ * attribution, for every kind, that all four attribution surfaces below share
+ * (eligibleForRuleReapply, ruleImpactCounts, ruleImpactIds, ruleClearIds).
+ *
+ * v1.31.0 (review finding R-01, P1). Until now this was one idea with two implementations. The
+ * category branch simulated: it asked categorizeTransaction what would really happen and kept the
+ * winner. The transfer and not_transfer branches took a SHORTCUT -- `normalized_merchant =
+ * rule.pattern`, exact text only -- on the strength of six docblocks (this one's predecessor
+ * included) asserting that "transfer and not_transfer are exact-match-only kinds". Nothing
+ * enforced that. matchTypeAllowedForKind (rules.ts) refuses only 'word' on those kinds, so the
+ * rules form and the pack importer have both always accepted a `contains` transfer rule, and
+ * matchRule has always fired it on every merchant containing its text.
+ *
+ * What that cost, in the household's terms: for a `contains E-TRANSFER` rule, "Affects" read
+ * near-zero, "Apply now" processed only the rows whose text was exactly `E-TRANSFER`, and -- the
+ * one that loses data -- "Delete rule and clear from transactions" previewed N, un-flagged those
+ * N, and left every other substring-matched row still flagged as a transfer, which means excluded
+ * from every report and every budget, with the rule gone and nothing left to attribute it to.
+ *
+ * THE ALTERNATIVE WAS CONSIDERED AND REFUSED. Narrowing matchTypeAllowedForKind so transfer kinds
+ * accept only 'exact' would have made the six claims true instead of making the code honest. It
+ * was rejected on two counts. First, `contains` transfer rules are a shipped capability that this
+ * repo's own tests exercise (tests/lib/categorize/rules.test.ts, tests/lib/categorize/engine.test.ts),
+ * so narrowing would break existing household rows and need a hygiene migration to list them.
+ * Second, and the reason it is not close: the shortcut IS the defect. An invariant asserted in six
+ * places and enforced in none is this codebase's most-repeated failure shape, and "make the claim
+ * true this once" leaves the identical trap armed for whatever match type somebody adds next.
+ *
+ * Per kind:
+ *  - category: the full categorizeTransaction simulation, unchanged -- a transfer is checked
+ *    FIRST, so a merchant a transfer rule also claims must never be attributed to a category rule
+ *    that would in fact never fire for it.
+ *  - transfer: the winning transfer rule, AND detectTransfer must actually come out true. matchRule
+ *    alone is not enough: a not_transfer override vetoes the merchant outright, so a rule counted
+ *    on such a row would promise a flip that can never happen. (The CARD_PAYMENT_PATTERNS list does
+ *    NOT veto -- it flags the same row for its own reasons, and the rule still genuinely claims it,
+ *    exactly as an exact rule on that text has always been treated.)
+ *  - not_transfer / rename: the winning rule of that kind. Nothing can pre-empt either: a
+ *    not_transfer match is the first thing detectTransfer honours, and a rename resolves on its own.
+ *
+ * Cheap by construction, and bounded the same way the category branch already bounds itself: one
+ * verdict per DISTINCT merchant (ruleAttributor, below), and matchRule's per-rule work for a
+ * non-matching kind is a single `ruleKind !==` comparison.
+ */
+function attributedRuleId(normalizedMerchant: string, kind: RuleKind, ctx: CategorizeContext): number | null {
+  if (kind === 'category') {
+    const outcome = categorizeTransaction({ id: 0, normalizedMerchant }, ctx);
+    return outcome.isTransfer ? null : outcome.matchedRuleId;
+  }
+  const rule = matchRule(normalizedMerchant, kind, ctx.rules);
+  if (rule === null) return null;
+  if (kind === 'transfer' && !detectTransfer(normalizedMerchant, ctx)) return null;
+  return rule.id;
+}
+
+/**
+ * attributedRuleId memoized per distinct merchant text, which is the bound every caller here needs:
+ * all four walk a whole table, and a household's transactions collapse to far fewer distinct
+ * merchants than rows. Safe to cache because attribution reads NOTHING but the merchant text and
+ * the rule list `ctx` was built from -- the same assumption ruleImpactCounts' `group by
+ * normalized_merchant` has always rested on.
+ */
+function ruleAttributor(kind: RuleKind, ctx: CategorizeContext): (normalizedMerchant: string) => number | null {
+  const cache = new Map<string, number | null>();
+  return (normalizedMerchant) => {
+    if (!cache.has(normalizedMerchant)) cache.set(normalizedMerchant, attributedRuleId(normalizedMerchant, kind, ctx));
+    return cache.get(normalizedMerchant) ?? null;
+  };
+}
+
+/**
  * v1.21.0 (item 11): the rows eligibleForRerun() would already touch (so a human decision --
  * categorization_source = 'manual' -- is never in scope; see ELIGIBLE's own docblock), narrowed
  * to the ones that CURRENTLY resolve to this one specific rule, so "Apply now" on one row can
@@ -374,12 +448,9 @@ export function previewRerun(txnIds: number[]): RerunPreview {
  * nothing left for "Apply now" to do that saving the rule did not already do the moment it was
  * saved.
  *
- * transfer / not_transfer are exact-match-only kinds (matchRule's own callers document this), so
- * attribution is unambiguous without a full categorizeTransaction simulation: the unique index on
- * (pattern, match_type, rule_kind) already makes "this rule's own rows" just "this exact merchant
- * text". category rules DO need the full simulation -- categorizeTransaction checks for a
- * transfer FIRST, so a merchant a transfer rule also claims must not be attributed to a category
- * rule that would never actually fire for it.
+ * v1.31.0 (R-01): every remaining kind resolves through attributedRuleId, so a `contains` transfer
+ * rule scopes "Apply now" to the rows it will really flag rather than to the one row whose text
+ * happens to equal its pattern. See attributedRuleId's docblock for what the shortcut cost.
  *
  * v1.24.0: takes a RuleScope. A BOUNDED re-apply is safe for every kind because re-applying only
  * ever ADDS -- a row outside the range is simply not looked at, and nothing about it is left
@@ -393,18 +464,8 @@ function eligibleForRuleReapply(rule: MerchantRuleRecord, scope: RuleScope = {})
   if (ids.length === 0) return [];
   const rows = selectRowsByIds(ids);
   const eligible = rows.filter((row) => (row.categoryId === null || row.source === 'bayes') && row.hasSplits === 0);
-
-  if (rule.ruleKind === 'transfer' || rule.ruleKind === 'not_transfer') {
-    return eligible.filter((row) => row.normalizedMerchant === rule.pattern).map((row) => row.id);
-  }
-
-  const ctx = buildContext();
-  return eligible
-    .filter(
-      (row) =>
-        categorizeTransaction({ id: row.id, normalizedMerchant: row.normalizedMerchant }, ctx).matchedRuleId === rule.id,
-    )
-    .map((row) => row.id);
+  const attributedTo = ruleAttributor(rule.ruleKind, buildContext());
+  return eligible.filter((row) => attributedTo(row.normalizedMerchant) === rule.id).map((row) => row.id);
 }
 
 /** Per-rule "Apply now" preview: the confirm text before the click. */
@@ -473,11 +534,12 @@ export function setRuleDisabled(input: { ruleId: number; disabled: boolean; at?:
  *    rows is still affecting all 200 of them right now, and telling "matches nothing" from
  *    "works" needs exactly that number, not the (always smaller, often zero) count of rows still
  *    waiting for a re-run.
- *  - transfer / not_transfer: exact-match-only kinds (matchRule's own callers document this), so
- *    unambiguous without a full simulation. Counted directly against the transaction's CURRENT
- *    stored is_transfer flag: 'transfer' counts currently-NOT-flagged rows carrying this exact
- *    merchant text (what flipping it would change), 'not_transfer' counts currently-flagged ones
- *    (what clearing the override would change back).
+ *  - transfer / not_transfer: the same simulation, through attributedRuleId, counted against the
+ *    transaction's CURRENT stored is_transfer flag: 'transfer' counts currently-NOT-flagged rows
+ *    this rule would flag (what applying it would change), 'not_transfer' counts currently-flagged
+ *    rows it releases (what clearing the override would change back). v1.31.0 (R-01): this used to
+ *    look rows up by exact merchant text, which read near-zero for the `contains` transfer rules
+ *    the form and the pack importer have always been able to write.
  *  - rename: transactions currently carrying display_source = 'rename' whose normalized merchant
  *    this rule resolves -- always in sync already (every rename save/disable/delete reapplies),
  *    so this is the one kind that needs no re-run to become accurate; it just reads what already
@@ -506,26 +568,23 @@ export function ruleImpactCounts(ctx: CategorizeContext = buildContext()): Map<n
     )
     .groupBy(transactions.normalizedMerchant)
     .all();
-  for (const row of reachable) {
-    const outcome = categorizeTransaction({ id: 0, normalizedMerchant: row.normalizedMerchant }, ctx);
-    if (!outcome.isTransfer) bump(outcome.matchedRuleId, row.c);
-  }
+  const attributedCategory = ruleAttributor('category', ctx);
+  for (const row of reachable) bump(attributedCategory(row.normalizedMerchant), row.c);
 
-  // transfer / not_transfer: exact merchant text against the CURRENT stored flag.
+  // transfer / not_transfer: the same simulation, read against the CURRENT stored flag. Grouping by
+  // (merchant, is_transfer) already collapses the table to one row per distinct merchant per flag
+  // value, so this is one attribution verdict per group and NOT one per rule per merchant -- the
+  // rule list is walked inside matchRule, where a kind that does not match costs one comparison.
   const byMerchantAndFlag = db
     .select({ normalizedMerchant: transactions.normalizedMerchant, isTransfer: transactions.isTransfer, c: sql<number>`count(*)` })
     .from(transactions)
     .groupBy(transactions.normalizedMerchant, transactions.isTransfer)
     .all();
-  const notFlagged = new Map<string, number>();
-  const flagged = new Map<string, number>();
+  const attributedTransfer = ruleAttributor('transfer', ctx);
+  const attributedNotTransfer = ruleAttributor('not_transfer', ctx);
   for (const row of byMerchantAndFlag) {
-    const target = row.isTransfer ? flagged : notFlagged;
-    target.set(row.normalizedMerchant, (target.get(row.normalizedMerchant) ?? 0) + row.c);
-  }
-  for (const rule of ctx.rules) {
-    if (rule.ruleKind === 'transfer') bump(rule.id, notFlagged.get(rule.pattern) ?? 0);
-    else if (rule.ruleKind === 'not_transfer') bump(rule.id, flagged.get(rule.pattern) ?? 0);
+    const attributed = row.isTransfer ? attributedNotTransfer : attributedTransfer;
+    bump(attributed(row.normalizedMerchant), row.c);
   }
 
   // rename: rows already carrying display_source = 'rename', attributed to whichever rename rule
@@ -536,10 +595,8 @@ export function ruleImpactCounts(ctx: CategorizeContext = buildContext()): Map<n
     .where(eq(transactions.displaySource, 'rename'))
     .groupBy(transactions.normalizedMerchant)
     .all();
-  for (const row of renamed) {
-    const rule = matchRule(row.normalizedMerchant, 'rename', ctx.rules);
-    bump(rule?.id ?? null, row.c);
-  }
+  const attributedRename = ruleAttributor('rename', ctx);
+  for (const row of renamed) bump(attributedRename(row.normalizedMerchant), row.c);
 
   return counts;
 }
@@ -555,19 +612,25 @@ export function ruleImpactCounts(ctx: CategorizeContext = buildContext()): Map<n
  * would be a number on screen that the button underneath it does not honour.
  * tests/lib/categorize/engine.test.ts pins the equality directly for exactly that reason.
  *
- *  - category: non-manual, non-split rows re-simulated through categorizeTransaction and kept
- *    when THIS rule is the one that wins. Deliberately WIDER than ELIGIBLE (which treats an
+ * v1.31.0 (R-01) collapsed what were three near-identical branches into ONE shape: a per-kind
+ * candidate-row query, then attributedRuleId over its distinct merchants. The kind now decides
+ * only WHICH ROWS ARE CANDIDATES; who a candidate belongs to is one definition for everybody.
+ * Before, the transfer kinds skipped attribution entirely and matched exact merchant text, which
+ * is the P1 this release fixes -- see attributedRuleId's docblock for what that cost.
+ *
+ *  - category: non-manual, non-split rows. Deliberately WIDER than ELIGIBLE (which treats an
  *    already-'rule'-sourced row as settled) -- see ruleImpactCounts' own docblock: a rule that
  *    already set 200 rows is affecting all 200 right now, and a 'rule'-sourced row is precisely
- *    what somebody clearing this rule wants cleared. One simulation per DISTINCT merchant, cached:
- *    categorizeTransaction reads nothing but the merchant text and the rule list, exactly as
- *    ruleImpactCounts' `group by normalized_merchant` already assumes.
- *  - transfer: rows carrying this exact merchant text whose stored is_transfer is currently
- *    FALSE -- what flipping the flag on would change. Note this is the FORWARD-looking set, which
- *    is what "Affects" means for this kind and is NOT the set a clear writes to; ruleClearIds
- *    (below) explains that polarity flip at length.
- *  - not_transfer: rows with that exact merchant text currently flagged TRUE.
- *  - rename: rows currently carrying display_source = 'rename' whose merchant this rule resolves.
+ *    what somebody clearing this rule wants cleared.
+ *  - transfer: rows whose stored is_transfer is currently FALSE -- what applying the rule would
+ *    change. Note this is the FORWARD-looking set, which is what "Affects" means for this kind and
+ *    is NOT the set a clear writes to; ruleClearIds (below) explains that polarity flip at length.
+ *  - not_transfer: rows currently flagged TRUE.
+ *  - rename: rows currently carrying display_source = 'rename'.
+ *
+ * One attribution verdict per DISTINCT merchant (ruleAttributor), which is what keeps this cheap
+ * on a whole-table scan: attribution reads nothing but the merchant text and `ctx`, exactly as
+ * ruleImpactCounts' `group by normalized_merchant` already assumes.
  *
  * The splits check stays inside `.where()`, never the select list -- a drizzle column reference
  * interpolated into a raw `sql` fragment used as a SELECT-list value is not table-qualified, so
@@ -585,69 +648,42 @@ export function ruleImpactIds(ruleId: number, scope: RuleScope = {}, ctx: Catego
   if (!rule) return [];
   const bounds = dateBounds(scope);
 
-  if (rule.ruleKind === 'transfer' || rule.ruleKind === 'not_transfer') {
-    // Exact-match-only kinds, so attribution needs no simulation -- the unique index on
-    // (pattern, match_type, rule_kind) makes "this rule's own rows" just "this exact merchant
-    // text", the same shortcut ruleImpactCounts and eligibleForRuleReapply already take.
-    return db
-      .select({ id: transactions.id })
-      .from(transactions)
-      .where(
-        and(
-          eq(transactions.normalizedMerchant, rule.pattern),
-          eq(transactions.isTransfer, rule.ruleKind === 'not_transfer'),
-          ...bounds,
-        ),
-      )
-      .orderBy(asc(transactions.id))
-      .all()
-      .map((row) => row.id);
-  }
-
-  if (rule.ruleKind === 'rename') {
-    const rows = db
-      .select({ id: transactions.id, normalizedMerchant: transactions.normalizedMerchant })
-      .from(transactions)
-      .where(and(eq(transactions.displaySource, 'rename'), ...bounds))
-      .orderBy(asc(transactions.id))
-      .all();
-    const resolved = new Map<string, boolean>();
-    return rows
-      .filter((row) => {
-        let hit = resolved.get(row.normalizedMerchant);
-        if (hit === undefined) {
-          hit = matchRule(row.normalizedMerchant, 'rename', ctx.rules)?.id === ruleId;
-          resolved.set(row.normalizedMerchant, hit);
-        }
-        return hit;
-      })
-      .map((row) => row.id);
-  }
-
-  const rows = db
+  return db
     .select({ id: transactions.id, normalizedMerchant: transactions.normalizedMerchant })
     .from(transactions)
-    .where(
-      and(
-        ne(transactions.categorizationSource, 'manual'),
-        sql`not exists (select 1 from ${transactionSplits} where ${transactionSplits.txnId} = ${transactions.id})`,
-        ...bounds,
-      ),
-    )
+    .where(and(candidateRowsFor(rule.ruleKind), ...bounds))
     .orderBy(asc(transactions.id))
-    .all();
-  const verdict = new Map<string, boolean>();
-  return rows
-    .filter((row) => {
-      let hit = verdict.get(row.normalizedMerchant);
-      if (hit === undefined) {
-        const outcome = categorizeTransaction({ id: 0, normalizedMerchant: row.normalizedMerchant }, ctx);
-        hit = !outcome.isTransfer && outcome.matchedRuleId === ruleId;
-        verdict.set(row.normalizedMerchant, hit);
-      }
-      return hit;
-    })
+    .all()
+    .filter(attributedToRule(rule, ctx))
     .map((row) => row.id);
+}
+
+/**
+ * Which rows are even CANDIDATES for a rule of this kind -- the only thing the kind decides now
+ * that attribution is shared (attributedRuleId). Written as one expression per kind rather than a
+ * chain of early returns so ruleImpactIds and ruleClearIds cannot drift on the candidate set the
+ * way they once drifted on attribution.
+ *
+ * The splits check stays inside `.where()`, never a select-list field -- a drizzle column
+ * reference interpolated into a raw `sql` fragment used as a SELECT-list value is not
+ * table-qualified, so the correlated subquery's bare `id` would resolve against
+ * transaction_splits' OWN id column and match every row the moment ANY split exists anywhere.
+ * transactionHasSplits' docblock carries the long version of this warning.
+ */
+function candidateRowsFor(kind: RuleKind) {
+  if (kind === 'transfer') return eq(transactions.isTransfer, false);
+  if (kind === 'not_transfer') return eq(transactions.isTransfer, true);
+  if (kind === 'rename') return eq(transactions.displaySource, 'rename');
+  return and(
+    ne(transactions.categorizationSource, 'manual'),
+    sql`not exists (select 1 from ${transactionSplits} where ${transactionSplits.txnId} = ${transactions.id})`,
+  );
+}
+
+/** attributedRuleId as a row predicate, memoized per distinct merchant across the whole scan. */
+function attributedToRule(rule: MerchantRuleRecord, ctx: CategorizeContext) {
+  const attributedTo = ruleAttributor(rule.ruleKind, ctx);
+  return (row: { normalizedMerchant: string }) => attributedTo(row.normalizedMerchant) === rule.id;
 }
 
 /**
@@ -656,14 +692,28 @@ export function ruleImpactIds(ruleId: number, scope: RuleScope = {}, ctx: Catego
  *
  * v1.24.0 finding, worth spelling out because it looks like an inconsistency and is not: "affects"
  * and "clear" point in OPPOSITE directions for the transfer kind. ruleImpactCounts defines a
- * transfer rule's impact as the currently-UNFLAGGED rows carrying its merchant text -- what
- * applying it would change -- because that column exists to answer "is this rule doing anything?"
- * for a rule whose work is still ahead of it. Un-applying it is the mirror image: the rows it
- * already flagged, i.e. the currently-FLAGGED ones. Using the "affects" set to clear would set
- * is_transfer = false on rows where it is already false and leave every genuinely flagged row
- * alone -- a button that reports success and changes nothing. So the polarity flips here, and
- * previewRuleClearAction states THIS count rather than the "Affects" column's, so the dialog's
- * number and the write agree. For every other kind the two sets coincide and this is a pass-through.
+ * transfer rule's impact as the currently-UNFLAGGED rows it would flag -- what applying it would
+ * change -- because that column exists to answer "is this rule doing anything?" for a rule whose
+ * work is still ahead of it. Un-applying it is the mirror image: the rows it already flagged, i.e.
+ * the currently-FLAGGED ones. Using the "affects" set to clear would set is_transfer = false on
+ * rows where it is already false and leave every genuinely flagged row alone -- a button that
+ * reports success and changes nothing. So the polarity flips here, and previewRuleClearAction
+ * states THIS count rather than the "Affects" column's, so the dialog's number and the write agree.
+ * For every other kind the two sets coincide and this is a pass-through.
+ *
+ * ONLY THE POLARITY FLIPS. v1.31.0 (R-01): the transfer branch below is the same attribution
+ * everything else here uses (attributedRuleId, via attributedToRule), against the flagged rows
+ * instead of the unflagged ones. It used to match exact merchant text, which is what made
+ * "Delete rule and clear from transactions" preview N rows, un-flag those N, and strand every
+ * substring-matched row still flagged as a transfer -- out of every report and budget -- with the
+ * rule deleted and nothing left to attribute it to. That was the P1.
+ *
+ * ONE RESIDUAL CASE, stated rather than hidden: attribution requires detectTransfer to be true, so
+ * if somebody adds a not_transfer override for a merchant this rule already flagged, clearing this
+ * rule no longer reaches those rows. They are not this rule's any more -- the override, not this
+ * rule, now decides that merchant -- and "Re-run rules" un-flags them, because a flagged row has
+ * category_id NULL and so ELIGIBLE reaches it. Deliberately NOT special-cased: a second definition
+ * of attribution living in the clear path is exactly the drift this release removed.
  *
  * `rename` drops the scope on the floor (see clearRuleFromTransactions for why a bounded rename
  * revert is not a thing this codebase offers), so the preview count and the write agree there too.
@@ -676,11 +726,12 @@ export function ruleClearIds(ruleId: number, scope: RuleScope = {}, ctx: Categor
   if (rule.ruleKind === 'rename') return ruleImpactIds(ruleId, {}, ctx);
   if (rule.ruleKind === 'category') return ruleImpactIds(ruleId, scope, ctx);
   return getDb()
-    .select({ id: transactions.id })
+    .select({ id: transactions.id, normalizedMerchant: transactions.normalizedMerchant })
     .from(transactions)
-    .where(and(eq(transactions.normalizedMerchant, rule.pattern), eq(transactions.isTransfer, true), ...dateBounds(scope)))
+    .where(and(eq(transactions.isTransfer, true), ...dateBounds(scope)))
     .orderBy(asc(transactions.id))
     .all()
+    .filter(attributedToRule(rule, ctx))
     .map((row) => row.id);
 }
 

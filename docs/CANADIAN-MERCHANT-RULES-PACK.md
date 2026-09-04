@@ -195,11 +195,18 @@ What counts as a word boundary is defined once, in `wordBoundaryTokens()`
 - **The pattern is never compiled into a regular expression.** It is free text somebody types, so
   `.`, `+`, `(` and `*` mean themselves, and `.*` matches nothing rather than everything.
 
-`word` is available for `category` and `rename` rules only. `transfer` and `not_transfer` are
-exact-match-only kinds, and four functions in `src/lib/categorize/engine.ts` rely on that to
-attribute rows to a rule by asking SQL for `normalized_merchant = rule.pattern` — see
-`WORD_MATCH_KINDS` in `src/lib/categorize/rules.ts` for the full argument. This pack has never
-carried either kind (the format itself refuses them), so nothing here is affected.
+`word` is available for `category` and `rename` rules only. It is the one match type a `transfer`
+or `not_transfer` rule may not carry, and the reason is what those two kinds are *for* rather than
+anything the engine needs — see `WORD_MATCH_KINDS` in `src/lib/categorize/rules.ts` for the full
+argument. `exact` and `contains` are both available on every kind: a
+`{"match_type": "contains", "rule_kind": "transfer"}` entry imports and fires as a substring match.
+
+Until v1.31.0 this section claimed those two kinds were exact-match-only and that four functions in
+`src/lib/categorize/engine.ts` relied on it to attribute rows by `normalized_merchant =
+rule.pattern`. The claim was never enforced anywhere, and those four functions now simulate the
+match instead (review finding R-01), so a `contains` transfer rule is counted, applied and cleared
+on exactly the rows it really matches. This pack has never carried either kind, so nothing here is
+affected either way.
 
 ### If you already installed v1 of this pack
 

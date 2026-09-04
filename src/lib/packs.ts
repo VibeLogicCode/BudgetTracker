@@ -120,8 +120,11 @@ function isImportableRuleKind(kind: string): kind is RuleKind {
  *   - an unsupported rule_kind ('not_transfer', or anything this install has never heard of) --
  *     controller ruling (a), unchanged since the format shipped;
  *   - match_type 'word' on a kind that cannot carry it (transfer). See WORD_MATCH_KINDS in
- *     src/lib/categorize/rules.ts for why transfer/not_transfer are exact-match-only. Skipping is
- *     the right treatment for exactly the reason ruling (a) gave for the first case: a pack
+ *     src/lib/categorize/rules.ts for why 'word' specifically is refused there. 'word' is the ONLY
+ *     match type refused: a `{"match_type":"contains","rule_kind":"transfer"}` entry is imported
+ *     and fires as a substring match, which is a shipped capability and not an oversight (v1.31.0
+ *     R-01 made the engine's attribution honest about it rather than narrowing the type). Skipping
+ *     is the right treatment for exactly the reason ruling (a) gave for the first case: a pack
  *     written against a different install's idea of what a rule may be is not a MALFORMED file,
  *     and one unsupported entry must never cost a household the other 189.
  */
