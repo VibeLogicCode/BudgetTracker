@@ -11,6 +11,8 @@ import {
   DUPLICATE_LOOKBACK_DAYS,
   DUPLICATE_MIN_ABS_CENTS,
   DUPLICATE_WINDOW_DAYS,
+  RECURRING_MIN_CHARGES,
+  RECURRING_STALE_GRACE_DAYS,
   UNUSUAL_MIN_ABS_CENTS,
   UNUSUAL_MIN_HOUSEHOLD_HISTORY_DAYS,
   UNUSUAL_MIN_SAMPLES,
@@ -81,11 +83,32 @@ export interface CreepVerdict {
   priorCount: number;
 }
 
+/** The two cadences this app recognises. Weekly and quarterly are out of scope (MUST-9.15). */
+export type RecurringCadence = 'monthly' | 'yearly';
+
+/**
+ * MUST-9.15's two bands, now returning WHICH one matched rather than a bare yes.
+ *
+ * F-05 (v1.31.0) needs the name of the band to say "monthly" or "yearly" on a card and to pick
+ * the staleness allowance below; creepVerdict needs only the yes/no it always had, and
+ * isRecurringGap() is kept as its one-line caller so that reading stays byte-identical. One
+ * definition of "what a monthly gap is", two callers -- the alternative (a second pair of
+ * comparisons inside the new detector) is how the Reports/Budgets spend disagreement started.
+ */
+function recurringBand(medianGapDays: number): RecurringCadence | null {
+  if (medianGapDays >= CREEP_MONTHLY_GAP_MIN_DAYS && medianGapDays <= CREEP_MONTHLY_GAP_MAX_DAYS) return 'monthly';
+  if (medianGapDays >= CREEP_YEARLY_GAP_MIN_DAYS && medianGapDays <= CREEP_YEARLY_GAP_MAX_DAYS) return 'yearly';
+  return null;
+}
+
 /** MUST-9.15: monthly and yearly are the two bands. Weekly and quarterly are out of scope. */
 function isRecurringGap(medianGapDays: number): boolean {
-  const monthly = medianGapDays >= CREEP_MONTHLY_GAP_MIN_DAYS && medianGapDays <= CREEP_MONTHLY_GAP_MAX_DAYS;
-  const yearly = medianGapDays >= CREEP_YEARLY_GAP_MIN_DAYS && medianGapDays <= CREEP_YEARLY_GAP_MAX_DAYS;
-  return monthly || yearly;
+  return recurringBand(medianGapDays) !== null;
+}
+
+/** The band's own upper edge, which is what "how late may the newest charge be" is measured from. */
+function bandMaxDays(cadence: RecurringCadence): number {
+  return cadence === 'monthly' ? CREEP_MONTHLY_GAP_MAX_DAYS : CREEP_YEARLY_GAP_MAX_DAYS;
 }
 
 /**
@@ -123,6 +146,82 @@ export function creepVerdict(input: { charges: SpendRow[]; today: string }): Cre
   if (rise < CREEP_MIN_ABS_CENTS) return null;
 
   return { transactionId: latest.id, dateIso: latest.date, newAmountCents, baselineCents, priorCount: preceding.length };
+}
+
+/**
+ * F-05 (2026-09-02 review, v1.31.0). What creepVerdict already knew, asked as a different
+ * question: not "did this merchant's price go up" but "is this merchant charging on a cadence at
+ * all, and is it still charging". PURE, beside creepVerdict, because it decides over the same
+ * rows from the same 25-35 / 350-380 day bands -- putting it anywhere else would have meant a
+ * second, drifting definition of a monthly charge.
+ *
+ * WHAT THIS RETURNS IS A CADENCE, NOT A SUBSCRIPTION. Nothing here can distinguish a streaming
+ * service from a once-a-month grocery shop or a utility bill that varies: they produce the same
+ * dates. The verdict deliberately carries no `isSubscription`, no confidence score and no
+ * category guess, so no caller can render a claim this function did not make -- the household
+ * decides what a row is, by recording it (F-05's "Track"). This is the same rule three v1.30.0
+ * fixes rest on: state what was measured, never what it implies.
+ *
+ * `charges` is ONE merchant's spend rows over a window at least RECURRING_LOOKBACK_DAYS wide,
+ * in any order. Amounts are signed as the ledger stores them; the verdict reports magnitudes.
+ */
+export interface RecurringVerdict {
+  cadence: RecurringCadence;
+  /** How many charges the cadence was read from -- the card prints it, so a 3-charge row and a
+   *  30-charge row are not presented as equally established. */
+  chargeCount: number;
+  medianGapDays: number;
+  /** The newest charge: what "Track" prefills from, and what the card's amount/date columns say. */
+  latestId: number;
+  latestDateIso: string;
+  /** Magnitude, not the ledger's negative. */
+  latestAmountCents: number;
+  /** Median magnitude across every charge -- the honest answer to "what does this usually cost",
+   *  and how a variable bill shows itself when it sits well away from the latest amount. */
+  typicalCents: number;
+}
+
+export function recurringVerdict(input: { charges: SpendRow[]; today: string }): RecurringVerdict | null {
+  const charges = [...input.charges]
+    // A refund or a reversal on the same merchant is not one of its charges, and a future-dated
+    // row (a post-dated entry, a bad import) is not evidence of anything yet -- the same L-8
+    // reasoning findDuplicates() applies below.
+    .filter((charge) => charge.amountCents < 0 && charge.date <= input.today)
+    .sort((a, b) => (a.date === b.date ? a.id - b.id : a.date < b.date ? -1 : 1));
+  if (charges.length < RECURRING_MIN_CHARGES) return null;
+
+  const gaps: number[] = [];
+  for (let index = 1; index < charges.length; index += 1) {
+    gaps.push(daysBetweenIso(charges[index - 1].date, charges[index].date));
+  }
+  const medianGapDays = medianCents(gaps);
+  if (medianGapDays === null) return null;
+  const cadence = recurringBand(medianGapDays);
+  if (cadence === null) return null;
+
+  /**
+   * STILL charging, not "once charged". This is the condition the wide window (see
+   * RECURRING_LOOKBACK_DAYS) makes load-bearing: a subscription cancelled two years ago has a
+   * textbook monthly median gap inside that window, and listing it as a current commitment
+   * would be the exact overclaim F-05 is written to avoid. One band-width plus a small grace,
+   * so a renewal read a fortnight after its anniversary still counts and one read a year late
+   * does not.
+   */
+  const latest = charges[charges.length - 1];
+  if (daysBetweenIso(latest.date, input.today) > bandMaxDays(cadence) + RECURRING_STALE_GRACE_DAYS) return null;
+
+  const typicalCents = medianCents(charges.map((charge) => Math.abs(charge.amountCents)));
+  if (typicalCents === null) return null;
+
+  return {
+    cadence,
+    chargeCount: charges.length,
+    medianGapDays,
+    latestId: latest.id,
+    latestDateIso: latest.date,
+    latestAmountCents: Math.abs(latest.amountCents),
+    typicalCents,
+  };
 }
 
 export interface DuplicatePair {

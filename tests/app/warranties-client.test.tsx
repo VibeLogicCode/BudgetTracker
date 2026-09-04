@@ -2,6 +2,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { render, cleanup, screen } from '@testing-library/react';
 import { WarrantiesClient } from '@/app/(app)/warranties/warranties-client';
+import type { RecurringChargeRow } from '@/lib/recurring';
 import type { WarrantyListItem, WarrantySearchResult } from '@/lib/warranty/search';
 
 afterEach(() => cleanup());
@@ -46,6 +47,9 @@ function renderList(res: WarrantySearchResult, over: Partial<Parameters<typeof W
       typeId=""
       sort="expiry"
       billSchedules={{}}
+      recurring={[]}
+      recurringLoad={{ monthlyCents: 0, annualCents: 0, itemCount: 0 }}
+      recurringPerson={null}
       {...over}
     />,
   );
@@ -285,5 +289,110 @@ describe('WarrantiesClient — the table declares its own widths (item I, ruling
     expect(container.querySelector('[data-page-width="wide"]')).toBeTruthy();
     const table = container.querySelector('table') as HTMLTableElement;
     expect(table.style.minWidth).toBe('72rem');
+  });
+});
+
+/**
+ * F-05 (2026-09-02 review, v1.31.0): the Recurring charges card and the recorded-billing line.
+ *
+ * Half of these assertions are about what the page must NOT say. That is the point of the
+ * feature: cadence detection cannot tell a subscription from a monthly grocery shop, so any
+ * wording that names one is a claim the data does not support -- and the wording is the only
+ * place that claim could get made, since the read model deliberately returns no such field.
+ */
+function charge(over: Partial<RecurringChargeRow> = {}): RecurringChargeRow {
+  return {
+    merchant: 'NETFLIX',
+    cadence: 'monthly',
+    chargeCount: 13,
+    typicalCents: 1649,
+    lastAmountCents: 1799,
+    lastDate: '2026-08-14',
+    transactionId: 4210,
+    tracked: null,
+    ...over,
+  };
+}
+
+describe('Recurring charges card (F-05)', () => {
+  it('shows the merchant, the rhythm, the last charge and how much evidence there is', () => {
+    renderList(result([]), { recurring: [charge()] });
+    expect(screen.getByText('NETFLIX')).toBeTruthy();
+    expect(screen.getByText('Monthly')).toBeTruthy();
+    expect(screen.getByText('$17.99')).toBeTruthy();
+    expect(screen.getByText('2026-08-14')).toBeTruthy();
+    // The count and the typical amount together are how a reader judges the row: 13 charges is
+    // stronger than 3, and "usually $16.49" against a $17.99 last charge says it varies.
+    expect(screen.getByText('13 charges · usually $16.49')).toBeTruthy();
+  });
+
+  it('never calls a rhythm a subscription, and says so in the card itself', () => {
+    const { container } = renderList(result([]), { recurring: [charge()] });
+    const card = container.textContent ?? '';
+    expect(card).toContain('A rhythm is not a subscription');
+    expect(card).toContain('Nothing on this card is saved anywhere');
+    // Not "Your subscriptions", not "Wasted", not "Cancel these" -- none of which the detector
+    // has any basis for. The card title and the column heading both say what was measured.
+    expect(card).toContain('Recurring charges');
+    expect(card).not.toMatch(/your subscriptions|forgotten|wasted|you can cancel/i);
+  });
+
+  it('offers Track on an untracked merchant, through the ONE prefill path there is', () => {
+    const { container } = renderList(result([]), { recurring: [charge({ transactionId: 4210 })] });
+    const track = [...container.querySelectorAll('a')].find((a) => a.textContent === 'Track');
+    expect(track?.getAttribute('href')).toBe('/warranties/new?transactionId=4210');
+  });
+
+  it('names the record that covers a tracked merchant instead of showing a bare tick', () => {
+    const { container } = renderList(result([]), {
+      recurring: [charge({ tracked: { kind: 'item', itemId: 12, itemName: 'Netflix Premium' } })],
+    });
+    const badge = [...container.querySelectorAll('a')].find((a) => a.textContent === 'Netflix Premium');
+    expect(badge?.getAttribute('href')).toBe('/warranties/12');
+    // No Track link on a row the household has already recorded.
+    expect([...container.querySelectorAll('a')].some((a) => a.textContent === 'Track')).toBe(false);
+  });
+
+  it('drills into the merchant rows through transactionsHref, carrying the person scope', () => {
+    const { container } = renderList(result([]), { recurring: [charge()], recurringPerson: 7 });
+    const link = [...container.querySelectorAll('a')].find((a) => a.textContent === 'NETFLIX');
+    const href = link?.getAttribute('href') ?? '';
+    expect(href.startsWith('/transactions?')).toBe(true);
+    const params = new URLSearchParams(href.slice('/transactions?'.length));
+    expect(params.get('q')).toBe('NETFLIX');
+    expect(params.get('person')).toBe('7');
+  });
+
+  it('says nothing has a rhythm yet, rather than "no subscriptions found"', () => {
+    const { container } = renderList(result([]), { recurring: [] });
+    expect(container.textContent).toContain('No merchant is charging on a regular rhythm yet');
+  });
+});
+
+describe('the recorded-billing header line (F-05)', () => {
+  it('reads the monthly and the annual totals as two figures, never one blended number', () => {
+    const { container } = renderList(result([]), {
+      recurringLoad: { monthlyCents: 41200, annualCents: 118000, itemCount: 7 },
+    });
+    expect(container.textContent).toContain('Recorded billing:');
+    expect(container.textContent).toContain('$412.00 a month, plus $1,180.00 a year billed annually, across 7 recorded items.');
+    // $1,180 a year is NOT quietly divided into the monthly figure: $412 + $98.33 would be a
+    // monthly payment nobody makes, and adding it would double-count the same dollar.
+    expect(container.textContent).not.toContain('$510.33');
+  });
+
+  it('says "Recorded", because the figure is the sum of what somebody typed in', () => {
+    const { container } = renderList(result([]), {
+      recurringLoad: { monthlyCents: 1649, annualCents: 0, itemCount: 1 },
+    });
+    expect(container.textContent).toContain('$16.49 a month across 1 recorded item.');
+  });
+
+  it('prints no line at all when nothing carries a billing amount', () => {
+    const { container } = renderList(result([]), {
+      recurringLoad: { monthlyCents: 0, annualCents: 0, itemCount: 0 },
+    });
+    // Not "$0.00 a month", which reads as a finding about the household rather than an empty record.
+    expect(container.textContent).not.toContain('Recorded billing:');
   });
 });

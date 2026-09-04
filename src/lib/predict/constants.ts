@@ -52,6 +52,36 @@ export const CREEP_MIN_PCT = 5;
 export const CREEP_MIN_ABS_CENTS = 100; // $1
 export const CREEP_MAX_PER_EVALUATION = 5;
 
+// Recurring commitments (F-05, 2026-09-02 review, v1.31.0). The bands themselves are the
+// CREEP_*_GAP_* pair above, reused rather than re-declared: "what a monthly cadence looks like"
+// must mean one thing, or the Recurring charges card and the subscription-creep alert would
+// disagree about the same merchant on the same day.
+/**
+ * Why a little over three YEARS and not the proposal's "last 12 months": three charges at a
+ * yearly gap span 700 to 760 days, so a 365-day slice cannot contain them -- the yearly band
+ * would have been structurally unreachable and the card would silently have been monthly-only.
+ * 1200 = the widest span the detector can still accept (760 days of gaps, plus a latest charge
+ * up to CREEP_YEARLY_GAP_MAX_DAYS + RECURRING_STALE_GRACE_DAYS old) rounded up.
+ *
+ * The cost is one indexed range scan over transactions.date returning four narrow columns --
+ * the same shape readSlice (src/lib/insights.ts) already runs over 365 days, three times as
+ * long. Narrowing it per band (13 months for monthly, 1200 days for yearly) was rejected: two
+ * windows means two queries and two answers to "what did this card look at", for a scan that
+ * is one row per charge either way.
+ */
+export const RECURRING_LOOKBACK_DAYS = 1200;
+/** Two gaps is the fewest that can have a median at all; one gap is a coincidence with a name. */
+export const RECURRING_MIN_CHARGES = 3;
+/**
+ * How late a charge may be before the cadence reads as STOPPED rather than current. Added
+ * because the wide window above makes staleness the live risk: a subscription cancelled two
+ * years ago still has a textbook monthly gap inside 1200 days, and listing it as a recurring
+ * commitment -- worse, counting it in a total -- would be asserting something the data says the
+ * opposite of. An annual renewal that fell on the 5th and is now read on the 20th is 380 days
+ * out, so the grace sits just above the band, not far above it.
+ */
+export const RECURRING_STALE_GRACE_DAYS = 10;
+
 // Duplicate charge (spec section 9.5)
 export const DUPLICATE_WINDOW_DAYS = 3;
 export const DUPLICATE_LOOKBACK_DAYS = 14;

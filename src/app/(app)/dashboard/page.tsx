@@ -15,6 +15,7 @@ import { listLoans } from '@/lib/loans';
 import { netWorthHint, netWorthOverTime } from '@/lib/networth';
 import { onboardingSteps } from '@/lib/onboarding';
 import { cashflowTrend, categoryBreakdown, topMerchants, trimLeadingEmptyMonths } from '@/lib/reports';
+import { recurringLoad } from '@/lib/recurring';
 import { cashRunway, cashRunwayHint, type CashRunway } from '@/lib/runway';
 // F-01 (v1.31.0): the same link builder the Reports cards use. A plain, client-safe module, so
 // this Server Component may value-import it (tests/ops/client-bundle.test.ts) and the two
@@ -197,6 +198,19 @@ export default async function DashboardPage({
   const runway: CashRunway | null = selfScoped ? null : cashRunway({ today }, viewer);
 
   const expiring = expiringSoonItems(EXPIRING_WIDGET_LIMIT, scopeUserId, today, viewer);
+  /**
+   * F-05 (2026-09-02 review, v1.31.0). What the household has RECORDED as recurring billing --
+   * the sum of billing amounts somebody typed into subscription/contract/loan items, nothing
+   * derived and nothing guessed. Follows the person pill (`scopeUserId`) like every other figure
+   * on this page; recurringLoad itself resolves ownerScope(viewer) first, so a self viewer's own
+   * scope still wins over whatever `?person=` asks for.
+   *
+   * Only the RECORDED figure is on the dashboard, not the detected-rhythm list. A tile is the
+   * most authoritative shape this app has -- one big number, no room for the disclosure a
+   * cadence guess needs -- so the guessing half stays on the Contracts & Coverage card where its
+   * caveat can sit beside it, and this tile carries a figure that needs none.
+   */
+  const recorded = recurringLoad({ today, ownerUserId: scopeUserId, viewer });
   // Review fix-round: one read-model scan, not two -- loansTotalOwedCents() would otherwise
   // call listLoans() again just to re-derive the sum LoansCard's own props already carry.
   const loans = listLoans(today, viewer);
@@ -564,6 +578,27 @@ export default async function DashboardPage({
             computed against it); cash runway cannot even in principle (Lane 1's own signature
             takes `today`, never a month), so it says "as of today" in its own hint instead of
             needing the page-level note the sections further down carry. */}
+        {/* F-05: self-hiding on itemCount, in the manner of the Net worth tile above -- a
+            household that has recorded no billing amounts reads no tile, rather than a
+            confident "$0.00" that looks like a statement about their spending. `Recorded` is
+            in the label, not just the hint: the number is the sum of what was typed in, and
+            the Recurring charges card on Contracts & Coverage exists precisely because that
+            differs from what the household actually pays. */}
+        {recorded.itemCount === 0 ? null : (
+          <StatTile
+            label="Recorded billing"
+            value={formatCents(recorded.monthlyCents)}
+            hint={
+              <>
+                A month, across {recorded.itemCount} recorded {recorded.itemCount === 1 ? 'item' : 'items'}
+                {recorded.annualCents > 0 ? `, plus ${formatCents(recorded.annualCents)} a year billed annually` : ''}.{' '}
+                <Link href="/warranties" className="underline hover:text-ink">
+                  Contracts &amp; Coverage
+                </Link>
+              </>
+            }
+          />
+        )}
         {savings !== null ? <SavedThisMonthTile progress={savings} /> : null}
         {runway !== null ? <CashRunwayTile runway={runway} /> : null}
       </div>

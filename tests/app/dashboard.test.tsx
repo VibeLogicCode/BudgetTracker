@@ -170,6 +170,113 @@ describe('DashboardPage (ruling R2)', () => {
     });
   }
 
+  /**
+   * F-05 (2026-09-02 review, v1.31.0): a subscription/contract item carrying a billing pair --
+   * what the "Recorded billing" tile totals. Same createWarrantyItem shape as seedLoan above.
+   */
+  function seedBilledItem(over: {
+    name: string;
+    ownerUserId: number;
+    cycle: 'monthly' | 'annual';
+    amountCents: number;
+  }): void {
+    const type = createItemType(`Subscription type for ${over.name}`, 'subscription');
+    createWarrantyItem({
+      name: over.name,
+      vendor: null,
+      model: null,
+      serial: null,
+      purchaseDate: '2026-01-01',
+      warrantyMonths: null,
+      isLifetime: true,
+      priceCents: null,
+      ownerUserId: over.ownerUserId,
+      transactionId: null,
+      typeId: type.id,
+      notes: null,
+      billingCycle: over.cycle,
+      billingAmountCents: over.amountCents,
+    });
+  }
+
+  /** The tile's own text. Amounts on this page repeat across cards, so every assertion about
+   *  this tile is scoped to it rather than to the whole document. */
+  function recordedTileText(container: HTMLElement): string | null {
+    const label = [...container.querySelectorAll('span.eyebrow')].find((node) => node.textContent === 'Recorded billing');
+    return label?.parentElement?.textContent ?? null;
+  }
+
+  describe('Recorded billing tile (F-05)', () => {
+    it('shows the monthly total, and reports the annual cycle separately rather than blending it', async () => {
+      const { adultId } = await setup();
+      seedBilledItem({ name: 'Streaming', ownerUserId: adultId, cycle: 'monthly', amountCents: 1649 });
+      seedBilledItem({ name: 'Music', ownerUserId: adultId, cycle: 'monthly', amountCents: 1099 });
+      seedBilledItem({ name: 'Cloud storage', ownerUserId: adultId, cycle: 'annual', amountCents: 11999 });
+      currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+      const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+      const { container } = render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+
+      const tile = recordedTileText(container);
+      expect(tile).toContain('$27.48');
+      expect(tile).toContain('A month, across 3 recorded items, plus $119.99 a year billed annually.');
+      // $119.99 a year is never divided into the monthly figure: $27.48 + $10.00 is a payment
+      // nobody makes, and it would double-count the same dollar against the annual line.
+      expect(tile).not.toContain('$37.48');
+    });
+
+    it('says "Recorded", never a claim about what the household actually pays', async () => {
+      const { adultId } = await setup();
+      seedBilledItem({ name: 'Streaming', ownerUserId: adultId, cycle: 'monthly', amountCents: 1649 });
+      currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+      const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+      const { container } = render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+
+      expect(recordedTileText(container)).toContain('A month, across 1 recorded item.');
+      // The tile totals items somebody typed in; it does not detect subscriptions and must not
+      // imply that it has. The detected-rhythm list lives on Contracts & Coverage, where its
+      // caveat sits beside it.
+      expect(container.textContent).not.toMatch(/your subscriptions|total recurring spend/i);
+    });
+
+    it('is absent, not zero, on a household that has recorded no billing amounts', async () => {
+      const { adultId } = await setup();
+      currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+      const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+      const { container } = render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+
+      expect(recordedTileText(container)).toBeNull();
+    });
+
+    it('ruling R2: a self viewer sees only their own recorded billing', async () => {
+      const { adultId, childId } = await setup();
+      seedBilledItem({ name: 'Adult streaming', ownerUserId: adultId, cycle: 'monthly', amountCents: 5000 });
+      seedBilledItem({ name: 'Child music', ownerUserId: childId, cycle: 'monthly', amountCents: 599 });
+      currentUser.value = { id: childId, name: 'Kid', username: 'kid', role: 'member', visibility: 'self' };
+      const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+      const { container } = render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+
+      const tile = recordedTileText(container);
+      expect(tile).toContain('$5.99');
+      expect(tile).toContain('1 recorded item');
+      // Neither the household total nor the other member's own figure reaches this viewer.
+      expect(tile).not.toContain('$55.99');
+      expect(tile).not.toContain('$50.00');
+    });
+
+    it('ruling R2: the person a self viewer URL asks for does not widen the figure (the S-01 shape)', async () => {
+      const { adultId, childId } = await setup();
+      seedBilledItem({ name: 'Adult streaming', ownerUserId: adultId, cycle: 'monthly', amountCents: 5000 });
+      seedBilledItem({ name: 'Child music', ownerUserId: childId, cycle: 'monthly', amountCents: 599 });
+      currentUser.value = { id: childId, name: 'Kid', username: 'kid', role: 'member', visibility: 'self' };
+      const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+      const { container } = render(await DashboardPage({ searchParams: Promise.resolve({ person: String(adultId) }) }));
+
+      const tile = recordedTileText(container);
+      expect(tile).toContain('$5.99');
+      expect(tile).not.toContain('$50.00');
+    });
+  });
+
   it('partitions loans: owed to the Loans card, lent to the "Who owes us" card', async () => {
     const { adultId } = await setup();
     seedLoan({ name: 'Civic', ownerUserId: adultId, direction: 'owed', balanceCents: 200_000 });

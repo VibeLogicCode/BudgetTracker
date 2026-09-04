@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { RecurringChargesCard, recordedBillingSentence } from '@/components/warranty/RecurringChargesCard';
 import { StatusBadge } from '@/components/warranty/StatusBadge';
 import { WarrantiesIcon } from '@/components/icons';
 import { Card, CardBody, CardFooter } from '@/components/ui/Card';
@@ -27,6 +28,7 @@ import {
   type ItemKind,
   type WarrantySort,
 } from '@/lib/warranty/constants';
+import type { RecurringChargeRow, RecurringLoad } from '@/lib/recurring';
 import { statusLabel, WARRANTY_STATUSES } from '@/lib/warranty/expiry';
 import type { WarrantySearchResult } from '@/lib/warranty/search';
 
@@ -70,11 +72,20 @@ export function WarrantiesClient({
   typeId,
   sort,
   billSchedules,
+  recurring,
+  recurringLoad,
+  recurringPerson,
 }: {
   result: WarrantySearchResult;
   people: { id: number; name: string }[];
   /** Delta T9: an optional type filter/select, alongside status/owner/sort. */
   types: { id: number; name: string; kind: ItemKind }[];
+  /** F-05: what the ledger shows arriving on a rhythm. Plain data -- the page derived it. */
+  recurring: RecurringChargeRow[];
+  /** F-05: what the household has RECORDED, which is a different claim and stays a separate one. */
+  recurringLoad: RecurringLoad;
+  /** The person scope `recurring` was built with, forwarded to every drill-down link. */
+  recurringPerson: string | number | null;
   today: string;
   query: string;
   status: string;
@@ -102,6 +113,8 @@ export function WarrantiesClient({
     return qs ? `/warranties?${qs}` : '/warranties';
   }
 
+  const recordedLine = recordedBillingSentence(recurringLoad);
+
   return (
     // Item 4 (v1.16.0 plan): the trimmed colgroup below still needs more than the shell's
     // standard 72rem (max-w-6xl) cap to sit comfortably beside eight columns -- the same
@@ -117,6 +130,19 @@ export function WarrantiesClient({
           </Link>
         }
       />
+
+      {/* F-05: the recorded billing line, immediately under the header the figure describes.
+          `recordedBillingSentence` returns null when nothing carries a billing amount yet, so a
+          household that has recorded none reads no line at all rather than "$0.00 a month" --
+          which would look like a finding about their spending instead of an empty record. The
+          word "Recorded" carries the whole disclosure: this is the sum of what somebody typed
+          in, never a claim about what the household actually pays (the Recurring charges card
+          below exists precisely because those two differ). */}
+      {recordedLine === null ? null : (
+        <p className="text-sm text-muted">
+          <span className="font-medium text-ink">Recorded billing:</span> {recordedLine}
+        </p>
+      )}
 
       <PageGuide>
         <p>
@@ -378,6 +404,13 @@ export function WarrantiesClient({
           </CardFooter>
         ) : null}
       </Card>
+
+      {/* Below the items table, not above it: this page's primary content is the paperwork the
+          household keeps, and the rhythm list is an audit tool you come here to run, not the
+          thing you check on every visit. It carries its own person scope from the page rather
+          than the `?owner=` item filter -- see the page's own comment on why those are not the
+          same question. */}
+      <RecurringChargesCard rows={recurring} person={recurringPerson} />
     </div>
   );
 }

@@ -2,6 +2,7 @@ import { requireUser } from '@/lib/auth/session';
 import { listUsers } from '@/lib/auth/users';
 import { ownerScope } from '@/lib/auth/viewer';
 import { addDaysIso, todayIso } from '@/lib/dates';
+import { recurringCharges, recurringLoad } from '@/lib/recurring';
 import { isWarrantyStatus } from '@/lib/warranty/expiry';
 import { unpaidInstallments } from '@/lib/warranty/installments';
 import { isWarrantySort, searchWarrantyItems } from '@/lib/warranty/search';
@@ -74,9 +75,30 @@ export default async function WarrantiesPage({
     }
   }
 
+  /**
+   * F-05 (2026-09-02 review, v1.31.0). Two read models, nothing stored: `recurringLoad` totals
+   * the billing amounts somebody actually typed into items (the header line), and
+   * `recurringCharges` derives what the LEDGER shows arriving on a rhythm (the card below the
+   * table). They are separate calls, and separate figures on screen, because one is recorded
+   * fact and the other is a pattern the app noticed -- blending them into a single "your
+   * recurring spend" number would present the guess with the authority of the record.
+   *
+   * `ownerUserId: scope` -- this page has no `?person=` of its own (it filters by `?owner=`,
+   * which is an ITEM filter and not a spend attribution), so the only person scope a recurring
+   * CHARGE read can honestly carry here is the viewer's own, or the household. Passing
+   * `ownerScope(viewer)` rather than the `owner` query parameter is deliberate: `?owner=` names
+   * whose ITEM a row is, and re-using it to filter transactions would answer a question nobody
+   * asked and would let any viewer narrow a spend read through the URL.
+   */
+  const load = recurringLoad({ today, ownerUserId: scope, viewer });
+  const recurring = recurringCharges({ today, ownerUserId: scope, viewer });
+
   return (
     <WarrantiesClient
       result={result}
+      recurring={recurring}
+      recurringLoad={load}
+      recurringPerson={scope}
       people={listUsers().filter((u) => u.isActive).map((u) => ({ id: u.id, name: u.name }))}
       types={listItemTypes().map((t) => ({ id: t.id, name: t.name, kind: t.kind }))}
       today={today}

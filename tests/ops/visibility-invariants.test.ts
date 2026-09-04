@@ -53,6 +53,13 @@ const REQUIRE_VIEWER: { file: string; fn: string }[] = [
   // listTransactions is: append eq(transactions.attributedUserId, ownerScope(viewer)) AFTER the
   // caller's own attributedUserId clause, never instead of it.
   { file: 'src/lib/budgets.ts', fn: 'categoryTransactions' },
+  // F-05 (2026-09-02 review, v1.31.0). Two read models over one household's charges and one
+  // household's recorded items -- a recurring-charge list is a spending read like any other, and
+  // v1.30.0 shipped four fixes for read paths that forgot. Both take the viewer and resolve
+  // ownerScope(viewer) FIRST, so the `ownerUserId` a caller passes (the dashboard's `?person=`)
+  // can only narrow a viewer already entitled to any member's figures -- the S-01 order.
+  { file: 'src/lib/recurring.ts', fn: 'recurringCharges' },
+  { file: 'src/lib/recurring.ts', fn: 'recurringLoad' },
 ];
 
 /** Exempt, WITH the reason. Nothing is exempt without one. */
@@ -221,8 +228,12 @@ describe('ruling R2: every read-model helper takes a viewer', () => {
   // (25 + 7) -- three entries (categoryTransactions in REQUIRE_VIEWER; categorySpend and
   // categorySpendWithRollupSeries in EXEMPT) were added for task-3 (S-01) while the floor stayed
   // at 28, so up to four real entries could have been deleted silently without tripping this.
-  it('the named lists cannot shrink below 32 entries', () => {
-    expect(REQUIRE_VIEWER.length + EXEMPT.length).toBeGreaterThanOrEqual(32);
+  //
+  // F-05 (task-9): raised from 32 to 34, the actual count with recurringCharges and recurringLoad
+  // added above. Raised in the same commit that adds them, for the reason the last two raises
+  // give: a floor left behind reality is a floor that permits silent deletions.
+  it('the named lists cannot shrink below 34 entries', () => {
+    expect(REQUIRE_VIEWER.length + EXEMPT.length).toBeGreaterThanOrEqual(34);
   });
 });
 

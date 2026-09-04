@@ -35,6 +35,9 @@ describe('MUST-3.6: every threshold is a pinned named export', () => {
       CREEP_MIN_PCT: C.CREEP_MIN_PCT,
       CREEP_MIN_ABS_CENTS: C.CREEP_MIN_ABS_CENTS,
       CREEP_MAX_PER_EVALUATION: C.CREEP_MAX_PER_EVALUATION,
+      RECURRING_LOOKBACK_DAYS: C.RECURRING_LOOKBACK_DAYS,
+      RECURRING_MIN_CHARGES: C.RECURRING_MIN_CHARGES,
+      RECURRING_STALE_GRACE_DAYS: C.RECURRING_STALE_GRACE_DAYS,
       DUPLICATE_WINDOW_DAYS: C.DUPLICATE_WINDOW_DAYS,
       DUPLICATE_LOOKBACK_DAYS: C.DUPLICATE_LOOKBACK_DAYS,
       DUPLICATE_MIN_ABS_CENTS: C.DUPLICATE_MIN_ABS_CENTS,
@@ -74,6 +77,9 @@ describe('MUST-3.6: every threshold is a pinned named export', () => {
       CREEP_MIN_PCT: 5,
       CREEP_MIN_ABS_CENTS: 100,
       CREEP_MAX_PER_EVALUATION: 5,
+      RECURRING_LOOKBACK_DAYS: 1200,
+      RECURRING_MIN_CHARGES: 3,
+      RECURRING_STALE_GRACE_DAYS: 10,
       DUPLICATE_WINDOW_DAYS: 3,
       DUPLICATE_LOOKBACK_DAYS: 14,
       DUPLICATE_MIN_ABS_CENTS: 1000,
@@ -83,6 +89,26 @@ describe('MUST-3.6: every threshold is a pinned named export', () => {
       SUGGEST_REFRESH_MIN_DELTA_PCT: 10,
       SUGGEST_REFRESH_MIN_DELTA_CENTS: 1000,
     });
+  });
+});
+
+describe('F-05: the recurring window is wide enough for the cadence it claims to detect', () => {
+  it('can contain three charges a year apart plus a full staleness allowance', () => {
+    // The proposal said "the last 12 months". Three charges at the yearly band's own widest gap
+    // span 2 * CREEP_YEARLY_GAP_MAX_DAYS, and the newest of them may itself be a band-width plus
+    // the grace old -- so anything narrower than this makes the yearly cadence undetectable
+    // rather than merely rare, and the card would have been monthly-only without saying so.
+    const widestSpan = 2 * C.CREEP_YEARLY_GAP_MAX_DAYS + C.CREEP_YEARLY_GAP_MAX_DAYS + C.RECURRING_STALE_GRACE_DAYS;
+    expect(C.RECURRING_LOOKBACK_DAYS).toBeGreaterThanOrEqual(widestSpan);
+    expect(365).toBeLessThan(widestSpan);
+  });
+
+  it('reads the cadence from the SAME bands the creep alert does', () => {
+    // F-05 declares no bands of its own: recurringBand() (src/lib/predict/anomalies.ts) reads
+    // these four. A fifth constant appearing here for "the recurring card's monthly band" is
+    // the drift this asserts against.
+    expect([C.CREEP_MONTHLY_GAP_MIN_DAYS, C.CREEP_MONTHLY_GAP_MAX_DAYS]).toEqual([25, 35]);
+    expect([C.CREEP_YEARLY_GAP_MIN_DAYS, C.CREEP_YEARLY_GAP_MAX_DAYS]).toEqual([350, 380]);
   });
 });
 

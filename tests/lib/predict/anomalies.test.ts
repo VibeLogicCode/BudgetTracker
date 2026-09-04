@@ -4,6 +4,7 @@ import {
   creepVerdict,
   findDuplicates,
   hasEnoughHouseholdHistory,
+  recurringVerdict,
   unusualVerdict,
   type SpendRow,
 } from '@/lib/predict/anomalies';
@@ -11,9 +12,11 @@ import {
   CREEP_LOOKBACK_DAYS,
   CREEP_MONTHLY_GAP_MAX_DAYS,
   CREEP_MONTHLY_GAP_MIN_DAYS,
+  CREEP_YEARLY_GAP_MAX_DAYS,
   CREEP_YEARLY_GAP_MIN_DAYS,
   DUPLICATE_LOOKBACK_DAYS,
   DUPLICATE_WINDOW_DAYS,
+  RECURRING_STALE_GRACE_DAYS,
 } from '@/lib/predict/constants';
 
 const TODAY = '2026-08-18';
@@ -149,6 +152,125 @@ describe('MUST-9.15 and MUST-9.16: creepVerdict', () => {
   it('does not fire when the newest charge went down', () => {
     const cheaper = [...monthlyCharges.slice(0, 3), row({ id: 4, date: '2026-08-14', amountCents: -1000 })];
     expect(creepVerdict({ charges: cheaper, today: TODAY })).toBeNull();
+  });
+});
+
+describe('F-05: recurringVerdict reports a cadence, and only a cadence', () => {
+  /** Thirteen monthly charges ending three days before TODAY -- an ordinary current commitment. */
+  const monthly = (over: { amountCents?: (index: number) => number; count?: number; endsDaysAgo?: number } = {}): SpendRow[] => {
+    const count = over.count ?? 13;
+    const endsDaysAgo = over.endsDaysAgo ?? 3;
+    return Array.from({ length: count }, (_unused, index) =>
+      row({
+        id: index + 1,
+        date: addDaysIso(TODAY, -endsDaysAgo - (count - 1 - index) * 30),
+        amountCents: over.amountCents ? over.amountCents(index) : -1649,
+      }),
+    );
+  };
+
+  it('names the monthly cadence, the newest charge and what the charge usually is', () => {
+    expect(recurringVerdict({ charges: monthly(), today: TODAY })).toEqual({
+      cadence: 'monthly',
+      chargeCount: 13,
+      medianGapDays: 30,
+      latestId: 13,
+      latestDateIso: addDaysIso(TODAY, -3),
+      latestAmountCents: 1649,
+      typicalCents: 1649,
+    });
+  });
+
+  it('reports the typical amount as the median, so a variable bill shows the gap between the two', () => {
+    // Five charges: 40, 60, 80, 100 and 300 dollars. The latest is the outlier; "usually" is 80.
+    const varying = monthly({ count: 5, amountCents: (index) => [-4000, -6000, -8000, -10000, -30000][index] });
+    const verdict = recurringVerdict({ charges: varying, today: TODAY });
+    expect(verdict?.typicalCents).toBe(8000);
+    expect(verdict?.latestAmountCents).toBe(30000);
+  });
+
+  it('needs three charges: two are one gap, and one gap is a coincidence with a name', () => {
+    expect(recurringVerdict({ charges: monthly({ count: 2 }), today: TODAY })).toBeNull();
+    expect(recurringVerdict({ charges: monthly({ count: 3 }), today: TODAY })?.cadence).toBe('monthly');
+  });
+
+  it('names the yearly cadence, which needs more than 12 months of history to exist at all', () => {
+    const yearly = [
+      row({ id: 1, date: addDaysIso(TODAY, -735), amountCents: -11999 }),
+      row({ id: 2, date: addDaysIso(TODAY, -370), amountCents: -11999 }),
+      row({ id: 3, date: addDaysIso(TODAY, -5), amountCents: -12999 }),
+    ];
+    expect(recurringVerdict({ charges: yearly, today: TODAY })).toMatchObject({ cadence: 'yearly', chargeCount: 3 });
+    // The point of RECURRING_LOOKBACK_DAYS: the earliest of these sits well outside a 365-day slice.
+    expect(735).toBeGreaterThan(365);
+  });
+
+  it('says nothing about a weekly or a quarterly rhythm -- monthly and yearly are the only bands', () => {
+    const weekly = Array.from({ length: 12 }, (_unused, index) =>
+      row({ id: index + 1, date: addDaysIso(TODAY, -index * 7), amountCents: -8500 }),
+    );
+    expect(recurringVerdict({ charges: weekly, today: TODAY })).toBeNull();
+    const quarterly = Array.from({ length: 5 }, (_unused, index) =>
+      row({ id: index + 1, date: addDaysIso(TODAY, -index * 91), amountCents: -8500 }),
+    );
+    expect(recurringVerdict({ charges: quarterly, today: TODAY })).toBeNull();
+  });
+
+  it('holds the band edges exactly where creepVerdict holds them', () => {
+    for (const gap of [CREEP_MONTHLY_GAP_MIN_DAYS, CREEP_MONTHLY_GAP_MAX_DAYS]) {
+      const charges = Array.from({ length: 4 }, (_unused, index) =>
+        row({ id: index + 1, date: addDaysIso(TODAY, -(3 - index) * gap), amountCents: -1649 }),
+      );
+      expect(recurringVerdict({ charges, today: TODAY })?.cadence).toBe('monthly');
+    }
+    const justOutside = Array.from({ length: 4 }, (_unused, index) =>
+      row({ id: index + 1, date: addDaysIso(TODAY, -(3 - index) * (CREEP_MONTHLY_GAP_MAX_DAYS + 1)), amountCents: -1649 }),
+    );
+    expect(recurringVerdict({ charges: justOutside, today: TODAY })).toBeNull();
+    expect(CREEP_YEARLY_GAP_MIN_DAYS).toBeGreaterThan(CREEP_MONTHLY_GAP_MAX_DAYS + 1);
+  });
+
+  it('drops a cadence that STOPPED: a cancelled subscription is not a current commitment', () => {
+    // The gaps are still textbook monthly; the newest charge is a year old.
+    expect(recurringVerdict({ charges: monthly({ endsDaysAgo: 365 }), today: TODAY })).toBeNull();
+    // One band-width plus the grace still counts; a day past it does not.
+    const grace = CREEP_MONTHLY_GAP_MAX_DAYS + RECURRING_STALE_GRACE_DAYS;
+    expect(recurringVerdict({ charges: monthly({ endsDaysAgo: grace }), today: TODAY })?.cadence).toBe('monthly');
+    expect(recurringVerdict({ charges: monthly({ endsDaysAgo: grace + 1 }), today: TODAY })).toBeNull();
+    // The yearly band gets the wider allowance its own edge implies, not the monthly one.
+    const yearly = Array.from({ length: 3 }, (_unused, index) =>
+      row({ id: index + 1, date: addDaysIso(TODAY, -(CREEP_YEARLY_GAP_MAX_DAYS + RECURRING_STALE_GRACE_DAYS) - (2 - index) * 365), amountCents: -11999 }),
+    );
+    expect(recurringVerdict({ charges: yearly, today: TODAY })?.cadence).toBe('yearly');
+  });
+
+  it('counts charges only: a refund and a future-dated row are neither', () => {
+    const withRefund = [...monthly(), row({ id: 99, date: addDaysIso(TODAY, -2), amountCents: 1649 })];
+    expect(recurringVerdict({ charges: withRefund, today: TODAY })?.chargeCount).toBe(13);
+    const withFuture = [...monthly(), row({ id: 98, date: addDaysIso(TODAY, 20), amountCents: -1649 })];
+    const verdict = recurringVerdict({ charges: withFuture, today: TODAY });
+    expect(verdict?.chargeCount).toBe(13);
+    expect(verdict?.latestDateIso).toBe(addDaysIso(TODAY, -3));
+  });
+
+  it('asserts a cadence and nothing else -- no subscription claim to render', () => {
+    const verdict = recurringVerdict({ charges: monthly(), today: TODAY });
+    expect(Object.keys(verdict ?? {}).sort()).toEqual([
+      'cadence',
+      'chargeCount',
+      'latestAmountCents',
+      'latestDateIso',
+      'latestId',
+      'medianGapDays',
+      'typicalCents',
+    ]);
+  });
+
+  it('is order-insensitive: the caller may hand rows over in any order', () => {
+    const shuffled = [...monthly()].reverse();
+    expect(recurringVerdict({ charges: shuffled, today: TODAY })).toEqual(
+      recurringVerdict({ charges: monthly(), today: TODAY }),
+    );
   });
 });
 
