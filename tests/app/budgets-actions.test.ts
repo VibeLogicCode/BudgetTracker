@@ -1,8 +1,20 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { createSeededTestDb, categoryIdByName, insertTestUser, type TestDb } from '../helpers/db';
+import { sql } from 'drizzle-orm';
+import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
 import { budgetProgress, resolveBudget, rolloverStartMonth, setRollover, upsertBudget } from '@/lib/budgets';
+import { nowIso } from '@/lib/clock';
+import { setUserVisibility } from '@/lib/auth/users';
 
-let currentUser: { id: number; name: string; username: string; role: 'admin' | 'member' } = {
+let currentUser: {
+  id: number;
+  name: string;
+  username: string;
+  role: 'admin' | 'member';
+  /** task-3 (S-01): defaults to undefined, which ownerScope() treats exactly like 'household'
+   *  (its check is `viewer.visibility === 'self'`) -- every pre-existing test in this file relies
+   *  on that default. Only the new categoryTransactionsAction self-viewer tests set it. */
+  visibility?: 'household' | 'self';
+} = {
   id: 1,
   name: 'Alice',
   username: 'alice',
@@ -23,6 +35,7 @@ vi.mock('next/cache', () => ({
 }));
 
 import { copyPreviousMonthAction, setLimitAction, setRolloverAction, setSavingsTargetAction } from '@/app/(app)/budgets/actions';
+import { categoryTransactionsAction } from '@/app/(app)/budgets/category-transactions-action';
 import { rolloverIdsFor } from '@/app/(app)/budgets/page';
 // Lane 1 (src/lib/savings-target.ts): not mocked here, same as every other library import in
 // this file -- these tests read the real row a save wrote, the same way resolveBudget above
@@ -54,6 +67,23 @@ function setup() {
   currentUser = { id: alice, name: 'Alice', username: 'alice', role: 'member' };
   mockHeaders = SAME_ORIGIN;
   return { db: current.db, sqlite: current.sqlite, alice, bob, admin, groceries };
+}
+
+/**
+ * task-3 (S-01). Same setup() plus one account and a `spend` fixture -- the shape
+ * tests/lib/budgets.test.ts's own `spend()` already uses for categoryTransactions -- so a test
+ * here can post real, attributable rows for categoryTransactionsAction to (mis)read.
+ */
+function seedWithTransactions() {
+  const base = setup();
+  const joint = insertTestAccount(base.db, { name: 'Joint Chequing' });
+  const spend = (over: { attributedUserId: number | null; amountCents: number; merchant: string }) => {
+    base.db.run(sql`
+      insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, category_id, categorization_source, is_transfer, attributed_user_id, created_by, created_at, updated_at)
+      values (${joint}, '2026-03-10', ${over.merchant}, ${over.merchant}, ${over.amountCents}, ${base.groceries}, 'manual', 0, ${over.attributedUserId}, ${base.alice}, ${nowIso()}, ${nowIso()})
+    `);
+  };
+  return { ...base, joint, spend };
 }
 
 describe('setLimitAction — review finding 6', () => {
@@ -393,5 +423,93 @@ describe('rolloverIdsFor (page.tsx)', () => {
 
     expect(rolloverIdsFor('personal', alice, budgetProgress('2026-03', 'personal', alice))).toContain(groceries);
     expect(rolloverIdsFor('household', null, budgetProgress('2026-03'))).not.toContain(groceries);
+  });
+});
+
+/**
+ * task-3 (S-01) -- the highest-severity finding of the 2026-09-02 review. This action had never
+ * had a test of any kind: it took the caller's `scope`/`userId` verbatim and applied no owner
+ * scoping of its own, so a self-scoped member (in practice, a child's account) could post
+ * `{ scope: 'household', userId: null, ... }` and read every household member's transactions in a
+ * category -- merchant, date, amountCents -- or `{ scope: 'personal', userId: <someone else> }` to
+ * read one named person. The fix (src/lib/budgets.ts's `categoryTransactions`) appends the
+ * viewer's own `ownerScope` AFTER the caller's requested scope, the same v1.13.0 ruling R2 pattern
+ * `buildWhere` uses in src/lib/transactions.ts -- never a rewrite to the viewer's own id, which
+ * would show them their own spending under someone else's name.
+ */
+describe('categoryTransactionsAction — task-3 (S-01): a self-scoped member could read any member\'s transactions', () => {
+  it('a self-scoped member asking for scope "household" receives only their own rows', async () => {
+    const { alice, bob, groceries, spend } = seedWithTransactions();
+    spend({ attributedUserId: alice, amountCents: -1200, merchant: 'ALICE COFFEE' });
+    spend({ attributedUserId: bob, amountCents: -9900, merchant: 'BOB ELECTRONICS' });
+    setUserVisibility(alice, 'self');
+    currentUser = { id: alice, name: 'Alice', username: 'alice', role: 'member', visibility: 'self' };
+
+    const result = await categoryTransactionsAction({ scope: 'household', userId: null, month: '2026-03', categoryId: groceries });
+    if (!('rows' in result)) throw new Error(`expected rows, got error: ${result.error}`);
+    expect(result.rows.map((r) => ({ merchant: r.merchant, amountCents: r.amountCents }))).toEqual([
+      { merchant: 'ALICE COFFEE', amountCents: -1200 },
+    ]);
+    // The leak this task fixes: Bob's row must not be in Alice's "household" breakdown.
+    expect(result.rows.some((r) => r.merchant === 'BOB ELECTRONICS')).toBe(false);
+  });
+
+  it('a self-scoped member asking for another member by id receives zero rows', async () => {
+    const { alice, bob, groceries, spend } = seedWithTransactions();
+    // task-3 fix round 1 (Important 1). Alice's OWN row is seeded here on purpose, not unused
+    // fixture data -- without it, an implementation that REWROTE attributedUserId to Alice's own
+    // id (instead of appending an unsatisfiable AND) would also return [] here, since only Bob's
+    // row existed and it would still be filtered out. With Alice's own row present, a rewrite
+    // would return exactly this row (her own spending, mislabelled as the answer to "give me
+    // Bob's"), while a correct append still returns []. Do not delete this line: it is the one
+    // thing that makes the two implementations diverge in this test.
+    spend({ attributedUserId: alice, amountCents: -1200, merchant: 'ALICE COFFEE' });
+    spend({ attributedUserId: bob, amountCents: -9900, merchant: 'BOB ELECTRONICS' });
+    setUserVisibility(alice, 'self');
+    currentUser = { id: alice, name: 'Alice', username: 'alice', role: 'member', visibility: 'self' };
+
+    const result = await categoryTransactionsAction({ scope: 'personal', userId: bob, month: '2026-03', categoryId: groceries });
+    if (!('rows' in result)) throw new Error(`expected rows, got error: ${result.error}`);
+    // Zero rows, not Bob's real rows, not Alice's own rows relabelled, and not "not yours" --
+    // see getTransaction's own documented choice in src/lib/transactions.ts: an out-of-scope row
+    // reads exactly like no such row.
+    expect(result.rows).toEqual([]);
+  });
+
+  it('a household-visibility member is unaffected -- still sees every row, both scopes', async () => {
+    const { alice, bob, groceries, spend } = seedWithTransactions();
+    spend({ attributedUserId: alice, amountCents: -1200, merchant: 'ALICE COFFEE' });
+    spend({ attributedUserId: bob, amountCents: -9900, merchant: 'BOB ELECTRONICS' });
+    // task-3 fix round 1 (Minor 3). Set explicitly rather than left to the mock's default
+    // (`visibility?:` is optional) -- this test names 'household' visibility, so it should
+    // actually exercise that literal value, not just the coincidentally-equivalent undefined.
+    currentUser = { id: alice, name: 'Alice', username: 'alice', role: 'member', visibility: 'household' };
+
+    const household = await categoryTransactionsAction({ scope: 'household', userId: null, month: '2026-03', categoryId: groceries });
+    if (!('rows' in household)) throw new Error(`expected rows, got error: ${household.error}`);
+    expect(household.rows.map((r) => r.merchant).sort()).toEqual(['ALICE COFFEE', 'BOB ELECTRONICS']);
+
+    const personal = await categoryTransactionsAction({ scope: 'personal', userId: bob, month: '2026-03', categoryId: groceries });
+    if (!('rows' in personal)) throw new Error(`expected rows, got error: ${personal.error}`);
+    expect(personal.rows.map((r) => r.merchant)).toEqual(['BOB ELECTRONICS']);
+  });
+
+  it('an admin is unaffected, including admin + visibility: self (micro-ruling M1)', async () => {
+    const { admin, bob, groceries, spend } = seedWithTransactions();
+    spend({ attributedUserId: bob, amountCents: -9900, merchant: 'BOB ELECTRONICS' });
+
+    // Admin + self is unreachable through the UI (setUserVisibility itself refuses to write this
+    // combination), so this simulates the hand-edited-database-row case viewer.ts's own comment on
+    // ownerScope names -- the session mock carries it directly, the same way a stale/edited row
+    // could. ownerScope treats it as unrestricted regardless.
+    currentUser = { id: admin, name: 'Admin', username: 'admin', role: 'admin', visibility: 'self' };
+    const personalAsSelfAdmin = await categoryTransactionsAction({ scope: 'personal', userId: bob, month: '2026-03', categoryId: groceries });
+    if (!('rows' in personalAsSelfAdmin)) throw new Error(`expected rows, got error: ${personalAsSelfAdmin.error}`);
+    expect(personalAsSelfAdmin.rows.map((r) => r.merchant)).toEqual(['BOB ELECTRONICS']);
+
+    currentUser = { id: admin, name: 'Admin', username: 'admin', role: 'admin' }; // visibility: household
+    const household = await categoryTransactionsAction({ scope: 'household', userId: null, month: '2026-03', categoryId: groceries });
+    if (!('rows' in household)) throw new Error(`expected rows, got error: ${household.error}`);
+    expect(household.rows.map((r) => r.merchant)).toEqual(['BOB ELECTRONICS']);
   });
 });

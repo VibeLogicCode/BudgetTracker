@@ -5,6 +5,7 @@ import { budgetProgress, budgetTotals, categorySpend, categoryTransactions, clea
 import { archiveCategory } from '@/lib/categories';
 import { nowIso } from '@/lib/clock';
 import { assignTransactionToLoan } from '@/lib/loans';
+import type { Viewer } from '@/lib/auth/viewer';
 // Lane 1 (2026-08-30 plan): categoryTransactions is split-aware, the same way categorySpend
 // (immediately below) already is -- one test proves it by actually splitting a transaction,
 // rather than trusting that reusing EFFECTIVE_CATEGORY/EFFECTIVE_AMOUNT was enough.
@@ -15,6 +16,18 @@ afterEach(() => {
   current?.cleanup();
   current = null;
 });
+
+/**
+ * task-3 (S-01, controller ruling R11): categoryTransactions gained a required `viewer` and now
+ * appends its own owner-scope clause (see src/lib/budgets.ts). Every test in this file predates
+ * that and is testing month/category/transfer/split behaviour, not owner scoping -- a plain
+ * household-visibility member makes ownerScope(viewer) null (role is a no-op arm here on
+ * purpose -- see task-3 fix round 1, Minor 2: this used to be `role: 'admin'`, which returned
+ * null because of the ROLE, not the visibility this constant's whole point is to exercise), so
+ * the clause this fix added is a no-op for every one of them and none of their existing
+ * assertions change.
+ */
+const HOUSEHOLD_VIEWER: Viewer = { id: 0, role: 'member', visibility: 'household' };
 
 function setup() {
   current = createSeededTestDb();
@@ -189,7 +202,7 @@ describe('categoryTransactions — the Lane 1 breakdown drill-down', () => {
     const groceries = categoryIdByName(db, 'Groceries');
     spend({ categoryId: groceries, amountCents: -1200, date: '2026-03-05' });
     spend({ categoryId: groceries, amountCents: -3400, date: '2026-03-20' });
-    const rows = categoryTransactions('2026-03', groceries);
+    const rows = categoryTransactions('2026-03', groceries, {}, HOUSEHOLD_VIEWER);
     expect(rows.map((r) => r.amountCents)).toEqual([-3400, -1200]);
     expect(rows[0].merchant).toBe('X'); // the spend() fixture's raw_description
     expect(rows[0].date).toBe('2026-03-20');
@@ -201,14 +214,14 @@ describe('categoryTransactions — the Lane 1 breakdown drill-down', () => {
     const coffee = categoryIdByName(db, 'Coffee');
     spend({ categoryId: coffee, amountCents: -500, date: '2026-03-10' });
     spend({ categoryId: groceries, amountCents: -700, date: '2026-02-10' });
-    expect(categoryTransactions('2026-03', groceries)).toEqual([]);
+    expect(categoryTransactions('2026-03', groceries, {}, HOUSEHOLD_VIEWER)).toEqual([]);
   });
 
   it('excludes transfers', () => {
     const { db, spend } = setup();
     const groceries = categoryIdByName(db, 'Groceries');
     spend({ categoryId: groceries, amountCents: -900, isTransfer: true });
-    expect(categoryTransactions('2026-03', groceries)).toEqual([]);
+    expect(categoryTransactions('2026-03', groceries, {}, HOUSEHOLD_VIEWER)).toEqual([]);
   });
 
   it('scopes personal by attributedUserId, same as categorySpend', () => {
@@ -216,7 +229,7 @@ describe('categoryTransactions — the Lane 1 breakdown drill-down', () => {
     const groceries = categoryIdByName(db, 'Groceries');
     spend({ categoryId: groceries, amountCents: -1000, attributedUserId: alice });
     spend({ categoryId: groceries, amountCents: -2000, attributedUserId: bob });
-    const rows = categoryTransactions('2026-03', groceries, { scope: 'personal', attributedUserId: alice });
+    const rows = categoryTransactions('2026-03', groceries, { scope: 'personal', attributedUserId: alice }, HOUSEHOLD_VIEWER);
     expect(rows.map((r) => r.amountCents)).toEqual([-1000]);
   });
 
@@ -225,13 +238,13 @@ describe('categoryTransactions — the Lane 1 breakdown drill-down', () => {
     const groceries = categoryIdByName(db, 'Groceries');
     spend({ categoryId: groceries, amountCents: -1000, attributedUserId: alice });
     spend({ categoryId: groceries, amountCents: -2000, attributedUserId: null });
-    const rows = categoryTransactions('2026-03', groceries, { scope: 'household', attributedUserId: alice });
+    const rows = categoryTransactions('2026-03', groceries, { scope: 'household', attributedUserId: alice }, HOUSEHOLD_VIEWER);
     expect(rows).toHaveLength(2);
   });
 
   it('throws for personal scope without a user, the same trap categorySpend guards against', () => {
     setup();
-    expect(() => categoryTransactions('2026-03', 1, { scope: 'personal' })).toThrowError(/requires a user/);
+    expect(() => categoryTransactions('2026-03', 1, { scope: 'personal' }, HOUSEHOLD_VIEWER)).toThrowError(/requires a user/);
   });
 
   it('is split-aware: a split part contributes its own category and amount, not the parent transaction\'s', () => {
@@ -247,8 +260,8 @@ describe('categoryTransactions — the Lane 1 breakdown drill-down', () => {
       ],
       userId: alice,
     });
-    expect(categoryTransactions('2026-03', groceries).map((r) => r.amountCents)).toEqual([-6000]);
-    expect(categoryTransactions('2026-03', restaurants).map((r) => r.amountCents)).toEqual([-4000]);
+    expect(categoryTransactions('2026-03', groceries, {}, HOUSEHOLD_VIEWER).map((r) => r.amountCents)).toEqual([-6000]);
+    expect(categoryTransactions('2026-03', restaurants, {}, HOUSEHOLD_VIEWER).map((r) => r.amountCents)).toEqual([-4000]);
   });
 });
 
@@ -789,7 +802,7 @@ describe('loan principal movements are excluded from budget spend too (C-02)', (
     assignTransactionToLoan({ txnId, itemId: loanId });
 
     expect(categorySpend('2026-03').get(groceries) ?? 0).toBe(0);
-    expect(categoryTransactions('2026-03', groceries)).toEqual([]);
+    expect(categoryTransactions('2026-03', groceries, {}, HOUSEHOLD_VIEWER)).toEqual([]);
   });
 
   it('budgetTotals(budgetProgress(...)) reflects it: a $6,000 lend-out never inflates the Budgets card', () => {

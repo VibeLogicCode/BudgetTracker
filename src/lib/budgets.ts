@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, gte, isNull, lte, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { budgetRollover, budgets, transactions, transactionSplits } from '@/db/schema';
+import { ownerScope, type Viewer } from '@/lib/auth/viewer';
 import { listCategories, type CategoryRecord } from '@/lib/categories';
 import { nowIso } from '@/lib/clock';
 import { addMonths, isMonthKey, monthEnd, monthRange, monthStart } from '@/lib/dates';
@@ -203,11 +204,19 @@ export interface CategoryTransactionRow {
  * table's worth of columns. A split transaction contributes its OWN part's category and amount
  * (EFFECTIVE_CATEGORY/EFFECTIVE_AMOUNT, src/lib/splits.ts), the same rule categorySpend already
  * folds every total through, so a row returned here is exactly one of the rows that total summed.
+ *
+ * `viewer` is REQUIRED (controller ruling R11), for the same reason listTransactions' is
+ * (src/lib/transactions.ts): an optional parameter lets a forgotten call site compile into a
+ * silent leak. `opts.attributedUserId`/`opts.scope` answer "whose card is this a breakdown of"
+ * (household, or one NAMED person, regardless of who is asking); `viewer` answers a different
+ * question, "who is asking", and narrows the result to what THEY may see -- see the appended
+ * clause below for how the two combine.
  */
 export function categoryTransactions(
   month: string,
   categoryId: number,
-  opts: { attributedUserId?: number | null; scope?: BudgetScope } = {},
+  opts: { attributedUserId?: number | null; scope?: BudgetScope },
+  viewer: Viewer,
 ): CategoryTransactionRow[] {
   assertMonth(month);
   if (opts.scope === 'personal' && (opts.attributedUserId === undefined || opts.attributedUserId === null)) {
@@ -222,6 +231,16 @@ export function categoryTransactions(
   if (opts.scope !== 'household' && opts.attributedUserId !== undefined && opts.attributedUserId !== null) {
     clauses.push(eq(transactions.attributedUserId, opts.attributedUserId));
   }
+  // v1.13.0 ruling R2, applied here the same way src/lib/transactions.ts:343-348 applies it to
+  // listTransactions. Appended AFTER the caller's own attributedUserId clause above, never instead
+  // of it: a self viewer who asks for `scope: 'household'` (or for another named person) must get
+  // an unsatisfiable AND -- their own rows only, or zero rows -- not a filter silently rewritten to
+  // themselves. A rewrite would show them their own spending under another person's name (or under
+  // "household"), which is a worse answer than the true, narrower one. ownerScope returns null for
+  // a household-visibility viewer or an admin (micro-ruling M1: admin + self is unrestricted), so
+  // neither is affected.
+  const viewerScope = ownerScope(viewer);
+  if (viewerScope !== null) clauses.push(eq(transactions.attributedUserId, viewerScope));
 
   return getDb()
     .select({
@@ -246,24 +265,6 @@ export function categoryTransactions(
  */
 function foldRollup(categoryId: number, childIds: number[], spendByCategory: Map<number, number>): number {
   return childIds.reduce((sum, id) => sum + (spendByCategory.get(id) ?? 0), spendByCategory.get(categoryId) ?? 0);
-}
-
-/**
- * `categoryId`'s spend for `month`, INCLUDING every child's (archived included) -- the same
- * rollup rule `budgetProgress`/`buildRow` renders, via foldRollup above. One query for the
- * month's category spend (categorySpend) plus one for the category tree (listCategories).
- *
- * effectiveBudget's multi-month carry walk does NOT call this once per month -- see
- * categorySpendWithRollupSeries below for the batched form that keeps a 24-month look-back to
- * a small, constant number of queries.
- */
-export function categorySpendWithRollup(month: string, scope: BudgetScope, userId: number | null, categoryId: number): number {
-  assertMonth(month);
-  const spendByCategory = categorySpend(month, { scope, attributedUserId: scope === 'personal' ? userId : undefined });
-  const childIds = listCategories({ includeArchived: true })
-    .filter((category) => category.parentId === categoryId)
-    .map((category) => category.id);
-  return foldRollup(categoryId, childIds, spendByCategory);
 }
 
 /**

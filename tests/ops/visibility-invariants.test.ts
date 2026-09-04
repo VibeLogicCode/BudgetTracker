@@ -46,6 +46,13 @@ const REQUIRE_VIEWER: { file: string; fn: string }[] = [
   // mechanically asserts, that the viewer parameter exists and is never optional. That is what
   // stops a future caller compiling a create that skips the owner rules (rulings A10, A12).
   { file: 'src/lib/loans.ts', fn: 'createLoanFromTransaction' },
+  // Controller ruling R11 (task-3, S-01). categoryTransactionsAction posted the caller's own
+  // scope/userId straight through with no owner narrowing of any kind, so a self-scoped member
+  // asking for `scope: 'household'` (or for another member by id) read every household
+  // transaction -- merchant, date, amountCents -- in that category. Fixed the same way
+  // listTransactions is: append eq(transactions.attributedUserId, ownerScope(viewer)) AFTER the
+  // caller's own attributedUserId clause, never instead of it.
+  { file: 'src/lib/budgets.ts', fn: 'categoryTransactions' },
 ];
 
 /** Exempt, WITH the reason. Nothing is exempt without one. */
@@ -74,6 +81,16 @@ const EXEMPT: { file: string; fn: string; why: string }[] = [
     file: 'src/lib/transactions.ts',
     fn: 'transactionOwners',
     why: 'not a read-model: returns transaction id and attributed_user_id only -- no amount, no description, no merchant, no joins. It exists so the bulk ownership pre-check in transactions/actions.ts costs one query instead of one getTransaction per selected id, and its callers compare the owners it returns against ownerScope(viewer) themselves before any write (item BL, v1.13.1).',
+  },
+  {
+    file: 'src/lib/budgets.ts',
+    fn: 'categorySpend',
+    why: "internal resolver, investigated for task-3 (S-01) alongside categoryTransactions above. Its only caller is budgetProgress (this file), which has no viewer of its own -- so the real question is whether any caller of budgetProgress ever hands it a raw, user-supplied id. task-3 fix round 1 (Important 2): the true invariant is narrower than 'nothing user-supplied reaches it' -- a user-supplied id DOES reach it, but only when ownerScope(viewer) is null, i.e. a viewer already entitled to any member's figures, because `??` makes a non-null ownerScope win. dashboard/page.tsx's `scopeUserId = ownerScope(viewer) ?? urlScope` (from `?person=`) and bills.ts's safeToSpend both resolve ownerScope FIRST, so a self-scoped viewer can never steer either through the URL or a form value -- only a household-visibility viewer or an admin (ownerScope null) ever lets the user-supplied value through, and both are already entitled to any member's figures. budgets/page.tsx's personal loop runs only over listAttributablePeople() already filtered to the viewer's own id for a self-scoped viewer. The remaining callers -- notify/evaluate/budget.ts, pace.ts, monthly.ts and digest.ts -- are server-side notification evaluators with no request at all: they loop over member ids the evaluator itself derived from the household roster, never a value read from a URL or form.",
+  },
+  {
+    file: 'src/lib/budgets.ts',
+    fn: 'categorySpendWithRollupSeries',
+    why: 'internal resolver, not even exported -- investigated for task-3 (S-01) alongside categoryTransactions above. Its only caller is effectiveBudget (this file), itself called only from buildRow inside budgetProgress: the identical viewer-derived scope/userId chain categorySpend\'s own exemption above describes. No page or route calls it directly.',
   },
 ];
 
@@ -143,6 +160,16 @@ describe('ruling R2: every read-model helper takes a viewer', () => {
       expect(signature).toMatch(/viewer\s*:\s*Viewer|viewer:\s*Viewer/);
       // Required, not optional: an optional viewer lets a forgotten call site compile into a leak.
       expect(signature).not.toMatch(/viewer\?\s*:/);
+      // task-3 fix round 1 (Important 3). `viewer?: Viewer` is not the only way to make a
+      // "required" viewer optional in practice -- `viewer: Viewer = SOME_DEFAULT` (or
+      // `viewer: Viewer | undefined = undefined`) is syntactically non-optional and passes the
+      // two assertions above, but a call site that omits the argument compiles anyway and gets
+      // the default, silently reopening the exact leak this list exists to catch. A default is
+      // the LIKELIER regression, not the rarer one: it is exactly what someone reaches for when
+      // a new call site otherwise fails to compile. Proven by running this against
+      // categoryTransactions with a temporarily-defaulted viewer (see task-3-report.md) -- it
+      // failed, where the two assertions above did not.
+      expect(signature).not.toMatch(/viewer\s*:\s*Viewer[^,)]*=/);
     });
   }
 
@@ -158,8 +185,13 @@ describe('ruling R2: every read-model helper takes a viewer', () => {
   // v1.13.0 whole-branch review (item M-e): raised from 20 to 27, the actual count as of this
   // review (23 + 4) -- 20 had drifted well below reality and would not have caught a deletion
   // of up to seven real entries.
-  it('the named lists cannot shrink below 28 entries', () => {
-    expect(REQUIRE_VIEWER.length + EXEMPT.length).toBeGreaterThanOrEqual(28);
+  //
+  // task-3 fix round 1 (Minor 1): raised from 28 to 32, the actual count as of this fix round
+  // (25 + 7) -- three entries (categoryTransactions in REQUIRE_VIEWER; categorySpend and
+  // categorySpendWithRollupSeries in EXEMPT) were added for task-3 (S-01) while the floor stayed
+  // at 28, so up to four real entries could have been deleted silently without tripping this.
+  it('the named lists cannot shrink below 32 entries', () => {
+    expect(REQUIRE_VIEWER.length + EXEMPT.length).toBeGreaterThanOrEqual(32);
   });
 });
 
