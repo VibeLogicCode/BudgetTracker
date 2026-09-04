@@ -12,14 +12,19 @@ import {
   personSpendSplit,
   topMerchants,
 } from '@/lib/reports';
-import { isMonthKey, monthOf, monthsBetween, todayIso } from '@/lib/dates';
+import { addMonthsClamped, isMonthKey, monthOf, monthsBetween, todayIso } from '@/lib/dates';
 import { resolveRange } from '@/lib/date-range';
 import { readEnv } from '@/lib/env';
 import { suggestionsFor } from '@/lib/predict/history';
 import type { BaselineRow } from '@/lib/predict/suggest';
 import { savingsProgress } from '@/lib/savings-target';
 import { taxYearReport, taxYears } from '@/lib/tax';
-import { ReportsClient, type SavingsMonthRow, type TaxYearDisplayRow } from './reports-client';
+import {
+  ReportsClient,
+  type CategoryBreakdownDisplayRow,
+  type SavingsMonthRow,
+  type TaxYearDisplayRow,
+} from './reports-client';
 
 export const dynamic = 'force-dynamic';
 
@@ -144,6 +149,53 @@ export default async function ReportsPage({
       ? []
       : taxYearReport(selectedTaxYear).map((row) => ({ ...row, parentId: categoryParentById.get(row.categoryId) ?? null }));
 
+  /**
+   * F-08 (v1.31.0): the same breakdown over the same range shifted twelve months back, joined by
+   * categoryId. `addMonthsClamped` (src/lib/dates.ts) does the day-level shift, so 29 February
+   * lands on 28 February rather than overflowing into March the way Date.setMonth would.
+   *
+   * A SECOND call to the function the card already uses, with the same person scope and the same
+   * viewer -- not a new aggregate. Anything narrower would have to re-decide what counts as
+   * spend, which is exactly the disagreement SPEND_ROW_WHERE (src/lib/spend-where.ts) exists to
+   * make impossible; anything wider would be a read model nobody asked for.
+   *
+   * `priorYearRange` is null when the shifted window held no rows AT ALL, and that nullness is
+   * what hides the two columns on the card. It is deliberately not "every row's prior figure is
+   * zero": a household that has been running for three months has no last year, and a table of
+   * "$0.00 last year" tells them they spent nothing then rather than that nothing is known. A row
+   * that IS zero inside a range that has other rows is a real figure and stays (rendered as an em
+   * dash, with the change stated in words).
+   */
+  const priorFrom = addMonthsClamped(from, -12);
+  const priorTo = addMonthsClamped(to, -12);
+  const priorRows = categoryBreakdown({ from: priorFrom, to: priorTo, attributedUserId: person, rollup: true }, viewer);
+  const priorByCategory = new Map(priorRows.map((row) => [row.categoryId, row.spentCents]));
+  const breakdown: CategoryBreakdownDisplayRow[] = categoryBreakdown(
+    { from, to, attributedUserId: person, rollup: true },
+    viewer,
+  ).map((row) => ({ ...row, priorCents: priorByCategory.get(row.categoryId) ?? 0 }));
+
+  /**
+   * F-04 (v1.31.0). `categoryBreakdown` has taken `includeIncome` since v1.7.0 and no caller in
+   * the repository ever passed it -- income categories are first-class in the schema, the
+   * merchant pack files payroll into them, and the Reports page hid the split anyway.
+   *
+   * Rollup OFF, unlike the spend breakdown above: the seeded tree is Income > Salary / Other
+   * Income, so a rolled-up read answers "income: $6,000" -- the one figure the dashboard's Money
+   * in tile already shows, and the exact question this card exists to break apart.
+   *
+   * Sorted here rather than relying on categoryBreakdown's own sort: that sort is descending by
+   * `spentCents`, and income rows carry a NEGATIVE spentCents (netSpentCents' sign convention),
+   * so its order puts the smallest income first. Ascending on the same field is "largest income
+   * first" for exactly the same reason.
+   *
+   * Scoped like every other card here -- same range, same person, same viewer -- so a self-scoped
+   * member sees their own income and nobody else's (scopeFor, src/lib/reports.ts).
+   */
+  const income = categoryBreakdown({ from, to, attributedUserId: person, includeIncome: true }, viewer)
+    .filter((row) => row.isIncome)
+    .sort((a, b) => a.spentCents - b.spentCents);
+
   // v1.14.0 (ruling P12): ONE read, two flags. hasLoans keeps its exact meaning -- any loan with
   // a tracked balance, either direction -- so the card's visibility does not change for any
   // existing install; hasLent decides only whether a second LINE and a legend appear.
@@ -162,7 +214,9 @@ export default async function ReportsPage({
       // must not receive the other names at all, not merely be shown a select that omits
       // them. Same principle as suggestionsFor/netWorthOverTime/debtOverTime/taxYears above.
       people={showHouseholdTotals ? listUsers().map((u) => ({ id: u.id, name: u.name })) : []}
-      breakdown={categoryBreakdown({ from, to, attributedUserId: person, rollup: true }, viewer)}
+      breakdown={breakdown}
+      priorYearRange={priorRows.length === 0 ? null : { from: priorFrom, to: priorTo }}
+      income={income}
       monthOverMonth={categoryMonthOverMonth(
         { fromMonth: from.slice(0, 7), toMonth: to.slice(0, 7), attributedUserId: person, limit: 10 },
         viewer,

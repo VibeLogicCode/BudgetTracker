@@ -17,7 +17,7 @@ import { AmountCell, TableWrap } from '@/components/ui/Table';
 import { Field, inputClass, selectClass } from '@/components/ui/form';
 import { DateRangePicker } from '@/components/ui/DateRangePicker';
 import { rangeParams, type ResolvedRange } from '@/lib/date-range';
-import { monthLabel, monthOf } from '@/lib/dates';
+import { monthEnd, monthLabel, monthOf, monthStart } from '@/lib/dates';
 import type { DebtPoint } from '@/lib/loans';
 import { formatCents } from '@/lib/money';
 import type { NetWorthPoint } from '@/lib/networth';
@@ -38,6 +38,11 @@ import type {
 // Same reasoning as STALE_SNAPSHOT_DAYS above, for '@/lib/reports' and its @/db/client import --
 // see src/lib/savings-rate.ts's docblock.
 import { savingsRate } from '@/lib/savings-rate';
+// F-01: the ONE builder for every "show me the rows behind this number" link on this page.
+// Pure and client-safe by construction (it value-imports only @/lib/date-range), so the
+// dashboard's Server Component and the transactions row menu share it with this file rather
+// than each hand-rolling a querystring -- see its own docblock for why that mattered.
+import { transactionsHref, type TransactionsLinkScope, type TransactionsLinkTarget } from '@/lib/transaction-links';
 import type { TaxYearRow } from '@/lib/tax';
 
 /** Task 15b (v1.7.0): one taxYearReport() row, plus its place in the category tree. tax.ts's
@@ -58,6 +63,22 @@ export interface TaxYearDisplayRow extends TaxYearRow {
  * forbids a second definition of "saved", and savingsProgress is the one place that division
  * happens.
  */
+/**
+ * F-08 (v1.31.0): one `categoryBreakdown` row plus the same category's net spend over the range
+ * shifted twelve months back, joined by categoryId BY THE PAGE -- exactly the way
+ * TaxYearDisplayRow above carries a field reports/page.tsx attaches. The join happens there, once,
+ * because that is where both reads live; doing it here would mean shipping a second array to the
+ * browser purely so the browser could rebuild a Map the server already had.
+ *
+ * `priorCents` is 0 for a category that existed this year and not last. That is a real figure and
+ * not a placeholder -- the table renders it as an em dash rather than "$0.00" (formatOrDash), and
+ * the Change column says so in words. Whether the comparison is shown AT ALL is a separate,
+ * card-level decision carried by `priorYearRange`.
+ */
+export interface CategoryBreakdownDisplayRow extends CategoryBreakdownRow {
+  priorCents: number;
+}
+
 export interface SavingsMonthRow extends MonthTrendRow {
   /** null when no target is set this month, or a percent target had no income to resolve
    *  against -- never a fallback zero (see SavingsChart.tsx's SavingsChartRow docblock). */
@@ -71,6 +92,8 @@ export function ReportsClient({
   person,
   people,
   breakdown,
+  priorYearRange,
+  income,
   monthOverMonth,
   split,
   debt,
@@ -94,7 +117,26 @@ export function ReportsClient({
   today: string;
   person: string;
   people: { id: number; name: string }[];
-  breakdown: CategoryBreakdownRow[];
+  breakdown: CategoryBreakdownDisplayRow[];
+  /**
+   * F-08: the window `priorCents` above was summed over -- the picked range shifted twelve months
+   * back -- or null when that window held no rows at all.
+   *
+   * Null hides the two comparison columns outright rather than rendering them full of zeros. A
+   * column of "$0.00" against last year does not read as "we have no statements from then"; it
+   * reads as "we spent nothing", which is a different and false claim. v1.30.0 fixed exactly that
+   * mistake in a notification, and this is the same mistake with a table around it.
+   */
+  priorYearRange: { from: string; to: string } | null;
+  /**
+   * F-04: `categoryBreakdown({ includeIncome: true })`'s income rows for the same range and
+   * person, rollup OFF and sorted largest first by the page. Rollup is off deliberately: the
+   * seeded tree files payroll under Income > Salary, so a rolled-up read collapses to the single
+   * "money in" figure the dashboard already shows -- the exact question this card exists to break
+   * apart. Amounts arrive NEGATIVE (netSpentCents' sign convention for income); the card renders
+   * their magnitude.
+   */
+  income: CategoryBreakdownRow[];
   monthOverMonth: { months: string[]; rows: CategoryMonthTrend[] };
   split: PersonSplitRow[];
   debt: DebtPoint[];
@@ -145,6 +187,17 @@ export function ReportsClient({
     ...rangeParams(range),
     ...(person ? { person } : {}),
   }).toString()}`;
+
+  /**
+   * F-01. The scope every range-driven card on this page was built with, resolved ONCE: the
+   * picker's own range and the person filter the page force-scoped through the viewer. Every
+   * drill-down below either passes this object or passes a scope of its own with a comment
+   * saying why it differs (the year-over-year card follows its compare month; the tax card
+   * follows its year and its row's own person). One value rather than a literal at each call
+   * site is what makes "does this link carry the person scope?" answerable by reading, and a
+   * dropped scope visible in a diff.
+   */
+  const rangeScope: TransactionsLinkScope = { range, person };
 
   // Task 15b: ordered once for both the table and the grand total below, so the two can never
   // disagree about which rows overlap.
@@ -343,7 +396,14 @@ export function ReportsClient({
       ) : null}
 
       <Card>
-        <CardHeader title="Category breakdown" description="Net spend per category over the range." />
+        <CardHeader
+          title="Category breakdown"
+          description={
+            priorYearRange
+              ? `Net spend per category over the range, beside the same stretch a year earlier (${priorYearRange.from} to ${priorYearRange.to}).`
+              : 'Net spend per category over the range.'
+          }
+        />
         {breakdown.length === 0 ? (
           <EmptyState
             icon={ReportsIcon}
@@ -357,9 +417,103 @@ export function ReportsClient({
             Widen the dates, or import the statements that cover them.
           </EmptyState>
         ) : (
-          <CardBody>
-            <CategoryBarChart data={breakdown} />
-          </CardBody>
+          <>
+            <CardBody>
+              <CategoryBarChart data={breakdown} />
+            </CardBody>
+            {/* F-01/F-08: the chart keeps its job (ruling D7 -- Reports keeps its charts as they
+                are) and the table beside it does the two things a <Bar> cannot: carry a link per
+                category, and carry a second figure per category. The chart plots the top 12; this
+                table is every row, which is also why the card's own total is not restated here --
+                the rows ARE the breakdown. */}
+            <TableWrap bare responsive>
+              <thead>
+                <tr>
+                  <th scope="col">Category</th>
+                  <th scope="col" className="text-right">Net spent</th>
+                  {priorYearRange ? (
+                    <>
+                      <th scope="col" className="text-right">Same period last year</th>
+                      <th scope="col">Change</th>
+                    </>
+                  ) : null}
+                </tr>
+              </thead>
+              <tbody>
+                {breakdown.map((row) => (
+                  <tr key={row.categoryId ?? 'uncategorized'}>
+                    <td className="cell-stack-headline" data-label="Category">
+                      <DrillLink scope={rangeScope} target={{ kind: 'category', categoryId: row.categoryId, exact: row.direct }}>
+                        {row.categoryName}
+                      </DrillLink>
+                    </td>
+                    <AmountCell data-label="Net spent" className="cell-stack-amount">
+                      <Money cents={row.spentCents} plain />
+                    </AmountCell>
+                    {priorYearRange ? (
+                      <>
+                        <AmountCell data-label="Same period last year" className="text-muted">
+                          {formatOrDash(row.priorCents)}
+                        </AmountCell>
+                        <td data-label="Change">{yoyChange(row.spentCents, row.priorCents, 'No spend in this range last year')}</td>
+                      </>
+                    ) : null}
+                  </tr>
+                ))}
+              </tbody>
+            </TableWrap>
+          </>
+        )}
+      </Card>
+
+      {/* F-04. Not gated on showHouseholdTotals: unlike Net worth or the tax year, income by
+          source has an honest per-person shape -- categoryBreakdown force-scopes a self viewer to
+          their OWN attributed rows through `viewer` (scopeFor, src/lib/reports.ts), so what a
+          child sees here is their own money and nothing else, exactly like the Category breakdown
+          card directly above. */}
+      <Card>
+        <CardHeader title="Income by source" description="What came in over the range, by income category." />
+        {income.length === 0 ? (
+          <EmptyState
+            icon={ReportsIcon}
+            title="No income in this range"
+            action={
+              <Link href="/settings/managers" className="btn btn--secondary btn--sm">
+                Mark a category as income
+              </Link>
+            }
+          >
+            Income shows up here once a category is marked as income and a deposit is filed under it.
+          </EmptyState>
+        ) : (
+          <TableWrap bare responsive>
+            <thead>
+              <tr>
+                <th scope="col">Source</th>
+                <th scope="col" className="text-right">Received</th>
+              </tr>
+            </thead>
+            <tbody>
+              {income.map((row) => (
+                <tr key={row.categoryId ?? 'uncategorized'}>
+                  <td className="cell-stack-headline" data-label="Source">
+                    <DrillLink scope={rangeScope} target={{ kind: 'category', categoryId: row.categoryId, exact: row.direct }}>
+                      {row.categoryName}
+                    </DrillLink>
+                  </td>
+                  {/* netSpentCents makes income negative (it is the negation of a signed sum, and
+                      a deposit's sign is positive), so the magnitude is the figure a person means
+                      by "how much came in". `plain` keeps it uncoloured for the same reason the
+                      spend columns are uncoloured: a positive number here means money in, and
+                      Money's own red/green pair would paint it by SIGN, which is the opposite
+                      reading. */}
+                  <AmountCell data-label="Received" className="cell-stack-amount">
+                    <Money cents={-row.spentCents} plain />
+                  </AmountCell>
+                </tr>
+              ))}
+            </tbody>
+          </TableWrap>
         )}
       </Card>
 
@@ -409,7 +563,15 @@ export function ReportsClient({
             <tbody>
               {monthOverMonth.rows.map((row) => (
                 <tr key={row.categoryId}>
-                  <td className="whitespace-nowrap font-medium text-ink cell-stack-headline" data-label="Category">{row.categoryName}</td>
+                  <td className="whitespace-nowrap font-medium text-ink cell-stack-headline" data-label="Category">
+                    {/* `exact` -- categoryMonthOverMonth groups by the transaction's OWN category
+                        with no rollup (src/lib/reports.ts), so a parent's row here is that
+                        parent's direct rows only. A link without `exact=1` would list the parent
+                        AND every child: a larger set than the total beside it. */}
+                    <DrillLink scope={rangeScope} target={{ kind: 'category', categoryId: row.categoryId, exact: true }}>
+                      {row.categoryName}
+                    </DrillLink>
+                  </td>
                   {monthOverMonth.months.map((month) => (
                     <td key={month} className="text-right text-muted" data-label={month}>
                       {formatOrDash(row.byMonth[month] ?? 0)}
@@ -457,7 +619,21 @@ export function ReportsClient({
             <tbody>
               {yoy.map((row) => (
                 <tr key={row.categoryId}>
-                  <td className="whitespace-nowrap font-medium text-ink cell-stack-headline" data-label="Category">{row.categoryName}</td>
+                  <td className="whitespace-nowrap font-medium text-ink cell-stack-headline" data-label="Category">
+                    {/* This card follows its OWN compare month, not the page's date range -- the
+                        range picker never touched these three figures, so a link carrying it
+                        would open a list that does not contain the number beside it. The month
+                        chosen is the "This month" column's, the figure the other two exist to be
+                        compared against and the one this row is sorted by. No `exact`:
+                        categoryYearOverYear rolls children into their parent, so a row here
+                        really is the parent plus everything under it. */}
+                    <DrillLink
+                      scope={{ range: { from: monthStart(yoyMonth), to: monthEnd(yoyMonth) }, person }}
+                      target={{ kind: 'category', categoryId: row.categoryId }}
+                    >
+                      {row.categoryName}
+                    </DrillLink>
+                  </td>
                   {/* This month, not Last month or Last year, is the amount call: it is
                       today's figure, the one the other two columns exist to compare against. */}
                   <td className="text-right cell-stack-amount" data-label="This month">{formatOrDash(row.thisMonthCents)}</td>
@@ -532,7 +708,15 @@ export function ReportsClient({
             <tbody>
               {merchants.map((row) => (
                 <tr key={row.normalizedMerchant}>
-                  <td className="whitespace-nowrap font-medium text-ink cell-stack-headline" data-label="Merchant">{row.normalizedMerchant}</td>
+                  <td className="whitespace-nowrap font-medium text-ink cell-stack-headline" data-label="Merchant">
+                    {/* A search, not a merchant id -- there is no merchant table, and `?q=` is the
+                        same hop NeedsALookCard has always used from a flagged charge. The name is
+                        already the folded/renamed identity topMerchants grouped by (item 8b), so
+                        searching it finds the same rows the bucket counted. */}
+                    <DrillLink scope={rangeScope} target={{ kind: 'merchant', merchant: row.normalizedMerchant }}>
+                      {row.normalizedMerchant}
+                    </DrillLink>
+                  </td>
                   <td className="text-right text-muted" data-label="Charges">{row.count}</td>
                   <AmountCell data-label="Net spent" className="cell-stack-amount">
                     <Money cents={row.spentCents} plain />
@@ -631,7 +815,22 @@ export function ReportsClient({
                           className={`${nested ? 'text-muted' : 'font-medium text-ink'} cell-stack-headline`}
                           data-label="Category"
                         >
-                          {row.categoryName}
+                          {/* F-01's highest-value link: the whole tax year, that category, THAT
+                              PERSON. The person comes from the ROW, never from the page's filter
+                              -- taxYearReport takes no person scope at all, so this card's own
+                              figures do not follow the picker and a link that carried it would
+                              open a list that does not add up to the amount beside it. The
+                              transaction list this reaches is what a return actually needs, which
+                              the Category/Person/Amount CSV (src/lib/tax.ts) cannot give. */}
+                          <DrillLink
+                            scope={{
+                              range: { from: `${taxYear}-01-01`, to: `${taxYear}-12-31` },
+                              person: personRow.userId ?? 'unattributed',
+                            }}
+                            target={{ kind: 'category', categoryId: row.categoryId }}
+                          >
+                            {row.categoryName}
+                          </DrillLink>
                         </td>
                         <td className="text-muted" data-label="Person">{personRow.label}</td>
                         <AmountCell data-label="Amount" className="cell-stack-amount">
@@ -717,6 +916,37 @@ export function ReportsClient({
   );
 }
 
+/**
+ * F-01: one component for every drill-down on this page, so the link AFFORDANCE is as single as
+ * the URL builder behind it. Both props are required and neither has a default -- a call site
+ * has to name the scope it is linking with, which is the whole point (a link that silently
+ * inherits "no person filter" is how a household figure's rows reach somebody who asked about one
+ * person).
+ *
+ * `min-h-11 sm:min-h-0`: below `sm` these tables reflow into stacked cards where the category
+ * name is the row's headline and the only tap target on it, so it carries the 44px minimum. On a
+ * desktop row it goes back to sitting on the text's own line height, because a 44px-tall cell in
+ * a table of fifteen categories is a table nobody can see the bottom of.
+ */
+function DrillLink({
+  scope,
+  target,
+  children,
+}: {
+  scope: TransactionsLinkScope;
+  target: TransactionsLinkTarget;
+  children: React.ReactNode;
+}) {
+  return (
+    <Link
+      href={transactionsHref(scope, target)}
+      className="inline-flex min-h-11 items-center text-accent-text hover:underline sm:min-h-0"
+    >
+      {children}
+    </Link>
+  );
+}
+
 /** A zero in a month-over-month grid is noise; an em dash reads as "nothing here". */
 function formatOrDash(cents: number): React.ReactNode {
   if (cents === 0) return <span className="text-subtle">—</span>;
@@ -746,13 +976,22 @@ function cashflowSummary(rows: SavingsMonthRow[]): string {
   return `${base} · Target met in ${met} of ${withTarget.length} month${withTarget.length === 1 ? '' : 's'}.`;
 }
 
-/** Task 13: the YoY card's delta indicator. A category with nothing spent in the reference
- *  month has no percentage change to report, so this says so in words rather than dividing by
- *  zero -- the same guard savingsRate() applies for the card above. */
-function yoyChange(thisMonthCents: number, lastYearCents: number): React.ReactNode {
+/**
+ * Task 13: the YoY card's delta indicator. A category with nothing spent in the reference period
+ * has no percentage change to report, so this says so in words rather than dividing by zero --
+ * the same guard savingsRate() applies for the card above.
+ *
+ * F-08 (v1.31.0) gave it a second caller -- the Category breakdown's "same period last year"
+ * column -- rather than a second copy. Only the zero-reference SENTENCE differs between them
+ * ("this month" against a range the person picked), so only that sentence is a parameter; the
+ * percentage, the rounding, the direction and the icons stay one implementation. Writing a
+ * near-identical `rangeChange()` beside it is exactly the "one idea implemented twice" shape this
+ * review lineage keeps finding.
+ */
+function yoyChange(thisMonthCents: number, lastYearCents: number, noReferenceCopy = 'No spend this month last year'): React.ReactNode {
   if (lastYearCents === 0) {
     if (thisMonthCents === 0) return <span className="text-subtle">—</span>;
-    return <span className="text-xs text-muted">No spend this month last year</span>;
+    return <span className="text-xs text-muted">{noReferenceCopy}</span>;
   }
   const pct = Math.round(((thisMonthCents - lastYearCents) / lastYearCents) * 100);
   const direction = pct > 0 ? 'rising' : pct < 0 ? 'falling' : 'flat';

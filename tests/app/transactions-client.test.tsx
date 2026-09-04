@@ -214,6 +214,56 @@ describe('Create warranty row action (§11)', () => {
   });
 });
 
+/**
+ * F-01 (v1.31.0). Reports and the dashboard link a FIGURE to its rows; this is the same hop
+ * taken from a row -- "I am looking at this charge, show me every other one from here".
+ *
+ * The row's merchant text stays a <span> (it sits inside a truncating cell next to the
+ * rename/why-this-name affordances, and a link there would fight all three for the same tap), so
+ * the hop lives in the row menu, next to the other merchant-shaped items.
+ *
+ * Two properties worth guarding, both of which a hand-built querystring would get wrong:
+ * the search term is the NORMALIZED merchant (what `?q=` is matched against on arrival), not the
+ * raw bank line the row displays; and this is the one link in the app that carries NO range,
+ * because "all" is the whole point of it.
+ */
+describe('Show all from this merchant row action (F-01)', () => {
+  const baseProps = { accounts: [], categories: [], people: [], today: '2026-03-02' };
+  const ITEM = 'Show all from this merchant';
+
+  it('links to every transaction at this merchant, at every date', () => {
+    render(<TransactionsClient page={pageWithRow()} {...baseProps} />);
+    openRowMenu('Actions for TIM HORTONS');
+
+    expect(screen.getByRole('menuitem', { name: ITEM }).getAttribute('href')).toBe('/transactions?q=TIM+HORTONS');
+  });
+
+  it('searches the normalized merchant, not the raw bank line the row is showing', () => {
+    render(
+      <TransactionsClient
+        page={pageWithRow({
+          rawDescription: 'POINT OF SALE PURCHASE TIM HORTONS #4021',
+          normalizedMerchant: 'TIM HORTONS',
+        })}
+        {...baseProps}
+      />,
+    );
+    openRowMenu('Actions for POINT OF SALE PURCHASE');
+
+    // The bank line, pasted into ?q=, would match this one row and nothing else -- every other
+    // charge at the same merchant carries a different store and terminal number.
+    expect(screen.getByRole('menuitem', { name: ITEM }).getAttribute('href')).toBe('/transactions?q=TIM+HORTONS');
+  });
+
+  it('is offered on a transfer row too, unlike the row actions that are about spend', () => {
+    render(<TransactionsClient page={pageWithRow({ id: 78, isTransfer: true })} {...baseProps} />);
+    openRowMenu('Actions for TIM HORTONS');
+
+    expect(screen.queryByRole('menuitem', { name: 'Create warranty' })).toBeNull();
+    expect(screen.getByRole('menuitem', { name: ITEM })).toBeTruthy();
+  });
+});
+
 describe('MUST-14.8 / MUST-14.9: the row control', () => {
   const linkedRowId = 1; // matches pageWithRow()'s default row id
   const baseProps = {

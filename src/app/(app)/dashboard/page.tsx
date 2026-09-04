@@ -16,6 +16,10 @@ import { netWorthHint, netWorthOverTime } from '@/lib/networth';
 import { onboardingSteps } from '@/lib/onboarding';
 import { cashflowTrend, categoryBreakdown, topMerchants, trimLeadingEmptyMonths } from '@/lib/reports';
 import { cashRunway, cashRunwayHint, type CashRunway } from '@/lib/runway';
+// F-01 (v1.31.0): the same link builder the Reports cards use. A plain, client-safe module, so
+// this Server Component may value-import it (tests/ops/client-bundle.test.ts) and the two
+// surfaces cannot drift about what a merchant drill-down carries.
+import { transactionsHref } from '@/lib/transaction-links';
 import { savingsProgress, type SavingsProgress } from '@/lib/savings-target';
 import { expiringSoonItems } from '@/lib/warranty/search';
 import { formatCents } from '@/lib/money';
@@ -763,10 +767,29 @@ export default async function DashboardPage({
                 {merchants.map((merchant) => (
                   <li
                     key={merchant.normalizedMerchant}
-                    className="flex items-baseline justify-between gap-4 border-b border-line px-5 py-2.5 last:border-b-0 sm:px-6"
+                    // min-h-11 below sm: the merchant name is now a tap target, and the row is the
+                    // band a thumb aims at. Applied to the ROW rather than to the link itself
+                    // because the name sits inside a `truncate` span -- growing the link's own box
+                    // would either break the ellipsis or push its hit area outside the clipping
+                    // parent, where a tap never lands.
+                    className="flex min-h-11 items-baseline justify-between gap-4 border-b border-line px-5 py-2.5 last:border-b-0 sm:min-h-0 sm:px-6"
                   >
                     <span className="min-w-0 truncate text-ink">
-                      {merchant.normalizedMerchant} <span className="text-subtle">({merchant.count})</span>
+                      {/* F-01: the card's OWN scope -- the month being viewed (not today's, which
+                          is a different question whenever `?month=` points at a past month) and
+                          the person pill. `?q=` rather than a merchant id for the reason
+                          NeedsALookCard's own link gives: there is no merchant table, and the
+                          search lands on the charges with their neighbours. */}
+                      <Link
+                        href={transactionsHref(
+                          { range: { from: monthStart(month), to: monthEnd(month) }, person: scopeUserId },
+                          { kind: 'merchant', merchant: merchant.normalizedMerchant },
+                        )}
+                        className="text-accent-text hover:underline"
+                      >
+                        {merchant.normalizedMerchant}
+                      </Link>{' '}
+                      <span className="text-subtle">({merchant.count})</span>
                     </span>
                     <span className="money shrink-0">{formatCents(merchant.spentCents)}</span>
                   </li>

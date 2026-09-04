@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach } from 'vitest';
 import { render, cleanup, within } from '@testing-library/react';
-import { ReportsClient, type SavingsMonthRow, type TaxYearDisplayRow } from '@/app/(app)/reports/reports-client';
+import {
+  ReportsClient,
+  type CategoryBreakdownDisplayRow,
+  type SavingsMonthRow,
+  type TaxYearDisplayRow,
+} from '@/app/(app)/reports/reports-client';
 import { buildSavingsSeries, hasAnyTarget, SavingsChart } from '@/components/charts/SavingsChart';
 import { UNATTRIBUTED_LABEL } from '@/lib/reports';
 import type { ResolvedRange } from '@/lib/date-range';
@@ -49,7 +54,12 @@ function baseProps(
     today: '2026-06-30',
     person: '',
     people: [],
-    breakdown: [],
+    breakdown: [] as CategoryBreakdownDisplayRow[],
+    // F-08: null means the range shifted twelve months back had no rows at all, so the two
+    // comparison columns are withheld rather than shown as $0.00.
+    priorYearRange: null as { from: string; to: string } | null,
+    // F-04: the "Income by source" card's rows, empty in every pre-existing fixture here.
+    income: [] as CategoryBreakdownDisplayRow[],
     monthOverMonth: { months: [], rows: [] },
     split: [],
     debt: [],
@@ -143,8 +153,10 @@ describe('ReportsClient — Tax year card', () => {
 
     expect(card.getAllByText('Groceries')).toHaveLength(2); // one row per person
     // v1.15.0 (responsive rows): the category cell carries the tree's indent AND is the
-    // phone card's headline (same rule as Budgets' Row component).
-    expect(card.getAllByText('Groceries')[0].className).toContain('cell-stack-headline');
+    // phone card's headline (same rule as Budgets' Row component). Read off the CELL via
+    // closest('td'), not off whatever element happens to hold the text: F-01 (v1.31.0) made the
+    // name itself a drill-down <a> inside that cell, which is where the text now lives.
+    expect(card.getAllByText('Groceries')[0].closest('td')?.className).toContain('cell-stack-headline');
     expect(card.getByText('Alice')).toBeTruthy();
     expect(card.getByText(UNATTRIBUTED_LABEL)).toBeTruthy();
     expect(card.getByText('$40.00')).toBeTruthy();
@@ -660,5 +672,231 @@ describe('SavingsChart (src/components/charts/SavingsChart.tsx)', () => {
       />,
     );
     expect(within(container).getByText('Cumulative saved')).toBeTruthy();
+  });
+});
+
+/**
+ * v1.31.0, F-01 / F-04 / F-08.
+ *
+ * Every assertion below reads an `href` off the rendered DOM rather than calling
+ * `transactionsHref` and comparing strings: what a person gets when they click the number is the
+ * behaviour worth pinning, and a test that rebuilt the URL with the same helper the component
+ * used would pass even if the component had passed it the WRONG SCOPE -- which is precisely the
+ * defect class this feature had to avoid (v1.30.0 shipped three fixes for paths that dropped a
+ * person scope). So every expected scope is spelled out here, literally, per card.
+ */
+
+function cardByTitle(container: HTMLElement, title: string): HTMLElement {
+  const heading = Array.from(container.querySelectorAll('h2')).find((h) => h.textContent === title);
+  if (!heading) throw new Error(`No card titled ${title}`);
+  const card = heading.closest('section');
+  if (!card) throw new Error(`No <section> around the ${title} card`);
+  return card as HTMLElement;
+}
+
+/** Every <a> inside one card, as [text, href] -- the shape an assertion about drill-downs wants. */
+function linksIn(card: HTMLElement): [string, string][] {
+  return Array.from(card.querySelectorAll('a')).map((a) => [a.textContent ?? '', a.getAttribute('href') ?? '']);
+}
+
+function breakdownRow(over: {
+  categoryId: number | null;
+  categoryName: string;
+  spentCents: number;
+  priorCents?: number;
+  direct?: boolean;
+  isIncome?: boolean;
+}): CategoryBreakdownDisplayRow {
+  return {
+    parentId: null,
+    isIncome: false,
+    direct: false,
+    priorCents: 0,
+    ...over,
+  };
+}
+
+describe('ReportsClient — F-01: every figure links to the rows behind it', () => {
+  it("a Category breakdown row links to its category over the card's own range and person", () => {
+    const { container } = render(
+      <ReportsClient
+        {...baseProps()}
+        person="4"
+        breakdown={[breakdownRow({ categoryId: 12, categoryName: 'Groceries', spentCents: 124000 })]}
+      />,
+    );
+    expect(linksIn(cardByTitle(container, 'Category breakdown'))).toContainEqual([
+      'Groceries',
+      '/transactions?range=last_6_months&person=4&category=12',
+    ]);
+  });
+
+  it('the Uncategorized bucket links too, as a real filter value', () => {
+    const { container } = render(
+      <ReportsClient
+        {...baseProps()}
+        breakdown={[breakdownRow({ categoryId: null, categoryName: 'Uncategorized', spentCents: 4000 })]}
+      />,
+    );
+    expect(linksIn(cardByTitle(container, 'Category breakdown'))).toContainEqual([
+      'Uncategorized',
+      '/transactions?range=last_6_months&category=uncategorized',
+    ]);
+  });
+
+  it('a household figure links without a person filter, so it does not answer a narrower question', () => {
+    const { container } = render(
+      <ReportsClient
+        {...baseProps()}
+        person=""
+        breakdown={[breakdownRow({ categoryId: 12, categoryName: 'Groceries', spentCents: 124000 })]}
+      />,
+    );
+    expect(linksIn(cardByTitle(container, 'Category breakdown'))[0][1]).not.toContain('person=');
+  });
+
+  it('the unattributed person scope travels as a scope, not as an absent one', () => {
+    const { container } = render(
+      <ReportsClient
+        {...baseProps()}
+        person="unattributed"
+        breakdown={[breakdownRow({ categoryId: 12, categoryName: 'Groceries', spentCents: 124000 })]}
+      />,
+    );
+    expect(linksIn(cardByTitle(container, 'Category breakdown'))[0][1]).toContain('person=unattributed');
+  });
+
+  it('a Month over month row asks for that category ALONE, because that is what the row sums', () => {
+    const { container } = render(
+      <ReportsClient
+        {...baseProps()}
+        person="4"
+        monthOverMonth={{
+          months: ['2026-05', '2026-06'],
+          rows: [{ categoryId: 12, categoryName: 'Groceries', byMonth: { '2026-05': 1000, '2026-06': 2000 }, totalCents: 3000 }],
+        }}
+      />,
+    );
+    expect(linksIn(cardByTitle(container, 'Month over month'))).toContainEqual([
+      'Groceries',
+      '/transactions?range=last_6_months&person=4&category=12&exact=1',
+    ]);
+  });
+
+  it("a year-over-year row links to the card's OWN compare month, not the page range", () => {
+    const { container } = render(
+      <ReportsClient
+        {...baseProps()}
+        person="4"
+        yoyMonth="2026-02"
+        yoy={[{ categoryId: 12, categoryName: 'Groceries', thisMonthCents: 1000, lastMonthCents: 900, lastYearCents: 800 }]}
+      />,
+    );
+    expect(linksIn(cardByTitle(container, 'This month against last year'))).toContainEqual([
+      'Groceries',
+      '/transactions?range=custom&from=2026-02-01&to=2026-02-28&person=4&category=12',
+    ]);
+  });
+
+  it('a Top merchants row searches for that merchant over the range and person', () => {
+    const { container } = render(
+      <ReportsClient {...baseProps()} person="4" merchants={[{ normalizedMerchant: 'TIM HORTONS', spentCents: 4200, count: 7 }]} />,
+    );
+    expect(linksIn(cardByTitle(container, 'Top merchants'))).toContainEqual([
+      'TIM HORTONS',
+      '/transactions?range=last_6_months&person=4&q=TIM+HORTONS',
+    ]);
+  });
+
+  it("a Tax year row links to the whole tax year and to THAT ROW'S person, not the page filter", () => {
+    const rows = [
+      taxRow({
+        categoryId: 12,
+        categoryName: 'Medical',
+        totalCents: 9000,
+        byUser: [
+          { userId: 3, label: 'Alice', cents: 6000 },
+          { userId: null, label: UNATTRIBUTED_LABEL, cents: 3000 },
+        ],
+      }),
+    ];
+    const { container } = render(<ReportsClient {...baseProps({ taxYears: [2025], taxYear: 2025, taxRows: rows })} person="4" />);
+    const hrefs = linksIn(cardByTitle(container, 'Tax year')).filter(([, href]) => href.startsWith('/transactions'));
+    expect(hrefs).toEqual([
+      ['Medical', '/transactions?range=custom&from=2025-01-01&to=2025-12-31&person=3&category=12'],
+      ['Medical', '/transactions?range=custom&from=2025-01-01&to=2025-12-31&person=unattributed&category=12'],
+    ]);
+  });
+});
+
+describe('ReportsClient — F-08: the same period a year earlier', () => {
+  const breakdown = [
+    breakdownRow({ categoryId: 12, categoryName: 'Groceries', spentCents: 124000, priorCents: 100000 }),
+    breakdownRow({ categoryId: 13, categoryName: 'Coffee', spentCents: 5000, priorCents: 0 }),
+  ];
+
+  it('adds the comparison columns when the shifted range has rows', () => {
+    const { container } = render(
+      <ReportsClient {...baseProps()} breakdown={breakdown} priorYearRange={{ from: '2025-01-01', to: '2025-06-30' }} />,
+    );
+    const card = within(cardByTitle(container, 'Category breakdown'));
+    expect(card.getByText('Same period last year')).toBeTruthy();
+    expect(card.getByText('$1,000.00')).toBeTruthy();
+    expect(card.getByText('+24% vs last year')).toBeTruthy();
+  });
+
+  it('says so in words rather than showing a $0.00 comparison for a category that is new this year', () => {
+    const { container } = render(
+      <ReportsClient {...baseProps()} breakdown={breakdown} priorYearRange={{ from: '2025-01-01', to: '2025-06-30' }} />,
+    );
+    const card = within(cardByTitle(container, 'Category breakdown'));
+    expect(card.getByText('No spend in this range last year')).toBeTruthy();
+    expect(card.queryByText('$0.00')).toBeNull();
+  });
+
+  it('hides the columns entirely when the shifted range has nothing in it', () => {
+    const { container } = render(<ReportsClient {...baseProps()} breakdown={breakdown} priorYearRange={null} />);
+    const card = within(cardByTitle(container, 'Category breakdown'));
+    expect(card.queryByText('Same period last year')).toBeNull();
+    expect(card.queryByText('Change')).toBeNull();
+    // The card still shows this year's own figures -- only the comparison is withheld.
+    expect(card.getByText('$1,240.00')).toBeTruthy();
+  });
+});
+
+describe('ReportsClient — F-04: Income by source', () => {
+  const income = [
+    breakdownRow({ categoryId: 20, categoryName: 'Salary', spentCents: -500000, isIncome: true }),
+    breakdownRow({ categoryId: 21, categoryName: 'Child benefit', spentCents: -60000, isIncome: true }),
+    breakdownRow({
+      categoryId: 22,
+      categoryName: 'Income — not in a sub-category',
+      spentCents: -7000,
+      isIncome: true,
+      direct: true,
+    }),
+  ];
+
+  it('reads income as money IN, not as a negative amount of spend', () => {
+    const { container } = render(<ReportsClient {...baseProps()} income={income} />);
+    const card = within(cardByTitle(container, 'Income by source'));
+    expect(card.getByText('$5,000.00')).toBeTruthy();
+    expect(card.getByText('$600.00')).toBeTruthy();
+    expect(card.queryByText('-$5,000.00')).toBeNull();
+  });
+
+  it("links each source, and asks for a parent category ALONE when the row is that parent's own slice", () => {
+    const { container } = render(<ReportsClient {...baseProps()} person="4" income={income} />);
+    const hrefs = linksIn(cardByTitle(container, 'Income by source'));
+    expect(hrefs).toContainEqual(['Salary', '/transactions?range=last_6_months&person=4&category=20']);
+    expect(hrefs).toContainEqual([
+      'Income — not in a sub-category',
+      '/transactions?range=last_6_months&person=4&category=22&exact=1',
+    ]);
+  });
+
+  it('shows an empty state rather than a card of nothing when no income landed in the range', () => {
+    const { container } = render(<ReportsClient {...baseProps()} income={[]} />);
+    expect(within(cardByTitle(container, 'Income by source')).getByText('No income in this range')).toBeTruthy();
   });
 });

@@ -60,6 +60,21 @@ export interface CategoryBreakdownRow {
   parentId: number | null;
   isIncome: boolean;
   spentCents: number;
+  /**
+   * F-01 (v1.31.0): true only for a NON-rollup bucket keyed by a category that is somebody
+   * else's parent -- the `— not in a sub-category` rows below. It is the same judgement the
+   * label already encodes, exposed as a field because a caller building a drill-down link needs
+   * it as a boolean: `?category=<parentId>` lists the parent AND every child, so a direct row's
+   * link must add `exact=1` or it shows a strictly larger set than the amount beside it claims
+   * (see transactionsHref, src/lib/transaction-links.ts). Exposed rather than re-derived at each
+   * card, because "is this id somebody's parentId" living in three files is how the two would
+   * eventually disagree -- and the alternative, string-matching the em dash in `categoryName`,
+   * makes a display string load-bearing for a query.
+   *
+   * Always false with `rollup: true`: a rolled bucket already IS parent-plus-every-child, which
+   * is exactly what a plain `?category=<id>` means.
+   */
+  direct: boolean;
 }
 
 export function categoryBreakdown(
@@ -84,16 +99,21 @@ export function categoryBreakdown(
   for (const row of rows) spendByCategory.set(row.categoryId, netSpentCents(row.total ?? 0));
 
   const result: CategoryBreakdownRow[] = [];
-  const emit = (categoryId: number | null, spentCents: number, nameOverride?: string) => {
+  // `direct` and the "not in a sub-category" LABEL are one decision, so they are made in one
+  // place: a row that is a parent's own direct slice is named for that and flagged for it, and
+  // there is no way to produce one without the other.
+  const emit = (categoryId: number | null, spentCents: number, direct = false) => {
     const category = categoryId === null ? null : byId.get(categoryId);
     const isIncome = category?.isIncome ?? false;
     if (!input.includeIncome && isIncome) return;
+    const name = category?.name ?? 'Uncategorized';
     result.push({
       categoryId,
-      categoryName: nameOverride ?? category?.name ?? 'Uncategorized',
+      categoryName: direct ? `${name} — not in a sub-category` : name,
       parentId: category?.parentId ?? null,
       isIncome,
       spentCents,
+      direct,
     });
   };
 
@@ -133,9 +153,9 @@ export function categoryBreakdown(
     // what it is about.
     const parentIds = new Set(all.filter((category) => category.parentId !== null).map((category) => category.parentId as number));
     for (const [categoryId, spent] of spendByCategory) {
-      const isDirectParentSpend = categoryId !== null && parentIds.has(categoryId);
-      const name = categoryId === null ? null : byId.get(categoryId)?.name;
-      emit(categoryId, spent, isDirectParentSpend && name ? `${name} — not in a sub-category` : undefined);
+      // `byId.has` guards a dangling parentId: without a category to name, the row falls back to
+      // 'Uncategorized', and "Uncategorized — not in a sub-category" is not a sentence.
+      emit(categoryId, spent, categoryId !== null && parentIds.has(categoryId) && byId.has(categoryId));
     }
   }
 

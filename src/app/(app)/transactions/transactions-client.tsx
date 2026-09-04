@@ -37,6 +37,10 @@ import { categoryOptionGroups, categoryOptions, type CategoryLike, type Category
 import { type ResolvedRange } from '@/lib/date-range';
 import type { LoanLink } from '@/lib/loans';
 import { formatCents, parseAmountToCents, sumCents } from '@/lib/money';
+// F-01 (v1.31.0): the same builder Reports and the dashboard link their figures with. Reaching
+// for it here rather than writing `?q=${encodeURIComponent(...)}` inline is the whole point of
+// the module -- see its docblock on why a second, hand-built definition is the defect shape.
+import { transactionsHref } from '@/lib/transaction-links';
 import type { SplitRow } from '@/lib/splits';
 import type {
   CategorizationSource,
@@ -1095,6 +1099,26 @@ export function TransactionsClient({
         <RowMenuButton onSelect={() => setNoting({ id: row.id, current: row.notes ?? '' })}>
           Note…
         </RowMenuButton>
+        {/* F-01 (v1.31.0). The row-side twin of the Reports and dashboard drill-downs: from a
+            figure, "show me the rows behind this"; from a row, "show me the rest of them".
+            Offered on every row, transfers included -- a transfer has a merchant like anything
+            else, and this item only reads.
+
+            NOT on the merchant name itself, which stays a <span> (below, around the
+            displayDescription cell): that text is truncated, and already carries the rename
+            affordance and the "why this name" disclosure, so a link there would compete with two
+            controls for the same tap on a phone. The kebab is where this row's actions live.
+
+            `range: null` is deliberate and this is the ONE call site that means it -- "all" is
+            the whole request. Every other link in the app carries the window its figure was
+            summed over, and transaction-links.ts spells `range` out with no default precisely so
+            that this choice reads as a decision here rather than an omission.
+            `person: null` for the same reason: "all" includes everyone the viewer can see, and
+            /transactions is itself viewer-scoped server-side (scopeFor), so a self-scoped member
+            following this still only ever reaches their own rows. */}
+        <RowMenuLink href={transactionsHref({ range: null, person: null }, { kind: 'merchant', merchant: row.normalizedMerchant })}>
+          Show all from this merchant
+        </RowMenuLink>
         {/* Ruling R4: offered on EVERY row, both directions -- not gated on reviewMode, and not
             gated on row.isTransfer either, since it is the control that flips that very flag.
             setRowTransferAction (Lane 1) reads `isTransfer` off the form, so this one item works

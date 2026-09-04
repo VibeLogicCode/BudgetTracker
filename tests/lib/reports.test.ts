@@ -154,6 +154,63 @@ describe('categoryBreakdown', () => {
     expect(rolled.find((r) => r.categoryId === food)?.categoryName).toBe('Food');
   });
 
+  /**
+   * F-01 (v1.31.0). The `— not in a sub-category` NAME above is not enough for a caller that has
+   * to build a drill-down link for the row: a link that asks for `?category=<parentId>` without
+   * `exact=1` lists the parent AND every child, which is a strictly larger set than the amount
+   * beside the link. `direct` is that same judgement as a field, so the Reports and Income cards
+   * read it instead of re-deriving "is this id somebody's parentId" from the category tree (or,
+   * worse, string-matching the em dash in the label).
+   */
+  it('flags the direct-to-parent bucket, so a drill-down link can ask for that category ALONE', () => {
+    const { db, add } = setup();
+    const food = categoryIdByName(db, 'Food');
+    const groceries = categoryIdByName(db, 'Groceries');
+    const kids = categoryIdByName(db, 'Kids');
+    add({ categoryId: food, amountCents: -1000 });
+    add({ categoryId: groceries, amountCents: -20000 });
+    add({ categoryId: kids, amountCents: -1500 });
+    add({ categoryId: null, amountCents: -900 });
+
+    const flat = categoryBreakdown(MARCH, HOUSEHOLD);
+    expect(flat.find((r) => r.categoryId === food)?.direct).toBe(true);
+    expect(flat.find((r) => r.categoryId === groceries)?.direct).toBe(false);
+    // A childless top-level category's bucket IS everything under it, so it is not "direct".
+    expect(flat.find((r) => r.categoryId === kids)?.direct).toBe(false);
+    expect(flat.find((r) => r.categoryId === null)?.direct).toBe(false);
+
+    // Rolled up, a parent's bucket already IS parent-plus-children, so nothing is direct-only.
+    const rolled = categoryBreakdown({ ...MARCH, rollup: true }, HOUSEHOLD);
+    expect(rolled.find((r) => r.categoryId === food)?.direct).toBe(false);
+  });
+
+  /**
+   * F-04 (v1.31.0), the read the "Income by source" card is built on. Rollup is deliberately OFF
+   * for it: the seeded tree files payroll under Income > Salary, so a rolled-up read answers
+   * "income: $6,000" -- the single figure the dashboard already shows and the exact question the
+   * card exists to break apart.
+   */
+  it('with income included and rollup off, gives one row per income source', () => {
+    const { db, add } = setup();
+    const income = categoryIdByName(db, 'Income');
+    const salary = categoryIdByName(db, 'Salary');
+    const other = categoryIdByName(db, 'Other Income');
+    add({ categoryId: salary, amountCents: 500000 });
+    add({ categoryId: other, amountCents: 30000 });
+    add({ categoryId: income, amountCents: 7000 });
+    add({ categoryId: categoryIdByName(db, 'Groceries'), amountCents: -12000 });
+
+    const rows = categoryBreakdown({ ...MARCH, includeIncome: true }, HOUSEHOLD).filter((r) => r.isIncome);
+    expect(rows.map((r) => [r.categoryName, r.spentCents, r.direct])).toEqual(
+      expect.arrayContaining([
+        ['Salary', -500000, false],
+        ['Other Income', -30000, false],
+        ['Income — not in a sub-category', -7000, true],
+      ]),
+    );
+    expect(rows).toHaveLength(3);
+  });
+
   /** A top-level category with no children (the seeded 'Kids' category has none) has nothing to
    *  disambiguate it from, so it keeps its plain name even with rollup off. */
   it('a childless top-level category keeps its plain name, flat', () => {

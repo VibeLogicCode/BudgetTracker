@@ -3,6 +3,7 @@ import { Card, CardHeader } from '@/components/ui/Card';
 import { ListRow } from '@/components/ui/ListRow';
 import { Pill } from '@/components/ui/Pill';
 import type { InsightKind, InsightRow } from '@/lib/insights';
+import { transactionsHref } from '@/lib/transaction-links';
 
 /**
  * v1.13.0 ruling R6 (item AJ / PROD-2). Self-hiding, in the manner of LoansCard and ComingUpCard:
@@ -48,11 +49,23 @@ export function NeedsALookCard({ rows }: { rows: InsightRow[] }) {
             trailing={
               // A search link, not /transactions/<id>: there is no per-transaction page, and the
               // merchant search lands on the charge WITH its neighbours, which is what somebody
-              // checking a duplicate actually wants to see. URLSearchParams (not
-              // encodeURIComponent) so a space becomes `+`, matching the query-string convention
-              // the rest of the app's links already use.
+              // checking a duplicate actually wants to see.
+              //
+              // F-01 (v1.31.0): this link used to build its own querystring here, and the note
+              // that stood in its place argued for URLSearchParams over encodeURIComponent so a
+              // space became `+` "matching the query-string convention the rest of the app's
+              // links already use". That convention now has a name and one implementation
+              // (transactionsHref, src/lib/transaction-links.ts), which every Reports card, the
+              // dashboard's Top merchants and the transactions row menu were built on in the same
+              // release -- so this call site joins them rather than remaining a second, agreeing
+              // -by-coincidence copy of the same rule. The URL is byte-identical to what this
+              // line produced before.
+              //
+              // `range: null` and `person: null` restate what this card always meant: the
+              // insight's own sentence carries its month, and the question here is "where else
+              // has this merchant charged us", which a range would narrow away.
               <Link
-                href={`/transactions?${new URLSearchParams({ q: row.merchant }).toString()}`}
+                href={transactionsHref({ range: null, person: null }, { kind: 'merchant', merchant: row.merchant })}
                 className="text-accent-text"
               >
                 Look

@@ -10,7 +10,7 @@ import { recordBalanceSnapshot } from '@/lib/networth';
 import { createManualTransaction } from '@/lib/transactions';
 import { createWarrantyItem } from '@/lib/warranty/items';
 import { createItemType } from '@/lib/warranty/types';
-import { addMonths, currentMonth, monthEnd, monthLabel, todayIso } from '@/lib/dates';
+import { addMonths, currentMonth, monthEnd, monthLabel, monthStart, todayIso } from '@/lib/dates';
 // Lane 1 (src/lib/savings-target.ts): not mocked, real DB, same as every other lib import here.
 import { saveSavingsTarget } from '@/lib/savings-target';
 import { createTestDb, type TestDb } from '../helpers/db';
@@ -235,6 +235,40 @@ describe('DashboardPage (ruling R2)', () => {
     expect(screen.getByText('Top merchants')).toBeTruthy();
     // v1.25.0 backlog item 15: same role change as the self-viewer test above.
     expect(screen.getByRole('navigation', { name: 'Whose money to show' })).toBeTruthy();
+  });
+
+  /**
+   * F-01 (v1.31.0). The Top merchants card is scoped to the month being viewed AND to the person
+   * pill, so its link has to carry both: a bare `?q=<merchant>` opens the household's whole
+   * history at that merchant, which is not the figure the card just stated.
+   *
+   * The seeded description is 'BIG STORE' but the row reads 'BIG', and that is the point of
+   * asserting on this merchant rather than a name that survives untouched: `topMerchants` groups
+   * by transactions.normalized_merchant, and normalizeMerchant() drops the bare token 'STORE' as
+   * a store-number marker (src/lib/categorize/normalize.ts). So the link has to carry the
+   * NORMALIZED name -- which is what `?q=` matches against on the receiving page
+   * (transactions.ts's `upper(normalizedMerchant) like`) -- and a future edit that "helpfully"
+   * passed the raw bank description instead would fail here rather than ship a link that lands
+   * on a filter matching nothing.
+   */
+  it('links each top merchant to that merchant within the month the card is showing', async () => {
+    const { adultId } = await setup();
+    currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.getByRole('link', { name: 'BIG' }).getAttribute('href')).toBe(
+      `/transactions?range=custom&from=${monthStart(currentMonth())}&to=${monthEnd(currentMonth())}&q=BIG`,
+    );
+  });
+
+  it('carries the person pill into the merchant link, so the list answers the question the card answered', async () => {
+    const { adultId, childId } = await setup();
+    currentUser.value = { id: adultId, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    render(await DashboardPage({ searchParams: Promise.resolve({ person: String(childId) }) }));
+
+    expect(screen.getByRole('link', { name: 'KID SHOP' }).getAttribute('href')).toContain(`&person=${childId}&`);
   });
 
   // v1.13.0 whole-branch review, item I2.
