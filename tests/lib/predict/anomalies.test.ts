@@ -272,6 +272,26 @@ describe('F-05: recurringVerdict reports a cadence, and only a cadence', () => {
       recurringVerdict({ charges: monthly(), today: TODAY }),
     );
   });
+
+  it('I-1 (2026-09-02 review): does not claim a cadence when a two-value median is only the MEAN of two out-of-band gaps', () => {
+    // Gaps of 1 day and 59 days average (medianCents of two values) to 30, which sits inside the
+    // monthly band though neither gap does -- reproduced verbatim from the review.
+    const monthlyShape: SpendRow[] = [
+      row({ id: 1, date: '2026-06-30', amountCents: -1000 }),
+      row({ id: 2, date: '2026-07-01', amountCents: -1000 }),
+      row({ id: 3, date: '2026-08-29', amountCents: -1000 }),
+    ];
+    expect(recurringVerdict({ charges: monthlyShape, today: '2026-08-29' })).toBeNull();
+
+    // Gaps of 26 days and 704 days average to 365, which sits inside the yearly band though
+    // neither gap does -- same shape, reproduced in the yearly band.
+    const yearlyShape: SpendRow[] = [
+      row({ id: 1, date: '2024-09-01', amountCents: -1000 }),
+      row({ id: 2, date: '2024-09-27', amountCents: -1000 }),
+      row({ id: 3, date: '2026-09-01', amountCents: -1000 }),
+    ];
+    expect(recurringVerdict({ charges: yearlyShape, today: '2026-09-01' })).toBeNull();
+  });
 });
 
 describe('MUST-9.20 to MUST-9.23: findDuplicates', () => {

@@ -383,8 +383,10 @@ export function UpdatesClient(props: UpdatesViewProps) {
                     releases page before deciding.
                   </p>
                 ) : (
-                  review.release.groups.map((group) => (
-                    <div key={group.title} className="flex flex-col gap-1.5">
+                  review.release.groups.map((group, index) => (
+                    // M-7 (2026-09-02 review): same fix as about-panel.tsx -- `group.title`
+                    // alone collides when a release has two same-named `###` groups.
+                    <div key={`${index}-${group.title}`} className="flex flex-col gap-1.5">
                       <h4 className="eyebrow">{group.title}</h4>
                       <ul className="flex flex-col gap-1 text-sm text-muted">
                         {group.items.map((item, index) => (

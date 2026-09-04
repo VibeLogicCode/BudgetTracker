@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
-import { and, desc, eq, lt, ne } from 'drizzle-orm';
+import { and, desc, eq, gt, lt, ne } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { sessions, users } from '@/db/schema';
 import { nowIso } from '@/lib/clock';
@@ -121,6 +121,17 @@ export function destroySession(token: string): void {
  * (an admin gets no wider a list here; that would be a new privilege this release did not agree
  * to add). Ordered newest-active-first, the same ordering a person would want when scanning for
  * a device they do not recognise.
+ *
+ * Filtered to `expiresAt > at` (2026-09-02 review, M-1). validateSession() already refuses an
+ * expired row at read time, but nothing deletes it until the nightly purgeExpiredSessions()
+ * sweep runs -- so without this clause a row can sit here, looking exactly like a live device,
+ * for up to about a day after it stopped being one. The one reader this card is FOR is someone
+ * checking for a login they do not recognise; showing them a device that cannot actually be used
+ * is the same "state only what is true" mistake the IP column got right elsewhere on this page.
+ * Deleting the row here instead (i.e. calling purgeExpiredSessions() from a read path) was
+ * rejected: a read should not have a write side effect, and the nightly sweep already owns
+ * cleanup. `at` defaults the way the rest of this module does, so a caller can pin "now" in a
+ * test without this function gaining its own clock.
  */
 export interface SessionSummary {
   id: string;
@@ -130,7 +141,7 @@ export interface SessionSummary {
   lastSeenAt: string;
 }
 
-export function listSessionsForUser(userId: number): SessionSummary[] {
+export function listSessionsForUser(userId: number, at: Date = new Date()): SessionSummary[] {
   return getDb()
     .select({
       id: sessions.tokenHash,
@@ -140,7 +151,7 @@ export function listSessionsForUser(userId: number): SessionSummary[] {
       lastSeenAt: sessions.lastSeenAt,
     })
     .from(sessions)
-    .where(eq(sessions.userId, userId))
+    .where(and(eq(sessions.userId, userId), gt(sessions.expiresAt, at.toISOString())))
     .orderBy(desc(sessions.lastSeenAt))
     .all();
 }

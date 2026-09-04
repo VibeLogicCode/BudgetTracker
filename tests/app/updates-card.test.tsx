@@ -187,6 +187,33 @@ describe('MUST-4.8 / MUST-9.5: remote changelog markup renders as literal text',
   });
 });
 
+describe('M-7 (2026-09-02 review): duplicate group titles in one release do not collide on key', () => {
+  it('renders both same-titled groups without a React duplicate-key warning', async () => {
+    vi.mocked(reviewUpdateAction).mockResolvedValueOnce({
+      version: '1.4.0',
+      release: {
+        heading: '[1.4.0] - 2026-08-18',
+        notes: [],
+        groups: [
+          { title: 'Added', items: ['first Added bullet'] },
+          { title: 'Added', items: ['second Added bullet'] },
+        ],
+      },
+    });
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { container } = render(<UpdatesClient {...base} severity="major" latestVersion="1.4.0" />);
+    submit('Review and update');
+
+    await waitFor(() => expect(container.textContent).toContain('second Added bullet'));
+    expect(container.textContent).toContain('first Added bullet');
+    for (const call of errorSpy.mock.calls) {
+      expect(String(call[0])).not.toMatch(/same key/);
+    }
+    errorSpy.mockRestore();
+  });
+});
+
 describe("MUST-9.8: the two apply outcomes render their exact sentences", () => {
   it('the accepted sentence is shown verbatim', async () => {
     vi.mocked(applyUpdateAction).mockResolvedValueOnce({

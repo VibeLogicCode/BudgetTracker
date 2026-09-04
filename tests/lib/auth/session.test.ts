@@ -164,7 +164,9 @@ describe('F-09: listSessionsForUser', () => {
     createSession(alice, { userAgent: 'alice-new', at: new Date('2026-01-02T00:00:00.000Z') });
     createSession(bob, { userAgent: 'bob-only' });
 
-    const rows = listSessionsForUser(alice);
+    // M-1 fix: listSessionsForUser now excludes expired rows, so `at` is pinned inside both
+    // fixture sessions' 30-day validity window rather than left to default to the real clock.
+    const rows = listSessionsForUser(alice, new Date('2026-01-02T12:00:00.000Z'));
     expect(rows.map((r) => r.userAgent)).toEqual(['alice-new', 'alice-old']);
     expect(rows.some((r) => r.userAgent === 'bob-only')).toBe(false);
   });
@@ -180,6 +182,22 @@ describe('F-09: listSessionsForUser', () => {
     expect(row.id).not.toContain(token);
     expect(row.ip).toBe('10.0.0.5');
     expect(row.userAgent).toBe('vitest');
+  });
+
+  it('M-1 (2026-09-02 review): omits an expired session rather than listing it as a live device', () => {
+    current = createTestDb();
+    const userId = insertTestUser(current.db, { username: 'alice' });
+    const at = new Date('2026-01-01T00:00:00.000Z');
+    createSession(userId, { userAgent: 'still-live', at });
+    createSession(userId, { userAgent: 'stale-but-not-yet-purged', at: new Date('2025-11-01T00:00:00.000Z') });
+
+    // Between expiry and the nightly purgeExpiredSessions() sweep, the expired row still exists
+    // in the table -- validateSession() would already refuse it, but this listing must not show
+    // it as a device that is currently signed in.
+    const later = new Date('2026-01-05T00:00:00.000Z'); // after the 30-day expiry of the second session
+    const rows = listSessionsForUser(userId, later);
+    expect(rows.map((r) => r.userAgent)).toEqual(['still-live']);
+    expect(rows.some((r) => r.userAgent === 'stale-but-not-yet-purged')).toBe(false);
   });
 });
 

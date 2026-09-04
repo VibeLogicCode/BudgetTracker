@@ -200,6 +200,18 @@ export function recurringVerdict(input: { charges: SpendRow[]; today: string }):
   if (cadence === null) return null;
 
   /**
+   * Every gap must itself sit in the band the median chose -- not just the median (2026-09-02
+   * review, I-1). At the 3-charge floor there are exactly two gaps, and medianCents() of two
+   * values is their mean, not an observed interval: gaps of 1 and 59 days average to 30 and,
+   * without this check, would read as a confident "Monthly" though neither gap is a month.
+   * Raising RECURRING_MIN_CHARGES instead was rejected -- it does not fix the averaging, it only
+   * moves the count at which it can still happen (three gaps of 1, 1 and 88 average to 30 too).
+   * Requiring the band on every gap is what stops a mean from posing as a rhythm, at any count,
+   * and is why the 3-charge floor above can stay put.
+   */
+  if (!gaps.every((gap) => recurringBand(gap) === cadence)) return null;
+
+  /**
    * STILL charging, not "once charged". This is the condition the wide window (see
    * RECURRING_LOOKBACK_DAYS) makes load-bearing: a subscription cancelled two years ago has a
    * textbook monthly median gap inside that window, and listing it as a current commitment

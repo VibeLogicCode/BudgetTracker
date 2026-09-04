@@ -216,6 +216,19 @@ function record(name, pass, detail) {
   console.log(`${pass ? 'PASS' : 'FAIL'}  ${name}${detail ? '  (' + detail + ')' : ''}`);
 }
 
+/**
+ * Records a check as SKIPPED rather than passed or failed (review M-6). Skipped checks are
+ * excluded from both the numerator and the denominator of the final "N/M checks passed" line, so
+ * a platform-limited run reads as "M/M passed, K skipped" instead of quietly reporting the same
+ * total M as a full run would -- the failure mode this exists to avoid is a developer misreading
+ * a shorter denominator as a regression, or a passing count as having actually exercised the
+ * check.
+ */
+function skip(name, reason) {
+  results.push({ name, pass: null, skipped: true });
+  console.log(`SKIP  ${name}  (${reason})`);
+}
+
 /** Route path plus status only -- never a cookie value (see docblock). */
 async function request(pathname, { cookie } = {}) {
   const headers = {};
@@ -366,6 +379,21 @@ async function shutdownAndVerify() {
   while (!serverExit && Date.now() < deadline) {
     await sleep(200);
   }
+  if (process.platform === 'win32') {
+    // Node maps SIGTERM to TerminateProcess on Windows (documented Node.js behaviour), which
+    // kills the process immediately and never runs its 'SIGTERM' handler -- so the app's own
+    // graceful-shutdown code (the exit-0 path and the '[shutdown] ...' log line) genuinely
+    // cannot run here, on any build, regardless of the tree. This is not flaky; it is
+    // unreachable on this platform. CI runs this script on ubuntu-latest, where SIGTERM does
+    // reach the handler and both checks below are scored for real (review M-6). Skipping them
+    // here -- rather than either faking a pass or letting them fail as noise -- is what keeps a
+    // developer running the strongest gate locally on Windows from mistaking a shorter total for
+    // a regression.
+    skip('graceful shutdown exit code', "SIGTERM maps to TerminateProcess on win32; the app's shutdown handler cannot run -- see ubuntu-latest CI for this check");
+    skip('graceful shutdown log line', "SIGTERM maps to TerminateProcess on win32; the app's shutdown handler cannot run -- see ubuntu-latest CI for this check");
+    if (!serverExit) server.kill('SIGKILL');
+    return;
+  }
   if (!serverExit) {
     record('graceful shutdown', false, `did not exit within ${SHUTDOWN_TIMEOUT_MS}ms of SIGTERM`);
     server.kill('SIGKILL');
@@ -405,9 +433,17 @@ try {
   fs.rmSync(dataDir, { recursive: true, force: true });
 }
 
-const failed = results.filter((r) => !r.pass);
+const skipped = results.filter((r) => r.skipped);
+const scored = results.filter((r) => !r.skipped);
+const failed = scored.filter((r) => !r.pass);
 console.log('');
-console.log(`[smoke] ${results.length - failed.length}/${results.length} checks passed`);
+console.log(
+  `[smoke] ${scored.length - failed.length}/${scored.length} checks passed` +
+    (skipped.length > 0 ? `, ${skipped.length} skipped` : ''),
+);
+if (skipped.length > 0) {
+  console.log(`[smoke] SKIPPED (not scored -- see reason above): ${skipped.map((r) => r.name).join(', ')}`);
+}
 if (failed.length > 0) {
   console.log(`[smoke] FAILED: ${failed.map((r) => r.name).join(', ')}`);
   exitCode = 1;

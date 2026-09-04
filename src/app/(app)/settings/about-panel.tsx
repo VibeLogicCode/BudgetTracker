@@ -116,8 +116,14 @@ export function AboutPanel({
                       {renderEmphasis(note)}
                     </p>
                   ))}
-                  {release.groups.map((group) => (
-                    <div key={group.title} className="flex flex-col gap-1.5">
+                  {release.groups.map((group, index) => (
+                    // M-7 (2026-09-02 review): `group.title` alone collides when a release
+                    // section has two same-named `###` groups (e.g. two "Added" headings) --
+                    // observed via tests/app/settings-sessions.test.tsx's React key warning.
+                    // Groups within one release have no other stable identity to key on, so the
+                    // index is prefixed rather than substituted for the title, keeping the title
+                    // as the human-meaningful part of the key.
+                    <div key={`${index}-${group.title}`} className="flex flex-col gap-1.5">
                       <h4 className="eyebrow">{group.title}</h4>
                       <ul className="flex flex-col gap-1 text-sm text-muted">
                         {group.items.map((item, index) => (

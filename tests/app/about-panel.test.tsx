@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -63,6 +63,27 @@ describe('Settings → About', () => {
     const { getByText } = render(<AboutPanel ocr={NO_PROBE} />);
     expect(getByText('9.9.9 - 2030-01-01')).toBeTruthy();
     expect(getByText('a bullet written at runtime')).toBeTruthy();
+  });
+
+  it('M-7 (2026-09-02 review): two same-named groups in one release do not collide on key', () => {
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'budget-about-dupe-')), 'CHANGELOG.md');
+    // parseChangelog() (src/lib/changelog.ts) makes a fresh group object per `### ` line, so
+    // two `### Added` headings under one release produce two same-titled groups -- exactly the
+    // shape tests/app/settings-sessions.test.tsx observed React warn about ("Encountered two
+    // children with the same key, `Added`") before the key was made unique per group.
+    fs.writeFileSync(
+      file,
+      '## 9.9.9 - 2030-01-01\n\n### Added\n\n- first Added bullet\n\n### Added\n\n- second Added bullet\n',
+    );
+    process.env.BUDGET_CHANGELOG_PATH = file;
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { getByText } = render(<AboutPanel ocr={NO_PROBE} />);
+    expect(getByText('first Added bullet')).toBeTruthy();
+    expect(getByText('second Added bullet')).toBeTruthy();
+    for (const call of errorSpy.mock.calls) {
+      expect(String(call[0])).not.toMatch(/same key/);
+    }
+    errorSpy.mockRestore();
   });
 });
 
