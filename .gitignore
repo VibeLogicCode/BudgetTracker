@@ -20,3 +20,8 @@ next-env.d.ts
 
 # Design references (mockups and exported prototypes). Never shipped, never published.
 /UI Component/
+
+# Screen recordings dropped in the repo root while demoing a change. Never part of the
+# source tree, and this is a public repository -- a recording of a real household ledger is
+# exactly the thing that must not be published by an absent-minded `git add -A`.
+screen-*.mp4

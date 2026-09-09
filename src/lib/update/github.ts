@@ -2,6 +2,11 @@ import { parseChangelog, type ChangelogRelease } from '@/lib/changelog';
 import { truncateText } from '@/lib/notify/render';
 import { GITHUB_API_ORIGIN, GITHUB_CHANGELOG_PATH, GITHUB_RELEASES_PATH, assertGithubUrl } from '@/lib/update/egress';
 import { formatSemver, parseSemver } from '@/lib/update/semver';
+import {
+  GITHUB_INTERACTIVE_TIMEOUT_MS,
+  GITHUB_SCHEDULED_TIMEOUT_MS,
+  timeoutSeconds,
+} from '@/lib/update/timeouts';
 import { APP_VERSION } from '@/lib/version';
 
 /**
@@ -18,7 +23,14 @@ import { APP_VERSION } from '@/lib/version';
  * folded into a shared request helper: that adjacency is the property a refactor loses first,
  * and Task 14's scanner checks for it at the source level.
  */
-export const GITHUB_TIMEOUT_MS = 15_000;
+/**
+ * v1.32.0 (UP-1): the one 15-second budget this line used to declare is now two, in
+ * @/lib/update/timeouts -- GITHUB_SCHEDULED_TIMEOUT_MS for the 04:00 tick nobody is waiting on
+ * and GITHUB_INTERACTIVE_TIMEOUT_MS for the two requests a person is watching. See that file
+ * for why they differ. They live there rather than here because updates-client.tsx has to name
+ * the interactive one on screen and cannot import this module (it reaches the database client
+ * through @/lib/notify/render).
+ */
 export const MAX_CHANGELOG_BYTES = 512 * 1024;
 export const MAX_CHANGELOG_GROUPS = 12;
 export const MAX_CHANGELOG_ITEMS = 200;
@@ -86,8 +98,21 @@ function statusIsPermanent(status: number): boolean {
 }
 
 /** Turns anything a rejected fetch() can throw (DNS failure, connect timeout, abort) into a
- * transient UpdateCheckError. Does not itself call fetch. */
-function requestFailure(error: unknown): UpdateCheckError {
+ * transient UpdateCheckError. Does not itself call fetch.
+ *
+ * v1.32.0 (UP-1): a budget that ran out now says so in words a household can act on, naming
+ * the budget that expired. AbortSignal.timeout() rejects with a DOMException named
+ * 'TimeoutError' whose own message is "The operation was aborted due to timeout" (its real
+ * shape on Node is pinned by tests/lib/update/watchtower.test.ts) -- a sentence that reads like
+ * the app cancelled something on purpose and never mentions GitHub at all. Every other
+ * rejection still carries its own message through unchanged, because "getaddrinfo ENOTFOUND
+ * api.github.com" is more useful than anything this function could write over it. */
+function requestFailure(error: unknown, timeoutMs: number): UpdateCheckError {
+  if (error instanceof Error && error.name === 'TimeoutError') {
+    return new UpdateCheckError(`GitHub did not answer within ${timeoutSeconds(timeoutMs)} seconds.`, {
+      permanent: false,
+    });
+  }
   const message = error instanceof Error ? error.message : 'The GitHub request failed.';
   return new UpdateCheckError(message, { permanent: false });
 }
@@ -107,10 +132,16 @@ async function readJson(response: Response): Promise<unknown> {
  * guessed at, which is what keeps an unclassifiable version away from an auto-apply
  * decision (MUST-4.10).
  */
-export async function fetchLatestRelease(): Promise<RemoteRelease> {
+export async function fetchLatestRelease(options: { timeoutMs?: number } = {}): Promise<RemoteRelease> {
+  // v1.32.0 (UP-1): this function has two callers with two different kinds of patience, and
+  // runUpdateCheck (check.ts) is the one that knows which it is -- it already carries the
+  // `manual` flag the Check-now button sets. The DEFAULT is the scheduled budget, so the
+  // scheduler and any future caller that has not thought about it keep exactly today's
+  // behaviour, and only a caller that positively knows a person is waiting shortens it.
+  const timeoutMs = options.timeoutMs ?? GITHUB_SCHEDULED_TIMEOUT_MS;
   const url = `${GITHUB_API_ORIGIN}${GITHUB_RELEASES_PATH}`;
-  // MUST-4.4: 15 s abort and redirect: 'error'. A 3xx from api.github.com is a failure, not
-  // a hop.
+  // MUST-4.4: a bounded abort and redirect: 'error'. A 3xx from api.github.com is a failure,
+  // not a hop.
   let response: Response;
   try {
     assertGithubUrl(url);
@@ -118,10 +149,10 @@ export async function fetchLatestRelease(): Promise<RemoteRelease> {
       method: 'GET',
       headers: headers(),
       redirect: 'error',
-      signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (error) {
-    throw requestFailure(error);
+    throw requestFailure(error, timeoutMs);
   }
 
   if (!response.ok) {
@@ -151,7 +182,14 @@ export async function fetchLatestRelease(): Promise<RemoteRelease> {
  * contain a path or query character, so the guard's `\d+` pattern and this parser's
  * strictness can never diverge.
  */
-export async function fetchRemoteChangelog(version: string): Promise<string> {
+export async function fetchRemoteChangelog(version: string, options: { timeoutMs?: number } = {}): Promise<string> {
+  // v1.32.0 (UP-1): this one defaults to the INTERACTIVE budget, the opposite of
+  // fetchLatestRelease above, because it has exactly one caller -- reviewUpdateAction, behind
+  // the "Review and update" button -- and that caller is a person waiting, always. There is no
+  // scheduled path that reads the changelog: the daily tick classifies a version and stops. The
+  // option is still here so a future unattended caller can say so explicitly rather than
+  // inheriting a budget chosen for a button.
+  const timeoutMs = options.timeoutMs ?? GITHUB_INTERACTIVE_TIMEOUT_MS;
   const parsedVersion = parseSemver(version);
   if (parsedVersion === null) throw new UpdateCheckError(UNPARSEABLE_TAG_ERROR, { permanent: true });
 
@@ -163,10 +201,10 @@ export async function fetchRemoteChangelog(version: string): Promise<string> {
       method: 'GET',
       headers: headers(),
       redirect: 'error',
-      signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (error) {
-    throw requestFailure(error);
+    throw requestFailure(error, timeoutMs);
   }
 
   if (!response.ok) {

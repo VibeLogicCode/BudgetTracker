@@ -864,6 +864,49 @@ describe('ReportsClient — F-08: the same period a year earlier', () => {
   });
 });
 
+/**
+ * UP-4 (v1.32.0, owner ask 2026-09-04). Nothing here changes an aggregate or a filter -- these
+ * pin the COPY fix: the page now states the resolved dates a preset range summed, both in the
+ * eyebrow (visible regardless of which card someone is looking at, since the picker itself hides
+ * its own From/To inputs for a non-custom preset -- DateRangePicker.tsx) and in the Category
+ * breakdown card, which already named its comparison window precisely and now names its own
+ * window the same way.
+ */
+describe('ReportsClient — UP-4: the page states the dates it summed', () => {
+  it('the eyebrow appends the resolved dates to a preset label', () => {
+    const { container } = render(<ReportsClient {...baseProps()} />);
+    const eyebrow = container.querySelector('span.eyebrow');
+    // baseProps' RANGE fixture: { preset: 'last_6_months', from: '2026-01-01', to: '2026-06-30',
+    // label: 'Last 6 months' } -- a preset label alone ("Last 6 months") names no date at all.
+    expect(eyebrow?.textContent).toBe('Last 6 months (2026-01-01 to 2026-06-30)');
+  });
+
+  it('does not repeat the dates for a custom range, whose own label already IS the two dates', () => {
+    const customRange: ResolvedRange = { preset: 'custom', from: '2026-08-01', to: '2026-08-31', label: '2026-08-01 to 2026-08-31' };
+    const { container } = render(<ReportsClient {...baseProps()} range={customRange} />);
+    const eyebrow = container.querySelector('span.eyebrow');
+    expect(eyebrow?.textContent).toBe('2026-08-01 to 2026-08-31');
+  });
+
+  it("the Category breakdown card names its own window precisely when there is no prior-year comparison", () => {
+    const { container } = render(<ReportsClient {...baseProps()} priorYearRange={null} />);
+    const card = within(cardByTitle(container, 'Category breakdown'));
+    expect(card.getByText('Net spend per category from 2026-01-01 to 2026-06-30.')).toBeTruthy();
+  });
+
+  it('the Category breakdown card names BOTH windows precisely when a prior-year comparison is present', () => {
+    const { container } = render(
+      <ReportsClient {...baseProps()} priorYearRange={{ from: '2025-01-01', to: '2025-06-30' }} />,
+    );
+    const card = within(cardByTitle(container, 'Category breakdown'));
+    expect(
+      card.getByText(
+        'Net spend per category from 2026-01-01 to 2026-06-30, beside the same stretch a year earlier (2025-01-01 to 2025-06-30).',
+      ),
+    ).toBeTruthy();
+  });
+});
+
 describe('ReportsClient — F-04: Income by source', () => {
   const income = [
     breakdownRow({ categoryId: 20, categoryName: 'Salary', spentCents: -500000, isIncome: true }),

@@ -14,6 +14,8 @@ import { addMonths, currentMonth, monthEnd, monthLabel, monthStart, todayIso } f
 // Lane 1 (src/lib/savings-target.ts): not mocked, real DB, same as every other lib import here.
 import { saveSavingsTarget } from '@/lib/savings-target';
 import { createTestDb, type TestDb } from '../helpers/db';
+import { CROSS_ORIGIN_ERROR } from '@/lib/auth/csrf';
+import { resetNotifyRateLimitsForTests } from '@/lib/notify/ratelimit';
 
 // v1.26.0 Lane 3b's own describe block near the end of this file exercises
 // dismissRuleImportAction directly (a real 'use server' function, same reasoning
@@ -1068,5 +1070,118 @@ describe('DashboardPage — Lane 3b: the unreviewed-rule-imports card', () => {
     cleanup();
     render(await DashboardPage({ searchParams: Promise.resolve({}) }));
     expect(screen.queryByText('Rules categorized these on import')).toBeNull();
+  });
+});
+
+/**
+ * 2026-09-08, docs/superpowers/specs/2026-09-08-manual-digest-send-design.md. The dashboard's
+ * "Send me a summary now" control and the action behind it. Same direct-invocation approach as the
+ * dismiss test above: the real 'use server' function against a real DB, not a simulated click.
+ */
+describe('sending a spending summary on demand', () => {
+  let t: TestDb | null = null;
+  afterEach(() => {
+    // The rate bucket is module-level and in-memory (src/lib/notify/ratelimit.ts), so it survives
+    // a fresh database -- without this reset the three-per-hour cap would leak between the tests
+    // below and whichever ran fourth would fail for the wrong reason.
+    resetNotifyRateLimitsForTests();
+    t?.cleanup();
+    t = null;
+  });
+
+  async function adminOnDashboard(): Promise<number> {
+    t = createTestDb();
+    const adult = await createUser({ name: 'Adult', username: 'adult', password: 'correct horse battery', role: 'admin' });
+    currentUser.value = { id: adult.id, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    return adult.id;
+  }
+
+  it('offers the control in the dashboard header', async () => {
+    await adminOnDashboard();
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+    expect(screen.getByRole('button', { name: 'Send me a summary…' })).toBeTruthy();
+  });
+
+  it('reports which scope it sent to, so the person knows whether anyone else was notified', async () => {
+    await adminOnDashboard();
+    const { sendDigestNowAction } = await import('@/app/(app)/dashboard/actions');
+    const fd = new FormData();
+    fd.set('scope', 'self');
+    const result = await sendDigestNowAction({}, fd);
+    expect(result.error).toBeUndefined();
+    expect(result.sent).toBe('self');
+  });
+
+  it('refuses a scope it does not recognise, before spending a rate-limit token on it', async () => {
+    await adminOnDashboard();
+    const { sendDigestNowAction } = await import('@/app/(app)/dashboard/actions');
+    const fd = new FormData();
+    fd.set('scope', 'everyone-on-the-internet');
+    expect((await sendDigestNowAction({}, fd)).error).toBe('Invalid request.');
+    // The token was NOT consumed: three real sends still succeed afterwards. Validation before the
+    // limiter is what makes a malformed press free rather than costly.
+    for (const _ of [1, 2, 3]) {
+      const ok = new FormData();
+      ok.set('scope', 'self');
+      expect((await sendDigestNowAction({}, ok)).error).toBeUndefined();
+    }
+  });
+
+  it('refuses the household scope for a self-scoped member, and only that scope', async () => {
+    t = createTestDb();
+    const kid = await createUser({ name: 'Kid', username: 'kid', password: 'correct horse battery', role: 'member' });
+    currentUser.value = { id: kid.id, name: 'Kid', username: 'kid', role: 'member', visibility: 'self' };
+
+    const { sendDigestNowAction } = await import('@/app/(app)/dashboard/actions');
+    const household = new FormData();
+    household.set('scope', 'household');
+    expect((await sendDigestNowAction({}, household)).error).toBe('Not available on this account.');
+
+    // Their own summary is untouched -- the refusal is about who else gets notified, not about
+    // whether this person may have their own digest.
+    const own = new FormData();
+    own.set('scope', 'self');
+    expect((await sendDigestNowAction({}, own)).sent).toBe('self');
+  });
+
+  it('does not offer the household option to a self-scoped member at all', async () => {
+    t = createTestDb();
+    const kid = await createUser({ name: 'Kid', username: 'kid', password: 'correct horse battery', role: 'member' });
+    currentUser.value = { id: kid.id, name: 'Kid', username: 'kid', role: 'member', visibility: 'self' };
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+    // The trigger is there; what is absent is the choice the action would refuse. A control that
+    // exists only to say no explains less than its absence does.
+    expect(screen.getByRole('button', { name: 'Send me a summary…' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Everyone in the household' })).toBeNull();
+  });
+
+  it('rate-limits repeated presses, naming when to try again', async () => {
+    await adminOnDashboard();
+    const { sendDigestNowAction } = await import('@/app/(app)/dashboard/actions');
+    const send = async () => {
+      const fd = new FormData();
+      fd.set('scope', 'self');
+      return sendDigestNowAction({}, fd);
+    };
+    for (const _ of [1, 2, 3]) expect((await send()).error).toBeUndefined();
+    const refused = await send();
+    expect(refused.sent).toBeUndefined();
+    expect(refused.error).toMatch(/Too many summaries sent just now\. Try again in \d+ minutes?\./);
+  });
+
+  it('refuses a cross-origin post before doing anything at all', async () => {
+    await adminOnDashboard();
+    const saved = requestHeaders;
+    requestHeaders = new Headers({ origin: 'http://evil.example', host: 'nas.local:3000' });
+    try {
+      const { sendDigestNowAction } = await import('@/app/(app)/dashboard/actions');
+      const fd = new FormData();
+      fd.set('scope', 'household');
+      expect((await sendDigestNowAction({}, fd)).error).toBe(CROSS_ORIGIN_ERROR);
+    } finally {
+      requestHeaders = saved;
+    }
   });
 });

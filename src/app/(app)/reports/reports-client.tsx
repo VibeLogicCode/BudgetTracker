@@ -214,7 +214,7 @@ export function ReportsClient({
     // data-page-width: the month-over-month table grows a column per month (see globals.css).
     <div data-page-width="wide" className="flex flex-col gap-4 sm:gap-5">
       <PageHeader
-        eyebrow={range.label}
+        eyebrow={rangeEyebrow(range)}
         title="Reports"
         description={
           showPersonSplit
@@ -396,12 +396,18 @@ export function ReportsClient({
       ) : null}
 
       <Card>
+        {/* UP-4 (v1.32.0, owner ask 2026-09-04): this description already named the COMPARISON
+            window precisely (`${priorYearRange.from} to ${priorYearRange.to}` below, unchanged) --
+            it just never named its OWN window the same way, so a household reading "over the
+            range" here had nowhere on this card to learn what "the range" actually resolved to.
+            Fixed by matching the existing precision rather than inventing a new phrasing: both
+            branches below now name their window the identical way. */}
         <CardHeader
           title="Category breakdown"
           description={
             priorYearRange
-              ? `Net spend per category over the range, beside the same stretch a year earlier (${priorYearRange.from} to ${priorYearRange.to}).`
-              : 'Net spend per category over the range.'
+              ? `Net spend per category from ${range.from} to ${range.to}, beside the same stretch a year earlier (${priorYearRange.from} to ${priorYearRange.to}).`
+              : `Net spend per category from ${range.from} to ${range.to}.`
           }
         />
         {breakdown.length === 0 ? (
@@ -945,6 +951,32 @@ function DrillLink({
       {children}
     </Link>
   );
+}
+
+/**
+ * UP-4 (v1.32.0, owner ask 2026-09-04). **Not a filter fix** -- every card's own range/person scope
+ * (`rangeClauses`, src/lib/reports.ts) was verified end to end; this is the copy that made the
+ * correct number read as broken. `range.label` alone is a PRESET NAME ("Last month"), never a
+ * date, and a name has no relationship to when "now" was when it resolved. Three days into
+ * September, "Last month" in the eyebrow reads as "the current month" to someone who never opened
+ * the picker -- which is exactly how a complete August's Category breakdown total got mistaken
+ * for the current month's spend.
+ *
+ * Why the eyebrow and not (only) the picker: the picker's own From/To inputs are hidden for any
+ * non-custom preset (DateRangePicker.tsx's `custom ? '' : 'hidden'`), by design -- MUST-12.4 keeps
+ * a stale from/to from riding along beside a preset in the submitted form. So today nothing on
+ * this page states the resolved dates for a preset range at all; the eyebrow is the one line that
+ * is visible regardless of which card someone is looking at, without opening the picker.
+ *
+ * A custom range's own label already IS the two dates (customRange() in date-range.ts sets
+ * `${low} to ${high}`) -- appending them again here would print the same text twice, which is
+ * exactly the "made it worse by repeating" failure mode this task warns against. Every PRESET
+ * label, by contrast, never carries a date at all, so appending is the fix, and only a non-custom
+ * preset needs it.
+ */
+function rangeEyebrow(range: ResolvedRange): string {
+  if (range.preset === 'custom') return range.label;
+  return `${range.label} (${range.from} to ${range.to})`;
 }
 
 /** A zero in a month-over-month grid is noise; an em dash reads as "nothing here". */

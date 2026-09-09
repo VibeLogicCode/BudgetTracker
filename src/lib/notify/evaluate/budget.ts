@@ -5,6 +5,7 @@ import { budgetProgress, type BudgetRow } from '@/lib/budgets';
 import { isSelfScoped } from '@/lib/auth/viewer';
 import { currentMonth } from '@/lib/dates';
 import { getUserSettings, isEventEnabled, notifiableUsers } from '@/lib/notify/config';
+import { HOUSEHOLD_PASS_SETTINGS, familyChannelNeedsOwnPass } from '@/lib/notify/family-pass';
 import { CHANNELS, budgetExceededKey, budgetThresholdKey, type BudgetScopeKey } from '@/lib/notify/events';
 import { enqueue, enqueuedAnything } from '@/lib/notify/outbox';
 import { renderEvent } from '@/lib/notify/render';
@@ -20,6 +21,12 @@ let lastBudgetKey: string | null = null;
 
 export function resetBudgetFingerprintForTests(): void {
   lastBudgetKey = null;
+}
+
+/** v1.32.0 (R23): which of the two budget events the FAMILY CHANNEL owes a pass of its own. */
+interface HouseholdPass {
+  threshold: boolean;
+  exceeded: boolean;
 }
 
 interface Participant {
@@ -109,7 +116,7 @@ function flatten(rows: BudgetRow[], acc: BudgetRow[] = []): BudgetRow[] {
  * requires two DIFFERENT budget rows edited in the exact same evaluation tick to values
  * whose sum happens to net to zero change.
  */
-function fingerprint(month: string, participants: Participant[]): string {
+function fingerprint(month: string, participants: Participant[], householdPass: HouseholdPass): string {
   // Whole table, unscoped -- see doc comment above for why. Still one aggregate query,
   // same shape as the budgets/budget_rollover reads below.
   const row = getDb()
@@ -143,7 +150,12 @@ function fingerprint(month: string, participants: Participant[]): string {
   return (
     `${month}|${row?.n ?? 0}|${row?.maxId ?? 0}|${row?.maxUpdated ?? ''}` +
     `|${budgetRow?.n ?? 0}|${budgetRow?.maxId ?? 0}|${budgetRow?.sumAmt ?? 0}` +
-    `|${rolloverRow?.n ?? 0}|${rolloverRow?.maxId ?? 0}|${people}`
+    `|${rolloverRow?.n ?? 0}|${rolloverRow?.maxId ?? 0}|${people}` +
+    // v1.32.0 (R23): routing either event to the family channel, or the last personal subscriber
+    // switching it off, changes what this tick owes the household -- and neither writes a
+    // transaction, a budget or a rollover row, so without this the change would stay invisible
+    // until some unrelated write moved the fingerprint. On a quiet install that is days.
+    `|${householdPass.threshold ? 1 : 0}${householdPass.exceeded ? 1 : 0}`
   );
 }
 
@@ -178,7 +190,8 @@ function computeParticipants(): Map<number, Participant> {
 }
 
 function fireFor(input: {
-  userId: number;
+  /** v1.32.0 (R23): null is THE HOUSEHOLD'S own pass. See enqueue()'s `userId` docblock. */
+  userId: number | null;
   scope: BudgetScopeKey;
   row: BudgetRow;
   month: string;
@@ -186,8 +199,18 @@ function fireFor(input: {
   now: Date;
   /** S-18 round 1: set for a self-scoped participant's HOUSEHOLD rows only. See enqueue(). */
   familyChannelOnly?: boolean;
+  /**
+   * v1.32.0 (R23): which of the two events this pass is here for. Both, for a member -- their
+   * personal toggles are enqueue()'s business, not this function's, exactly as before. The
+   * household pass sets them independently, because the family channel subscribes to the two
+   * events separately and may be the only subscriber to just one of them: a household where
+   * somebody has budget_exceeded on and nobody has budget_threshold on owes the family channel a
+   * threshold pass and must not write a second exceeded row alongside that member's.
+   */
+  fire?: { threshold: boolean; exceeded: boolean };
 }): number {
   const { row, scope, month, userId, thresholdPct, now, familyChannelOnly } = input;
+  const fire = input.fire ?? { threshold: true, exceeded: true };
   if (row.limitCents === null || row.pct === null) return 0;
 
   let fired = 0;
@@ -197,7 +220,7 @@ function fireFor(input: {
   // looking at. MUST-6.17: both may fire in the same evaluation: a single import that
   // jumps straight past 100% still owes the threshold message, so pct is deliberately NOT
   // capped below 100 here; the exceeded check below is independent.
-  if (row.pct >= thresholdPct) {
+  if (fire.threshold && row.pct >= thresholdPct) {
     const { subject, body } = renderEvent({
       event: 'budget_threshold',
       scope,
@@ -223,7 +246,7 @@ function fireFor(input: {
     if (enqueuedAnything(result)) fired += 1;
   }
 
-  if (row.spentCents > row.limitCents) {
+  if (fire.exceeded && row.spentCents > row.limitCents) {
     const { subject, body } = renderEvent({
       event: 'budget_exceeded',
       scope,
@@ -256,17 +279,44 @@ function fireFor(input: {
  * Only rows with a resolved limitCents participate. Parents and children are independent
  * (budgetProgress already applies the rollup rule to the parent's spentCents), so a parent
  * and one of its children may each cross and each gets its own message.
+ *
+ * v1.32.0 (ruling R23): plus a third pass over the SAME household rows for the family channel
+ * itself, when it is subscribed and no member is -- see `householdPass` below and
+ * src/lib/notify/family-pass.ts. It uses the household's own threshold rather than any member's,
+ * so the family row's dedup key does not move when somebody edits their settings page.
  */
 export function evaluateBudgets(input: { now: Date; tz: string }): number {
   const month = currentMonth(input.now, input.tz);
 
   const everyone = computeParticipants();
-  if (everyone.size === 0) {
+  // v1.32.0 (ruling R23): the family channel subscribes to these two events in its own right, so
+  // "nobody has it switched on personally" is no longer a reason for this tick to do nothing --
+  // that was exactly the state in which the family channel went silent with nothing to say why.
+  // Per event, because an admin routes them separately and the family channel may be the only
+  // subscriber to one of the two.
+  //
+  // THE `everyone.size === 0` CLAUSE IS THIS FILE'S ALONE, and it is the price of the roster above
+  // being the UNION of both events. fireFor fires BOTH for every participant, and enqueue's routed
+  // branch deliberately does not consult isEventEnabled ("the household row is the household's
+  // decision, not the sum of five people's toggles"), so ONE member subscribed to budget_exceeded
+  // alone already writes the family channel's budget_THRESHOLD row -- at their own threshold, which
+  // is in its dedup key. Without this clause the household pass would then add a second row for the
+  // same category at 80 percent, which is exactly the duplicate send this ruling must not create.
+  // With it the two paths stay mutually exclusive, and the family channel still gets its threshold
+  // row (from that member's pass) rather than nothing, which is what R23 is about.
+  // tests/lib/notify/evaluate/family-channel-pass.test.ts asserts both halves; the second of them
+  // failed while this clause was missing, which is how it got written.
+  const noMemberPass = everyone.size === 0;
+  const householdPass: HouseholdPass = {
+    threshold: noMemberPass && familyChannelNeedsOwnPass('budget_threshold'),
+    exceeded: noMemberPass && familyChannelNeedsOwnPass('budget_exceeded'),
+  };
+  if (noMemberPass && !householdPass.threshold && !householdPass.exceeded) {
     lastBudgetKey = null;
     return 0;
   }
 
-  const key = fingerprint(month, [...everyone.values()]);
+  const key = fingerprint(month, [...everyone.values()], householdPass);
   if (key === lastBudgetKey) return 0;
 
   let fired = 0;
@@ -295,6 +345,26 @@ export function evaluateBudgets(input: { now: Date; tz: string }): number {
     }
     for (const row of flatten(budgetProgress(month, 'personal', person.userId))) {
       fired += fireFor({ userId: person.userId, scope: 'personal', row, month, thresholdPct: person.thresholdPct, now: input.now });
+    }
+  }
+
+  // The household's own pass (R23). Household rows only -- the family channel has no personal
+  // budgets, and a personal-scope send is not routable in the first place (enqueue's
+  // subjectScope) -- and at the household's own threshold rather than any member's, so the family
+  // row's dedup key does not move when somebody edits their settings page. It runs only when the
+  // loop above enqueued nothing for this event, so it can never be a second writer of a row that
+  // loop already wrote; see familyChannelNeedsOwnPass.
+  if (householdPass.threshold || householdPass.exceeded) {
+    for (const row of householdRows) {
+      fired += fireFor({
+        userId: null,
+        scope: 'household',
+        row,
+        month,
+        thresholdPct: HOUSEHOLD_PASS_SETTINGS.budgetThresholdPct,
+        now: input.now,
+        fire: householdPass,
+      });
     }
   }
 

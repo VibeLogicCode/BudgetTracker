@@ -5,6 +5,7 @@ import { setSetting } from '@/lib/settings';
 import { APPLY_CONFIRM_MAX_AGE_MS } from '@/lib/update/state';
 import { APPLY_MAX, checkUpdateApply, resetUpdateRateLimitsForTests } from '@/lib/update/ratelimit';
 import { classify, parseSemver } from '@/lib/update/semver';
+import { GITHUB_INTERACTIVE_TIMEOUT_MS, GITHUB_SCHEDULED_TIMEOUT_MS } from '@/lib/update/timeouts';
 import { readUpdateState, setAutoApply, setUpdateChecksEnabled } from '@/lib/update/state';
 import { saveEmailTarget, saveSmtp } from '@/lib/notify/config';
 import { setNotifySenderForTests, resetNotifySenderForTests } from '@/lib/notify/send';
@@ -395,5 +396,64 @@ describe('Task 3d, symptom B: applyUpdate is single-flight per version', () => {
     });
     expect(second.outcome).toBe('accepted');
     expect(watchtowerCalls).toBe(2);
+  });
+});
+
+/**
+ * v1.32.0 (UP-1). MUST-10.5 says the Check-now button and the 04:00 tick run the SAME function,
+ * so the two can never classify one pair of versions differently, and that stays exactly true:
+ * the only thing this split varies is how long each is prepared to wait. `manual` was already in
+ * runUpdateCheck's signature and was read by nothing -- these two tests are what make it mean
+ * something, and what fails if it is ever wired to the wrong budget or dropped again.
+ *
+ * `v${APP_VERSION}` is stubbed deliberately: severity 'none', so no auto-apply runs and the only
+ * AbortSignal.timeout() call in the run is the GitHub one. (triggerUpdate has a 30 s budget of
+ * its own, which would otherwise land in this spy.)
+ */
+describe('UP-1: a person waiting on a button waits less than the 04:00 tick', () => {
+  const at = new Date('2026-08-18T12:00:00.000Z');
+
+  it('a MANUAL check takes the interactive budget', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    stubRelease(`v${APP_VERSION}`);
+
+    await runUpdateCheck({ now: at, manual: true });
+
+    expect(githubCalls).toBe(1);
+    expect(timeout).toHaveBeenCalledWith(GITHUB_INTERACTIVE_TIMEOUT_MS);
+    expect(timeout).not.toHaveBeenCalledWith(GITHUB_SCHEDULED_TIMEOUT_MS);
+  });
+
+  it('the scheduled tick -- no manual flag, as src/lib/scheduler.ts calls it -- keeps the long budget', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    stubRelease(`v${APP_VERSION}`);
+
+    await runUpdateCheck({ now: at });
+
+    expect(githubCalls).toBe(1);
+    expect(timeout).toHaveBeenCalledWith(GITHUB_SCHEDULED_TIMEOUT_MS);
+    expect(timeout).not.toHaveBeenCalledWith(GITHUB_INTERACTIVE_TIMEOUT_MS);
+  });
+
+  it('manual: false is the scheduled budget too -- only a positive claim shortens the wait', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    stubRelease(`v${APP_VERSION}`);
+
+    await runUpdateCheck({ now: at, manual: false });
+
+    expect(timeout).toHaveBeenCalledWith(GITHUB_SCHEDULED_TIMEOUT_MS);
+  });
+
+  it('a manual check that times out reports the budget it actually had', async () => {
+    globalThis.fetch = vi.fn(async () => {
+      throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+    }) as unknown as typeof fetch;
+
+    const result = await runUpdateCheck({ now: at, manual: true });
+
+    // MUST-5.5: the stamp is written on a failed attempt too, and the sentence the card shows
+    // names GitHub and a number rather than "The operation was aborted due to timeout".
+    expect(result.error).toBe('GitHub did not answer within 5 seconds.');
+    expect(readUpdateState().lastCheckError).toBe('GitHub did not answer within 5 seconds.');
   });
 });

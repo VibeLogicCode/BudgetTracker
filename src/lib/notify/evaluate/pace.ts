@@ -1,8 +1,9 @@
 import { budgetProgress, flattenBudgetRows, type BudgetRow } from '@/lib/budgets';
 import { viewerFor } from '@/lib/auth/users';
-import { isSelfScoped } from '@/lib/auth/viewer';
+import { HOUSEHOLD_VIEWER, isSelfScoped } from '@/lib/auth/viewer';
 import { currentMonth, monthEnd, todayIso } from '@/lib/dates';
 import { isEventEnabled } from '@/lib/notify/config';
+import { familyChannelNeedsOwnPass } from '@/lib/notify/family-pass';
 import { CHANNELS, budgetPaceKey, type BudgetScopeKey } from '@/lib/notify/events';
 import { householdRoutedChannels } from '@/lib/notify/household';
 import { enqueue, enqueuedAnything } from '@/lib/notify/outbox';
@@ -65,7 +66,8 @@ function candidateFor(input: {
 }
 
 function enqueuePaceCandidate(input: {
-  userId: number;
+  /** v1.32.0 (R23): null is THE HOUSEHOLD'S own pass. See enqueue()'s `userId` docblock. */
+  userId: number | null;
   month: string;
   dayOfMonth: number;
   now: Date;
@@ -118,14 +120,29 @@ function enqueuePaceCandidate(input: {
  * family-channel contribution and protected nobody. With NO routed channel there is no room to
  * feed, so the household read is skipped entirely rather than run and discarded -- see below.
  *
+ * v1.32.0 (ruling R23): also called ONCE PER TICK-SLOT WITH `userId: null`, from the household's
+ * own block in evaluate/index.ts, when the family channel is subscribed and nobody in the household
+ * is. That pass reads through HOUSEHOLD_VIEWER and projects the household scope alone -- see the
+ * `recipient` branches below, and src/lib/notify/family-pass.ts for why the family channel is a
+ * subscriber in its own right rather than a fan-out of the members'.
+ *
  * MEDIUM fix (final-fix-wave item 3): capped at PACE_MAX_PER_EVALUATION, largest overshoot
  * first, mirroring UNUSUAL_MAX_PER_EVALUATION / CREEP_MAX_PER_EVALUATION /
  * DUPLICATE_MAX_PER_EVALUATION. Without it, day 7 of a 31-day month fires the moment spend
  * reaches 24.8 percent of the limit, which roughly half of all budgeted categories clear on
  * the very first day the projection is allowed to run.
  */
-export function evaluateBudgetPace(input: { userId: number; now: Date; tz: string }): number {
-  if (!CHANNELS.some((channel) => isEventEnabled(input.userId, 'budget_pace', channel))) return 0;
+export function evaluateBudgetPace(input: { userId: number | null; now: Date; tz: string }): number {
+  // v1.32.0 (ruling R23). A null userId is THE HOUSEHOLD'S own pass, run from the household's own
+  // daily slot in evaluate/index.ts: the family channel subscribes to budget_pace in its own right,
+  // and before this ruling a household where nobody had the event switched on personally returned
+  // on the line below and the family channel got nothing, for ever, with nothing to say why.
+  const recipient = input.userId;
+  if (recipient === null) {
+    if (!familyChannelNeedsOwnPass('budget_pace')) return 0;
+  } else if (!CHANNELS.some((channel) => isEventEnabled(recipient, 'budget_pace', channel))) {
+    return 0;
+  }
 
   const today = todayIso(input.now, input.tz);
   const dayOfMonth = Number(today.slice(8, 10));
@@ -136,7 +153,11 @@ export function evaluateBudgetPace(input: { userId: number; now: Date; tz: strin
   // guard, and it is the check that decides whether this evaluation happens at all.
   if (dayOfMonth < PACE_MIN_DAY_OF_MONTH) return 0;
 
-  const viewer = viewerFor(input.userId);
+  // The household reads as HOUSEHOLD_VIEWER, which is what "no owner restriction" means
+  // (src/lib/auth/viewer.ts) and the same viewer the family channel's digests are already rendered
+  // through. It is never self-scoped: there is no person for a household figure to be withheld
+  // from, which is also why the personal scope below is skipped for it entirely.
+  const viewer = recipient === null ? HOUSEHOLD_VIEWER : viewerFor(recipient);
   // Item BK precedent (see viewerFor's docblock, src/lib/auth/users.ts): 0 already means "nothing
   // enqueued" to every caller.
   if (viewer === null) return 0;
@@ -157,7 +178,11 @@ export function evaluateBudgetPace(input: { userId: number; now: Date; tz: strin
     ...(wantsHousehold
       ? [{ scope: 'household' as const, rows: flattenBudgetRows(budgetProgress(month, 'household', null)) }]
       : []),
-    { scope: 'personal', rows: flattenBudgetRows(budgetProgress(month, 'personal', input.userId)) },
+    // R23: the household has no personal budgets to project, and a personal-scope send is not
+    // routable at all (enqueue's subjectScope), so its pass reads the household scope alone.
+    ...(recipient === null
+      ? []
+      : [{ scope: 'personal' as const, rows: flattenBudgetRows(budgetProgress(month, 'personal', recipient)) }]),
   ];
 
   const candidates: PaceCandidate[] = [];
@@ -171,7 +196,7 @@ export function evaluateBudgetPace(input: { userId: number; now: Date; tz: strin
 
   let fired = 0;
   for (const candidate of candidates.slice(0, PACE_MAX_PER_EVALUATION)) {
-    fired += enqueuePaceCandidate({ userId: input.userId, month, dayOfMonth, now: input.now, candidate, selfScoped });
+    fired += enqueuePaceCandidate({ userId: recipient, month, dayOfMonth, now: input.now, candidate, selfScoped });
   }
   return fired;
 }

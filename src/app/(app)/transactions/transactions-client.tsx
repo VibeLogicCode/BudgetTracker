@@ -769,6 +769,24 @@ export function TransactionsClient({
       ? sourceParam
       : '';
   const activeGroupView: '' | 'category' = groups !== null ? 'category' : '';
+  /**
+   * 2026-09-08, docs/superpowers/specs/2026-09-08-grouped-review-navigation-design.md §5.1.
+   * `?via=groups` is PROVENANCE, not a filter: groupDrillHref stamps it, readFilter never reads
+   * it, and it is deliberately absent from the active-filter count above (a badge counting it
+   * would claim a filter with nothing behind it). Its only job is to let the landed page know it
+   * is standing at the bottom of a drill-down, and therefore owes the person a way back up.
+   *
+   * Checked against the one value it is ever written with, the same way activeSort and
+   * activeQueueChip parse theirs -- a hand-edited `?via=anything` is simply not a drill-down.
+   *
+   * NAMED `via`, NOT `from`, and this is a landmine rather than a preference. `?from=` is already
+   * this page's DATE RANGE start (readFilter, filter-params.ts, and the `range || from || to`
+   * clause in the active-filter count above). Stamping provenance on `from` handed the date parser
+   * the string 'groups' and lit the funnel badge with a filter nobody could find -- caught by the
+   * badge test rather than in production, which is the only reason this reads as a comment and not
+   * as a bug report.
+   */
+  const cameFromGroups = new URLSearchParams(currentQuery).get('via') === 'groups';
   /** `?import=<id>`. Shown as a dismissible chip (below) rather than only being honoured silently:
    *  a batch nobody can see they are inside is a batch they cannot get out of, and the import audit
    *  link (`/transactions?import=<id>&source=rule&group=category`) is the one filter on this page a
@@ -2023,7 +2041,83 @@ export function TransactionsClient({
       params.set('category', String(group.categoryId));
       params.set('exact', '1');
     }
+    // 2026-09-08 (spec §5.1). The provenance stamp that makes this a round trip instead of a
+    // one-way door. Set LAST of the three so it survives whichever branch above ran -- the
+    // uncategorized branch deletes `exact`, and a `via` set before that would read as though the
+    // deletion were the point.
+    params.set('via', 'groups');
     return filterHref(params.toString(), 'group', null);
+  }
+
+  /**
+   * 2026-09-08 (spec §5.1). The way back out, and the one thing the drill-down shipped without.
+   *
+   * Every route back that already existed was wrong in a different way, which is why this is its
+   * own href rather than a reuse of one of them: the View pill restores `group` but KEEPS
+   * `category`/`exact`, so it lands on a grouped view of the single cluster you were already
+   * looking at; the category chips' "All" clears `category` but never restores `group`; and below
+   * `sm` the View pill row is folded away entirely (rowVisibility, above) once no group view is
+   * active -- which is exactly the state a drill-down lands you in. On a phone there was no route
+   * back at all.
+   *
+   * Clears all three drill-down params and sets `group=category`, through filterHref so every
+   * other live filter (import, source, dates, account, person, search) survives the trip and both
+   * pagers reset. Returning to a batch minus the filter that defined it would be its own bug.
+   */
+  function backToGroupsHref(): string {
+    const params = new URLSearchParams(currentQuery);
+    params.delete('category');
+    params.delete('exact');
+    params.delete('via');
+    return filterHref(params.toString(), 'group', 'category');
+  }
+
+  /**
+   * 2026-09-08 (spec §5.1). Rendered on the DRILLED list, never in the grouped view itself (where
+   * "back to groups" names where you already are) and never without the provenance stamp (an
+   * ordinary `?category=` filter someone reached by clicking a chip is not a drill-down, and
+   * offering to send them to a grouped view they never asked for would be a non-sequitur).
+   *
+   * NO rowVisibility class, deliberately and permanently. This is the same unconditional exception
+   * the import-batch chip already takes: a person did not click a control to get here, so the way
+   * out must not be behind a fold they would have to know to open. Folding this would restore the
+   * exact phone-sized trap the change exists to close.
+   *
+   * The trailing name is TEXT, not a second link. There is nowhere else for it to go -- it names
+   * the list already on screen -- and a link that navigates to where you are is the kind of
+   * control people click twice and then distrust.
+   */
+  function groupsBreadcrumb() {
+    if (!cameFromGroups || groups !== null) return null;
+    // `categories`, not the top-level chip list: a drill-down can land on a SUB-category, which
+    // never appears in that list, and a breadcrumb that silently omits its own name for exactly
+    // the clusters filed deepest would be worse than none.
+    const landed = categories.find((row) => String(row.id) === activeCategoryChip);
+    const here =
+      activeCategoryChip === 'uncategorized'
+        ? 'Uncategorized'
+        : landed === undefined
+          ? null
+          : // The same suffix the cluster header carried, rebuilt from the same fact
+            // (groupTransactionsByCategory computes it from `parentIds`): a drilled list is
+            // `exact=1`, so it holds only what is filed DIRECTLY on this category, and printing
+            // the bare name over it would read as the parent's whole subtree.
+            categories.some((row) => row.parentId === landed.id)
+            ? `${landed.name} — not in a sub-category`
+            : landed.name;
+    return (
+      <div data-groups-breadcrumb className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted">
+        <Link href={backToGroupsHref()} className="btn btn--ghost btn--sm">
+          ← All categories
+        </Link>
+        {here !== null ? (
+          <>
+            <span aria-hidden="true">·</span>
+            <span className="font-medium text-ink">{here}</span>
+          </>
+        ) : null}
+      </div>
+    );
   }
 
   /**
@@ -2094,7 +2188,46 @@ export function TransactionsClient({
                     </span>
                   </span>
                 </summary>
-                <div className="flex flex-wrap items-center gap-2 border-t border-line bg-surface-2/60 px-4 py-3 sm:px-5">
+                <div className="border-t border-line bg-surface-2/60">
+                  {/* 2026-09-08 (spec §5.2). What the triangle was always promising. READ-ONLY on
+                      purpose -- no checkbox, no kebab, no inline editor: the moment a preview row
+                      grows the flat list's controls, this view has quietly become a second
+                      transactions list with none of its pagination, and every bulk action on the
+                      page would need a second meaning here.
+
+                      Keyed by id AND position, not id alone. A split with two parts filed to the
+                      SAME category legitimately previews twice in that one cluster (the money
+                      really is doubled up there, which is why `count` is distinct and the subtotal
+                      is not), and two children under one React key is a silent render bug. */}
+                  {group.preview.length > 0 ? (
+                    <ul className="flex flex-col border-b border-line">
+                      {group.preview.map((row, index) => (
+                        <li
+                          key={`${row.id}-${index}`}
+                          data-group-preview-row
+                          className="flex items-baseline justify-between gap-3 px-4 py-2 text-sm sm:px-5"
+                        >
+                          <span className="flex min-w-0 items-baseline gap-3">
+                            {/* Plain ISO, the same spelling the flat list's own card prints for a
+                                row's date -- not a prettier format invented for this one place. */}
+                            <span className="tabnum shrink-0 text-muted">{row.date}</span>
+                            <span className="truncate text-ink">{row.description}</span>
+                          </span>
+                          <Money cents={row.amountCents} className="tabnum shrink-0" />
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  {/* BOTH figures, on every cluster -- including the ones where they match. The
+                      original objection to inline rows was that a preview count and a header count
+                      are two numbers on one screen that can disagree; stating the relationship
+                      outright is what stops them reading as a contradiction. Rendering it only
+                      when truncated would make its ABSENCE the signal, which is a thing nobody
+                      notices. */}
+                  <p className="px-4 pt-2 text-xs text-muted sm:px-5">
+                    {`Showing ${group.preview.length} of ${group.count}`}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2 px-4 py-3 sm:px-5">
                   <Link href={groupDrillHref(group)} className="btn btn--secondary btn--sm">
                     {`See all ${group.count} in the list`}
                   </Link>
@@ -2121,6 +2254,7 @@ export function TransactionsClient({
                   >
                     Recategorize the group…
                   </button>
+                  </div>
                 </div>
               </details>
             </li>
@@ -2520,6 +2654,12 @@ export function TransactionsClient({
                 filter belongs back on the first page of groups, which is exactly what filterHref
                 does to it for a link and what its absence does here for a submit. */}
             {activeGroupView !== '' ? <input type="hidden" name="group" value={activeGroupView} /> : null}
+            {/* 2026-09-08 (spec §5.1). `via` rides along for the identical reason `group` does:
+                it is set by a plain <a> (groupDrillHref) and is not a field on this form, so a
+                submit would drop it -- and dropping it deletes the way back, stranding somebody
+                mid-audit for the crime of changing the account. It narrows nothing on the way
+                through: readFilter never reads it. */}
+            {cameFromGroups ? <input type="hidden" name="via" value="groups" /> : null}
             {activeSort !== '' ? <input type="hidden" name="sort" value={activeSort} /> : null}
             {activeSort !== '' ? <input type="hidden" name="dir" value={activeDirection} /> : null}
             {activeSource !== '' ? <input type="hidden" name="source" value={activeSource} /> : null}
@@ -2921,6 +3061,13 @@ export function TransactionsClient({
           ))}
         </div>
       ) : null}
+
+      {/* 2026-09-08 (spec §5.1). Above the list and below the filter card, so it reads as "you are
+          here, inside that batch" rather than as one more filter control. groupsBreadcrumb returns
+          null in the grouped view and without the provenance stamp, so this needs no condition of
+          its own -- one place decides, the same way `groups !== null` is the single signal for the
+          branch below. */}
+      {groupsBreadcrumb()}
 
       {/* v1.26.0 Lane 3a item 2: the grouped view replaces the rows entirely, the same
           INSTEAD-not-as-well-as rule review mode has always followed one branch down. It comes

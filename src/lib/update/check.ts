@@ -4,6 +4,7 @@ import { updateAvailableKey } from '@/lib/notify/events';
 import { enqueue, kickOutbox } from '@/lib/notify/outbox';
 import { renderEvent } from '@/lib/notify/render';
 import { UpdateCheckError, fetchLatestRelease } from '@/lib/update/github';
+import { GITHUB_INTERACTIVE_TIMEOUT_MS, GITHUB_SCHEDULED_TIMEOUT_MS } from '@/lib/update/timeouts';
 import { checkUpdateApply } from '@/lib/update/ratelimit';
 import { classify, parseSemver, type UpdateSeverity } from '@/lib/update/semver';
 import {
@@ -148,9 +149,18 @@ export async function runUpdateCheck(input: { now?: Date; manual?: boolean }): P
   // being retried forever.
   reconcilePendingApply(at);
 
+  // v1.32.0 (UP-1): `manual` was carried through this signature and never read; this is what it
+  // is for. A person pressing Check now and the 04:00 tick are the same check by design
+  // (MUST-10.5 -- one code path, so the two can never classify a version pair differently), and
+  // that stays true: the ONLY thing that varies is how long each is willing to wait. See
+  // @/lib/update/timeouts for why five seconds and fifteen. Rejected alternative: a second
+  // function for the manual path, which would have split MUST-10.5's single code path to vary
+  // one integer.
+  const timeoutMs = input.manual === true ? GITHUB_INTERACTIVE_TIMEOUT_MS : GITHUB_SCHEDULED_TIMEOUT_MS;
+
   let release: Awaited<ReturnType<typeof fetchLatestRelease>>;
   try {
-    release = await fetchLatestRelease();
+    release = await fetchLatestRelease({ timeoutMs });
   } catch (error) {
     const message = scrub(error instanceof Error ? error.message : 'The update check failed.');
     // MUST-5.5: the stamp is written on a FAILED attempt too, before returning.

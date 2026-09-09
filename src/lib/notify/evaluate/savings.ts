@@ -2,6 +2,7 @@ import { viewerFor } from '@/lib/auth/users';
 import { HOUSEHOLD_VIEWER, isSelfScoped } from '@/lib/auth/viewer';
 import { addMonths, currentMonth, monthEnd, todayIso } from '@/lib/dates';
 import { isEventEnabled, notifiableUsers } from '@/lib/notify/config';
+import { familyChannelNeedsOwnPass } from '@/lib/notify/family-pass';
 import { CHANNELS, savingsMonthClosedKey, savingsTargetMetKey, savingsTargetPaceKey } from '@/lib/notify/events';
 import { householdRoutedChannels } from '@/lib/notify/household';
 import { enqueue, enqueuedAnything } from '@/lib/notify/outbox';
@@ -38,6 +39,12 @@ import { savingsProgress, savingsStreak } from '@/lib/savings-target';
  * self-scoped recipient the answer is to omit the personal send entirely rather than scope it to
  * zero -- a "$0.00 target" sentence would be a false statement about household state, not a
  * narrowed one.
+ *
+ * v1.32.0 (ruling R23): all three events also have a FAMILY-CHANNEL pass -- `userId: null`, which
+ * enqueues the family row and nothing else. It runs only when the family channel is subscribed and
+ * no member is, so it is never a second writer of a row a member's pass already wrote. Nothing about
+ * the reads changes: ruling T3 already had every figure here coming from HOUSEHOLD_VIEWER, so the
+ * room's message is the same one the loop would have shared across recipients.
  *
  * Every arithmetic decision -- what "saved" means, how a percent target resolves, what "met"
  * means, what the streak is -- comes from src/lib/savings-target.ts's savingsProgress/
@@ -78,7 +85,12 @@ function participantsFor(eventId: string): { userId: number; selfScoped: boolean
  */
 export function evaluateSavingsTargetMet(input: { now: Date; tz: string }): number {
   const participants = participantsFor('savings_target_met');
-  if (participants.length === 0) return 0;
+  // v1.32.0 (ruling R23): the family channel subscribes to this event in its own right, so a
+  // household where nobody has it switched on personally no longer returns here with the family
+  // channel configured, enabled and silent. `userId: null` below is the household's own pass; it
+  // runs only when the loop over `participants` is empty, so the two can never both write the row.
+  const householdPass = familyChannelNeedsOwnPass('savings_target_met');
+  if (participants.length === 0 && !householdPass) return 0;
 
   const month = currentMonth(input.now, input.tz);
   const progress = savingsProgress(month, HOUSEHOLD_VIEWER);
@@ -111,6 +123,19 @@ export function evaluateSavingsTargetMet(input: { now: Date; tz: string }): numb
     });
     if (enqueuedAnything(result)) fired += 1;
   }
+  if (householdPass) {
+    // Ruling T3 again: the figures are the same pooled ones every recipient above would have been
+    // sent, so the family channel's message is the render already built, not a second one.
+    const result = enqueue({
+      userId: null,
+      eventId: 'savings_target_met',
+      dedupKey: savingsTargetMetKey(month),
+      subject,
+      body,
+      at: input.now,
+    });
+    if (enqueuedAnything(result)) fired += 1;
+  }
   return fired;
 }
 
@@ -133,17 +158,30 @@ export function evaluateSavingsTargetMet(input: { now: Date; tz: string }): numb
  * month even if the shortfall later narrows or widens -- the same "never re-alert on a moving
  * projection" rule budgetPaceKey documents.
  */
-function fireSavingsPace(input: { userId: number; now: Date; tz: string }): number {
-  if (!CHANNELS.some((channel) => isEventEnabled(input.userId, 'savings_target_pace', channel))) return 0;
+function fireSavingsPace(input: { userId: number | null; now: Date; tz: string }): number {
+  // v1.32.0 (R23): null is THE HOUSEHOLD'S own pass, run from the household's daily slot in
+  // evaluate/index.ts. See src/lib/notify/family-pass.ts.
+  const recipient = input.userId;
+  if (recipient === null) {
+    if (!familyChannelNeedsOwnPass('savings_target_pace')) return 0;
+  } else if (!CHANNELS.some((channel) => isEventEnabled(recipient, 'savings_target_pace', channel))) {
+    return 0;
+  }
 
   const today = todayIso(input.now, input.tz);
   const dayOfMonth = Number(today.slice(8, 10));
   if (dayOfMonth < PACE_MIN_DAY_OF_MONTH) return 0;
 
-  const viewer = viewerFor(input.userId);
-  // Item BK precedent: 0 already means "nothing enqueued" to every caller.
-  if (viewer === null) return 0;
-  const selfScoped = isSelfScoped(viewer);
+  // The household is never self-scoped: there is no person for a household figure to be withheld
+  // from, and the figures below are already read through HOUSEHOLD_VIEWER for every recipient
+  // (ruling T3), so its pass needs no viewer at all.
+  let selfScoped = false;
+  if (recipient !== null) {
+    const viewer = viewerFor(recipient);
+    // Item BK precedent: 0 already means "nothing enqueued" to every caller.
+    if (viewer === null) return 0;
+    selfScoped = isSelfScoped(viewer);
+  }
   // S-18 round 1: for a self-scoped recipient this send exists ONLY to feed the family channel,
   // so with no routed channel there is no room to feed -- the household read is skipped outright
   // rather than run and discarded, the same routed-first ordering evaluate/digest.ts uses.
@@ -168,7 +206,7 @@ function fireSavingsPace(input: { userId: number; now: Date; tz: string }): numb
     proRatedTargetCents,
   });
   const result = enqueue({
-    userId: input.userId,
+    userId: recipient,
     eventId: 'savings_target_pace',
     dedupKey: savingsTargetPaceKey(month),
     subject,
@@ -191,16 +229,26 @@ function fireSavingsPace(input: { userId: number; now: Date; tz: string }): numb
  * plan says is worth sending -- reaches the renderer already computed; render.ts's own wording
  * rule only mentions it once the streak is 2 or more, since one month alone is noise.
  */
-function fireSavingsMonthClosed(input: { userId: number; now: Date; tz: string }): number {
-  if (!CHANNELS.some((channel) => isEventEnabled(input.userId, 'savings_month_closed', channel))) return 0;
+function fireSavingsMonthClosed(input: { userId: number | null; now: Date; tz: string }): number {
+  // v1.32.0 (R23): null is THE HOUSEHOLD'S own pass, exactly as in fireSavingsPace above.
+  const recipient = input.userId;
+  if (recipient === null) {
+    if (!familyChannelNeedsOwnPass('savings_month_closed')) return 0;
+  } else if (!CHANNELS.some((channel) => isEventEnabled(recipient, 'savings_month_closed', channel))) {
+    return 0;
+  }
 
   const today = todayIso(input.now, input.tz);
   if (Number(today.slice(8, 10)) > MONTH_REPORT_DAY_MAX) return 0;
 
-  const viewer = viewerFor(input.userId);
-  // Item BK precedent: 0 already means "nothing enqueued" to every caller.
-  if (viewer === null) return 0;
-  const selfScoped = isSelfScoped(viewer);
+  // As in fireSavingsPace: the household has no visibility to consult.
+  let selfScoped = false;
+  if (recipient !== null) {
+    const viewer = viewerFor(recipient);
+    // Item BK precedent: 0 already means "nothing enqueued" to every caller.
+    if (viewer === null) return 0;
+    selfScoped = isSelfScoped(viewer);
+  }
   // S-18 round 1, as in fireSavingsPace above: nothing routed means no room to feed, so neither
   // the closed month's progress nor its streak is read for a self-scoped recipient at all.
   if (selfScoped && householdRoutedChannels('savings_month_closed').length === 0) return 0;
@@ -219,7 +267,7 @@ function fireSavingsMonthClosed(input: { userId: number; now: Date; tz: string }
     streak,
   });
   const result = enqueue({
-    userId: input.userId,
+    userId: recipient,
     eventId: 'savings_month_closed',
     dedupKey: savingsMonthClosedKey(closedMonth),
     subject,
@@ -236,6 +284,6 @@ function fireSavingsMonthClosed(input: { userId: number; now: Date; tz: string }
  * evaluate/monthly.ts's evaluateMonthBoundary uses to fold its own two month-boundary events
  * into a single call for evaluate/index.ts to make.
  */
-export function evaluateSavingsDaily(input: { userId: number; now: Date; tz: string }): number {
+export function evaluateSavingsDaily(input: { userId: number | null; now: Date; tz: string }): number {
   return fireSavingsPace(input) + fireSavingsMonthClosed(input);
 }

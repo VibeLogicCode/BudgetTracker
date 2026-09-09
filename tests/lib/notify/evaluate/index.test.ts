@@ -54,8 +54,18 @@ describe('slot-skip logging is deduped by (kind, userId, slotDate)', () => {
 });
 
 describe('MUST-10.9 (final-fix-wave item 4): the three newer daily evaluators run once per slot, not once per tick', () => {
-  it('two ticks inside the same daily window run them once, and a new slot date runs them again', () => {
-    insertTestUser(t.db);
+  /**
+   * v1.32.0 (ruling R23): each of the three now runs TWICE per daily slot with one member in the
+   * household -- once for that member (`userId: <id>`) and once for the family channel itself
+   * (`userId: null`, from runHouseholdEvaluation). The counts below assert the pair rather than a
+   * bare number, so this test still fails if either pass loses its once-per-slot cache and starts
+   * recomputing on every five-minute tick -- which is the thing MUST-10.9 is about.
+   */
+  const recipients = (spy: { mock: { calls: unknown[][] } }): unknown[] =>
+    spy.mock.calls.map((args) => (args[0] as { userId: number | null }).userId);
+
+  it('two ticks inside the same daily window run them once per recipient, and a new slot date runs them again', () => {
+    const userId = insertTestUser(t.db);
     // dailyHour defaults to 8; 09:00 UTC on the 17th and 09:05 UTC on the 17th are both inside
     // the same daily slot (slotDate '2026-08-17'). 09:00 on the 18th is the next day's slot.
     const paceSpy = vi.spyOn(paceModule, 'evaluateBudgetPace').mockReturnValue(0);
@@ -64,14 +74,14 @@ describe('MUST-10.9 (final-fix-wave item 4): the three newer daily evaluators ru
     try {
       runScheduledEvaluation(new Date('2026-08-17T09:00:00Z'));
       runScheduledEvaluation(new Date('2026-08-17T09:05:00Z'));
-      expect(paceSpy).toHaveBeenCalledTimes(1);
-      expect(creepSpy).toHaveBeenCalledTimes(1);
-      expect(monthlySpy).toHaveBeenCalledTimes(1);
+      for (const spy of [paceSpy, creepSpy, monthlySpy]) {
+        expect(recipients(spy)).toEqual([userId, null]);
+      }
 
       runScheduledEvaluation(new Date('2026-08-18T09:00:00Z'));
-      expect(paceSpy).toHaveBeenCalledTimes(2);
-      expect(creepSpy).toHaveBeenCalledTimes(2);
-      expect(monthlySpy).toHaveBeenCalledTimes(2);
+      for (const spy of [paceSpy, creepSpy, monthlySpy]) {
+        expect(recipients(spy)).toEqual([userId, null, userId, null]);
+      }
     } finally {
       paceSpy.mockRestore();
       creepSpy.mockRestore();

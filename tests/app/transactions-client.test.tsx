@@ -3462,8 +3462,27 @@ const CATEGORIES = [
 
 function groupPage(overrides: Partial<CategoryGroupPage> = {}): CategoryGroupPage {
   const groups: CategoryGroupRow[] = [
-    { categoryId: 42, categoryName: 'Groceries', parentId: null, count: 37, totalCents: -166_00 },
-    { categoryId: 43, categoryName: 'Coffee', parentId: null, count: 4, totalCents: -15_00 },
+    {
+      categoryId: 42,
+      categoryName: 'Groceries',
+      parentId: null,
+      count: 37,
+      totalCents: -166_00,
+      // 2026-09-08 (spec §5.2): fewer previews than the count, deliberately -- this is the
+      // truncated cluster, the one "Showing 2 of 37" has to be honest about.
+      preview: [
+        { id: 501, date: '2026-03-02', description: 'CORNER MARKET', amountCents: -42_10 },
+        { id: 502, date: '2026-03-01', description: 'GROCER 88', amountCents: -18_75 },
+      ],
+    },
+    {
+      categoryId: 43,
+      categoryName: 'Coffee',
+      parentId: null,
+      count: 4,
+      totalCents: -15_00,
+      preview: [{ id: 503, date: '2026-03-02', description: 'CAFE ROMA', amountCents: -5_25 }],
+    },
   ];
   return {
     groups,
@@ -3539,7 +3558,7 @@ describe('v1.26.0 Lane 3a item 2: the grouped-by-category view', () => {
 
   it('the uncategorized cluster drills down on ?category=uncategorized, with no exact flag to be wrong about', () => {
     const { container } = renderGrouped({
-      groups: [{ categoryId: null, categoryName: 'Uncategorized', parentId: null, count: 5, totalCents: -900 }],
+      groups: [{ categoryId: null, categoryName: 'Uncategorized', parentId: null, count: 5, totalCents: -900, preview: [{ id: 601, date: '2026-03-02', description: 'UNKNOWN SHOP', amountCents: -900 }] }],
       groupCount: 1,
     });
     const link = Array.from(container.querySelectorAll('a')).find((a) =>
@@ -3595,6 +3614,144 @@ describe('v1.26.0 Lane 3a item 2: the grouped-by-category view', () => {
   });
 });
 
+/**
+ * 2026-09-08, docs/superpowers/specs/2026-09-08-grouped-review-navigation-design.md §5.2. The
+ * disclosure used to reveal three buttons and nothing else, which is not what a triangle promises.
+ */
+describe('the grouped view: preview rows inside a disclosure', () => {
+  it('renders the cluster’s preview rows, each with its date, description and amount', () => {
+    const { container } = renderGrouped();
+    const first = container.querySelectorAll('ul[data-category-groups] > li')[0];
+    const rows = Array.from(first.querySelectorAll('[data-group-preview-row]')).map((node) =>
+      (node.textContent ?? '').replace(/\s+/g, ' ').trim(),
+    );
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toContain('CORNER MARKET');
+    expect(rows[0]).toContain('$42.10');
+    expect(rows[1]).toContain('GROCER 88');
+  });
+
+  it('states BOTH figures, so the preview count cannot be misread as the cluster count', () => {
+    const { container } = renderGrouped();
+    const first = container.querySelectorAll('ul[data-category-groups] > li')[0];
+    expect((first.textContent ?? '').replace(/\s+/g, ' ')).toContain('Showing 2 of 37');
+  });
+
+  it('states them on an untruncated cluster too -- a line whose absence must be noticed is not a line', () => {
+    const { container } = renderGrouped({
+      groups: [
+        {
+          categoryId: 43,
+          categoryName: 'Coffee',
+          parentId: null,
+          count: 1,
+          totalCents: -5_25,
+          preview: [{ id: 503, date: '2026-03-02', description: 'CAFE ROMA', amountCents: -5_25 }],
+        },
+      ],
+      groupCount: 1,
+    });
+    expect((container.textContent ?? '').replace(/\s+/g, ' ')).toContain('Showing 1 of 1');
+  });
+
+  it('keeps the three actions, below the rows, with their copy unchanged', () => {
+    const { container } = renderGrouped();
+    const labels = Array.from(container.querySelectorAll('ul[data-category-groups] > li')[0].querySelectorAll('a, button')).map(
+      (node) => (node.textContent ?? '').trim(),
+    );
+    expect(labels).toContain('See all 37 in the list');
+    expect(labels).toContain('These are all correct');
+    expect(labels).toContain('Recategorize the group…');
+  });
+
+  it('renders no preview list at all for a cluster the server sent none for', () => {
+    const { container } = renderGrouped({
+      groups: [{ categoryId: 42, categoryName: 'Groceries', parentId: null, count: 0, totalCents: 0, preview: [] }],
+      groupCount: 1,
+    });
+    expect(container.querySelector('[data-group-preview-row]')).toBeNull();
+  });
+});
+
+/**
+ * 2026-09-08, spec §5.1. The drill-down used to be a one-way door: `group` was deleted, the View
+ * pill row is folded below `sm` once no group view is active, and the pill would have restored the
+ * grouped view WITH the single-category filter still on it -- a grouped view of one cluster, not
+ * the batch. `via=groups` is the provenance that lets the landed page offer a real way back.
+ */
+describe('the grouped view: the way back out of a drill-down', () => {
+  it('the drill-down link carries via=groups', () => {
+    const { container } = renderGrouped();
+    const link = Array.from(container.querySelectorAll('a')).find((a) =>
+      (a.textContent ?? '').startsWith('See all 37 in the list'),
+    );
+    expect(link?.getAttribute('href')).toContain('via=groups');
+  });
+
+  function renderDrilled(query: string) {
+    return render(
+      <TransactionsClient
+        page={pageWithRow({ id: 1 })}
+        accounts={[{ id: 1, name: 'Joint Chequing' }]}
+        categories={CATEGORIES}
+        people={[]}
+        today="2026-03-02"
+        currentQuery={query}
+      />,
+    );
+  }
+
+  it('offers a back link whose href restores the grouped view and drops the drill-down filter', () => {
+    const { container } = renderDrilled('import=7&source=rule&category=42&exact=1&via=groups');
+    const back = container.querySelector('[data-groups-breadcrumb] a');
+    expect((back?.textContent ?? '').trim()).toBe('← All categories');
+    const href = back?.getAttribute('href') ?? '';
+    expect(href).toContain('group=category');
+    // The three params that made this a drill-down all go; everything else that was filtering
+    // stays, or the way back would land somewhere the person never was.
+    expect(href).not.toContain('category=');
+    expect(href).not.toContain('exact=');
+    expect(href).not.toContain('via=');
+    expect(href).toContain('import=7');
+    expect(href).toContain('source=rule');
+  });
+
+  it('names where you are beside the link, as text rather than a second link', () => {
+    const { container } = renderDrilled('category=42&exact=1&via=groups');
+    const crumb = container.querySelector('[data-groups-breadcrumb]');
+    expect((crumb?.textContent ?? '')).toContain('Groceries');
+    expect(crumb?.querySelectorAll('a')).toHaveLength(1);
+  });
+
+  it('is visible at EVERY width -- never behind the filter fold that hid the View pills', () => {
+    const { container } = renderDrilled('category=42&exact=1&via=groups');
+    const crumb = container.querySelector('[data-groups-breadcrumb]');
+    // `hidden sm:flex` is exactly what rowVisibility applies to a folded row, and applying it here
+    // would reintroduce the phone-sized trap this whole change exists to close.
+    expect(crumb?.className ?? '').not.toContain('hidden');
+  });
+
+  it('does not appear without the provenance param -- an ordinary category filter is not a drill-down', () => {
+    const { container } = renderDrilled('category=42&exact=1');
+    expect(container.querySelector('[data-groups-breadcrumb]')).toBeNull();
+  });
+
+  it('does not appear in the grouped view itself, where "back to groups" is where you already are', () => {
+    const { container } = renderGrouped({}, 'category=42&exact=1&via=groups&group=category');
+    expect(container.querySelector('[data-groups-breadcrumb]')).toBeNull();
+  });
+
+  it('via= is provenance, not a filter, so it never inflates the active-filter badge', () => {
+    window.history.pushState({}, '', '/transactions?via=groups');
+    renderDrilled('via=groups');
+    // The badge counts filters that NARROW the list. `via` narrows nothing -- it is not read by
+    // readFilter and never reaches buildWhere -- so a badge counting it would claim a filter the
+    // person can neither find nor clear.
+    expect(screen.getByRole('button', { name: 'Filters' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Filters (1)' })).toBeNull();
+  });
+});
+
 describe('v1.26.0 Lane 3a item 4: the group bulk actions', () => {
   it('states the group’s TRUE count, not the number of rows rendered on this page', async () => {
     renderGrouped();
@@ -3633,7 +3790,7 @@ describe('v1.26.0 Lane 3a item 4: the group bulk actions', () => {
 
   it('offers no confirm on the uncategorized cluster -- there is no category there to agree with', () => {
     renderGrouped({
-      groups: [{ categoryId: null, categoryName: 'Uncategorized', parentId: null, count: 5, totalCents: -900 }],
+      groups: [{ categoryId: null, categoryName: 'Uncategorized', parentId: null, count: 5, totalCents: -900, preview: [{ id: 601, date: '2026-03-02', description: 'UNKNOWN SHOP', amountCents: -900 }] }],
       groupCount: 1,
     });
     expect(screen.queryByRole('button', { name: 'These are all correct' })).toBeNull();

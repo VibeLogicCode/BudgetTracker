@@ -9,6 +9,11 @@ import {
   fetchLatestRelease,
   fetchRemoteChangelog,
 } from '@/lib/update/github';
+import {
+  GITHUB_INTERACTIVE_TIMEOUT_MS,
+  GITHUB_SCHEDULED_TIMEOUT_MS,
+  timeoutSeconds,
+} from '@/lib/update/timeouts';
 import { parseChangelog } from '@/lib/changelog';
 import { APP_VERSION } from '@/lib/version';
 import * as egress from '@/lib/update/egress';
@@ -93,6 +98,87 @@ describe('MUST-4.2 / MUST-4.3 / MUST-4.4: the release request, exactly', () => {
       stub(() => json({ tag_name: 'v1.4.0', published_at: 1755331200 }));
       await expect(fetchLatestRelease()).resolves.toMatchObject({ publishedAt: null });
     });
+  });
+});
+
+/**
+ * v1.32.0 (UP-1). One 15-second budget used to serve both endpoints, so pressing Check now
+ * could sit on "Working…" for fifteen seconds -- the owner's recording of a real update shows
+ * them reloading the page at about 22 seconds rather than waiting it out.
+ *
+ * Asserted on AbortSignal.timeout()'s argument rather than by waiting one out, because the
+ * budget is not otherwise readable off the signal the stub receives (the existing MUST-4.4 test
+ * above can only say `toBeInstanceOf(AbortSignal)`), and a test that really waited five seconds
+ * would be five seconds of nothing in every run. The spy calls through, so the request under
+ * test is the real one.
+ */
+describe('UP-1: two budgets, and each endpoint takes the right one by default', () => {
+  it('fetchLatestRelease defaults to the SCHEDULED budget -- the 04:00 tick has nobody waiting', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    stub(() => json({ tag_name: 'v1.4.0' }));
+    await fetchLatestRelease();
+    expect(timeout).toHaveBeenCalledWith(GITHUB_SCHEDULED_TIMEOUT_MS);
+    expect(timeout).not.toHaveBeenCalledWith(GITHUB_INTERACTIVE_TIMEOUT_MS);
+  });
+
+  it('fetchLatestRelease honours an explicit budget -- this is how the Check-now path shortens it', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    stub(() => json({ tag_name: 'v1.4.0' }));
+    await fetchLatestRelease({ timeoutMs: GITHUB_INTERACTIVE_TIMEOUT_MS });
+    expect(timeout).toHaveBeenCalledWith(GITHUB_INTERACTIVE_TIMEOUT_MS);
+    expect(timeout).not.toHaveBeenCalledWith(GITHUB_SCHEDULED_TIMEOUT_MS);
+  });
+
+  it('fetchRemoteChangelog defaults to the INTERACTIVE budget -- its only caller is a button', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    const content = Buffer.from('# Changelog', 'utf8').toString('base64');
+    stub(() => json({ encoding: 'base64', size: 11, content }));
+    await fetchRemoteChangelog('1.4.0');
+    expect(timeout).toHaveBeenCalledWith(GITHUB_INTERACTIVE_TIMEOUT_MS);
+    expect(timeout).not.toHaveBeenCalledWith(GITHUB_SCHEDULED_TIMEOUT_MS);
+  });
+
+  it('the budget a person waits on is strictly the shorter of the two', () => {
+    // The split only means something while they differ. Collapsing them back to one number --
+    // in either direction -- fails here rather than quietly restoring the fifteen-second wait.
+    expect(GITHUB_INTERACTIVE_TIMEOUT_MS).toBeLessThan(GITHUB_SCHEDULED_TIMEOUT_MS);
+  });
+});
+
+describe('UP-1: an expired budget says so in words a household can act on', () => {
+  it('reports GitHub, not "the operation was aborted", and stays TRANSIENT', async () => {
+    // AbortSignal.timeout()'s real rejection shape on Node, pinned the same way
+    // tests/lib/update/watchtower.test.ts pins it: a DOMException named 'TimeoutError'.
+    stub(() => {
+      throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+    });
+    const error = (await fetchLatestRelease({ timeoutMs: GITHUB_INTERACTIVE_TIMEOUT_MS }).catch(
+      (e: unknown) => e,
+    )) as UpdateCheckError;
+    expect(error.message).toBe(`GitHub did not answer within ${timeoutSeconds(GITHUB_INTERACTIVE_TIMEOUT_MS)} seconds.`);
+    expect(error.message).not.toMatch(/aborted/i);
+    // MUST-4.7: a timeout is not a permanent failure. It was transient before this release and
+    // rewriting the sentence must not have quietly reclassified it.
+    expect(error.permanent).toBe(false);
+  });
+
+  it('names the budget that actually expired, so the scheduled path does not report five seconds', async () => {
+    stub(() => {
+      throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+    });
+    const error = (await fetchLatestRelease().catch((e: unknown) => e)) as UpdateCheckError;
+    expect(error.message).toBe(`GitHub did not answer within ${timeoutSeconds(GITHUB_SCHEDULED_TIMEOUT_MS)} seconds.`);
+  });
+
+  it('every other rejection still carries its own message through', async () => {
+    // "getaddrinfo ENOTFOUND api.github.com" is more useful than anything requestFailure could
+    // write over it, so only the TimeoutError branch is rewritten.
+    stub(() => {
+      throw new Error('getaddrinfo ENOTFOUND api.github.com');
+    });
+    const error = (await fetchLatestRelease().catch((e: unknown) => e)) as UpdateCheckError;
+    expect(error.message).toBe('getaddrinfo ENOTFOUND api.github.com');
+    expect(error.permanent).toBe(false);
   });
 });
 

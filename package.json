@@ -19,6 +19,7 @@
     "vendor-scanner-assets": "node scripts/vendor-scanner-assets.mjs",
     "check-ocr-assets": "node scripts/check-ocr-assets.mjs",
     "smoke": "node scripts/smoke-test.mjs",
+    "smoke:image": "node scripts/smoke-test-image.mjs",
     "reset-password": "node --experimental-strip-types scripts/reset-admin-password.ts",
     "restore-backup": "node --experimental-strip-types scripts/restore-backup.ts",
     "install:linux": "bash install/install-linux.sh"

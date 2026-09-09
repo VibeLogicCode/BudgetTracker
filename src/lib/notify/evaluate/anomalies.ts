@@ -4,6 +4,7 @@ import { accounts, transactions } from '@/db/schema';
 import { listCategories } from '@/lib/categories';
 import { addDaysIso, todayIso } from '@/lib/dates';
 import { isEventEnabled, notifiableUsers } from '@/lib/notify/config';
+import { familyChannelNeedsOwnPass } from '@/lib/notify/family-pass';
 import { CHANNELS, duplicateChargeKey, subscriptionCreepKey, unusualTransactionKey } from '@/lib/notify/events';
 import { enqueue, enqueuedAnything } from '@/lib/notify/outbox';
 import { renderEvent } from '@/lib/notify/render';
@@ -35,7 +36,16 @@ export function resetAnomalyFingerprintForTests(): void {
 }
 
 interface AnomalyParticipant {
-  userId: number;
+  /**
+   * v1.32.0 (ruling R23): null is THE FAMILY CHANNEL, evaluating as itself. It is a genuine
+   * recipient of these two events -- an admin routes them to the household's group chat through
+   * setHouseholdEventPref, which asks nobody's permission and reads nobody's toggles -- and
+   * v1.31.0's item-M-8 ruling made a household with no admin subscriber, and therefore no family
+   * row at all, the ORDINARY case rather than a corner: participants() below now skips every
+   * non-admin, so a household whose one admin leaves both events off used to route them into a
+   * silence nothing could explain.
+   */
+  userId: number | null;
   unusual: boolean;
   duplicate: boolean;
 }
@@ -90,10 +100,14 @@ function fingerprint(sliceStart: string, people: AnomalyParticipant[]): string {
     .where(gte(transactions.date, sliceStart))
     .get();
 
+  // -1 sorts the family channel first and can never collide with a user id (SQLite rowids start
+  // at 1), so routing an event -- or the last subscriber switching one off -- moves this string
+  // and the very next tick re-evaluates. Neither writes a transaction, so nothing else here
+  // would have noticed.
   const roster = people
     .slice()
-    .sort((a, b) => a.userId - b.userId)
-    .map((person) => `${person.userId}:${person.unusual ? 1 : 0}${person.duplicate ? 1 : 0}`)
+    .sort((a, b) => (a.userId ?? -1) - (b.userId ?? -1))
+    .map((person) => `${person.userId ?? 'household'}:${person.unusual ? 1 : 0}${person.duplicate ? 1 : 0}`)
     .join(',');
   return `${sliceStart}|${row?.n ?? 0}|${row?.maxId ?? 0}|${row?.maxUpdated ?? ''}|${roster}`;
 }
@@ -269,7 +283,18 @@ function findUnusual(slice: SliceRow[], today: string): UnusualFinding[] {
  * there is no self-scoped personal delivery left for familyChannelOnly to withhold.
  */
 export function evaluateAnomalies(input: { now: Date; tz: string }): number {
+  // v1.32.0 (ruling R23): the family channel is added to the roster as a recipient in its own
+  // right, per event, when it is subscribed and nobody in the household is. It then travels
+  // through the fingerprint, the history gate and the fire loop below as any other participant
+  // does -- there is no second copy of when-to-fire anywhere, only one more row in `people`.
+  const householdPass = {
+    unusual: familyChannelNeedsOwnPass('unusual_transaction'),
+    duplicate: familyChannelNeedsOwnPass('duplicate_charge'),
+  };
   const people = participants();
+  if (householdPass.unusual || householdPass.duplicate) {
+    people.push({ userId: null, unusual: householdPass.unusual, duplicate: householdPass.duplicate });
+  }
   if (people.length === 0) {
     lastAnomalyKey = null;
     return 0;
@@ -351,9 +376,21 @@ export function evaluateAnomalies(input: { now: Date; tz: string }): number {
  * MUST-9.18: the user's daily slot. A price increase is not urgent enough to warrant a
  * per-tick scan, and 35 days of lookback means a container that was off for a week loses
  * nothing, so this needs no fingerprint (MUST-10.8).
+ *
+ * v1.32.0 (ruling R23): also called once from the household's own daily slot with `userId: null`,
+ * when the family channel is subscribed to subscription_creep and nobody in the household is.
  */
-export function evaluateSubscriptionCreep(input: { userId: number; now: Date; tz: string }): number {
-  if (!CHANNELS.some((channel) => isEventEnabled(input.userId, 'subscription_creep', channel))) return 0;
+export function evaluateSubscriptionCreep(input: { userId: number | null; now: Date; tz: string }): number {
+  // v1.32.0 (R23): null is THE HOUSEHOLD'S own pass, run from the household's own daily slot in
+  // evaluate/index.ts. Every figure this event names is already household-wide -- the merchant
+  // grouping below has no attribution filter -- so the room's message is the same render a
+  // member's pass would have produced, and there is nothing here to re-scope for it.
+  const recipient = input.userId;
+  if (recipient === null) {
+    if (!familyChannelNeedsOwnPass('subscription_creep')) return 0;
+  } else if (!CHANNELS.some((channel) => isEventEnabled(recipient, 'subscription_creep', channel))) {
+    return 0;
+  }
 
   const today = todayIso(input.now, input.tz);
   const recentStart = addDaysIso(today, -CREEP_LOOKBACK_DAYS);
@@ -417,7 +454,7 @@ export function evaluateSubscriptionCreep(input: { userId: number; now: Date; tz
       priorCount: finding.verdict.priorCount,
     });
     const result = enqueue({
-      userId: input.userId,
+      userId: recipient,
       eventId: 'subscription_creep',
       dedupKey: subscriptionCreepKey(finding.verdict.transactionId),
       subject,

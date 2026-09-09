@@ -1,6 +1,6 @@
-import { budgetProgress, type BudgetRow } from '@/lib/budgets';
+import { budgetProgress, budgetScopeFor, type BudgetRow } from '@/lib/budgets';
 import { listUsers, viewerFor } from '@/lib/auth/users';
-import { HOUSEHOLD_VIEWER, isSelfScoped } from '@/lib/auth/viewer';
+import { HOUSEHOLD_VIEWER, isSelfScoped, ownerScope } from '@/lib/auth/viewer';
 import { reviewQueueCount } from '@/lib/categorize/engine';
 import { addDaysIso, currentMonth } from '@/lib/dates';
 import { categoryBreakdown, topMerchants } from '@/lib/reports';
@@ -22,6 +22,26 @@ function overBudgetNames(rows: BudgetRow[], acc: string[] = []): string[] {
 }
 
 /**
+ * 2026-09-08 (docs/superpowers/specs/2026-09-08-manual-digest-send-design.md). An ON-DEMAND send
+ * of this same digest, from the dashboard button -- not a second report to keep in step with this
+ * one, which is the whole reason it is a parameter here rather than its own evaluator.
+ *
+ * `token` REPLACES the slot date in both dedup keys, and without it the feature does not work at
+ * all: every key this function writes is slot-dated, so a manual send in a week whose scheduled
+ * digest already went out would be silently discarded by the unique index and the person would
+ * get a button that does nothing. The action passes a minute-precision stamp, which makes a
+ * double-click idempotent for free while still allowing a genuine second send later.
+ *
+ * `includeHousehold` is the person's own answer to "notify myself, or everyone?", and it can only
+ * ever REMOVE the household send, never add one: an unrouted household still gets nothing, so
+ * this cannot become a way to push a message into a family channel nobody configured.
+ */
+export interface ManualDigestSend {
+  token: string;
+  includeHousehold: boolean;
+}
+
+/**
  * §10.2: the digest covers the 7 days ENDING THE DAY BEFORE the slot date:
  * from = addDaysIso(slotDate, -7), to = addDaysIso(slotDate, -1). A fixed trailing window
  * rather than a fixed calendar week running Monday to Sunday, so any chosen digest_weekday
@@ -36,7 +56,12 @@ function overBudgetNames(rows: BudgetRow[], acc: string[] = []): string[] {
  * A week with no transactions still sends: silence would be indistinguishable from a
  * broken channel.
  */
-export function evaluateWeeklyDigest(input: { userId: number; slotDate: string; now: Date }): number {
+export function evaluateWeeklyDigest(input: {
+  userId: number;
+  slotDate: string;
+  now: Date;
+  manual?: ManualDigestSend;
+}): number {
   const from = addDaysIso(input.slotDate, -7);
   const to = addDaysIso(input.slotDate, -1);
   const viewer = viewerFor(input.userId);
@@ -67,7 +92,10 @@ export function evaluateWeeklyDigest(input: { userId: number; slotDate: string; 
   // Resolved BEFORE the household read below, not after it (review round 1, minor 4). Only built
   // when the digest is actually routed: an unrouted household pays for none of the per-member
   // queries in buildHouseholdDigest, and its evaluation is exactly what it was before v1.28.0.
-  const routed = householdRoutedChannels('weekly_digest');
+  // 2026-09-08: a manual send addressed to nobody but the sender skips the household read too, so
+  // "just me" costs none of buildHouseholdDigest's per-member queries -- the same skip-rather-than-
+  // compute-and-discard rule the self-scoped branch below already follows.
+  const routed = input.manual !== undefined && !input.manual.includeHousehold ? [] : householdRoutedChannels('weekly_digest');
   const selfScoped = isSelfScoped(viewer);
   // The true household list -- byte-identical to what this call always computed before the S-18
   // fix. It is what the family channel's digest below is built from (buildHouseholdDigest is
@@ -84,7 +112,15 @@ export function evaluateWeeklyDigest(input: { userId: number; slotDate: string; 
   // list -- a self-scoped recipient's overBudget names only categories THEY are over on.
   // household/admin recipients are unaffected: overBudget === householdOverBudget for them,
   // the exact value and the exact query this line always ran.
-  const overBudget = selfScoped ? overBudgetNames(budgetProgress(month, 'personal', viewer.id)) : householdOverBudget;
+  //
+  // v1.32.0: the scope comes from budgetScopeFor(viewer), the one definition in src/lib/budgets.ts,
+  // rather than a second hand-written `selfScoped ? 'personal' : 'household'`. The household arm
+  // still reuses the array read above rather than re-reading it under the same scope.
+  const ownScope = budgetScopeFor(viewer);
+  const overBudget =
+    ownScope === 'household'
+      ? householdOverBudget
+      : overBudgetNames(budgetProgress(month, ownScope, ownerScope(viewer)));
 
   const { subject, body } = renderEvent({
     event: 'weekly_digest',
@@ -102,12 +138,26 @@ export function evaluateWeeklyDigest(input: { userId: number; slotDate: string; 
   const household =
     routed.length === 0
       ? undefined
-      : buildHouseholdDigest({ from, to, slotDate: input.slotDate, reviewCount, overBudget: householdOverBudget });
+      : buildHouseholdDigest({
+          from,
+          to,
+          slotDate: input.slotDate,
+          reviewCount,
+          overBudget: householdOverBudget,
+          manualToken: input.manual?.token,
+        });
 
   const result = enqueue({
     userId: input.userId,
     eventId: 'weekly_digest',
-    dedupKey: weeklyDigestKey(input.slotDate),
+    // 2026-09-08: the manual token stands in for the slot date, so an on-demand send is never
+    // collapsed into the scheduled one this week already wrote. See ManualDigestSend.
+    dedupKey: input.manual === undefined ? weeklyDigestKey(input.slotDate) : weeklyDigestKey(`manual:${input.manual.token}`),
+    // "Just me" has to say so HERE, not merely decline to build a household body above: enqueue
+    // decides routing for itself, so without this the family channel gets a row (built from the
+    // personal subject and body) and the sender's own copy on that channel is suppressed to make
+    // way for it -- the exact inverse of the button they pressed. See skipHouseholdRouting.
+    skipHouseholdRouting: input.manual !== undefined && !input.manual.includeHousehold,
     subject,
     body,
     household,
@@ -158,6 +208,8 @@ function buildHouseholdDigest(input: {
   slotDate: string;
   reviewCount: number;
   overBudget: string[];
+  /** 2026-09-08. Present only for an on-demand send -- see ManualDigestSend. */
+  manualToken?: string;
 }): { subject: string; body: string; dedupKey: string } {
   const { from, to } = input;
   const sum = (rows: { spentCents: number }[]): number => rows.reduce((total, row) => total + row.spentCents, 0);
@@ -193,5 +245,16 @@ function buildHouseholdDigest(input: {
   // Keyed by the WEEK, not by this member's slot date: see householdWeeklyDigestKey. Every
   // member's weekly slot in the same week aims at this one key, so the group gets one digest
   // however many people fire, and however differently they set their own digest weekday.
-  return { subject, body, dedupKey: householdWeeklyDigestKey(mondayOfIsoWeek(input.slotDate)) };
+  // 2026-09-08: a manual send keys on its own token instead. Without this the week-bounded key
+  // above would collapse the on-demand household digest into the one this week already sent --
+  // the same silent no-op the personal key would produce, and the one somebody pressing a button
+  // marked "notify everyone" would read as the app ignoring them.
+  return {
+    subject,
+    body,
+    dedupKey:
+      input.manualToken === undefined
+        ? householdWeeklyDigestKey(mondayOfIsoWeek(input.slotDate))
+        : householdWeeklyDigestKey(`manual:${input.manualToken}`),
+  };
 }

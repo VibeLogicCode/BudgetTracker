@@ -195,6 +195,100 @@ describe('.dockerignore', () => {
   });
 });
 
+describe('image-level smoke test (v1.32.0, lane L5)', () => {
+  // The standalone smoke test (scripts/smoke-test.mjs, v1.31.0) boots .next/standalone/server.js
+  // directly on the host and can never catch a missing Dockerfile COPY, a read-only-rootfs
+  // violation, or a file the image forgot -- it never runs the shipped image. These checks are
+  // mechanical guards on the scripts and workflow that close that gap, not a restatement of the
+  // brief in prose: constraints.md is explicit that "a prose enumeration is not a mechanism."
+
+  it('adds an image-smoke npm script beside "smoke", and touches no other script line', () => {
+    const pkg = JSON.parse(read('package.json')) as { scripts: Record<string, string> };
+    expect(pkg.scripts['smoke:image']).toBe('node scripts/smoke-test-image.mjs');
+    expect(pkg.scripts.smoke).toBe('node scripts/smoke-test.mjs');
+  });
+
+  it('both smoke scripts import the route list from one shared module instead of each defining it', () => {
+    const standalone = read('scripts/smoke-test.mjs');
+    const image = read('scripts/smoke-test-image.mjs');
+    const shared = read('scripts/smoke-routes.mjs');
+    for (const listName of ['DEFAULT_PAGES', 'SPECIAL_PAGES', 'API_GETS', 'POST_ONLY_ROUTES']) {
+      // Defined exactly once, in the shared module...
+      const definitions = shared.match(new RegExp(`export const ${listName}\\s*=`, 'g')) ?? [];
+      expect(definitions.length, `${listName} must be defined exactly once in smoke-routes.mjs`).toBe(1);
+      // ...and neither consumer re-declares its own copy.
+      expect(standalone).not.toMatch(new RegExp(`const ${listName}\\s*=\\s*\\[`));
+      expect(image).not.toMatch(new RegExp(`const ${listName}\\s*=\\s*\\[`));
+    }
+    // Both actually import from the shared file rather than happening to agree today.
+    expect(standalone).toMatch(/from ['"]\.\/smoke-(routes|checks)\.mjs['"]/);
+    expect(image).toMatch(/from ['"]\.\/smoke-(routes|checks)\.mjs['"]/);
+  });
+
+  it('never mounts, reads, copies or references .tmp-data (the household\'s real financial data)', () => {
+    for (const file of [
+      'scripts/smoke-test-image.mjs',
+      'scripts/smoke-seed.mjs',
+      'scripts/smoke-checks.mjs',
+      'scripts/smoke-fixtures.mjs',
+      'scripts/smoke-routes.mjs',
+      '.github/workflows/release-image.yml',
+    ]) {
+      expect(read(file)).not.toContain('.tmp-data');
+    }
+  });
+
+  it('runs /data as a tmpfs, never a host bind mount', () => {
+    const src = read('scripts/smoke-test-image.mjs');
+    expect(src).toMatch(/--tmpfs['"]?,\s*['"]\/data:/);
+    expect(src).not.toMatch(/-v['"]|--volume|--mount/);
+  });
+
+  it('runs the container read-only, so a rootfs write the image relies on fails here first', () => {
+    expect(read('scripts/smoke-test-image.mjs')).toMatch(/--read-only/);
+  });
+
+  it('waits on the container\'s own HEALTHCHECK rather than a fixed sleep', () => {
+    const src = read('scripts/smoke-test-image.mjs');
+    expect(src).toMatch(/\.State\.Health/);
+    expect(src).toMatch(/healthy/);
+  });
+
+  it('tears the container down on every exit path via a single process-exit hook', () => {
+    const src = read('scripts/smoke-test-image.mjs');
+    expect(src).toMatch(/process\.on\(['"]exit['"]/);
+    expect(src).toMatch(/docker['"],\s*\[['"]rm['"]/);
+    // The signal handlers must feed the same exit path, not bypass it with their own cleanup.
+    expect(src).toMatch(/process\.on\(['"]SIGINT['"]/);
+    expect(src).toMatch(/process\.on\(['"]SIGTERM['"]/);
+  });
+
+  it('degrades honestly with no Docker: a clear SKIP, never a silent no-op, never a false pass', () => {
+    const src = read('scripts/smoke-test-image.mjs');
+    expect(src).toMatch(/SKIP/);
+    expect(src).toMatch(/not a PASS/i);
+    // The skip path must not run the request battery and report a hollow "0/0 passed" as if it
+    // had exercised anything -- reviewed guards that asserted an empty list with no positive
+    // control are exactly the shape this must not repeat.
+    const skipBranch = src.slice(src.indexOf('if (!docker.ok)'), src.indexOf('} else {'));
+    expect(skipBranch).not.toMatch(/runPageChecks|runApiChecks/);
+  });
+
+  it('release-image.yml builds and smoke-tests the image before it is ever pushed to GHCR', () => {
+    const workflow = read('.github/workflows/release-image.yml');
+    const smokeStepIdx = workflow.indexOf('npm run smoke:image');
+    const loadIdx = workflow.indexOf('load: true');
+    const pushIdx = workflow.indexOf('push: true');
+    expect(smokeStepIdx).toBeGreaterThan(-1);
+    expect(loadIdx).toBeGreaterThan(-1);
+    expect(pushIdx).toBeGreaterThan(-1);
+    // The image that gets smoked is loaded locally BEFORE the smoke step runs, and the smoke
+    // step itself runs strictly before the step that pushes to GHCR.
+    expect(loadIdx).toBeLessThan(smokeStepIdx);
+    expect(smokeStepIdx).toBeLessThan(pushIdx);
+  });
+});
+
 describe('version and changelog', () => {
   const pkg = JSON.parse(read('package.json')) as { version: string; dependencies: Record<string, string> };
   const changelog = read('CHANGELOG.md');

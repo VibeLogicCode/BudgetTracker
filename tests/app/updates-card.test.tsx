@@ -5,12 +5,15 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { UpdatesClient, type UpdatesViewProps } from '@/app/(app)/settings/updates-client';
+import { RESTART_NOTICE_KEY } from '@/lib/update/restart-notice';
+import { GITHUB_INTERACTIVE_TIMEOUT_MS, timeoutSeconds } from '@/lib/update/timeouts';
 import {
   applyUpdateAction,
   checkForUpdateNowAction,
   dismissUpdateAction,
   enableUpdateChecksAction,
   reviewUpdateAction,
+  setAutoApplyAction,
 } from '@/app/(app)/settings/actions';
 
 vi.mock('@/app/(app)/settings/actions', () => ({
@@ -533,5 +536,188 @@ describe('item M-6: pending is not derived from the clock during the first rende
     // render() flushes effects, so by here the clock HAS been read -- on the client only.
     expect(screen.getByText(/Watchtower is pulling 1\.4\.0/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Update now' })).toBeNull();
+  });
+});
+/**
+ * v1.32.0 (UP-1). From the owner's 58-second recording of a real v1.30.0 -> v1.31.0 update: the
+ * button said "Working...", the line above it still said "Last checked" with a stamp from hours
+ * earlier, and neither changed for long enough that they reloaded the page at about 22 seconds.
+ * The update itself worked; what the app SAID while it worked did not.
+ */
+describe('UP-1: Check now says what it is doing, and the old stamp stops claiming to be current', () => {
+  /** Resolves when the test says so, which is the only way to observe the in-flight render. */
+  function heldCheck(): (state: Record<string, unknown>) => void {
+    let release!: (state: Record<string, unknown>) => void;
+    vi.mocked(checkForUpdateNowAction).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve as typeof release;
+        }),
+    );
+    return (state) => release(state);
+  }
+
+  it('names GitHub and the budget while the request is in flight', async () => {
+    const finish = heldCheck();
+    render(<UpdatesClient {...base} />);
+    expect(screen.getByText(/Last checked 2026-08-18 09:30/)).toBeTruthy();
+
+    submit('Check now');
+
+    await waitFor(() => expect(screen.getByText(/Asking GitHub for the newest published release/)).toBeTruthy());
+    // The duration comes from the SAME constant AbortSignal.timeout() is handed, so the promise
+    // on screen cannot outlive the budget behind it.
+    expect(document.body.textContent).toContain(
+      `it gives up after ${timeoutSeconds(GITHUB_INTERACTIVE_TIMEOUT_MS)} seconds`,
+    );
+
+    finish({ message: 'You are on the newest published version.' });
+    await waitFor(() => expect(screen.getByText(/Last checked 2026-08-18 09:30/)).toBeTruthy());
+  });
+
+  it('the stale stamp is relabelled "Previously checked", never dropped and never left as "Last checked"', async () => {
+    const finish = heldCheck();
+    render(<UpdatesClient {...base} />);
+    submit('Check now');
+
+    await waitFor(() => expect(document.body.textContent).toContain('Previously checked 2026-08-18 09:30'));
+    // The house rule -- show nothing rather than something false -- settled here by making the
+    // sentence true. "Last checked" beside an in-flight check is the false half of it.
+    expect(screen.queryByText(/Last checked/)).toBeNull();
+
+    finish({ message: 'You are on the newest published version.' });
+    await waitFor(() => expect(screen.getByText(/Last checked 2026-08-18 09:30/)).toBeTruthy());
+    expect(document.body.textContent).not.toContain('Previously checked');
+  });
+
+  it('the button names the operation instead of the app-wide "Working...", and cannot be fired twice', async () => {
+    const finish = heldCheck();
+    render(<UpdatesClient {...base} />);
+    expect(screen.getByRole('button', { name: 'Check now' })).toBeTruthy();
+
+    submit('Check now');
+
+    const button = await screen.findByRole('button', { name: 'Asking GitHub…' });
+    expect(screen.queryByText('Working…')).toBeNull();
+    // SubmitButton's double-submit protection is the disabled attribute; this button keeps it.
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+
+    finish({ message: 'You are on the newest published version.' });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Check now' })).toBeTruthy());
+  });
+
+  it('the line is a live region, so the change is announced and not only seen', () => {
+    render(<UpdatesClient {...base} />);
+    const status = screen.getByRole('status');
+    expect(status.getAttribute('aria-live')).toBe('polite');
+    expect(status.textContent).toContain('Last checked');
+  });
+
+  it('only the CHECK pends this line -- a Save leaves the stamp alone', async () => {
+    let release!: () => void;
+    vi.mocked(setAutoApplyAction).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ message: 'Saved.' });
+        }),
+    );
+    render(<UpdatesClient {...base} />);
+    submit('Save');
+
+    await waitFor(() => expect(screen.getByText(/Last checked 2026-08-18 09:30/)).toBeTruthy());
+    expect(document.body.textContent).not.toContain('Asking GitHub');
+
+    release();
+    await waitFor(() => expect(screen.getByText('Saved.')).toBeTruthy());
+  });
+});
+
+/**
+ * v1.32.0 (UP-2). The write half of the restart hint src/app/(app)/error.tsx reads -- see
+ * tests/app/error-boundaries.test.tsx for the read half, and
+ * tests/lib/update/restart-notice.test.ts for the rules in between.
+ *
+ * What matters here is WHICH outcomes arm it. An accepted apply is a restart the household
+ * authorised; a refused one is a button press that did nothing, and arming on that would let a
+ * rate-limited click suppress a genuine crash message for the next five minutes.
+ */
+describe('UP-2: an accepted apply arms the restart notice, a refused one does not', () => {
+  beforeEach(() => window.localStorage.clear());
+  afterEach(() => window.localStorage.clear());
+
+  function stored(): { version: string; at: number } | null {
+    const raw = window.localStorage.getItem(RESTART_NOTICE_KEY);
+    return raw === null ? null : (JSON.parse(raw) as { version: string; at: number });
+  }
+
+  it('Update now, accepted: the version being installed is recorded with a stamp', async () => {
+    vi.mocked(applyUpdateAction).mockResolvedValueOnce({
+      message:
+        'Update requested. Watchtower is pulling 1.4.0 and will restart this app in a moment. Reload this page in a minute or two.',
+      applyRequestedVersion: '1.4.0',
+      applyRequestedAt: '2026-08-18T09:35:00.000Z',
+      resolvedAt: '2026-08-18T09:35:00.000Z',
+    });
+    render(<UpdatesClient {...base} severity="minor" latestVersion="1.4.0" />);
+    submit('Update now');
+
+    await waitFor(() => expect(stored()).not.toBeNull());
+    expect(stored()!.version).toBe('1.4.0');
+    expect(Number.isFinite(stored()!.at)).toBe(true);
+  });
+
+  it('accepted-unconfirmed arms it too -- the container died before it could answer, which is the case this exists for', async () => {
+    vi.mocked(applyUpdateAction).mockResolvedValueOnce({
+      message:
+        'Update requested. This app is being replaced right now, so it could not wait for a reply. Reload this page in a minute or two.',
+      applyRequestedVersion: '1.4.0',
+      applyRequestedAt: '2026-08-18T09:35:00.000Z',
+      resolvedAt: '2026-08-18T09:35:00.000Z',
+    });
+    render(<UpdatesClient {...base} severity="minor" latestVersion="1.4.0" />);
+    submit('Update now');
+
+    await waitFor(() => expect(stored()?.version).toBe('1.4.0'));
+  });
+
+  it('a rate-limited apply arms NOTHING -- a refused click is not a restart', async () => {
+    vi.mocked(applyUpdateAction).mockResolvedValueOnce({
+      error: 'Too many attempts. Try again in 12 minutes.',
+    });
+    render(<UpdatesClient {...base} severity="minor" latestVersion="1.4.0" />);
+    submit('Update now');
+
+    await waitFor(() => expect(screen.getByText('Too many attempts. Try again in 12 minutes.')).toBeTruthy());
+    expect(stored()).toBeNull();
+  });
+
+  it('a stale-version refusal arms nothing either, even though it reports a pending version', async () => {
+    vi.mocked(applyUpdateAction).mockResolvedValueOnce({
+      error: 'That version is no longer the one on offer. Check again.',
+      applyRequestedVersion: '1.4.0',
+      applyRequestedAt: '2026-08-18T09:35:00.000Z',
+    });
+    render(<UpdatesClient {...base} severity="minor" latestVersion="1.4.0" />);
+    submit('Update now');
+
+    await waitFor(() => expect(screen.getByText(/no longer the one on offer/)).toBeTruthy());
+    expect(stored()).toBeNull();
+  });
+
+  it('merely rendering the card arms nothing, however the update state looks', () => {
+    render(
+      <UpdatesClient
+        {...base}
+        severity="minor"
+        latestVersion="1.4.0"
+        applyRequestedVersion="1.4.0"
+        applyRequestedAt={new Date().toISOString()}
+      />,
+    );
+    // `pending` is true here (the database says an apply is in flight) and the notice is on
+    // screen -- but MUST-7.6's window is 30 minutes, so re-arming a five-minute restart hint on
+    // every visit to Settings would let a long-dead apply speak for a fresh crash.
+    expect(screen.getByText(/Watchtower is pulling 1\.4\.0/)).toBeTruthy();
+    expect(stored()).toBeNull();
   });
 });

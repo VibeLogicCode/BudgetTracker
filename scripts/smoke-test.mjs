@@ -26,7 +26,9 @@
  * has full coverage in tests/app/*login*. What this script actually needs to prove -- that a
  * valid session cookie is accepted end to end and an invalid one is rejected end to end by
  * requireUser() -- is exercised identically by a session row written straight into the fixture
- * database, using the same tokenHash = sha256(token) scheme src/lib/auth/session.ts uses.
+ * database, using the same tokenHash = sha256(token) scheme src/lib/auth/session.ts uses. This
+ * row-shape (and the ARGON2_OPTIONS it depends on) lives in scripts/smoke-fixtures.mjs, shared
+ * with scripts/smoke-test-image.mjs (v1.32.0, lane L5) -- see that file's docblock.
  *
  * WHY plain `better-sqlite3` + `drizzle-orm` here instead of importing `@/db/client` and
  * `@/db/seed`: this script runs with Node's native TypeScript stripping, which has no notion of
@@ -34,8 +36,13 @@
  * bundler in front of it. Rather than add a bespoke path-alias loader (a new, untested failure
  * mode for a CI job that must stay simple to debug when it goes red), this mirrors the existing
  * convention in scripts/reset-admin-password.ts: talk to better-sqlite3 and argon2 directly.
- * ARGON2_OPTIONS below must stay identical to src/lib/auth/password.ts, the same invariant
- * tests/scripts/reset-admin-password.test.ts already pins for that script.
+ *
+ * WHY the route list and the request battery live in scripts/smoke-routes.mjs and
+ * scripts/smoke-checks.mjs instead of here: this project's most-repeated defect shape is one idea
+ * implemented in more than one place with nothing tying the copies together. scripts/smoke-test-
+ * image.mjs (v1.32.0) needs the exact same routes and the exact same expectations against a
+ * running container instead of a spawned host process -- sharing one definition means a changed
+ * expectation changes both runs at once, instead of two lists quietly disagreeing later.
  *
  * NEVER touches .tmp-data/ -- the fixture lives under a fresh os.tmpdir() directory, created
  * here and removed at the end of this script, regardless of pass or fail.
@@ -43,27 +50,22 @@
  * NEVER logs a session token or a cookie value -- only route paths and status codes.
  */
 
-import { randomBytes, createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
-import argon2 from 'argon2';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
+import { randomBytes } from 'node:crypto';
+import { seedFixtureDb } from './smoke-fixtures.mjs';
+import { createRunner, runPageChecks, runApiChecks, checkCspNonce, checkNoServerErrors, printSummary } from './smoke-checks.mjs';
 
 const ROOT = process.cwd();
 const PORT = Number(process.env.SMOKE_PORT ?? 3411);
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 const BOOT_TIMEOUT_MS = 60_000;
 const SHUTDOWN_TIMEOUT_MS = 15_000;
-const SESSION_COOKIE_NAME = 'bt_session';
-
-/** Must stay identical to ARGON2_OPTIONS in src/lib/auth/password.ts -- see docblock above. */
-const ARGON2_OPTIONS = { type: argon2.argon2id, memoryCost: 65536, timeCost: 3, parallelism: 1 };
-
-const nowIso = () => new Date().toISOString();
 
 function log(line) {
   console.log(`[smoke] ${line}`);
@@ -85,52 +87,9 @@ sqlite.pragma('foreign_keys = OFF');
 migrate(drizzle(sqlite), { migrationsFolder: path.join(ROOT, 'drizzle') });
 sqlite.pragma('foreign_keys = ON');
 
-const ADMIN_USERNAME = 'smoke-admin';
-// Random, throwaway, never logged -- the fixture database is discarded at the end of this run.
-const ADMIN_PASSWORD = randomBytes(16).toString('base64url');
-const passwordHash = await argon2.hash(ADMIN_PASSWORD, ARGON2_OPTIONS);
-
-const insertUser = sqlite.prepare(
-  `insert into users
-     (name, username, password_hash, role, totp_secret_encrypted, totp_enabled, is_active,
-      created_at, must_change_password, totp_last_counter, visibility, can_sign_in, last_account_id)
-   values (?, ?, ?, 'admin', null, 0, 1, ?, 0, null, 'household', 1, null)`,
-);
-const userId = Number(insertUser.run('Smoke Admin', ADMIN_USERNAME, passwordHash, nowIso()).lastInsertRowid);
-
-// A handful of categories -- enough for pages that render a category picker or a spend-by-category
-// chart to have a non-empty path, without reproducing src/db/seed.ts's full taxonomy.
-const insertCategory = sqlite.prepare(
-  `insert into categories (name, parent_id, icon, color, is_income, is_archived, sort_order, tax_relevant)
-   values (?, ?, ?, ?, ?, 0, ?, 0)`,
-);
-const incomeId = Number(insertCategory.run('Income', null, '💵', '#16a34a', 1, 0).lastInsertRowid);
-insertCategory.run('Salary', incomeId, '💵', '#16a34a', 1, 1);
-const housingId = Number(insertCategory.run('Housing', null, '🏠', '#0ea5e9', 0, 100).lastInsertRowid);
-insertCategory.run('Rent/Mortgage', housingId, '🏠', '#0ea5e9', 0, 101);
-
-// A valid session, minted the same way src/lib/auth/session.ts's createSession() does
-// (tokenHash = sha256(token) hex, 30-day expiry) -- see the docblock above for why this
-// script mints the row directly instead of driving the real login form.
-const validToken = randomBytes(32).toString('base64url');
-const validTokenHash = createHash('sha256').update(validToken).digest('hex');
-const sessionCreatedAt = nowIso();
-const sessionExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-sqlite
-  .prepare(
-    `insert into sessions (token_hash, user_id, created_at, expires_at, last_seen_at, user_agent, ip)
-     values (?, ?, ?, ?, ?, null, null)`,
-  )
-  .run(validTokenHash, userId, sessionCreatedAt, sessionExpiresAt, sessionCreatedAt);
-
+const { userId, validToken } = await seedFixtureDb(sqlite);
 sqlite.close();
 log(`seeded one admin (id ${userId}) and one valid session`);
-
-// A cookie value that is well-formed but matches no session row -- the "third case" the review
-// calls out: it passes src/proxy.ts (which only checks cookie *presence*) and must still be
-// bounced by requireUser() in src/app/(app)/layout.tsx, which is the one thing only a real
-// end-to-end request can prove.
-const GARBAGE_TOKEN = 'not-a-real-session-token-00000000000000000000000';
 
 // ---------------------------------------------------------------------------
 // 2. Boot the standalone server built by `npm run build`.
@@ -207,167 +166,10 @@ async function waitForHealth() {
 }
 
 // ---------------------------------------------------------------------------
-// 3. Request battery.
+// 3. Request battery (scripts/smoke-checks.mjs, routes from scripts/smoke-routes.mjs).
 // ---------------------------------------------------------------------------
 
-const results = [];
-function record(name, pass, detail) {
-  results.push({ name, pass });
-  console.log(`${pass ? 'PASS' : 'FAIL'}  ${name}${detail ? '  (' + detail + ')' : ''}`);
-}
-
-/**
- * Records a check as SKIPPED rather than passed or failed (review M-6). Skipped checks are
- * excluded from both the numerator and the denominator of the final "N/M checks passed" line, so
- * a platform-limited run reads as "M/M passed, K skipped" instead of quietly reporting the same
- * total M as a full run would -- the failure mode this exists to avoid is a developer misreading
- * a shorter denominator as a regression, or a passing count as having actually exercised the
- * check.
- */
-function skip(name, reason) {
-  results.push({ name, pass: null, skipped: true });
-  console.log(`SKIP  ${name}  (${reason})`);
-}
-
-/** Route path plus status only -- never a cookie value (see docblock). */
-async function request(pathname, { cookie } = {}) {
-  const headers = {};
-  if (cookie !== undefined) headers.cookie = `${SESSION_COOKIE_NAME}=${cookie}`;
-  return fetch(`${BASE_URL}${pathname}`, { redirect: 'manual', headers });
-}
-
-async function expectStatus(label, pathname, opts, expected) {
-  const wanted = Array.isArray(expected) ? expected : [expected];
-  let res;
-  try {
-    res = await request(pathname, opts);
-  } catch (error) {
-    record(label, false, `request failed: ${error instanceof Error ? error.message : String(error)}`);
-    return null;
-  }
-  const ok = wanted.includes(res.status);
-  record(label, ok, ok ? `${res.status}` : `expected ${wanted.join('|')}, got ${res.status}`);
-  return res;
-}
-
-// 28 page routes (walked src/app/**/page.tsx). Default: 307 (-> /login) with no cookie, 200
-// with a valid session. Listed exceptions were derived by reading each page's own redirect
-// logic, not guessed -- see the smoke report for the source lines behind each one.
-const DEFAULT_PAGES = [
-  '/dashboard',
-  '/transactions',
-  '/budgets',
-  '/reports',
-  '/goals',
-  '/goals/new',
-  '/import',
-  '/import/wizard',
-  '/warranties',
-  '/warranties/new',
-  '/help',
-  '/settings',
-  '/settings/accounts',
-  '/settings/audit',
-  '/settings/backups',
-  '/settings/connections',
-  '/settings/item-types',
-  '/settings/managers',
-  '/settings/merchant-rules',
-  '/settings/notifications',
-  '/settings/users',
-];
-
-// [path, anonExpected, authExpected]
-const SPECIAL_PAGES = [
-  // src/app/page.tsx: always redirect()s based on isSetupRequired(), regardless of auth.
-  ['/', [307], [307]],
-  // src/app/(app)/review/page.tsx: folded into Transactions (ruling R6) -- unconditionally
-  // redirect()s to /transactions?review=1 with no auth check of its own, so BOTH anon (the
-  // proxy still 307s it to /login first, since /review carries no session cookie) and auth
-  // (the page's own redirect) land on 307, just to different Location values.
-  ['/review', [307], [307]],
-  // src/app/(auth)/login/page.tsx never checks for a session; always renders the form.
-  ['/login', [200], [200]],
-  // src/app/(auth)/setup/page.tsx: setup is already done in this fixture, so it always
-  // redirects to /login regardless of auth state.
-  ['/setup', [307], [307]],
-  // src/app/(auth)/setup/accounts/page.tsx is public-prefixed (proxy never blocks it) but
-  // requireAdmin()s internally -- anon bounces to /login; authenticated with zero accounts
-  // (this fixture's state) it renders the step.
-  ['/setup/accounts', [307], [200]],
-  // src/app/(auth)/change-password/page.tsx: not in PUBLIC_PREFIXES, so proxy 307s an
-  // anonymous GET to /login; requireUser() passes for the seeded admin but
-  // mustChangePassword is false, so the page itself redirects to /dashboard.
-  ['/change-password', [307], [307]],
-  // src/app/(app)/warranties/[id]/page.tsx: an id matching no row calls notFound().
-  ['/warranties/999999', [307], [404]],
-];
-
-async function runPageChecks() {
-  for (const pathname of DEFAULT_PAGES) {
-    await expectStatus(`page anon   ${pathname}`, pathname, {}, [307]);
-    await expectStatus(`page auth   ${pathname}`, pathname, { cookie: validToken }, [200]);
-  }
-  for (const [pathname, anon, auth] of SPECIAL_PAGES) {
-    await expectStatus(`page anon   ${pathname}`, pathname, {}, anon);
-    await expectStatus(`page auth   ${pathname}`, pathname, { cookie: validToken }, auth);
-  }
-  // The one case only an end-to-end request can check (review O-01 / "Proposed smoke test"):
-  // a garbage-but-present cookie passes src/proxy.ts (presence-only check) and must still be
-  // redirected by requireUser() in src/app/(app)/layout.tsx.
-  await expectStatus('page garbage-cookie /dashboard', '/dashboard', { cookie: GARBAGE_TOKEN }, [307]);
-}
-
-// 8 safe API GETs (spec's "Proposed smoke test" route list). [path, anonExpected, authExpected]
-const API_GETS = [
-  ['/api/backup/download', [401], [200]],
-  ['/api/reports/export', [401], [200]],
-  // parseTaxYear() 400s with no ?year= -- always pass one so the auth-expected branch is 200.
-  ['/api/reports/tax-export?year=2026', [401], [200]],
-  ['/api/packs/rules/export', [401], [200]],
-  ['/api/packs/profiles/export', [401], [200]],
-  // Admin session, no SimpleFIN connection configured in this fixture -> the documented
-  // "not connected" response, not a 500.
-  ['/api/simplefin/accounts', [401], [409]],
-  ['/api/warranties/receipts/999999', [401], [404]],
-];
-
-// The 11 POST-only routes (spec text says twelve; the actual route.ts files under src/app/api
-// export exactly eleven POST handlers with no GET -- verified by grepping every
-// `export (async )?function GET|POST` in src/app/api, not assumed from the review prose).
-// A GET against each still proves the module loaded and the route registered (Next's own
-// 405 for an unimplemented method on an existing route file).
-const POST_ONLY_ROUTES = [
-  '/api/auth/logout',
-  '/api/import/preview',
-  '/api/import/raw-preview',
-  '/api/import/commit',
-  '/api/import/undo',
-  '/api/packs/rules/import',
-  '/api/packs/profiles/import',
-  '/api/simplefin/claim',
-  '/api/simplefin/link',
-  '/api/simplefin/sync',
-  '/api/warranties/receipts/stage',
-];
-
-async function runApiChecks() {
-  await expectStatus('api unauth  /api/health', '/api/health', {}, [200]);
-  for (const [pathname, anon, auth] of API_GETS) {
-    await expectStatus(`api anon    ${pathname}`, pathname, {}, anon);
-    await expectStatus(`api auth    ${pathname}`, pathname, { cookie: validToken }, auth);
-  }
-  for (const pathname of POST_ONLY_ROUTES) {
-    await expectStatus(`api 405     ${pathname}`, pathname, { cookie: validToken }, [405]);
-  }
-}
-
-async function checkCspNonce() {
-  const res = await request('/dashboard', { cookie: validToken });
-  const csp = res.headers.get('content-security-policy') ?? '';
-  const ok = res.status === 200 && /nonce-[A-Za-z0-9+/=]+/.test(csp);
-  record('csp nonce on a real response', ok, ok ? undefined : `content-security-policy: ${csp || '(missing)'}`);
-}
+const runner = createRunner('[smoke]');
 
 // ---------------------------------------------------------------------------
 // 4. Run everything, then verify the shutdown path.
@@ -389,39 +191,34 @@ async function shutdownAndVerify() {
     // here -- rather than either faking a pass or letting them fail as noise -- is what keeps a
     // developer running the strongest gate locally on Windows from mistaking a shorter total for
     // a regression.
-    skip('graceful shutdown exit code', "SIGTERM maps to TerminateProcess on win32; the app's shutdown handler cannot run -- see ubuntu-latest CI for this check");
-    skip('graceful shutdown log line', "SIGTERM maps to TerminateProcess on win32; the app's shutdown handler cannot run -- see ubuntu-latest CI for this check");
+    //
+    // scripts/smoke-test-image.mjs does NOT need this skip: a container's PID 1 is always a
+    // Linux process (Docker Desktop on Windows runs containers inside a Linux VM), so `docker
+    // stop`'s SIGTERM reaches the app's real handler even when this script is run on Windows.
+    runner.skip('graceful shutdown exit code', "SIGTERM maps to TerminateProcess on win32; the app's shutdown handler cannot run -- see ubuntu-latest CI for this check");
+    runner.skip('graceful shutdown log line', "SIGTERM maps to TerminateProcess on win32; the app's shutdown handler cannot run -- see ubuntu-latest CI for this check");
     if (!serverExit) server.kill('SIGKILL');
     return;
   }
   if (!serverExit) {
-    record('graceful shutdown', false, `did not exit within ${SHUTDOWN_TIMEOUT_MS}ms of SIGTERM`);
+    runner.record('graceful shutdown', false, `did not exit within ${SHUTDOWN_TIMEOUT_MS}ms of SIGTERM`);
     server.kill('SIGKILL');
     return;
   }
   const exitOk = serverExit.code === 0;
-  record('graceful shutdown exit code', exitOk, `code ${serverExit.code}, signal ${serverExit.signal}`);
+  runner.record('graceful shutdown exit code', exitOk, `code ${serverExit.code}, signal ${serverExit.signal}`);
   const loggedShutdown = stdoutBuf.includes('[shutdown] received SIGTERM, database closed, exiting');
-  record('graceful shutdown log line', loggedShutdown);
-}
-
-function checkNoServerErrors() {
-  // console.error always writes to stderr; a clean boot-and-serve run should produce none.
-  // Checked here (after the request battery, before shutdown) so a route that renders its own
-  // error boundary and still returns 200 -- exactly the gap a status-code-only check would
-  // miss -- fails this run too.
-  const ok = stderrBuf.trim().length === 0;
-  record('no console.error / stderr output from the server', ok, ok ? undefined : `${stderrBuf.split('\n').length} line(s) captured, see log above`);
+  runner.record('graceful shutdown log line', loggedShutdown);
 }
 
 let exitCode = 0;
 try {
   await waitForHealth();
   log('server is healthy');
-  await runPageChecks();
-  await runApiChecks();
-  await checkCspNonce();
-  checkNoServerErrors();
+  await runPageChecks(runner, BASE_URL, validToken);
+  await runApiChecks(runner, BASE_URL, validToken);
+  await checkCspNonce(runner, BASE_URL, validToken);
+  checkNoServerErrors(runner, stderrBuf);
   await shutdownAndVerify();
 } catch (error) {
   console.error(`[smoke] fatal: ${error instanceof Error ? error.stack : String(error)}`);
@@ -433,19 +230,5 @@ try {
   fs.rmSync(dataDir, { recursive: true, force: true });
 }
 
-const skipped = results.filter((r) => r.skipped);
-const scored = results.filter((r) => !r.skipped);
-const failed = scored.filter((r) => !r.pass);
-console.log('');
-console.log(
-  `[smoke] ${scored.length - failed.length}/${scored.length} checks passed` +
-    (skipped.length > 0 ? `, ${skipped.length} skipped` : ''),
-);
-if (skipped.length > 0) {
-  console.log(`[smoke] SKIPPED (not scored -- see reason above): ${skipped.map((r) => r.name).join(', ')}`);
-}
-if (failed.length > 0) {
-  console.log(`[smoke] FAILED: ${failed.map((r) => r.name).join(', ')}`);
-  exitCode = 1;
-}
-process.exit(exitCode);
+const summaryExitCode = printSummary(runner);
+process.exit(exitCode || summaryExitCode);

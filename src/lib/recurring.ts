@@ -7,6 +7,7 @@ import { recurringVerdict, type RecurringCadence, type SpendRow } from '@/lib/pr
 import { RECURRING_LOOKBACK_DAYS } from '@/lib/predict/constants';
 import { SPEND_ROW_WHERE } from '@/lib/spend-where';
 import { billingAllowedForKind, ITEM_KINDS, type ItemKind } from '@/lib/warranty/constants';
+import { notEnded } from '@/lib/warranty/expiry-sql';
 
 /**
  * F-05 (2026-09-02 review, v1.31.0). The READ MODEL behind the Recurring charges card, the
@@ -86,19 +87,6 @@ export interface RecurringLoad {
 const RECURRING_ITEM_KINDS: ItemKind[] = ITEM_KINDS.filter(billingAllowedForKind);
 
 /**
- * "Has not ended yet." Expressed the same way warrantyStatus() (src/lib/warranty/expiry.ts)
- * decides `expired`: open-ended and no-end-date items are live, and coverage is inclusive of
- * the expiry date itself.
- *
- * This matters more here than anywhere else on the item side, and in the opposite direction to
- * the usual: an ENDED contract whose merchant is still charging is the single most valuable row
- * this card can produce. Counting that item as "tracked" would hide the finding behind a badge.
- */
-function notEnded(today: string): SQL {
-  return sql`(${warrantyItems.isLifetime} = 1 or ${warrantyItems.expiryDate} is null or ${warrantyItems.expiryDate} >= ${today})`;
-}
-
-/**
  * One indexed range scan over `transactions.date`, four narrow columns, grouped in JS -- the
  * same shape (and the same reasoning) as readSlice in src/lib/insights.ts. A SQL
  * `group by normalized_merchant having count(*) >= 3` pre-filter was considered and rejected:
@@ -166,6 +154,12 @@ function covers(needle: Needle, merchant: string): boolean {
  * `warranty_items.owner_user_id`. Rules come first in the returned order and win any tie: a rule
  * is a statement about what the app will DO with the next charge, an item-name match is a
  * resemblance.
+ *
+ * `notEnded` (src/lib/warranty/expiry-sql.ts) matters more here than anywhere else on the item
+ * side, and in the opposite direction to the usual: an ENDED contract whose merchant is still
+ * charging is the single most valuable row this card can produce. Counting that item as "tracked"
+ * would hide the finding behind a badge, which is why the boundary this predicate draws is worth
+ * one shared definition rather than a local `>=` that agrees with the badge until it doesn't.
  */
 function needles(today: string, scope: number | null): Needle[] {
   const db = getDb();

@@ -1202,7 +1202,20 @@ describe('groupTransactionsByCategory (v1.26.0 Lane 2 item 3)', () => {
     const none = page.groups.find((group) => group.categoryId === null)!;
     // 'Uncategorized', not a bare 'None' -- the same string categoryBreakdown (src/lib/reports.ts)
     // already prints for this edge case.
-    expect(none).toEqual({ categoryId: null, categoryName: 'Uncategorized', parentId: null, count: 2, totalCents: -5000 });
+    expect(none).toEqual({
+      categoryId: null,
+      categoryName: 'Uncategorized',
+      parentId: null,
+      count: 2,
+      totalCents: -5000,
+      // 2026-09-08 (spec §5.2): both rows, newest first. Left as a full equality rather than
+      // relaxed to toMatchObject -- this test's job is to pin the WHOLE shape of the null cluster,
+      // and the null cluster's preview is the one an `in` list would silently leave empty.
+      preview: [
+        { id: expect.any(Number), date: '2026-03-02', description: 'MYSTERY B', amountCents: -3000 },
+        { id: expect.any(Number), date: '2026-03-02', description: 'MYSTERY A', amountCents: -2000 },
+      ],
+    });
   });
 
   it('labels direct spend on a parent that has children, and leaves a childless top-level alone', () => {
@@ -1339,6 +1352,116 @@ describe('groupTransactionsByCategory (v1.26.0 Lane 2 item 3)', () => {
       outCents: 0,
       inCents: 0,
     });
+  });
+});
+
+/**
+ * 2026-09-08 (docs/superpowers/specs/2026-09-08-grouped-review-navigation-design.md §5.2). The
+ * disclosure under each cluster header used to reveal only the three action buttons, which is not
+ * what a disclosure triangle promises. `preview` is the cluster's newest rows, capped at 5, so
+ * expanding a group answers "what is in here" without leaving the page.
+ */
+describe('groupTransactionsByCategory: preview rows', () => {
+  it('holds at most 5 rows, newest first, for each cluster on the requested page', () => {
+    const { db, add } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    for (let i = 1; i <= 7; i += 1) {
+      add({ date: `2026-03-0${i}`, description: `MARKET ${i}`, amountCents: -100 * i, categoryId: groceries, source: 'rule' });
+    }
+
+    const group = groupTransactionsByCategory({ source: 'rule' }, VIEWER).groups.find(
+      (row) => row.categoryName === 'Groceries',
+    )!;
+    // The header still counts the WHOLE cluster -- the cap is on what is previewed, never on what
+    // is counted. That pair is exactly what the "Showing 5 of 7" line on screen states.
+    expect(group.count).toBe(7);
+    expect(group.preview).toHaveLength(5);
+    expect(group.preview.map((row) => row.description)).toEqual([
+      'MARKET 7',
+      'MARKET 6',
+      'MARKET 5',
+      'MARKET 4',
+      'MARKET 3',
+    ]);
+    expect(group.preview[0]).toMatchObject({ date: '2026-03-07', amountCents: -700 });
+  });
+
+  it("previews a split under EACH part's category, at that part's own amount", () => {
+    const { db, alice, add } = setup();
+    const pharmacy = categoryIdByName(db, 'Pharmacy');
+    const groceries = categoryIdByName(db, 'Groceries');
+    const splitTxn = add({ description: 'BIG BOX', amountCents: -5000 });
+    setTransactionSplits({
+      txnId: splitTxn,
+      parts: [
+        { categoryId: pharmacy, amountCents: -3000 },
+        { categoryId: groceries, amountCents: -2000 },
+      ],
+      userId: alice,
+    });
+
+    const byName = new Map(groupTransactionsByCategory({}, VIEWER).groups.map((g) => [g.categoryName, g]));
+    // The same row appears under both clusters, each time carrying the PART's amount -- never the
+    // parent's -5000, which is the number a naive join would show in both places.
+    expect(byName.get('Pharmacy')!.preview).toEqual([
+      { id: splitTxn, date: '2026-03-02', description: 'BIG BOX', amountCents: -3000 },
+    ]);
+    expect(byName.get('Groceries')!.preview).toEqual([
+      { id: splitTxn, date: '2026-03-02', description: 'BIG BOX', amountCents: -2000 },
+    ]);
+  });
+
+  it('previews the uncategorized cluster too -- the null branch an `in` list can never match', () => {
+    const { add } = setup();
+    add({ date: '2026-03-04', description: 'UNKNOWN SHOP', amountCents: -1234 });
+
+    const group = groupTransactionsByCategory({}, VIEWER).groups.find((row) => row.categoryId === null)!;
+    expect(group.categoryName).toBe('Uncategorized');
+    expect(group.preview).toEqual([{ id: expect.any(Number), date: '2026-03-04', description: 'UNKNOWN SHOP', amountCents: -1234 }]);
+  });
+
+  it('prefers the display description, the same text the flat list shows', () => {
+    const { db, add } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const id = add({ description: 'SQ *MRKT 4471', amountCents: -900, categoryId: groceries, source: 'rule' });
+    db.run(sql`update transactions set display_description = 'Corner Market' where id = ${id}`);
+
+    const group = groupTransactionsByCategory({ source: 'rule' }, VIEWER).groups[0];
+    expect(group.preview[0].description).toBe('Corner Market');
+  });
+
+  it('honours the same filter as the cluster it sits under', () => {
+    const { db, add } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    add({ date: '2026-03-09', description: 'MANUAL MARKET', amountCents: -100, categoryId: groceries, source: 'manual' });
+    add({ date: '2026-03-01', description: 'RULE MARKET', amountCents: -200, categoryId: groceries, source: 'rule' });
+
+    // Newest first would put MANUAL MARKET on top -- it is excluded because the FILTER excludes it,
+    // not because of anything the preview query does on its own.
+    const group = groupTransactionsByCategory({ source: 'rule' }, VIEWER).groups[0];
+    expect(group.count).toBe(1);
+    expect(group.preview.map((row) => row.description)).toEqual(['RULE MARKET']);
+  });
+
+  it('covers only the clusters on the requested gpage, never the whole set', () => {
+    const { db, add } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const coffee = categoryIdByName(db, 'Coffee');
+    add({ description: 'BIG MARKET', amountCents: -9000, categoryId: groceries, source: 'rule' });
+    add({ description: 'SMALL CAFE', amountCents: -300, categoryId: coffee, source: 'rule' });
+
+    const first = groupTransactionsByCategory({ source: 'rule' }, VIEWER, { pageSize: 1, page: 1 });
+    expect(first.groups).toHaveLength(1);
+    expect(first.groups[0].preview.map((row) => row.description)).toEqual(['BIG MARKET']);
+
+    const second = groupTransactionsByCategory({ source: 'rule' }, VIEWER, { pageSize: 1, page: 2 });
+    expect(second.groups[0].preview.map((row) => row.description)).toEqual(['SMALL CAFE']);
+  });
+
+  it('is an empty array, not undefined, for a page past the end', () => {
+    setup();
+    const page = groupTransactionsByCategory({ source: 'rule', importId: 999999 }, VIEWER);
+    expect(page.groups).toEqual([]);
   });
 });
 
@@ -1515,7 +1638,7 @@ describe('listTransactions source and importId filters (v1.26.0 Lane 2 item 2)',
   });
 
   it('narrows the grouped aggregate identically', () => {
-    const { db, importA } = seedBatches();
+    const { db, importA, ruleA } = seedBatches();
     const groups = groupTransactionsByCategory({ source: 'rule', importId: importA }, VIEWER);
     expect(groups.groups).toEqual([
       {
@@ -1524,6 +1647,12 @@ describe('listTransactions source and importId filters (v1.26.0 Lane 2 item 2)',
         parentId: categoryIdByName(db, 'Food'),
         count: 1,
         totalCents: -1000,
+        // 2026-09-08 (spec §5.2): the preview is narrowed by the SAME filter as the cluster, so
+        // batch B's row cannot appear here -- which is the whole point of this test, now stated
+        // about the rows on screen as well as about the aggregate above them. Asserted on the ID,
+        // not the description: both batches seed a row called 'CORNER MARKET', so a description
+        // assertion would pass whichever batch leaked in.
+        preview: [{ id: ruleA, date: '2026-03-02', description: 'CORNER MARKET', amountCents: -1000 }],
       },
     ]);
     expect(groups.totalCount).toBe(1);

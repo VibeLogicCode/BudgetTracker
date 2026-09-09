@@ -1,9 +1,10 @@
-import { budgetProgress, budgetTotals, resolveBudget, type BudgetScope } from '@/lib/budgets';
+import { budgetProgress, budgetScopeFor, budgetTotals, resolveBudget } from '@/lib/budgets';
 import { viewerFor } from '@/lib/auth/users';
-import { HOUSEHOLD_VIEWER, isSelfScoped, type Viewer } from '@/lib/auth/viewer';
+import { HOUSEHOLD_VIEWER, isSelfScoped, ownerScope, type Viewer } from '@/lib/auth/viewer';
 import { listCategories } from '@/lib/categories';
 import { addMonths, currentMonth, monthEnd, monthStart, todayIso } from '@/lib/dates';
 import { isEventEnabled } from '@/lib/notify/config';
+import { familyChannelNeedsOwnPass } from '@/lib/notify/family-pass';
 import { CHANNELS, monthlyDigestKey, predictedVsActualKey, suggestedBudgetRefreshKey } from '@/lib/notify/events';
 import { flattenBudgetRows } from '@/lib/notify/evaluate/pace';
 import { householdRoutedChannels } from '@/lib/notify/household';
@@ -111,10 +112,21 @@ function renderPredicted(
   });
 }
 
-function firePredictedVsActual(input: { userId: number; month: string; now: Date }): number {
-  if (!CHANNELS.some((channel) => isEventEnabled(input.userId, 'predicted_vs_actual', channel))) return 0;
+function firePredictedVsActual(input: { userId: number | null; month: string; now: Date }): number {
+  // v1.32.0 (ruling R23): null is THE HOUSEHOLD'S own pass, run from the household's own daily
+  // slot in evaluate/index.ts. Before it, this early return was where the family channel's
+  // monthly report went to die in a household that had routed the event and left every personal
+  // toggle off. The household reads through HOUSEHOLD_VIEWER, so `selfScoped` is false and every
+  // branch below takes its household arm -- which is the message finding I-1 already built for
+  // the room, now sent as the room's own rather than as a by-product of somebody else's.
+  const recipient = input.userId;
+  if (recipient === null) {
+    if (!familyChannelNeedsOwnPass('predicted_vs_actual')) return 0;
+  } else if (!CHANNELS.some((channel) => isEventEnabled(recipient, 'predicted_vs_actual', channel))) {
+    return 0;
+  }
 
-  const viewer = viewerFor(input.userId);
+  const viewer = recipient === null ? HOUSEHOLD_VIEWER : viewerFor(recipient);
   // Item BK: 0 already means "nothing enqueued" to every caller of this function.
   if (viewer === null) return 0;
 
@@ -135,7 +147,11 @@ function firePredictedVsActual(input: { userId: number; month: string; now: Date
   // ran. `personal` is unaffected either way: it is this recipient's OWN comparison, computed the
   // same for every recipient regardless of visibility.
   const ownHousehold = selfScoped ? null : household;
-  const personal = comparePredicted(input.month, 'personal', input.userId);
+  // R23: the family channel has no personal comparison of its own, and nothing scoped 'personal'
+  // may reach a room's message anyway (renderPredicted's own note). `own` is therefore the
+  // household lines alone on a household pass -- the room's message, and the only one it sends.
+  const personal =
+    recipient === null ? { lines: [] as ScopedPredicted[], totalDeltaCents: 0 } : comparePredicted(input.month, 'personal', recipient);
   const own = [...(ownHousehold?.lines ?? []), ...personal.lines];
   const family = routed.length === 0 ? [] : (household?.lines ?? []);
   // MUST-9.26: a category with a limit and no suggestion has no expected figure to compare
@@ -158,7 +174,7 @@ function firePredictedVsActual(input: { userId: number; month: string; now: Date
   // Household block, so the honest render is no sentence at all.
   const { subject, body } = renderPredicted(input.month, own, ownHousehold?.totalDeltaCents ?? null);
   const result = enqueue({
-    userId: input.userId,
+    userId: recipient,
     eventId: 'predicted_vs_actual',
     dedupKey: predictedVsActualKey(input.month),
     subject,
@@ -173,7 +189,10 @@ function firePredictedVsActual(input: { userId: number; month: string; now: Date
     // not be sent a header with no lines under it on the channels the room did not take. Only
     // ever true for a self-scoped recipient: for anyone else `own` is a superset of `family`, so
     // an empty `own` means an empty `family` and the guard above already returned.
-    familyChannelOnly: own.length === 0,
+    //
+    // R23: never set on a household pass, where `own` IS the family lines -- and enqueue refuses
+    // the pairing anyway, there being no personal delivery there to withhold.
+    familyChannelOnly: recipient !== null && own.length === 0,
     at: input.now,
   });
   return enqueuedAnything(result) ? 1 : 0;
@@ -201,10 +220,16 @@ function refreshFor(month: string, scope: 'household' | 'personal', userId: numb
   return out.sort((a, b) => Math.abs(b.nowCents - (b.wasCents ?? 0)) - Math.abs(a.nowCents - (a.wasCents ?? 0)));
 }
 
-function fireSuggestedRefresh(input: { userId: number; month: string; now: Date }): number {
-  if (!CHANNELS.some((channel) => isEventEnabled(input.userId, 'suggested_budget_refresh', channel))) return 0;
+function fireSuggestedRefresh(input: { userId: number | null; month: string; now: Date }): number {
+  // v1.32.0 (R23): null is THE HOUSEHOLD'S own pass, as in firePredictedVsActual above.
+  const recipient = input.userId;
+  if (recipient === null) {
+    if (!familyChannelNeedsOwnPass('suggested_budget_refresh')) return 0;
+  } else if (!CHANNELS.some((channel) => isEventEnabled(recipient, 'suggested_budget_refresh', channel))) {
+    return 0;
+  }
 
-  const viewer = viewerFor(input.userId);
+  const viewer = recipient === null ? HOUSEHOLD_VIEWER : viewerFor(recipient);
   // Item BK: 0 already means "nothing enqueued" to every caller of this function.
   if (viewer === null) return 0;
 
@@ -221,7 +246,8 @@ function fireSuggestedRefresh(input: { userId: number; month: string; now: Date 
   // no household list whether or not the read above ran. `personal` is unaffected: it is this
   // recipient's own suggestions, computed the same for every recipient regardless of visibility.
   const ownHousehold = selfScoped ? [] : household;
-  const personal = refreshFor(input.month, 'personal', input.userId);
+  // R23: no personal suggestions on a household pass, for the same reason as above.
+  const personal = recipient === null ? [] : refreshFor(input.month, 'personal', recipient);
   // Honest for each audience separately: this one counts only what THIS recipient's message
   // actually carries, and the family channel's count below only what the room's carries. One
   // shared count would put the recipient's personal changes in the room's subject line.
@@ -240,7 +266,7 @@ function fireSuggestedRefresh(input: { userId: number; month: string; now: Date 
     changedCount,
   });
   const result = enqueue({
-    userId: input.userId,
+    userId: recipient,
     eventId: 'suggested_budget_refresh',
     dedupKey: suggestedBudgetRefreshKey(input.month),
     subject,
@@ -262,8 +288,8 @@ function fireSuggestedRefresh(input: { userId: number; month: string; now: Date 
           }),
     // As in firePredictedVsActual: only ever true for a self-scoped recipient whose own message
     // came out empty, and it withholds a subject line reading "0 suggested budgets changed" on
-    // the channels the family channel did not take.
-    familyChannelOnly: changedCount === 0,
+    // the channels the family channel did not take. Never set on a household pass (R23).
+    familyChannelOnly: recipient !== null && changedCount === 0,
     at: input.now,
   });
   return enqueuedAnything(result) ? 1 : 0;
@@ -296,16 +322,24 @@ function fireSuggestedRefresh(input: { userId: number; month: string; now: Date 
  * once per audience -- with this recipient's viewer for their own copy, with HOUSEHOLD_VIEWER for
  * the family channel's -- so the paragraph above describes that helper, not this function.
  */
-function fireMonthlyDigest(input: { userId: number; endedMonth: string; now: Date }): number {
-  if (!CHANNELS.some((channel) => isEventEnabled(input.userId, 'monthly_digest', channel))) return 0;
+function fireMonthlyDigest(input: { userId: number | null; endedMonth: string; now: Date }): number {
+  // v1.32.0 (R23): null is THE HOUSEHOLD'S own pass. renderMonthlyDigestFor takes the viewer, so
+  // the household's copy is the same call through the same HOUSEHOLD_VIEWER that the `household`
+  // override below already makes -- one definition of what the room reads, not a second.
+  const recipient = input.userId;
+  if (recipient === null) {
+    if (!familyChannelNeedsOwnPass('monthly_digest')) return 0;
+  } else if (!CHANNELS.some((channel) => isEventEnabled(recipient, 'monthly_digest', channel))) {
+    return 0;
+  }
 
-  const viewer = viewerFor(input.userId);
+  const viewer = recipient === null ? HOUSEHOLD_VIEWER : viewerFor(recipient);
   // Item BK: 0 already means "no outbox row was enqueued" to every caller of this function.
   if (viewer === null) return 0;
   const { subject, body } = renderMonthlyDigestFor(input.endedMonth, viewer);
 
   const result = enqueue({
-    userId: input.userId,
+    userId: recipient,
     eventId: 'monthly_digest',
     dedupKey: monthlyDigestKey(input.endedMonth),
     subject,
@@ -343,8 +377,10 @@ function fireMonthlyDigest(input: { userId: number; endedMonth: string; now: Dat
 function renderMonthlyDigestFor(endedMonth: string, viewer: Viewer): { subject: string; body: string } {
   // cashflowTrend(1, {endMonth}) always returns exactly one row, for endedMonth itself.
   const [trend] = cashflowTrend(1, { endMonth: endedMonth }, viewer);
-  const totalsScope: BudgetScope = isSelfScoped(viewer) ? 'personal' : 'household';
-  const totals = budgetTotals(budgetProgress(endedMonth, totalsScope, totalsScope === 'personal' ? viewer.id : null));
+  // v1.32.0: budgetScopeFor + ownerScope, not a fifth hand-written copy of the same ternary. The
+  // pair is exactly what this line used to spell out -- ownerScope returns the viewer's id for the
+  // viewers budgetScopeFor returns 'personal' for, and null for the rest.
+  const totals = budgetTotals(budgetProgress(endedMonth, budgetScopeFor(viewer), ownerScope(viewer)));
   const topMerchantLines: DigestLine[] = topMerchants(
     {
       from: monthStart(endedMonth),
@@ -371,7 +407,7 @@ function renderMonthlyDigestFor(endedMonth: string, viewer: Viewer): { subject: 
  * still delivers on the 2nd or 3rd, on top of the daily slot's own 12-hour catch-up. Each
  * event's monthly key makes the second and third day a no-op.
  */
-export function evaluateMonthBoundary(input: { userId: number; now: Date; tz: string }): number {
+export function evaluateMonthBoundary(input: { userId: number | null; now: Date; tz: string }): number {
   const today = todayIso(input.now, input.tz);
   if (Number(today.slice(8, 10)) > MONTH_REPORT_DAY_MAX) return 0;
 

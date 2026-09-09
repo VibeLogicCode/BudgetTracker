@@ -82,17 +82,16 @@ export function statusLabel(
   }
 }
 
-/**
- * The SAME rule as warrantyStatus(), expressed in SQL so the list, the filter counts and
- * the badge can never disagree (§3.7). Binds exactly two parameters, in this order:
- *   1. today  (ISO YYYY-MM-DD)
- *   2. soon   (= addDaysIso(today, EXPIRING_SOON_DAYS))
- * Assumes warranty_items is aliased `i`.
+/*
+ * STATUS_CASE_SQL used to live here, and `notEnded()` used to be written a third time in
+ * src/lib/recurring.ts. Both now come out of ONE ladder in src/lib/warranty/expiry-sql.ts
+ * (R25, v1.32.0, controller ruling V2), which needs @/db/schema and so cannot live in this file:
+ * three `'use client'` files reach this module (one of them through StatusBadge), and pulling the
+ * schema and drizzle's SQL builder into their bundle to save one duplicated comparison is the
+ * wrong trade (MUST-2.1).
+ *
+ * This file stays pure, client-safe TypeScript. warrantyStatus() above is the OTHER statement of
+ * the rule -- the one that cannot be generated, because it answers about a row already in memory
+ * rather than building a WHERE clause -- and tests/ops/not-ended-agreement.test.ts executes it
+ * against both SQL renderings on the boundary dates so the two cannot part company.
  */
-export const STATUS_CASE_SQL = `case
-  when i.is_lifetime = 1 then 'lifetime'
-  when i.expiry_date is null then 'unknown'
-  when i.expiry_date < ? then 'expired'
-  when i.expiry_date <= ? then 'expiring'
-  else 'active'
-end`;

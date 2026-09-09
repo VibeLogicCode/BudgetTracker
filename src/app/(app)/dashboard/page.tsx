@@ -32,6 +32,7 @@ import { WhoOwesUsCard } from '@/components/WhoOwesUsCard';
 import { NeedsALookCard } from '@/components/NeedsALookCard';
 import { RuleReviewCard } from '@/components/RuleReviewCard';
 import { QuickAddTransaction, QuickAddTrigger } from '@/components/QuickAddTransaction';
+import { SendDigestNow } from '@/components/SendDigestNow';
 import { SavingsChart, type SavingsChartRow } from '@/components/charts/SavingsChart';
 import { AlertIcon, ArrowRightIcon, InfoIcon } from '@/components/icons';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
@@ -324,7 +325,18 @@ export default async function DashboardPage({
                 state is the #quick-add hash, not React state, because the form it opens is a
                 completely different part of the tree (see QuickAddTransaction.tsx's
                 useQuickAddHash for why). */}
-            <QuickAddTrigger />
+            {/* 2026-09-08 (spec: docs/superpowers/specs/2026-09-08-manual-digest-send-design.md).
+                Beside Add a transaction rather than in a card of its own: it is an action, not a
+                readout, and this row is where this page keeps its actions. `canNotifyHousehold`
+                mirrors the action's own refusal -- a self-scoped member is never offered the
+                household option, on the same ruling R2 grounds that hide the person-scope pills
+                from them just below. */}
+            <div className="flex flex-col items-start gap-1 sm:items-end">
+              <div className="flex flex-wrap items-center gap-2">
+                <QuickAddTrigger />
+                <SendDigestNow canNotifyHousehold={!selfScoped} />
+              </div>
+            </div>
             {/* Ruling T7: the dashboard follows `?month=`, same as Budgets -- see MonthNav's own
                 docblock for why this needs no client-side router. `person=` is carried along
                 only when it is actually a household viewer's own choice: a self viewer's own id

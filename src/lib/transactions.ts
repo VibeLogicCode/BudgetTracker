@@ -533,6 +533,29 @@ export function listTransactions(filter: TransactionFilter, viewer: Viewer): Tra
   return { rows, total, page, pageSize, pageCount: Math.max(1, Math.ceil(total / pageSize)), outCents, inCents };
 }
 
+/**
+ * 2026-09-08 (docs/superpowers/specs/2026-09-08-grouped-review-navigation-design.md §5.2). One row
+ * inside a cluster's disclosure. Deliberately NOT a `TransactionRow`: this is a read-only preview,
+ * and handing the client the full row shape would invite the disclosure to grow the editors,
+ * kebab menu and selection checkbox the flat list owns -- at which point the group view has
+ * quietly become a second transactions list with none of its pagination.
+ */
+export interface CategoryPreviewRow {
+  id: number;
+  date: string;
+  /** `coalesce(display_description, raw_description)` -- the same text the flat list renders. */
+  description: string;
+  /**
+   * The EFFECTIVE amount, so a split part previews at the part's own amount and therefore sums
+   * toward the subtotal printed directly above it. Previewing the parent's lump amount here would
+   * put a number on screen that the cluster's own total contradicts.
+   */
+  amountCents: number;
+}
+
+/** How many rows a cluster previews before "See all N in the list" takes over. */
+const PREVIEW_LIMIT = 5;
+
 /** v1.26.0 Lane 2 item 3. One category cluster within a filtered set. See CategoryGroupPage. */
 export interface CategoryGroupRow {
   /** null is the uncategorized cluster; `categoryName` is already labelled for it. */
@@ -550,6 +573,15 @@ export interface CategoryGroupRow {
   count: number;
   /** Signed net, integer cents. Negative is spending, matching every other total in this app. */
   totalCents: number;
+  /**
+   * The cluster's newest rows, at most PREVIEW_LIMIT of them, newest first. Empty only for a
+   * cluster with no rows, which cannot happen (a cluster exists because a row is in it).
+   *
+   * `preview.length` and `count` are two different figures on purpose and the screen states both
+   * ("Showing 5 of 37"). Populated ONLY for the clusters on the returned page -- see the preview
+   * query in groupTransactionsByCategory for why that ordering matters.
+   */
+  preview: CategoryPreviewRow[];
 }
 
 /**
@@ -665,6 +697,99 @@ export interface CategoryGroupPage {
  * `viewer` is REQUIRED for the same reason it is on listTransactions (v1.13.0 ruling R2): an
  * optional viewer lets a forgotten call site compile into a silent leak.
  */
+/**
+ * 2026-09-08 (spec §5.2). The preview rows for ONE PAGE of clusters, in ONE query.
+ *
+ * The count is the whole point. The original expand-vs-link decision rejected inline rows because
+ * they meant "N row queries on every render"; a single window function over the already-narrowed
+ * WHERE is not N queries, which is what makes the disclosure affordable now. It runs AFTER the
+ * in-memory slice, so its cost is bounded by `pageSize` (≤200, default 25) rather than by the whole
+ * category tree, and a household paging through clusters never pays for the ones it is not looking
+ * at.
+ *
+ * `where` is the caller's own `buildWhere` output, passed straight through -- the same clause list
+ * the cluster aggregate and the flat list already share. There is deliberately no second filter
+ * path here: a preview that could show a row the cluster above it did not count would be the exact
+ * class of on-screen contradiction this module keeps paying to avoid.
+ *
+ * The null cluster is matched by `is null`, NEVER by leaving it out of the `in` list and hoping:
+ * SQL `in` does not match null, so an uncategorized cluster would silently preview nothing while
+ * every other cluster previewed fine -- a bug that looks like "the uncategorized group is empty",
+ * which is the one reading a person auditing their rules must not be given.
+ *
+ * ORDER BY date desc, id desc inside the window mirrors listTransactions' own default order
+ * (orderByFor, above), so the five rows previewed here are the five at the top of the list the
+ * "See all N" link lands on. Deliberately NOT `filter.sort`: a person who sorted the flat list by
+ * amount is looking at clusters now, and a preview whose order changes under a control that is
+ * folded away on this view would be unexplainable.
+ */
+function attachPreviews(pageGroups: Omit<CategoryGroupRow, 'preview'>[], where: SQL | undefined): CategoryGroupRow[] {
+  if (pageGroups.length === 0) return [];
+
+  const ids = pageGroups.map((group) => group.categoryId).filter((id): id is number => id !== null);
+  const wantsNull = pageGroups.some((group) => group.categoryId === null);
+  // `inArray` with an empty list is a clause that matches nothing in drizzle, so the two halves are
+  // assembled only when they have something to say -- one cluster page can legitimately be all
+  // named categories, or (on the last page of a big set) the lone uncategorized one.
+  const scopes: SQL[] = [];
+  if (ids.length > 0) scopes.push(inArray(EFFECTIVE_CATEGORY, ids));
+  if (wantsNull) scopes.push(isNull(EFFECTIVE_CATEGORY));
+  const scope = scopes.length === 1 ? scopes[0] : or(...scopes);
+
+  const ranked = getDb()
+    .select({
+      categoryId: sql<number | null>`${EFFECTIVE_CATEGORY}`.as('preview_category_id'),
+      id: transactions.id,
+      date: transactions.date,
+      description: sql<string>`coalesce(${transactions.displayDescription}, ${transactions.rawDescription})`.as('preview_description'),
+      amountCents: sql<number>`${EFFECTIVE_AMOUNT}`.as('preview_amount_cents'),
+      rank: sql<number>`row_number() over (partition by ${EFFECTIVE_CATEGORY} order by ${transactions.date} desc, ${transactions.id} desc)`.as('preview_rank'),
+    })
+    .from(transactions)
+    .leftJoin(transactionSplits, eq(transactionSplits.txnId, transactions.id))
+    .where(and(where, scope))
+    .as('ranked');
+
+  const previewRows = getDb()
+    .select({
+      categoryId: ranked.categoryId,
+      id: ranked.id,
+      date: ranked.date,
+      description: ranked.description,
+      amountCents: ranked.amountCents,
+    })
+    .from(ranked)
+    .where(lte(ranked.rank, PREVIEW_LIMIT))
+    .all();
+
+  // Keyed by the same string the client uses for its own React keys ('uncategorized' for the null
+  // cluster), rather than by a number that would collide the moment null were coerced to 0.
+  const byCategory = new Map<string, CategoryPreviewRow[]>();
+  for (const row of previewRows) {
+    const key = row.categoryId === null ? 'uncategorized' : String(row.categoryId);
+    const bucket = byCategory.get(key);
+    const preview: CategoryPreviewRow = {
+      id: row.id,
+      date: row.date,
+      description: row.description,
+      amountCents: row.amountCents,
+    };
+    if (bucket === undefined) byCategory.set(key, [preview]);
+    else bucket.push(preview);
+  }
+  // SQLite does not promise the outer SELECT preserves the window's ordering, so the rank order is
+  // restated here rather than assumed -- the same "sort where you need the order" rule the cluster
+  // sort above follows instead of trusting GROUP BY's output order.
+  for (const bucket of byCategory.values()) {
+    bucket.sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id);
+  }
+
+  return pageGroups.map((group) => ({
+    ...group,
+    preview: byCategory.get(group.categoryId === null ? 'uncategorized' : String(group.categoryId)) ?? [],
+  }));
+}
+
 export function groupTransactionsByCategory(
   filter: TransactionFilter,
   viewer: Viewer,
@@ -731,7 +856,11 @@ export function groupTransactionsByCategory(
       .map((row) => row.parentId as number),
   );
 
-  const groups: CategoryGroupRow[] = rows.map((row) => {
+  // Built WITHOUT `preview`, because previews are fetched only for the clusters that survive the
+  // slice below -- see attachPreviews. Typing the intermediate honestly (rather than asserting it
+  // is already a CategoryGroupRow) is what makes the compiler insist the slice goes through that
+  // function on its way out.
+  const groups: Omit<CategoryGroupRow, 'preview'>[] = rows.map((row) => {
     const name = row.categoryName;
     const label =
       name === null
@@ -762,8 +891,10 @@ export function groupTransactionsByCategory(
   );
 
   const groupCount = groups.length;
+  const pageGroups = groups.slice((page - 1) * pageSize, page * pageSize);
+
   return {
-    groups: groups.slice((page - 1) * pageSize, page * pageSize),
+    groups: attachPreviews(pageGroups, where),
     page,
     pageSize,
     pageCount: Math.max(1, Math.ceil(groupCount / pageSize)),

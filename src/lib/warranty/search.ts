@@ -1,11 +1,8 @@
 import { getSqlite } from '@/db/client';
 import { ownerScope, type Viewer } from '@/lib/auth/viewer';
 import { addDaysIso, todayIso } from '@/lib/dates';
-import {
-  EXPIRING_SOON_DAYS,
-  STATUS_CASE_SQL,
-  type WarrantyStatus,
-} from '@/lib/warranty/expiry';
+import { EXPIRING_SOON_DAYS, type WarrantyStatus } from '@/lib/warranty/expiry';
+import { STATUS_CASE_SQL } from '@/lib/warranty/expiry-sql';
 import type { WarrantyItemRow } from '@/lib/warranty/items';
 import { WARRANTY_SORTS, isWarrantySort, type BillingCycle, type ItemKind, type LoanDirection, type WarrantySort } from '@/lib/warranty/constants';
 

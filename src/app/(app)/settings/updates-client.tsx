@@ -5,9 +5,12 @@ import { useActionState, useEffect, useState } from 'react';
 import { FormError } from '@/components/FormError';
 import { renderEmphasis } from '@/components/render-emphasis';
 import { SubmitButton } from '@/components/SubmitButton';
+import { buttonClass } from '@/components/ui/Button';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { Notice } from '@/components/ui/Notice';
+import { markRestartExpected } from '@/lib/update/restart-notice';
 import type { UpdateSeverity } from '@/lib/update/semver';
+import { GITHUB_INTERACTIVE_TIMEOUT_MS, timeoutSeconds } from '@/lib/update/timeouts';
 import {
   applyUpdateAction,
   checkForUpdateNowAction,
@@ -131,7 +134,12 @@ export function UpdatesClient(props: UpdatesViewProps) {
   const [enableState, enable] = useActionState(enableUpdateChecksAction, initial);
   const [disableState, disable] = useActionState(disableUpdateChecksAction, initial);
   const [autoState, saveAuto] = useActionState(setAutoApplyAction, initial);
-  const [checkState, checkNow] = useActionState(checkForUpdateNowAction, initial);
+  // v1.32.0 (UP-1): the third element. `checkPending` is the ONE reading of "a check is in
+  // flight" this card has, and it drives both the button's own label and the status line above
+  // it. useFormStatus() inside the form would have given the button its label but not the line,
+  // which sits outside the <form> — and two independent readings of one state is how the line
+  // and the button end up disagreeing.
+  const [checkState, checkNow, checkPending] = useActionState(checkForUpdateNowAction, initial);
   const [applyState, apply] = useActionState(applyUpdateAction, initial);
   const [dismissState, dismiss] = useActionState(dismissUpdateAction, initial);
   const [review, runReview, reviewPending] = useActionState(
@@ -179,6 +187,35 @@ export function UpdatesClient(props: UpdatesViewProps) {
   useEffect(() => {
     setClockMs(Date.now());
   }, [applyStamp]);
+
+  /**
+   * v1.32.0 (UP-2). The one write of the restart hint src/app/(app)/error.tsx reads, so that a
+   * container the household just asked to replace itself does not come back as "The app could
+   * not finish loading this screen… this usually clears on its own".
+   *
+   * Keyed on the APPLY ACTION'S OWN RESULT, not on a click and not on the `pending` boolean
+   * below. A click is not an apply: applyUpdateAction refuses a stale version, a cross-origin
+   * POST and a spent rate-limit bucket, and an entry written for one of those would suppress a
+   * genuine crash message for the next five minutes on the strength of a button press that did
+   * nothing. `pending` is wrong for the opposite reason — it stays true for MUST-7.6's full 30
+   * minutes, so merely opening Settings 25 minutes after a failed apply would keep re-arming a
+   * five-minute window that has nothing to restart.
+   *
+   * `error === undefined && message !== undefined` is exactly the set of outcomes where the
+   * server accepted responsibility for a restart: 'accepted', 'accepted-unconfirmed', and
+   * 'already-pending' (which means an apply IS in flight — this one just was not the request
+   * that started it). `applyRequestedVersion` is read back from the state applyUpdate() itself
+   * committed before the Watchtower fetch, never from the form field.
+   *
+   * MUST-9.9 is untouched: this sets no timer, no interval and no poll. It writes one string to
+   * this browser's own localStorage and never asks anything about it again.
+   */
+  useEffect(() => {
+    if (applyState.error !== undefined || applyState.message === undefined) return;
+    const version = applyState.applyRequestedVersion;
+    if (version === null || version === undefined) return;
+    markRestartExpected(version, Date.now());
+  }, [applyState]);
 
   /**
    * Backlog item 17 / Part 4: independent of whether APP update checks are on/off (this is a
@@ -278,10 +315,42 @@ export function UpdatesClient(props: UpdatesViewProps) {
       />
       <CardBody className="flex flex-col gap-4">
         {canadianPackNotice}
-        <p className="text-sm text-subtle">
-          Last checked {stamp(resolved.lastCheckedAt)}
-          {resolved.latestPublishedAt === null ? null : ` · published ${stamp(resolved.latestPublishedAt)}`}
-          {props.lastAppliedAt === null ? null : ` · last updated ${stamp(props.lastAppliedAt)}`}
+        {/*
+          v1.32.0 (UP-1). Two things were wrong with this line while a check was running: it said
+          "Last checked" beside a request that was, at that moment, deciding whether that stamp
+          was still true, and it named no operation and no duration, so fifteen seconds of a
+          working GitHub call and a hung one looked identical. The owner's recording of a real
+          update shows them reloading the page at about 22 seconds for exactly that reason.
+
+          Of the three ways to stop a stale stamp claiming to be current — hide it, grey it, or
+          label it as the previous check — this labels it. Hiding drops the one fact that tells
+          the reader whether the check they just started was even needed, and reflows the card
+          while they are reading it. Greying says it in colour only: it is silent to a screen
+          reader, invisible to anyone who cannot separate two greys, and gone on a printout. The
+          words are the one channel every reader shares, and "Previously checked" is simply true
+          where "Last checked" was not. That is the same house rule the last release applied six
+          times — show nothing rather than something false — settled here by making the sentence
+          true rather than by deleting it.
+
+          The duration is imported, not typed out: @/lib/update/timeouts owns the number that
+          AbortSignal.timeout() actually enforces, so the promise on screen cannot drift from the
+          budget behind it. role="status" so the change is announced rather than only seen —
+          this line is the entire feedback for a button that is otherwise silent.
+        */}
+        <p className="text-sm text-subtle" role="status" aria-live="polite">
+          {checkPending ? (
+            <>
+              Asking GitHub for the newest published release — it gives up after{' '}
+              {timeoutSeconds(GITHUB_INTERACTIVE_TIMEOUT_MS)} seconds. Previously checked{' '}
+              {stamp(resolved.lastCheckedAt)}.
+            </>
+          ) : (
+            <>
+              Last checked {stamp(resolved.lastCheckedAt)}
+              {resolved.latestPublishedAt === null ? null : ` · published ${stamp(resolved.latestPublishedAt)}`}
+              {props.lastAppliedAt === null ? null : ` · last updated ${stamp(props.lastAppliedAt)}`}
+            </>
+          )}
         </p>
 
         {props.lastCheckError === null ? null : <Notice tone="error">{props.lastCheckError}</Notice>}
@@ -292,7 +361,21 @@ export function UpdatesClient(props: UpdatesViewProps) {
 
         <div className="flex flex-wrap items-center gap-3">
           <form action={checkNow}>
-            <SubmitButton className="btn btn--secondary">Check now</SubmitButton>
+            {/*
+              v1.32.0 (UP-1): not <SubmitButton>, which renders the same word — "Working…" — for
+              every form in this app. On a button whose work is a network request to somebody
+              else's server, that word names no operation and gives the reader nothing to
+              distinguish a request in flight from a process that has stopped answering. The
+              label below names who is being asked; the status line above says for how long.
+
+              Driven by useActionState's `checkPending` rather than by SubmitButton's own
+              useFormStatus, so this button and that line are the same reading of the same state.
+              The disabled attribute is kept for the reason SubmitButton's docblock gives: it is
+              this app's double-submit protection.
+            */}
+            <button type="submit" disabled={checkPending} className={buttonClass('secondary')}>
+              {checkPending ? 'Asking GitHub…' : 'Check now'}
+            </button>
           </form>
           <form action={saveAuto} className="flex items-center gap-2">
             <label className="flex items-center gap-2 text-sm text-muted">

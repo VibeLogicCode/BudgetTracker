@@ -13,6 +13,7 @@ import { evaluateSavingsDaily, evaluateSavingsTargetMet } from '@/lib/notify/eva
 import { evaluateStaleImport } from '@/lib/notify/evaluate/stale';
 import { dailySlot, mondayOfIsoWeek, weeklySlot } from '@/lib/notify/evaluate/slots';
 import { CHANNELS, householdWeeklyDigestKey, weeklyDigestKey } from '@/lib/notify/events';
+import { HOUSEHOLD_PASS_SETTINGS } from '@/lib/notify/family-pass';
 import { householdRoutedChannels } from '@/lib/notify/household';
 
 /**
@@ -41,8 +42,17 @@ export function resetSlotSkipLogForTests(): void {
  */
 let lastDailyEvaluatedSlot = new Map<number, string>();
 
+/**
+ * v1.32.0 (ruling R23). The household's own version of lastDailyEvaluatedSlot above, and for the
+ * identical reason: `daily.fires` stays true for the whole 12-hour catch-up window and the
+ * scheduler ticks every five minutes, so without this the household's daily pass would recompute
+ * roughly 144 times a day. One entry, not a map, because there is exactly one household.
+ */
+let lastHouseholdDailySlot: string | null = null;
+
 export function resetDailyEvaluationSlotForTests(): void {
   lastDailyEvaluatedSlot = new Map();
+  lastHouseholdDailySlot = null;
 }
 
 function logSlotSkipOnce(kind: 'daily' | 'weekly', userId: number, slotDate: string, hoursSince: number): void {
@@ -161,6 +171,8 @@ export function runScheduledEvaluation(now: Date = new Date()): void {
     }
   }
 
+  runHouseholdEvaluation(now, tz);
+
   try {
     evaluateBudgets({ now, tz });
   } catch (error) {
@@ -180,5 +192,60 @@ export function runScheduledEvaluation(now: Date = new Date()): void {
     evaluateSavingsTargetMet({ now, tz });
   } catch (error) {
     console.error('[notify] savings target evaluation failed', error);
+  }
+}
+
+/**
+ * v1.32.0, RULING R23: THE FAMILY CHANNEL'S OWN EVALUATION PASS.
+ *
+ * Every slot-triggered evaluator above is driven by ONE MEMBER'S clock and gated on THAT MEMBER'S
+ * preferences, and the family-channel row was a by-product of reaching enqueue() during such a
+ * pass. So a household that had configured a family channel, enabled it, and switched the event on
+ * for the room but for nobody in particular got no row at all -- for every household-eligible
+ * event, silently, with nothing anywhere saying why. src/lib/notify/family-pass.ts carries the
+ * ruling itself: a family-channel subscription is a thing in its own right, so it evaluates as
+ * itself, with `userId: null` all the way down to the outbox row it was always going to write.
+ *
+ * WHY THE HOUSEHOLD HAS ITS OWN CLOCK RATHER THAN RIDING ON A MEMBER'S. Each evaluator here fires
+ * on a slot, and the household has no notification_user_settings row to take an hour from. The two
+ * candidates were "run it inside the per-user loop, on whichever member's slot comes first" and
+ * this. The first is cheaper by one slot computation and was rejected twice over: it would run the
+ * whole household pass once per member per slot (idempotent, but N times the queries every day for
+ * as long as the routing lasts), and it would make the family channel's delivery time depend on
+ * who is in the household -- change your own daily hour and the group chat moves. This uses
+ * HOUSEHOLD_PASS_SETTINGS, the app's own documented defaults, which is exactly what a member who
+ * has never opened their settings page uses too, so on a default install the room and the people
+ * in it are told at the same time.
+ *
+ * NOT HERE, deliberately: the tick-triggered events (budget_threshold, budget_exceeded,
+ * unusual_transaction, duplicate_charge, savings_target_met). Those evaluators already run once per
+ * tick outside the per-user loop and own their own recipient rosters, so the family channel joins
+ * the roster inside them rather than being called separately from here -- one place that decides
+ * who an event is for, per event, which is the shape those files already had.
+ *
+ * ALSO NOT HERE: coming_due and weekly_digest, the two household-eligible events whose evaluators
+ * have no personal gate at all. They run for every notifiable user regardless of that user's
+ * toggles, so their family row was never the missing one; adding a second writer would buy nothing
+ * and put the room's coming_due message under a different owner. tests/ops/family-channel-pass.test.ts
+ * is the named list, and tests/lib/notify/evaluate/family-channel-pass.test.ts proves the claim
+ * about those two rather than asserting it.
+ *
+ * Wrapped exactly as the per-user blocks above are: one bad read for the room must not stop the
+ * household from being told anything.
+ */
+function runHouseholdEvaluation(now: Date, tz: string): void {
+  try {
+    const daily = dailySlot(now, HOUSEHOLD_PASS_SETTINGS.dailyHour, tz);
+    if (daily.fires && lastHouseholdDailySlot !== daily.slotDate) {
+      evaluateBudgetPace({ userId: null, now, tz });
+      evaluateSubscriptionCreep({ userId: null, now, tz });
+      evaluateMonthBoundary({ userId: null, now, tz });
+      evaluateSavingsDaily({ userId: null, now, tz });
+      // Recorded only after all four return without throwing, so a transient failure retries on
+      // the next tick rather than being silently skipped for the day (MUST-10.9's own rule).
+      lastHouseholdDailySlot = daily.slotDate;
+    }
+  } catch (error) {
+    console.error('[notify] daily evaluation failed for the family channel', error);
   }
 }

@@ -11,6 +11,36 @@ import { SPEND_ROW_WHERE } from '@/lib/spend-where';
 
 export type BudgetScope = 'household' | 'personal';
 
+/**
+ * v1.32.0. THE one definition of "which set of budgets does this viewer's own screen or message
+ * read": 'personal' for a self-scoped viewer, 'household' for everybody else. Pair it with
+ * `ownerScope(viewer)` (src/lib/auth/viewer.ts) for the `userId` argument -- that function already
+ * returns the viewer's id for exactly the same viewers this returns 'personal' for, and null for
+ * the rest, which is precisely `budgetProgress`'s and `resolveBudget`'s calling convention. So
+ * `budgetProgress(month, budgetScopeFor(viewer), ownerScope(viewer))` is the whole branch, with
+ * nothing left over to write down twice.
+ *
+ * WHY IT LIVES HERE and not beside `isSelfScoped`: this is a statement about budgets, and its
+ * return type is `BudgetScope`, which is declared two lines up. src/lib/auth/viewer.ts is
+ * deliberately dependency-free and knows nothing about budgets (tests/ops/client-bundle.test.ts
+ * depends on that); putting a BudgetScope-valued function there would either drag the type into
+ * the auth module or duplicate the union a third time (`BudgetScopeKey` in
+ * src/lib/notify/events.ts is already a second copy, kept only because that module must stay
+ * import-free of @/db -- see MUST-2.1).
+ *
+ * WHAT IT IS NOT, and the reason this docblock is long: most `isSelfScoped(viewer)` calls in this
+ * repo are NOT this branch. They are refusals ("Not available on this account."), redirects,
+ * omissions (budgets/page.tsx computes no household tree at all for a self viewer -- ruling R2 --
+ * rather than choosing a different scope for one), delivery decisions (enqueue's
+ * `familyChannelOnly`) and view props (`showExport`). Those ask a different question that happens
+ * to consult the same predicate, and rewriting one of them as a scope lookup would be a
+ * regression, not a consolidation. Convert a call site only when the value it produces is a
+ * `BudgetScope` handed to a function in this file.
+ */
+export function budgetScopeFor(viewer: Viewer): BudgetScope {
+  return ownerScope(viewer) === null ? 'household' : 'personal';
+}
+
 export interface BudgetRow {
   categoryId: number;
   categoryName: string;

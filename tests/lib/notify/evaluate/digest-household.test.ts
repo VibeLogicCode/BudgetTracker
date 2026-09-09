@@ -260,3 +260,117 @@ describe('a personal digest is unchanged', () => {
     ]);
   });
 });
+
+/**
+ * 2026-09-08, docs/superpowers/specs/2026-09-08-manual-digest-send-design.md. The dashboard's
+ * "Send me a summary now" button. Tested HERE rather than in digest.test.ts because the thing most
+ * likely to be silently wrong is the dedup keys, and both of them -- the personal one and the
+ * week-bounded household one -- are only visible together in this file's fixtures.
+ */
+describe('an on-demand digest send', () => {
+  it('sends even when this week’s scheduled digest has already gone out', () => {
+    const alex = person('Alex');
+    spend(50000, alex);
+
+    // The scheduled send, exactly as the evaluator would have run it.
+    expect(evaluateWeeklyDigest({ userId: alex, slotDate: SLOT, now: NOW })).toBe(1);
+    const scheduled = rows().length;
+
+    // A second SCHEDULED evaluation in the same slot is a no-op -- that is the guard this feature
+    // has to get past, asserted here so the test below cannot pass for a trivial reason.
+    expect(evaluateWeeklyDigest({ userId: alex, slotDate: SLOT, now: NOW })).toBe(0);
+    expect(rows()).toHaveLength(scheduled);
+
+    expect(
+      evaluateWeeklyDigest({
+        userId: alex,
+        slotDate: SLOT,
+        now: NOW,
+        manual: { token: '2026-09-08T14:03', includeHousehold: false },
+      }),
+    ).toBe(1);
+    expect(rows().length).toBeGreaterThan(scheduled);
+  });
+
+  it('collapses a double-press within the same minute into one message', () => {
+    const alex = person('Alex');
+    spend(50000, alex);
+    const manual = { token: '2026-09-08T14:03', includeHousehold: false };
+
+    expect(evaluateWeeklyDigest({ userId: alex, slotDate: SLOT, now: NOW, manual })).toBe(1);
+    const after = rows().length;
+    // Same token, so the outbox's unique index does the work -- no separate guard needed, and a
+    // person pressing twice impatiently gets the one digest they meant.
+    expect(evaluateWeeklyDigest({ userId: alex, slotDate: SLOT, now: NOW, manual })).toBe(0);
+    expect(rows()).toHaveLength(after);
+  });
+
+  it('still sends again on a later press, minutes apart', () => {
+    const alex = person('Alex');
+    spend(50000, alex);
+    evaluateWeeklyDigest({ userId: alex, slotDate: SLOT, now: NOW, manual: { token: '2026-09-08T14:03', includeHousehold: false } });
+    const after = rows().length;
+    expect(
+      evaluateWeeklyDigest({ userId: alex, slotDate: SLOT, now: NOW, manual: { token: '2026-09-08T14:09', includeHousehold: false } }),
+    ).toBe(1);
+    expect(rows().length).toBeGreaterThan(after);
+  });
+
+  it('"just me" writes NO family-channel row, even with the household fully routed', () => {
+    const alex = person('Alex');
+    familyTelegram(alex);
+    spend(50000, alex);
+
+    evaluateWeeklyDigest({
+      userId: alex,
+      slotDate: SLOT,
+      now: NOW,
+      manual: { token: '2026-09-08T14:03', includeHousehold: false },
+    });
+    // A household row is user_id NULL. Its absence here is the whole promise of the "Just me"
+    // button: nobody else is notified because one person pressed something.
+    expect(rows().filter((row) => row.user_id === null)).toHaveLength(0);
+    // And the sender is delivered on BOTH their channels, telegram included. This is the half that
+    // was actually broken: routing normally SUPPRESSES a member's personal row on a routed channel
+    // in favour of the family one, so declining to build a household body was not enough -- "Just
+    // me" wrote to the family channel and not to Alex. Asserting the channel names, rather than
+    // just "more than zero rows", is what makes this test able to fail that way again.
+    expect(rows().filter((row) => row.user_id === alex).map((row) => row.channel).sort()).toEqual(['email', 'telegram']);
+  });
+
+  it('"everyone" writes the family-channel row, on a key the week’s scheduled one cannot collapse', () => {
+    const alex = person('Alex');
+    familyTelegram(alex);
+    spend(50000, alex);
+
+    evaluateWeeklyDigest({ userId: alex, slotDate: SLOT, now: NOW });
+    const scheduledHouseholdKey = householdRow().dedup_key;
+
+    evaluateWeeklyDigest({
+      userId: alex,
+      slotDate: SLOT,
+      now: NOW,
+      manual: { token: '2026-09-08T14:03', includeHousehold: true },
+    });
+    const householdKeys = rows().filter((row) => row.user_id === null).map((row) => row.dedup_key);
+    // Two distinct household rows: the week's own, and this one. Sharing a key would have made the
+    // button a silent no-op for the exact household that had already had its weekly digest.
+    expect(new Set(householdKeys).size).toBe(2);
+    expect(householdKeys).toContain(scheduledHouseholdKey);
+  });
+
+  it('cannot conjure a family-channel send for a household that routes nothing', () => {
+    const alex = person('Alex');
+    spend(50000, alex);
+    // No familyTelegram() here: nothing is routed. `includeHousehold` can only ever REMOVE the
+    // household send, never add one -- otherwise this button would be a way to push a message into
+    // a channel nobody configured.
+    evaluateWeeklyDigest({
+      userId: alex,
+      slotDate: SLOT,
+      now: NOW,
+      manual: { token: '2026-09-08T14:03', includeHousehold: true },
+    });
+    expect(rows().filter((row) => row.user_id === null)).toHaveLength(0);
+  });
+});

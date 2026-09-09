@@ -116,11 +116,46 @@ jobs:
           OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           echo "IMAGE_NAME=ghcr.io/${OWNER_LC}/budgettracker" >> "$GITHUB_ENV"
 
+      # scripts/smoke-test-image.mjs (v1.32.0, lane L5) is plain Node against the `docker` CLI --
+      # no npm packages of its own -- but pinning the version here matches every other job in
+      # this repo and avoids depending on whatever Node ubuntu-latest happens to preinstall.
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+
+      # Image-level smoke test (mirrors O-01/R9's standalone smoke test, from the other side --
+      # see scripts/smoke-test-image.mjs's own docblock). The standalone smoke test in test.yml
+      # boots .next/standalone/server.js directly on the host and can never catch a missing
+      # Dockerfile COPY, a read-only-rootfs violation, or a file the image forgot. This step
+      # builds a single-platform image THIS RUNNER CAN EXECUTE and smoke-tests it before a single
+      # byte reaches GHCR: "a check that runs after publishing has already lost." `load: true`
+      # only ever loads one platform into the local docker daemon -- buildx's docker exporter
+      # cannot load a multi-platform manifest list -- which is why this is a separate build from
+      # the multi-arch push below, amd64 only (what ubuntu-latest can run natively, no QEMU
+      # emulation). The multi-arch build two steps down reuses this build's cache (both use
+      # cache-from/cache-to type=gha), so it is not a second full compile of the amd64 layers.
+      - name: Build amd64 image for the image-level smoke test
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: budget-tracker:ci-smoke
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Image-level smoke test
+        env:
+          SMOKE_IMAGE_TAG: budget-tracker:ci-smoke
+        run: npm run smoke:image
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -135,7 +170,10 @@ jobs:
       # images now carry both linux ORT binaries while the darwin and win32 payloads are
       # stripped in the deps stage. Whether a given arm64 CPU can actually execute those
       # kernels is decided at run time by the compatibility probe and cannot be decided
-      # here, which is why there is no emulated smoke test in this workflow.
+      # here, which is why there is no EMULATED smoke test of the arm64 half in this workflow --
+      # the step above already proved the amd64 half of this exact build (same source, same
+      # cache) by actually running it; arm64 is proved by the compatibility probe at boot, on
+      # real arm64 hardware, which is the only place that question can honestly be answered.
       - name: Build and push
         uses: docker/build-push-action@v6
         with:

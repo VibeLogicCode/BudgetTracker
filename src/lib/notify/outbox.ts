@@ -47,6 +47,16 @@ export const DEFERRED_ERROR = 'Deferred: an earlier send this pass failed for th
  */
 export const HOUSEHOLD_INELIGIBLE_ERROR = 'That event may not be sent to a family channel.';
 
+/**
+ * v1.32.0 (ruling R23), thrown rather than returned: pairing `userId: null` with
+ * `subjectScope: 'personal'` asks for a household pass over an event that is not routable at all,
+ * so nothing could ever be enqueued. There is no user-facing condition here to report -- it is a
+ * caller that has mixed up the two ideas -- and a silent empty result is exactly how a household
+ * would end up with a family channel that stays quiet for a reason nobody can see, which is the
+ * defect R23 is about. Same shape as assertMonth() in src/lib/budgets.ts.
+ */
+export const HOUSEHOLD_PASS_NOT_ROUTABLE = 'A household pass has nothing to send for a personal-scope event.';
+
 /** MUST-7.6: 2, 4, 8, 16, 32, 64, 128, 256 minutes, capped at six hours. */
 export function backoffMs(attempts: number): number {
   return Math.min(2 ** attempts * 60_000, MAX_BACKOFF_MS);
@@ -62,7 +72,8 @@ export function backoffMs(attempts: number): number {
  * at send time after three retries would produce a "budget at 82%" alert that says 91%.
  */
 export interface EnqueueResult {
-  /** Personal rows actually inserted. Unchanged meaning since v1.3.0. */
+  /** Personal rows actually inserted. Unchanged meaning since v1.3.0. Always empty on a
+   *  household pass (`userId: null`), which has no person to deliver to. */
   inserted: Channel[];
   /** Household rows actually inserted by THIS call. Empty on the second member's call. */
   household: Channel[];
@@ -71,7 +82,22 @@ export interface EnqueueResult {
 }
 
 export function enqueue(input: {
-  userId: number;
+  /**
+   * WHO this pass is evaluating for. A user id is a member's own pass, unchanged since v1.3.0.
+   *
+   * v1.32.0, ruling R23: NULL is THE HOUSEHOLD'S OWN PASS. The family channel is a subscriber in
+   * its own right (src/lib/notify/family-pass.ts has the ruling and the alternative it rejected),
+   * so it evaluates as itself: this call writes the family-channel row on every routed channel and
+   * NOTHING else -- no personal row, and no isEventEnabled lookup, because the family channel is
+   * not a person and has no preferences to consult. It exists because the row below used to be
+   * written only as a side effect of some member's evaluation, so an event nobody had switched on
+   * personally produced no family row at all.
+   *
+   * A household pass is never the SECOND writer of a row: familyChannelNeedsOwnPass() runs it only
+   * when no member is subscribed, which is exactly when no member's pass reaches the routed branch
+   * below. Nothing here relies on the unique index to collapse two writers.
+   */
+  userId: number | null;
   eventId: string;
   dedupKey: string;
   subject: string;
@@ -128,8 +154,34 @@ export function enqueue(input: {
    * mean the same thing to this loop ("family row yes, personal row no") and both are only ever
    * set for a self-scoped recipient. tests/ops/enqueue-family-channel.test.ts is the named list of
    * which call site is which, and why (finding I-2).
+   *
+   * v1.32.0: NOT made redundant by the household pass above, and the distinction is worth stating
+   * because it looks redundant. A household pass runs only when NO member is subscribed; this flag
+   * does its work when a member IS subscribed, and specifically on the channels the event is NOT
+   * routed to, where there is no family channel and the only row on offer is the personal one this
+   * flag exists to withhold. Meaningless together with `userId: null`, and no caller pairs them.
    */
   familyChannelOnly?: boolean;
+  /**
+   * 2026-09-08, docs/superpowers/specs/2026-09-08-manual-digest-send-design.md. Ignore household
+   * routing entirely for THIS call: no family-channel row on any channel, and consequently no
+   * suppression of the recipient's own personal row either.
+   *
+   * Written for the dashboard's on-demand digest, "Just me" option, and it is not a convenience --
+   * without it that option does the OPPOSITE of what it says. Routing is decided here, not by the
+   * caller, so a caller that merely declines to pass `household` still lands in the branch below:
+   * the family row gets written from the PERSONAL subject and body, and the person's own copy on
+   * that channel is suppressed in favour of it. Somebody pressing "Just me" would have notified
+   * the whole family channel and not themselves.
+   *
+   * Deliberately NOT the same idea as `familyChannelOnly`, which is its mirror (withhold the
+   * personal row, keep the household one) and is set for a self-scoped RECIPIENT of a household
+   * figure. This one is set by a person's own explicit choice about one send, and never by an
+   * evaluator running on a schedule -- a scheduled digest must keep honouring the household's
+   * routing, or an admin's setting would silently stop applying. Pairing the two would ask for a
+   * row on no channel at all; no caller does, and nothing here relies on that.
+   */
+  skipHouseholdRouting?: boolean;
   at?: Date;
 }): EnqueueResult {
   const db = getDb();
@@ -138,6 +190,10 @@ export function enqueue(input: {
   const household: Channel[] = [];
   const suppressed: Channel[] = [];
   const routable = (input.subjectScope ?? 'household') === 'household';
+  // Narrowed once, here, so the two branches below read `recipient` rather than re-testing
+  // input.userId -- the same shape buildRequest() already uses for a pending row's user id.
+  const recipient = input.userId;
+  if (recipient === null && !routable) throw new Error(HOUSEHOLD_PASS_NOT_ROUTABLE);
 
   for (const channel of CHANNELS) {
     // v1.28.0, decision 4: the family channel REPLACES the personal one for a routed event. Per
@@ -146,8 +202,11 @@ export function enqueue(input: {
     // the household row is the household's decision, not the sum of five people's toggles, and
     // a member who has the event switched off must not be able to conjure a second copy into
     // the group by switching it on.
-    if (routable && isHouseholdRouted(input.eventId, channel)) {
-      suppressed.push(channel);
+    if (routable && input.skipHouseholdRouting !== true && isHouseholdRouted(input.eventId, channel)) {
+      // Only a MEMBER's pass has a personal send for the family channel to replace; a household
+      // pass had none to begin with, and reporting one would tell an evaluator's `fired` counter
+      // that something was withheld from somebody.
+      if (recipient !== null) suppressed.push(channel);
       // MUST-3.9 holds unchanged for the family channel: the row IS the guard. The unique index
       // is (COALESCE(user_id, -1), channel, dedup_key), so every member's evaluation this week
       // aims at the same slot and only the first one lands. That is what makes "two members,
@@ -175,15 +234,19 @@ export function enqueue(input: {
     // Not routed on this channel, so the only row it could produce is the PERSONAL one -- and
     // that is exactly the delivery familyChannelOnly exists to withhold. Placed after the routed
     // branch above, never before it: the family-channel row must still be written.
-    if (input.familyChannelOnly) continue;
+    //
+    // v1.32.0: a household pass falls out here too, for the plainer reason that there is nobody to
+    // deliver a personal row TO. It reaches this line only on a channel the event is NOT routed
+    // to, where the family channel it evaluates for does not exist.
+    if (recipient === null || input.familyChannelOnly) continue;
 
-    if (!isEventEnabled(input.userId, input.eventId, channel)) continue;
+    if (!isEventEnabled(recipient, input.eventId, channel)) continue;
     // MUST-3.9: the row that was sent IS the dedup guard. `changes === 0` means
     // "already fired": there is no separate bookkeeping that could drift.
     const result = db
       .insert(notificationOutbox)
       .values({
-        userId: input.userId,
+        userId: recipient,
         channel,
         eventId: input.eventId,
         dedupKey: input.dedupKey,

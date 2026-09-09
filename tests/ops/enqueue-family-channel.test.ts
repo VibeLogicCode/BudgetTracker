@@ -28,6 +28,21 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
  */
 interface EnqueueSite {
   file: string;
+  /**
+   * v1.32.0 (ruling R23). WHO this call evaluates for. 'household' is a call passing
+   * `userId: null` -- the family channel evaluating as itself, which writes the family-channel
+   * row and no personal row at all (src/lib/notify/family-pass.ts). The distinction matters to
+   * this guard because familyChannelOnly's whole job is withholding a PERSONAL delivery, and a
+   * household pass has none to withhold: requiring the flag there would be requiring a no-op,
+   * and reading its absence as an omission would be reading a leak into a call that cannot leak.
+   * Asserted against the source below, so a call cannot be filed as one and written as the other.
+   * 'household' means the call LITERALLY passes `userId: null`. A dual-purpose call site that
+   * passes a variable which may be null (evaluate/savings.ts's pace and month-closed sends, whose
+   * enclosing function takes `number | null`) is filed as 'member', because the flag question --
+   * "is a household-derived body about to be delivered to a person" -- is about the case where it
+   * is not null, and the null case cannot reach the personal branch of enqueue at all.
+   */
+  recipient: 'member' | 'household';
   /** 1-based position of the `enqueue(` call within the file, top to bottom. */
   nth: number;
   /**
@@ -41,6 +56,9 @@ interface EnqueueSite {
    * `household` override) carry a figure derived from more money than the recipient's own?
    * If yes, `familyChannelOnly` is required for a self-scoped recipient: the routed row is the
    * family channel's business, the personal copy is the leak.
+   *
+   * Always true, and always harmless, on a `recipient: 'household'` call: the room's message is
+   * household-derived by definition and there is no personal delivery of it to anybody.
    */
   householdDerivedBody: boolean;
   /** Whether the call passes `familyChannelOnly` today. Asserted against the source BOTH ways. */
@@ -60,6 +78,7 @@ const ENQUEUE_SITES: EnqueueSite[] = [
     file: 'src/lib/canadian-pack.ts',
     nth: 1,
     marker: "eventId: 'pack_update_available'",
+    recipient: 'member',
     householdDerivedBody: false,
     familyChannelOnly: 'absent',
     why: "renderEvent('pack_update_available') is given the pack label and the installed/bundled version strings only -- no transaction, no budget, no money of any kind -- and it is fanned out over adminUserIds().",
@@ -68,6 +87,7 @@ const ENQUEUE_SITES: EnqueueSite[] = [
     file: 'src/lib/notify/evaluate/anomalies.ts',
     nth: 1,
     marker: "eventId: 'unusual_transaction'",
+    recipient: 'member',
     householdDerivedBody: true,
     familyChannelOnly: 'absent',
     why: "the body carries one transaction's merchant, account name, date, amount and category straight out of readSlice(), which selects every household transaction with no attribution filter, and the loop fans that one render out over every recipient participants() returns.",
@@ -78,6 +98,7 @@ const ENQUEUE_SITES: EnqueueSite[] = [
     file: 'src/lib/notify/evaluate/anomalies.ts',
     nth: 2,
     marker: "eventId: 'duplicate_charge'",
+    recipient: 'member',
     householdDerivedBody: true,
     familyChannelOnly: 'absent',
     why: 'the body carries a merchant, an amount and two dates from the same unfiltered readSlice() as the site above, fanned out over every recipient participants() returns.',
@@ -87,6 +108,7 @@ const ENQUEUE_SITES: EnqueueSite[] = [
     file: 'src/lib/notify/evaluate/anomalies.ts',
     nth: 3,
     marker: "eventId: 'subscription_creep'",
+    recipient: 'member',
     householdDerivedBody: true,
     familyChannelOnly: 'absent',
     why: "evaluateSubscriptionCreep groups the household's charges by merchant with no attribution filter, so the merchant, date, new amount and baseline in this body can all be another member's.",
@@ -103,6 +125,7 @@ const ENQUEUE_SITES: EnqueueSite[] = [
     file: 'src/lib/notify/evaluate/budget.ts',
     nth: 1,
     marker: "eventId: 'budget_threshold'",
+    recipient: 'member',
     householdDerivedBody: true,
     familyChannelOnly: 'passed',
     why: "fireFor renders the row it is given, and evaluateBudgets calls it once per row of budgetProgress(month, 'household', null) for EVERY participant; the flag is fireFor's own parameter, set to person.selfScoped on that household loop and left undefined on the personal loop below it.",
@@ -111,6 +134,7 @@ const ENQUEUE_SITES: EnqueueSite[] = [
     file: 'src/lib/notify/evaluate/budget.ts',
     nth: 2,
     marker: "eventId: 'budget_exceeded'",
+    recipient: 'member',
     householdDerivedBody: true,
     familyChannelOnly: 'passed',
     why: 'the second of fireFor\'s two sends, from the same household or personal row and the same parameter as the site above.',
@@ -119,6 +143,7 @@ const ENQUEUE_SITES: EnqueueSite[] = [
     file: 'src/lib/notify/evaluate/coming-due.ts',
     nth: 1,
     marker: 'installmentOverdueKey(row.installmentId, month)',
+    recipient: 'member',
     householdDerivedBody: false,
     familyChannelOnly: 'absent',
     why: 'the installment rows come from unpaidInstallments({ ownerUserId: input.userId }), so every name, due date and amount in this body is already the recipient\'s own.',
@@ -127,6 +152,7 @@ const ENQUEUE_SITES: EnqueueSite[] = [
     file: 'src/lib/notify/evaluate/coming-due.ts',
     nth: 2,
     marker: 'comingDueKey(row.id, expiryDate)',
+    recipient: 'member',
     householdDerivedBody: false,
     familyChannelOnly: 'absent',
     why: "the warranty query filters eq(warrantyItems.ownerUserId, input.userId), so the item name, vendor, price and expiry date in this body are the recipient's own.",
@@ -135,6 +161,7 @@ const ENQUEUE_SITES: EnqueueSite[] = [
     file: 'src/lib/notify/evaluate/digest.ts',
     nth: 1,
     marker: "eventId: 'weekly_digest'",
+    recipient: 'member',
     householdDerivedBody: false,
     familyChannelOnly: 'absent',
     why: "every figure in the personal body goes through viewerFor(input.userId) -- categoryBreakdown and topMerchants take the viewer, and the S-18 fix made overBudget read budgetProgress(month, 'personal', viewer.id) for a self-scoped recipient; the true household read reaches the family channel through the `household` override alone, which is the one row familyChannelOnly could not withhold anyway.",
@@ -143,6 +170,7 @@ const ENQUEUE_SITES: EnqueueSite[] = [
     file: 'src/lib/notify/evaluate/monthly.ts',
     nth: 1,
     marker: "eventId: 'predicted_vs_actual'",
+    recipient: 'member',
     householdDerivedBody: false,
     familyChannelOnly: 'passed',
     why: "the personal body is rendered from `own`, which is empty of household lines for a self-scoped recipient (ownHousehold is null) and carries no total sentence either; the household comparison reaches the family channel through the `household` override (finding I-1). The flag is passed for a DIFFERENT reason from budget.ts's and savings.ts's -- `own.length === 0` withholds a header with no lines under it from a member who has no attributed spend of their own but still contributes the room's message -- and it is only ever true for a self-scoped recipient, since for anyone else `own` is a superset of the family lines.",
@@ -151,6 +179,7 @@ const ENQUEUE_SITES: EnqueueSite[] = [
     file: 'src/lib/notify/evaluate/monthly.ts',
     nth: 2,
     marker: "eventId: 'suggested_budget_refresh'",
+    recipient: 'member',
     householdDerivedBody: false,
     familyChannelOnly: 'passed',
     why: 'the personal body is rendered from ownHousehold (empty for a self-scoped recipient) plus their own refreshFor(month, \'personal\', userId) list, and changedCount counts only those two; the household list reaches the family channel through the `household` override. The flag carries the same "this recipient\'s own message came out empty" meaning as the site above, here withholding a "0 suggested budgets changed" subject line.',
@@ -159,6 +188,7 @@ const ENQUEUE_SITES: EnqueueSite[] = [
     file: 'src/lib/notify/evaluate/monthly.ts',
     nth: 3,
     marker: "eventId: 'monthly_digest'",
+    recipient: 'member',
     householdDerivedBody: false,
     familyChannelOnly: 'absent',
     why: "renderMonthlyDigestFor is called with the recipient's own viewer for this body -- cashflowTrend and topMerchants take it, and the budgeted pair reads budgetProgress(month, 'personal', viewer.id) for a self-scoped recipient (the S-18 fix) -- while the family channel's copy is a second call through HOUSEHOLD_VIEWER passed as the `household` override.",
@@ -167,6 +197,7 @@ const ENQUEUE_SITES: EnqueueSite[] = [
     file: 'src/lib/notify/evaluate/pace.ts',
     nth: 1,
     marker: "eventId: 'budget_pace'",
+    recipient: 'member',
     householdDerivedBody: true,
     familyChannelOnly: 'passed',
     why: "the body is a projection over one budgetProgress row whose scope the caller chose, so it is household-derived exactly when candidate.scope === 'household' -- which is what the flag is guarded on, because a personal-scope send is not routable at all (subjectScope) and pairing the two would enqueue nothing.",
@@ -175,6 +206,7 @@ const ENQUEUE_SITES: EnqueueSite[] = [
     file: 'src/lib/notify/evaluate/savings.ts',
     nth: 1,
     marker: "eventId: 'savings_target_met'",
+    recipient: 'member',
     householdDerivedBody: true,
     familyChannelOnly: 'passed',
     why: "netCents and targetCents come from savingsProgress(month, HOUSEHOLD_WIDE) and ruling T3 gives them no personal analogue to narrow to, so the one render is shared across recipients and the flag is set per participant.selfScoped.",
@@ -182,15 +214,26 @@ const ENQUEUE_SITES: EnqueueSite[] = [
   {
     file: 'src/lib/notify/evaluate/savings.ts',
     nth: 2,
+    marker: "userId: null",
+    recipient: 'household',
+    householdDerivedBody: true,
+    familyChannelOnly: 'absent',
+    why: "ruling R23's household pass for savings_target_met: the same one render the loop above shares across recipients (ruling T3 leaves no per-person figure to personalise), sent to the family channel as its own message rather than as a by-product of some member's evaluation.",
+  },
+  {
+    file: 'src/lib/notify/evaluate/savings.ts',
+    nth: 3,
     marker: "eventId: 'savings_target_pace'",
+    recipient: 'member',
     householdDerivedBody: true,
     familyChannelOnly: 'passed',
     why: 'the same household-wide savingsProgress figures plus a pro-rated target derived from them; the flag is the recipient\'s own selfScoped, resolved from viewerFor above the call.',
   },
   {
     file: 'src/lib/notify/evaluate/savings.ts',
-    nth: 3,
+    nth: 4,
     marker: "eventId: 'savings_month_closed'",
+    recipient: 'member',
     householdDerivedBody: true,
     familyChannelOnly: 'passed',
     why: 'the closed month\'s household savingsProgress plus savingsStreak(closedMonth, HOUSEHOLD_WIDE); the function also skips both reads outright when the recipient is self-scoped and the event is routed to no family channel.',
@@ -199,6 +242,7 @@ const ENQUEUE_SITES: EnqueueSite[] = [
     file: 'src/lib/notify/evaluate/stale.ts',
     nth: 1,
     marker: "eventId: 'stale_import'",
+    recipient: 'member',
     householdDerivedBody: true,
     familyChannelOnly: 'absent',
     why: 'the body names an account and the date it was last imported into, taken from a query over every active account in the install with no owner filter.',
@@ -209,6 +253,7 @@ const ENQUEUE_SITES: EnqueueSite[] = [
     file: 'src/lib/notify/raise.ts',
     nth: 1,
     marker: "eventId: 'new_signin'",
+    recipient: 'member',
     householdDerivedBody: false,
     familyChannelOnly: 'absent',
     why: "an account-security event about the recipient's own session: their name, the sign-in time, the IP and the user agent. No money.",
@@ -217,6 +262,7 @@ const ENQUEUE_SITES: EnqueueSite[] = [
     file: 'src/lib/notify/raise.ts',
     nth: 2,
     marker: 'eventId: input.event',
+    recipient: 'member',
     householdDerivedBody: false,
     familyChannelOnly: 'absent',
     why: "mfa_disabled / password_changed for the recipient's own account: their name and the time it happened. No money.",
@@ -225,6 +271,7 @@ const ENQUEUE_SITES: EnqueueSite[] = [
     file: 'src/lib/notify/raise.ts',
     nth: 3,
     marker: "eventId: 'backup_failed'",
+    recipient: 'member',
     householdDerivedBody: false,
     familyChannelOnly: 'absent',
     why: 'an admin-only operational alert carrying a date and an error message; no transaction, budget or balance is read.',
@@ -233,6 +280,7 @@ const ENQUEUE_SITES: EnqueueSite[] = [
     file: 'src/lib/notify/raise.ts',
     nth: 4,
     marker: "eventId: 'restore_outcome'",
+    recipient: 'member',
     householdDerivedBody: false,
     familyChannelOnly: 'absent',
     why: 'an admin-only operational alert carrying the restore status, source name, requesting username and receipt counts; no money.',
@@ -241,6 +289,7 @@ const ENQUEUE_SITES: EnqueueSite[] = [
     file: 'src/lib/notify/raise.ts',
     nth: 5,
     marker: "eventId: 'sync_failed'",
+    recipient: 'member',
     householdDerivedBody: false,
     familyChannelOnly: 'absent',
     why: 'an admin-only operational alert carrying a date and error.message only -- deliberately two fields, so the SimpleFIN access URL cannot ride in on a third.',
@@ -249,6 +298,7 @@ const ENQUEUE_SITES: EnqueueSite[] = [
     file: 'src/lib/update/check.ts',
     nth: 1,
     marker: "eventId: 'update_available'",
+    recipient: 'member',
     householdDerivedBody: false,
     familyChannelOnly: 'absent',
     why: 'an admin-only release notice: two version strings, a severity, a publish date and a can-apply flag. No money.',
@@ -353,6 +403,36 @@ describe('enqueue call sites are all classified (finding I-2)', () => {
     expect(drifted, 'the calls in a file were reordered or rewritten: re-check each reason against the code before re-pointing it').toEqual([]);
   });
 
+  it('agrees with the source about which calls are the household\'s own pass (R23)', () => {
+    const wrong = ENQUEUE_SITES.flatMap((site) => {
+      const call = found.find((c) => c.file === site.file && c.nth === site.nth);
+      if (call === undefined) return [];
+      // `userId: null` is the whole signature of a household pass at a call site: enqueue takes
+      // `userId: number | null` and null means the family channel evaluating as itself.
+      const isHousehold = /userId:\s*null\b/.test(call.args);
+      if (isHousehold === (site.recipient === 'household')) return [];
+      return [
+        isHousehold
+          ? `${key(site)} passes userId: null but is listed as a member call`
+          : `${key(site)} is listed as the household's own pass and does not pass userId: null`,
+      ];
+    });
+    expect(
+      wrong,
+      "a call site's recipient no longer matches what ENQUEUE_SITES says about it. A member call that became a household pass no longer needs familyChannelOnly; one that went the other way needs it again, or a written exception",
+    ).toEqual([]);
+  });
+
+  it('never pairs the household pass with familyChannelOnly, which would be a no-op', () => {
+    const paired = ENQUEUE_SITES.filter(
+      (site) => site.recipient === 'household' && site.familyChannelOnly === 'passed',
+    ).map(key);
+    expect(
+      paired,
+      'familyChannelOnly withholds a PERSONAL delivery; a household pass has none, so pairing them says nothing and hides which of the two rules the author meant',
+    ).toEqual([]);
+  });
+
   it('agrees with the source about which calls pass familyChannelOnly', () => {
     const wrong = ENQUEUE_SITES.flatMap((site) => {
       const call = found.find((c) => c.file === site.file && c.nth === site.nth);
@@ -373,7 +453,11 @@ describe('enqueue call sites are all classified (finding I-2)', () => {
 
   it('requires familyChannelOnly wherever the personal body is household-derived', () => {
     const unguarded = ENQUEUE_SITES.filter(
-      (site) => site.householdDerivedBody && site.familyChannelOnly === 'absent' && (site.exception ?? '').length === 0,
+      (site) =>
+        site.recipient === 'member' &&
+        site.householdDerivedBody &&
+        site.familyChannelOnly === 'absent' &&
+        (site.exception ?? '').length === 0,
     ).map(key);
     expect(
       unguarded,

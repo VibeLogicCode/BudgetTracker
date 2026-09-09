@@ -1,13 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import {
   EXPIRING_SOON_DAYS,
-  STATUS_CASE_SQL,
   WARRANTY_STATUSES,
   computeExpiryDate,
   isWarrantyStatus,
   statusLabel,
   warrantyStatus,
 } from '@/lib/warranty/expiry';
+import { STATUS_CASE_SQL } from '@/lib/warranty/expiry-sql';
 
 const TODAY = '2026-08-16';
 
