@@ -436,7 +436,29 @@ export async function checkForUpdateNowAction(_prev: UpdateActionState, formData
   // Check now on an install configured to install small updates automatically installs the
   // small update; anything else would be a surprising second policy.
   const result = await runUpdateCheck({ now: new Date(), manual: true });
-  revalidatePath(UPDATE_PATH);
+  /**
+   * NO revalidatePath HERE, and this is the one action where that matters.
+   *
+   * Owner report, 2026-09-09: "when i press check for updates it goes to this page and stays
+   * there until a refresh." The button's label comes from useActionState's `checkPending`
+   * (updates-client.tsx, v1.32.0 UP-1), which stays true for the WHOLE transition — the GitHub
+   * request AND everything a revalidation causes to re-render behind it. UPDATE_PATH is
+   * '/settings', so a five-second call to GitHub was followed by a rebuild of every card on that
+   * page — accounts, users, sessions, backups, connections, item types, merchant rules, audit,
+   * notifications — each with its own queries, on a NAS. The button went on saying "Asking
+   * GitHub…" for all of it, which is a promise about a request that had already answered.
+   *
+   * It bought nothing. Item M-3 made every action here return currentAvailability(), and
+   * resolveView() prefers that over props exactly so the card shows the new answer without
+   * waiting to be revalidated. UpdatesCard is the ONLY reader of update state on that page —
+   * AboutPanel beside it reads APP_VERSION, a build constant, and the changelog file, neither of
+   * which a check can change. So the re-render refreshed nine cards' worth of unrelated queries
+   * to tell one card something it had already been handed.
+   *
+   * The other five actions here keep theirs: they write local state and return instantly, so
+   * there is no network wait for a page rebuild to hide behind, and disable's MUST-3.4 wipe in
+   * particular must not leave a stale render anywhere. The distinction is the wait, not tidiness.
+   */
   // Task 3d (symptom A): read AFTER runUpdateCheck's writes, so this reflects exactly what the
   // check just committed rather than the render that is about to go stale again.
   const availability = currentAvailability();

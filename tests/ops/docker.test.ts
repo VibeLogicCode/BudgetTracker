@@ -474,12 +474,27 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.36.0 release', () => {
+  it('MUST-7.1: the 1.36.1 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.36.0');
+    expect(pkg.version).toBe('1.36.1');
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toMatch(/^## \[1\.36\.1\] - 2026-09-09$/m);
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.36.1]'));
+    expect(changelog.indexOf('## [1.36.1]')).toBeLessThan(changelog.indexOf('## [1.36.0]'));
+    const current = changelog.slice(changelog.indexOf('## [1.36.1]'), changelog.indexOf('## [1.36.0]'));
+    // The owner's own words for the symptom, so it is recognisable if it ever returns.
+    expect(current).toMatch(/Asking GitHub/);
+    expect(current).toMatch(/until the page was reloaded by hand/i);
+    // The cause, not just the symptom: the button waited on a whole-page revalidation.
+    expect(current).toMatch(/revalidated the entire Settings page/i);
+    expect(current).toMatch(/No migration/i);
+  });
+
+  it('MUST-7.1: the 1.36.0 release is still recorded intact (append-only discipline)', () => {
+    const pkg = JSON.parse(read('package.json')) as { version: string };
+    expect(pkg.version).toBe('1.36.1');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.36\.0\] - 2026-09-09$/m);
-    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.36.0]'));
     expect(changelog.indexOf('## [1.36.0]')).toBeLessThan(changelog.indexOf('## [1.35.0]'));
     const current = changelog.slice(changelog.indexOf('## [1.36.0]'), changelog.indexOf('## [1.35.0]'));
     // The last per-category detector, and the wording that says which one it was.
@@ -495,7 +510,7 @@ describe('version and changelog', () => {
 
   it('MUST-7.1: the 1.35.0 release is still recorded intact (append-only discipline)', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.36.0');
+    expect(pkg.version).toBe('1.36.1');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.35\.0\] - 2026-09-09$/m);
     expect(changelog.indexOf('## [1.35.0]')).toBeLessThan(changelog.indexOf('## [1.34.0]'));
@@ -516,7 +531,7 @@ describe('version and changelog', () => {
 
   it('MUST-7.1: the 1.34.0 release is still recorded intact (append-only discipline)', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.36.0');
+    expect(pkg.version).toBe('1.36.1');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.34\.0\] - 2026-09-08$/m);
     expect(changelog.indexOf('## [1.34.0]')).toBeLessThan(changelog.indexOf('## [1.33.0]'));
@@ -536,7 +551,7 @@ describe('version and changelog', () => {
 
   it('MUST-7.1: the 1.33.0 release is still recorded intact (append-only discipline)', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.36.0');
+    expect(pkg.version).toBe('1.36.1');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.33\.0\] - 2026-09-08$/m);
     expect(changelog.indexOf('## [1.33.0]')).toBeLessThan(changelog.indexOf('## [1.32.0]'));

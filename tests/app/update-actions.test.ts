@@ -368,3 +368,52 @@ describe('Task 3d (symptom B): a second applyUpdateAction for the same version i
     expect(second.applyRequestedVersion).toBe('9.9.9');
   });
 });
+
+/**
+ * Owner report, 2026-09-09: "when i press check for updates it goes to this page and stays there
+ * until a refresh."
+ *
+ * The button's label is driven by useActionState's `checkPending` (updates-client.tsx, v1.32.0
+ * UP-1), which stays true for the WHOLE transition -- not just the GitHub request, but everything
+ * revalidatePath() causes to re-render afterwards. UPDATE_PATH is '/settings', so a five-second
+ * GitHub call was followed by a re-render of every card on that page: accounts, users, sessions,
+ * backups, connections, item types, merchant rules, audit and notifications, each with its own
+ * queries. The button went on promising "Asking GitHub..." for all of it, long after GitHub had
+ * answered.
+ *
+ * It buys nothing. Item M-3 already made every one of these actions hand its own fresh state back
+ * (currentAvailability()), and resolveView() prefers that over props precisely so the card renders
+ * the new answer without waiting for anything to be revalidated -- and UpdatesCard is the ONLY
+ * consumer of update state on that page (AboutPanel reads APP_VERSION, a build constant, and the
+ * changelog file).
+ */
+describe("2026-09-09: Check now does not make the button wait on the whole settings page", () => {
+  it('returns its own fresh availability and revalidates nothing', async () => {
+    const { revalidatePath } = await import('next/cache');
+    await actions.enableUpdateChecksAction({}, new FormData());
+    vi.mocked(revalidatePath).mockClear();
+
+    stubRelease(`v${APP_VERSION}`);
+    const result = await actions.checkForUpdateNowAction({}, new FormData());
+
+    // The card needs no revalidation to show the new answer: the action hands it back.
+    expect(result.lastCheckedAt).toBe(readUpdateState().lastCheckedAt);
+    expect(result.lastCheckedAt).not.toBeNull();
+    expect(result.resolvedAt).not.toBeUndefined();
+    // ...so nothing re-renders the other eight cards, and `checkPending` clears when GitHub
+    // answers rather than when the settings page finishes rebuilding itself.
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it('the actions that only write local state still revalidate', async () => {
+    // The distinction is the network wait, not tidiness. These return instantly, and Disable in
+    // particular wipes state other renders should not keep showing (MUST-3.4).
+    const { revalidatePath } = await import('next/cache');
+    vi.mocked(revalidatePath).mockClear();
+    await actions.enableUpdateChecksAction({}, new FormData());
+    expect(revalidatePath).toHaveBeenCalledWith('/settings');
+    vi.mocked(revalidatePath).mockClear();
+    await actions.disableUpdateChecksAction({}, new FormData());
+    expect(revalidatePath).toHaveBeenCalledWith('/settings');
+  });
+});

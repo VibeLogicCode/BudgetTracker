@@ -21,6 +21,21 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.36.1] - 2026-09-09
+
+No migration.
+
+### Fixed
+
+- **"Check now" stayed on "Asking GitHub…" until the page was reloaded by hand.** The button's
+  label was tied to the whole transition, and the action revalidated the entire Settings page — so
+  after GitHub answered in a second or two, the button went on promising it was still asking while
+  the server rebuilt every other card on that page: accounts, users, sessions, backups,
+  connections, item types, merchant rules, audit and notifications. The check now refreshes only
+  the Updates card, from the answer it already hands back, so the button reports the request it
+  actually made. The other update buttons are unchanged: they write local state and return at once,
+  with no network wait for a rebuild to hide behind.
+
 ## [1.36.0] - 2026-09-09
 
 No migration.
