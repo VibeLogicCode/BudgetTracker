@@ -22,6 +22,7 @@ DRY_RUN=0
 SKIP_GIT=0
 SKIP_DEPS=0
 SKIP_PULL=0
+SKIP_BACKUP=0
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -37,6 +38,8 @@ Options:
   --skip-git   Do not run "git pull" even if this is a git checkout.
   --no-pull    Do not refresh the base image.
   --no-deps    Do not run "npm update" (patch/minor dependency refresh).
+  --skip-backup  Do not take a backup before upgrading. Not recommended: the
+               rollback below restores the IMAGE, never the database.
   --help       Show this message.
 
 What it does, in order:
@@ -44,17 +47,19 @@ What it does, in order:
   2. docker pull node:22-bookworm-slim   (base-image security fixes)
   3. npm update                (PATCH AND MINOR ONLY — majors are never automatic)
   4. tag the running image as budget-tracker:previous   (the rollback point)
-  5. docker compose build
-  6. docker compose up -d
-  7. poll the container's own health status via "docker inspect" (this is
+  5. take a verified backup, inside the running container  (--skip-backup to omit)
+  6. docker compose build
+  7. docker compose up -d
+  8. poll the container's own health status via "docker inspect" (this is
      independent of any --port remap done at install time — it reads the
      container's internal /api/health check, not a host URL)
-  8. AUTO-ROLLBACK if it never becomes healthy: restore budget-tracker:previous,
+  9. AUTO-ROLLBACK if it never becomes healthy: restore budget-tracker:previous,
      restart, re-verify, print the logs, exit non-zero.
 
 There is no scheduler and no automatic update. Run this by hand.
 Major dependency upgrades stay manual and reviewed.
-Your /data directory is never touched, in any branch.
+Your /data directory is never touched, in any branch, except to ADD the backup
+taken at step 5 -- nothing existing is modified or removed.
 If a rollback happens, any git pull / npm update from this run are left in
 your working tree — see the ROLLBACK message for exact recovery commands.
 EOF
@@ -66,6 +71,7 @@ while [ $# -gt 0 ]; do
     --skip-git) SKIP_GIT=1; shift ;;
     --no-deps) SKIP_DEPS=1; shift ;;
     --no-pull) SKIP_PULL=1; shift ;;
+    --skip-backup) SKIP_BACKUP=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; echo >&2; usage >&2; exit 2 ;;
   esac
@@ -177,7 +183,7 @@ BEFORE_VERSION="$(app_version)"
 BEFORE_DEPS="$(dependency_fingerprint)"
 step "Before — app version ${BEFORE_VERSION:-unknown}, lockfile ${BEFORE_DEPS}"
 
-step "Step 1/8 — new source"
+step "Step 1/9 — new source"
 if [ "$SKIP_GIT" -eq 1 ]; then
   say "Skipped (--skip-git)."
 elif [ -d "${PROJECT_DIR}/.git" ]; then
@@ -189,7 +195,7 @@ else
   say "Your ./data and .env are safe: only source files need replacing."
 fi
 
-step "Step 2/8 — base image refresh"
+step "Step 2/9 — base image refresh"
 if [ "$SKIP_PULL" -eq 1 ]; then
   say "Skipped (--no-pull)."
 else
@@ -197,7 +203,7 @@ else
   run docker pull "$BASE_IMAGE"
 fi
 
-step "Step 3/8 — semver-safe dependency update (patch and minor only)"
+step "Step 3/9 — semver-safe dependency update (patch and minor only)"
 if [ "$SKIP_DEPS" -eq 1 ]; then
   say "Skipped (--no-deps)."
 else
@@ -206,7 +212,7 @@ else
   run npm update
 fi
 
-step "Step 4/8 — tagging the rollback point"
+step "Step 4/9 — tagging the rollback point"
 say "Running: docker tag ${IMAGE} ${ROLLBACK_IMAGE}"
 if [ "$DRY_RUN" -eq 1 ]; then
   say "[dry-run] would run: docker tag ${IMAGE} ${ROLLBACK_IMAGE}"
@@ -219,24 +225,47 @@ else
   fi
 fi
 
-step "Step 5/8 — rebuilding"
+# O-05 (2026-09-02 review). A fresh restore point BEFORE the swap, while the OLD container is
+# still up and can take one. Runs `npm run backup` INSIDE that container, so the backup logic is
+# the same Node code the in-app Update button uses -- one implementation, not a second one written
+# in bash and a third in PowerShell. See src/lib/backup/pre-upgrade.ts.
+#
+# Aborts on failure: no backup means no way back, and the rollback path below only re-tags the old
+# IMAGE -- it has never restored the database. --skip-backup is the deliberate override.
+step "Step 5/9 — backup"
+if [ "$SKIP_BACKUP" -eq 1 ]; then
+  warn "Skipping the pre-upgrade backup (--skip-backup). There will be no restore point from just before this upgrade."
+elif [ "$DRY_RUN" -eq 1 ]; then
+  say "[dry-run] would run: docker compose exec -T app npm run --silent backup"
+else
+  say "Running: docker compose exec -T app npm run --silent backup"
+  if BACKUP_PATH=$(docker compose exec -T app npm run --silent backup); then
+    say "Backup written to ${BACKUP_PATH}."
+  else
+    echo "The pre-upgrade backup failed, so the update stopped before changing anything." >&2
+    echo "Fix the cause (usually disk space) and run this again, or pass --skip-backup to proceed without one." >&2
+    exit 1
+  fi
+fi
+
+step "Step 6/9 — rebuilding"
 say "Running: docker compose build"
 run docker compose build
 
-step "Step 6/8 — restarting"
+step "Step 7/9 — restarting"
 say "Running: docker compose up -d"
 run docker compose up -d
 
-step "Step 7/8 — health check"
+step "Step 8/9 — health check"
 if wait_for_health; then
   say "The updated container is healthy."
 else
-  step "Step 8/8 — health check FAILED, rolling back"
+  step "Step 9/9 — health check FAILED, rolling back"
   rollback || exit 1
   exit 1
 fi
 
-step "Step 8/8 — done"
+step "Step 9/9 — done"
 AFTER_VERSION="$(app_version)"
 AFTER_DEPS="$(dependency_fingerprint)"
 say "App version: ${BEFORE_VERSION:-unknown} -> ${AFTER_VERSION:-unknown}"

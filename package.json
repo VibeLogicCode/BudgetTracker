@@ -22,6 +22,7 @@
     "smoke:image": "node scripts/smoke-test-image.mjs",
     "reset-password": "node --experimental-strip-types scripts/reset-admin-password.ts",
     "restore-backup": "node --experimental-strip-types scripts/restore-backup.ts",
+    "backup": "node --experimental-strip-types scripts/create-backup.ts",
     "install:linux": "bash install/install-linux.sh"
   },
   "//ocr-pins": "onnxruntime-node is exact because the ARM instruction-set risk the runtime probe exists for is a property of one ORT build; a silent minor bump changes the MLAS kernels this release was probed against. jscanify is exact because it is pinned against one OpenCV.js API generation. @techstark/opencv-js is exact and must be 4.7.0-release.1; the 5.0.x builds from the same publisher change enough API surface that pairing them with jscanify 1.4.3 is untested. sharp takes a caret: per-platform optional deps, mature, and 0.34.5 was already present only as a transitive of Next.",

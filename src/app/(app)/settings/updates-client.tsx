@@ -524,6 +524,18 @@ export function UpdatesClient(props: UpdatesViewProps) {
               <input type="hidden" name="version" value={offered} />
               <SubmitButton className="btn btn--ghost">Not now</SubmitButton>
             </form>
+            {/* O-05: the override, and it appears ONLY after a backup failure has been shown --
+                `backupFailed` is set by applyUpdateAction on that one refusal and by nothing else.
+                A permanently visible "skip the backup" button is how a safety net stops being one;
+                this is the escape hatch for somebody who has read why it refused and accepted it.
+                Ghost styling, and it names what it gives up rather than saying "force". */}
+            {applyState.backupFailed === true ? (
+              <form action={apply}>
+                <input type="hidden" name="version" value={offered} />
+                <input type="hidden" name="skipBackup" value="1" />
+                <SubmitButton className="btn btn--ghost">Update without a backup</SubmitButton>
+              </form>
+            ) : null}
           </div>
         )}
 

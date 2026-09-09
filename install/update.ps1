@@ -15,6 +15,7 @@ param(
   [switch]$SkipGit,
   [switch]$NoDeps,
   [switch]$NoPull,
+  [switch]$SkipBackup,
   [switch]$Help
 )
 
@@ -155,7 +156,7 @@ $beforeVersion = Get-AppVersion
 $beforeDeps = Get-DependencyFingerprint
 Write-Step "Before - app version $beforeVersion, lockfile $beforeDeps"
 
-Write-Step 'Step 1/8 - new source'
+Write-Step 'Step 1/9 - new source'
 if ($SkipGit) { Write-Output 'Skipped (-SkipGit).' }
 elseif (Test-Path (Join-Path $ProjectDir '.git')) {
   Write-Output 'Running: git pull --ff-only'
@@ -166,14 +167,14 @@ else {
   Write-Output 'Your .\data and .env are safe: only source files need replacing.'
 }
 
-Write-Step 'Step 2/8 - base image refresh'
+Write-Step 'Step 2/9 - base image refresh'
 if ($NoPull) { Write-Output 'Skipped (-NoPull).' }
 else {
   Write-Output "Running: docker pull $BaseImage"
   Invoke-Step 'docker' @('pull', $BaseImage)
 }
 
-Write-Step 'Step 3/8 - semver-safe dependency update (patch and minor only)'
+Write-Step 'Step 3/9 - semver-safe dependency update (patch and minor only)'
 if ($NoDeps) { Write-Output 'Skipped (-NoDeps).' }
 else {
   Write-Output 'Running: npm update'
@@ -181,7 +182,7 @@ else {
   Invoke-Step 'npm' @('update')
 }
 
-Write-Step 'Step 4/8 - tagging the rollback point'
+Write-Step 'Step 4/9 - tagging the rollback point'
 if ($DryRun) { Write-Output "[dry-run] would run: docker tag $Image $RollbackImage" }
 else {
   & docker image inspect $Image *> $null
@@ -194,25 +195,48 @@ else {
   }
 }
 
-Write-Step 'Step 5/8 - rebuilding'
+# O-05 (2026-09-02 review). A verified restore point BEFORE the swap, taken by the OLD container
+# while it is still running. Calls `npm run backup` inside it, so this is the same Node code the
+# in-app Update button and install/update.sh both use -- one backup implementation for every host.
+# See src/lib/backup/pre-upgrade.ts.
+#
+# Aborts on failure: the rollback below restores the IMAGE and has never restored the database, so
+# without a backup there is no way back. -SkipBackup is the deliberate override.
+Write-Step 'Step 5/9 - backup'
+if ($SkipBackup) {
+  Write-Warning 'Skipping the pre-upgrade backup (-SkipBackup). There will be no restore point from just before this upgrade.'
+} elseif ($DryRun) {
+  Write-Output '[dry-run] would run: docker compose exec -T app npm run --silent backup'
+} else {
+  Write-Output 'Running: docker compose exec -T app npm run --silent backup'
+  $backupPath = & docker compose exec -T app npm run --silent backup
+  if ($LASTEXITCODE -ne 0) {
+    Write-Error 'The pre-upgrade backup failed, so the update stopped before changing anything.'
+    Write-Error 'Fix the cause (usually disk space) and run this again, or pass -SkipBackup to proceed without one.'
+    exit 1
+  }
+  Write-Output "Backup written to $backupPath."
+}
+
+Write-Step 'Step 6/9 - rebuilding'
 Write-Output 'Running: docker compose build'
 Invoke-Step 'docker' @('compose', 'build')
 
-Write-Step 'Step 6/8 - restarting'
+Write-Step 'Step 7/9 - restarting'
 Write-Output 'Running: docker compose up -d'
 Invoke-Step 'docker' @('compose', 'up', '-d')
 
-Write-Step 'Step 7/8 - health check'
+Write-Step 'Step 8/9 - health check'
 if (Wait-Healthy) {
   Write-Output 'The updated container is healthy.'
 }
 else {
-  Write-Step 'Step 8/8 - health check FAILED, rolling back'
+  Write-Step 'Step 9/9 - health check FAILED, rolling back'
   Invoke-Rollback
   exit 1
 }
 
-Write-Step 'Step 8/8 - done'
+Write-Step 'Step 9/9 - done'
 $afterVersion = Get-AppVersion
 $afterDeps = Get-DependencyFingerprint
 Write-Output "App version: $beforeVersion -> $afterVersion"

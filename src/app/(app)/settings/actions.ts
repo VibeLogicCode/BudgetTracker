@@ -32,6 +32,7 @@ import { findUserByUsername, setUserPassword } from '@/lib/auth/users';
 import { parseChangelog } from '@/lib/changelog';
 import type { ChangelogRelease } from '@/lib/changelog';
 import { raiseAccountSecurityEvent } from '@/lib/notify/raise';
+import { PreUpgradeBackupError } from '@/lib/backup/pre-upgrade';
 import { applyUpdate, runUpdateCheck } from '@/lib/update/check';
 import { boundRelease, fetchRemoteChangelog } from '@/lib/update/github';
 import { checkUpdateCheckNow, checkUpdateReview } from '@/lib/update/ratelimit';
@@ -284,6 +285,12 @@ export interface UpdateActionState {
   autoApply?: boolean;
   dismissedVersion?: string | null;
   /**
+   * O-05: set only when the pre-upgrade backup refused. The card uses it to offer the override,
+   * which must never appear until a real failure has been shown -- an always-visible "skip the
+   * backup" button is how the safety net stops being one.
+   */
+  backupFailed?: boolean;
+  /**
    * When currentAvailability() read the state, so resolveView can rank SIX action results by
    * recency instead of by a hardcoded order. With two results the order could be argued from
    * what each action writes; with six it cannot — press Enable then Check and the enable
@@ -487,8 +494,15 @@ export async function applyUpdateAction(_prev: UpdateActionState, formData: Form
   // nothing would be the wrong order.
   if (watchtowerConfig() === null) return { error: 'This install has no Watchtower companion to ask.' };
 
+  /**
+   * O-05: an admin who has been shown a backup failure and chosen to go ahead anyway. The form
+   * only carries this after the refusal below has been rendered once, so it can never be the
+   * first thing a click does.
+   */
+  const skipBackup = String(formData.get('skipBackup') ?? '') === '1';
+
   try {
-    const result = await applyUpdate({ version: parsed.data, now: new Date() });
+    const result = await applyUpdate({ version: parsed.data, now: new Date(), skipBackup });
     revalidatePath(UPDATE_PATH);
     // Task 3d (symptom A): read AFTER applyUpdate's write, same reasoning as
     // checkForUpdateNowAction above.
@@ -519,6 +533,21 @@ export async function applyUpdateAction(_prev: UpdateActionState, formData: Form
       ...availability,
     };
   } catch (error) {
+    /**
+     * O-05: the pre-upgrade backup failed, so applyUpdate refused before recording anything or
+     * touching Watchtower. Nothing has changed and the install is exactly as it was.
+     *
+     * Reported as its own sentence rather than folded into the generic failure below, because the
+     * fix is specific (usually free some disk space) and because the admin needs to be told that
+     * an override exists -- otherwise a full disk silently becomes "updates don't work any more".
+     */
+    if (error instanceof PreUpgradeBackupError) {
+      return {
+        error: `${error.message} Nothing was changed. Free some space and try again, or choose "Update without a backup" to go ahead anyway.`,
+        backupFailed: true,
+        ...currentAvailability(),
+      };
+    }
     revalidatePath(UPDATE_PATH);
     const availability = currentAvailability();
     // MUST-7.3 / MUST-10.11: this is the ORIGINAL error applyUpdate() re-throws, not a

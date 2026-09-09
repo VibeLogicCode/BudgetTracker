@@ -1,3 +1,4 @@
+import { createVerifiedPreUpgradeBackup } from '@/lib/backup/pre-upgrade';
 import { adminUserIds } from '@/lib/notify/config';
 import { scrubSecrets } from '@/lib/notify/crypto';
 import { updateAvailableKey } from '@/lib/notify/events';
@@ -79,7 +80,16 @@ function scrub(text: string): string {
  * MUST-10.11: every string that can reach `update.last_apply_error`, console.* or the
  * browser goes through scrubSecrets with the token in the secret list.
  */
-export async function applyUpdate(input: { version: string; now?: Date }): Promise<ApplyOutcome> {
+export async function applyUpdate(input: {
+  version: string;
+  now?: Date;
+  /**
+   * O-05. Proceed even though the pre-upgrade backup failed. Set ONLY from an explicit human
+   * confirmation after being told what failed and why -- never a default, and never set by the
+   * automatic-apply path, which has nobody present to accept the risk.
+   */
+  skipBackup?: boolean;
+}): Promise<ApplyOutcome> {
   const at = input.now ?? new Date();
   const config = watchtowerConfig();
   if (config === null) throw new WatchtowerError('This install has no Watchtower companion to ask.', { permanent: true });
@@ -112,6 +122,20 @@ export async function applyUpdate(input: { version: string; now?: Date }): Promi
   // would have bypassed both and reached Watchtower unbounded.
   const verdict = checkUpdateApply();
   if (!verdict.allowed) return { outcome: 'rate-limited', retryAfterMinutes: verdict.retryAfterMinutes };
+
+  /**
+   * O-05: the backup goes HERE -- after the duplicate and rate-limit guards, so a rejected request
+   * never pays for one, and before recordApplyRequested, because everything after that line may be
+   * killed at any moment by the container this call is about to ask Watchtower to replace.
+   *
+   * A failure ABORTS by throwing (PreUpgradeBackupError). No backup means no way back, and an
+   * upgrade you cannot undo is the exact situation this item exists to prevent -- so refusing is
+   * the safe default even though it blocks the upgrade. `skipBackup` is the deliberate escape
+   * hatch for somebody who has read the reason and accepted it.
+   */
+  if (input.skipBackup !== true) {
+    createVerifiedPreUpgradeBackup(at);
+  }
 
   recordApplyRequested({ version: input.version, at });
   try {
