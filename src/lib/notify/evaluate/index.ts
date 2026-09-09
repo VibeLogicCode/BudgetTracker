@@ -124,7 +124,28 @@ function digestAlreadySent(userId: number, slotDate: string): boolean {
  * This function never throws into the scheduler: each user's evaluation is wrapped so one
  * bad row cannot stop the rest of the household from being told anything.
  */
-export function runScheduledEvaluation(now: Date = new Date()): void {
+export function runScheduledEvaluation(
+  now: Date = new Date(),
+  options?: {
+    /**
+     * Owner report, 2026-09-08: "it shouldnt send notifications on boot. when it reboots it sends
+     * notifications about budget".
+     *
+     * SLOT events still catch up at boot -- that is MUST-6.1, and it is the whole reason a
+     * container that was off overnight still gets yesterday's coming_due and its weekly digest.
+     * TICK events do not, and never needed to: budget_threshold, budget_exceeded, the anomaly
+     * family and savings_target_met all describe a CURRENT state, so if the state still holds the
+     * next five-minute tick reports it anyway. Firing them at boot buys nothing and costs a burst.
+     *
+     * It became loud rather than merely redundant in v1.32.0: the family channel gained its own
+     * evaluation pass (ruling R23), so on the first boot after that upgrade every household dedup
+     * key was unwritten and every currently-over-budget category fired into the family channel at
+     * once. That is a one-off, but "restart the container, get a wall of alerts" is not a thing an
+     * app should do at all.
+     */
+    atBoot?: boolean;
+  },
+): void {
   const { tz } = readEnv();
 
   for (const user of notifiableUsers()) {
@@ -172,6 +193,14 @@ export function runScheduledEvaluation(now: Date = new Date()): void {
   }
 
   runHouseholdEvaluation(now, tz);
+
+  // The three TICK-triggered evaluators, skipped on the boot pass -- see `atBoot` above. Grouped
+  // here behind one guard rather than three, because "what fires on a tick but not at boot" is one
+  // idea and a fourth such evaluator must land inside this block, not beside it.
+  if (options?.atBoot === true) {
+    console.log('[notify] boot pass: slot catch-up only, tick-triggered events skipped');
+    return;
+  }
 
   try {
     evaluateBudgets({ now, tz });

@@ -44,23 +44,36 @@ export function SendDigestNow({ canNotifyHousehold }: { canNotifyHousehold: bool
   }, [state.sent]);
 
   return (
-    <>
-      <button type="button" className="btn btn--secondary btn--sm" onClick={() => setOpen(true)}>
+    /**
+     * Owner report, 2026-09-08: "doesnt fit the width or height of add transaction, seems out of
+     * place". Two separate mistakes, both here.
+     *
+     * HEIGHT: the button carried `btn btn--secondary btn--sm` and stopped there, while
+     * QuickAddTrigger beside it also carries `min-h-11 sm:min-h-0` -- the 44px touch floor this
+     * codebase applies globally. Two buttons on one row, one of them 44px and one of them not, is
+     * exactly as obvious as it sounds.
+     *
+     * WIDTH: this component returned a FRAGMENT whose siblings were the button, a status line and
+     * an error line. The dashboard drops that fragment straight into a flex ROW, so the status text
+     * became a flex item beside the buttons and stretched the row. A column wrapper keeps the row
+     * holding buttons only, with anything this control has to say stacked underneath it.
+     */
+    <span className="inline-flex flex-col items-start gap-1 sm:items-end">
+      <button
+        type="button"
+        className="btn btn--secondary btn--sm min-h-11 sm:min-h-0"
+        onClick={() => setOpen(true)}
+      >
         Send me a summary…
       </button>
-      {/* The confirmation lives OUT here, not in the dialog: the dialog is gone by the time this
-          renders, and a person who just pressed a button is owed a visible answer that the send
-          happened. It names who got it, because that was the question they were asked. */}
+      {/* Below the button, never beside it. The dialog is gone by the time this renders, and a
+          person who just pressed a button is owed a visible answer naming who got it. */}
       {state.sent !== undefined ? (
-        <p role="status" className="text-xs text-muted">
-          {state.sent === 'household'
-            ? 'Summary sent to you and the household channel.'
-            : 'Summary sent to you.'}
-        </p>
+        <span role="status" className="text-xs text-muted">
+          {state.sent === 'household' ? 'Summary sent to you and the household channel.' : 'Summary sent to you.'}
+        </span>
       ) : null}
-      {/* A refusal with the dialog shut can only be the one the action returns before any dialog
-          is open again -- shown here so it is never invisible. */}
-      {!open ? <FormError message={state.error} /> : null}
+      {!open && state.error !== undefined ? <span className="text-xs text-danger">{state.error}</span> : null}
       {open ? (
         <RowDialog
           dialogId="send-digest-dialog"
@@ -103,6 +116,6 @@ export function SendDigestNow({ canNotifyHousehold }: { canNotifyHousehold: bool
           </div>
         </RowDialog>
       ) : null}
-    </>
+    </span>
   );
 }

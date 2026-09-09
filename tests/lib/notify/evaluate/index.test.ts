@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 import { sql } from 'drizzle-orm';
 import { createTestDb, insertTestUser, type TestDb } from '../../../helpers/db';
 import { nowIso } from '@/lib/clock';
@@ -9,6 +11,8 @@ import { resetAnomalyFingerprintForTests } from '@/lib/notify/evaluate/anomalies
 import * as paceModule from '@/lib/notify/evaluate/pace';
 import * as anomaliesModule from '@/lib/notify/evaluate/anomalies';
 import * as monthlyModule from '@/lib/notify/evaluate/monthly';
+import * as budgetModule from '@/lib/notify/evaluate/budget';
+import * as savingsModule from '@/lib/notify/evaluate/savings';
 
 let t: TestDb;
 const originalTz = process.env.TZ;
@@ -125,5 +129,61 @@ describe('the weekly digest existence pre-check', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+/**
+ * Owner report, 2026-09-08: "it shouldnt send notifications on boot. when it reboots it sends
+ * notifications about budget."
+ *
+ * The boot pass exists for SLOT catch-up (MUST-6.1) -- a container that was off overnight still
+ * owes yesterday's coming_due and the weekly digest. It never needed to run the TICK-triggered
+ * evaluators, which describe a current state and will say the same thing five minutes later.
+ *
+ * It turned loud in v1.32.0: the family channel gained its own pass (R23), so on the first boot
+ * after that upgrade every household dedup key was unwritten and every over-budget category fired
+ * into the family channel at once.
+ */
+describe('the boot pass does not fire tick-triggered events', () => {
+  it('skips budgets, anomalies and savings targets when atBoot is set', () => {
+    const budgets = vi.spyOn(budgetModule, 'evaluateBudgets').mockReturnValue(0);
+    const anomalies = vi.spyOn(anomaliesModule, 'evaluateAnomalies').mockReturnValue(0);
+    const savings = vi.spyOn(savingsModule, 'evaluateSavingsTargetMet').mockReturnValue(0);
+    try {
+      runScheduledEvaluation(new Date('2026-09-08T12:00:00Z'), { atBoot: true });
+      expect(budgets).not.toHaveBeenCalled();
+      expect(anomalies).not.toHaveBeenCalled();
+      expect(savings).not.toHaveBeenCalled();
+    } finally {
+      budgets.mockRestore();
+      anomalies.mockRestore();
+      savings.mockRestore();
+    }
+  });
+
+  it('still fires them on an ordinary tick', () => {
+    const budgets = vi.spyOn(budgetModule, 'evaluateBudgets').mockReturnValue(0);
+    const anomalies = vi.spyOn(anomaliesModule, 'evaluateAnomalies').mockReturnValue(0);
+    const savings = vi.spyOn(savingsModule, 'evaluateSavingsTargetMet').mockReturnValue(0);
+    try {
+      // No options at all -- the cron path. If this ever stopped firing, budget alerts would go
+      // silent entirely, which is a far worse defect than the burst this change removes.
+      runScheduledEvaluation(new Date('2026-09-08T12:05:00Z'));
+      expect(budgets).toHaveBeenCalledTimes(1);
+      expect(anomalies).toHaveBeenCalledTimes(1);
+      expect(savings).toHaveBeenCalledTimes(1);
+    } finally {
+      budgets.mockRestore();
+      anomalies.mockRestore();
+      savings.mockRestore();
+    }
+  });
+
+  it('the scheduler passes atBoot ONLY on the boot call, never on the cron one', () => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'src/lib/scheduler.ts'), 'utf8');
+    // The cron registration calls it bare; the boot call carries the flag. Getting these the wrong
+    // way round would silence every budget alert forever, so it is pinned rather than assumed.
+    expect(source).toContain('runNotifyTick(new Date(), { atBoot: true })');
+    expect(source).toMatch(/runNotifyTick\(\);/);
   });
 });

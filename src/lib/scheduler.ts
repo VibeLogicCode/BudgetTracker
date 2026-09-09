@@ -63,7 +63,7 @@ export function runNightlyTick(now: Date = new Date()): void {
   }
 }
 
-export function runNotifyTick(now: Date = new Date()): void {
+export function runNotifyTick(now: Date = new Date(), options?: { atBoot?: boolean }): void {
   // MUST-6.3: the single-flight guard is the tick's actual first statement.
   if (ticking) return;
 
@@ -88,7 +88,7 @@ export function runNotifyTick(now: Date = new Date()): void {
       const expired = expireStalePending(now);
       if (expired > 0) console.log(`[notify] expired ${expired} pending row(s) older than 24h`);
     }
-    runScheduledEvaluation(now);
+    runScheduledEvaluation(now, options);
   } catch (error) {
     console.error('[notify] tick failed', error);
   } finally {
@@ -237,7 +237,9 @@ export function startScheduler(): void {
   // next cron tick. The update check goes first, ahead of the notification tick.
   runUpdateTick();
   runCanadianPackUpdateTick();
-  runNotifyTick();
+  // atBoot: slot catch-up still runs (MUST-6.1); budget/anomaly/savings-target alerts do not.
+  // Owner report 2026-09-08 -- a restart should not produce a burst of alerts.
+  runNotifyTick(new Date(), { atBoot: true });
   // Task 8: same reasoning as the two ticks above -- a container that was off catches up on
   // a due auto-sync immediately at boot rather than waiting up to five minutes.
   runSimplefinTick();

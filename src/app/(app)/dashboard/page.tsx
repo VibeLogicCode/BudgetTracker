@@ -331,11 +331,9 @@ export default async function DashboardPage({
                 mirrors the action's own refusal -- a self-scoped member is never offered the
                 household option, on the same ruling R2 grounds that hide the person-scope pills
                 from them just below. */}
-            <div className="flex flex-col items-start gap-1 sm:items-end">
-              <div className="flex flex-wrap items-center gap-2">
-                <QuickAddTrigger />
-                <SendDigestNow canNotifyHousehold={!selfScoped} />
-              </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <QuickAddTrigger />
+              <SendDigestNow canNotifyHousehold={!selfScoped} />
             </div>
             {/* Ruling T7: the dashboard follows `?month=`, same as Budgets -- see MonthNav's own
                 docblock for why this needs no client-side router. `person=` is carried along

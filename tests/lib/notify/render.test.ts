@@ -73,6 +73,53 @@ describe('§10.1: budget events', () => {
     expect(body).toBe('Household Groceries budget for August 2026 is at 82% — $410.00 of $500.00, $90.00 left.');
   });
 
+  /**
+   * Owner report, 2026-09-08: a Telegram alert read "Budget 98.61999999999999%: Home Improvement".
+   * $147.93 of $150.00 really is that number in binary floating point; the defect was publishing it.
+   */
+  it('rounds the percentage to two decimals instead of printing the raw float', () => {
+    const { subject, body } = renderEvent({
+      event: 'budget_threshold',
+      scope: 'household',
+      categoryName: 'Home Improvement',
+      month: '2026-09',
+      // The exact value the owner was sent.
+      pct: (14793 / 15000) * 100,
+      spentCents: 14793,
+      limitCents: 15000,
+    });
+    expect(subject).toBe('Budget 98.62%: Home Improvement (September 2026)');
+    expect(body).toContain('is at 98.62% —');
+    expect(subject).not.toContain('98.61999');
+  });
+
+  it('drops trailing zeros rather than printing 100.00%', () => {
+    const { subject } = renderEvent({
+      event: 'budget_threshold',
+      scope: 'household',
+      categoryName: 'Gas',
+      month: '2026-09',
+      pct: 100,
+      spentCents: 10000,
+      limitCents: 10000,
+    });
+    // A fixed two-decimal format would read "100.00%", which is noisier than what it replaced.
+    expect(subject).toBe('Budget 100%: Gas (September 2026)');
+  });
+
+  it('leaves a percentage that is already short exactly as it was', () => {
+    const { subject } = renderEvent({
+      event: 'budget_threshold',
+      scope: 'household',
+      categoryName: 'Fast Food',
+      month: '2026-09',
+      pct: 180.99,
+      spentCents: 18099,
+      limitCents: 10000,
+    });
+    expect(subject).toBe('Budget 180.99%: Fast Food (September 2026)');
+  });
+
   it('omits the "left" clause when a single jump takes pct past 100% (MUST-6.17)', () => {
     const { body } = renderEvent({
       event: 'budget_threshold',

@@ -287,6 +287,22 @@ function money(cents: number): string {
   return formatCents(cents, { currency: true });
 }
 
+/**
+ * Owner report, 2026-09-08: a Telegram alert read "Budget 98.61999999999999%: Home Improvement".
+ *
+ * `pct` arrives as a raw float from budgetProgress (spent / limit * 100), and $147.93 of $150.00 is
+ * genuinely 98.61999999999999 in binary floating point. Interpolating it straight into a sentence
+ * published every figure IEEE-754 could produce.
+ *
+ * Two decimals, then trailing zeros dropped via Number(): 98.62, 180.99, and a clean 100 rather
+ * than 100.00. Rounding is a PRESENTATION decision made here and nowhere else -- the stored figure
+ * and every comparison against a threshold keep full precision, because a budget that fires at
+ * 99.996% must not be rounded into firing at 100 and then described as blown.
+ */
+function percent(value: number): string {
+  return String(Number(value.toFixed(2)));
+}
+
 function scopeWord(scope: 'household' | 'personal'): string {
   return scope === 'household' ? 'Household' : 'Your';
 }
@@ -513,9 +529,9 @@ export function renderEvent(input: RenderInput): { subject: string; body: string
       // entirely; budget_exceeded is the message that talks about being over.
       const remainingClause = remainingCents >= 0 ? `, ${money(remainingCents)} left` : '';
       return {
-        subject: `Budget ${input.pct}%: ${category} (${label})`,
+        subject: `Budget ${percent(input.pct)}%: ${category} (${label})`,
         body:
-          `${scopeWord(input.scope)} ${category} budget for ${label} is at ${input.pct}% — ` +
+          `${scopeWord(input.scope)} ${category} budget for ${label} is at ${percent(input.pct)}% — ` +
           `${money(input.spentCents)} of ${money(input.limitCents)}${remainingClause}.`,
       };
     }
