@@ -1265,3 +1265,18 @@ export const auditLog = sqliteTable(
   },
   (t) => [index('audit_log_at_idx').on(t.at), index('audit_log_entity_idx').on(t.entity, t.entityId)],
 );
+
+/**
+ * 2026-09-08. Which months the household has declared complete. See drizzle/0022_month_closures.sql
+ * for why this is recorded rather than inferred: a quiet account has nothing to import, so no
+ * import-timing rule can tell "the data is all in" from "there was nothing to fetch".
+ */
+export const monthClosures = sqliteTable('month_closures', {
+  /** 'YYYY-MM' — the month being declared complete, not the month it was declared in. */
+  month: text('month').primaryKey(),
+  /** NULL when the app closed it automatically: every account is SimpleFIN-linked and synced. */
+  closedBy: integer('closed_by').references(() => users.id),
+  closedAt: text('closed_at').notNull(),
+  /** Set once the monthly summary has been enqueued. A failed send must not un-close the month. */
+  summarySentAt: text('summary_sent_at'),
+});

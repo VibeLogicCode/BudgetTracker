@@ -48,9 +48,16 @@ install
 # never published" -- which was true of git and not of Docker.
 UI Component/
 
-# Development inputs, verified not read at runtime: nothing in src/ or scripts/ opens either
-# directory (the @/lib/packs hits are a source module, not this folder).
-packs/
+# fixtures/ is a development input, verified not read at runtime or at build time.
+#
+# packs/ IS NOT, and is deliberately absent from this list. The 2026-09-02 review asserted that
+# neither directory was a runtime input; that was true of fixtures/ and wrong about packs/, which
+# src/lib/canadian-pack.ts imports directly as a bundled JSON module. Excluding it built a green
+# suite and a broken image: `next build` failed inside Docker with "Can't resolve
+# '../../packs/canadian-merchants.json'" and v1.33.0 published nothing.
+#
+# tests/ops/docker.test.ts now asserts that every directory a source file imports from stays in the
+# build context, so this cannot be re-excluded by anybody reading the same review.
 fixtures/
 
 # Build caches and repo metadata: large, useless in an image, and tsbuildinfo is ~350 KB.

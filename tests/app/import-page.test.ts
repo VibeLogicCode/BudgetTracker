@@ -53,7 +53,12 @@ describe('ImportPage', () => {
     currentUser.value = { id: admin, name: 'Admin', username: 'admin', role: 'admin', visibility: 'household' };
 
     const { default: ImportPage } = await import('@/app/(app)/import/page');
-    const element = (await ImportPage()) as { props: { accounts: { name: string }[] } };
+    // 2026-09-08: the page now returns a fragment — the Close-month card sits above ImportClient
+    // (src/components/CloseMonthCard.tsx) — so the client element is a child rather than the root.
+    const rendered = (await ImportPage()) as { props: { children: unknown[] } };
+    const element = (rendered.props.children as { props?: { accounts?: unknown } }[]).find(
+      (child) => child?.props?.accounts !== undefined,
+    ) as { props: { accounts: { name: string }[] } };
     expect(redirected).toEqual([]);
     const names = element.props.accounts.map((a) => a.name);
     expect(names).toContain('Joint Chequing');

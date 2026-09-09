@@ -21,6 +21,33 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.34.0] - 2026-09-08
+
+Migration 0022 (`month_closures`). Notifications wait for your data instead of the calendar.
+
+### Fixed
+
+- **v1.33.0 never published an image.** Its `.dockerignore` tidy-up excluded `packs/`, which
+  `src/lib/canadian-pack.ts` imports as a bundled module, so `next build` failed inside Docker
+  while every test stayed green. The build context guard now reads the imports themselves and
+  fails if any directory source code imports from is excluded.
+
+### Changed
+
+- **The weekly summary is sent only when transactions have actually arrived since the last one.**
+  A household that imports once a week was getting a summary every week regardless — including
+  weeks in which, as far as the app knew, nothing had happened. It now looks every morning and
+  sends on the first one after its due day that has something new, so an import on Monday afternoon
+  produces a summary on Tuesday rather than waiting six days for the next slot. The due day does
+  not drift: it re-anchors to the weekday you chose.
+- **Last month's summary waits until you say the month is complete.** Firing on the 1st to the 3rd
+  meant reporting a month whose statements had not arrived. A card on the Import page lists each
+  account and closes the month in one click, which covers every hand-imported account at once —
+  including a quiet one with nothing to import, which no amount of guessing could have resolved.
+  Accounts linked to SimpleFIN are judged by their own sync and need no confirmation, so a fully
+  linked household never sees the card. The weekly summary carries a standing reminder while a
+  month is open.
+
 ## [1.33.0] - 2026-09-08
 
 No migration. Fewer, better notifications, and four safety nets on the upgrade path.

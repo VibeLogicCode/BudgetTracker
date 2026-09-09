@@ -285,6 +285,7 @@ describe('§10.2: the weekly digest', () => {
       over: [{ name: 'Restaurants', spentCents: 41000, limitCents: 30000 }],
       close: [{ name: 'Coffee', spentCents: 4500, limitCents: 5000 }],
     },
+    openMonths: [],
   } as const;
 
   it('renders the subject as the date range', () => {
@@ -327,6 +328,7 @@ describe('§10.2: the weekly digest', () => {
       topMerchants: [{ name: 'LOBLAWS', cents: 21055 }],
       reviewCount: 12,
       budgets: { over: [{ name: 'Restaurants', spentCents: 41000, limitCents: 30000 }], close: [] },
+      openMonths: [],
     });
     expect(subject).toBe('Household weekly summary — 2026-08-10 to 2026-08-16');
     expect(body).toContain('Household spend: $1,234.56');
@@ -358,6 +360,7 @@ describe('§10.2: the weekly digest', () => {
       topMerchants: [],
       reviewCount: 0,
       budgets: { over: [], close: [] },
+      openMonths: [],
     });
     expect(body).toBe('No transactions were recorded this week.');
   });
@@ -371,6 +374,7 @@ describe('§10.2: the weekly digest', () => {
       topMerchants: [],
       reviewCount: 0,
       budgets: { over: [], close: [] },
+      openMonths: [],
     });
     expect(body).toContain('No transactions were recorded this week.');
   });
@@ -536,6 +540,7 @@ const SAMPLES_BY_EVENT: Record<string, RenderInput[]> = {
       topMerchants: [],
       reviewCount: 0,
       budgets: { over: [], close: [] },
+      openMonths: [],
     },
     // v1.28.0: the family channel's body is a SECOND body behind the same event id, so it gets
     // its own sample here rather than riding on the personal one's URL check.
@@ -551,6 +556,7 @@ const SAMPLES_BY_EVENT: Record<string, RenderInput[]> = {
       topMerchants: [],
       reviewCount: 0,
       budgets: { over: [], close: [] },
+      openMonths: [],
     },
   ],
   new_signin: [{ event: 'new_signin', name: 'S', atLabel: 'x', tz: 'UTC', ip: '1.2.3.4', userAgent: null }],

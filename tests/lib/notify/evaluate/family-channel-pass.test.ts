@@ -39,6 +39,8 @@ const FAMILY_TOKEN = '888800002:AAFAMILY-invented-token-never-a-real-one';
 const FAMILY_CHAT = '-1009876543211';
 const TZ = 'UTC';
 
+import { closeMonth } from '@/lib/month-close';
+
 let t: TestDb;
 let accountId: number;
 let adminId: number;
@@ -174,6 +176,9 @@ describe('R23: an event nobody has enabled personally still reaches the family c
     }
     upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-01', amountCents: 20000 });
 
+    // 2026-09-08: the month-boundary reports wait for the month to be declared complete
+    // (src/lib/month-close.ts) rather than firing on the 1st to the 3rd.
+    closeMonth('2026-07', null, new Date('2026-08-01T00:00:00Z'));
     expect(evaluateMonthBoundary({ userId: null, now: new Date('2026-08-01T09:00:00Z'), tz: TZ })).toBe(3);
 
     expect(familyRows('predicted_vs_actual').map((row) => row.dedup_key)).toEqual(['hh:predvs:2026-07']);

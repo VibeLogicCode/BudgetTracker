@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 const read = (name: string) => fs.readFileSync(path.join(process.cwd(), name), 'utf8');
 
@@ -210,6 +211,9 @@ describe('.dockerignore', () => {
     'next-env.d.ts',
     // Settings -> About reads this at runtime; Dockerfile:76 copies it explicitly.
     'CHANGELOG.md',
+    // Imported as a bundled JSON module by src/lib/canadian-pack.ts. Excluding it broke the
+    // v1.33.0 image build while every test stayed green -- see .dockerignore's own note.
+    'packs',
     // The build's own inputs. Excluding either is meaningless (docker reads them before the
     // context is assembled) but leaving them unclassified would fail this test for no reason.
     'Dockerfile',
@@ -240,8 +244,23 @@ describe('.dockerignore', () => {
   }
 
   it('O-02: every top-level entry is either ignored or explicitly required', () => {
-    const unclassified = fs
-      .readdirSync(process.cwd())
+    /**
+     * Top-level entries GIT tracks, not whatever happens to be on disk.
+     *
+     * readdirSync was the first cut and it was flaky: this suite runs in parallel with tests that
+     * create temp databases and restore directories in the repo root, so the sweep failed on
+     * somebody else's debris. Tracked files are the honest subject anyway — the defect this guard
+     * exists to catch is a NEW DIRECTORY somebody adds and forgets to classify, and adding one
+     * means committing it.
+     */
+    const tracked = new Set(
+      execFileSync('git', ['ls-files'], { cwd: process.cwd(), encoding: 'utf8' })
+        .split(/\r?\n/)
+        .filter((line) => line.length > 0)
+        .map((line) => line.split('/')[0]),
+    );
+
+    const unclassified = [...tracked]
       .filter((entry) => !NEVER_IN_A_CLEAN_CHECKOUT.test(entry))
       .filter((entry) => !REQUIRED_IN_BUILD_CONTEXT.has(entry))
       .filter((entry) => !ignoredByDockerignore(entry));
@@ -256,11 +275,47 @@ describe('.dockerignore', () => {
     ).toEqual([]);
   });
 
+  /**
+   * The guard that would have caught the v1.33.0 build failure. O-02's sweep proved every
+   * top-level entry was CLASSIFIED; it could not tell a correct classification from a wrong one,
+   * and `packs/` was wrongly excluded on the strength of a review note. `next build` runs only in
+   * the release workflow, so the mistake reached a tag.
+   *
+   * This reads the imports rather than trusting prose: any relative import that climbs out of src/
+   * names a directory the build genuinely needs, and excluding it is a build failure by
+   * construction.
+   */
+  it('O-02: no directory that source code imports from is excluded', () => {
+    const sourceDirs = ['src'];
+    const imported = new Set<string>();
+    const walk = (dir: string): void => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (/\.tsx?$/.test(entry.name)) {
+          for (const match of fs.readFileSync(full, 'utf8').matchAll(/from '((?:\.\.\/)+[^']+)'/g)) {
+            const resolved = path.relative(process.cwd(), path.resolve(dir, match[1]));
+            const top = resolved.split(path.sep)[0];
+            if (top && top !== '..' && !top.startsWith('.')) imported.add(top);
+          }
+        }
+      }
+    };
+    for (const dir of sourceDirs) walk(path.join(process.cwd(), dir));
+
+    for (const top of imported) {
+      expect(
+        ignoredByDockerignore(top),
+        `${top} is imported by source code but excluded from the Docker build context — next build will fail inside the image`,
+      ).toBe(false);
+    }
+  });
+
   it('O-02: the entries the review found unlisted are now ignored', () => {
     // Named individually rather than trusting the sweep above, so a careless widening of the
     // allowlist cannot quietly re-admit them. `UI Component/` is a third-party design prototype
     // and `.claude` is local agent configuration -- neither belongs in a public image.
-    for (const entry of ['UI Component', '.claude', '.vscode', 'packs', 'fixtures', 'tsconfig.tsbuildinfo']) {
+    for (const entry of ['UI Component', '.claude', '.vscode', 'fixtures', 'tsconfig.tsbuildinfo']) {
       expect(ignoredByDockerignore(entry), `${entry} is not excluded from the build context`).toBe(true);
     }
   });
@@ -419,12 +474,32 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.33.0 release', () => {
+  it('MUST-7.1: the 1.34.0 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.33.0');
+    expect(pkg.version).toBe('1.34.0');
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toMatch(/^## \[1\.34\.0\] - 2026-09-08$/m);
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.34.0]'));
+    expect(changelog.indexOf('## [1.34.0]')).toBeLessThan(changelog.indexOf('## [1.33.0]'));
+    const release = changelog.slice(changelog.indexOf('## [1.34.0]'), changelog.indexOf('## [1.33.0]'));
+    // This release DOES carry a migration, and saying so is what tells a household to take a
+    // backup first -- the opposite of every recent release's "No migration".
+    expect(release).toMatch(/Migration 0022/i);
+    // The defect that cost a whole release: a green suite and a broken image.
+    expect(release).toMatch(/never\s+published\s+an\s+image/i);
+    expect(release).toMatch(/packs\//);
+    // The two behaviours the owner asked for, in the words he used for them.
+    expect(release).toMatch(/only\s+when\s+transactions\s+have\s+actually\s+arrived/i);
+    expect(release).toMatch(/waits\s+until\s+you\s+say\s+the\s+month\s+is\s+complete/i);
+    // The quiet account is the case that broke every inference-based rule; it must stay named.
+    expect(release).toMatch(/quiet\s+one\s+with\s+nothing\s+to\s+import/i);
+  });
+
+  it('MUST-7.1: the 1.33.0 release is still recorded intact (append-only discipline)', () => {
+    const pkg = JSON.parse(read('package.json')) as { version: string };
+    expect(pkg.version).toBe('1.34.0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.33\.0\] - 2026-09-08$/m);
-    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.33.0]'));
     expect(changelog.indexOf('## [1.33.0]')).toBeLessThan(changelog.indexOf('## [1.32.0]'));
     const release = changelog.slice(changelog.indexOf('## [1.33.0]'), changelog.indexOf('## [1.32.0]'));
     // No schema change, as every release says when it is true.

@@ -243,7 +243,19 @@ describe('MUST-3.12: a year of daily evaluations against a fixed item set', () =
       expect(eventCounts()).toEqual({
         coming_due: 1,
         stale_import: 52,
-        weekly_digest: 52,
+        /**
+         * 2026-09-08: SEVEN, not 52, and the drop is the feature.
+         *
+         * The weekly summary now sends only when transactions have ARRIVED since the last one
+         * (evaluate/index.ts, hasNewTransactionsSince). This fixture seeds a fixed item set and
+         * then simulates a year without importing anything further, so for most of that year there
+         * is genuinely nothing new to report — and the app now says nothing instead of sending 52
+         * summaries about a week in which, as far as it knows, nothing happened.
+         *
+         * That is the owner's complaint answered at the root: "i only import data on sundays i
+         * dont want daily messages". A summary about no new data is the definition of noise.
+         */
+        weekly_digest: 7,
         backup_failed: 1,
         new_signin: 1,
         restore_outcome: 1,

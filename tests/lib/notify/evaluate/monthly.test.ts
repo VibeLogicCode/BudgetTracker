@@ -23,6 +23,7 @@ vi.mock('@/lib/auth/users', async (importOriginal) => {
 
 import { setUserVisibility, viewerFor } from '@/lib/auth/users';
 import { evaluateMonthBoundary } from '@/lib/notify/evaluate/monthly';
+import { closeMonth } from '@/lib/month-close';
 
 let t: TestDb;
 let accountId: number;
@@ -36,6 +37,14 @@ beforeEach(() => {
   resetOutboxPumpForTests();
   setNotifySenderForTests(async () => {});
   vi.mocked(viewerFor).mockClear();
+  /**
+   * 2026-09-08. The month-boundary reports now wait for the household to declare the month
+   * complete (src/lib/month-close.ts) instead of firing on the 1st to the 3rd. Every test in this
+   * file is about July's reports, so a closed July is the shared precondition -- stated once here
+   * rather than repeated across thirty call sites. The two tests that are ABOUT the open case
+   * delete this row again.
+   */
+  closeMonth('2026-07', null, new Date('2026-08-01T00:00:00Z'));
 });
 
 afterEach(() => {
@@ -116,27 +125,46 @@ function enableMonthlyDigest(userId: number): void {
   setPref(userId, 'monthly_digest', 'email', true);
 }
 
-describe('MUST-9.26 and MUST-9.31: the three-day window', () => {
-  it('fires on day 1, 2 and 3 and not on day 4', () => {
+/**
+ * 2026-09-08. MUST-9.26's three-day window is GONE, replaced by "the household has said the month
+ * is complete" (src/lib/month-close.ts).
+ *
+ * The window was the defect: a household whose statements arrive after the 3rd -- which is most of
+ * them, and certainly this one, importing by hand on Sundays -- got a September summary on October
+ * 1st describing about three weeks of September. Late and right beats punctual and wrong, because a
+ * monthly report is sent once and cannot be corrected afterwards.
+ */
+describe('the month-boundary reports wait for the month to be closed', () => {
+  it('sends nothing at all while the month is open, whatever the date', () => {
     const userId = optedInUser();
     seedHistory();
-    for (const day of ['01', '02', '03']) {
-      resetOutboxPumpForTests();
-      t.db.run(sql`delete from notification_outbox`);
-      expect(evaluateMonthBoundary({ userId, now: new Date(`2026-08-${day}T09:00:00Z`), tz: TZ })).toBeGreaterThan(0);
+    t.db.run(sql`delete from month_closures`);
+    // The old window's own dates, and two well past it. None of them fire now.
+    for (const day of ['01', '02', '03', '04', '15']) {
+      expect(evaluateMonthBoundary({ userId, now: new Date(`2026-08-${day}T09:00:00Z`), tz: TZ })).toBe(0);
     }
-    t.db.run(sql`delete from notification_outbox`);
-    expect(evaluateMonthBoundary({ userId, now: new Date('2026-08-04T09:00:00Z'), tz: TZ })).toBe(0);
     expect(keys()).toEqual([]);
   });
 
-  it('MUST-9.29 and MUST-9.32: each fires exactly once across all three days', () => {
+  it('fires once the month is closed, on whatever day that happens to be', () => {
     const userId = optedInUser();
     seedHistory();
+    closeMonth('2026-07', userId, new Date('2026-08-09T09:00:00Z'));
+    // The 9th: nowhere near the old window, and exactly the sort of date a Sunday importer closes on.
+    expect(evaluateMonthBoundary({ userId, now: new Date('2026-08-09T09:00:00Z'), tz: TZ })).toBe(2);
+    expect(keys().sort()).toEqual(['predvs:2026-07', 'suggest:2026-08']);
+  });
+
+  it('MUST-9.29 and MUST-9.32: each fires exactly once, however often the slot runs', () => {
+    const userId = optedInUser();
+    seedHistory();
+    closeMonth('2026-07', userId, new Date('2026-08-09T09:00:00Z'));
     let total = 0;
-    for (const day of ['01', '02', '03']) {
+    for (const day of ['09', '10', '11']) {
       total += evaluateMonthBoundary({ userId, now: new Date(`2026-08-${day}T09:00:00Z`), tz: TZ });
     }
+    // Once, not three times: the closure row carries its own summary_sent_at, so a closed month is
+    // never summarised twice however many times the daily look runs.
     expect(total).toBe(2);
     expect(keys().sort()).toEqual(['predvs:2026-07', 'suggest:2026-08']);
   });
@@ -316,12 +344,14 @@ describe('Task 16 (v1.7.0): the monthly digest', () => {
     expect(row.body).toContain('$713.40'); // July's spend, from seedHistory()
   });
 
-  it('does not fire outside the window (day 4)', () => {
+  it('does not fire while the month is still open', () => {
     const userId = optedInUser();
     enableMonthlyDigest(userId);
     setPref(userId, 'predicted_vs_actual', 'email', false);
     setPref(userId, 'suggested_budget_refresh', 'email', false);
     seedHistory();
+    // seedHistory closes July; this test is about the OPEN case, so undo it.
+    t.db.run(sql`delete from month_closures`);
 
     expect(evaluateMonthBoundary({ userId, now: new Date('2026-08-04T09:00:00Z'), tz: TZ })).toBe(0);
     expect(keys()).toEqual([]);

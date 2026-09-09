@@ -27,6 +27,8 @@ const FAMILY_CHAT = '-1009876543210';
 const NOW = new Date('2026-08-01T09:00:00Z');
 const TZ = 'UTC';
 
+import { closeMonth } from '@/lib/month-close';
+
 let t: TestDb;
 let accountId: number;
 let adminId: number;
@@ -41,6 +43,10 @@ beforeEach(() => {
   gas = categoryIdByName(t.db, 'Gas');
   resetOutboxPumpForTests();
   setNotifySenderForTests(async () => {});
+  // 2026-09-08: the month-boundary reports wait for the household to declare the month complete
+  // (src/lib/month-close.ts) rather than firing on the 1st to the 3rd. Every test here is about
+  // July's reports, so a closed July is the shared precondition.
+  closeMonth('2026-07', null, new Date('2026-08-01T00:00:00Z'));
   saveSmtp({
     preset: 'brevo',
     host: 'smtp-relay.brevo.com',

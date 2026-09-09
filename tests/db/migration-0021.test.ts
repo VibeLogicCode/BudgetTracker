@@ -269,9 +269,9 @@ describe('drizzle/0021_household_channels.sql', () => {
     expect(entry).toMatchObject({ idx: 21, tag: '0021_household_channels' });
     const idxs = journal.entries.map((e) => e.idx).sort((a, b) => a - b);
     expect(idxs.indexOf(21)).toBe(idxs.indexOf(20) + 1);
-    // This suite now owns the "I am the newest" claim, handed on from 0020's suite the way 0020
-    // took it from 0019. Whichever migration is last owns it; nobody else asserts it.
-    expect(Math.max(...idxs)).toBe(21);
+    // The "I am the newest" claim moved on to 0022's suite (month_closures), the way this suite
+    // took it from 0020's. Whichever migration is last owns it; nobody else asserts it. What stays
+    // here is the ordering claim above, which is this migration's own business forever.
   });
 });
 

@@ -18,6 +18,7 @@ import {
 } from '@/lib/predict/constants';
 import { suggestionsFor } from '@/lib/predict/history';
 import { cashflowTrend, topMerchants } from '@/lib/reports';
+import { closedMonthsAwaitingSummary } from '@/lib/month-close';
 
 const MONTHLY_DIGEST_TOP_MERCHANTS = 5;
 
@@ -408,11 +409,32 @@ function renderMonthlyDigestFor(endedMonth: string, viewer: Viewer): { subject: 
  * event's monthly key makes the second and third day a no-op.
  */
 export function evaluateMonthBoundary(input: { userId: number | null; now: Date; tz: string }): number {
-  const today = todayIso(input.now, input.tz);
-  if (Number(today.slice(8, 10)) > MONTH_REPORT_DAY_MAX) return 0;
-
-  const target = currentMonth(input.now, input.tz);
-  const endedMonth = addMonths(target, -1);
+  /**
+   * 2026-09-08. The gate is now "has the household said last month is complete", not "is it the
+   * 1st to the 3rd".
+   *
+   * The calendar gate produced a summary of a partial month, every month, for any household whose
+   * statements arrive after the 3rd — which is most of them. The owner's is imported by hand on
+   * Sundays, so a September summary sent on October 1st routinely described about three weeks.
+   *
+   * Nothing fires until the month is closed (src/lib/month-close.ts). A month nobody ever closes
+   * produces no summary at all, which is deliberate: a monthly report is sent once and cannot be
+   * corrected afterwards, so late and right beats punctual and wrong. The weekly summary carries a
+   * standing reminder for any open month, so silence is never the only signal.
+   *
+   * THIS FUNCTION DOES NOT MARK THE MONTH SENT, and that is load-bearing. It is called once PER
+   * RECIPIENT, so marking here would mark the month the moment the first member was evaluated and
+   * every other member would get nothing -- a household where only whoever sorts first ever
+   * receives a monthly summary. markMonthSummarySent belongs to whoever owns the loop; the two
+   * callers (the scheduler pass and the Close month action) each call it once, after theirs.
+   * Caught by the S-18 tests, which evaluate three recipients in a row.
+   */
+  const pending = closedMonthsAwaitingSummary();
+  if (pending.length === 0) return 0;
+  // Oldest first: after a holiday two months can be closed at once, and they should arrive in the
+  // order they happened.
+  const endedMonth = pending[0];
+  const target = addMonths(endedMonth, 1);
   let fired = 0;
   fired += firePredictedVsActual({ userId: input.userId, month: endedMonth, now: input.now });
   fired += fireSuggestedRefresh({ userId: input.userId, month: target, now: input.now });

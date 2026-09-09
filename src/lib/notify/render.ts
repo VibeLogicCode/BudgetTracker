@@ -107,6 +107,7 @@ export type RenderInput =
       topMerchants: readonly DigestLine[];
       reviewCount: number;
       budgets: BudgetSummary;
+      openMonths: readonly string[];
     }
   | {
       event: 'weekly_digest';
@@ -132,6 +133,7 @@ export type RenderInput =
       topMerchants: readonly DigestLine[];
       reviewCount: number;
       budgets: BudgetSummary;
+      openMonths: readonly string[];
     }
   | { event: 'new_signin'; name: string; atLabel: string; tz: string; ip: string; userAgent: string | null }
   | { event: 'password_changed'; name: string; atLabel: string; tz: string }
@@ -422,6 +424,21 @@ function budgetLines(rows: readonly BudgetStanding[]): string[] {
 /** Whole dollars, rounded to the nearest. Summaries scan; only a single-charge alert needs cents. */
 function wholeMoney(cents: number): string {
   return money(Math.round(Math.abs(cents) / 100) * 100).replace(/\.00$/, '');
+}
+
+/**
+ * 2026-09-08. The standing reminder for a month nobody has confirmed complete.
+ *
+ * A month is never auto-closed and its summary is never auto-sent, so without this the only signal
+ * that one is waiting would be its absence -- and an absence nobody notices is how a household ends
+ * up never seeing a monthly summary again. It rides the weekly summary rather than being a message
+ * of its own, because the weekly is already in front of them and a nag with its own notification
+ * would be exactly the noise this whole change removes.
+ */
+function openMonthReminder(months: readonly string[]): string[] {
+  if (months.length === 0) return [];
+  const named = months.map((month) => monthLabel(month)).join(' and ');
+  return ['', `${named} ${months.length === 1 ? 'is' : 'are'} not closed. Close on the Import page to get the summary.`];
 }
 
 /** The budget block both digest variants share. Omitted entirely when there is nothing to say. */

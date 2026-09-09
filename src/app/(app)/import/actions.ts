@@ -12,6 +12,11 @@ import { deleteAccountCardPerson, upsertAccountCardPerson } from '@/lib/import/c
 import { importMappingSchema } from '@/lib/import/mapping';
 import { createProfile, forkProfileIfBuiltin, getProfile, getProfileByName, mappingsEqual, setAccountProfile } from '@/lib/import/presets';
 import { deleteStagedFile } from '@/lib/import/staging';
+import { readEnv } from '@/lib/env';
+import { closeMonth, openMonths } from '@/lib/month-close';
+import { notifiableUsers } from '@/lib/notify/config';
+import { evaluateMonthBoundary } from '@/lib/notify/evaluate/monthly';
+import { kickOutbox } from '@/lib/notify/outbox';
 
 export interface WizardState {
   error?: string;
@@ -183,4 +188,59 @@ export async function setCardPersonAction(_prev: CardPersonState, formData: Form
   upsertAccountCardPerson({ accountId: parsed.data.accountId, cardValue: parsed.data.cardValue, userId });
   revalidatePath('/import');
   return { message: 'Saved. This assignment is remembered for every future import into this account too.' };
+}
+
+/**
+ * 2026-09-08. "September is complete" — the household's own statement that last month's data is
+ * all in, which is the only reliable way to know it.
+ *
+ * Owner report: "what happens if 1 of the accounts doesnt have any entry for 15 days in next month
+ * and there is nothing to import ... using logic we have now is not reliable." A quiet account has
+ * nothing to import, so no amount of inference over import timing can tell "complete" from
+ * "nothing to fetch". One person pressing one button settles it for every manual account at once.
+ *
+ * On the Import page because that is where somebody stands the moment they have finished importing
+ * — the only moment at which the question is easy to answer.
+ */
+export interface CloseMonthState {
+  error?: string;
+  closed?: string;
+}
+
+const monthField = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'Invalid month.');
+
+export async function closeMonthAction(_prev: CloseMonthState, formData: FormData): Promise<CloseMonthState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  const user = await requireUser();
+  // Closing a month is a household-level statement about household data, so it follows the same
+  // rule dismissing an import audit does: a self-scoped member sees only their own money and is
+  // not in a position to say the household's books are complete.
+  if (isSelfScoped(user)) return { error: 'Not available on this account.' };
+
+  const parsed = monthField.safeParse(String(formData.get('month') ?? ''));
+  if (!parsed.success) return { error: 'Invalid request.' };
+
+  // Refuse a month that has not ended. Closing the month in progress would send a summary of a
+  // month still being spent in, which is the exact defect this whole mechanism exists to prevent.
+  if (!openMonths().includes(parsed.data)) {
+    return { error: 'That month is either still running or already closed.' };
+  }
+
+  closeMonth(parsed.data, user.id);
+  // A human act gets an immediate result: evaluate now and drain, rather than leaving the summary
+  // for a slot up to a week away.
+  const { tz } = readEnv();
+  for (const person of notifiableUsers()) {
+    try {
+      evaluateMonthBoundary({ userId: person.id, now: new Date(), tz });
+    } catch (error) {
+      console.error(`[notify] month summary failed for user ${person.id}`, error);
+    }
+  }
+  kickOutbox();
+
+  revalidatePath('/import');
+  revalidatePath('/dashboard');
+  return { closed: parsed.data };
 }

@@ -7,6 +7,7 @@ import { categoryBreakdown, topMerchants } from '@/lib/reports';
 import { householdWeeklyDigestKey, weeklyDigestKey } from '@/lib/notify/events';
 import { mondayOfIsoWeek } from '@/lib/notify/evaluate/slots';
 import { householdRoutedChannels } from '@/lib/notify/household';
+import { openMonths } from '@/lib/month-close';
 import { enqueue, enqueuedAnything } from '@/lib/notify/outbox';
 import { renderEvent, type BudgetStanding, type BudgetSummary, type DigestLine } from '@/lib/notify/render';
 
@@ -113,6 +114,10 @@ export function evaluateWeeklyDigest(input: {
   }));
 
   const reviewCount = reviewQueueCount();
+  // 2026-09-08: a standing reminder for any month nobody has confirmed complete. Nothing is
+  // auto-closed and nothing auto-sends, so without this the only sign a monthly summary is waiting
+  // would be its absence -- and nobody notices an absence.
+  const monthsOpen = openMonths(input.now);
   const month = currentMonth(input.now);
   // Resolved BEFORE the household read below, not after it (review round 1, minor 4). Only built
   // when the digest is actually routed: an unrouted household pays for none of the per-member
@@ -160,6 +165,7 @@ export function evaluateWeeklyDigest(input: {
     topMerchants: topMerchantLines,
     reviewCount,
     budgets,
+    openMonths: monthsOpen,
   });
 
   const household =
@@ -171,6 +177,7 @@ export function evaluateWeeklyDigest(input: {
           slotDate: input.slotDate,
           reviewCount,
           budgets: householdBudgets,
+          openMonths: monthsOpen,
           manualToken: input.manual?.token,
         });
 
@@ -240,6 +247,7 @@ function buildHouseholdDigest(input: {
   slotDate: string;
   reviewCount: number;
   budgets: BudgetSummary;
+  openMonths: readonly string[];
   /** 2026-09-08. Present only for an on-demand send -- see ManualDigestSend. */
   manualToken?: string;
 }): { subject: string; body: string; dedupKey: string } {
@@ -272,6 +280,7 @@ function buildHouseholdDigest(input: {
     })),
     reviewCount: input.reviewCount,
     budgets: input.budgets,
+    openMonths: input.openMonths,
   });
 
   // Keyed by the WEEK, not by this member's slot date: see householdWeeklyDigestKey. Every

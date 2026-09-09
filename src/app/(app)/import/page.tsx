@@ -6,6 +6,9 @@ import { listUsers } from '@/lib/auth/users';
 import { hasReadableMapping, listProfiles } from '@/lib/import/presets';
 import { listImportHistory } from '@/lib/import/commit';
 import { isSimplefinManaged } from '@/lib/simplefin/connection';
+import { monthLabel } from '@/lib/dates';
+import { monthState, openMonths } from '@/lib/month-close';
+import { CloseMonthCard, type OpenMonthView } from '@/components/CloseMonthCard';
 import { ImportClient } from './import-client';
 
 export const dynamic = 'force-dynamic';
@@ -20,7 +23,31 @@ export default async function ImportPage() {
   const allAccounts = listAccounts({}, user).filter((a) => acceptsTransactions(a.type));
   const csvAccounts = allAccounts.filter((a) => !isSimplefinManaged(a.id));
   const managed = allAccounts.filter((a) => isSimplefinManaged(a.id));
+
+  /**
+   * 2026-09-08. Months that have ended and nobody has confirmed complete. The card self-hides when
+   * there are none and for a household whose accounts are all SimpleFIN-linked (those close
+   * themselves — see src/lib/month-close.ts), so this costs an idle household nothing on screen.
+   */
+  const openMonthViews: OpenMonthView[] = openMonths().map((month) => {
+    const state = monthState(month);
+    return {
+      month,
+      label: monthLabel(month),
+      accounts: state.accounts.map((a) => ({
+        name: a.name,
+        linked: a.linked,
+        synced: a.synced,
+        lastSyncAt: a.lastSyncAt,
+      })),
+      waiting: state.waiting,
+      needsConfirmation: state.needsConfirmation,
+    };
+  });
+
   return (
+    <>
+    <CloseMonthCard months={openMonthViews} />
     <ImportClient
       accounts={csvAccounts.map((a) => ({ id: a.id, name: a.name, importProfileId: a.importProfileId }))}
       // A profile with an unreadable stored mapping (see ProfileRecord.mappingError) is not
@@ -41,5 +68,6 @@ export default async function ImportPage() {
         .filter((u) => u.isActive)
         .map((u) => ({ id: u.id, name: u.name }))}
     />
+  </>
   );
 }

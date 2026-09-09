@@ -1,8 +1,9 @@
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
-import { notificationOutbox } from '@/db/schema';
+import { notificationOutbox, transactions } from '@/db/schema';
 import { readEnv } from '@/lib/env';
 import { getUserSettings, notifiableUsers } from '@/lib/notify/config';
+import { closeMonthsAutomatically } from '@/lib/month-close';
 import { evaluateAnomalies, evaluateSubscriptionCreep } from '@/lib/notify/evaluate/anomalies';
 import { evaluateComingDue } from '@/lib/notify/evaluate/coming-due';
 import { evaluateWeeklyDigest } from '@/lib/notify/evaluate/digest';
@@ -70,6 +71,47 @@ function logSlotSkipOnce(kind: 'daily' | 'weekly', userId: number, slotDate: str
  * the real send has already happened. coming_due has no equivalent check: its own query is
  * already a single cheap read, so the extra existence check would cost more than it saves.
  */
+/**
+ * 2026-09-08. When this recipient last had a weekly summary, or null if never.
+ *
+ * Reads the outbox rather than a stored timestamp, because the outbox row IS the record that a
+ * summary was produced — the same "the row is the guard" rule MUST-3.9 already relies on, and it
+ * means a manual send from the dashboard counts as the last summary too, which is what stops the
+ * button and the schedule sending twice about the same data.
+ */
+function lastDigestAt(userId: number): string | null {
+  const row = getDb()
+    .select({ at: notificationOutbox.createdAt })
+    .from(notificationOutbox)
+    .where(and(eq(notificationOutbox.userId, userId), eq(notificationOutbox.eventId, 'weekly_digest')))
+    .orderBy(desc(notificationOutbox.createdAt))
+    .limit(1)
+    .get();
+  return row?.at ?? null;
+}
+
+/**
+ * 2026-09-08. Have any transactions ARRIVED since then?
+ *
+ * `transactions.created_at`, not an `imports` row, and the distinction is the whole point. A
+ * SimpleFIN sync that finds nothing still writes an imports row with `rows_added` zero, so gating
+ * on "an import happened" would fire a summary about a week in which nothing changed — which is
+ * precisely the stale message this gate exists to prevent. A transaction row is the honest signal:
+ * it exists only when there is genuinely something new to report.
+ *
+ * A household that has never had a summary passes: the first one should not wait for a second
+ * import.
+ */
+function hasNewTransactionsSince(since: string | null): boolean {
+  if (since === null) return true;
+  const row = getDb()
+    .select({ n: sql<number>`count(*)` })
+    .from(transactions)
+    .where(gt(transactions.createdAt, since))
+    .get();
+  return (row?.n ?? 0) > 0;
+}
+
 function digestAlreadySent(userId: number, slotDate: string): boolean {
   const row = getDb()
     .select({ id: notificationOutbox.id })
@@ -177,18 +219,57 @@ export function runScheduledEvaluation(
       console.error(`[notify] daily evaluation failed for user ${user.id}`, error);
     }
 
+    /**
+     * 2026-09-08. THE ANCHOR, and the reason the owner stopped getting stale summaries.
+     *
+     * He imports once a week, on Sundays. The old rule fired at the weekly slot if it was inside a
+     * 48-hour catch-up window, which produced two bad outcomes: a summary on Monday whether or not
+     * anything had been imported (a report on a week in which, from the app's point of view,
+     * nothing happened), and — worse — if he imported on Monday AFTERNOON, the next evaluation was
+     * the following Monday and six days of data sat unreported.
+     *
+     * The fix separates the two jobs the schedule was doing. The chosen weekday and hour give an
+     * ANCHOR: the most recent Monday 08:00 at or before now, which weeklySlot already computes as
+     * `slotDate`. We look EVERY day, and send when both hold:
+     *
+     *   (a) transactions have been added since the last summary, and
+     *   (b) no summary has gone out for this anchor yet.
+     *
+     * (b) is free: the dedup key is already `digest:<slotDate>`, so a summary sent for this anchor
+     * cannot be sent twice. (a) is the new half.
+     *
+     * WHY IT DOES NOT DRIFT. A count of days would: send on Tuesday, and the following Monday is
+     * only six days later, so it slips to Tuesday permanently, then Wednesday. Anchoring on the
+     * weekday re-pins it — a Tuesday send is still "before the next Monday anchor", so the week
+     * after returns to Monday.
+     *
+     * The catch-up window is gone with it. An anchor waits as long as it needs to, so a container
+     * off for three days simply sends on the day it comes back, and `logSlotSkipOnce` has nothing
+     * left to report.
+     */
     try {
       const weekly = weeklySlot(now, settings.digestWeekday, settings.digestHour, tz);
-      if (weekly.fires) {
-        if (!digestAlreadySent(user.id, weekly.slotDate)) {
-          evaluateWeeklyDigest({ userId: user.id, slotDate: weekly.slotDate, now });
-        }
-      } else {
-        logSlotSkipOnce('weekly', user.id, weekly.slotDate, weekly.hoursSince);
+      if (!digestAlreadySent(user.id, weekly.slotDate) && hasNewTransactionsSince(lastDigestAt(user.id))) {
+        evaluateWeeklyDigest({ userId: user.id, slotDate: weekly.slotDate, now });
       }
     } catch (error) {
       console.error(`[notify] weekly evaluation failed for user ${user.id}`, error);
     }
+  }
+
+  /**
+   * 2026-09-08. A household whose accounts are ALL SimpleFIN-linked needs nobody to confirm the
+   * month: a successful sync past the month end is a reliable statement that the data is current,
+   * which is the one machine signal this design trusts. Anyone with a manual account closes the
+   * month by hand on the Import page instead, and this does nothing for them.
+   *
+   * Before the per-user loop's month-boundary evaluation would find anything to send, so a
+   * fully-synced household gets last month's summary on the first slot after the posting lag.
+   */
+  try {
+    closeMonthsAutomatically(now, tz);
+  } catch (error) {
+    console.error('[notify] automatic month closure failed', error);
   }
 
   runHouseholdEvaluation(now, tz);
