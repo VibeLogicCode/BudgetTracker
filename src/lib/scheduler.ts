@@ -150,6 +150,21 @@ export function runCanadianPackUpdateTick(now: Date = new Date()): void {
 }
 
 /**
+ * 2026-09-09: runCanadianPackUpdateTick IS NO LONGER SCHEDULED.
+ *
+ * A merchant-rules pack update changes how new transactions get categorised. It is genuinely
+ * useful and genuinely not urgent -- nothing breaks if it is applied a month from now, and it is
+ * already on the Settings -> Merchant rules page whenever somebody looks. Sending it as a push
+ * notification spends the household's attention on a fact that asks nothing of them, and a channel
+ * that mostly carries those is a channel people stop reading.
+ *
+ * That is the same judgement applied to app updates immediately above (major versions only) and to
+ * budgets a day earlier (one weekly summary, not one message per category). The function, the
+ * event id and its preference row all stay, exactly as evaluateBudgets does, so restoring it is
+ * one line in registerScheduler.
+ */
+
+/**
  * Task 8 (v1.7.0, design ruling 7): a SEPARATE function with its OWN independent gate,
  * deliberately not folded into runUpdateTick or runNotifyTick, for the same reason MUST-5.1
  * separates the update tick from the notify tick: a household that wants auto-sync but has
@@ -220,7 +235,6 @@ export function startScheduler(): void {
     NOTIFY_TICK_CRON,
     () => {
       runUpdateTick();
-      runCanadianPackUpdateTick();
       runNotifyTick();
       runSimplefinTick();
     },
@@ -236,7 +250,6 @@ export function startScheduler(): void {
   // through a slot catches up in seconds rather than waiting up to five minutes for the
   // next cron tick. The update check goes first, ahead of the notification tick.
   runUpdateTick();
-  runCanadianPackUpdateTick();
   // atBoot: slot catch-up still runs (MUST-6.1); budget/anomaly/savings-target alerts do not.
   // Owner report 2026-09-08 -- a restart should not produce a burst of alerts.
   runNotifyTick(new Date(), { atBoot: true });

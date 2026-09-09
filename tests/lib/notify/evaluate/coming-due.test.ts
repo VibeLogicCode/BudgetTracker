@@ -5,7 +5,7 @@ import { saveEmailTarget, saveSmtp, saveTelegramTarget, saveUserSettings, DEFAUL
 import { resetNotifySenderForTests, setNotifySenderForTests } from '@/lib/notify/send';
 import { resetOutboxPumpForTests } from '@/lib/notify/outbox';
 import { MAX_NEW_ROWS_PER_USER_PER_EVALUATION, evaluateComingDue } from '@/lib/notify/evaluate/coming-due';
-import { installmentDueKey, installmentOverdueKey } from '@/lib/notify/events';
+import { comingDueBatchKey, installmentDueKey, installmentOverdueKey } from '@/lib/notify/events';
 import { addInstallment } from '@/lib/warranty/installments';
 
 let t: TestDb;
@@ -91,6 +91,20 @@ function queued(): { dedup_key: string; subject: string }[] {
     .all() as { dedup_key: string; subject: string }[];
 }
 
+/**
+ * 2026-09-09: ONE MESSAGE, NOT ONE PER ITEM.
+ *
+ * Every claim MUST-6.10 to MUST-6.14 makes is still made below; what changed is the delivery. An
+ * item is still announced once ever, an edited date is still a new fact and a new announcement, the
+ * verb still comes from the item's kind, and the cap still bounds one evaluation. They are now
+ * asserted against ONE outbox row whose body names everything, rather than against a row each --
+ * which is the owner's "1 message per X ... can we not send a summary" complaint, applied to the
+ * one remaining evaluator that still worked that way.
+ */
+function bodies(): string[] {
+  return (t.sqlite.prepare('select body from notification_outbox order by id').all() as { body: string }[]).map((r) => r.body);
+}
+
 describe('MUST-6.10: the window', () => {
   it('includes exactly today and exactly today + N, and excludes today + N + 1', () => {
     const userId = emailUser();
@@ -100,8 +114,14 @@ describe('MUST-6.10: the window', () => {
     item({ ownerUserId: userId, name: 'Beyond', expiryDate: '2026-09-01' });
     item({ ownerUserId: userId, name: 'Past', expiryDate: '2026-08-16' });
 
-    expect(evaluateComingDue({ userId, now: NOW, tz: TZ })).toBe(2);
-    expect(queued().map((r) => r.subject).sort()).toEqual(['Coming due: Edge', 'Coming due: Today']);
+    // ONE row now, whatever the count -- the count is in the subject instead.
+    expect(evaluateComingDue({ userId, now: NOW, tz: TZ })).toBe(1);
+    expect(queued()).toHaveLength(1);
+    expect(queued()[0]?.subject).toBe('2 coming due');
+    expect(bodies()[0]).toContain('Today');
+    expect(bodies()[0]).toContain('Edge');
+    expect(bodies()[0]).not.toContain('Beyond');
+    expect(bodies()[0]).not.toContain('Past');
   });
 
   it('never fires for a lifetime item or an item with no expiry date', () => {
@@ -118,6 +138,8 @@ describe('MUST-6.10: the window', () => {
     item({ ownerUserId: userId, name: 'Soon', expiryDate: '2026-08-20' });
     item({ ownerUserId: userId, name: 'Later', expiryDate: '2026-08-21' });
     expect(evaluateComingDue({ userId, now: NOW, tz: TZ })).toBe(1);
+    expect(bodies()[0]).toContain('Soon');
+    expect(bodies()[0]).not.toContain('Later');
   });
 });
 
@@ -140,60 +162,94 @@ describe('MUST-6.12: announced once ever, per item and expiry date', () => {
     expect(queued()).toHaveLength(1);
   });
 
+  it('an unchanged window stays silent for as long as it stays unchanged', () => {
+    // The property that makes batching safe: the ledger is the batch key's contents, so a window
+    // that gains nothing produces nothing, day after day, exactly as the per-item keys did.
+    const userId = emailUser();
+    item({ ownerUserId: userId, expiryDate: '2026-08-25' });
+    expect(evaluateComingDue({ userId, now: NOW, tz: TZ })).toBe(1);
+    for (const day of ['2026-08-18', '2026-08-19', '2026-08-20', '2026-08-21']) {
+      expect(evaluateComingDue({ userId, now: new Date(`${day}T12:00:00Z`), tz: TZ })).toBe(0);
+    }
+    expect(queued()).toHaveLength(1);
+  });
+
+  it('a NEW item joining the window sends one message that names them all', () => {
+    const userId = emailUser();
+    item({ ownerUserId: userId, name: 'Fridge', expiryDate: '2026-08-25' });
+    expect(evaluateComingDue({ userId, now: NOW, tz: TZ })).toBe(1);
+    item({ ownerUserId: userId, name: 'Boiler', expiryDate: '2026-08-26' });
+    expect(evaluateComingDue({ userId, now: new Date('2026-08-18T12:00:00Z'), tz: TZ })).toBe(1);
+    // The second message is the current board, not a note about the newcomer alone: a list of what
+    // is due is more use than "one more thing was added to a list you cannot see".
+    expect(bodies()[1]).toContain('Boiler');
+    expect(bodies()[1]).toContain('Fridge');
+  });
+
   it('editing the expiry date produces a second, correctly-keyed message', () => {
     const userId = emailUser();
     const id = item({ ownerUserId: userId, expiryDate: '2026-08-20' });
     evaluateComingDue({ userId, now: NOW, tz: TZ });
     t.db.run(sql`update warranty_items set expiry_date = ${'2026-08-25'} where id = ${id}`);
     expect(evaluateComingDue({ userId, now: NOW, tz: TZ })).toBe(1);
-    expect(queued().map((r) => r.dedup_key)).toEqual([`due:${id}:2026-08-20`, `due:${id}:2026-08-25`]);
+    // The per-item keys are still the ledger; they now ride inside the batch key.
+    expect(queued().map((r) => r.dedup_key)).toEqual([`due:batch:due:${id}:2026-08-20`, `due:batch:due:${id}:2026-08-25`]);
   });
 });
 
 describe('MUST-6.13: the flood guard', () => {
-  it('caps a single evaluation at 20 new rows and picks the rest up next slot', () => {
+  it('names at most 20 and counts the rest, picking them up next slot', () => {
     const userId = emailUser();
     for (let i = 0; i < 25; i += 1) item({ ownerUserId: userId, name: `Item ${i}`, expiryDate: '2026-08-20' });
     expect(MAX_NEW_ROWS_PER_USER_PER_EVALUATION).toBe(20);
-    expect(evaluateComingDue({ userId, now: NOW, tz: TZ })).toBe(20);
-    expect(evaluateComingDue({ userId, now: new Date('2026-08-18T12:00:00Z'), tz: TZ })).toBe(5);
-    expect(queued()).toHaveLength(25);
+    expect(evaluateComingDue({ userId, now: NOW, tz: TZ })).toBe(1);
+    expect(bodies()[0]).toContain('And 5 more.');
+    // The five it did not name are still new tomorrow, which is what makes the cap a deferral
+    // rather than a silent drop.
+    expect(evaluateComingDue({ userId, now: new Date('2026-08-18T12:00:00Z'), tz: TZ })).toBe(1);
+    expect(evaluateComingDue({ userId, now: new Date('2026-08-19T12:00:00Z'), tz: TZ })).toBe(0);
+    expect(queued()).toHaveLength(2);
   });
 
-  it('counts ROWS, not items: a user with both channels enabled hits the cap at 10 items (20 rows)', () => {
+  it('the cap never crowds a new item out: the 21st item is announced, not silently discarded', () => {
+    // The failure this guards: take the first 20 candidates in priority order and, once those 20
+    // are already announced, a genuinely new 21st produces a key identical to the row already in
+    // the outbox. The unique index discards it and that item is never announced at all.
+    const userId = emailUser();
+    for (let i = 0; i < 20; i += 1) item({ ownerUserId: userId, name: `Old ${i}`, expiryDate: '2026-08-20' });
+    expect(evaluateComingDue({ userId, now: NOW, tz: TZ })).toBe(1);
+    item({ ownerUserId: userId, name: 'Newcomer', expiryDate: '2026-08-21' });
+    expect(evaluateComingDue({ userId, now: new Date('2026-08-18T12:00:00Z'), tz: TZ })).toBe(1);
+    expect(bodies()[1]).toContain('Newcomer');
+  });
+
+  it('one row per channel: a user with both channels gets the same message twice, once each', () => {
     const userId = bothChannelsUser();
     for (let i = 0; i < 25; i += 1) item({ ownerUserId: userId, name: `Item ${i}`, expiryDate: '2026-08-20' });
-    expect(evaluateComingDue({ userId, now: NOW, tz: TZ })).toBe(20);
-    // 10 items × 2 channels = 20 rows; the 11th item's pair is left for the next slot.
-    expect(queued()).toHaveLength(20);
-    expect(evaluateComingDue({ userId, now: new Date('2026-08-18T12:00:00Z'), tz: TZ })).toBe(20);
-    // The remaining 15 items × 2 channels = 30 rows; capped again at 20.
-    expect(queued()).toHaveLength(40);
-    expect(evaluateComingDue({ userId, now: new Date('2026-08-19T12:00:00Z'), tz: TZ })).toBe(10);
-    expect(queued()).toHaveLength(50);
+    // Still ONE logical message; enqueue fans it out per channel as it does for every event.
+    expect(evaluateComingDue({ userId, now: NOW, tz: TZ })).toBe(1);
+    expect(queued()).toHaveLength(2);
   });
 });
 
 describe('MUST-6.14: the verb comes from the item’s kind', () => {
-  it('a loan says "paid off by" and a subscription "cancel by"', () => {
+  it('a loan says "paid off by" and a subscription "cancel by", in the one message', () => {
     const userId = emailUser();
     item({ ownerUserId: userId, name: 'Car loan', expiryDate: '2026-08-20', kind: 'loan' });
     item({ ownerUserId: userId, name: 'Netflix', expiryDate: '2026-08-21', kind: 'subscription' });
     evaluateComingDue({ userId, now: NOW, tz: TZ });
-    const bodies = (t.sqlite.prepare('select body from notification_outbox order by id').all() as { body: string }[]).map(
-      (r) => r.body,
-    );
-    expect(bodies[0]).toContain('paid off by');
-    expect(bodies[1]).toContain('cancel by');
+    expect(bodies()[0]).toContain('paid off by');
+    expect(bodies()[0]).toContain('cancel by');
   });
 
   it('includes the vendor and the price when they are set', () => {
+    // The per-item message put these on lines of their own. The batched line keeps both facts --
+    // batching is about how many notifications arrive, not about telling the household less.
     const userId = emailUser();
     item({ ownerUserId: userId, name: 'Fridge', expiryDate: '2026-08-20', vendor: 'Costco', priceCents: 129999 });
     evaluateComingDue({ userId, now: NOW, tz: TZ });
-    const row = t.sqlite.prepare('select body from notification_outbox').get() as { body: string };
-    expect(row.body).toContain('Costco');
-    expect(row.body).toContain('$1,299.99');
+    expect(bodies()[0]).toContain('Costco');
+    expect(bodies()[0]).toContain('$1,299.99');
   });
 });
 
@@ -211,11 +267,11 @@ describe('installments in the coming-due evaluation', () => {
     ).map((r) => r.dedup_key);
   }
 
-  it('enqueues one row per channel for an installment inside the window, under installmentDueKey', () => {
+  it('carries an installment inside the window under its own installmentDueKey token', () => {
     const userId = bothChannelsUser();
     const { ids } = billWith(userId, ['2026-08-20']);
-    expect(evaluateComingDue({ userId, now: NOW, tz: TZ })).toBe(2);
-    expect(new Set(keysFor(userId))).toEqual(new Set([installmentDueKey(ids[0]!, '2026-08-20')]));
+    expect(evaluateComingDue({ userId, now: NOW, tz: TZ })).toBe(1);
+    expect(new Set(keysFor(userId))).toEqual(new Set([comingDueBatchKey([installmentDueKey(ids[0]!, '2026-08-20')])]));
   });
 
   it('says nothing the next day about the same installment', () => {
@@ -229,24 +285,32 @@ describe('installments in the coming-due evaluation', () => {
     const userId = emailUser();
     const { ids } = billWith(userId, ['2026-05-01']);
     expect(evaluateComingDue({ userId, now: NOW, tz: TZ })).toBe(1);
-    expect(keysFor(userId)).toEqual([installmentOverdueKey(ids[0]!, '2026-08')]);
+    expect(keysFor(userId)).toEqual([comingDueBatchKey([installmentOverdueKey(ids[0]!, '2026-08')])]);
+    expect(bodies()[0]).toContain('Overdue');
     // Tomorrow: nothing.
     expect(evaluateComingDue({ userId, now: new Date('2026-08-18T12:00:00Z'), tz: TZ })).toBe(0);
-    // Next calendar month: one more, under its own bounded key.
+    // Next calendar month: one more. installmentOverdueKey carries the month, so September's
+    // token is new and the batch is a new fact rather than a repeat.
     expect(evaluateComingDue({ userId, now: new Date('2026-09-02T12:00:00Z'), tz: TZ })).toBe(1);
     expect(keysFor(userId).sort()).toEqual(
-      [installmentOverdueKey(ids[0]!, '2026-08'), installmentOverdueKey(ids[0]!, '2026-09')].sort(),
+      [
+        comingDueBatchKey([installmentOverdueKey(ids[0]!, '2026-08')]),
+        comingDueBatchKey([installmentOverdueKey(ids[0]!, '2026-09')]),
+      ].sort(),
     );
   });
 
-  it('an item expiry that falls on one of its own installment dates produces TWO rows, not one', () => {
-    // The distinct key prefixes are what make this true; a shared prefix would let one message
-    // silently suppress the other.
+  it('an item expiry that falls on one of its own installment dates is TWO lines, not one', () => {
+    // The distinct key prefixes are what make this true; a shared prefix would let one line
+    // silently suppress the other, inside the batch key exactly as it would have between rows.
     const userId = emailUser();
     const itemId = item({ ownerUserId: userId, name: 'Municipal tax', kind: 'bill', expiryDate: '2026-08-20' });
     const installmentId = addInstallment({ itemId, dueDate: '2026-08-20', amountCents: 120_000 });
-    expect(evaluateComingDue({ userId, now: NOW, tz: TZ })).toBe(2);
-    expect(keysFor(userId).sort()).toEqual([`bill:${installmentId}:2026-08-20`, `due:${itemId}:2026-08-20`].sort());
+    expect(evaluateComingDue({ userId, now: NOW, tz: TZ })).toBe(1);
+    expect(keysFor(userId)).toEqual([
+      comingDueBatchKey([`bill:${installmentId}:2026-08-20`, `due:${itemId}:2026-08-20`]),
+    ]);
+    expect(queued()[0]?.subject).toBe('2 coming due');
   });
 
   it('never announces a paid installment or another household member’s', () => {
@@ -256,19 +320,21 @@ describe('installments in the coming-due evaluation', () => {
     billWith(theirs, ['2026-08-20']);
     t.sqlite.prepare('update bill_installments set paid_at = ? where id = ?').run('2026-08-01T00:00:00.000Z', ids[0]);
     expect(evaluateComingDue({ userId: mine, now: NOW, tz: TZ })).toBe(1);
-    expect(keysFor(mine)).toEqual([installmentDueKey(ids[1]!, '2026-08-21')]);
+    expect(keysFor(mine)).toEqual([comingDueBatchKey([installmentDueKey(ids[1]!, '2026-08-21')])]);
   });
 
   it('spends the shared flood cap on overdue rows first, then upcoming, then item expiries', () => {
-    // The cap counts ROWS across all three sources. When it bites, the household should lose the
-    // least urgent message, not the most -- which is the only reason the order matters.
+    // The cap bounds one message. When it bites, the household should lose the least urgent line,
+    // not the most -- which is the only reason the order matters.
     const userId = emailUser();
     const dues: string[] = [];
     for (let i = 0; i < MAX_NEW_ROWS_PER_USER_PER_EVALUATION + 5; i += 1) {
       dues.push(`2026-08-${String(18 + (i % 10)).padStart(2, '0')}`);
     }
     const { ids } = billWith(userId, ['2026-05-01', ...dues]);
-    expect(evaluateComingDue({ userId, now: NOW, tz: TZ })).toBe(MAX_NEW_ROWS_PER_USER_PER_EVALUATION);
-    expect(keysFor(userId)).toContain(installmentOverdueKey(ids[0]!, '2026-08'));
+    expect(evaluateComingDue({ userId, now: NOW, tz: TZ })).toBe(1);
+    expect(keysFor(userId)[0]).toContain(installmentOverdueKey(ids[0]!, '2026-08'));
+    // Overdue leads the message, ahead of everything merely upcoming.
+    expect(bodies()[0].startsWith('Overdue')).toBe(true);
   });
 });

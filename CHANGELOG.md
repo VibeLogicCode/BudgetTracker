@@ -21,6 +21,52 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.35.0] - 2026-09-09
+
+Migration 0023 (`summary_frequency`). Fewer messages, each one worth reading.
+
+### Added
+
+- **Choose how often the spending summary is sent** — Settings -> Notifications now offers "at most
+  once a day", "at most once a week" (the default, and what every install already did), or "only
+  when I press Send". Nothing is sent in any mode unless transactions have arrived since the last
+  summary, so a household that imports on Sundays gets a Sunday-ish rhythm whichever it picks.
+- **Send a summary from the Import page**, beside the Close month card. That is where somebody is
+  standing the moment they have finished importing, which is exactly when there is something new to
+  say.
+
+### Changed
+
+- **What is coming due is ONE message, not one per item.** Three bills and two warranties used to
+  mean five notifications in the same minute. They are now a single list, overdue first, with the
+  counts in the subject so it can be triaged from the lock screen. Nothing is announced twice and
+  nothing is lost: vendor and price still appear, on the same line.
+- **Accounts that have gone quiet are one message a week naming all of them**, rather than one
+  message per account per week.
+- **Update notifications are for MAJOR versions only.** This app publishes most weeks and almost
+  every release is a patch. Settings -> About still lists whatever is waiting; the difference is
+  that a release which asks nothing of you no longer interrupts you. An update that was attempted
+  and silently did not apply still notifies, whatever its size — that one does ask something.
+- **A merchant rules pack update is no longer pushed at all.** It is on the Merchant rules page,
+  and nothing breaks by applying it next month.
+- **Hitting the savings target is a line in the monthly summary** instead of a notification on the
+  day it happens — which, for a household paid monthly, was a push on payday every month.
+- **Summary tables no longer use aligned columns.** Telegram sends plain text with no parse_mode,
+  so a phone renders it in a proportional font and a column built by padding came out visibly
+  ragged. Every line now reads `Name: $figure`, which is correct in any font.
+- Retired the word "blown" from budget messages.
+- **Send now also flushes any monthly summary that was waiting**, so pressing it after closing a
+  month sends both, in the order they happened.
+
+### Fixed
+
+- **A month closed after the first one would never have been summarised.** Nothing in the app ever
+  marked a month's summary as sent, so the oldest unsummarised month stayed at the head of the
+  queue for ever and every later one sat behind it. Silent, because the per-month dedup keys made
+  each repeat evaluation a harmless no-op. Shipped in 1.34.0 and fixed here before it could bite:
+  the month-boundary reports now run from one owned loop that marks the month once every recipient
+  and the family channel have been evaluated.
+
 ## [1.34.0] - 2026-09-08
 
 Migration 0022 (`month_closures`). Notifications wait for your data instead of the calendar.

@@ -184,7 +184,7 @@ describe('MUST-6.1: the update_available registry entry', () => {
     expect(entry).toEqual({
       id: 'update_available',
       label: 'An update is available',
-      blurb: 'A newer version of Budget Tracker is published and is waiting for your say-so.',
+      blurb: 'A new MAJOR version of Budget Tracker is published and needs your say-so. Smaller releases are shown in Settings only.',
       audience: 'admin',
       trigger: 'tick',
       defaultEnabled: true,
@@ -308,7 +308,7 @@ describe('backlog item 17 / Part 4: the pack_update_available registry entry', (
     expect(entry).toEqual({
       id: 'pack_update_available',
       label: 'A merchant rules pack update is available',
-      blurb: 'A merchant rules pack you installed (e.g. the Canadian pack) has a newer version published.',
+      blurb: 'A merchant rules pack has a newer version. Shown on the Merchant rules page rather than sent, since nothing breaks by waiting.',
       audience: 'admin',
       trigger: 'tick',
       defaultEnabled: true,

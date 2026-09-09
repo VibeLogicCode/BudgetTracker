@@ -1117,7 +1117,31 @@ export function NotificationsClient(data: NotificationsPageData) {
                 </TableWrap>
                 <p className="text-sm text-muted">{PRIVACY_SENTENCE}</p>
                 <p className={hintClass}>{BACKUP_SENTENCE}</p>
-                {/* The five knobs, each with its default in the hint text. */}
+                {/* The knobs, each with its default in the hint text. */}
+                {/*
+                  2026-09-09, and FIRST because it is the one that decides whether the three timing
+                  knobs below it matter at all: "i only import data on sundays i dont want daily
+                  messages they need to be weekly only or when i press notify in app manually."
+
+                  The summary is gated on new transactions in every mode, so "at most" is the honest
+                  word in each label -- a week with no import sends nothing whichever is chosen.
+                */}
+                <Field
+                  label="How often to send the spending summary"
+                  htmlFor="summaryFrequency"
+                  hint="Default weekly. Nothing is sent unless transactions have arrived since the last one."
+                >
+                  <select
+                    id="summaryFrequency"
+                    name="summaryFrequency"
+                    className={selectClass}
+                    defaultValue={data.settings.summaryFrequency}
+                  >
+                    <option value="daily">At most once a day</option>
+                    <option value="weekly">At most once a week</option>
+                    <option value="manual">Only when I press Send on the dashboard</option>
+                  </select>
+                </Field>
                 <Field label="Days before a due date to warn" htmlFor="comingDueDays" hint="Default 14.">
                   <input id="comingDueDays" name="comingDueDays" inputMode="numeric" className={inputClass} defaultValue={String(data.settings.comingDueDays)} />
                 </Field>
@@ -1130,7 +1154,11 @@ export function NotificationsClient(data: NotificationsPageData) {
                 <Field label="Daily message hour" htmlFor="dailyHour" hint="Default 8 (24-hour clock).">
                   <input id="dailyHour" name="dailyHour" inputMode="numeric" className={inputClass} defaultValue={String(data.settings.dailyHour)} />
                 </Field>
-                <Field label="Weekly summary day" htmlFor="digestWeekday" hint="Default Monday.">
+                <Field
+                  label="Weekly summary day"
+                  htmlFor="digestWeekday"
+                  hint="Default Monday. The day a weekly summary aims for; a late send returns to it rather than drifting."
+                >
                   <select id="digestWeekday" name="digestWeekday" className={selectClass} defaultValue={String(data.settings.digestWeekday)}>
                     {['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((day, index) => (
                       <option key={day} value={String(index)}>

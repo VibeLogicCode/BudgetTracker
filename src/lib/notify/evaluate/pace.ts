@@ -47,7 +47,7 @@ function candidateFor(input: {
   const { row } = input;
   // Condition 2: a zero limit is budget_exceeded's business, not a projection's.
   if (row.limitCents === null || row.limitCents <= 0) return null;
-  // Condition 3: a budget already blown is budget_exceeded's message. The two are mutually
+  // Condition 3: a budget already over is budget_exceeded's message. The two are mutually
   // exclusive by construction, not by ordering.
   if (row.spentCents > row.limitCents) return null;
 

@@ -202,6 +202,10 @@ describe('§3.5: per-user knobs', () => {
       dailyHour: 8,
       digestWeekday: 1,
       digestHour: 8,
+      // 2026-09-09: weekly, because it is what every install already did. A default that
+      // changed an existing household's cadence on an upgrade nobody asked for would be a
+      // worse answer than any of the three.
+      summaryFrequency: 'weekly',
     });
   });
 

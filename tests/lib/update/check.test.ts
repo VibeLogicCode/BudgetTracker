@@ -118,22 +118,43 @@ describe('MUST-5.7: the five outcomes', () => {
     expect(outboxRows()).toEqual([]);
   });
 
-  it('patch with auto-apply OFF — enqueues update_available and applies nothing', async () => {
+  /**
+   * 2026-09-09: MAJOR VERSIONS ONLY are notified.
+   *
+   * This app publishes a release most weeks and almost all of them are minor or patch. A push for
+   * each is a message that says "something changed, and nothing is asked of you"; a stream of them
+   * teaches a household to stop reading the channel, including the messages that DO ask something.
+   * Settings -> About still shows every waiting update, whatever its severity.
+   */
+  it('patch with auto-apply OFF — applies nothing and, since 2026-09-09, notifies nothing', async () => {
     withWatchtower(true);
     setAutoApply(false);
     stubRelease(`v${APP_VERSION.split('.').slice(0, 2).join('.')}.${Number(APP_VERSION.split('.')[2]) + 1}`);
     const result = await runUpdateCheck({ now: new Date() });
     expect(result.applied).toBe(false);
-    expect(result.notified).toBe(true);
+    expect(result.notified).toBe(false);
     expect(watchtowerCalls).toBe(0);
-    expect(outboxRows().map((r) => r.event_id)).toContain('update_available');
+    expect(outboxRows()).toEqual([]);
+    // The check itself is unaffected: the version is still recorded for the About card.
+    expect(result.latestVersion).not.toBeNull();
   });
 
-  it('patch with NO Watchtower — enqueues, and the body says there is no in-app update trigger', async () => {
+  it('minor with auto-apply OFF — likewise silent', async () => {
+    withWatchtower(true);
+    setAutoApply(false);
+    stubRelease(`v${APP_VERSION.split('.')[0]}.${Number(APP_VERSION.split('.')[1]) + 1}.0`);
+    const result = await runUpdateCheck({ now: new Date() });
+    expect(result.severity).toBe('minor');
+    expect(result.notified).toBe(false);
+    expect(outboxRows()).toEqual([]);
+  });
+
+  it('major with NO Watchtower — enqueues, and the body says there is no in-app update trigger', async () => {
     withWatchtower(false);
     setAutoApply(true);
-    stubRelease(`v${APP_VERSION.split('.').slice(0, 2).join('.')}.${Number(APP_VERSION.split('.')[2]) + 1}`);
+    stubRelease(`v${Number(APP_VERSION.split('.')[0]) + 1}.0.0`);
     const result = await runUpdateCheck({ now: new Date() });
+    expect(result.severity).toBe('major');
     expect(result.applied).toBe(false);
     expect(result.notified).toBe(true);
     expect(watchtowerCalls).toBe(0);
@@ -210,7 +231,8 @@ describe('MUST-5.5 / MUST-5.9: the stamp and the dismissal', () => {
   it('a second check at the same version enqueues nothing new', async () => {
     withWatchtower(false);
     setAutoApply(false);
-    const next = `v${APP_VERSION.split('.').slice(0, 2).join('.')}.${Number(APP_VERSION.split('.')[2]) + 1}`;
+    // A MAJOR, because since 2026-09-09 that is the severity that produces a row at all.
+    const next = `v${Number(APP_VERSION.split('.')[0]) + 1}.0.0`;
     stubRelease(next);
     await runUpdateCheck({ now: new Date('2026-08-18T12:00:00.000Z') });
     const first = outboxRows().length;
@@ -259,8 +281,12 @@ describe('Fix round finding 4: the APPLY bucket bounds the internal auto-apply p
     stubRelease(`v${major}.${minor}.${patch + 1 + APPLY_MAX}`);
     const refused = await runUpdateCheck({ now: new Date(), manual: true });
     expect(refused.applied).toBe(false);
+    // The point of this test: a rate-limited attempt is NOT an error -- it falls through to the
+    // notify path exactly as a Watchtower-absent install does.
     expect(refused.error).toBeNull();
-    expect(refused.notified).toBe(true);
+    // 2026-09-09: and that path now says nothing for a patch. A rate limit clears itself within
+    // the hour and asks nothing of anybody, so there is nothing here worth a push.
+    expect(refused.notified).toBe(false);
     expect(watchtowerCalls).toBe(APPLY_MAX);
   });
 });

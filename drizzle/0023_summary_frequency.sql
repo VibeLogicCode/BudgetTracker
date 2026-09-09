@@ -1,0 +1,14 @@
+-- 2026-09-09. How often a person wants the spending summary, in their own words.
+--
+-- Owner report: "i only import data on sundays i dont want daily messages they need to be weekly
+-- only or when i press notify in app manually."
+--
+-- The weekday and hour columns beside this one answer WHEN, and they stay: they are the anchor the
+-- summary re-pins to so it cannot drift. This answers HOW OFTEN, which is a different question and
+-- previously had no answer at all -- weekly was the only behaviour, hard-coded.
+--
+-- 'weekly' is the default because it is what every existing install already does, so an upgrade
+-- changes nothing for anybody until they choose otherwise. 'manual' means the schedule never sends
+-- and the dashboard button is the only source, which is a real preference for a household that
+-- imports on its own rhythm.
+alter table notification_user_settings add column summary_frequency text not null default 'weekly';

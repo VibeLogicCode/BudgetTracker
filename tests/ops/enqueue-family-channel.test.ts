@@ -140,22 +140,16 @@ const ENQUEUE_SITES: EnqueueSite[] = [
     why: 'the second of fireFor\'s two sends, from the same household or personal row and the same parameter as the site above.',
   },
   {
+    // 2026-09-09: ONE call site now, not two. The evaluator sends one message listing everything
+    // due instead of one per item, so the two enqueues (installments, then item expiries) became
+    // a single batched one -- see evaluateComingDue for how the announced-once property survives.
     file: 'src/lib/notify/evaluate/coming-due.ts',
     nth: 1,
-    marker: 'installmentOverdueKey(row.installmentId, month)',
+    marker: 'comingDueBatchKey(shown.map',
     recipient: 'member',
     householdDerivedBody: false,
     familyChannelOnly: 'absent',
-    why: 'the installment rows come from unpaidInstallments({ ownerUserId: input.userId }), so every name, due date and amount in this body is already the recipient\'s own.',
-  },
-  {
-    file: 'src/lib/notify/evaluate/coming-due.ts',
-    nth: 2,
-    marker: 'comingDueKey(row.id, expiryDate)',
-    recipient: 'member',
-    householdDerivedBody: false,
-    familyChannelOnly: 'absent',
-    why: "the warranty query filters eq(warrantyItems.ownerUserId, input.userId), so the item name, vendor, price and expiry date in this body are the recipient's own.",
+    why: "both sources filter on this recipient: unpaidInstallments({ ownerUserId: input.userId }) and eq(warrantyItems.ownerUserId, input.userId), so every name, date, amount, vendor and price in this body is the recipients own.",
   },
   {
     file: 'src/lib/notify/evaluate/digest.ts',

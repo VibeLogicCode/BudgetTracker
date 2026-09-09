@@ -74,16 +74,23 @@ describe('MUST-10.9 (final-fix-wave item 4): the three newer daily evaluators ru
     // the same daily slot (slotDate '2026-08-17'). 09:00 on the 18th is the next day's slot.
     const paceSpy = vi.spyOn(paceModule, 'evaluateBudgetPace').mockReturnValue(0);
     const creepSpy = vi.spyOn(anomaliesModule, 'evaluateSubscriptionCreep').mockReturnValue(0);
+    // 2026-09-09: evaluateMonthBoundary is NO LONGER one of them. Its trigger is the month being
+    // closed, not a slot, so it moved into flushMonthSummaries -- which owns the loop over every
+    // recipient precisely so it can mark the month sent once everybody has been evaluated. Its
+    // own once-per-month guard is the summary_sent_at column, not this in-memory slot cache.
     const monthlySpy = vi.spyOn(monthlyModule, 'evaluateMonthBoundary').mockReturnValue(0);
     try {
       runScheduledEvaluation(new Date('2026-08-17T09:00:00Z'));
       runScheduledEvaluation(new Date('2026-08-17T09:05:00Z'));
-      for (const spy of [paceSpy, creepSpy, monthlySpy]) {
+      for (const spy of [paceSpy, creepSpy]) {
         expect(recipients(spy)).toEqual([userId, null]);
       }
+      // No month is closed in this fixture, so flushMonthSummaries returns before evaluating
+      // anybody -- which is the cheap early-out that lets it run on every tick.
+      expect(monthlySpy).not.toHaveBeenCalled();
 
       runScheduledEvaluation(new Date('2026-08-18T09:00:00Z'));
-      for (const spy of [paceSpy, creepSpy, monthlySpy]) {
+      for (const spy of [paceSpy, creepSpy]) {
         expect(recipients(spy)).toEqual([userId, null, userId, null]);
       }
     } finally {
@@ -145,16 +152,13 @@ describe('the weekly digest existence pre-check', () => {
  * into the family channel at once.
  */
 describe('the boot pass does not fire tick-triggered events', () => {
-  it('skips anomalies and savings targets when atBoot is set', () => {
+  it('skips anomalies when atBoot is set', () => {
     const anomalies = vi.spyOn(anomaliesModule, 'evaluateAnomalies').mockReturnValue(0);
-    const savings = vi.spyOn(savingsModule, 'evaluateSavingsTargetMet').mockReturnValue(0);
     try {
       runScheduledEvaluation(new Date('2026-09-08T12:00:00Z'), { atBoot: true });
       expect(anomalies).not.toHaveBeenCalled();
-      expect(savings).not.toHaveBeenCalled();
     } finally {
       anomalies.mockRestore();
-      savings.mockRestore();
     }
   });
 
@@ -173,15 +177,26 @@ describe('the boot pass does not fire tick-triggered events', () => {
 
   it('still fires them on an ordinary tick', () => {
     const anomalies = vi.spyOn(anomaliesModule, 'evaluateAnomalies').mockReturnValue(0);
-    const savings = vi.spyOn(savingsModule, 'evaluateSavingsTargetMet').mockReturnValue(0);
     try {
       // No options at all -- the cron path. If this ever stopped firing, the anomaly alerts would
       // go silent entirely, which is a far worse defect than the burst this change removes.
       runScheduledEvaluation(new Date('2026-09-08T12:05:00Z'));
       expect(anomalies).toHaveBeenCalledTimes(1);
-      expect(savings).toHaveBeenCalledTimes(1);
     } finally {
       anomalies.mockRestore();
+    }
+  });
+
+  it('2026-09-09: savings_target_met no longer fires on ANY tick -- it is a monthly-summary line', () => {
+    // It fired the moment net first crossed the target, which for a household paid monthly is a
+    // push on payday every month about something the Savings page already showed. The fact belongs
+    // to the month, so it is now a line in the monthly summary (evaluate/monthly.ts).
+    const savings = vi.spyOn(savingsModule, 'evaluateSavingsTargetMet').mockReturnValue(0);
+    try {
+      runScheduledEvaluation(new Date('2026-09-08T12:00:00Z'), { atBoot: true });
+      runScheduledEvaluation(new Date('2026-09-08T12:05:00Z'));
+      expect(savings).not.toHaveBeenCalled();
+    } finally {
       savings.mockRestore();
     }
   });

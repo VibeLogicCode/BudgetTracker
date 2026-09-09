@@ -248,14 +248,41 @@ export async function runUpdateCheck(input: { now?: Date; manual?: boolean }): P
     }
   }
 
-  const notified = notifyUpdateAvailable({
-    currentVersion,
-    latestVersion: release.version,
-    severity,
-    publishedAt: release.publishedAt,
-    canApplyInApp: config !== null,
-    at,
-  });
+  /**
+   * 2026-09-09: MAJOR VERSIONS ONLY get a notification.
+   *
+   * This app publishes a release most weeks, and almost all of them are minor or patch. A push
+   * notification for each is a message that says "something changed, and nothing is asked of you"
+   * -- and a stream of those is what teaches a household to stop reading the channel, including
+   * the messages that DO ask something of them. It is the same judgement that took budgets down to
+   * one summary a week.
+   *
+   * A major version is different in kind: `severity === 'major'` is also the one case that
+   * disables auto-apply above (MUST-5.7), so it is precisely the case where a person has to decide
+   * something. That is what a notification is for.
+   *
+   * NOTHING IS HIDDEN. Settings -> About shows every waiting update whatever its severity, and the
+   * check itself is unchanged -- this decides only whether to interrupt somebody about it.
+   *
+   * THE ONE EXCEPTION, and it is not about severity at all: an apply that was attempted and did
+   * not happen. `lastApplyFailedVersion === release.version` is the pinned-tag case (fix wave item
+   * 1) -- Watchtower accepted the request, nothing was replaced, and the app is still on the old
+   * version past the confirmation window. That is a broken update mechanism on a household's NAS,
+   * it is silent by nature, and it asks the admin for something. A patch release that quietly
+   * fails to apply is exactly the message this channel exists to carry.
+   */
+  const applyFailed = state.lastApplyFailedVersion === release.version;
+  const notified =
+    severity === 'major' || applyFailed
+      ? notifyUpdateAvailable({
+          currentVersion,
+          latestVersion: release.version,
+          severity,
+          publishedAt: release.publishedAt,
+          canApplyInApp: config !== null,
+          at,
+        })
+      : false;
   return { severity, currentVersion, latestVersion: release.version, applied: false, notified, error: null };
 }
 

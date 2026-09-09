@@ -7,9 +7,9 @@ import { closeMonthsAutomatically } from '@/lib/month-close';
 import { evaluateAnomalies, evaluateSubscriptionCreep } from '@/lib/notify/evaluate/anomalies';
 import { evaluateComingDue } from '@/lib/notify/evaluate/coming-due';
 import { evaluateWeeklyDigest } from '@/lib/notify/evaluate/digest';
-import { evaluateMonthBoundary } from '@/lib/notify/evaluate/monthly';
+import { flushMonthSummaries } from '@/lib/notify/evaluate/monthly';
 import { evaluateBudgetPace } from '@/lib/notify/evaluate/pace';
-import { evaluateSavingsDaily, evaluateSavingsTargetMet } from '@/lib/notify/evaluate/savings';
+import { evaluateSavingsDaily } from '@/lib/notify/evaluate/savings';
 import { evaluateStaleImport } from '@/lib/notify/evaluate/stale';
 import { dailySlot, mondayOfIsoWeek, weeklySlot } from '@/lib/notify/evaluate/slots';
 import { CHANNELS, householdWeeklyDigestKey, weeklyDigestKey } from '@/lib/notify/events';
@@ -204,7 +204,11 @@ export function runScheduledEvaluation(
         if (lastDailyEvaluatedSlot.get(user.id) !== daily.slotDate) {
           evaluateBudgetPace({ userId: user.id, now, tz });
           evaluateSubscriptionCreep({ userId: user.id, now, tz });
-          evaluateMonthBoundary({ userId: user.id, now, tz });
+          // 2026-09-09: the month-boundary reports moved OUT of the daily slot and into
+          // flushMonthSummaries below. Their trigger is the month being closed -- a person pressing
+          // a button, or every account being synced -- not a slot, and the loop has to be owned in
+          // one place so the month can be marked sent after everybody has been evaluated. See
+          // flushMonthSummaries, which also documents the defect that made this necessary.
           // Lane 2 (savings targets): savings_target_pace and savings_month_closed are both
           // daily_slot events, so they share this same once-per-day-per-user cache rather than
           // recomputing savingsProgress/savingsStreak on every five-minute tick inside the
@@ -248,9 +252,27 @@ export function runScheduledEvaluation(
      * left to report.
      */
     try {
-      const weekly = weeklySlot(now, settings.digestWeekday, settings.digestHour, tz);
-      if (!digestAlreadySent(user.id, weekly.slotDate) && hasNewTransactionsSince(lastDigestAt(user.id))) {
-        evaluateWeeklyDigest({ userId: user.id, slotDate: weekly.slotDate, now });
+      /**
+       * 2026-09-09: summaryFrequency picks the ANCHOR, and nothing else about the mechanism above
+       * changes. 'manual' has no anchor at all -- the schedule does not send, the dashboard button
+       * does -- so it returns before any query runs.
+       *
+       * THE FAMILY CHANNEL STAYS WEEKLY whatever any member chooses, and that is deliberate: its
+       * key is week-bounded (householdWeeklyDigestKey) precisely so several members with different
+       * weekdays produce ONE message in the room rather than one each. A member who picks 'daily'
+       * and whose channels are ALL routed to the room therefore still reads a weekly message --
+       * already true of everything else they receive, routing being the choice to be told in the
+       * room instead of privately. Route only one channel and their own daily copy arrives on the
+       * other, which is digestAlreadySent's partial-routing branch falling through as written.
+       */
+      if (settings.summaryFrequency !== 'manual') {
+        const anchor =
+          settings.summaryFrequency === 'daily'
+            ? dailySlot(now, settings.digestHour, tz).slotDate
+            : weeklySlot(now, settings.digestWeekday, settings.digestHour, tz).slotDate;
+        if (!digestAlreadySent(user.id, anchor) && hasNewTransactionsSince(lastDigestAt(user.id))) {
+          evaluateWeeklyDigest({ userId: user.id, slotDate: anchor, now });
+        }
       }
     } catch (error) {
       console.error(`[notify] weekly evaluation failed for user ${user.id}`, error);
@@ -270,6 +292,21 @@ export function runScheduledEvaluation(
     closeMonthsAutomatically(now, tz);
   } catch (error) {
     console.error('[notify] automatic month closure failed', error);
+  }
+
+  /**
+   * 2026-09-09. Every month-boundary report, for everybody, in one owned loop -- and the month
+   * marked sent afterwards, which nothing did before (see flushMonthSummaries).
+   *
+   * Runs on every tick, boot included: its first statement is an indexed read that returns an
+   * empty list whenever no month is waiting, which is almost always. It belongs in the boot pass
+   * for MUST-6.1's reason -- a container that was off when somebody closed a month should send the
+   * summary when it comes back, not sit on it.
+   */
+  try {
+    flushMonthSummaries(now, tz);
+  } catch (error) {
+    console.error('[notify] month summary flush failed', error);
   }
 
   runHouseholdEvaluation(now, tz);
@@ -304,14 +341,21 @@ export function runScheduledEvaluation(
     console.error('[notify] anomaly evaluation failed', error);
   }
 
-  try {
-    // Lane 2: savings_target_met is a tick event, household-wide (ruling T3), so it runs once
-    // per tick here rather than once per user inside the loop above -- the same shape
-    // evaluateBudgets/evaluateAnomalies already use for their own tick-triggered events.
-    evaluateSavingsTargetMet({ now, tz });
-  } catch (error) {
-    console.error('[notify] savings target evaluation failed', error);
-  }
+  /**
+   * 2026-09-09: evaluateSavingsTargetMet is NO LONGER CALLED, for the same reason evaluateBudgets
+   * is not (see above).
+   *
+   * It fired on a five-minute tick, the moment net first crossed the target. For a household paid
+   * monthly that is a push notification on payday, every month, telling them something the
+   * Savings page already showed -- and by the time the month is over the figure may well have
+   * moved. Its fact belongs to the month, so it is now a line in the monthly summary
+   * (evaluate/monthly.ts, renderMonthlyDigestFor).
+   *
+   * The function and the event id stay, as evaluateBudgets does: one line to revisit.
+   */
+
+  // evaluateSavingsDaily still runs on the daily slot inside the per-user loop above --
+  // savings_target_pace and savings_month_closed are unaffected by this.
 }
 
 /**
@@ -358,9 +402,10 @@ function runHouseholdEvaluation(now: Date, tz: string): void {
     if (daily.fires && lastHouseholdDailySlot !== daily.slotDate) {
       evaluateBudgetPace({ userId: null, now, tz });
       evaluateSubscriptionCreep({ userId: null, now, tz });
-      evaluateMonthBoundary({ userId: null, now, tz });
+      // 2026-09-09: the room's month-boundary reports moved to flushMonthSummaries too, which
+      // makes the family-channel pass for them part of the same loop the marking depends on.
       evaluateSavingsDaily({ userId: null, now, tz });
-      // Recorded only after all four return without throwing, so a transient failure retries on
+      // Recorded only after all three return without throwing, so a transient failure retries on
       // the next tick rather than being silently skipped for the day (MUST-10.9's own rule).
       lastHouseholdDailySlot = daily.slotDate;
     }

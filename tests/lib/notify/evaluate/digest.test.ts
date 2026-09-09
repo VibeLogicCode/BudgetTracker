@@ -268,7 +268,10 @@ describe('the weekly summary carries every budget, instead of one message each',
     expect(text).toContain('Total over: $130.');
 
     // Biggest problem first: the first line under Over is the one a family talks about.
-    expect(text.indexOf('Groceries: $180')).toBeLessThan(text.indexOf('Gas: $250'));
+    // Matched on the full BUDGET line: since 2026-09-09 the Top categories table uses the same
+    // `Name: $figure` shape (padded() columns render ragged in Telegram's proportional font), so
+    // indexing on `Groceries: $180` alone could find either.
+    expect(text.indexOf('Groceries: $180 of')).toBeLessThan(text.indexOf('Gas: $250 of'));
     // Over and close are disjoint -- "at 90% of the limit" stops being news once the limit is
     // gone. Matched on the BUDGET line, not the bare name: 'Coffee' also appears in Top
     // categories above, and indexing on the name alone found that instead.
@@ -299,7 +302,7 @@ describe('the weekly summary carries every budget, instead of one message each',
     evaluateWeeklyDigest({ userId, slotDate: '2026-08-17', now: NOW });
     const text = body();
     expect(text).toContain('No transactions were recorded this week.');
-    // The month is still blown; a quiet week is not a reason to stop saying so.
+    // The month is still over; a quiet week is not a reason to stop saying so.
     expect(text).toContain('Groceries: $180 of $100, $80 over');
   });
 
@@ -308,7 +311,10 @@ describe('the weekly summary carries every budget, instead of one message each',
     const groceries = categoryIdByName(t.db, 'Groceries');
     spend(groceries, 50000, '2026-08-12');
     evaluateWeeklyDigest({ userId, slotDate: '2026-08-17', now: NOW });
-    // Nothing to be over or close to. Spending shows in the totals, never in the budget block.
-    expect(body()).not.toContain('Groceries: $500');
+    // Nothing to be over or close to. Spending shows in the totals, never in the budget block --
+    // and it is the ` of $limit` clause that distinguishes a budget line from the Top categories
+    // line, both being `Name: $figure` since 2026-09-09.
+    expect(body()).not.toMatch(/Groceries: \$\d+ of /);
+    expect(body()).not.toContain('Total over');
   });
 });

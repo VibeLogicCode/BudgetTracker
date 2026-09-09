@@ -112,10 +112,10 @@ describe('the household digest names members', () => {
     expect(subject).toBe('Household weekly summary — 2026-08-10 to 2026-08-16');
     expect(body).toContain('Household spend: $1,234.56');
     expect(body).toContain('Who spent it');
-    expect(body).toMatch(/Alex\s+\$700\.00/);
-    expect(body).toMatch(/Robin\s+\$434\.56/);
+    expect(body).toContain('Alex: $700');
+    expect(body).toContain('Robin: $435');
     // The line that matters in a joint household: the money nobody has claimed.
-    expect(body).toMatch(/Unattributed\s+\$100\.00/);
+    expect(body).toContain('Unattributed: $100');
     // 700.00 + 434.56 + 100.00 = 1,234.56, and the partition is exact by construction:
     // attributed_user_id is either a member's id or NULL, and those are exhaustive.
     expect(70000 + 43456 + 10000).toBe(123456);
@@ -134,11 +134,11 @@ describe('the household digest names members', () => {
 
     evaluateWeeklyDigest({ userId: alex, slotDate: SLOT, now: NOW });
     const { body } = householdRow();
-    expect(body).toMatch(/Alex\s+\$50\.00/);
+    expect(body).toContain('Alex: $50');
     // Robin is active and spent nothing: "$0.00" is information, and their absence would not be.
-    expect(body).toMatch(/Robin\s+\$0\.00/);
+    expect(body).toContain('Robin: $0');
     // Sam is gone but their $25 is not, so leaving them out would quietly break the addition.
-    expect(body).toMatch(/Sam\s+\$25\.00/);
+    expect(body).toContain('Sam: $25');
     expect(body).toContain('Household spend: $75.00');
   });
 
@@ -185,8 +185,8 @@ describe("a member's own settings cannot change the family digest", () => {
     evaluateWeeklyDigest({ userId: robin, slotDate: SLOT, now: NOW });
     const { body } = householdRow();
     expect(body).toContain('Household spend: $1,000.00');
-    expect(body).toMatch(/Alex\s+\$700\.00/);
-    expect(body).toMatch(/Robin\s+\$300\.00/);
+    expect(body).toContain('Alex: $700');
+    expect(body).toContain('Robin: $300');
   });
 
   it('produces the same family digest whichever member fires it', () => {

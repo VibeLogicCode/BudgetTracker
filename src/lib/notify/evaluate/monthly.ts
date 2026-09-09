@@ -18,7 +18,9 @@ import {
 } from '@/lib/predict/constants';
 import { suggestionsFor } from '@/lib/predict/history';
 import { cashflowTrend, topMerchants } from '@/lib/reports';
-import { closedMonthsAwaitingSummary } from '@/lib/month-close';
+import { savingsProgress } from '@/lib/savings-target';
+import { closedMonthsAwaitingSummary, markMonthSummarySent } from '@/lib/month-close';
+import { notifiableUsers } from '@/lib/notify/config';
 
 const MONTHLY_DIGEST_TOP_MERCHANTS = 5;
 
@@ -391,6 +393,17 @@ function renderMonthlyDigestFor(endedMonth: string, viewer: Viewer): { subject: 
     viewer,
   ).map((row) => ({ name: row.normalizedMerchant, cents: row.spentCents }));
 
+  /**
+   * 2026-09-09. savings_target_met's home, now that it no longer fires on a tick.
+   *
+   * Ruling T3: a savings target is household-scoped and has NO per-person analogue, so unlike the
+   * budgeted pair on the line above there is nothing to narrow it to for a self-scoped recipient.
+   * Omitted entirely for them (ruling R2), which is the same answer evaluate/savings.ts reached
+   * for the same reason -- a "$0.00 target" line would be a false statement about household state
+   * rather than a narrowed one.
+   */
+  const progress = isSelfScoped(viewer) ? null : savingsProgress(endedMonth, HOUSEHOLD_VIEWER);
+
   return renderEvent({
     event: 'monthly_digest',
     month: endedMonth,
@@ -400,6 +413,10 @@ function renderMonthlyDigestFor(endedMonth: string, viewer: Viewer): { subject: 
     budgetedLimitCents: totals.budgetedLimitCents,
     budgetedSpentCents: totals.budgetedSpentCents,
     topMerchants: topMerchantLines,
+    savings:
+      progress === null || progress.targetCents === null
+        ? null
+        : { netCents: progress.netCents, targetCents: progress.targetCents, met: progress.met },
   });
 }
 
@@ -439,5 +456,57 @@ export function evaluateMonthBoundary(input: { userId: number | null; now: Date;
   fired += firePredictedVsActual({ userId: input.userId, month: endedMonth, now: input.now });
   fired += fireSuggestedRefresh({ userId: input.userId, month: target, now: input.now });
   fired += fireMonthlyDigest({ userId: input.userId, endedMonth, now: input.now });
+  return fired;
+}
+
+/**
+ * 2026-09-09. THE ONE CALLER of evaluateMonthBoundary, and the fix for a defect shipped in
+ * v1.34.0: markMonthSummarySent had no callers at all.
+ *
+ * The consequence was quiet and total. closedMonthsAwaitingSummary() returns months with a null
+ * summary_sent_at, oldest first, and evaluateMonthBoundary reports pending[0] alone. With nothing
+ * ever marking a month sent, pending[0] was the SAME month for ever: every later closed month sat
+ * behind it and no household would have received a monthly summary again after the first. The
+ * per-month dedup keys hid it -- the repeat evaluations were all no-ops, so nothing looked wrong.
+ *
+ * The month is marked HERE rather than inside evaluateMonthBoundary because that function is
+ * called once per recipient: marking there would mark the month while evaluating the first member,
+ * and everybody else would be skipped. This owns the whole loop -- every notifiable user, then the
+ * family channel -- so by the time it marks, everyone who was going to be told has been.
+ *
+ * ONE MONTH PER CALL, oldest first. Two months closed at once (a holiday, a late confirmation)
+ * arrive on consecutive ticks in the order they happened, rather than as two messages at once.
+ *
+ * The daily slot no longer gates any of this, and does not need to: the trigger is the month being
+ * CLOSED, which is either a person pressing a button or closeMonthsAutomatically deciding every
+ * account is synced. Both are already deliberate acts. Waiting for a slot after one of them only
+ * delayed the summary.
+ */
+export function flushMonthSummaries(now: Date, tz: string): number {
+  const pending = closedMonthsAwaitingSummary();
+  if (pending.length === 0) return 0;
+  const month = pending[0];
+
+  let fired = 0;
+  for (const person of notifiableUsers()) {
+    try {
+      fired += evaluateMonthBoundary({ userId: person.id, now, tz });
+    } catch (error) {
+      console.error(`[notify] month summary failed for user ${person.id}`, error);
+    }
+  }
+  try {
+    // Ruling R23: the family channel evaluates as itself. Inside evaluateMonthBoundary each fire*
+    // returns early unless the room is actually subscribed and no member is, so this is a no-op
+    // for a household that has routed nothing.
+    fired += evaluateMonthBoundary({ userId: null, now, tz });
+  } catch (error) {
+    console.error('[notify] month summary failed for the family channel', error);
+  }
+
+  // Marked even when `fired` is 0. Zero means every recipient has the event switched off, or the
+  // rows were already written by an earlier pass -- not that the send failed. Leaving it unmarked
+  // in that case is what would block every later month, which is the defect this function fixes.
+  markMonthSummarySent(month, now);
   return fired;
 }

@@ -59,6 +59,20 @@ interface HouseholdPassOwner {
   file: string;
   /** The exported function evaluate/index.ts's household block calls, for slot-fired events. */
   entryPoint: string | null;
+  /**
+   * 2026-09-09. WHERE that entry point is called with a null recipient, when it is not the
+   * household block in evaluate/index.ts.
+   *
+   * The three month-boundary events moved out of the daily slot: their trigger is the month being
+   * CLOSED, and the loop over every recipient has to be owned in ONE place so the month can be
+   * marked summarised once everybody has been evaluated (flushMonthSummaries -- see its docblock
+   * for the defect that made that necessary). The family channel's null pass moved with them.
+   *
+   * A field rather than a loosened assertion: the claim this test makes is "something actually
+   * runs the household pass", and naming the caller keeps that claim exact instead of widening it
+   * to "somewhere in the repo".
+   */
+  entryPointIn?: { file: string; fn: string };
   why: string;
 }
 
@@ -115,18 +129,21 @@ const HOUSEHOLD_PASS_OWNERS: Record<string, HouseholdPassOwner> = {
     kind: 'household-pass',
     file: 'src/lib/notify/evaluate/monthly.ts',
     entryPoint: 'evaluateMonthBoundary',
-    why: 'a daily-slot event inside evaluateMonthBoundary; with userId null the recipient is HOUSEHOLD_VIEWER, so `own` is the household comparison finding I-1 already built for the room.',
+    entryPointIn: { file: 'src/lib/notify/evaluate/monthly.ts', fn: 'export function flushMonthSummaries(' },
+    why: 'inside evaluateMonthBoundary, run from flushMonthSummaries since 2026-09-09 rather than from the daily slot; with userId null the recipient is HOUSEHOLD_VIEWER, so `own` is the household comparison finding I-1 already built for the room.',
   },
   suggested_budget_refresh: {
     kind: 'household-pass',
     file: 'src/lib/notify/evaluate/monthly.ts',
     entryPoint: 'evaluateMonthBoundary',
+    entryPointIn: { file: 'src/lib/notify/evaluate/monthly.ts', fn: 'export function flushMonthSummaries(' },
     why: 'the second of evaluateMonthBoundary\'s three, on the same household read and the same null recipient.',
   },
   monthly_digest: {
     kind: 'household-pass',
     file: 'src/lib/notify/evaluate/monthly.ts',
     entryPoint: 'evaluateMonthBoundary',
+    entryPointIn: { file: 'src/lib/notify/evaluate/monthly.ts', fn: 'export function flushMonthSummaries(' },
     why: 'the third: renderMonthlyDigestFor takes a viewer, so the household pass is that same call through HOUSEHOLD_VIEWER and there is no second definition of the room\'s digest.',
   },
   savings_target_met: {
@@ -149,7 +166,15 @@ const HOUSEHOLD_PASS_OWNERS: Record<string, HouseholdPassOwner> = {
   },
 };
 
-/** The body of runHouseholdEvaluation, which is the only place a slot-fired household pass runs. */
+/** The source of `file` from the declaration of `fn` onwards. */
+function blockOf(file: string, fn: string): string {
+  const source = read(file);
+  const at = source.indexOf(fn);
+  expect(at, `${file} no longer declares ${fn}`).toBeGreaterThan(-1);
+  return source.slice(at);
+}
+
+/** The body of runHouseholdEvaluation, the default home of a slot-fired household pass. */
 function householdBlock(): string {
   const source = read(HOUSEHOLD_BLOCK);
   const at = source.indexOf('function runHouseholdEvaluation(');
@@ -196,12 +221,18 @@ describe('R23: every household-eligible event has a family-channel pass, or a ch
     ).toEqual([]);
   });
 
-  it('every slot-fired household pass is actually reached from the household block', () => {
-    const block = householdBlock();
+  it('every slot-fired household pass is actually reached from the block that owns it', () => {
     const unreachable = Object.entries(HOUSEHOLD_PASS_OWNERS)
       .filter(([, owner]) => owner.entryPoint !== null)
-      .filter(([, owner]) => !block.includes(`${owner.entryPoint}({ userId: null`))
-      .map(([eventId, owner]) => `${eventId}: runHouseholdEvaluation never calls ${owner.entryPoint}({ userId: null, ... })`);
+      .filter(([, owner]) => {
+        const block =
+          owner.entryPointIn === undefined ? householdBlock() : blockOf(owner.entryPointIn.file, owner.entryPointIn.fn);
+        return !block.includes(`${owner.entryPoint}({ userId: null`);
+      })
+      .map(
+        ([eventId, owner]) =>
+          `${eventId}: ${owner.entryPointIn?.fn ?? 'runHouseholdEvaluation'} never calls ${owner.entryPoint}({ userId: null, ... })`,
+      );
     expect(
       unreachable,
       'a household pass exists and nothing runs it, which leaves the family channel exactly as silent as it was before R23',

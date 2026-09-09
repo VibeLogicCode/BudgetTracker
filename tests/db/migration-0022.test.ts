@@ -49,7 +49,7 @@ describe('drizzle/0022_month_closures.sql', () => {
     expect(insert).toThrow(/UNIQUE|PRIMARY/i);
   });
 
-  it('records itself in the journal, immediately after 0021, and is the newest', () => {
+  it('records itself in the journal, immediately after 0021', () => {
     const journal = JSON.parse(fs.readFileSync(path.join(root, 'drizzle/meta/_journal.json'), 'utf8')) as {
       entries: { idx: number; tag: string }[];
     };
@@ -57,7 +57,7 @@ describe('drizzle/0022_month_closures.sql', () => {
     expect(entry).toMatchObject({ idx: 22, tag: '0022_month_closures' });
     const idxs = journal.entries.map((e) => e.idx).sort((a, b) => a - b);
     expect(idxs.indexOf(22)).toBe(idxs.indexOf(21) + 1);
-    // This suite now owns the "I am the newest" claim, handed on from 0021's.
-    expect(Math.max(...idxs)).toBe(22);
+    // The "I am the newest" claim moved on to migration-0023.test.ts. This suite keeps the
+    // ordering claim, which is the one that stays true for ever.
   });
 });

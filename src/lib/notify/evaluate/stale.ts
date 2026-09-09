@@ -5,7 +5,7 @@ import { viewerFor } from '@/lib/auth/users';
 import { isSelfScoped } from '@/lib/auth/viewer';
 import { daysBetweenIso, todayIso } from '@/lib/dates';
 import { getUserSettings } from '@/lib/notify/config';
-import { staleImportKey } from '@/lib/notify/events';
+import { staleImportBatchKey } from '@/lib/notify/events';
 import { mondayOfIsoWeek } from '@/lib/notify/evaluate/slots';
 import { enqueue, enqueuedAnything } from '@/lib/notify/outbox';
 import { renderEvent } from '@/lib/notify/render';
@@ -59,29 +59,46 @@ export function evaluateStaleImport(input: { userId: number; now: Date; tz: stri
   const settings = getUserSettings(input.userId);
   const today = todayIso(input.now, input.tz);
   const monday = mondayOfIsoWeek(today);
-  let enqueued = 0;
 
-  for (const row of rows) {
-    const lastImportIso = row.newest.slice(0, 10);
-    const daysAgo = daysBetweenIso(lastImportIso, today);
-    if (daysAgo < settings.staleImportWeeks * 7) continue;
+  /**
+   * 2026-09-09: ONE MESSAGE A WEEK, NAMING EVERY QUIET ACCOUNT.
+   *
+   * Ruling R14 split the household-wide alert per account so that five lagging accounts could not
+   * mask each other, and that was right. What it produced, for a household on manual CSV across
+   * five accounts, was five notifications in the same minute saying the same sentence with a
+   * different name in it -- the owner's "1 message per X, too repetitive" complaint exactly.
+   *
+   * R14's requirement is that the message NAMES the account. One message that names all five
+   * satisfies it; nothing is masked, and the household reads it once. The cadence is unchanged:
+   * staleImportBatchKey is week-bounded exactly as the per-account key was, so the nag is still at
+   * most weekly and MUST-3.12's pruning-safety argument carries over untouched.
+   *
+   * The account ids are deliberately NOT in the key: a sixth account going quiet mid-week must not
+   * trigger a second message. It is named in next Monday's.
+   */
+  const stale = rows
+    .map((row) => {
+      const lastImportIso = row.newest.slice(0, 10);
+      return { name: row.accountName, lastImportIso, daysAgo: daysBetweenIso(lastImportIso, today) };
+    })
+    .filter((row) => row.daysAgo >= settings.staleImportWeeks * 7)
+    // Quietest first: the account that has been ignored longest is the one worth acting on.
+    .sort((a, b) => b.daysAgo - a.daysAgo);
+  if (stale.length === 0) return 0;
 
-    const { subject, body } = renderEvent({
-      event: 'stale_import',
-      weeks: settings.staleImportWeeks,
-      lastImportIso,
-      daysAgo,
-      accountName: row.accountName,
-    });
-    const result = enqueue({
-      userId: input.userId,
-      eventId: 'stale_import',
-      dedupKey: staleImportKey(monday, row.accountId),
-      subject,
-      body,
-      at: input.now,
-    });
-    if (enqueuedAnything(result)) enqueued += 1;
-  }
-  return enqueued;
+  const { subject, body } = renderEvent({
+    event: 'stale_import',
+    variant: 'batch',
+    weeks: settings.staleImportWeeks,
+    accounts: stale,
+  });
+  const result = enqueue({
+    userId: input.userId,
+    eventId: 'stale_import',
+    dedupKey: staleImportBatchKey(monday),
+    subject,
+    body,
+    at: input.now,
+  });
+  return enqueuedAnything(result) ? 1 : 0;
 }

@@ -136,6 +136,10 @@ const knobsSchema = z.object({
   dailyHour: z.coerce.number().int().min(0).max(23),
   digestWeekday: z.coerce.number().int().min(0).max(6),
   digestHour: z.coerce.number().int().min(0).max(23),
+  // 2026-09-09. z.enum, not a coerced string: the column is a three-value enum in the schema and
+  // an unrecognised value would make the weekly gate in evaluate/index.ts fall through to a branch
+  // nobody wrote. A forged field is a validation error here rather than a surprise there.
+  summaryFrequency: z.enum(['daily', 'weekly', 'manual']),
 });
 
 function text(formData: FormData, key: string): string {
@@ -409,6 +413,7 @@ export async function savePreferencesAction(_prev: NotificationsState, formData:
     dailyHour: text(formData, 'dailyHour'),
     digestWeekday: text(formData, 'digestWeekday'),
     digestHour: text(formData, 'digestHour'),
+    summaryFrequency: text(formData, 'summaryFrequency'),
   });
   if (!parsed.success) return { error: firstIssue(parsed.error) };
 

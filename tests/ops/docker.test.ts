@@ -474,12 +474,33 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.34.0 release', () => {
+  it('MUST-7.1: the 1.35.0 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.34.0');
+    expect(pkg.version).toBe('1.35.0');
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toMatch(/^## \[1\.35\.0\] - 2026-09-09$/m);
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.35.0]'));
+    expect(changelog.indexOf('## [1.35.0]')).toBeLessThan(changelog.indexOf('## [1.34.0]'));
+    const current = changelog.slice(changelog.indexOf('## [1.35.0]'), changelog.indexOf('## [1.34.0]'));
+    // This release carries a migration, and saying so is what tells a household to back up first.
+    expect(current).toMatch(/Migration 0023/i);
+    // The setting the owner asked for, in the shape he asked for it.
+    expect(current).toMatch(/only\s+when\s+I\s+press\s+Send/i);
+    // The two batchings, and the noise removals.
+    expect(current).toMatch(/ONE\s+message,\s+not\s+one\s+per\s+item/i);
+    expect(current).toMatch(/MAJOR\s+versions\s+only/i);
+    // The defect found and fixed in the same session it was found: a silent one, so it must be
+    // recorded in the words that let somebody recognise it if it ever comes back.
+    expect(current).toMatch(/never\s+have\s+been\s+summarised/i);
+    // The reason the aligned columns went: they were correct in a test and wrong on a phone.
+    expect(current).toMatch(/proportional\s+font/i);
+  });
+
+  it('MUST-7.1: the 1.34.0 release is still recorded intact (append-only discipline)', () => {
+    const pkg = JSON.parse(read('package.json')) as { version: string };
+    expect(pkg.version).toBe('1.35.0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.34\.0\] - 2026-09-08$/m);
-    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.34.0]'));
     expect(changelog.indexOf('## [1.34.0]')).toBeLessThan(changelog.indexOf('## [1.33.0]'));
     const release = changelog.slice(changelog.indexOf('## [1.34.0]'), changelog.indexOf('## [1.33.0]'));
     // This release DOES carry a migration, and saying so is what tells a household to take a
@@ -497,7 +518,7 @@ describe('version and changelog', () => {
 
   it('MUST-7.1: the 1.33.0 release is still recorded intact (append-only discipline)', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.34.0');
+    expect(pkg.version).toBe('1.35.0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.33\.0\] - 2026-09-08$/m);
     expect(changelog.indexOf('## [1.33.0]')).toBeLessThan(changelog.indexOf('## [1.32.0]'));

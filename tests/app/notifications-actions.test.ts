@@ -520,6 +520,7 @@ describe('MUST-3.7: savePreferencesAction writes only changed toggles', () => {
         dailyHour: '19',
         digestWeekday: '5',
         digestHour: '7',
+        summaryFrequency: 'weekly',
       }),
     );
     expect(result.error).toBeUndefined();
@@ -539,6 +540,7 @@ describe('MUST-3.7: savePreferencesAction writes only changed toggles', () => {
       dailyHour: 19,
       digestWeekday: 5,
       digestHour: 7,
+      summaryFrequency: 'weekly',
     });
   });
 
@@ -550,6 +552,7 @@ describe('MUST-3.7: savePreferencesAction writes only changed toggles', () => {
       dailyHour: '8',
       digestWeekday: '1',
       digestHour: '8',
+      summaryFrequency: 'weekly',
     };
     expect((await actions.savePreferencesAction({}, form({ ...base, budgetThresholdPct: '100' }))).error).toBeDefined();
     expect((await actions.savePreferencesAction({}, form({ ...base, comingDueDays: '0' }))).error).toBeDefined();
@@ -565,6 +568,7 @@ describe('MUST-3.7: savePreferencesAction writes only changed toggles', () => {
       dailyHour: 6,
       digestWeekday: 2,
       digestHour: 9,
+      summaryFrequency: 'daily',
     });
     setPref(other, 'weekly_digest', 'email', true);
 
@@ -587,6 +591,7 @@ describe('MUST-3.7: savePreferencesAction writes only changed toggles', () => {
         dailyHour: '8',
         digestWeekday: '1',
         digestHour: '8',
+        summaryFrequency: 'weekly',
       }),
     );
 
@@ -597,6 +602,7 @@ describe('MUST-3.7: savePreferencesAction writes only changed toggles', () => {
       dailyHour: 6,
       digestWeekday: 2,
       digestHour: 9,
+      summaryFrequency: 'daily',
     });
     const row = t.sqlite
       .prepare('select enabled from notification_prefs where user_id = ? and event_id = ? and channel = ?')
@@ -617,6 +623,7 @@ describe('MUST-3.7: savePreferencesAction writes only changed toggles', () => {
       dailyHour: 8,
       digestWeekday: 1,
       digestHour: 8,
+      summaryFrequency: 'weekly',
     });
   });
 
@@ -638,6 +645,7 @@ describe('MUST-3.7: savePreferencesAction writes only changed toggles', () => {
         dailyHour: '8',
         digestWeekday: '1',
         digestHour: '8',
+        summaryFrequency: 'weekly',
       }),
     );
     expect(t.sqlite.prepare(`select event_id from notification_prefs where event_id = 'backup_failed'`).all()).toHaveLength(0);
@@ -656,6 +664,7 @@ describe('Review fix (IMPORTANT): an unconfigured or disabled channel is never w
         dailyHour: '8',
         digestWeekday: '1',
         digestHour: '8',
+        summaryFrequency: 'weekly',
       }),
     );
     expect(result.error).toBeUndefined();
@@ -686,6 +695,7 @@ describe('Review fix (IMPORTANT): an unconfigured or disabled channel is never w
         dailyHour: '8',
         digestWeekday: '1',
         digestHour: '8',
+        summaryFrequency: 'weekly',
       }),
     );
     saveTelegramTarget({ userId: currentUser.value.id, destination: '5551234', botToken: null, enabled: true });
@@ -706,6 +716,7 @@ describe('Review fix (IMPORTANT): an unconfigured or disabled channel is never w
         dailyHour: '8',
         digestWeekday: '1',
         digestHour: '8',
+        summaryFrequency: 'weekly',
       }),
     );
     const row = t.sqlite

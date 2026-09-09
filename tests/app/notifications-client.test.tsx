@@ -44,6 +44,7 @@ const SETTINGS = {
   dailyHour: 8,
   digestWeekday: 1,
   digestHour: 8,
+  summaryFrequency: 'weekly' as const,
 };
 
 function props(over: Partial<NotificationsPageData> = {}): NotificationsPageData {

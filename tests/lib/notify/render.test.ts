@@ -157,7 +157,7 @@ describe('§10.1: budget events', () => {
       limitCents: 50000,
     });
     expect(subject).toBe('Over budget: Restaurants (August 2026)');
-    expect(body).toBe('Household Restaurants budget for August 2026 is blown — $610.00 of $500.00, $110.00 over.');
+    expect(body).toBe('Household Restaurants budget for August 2026 is over — $610.00 of $500.00, $110.00 over.');
   });
 });
 
@@ -206,6 +206,7 @@ describe('§10.1: the operational events', () => {
   it('stale_import states the account, the weeks, the last import and why it matters', () => {
     const { subject, body } = renderEvent({
       event: 'stale_import',
+      variant: 'single' as const,
       weeks: 3,
       lastImportIso: '2026-07-27',
       daysAgo: 21,
@@ -299,7 +300,10 @@ describe('§10.2: the weekly digest', () => {
     expect(body).toContain('$412.30');
     expect(body).toContain('Top categories (household)');
     expect(body).toContain('Groceries');
-    expect(body).toContain('$402.11');
+    // 2026-09-09: whole dollars, and `Name: $figure` rather than a padEnd column -- Telegram
+    // renders plain text in a proportional font, so an aligned column comes out ragged on a
+    // phone. See render.ts's padded()/nameAndMoney note.
+    expect(body).toContain('Groceries: $402');
     expect(body).toContain('Top merchants (household)');
     expect(body).toContain('LOBLAWS');
     expect(body).toContain('12 transactions still need review.');
@@ -333,11 +337,12 @@ describe('§10.2: the weekly digest', () => {
     expect(subject).toBe('Household weekly summary — 2026-08-10 to 2026-08-16');
     expect(body).toContain('Household spend: $1,234.56');
     expect(body).toContain('Who spent it');
-    // padded(), the same two-column helper every other table in this file uses -- so it reads as
-    // a table in a Telegram message and in a plain-text email, with no second style invented.
-    expect(body).toMatch(/^ {2}Alex {10}\$700\.00$/m);
-    expect(body).toMatch(/^ {2}Robin {9}\$434\.56$/m);
-    expect(body).toMatch(/^ {2}Unattributed {2}\$100\.00$/m);
+    // 2026-09-09: `Name: $figure`, not a padEnd column. The column looked right in a test and in
+    // email, and ragged on the phone the household actually reads it on -- Telegram sends plain
+    // text with no parse_mode, so it renders in a proportional font.
+    expect(body).toContain('Alex: $700');
+    expect(body).toContain('Robin: $435');
+    expect(body).toContain('Unattributed: $100');
     // There is no "you" in a group chat.
     expect(body).not.toContain('Your spend');
     // Everything after the header block is the shared tail, unchanged.
@@ -383,6 +388,7 @@ describe('§10.2: the weekly digest', () => {
 describe('Task 16 (v1.7.0): the monthly digest', () => {
   const full = {
     event: 'monthly_digest',
+    savings: null,
     month: '2026-07',
     incomeCents: 500000,
     spendCents: 320000,
@@ -408,7 +414,8 @@ describe('Task 16 (v1.7.0): the monthly digest', () => {
     expect(body).toContain('Net: $1,800.00');
     expect(body).toContain('Top merchants');
     expect(body).toContain('LOBLAWS');
-    expect(body).toContain('$210.55');
+    // 2026-09-09: whole dollars in `Name: $figure` form, as the weekly's tables now are.
+    expect(body).toContain('LOBLAWS: $211');
     expect(body).toContain('Budgets: $1,500.00 of $2,000.00 spent, $500.00 left.');
   });
 
@@ -566,7 +573,7 @@ const SAMPLES_BY_EVENT: Record<string, RenderInput[]> = {
   restore_outcome: [
     { event: 'restore_outcome', status: 'success', sourceName: 's', requestedByUsername: 'u', finishedAt: 'f', receiptsRestored: 0, missingReceiptRows: 0, error: null },
   ],
-  stale_import: [{ event: 'stale_import', weeks: 3, lastImportIso: '2026-07-27', daysAgo: 21, accountName: 'Amex' }],
+  stale_import: [{ event: 'stale_import', variant: 'single' as const, weeks: 3, lastImportIso: '2026-07-27', daysAgo: 21, accountName: 'Amex' }],
   update_available: [
     { event: 'update_available', currentVersion: '1.3.1', latestVersion: '1.4.0', severity: 'major', publishedAt: null, canApplyInApp: true },
     { event: 'update_available', currentVersion: '1.3.1', latestVersion: '1.4.0', severity: 'major', publishedAt: null, canApplyInApp: false },
@@ -598,6 +605,7 @@ const SAMPLES_BY_EVENT: Record<string, RenderInput[]> = {
   monthly_digest: [
     {
       event: 'monthly_digest',
+      savings: null,
       month: '2026-07',
       incomeCents: 0,
       spendCents: 0,

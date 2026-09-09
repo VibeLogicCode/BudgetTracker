@@ -9,6 +9,7 @@ import { isSimplefinManaged } from '@/lib/simplefin/connection';
 import { monthLabel } from '@/lib/dates';
 import { monthState, openMonths } from '@/lib/month-close';
 import { CloseMonthCard, type OpenMonthView } from '@/components/CloseMonthCard';
+import { SendDigestNow } from '@/components/SendDigestNow';
 import { ImportClient } from './import-client';
 
 export const dynamic = 'force-dynamic';
@@ -48,6 +49,21 @@ export default async function ImportPage() {
   return (
     <>
     <CloseMonthCard months={openMonthViews} />
+    {/*
+      2026-09-09. The SAME control as the dashboard's, on the page somebody is standing on the
+      moment they have just finished importing.
+
+      That moment is the whole point. The summary only sends when transactions have arrived since
+      the last one, so an import is exactly when there is something new to say -- and "I have just
+      loaded this week's statements, tell everyone where we are" is one press rather than a trip
+      back to the dashboard. It is the same act as closing a month directly above it.
+
+      No self-scoped case to handle here: this page redirects a self viewer at the top, so
+      canNotifyHousehold is unconditionally true by the time this renders.
+    */}
+    <div className="flex justify-end">
+      <SendDigestNow canNotifyHousehold />
+    </div>
     <ImportClient
       accounts={csvAccounts.map((a) => ({ id: a.id, name: a.name, importProfileId: a.importProfileId }))}
       // A profile with an unreadable stored mapping (see ProfileRecord.mappingError) is not

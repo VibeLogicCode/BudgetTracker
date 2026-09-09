@@ -194,15 +194,17 @@ describe('MUST-5.1 … MUST-5.4: the update tick', () => {
 
   it('MUST-5.2: the cron callback and the boot path call it BEFORE runNotifyTick', () => {
     const source = fs.readFileSync(path.join(process.cwd(), 'src/lib/scheduler.ts'), 'utf8');
-    // Backlog item 17 / Part 4: runCanadianPackUpdateTick() now sits directly between the two --
-    // deliberately, it is the OTHER version-comparison tick (see scheduler.ts's own docblock on
-    // it) and belongs beside runUpdateTick, not after the generic notify tick. Loosened from a
-    // bare "runUpdateTick then runNotifyTick" to allow exactly this one line in between, rather
-    // than demanding the two sit on directly adjacent lines forever.
-    expect(source).toMatch(/runUpdateTick\(\);\s*\n\s*runCanadianPackUpdateTick\(\);\s*\n\s*runNotifyTick\(\);/);
+    // 2026-09-09: runCanadianPackUpdateTick sat between these two until a merchant-pack update
+    // stopped being pushed at all (it is on the Merchant rules page, it is not urgent, and a
+    // channel that mostly carries such facts stops being read). The ordering claim this test
+    // exists for -- the app's own update check runs BEFORE the generic notify tick -- is
+    // unchanged, and is now the plain adjacency it originally was.
+    expect(source).toMatch(/runUpdateTick\(\);\s*\n(\s*\/\/[^\n]*\n)*\s*runNotifyTick\(/);
     // Two occurrences: the cron callback and the boot call.
     expect(source.match(/runUpdateTick\(\);/g)).toHaveLength(2);
-    expect(source.match(/runCanadianPackUpdateTick\(\);/g)).toHaveLength(2);
+    // The function still EXISTS -- unscheduling it is one line to revisit, exactly as
+    // evaluateBudgets is -- but nothing calls it on a tick or at boot any more.
+    expect(source.match(/^\s*runCanadianPackUpdateTick\(\);/gm)).toBeNull();
   });
 
   it('MUST-5.3: notify\'s dormancy bail is still the first statement after its single-flight guard', () => {

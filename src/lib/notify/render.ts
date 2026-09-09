@@ -44,6 +44,41 @@ export interface RefreshLine {
   wasCents: number | null;
 }
 
+/**
+ * 2026-09-09. One thing that is due, in the batched coming_due message.
+ *
+ * Deliberately carries the SOURCE FIELDS rather than a pre-composed sentence. The line's wording is
+ * a presentation decision and belongs in this file with every other one -- an evaluator handing
+ * over finished prose is how a second, drifting voice for the same event gets started.
+ */
+export interface ComingDueEntry {
+  /** An installment on a bill, or an item's own expiry. */
+  kind: 'installment' | 'expiry';
+  name: string;
+  /** Due date for an installment, expiry date for an item. */
+  dateIso: string;
+  /** Installments only: past its due date and still unpaid. Always false for an expiry. */
+  overdue: boolean;
+  /** Installments only. */
+  amountCents: number | null;
+  /** Expiries only: which of the four end-date verbs this item's type takes. */
+  itemKind: ItemKind | null;
+  /**
+   * Expiries only, both optional in the data. Carried so the batched line loses NOTHING the
+   * per-item message used to say -- that one put Vendor and Price on lines of their own, which is
+   * exactly the shape that makes twenty of them unreadable. One line, same facts.
+   */
+  vendor: string | null;
+  priceCents: number | null;
+}
+
+/** 2026-09-09. One account that has gone quiet, in the batched stale_import message. */
+export interface StaleAccountLine {
+  name: string;
+  lastImportIso: string;
+  daysAgo: number;
+}
+
 export type RenderInput =
   | {
       event: 'coming_due';
@@ -70,6 +105,22 @@ export type RenderInput =
       amountCents: number;
       todayIso: string;
       overdue: boolean;
+    }
+  | {
+      /**
+       * 2026-09-09. ONE message listing everything due, in place of one message per item.
+       *
+       * The two variants above are what this composes from conceptually and what the app sent
+       * until now; they are RETAINED rather than deleted for the reason evaluateBudgets is
+       * (evaluate/index.ts): a per-item alert is one line to restore, and its wording is pinned by
+       * tests that would otherwise have to be rewritten to bring it back. Nothing calls them today.
+       */
+      event: 'coming_due';
+      variant: 'batch';
+      todayIso: string;
+      entries: readonly ComingDueEntry[];
+      /** Items beyond the ones listed, so a large library says so rather than silently truncating. */
+      omitted: number;
     }
   | {
       event: 'budget_threshold';
@@ -150,6 +201,7 @@ export type RenderInput =
     }
   | {
       event: 'stale_import';
+      variant: 'single';
       weeks: number;
       lastImportIso: string;
       daysAgo: number;
@@ -159,6 +211,18 @@ export type RenderInput =
        * site silently fall back to the old, ambiguous household-wide wording.
        */
       accountName: string;
+    }
+  | {
+      /**
+       * 2026-09-09. ONE message naming every account that has gone quiet, in place of one message
+       * per account. Ruling R14's point stands and is kept -- the message still names which
+       * accounts, so five quiet accounts never read as five identical repeats -- but it is a
+       * LIST, not five notifications. The evaluator sends this and nothing else.
+       */
+      event: 'stale_import';
+      variant: 'batch';
+      weeks: number;
+      accounts: readonly StaleAccountLine[];
     }
   | {
       event: 'update_available';
@@ -248,6 +312,17 @@ export type RenderInput =
       budgetedLimitCents: number;
       budgetedSpentCents: number;
       topMerchants: readonly DigestLine[];
+      /**
+       * 2026-09-09. How the closed month's savings came out, or null when there was no resolved
+       * target -- and null for a self-scoped recipient, for whom a household savings figure is
+       * ruling R2's leak and has no personal analogue to narrow to (ruling T3).
+       *
+       * This is where savings_target_met went. It used to fire on a five-minute TICK, the moment
+       * net first crossed the target, which for a household paid monthly means a push notification
+       * on payday every month saying something they could already see. It is a fact about a month,
+       * so it belongs in the message about that month.
+       */
+      savings: { netCents: number; targetCents: number; met: boolean } | null;
     }
   // Lane 2 (spec docs/superpowers/plans/2026-08-30-savings-targets.md). Ruling T3: household
   // scope only, so none of the three savings events below carries a `scope` field the way the
@@ -299,7 +374,7 @@ function money(cents: number): string {
  * Two decimals, then trailing zeros dropped via Number(): 98.62, 180.99, and a clean 100 rather
  * than 100.00. Rounding is a PRESENTATION decision made here and nowhere else -- the stored figure
  * and every comparison against a threshold keep full precision, because a budget that fires at
- * 99.996% must not be rounded into firing at 100 and then described as blown.
+ * 99.996% must not be rounded into firing at 100 and then described as over.
  */
 function percent(value: number): string {
   return String(Number(value.toFixed(2)));
@@ -343,10 +418,35 @@ function publishedLine(publishedAt: string | null): string {
   return `\n\nPublished ${publishedAt.slice(0, 16).replace('T', ' ')}.`;
 }
 
-/** Two columns, padded, so a digest reads as a table in a plain-text message. */
+/**
+ * Two columns, padded, so a digest reads as a table in a plain-text message.
+ *
+ * 2026-09-09: NO LONGER USED BY THE DIGESTS. Telegram sends plain text with no parse_mode, so a
+ * phone renders it in a PROPORTIONAL font -- and a column built with padEnd, which assumes every
+ * character is the same width, comes out visibly ragged. It looked correct in the tests and in
+ * email, and wrong in the only place the household actually reads it.
+ *
+ * `Name: $figure` (nameAndMoney below) reads correctly in any font, which is why the budget block
+ * added a day earlier already used that shape. This is the rest of the file catching up.
+ *
+ * Kept because the two month-boundary reports below compose on top of it (predictedLines and
+ * refreshLines append a second and third figure to an aligned first column, and their exact output
+ * is pinned by MUST-9.30's tests). Those are email-shaped reports that a household enables
+ * deliberately; the digests are the ones that land on a phone every week.
+ */
 function padded(lines: readonly DigestLine[], indent = '  '): string[] {
   const width = lines.reduce((max, line) => Math.max(max, truncateText(line.name, NAME_MAX).length), 0);
   return lines.map((line) => `${indent}${truncateText(line.name, NAME_MAX).padEnd(width + 2)}${money(line.cents)}`);
+}
+
+/**
+ * 2026-09-09. The digest's one line shape: `Name: $figure`, no alignment.
+ *
+ * See padded() above for why. Whole dollars for the same reason budgetLines uses them -- these are
+ * scanning figures, and nobody reconciles a merchant total from a notification.
+ */
+function nameAndMoney(lines: readonly DigestLine[]): string[] {
+  return lines.map((line) => `${truncateText(line.name, NAME_MAX)}: ${wholeMoney(line.cents)}`);
 }
 
 /**
@@ -453,6 +553,68 @@ function budgetBlock(budgets: BudgetSummary): string[] {
   return parts;
 }
 
+/**
+ * 2026-09-09. The batched "what is due" message.
+ *
+ * Owner report: "there is 1 message per budget can we not send a summary message with key figures
+ * and less repetitive text so its easier to read and digest info" -- said about budgets, and the
+ * same complaint applies unchanged here. Five items inside the window used to be five
+ * notifications, each with its own subject, arriving in the same minute.
+ *
+ * OVERDUE FIRST and under its own heading, because a bill that is late and one that is due next
+ * Tuesday are different news and a single flat list buries the first in the second. Money is whole
+ * dollars for the same reason the digest's are (wholeMoney): nobody reconciles from a phone.
+ *
+ * NOT padded() -- Telegram renders plain text in a proportional font, so column alignment built
+ * with padEnd comes out ragged on a phone. `Name: figures` reads correctly in any font.
+ */
+function renderComingDueBatch(input: Extract<RenderInput, { event: 'coming_due'; variant: 'batch' }>): {
+  subject: string;
+  body: string;
+} {
+  const line = (entry: ComingDueEntry): string => {
+    const name = truncateText(entry.name, NAME_MAX);
+    if (entry.kind === 'installment') {
+      const amount = entry.amountCents === null ? '' : `${wholeMoney(entry.amountCents)}, `;
+      if (entry.overdue) {
+        const daysAgo = daysBetweenIso(entry.dateIso, input.todayIso);
+        return `${name}: ${amount}due ${entry.dateIso} (${daysAgo} day${daysAgo === 1 ? '' : 's'} ago)`;
+      }
+      return `${name}: ${amount}due ${entry.dateIso} (${inDays(input.todayIso, entry.dateIso)})`;
+    }
+    // The verb comes from expiryPhraseForKind (MUST-6.14 / MUST-19.11), never from a literal here.
+    const kind = entry.itemKind ?? 'warranty';
+    const detail = [
+      entry.vendor === null ? '' : truncateText(entry.vendor, NAME_MAX),
+      entry.priceCents === null ? '' : money(entry.priceCents),
+    ]
+      .filter((part) => part !== '')
+      .join(' ');
+    const tail = detail === '' ? '' : `, ${detail}`;
+    return `${name}: ${expiryPhraseForKind(kind, entry.dateIso)} (${inDays(input.todayIso, entry.dateIso)})${tail}`;
+  };
+
+  const overdue = input.entries.filter((entry) => entry.overdue);
+  const upcoming = input.entries.filter((entry) => !entry.overdue);
+
+  const parts: string[] = [];
+  if (overdue.length > 0) parts.push('Overdue', ...overdue.map(line));
+  if (upcoming.length > 0) {
+    if (parts.length > 0) parts.push('');
+    parts.push('Coming up', ...upcoming.map(line));
+  }
+  if (input.omitted > 0) parts.push('', `And ${input.omitted} more.`);
+
+  // The subject carries the counts, so the message can be triaged from the lock screen without
+  // being opened -- which is the whole reason for batching rather than sending one of each.
+  const total = input.entries.length + input.omitted;
+  const subject =
+    overdue.length > 0
+      ? `${overdue.length} overdue, ${total - overdue.length} coming due`
+      : `${total} coming due`;
+  return { subject, body: parts.join('\n').trimEnd() };
+}
+
 /** The tail both digest variants share when the week held nothing at all. */
 function emptyDigestTail(input: WeeklyDigestInput): string {
   // A week with no transactions can still hold budgets that went over earlier in the month, so the
@@ -466,10 +628,10 @@ function emptyDigestTail(input: WeeklyDigestInput): string {
 /** The tables and footer both variants share, appended after each one's own header block. */
 function digestTail(input: WeeklyDigestInput, parts: string[]): string {
   if (input.topCategories.length > 0) {
-    parts.push('', 'Top categories (household)', ...padded(input.topCategories));
+    parts.push('', 'Top categories (household)', ...nameAndMoney(input.topCategories));
   }
   if (input.topMerchants.length > 0) {
-    parts.push('', 'Top merchants (household)', ...padded(input.topMerchants));
+    parts.push('', 'Top merchants (household)', ...nameAndMoney(input.topMerchants));
   }
   // 2026-09-08: the budget block replaces the old one-line "Over budget this month: A, B, C."
   // That line named categories and gave no figures, which is exactly why a separate alert per
@@ -520,7 +682,7 @@ function renderHouseholdDigest(input: Extract<WeeklyDigestInput, { variant: 'hou
 
   const parts: string[] = [`Household spend: ${money(input.householdSpentCents)}`];
   const who: DigestLine[] = [...input.members, { name: 'Unattributed', cents: input.unattributedCents }];
-  parts.push('', 'Who spent it', ...padded(who));
+  parts.push('', 'Who spent it', ...nameAndMoney(who));
   return digestTail(input, parts);
 }
 
@@ -550,7 +712,7 @@ function renderMonthlyDigest(input: Extract<RenderInput, { event: 'monthly_diges
     `Net: ${money(input.netCents)}`,
   ];
   if (input.topMerchants.length > 0) {
-    parts.push('', 'Top merchants', ...padded(input.topMerchants));
+    parts.push('', 'Top merchants', ...nameAndMoney(input.topMerchants));
   }
   parts.push('');
   if (input.budgetedLimitCents > 0) {
@@ -563,12 +725,22 @@ function renderMonthlyDigest(input: Extract<RenderInput, { event: 'monthly_diges
   } else {
     parts.push('No budgets were set this month.');
   }
+  // 2026-09-09: savings_target_met's fact, in the message about the month it is a fact about.
+  if (input.savings !== null) {
+    const { netCents, targetCents, met } = input.savings;
+    parts.push(
+      met
+        ? `Savings: ${money(netCents)} against a ${money(targetCents)} target — met.`
+        : `Savings: ${money(netCents)} against a ${money(targetCents)} target, ${money(targetCents - netCents)} short.`,
+    );
+  }
   return parts.join('\n').trimEnd();
 }
 
 export function renderEvent(input: RenderInput): { subject: string; body: string } {
   switch (input.event) {
     case 'coming_due': {
+      if (input.variant === 'batch') return renderComingDueBatch(input);
       const name = truncateText(input.itemName, NAME_MAX);
       if (input.variant === 'installment') {
         // The noun comes from ITEM_KIND_LABELS, not from a literal (MUST-19.11): a bill
@@ -619,7 +791,7 @@ export function renderEvent(input: RenderInput): { subject: string; body: string
       return {
         subject: `Over budget: ${category} (${label})`,
         body:
-          `${scopeWord(input.scope)} ${category} budget for ${label} is blown — ` +
+          `${scopeWord(input.scope)} ${category} budget for ${label} is over — ` +
           `${money(input.spentCents)} of ${money(input.limitCents)}, ${money(input.spentCents - input.limitCents)} over.`,
       };
     }
@@ -679,6 +851,22 @@ export function renderEvent(input: RenderInput): { subject: string; body: string
       return { subject: input.status === 'success' ? 'Restore succeeded' : 'Restore FAILED', body: lines.join('\n') };
     }
     case 'stale_import':
+      if (input.variant === 'batch') {
+        // 2026-09-09. Ruling R14 said every message must NAME the quiet account, because five
+        // household-wide messages read as five identical repeats. That still holds -- and one
+        // message that names all five satisfies it better than five that name one each.
+        const names = input.accounts.map(
+          (account) =>
+            `${truncateText(account.name, NAME_MAX)}: last import ${account.lastImportIso} (${account.daysAgo} days ago)`,
+        );
+        return {
+          subject:
+            input.accounts.length === 1
+              ? `${truncateText(input.accounts[0].name, NAME_MAX)} has not been imported in ${input.weeks} weeks`
+              : `${input.accounts.length} accounts have not been imported in ${input.weeks} weeks`,
+          body: [...names, '', 'Bank exports are how this app learns what you spent.'].join('\n'),
+        };
+      }
       // v1.13.0 ruling R14 (item AM / PROD-10): the account is named in its own line so five
       // separate messages for five separate accounts never read as identical repeats of each
       // other. The exact "last import was..." sentence is unchanged from before this ruling.

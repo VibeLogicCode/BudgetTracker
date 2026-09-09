@@ -118,7 +118,10 @@ describe('MUST-3.11: one message per calendar week while stale', () => {
     expect(evaluateStaleImport({ userId, now: new Date('2026-08-17T12:00:00Z'), tz: TZ })).toBe(1); // Monday
     expect(evaluateStaleImport({ userId, now: new Date('2026-08-19T12:00:00Z'), tz: TZ })).toBe(0); // Wednesday
     expect(evaluateStaleImport({ userId, now: new Date('2026-08-24T12:00:00Z'), tz: TZ })).toBe(1); // next Monday
-    expect(keys()).toEqual([`stale:2026-08-17:${accountId}`, `stale:2026-08-24:${accountId}`]);
+    // 2026-09-09: one key a week for the whole household, not one per account -- the message
+    // names every quiet account instead of arriving once per account. Still week-bounded, so
+    // MUST-3.12's pruning-safety argument is unchanged.
+    expect(keys()).toEqual(['stale:batch:2026-08-17', 'stale:batch:2026-08-24']);
   });
 });
 
@@ -142,8 +145,10 @@ describe('the body', () => {
       subject: string;
       body: string;
     };
-    expect(row.subject).toBe('No transactions imported in 3 weeks');
-    expect(row.body).toContain('The last import was 2026-07-27 (21 days ago).');
+    // 2026-09-09: the subject names the one quiet account rather than stating a count, so a
+    // single-account household reads the whole fact on the lock screen.
+    expect(row.subject).toMatch(/has not been imported in 3 weeks$/);
+    expect(row.body).toContain('last import 2026-07-27 (21 days ago)');
   });
 });
 
@@ -166,7 +171,22 @@ describe('ruling R14: the stale-import alert names the account', () => {
     const queued = pendingOutbox(userId);
     expect(queued).toHaveLength(1);
     expect(queued[0]?.body).toContain('Amex');
-    expect(queued[0]?.dedupKey).toBe(`stale:2026-08-24:${accountB}`);
+    expect(queued[0]?.dedupKey).toBe('stale:batch:2026-08-24');
+  });
+
+  it('2026-09-09: two quiet accounts are ONE message that names both, not two messages', () => {
+    // Ruling R14 required the message to NAME the account, because five household-wide messages
+    // read as five identical repeats. One message naming all of them satisfies that better than
+    // one message each -- which is the owner's "1 message per X is too repetitive" complaint.
+    const accountC = insertTestAccount(t.db, { name: 'Visa', type: 'credit' });
+    importAt(userId, '2026-07-20T12:00:00.000Z', accountC);
+    expect(evaluateStaleImport({ userId, now: new Date('2026-08-27T09:00:00Z'), tz: 'America/Toronto' })).toBe(1);
+    const queued = pendingOutbox(userId);
+    expect(queued).toHaveLength(1);
+    expect(queued[0]?.body).toContain('Amex');
+    expect(queued[0]?.body).toContain('Visa');
+    // Chequing was imported yesterday, so it is not quiet and is not named.
+    expect(queued[0]?.body).not.toContain('Chequing');
   });
 
   it('a second evaluation in the same week enqueues nothing', () => {

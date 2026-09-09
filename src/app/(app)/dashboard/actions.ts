@@ -12,6 +12,7 @@ import { readEnv } from '@/lib/env';
 import { isEventEnabled } from '@/lib/notify/config';
 import { CHANNELS } from '@/lib/notify/events';
 import { evaluateWeeklyDigest } from '@/lib/notify/evaluate/digest';
+import { flushMonthSummaries } from '@/lib/notify/evaluate/monthly';
 import { householdRoutedChannels } from '@/lib/notify/household';
 import { kickOutbox } from '@/lib/notify/outbox';
 import { checkManualDigest } from '@/lib/notify/ratelimit';
@@ -124,6 +125,26 @@ export async function sendDigestNowAction(
 
   const now = new Date();
   const { tz } = readEnv();
+
+  /**
+   * 2026-09-09. The button reports EVERYTHING that is waiting, not just the week.
+   *
+   * A monthly summary only goes out once its month has been closed, and it is enqueued by whatever
+   * pass happens to run next. Somebody who closes September and then presses Send is asking "tell
+   * me where we are" -- and a reply that covers the week while September's summary is still
+   * pending, unmentioned, is a worse answer than the one they could have waited for.
+   *
+   * Idempotent and safe to run from a button: every month-boundary key carries the month, so a
+   * summary already sent is a no-op, and flushMonthSummaries returns immediately when no month is
+   * waiting. It runs BEFORE the weekly send so the two arrive in the order they happened.
+   */
+  try {
+    flushMonthSummaries(now, tz);
+  } catch (error) {
+    // Never let a pending monthly stop the weekly the person actually pressed the button for.
+    console.error('[notify] month summary flush failed on manual send', error);
+  }
+
   const enqueued = evaluateWeeklyDigest({
     userId: user.id,
     slotDate: todayIso(now, tz),

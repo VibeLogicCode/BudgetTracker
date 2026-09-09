@@ -406,6 +406,27 @@ export function hasAnyEnabledTarget(): boolean {
   return row !== undefined;
 }
 
+/**
+ * 2026-09-09 (owner report: "i only import data on sundays i dont want daily messages they need to
+ * be weekly only or when i press notify in app manually").
+ *
+ * HOW OFTEN the spending summary is sent. Deliberately separate from digestWeekday/digestHour,
+ * which answer WHEN: the weekday is the anchor the summary re-pins to so a late send cannot make
+ * it drift a day earlier every week, and that mechanism is unchanged by any of these three.
+ *
+ *   'weekly'  the shipped behaviour: at most one a week, anchored on digestWeekday.
+ *   'daily'   at most one a day, anchored on digestHour. Still gated on new transactions, so a
+ *             household that imports weekly gets a weekly message from it anyway.
+ *   'manual'  the schedule never sends it. The dashboard button is the only source.
+ *
+ * The data gate applies to all three: nothing is sent unless transactions have arrived since the
+ * last summary, because a report on a week in which nothing changed is the noise this whole
+ * redesign set out to remove.
+ */
+export type SummaryFrequency = 'daily' | 'weekly' | 'manual';
+
+export const SUMMARY_FREQUENCIES: readonly SummaryFrequency[] = ['daily', 'weekly', 'manual'];
+
 export interface UserSettings {
   comingDueDays: number;
   budgetThresholdPct: number;
@@ -413,6 +434,7 @@ export interface UserSettings {
   dailyHour: number;
   digestWeekday: number;
   digestHour: number;
+  summaryFrequency: SummaryFrequency;
 }
 
 /** §3.5: an ABSENT row means every default applies. Nothing seeds this table. */
@@ -423,6 +445,7 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   dailyHour: 8,
   digestWeekday: 1,
   digestHour: 8,
+  summaryFrequency: 'weekly',
 };
 
 export function getUserSettings(userId: number): UserSettings {
@@ -439,6 +462,7 @@ export function getUserSettings(userId: number): UserSettings {
     dailyHour: row.dailyHour,
     digestWeekday: row.digestWeekday,
     digestHour: row.digestHour,
+    summaryFrequency: row.summaryFrequency,
   };
 }
 

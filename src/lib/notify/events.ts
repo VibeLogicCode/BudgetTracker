@@ -77,7 +77,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
   {
     id: 'coming_due',
     label: 'Something is coming due',
-    blurb: 'A warranty, subscription, contract or loan reaches its date soon, or a bill installment is due.',
+    blurb: 'A warranty, subscription, contract or loan reaches its date soon, or a bill installment is due. One message listing everything.',
     audience: 'all',
     trigger: 'daily_slot',
     defaultEnabled: true,
@@ -86,7 +86,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
   {
     id: 'budget_threshold',
     label: 'A budget is getting close',
-    blurb: 'A category has passed the percentage you set for this month.',
+    blurb: 'A category has passed the percentage you set. Reported in the spending summary rather than as its own message.',
     audience: 'all',
     trigger: 'tick',
     defaultEnabled: false,
@@ -94,8 +94,8 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
   },
   {
     id: 'budget_exceeded',
-    label: 'A budget is blown',
-    blurb: 'A category has spent more than its limit for this month.',
+    label: 'A budget has gone over',
+    blurb: 'A category has spent more than its limit. Reported in the spending summary rather than as its own message.',
     audience: 'all',
     trigger: 'tick',
     defaultEnabled: true,
@@ -158,7 +158,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
   {
     id: 'stale_import',
     label: 'Nothing has been imported lately',
-    blurb: 'An account has gone the number of weeks you set with no import, checked per account.',
+    blurb: 'An account has gone the number of weeks you set with no import. One message a week naming every quiet account.',
     audience: 'all',
     trigger: 'daily_slot',
     defaultEnabled: false,
@@ -167,7 +167,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
   {
     id: 'update_available',
     label: 'An update is available',
-    blurb: 'A newer version of Budget Tracker is published and is waiting for your say-so.',
+    blurb: 'A new MAJOR version of Budget Tracker is published and needs your say-so. Smaller releases are shown in Settings only.',
     audience: 'admin',
     trigger: 'tick',
     defaultEnabled: true,
@@ -250,7 +250,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     // scope only, so this fires against ONE pooled figure -- never a per-person one.
     id: 'savings_target_met',
     label: "You hit this month's savings target",
-    blurb: "This month's net income has reached the savings target you set.",
+    blurb: "How the month came out against the savings target you set. Reported in the monthly summary rather than on the day it happens.",
     audience: 'all',
     trigger: 'tick',
     defaultEnabled: true,
@@ -286,7 +286,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     // see that function's docblock for why it only ever NOTIFIES, never applies anything).
     id: 'pack_update_available',
     label: 'A merchant rules pack update is available',
-    blurb: 'A merchant rules pack you installed (e.g. the Canadian pack) has a newer version published.',
+    blurb: 'A merchant rules pack has a newer version. Shown on the Merchant rules page rather than sent, since nothing breaks by waiting.',
     audience: 'admin',
     trigger: 'tick',
     defaultEnabled: true,
@@ -466,6 +466,43 @@ export function restoreOutcomeKey(finishedAt: string): string {
  */
 export function staleImportKey(mondayIso: string, accountId: number): string {
   return `stale:${mondayIso}:${accountId}`;
+}
+
+/**
+ * 2026-09-09. The batched version: ONE message a week naming every quiet account, in place of one
+ * message per account per week.
+ *
+ * Week-bounded exactly as staleImportKey is, so MUST-3.12's pruning-safety argument carries over
+ * unchanged -- the key advances every Monday and never recurs. The account ids are deliberately
+ * NOT in it: the whole point is that the household is told once a week however many accounts have
+ * gone quiet, and a key that moved when the SET moved would send a second message the day a sixth
+ * account joined the five already named.
+ */
+export function staleImportBatchKey(mondayIso: string): string {
+  return `stale:batch:${mondayIso}`;
+}
+
+/**
+ * 2026-09-09. The batched coming_due key, and the ledger of what has already been announced.
+ *
+ * It CARRIES the per-item keys it covers, joined by '|', because they are the only record that an
+ * item has been announced -- the per-item rows this replaces were that record before. The
+ * evaluator reads back every `due:batch:` key it has written, splits them, and treats the union as
+ * "already said". That preserves comingDueKey's own property exactly (an item is announced once,
+ * and an edited date is a new fact and a new announcement) while sending one message instead of
+ * twenty.
+ *
+ * BOUNDED by the caller's MAX_NEW_ROWS_PER_USER_PER_EVALUATION cap, so this is at most a few
+ * hundred characters. An unbounded key would be a real problem: it is an indexed column.
+ */
+export function comingDueBatchKey(itemKeys: readonly string[]): string {
+  return `due:batch:${[...itemKeys].sort().join('|')}`;
+}
+
+/** The tokens a comingDueBatchKey carries, or [] for any other key. */
+export function comingDueBatchMembers(dedupKey: string): string[] {
+  if (!dedupKey.startsWith('due:batch:')) return [];
+  return dedupKey.slice('due:batch:'.length).split('|').filter((token) => token.length > 0);
 }
 
 /**

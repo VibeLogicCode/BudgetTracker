@@ -14,8 +14,7 @@ import { createProfile, forkProfileIfBuiltin, getProfile, getProfileByName, mapp
 import { deleteStagedFile } from '@/lib/import/staging';
 import { readEnv } from '@/lib/env';
 import { closeMonth, openMonths } from '@/lib/month-close';
-import { notifiableUsers } from '@/lib/notify/config';
-import { evaluateMonthBoundary } from '@/lib/notify/evaluate/monthly';
+import { flushMonthSummaries } from '@/lib/notify/evaluate/monthly';
 import { kickOutbox } from '@/lib/notify/outbox';
 
 export interface WizardState {
@@ -229,14 +228,17 @@ export async function closeMonthAction(_prev: CloseMonthState, formData: FormDat
 
   closeMonth(parsed.data, user.id);
   // A human act gets an immediate result: evaluate now and drain, rather than leaving the summary
-  // for a slot up to a week away.
+  // for a tick.
+  //
+  // 2026-09-09: flushMonthSummaries, not a second hand-written loop over notifiableUsers. It owns
+  // the family channel's pass as well as every member's, and it MARKS THE MONTH SENT afterwards --
+  // which this loop never did, and which nothing else did either, so every month closed after the
+  // first stayed queued behind it for ever. See flushMonthSummaries.
   const { tz } = readEnv();
-  for (const person of notifiableUsers()) {
-    try {
-      evaluateMonthBoundary({ userId: person.id, now: new Date(), tz });
-    } catch (error) {
-      console.error(`[notify] month summary failed for user ${person.id}`, error);
-    }
+  try {
+    flushMonthSummaries(new Date(), tz);
+  } catch (error) {
+    console.error('[notify] month summary flush failed after closing a month', error);
   }
   kickOutbox();
 

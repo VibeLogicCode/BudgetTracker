@@ -1037,6 +1037,16 @@ export const notificationUserSettings = sqliteTable('notification_user_settings'
   /** 0 = Sunday .. 6 = Saturday. */
   digestWeekday: integer('digest_weekday').notNull().default(1),
   digestHour: integer('digest_hour').notNull().default(8),
+  /**
+   * 2026-09-09. How often the spending summary is sent, as against WHEN (the two columns above).
+   *
+   * 'weekly' is the shipped behaviour and the default, so an upgrade changes nothing. 'daily' uses
+   * the same data gate at the daily hour. 'manual' means the schedule never sends it at all and
+   * the dashboard button is the only source.
+   */
+  summaryFrequency: text('summary_frequency', { enum: ['daily', 'weekly', 'manual'] })
+    .notNull()
+    .default('weekly'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 });
