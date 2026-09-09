@@ -21,6 +21,48 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.33.0] - 2026-09-08
+
+No migration. Fewer, better notifications, and four safety nets on the upgrade path.
+
+### Changed
+
+- **Budgets are a section of the weekly summary, not a message each.** Four budgets over used to
+  produce six Telegram messages, every one of them restating "Household X budget for September
+  2026 is at" with a different name in it. They are now one block in the weekly summary, reading
+  `Groceries: $180 of $100, $80 over` — whole dollars, no percentages, biggest overage first, with
+  a total. Over and close are separate sections, and a category that is over is never also listed
+  as close. Per-category budget alerts no longer fire; the two event ids and their settings remain.
+- **Budget percentages round to two decimals** where they still appear. An alert really did read
+  `Budget 98.61999999999999%`.
+- **A restart no longer fires a burst of alerts.** Budget, anomaly and savings-target events are
+  skipped on the boot pass; the daily and weekly catch-up that boot exists for still runs.
+
+### Added
+
+- **A verified backup before every upgrade**, on all three paths — the in-app Update button and
+  both installer scripts, all calling one implementation inside the container so it behaves the
+  same on Linux, Windows, macOS and Synology. The upgrade refuses if the backup fails, and the
+  override appears only after you have been told why. `--skip-backup` / `-SkipBackup`.
+- **The app refuses to start against a database written by a newer version.** Rolling an image back
+  over a migrated database used to boot silently and serve a schema the code did not know.
+
+### Fixed
+
+- **"Send me a summary" now sends.** It queued the message and left it for the next five-minute
+  tick, so nothing arrived while anyone was watching; it also claimed success whether or not
+  anything had been queued, and refused outright for anyone who had routed the summary to their
+  family channel. An explicit request now overrides the scheduled-delivery toggle, drains
+  immediately, and reports what actually happened.
+- **The dashboard summary button** matches the height of Add a transaction and no longer stretches
+  the header row.
+- **A crash checkpoints the database.** An unhandled rejection used to kill the process with the
+  write-ahead log unflushed and the OCR marker uncleared, which the next boot could not tell from a
+  real crash.
+- **Local Docker builds no longer sweep the whole repository into the image.** The exclusion list
+  was a denylist, so anything new shipped by default; the test now enumerates the repository root
+  and fails on any entry nobody has classified.
+
 ## [1.32.0] - 2026-09-08
 
 No migration. Two additions you asked for, and a family channel that finally speaks for itself.

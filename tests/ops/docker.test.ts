@@ -419,12 +419,34 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.32.0 release', () => {
+  it('MUST-7.1: the 1.33.0 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.32.0');
+    expect(pkg.version).toBe('1.33.0');
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toMatch(/^## \[1\.33\.0\] - 2026-09-08$/m);
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.33.0]'));
+    expect(changelog.indexOf('## [1.33.0]')).toBeLessThan(changelog.indexOf('## [1.32.0]'));
+    const release = changelog.slice(changelog.indexOf('## [1.33.0]'), changelog.indexOf('## [1.32.0]'));
+    // No schema change, as every release says when it is true.
+    expect(release).toMatch(/No migration/i);
+    // The release's headline: the owner's actual complaint, and the shape that replaced it.
+    expect(release).toMatch(/not\s+a\s+message\s+each/i);
+    expect(release).toMatch(/\$180\s+of\s+\$100,\s+\$80\s+over/);
+    // The float that reached a phone.
+    expect(release).toMatch(/98\.61999999999999/);
+    // The three safety properties, each of which is invisible until the day it matters.
+    expect(release).toMatch(/verified\s+backup\s+before\s+every\s+upgrade/i);
+    expect(release).toMatch(/refuses\s+to\s+start\s+against\s+a\s+database\s+written\s+by\s+a\s+newer\s+version/i);
+    expect(release).toMatch(/crash\s+checkpoints\s+the\s+database/i);
+    // The button that did nothing, in the words the owner used for it.
+    expect(release).toMatch(/now\s+sends/i);
+    // A restart must never again produce a wall of alerts.
+    expect(release).toMatch(/restart\s+no\s+longer\s+fires\s+a\s+burst/i);
+  });
+
+  it('MUST-7.1: the 1.32.0 release is still recorded intact (append-only discipline)', () => {
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.32\.0\] - 2026-09-08$/m);
-    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.32.0]'));
     expect(changelog.indexOf('## [1.32.0]')).toBeLessThan(changelog.indexOf('## [1.31.0]'));
     const release = changelog.slice(changelog.indexOf('## [1.32.0]'), changelog.indexOf('## [1.31.0]'));
     // Seven efforts, no schema change -- the same promise every release makes, and what lets a
