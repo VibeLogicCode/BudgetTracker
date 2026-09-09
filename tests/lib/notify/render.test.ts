@@ -284,6 +284,7 @@ describe('§10.2: the weekly digest', () => {
     reviewCount: 12,
     budgets: {
       over: [{ name: 'Restaurants', spentCents: 41000, limitCents: 30000 }],
+      pace: [{ name: 'Groceries', spentCents: 30000, limitCents: 50000, projectedCents: 62000 }],
       close: [{ name: 'Coffee', spentCents: 4500, limitCents: 5000 }],
     },
     openMonths: [],
@@ -312,6 +313,14 @@ describe('§10.2: the weekly digest', () => {
     // block carrying the numbers those alerts used to carry, one message at a time.
     expect(body).toContain('Restaurants: $410 of $300, $110 over');
     expect(body).toContain('Coffee: $45 of $50, $5 left');
+    // 2026-09-09: the pace projection, which used to be a message per category on a DAILY slot.
+    expect(body).toContain('On pace to go over');
+    expect(body).toContain('Groceries: $300 of $500, on pace for $620');
+    // Between Over and Close: a projection landing past the limit is more use than a threshold
+    // that has merely been touched.
+    expect(body.indexOf('Over')).toBeLessThan(body.indexOf('On pace to go over'));
+    expect(body.indexOf('On pace to go over')).toBeLessThan(body.indexOf('Close'));
+    // The total counts what is ALREADY over. A projection is not money spent.
     expect(body).toContain('Total over: $110.');
     expect(body).not.toContain('Over budget this month:');
   });
@@ -331,7 +340,7 @@ describe('§10.2: the weekly digest', () => {
       topCategories: [{ name: 'Groceries', cents: 40211 }],
       topMerchants: [{ name: 'LOBLAWS', cents: 21055 }],
       reviewCount: 12,
-      budgets: { over: [{ name: 'Restaurants', spentCents: 41000, limitCents: 30000 }], close: [] },
+      budgets: { over: [{ name: 'Restaurants', spentCents: 41000, limitCents: 30000 }], pace: [], close: [] },
       openMonths: [],
     });
     expect(subject).toBe('Household weekly summary — 2026-08-10 to 2026-08-16');
@@ -364,7 +373,7 @@ describe('§10.2: the weekly digest', () => {
       topCategories: [],
       topMerchants: [],
       reviewCount: 0,
-      budgets: { over: [], close: [] },
+      budgets: { over: [], pace: [], close: [] },
       openMonths: [],
     });
     expect(body).toBe('No transactions were recorded this week.');
@@ -378,7 +387,7 @@ describe('§10.2: the weekly digest', () => {
       topCategories: [],
       topMerchants: [],
       reviewCount: 0,
-      budgets: { over: [], close: [] },
+      budgets: { over: [], pace: [], close: [] },
       openMonths: [],
     });
     expect(body).toContain('No transactions were recorded this week.');
@@ -546,7 +555,7 @@ const SAMPLES_BY_EVENT: Record<string, RenderInput[]> = {
       topCategories: [],
       topMerchants: [],
       reviewCount: 0,
-      budgets: { over: [], close: [] },
+      budgets: { over: [], pace: [], close: [] },
       openMonths: [],
     },
     // v1.28.0: the family channel's body is a SECOND body behind the same event id, so it gets
@@ -562,7 +571,7 @@ const SAMPLES_BY_EVENT: Record<string, RenderInput[]> = {
       topCategories: [],
       topMerchants: [],
       reviewCount: 0,
-      budgets: { over: [], close: [] },
+      budgets: { over: [], pace: [], close: [] },
       openMonths: [],
     },
   ],

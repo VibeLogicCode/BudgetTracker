@@ -2,14 +2,22 @@ import { budgetProgress, budgetScopeFor, type BudgetRow } from '@/lib/budgets';
 import { listUsers, viewerFor } from '@/lib/auth/users';
 import { HOUSEHOLD_VIEWER, isSelfScoped, ownerScope } from '@/lib/auth/viewer';
 import { reviewQueueCount } from '@/lib/categorize/engine';
-import { addDaysIso, currentMonth } from '@/lib/dates';
+import { addDaysIso, currentMonth, monthEnd, todayIso } from '@/lib/dates';
 import { categoryBreakdown, topMerchants } from '@/lib/reports';
 import { householdWeeklyDigestKey, weeklyDigestKey } from '@/lib/notify/events';
 import { mondayOfIsoWeek } from '@/lib/notify/evaluate/slots';
 import { householdRoutedChannels } from '@/lib/notify/household';
 import { openMonths } from '@/lib/month-close';
 import { enqueue, enqueuedAnything } from '@/lib/notify/outbox';
-import { renderEvent, type BudgetStanding, type BudgetSummary, type DigestLine } from '@/lib/notify/render';
+import { PACE_OVERSHOOT_MIN_PCT } from '@/lib/predict/constants';
+import { projectMonthEnd } from '@/lib/predict/pace';
+import {
+  renderEvent,
+  type BudgetPaceStanding,
+  type BudgetStanding,
+  type BudgetSummary,
+  type DigestLine,
+} from '@/lib/notify/render';
 
 const TOP_CATEGORIES = 5;
 const TOP_MERCHANTS = 3;
@@ -19,17 +27,41 @@ const TOP_MERCHANTS = 3;
  * FIGURES for every budget that is over or close, which is what the per-category alerts used to
  * carry one message at a time.
  *
- * `close` is anything at or past CLOSE_PCT that is not already over -- the two lists are disjoint,
- * because "at 98% of the limit" stops being news once the limit is gone. Rows with no limit are
- * skipped: a category nobody budgeted cannot be over or close to anything.
+ * `close` is anything at or past CLOSE_PCT that is neither already over nor projected to go over.
+ * The three lists are disjoint (see BudgetSummary), because naming one category under two
+ * headings is the repetition this whole redesign removes. Rows with no limit are skipped: a
+ * category nobody budgeted cannot be over, heading over, or close to anything.
  *
- * Sorted biggest problem first: over by dollars over, descending; close by dollars left, ascending.
- * In a family group chat the first line under `Over` is the one that gets talked about.
+ * Sorted biggest problem first within each list. In a family group chat the first line under a
+ * heading is the one that gets talked about.
  */
 const CLOSE_PCT = 80;
 
-function collectBudgets(rows: BudgetRow[], acc?: { over: BudgetStanding[]; close: BudgetStanding[] }): BudgetSummary {
-  const out = acc ?? { over: [] as BudgetStanding[], close: [] as BudgetStanding[] };
+/**
+ * 2026-09-09. THE PACE PROJECTION MOVED IN HERE, from budget_pace's own evaluator.
+ *
+ * It was the last detector still sending one message per category -- up to five a day, on a DAILY
+ * slot, for a household that imports once a week. So on a Sunday import it could produce five
+ * notifications about five categories, then say nothing new for six days while the figures did not
+ * move, then do it again. Every objection the owner raised about the per-budget alerts applies to
+ * it word for word, and it sits beside those same figures naturally: over, heading over, close.
+ *
+ * NOTHING IS RECOMPUTED. projectMonthEnd and both thresholds are the same ones evaluate/pace.ts
+ * used (src/lib/predict/), so there is no second definition of "on pace" anywhere -- which is the
+ * rule that kept the per-category alert and the Budgets page agreeing, and still does.
+ */
+interface BudgetAccumulator {
+  over: BudgetStanding[];
+  pace: BudgetPaceStanding[];
+  close: BudgetStanding[];
+}
+
+function collectBudgets(
+  rows: BudgetRow[],
+  at: { dayOfMonth: number; daysInMonth: number },
+  acc?: BudgetAccumulator,
+): BudgetSummary {
+  const out: BudgetAccumulator = acc ?? { over: [], pace: [], close: [] };
   for (const row of rows) {
     if (row.limitCents !== null && row.limitCents > 0) {
       const standing: BudgetStanding = {
@@ -37,14 +69,41 @@ function collectBudgets(rows: BudgetRow[], acc?: { over: BudgetStanding[]; close
         spentCents: row.spentCents,
         limitCents: row.limitCents,
       };
-      if (row.overBudget) out.over.push(standing);
-      else if (row.pct !== null && row.pct >= CLOSE_PCT) out.close.push(standing);
+      // The three are decided in urgency order and a category lands in exactly one, which is what
+      // makes them disjoint by construction rather than by the reader noticing.
+      if (row.overBudget) {
+        out.over.push(standing);
+      } else {
+        // projectMonthEnd returns null before PACE_MIN_DAY_OF_MONTH: a projection from three days
+        // of spending is arithmetic, not information, and this is where that rule is honoured.
+        const projectedCents = projectMonthEnd({
+          spentCents: row.spentCents,
+          dayOfMonth: at.dayOfMonth,
+          daysInMonth: at.daysInMonth,
+        });
+        // Integer comparison, no float ratio (MUST-3.5). A projected 3 percent overshoot on the
+        // 7th is noise; 110 percent is a number worth acting on.
+        const onPace = projectedCents !== null && projectedCents * 100 >= row.limitCents * PACE_OVERSHOOT_MIN_PCT;
+        if (onPace) out.pace.push({ ...standing, projectedCents: projectedCents as number });
+        else if (row.pct !== null && row.pct >= CLOSE_PCT) out.close.push(standing);
+      }
     }
-    if (row.children.length > 0) collectBudgets(row.children, out);
+    if (row.children.length > 0) collectBudgets(row.children, at, out);
   }
   out.over.sort((a, b) => b.spentCents - b.limitCents - (a.spentCents - a.limitCents));
+  // Worst overshoot first, the same order evaluate/pace.ts spent its per-evaluation cap in.
+  out.pace.sort((a, b) => b.projectedCents - b.limitCents - (a.projectedCents - a.limitCents));
   out.close.sort((a, b) => a.limitCents - a.spentCents - (b.limitCents - b.spentCents));
   return out;
+}
+
+/** Today's day-of-month and the month's length, the two inputs projectMonthEnd needs. */
+function paceWindow(month: string, now: Date): { dayOfMonth: number; daysInMonth: number } {
+  return {
+    dayOfMonth: Number(todayIso(now).slice(8, 10)),
+    // MUST-8.2: from monthEnd, so February is 29 days in 2028 with no leap-year rule here.
+    daysInMonth: Number(monthEnd(month).slice(8, 10)),
+  };
 }
 
 /**
@@ -136,10 +195,11 @@ export function evaluateWeeklyDigest(input: {
   // nothing else, so with no routed channel it feeds nothing -- and a wasted 24-month
   // budgetProgress on every such member's weekly slot is the cost. Skipped outright in that
   // case rather than run and discarded, which is also HOUSEHOLD_ONLY_AT_PAGE's own rule.
+  const paceAt = paceWindow(month, input.now);
   const householdBudgets: BudgetSummary =
     selfScoped && routed.length === 0
-      ? { over: [], close: [] }
-      : collectBudgets(budgetProgress(month, 'household', null));
+      ? { over: [], pace: [], close: [] }
+      : collectBudgets(budgetProgress(month, 'household', null), paceAt);
   // S-18 fix (v1.13.0 ruling R2): the RECIPIENT's own personal digest never sees the household
   // list -- a self-scoped recipient's overBudget names only categories THEY are over on.
   // household/admin recipients are unaffected: overBudget === householdOverBudget for them,
@@ -152,7 +212,7 @@ export function evaluateWeeklyDigest(input: {
   const budgets: BudgetSummary =
     ownScope === 'household'
       ? householdBudgets
-      : collectBudgets(budgetProgress(month, ownScope, ownerScope(viewer)));
+      : collectBudgets(budgetProgress(month, ownScope, ownerScope(viewer)), paceAt);
 
   const { subject, body } = renderEvent({
     event: 'weekly_digest',

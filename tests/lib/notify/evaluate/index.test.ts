@@ -72,6 +72,9 @@ describe('MUST-10.9 (final-fix-wave item 4): the three newer daily evaluators ru
     const userId = insertTestUser(t.db);
     // dailyHour defaults to 8; 09:00 UTC on the 17th and 09:05 UTC on the 17th are both inside
     // the same daily slot (slotDate '2026-08-17'). 09:00 on the 18th is the next day's slot.
+    // 2026-09-09: evaluateBudgetPace is no longer scheduled either -- its projection is a section
+    // of the weekly summary now (evaluate/digest.ts, collectBudgets), so it was the last detector
+    // still sending a message per category. Spied on to prove it stays unscheduled.
     const paceSpy = vi.spyOn(paceModule, 'evaluateBudgetPace').mockReturnValue(0);
     const creepSpy = vi.spyOn(anomaliesModule, 'evaluateSubscriptionCreep').mockReturnValue(0);
     // 2026-09-09: evaluateMonthBoundary is NO LONGER one of them. Its trigger is the month being
@@ -82,17 +85,15 @@ describe('MUST-10.9 (final-fix-wave item 4): the three newer daily evaluators ru
     try {
       runScheduledEvaluation(new Date('2026-08-17T09:00:00Z'));
       runScheduledEvaluation(new Date('2026-08-17T09:05:00Z'));
-      for (const spy of [paceSpy, creepSpy]) {
-        expect(recipients(spy)).toEqual([userId, null]);
-      }
+      expect(recipients(creepSpy)).toEqual([userId, null]);
+      expect(paceSpy).not.toHaveBeenCalled();
       // No month is closed in this fixture, so flushMonthSummaries returns before evaluating
       // anybody -- which is the cheap early-out that lets it run on every tick.
       expect(monthlySpy).not.toHaveBeenCalled();
 
       runScheduledEvaluation(new Date('2026-08-18T09:00:00Z'));
-      for (const spy of [paceSpy, creepSpy]) {
-        expect(recipients(spy)).toEqual([userId, null, userId, null]);
-      }
+      expect(recipients(creepSpy)).toEqual([userId, null, userId, null]);
+      expect(paceSpy).not.toHaveBeenCalled();
     } finally {
       paceSpy.mockRestore();
       creepSpy.mockRestore();

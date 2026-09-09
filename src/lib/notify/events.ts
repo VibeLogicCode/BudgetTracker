@@ -176,7 +176,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
   {
     id: 'budget_pace',
     label: 'On pace to go over budget',
-    blurb: 'A category is heading past its limit before the month is out.',
+    blurb: 'A category is heading past its limit before the month is out. Reported in the spending summary rather than as its own message.',
     audience: 'all',
     trigger: 'daily_slot',
     defaultEnabled: true,

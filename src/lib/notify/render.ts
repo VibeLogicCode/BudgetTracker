@@ -491,12 +491,34 @@ export interface BudgetStanding {
 }
 
 /**
- * What the digest says about budgets. `over` and `close` are disjoint: a category that is over is
- * never also listed as close, because "at 98% of the limit" stops being news the moment the limit
- * is gone.
+ * 2026-09-09. One budget the month is not over yet but is heading past, with where the projection
+ * lands. This is what budget_pace used to send one message per category for, on a DAILY slot.
+ */
+export interface BudgetPaceStanding extends BudgetStanding {
+  /** Month-end spend if the rest of the month looks like the part already spent. */
+  projectedCents: number;
+}
+
+/**
+ * What the digest says about budgets. THE THREE LISTS ARE DISJOINT, and the order is the order a
+ * household should read them in:
+ *
+ *   over   the limit is gone. Nothing to predict.
+ *   pace   not over yet, but the projection lands past the limit if nothing changes.
+ *   close  at the warning percentage, and NOT projected over -- which makes it the mildest of the
+ *          three, not the second.
+ *
+ * `pace` sits between them because it is the only one that is actionable and not yet true: a
+ * category at 30 percent on the 8th heading for 400 percent belongs above one sitting at 85 percent
+ * that the projection says will finish under. A static threshold and a prediction are different
+ * facts, and before this the summary only ever carried the threshold.
+ *
+ * A category appears in exactly one list. Naming it twice under two headings is the repetition
+ * every other part of this redesign removed.
  */
 export interface BudgetSummary {
   over: readonly BudgetStanding[];
+  pace: readonly BudgetPaceStanding[];
   close: readonly BudgetStanding[];
 }
 
@@ -541,10 +563,32 @@ function openMonthReminder(months: readonly string[]): string[] {
   return ['', `${named} ${months.length === 1 ? 'is' : 'are'} not closed. Close on the Import page to get the summary.`];
 }
 
+/**
+ * 2026-09-09. `Name: $spent of $limit, on pace for $projected` -- the pace line.
+ *
+ * Deliberately the SAME `Name: $spent of $limit` opening as budgetLines, with a different tail.
+ * One shape learned once: the reader's eye already knows where the two figures are, and the clause
+ * after the comma is the only thing that varies between the three headings.
+ *
+ * NO PERCENTAGE. The per-category alert said "at that rate the month ends near $620, about $120
+ * over"; a summary line has room for the landing figure, which is the number somebody acts on.
+ * "124%" is what a spreadsheet feels.
+ */
+function paceLines(rows: readonly BudgetPaceStanding[]): string[] {
+  return rows.map(
+    (row) =>
+      `${truncateText(row.name, NAME_MAX)}: ${wholeMoney(row.spentCents)} of ${wholeMoney(row.limitCents)}, ` +
+      `on pace for ${wholeMoney(row.projectedCents)}`,
+  );
+}
+
 /** The budget block both digest variants share. Omitted entirely when there is nothing to say. */
 function budgetBlock(budgets: BudgetSummary): string[] {
   const parts: string[] = [];
   if (budgets.over.length > 0) parts.push('', 'Over', ...budgetLines(budgets.over));
+  // 2026-09-09: between Over and Close, because a projection that lands past the limit is more
+  // use than a threshold that has merely been touched. See BudgetSummary's own note.
+  if (budgets.pace.length > 0) parts.push('', 'On pace to go over', ...paceLines(budgets.pace));
   if (budgets.close.length > 0) parts.push('', 'Close', ...budgetLines(budgets.close));
   if (budgets.over.length > 0) {
     const total = budgets.over.reduce((sum, row) => sum + (row.spentCents - row.limitCents), 0);

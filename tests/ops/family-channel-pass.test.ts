@@ -104,8 +104,8 @@ const HOUSEHOLD_PASS_OWNERS: Record<string, HouseholdPassOwner> = {
   budget_pace: {
     kind: 'household-pass',
     file: 'src/lib/notify/evaluate/pace.ts',
-    entryPoint: 'evaluateBudgetPace',
-    why: 'a daily-slot event: the household block calls evaluateBudgetPace with userId null, which reads through HOUSEHOLD_VIEWER and projects the household scope alone.',
+    entryPoint: null,
+    why: '2026-09-09: no longer scheduled at all. The projection is a section of the weekly summary (evaluate/digest.ts, collectBudgets), so the room reads it in the household digest buildHouseholdDigest already renders -- the same place budget_threshold and budget_exceeded went. evaluateBudgetPace still exists and still takes a null recipient; nothing calls it.',
   },
   unusual_transaction: {
     kind: 'household-pass',

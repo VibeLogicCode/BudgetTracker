@@ -21,6 +21,33 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.36.0] - 2026-09-09
+
+No migration.
+
+### Changed
+
+- **"On pace to go over budget" is a section of the weekly summary, not a message per category.**
+  It was the last detector still working that way — up to five notifications a day, on a daily
+  schedule, for a household that imports once a week. The projection now sits with the figures it
+  belongs beside, under its own heading between `Over` and `Close`:
+
+      Over
+      Groceries: $180 of $100, $80 over
+
+      On pace to go over
+      Coffee: $45 of $50, on pace for $82
+
+      Close
+      Petrol: $160 of $200, $40 left
+
+  Same arithmetic, same thresholds, same helpers — nothing about when a category counts as heading
+  over has changed, and it still says nothing before the 7th of the month.
+- **The three budget lists are now disjoint, and ordered by urgency.** A category used to be able
+  to read as "close" while the projection said it would finish well past its limit — 90% of a limit
+  on the 17th is not "close", it is heading for 164%. Each category is named once, under the
+  heading that describes it best.
+
 ## [1.35.0] - 2026-09-09
 
 Migration 0023 (`summary_frequency`). Fewer messages, each one worth reading.

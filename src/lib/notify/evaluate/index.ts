@@ -8,7 +8,6 @@ import { evaluateAnomalies, evaluateSubscriptionCreep } from '@/lib/notify/evalu
 import { evaluateComingDue } from '@/lib/notify/evaluate/coming-due';
 import { evaluateWeeklyDigest } from '@/lib/notify/evaluate/digest';
 import { flushMonthSummaries } from '@/lib/notify/evaluate/monthly';
-import { evaluateBudgetPace } from '@/lib/notify/evaluate/pace';
 import { evaluateSavingsDaily } from '@/lib/notify/evaluate/savings';
 import { evaluateStaleImport } from '@/lib/notify/evaluate/stale';
 import { dailySlot, mondayOfIsoWeek, weeklySlot } from '@/lib/notify/evaluate/slots';
@@ -30,10 +29,14 @@ export function resetSlotSkipLogForTests(): void {
 }
 
 /**
- * MUST-10.9 (final-fix-wave item 4): mirrors digestAlreadySent's purpose for the three newer
- * daily-slot evaluators (evaluateBudgetPace, evaluateSubscriptionCreep, evaluateMonthBoundary).
+ * MUST-10.9 (final-fix-wave item 4): mirrors digestAlreadySent's purpose for the remaining
+ * daily-slot evaluators -- evaluateSubscriptionCreep and evaluateSavingsDaily. It covered four:
+ * evaluateMonthBoundary moved to flushMonthSummaries (its trigger is the month being closed, not a
+ * slot) and evaluateBudgetPace stopped being scheduled at all (its projection is a section of the
+ * weekly summary now). Both moves are dated 2026-09-09 and argued at their call sites below.
+ *
  * `daily.fires` stays true for the whole DAILY_MAX_CATCHUP_HOURS (12h) window and the scheduler
- * ticks every 5 minutes, so without this an unchanged tick recomputed all three roughly 144
+ * ticks every 5 minutes, so without this an unchanged tick recomputed each of them roughly 144
  * times a day per user. Each detector's own dedup key already makes a repeat enqueue a no-op;
  * this in-memory per-user record of the last daily slotDate actually processed skips the
  * recompute itself before any query runs, the same way lastAnomalyKey does for the tick-cadence
@@ -202,7 +205,23 @@ export function runScheduledEvaluation(
         // catch-up window. Recorded only after all three return without throwing, so a
         // transient failure retries on the next tick instead of being silently skipped.
         if (lastDailyEvaluatedSlot.get(user.id) !== daily.slotDate) {
-          evaluateBudgetPace({ userId: user.id, now, tz });
+          /**
+           * 2026-09-09: evaluateBudgetPace is NO LONGER CALLED, for the third and last time this
+           * redesign makes this argument.
+           *
+           * It was the one detector still sending a message PER CATEGORY -- up to five a day, on
+           * this daily slot. For a household that imports on Sundays that meant five notifications
+           * on Sunday about five categories, six days of silence while the figures did not move,
+           * and five more the following Sunday. The owner's original complaint, exactly:
+           * "there is 1 message per budget can we not send a summary message ... less repetitive".
+           *
+           * The projection is now a section of the weekly summary, between Over and Close
+           * (evaluate/digest.ts, collectBudgets). Same arithmetic, same thresholds, same
+           * src/lib/predict helpers -- what changed is that it arrives with the figures it belongs
+           * beside, once, instead of alone and daily.
+           *
+           * The function and the event id stay, as evaluateBudgets and evaluateSavingsTargetMet do.
+           */
           evaluateSubscriptionCreep({ userId: user.id, now, tz });
           // 2026-09-09: the month-boundary reports moved OUT of the daily slot and into
           // flushMonthSummaries below. Their trigger is the month being closed -- a person pressing
@@ -400,7 +419,9 @@ function runHouseholdEvaluation(now: Date, tz: string): void {
   try {
     const daily = dailySlot(now, HOUSEHOLD_PASS_SETTINGS.dailyHour, tz);
     if (daily.fires && lastHouseholdDailySlot !== daily.slotDate) {
-      evaluateBudgetPace({ userId: null, now, tz });
+      // 2026-09-09: the room's budget_pace pass went with the member one -- the family channel
+      // reads the projection in the household weekly summary, which buildHouseholdDigest already
+      // carries the budget block of.
       evaluateSubscriptionCreep({ userId: null, now, tz });
       // 2026-09-09: the room's month-boundary reports moved to flushMonthSummaries too, which
       // makes the family-channel pass for them part of the same loop the marking depends on.

@@ -255,7 +255,11 @@ describe('the weekly summary carries every budget, instead of one message each',
 
     spend(groceries, 18000, '2026-08-12'); // $80 over
     spend(gas, 25000, '2026-08-13'); // $50 over
-    spend(coffee, 4500, '2026-08-14'); // 90%, close but not over
+    // 90% of its limit on the 17th of a 31-day month. That is NOT merely "close": at that rate
+    // the month ends near $82 against a $50 limit, which is why this row lands under On pace
+    // since 2026-09-09 rather than under Close. See the Close case in the test below for a row
+    // that really is only close.
+    spend(coffee, 4500, '2026-08-14');
 
     expect(evaluateWeeklyDigest({ userId, slotDate: '2026-08-17', now: NOW })).toBe(1);
     const text = body();
@@ -264,7 +268,9 @@ describe('the weekly summary carries every budget, instead of one message each',
     // forever. Cents are for a single-charge alert, not for a figure somebody glances at.
     expect(text).toContain('Groceries: $180 of $100, $80 over');
     expect(text).toContain('Gas: $250 of $200, $50 over');
-    expect(text).toContain('Coffee: $45 of $50, $5 left');
+    expect(text).toContain('Coffee: $45 of $50, on pace for $82');
+    // The total counts what is ALREADY over. A projection is not money spent, so Coffee's $32
+    // of projected overshoot is deliberately not in it.
     expect(text).toContain('Total over: $130.');
 
     // Biggest problem first: the first line under Over is the one a family talks about.
@@ -272,10 +278,38 @@ describe('the weekly summary carries every budget, instead of one message each',
     // `Name: $figure` shape (padded() columns render ragged in Telegram's proportional font), so
     // indexing on `Groceries: $180` alone could find either.
     expect(text.indexOf('Groceries: $180 of')).toBeLessThan(text.indexOf('Gas: $250 of'));
-    // Over and close are disjoint -- "at 90% of the limit" stops being news once the limit is
-    // gone. Matched on the BUDGET line, not the bare name: 'Coffee' also appears in Top
-    // categories above, and indexing on the name alone found that instead.
-    expect(text.indexOf('Coffee: $45 of $50')).toBeGreaterThan(text.indexOf('Gas: $250'));
+    // The three lists are disjoint and ordered by urgency: over, then heading over, then close.
+    expect(text.indexOf('Coffee: $45 of $50')).toBeGreaterThan(text.indexOf('Gas: $250 of'));
+    expect(text).not.toContain('Coffee: $45 of $50, $5 left');
+  });
+
+  it('2026-09-09: a category the projection says will finish UNDER stays under Close', () => {
+    // The distinction the per-category budget_pace alert used to make on its own, kept exactly:
+    // 110% of the limit (PACE_OVERSHOOT_MIN_PCT) is the line, so a row that is merely past the
+    // 80% warning threshold and projected to land inside its limit is still just close.
+    const userId = emailUser();
+    const coffee = categoryIdByName(t.db, 'Coffee');
+    upsertBudget({ scope: 'household', userId: null, categoryId: coffee, month: '2026-08', amountCents: 5000 });
+    // $45 of $50 on the 30th of a 31-day month projects to $47 -- close, and finishing under.
+    spend(coffee, 4500, '2026-08-14');
+
+    evaluateWeeklyDigest({ userId, slotDate: '2026-08-31', now: new Date('2026-08-30T12:00:00Z') });
+    const text = body();
+    expect(text).toContain('Coffee: $45 of $50, $5 left');
+    expect(text).not.toContain('On pace to go over');
+  });
+
+  it('2026-09-09: says nothing about pace before the 7th, when a projection is arithmetic not information', () => {
+    // projectMonthEnd returns null before PACE_MIN_DAY_OF_MONTH, and the summary honours that
+    // rather than inventing its own rule -- $40 spent by the 3rd projects to $413, which would
+    // put a category under On pace on the strength of three days.
+    const userId = emailUser();
+    const coffee = categoryIdByName(t.db, 'Coffee');
+    upsertBudget({ scope: 'household', userId: null, categoryId: coffee, month: '2026-08', amountCents: 5000 });
+    spend(coffee, 4000, '2026-08-02');
+
+    evaluateWeeklyDigest({ userId, slotDate: '2026-08-04', now: new Date('2026-08-03T12:00:00Z') });
+    expect(body()).not.toContain('On pace to go over');
   });
 
   it('says nothing about budgets when none are over or close', () => {
