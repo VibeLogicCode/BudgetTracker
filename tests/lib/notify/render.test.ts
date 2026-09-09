@@ -281,7 +281,10 @@ describe('§10.2: the weekly digest', () => {
       { name: 'PETRO-CANADA', cents: 12100 },
     ],
     reviewCount: 12,
-    overBudget: ['Restaurants', 'Coffee'],
+    budgets: {
+      over: [{ name: 'Restaurants', spentCents: 41000, limitCents: 30000 }],
+      close: [{ name: 'Coffee', spentCents: 4500, limitCents: 5000 }],
+    },
   } as const;
 
   it('renders the subject as the date range', () => {
@@ -299,7 +302,13 @@ describe('§10.2: the weekly digest', () => {
     expect(body).toContain('Top merchants (household)');
     expect(body).toContain('LOBLAWS');
     expect(body).toContain('12 transactions still need review.');
-    expect(body).toContain('Over budget this month: Restaurants, Coffee.');
+    // 2026-09-08: the one-line "Over budget this month: A, B." named categories and gave no
+    // figures, which is precisely why a separate alert per category had to exist. It is now a
+    // block carrying the numbers those alerts used to carry, one message at a time.
+    expect(body).toContain('Restaurants: $410 of $300, $110 over');
+    expect(body).toContain('Coffee: $45 of $50, $5 left');
+    expect(body).toContain('Total over: $110.');
+    expect(body).not.toContain('Over budget this month:');
   });
 
   it('v1.28.0: the household variant names members, adds unattributed, and drops "Your spend"', () => {
@@ -317,7 +326,7 @@ describe('§10.2: the weekly digest', () => {
       topCategories: [{ name: 'Groceries', cents: 40211 }],
       topMerchants: [{ name: 'LOBLAWS', cents: 21055 }],
       reviewCount: 12,
-      overBudget: ['Restaurants'],
+      budgets: { over: [{ name: 'Restaurants', spentCents: 41000, limitCents: 30000 }], close: [] },
     });
     expect(subject).toBe('Household weekly summary — 2026-08-10 to 2026-08-16');
     expect(body).toContain('Household spend: $1,234.56');
@@ -332,7 +341,8 @@ describe('§10.2: the weekly digest', () => {
     // Everything after the header block is the shared tail, unchanged.
     expect(body).toContain('Top categories (household)');
     expect(body).toContain('12 transactions still need review.');
-    expect(body).toContain('Over budget this month: Restaurants.');
+    expect(body).toContain('Restaurants: $410 of $300, $110 over');
+    expect(body).not.toContain('Over budget this month:');
   });
 
   it('v1.28.0: an empty household week still sends, with the same sentence', () => {
@@ -347,7 +357,7 @@ describe('§10.2: the weekly digest', () => {
       topCategories: [],
       topMerchants: [],
       reviewCount: 0,
-      overBudget: [],
+      budgets: { over: [], close: [] },
     });
     expect(body).toBe('No transactions were recorded this week.');
   });
@@ -360,7 +370,7 @@ describe('§10.2: the weekly digest', () => {
       topCategories: [],
       topMerchants: [],
       reviewCount: 0,
-      overBudget: [],
+      budgets: { over: [], close: [] },
     });
     expect(body).toContain('No transactions were recorded this week.');
   });
@@ -525,7 +535,7 @@ const SAMPLES_BY_EVENT: Record<string, RenderInput[]> = {
       topCategories: [],
       topMerchants: [],
       reviewCount: 0,
-      overBudget: [],
+      budgets: { over: [], close: [] },
     },
     // v1.28.0: the family channel's body is a SECOND body behind the same event id, so it gets
     // its own sample here rather than riding on the personal one's URL check.
@@ -540,7 +550,7 @@ const SAMPLES_BY_EVENT: Record<string, RenderInput[]> = {
       topCategories: [],
       topMerchants: [],
       reviewCount: 0,
-      overBudget: [],
+      budgets: { over: [], close: [] },
     },
   ],
   new_signin: [{ event: 'new_signin', name: 'S', atLabel: 'x', tz: 'UTC', ip: '1.2.3.4', userAgent: null }],

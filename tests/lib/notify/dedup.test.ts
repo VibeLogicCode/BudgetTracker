@@ -235,10 +235,13 @@ describe('MUST-3.12: a year of daily evaluations against a fixed item set', () =
         purgeOldOutboxRows(now);
       }
 
+      // 2026-09-08: budget_threshold and budget_exceeded are ABSENT, and their absence is the
+      // point of this assertion now. Their figures moved into the weekly digest (one message a
+      // week carrying every budget) and evaluate/index.ts stopped calling evaluateBudgets, so
+      // over 364 simulated days they fire zero times rather than once each. weekly_digest's 52 is
+      // what the household actually receives.
       expect(eventCounts()).toEqual({
         coming_due: 1,
-        budget_threshold: 1,
-        budget_exceeded: 1,
         stale_import: 52,
         weekly_digest: 52,
         backup_failed: 1,

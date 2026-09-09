@@ -145,35 +145,42 @@ describe('the weekly digest existence pre-check', () => {
  * into the family channel at once.
  */
 describe('the boot pass does not fire tick-triggered events', () => {
-  it('skips budgets, anomalies and savings targets when atBoot is set', () => {
-    const budgets = vi.spyOn(budgetModule, 'evaluateBudgets').mockReturnValue(0);
+  it('skips anomalies and savings targets when atBoot is set', () => {
     const anomalies = vi.spyOn(anomaliesModule, 'evaluateAnomalies').mockReturnValue(0);
     const savings = vi.spyOn(savingsModule, 'evaluateSavingsTargetMet').mockReturnValue(0);
     try {
       runScheduledEvaluation(new Date('2026-09-08T12:00:00Z'), { atBoot: true });
-      expect(budgets).not.toHaveBeenCalled();
       expect(anomalies).not.toHaveBeenCalled();
       expect(savings).not.toHaveBeenCalled();
     } finally {
-      budgets.mockRestore();
       anomalies.mockRestore();
       savings.mockRestore();
     }
   });
 
-  it('still fires them on an ordinary tick', () => {
+  it('never fires per-category budget alerts at all -- they are a section of the weekly summary now', () => {
     const budgets = vi.spyOn(budgetModule, 'evaluateBudgets').mockReturnValue(0);
+    try {
+      // Both paths. The owner's complaint was six messages for four budgets; the figures moved
+      // into the digest (evaluate/digest.ts, collectBudgets) and this evaluator stopped running.
+      runScheduledEvaluation(new Date('2026-09-08T12:00:00Z'), { atBoot: true });
+      runScheduledEvaluation(new Date('2026-09-08T12:05:00Z'));
+      expect(budgets).not.toHaveBeenCalled();
+    } finally {
+      budgets.mockRestore();
+    }
+  });
+
+  it('still fires them on an ordinary tick', () => {
     const anomalies = vi.spyOn(anomaliesModule, 'evaluateAnomalies').mockReturnValue(0);
     const savings = vi.spyOn(savingsModule, 'evaluateSavingsTargetMet').mockReturnValue(0);
     try {
-      // No options at all -- the cron path. If this ever stopped firing, budget alerts would go
-      // silent entirely, which is a far worse defect than the burst this change removes.
+      // No options at all -- the cron path. If this ever stopped firing, the anomaly alerts would
+      // go silent entirely, which is a far worse defect than the burst this change removes.
       runScheduledEvaluation(new Date('2026-09-08T12:05:00Z'));
-      expect(budgets).toHaveBeenCalledTimes(1);
       expect(anomalies).toHaveBeenCalledTimes(1);
       expect(savings).toHaveBeenCalledTimes(1);
     } finally {
-      budgets.mockRestore();
       anomalies.mockRestore();
       savings.mockRestore();
     }

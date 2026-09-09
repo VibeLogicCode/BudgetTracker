@@ -180,7 +180,7 @@ describe('S-18 fix (v1.13.0 ruling R2): overBudget names only the recipient\'s o
     const gas = categoryIdByName(t.db, 'Gas');
 
     // A household budget, blown by someone else's (unattributed) spend -- must never reach
-    // this recipient's "Over budget this month" line.
+    // this recipient's own budget block.
     upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-08', amountCents: 10000 });
     spend(groceries, 20000, '2026-08-12'); // $200.00 against a $100.00 household limit
 
@@ -190,7 +190,9 @@ describe('S-18 fix (v1.13.0 ruling R2): overBudget names only the recipient\'s o
 
     expect(evaluateWeeklyDigest({ userId, slotDate: '2026-08-17', now: NOW })).toBe(1);
     expect(body()).not.toContain('Groceries');
-    expect(body()).toContain('Over budget this month: Gas');
+    // 2026-09-08: same S-18 property, new shape -- the budget block carries figures now, so this
+    // asserts the category is named in it rather than in the old one-line list.
+    expect(body()).toContain('Gas: $90 of $50, $40 over');
   });
 
   it('a household-visibility member and an admin see the household over-budget category unchanged', () => {
@@ -202,11 +204,11 @@ describe('S-18 fix (v1.13.0 ruling R2): overBudget names only the recipient\'s o
 
     expect(evaluateWeeklyDigest({ userId: member, slotDate: '2026-08-17', now: NOW })).toBe(1);
     const memberBody = (t.sqlite.prepare('select body from notification_outbox where user_id = ?').get(member) as { body: string }).body;
-    expect(memberBody).toContain('Over budget this month: Groceries');
+    expect(memberBody).toContain('Groceries: $200 of $100, $100 over');
 
     expect(evaluateWeeklyDigest({ userId: admin, slotDate: '2026-08-17', now: NOW })).toBe(1);
     const adminBody = (t.sqlite.prepare('select body from notification_outbox where user_id = ?').get(admin) as { body: string }).body;
-    expect(adminBody).toContain('Over budget this month: Groceries');
+    expect(adminBody).toContain('Groceries: $200 of $100, $100 over');
   });
 });
 
@@ -228,5 +230,85 @@ describe('item BK: viewerFor skips rather than falling back to a household scope
       t.sqlite.prepare('select count(*) as c from notification_outbox where user_id = ?').get(userId) as { c: number }
     ).c;
     expect(count).toBe(0);
+  });
+});
+
+/**
+ * 2026-09-08, owner report: "there is 1 message per budget can we not send a summary message with
+ * key figures and less repetative text so its easier to read and digest info".
+ *
+ * The owner's Sunday-only import habit is what makes this correct rather than merely tidier: with
+ * one import a week there is no moment between summaries at which a budget figure could have
+ * moved, so a per-category alert on a five-minute tick was reporting news that had already been
+ * reported.
+ */
+describe('the weekly summary carries every budget, instead of one message each', () => {
+  it('lists over and close with figures, and totals what is over', () => {
+    const userId = emailUser();
+    const groceries = categoryIdByName(t.db, 'Groceries');
+    const gas = categoryIdByName(t.db, 'Gas');
+    const coffee = categoryIdByName(t.db, 'Coffee');
+
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-08', amountCents: 10000 });
+    upsertBudget({ scope: 'household', userId: null, categoryId: gas, month: '2026-08', amountCents: 20000 });
+    upsertBudget({ scope: 'household', userId: null, categoryId: coffee, month: '2026-08', amountCents: 5000 });
+
+    spend(groceries, 18000, '2026-08-12'); // $80 over
+    spend(gas, 25000, '2026-08-13'); // $50 over
+    spend(coffee, 4500, '2026-08-14'); // 90%, close but not over
+
+    expect(evaluateWeeklyDigest({ userId, slotDate: '2026-08-17', now: NOW })).toBe(1);
+    const text = body();
+
+    // Whole dollars, `Name: $spent of $limit, $gap` -- one line shape, learned once, scanned
+    // forever. Cents are for a single-charge alert, not for a figure somebody glances at.
+    expect(text).toContain('Groceries: $180 of $100, $80 over');
+    expect(text).toContain('Gas: $250 of $200, $50 over');
+    expect(text).toContain('Coffee: $45 of $50, $5 left');
+    expect(text).toContain('Total over: $130.');
+
+    // Biggest problem first: the first line under Over is the one a family talks about.
+    expect(text.indexOf('Groceries: $180')).toBeLessThan(text.indexOf('Gas: $250'));
+    // Over and close are disjoint -- "at 90% of the limit" stops being news once the limit is
+    // gone. Matched on the BUDGET line, not the bare name: 'Coffee' also appears in Top
+    // categories above, and indexing on the name alone found that instead.
+    expect(text.indexOf('Coffee: $45 of $50')).toBeGreaterThan(text.indexOf('Gas: $250'));
+  });
+
+  it('says nothing about budgets when none are over or close', () => {
+    const userId = emailUser();
+    const groceries = categoryIdByName(t.db, 'Groceries');
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-08', amountCents: 100000 });
+    spend(groceries, 1000, '2026-08-12');
+
+    evaluateWeeklyDigest({ userId, slotDate: '2026-08-17', now: NOW });
+    const text = body();
+    // Silence is a message. An "all budgets fine" block on every summary is how a section stops
+    // being read at all.
+    expect(text).not.toContain('Over');
+    expect(text).not.toContain('Total over');
+  });
+
+  it('still reports budgets in a week with no transactions at all', () => {
+    const userId = emailUser();
+    const groceries = categoryIdByName(t.db, 'Groceries');
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-08', amountCents: 10000 });
+    // Spent earlier in the month, but OUTSIDE this digest's seven-day window.
+    spend(groceries, 18000, '2026-08-02');
+
+    evaluateWeeklyDigest({ userId, slotDate: '2026-08-17', now: NOW });
+    const text = body();
+    expect(text).toContain('No transactions were recorded this week.');
+    // The month is still blown; a quiet week is not a reason to stop saying so.
+    expect(text).toContain('Groceries: $180 of $100, $80 over');
+  });
+
+  it('ignores a category with no budget set', () => {
+    const userId = emailUser();
+    const groceries = categoryIdByName(t.db, 'Groceries');
+    spend(groceries, 50000, '2026-08-12');
+    evaluateWeeklyDigest({ userId, slotDate: '2026-08-17', now: NOW });
+    // Nothing to be over or close to. Spending shows in the totals, never in the budget block.
+    expect(body()).not.toContain('Groceries: $500');
   });
 });

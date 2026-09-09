@@ -4,7 +4,6 @@ import { notificationOutbox } from '@/db/schema';
 import { readEnv } from '@/lib/env';
 import { getUserSettings, notifiableUsers } from '@/lib/notify/config';
 import { evaluateAnomalies, evaluateSubscriptionCreep } from '@/lib/notify/evaluate/anomalies';
-import { evaluateBudgets } from '@/lib/notify/evaluate/budget';
 import { evaluateComingDue } from '@/lib/notify/evaluate/coming-due';
 import { evaluateWeeklyDigest } from '@/lib/notify/evaluate/digest';
 import { evaluateMonthBoundary } from '@/lib/notify/evaluate/monthly';
@@ -202,11 +201,21 @@ export function runScheduledEvaluation(
     return;
   }
 
-  try {
-    evaluateBudgets({ now, tz });
-  } catch (error) {
-    console.error('[notify] budget evaluation failed', error);
-  }
+  /**
+   * 2026-09-08 (owner report: "there is 1 message per budget can we not send a summary message
+   * with key figures and less repetative text so its easier to read and digest info").
+   *
+   * evaluateBudgets is NO LONGER CALLED. Every figure it used to send one message at a time --
+   * category, spent, limit, how far over -- is now a section of the weekly summary, which the
+   * household reads once instead of six times (evaluate/digest.ts, collectBudgets).
+   *
+   * This is a deliberate removal, not an oversight, and the trade is worth stating: a category
+   * that goes over on Tuesday is reported in Monday's summary rather than within five minutes.
+   * For this household that costs nothing, because transactions arrive in one weekly import --
+   * there is no Tuesday in which the number could have moved. The function and its two event ids
+   * stay (prefs, family-channel routing and its own tests are untouched) so the decision is one
+   * line to revisit.
+   */
 
   try {
     evaluateAnomalies({ now, tz });

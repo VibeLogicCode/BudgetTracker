@@ -106,7 +106,7 @@ export type RenderInput =
       topCategories: readonly DigestLine[];
       topMerchants: readonly DigestLine[];
       reviewCount: number;
-      overBudget: readonly string[];
+      budgets: BudgetSummary;
     }
   | {
       event: 'weekly_digest';
@@ -131,7 +131,7 @@ export type RenderInput =
       topCategories: readonly DigestLine[];
       topMerchants: readonly DigestLine[];
       reviewCount: number;
-      overBudget: readonly string[];
+      budgets: BudgetSummary;
     }
   | { event: 'new_signin'; name: string; atLabel: string; tz: string; ip: string; userAgent: string | null }
   | { event: 'password_changed'; name: string; atLabel: string; tz: string }
@@ -374,16 +374,76 @@ function refreshLines(rows: readonly RefreshLine[]): string[] {
   });
 }
 
+/**
+ * 2026-09-08 (owner report: "there is 1 message per budget can we not send a summary message with
+ * key figures and less repetative text"). One budget's standing, with the figures that matter.
+ *
+ * Replaces the bare `string[]` of category names the digest used to carry. Names alone forced the
+ * household to go and look up every figure, which is why the per-category alerts existed at all --
+ * and those alerts are what this now absorbs.
+ */
+export interface BudgetStanding {
+  name: string;
+  spentCents: number;
+  limitCents: number;
+}
+
+/**
+ * What the digest says about budgets. `over` and `close` are disjoint: a category that is over is
+ * never also listed as close, because "at 98% of the limit" stops being news the moment the limit
+ * is gone.
+ */
+export interface BudgetSummary {
+  over: readonly BudgetStanding[];
+  close: readonly BudgetStanding[];
+}
+
 type WeeklyDigestInput = Extract<RenderInput, { event: 'weekly_digest' }>;
+
+/**
+ * `Name: $spent of $limit, $gap over|left` -- the one budget line shape, used everywhere.
+ *
+ * Whole dollars, not cents: this is a scanning figure, and nobody reconciles from a phone
+ * notification. Dollars over rather than a percentage, because "$81 over" is what a household
+ * feels and "180.99%" is what a spreadsheet feels.
+ *
+ * NOT padded() -- see that helper's own note. Telegram sends plain text with no parse_mode, so it
+ * renders in a proportional font and column alignment built with padEnd comes out ragged on every
+ * phone. `Name: figures` reads correctly in any font.
+ */
+function budgetLines(rows: readonly BudgetStanding[]): string[] {
+  return rows.map((row) => {
+    const gap = row.spentCents - row.limitCents;
+    const tail = gap > 0 ? `${wholeMoney(gap)} over` : `${wholeMoney(-gap)} left`;
+    return `${truncateText(row.name, NAME_MAX)}: ${wholeMoney(row.spentCents)} of ${wholeMoney(row.limitCents)}, ${tail}`;
+  });
+}
+
+/** Whole dollars, rounded to the nearest. Summaries scan; only a single-charge alert needs cents. */
+function wholeMoney(cents: number): string {
+  return money(Math.round(Math.abs(cents) / 100) * 100).replace(/\.00$/, '');
+}
+
+/** The budget block both digest variants share. Omitted entirely when there is nothing to say. */
+function budgetBlock(budgets: BudgetSummary): string[] {
+  const parts: string[] = [];
+  if (budgets.over.length > 0) parts.push('', 'Over', ...budgetLines(budgets.over));
+  if (budgets.close.length > 0) parts.push('', 'Close', ...budgetLines(budgets.close));
+  if (budgets.over.length > 0) {
+    const total = budgets.over.reduce((sum, row) => sum + (row.spentCents - row.limitCents), 0);
+    parts.push('', `Total over: ${wholeMoney(total)}.`);
+  }
+  return parts;
+}
 
 /** The tail both digest variants share when the week held nothing at all. */
 function emptyDigestTail(input: WeeklyDigestInput): string {
+  // A week with no transactions can still hold budgets that went over earlier in the month, so the
+  // budget block is appended here too rather than being treated as spend-only news.
   const tail: string[] = ['No transactions were recorded this week.'];
   if (input.reviewCount > 0) tail.push(`${input.reviewCount} transactions still need review.`);
-  if (input.overBudget.length > 0) {
-    tail.push(`Over budget this month: ${input.overBudget.map((n) => truncateText(n, NAME_MAX)).join(', ')}.`);
-  }
-  return tail.join('\n');
+  tail.push(...budgetBlock(input.budgets));
+  return tail.join('\n').trimEnd();
 }
 
 /** The tables and footer both variants share, appended after each one's own header block. */
@@ -394,11 +454,12 @@ function digestTail(input: WeeklyDigestInput, parts: string[]): string {
   if (input.topMerchants.length > 0) {
     parts.push('', 'Top merchants (household)', ...padded(input.topMerchants));
   }
+  // 2026-09-08: the budget block replaces the old one-line "Over budget this month: A, B, C."
+  // That line named categories and gave no figures, which is exactly why a separate alert per
+  // category had to exist. With the figures here, those alerts have nothing left to add.
+  parts.push(...budgetBlock(input.budgets));
   parts.push('');
   if (input.reviewCount > 0) parts.push(`${input.reviewCount} transactions still need review.`);
-  if (input.overBudget.length > 0) {
-    parts.push(`Over budget this month: ${input.overBudget.map((n) => truncateText(n, NAME_MAX)).join(', ')}.`);
-  }
   return parts.join('\n').trimEnd();
 }
 

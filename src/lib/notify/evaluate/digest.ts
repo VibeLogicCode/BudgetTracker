@@ -8,17 +8,42 @@ import { householdWeeklyDigestKey, weeklyDigestKey } from '@/lib/notify/events';
 import { mondayOfIsoWeek } from '@/lib/notify/evaluate/slots';
 import { householdRoutedChannels } from '@/lib/notify/household';
 import { enqueue, enqueuedAnything } from '@/lib/notify/outbox';
-import { renderEvent, type DigestLine } from '@/lib/notify/render';
+import { renderEvent, type BudgetStanding, type BudgetSummary, type DigestLine } from '@/lib/notify/render';
 
 const TOP_CATEGORIES = 5;
 const TOP_MERCHANTS = 3;
 
-function overBudgetNames(rows: BudgetRow[], acc: string[] = []): string[] {
+/**
+ * 2026-09-08 (owner report: one message per budget, too repetitive). The digest now carries the
+ * FIGURES for every budget that is over or close, which is what the per-category alerts used to
+ * carry one message at a time.
+ *
+ * `close` is anything at or past CLOSE_PCT that is not already over -- the two lists are disjoint,
+ * because "at 98% of the limit" stops being news once the limit is gone. Rows with no limit are
+ * skipped: a category nobody budgeted cannot be over or close to anything.
+ *
+ * Sorted biggest problem first: over by dollars over, descending; close by dollars left, ascending.
+ * In a family group chat the first line under `Over` is the one that gets talked about.
+ */
+const CLOSE_PCT = 80;
+
+function collectBudgets(rows: BudgetRow[], acc?: { over: BudgetStanding[]; close: BudgetStanding[] }): BudgetSummary {
+  const out = acc ?? { over: [] as BudgetStanding[], close: [] as BudgetStanding[] };
   for (const row of rows) {
-    if (row.overBudget) acc.push(row.categoryName);
-    if (row.children.length > 0) overBudgetNames(row.children, acc);
+    if (row.limitCents !== null && row.limitCents > 0) {
+      const standing: BudgetStanding = {
+        name: row.categoryName,
+        spentCents: row.spentCents,
+        limitCents: row.limitCents,
+      };
+      if (row.overBudget) out.over.push(standing);
+      else if (row.pct !== null && row.pct >= CLOSE_PCT) out.close.push(standing);
+    }
+    if (row.children.length > 0) collectBudgets(row.children, out);
   }
-  return acc;
+  out.over.sort((a, b) => b.spentCents - b.limitCents - (a.spentCents - a.limitCents));
+  out.close.sort((a, b) => a.limitCents - a.spentCents - (b.limitCents - b.spentCents));
+  return out;
 }
 
 /**
@@ -106,8 +131,10 @@ export function evaluateWeeklyDigest(input: {
   // nothing else, so with no routed channel it feeds nothing -- and a wasted 24-month
   // budgetProgress on every such member's weekly slot is the cost. Skipped outright in that
   // case rather than run and discarded, which is also HOUSEHOLD_ONLY_AT_PAGE's own rule.
-  const householdOverBudget =
-    selfScoped && routed.length === 0 ? [] : overBudgetNames(budgetProgress(month, 'household', null));
+  const householdBudgets: BudgetSummary =
+    selfScoped && routed.length === 0
+      ? { over: [], close: [] }
+      : collectBudgets(budgetProgress(month, 'household', null));
   // S-18 fix (v1.13.0 ruling R2): the RECIPIENT's own personal digest never sees the household
   // list -- a self-scoped recipient's overBudget names only categories THEY are over on.
   // household/admin recipients are unaffected: overBudget === householdOverBudget for them,
@@ -117,10 +144,10 @@ export function evaluateWeeklyDigest(input: {
   // rather than a second hand-written `selfScoped ? 'personal' : 'household'`. The household arm
   // still reuses the array read above rather than re-reading it under the same scope.
   const ownScope = budgetScopeFor(viewer);
-  const overBudget =
+  const budgets: BudgetSummary =
     ownScope === 'household'
-      ? householdOverBudget
-      : overBudgetNames(budgetProgress(month, ownScope, ownerScope(viewer)));
+      ? householdBudgets
+      : collectBudgets(budgetProgress(month, ownScope, ownerScope(viewer)));
 
   const { subject, body } = renderEvent({
     event: 'weekly_digest',
@@ -132,7 +159,7 @@ export function evaluateWeeklyDigest(input: {
     topCategories,
     topMerchants: topMerchantLines,
     reviewCount,
-    overBudget,
+    budgets,
   });
 
   const household =
@@ -143,7 +170,7 @@ export function evaluateWeeklyDigest(input: {
           to,
           slotDate: input.slotDate,
           reviewCount,
-          overBudget: householdOverBudget,
+          budgets: householdBudgets,
           manualToken: input.manual?.token,
         });
 
@@ -212,7 +239,7 @@ function buildHouseholdDigest(input: {
   to: string;
   slotDate: string;
   reviewCount: number;
-  overBudget: string[];
+  budgets: BudgetSummary;
   /** 2026-09-08. Present only for an on-demand send -- see ManualDigestSend. */
   manualToken?: string;
 }): { subject: string; body: string; dedupKey: string } {
@@ -244,7 +271,7 @@ function buildHouseholdDigest(input: {
       cents: row.spentCents,
     })),
     reviewCount: input.reviewCount,
-    overBudget: input.overBudget,
+    budgets: input.budgets,
   });
 
   // Keyed by the WEEK, not by this member's slot date: see householdWeeklyDigestKey. Every
