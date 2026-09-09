@@ -339,12 +339,42 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.31.0 release', () => {
+  it('MUST-7.1: the 1.32.0 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.31.0');
+    expect(pkg.version).toBe('1.32.0');
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toMatch(/^## \[1\.32\.0\] - 2026-09-08$/m);
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.32.0]'));
+    expect(changelog.indexOf('## [1.32.0]')).toBeLessThan(changelog.indexOf('## [1.31.0]'));
+    const release = changelog.slice(changelog.indexOf('## [1.32.0]'), changelog.indexOf('## [1.31.0]'));
+    // Seven efforts, no schema change -- the same promise every release makes, and what lets a
+    // self-hosted household skip the pre-pull database review.
+    expect(release).toMatch(/No migration/i);
+    // The release's headline defect, in the words a household would use for it: a channel they had
+    // deliberately configured produced nothing, and the reason was invisible from the settings
+    // screen that configured it. \s+ because the file is hard-wrapped.
+    expect(release).toMatch(/family\s+channel\s+stayed\s+quiet/i);
+    expect(release).toMatch(/subscriber\s+in\s+its\s+own\s+right/i);
+    // ...and the invariant the fix must never lose while fixing it. A second copy of every routed
+    // message is the failure mode that would look like the feature working.
+    expect(release).toMatch(/Nothing\s+is\s+sent\s+twice/i);
+    // The two owner-facing additions.
+    expect(release).toMatch(/Send\s+a\s+spending\s+summary\s+now/i);
+    expect(release).toMatch(/Expanding\s+a\s+category\s+in\s+the\s+review\s+view/i);
+    // The navigation defect behind the second one: the symptom, not the mechanism, because the
+    // mechanism may be rewritten and the symptom must never come back.
+    expect(release).toMatch(/one-way\s+door/i);
+    // The restart screen's own lie, which is the kind of thing a refactor quietly reintroduces by
+    // routing a planned restart back through the ordinary crash boundary.
+    expect(release).toMatch(/restart\s+screen\s+said\s+the\s+app\s+had\s+crashed/i);
+    // 1.31.0 deferred the warranty consolidation to this release by name; recording that it landed
+    // is what stops it being deferred a second time.
+    expect(release).toMatch(/three\s+copies\s+are\s+gone/i);
+  });
+
+  it('MUST-7.1: the 1.31.0 release is still recorded intact (append-only discipline)', () => {
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.31\.0\] - 2026-09-04$/m);
-    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.31.0]'));
     expect(changelog.indexOf('## [1.31.0]')).toBeLessThan(changelog.indexOf('## [1.30.0]'));
     const release = changelog.slice(changelog.indexOf('## [1.31.0]'), changelog.indexOf('## [1.30.0]'));
     // Ten features and twenty-five fixes ship with no schema change, and saying so is what lets a

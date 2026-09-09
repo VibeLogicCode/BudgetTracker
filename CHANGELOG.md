@@ -21,6 +21,59 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.32.0] - 2026-09-08
+
+No migration. Two additions you asked for, and a family channel that finally speaks for itself.
+
+The theme is notifications that were configured and stayed quiet, and screens that knew something
+they were not saying.
+
+### Added
+
+- **Send a spending summary now.** A button on the dashboard sends the weekly summary on demand,
+  and asks first whether it goes to you alone or to the whole household. It is the same report the
+  schedule already sends — the last seven days by category, top merchants, budget progress and
+  anything waiting to be reviewed — because two reports that mostly agree is how a household ends
+  up reading two different numbers for the same week. Pressing it twice in a minute sends one
+  summary, not two.
+- **Expanding a category in the review view shows its transactions.** The grouped view's disclosure
+  used to open onto three buttons and no rows, which is not what a disclosure triangle promises.
+  Each category now previews its five most recent transactions and says "Showing 5 of 37", so the
+  count above it and the rows below it cannot be read as contradicting each other.
+
+### Fixed
+
+- **The family channel stayed quiet unless somebody had the event switched on personally.** Its
+  message was only ever written as a side effect of a member's own notification, so a household
+  that had routed an event to the family channel — and switched it off for themselves, which is
+  exactly what routing means — got nothing at all. The family channel is now a subscriber in its
+  own right and is evaluated as itself. Nothing is sent twice: it takes its own pass only when no
+  member's pass would have produced that message.
+- **"See all N in the list" was a one-way door.** Drilling into a category from the review view
+  landed on a filtered list with no route back. The view control restores the grouping but keeps
+  the single-category filter, so it returned a group of one; the category chips clear the filter
+  but not the grouping; and on a phone that control is folded away entirely, so there was no route
+  back at any width except the browser's own back button. The drilled list now offers "All
+  categories", visible at every width.
+- **The restart screen said the app had crashed.** Asking for an update and then seeing "something
+  went wrong… this usually clears on its own" thirty seconds later is the app failing to admit it
+  is doing exactly what it was told to do. A planned restart now says so, and says what version it
+  is restarting into.
+- **An update check could hang with nothing bounding it.** Every request it makes now has a
+  deadline, so a slow or unreachable GitHub fails as a check that failed rather than as a card that
+  never resolves.
+- **A warranty item's "has this ended" test existed in three places.** Version 1.31.0 added a guard
+  that runs all three side by side so they could not drift apart silently, and left the merge for
+  this release because the module they all wanted to share could not host a database predicate.
+  There is now one definition, and the three copies are gone.
+
+### Changed
+
+- **The build smokes the published image, not just a development server.** Version 1.31.0 made the
+  pipeline boot the application before publishing, after 1.29.0 shipped a page that threw on every
+  request with the whole suite green. That check ran against a development server; it now also runs
+  against the actual image that gets pushed, which is the artefact a household installs.
+
 ## [1.31.0] - 2026-09-04
 
 No migration. Ten additions, twenty-five fixes, and one new gate in the build.
