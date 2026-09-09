@@ -531,10 +531,31 @@ export function effectivePref(userId: number, eventId: string, channel: Channel)
  *   4. an ENABLED notification_targets row exists for (userId, channel), per MUST-4.2,
  *   5. for channel 'email', an ENABLED notification_smtp row exists.
  */
-export function isEventEnabled(userId: number, eventId: string, channel: Channel): boolean {
+export function isEventEnabled(
+  userId: number,
+  eventId: string,
+  channel: Channel,
+  options?: {
+    /**
+     * 2026-09-08 (owner report: "i tried pressing send notification and it didnt do anything").
+     * Skip the per-event TOGGLE only -- never the checks below it.
+     *
+     * Set exclusively for an on-demand send the person just asked for by pressing a button. Their
+     * weekly_digest toggle being off means "do not push this to me on a schedule"; it has never
+     * meant "refuse it when I ask for it", and reading it that way made the dashboard button a
+     * no-op for exactly the households who had routed the digest to their family channel -- the
+     * ones most likely to press it.
+     *
+     * Everything after this line still applies, and must: a deactivated user, an admin-only event,
+     * and above all a channel with no configured or enabled target are all still refusals. This
+     * bypasses a preference, not a capability.
+     */
+    ignorePreference?: boolean;
+  },
+): boolean {
   const def = eventDef(eventId);
   if (!def) return false;
-  if (!effectivePref(userId, eventId, channel)) return false;
+  if (options?.ignorePreference !== true && !effectivePref(userId, eventId, channel)) return false;
 
   const user = getDb()
     .select({ role: users.role, isActive: users.isActive })

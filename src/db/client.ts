@@ -3,7 +3,20 @@ import BetterSqlite3 from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import { readEnv } from '@/lib/env';
+import {
+  MigrationJournalError,
+  isNewerThanCode,
+  readAppliedMigrationCounts,
+  readLocalMigrationCounts,
+} from '@/lib/db/migration-state';
 import * as schema from './schema';
+
+/**
+ * O-04. Its own class so instrumentation-node.ts's boot-failure frame can tell "you rolled the
+ * image back" apart from "the database is corrupt" -- two different next steps for the operator,
+ * and the boot log is usually the only thing they get.
+ */
+export class DatabaseNewerThanCodeError extends Error {}
 
 export type Db = BetterSQLite3Database<typeof schema>;
 
@@ -54,6 +67,47 @@ export function openDatabase(filePath: string): DbInstance {
   sqlite.pragma('busy_timeout = 5000');
   sqlite.pragma('foreign_keys = OFF');
   const db = drizzle(sqlite, { schema });
+
+  /**
+   * O-04 (2026-09-02 review, P1). BEFORE migrate(), because after it the question cannot be asked:
+   * drizzle compares each local migration against the database's single latest `created_at`, so on
+   * downgraded code every local migration already looks applied, nothing re-runs, and the boot
+   * succeeds while the old code serves a schema it does not know about.
+   *
+   * Refusing to start is the right answer even though it takes the app down, and this is the one
+   * place in this file that chooses a dead container over a running one on purpose. The failure it
+   * replaces is worse than downtime: an older INSERT that omits a column, or an older query shape
+   * that now returns wrong rows, silently, against real money. INSTALL.md has said downgrading "is
+   * not supported and never was" since v1.2.0 — this makes that sentence true rather than aspirational.
+   *
+   * It matters more here than the general case because install/synology-compose-pull.yml pins
+   * `:latest` and a tag push repoints it, so "pull the previous tag" is the natural recovery move
+   * after a bad upgrade, and that was precisely the unguarded path.
+   *
+   * A journal we cannot read is NOT treated as a downgrade: MigrationJournalError means a corrupted
+   * installation, and letting migrate() fail on it produces a far better message than a downgrade
+   * warning that sends somebody hunting for a version mismatch that does not exist.
+   */
+  try {
+    const applied = readAppliedMigrationCounts(sqlite);
+    const local = readLocalMigrationCounts(migrationsFolder());
+    if (isNewerThanCode(applied, local)) {
+      sqlite.close();
+      throw new DatabaseNewerThanCodeError(
+        `This database was written by a newer version of Budget Tracker than the one running ` +
+          `(it carries ${applied.count} applied migrations; this version ships ${local.count}). ` +
+          `Upgrade the image again, or restore a backup made by this version. Nothing was changed.`,
+      );
+    }
+  } catch (error) {
+    if (error instanceof DatabaseNewerThanCodeError) throw error;
+    if (!(error instanceof MigrationJournalError)) {
+      sqlite.close();
+      throw error;
+    }
+    // Unreadable journal: fall through and let migrate() produce the real diagnosis.
+  }
+
   let migrationError: unknown;
   try {
     migrate(db, { migrationsFolder: migrationsFolder() });

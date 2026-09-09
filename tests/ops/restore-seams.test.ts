@@ -185,10 +185,12 @@ describe('F2 defect fix: a signalled shutdown is not counted as an OCR crash', (
   });
 
   it('both SIGTERM and SIGINT route through the same handler, which clears the marker before exiting', () => {
-    expect(source).toMatch(/process\.on\(\s*['"]SIGTERM['"]\s*,\s*\(\)\s*=>\s*handleShutdownSignal/);
-    expect(source).toMatch(/process\.on\(\s*['"]SIGINT['"]\s*,\s*\(\)\s*=>\s*handleShutdownSignal/);
+    expect(source).toMatch(/process\.on\(\s*['"]SIGTERM['"]\s*,\s*\(\)\s*=>\s*shutdown/);
+    expect(source).toMatch(/process\.on\(\s*['"]SIGINT['"]\s*,\s*\(\)\s*=>\s*shutdown/);
     const clearAt = source.indexOf('clearOcrInFlightMarkerOnShutdown()');
-    const exitAt = source.indexOf('process.exit(0)');
+    // O-11 parameterised the exit code (0 for a signal, 1 for a crash), so the terminal call in
+    // the shared body is process.exit(code) now. The ordering this pins is unchanged.
+    const exitAt = source.indexOf('process.exit(code)');
     // There is no "after" for a call that ends the process -- the clear has to run before it.
     expect(clearAt).toBeGreaterThan(-1);
     expect(exitAt).toBeGreaterThan(clearAt);

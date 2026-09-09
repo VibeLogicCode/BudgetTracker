@@ -182,6 +182,13 @@ export function enqueue(input: {
    * row on no channel at all; no caller does, and nothing here relies on that.
    */
   skipHouseholdRouting?: boolean;
+  /**
+   * 2026-09-08. Deliver even though the recipient has this event's own toggle off -- see
+   * isEventEnabled's `ignorePreference` for why that toggle does not mean what refusing here made
+   * it mean. Set only for a send a person explicitly asked for; never by a scheduled evaluator,
+   * whose whole contract is that the toggle decides.
+   */
+  ignoreEventPreference?: boolean;
   at?: Date;
 }): EnqueueResult {
   const db = getDb();
@@ -240,7 +247,7 @@ export function enqueue(input: {
     // to, where the family channel it evaluates for does not exist.
     if (recipient === null || input.familyChannelOnly) continue;
 
-    if (!isEventEnabled(recipient, input.eventId, channel)) continue;
+    if (!isEventEnabled(recipient, input.eventId, channel, { ignorePreference: input.ignoreEventPreference })) continue;
     // MUST-3.9: the row that was sent IS the dedup guard. `changes === 0` means
     // "already fired": there is no separate bookkeeping that could drift.
     const result = db

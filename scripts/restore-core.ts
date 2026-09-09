@@ -23,6 +23,16 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import Database from 'better-sqlite3';
 import * as tar from 'tar';
+// O-04: the comparison, the journal reader and the applied-migration reader now live in one leaf
+// module that src/db/client.ts can also reach (it cannot import THIS file -- `tar` and the whole
+// restore machinery have no business in the boot path). The wrappers below keep MUST-20.12: every
+// error that can reach restore-result.json is still a written, operator-readable RestoreError.
+import {
+  MigrationJournalError,
+  isNewerThanCode,
+  readAppliedMigrationCounts,
+  readLocalMigrationCounts,
+} from '../src/lib/db/migration-state.ts';
 
 /** Must stay identical to STORED_NAME_RE in src/lib/warranty/receipts.ts. */
 export const RESTORE_STORED_NAME_RE =
@@ -208,58 +218,45 @@ export interface MigrationCounts {
 }
 
 export function readLocalMigrations(migrationsFolder: string): MigrationCounts {
-  const journal = path.join(migrationsFolder, 'meta', '_journal.json');
   // MUST-20.12: every error that can end up in restore-result.json must be a written,
   // operator-readable RestoreError, never a raw ENOENT/parse SyntaxError bubbling up from a
-  // filesystem primitive.
-  let raw: string;
+  // filesystem primitive. The leaf module throws MigrationJournalError; the two messages below are
+  // unchanged from when the reading lived here.
   try {
-    raw = fs.readFileSync(journal, 'utf8');
-  } catch {
-    throw new RestoreError('Could not read the local migrations journal. The installation may be corrupted.');
+    return readLocalMigrationCounts(migrationsFolder);
+  } catch (error) {
+    if (error instanceof MigrationJournalError) {
+      throw new RestoreError(
+        error.message.includes('valid JSON')
+          ? 'The local migrations journal is not valid JSON. The installation may be corrupted.'
+          : 'Could not read the local migrations journal. The installation may be corrupted.',
+      );
+    }
+    throw error;
   }
-  let parsed: { entries?: { when?: number }[] };
-  try {
-    parsed = JSON.parse(raw) as { entries?: { when?: number }[] };
-  } catch {
-    throw new RestoreError('The local migrations journal is not valid JSON. The installation may be corrupted.');
-  }
-  const entries = parsed.entries ?? [];
-  return {
-    count: entries.length,
-    maxWhen: entries.reduce((max, entry) => Math.max(max, Number(entry.when ?? 0)), 0),
-  };
 }
 
 export function readAppliedMigrations(databasePath: string): MigrationCounts {
+  // Opens its own read-only handle because the restore path is asked about a file it does not have
+  // open. The boot path calls the leaf module directly with the connection it already has.
   const db = new Database(databasePath, { readonly: true });
   try {
-    const table = db
-      .prepare("select name from sqlite_master where type='table' and name='__drizzle_migrations'")
-      .get();
-    // A pre-migrator or hand-made database: zero applied, and forward migration is exactly
-    // what should happen to it. Not an error.
-    if (!table) return { count: 0, maxWhen: 0 };
-    const row = db
-      .prepare('select count(*) as count, coalesce(max(created_at), 0) as maxWhen from __drizzle_migrations')
-      .get() as { count: number; maxWhen: number };
-    return { count: Number(row.count), maxWhen: Number(row.maxWhen) };
+    return readAppliedMigrationCounts(db);
   } finally {
     db.close();
   }
 }
 
 /**
- * MUST-20.16. Both conditions are checked because either alone can be fooled: `when` alone
- * misses a migration inserted with an earlier timestamp than the local maximum, and `count`
- * alone misses a reordered journal. Together they are the strongest statement that can be
- * made BEFORE a migration has run — which is the only moment at which the question can
- * honestly be asked.
+ * The RESTORE path's phrasing of the shared question — "is this ARCHIVE newer than the code?" —
+ * where src/db/client.ts asks it of the live database at boot. One rule (isNewerThanCode, in
+ * src/lib/db/migration-state.ts), two call sites, two messages, because "restore a backup made by
+ * this version" is the wrong instruction when there is no backup in play and vice versa.
  */
 export function assertNotNewerThanCode(databasePath: string, migrationsFolder: string): number {
   const local = readLocalMigrations(migrationsFolder);
   const backup = readAppliedMigrations(databasePath);
-  if (backup.maxWhen > local.maxWhen || backup.count > local.count) {
+  if (isNewerThanCode(backup, local)) {
     throw new RestoreError(
       `This backup was made by a newer version of Budget Tracker than the one running ` +
         `(it carries ${backup.count} applied migrations; this version ships ${local.count}). ` +

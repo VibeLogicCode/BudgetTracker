@@ -158,6 +158,11 @@ export function evaluateWeeklyDigest(input: {
     // personal subject and body) and the sender's own copy on that channel is suppressed to make
     // way for it -- the exact inverse of the button they pressed. See skipHouseholdRouting.
     skipHouseholdRouting: input.manual !== undefined && !input.manual.includeHousehold,
+    // A manual send is a person asking for this report right now, so their SCHEDULED-delivery
+    // toggle does not get to refuse it. Without this the button was a no-op for every household
+    // that had routed the digest to its family channel -- which is most of the ones who would
+    // press it (owner report, 2026-09-08).
+    ignoreEventPreference: input.manual !== undefined,
     subject,
     body,
     household,

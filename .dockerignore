@@ -33,3 +33,41 @@ real-statements/
 tests
 .github
 install
+
+# O-02 (2026-09-02 review, P1). Everything below was reaching the build context, and therefore
+# `COPY . .` and Next's standalone tracing, purely because nothing named it. tests/ops/docker.test.ts
+# now enumerates the repo root and fails on any entry that is neither ignored here nor on its
+# REQUIRED_IN_BUILD_CONTEXT allowlist, so a NEW directory can no longer ship by default -- which is
+# the actual fix. These entries are the backlog that guard found on its first run.
+
+# Local tooling and editor state. .claude carries agent configuration; this image is public.
+.claude
+.vscode
+
+# A third-party design prototype with its own lockfile. .gitignore calls it "Never shipped,
+# never published" -- which was true of git and not of Docker.
+UI Component/
+
+# Development inputs, verified not read at runtime: nothing in src/ or scripts/ opens either
+# directory (the @/lib/packs hits are a source module, not this folder).
+packs/
+fixtures/
+
+# Build caches and repo metadata: large, useless in an image, and tsbuildinfo is ~350 KB.
+*.tsbuildinfo
+.gitignore
+.gitattributes
+
+# Documentation and compose/config files that the running container never reads. INSTALL.md and
+# README.md are for people looking at the repository, not the image. CHANGELOG.md is deliberately
+# NOT here -- Settings -> About renders it at runtime.
+README.md
+INSTALL.md
+docker-compose.yml
+drizzle.config.ts
+vitest.config.ts
+.env.example
+
+# Screen recordings dropped in the repo root while demoing. Gitignored, but .gitignore has never
+# had any bearing on what Docker sends -- which is this whole section's point.
+screen-*.mp4

@@ -25,9 +25,11 @@ function stripComments(code: string): string {
  */
 describe('shutdown and boot failure (item AZ / UX-12)', () => {
   it('the signal handler closes the database before it exits', () => {
-    const handler = source.slice(source.indexOf('function handleShutdownSignal'));
+    const handler = source.slice(source.indexOf('function shutdown('));
     const close = handler.indexOf('closeDb()');
-    const exit = handler.indexOf('process.exit(0)');
+    // O-11 parameterised the exit code (0 for a signal, 1 for a crash), so the terminal call
+    // is process.exit(code) now -- the ordering this test pins is unchanged.
+    const exit = handler.indexOf('process.exit(code)');
     expect(close).toBeGreaterThan(-1);
     expect(exit).toBeGreaterThan(-1);
     // Order is the whole point: closing after exiting is not closing.
@@ -44,7 +46,7 @@ describe('shutdown and boot failure (item AZ / UX-12)', () => {
     // closeDb() (too late to backstop anything) or if .unref() were dropped (which would keep
     // the process alive on its own). This pins the actual ordering the shutdown path depends on.
     const codeOnly = stripComments(source);
-    const handler = codeOnly.slice(codeOnly.indexOf('function handleShutdownSignal'));
+    const handler = codeOnly.slice(codeOnly.indexOf('function shutdown('));
     const setTimeoutAt = handler.indexOf('setTimeout(');
     const unrefAt = handler.indexOf('.unref()');
     const closeDbAt = handler.indexOf('closeDb()');
@@ -52,7 +54,7 @@ describe('shutdown and boot failure (item AZ / UX-12)', () => {
     // or -- if a future rewrite ever drops the explicit clearTimeout -- the handler's own
     // terminal process.exit(0) superseding it.
     const clearAt = handler.indexOf('clearTimeout(');
-    const finalExitAt = handler.lastIndexOf('process.exit(0)');
+    const finalExitAt = handler.lastIndexOf('process.exit(code)');
     const disarmedAt = clearAt > -1 ? clearAt : finalExitAt;
 
     expect(setTimeoutAt).toBeGreaterThan(-1);
@@ -73,5 +75,51 @@ describe('shutdown and boot failure (item AZ / UX-12)', () => {
     // owner had to know to go and read.
     expect(source).toContain('restore-backup.ts');
     expect(source).toMatch(/try \{\s*getDb\(\);/);
+  });
+});
+
+/**
+ * O-11 (2026-09-02 review, P1). Node has crashed the process on an unhandled rejection since v15,
+ * and the SIGTERM handler above -- whose entire purpose is checkpointing the WAL and clearing the
+ * OCR in-flight marker -- covers signals only. A stray rejection therefore died with the WAL
+ * uncheckpointed and the marker uncleared, which is exactly the ambiguity reconcileOcrCrashOnBoot
+ * cannot resolve: it could no longer tell a stray rejection from a real crash.
+ *
+ * Source greps, for the same reason every test above uses them: importing this module boots the
+ * scheduler, opens the database and registers real process-level handlers.
+ */
+describe('O-11: a crash checkpoints the database like a signal does', () => {
+  it('registers both crash listeners', () => {
+    const codeOnly = stripComments(source);
+    expect(codeOnly).toMatch(/process\.on\(\s*'unhandledRejection'/);
+    expect(codeOnly).toMatch(/process\.on\(\s*'uncaughtException'/);
+  });
+
+  it('runs the same shutdown body a signal runs, rather than a second hand-copied one', () => {
+    const codeOnly = stripComments(source);
+    // One teardown, three entry points. A hand-copied body is how the OCR marker gets cleared on
+    // SIGTERM and forgotten on a crash -- the drift this codebase keeps paying to avoid.
+    const teardown = (codeOnly.match(/clearOcrInFlightMarkerOnShutdown\(\)/g) ?? []).length;
+    expect(teardown).toBe(1);
+    const closes = (codeOnly.match(/closeDb\(\)/g) ?? []).length;
+    expect(closes).toBe(1);
+  });
+
+  it('exits NON-zero on a crash, unlike the clean signal path', () => {
+    const codeOnly = stripComments(source);
+    // A crash that exits 0 tells Docker the container stopped on purpose, so a restart policy of
+    // on-failure never restarts it. The signal path must stay 0 for exactly the same reason
+    // inverted: a deliberate stop is not a failure.
+    expect(codeOnly).toMatch(/shutdown\('unhandled promise rejection',\s*1\)/);
+    expect(codeOnly).toMatch(/shutdown\('uncaught exception',\s*1\)/);
+    expect(codeOnly).toMatch(/shutdown\('received SIGTERM',\s*0\)/);
+    expect(codeOnly).toMatch(/shutdown\('received SIGINT',\s*0\)/);
+  });
+
+  it('logs the crash with its own prefix before tearing down, naming which listener fired', () => {
+    const codeOnly = stripComments(source);
+    // Without the reason in the log, the only difference between a crash and a `docker stop` in
+    // the container log is the exit code, which nobody reads after the fact.
+    expect(codeOnly).toMatch(/\[crash\]/);
   });
 });

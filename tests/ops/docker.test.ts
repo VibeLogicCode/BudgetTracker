@@ -185,6 +185,86 @@ describe('.dockerignore', () => {
     }
   });
 
+  /**
+   * O-02 (2026-09-02 review, P1). The test ABOVE pins four entries somebody noticed in August. It
+   * cannot notice a fifth, and that is the whole defect: `.dockerignore` is a denylist, `Dockerfile`
+   * does `COPY . .` into the builder, and Next 16's standalone tracing then copies the tree into an
+   * image that is PUBLIC on GHCR. Every new top-level directory ships by default and silently.
+   *
+   * So this inverts it. Enumerate what is actually in the repo root and require every entry to be
+   * either ignored or explicitly declared necessary. A new directory now FAILS the suite until
+   * somebody classifies it, which is the only version of this guard that keeps working without
+   * anybody remembering it exists.
+   */
+  const REQUIRED_IN_BUILD_CONTEXT = new Set([
+    'src',
+    'public',
+    'drizzle',
+    'scripts',
+    'vendor',
+    'package.json',
+    'package-lock.json',
+    'next.config.ts',
+    'tsconfig.json',
+    'postcss.config.mjs',
+    'next-env.d.ts',
+    // Settings -> About reads this at runtime; Dockerfile:76 copies it explicitly.
+    'CHANGELOG.md',
+    // The build's own inputs. Excluding either is meaningless (docker reads them before the
+    // context is assembled) but leaving them unclassified would fail this test for no reason.
+    'Dockerfile',
+    '.dockerignore',
+    // Shipped deliberately: this image is public, and an image with no licence text is worse
+    // than a few hundred wasted bytes.
+    'LICENSE',
+  ]);
+
+  /** Entries git itself never sees, so they cannot be classified in advance by a human reading the repo. */
+  const NEVER_IN_A_CLEAN_CHECKOUT = /^(node_modules|\.next|\.git|coverage|\.tmp-data|data)$/;
+
+  function ignoredByDockerignore(entry: string): boolean {
+    return dockerignore
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0 && !line.startsWith('#'))
+      .some((pattern) => {
+        const bare = pattern.replace(/\/$/, '');
+        if (bare === entry) return true;
+        // The only glob shape this file uses, e.g. `*.db`, `*.tsbuildinfo`, `screen-*.mp4`.
+        if (pattern.includes('*')) {
+          const rx = new RegExp(`^${pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`);
+          return rx.test(entry);
+        }
+        return false;
+      });
+  }
+
+  it('O-02: every top-level entry is either ignored or explicitly required', () => {
+    const unclassified = fs
+      .readdirSync(process.cwd())
+      .filter((entry) => !NEVER_IN_A_CLEAN_CHECKOUT.test(entry))
+      .filter((entry) => !REQUIRED_IN_BUILD_CONTEXT.has(entry))
+      .filter((entry) => !ignoredByDockerignore(entry));
+
+    // The message names the offender, because the person who added a directory six months from now
+    // is not the person reading this test, and "add it to .dockerignore or to the allowlist" is the
+    // whole decision they need to make.
+    expect(
+      unclassified,
+      `Unclassified top-level entries. Add each to .dockerignore, or to REQUIRED_IN_BUILD_CONTEXT ` +
+        `if the image genuinely needs it: ${unclassified.join(', ')}`,
+    ).toEqual([]);
+  });
+
+  it('O-02: the entries the review found unlisted are now ignored', () => {
+    // Named individually rather than trusting the sweep above, so a careless widening of the
+    // allowlist cannot quietly re-admit them. `UI Component/` is a third-party design prototype
+    // and `.claude` is local agent configuration -- neither belongs in a public image.
+    for (const entry of ['UI Component', '.claude', '.vscode', 'packs', 'fixtures', 'tsconfig.tsbuildinfo']) {
+      expect(ignoredByDockerignore(entry), `${entry} is not excluded from the build context`).toBe(true);
+    }
+  });
+
   it('still admits everything the image genuinely needs', () => {
     // The mirror of the test above: over-excluding is the other way to break the image, and
     // it fails at RUN time (a missing asset, a 500) rather than at build time.

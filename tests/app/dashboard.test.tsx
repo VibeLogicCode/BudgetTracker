@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { render, cleanup, screen } from '@testing-library/react';
 import { sql } from 'drizzle-orm';
 import { createAccount } from '@/lib/accounts';
@@ -14,8 +14,13 @@ import { addMonths, currentMonth, monthEnd, monthLabel, monthStart, todayIso } f
 // Lane 1 (src/lib/savings-target.ts): not mocked, real DB, same as every other lib import here.
 import { saveSavingsTarget } from '@/lib/savings-target';
 import { createTestDb, type TestDb } from '../helpers/db';
+import fs from 'node:fs';
+import path from 'node:path';
 import { CROSS_ORIGIN_ERROR } from '@/lib/auth/csrf';
+import { saveEmailTarget, saveSmtp } from '@/lib/notify/config';
 import { resetNotifyRateLimitsForTests } from '@/lib/notify/ratelimit';
+import { resetOutboxPumpForTests } from '@/lib/notify/outbox';
+import { resetNotifySenderForTests, setNotifySenderForTests } from '@/lib/notify/send';
 
 // v1.26.0 Lane 3b's own describe block near the end of this file exercises
 // dismissRuleImportAction directly (a real 'use server' function, same reasoning
@@ -1080,21 +1085,85 @@ describe('DashboardPage — Lane 3b: the unreviewed-rule-imports card', () => {
  */
 describe('sending a spending summary on demand', () => {
   let t: TestDb | null = null;
+  beforeEach(() => {
+    // kickOutbox() now actually drains, so the sender must be stubbed or these tests would try to
+    // reach a real SMTP relay.
+    setNotifySenderForTests(async () => {});
+    resetOutboxPumpForTests();
+  });
   afterEach(() => {
     // The rate bucket is module-level and in-memory (src/lib/notify/ratelimit.ts), so it survives
     // a fresh database -- without this reset the three-per-hour cap would leak between the tests
     // below and whichever ran fourth would fail for the wrong reason.
     resetNotifyRateLimitsForTests();
+    resetNotifySenderForTests();
+    resetOutboxPumpForTests();
     t?.cleanup();
     t = null;
   });
 
-  async function adminOnDashboard(): Promise<number> {
+  /**
+   * Owner report, 2026-09-08. This helper used to stop at creating the user, and every test below
+   * still passed -- because the action reported success without checking whether anything had
+   * actually been enqueued. A user with NO configured channel has nowhere to deliver to, which is
+   * the state these tests were silently asserting was a successful send. Configuring a real email
+   * target is what makes "sent" mean sent.
+   */
+  async function adminOnDashboard(withChannel = true): Promise<number> {
     t = createTestDb();
     const adult = await createUser({ name: 'Adult', username: 'adult', password: 'correct horse battery', role: 'admin' });
     currentUser.value = { id: adult.id, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+    if (withChannel) {
+      saveSmtp({
+        preset: 'brevo',
+        host: 'smtp-relay.brevo.com',
+        port: 587,
+        security: 'starttls',
+        username: 'me@example.invalid',
+        password: 'pw',
+        fromEmail: 'me@example.invalid',
+        fromName: 'Budget Tracker',
+        enabled: true,
+      });
+      saveEmailTarget({ userId: adult.id, destination: 'adult@example.invalid', enabled: true });
+      // Deliberately NOT setPref(): the weekly_digest toggle stays OFF, which is the state a
+      // household that has routed the digest to its family channel is in -- and the state in which
+      // the button did nothing at all. A manual send must work anyway (ignoreEventPreference).
+    }
     return adult.id;
   }
+
+  it('sends even though the scheduled weekly_digest toggle is off', async () => {
+    await adminOnDashboard();
+    const { sendDigestNowAction } = await import('@/app/(app)/dashboard/actions');
+    const fd = new FormData();
+    fd.set('scope', 'self');
+    // The owner's actual configuration: digest routed to the family channel, so their personal
+    // toggle is off. Refusing here is what made the button a no-op for them.
+    expect(await sendDigestNowAction({}, fd)).toEqual({ sent: 'self' });
+  });
+
+  it('says so plainly when there is no channel to deliver on, instead of claiming success', async () => {
+    await adminOnDashboard(false);
+    const { sendDigestNowAction } = await import('@/app/(app)/dashboard/actions');
+    const fd = new FormData();
+    fd.set('scope', 'self');
+    const result = await sendDigestNowAction({}, fd);
+    expect(result.sent).toBeUndefined();
+    expect(result.error).toMatch(/Nothing was sent/i);
+  });
+
+  it('drains the outbox rather than leaving the message for the five-minute tick', async () => {
+    // The defect the owner hit: "they came with a real delay". enqueue() only writes a pending
+    // row; without kickOutbox() delivery waits for the scheduler. A source assertion, because the
+    // drain is fire-and-forget by design and has no return value to await.
+    const source = fs.readFileSync(path.join(process.cwd(), 'src/app/(app)/dashboard/actions.ts'), 'utf8');
+    expect(source).toContain('kickOutbox(');
+    const enqueueAt = source.indexOf('evaluateWeeklyDigest({');
+    const kickAt = source.indexOf('kickOutbox(');
+    expect(enqueueAt).toBeGreaterThan(-1);
+    expect(kickAt).toBeGreaterThan(enqueueAt);
+  });
 
   it('offers the control in the dashboard header', async () => {
     await adminOnDashboard();
@@ -1132,6 +1201,20 @@ describe('sending a spending summary on demand', () => {
     t = createTestDb();
     const kid = await createUser({ name: 'Kid', username: 'kid', password: 'correct horse battery', role: 'member' });
     currentUser.value = { id: kid.id, name: 'Kid', username: 'kid', role: 'member', visibility: 'self' };
+    // A channel of their own, so the 'self' half below tests the REFUSAL rule rather than
+    // accidentally testing "this account has nowhere to deliver".
+    saveSmtp({
+      preset: 'brevo',
+      host: 'smtp-relay.brevo.com',
+      port: 587,
+      security: 'starttls',
+      username: 'me@example.invalid',
+      password: 'pw',
+      fromEmail: 'me@example.invalid',
+      fromName: 'Budget Tracker',
+      enabled: true,
+    });
+    saveEmailTarget({ userId: kid.id, destination: 'kid@example.invalid', enabled: true });
 
     const { sendDigestNowAction } = await import('@/app/(app)/dashboard/actions');
     const household = new FormData();

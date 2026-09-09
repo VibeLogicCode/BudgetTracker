@@ -9,7 +9,11 @@ import { isSelfScoped } from '@/lib/auth/viewer';
 import { todayIso } from '@/lib/dates';
 import { markImportRulesReviewed } from '@/lib/import/commit';
 import { readEnv } from '@/lib/env';
+import { isEventEnabled } from '@/lib/notify/config';
+import { CHANNELS } from '@/lib/notify/events';
 import { evaluateWeeklyDigest } from '@/lib/notify/evaluate/digest';
+import { householdRoutedChannels } from '@/lib/notify/household';
+import { kickOutbox } from '@/lib/notify/outbox';
 import { checkManualDigest } from '@/lib/notify/ratelimit';
 
 /**
@@ -120,14 +124,60 @@ export async function sendDigestNowAction(
 
   const now = new Date();
   const { tz } = readEnv();
-  evaluateWeeklyDigest({
+  const enqueued = evaluateWeeklyDigest({
     userId: user.id,
     slotDate: todayIso(now, tz),
     now,
     manual: { token: now.toISOString().slice(0, 16), includeHousehold: parsed.data === 'household' },
   });
 
-  // Not revalidating /dashboard: nothing this page renders changes. The outbox drains on its own
-  // schedule, and a revalidate here would suggest to the next reader that it does not.
+  /**
+   * Owner report, 2026-09-08: "i tried pressing send notification and it didnt do anything", for
+   * BOTH options. Two separate defects, both in this function, both fixed here.
+   *
+   * FIRST: the return value was discarded and this returned `sent` unconditionally, so the card
+   * said "Summary sent to you" whether or not a single row had been written. 0 means nothing was
+   * enqueued, and the person is owed that fact rather than a cheerful lie. The likeliest cause is
+   * named in the message, because "nothing happened" with no reason is unactionable: a channel
+   * that is configured but switched off entirely has nowhere to deliver to.
+   *
+   * SECOND, and the reason the household option ALSO did nothing: enqueue() only writes a pending
+   * row. Delivery is the scheduler's five-minute tick, so a correctly enqueued digest arrived
+   * minutes after the button, long after anybody had stopped looking. kickOutbox() is the existing
+   * fire-and-forget drain that every other server action already calls for exactly this reason
+   * (see its docblock) -- this action simply never called it.
+   */
+  if (enqueued === 0) {
+    /**
+     * Nothing was written, and the two reasons need OPPOSITE messages.
+     *
+     * No deliverable channel is a real failure with a real fix, and saying so is the whole point of
+     * checking the return value at all.
+     *
+     * A DUPLICATE is not a failure. The manual token is minute-precision, so a second press inside
+     * the same minute is collapsed by the outbox's unique index -- deliberately, so an impatient
+     * double-click sends one digest rather than two. Reporting that as "Nothing was sent. Check
+     * Settings" would send somebody debugging a working feature, which is a worse outcome than the
+     * silence this whole fix set out to remove. So: if they CAN receive it, the digest they asked
+     * for is on its way, and that is what they are told.
+     */
+    const canReceive =
+      CHANNELS.some((channel) => isEventEnabled(user.id, 'weekly_digest', channel, { ignorePreference: true })) ||
+      (parsed.data === 'household' && householdRoutedChannels('weekly_digest').length > 0);
+    if (!canReceive) {
+      return {
+        error:
+          'Nothing was sent. Check Settings → Notifications: the summary needs at least one channel ' +
+          'switched on, and the household option also needs a family channel set up.',
+      };
+    }
+    // Already queued this minute. Drain anyway -- the earlier press may still be sitting there.
+    kickOutbox(now);
+    return { sent: parsed.data };
+  }
+
+  kickOutbox(now);
+
+  // Still not revalidating /dashboard: nothing this page renders changes.
   return { sent: parsed.data };
 }

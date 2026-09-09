@@ -120,7 +120,21 @@ startScheduler();
 // restarting the container mid-job (exactly what setting OCR_ENGINE, see src/lib/env.ts,
 // requires) leaves the same ocr.inflight_job marker a real crash leaves, and
 // reconcileOcrCrashOnBoot() (queue.ts) cannot tell a clean restart from a crash.
-function handleShutdownSignal(signal: NodeJS.Signals): void {
+/**
+ * O-11 (2026-09-02 review, P1). `reason` is what brought us here and `code` is what we tell the
+ * supervisor, and they are separate arguments because the two crash entry points below need the
+ * SAME teardown with a DIFFERENT verdict.
+ *
+ * Exit 0 for a signal, 1 for a crash, and the difference is load-bearing rather than cosmetic: a
+ * container that exits 0 has stopped on purpose as far as Docker is concerned, so a restart policy
+ * of `on-failure` would leave a crashed app down. Reporting a crash as a clean stop is how an
+ * install stays dead overnight.
+ *
+ * One body, three callers. A hand-copied crash path is precisely how the OCR marker ends up
+ * cleared on SIGTERM and forgotten on a crash -- the drift this file already pays to avoid
+ * elsewhere, and tests/ops/shutdown.test.ts now counts the call sites to keep it that way.
+ */
+function shutdown(reason: string, code: 0 | 1): void {
   try {
     clearOcrInFlightMarkerOnShutdown();
   } catch (error) {
@@ -146,7 +160,7 @@ function handleShutdownSignal(signal: NodeJS.Signals): void {
   // first, which is what happens today.
   const hardStop = setTimeout(() => {
     console.error('[shutdown] the database did not close within 10s; exiting anyway');
-    process.exit(0);
+    process.exit(code);
   }, 10_000);
   hardStop.unref();
   try {
@@ -155,9 +169,35 @@ function handleShutdownSignal(signal: NodeJS.Signals): void {
     console.error('[shutdown] failed to close the database', error);
   }
   clearTimeout(hardStop);
-  console.log(`[shutdown] received ${signal}, database closed, exiting`);
-  process.exit(0);
+  console.log(`[shutdown] ${reason}, database closed, exiting`);
+  process.exit(code);
 }
 
-process.on('SIGTERM', () => handleShutdownSignal('SIGTERM'));
-process.on('SIGINT', () => handleShutdownSignal('SIGINT'));
+process.on('SIGTERM', () => shutdown('received SIGTERM', 0));
+process.on('SIGINT', () => shutdown('received SIGINT', 0));
+
+/**
+ * O-11. The backstop for the rejection nobody predicted. Every floating promise in this codebase
+ * is correctly `.catch`ed today (scheduler.ts, outbox.ts), so this is not covering a known leak --
+ * it is covering the one a later change introduces, at the moment it is introduced, which is the
+ * only time the WAL matters.
+ *
+ * Logged under `[crash]` rather than `[shutdown]`, because after the fact the container log is the
+ * only record of which of the two happened, and "the app stopped" and "the app fell over" call for
+ * different responses from whoever reads it.
+ *
+ * The listener itself must not throw: an exception raised while handling `uncaughtException` gets
+ * no second handler and takes the process down the hard way, skipping the very teardown this
+ * exists to run. `shutdown()` already wraps both of its steps in their own try/catch, so the only
+ * risk left is the logging line, and String() on an arbitrary thrown value cannot throw the way
+ * template-interpolating a hostile object's toString can.
+ */
+process.on('unhandledRejection', (reason) => {
+  console.error('[crash] unhandled promise rejection', reason);
+  shutdown('unhandled promise rejection', 1);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('[crash] uncaught exception', error);
+  shutdown('uncaught exception', 1);
+});
