@@ -21,8 +21,21 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.38.0] - 2026-09-14
+
+Migration 0024 (`merchant_rules` amount bounds and an attribution column). Nothing uses the new
+columns yet — every rule you have keeps behaving exactly as it did.
+
 ### Added
 
+- **The import page reads the file the moment you choose it.** The account and the import profile
+  are set from what is in the statement before anything is pressed — previously they were set when
+  you pressed Preview, which is after the card tells you they have been. Both selects, and Preview
+  itself, stay disabled until there is a file: they are answers about a file, and before there is
+  one they were showing whichever account happened to be there last. When the file cannot be placed
+  — no profile reads it, or nothing says which account it belongs to — the picker is left **blank**
+  rather than pre-armed with a guess, Preview refuses until you choose, and the page says so and
+  points at **Add a bank**.
 - **Assign a transaction to a bill.** A statement line that pays a bill can now be linked to that
   bill's installment straight from the row menu, the way loans have worked since v1.7.0 — pick the
   bill, and either take the installment due nearest that date or name one yourself. Nothing new is
