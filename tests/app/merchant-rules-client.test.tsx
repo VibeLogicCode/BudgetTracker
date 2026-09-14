@@ -36,7 +36,8 @@ function rule(over: Partial<MerchantRuleRecord> = {}): MerchantRuleRecord {
   return {
     id: 1, pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: 1, renameTo: null,
     createdBy: null, hitCount: 0, lastUsedAt: null, createdAt: '2026-08-16T00:00:00.000Z', lastModifiedBy: null,
-    disabledAt: null, packSource: null, packVersion: null, installedAt: null, ...over,
+    disabledAt: null, packSource: null, packVersion: null, installedAt: null,
+    amountMinCents: null, amountMaxCents: null, attributedUserId: null, ...over,
   };
 }
 

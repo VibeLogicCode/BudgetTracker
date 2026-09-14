@@ -1,6 +1,7 @@
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { merchantRules, users } from '@/db/schema';
+import { amountWithinBounds, boundsProblem, boundsWidth, isBounded } from '@/lib/categorize/amount-bounds';
 import { wordBoundaryTokens } from '@/lib/categorize/normalize';
 import { nowIso } from '@/lib/clock';
 
@@ -91,6 +92,35 @@ export const WORD_MATCH_KIND_ERROR =
   'Whole word applies to category and rename rules only. A transfer or not-a-transfer rule is about one description you have actually seen, so it takes Exact or Contains.';
 
 /**
+ * 2026-09-13 (migration 0024). The only kinds a rule may carry an AMOUNT WINDOW on, and like
+ * WORD_MATCH_KINDS above this is a deliberate restriction rather than an unfinished one.
+ *
+ * A transfer rule is learned from one specific payment description and is about that description;
+ * a not_transfer rule is a targeted veto of a pattern the card-payment list would otherwise catch;
+ * a rename is cosmetic and applies whatever the charge came to. None of the three has an amount to
+ * be about, and a window on one of them would be a claim nothing reads.
+ *
+ * Enforced at both choke points, the same pair WORD_MATCH_KINDS uses: upsertRuleFromCorrection
+ * throws (a programmer error -- no form offers the combination), and matchRule skips, so a row
+ * that reached the table by some other route -- a hand-edited database, a backup from a build that
+ * allowed it -- still cannot fire on a comparison its kind has no business making.
+ */
+export const AMOUNT_BOUND_KINDS: readonly RuleKind[] = ['category'];
+
+export function amountBoundsAllowedForKind(ruleKind: RuleKind): boolean {
+  return AMOUNT_BOUND_KINDS.includes(ruleKind);
+}
+
+/** One wording, one place (MUST-19.11) -- the form, the dialog and the pack importer all say this. */
+export const AMOUNT_BOUND_KIND_ERROR =
+  'An amount range applies to category rules only. A transfer, not-a-transfer or rename rule is about the description and not about what the charge came to.';
+
+/** One wording, one place (MUST-19.11). The table refuses this too (drizzle/0024's triggers); this
+ *  is the sentence a person gets instead of a constraint failure. */
+export const AMOUNT_BOUND_ORDER_ERROR =
+  'The smallest amount has to be below the largest one. A range the wrong way round matches nothing, for ever, with nothing on screen to say so.';
+
+/**
  * v1.31.0 review finding R-02 (P2). One wording, one place (MUST-19.11) -- saveRuleAction and the
  * pack importer's schema both say exactly this, the same discipline WORD_MATCH_KIND_ERROR above
  * already keeps for the other refusal a person can walk into on the rules form.
@@ -134,6 +164,18 @@ export interface MerchantRuleRecord {
    *  drizzle/0017_pack_provenance.sql's header. Null exactly when packSource is. */
   packVersion: number | null;
   installedAt: string | null;
+  /**
+   * 2026-09-13 (migration 0024). The amount window this rule is about, compared against
+   * abs(transactions.amount_cents) by amountWithinBounds -- the ONE predicate
+   * (src/lib/categorize/amount-bounds.ts). Both null means "about the merchant, whatever the
+   * amount", which is every row written before that migration. AMOUNT_BOUND_KINDS says which kinds
+   * may carry one.
+   */
+  amountMinCents: number | null;
+  amountMaxCents: number | null;
+  /** 2026-09-13 (migration 0024). Set only on rule_kind = 'attribution', where NULL means
+   *  Household -- the same thing NULL already means in transactions.attributed_user_id. */
+  attributedUserId: number | null;
 }
 
 /** What a pack write stamps on the row it writes -- see upsertRuleFromCorrection's `pack` param. */
@@ -272,10 +314,22 @@ export function ruleOutcomeMissing(rule: Pick<MerchantRuleRecord, 'ruleKind' | '
   return false;
 }
 
+/**
+ * 2026-09-13 (migration 0024). `amountCents` is the transaction's own signed amount, or null when
+ * the caller has none to offer.
+ *
+ * NULL IS A REFUSAL, NOT A WILDCARD: a rule that names an amount cannot fire without one, so a
+ * caller that forgets to pass it sees the merchant-wide answer rather than a bounded rule firing
+ * on a comparison nobody made. That direction is deliberate -- a MISS is recoverable and visible
+ * (the rules page's Affects column reads 0), a wrong answer filed silently is not. The parameter
+ * defaults to null so every pre-existing caller of a kind that cannot carry bounds compiles and
+ * behaves exactly as before.
+ */
 export function matchRule(
   normalizedMerchant: string,
   kind: RuleKind,
   rules: MerchantRuleRecord[],
+  amountCents: number | null = null,
 ): MerchantRuleRecord | null {
   let best: MerchantRuleRecord | null = null;
   for (const rule of rules) {
@@ -285,13 +339,48 @@ export function matchRule(
     // v1.31.0 R-02: a rule with no outcome must not WIN and then do nothing -- see
     // ruleOutcomeMissing above for the merchant that stopped being categorised because it did.
     if (ruleOutcomeMissing(rule)) continue;
+    if (isBounded(rule)) {
+      // The read-side half of AMOUNT_BOUND_KINDS, beside the match-type skip above and for the
+      // same reason: a window on a kind that may not carry one can never fire, whatever route put
+      // it in the table.
+      if (!amountBoundsAllowedForKind(rule.ruleKind)) continue;
+      if (amountCents === null) continue;
+      if (!amountWithinBounds(amountCents, rule.amountMinCents, rule.amountMaxCents)) continue;
+    }
     if (!patternMatches(rule.pattern, rule.matchType, normalizedMerchant)) continue;
     if (best === null || outranks(rule, best)) best = rule;
   }
   return best;
 }
 
+/**
+ * Five steps. The last three are v1.25.0's, byte-for-byte; the first two are migration 0024's and
+ * are NO-OPS for any pair of unbounded rules, which is every rule a household had before it --
+ * isBounded is false on both sides, so step 1 cannot fire and step 2 compares Infinity to
+ * Infinity. Every precedence test written before 0024 stays green for that reason.
+ *
+ * WHY BOUNDS OUTRANK PATTERN LENGTH, which had been the primary step since v1.25.0: length is a
+ * proxy for how much a person committed to, and an amount window is a SECOND DIMENSION of that
+ * commitment rather than more of the same one. Somebody who wrote "$125 to $155" described one
+ * charge from that merchant, not the merchant; and a bounded rule has already proved it describes
+ * THIS row, because it only reached this comparison by matching the amount. So when both match, it
+ * matched more completely. Without this step the owner's own case loses: a bounded and an
+ * unbounded exact rule on one merchant tie on length AND on match type, so step 5 would hand the
+ * charge to the older row -- the merchant-wide one they were trying to override.
+ *
+ * Step 2 is the same argument between two windows that both hold the amount: the tighter claim
+ * described it better. An open side counts as infinitely wide (boundsWidth), because a rule saying
+ * "$125 or more" claims every larger charge the merchant will ever make.
+ */
 function outranks(candidate: MerchantRuleRecord, incumbent: MerchantRuleRecord): boolean {
+  const candidateBounded = isBounded(candidate);
+  const incumbentBounded = isBounded(incumbent);
+  if (candidateBounded !== incumbentBounded) return candidateBounded;
+  if (candidateBounded) {
+    const candidateWidth = boundsWidth(candidate);
+    const incumbentWidth = boundsWidth(incumbent);
+    if (candidateWidth !== incumbentWidth) return candidateWidth < incumbentWidth;
+  }
   if (candidate.pattern.length !== incumbent.pattern.length) {
     return candidate.pattern.length > incumbent.pattern.length;
   }
@@ -359,6 +448,16 @@ export function upsertRuleFromCorrection(input: {
   categoryId: number | null;
   /** Only meaningful for rule_kind = 'rename'; ignored (stored NULL) otherwise. */
   renameTo?: string | null;
+  /**
+   * 2026-09-13 (migration 0024). The amount window this rule is about. PART OF THE ROW'S IDENTITY,
+   * not of its outcome: two rules for one merchant that differ only in their window are two rules,
+   * which is the whole point of that migration. So an update through this function never CHANGES a
+   * window -- it resolves which row it is talking about by it, then updates that row's outcome.
+   * Omitted by every pre-0024 caller, which is what keeps a correction or a teach writing the
+   * merchant-wide rule and leaving a bounded one alone.
+   */
+  amountMinCents?: number | null;
+  amountMaxCents?: number | null;
   createdBy: number | null;
   /** The ACTOR's role, not the rule's. An admin may write over anyone's rule. */
   actorRole: 'admin' | 'member';
@@ -403,6 +502,25 @@ export function upsertRuleFromCorrection(input: {
   // exactly the v1.21.0 item 9 lowercase-pattern defect wearing a different hat.
   if (!matchTypeAllowedForKind(input.matchType, input.ruleKind)) {
     throw new Error(`${WORD_MATCH_KIND_ERROR} (rule_kind "${input.ruleKind}")`);
+  }
+
+  // 2026-09-13 (migration 0024). Same shape and same argument as the match-type refusal directly
+  // above: a programmer error, thrown rather than returned. No form and no dialog offers a window
+  // on a kind outside AMOUNT_BOUND_KINDS, so reaching either of these lines means a NEW caller was
+  // written that did not know the restriction. Writing the row anyway was never an option -- a
+  // window matchRule will never honour is a rule that is dead on arrival, the v1.21.0 item 9
+  // lowercase-pattern defect wearing a different hat.
+  const boundsGiven = (input.amountMinCents ?? null) !== null || (input.amountMaxCents ?? null) !== null;
+  if (boundsGiven && !amountBoundsAllowedForKind(input.ruleKind)) {
+    throw new Error(`${AMOUNT_BOUND_KIND_ERROR} (rule_kind "${input.ruleKind}")`);
+  }
+  const amountMinCents = boundsGiven ? (input.amountMinCents ?? null) : null;
+  const amountMaxCents = boundsGiven ? (input.amountMaxCents ?? null) : null;
+  // boundsProblem, not a comparison written here: the form and the authoring dialog have to refuse
+  // exactly the same two shapes, and tests/ops/amount-bounds.test.ts refuses a second copy of the
+  // arithmetic anywhere under src/.
+  if (boundsProblem(amountMinCents, amountMaxCents) !== null) {
+    throw new Error(`${AMOUNT_BOUND_ORDER_ERROR} (minimum ${amountMinCents}, maximum ${amountMaxCents})`);
   }
 
   // v1.31.0 (review finding R-09, P3). A rule with no OUTCOME is refused here too, and
@@ -450,12 +568,24 @@ export function upsertRuleFromCorrection(input: {
 
   /**
    * 2026-09-13 (migration 0024). A rule's identity is now (pattern, match_type, rule_kind, bounds)
-   * -- two rules for one merchant can coexist when their amount ranges differ, which is the whole
-   * point of that migration. Every caller of THIS function writes an unbounded rule (nothing here
-   * takes bounds yet), so the identity it resolves is explicitly the UNBOUNDED row: without the two
-   * isNull clauses, a household with a bounded "INTACT $125-$155 -> Auto" rule would have their
-   * merchant-wide correction silently overwrite it.
+   * -- two rules for one merchant coexist when their amount windows differ, which is the whole
+   * point of that migration. So the row this write is ABOUT is the one carrying the same window,
+   * and a caller that passes no window is talking about the unbounded row and only that one.
+   *
+   * Load-bearing in exactly the owner's case: without the window in this WHERE, a household with a
+   * bounded "ACME $125-$155 -> Car insurance" rule would have every merchant-wide correction
+   * silently overwrite it -- which is the defect 0024 exists to end, reintroduced at the write
+   * side.
+   *
+   * `boundsMatch` uses isNull rather than eq(col, null) because SQL equality against NULL is never
+   * true; drizzle would emit `= null` and the select would find nothing, so an upsert of an
+   * unbounded rule would insert a duplicate and hit the unique index instead of updating.
    */
+  const boundsMatch = and(
+    amountMinCents === null ? isNull(merchantRules.amountMinCents) : eq(merchantRules.amountMinCents, amountMinCents),
+    amountMaxCents === null ? isNull(merchantRules.amountMaxCents) : eq(merchantRules.amountMaxCents, amountMaxCents),
+  );
+
   const existing = db
     .select({ id: merchantRules.id, createdBy: merchantRules.createdBy, ownerName: users.name })
     .from(merchantRules)
@@ -465,8 +595,7 @@ export function upsertRuleFromCorrection(input: {
         eq(merchantRules.pattern, pattern),
         eq(merchantRules.matchType, input.matchType),
         eq(merchantRules.ruleKind, input.ruleKind),
-        isNull(merchantRules.amountMinCents),
-        isNull(merchantRules.amountMaxCents),
+        boundsMatch,
       ),
     )
     .get();
@@ -511,6 +640,8 @@ export function upsertRuleFromCorrection(input: {
       ruleKind: input.ruleKind,
       categoryId: input.categoryId,
       renameTo,
+      amountMinCents,
+      amountMaxCents,
       createdBy: input.createdBy,
       // A brand-new rule created by an admin starts with no attribution trail at all -- exactly
       // how every pre-v1.13.0 row and every system/pack-authored rule already reads (schema
@@ -535,8 +666,7 @@ export function upsertRuleFromCorrection(input: {
         eq(merchantRules.pattern, pattern),
         eq(merchantRules.matchType, input.matchType),
         eq(merchantRules.ruleKind, input.ruleKind),
-        isNull(merchantRules.amountMinCents),
-        isNull(merchantRules.amountMaxCents),
+        boundsMatch,
       ),
     )
     .get();
@@ -690,6 +820,34 @@ function coverageEligible(narrowType: MatchType, broadType: MatchType): boolean 
   return broadType === 'word'; // narrowType === 'word'
 }
 
+/**
+ * 2026-09-13 (migration 0024). The SECOND axis of coverage, asked after the match-type matrix
+ * above has already said the patterns cover each other. Same conservative direction: a false
+ * "redundant" claim invites somebody to delete a rule that was doing real work.
+ *
+ *   - broad UNBOUNDED: covers whatever window the narrow rule has, since it fires on every amount.
+ *     Note this is still only "redundant" when the outcomes agree -- the owner's own pair
+ *     (merchant-wide -> Home insurance, $125-$155 -> Car insurance) disagree and are never flagged.
+ *   - broad BOUNDED, narrow UNBOUNDED: NEVER covered. The unbounded rule fires on amounts the
+ *     bounded one refuses, so deleting it would change what happens to those rows. This asymmetry
+ *     is the important cell: without it, the rules page would offer to delete the merchant-wide
+ *     rule the moment a household added one amount-specific rule under it.
+ *   - both BOUNDED: covered only when the narrow window lies wholly INSIDE the broad one. An open
+ *     side on the broad rule is open, so it contains anything on that side; an open side on the
+ *     narrow rule reaches past any closed broad side.
+ */
+function boundsCoverageEligible(narrow: MerchantRuleRecord, broad: MerchantRuleRecord): boolean {
+  if (!isBounded(broad)) return true;
+  if (!isBounded(narrow)) return false;
+  const broadMin = broad.amountMinCents;
+  const broadMax = broad.amountMaxCents;
+  const narrowMin = narrow.amountMinCents;
+  const narrowMax = narrow.amountMaxCents;
+  if (broadMin !== null && (narrowMin === null || narrowMin < broadMin)) return false;
+  if (broadMax !== null && (narrowMax === null || narrowMax > broadMax)) return false;
+  return true;
+}
+
 export function findRedundantRules(rules: MerchantRuleRecord[]): RedundantRule[] {
   const out: RedundantRule[] = [];
   for (const narrow of rules) {
@@ -699,6 +857,7 @@ export function findRedundantRules(rules: MerchantRuleRecord[]): RedundantRule[]
       if (broad.id === narrow.id) continue;
       if (broad.disabledAt !== null || broad.ruleKind !== narrow.ruleKind) continue;
       if (!coverageEligible(narrow.matchType, broad.matchType)) continue;
+      if (!boundsCoverageEligible(narrow, broad)) continue;
       // The real matcher, not a second hand-rolled string test -- see this function's own
       // docblock for why treating narrow.pattern as "the text" is a sound proof of full coverage
       // for exactly the cells the coverage matrix marks YES, and only those.

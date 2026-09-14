@@ -1214,8 +1214,27 @@ function importRulesPackWithin(
  * Never parsed, only compared, so the '|' separator carries no meaning that a pattern containing a
  * '|' could confuse: both sides of every comparison are built by this function.
  */
-export function ruleKeyOf(row: { pattern: string; matchType: MatchType; ruleKind: RuleKind }): string {
-  return `${row.pattern}|${row.matchType}|${row.ruleKind}`;
+export function ruleKeyOf(row: {
+  pattern: string;
+  matchType: MatchType;
+  ruleKind: RuleKind;
+  amountMinCents?: number | null;
+  amountMaxCents?: number | null;
+}): string {
+  const base = `${row.pattern}|${row.matchType}|${row.ruleKind}`;
+  // 2026-09-13 (migration 0024). The amount window joined merchant_rules_pattern_uq, so it has to
+  // join the key -- two rules that differ only by window are two rules, and a key that could not
+  // tell them apart would make the pack update walk treat one as the other.
+  //
+  // APPENDED ONLY WHEN A WINDOW EXISTS, and that condition is load-bearing rather than tidy:
+  // merchant_rules.pack_origin_key stores strings this function built BEFORE 0024. If the key grew
+  // an unconditional `|min|max` suffix, every stored origin would stop comparing equal to a freshly
+  // computed one and the next pack update would read every stamped rule as "edited by the
+  // household" -- which is exactly the defect drizzle/0018_pack_origin_key.sql exists to prevent,
+  // reintroduced. A pack can never write a bounded rule anyway (packRuleSchema carries no such
+  // field), so no stamped row ever takes the suffix.
+  if ((row.amountMinCents ?? null) === null && (row.amountMaxCents ?? null) === null) return base;
+  return `${base}|${row.amountMinCents ?? ''}|${row.amountMaxCents ?? ''}`;
 }
 
 /**

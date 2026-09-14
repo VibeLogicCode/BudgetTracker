@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { sql } from 'drizzle-orm';
 import { createSeededTestDb, categoryIdByName, insertTestUser, type TestDb } from '../../helpers/db';
 import { createUser } from '@/lib/auth/users';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  AMOUNT_BOUND_KIND_ERROR,
   bumpRuleUsage,
   deleteExactRule,
   deleteRule,
@@ -453,7 +455,8 @@ describe('findRedundantRules', () => {
     return {
       id: 1, pattern: 'X', matchType: 'exact', ruleKind: 'category', categoryId: null, renameTo: null,
       createdBy: null, hitCount: 0, lastUsedAt: null, createdAt: '2026-01-01T00:00:00.000Z',
-      lastModifiedBy: null, disabledAt: null, packSource: null, packVersion: null, installedAt: null, ...over,
+      lastModifiedBy: null, disabledAt: null, packSource: null, packVersion: null, installedAt: null,
+      amountMinCents: null, amountMaxCents: null, attributedUserId: null, ...over,
     };
   }
 
@@ -660,6 +663,7 @@ describe('findRedundantRules', () => {
         renameTo: rule.rename_to,
         createdBy: null, hitCount: 0, lastUsedAt: null, createdAt: '2026-01-01T00:00:00.000Z',
         lastModifiedBy: null, disabledAt: null, packSource: null, packVersion: null, installedAt: null,
+        amountMinCents: null, amountMaxCents: null, attributedUserId: null,
       }));
     }
 
@@ -822,5 +826,203 @@ describe('ruling R4 (item AH / SEC-6): a member cannot overwrite another person 
     expect(stored?.categoryId).toBe(9);
     expect(stored?.createdBy).toBe(memberId);
     expect(stored?.lastModifiedBy).toBe(adminId);
+  });
+});
+
+/**
+ * 2026-09-13, the owner's report: "insurance is with same company but different amount but
+ * imported categorizes the last setting i do so everything goes to home or auto. can i set in
+ * rule vendor + amount rule?"
+ *
+ * Migration 0024 lets two rules for one merchant coexist when their amount windows differ. These
+ * are the read-side consequences: which of the two wins, when a bounded rule must NOT fire, and
+ * which kinds may carry a window at all.
+ *
+ * Spec: docs/superpowers/specs/2026-09-13-vendor-amount-person-rules-design.md, rulings P4-P6.
+ */
+describe('matchRule: a rule that is about an amount as well as a merchant', () => {
+  function twoPolicies() {
+    current = createSeededTestDb();
+    const home = categoryIdByName(current.db, 'Home Insurance');
+    const auto = categoryIdByName(current.db, 'Car Insurance');
+    const unbounded = ruleId(
+      upsertRuleFromCorrection({ pattern: 'ACME INSURANCE', matchType: 'exact', ruleKind: 'category', categoryId: home, createdBy: null, actorRole: 'admin' }),
+    );
+    const bounded = ruleId(
+      upsertRuleFromCorrection({
+        pattern: 'ACME INSURANCE', matchType: 'exact', ruleKind: 'category', categoryId: auto,
+        amountMinCents: 12500, amountMaxCents: 15500, createdBy: null, actorRole: 'admin',
+      }),
+    );
+    return { home, auto, unbounded, bounded, rules: listRules('category') };
+  }
+
+  it('files the charge inside the window by the bounded rule, even though it is the NEWER row', () => {
+    const { bounded, rules } = twoPolicies();
+    // Both rules tie on pattern length and match type, so the pre-0024 chain would hand this to
+    // the lower id -- the merchant-wide rule, which is exactly the owner's complaint.
+    expect(matchRule('ACME INSURANCE', 'category', rules, -14012)?.id).toBe(bounded);
+  });
+
+  it('files a charge outside the window by the merchant-wide rule', () => {
+    const { unbounded, rules } = twoPolicies();
+    expect(matchRule('ACME INSURANCE', 'category', rules, -8940)?.id).toBe(unbounded);
+  });
+
+  it('files a refund of the premium with the premium, because the window is about the magnitude', () => {
+    const { bounded, rules } = twoPolicies();
+    expect(matchRule('ACME INSURANCE', 'category', rules, 14012)?.id).toBe(bounded);
+  });
+
+  /**
+   * A rule that needs an amount cannot fire without one. Any caller that forgets to pass the
+   * amount therefore sees the merchant-wide answer rather than a bounded rule firing on a
+   * comparison it never made -- a miss, not a wrong answer.
+   */
+  it('skips every bounded rule when no amount is passed at all', () => {
+    const { unbounded, rules } = twoPolicies();
+    expect(matchRule('ACME INSURANCE', 'category', rules)?.id).toBe(unbounded);
+    expect(matchRule('ACME INSURANCE', 'category', rules, null)?.id).toBe(unbounded);
+  });
+
+  it('prefers the narrower of two windows that both hold the amount', () => {
+    current = createSeededTestDb();
+    const home = categoryIdByName(current.db, 'Home Insurance');
+    const auto = categoryIdByName(current.db, 'Car Insurance');
+    const wide = ruleId(
+      upsertRuleFromCorrection({
+        pattern: 'ACME INSURANCE', matchType: 'exact', ruleKind: 'category', categoryId: home,
+        amountMinCents: 10000, amountMaxCents: 20000, createdBy: null, actorRole: 'admin',
+      }),
+    );
+    const narrow = ruleId(
+      upsertRuleFromCorrection({
+        pattern: 'ACME INSURANCE', matchType: 'exact', ruleKind: 'category', categoryId: auto,
+        amountMinCents: 13000, amountMaxCents: 15000, createdBy: null, actorRole: 'admin',
+      }),
+    );
+    expect(wide).toBeLessThan(narrow);
+    expect(matchRule('ACME INSURANCE', 'category', listRules('category'), -14012)?.id).toBe(narrow);
+  });
+
+  it('treats a half-open window as wider than a closed one, because it claims every larger charge', () => {
+    current = createSeededTestDb();
+    const home = categoryIdByName(current.db, 'Home Insurance');
+    const auto = categoryIdByName(current.db, 'Car Insurance');
+    upsertRuleFromCorrection({
+      pattern: 'ACME INSURANCE', matchType: 'exact', ruleKind: 'category', categoryId: home,
+      amountMinCents: 12500, amountMaxCents: null, createdBy: null, actorRole: 'admin',
+    });
+    const closed = ruleId(
+      upsertRuleFromCorrection({
+        pattern: 'ACME INSURANCE', matchType: 'exact', ruleKind: 'category', categoryId: auto,
+        amountMinCents: 12500, amountMaxCents: 15500, createdBy: null, actorRole: 'admin',
+      }),
+    );
+    expect(matchRule('ACME INSURANCE', 'category', listRules('category'), -14012)?.id).toBe(closed);
+  });
+
+  /**
+   * Bounds outrank pattern LENGTH, which is the pre-0024 primary step of the whole chain. A bound
+   * is a second dimension of commitment -- a person who wrote an amount described this charge,
+   * not everything that merchant sells -- and a bounded rule only ever fires when the amount
+   * agrees.
+   */
+  it('lets a short bounded pattern beat a longer unbounded one', () => {
+    current = createSeededTestDb();
+    const home = categoryIdByName(current.db, 'Home Insurance');
+    const auto = categoryIdByName(current.db, 'Car Insurance');
+    upsertRuleFromCorrection({ pattern: 'ACME INSURANCE CANADA', matchType: 'contains', ruleKind: 'category', categoryId: home, createdBy: null, actorRole: 'admin' });
+    const short = ruleId(
+      upsertRuleFromCorrection({
+        pattern: 'ACME', matchType: 'contains', ruleKind: 'category', categoryId: auto,
+        amountMinCents: 12500, amountMaxCents: 15500, createdBy: null, actorRole: 'admin',
+      }),
+    );
+    expect(matchRule('ACME INSURANCE CANADA', 'category', listRules('category'), -14012)?.id).toBe(short);
+  });
+});
+
+describe('amount bounds: which kinds may carry one, and what a bad window does', () => {
+  it('refuses a window on a transfer rule at the write choke point', () => {
+    current = createSeededTestDb();
+    expect(() =>
+      upsertRuleFromCorrection({
+        pattern: 'PAYMENT - THANK YOU', matchType: 'exact', ruleKind: 'transfer', categoryId: null,
+        amountMinCents: 100, amountMaxCents: 200, createdBy: null, actorRole: 'admin',
+      }),
+    ).toThrow(AMOUNT_BOUND_KIND_ERROR);
+  });
+
+  it('refuses a window on a rename rule, which is cosmetic and applies whatever the amount', () => {
+    current = createSeededTestDb();
+    expect(() =>
+      upsertRuleFromCorrection({
+        pattern: 'SQ *COFFEE', matchType: 'exact', ruleKind: 'rename', categoryId: null, renameTo: 'Coffee shop',
+        amountMinCents: 100, amountMaxCents: 200, createdBy: null, actorRole: 'admin',
+      }),
+    ).toThrow(AMOUNT_BOUND_KIND_ERROR);
+  });
+
+  it('refuses a window whose minimum is above its maximum', () => {
+    current = createSeededTestDb();
+    const coffee = categoryIdByName(current.db, 'Coffee');
+    expect(() =>
+      upsertRuleFromCorrection({
+        pattern: 'TIM HORTONS', matchType: 'exact', ruleKind: 'category', categoryId: coffee,
+        amountMinCents: 20000, amountMaxCents: 10000, createdBy: null, actorRole: 'admin',
+      }),
+    ).toThrow(/minimum/i);
+  });
+
+  /**
+   * The read-side half, for a row that reached the table by some route neither choke point covers
+   * -- a hand-edited database, or a backup from a build that allowed it. Same shape as the
+   * WORD_MATCH_KINDS skip directly beside it in matchRule.
+   */
+  it('never fires a bounded rule of a kind that may not carry a window, however it got there', () => {
+    current = createSeededTestDb();
+    const id = ruleId(
+      upsertRuleFromCorrection({ pattern: 'PAYMENT - THANK YOU', matchType: 'exact', ruleKind: 'transfer', categoryId: null, createdBy: null, actorRole: 'admin' }),
+    );
+    current.db.run(sql`update merchant_rules set amount_min_cents = 100, amount_max_cents = 200 where id = ${id}`);
+    expect(matchRule('PAYMENT - THANK YOU', 'transfer', listRules(), -150)).toBeNull();
+  });
+});
+
+describe('the unbounded rule is the one a per-row path owns, learns and deletes', () => {
+  it('leaves a bounded rule alone when a correction rewrites the merchant-wide one', () => {
+    current = createSeededTestDb();
+    const home = categoryIdByName(current.db, 'Home Insurance');
+    const auto = categoryIdByName(current.db, 'Car Insurance');
+    const coffee = categoryIdByName(current.db, 'Coffee');
+    const bounded = ruleId(
+      upsertRuleFromCorrection({
+        pattern: 'ACME INSURANCE', matchType: 'exact', ruleKind: 'category', categoryId: auto,
+        amountMinCents: 12500, amountMaxCents: 15500, createdBy: null, actorRole: 'admin',
+      }),
+    );
+    upsertRuleFromCorrection({ pattern: 'ACME INSURANCE', matchType: 'exact', ruleKind: 'category', categoryId: home, createdBy: null, actorRole: 'admin' });
+    upsertRuleFromCorrection({ pattern: 'ACME INSURANCE', matchType: 'exact', ruleKind: 'category', categoryId: coffee, createdBy: null, actorRole: 'admin' });
+
+    const rules = listRules('category');
+    expect(rules).toHaveLength(2);
+    expect(rules.find((row) => row.id === bounded)?.categoryId).toBe(auto);
+  });
+
+  it('deleteExactRule takes the merchant-wide rule only, not every window under it', () => {
+    current = createSeededTestDb();
+    const home = categoryIdByName(current.db, 'Home Insurance');
+    const auto = categoryIdByName(current.db, 'Car Insurance');
+    const bounded = ruleId(
+      upsertRuleFromCorrection({
+        pattern: 'ACME INSURANCE', matchType: 'exact', ruleKind: 'category', categoryId: auto,
+        amountMinCents: 12500, amountMaxCents: 15500, createdBy: null, actorRole: 'admin',
+      }),
+    );
+    upsertRuleFromCorrection({ pattern: 'ACME INSURANCE', matchType: 'exact', ruleKind: 'category', categoryId: home, createdBy: null, actorRole: 'admin' });
+
+    expect(deleteExactRule('ACME INSURANCE', 'category')).toBe(1);
+    expect(listRules('category').map((row) => row.id)).toEqual([bounded]);
   });
 });
