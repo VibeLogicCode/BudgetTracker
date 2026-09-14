@@ -21,6 +21,22 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.39.1] - 2026-09-14
+
+No migration.
+
+### Changed
+
+- **Amount rules can be one-sided from the row menu, in one click.** A rule fenced tightly around
+  what a charge costs today stops matching the year the price goes up, and the charge quietly falls
+  back to whatever the merchant's general rule says — visible only as that rule's "Affects" count
+  drifting toward 0. **Create a rule…** now asks what shape you want: *Any amount*, *About $X*
+  (a window around this charge, still the default), *More than…* or *Less than…*. Two one-sided
+  rules meeting at a split point between two policies — "less than $200" and "more than $200" —
+  cover every amount between them, so a price rise of any size still lands on the right side and
+  there is no gap left to fall into. One-sided rules always worked; this makes the durable shape
+  the easy one instead of something you had to know. The help page and the rules form both say so.
+
 ## [1.39.0] - 2026-09-14
 
 Migration 0024 shipped in v1.38.0 and did nothing; this is the release that uses it. Rules can now
