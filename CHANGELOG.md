@@ -21,6 +21,15 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+### Added
+
+- **The preset-rules notice can be put down.** After an app update, Settings said the Canadian
+  merchant pack you have installed is older than the one the build ships, and there was no way to
+  acknowledge it — the notice returned on every visit until somebody went to Merchant rules and
+  applied the update. **Not now** dismisses it for that pack version. The update itself stays
+  pending and Merchant rules keeps offering it with the same review-before-applying screen; the
+  next pack version raises the notice again (UP-3).
+
 ### Changed
 
 - **The help page now says why a loan payment the app matched for you is not renamed.** A row you

@@ -72,7 +72,7 @@ function baseProps(overrides: Partial<Parameters<typeof MerchantRulesClient>[0]>
     impactCounts: {},
     redundantByRuleId: {},
     rulesPackRows: [],
-    canadianPack: { installed: false, installedVersion: null, bundledVersion: 1, updateAvailable: false, presentCount: 0, totalCount: 190 },
+    canadianPack: { installed: false, installedVersion: null, bundledVersion: 1, updateAvailable: false, presentCount: 0, totalCount: 190, noticeDismissed: false },
     canadianInstallPreview: { totalRules: 190, categoryRules: 174, renameRules: 16, wouldWrite: 190, alreadyPresent: 0 },
     canadianRemovalPreview: null,
     canadianUpdateDiff: null,
@@ -764,7 +764,7 @@ describe('MerchantRulesClient — Canadian pack panel: persistent status line st
     render(
       <MerchantRulesClient
         {...baseProps({
-          canadianPack: { installed: true, installedVersion: 1, bundledVersion: 1, updateAvailable: false, presentCount: 182, totalCount: 190 },
+          canadianPack: { installed: true, installedVersion: 1, bundledVersion: 1, updateAvailable: false, presentCount: 182, totalCount: 190, noticeDismissed: false },
         })}
       />,
     );
@@ -822,7 +822,7 @@ describe('MerchantRulesClient — Canadian pack panel: remove confirmation (RowD
     bundledVersion: 1,
     updateAvailable: false,
     presentCount: 190,
-    totalCount: 190,
+    totalCount: 190, noticeDismissed: false,
   };
 
   it('Remove all opens a labelled dialog stating the rule count and the transaction-revert consequence', () => {
@@ -881,7 +881,7 @@ describe('MerchantRulesClient — Canadian pack panel: update review (RowDialog)
     bundledVersion: 2,
     updateAvailable: true,
     presentCount: 190,
-    totalCount: 190,
+    totalCount: 190, noticeDismissed: false,
   };
 
   it('Update opens a labelled dialog naming the target version, keeping the "What vX changes" heading and every section of the diff', () => {

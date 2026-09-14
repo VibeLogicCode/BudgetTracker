@@ -59,7 +59,12 @@ export function UpdatesCard() {
       canApplyInApp={watchtowerConfig() !== null}
       watchtowerError={watchtowerConfigError()}
       canadianPackUpdate={
-        pack.updateAvailable ? { installedVersion: pack.installedVersion, bundledVersion: pack.bundledVersion } : null
+        // UP-3: a notice an admin has put down for THIS bundled version is not sent to the client
+        // at all, so a reload does not bring it back. The update itself stays pending, and
+        // Settings -> Merchant rules keeps offering it -- see dismissCanadianPackUpdate.
+        pack.updateAvailable && !pack.noticeDismissed
+          ? { installedVersion: pack.installedVersion, bundledVersion: pack.bundledVersion }
+          : null
       }
     />
   );

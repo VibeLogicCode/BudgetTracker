@@ -39,6 +39,7 @@ import { checkUpdateCheckNow, checkUpdateReview } from '@/lib/update/ratelimit';
 import { classify, parseSemver, type UpdateSeverity } from '@/lib/update/semver';
 import { dismissVersion, readUpdateState, setAutoApply, setUpdateChecksEnabled } from '@/lib/update/state';
 import { watchtowerConfig } from '@/lib/update/watchtower';
+import { canadianPackState, dismissCanadianPackUpdate } from '@/lib/canadian-pack';
 import { nowIso } from '@/lib/clock';
 import { APP_VERSION } from '@/lib/version';
 import { pendingApplyMessage } from './pending-apply-message';
@@ -241,6 +242,17 @@ export async function signOutSessionAction(_prev: ProfileFormState, formData: Fo
 
   revalidatePath('/settings');
   return { message: 'That device was signed out.' };
+}
+
+/**
+ * UP-3. What dismissPackUpdateAction hands back. One field of substance: the bundled pack version
+ * the server has just recorded as dismissed, which the card prefers over its props so "Not now"
+ * takes effect on the press rather than on the next successful revalidation (item M-3).
+ */
+export interface PackNoticeActionState {
+  error?: string;
+  message?: string;
+  dismissedPackVersion?: number;
 }
 
 export interface UpdateActionState {
@@ -610,4 +622,39 @@ export async function dismissUpdateAction(_prev: UpdateActionState, formData: Fo
     message: `Skipping ${parsed.data} for now. You will still be told when a newer version is published.`,
     ...currentAvailability(),
   };
+}
+
+/**
+ * UP-3. The preset-pack notice on the Updates card, put down for one bundled version.
+ *
+ * Deliberately NOT an apply: applyCanadianPackUpdate's docblock refuses to be called from
+ * anywhere but the diff-and-confirm screen on Settings -> Merchant rules, because applying a
+ * pack decides how money gets categorized and a version number is not consent. This action
+ * writes one setting and touches no rule.
+ *
+ * Its own state type rather than UpdateActionState: the pack notice is independent of the app's
+ * own update state (it renders even when update checks are off), so folding it into that payload
+ * would make six unrelated fields travel with a one-field answer.
+ *
+ * The version is re-checked against canadianPackState() before it is stored -- the same
+ * MUST-9.7 discipline dismissUpdateAction applies to an app version, and for the same reason: a
+ * stale tab must not be able to pre-dismiss a pack version that is not the one on offer, which
+ * would swallow the notice the moment that version did arrive.
+ */
+export async function dismissPackUpdateAction(
+  _prev: PackNoticeActionState,
+  formData: FormData,
+): Promise<PackNoticeActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+  await requireAdmin();
+  const parsed = Number.parseInt(String(formData.get('version') ?? ''), 10);
+  if (!Number.isInteger(parsed)) return { error: 'That is not a pack version this app can act on.' };
+  const state = canadianPackState();
+  if (!state.updateAvailable) return { error: 'There is no preset-pack update on offer right now.' };
+  if (state.bundledVersion !== parsed) return { error: STALE_VERSION_ERROR };
+  dismissCanadianPackUpdate(parsed);
+  revalidatePath(UPDATE_PATH);
+  // Item M-3's lesson, applied on the way in rather than after the fact: the card renders the
+  // dismissal from THIS answer, so the button is never visibly inert while the page revalidates.
+  return { dismissedPackVersion: parsed, message: 'Put away until the next preset pack.' };
 }

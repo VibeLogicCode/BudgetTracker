@@ -10,6 +10,7 @@ import { GITHUB_INTERACTIVE_TIMEOUT_MS, timeoutSeconds } from '@/lib/update/time
 import {
   applyUpdateAction,
   checkForUpdateNowAction,
+  dismissPackUpdateAction,
   dismissUpdateAction,
   enableUpdateChecksAction,
   reviewUpdateAction,
@@ -24,6 +25,7 @@ vi.mock('@/app/(app)/settings/actions', () => ({
   reviewUpdateAction: vi.fn(async () => ({})),
   applyUpdateAction: vi.fn(async () => ({})),
   dismissUpdateAction: vi.fn(async () => ({})),
+  dismissPackUpdateAction: vi.fn(async () => ({})),
 }));
 
 afterEach(cleanup);
@@ -276,6 +278,41 @@ describe('backlog item 17 / Part 4: the preset-pack update notice', () => {
   it('still shows the pack notice even when app update checks are off', () => {
     render(<UpdatesClient {...base} enabled={false} autoApply={false} lastCheckedAt={null} canadianPackUpdate={{ installedVersion: 1, bundledVersion: 2 }} />);
     expect(screen.getByText('Preset rules: an update is available')).toBeTruthy();
+  });
+
+  /**
+   * UP-3. The notice is correct and the link is the only honest place to act (applying a pack
+   * needs the diff-and-confirm screen), but a notice with no way to put it down turns every
+   * app update into homework. "Not now" dismisses THIS bundled version only -- the server half
+   * (dismissCanadianPackUpdate, src/lib/canadian-pack.ts) stores the version, so a later pack
+   * asks again.
+   */
+  it('UP-3: offers Not now, and posts the bundled version to dismissPackUpdateAction', async () => {
+    render(<UpdatesClient {...base} canadianPackUpdate={{ installedVersion: 1, bundledVersion: 2 }} />);
+    submit('Not now');
+    await waitFor(() => expect(dismissPackUpdateAction).toHaveBeenCalled());
+    const formData = vi.mocked(dismissPackUpdateAction).mock.calls[0]?.[1] as FormData;
+    expect(formData.get('version')).toBe('2');
+  });
+
+  it('UP-3: hides the notice once the action reports it dismissed, without waiting for new props', async () => {
+    vi.mocked(dismissPackUpdateAction).mockResolvedValueOnce({ dismissedPackVersion: 2 });
+    render(<UpdatesClient {...base} canadianPackUpdate={{ installedVersion: 1, bundledVersion: 2 }} />);
+    submit('Not now');
+    await waitFor(() => expect(screen.queryByText('Preset rules: an update is available')).toBeNull());
+  });
+});
+
+describe('UP-3: the server half of the pack notice', () => {
+  /**
+   * A source assertion, in the idiom of "item H" below, because updates-card.tsx is an async
+   * server component that reads the database: what is being pinned is that the card consults
+   * noticeDismissed at all. Whether noticeDismissed is itself correct is proved against a real
+   * database in tests/lib/canadian-pack.test.ts.
+   */
+  it('renders the notice only while the bundled version has not been dismissed', () => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'src/app/(app)/settings/updates-card.tsx'), 'utf8');
+    expect(source).toContain('pack.updateAvailable && !pack.noticeDismissed');
   });
 });
 

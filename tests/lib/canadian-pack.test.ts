@@ -35,6 +35,7 @@ import {
   installCanadianPack,
   installedCanadianPackRows,
   notifyCanadianPackUpdateAvailable,
+  dismissCanadianPackUpdate,
   previewCanadianPackRemoval,
   removeCanadianPack,
 } from '@/lib/canadian-pack';
@@ -272,7 +273,17 @@ describe('canadianPackState: counts after individual deletions', () => {
 
   it('reports not-installed when nothing is stamped', () => {
     current = createSeededTestDb();
-    expect(canadianPackState(V1, 1)).toEqual({ installed: false, installedVersion: null, bundledVersion: 1, updateAvailable: false, presentCount: 0, totalCount: 4 });
+    expect(canadianPackState(V1, 1)).toEqual({
+      installed: false,
+      installedVersion: null,
+      bundledVersion: 1,
+      updateAvailable: false,
+      presentCount: 0,
+      totalCount: 4,
+      // UP-3: false rather than absent, so "nothing installed" and "nothing dismissed" read the
+      // same way here as they do on the card, which renders on updateAvailable && !noticeDismissed.
+      noticeDismissed: false,
+    });
   });
 });
 
@@ -912,5 +923,48 @@ describe('v1.31.0 pack additions: a rejected candidate (bare CRAVE) proves the c
     for (const rule of craveRules) {
       expect(patternMatches(rule.pattern, rule.match_type, unrelatedRestaurant)).toBe(false);
     }
+  });
+});
+
+/**
+ * UP-3 (the owner's 2026-09-04 screen recording): right after an app update the Settings page
+ * carries a notice saying the installed pack is older than the one this build ships. It is
+ * correct -- applyCanadianPackUpdate's docblock is explicit that a version comparison alone may
+ * never apply anything -- but with no way to put it down it reads as a chore that cannot be
+ * finished. `noticeDismissed` is that way: per BUNDLED version, so the next pack version asks
+ * again rather than inheriting the answer given to this one.
+ */
+describe('UP-3: the pack update notice can be dismissed for one version', () => {
+  it('is not dismissed by default while an update is pending', () => {
+    current = createSeededTestDb();
+    installCanadianPack(new Date('2026-01-01T00:00:00.000Z'), V1, 1);
+    const state = canadianPackState(V2, 2);
+    expect(state.updateAvailable).toBe(true);
+    expect(state.noticeDismissed).toBe(false);
+  });
+
+  it('is dismissed once that exact version is dismissed', () => {
+    current = createSeededTestDb();
+    installCanadianPack(new Date('2026-01-01T00:00:00.000Z'), V1, 1);
+    dismissCanadianPackUpdate(2);
+    expect(canadianPackState(V2, 2).noticeDismissed).toBe(true);
+  });
+
+  it('asks again when a NEWER version arrives', () => {
+    current = createSeededTestDb();
+    installCanadianPack(new Date('2026-01-01T00:00:00.000Z'), V1, 1);
+    dismissCanadianPackUpdate(2);
+    const later = canadianPackState(V2, 3);
+    expect(later.updateAvailable).toBe(true);
+    expect(later.noticeDismissed).toBe(false);
+  });
+
+  it('leaves the update itself pending -- dismissing is not applying', () => {
+    current = createSeededTestDb();
+    installCanadianPack(new Date('2026-01-01T00:00:00.000Z'), V1, 1);
+    dismissCanadianPackUpdate(2);
+    const state = canadianPackState(V2, 2);
+    expect(state.installedVersion).toBe(1);
+    expect(state.updateAvailable).toBe(true);
   });
 });

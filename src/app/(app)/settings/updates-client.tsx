@@ -15,10 +15,12 @@ import {
   applyUpdateAction,
   checkForUpdateNowAction,
   disableUpdateChecksAction,
+  dismissPackUpdateAction,
   dismissUpdateAction,
   enableUpdateChecksAction,
   reviewUpdateAction,
   setAutoApplyAction,
+  type PackNoticeActionState,
   type ReviewUpdateState,
   type UpdateActionState,
 } from './actions';
@@ -142,13 +144,16 @@ export function UpdatesClient(props: UpdatesViewProps) {
   const [checkState, checkNow, checkPending] = useActionState(checkForUpdateNowAction, initial);
   const [applyState, apply] = useActionState(applyUpdateAction, initial);
   const [dismissState, dismiss] = useActionState(dismissUpdateAction, initial);
+  // UP-3: its own state, because the pack notice is independent of the app's update state --
+  // it renders even when update checks are off.
+  const [packNotice, dismissPack] = useActionState(dismissPackUpdateAction, {} as PackNoticeActionState);
   const [review, runReview, reviewPending] = useActionState(
     async (_prev: ReviewUpdateState, formData: FormData) => reviewUpdateAction(formData),
     {} as ReviewUpdateState,
   );
   const [panelOpen, setPanelOpen] = useState(false);
 
-  const messages = [enableState, disableState, autoState, checkState, applyState, dismissState];
+  const messages = [enableState, disableState, autoState, checkState, applyState, dismissState, packNotice];
   const message = messages.map((s) => s.message).find((m) => m !== undefined);
   const error = messages.map((s) => s.error).find((e) => e !== undefined) ?? review.error;
 
@@ -225,7 +230,10 @@ export function UpdatesClient(props: UpdatesViewProps) {
    * the merchant-rules page, which is what this links to.
    */
   const canadianPackNotice =
-    props.canadianPackUpdate === null ? null : (
+    props.canadianPackUpdate === null ||
+    // UP-3 / item M-3: the action's own answer, preferred over props, so "Not now" takes effect on
+    // the press instead of waiting on a revalidation that may not reach this client.
+    packNotice.dismissedPackVersion === props.canadianPackUpdate.bundledVersion ? null : (
       <Notice tone="info" title="Preset rules: an update is available">
         <p>
           The Canadian merchant pack you installed is v{props.canadianPackUpdate.installedVersion}; this build ships
@@ -235,6 +243,12 @@ export function UpdatesClient(props: UpdatesViewProps) {
           </Link>
           .
         </p>
+        {/* UP-3: nothing here applies anything -- see dismissPackUpdateAction. This puts the
+            notice down for THIS bundled version only, so the next pack asks again. */}
+        <form action={dismissPack} className="mt-2">
+          <input type="hidden" name="version" value={String(props.canadianPackUpdate.bundledVersion)} />
+          <SubmitButton className="btn btn--secondary btn--sm">Not now</SubmitButton>
+        </form>
       </Notice>
     );
 

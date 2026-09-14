@@ -25,6 +25,7 @@ import {
 // calls -- one retroactive rename pass for a whole removal set instead of one per rename rule.
 import { applyRenameRules, buildContext, deleteRules, ruleImpactCounts } from '@/lib/categorize/engine';
 import { nowIso } from '@/lib/clock';
+import { getSetting, setSetting } from '@/lib/settings';
 import { adminUserIds } from '@/lib/notify/config';
 import { packUpdateAvailableKey } from '@/lib/notify/events';
 import { enqueue, kickOutbox } from '@/lib/notify/outbox';
@@ -104,6 +105,45 @@ export interface CanadianPackState {
    * number this install cannot actually produce. It is exact once installedVersion === bundledVersion.
    */
   totalCount: number;
+  /**
+   * UP-3. Whether an admin has put THIS bundled version's notice down. Never a substitute for
+   * applying anything -- see dismissCanadianPackUpdate below, and applyCanadianPackUpdate's own
+   * docblock for why a version comparison may not apply a pack on its own. Always false when no
+   * update is pending, so a caller can render on `updateAvailable && !noticeDismissed` without
+   * first checking which of the two it is looking at.
+   */
+  noticeDismissed: boolean;
+}
+
+/** The setting that remembers it, scoped to this pack the way every other key here is. */
+const DISMISSED_VERSION_KEY = `pack.${CANADIAN_PACK_ID}.dismissedVersion`;
+
+/**
+ * UP-3 (the owner's 2026-09-04 screen recording): right after an app update, Settings says the
+ * installed pack is older than the one this build ships and sends the reader to Merchant rules.
+ * The sentence is true and the link is the only honest place to act, but a notice that cannot be
+ * put down reads as homework rather than as information.
+ *
+ * This dismisses the NOTICE, and nothing else: the pack stays at the version it is, the update
+ * stays pending, and Settings -> Merchant rules keeps offering it with the same diff-and-confirm
+ * screen as before. The version is stored rather than a bare flag so the NEXT pack version asks
+ * again instead of inheriting the answer given to this one.
+ *
+ * What this deliberately is NOT is the other half of UP-3 as it was first sketched ("auto-apply
+ * when the household has not customised the pack"). applyCanadianPackUpdate's docblock refuses
+ * that in terms, and the refusal is right: applying changes how money gets categorized, and a
+ * version number is not consent. See docs/PENDING-FIXES.md's UP-3 entry.
+ */
+export function dismissCanadianPackUpdate(version: number): void {
+  setSetting(DISMISSED_VERSION_KEY, String(version));
+}
+
+/** The dismissed version, or null when nothing has been dismissed or the stored value is junk. */
+export function dismissedCanadianPackVersion(): number | null {
+  const raw = getSetting(DISMISSED_VERSION_KEY);
+  if (raw === null) return null;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isInteger(parsed) ? parsed : null;
 }
 
 /**
@@ -118,16 +158,26 @@ export function canadianPackState(pack: RulesPack = canadianRulesPack(), bundled
   const rows = installedCanadianPackRows();
   const totalCount = pack.rules.length;
   if (rows.length === 0) {
-    return { installed: false, installedVersion: null, bundledVersion, updateAvailable: false, presentCount: 0, totalCount };
+    return {
+      installed: false,
+      installedVersion: null,
+      bundledVersion,
+      updateAvailable: false,
+      presentCount: 0,
+      totalCount,
+      noticeDismissed: false,
+    };
   }
   const installedVersion = Math.min(...rows.map((row) => row.packVersion ?? bundledVersion));
+  const updateAvailable = installedVersion < bundledVersion;
   return {
     installed: true,
     installedVersion,
     bundledVersion,
-    updateAvailable: installedVersion < bundledVersion,
+    updateAvailable,
     presentCount: rows.length,
     totalCount,
+    noticeDismissed: updateAvailable && dismissedCanadianPackVersion() === bundledVersion,
   };
 }
 
