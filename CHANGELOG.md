@@ -21,6 +21,17 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+### Added
+
+- **A transaction you entered by hand can be deleted.** Until now nothing in the app could remove
+  a transaction — undoing an import was the only path, and it only removes rows an import brought
+  in — so a row written by **Record payment** on a bill stayed for good. **Delete transaction** is
+  on the row menu for any row no import owns, and it asks first. What it undoes before the row
+  goes: a loan balance it had moved goes back up, a bill installment it had marked paid becomes
+  unpaid again, and anything the classifier learned from it is untrained. Imported rows still say
+  so and point at Undo import, which is the operation that knows which rows an import alone
+  covers. Every delete is recorded in Settings → Audit log.
+
 ## [1.37.0] - 2026-09-13
 
 No migration.

@@ -12,7 +12,12 @@ import { nowIso } from '@/lib/clock';
  * no secret -- one short sentence at most. R3 says keep it small, and a log that grows a payload
  * column is a log that eventually holds a card number.
  */
-export type AuditAction = 'delete_item' | 'delete_receipt' | 'undo_import';
+/**
+ * 2026-09-13: 'delete_transaction' joins the three. audit_log.action carries a LENGTH check and
+ * never a value enum (drizzle/0013_household_scope.sql:40, which says why), so a new action needs
+ * no migration -- only this union and whatever writes it.
+ */
+export type AuditAction = 'delete_item' | 'delete_receipt' | 'undo_import' | 'delete_transaction';
 
 export function appendAudit(input: {
   userId: number;

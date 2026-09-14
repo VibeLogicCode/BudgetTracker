@@ -27,6 +27,7 @@ import {
   bulkSetNotes,
   bulkSetTransfer,
   createManualTransaction,
+  deleteManualTransaction,
   getTransaction,
   listTransactions,
   transactionOwners,
@@ -1091,4 +1092,29 @@ export async function saveSplitsAction(_prev: ActionState, formData: FormData): 
   revalidatePath('/transactions');
   revalidatePath('/review');
   return { message: parts.length === 0 ? 'Split removed.' : 'Split saved.' };
+}
+
+/**
+ * Delete a transaction nobody imported (owner report, 2026-09-13: Record payment writes a real
+ * transaction and there was no way to remove one).
+ *
+ * Thin on purpose: every decision -- imported rows are refused, the three reversals, the audit
+ * entry -- lives in deleteManualTransaction (src/lib/transactions.ts), because those are the same
+ * decisions undoImport makes and they should not be made twice in two places. This layer does the
+ * four things an action does here: origin, auth, parse, revalidate.
+ */
+export async function deleteTransactionAction(formData: FormData): Promise<ActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+  const user = await requireUser();
+  const parsed = z.coerce.number().int().positive().safeParse(formData.get('transactionId'));
+  if (!parsed.success) return { error: 'Invalid request.' };
+
+  const result = deleteManualTransaction({ txnId: parsed.data, userId: user.id, viewer: user });
+  if ('error' in result) return { error: result.error };
+
+  revalidatePath('/transactions');
+  revalidatePath('/dashboard');
+  revalidatePath('/reports');
+  revalidatePath('/warranties');
+  return { message: 'Transaction deleted.' };
 }

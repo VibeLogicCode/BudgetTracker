@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { getDb } from '@/db/client';
 import { accounts, categories, transactions, transactionSplits, users } from '@/db/schema';
 import { getAccount } from '@/lib/accounts';
-import { ownerScope, type Viewer } from '@/lib/auth/viewer';
+import { NOT_YOURS_ERROR, ownerScope, type Viewer } from '@/lib/auth/viewer';
 import {
   REVIEW_SUGGESTED_WHERE,
   REVIEW_UNCATEGORIZED_WHERE,
@@ -16,7 +16,16 @@ import { normalizeMerchant } from '@/lib/categorize/normalize';
 import { ruleOwnedError } from '@/lib/categorize/rules';
 import { nowIso } from '@/lib/clock';
 import { isIsoDate } from '@/lib/dates';
-import { applyPaymentMatchers, assignTransactionToLoan } from '@/lib/loans';
+import {
+  applyPaymentMatchers,
+  assignTransactionToLoan,
+  reverseInstallmentLinksForTransactions,
+  reverseLoanLinksForTransactions,
+} from '@/lib/loans';
+import { untrain } from '@/lib/categorize/bayes';
+import { tokenize } from '@/lib/categorize/normalize';
+import { appendAudit } from '@/lib/audit';
+import { transactionImports } from '@/db/schema';
 // F-07 (v1.31.0). See buildWhere's search clause below for why this is the ONLY new import the
 // feature needs -- the split editor already proved this parser handles a person's typed amount.
 import { parseAmountToCents } from '@/lib/money';
@@ -1293,4 +1302,89 @@ export function countExcludingCategory(categoryId: number): number {
     .where(or(ne(transactions.categoryId, categoryId), isNull(transactions.categoryId)))
     .get();
   return row?.c ?? 0;
+}
+
+/**
+ * Delete a transaction nobody imported.
+ *
+ * WHY THIS EXISTS (owner report, 2026-09-13): "it recorded this payment now which i have no way of
+ * removing." Record payment on a bill writes a real transaction, and until this function there was
+ * no delete path in the app at all -- undoImport was the only code that removed transaction rows,
+ * and it only removes rows an import created. So a row typed in by hand, or written by Record
+ * payment for a bill that was actually paid by a statement line, was permanent.
+ *
+ * WHERE THE LINE IS DRAWN, and why it is this one: an imported row belongs to its import. Deleting
+ * one from underneath would leave that import's own counts describing rows that are no longer
+ * there, and undo is the operation built for it -- it knows which rows this import ALONE brought
+ * in (partitionByAssociation) and never deletes a row a second import also covers. So an imported
+ * row is refused here and pointed at Undo import instead. `import_id` alone is not the test: a row
+ * can be associated with several imports through transaction_imports while carrying whichever
+ * import_id it was first given, so both are checked.
+ *
+ * THE THREE REVERSALS ARE undoImport's, in its order and for its reasons (see commit.ts's own
+ * comments): a cascade removes a loan_payments row but cannot put the loan's balance back; a SET
+ * NULL clears bill_installments.paid_txn_id but leaves paid_at asserting a payment that no longer
+ * exists; and neither of them untrains the classifier for a category somebody confirmed. Splits
+ * need no line here -- transaction_splits cascades, and a split describes only its own parent.
+ */
+export function deleteManualTransaction(input: {
+  txnId: number;
+  userId: number;
+  viewer: Viewer;
+  at?: Date;
+}): { ok: true } | { error: string } {
+  const db = getDb();
+  const row = db
+    .select({
+      id: transactions.id,
+      importId: transactions.importId,
+      rawDescription: transactions.rawDescription,
+      displayDescription: transactions.displayDescription,
+      normalizedMerchant: transactions.normalizedMerchant,
+      categoryId: transactions.categoryId,
+      categorizationSource: transactions.categorizationSource,
+      attributedUserId: transactions.attributedUserId,
+    })
+    .from(transactions)
+    .where(eq(transactions.id, input.txnId))
+    .get();
+  if (row === undefined) return { error: 'That transaction no longer exists.' };
+
+  const associations = db
+    .select({ importId: transactionImports.importId })
+    .from(transactionImports)
+    .where(eq(transactionImports.transactionId, input.txnId))
+    .all();
+  if (row.importId !== null || associations.length > 0) {
+    return {
+      error: 'That row came from an imported statement. Undo the import on the Import page to remove it.',
+    };
+  }
+
+  // R2, the same rule every other write in this file follows: a self-scoped viewer acts on their
+  // own records only. ownerScope returns null for a household viewer, which is what makes this a
+  // no-op for an admin rather than a second branch.
+  const scope = ownerScope(input.viewer);
+  if (scope !== null && row.attributedUserId !== scope) return { error: NOT_YOURS_ERROR };
+
+  const label = row.displayDescription ?? row.rawDescription;
+
+  return db.transaction(() => {
+    if (row.categorizationSource === 'manual' && row.categoryId !== null) {
+      untrain(tokenize(row.normalizedMerchant), row.categoryId);
+    }
+    reverseLoanLinksForTransactions([input.txnId]);
+    reverseInstallmentLinksForTransactions([input.txnId]);
+    db.delete(transactions).where(eq(transactions.id, input.txnId)).run();
+    appendAudit({
+      userId: input.userId,
+      action: 'delete_transaction',
+      entity: 'transaction',
+      entityId: input.txnId,
+      // One short sentence, per audit.ts's own rule: what went, not a payload.
+      detail: label.slice(0, 120),
+      at: nowIso(input.at),
+    });
+    return { ok: true } as const;
+  });
 }

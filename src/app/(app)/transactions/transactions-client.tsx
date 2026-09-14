@@ -73,6 +73,7 @@ import {
   setAttributionAction,
   setCategoryAction,
   setRowTransferAction,
+  deleteTransactionAction,
   unassignFromLoanAction,
   type ActionState,
 } from './actions';
@@ -600,6 +601,10 @@ export function TransactionsClient({
   );
   const [unassignState, unassignLoan] = useActionState(
     (_prev: ActionState, formData: FormData) => unassignFromLoanAction(formData),
+    initial,
+  );
+  const [deleteState, deleteTransaction] = useActionState(
+    (_prev: ActionState, formData: FormData) => deleteTransactionAction(formData),
     initial,
   );
   const [splitState, splitAction] = useActionState(saveSplitsAction, initial);
@@ -1242,6 +1247,21 @@ export function TransactionsClient({
             Assign to loan…
           </RowMenuButton>
         )}
+        {/* 2026-09-13, owner report: Record payment on a bill writes a real transaction, and until
+            now nothing could remove one. Offered ONLY on a row no import brought in -- an imported
+            row belongs to its import, and Undo import is the operation that knows which rows that
+            import alone covers (deleteManualTransaction says the same thing server-side, and says
+            it there so this condition is a courtesy rather than the guarantee). Last in the menu,
+            where every destructive item in this app sits. */}
+        {row.importId === null ? (
+          <RowMenuForm
+            action={deleteTransaction}
+            fields={{ transactionId: String(row.id) }}
+            confirm={`Delete this transaction permanently? Nothing puts it back — a loan balance or a bill installment it was linked to goes back to what it was.`}
+          >
+            Delete transaction
+          </RowMenuForm>
+        ) : null}
         {/* Review-mode-only, inventory #5: only when the categorizer itself guessed this row and
             nobody has confirmed it yet. */}
         {reviewMode && row.source === 'bayes' && row.categoryId !== null ? (

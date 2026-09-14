@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TransactionsClient } from '@/app/(app)/transactions/transactions-client';
-import { setCategoryAction } from '@/app/(app)/transactions/actions';
+import { deleteTransactionAction, setCategoryAction } from '@/app/(app)/transactions/actions';
 import type { CategoryGroupPage, CategoryGroupRow, TransactionPage, TransactionRow } from '@/lib/transactions';
 import type { SplitRow } from '@/lib/splits';
 
@@ -32,6 +32,7 @@ vi.mock('@/app/(app)/transactions/actions', () => ({
   acceptGuessAction: vi.fn(async () => ({})),
   applyToAllMatchingAction: vi.fn(async () => ({})),
   setRowTransferAction: vi.fn(async () => ({})),
+  deleteTransactionAction: vi.fn(async () => ({})),
   // v1.19.0 Lane 2 item 5: "Accept all suggestions".
   acceptAllGuessesAction: vi.fn(async () => ({})),
 }));
@@ -4107,5 +4108,60 @@ describe('TransactionsClient — the flat list can be paged', () => {
     const { queryAllByRole } = renderAt(1, 1);
     expect(queryAllByRole('link', { name: /next page/i })).toHaveLength(0);
     expect(queryAllByRole('link', { name: /previous page/i })).toHaveLength(0);
+  });
+});
+
+
+/**
+ * The owner, 2026-09-13: "it recorded this payment now which i have no way of removing." Record
+ * payment on a bill writes a real transaction; nothing in the app could delete one. The line drawn
+ * (deleteManualTransaction, src/lib/transactions.ts) is `importId`: a row an import brought in is
+ * that import's to remove, through Undo import, which knows which rows it alone covers.
+ */
+describe('TransactionsClient — deleting a row nobody imported', () => {
+  function renderRow(importId: number | null) {
+    return render(
+      <TransactionsClient
+        page={pageWithRow({ importId })}
+        accounts={[{ id: 1, name: 'Joint Chequing' }]}
+        categories={[{ id: 42, name: 'Old Category', parentId: null, isArchived: false, sortOrder: 0 }]}
+        people={[]}
+        today="2026-03-02"
+      />,
+    );
+  }
+
+  it('offers Delete on a hand-entered row', () => {
+    renderRow(null);
+    openRowMenu('Actions for TIM HORTONS');
+    expect(screen.getByRole('menuitem', { name: /delete/i })).toBeTruthy();
+  });
+
+  it('does not offer it on a row that came from an import', () => {
+    renderRow(7);
+    openRowMenu('Actions for TIM HORTONS');
+    expect(screen.queryByRole('menuitem', { name: /delete/i })).toBeNull();
+  });
+
+  it('asks before deleting, and a refusal writes nothing', async () => {
+    const asked = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    renderRow(null);
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: /delete/i }));
+
+    expect(asked).toHaveBeenCalledWith(expect.stringMatching(/permanently/i));
+    // The sentence has to say what else moves, because a delete reaches past the row itself.
+    expect(asked.mock.calls[0]?.[0]).toMatch(/loan balance|installment/i);
+    expect(deleteTransactionAction).not.toHaveBeenCalled();
+  });
+
+  it('posts the row id to deleteTransactionAction once confirmed', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderRow(null);
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: /delete/i }));
+    await waitFor(() => expect(deleteTransactionAction).toHaveBeenCalled());
+    const formData = vi.mocked(deleteTransactionAction).mock.calls[0]?.[0] as FormData;
+    expect(formData.get('transactionId')).toBe('1');
   });
 });
