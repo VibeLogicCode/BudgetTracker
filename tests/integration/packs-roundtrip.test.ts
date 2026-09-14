@@ -70,7 +70,7 @@ describe('rules pack round trip onto a fresh database', () => {
 
     const ctx = buildContext();
     const merchant = normalizeMerchant('POS PURCHASE       TIM HORTONS #4821 TORONTO ON');
-    const outcome = categorizeTransaction({ id: 1, normalizedMerchant: merchant }, ctx);
+    const outcome = categorizeTransaction({ id: 1, normalizedMerchant: merchant, amountCents: -1000 }, ctx);
     expect(outcome.source).toBe('rule');
     expect(outcome.categoryId).toBe(categoryIdByName(current.db, 'Coffee'));
   });

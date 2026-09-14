@@ -5,6 +5,7 @@ import { nowIso } from '@/lib/clock';
 // Ruling R24 (R-03): the ONE definition of which display_description writer outranks which.
 import { displaySourceMayWrite, displaySourcesAbove, type DisplaySource } from '@/lib/display-source';
 import { applyPaymentMatchers, restoreLoanDescription } from '@/lib/loans';
+import { isBounded } from '@/lib/categorize/amount-bounds';
 import { classify, train, untrain } from './bayes';
 import { tokenize } from './normalize';
 import {
@@ -74,6 +75,15 @@ export function matchesCardPaymentPattern(normalizedMerchant: string): boolean {
 export interface EngineTxn {
   id: number;
   normalizedMerchant: string;
+  /**
+   * 2026-09-13 (migration 0024). The row's own signed amount, so a rule carrying an amount window
+   * can be asked about it. REQUIRED rather than optional, deliberately: a caller that simply
+   * forgot it would make every bounded rule invisible on that path -- the rules page would read
+   * "Affects 0" while imports quietly filed rows by the very rule -- which is the R-01 failure
+   * shape this repo has already paid for once. A caller with genuinely no amount to offer passes
+   * null and says so; matchRule then skips every bounded rule rather than guessing.
+   */
+  amountCents: number | null;
 }
 
 export interface CategorizeOutcome {
@@ -136,7 +146,7 @@ export function categorizeTransaction(txn: EngineTxn, ctx: CategorizeContext): C
     return { categoryId: null, source: 'none', confidence: null, isTransfer: true, matchedRuleId: null };
   }
 
-  const rule = matchRule(txn.normalizedMerchant, 'category', ctx.rules);
+  const rule = matchRule(txn.normalizedMerchant, 'category', ctx.rules, txn.amountCents);
   // v1.31.0 R-02: matchRule can no longer HAND BACK a category rule with no category -- it skips
   // one at the choke point (ruleOutcomeMissing, rules.ts), so a shorter rule that can actually
   // file the merchant gets its turn instead of being shadowed by a winner that then declines to
@@ -221,6 +231,10 @@ function selectRowsByIds(ids: number[]) {
     /** v1.21.0 (item 11). Selected alongside categoryId so runEngine/previewRerun can tell
      *  "this row changed" from "this row was merely looked at" -- see EngineResult.changed. */
     isTransfer: boolean;
+    /** 2026-09-13 (migration 0024). Selected so a bounded rule's window is ANSWERABLE off a
+     *  fetched row -- every path that re-simulates a match (runEngine, previewRerun,
+     *  eligibleForRuleReapply) reads it from here. */
+    amountCents: number;
     /**
      * v1.12.1 (item BC / MON-6). ELIGIBLE (above) carries the splits half of the predicate and its
      * docblock explains at length why. runEngine re-derived eligibility in JavaScript and
@@ -245,6 +259,7 @@ function selectRowsByIds(ids: number[]) {
         categoryId: transactions.categoryId,
         source: transactions.categorizationSource,
         isTransfer: transactions.isTransfer,
+        amountCents: transactions.amountCents,
       })
       .from(transactions)
       .where(inArray(transactions.id, chunk))
@@ -303,7 +318,10 @@ export function runEngine(txnIds: number[]): EngineResult {
     const ruleHits = new Map<number, number>();
 
     for (const row of eligible) {
-      const outcome = categorizeTransaction({ id: row.id, normalizedMerchant: row.normalizedMerchant }, ctx);
+      const outcome = categorizeTransaction(
+        { id: row.id, normalizedMerchant: row.normalizedMerchant, amountCents: row.amountCents },
+        ctx,
+      );
       if (outcome.isTransfer) transfers += 1;
       if (outcome.categoryId !== null) categorized += 1;
       if (outcome.matchedRuleId !== null) {
@@ -421,7 +439,10 @@ export function previewRerun(txnIds: number[]): RerunPreview {
   const eligible = rows.filter(isEligibleRow);
   let wouldChange = 0;
   for (const row of eligible) {
-    const outcome = categorizeTransaction({ id: row.id, normalizedMerchant: row.normalizedMerchant }, ctx);
+    const outcome = categorizeTransaction(
+      { id: row.id, normalizedMerchant: row.normalizedMerchant, amountCents: row.amountCents },
+      ctx,
+    );
     if (outcome.categoryId !== row.categoryId || outcome.isTransfer !== row.isTransfer) wouldChange += 1;
   }
   return { eligible: eligible.length, wouldChange };
@@ -472,29 +493,61 @@ export function previewRerun(txnIds: number[]): RerunPreview {
  * verdict per DISTINCT merchant (ruleAttributor, below), and matchRule's per-rule work for a
  * non-matching kind is a single `ruleKind !==` comparison.
  */
-function attributedRuleId(normalizedMerchant: string, kind: RuleKind, ctx: CategorizeContext): number | null {
+function attributedRuleId(
+  normalizedMerchant: string,
+  amountCents: number | null,
+  kind: RuleKind,
+  ctx: CategorizeContext,
+): number | null {
   if (kind === 'category') {
-    const outcome = categorizeTransaction({ id: 0, normalizedMerchant }, ctx);
+    const outcome = categorizeTransaction({ id: 0, normalizedMerchant, amountCents }, ctx);
     return outcome.isTransfer ? null : outcome.matchedRuleId;
   }
-  const rule = matchRule(normalizedMerchant, kind, ctx.rules);
+  const rule = matchRule(normalizedMerchant, kind, ctx.rules, amountCents);
   if (rule === null) return null;
   if (kind === 'transfer' && !detectTransfer(normalizedMerchant, ctx)) return null;
   return rule.id;
 }
 
 /**
+ * 2026-09-13 (migration 0024). Does this rule list contain anything whose verdict can depend on
+ * the amount? Computed ONCE per context by the callers below and used to decide how much they
+ * have to do, which is what keeps a household with no bounded rule paying exactly nothing for
+ * this feature: the memo stays keyed on the merchant alone and ruleImpactCounts' grouping stays
+ * byte-identical to what it was.
+ */
+function contextHasBoundedRules(ctx: CategorizeContext): boolean {
+  return ctx.rules.some((rule) => isBounded(rule));
+}
+
+/**
  * attributedRuleId memoized per distinct merchant text, which is the bound every caller here needs:
  * all four walk a whole table, and a household's transactions collapse to far fewer distinct
- * merchants than rows. Safe to cache because attribution reads NOTHING but the merchant text and
- * the rule list `ctx` was built from -- the same assumption ruleImpactCounts' `group by
- * normalized_merchant` has always rested on.
+ * merchants than rows.
+ *
+ * 2026-09-13 (migration 0024) WIDENED THE KEY, CONDITIONALLY. The memo rested on "attribution
+ * reads NOTHING but the merchant text and the rule list ctx was built from" -- the same assumption
+ * ruleImpactCounts' `group by normalized_merchant` rests on. A bounded rule falsifies it: two
+ * charges from one insurer, $140 and $89, share a merchant and must resolve to DIFFERENT rules, so
+ * a merchant-only key would hand the second row the first row's answer. Silently, and only for
+ * households that have a bounded rule at all -- which is the worst shape a cache bug can take.
+ *
+ * So the key is `(merchant, amount)` when the context holds any bounded rule, and the merchant
+ * alone otherwise. Conditional rather than unconditional because the amount is far more distinct
+ * than the merchant: keying on it always would turn a memo with one entry per merchant into one
+ * with an entry per (merchant, amount) pair for every household, to fix a collision only a bounded
+ * rule can cause.
  */
-function ruleAttributor(kind: RuleKind, ctx: CategorizeContext): (normalizedMerchant: string) => number | null {
+function ruleAttributor(
+  kind: RuleKind,
+  ctx: CategorizeContext,
+): (normalizedMerchant: string, amountCents: number | null) => number | null {
   const cache = new Map<string, number | null>();
-  return (normalizedMerchant) => {
-    if (!cache.has(normalizedMerchant)) cache.set(normalizedMerchant, attributedRuleId(normalizedMerchant, kind, ctx));
-    return cache.get(normalizedMerchant) ?? null;
+  const amountMatters = contextHasBoundedRules(ctx);
+  return (normalizedMerchant, amountCents) => {
+    const key = amountMatters ? `${amountCents ?? ''}|${normalizedMerchant}` : normalizedMerchant;
+    if (!cache.has(key)) cache.set(key, attributedRuleId(normalizedMerchant, amountCents, kind, ctx));
+    return cache.get(key) ?? null;
   };
 }
 
@@ -531,7 +584,7 @@ function eligibleForRuleReapply(rule: MerchantRuleRecord, scope: RuleScope = {})
   // merchant text.
   const rows = selectRowsByIds(ids);
   const attributedTo = ruleAttributor(rule.ruleKind, buildContext());
-  return rows.filter((row) => attributedTo(row.normalizedMerchant) === rule.id).map((row) => row.id);
+  return rows.filter((row) => attributedTo(row.normalizedMerchant, row.amountCents) === rule.id).map((row) => row.id);
 }
 
 /** Per-rule "Apply now" preview: the confirm text before the click. */
@@ -621,10 +674,29 @@ export function ruleImpactCounts(ctx: CategorizeContext = buildContext()): Map<n
     counts.set(ruleId, (counts.get(ruleId) ?? 0) + n);
   };
 
+  /**
+   * 2026-09-13 (migration 0024). Whether the grouping below has to keep amounts apart.
+   *
+   * Every `group by normalized_merchant` here rests on "one merchant, one verdict", which a
+   * bounded rule falsifies -- two charges from one insurer resolve to two different rules. Adding
+   * amount_cents to the grouping restores the invariant the queries were written under, at the
+   * cost of more groups; doing it unconditionally would cost every household that groups-per-row
+   * blow-up to fix a collision only a bounded rule can cause. So it is conditional, computed once,
+   * and a household with no bounded rule runs the byte-identical query it always ran.
+   *
+   * MEASURED, not asserted (the discipline the rename-pass note at the bottom of this file keeps).
+   * 20,000 transactions over 200 merchants and 200 rules: 33.4 ms with no bounded rule, 42.8 ms
+   * once one exists -- the whole table is already read either way, and the extra cost is finer
+   * grouping plus one attribution verdict per distinct amount rather than per merchant. A
+   * household that never writes a bounded rule pays the first number for ever.
+   */
+  const amountMatters = contextHasBoundedRules(ctx);
+  const amountColumn = amountMatters ? transactions.amountCents : sql<number | null>`null`;
+
   // category: every row a human has not decided, re-simulated fresh (see docblock above for why
   // this is wider than ELIGIBLE).
   const reachable = db
-    .select({ normalizedMerchant: transactions.normalizedMerchant, c: sql<number>`count(*)` })
+    .select({ normalizedMerchant: transactions.normalizedMerchant, amountCents: amountColumn, c: sql<number>`count(*)` })
     .from(transactions)
     .where(
       and(
@@ -632,15 +704,19 @@ export function ruleImpactCounts(ctx: CategorizeContext = buildContext()): Map<n
         sql`not exists (select 1 from ${transactionSplits} where ${transactionSplits.txnId} = ${transactions.id})`,
       ),
     )
-    .groupBy(transactions.normalizedMerchant)
+    .groupBy(...(amountMatters ? [transactions.normalizedMerchant, transactions.amountCents] : [transactions.normalizedMerchant]))
     .all();
   const attributedCategory = ruleAttributor('category', ctx);
-  for (const row of reachable) bump(attributedCategory(row.normalizedMerchant), row.c);
+  for (const row of reachable) bump(attributedCategory(row.normalizedMerchant, row.amountCents), row.c);
 
   // transfer / not_transfer: the same simulation, read against the CURRENT stored flag. Grouping by
   // (merchant, is_transfer) already collapses the table to one row per distinct merchant per flag
   // value, so this is one attribution verdict per group and NOT one per rule per merchant -- the
   // rule list is walked inside matchRule, where a kind that does not match costs one comparison.
+  //
+  // No amount in THIS grouping, and that is not an oversight: AMOUNT_BOUND_KINDS (rules.ts) refuses
+  // a window on either transfer kind, and matchRule skips one that reached the table anyway, so a
+  // transfer verdict genuinely cannot depend on the amount. The null below is what it is asking.
   const byMerchantAndFlag = db
     .select({ normalizedMerchant: transactions.normalizedMerchant, isTransfer: transactions.isTransfer, c: sql<number>`count(*)` })
     .from(transactions)
@@ -650,11 +726,11 @@ export function ruleImpactCounts(ctx: CategorizeContext = buildContext()): Map<n
   const attributedNotTransfer = ruleAttributor('not_transfer', ctx);
   for (const row of byMerchantAndFlag) {
     const attributed = row.isTransfer ? attributedNotTransfer : attributedTransfer;
-    bump(attributed(row.normalizedMerchant), row.c);
+    bump(attributed(row.normalizedMerchant, null), row.c);
   }
 
   // rename: rows already carrying display_source = 'rename', attributed to whichever rename rule
-  // currently resolves for their merchant.
+  // currently resolves for their merchant. A rename cannot carry a window either.
   const renamed = db
     .select({ normalizedMerchant: transactions.normalizedMerchant, c: sql<number>`count(*)` })
     .from(transactions)
@@ -662,7 +738,7 @@ export function ruleImpactCounts(ctx: CategorizeContext = buildContext()): Map<n
     .groupBy(transactions.normalizedMerchant)
     .all();
   const attributedRename = ruleAttributor('rename', ctx);
-  for (const row of renamed) bump(attributedRename(row.normalizedMerchant), row.c);
+  for (const row of renamed) bump(attributedRename(row.normalizedMerchant, null), row.c);
 
   return counts;
 }
@@ -715,7 +791,13 @@ export function ruleImpactIds(ruleId: number, scope: RuleScope = {}, ctx: Catego
   const bounds = dateBounds(scope);
 
   return db
-    .select({ id: transactions.id, normalizedMerchant: transactions.normalizedMerchant })
+    .select({
+      id: transactions.id,
+      normalizedMerchant: transactions.normalizedMerchant,
+      // 2026-09-13 (migration 0024): selected so attributedToRule can ask the amount question off
+      // a fetched row, rather than this list disagreeing with what an import would really do.
+      amountCents: transactions.amountCents,
+    })
     .from(transactions)
     .where(and(candidateRowsFor(rule.ruleKind), ...bounds))
     .orderBy(asc(transactions.id))
@@ -746,10 +828,12 @@ function candidateRowsFor(kind: RuleKind) {
   );
 }
 
-/** attributedRuleId as a row predicate, memoized per distinct merchant across the whole scan. */
+/** attributedRuleId as a row predicate, memoized per distinct merchant -- and, once any bounded
+ *  rule exists, per (merchant, amount) -- across the whole scan. */
 function attributedToRule(rule: MerchantRuleRecord, ctx: CategorizeContext) {
   const attributedTo = ruleAttributor(rule.ruleKind, ctx);
-  return (row: { normalizedMerchant: string }) => attributedTo(row.normalizedMerchant) === rule.id;
+  return (row: { normalizedMerchant: string; amountCents: number | null }) =>
+    attributedTo(row.normalizedMerchant, row.amountCents) === rule.id;
 }
 
 /**
@@ -799,7 +883,13 @@ export function ruleClearIds(ruleId: number, scope: RuleScope = {}, ctx: Categor
   if (rule.ruleKind === 'rename') return ruleImpactIds(ruleId, {}, ctx);
   if (rule.ruleKind === 'category') return ruleImpactIds(ruleId, scope, ctx);
   return getDb()
-    .select({ id: transactions.id, normalizedMerchant: transactions.normalizedMerchant })
+    .select({
+      id: transactions.id,
+      normalizedMerchant: transactions.normalizedMerchant,
+      // Selected only so attributedToRule can be handed a whole row. A transfer rule can never
+      // carry a window (AMOUNT_BOUND_KINDS), so this column changes nothing about the verdict.
+      amountCents: transactions.amountCents,
+    })
     .from(transactions)
     .where(and(eq(transactions.isTransfer, true), ...dateBounds(scope)))
     .orderBy(asc(transactions.id))

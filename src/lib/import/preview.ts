@@ -155,7 +155,10 @@ export function buildPreview(input: {
 
     if (rows.length < PREVIEW_ROW_LIMIT) {
       const normalizedMerchant = normalizeMerchant(row.rawDescription);
-      const outcome = categorizeTransaction({ id: 0, normalizedMerchant }, ctx);
+      // 2026-09-13 (migration 0024): the amount, so the preview shows what the COMMIT will really
+      // do. A bounded rule is skipped outright when no amount is offered, so a preview that left
+      // it out would promise one category and then import another.
+      const outcome = categorizeTransaction({ id: 0, normalizedMerchant, amountCents: row.amountCents }, ctx);
       rows.push({
         rowIndex: row.rowIndex,
         rawDate: row.rawDate,

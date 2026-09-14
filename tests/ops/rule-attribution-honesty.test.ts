@@ -298,6 +298,97 @@ describe('v1.31.0 R-01: attribution simulates the match for every combination th
   });
 });
 
+
+/**
+ * 2026-09-13 (migration 0024): THE SAME GOVERNING PROPERTY, one dimension over.
+ *
+ * The four surfaces must resolve a row the way the engine really matches it. Until 0024 the only
+ * thing a match could depend on was the merchant text, so `exact` was exempt above as "the
+ * degenerate case the shortcut got right by accident" -- a rule whose pattern IS the merchant
+ * text. An amount window makes `exact` non-degenerate: two exact rules on one merchant now match
+ * different rows, and a surface that resolves by text alone cannot tell them apart. That is
+ * exactly the R-01 failure shape -- "Affects" reading 0 while imports file rows by the rule --
+ * reached through a dimension R-01's own exemption did not exist to cover.
+ *
+ * The owner's case, with invented figures: one insurer, two policies. Spec:
+ * docs/superpowers/specs/2026-09-13-vendor-amount-person-rules-design.md, ruling P7.
+ */
+describe('migration 0024: attribution simulates the AMOUNT too, not only the text', () => {
+  function twoPolicies() {
+    const { db, userId, add } = fixture();
+    const inside = add('ACME INSURANCE', -14012);
+    const outside = add('ACME INSURANCE', -8940);
+    const merchantWide = upsertRuleFromCorrection({
+      pattern: 'ACME INSURANCE', matchType: 'exact', ruleKind: 'category',
+      categoryId: categoryIdByName(db, 'Home Insurance'), createdBy: userId, actorRole: 'admin',
+    });
+    const bounded = upsertRuleFromCorrection({
+      pattern: 'ACME INSURANCE', matchType: 'exact', ruleKind: 'category',
+      categoryId: categoryIdByName(db, 'Car Insurance'),
+      amountMinCents: 12500, amountMaxCents: 15500, createdBy: userId, actorRole: 'admin',
+    });
+    if (!merchantWide.ok || !bounded.ok) throw new Error('unexpected refusal');
+    return { inside, outside, merchantWide: merchantWide.ruleId, bounded: bounded.ruleId, db };
+  }
+
+  it('runEngine files each policy by its own rule', () => {
+    const { inside, outside, db } = twoPolicies();
+    runEngine([inside, outside]);
+    const categoryOf = (id: number) =>
+      current!.db.get<{ name: string }>(
+        sql`select c.name as name from transactions t join categories c on c.id = t.category_id where t.id = ${id}`,
+      ).name;
+    expect(categoryOf(inside)).toBe('Car Insurance');
+    expect(categoryOf(outside)).toBe('Home Insurance');
+    expect(db).toBeDefined();
+  });
+
+  it('Affects counts each rule the rows it really wins, and never the other rule rows', () => {
+    const { inside, outside, merchantWide, bounded } = twoPolicies();
+    const counts = ruleImpactCounts();
+    expect({ bounded: counts.get(bounded) ?? 0, merchantWide: counts.get(merchantWide) ?? 0 }).toEqual({
+      bounded: 1,
+      merchantWide: 1,
+    });
+    expect(ruleImpactIds(bounded)).toEqual([inside]);
+    expect(ruleImpactIds(merchantWide)).toEqual([outside]);
+  });
+
+  it('"Apply now" on the bounded rule scopes to the charge inside its window', () => {
+    const { bounded } = twoPolicies();
+    expect(previewRuleReapply(bounded).eligible).toBe(1);
+  });
+
+  /**
+   * The assertion R-01 failed, in its 0024 spelling: a clear must write to the rows the rule
+   * really gave something to. Clearing the bounded rule must not uncategorize the OTHER policy,
+   * which the merchant-wide rule filed and still owns.
+   */
+  it('a clear writes to the rule own rows and leaves the other policy filed', () => {
+    const { inside, outside, bounded } = twoPolicies();
+    runEngine([inside, outside]);
+    expect(ruleClearIds(bounded)).toEqual([inside]);
+
+    clearRuleFromTransactions({ ruleId: bounded });
+
+    const filed = (id: number) =>
+      current!.db.get<{ c: number }>(sql`select count(*) as c from transactions where id = ${id} and category_id is not null`).c;
+    expect({ inside: filed(inside), outside: filed(outside) }).toEqual({ inside: 0, outside: 1 });
+  });
+
+  /**
+   * The memo in ruleAttributor is keyed per DISTINCT MERCHANT, which was sound while attribution
+   * read nothing but the text. Both rows here share one merchant and must resolve differently, so
+   * a merchant-only key would hand the second row the first row answer -- silently, and only for
+   * households that have a bounded rule at all.
+   */
+  it('does not hand one policy the other verdict through the per-merchant memo', () => {
+    const { inside, outside, merchantWide, bounded } = twoPolicies();
+    const ids = [...ruleImpactIds(bounded), ...ruleImpactIds(merchantWide)].sort((a, b) => a - b);
+    expect(ids).toEqual([inside, outside].sort((a, b) => a - b));
+  });
+});
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const ENGINE = 'src/lib/categorize/engine.ts';
 

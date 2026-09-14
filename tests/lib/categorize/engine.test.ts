@@ -122,7 +122,7 @@ describe('categorizeTransaction ordering', () => {
     for (let i = 0; i < 3; i += 1) train(['TIM', 'HORTONS'], groceries);
     for (let i = 0; i < 3; i += 1) train(['METRO', 'PLUS'], restaurants);
 
-    const outcome = categorizeTransaction({ id: 1, normalizedMerchant: 'TIM HORTONS' }, buildContext());
+    const outcome = categorizeTransaction({ id: 1, normalizedMerchant: 'TIM HORTONS', amountCents: -1000 }, buildContext());
     expect(outcome).toMatchObject({ categoryId: coffee, source: 'rule', confidence: null, isTransfer: false });
   });
 
@@ -130,7 +130,7 @@ describe('categorizeTransaction ordering', () => {
     const { db } = setup();
     const restaurants = categoryIdByName(db, 'Restaurants');
     upsertRuleFromCorrection({ pattern: 'TIM', matchType: 'contains', ruleKind: 'category', categoryId: restaurants, createdBy: null, actorRole: 'admin' });
-    expect(categorizeTransaction({ id: 1, normalizedMerchant: 'TIM HORTONS EXPRESS' }, buildContext())).toMatchObject({
+    expect(categorizeTransaction({ id: 1, normalizedMerchant: 'TIM HORTONS EXPRESS', amountCents: -1000 }, buildContext())).toMatchObject({
       categoryId: restaurants,
       source: 'rule',
     });
@@ -143,7 +143,7 @@ describe('categorizeTransaction ordering', () => {
     for (let i = 0; i < 3; i += 1) train(['TIM', 'HORTONS'], coffee);
     for (let i = 0; i < 3; i += 1) train(['METRO', 'PLUS'], groceries);
 
-    const outcome = categorizeTransaction({ id: 1, normalizedMerchant: 'TIM HORTONS' }, buildContext());
+    const outcome = categorizeTransaction({ id: 1, normalizedMerchant: 'TIM HORTONS', amountCents: -1000 }, buildContext());
     expect(outcome.source).toBe('bayes');
     expect(outcome.categoryId).toBe(coffee);
     expect(outcome.confidence).toBeCloseTo(classify(tokenize('TIM HORTONS'))!.margin, 6);
@@ -151,7 +151,7 @@ describe('categorizeTransaction ordering', () => {
 
   it('leaves a row uncategorized when nothing matches', () => {
     setup();
-    expect(categorizeTransaction({ id: 1, normalizedMerchant: 'SOME NEW SHOP' }, buildContext())).toMatchObject({
+    expect(categorizeTransaction({ id: 1, normalizedMerchant: 'SOME NEW SHOP', amountCents: -1000 }, buildContext())).toMatchObject({
       categoryId: null,
       source: 'none',
       confidence: null,
@@ -163,7 +163,7 @@ describe('categorizeTransaction ordering', () => {
     const { db } = setup();
     const coffee = categoryIdByName(db, 'Coffee');
     upsertRuleFromCorrection({ pattern: 'PAYMENT', matchType: 'contains', ruleKind: 'category', categoryId: coffee, createdBy: null, actorRole: 'admin' });
-    expect(categorizeTransaction({ id: 1, normalizedMerchant: 'PAYMENT - THANK YOU' }, buildContext())).toMatchObject({
+    expect(categorizeTransaction({ id: 1, normalizedMerchant: 'PAYMENT - THANK YOU', amountCents: -1000 }, buildContext())).toMatchObject({
       categoryId: null,
       source: 'none',
       isTransfer: true,
@@ -1820,7 +1820,7 @@ describe('v1.31.0 R-02: a rule with no outcome can neither fire nor shadow', () 
     const ctx = buildContext();
     expect(matchRule('TIM HORTONS', 'category', ctx.rules)?.pattern).toBe('TIM');
     expect(
-      categorizeTransaction({ id: 1, normalizedMerchant: 'TIM HORTONS' }, ctx),
+      categorizeTransaction({ id: 1, normalizedMerchant: 'TIM HORTONS', amountCents: -1000 }, ctx),
     ).toMatchObject({ categoryId: coffee, source: 'rule' });
   });
 
