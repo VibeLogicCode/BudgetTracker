@@ -369,6 +369,15 @@ export const HELP_SECTIONS: HelpSection[] = [
           assigns that row as its first entry.
         </P>
         <P>
+          A row you assign yourself is renamed to say which loan it belongs to. A row{' '}
+          <B>matched by a payment rule keeps the wording the bank sent</B>, and that is deliberate:
+          a rule matches on text alone, and an e-transfer, a cash withdrawal or a bank draft can be
+          for anything. Renaming one would state a certainty the rule does not have. Either way the
+          row carries a <B>badge naming the loan</B>, and the balance moves the same. If a rule has
+          linked something it should not have, <B>Unassign from &lt;loan name&gt;</B> on the
+          row&rsquo;s menu puts that loan&rsquo;s balance back to what it was.
+        </P>
+        <P>
           A <B>bill</B> is the one kind that carries its own list of due dates rather than a
           repeating cycle — property tax, which falls due two to six times a year on dates the
           municipality picks. Create an item type of kind <B>Bill</B> under{' '}

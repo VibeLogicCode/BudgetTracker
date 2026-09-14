@@ -1773,3 +1773,41 @@ only proof it worked.
 loan -- the same treatment `transfer`, `renamed` and `rule` badges already get.
 
 **Effort:** ~30-40 min. No migration. No personal data.
+
+## R27. Rule-linked loan payments carry no `'loan'` label — RULED CLOSED 2026-09-13 (working as intended)
+
+Raised by the v1.31.0 reviews as an inconsistency: `applyLoanDescription` (`src/lib/loans.ts`) runs
+only from `assignTransactionToLoan`, so a manually assigned row is renamed "Loan to X" /
+"Repayment from X" while a row linked by a payment rule or by the backfill sweep (`link()`, same
+file, `source: 'rule'`) keeps the bank's own wording. Two rows on the same loan, with the same
+effect on its balance, look different for a reason nothing on screen states.
+
+**The proposal was to label every path.** It was withdrawn during the ruling, and the owner's
+reasoning is the record here: a loan can be repaid by e-transfer, cash or bank draft, and those
+descriptions are generic. The matcher is a bare substring test —
+`txn.normalizedMerchant.includes(rule.merchantContains)`, plus an optional account scope
+(`applyPaymentMatchers`) — with a 3-character floor on the rule text and **no amount check and no
+expected-date window**. So a rule broad enough to catch "he repays me by e-transfer" is broad
+enough to catch every other e-transfer, and renaming those rows would dress a substring guess up as
+a statement of fact.
+
+**Ruling.** The asymmetry is honest and stays. A manual assign is a person naming THIS row, so it
+earns a rename. A rule link keeps the bank's wording and wears the blue loan badge that item CA
+added, which every linked row carries regardless of source. Documented in the Coverage section of
+`src/app/(app)/help/content.tsx`, guarded by `tests/app/help.test.tsx` ("R27: says only an
+assignment you make yourself renames the row").
+
+**What the ruling exposed, and what is worth doing instead.** The rename was never the defect — a
+wrongly matched row already moves a loan's balance today, rename or no rename. Recorded as its own
+item rather than folded in here:
+
+- **R27a — a loan rule should be able to carry an expected amount, matched within a tolerance.**
+  A $400 monthly repayment then stops matching a $60 dinner split. Biggest gain of the three,
+  no migration if it reads the item's existing payment amount.
+- **R27b — rule-linked loan payments could land in the review queue** rather than applying
+  silently, so a wrong link costs a click instead of going unnoticed.
+- **R27c — warn when a rule's text is generic** (`INTERAC`, `E-TRANSFER`, `WITHDRAWAL`, `DRAFT`)
+  and show how many existing transactions it would match, before the rule is saved.
+
+Today's only defence is `Unassign from <loan>` on the row menu, which does put the balance back —
+but only for a link somebody happens to notice.

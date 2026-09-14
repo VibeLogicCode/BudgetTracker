@@ -189,6 +189,21 @@ describe('the help page explains loan direction (spec BU)', () => {
     expect(text).toContain('Assign to');
     expect(text).toContain('Assign to new loan…');
   });
+
+  /**
+   * R27, ruled 2026-09-13: a rule-linked or backfilled loan payment deliberately keeps the bank's
+   * own wording, because a payment-matching rule is a substring guess (applyPaymentMatchers,
+   * src/lib/loans.ts) and a renamed row states a certainty the rule does not have. Only
+   * assignTransactionToLoan -- a person naming THIS row -- renames. The asymmetry is visible on
+   * screen, so it is documented here rather than left for a household to work out from two rows
+   * that look different for no stated reason.
+   */
+  it('R27: says only an assignment you make yourself renames the row, and that every linked row carries the loan badge', () => {
+    const text = all();
+    expect(text).toContain('A row you assign yourself is renamed');
+    expect(text).toContain('matched by a payment rule keeps the wording the bank sent');
+    expect(text).toContain('badge naming the loan');
+  });
 });
 
 describe('the help page obeys the standing content rules', () => {

@@ -21,6 +21,14 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+### Changed
+
+- **The help page now says why a loan payment the app matched for you is not renamed.** A row you
+  assign to a loan yourself is renamed to say so; a row a payment rule matched keeps the wording the
+  bank sent, because a rule matches on text alone and an e-transfer, a cash withdrawal or a bank
+  draft can be for anything. Both carry the badge naming the loan, and both move its balance the
+  same way. The behaviour is unchanged — it was simply never written down (R27).
+
 ## [1.36.1] - 2026-09-09
 
 No migration.
