@@ -1,6 +1,8 @@
 import { and, desc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { accounts, imports, transactionImports, transactions, users } from '@/db/schema';
+import { resolveAttribution } from '@/lib/attribution';
+import { listRules, matchRule } from '@/lib/categorize/rules';
 import { nowIso } from '@/lib/clock';
 import { reverseInstallmentLinksForTransactions, reverseLoanLinksForTransactions } from '@/lib/loans';
 import { deleteCsvSnapshotsForAccountDates, recordBalanceSnapshot } from '@/lib/networth';
@@ -117,28 +119,44 @@ export function commitImport(input: CommitInput): CommitResult {
       ? new Map(listAccountCardPeople(input.accountId).map((row) => [row.cardValue, { userId: row.userId, userName: row.userName }]))
       : null;
 
+  /**
+   * 2026-09-13. The attribution RULES, loaded once per commit beside cardMap and for the same
+   * reason (MUST-3.3): never once per row. Empty for every household that has written none, in
+   * which case matchRule walks a list of nothing and the chain below behaves exactly as it did
+   * before this existed.
+   */
+  const attributionRules = listRules('attribution');
+
   // Tallies for the SHOULD-3.6 attribution-split summary, kept only for rows this call
   // actually INSERTS -- a duplicate row already has whatever attribution it got the first
   // time it was committed, so it has nothing new to report here.
   const matchedTally = new Map<string, number>();
   let fallbackCount = 0;
+  /** 2026-09-13: rows a RULE decided, counted apart from both of the above -- otherwise the
+   *  summary would file them under "no card match" and say they went to the account owner, which
+   *  is the one thing that did not happen to them. */
+  let ruleCount = 0;
 
   /**
-   * MUST-3.3's fallback chain, in order: no cardCol/no map -> owner; index beyond this row's
-   * cells, or the cell normalizes to empty -> owner; normalized value not in the map ->
-   * owner; otherwise the mapped person. `matchedName` is non-null only on the last case, so
-   * the caller can tally "matched a real person" separately from every flavour of fallback.
+   * The card half of MUST-3.3's chain: no cardCol/no map -> null; index beyond this row's cells,
+   * or the cell normalizes to empty -> null; normalized value not in the map -> null; otherwise
+   * the mapped person. `userName` is non-null only on the last case, so the caller can tally
+   * "matched a real person" separately from every flavour of fallback.
+   *
+   * The ORDER this feeds into lives in src/lib/attribution.ts (ruling P17), not here: it is the
+   * sentence the import, the rules page and the authoring dialog all have to agree on, and it was
+   * written inline in this closure when there were only two candidates to order.
    */
-  function resolveAttribution(cells: string[]): { userId: number | null; matchedName: string | null } {
-    const fallback = { userId: ownerUserId, matchedName: null };
-    if (cardCol === null || cardMap === null) return fallback;
+  function cardPerson(cells: string[]): { userId: number | null; userName: string | null } {
+    const none = { userId: null, userName: null };
+    if (cardCol === null || cardMap === null) return none;
     const raw = cells[cardCol];
-    if (raw === undefined) return fallback;
+    if (raw === undefined) return none;
     const value = normalizeCardValue(raw);
-    if (value.length === 0) return fallback;
+    if (value.length === 0) return none;
     const match = cardMap.get(value);
-    if (!match) return fallback;
-    return { userId: match.userId, matchedName: match.userName };
+    if (!match) return none;
+    return { userId: match.userId, userName: match.userName };
   }
 
   const existing = findExistingByHashes(
@@ -195,9 +213,25 @@ export function commitImport(input: CommitInput): CommitResult {
 
       assertInsertable(row);
 
-      const attribution = resolveAttribution(row.cells);
-      if (attribution.matchedName !== null) {
-        matchedTally.set(attribution.matchedName, (matchedTally.get(attribution.matchedName) ?? 0) + 1);
+      // Hoisted above the resolver because the attribution rule needs it too, and computing the
+      // normalized text twice per row for two readers is the kind of thing that silently doubles
+      // the cost of a 4,000-row import.
+      const normalizedMerchant = normalizeMerchant(row.rawDescription);
+      const matchedRule =
+        attributionRules.length === 0
+          ? null
+          : matchRule(normalizedMerchant, 'attribution', attributionRules, row.amountCents);
+      const card = cardPerson(row.cells);
+      const attribution = resolveAttribution({
+        ruleUserId: matchedRule?.attributedUserId ?? null,
+        ruleMatched: matchedRule !== null,
+        cardUserId: card.userId,
+        ownerUserId,
+      });
+      if (attribution.source === 'rule') {
+        ruleCount += 1;
+      } else if (card.userName !== null) {
+        matchedTally.set(card.userName, (matchedTally.get(card.userName) ?? 0) + 1);
       } else if (cardCol !== null) {
         fallbackCount += 1;
       }
@@ -210,7 +244,7 @@ export function commitImport(input: CommitInput): CommitResult {
           attributedUserId: attribution.userId,
           date: row.date,
           rawDescription: row.rawDescription,
-          normalizedMerchant: normalizeMerchant(row.rawDescription),
+          normalizedMerchant,
           amountCents: row.amountCents,
           categoryId: null,
           categorizationSource: 'none',
@@ -258,10 +292,17 @@ export function commitImport(input: CommitInput): CommitResult {
     // and omitted altogether when nothing fell back. null (not "0 rows...") whenever there
     // is genuinely nothing new to report: no cardCol, or an all-duplicate commit.
     let attributionSummary: string | null = null;
-    if (cardCol !== null && insertedTransactionIds.length > 0) {
+    // 2026-09-13: reported whenever a RULE decided something too, not only when a card column
+    // exists -- a household with attribution rules and no cardholder column has a real split to
+    // read, and staying silent about it would be the summary's old blind spot moved one column
+    // over.
+    if ((cardCol !== null || ruleCount > 0) && insertedTransactionIds.length > 0) {
       const parts: string[] = [...matchedTally.entries()]
         .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
         .map(([name, count]) => `${count} ${count === 1 ? 'row' : 'rows'} to ${name}`);
+      if (ruleCount > 0) {
+        parts.push(`${ruleCount} ${ruleCount === 1 ? 'row' : 'rows'} by rule`);
+      }
       if (fallbackCount > 0) {
         const label = ownerUserId !== null ? 'the account owner' : 'unattributed';
         parts.push(`${fallbackCount} ${fallbackCount === 1 ? 'row' : 'rows'} to ${label} (no card match)`);
