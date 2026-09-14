@@ -21,6 +21,13 @@ export interface ProfileScore {
   cleanRate: number;
   parsedRows: number;
   errorRows: number;
+  /**
+   * How many of the file's OWN columns this mapping accounts for. Two presets can describe one
+   * layout -- CIBC Chequing/Visa is TD Chequing/Debit without the balance column -- and then the
+   * clean rates are identical and this is what separates them. A mapping that leaves a column of
+   * the file unexplained is a poorer description of it than one that reads every column.
+   */
+  coverage: number;
 }
 
 export interface ProfileDetection {
@@ -38,6 +45,23 @@ export interface ProfileDetection {
   source: 'csv' | 'ofx';
   /** Every candidate, best first -- so a caller can show the runners-up rather than only the winner. */
   scores: ProfileScore[];
+}
+
+/**
+ * Every column index a mapping actually consumes, capped at the file's own width: a mapping that
+ * names a column the file does not have is not explaining anything by naming it.
+ */
+function coverageOf(mapping: ImportMapping, columnCount: number): number {
+  const indexes = new Set<number>([
+    mapping.dateCol,
+    ...mapping.descCols,
+    ...(mapping.amountCol === null ? [] : [mapping.amountCol]),
+    ...(mapping.debitCol === null ? [] : [mapping.debitCol]),
+    ...(mapping.creditCol === null ? [] : [mapping.creditCol]),
+    ...(mapping.balanceCol === null || mapping.balanceCol === undefined ? [] : [mapping.balanceCol]),
+    ...(mapping.cardCol === null || mapping.cardCol === undefined ? [] : [mapping.cardCol]),
+  ]);
+  return [...indexes].filter((index) => index >= 0 && index < columnCount).length;
 }
 
 /**
@@ -111,17 +135,24 @@ export function detectImportProfile(input: {
     .map((candidate) => {
       const parsed = parseCsv(head, candidate.mapping);
       const attempted = parsed.rows.length + parsed.errors.length;
+      const columnCount = Math.max(
+        0,
+        ...parsed.rows.map((row) => row.cells.length),
+        ...parsed.errors.map((row) => row.cells.length),
+      );
       return {
         profileId: candidate.id,
         name: candidate.name,
         cleanRate: attempted === 0 ? 0 : parsed.rows.length / attempted,
         parsedRows: parsed.rows.length,
         errorRows: parsed.errors.length,
+        coverage: coverageOf(candidate.mapping, columnCount),
       };
     })
-    // Rows read breaks a cleanRate tie: a mapping that read forty rows cleanly is a better answer
-    // than one that read two, even though both scored 1.
-    .sort((a, b) => b.cleanRate - a.cleanRate || b.parsedRows - a.parsedRows);
+    // Coverage before rows read: a dead heat on clean rate is the two-presets-one-layout case,
+    // where the answer is whichever mapping explains more of the file. Rows read is the last
+    // tie-break -- forty rows read cleanly beats two, even though both scored 1.
+    .sort((a, b) => b.cleanRate - a.cleanRate || b.coverage - a.coverage || b.parsedRows - a.parsedRows);
 
   const best = scores[0];
   if (best === undefined || best.parsedRows === 0 || best.cleanRate < MINIMUM_CLEAN_RATE) {
@@ -134,8 +165,11 @@ export function detectImportProfile(input: {
     };
   }
 
+  // Ambiguity is a tie the tie-breaks could not settle: as readable as each other AND explaining
+  // the file equally well. When one mapping covers more columns it has genuinely won, so the
+  // margin check below does not get to overrule it.
   const runnerUp = scores[1];
-  if (runnerUp !== undefined && best.cleanRate - runnerUp.cleanRate < MARGIN) {
+  if (runnerUp !== undefined && best.cleanRate - runnerUp.cleanRate < MARGIN && best.coverage <= runnerUp.coverage) {
     return {
       profile: null,
       confidence: 'none',

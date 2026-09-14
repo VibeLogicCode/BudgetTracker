@@ -77,6 +77,26 @@ describe('detectImportProfile: the built-in presets against their own real expor
   });
 });
 
+/**
+ * Two presets can describe the same layout. CIBC Chequing/Visa is TD Chequing/Debit with no
+ * balance column: same ISO dates, same four columns, same header-less shape -- so a TD export
+ * parses perfectly under both and a clean-rate race between them is a dead heat. The tie-break is
+ * which mapping EXPLAINS MORE of the file: TD reads column 4 as the running balance, CIBC leaves
+ * it unaccounted for. A mapping that accounts for every column of a file is the better description
+ * of that file, and it is the one whose preview will show the household more.
+ */
+describe('detectImportProfile: two presets describing one layout', () => {
+  it('prefers the mapping that accounts for more of the file', () => {
+    const result = detect('td-chequing.csv', ['TD Chequing/Debit', 'CIBC Chequing/Visa']);
+    expect(result.profile?.name).toBe('TD Chequing/Debit');
+  });
+
+  it('still reports both as readable, so the runner-up is visible', () => {
+    const result = detect('td-chequing.csv', ['TD Chequing/Debit', 'CIBC Chequing/Visa']);
+    expect(result.scores.every((score) => score.cleanRate === 1)).toBe(true);
+  });
+});
+
 describe('detectImportProfile: when it cannot tell', () => {
   /**
    * The two TD presets are the case the owner raised: two exports from one bank that look alike.
