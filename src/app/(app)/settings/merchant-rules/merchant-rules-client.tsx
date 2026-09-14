@@ -762,7 +762,7 @@ export function MerchantRulesClient({
           {editing.ruleKind === 'category' || editing.ruleKind === 'attribution' ? (
             <Field
               label="Amount range (optional)"
-              hint="Leave both empty and the rule is about the merchant, whatever the amount. Two rules for one merchant can hold different ranges — that is how one insurer's two policies stay apart."
+              hint="Leave both empty and the rule is about the merchant, whatever the amount. Leave ONE empty and that side is open — “125.00 to blank” means $125 or more. Two one-sided rules meeting at a split point is what keeps one insurer's two policies apart when a price rises."
             >
               <div className="flex flex-wrap items-center gap-2">
                 <input

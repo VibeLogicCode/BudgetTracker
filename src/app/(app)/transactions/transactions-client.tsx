@@ -201,6 +201,16 @@ function centsToInput(cents: number): string {
   return (cents / 100).toFixed(2);
 }
 
+/**
+ * 2026-09-14. What SHAPE of amount condition a rule being written from a row carries.
+ *
+ * 'about' is a two-sided window around one charge -- right for a recurring bill whose figure
+ * barely moves. 'more'/'less' are the one-sided halves that make two rules meet at a split point,
+ * which is the shape that survives a price rise (see the Field's own note in ruleDialog below).
+ * 'any' is no window at all: a rule about the merchant, whatever the charge.
+ */
+type AmountMode = 'any' | 'about' | 'more' | 'less';
+
 function outInWords(outCents: number, inCents: number): string {
   return `${formatCents(absCents(outCents))} out · ${formatCents(absCents(inCents))} in`;
 }
@@ -600,9 +610,12 @@ export function TransactionsClient({
    */
   const [ruleRow, setRuleRow] = useState<{
     id: number;
-    bounded: boolean;
+    amountMode: AmountMode;
     amountMin: string;
     amountMax: string;
+    /** The single number the one-sided shapes use, kept apart from the two-sided pair so
+     *  switching between them loses neither. */
+    splitPoint: string;
     categoryId: number | null;
     person: string;
   } | null>(null);
@@ -1358,9 +1371,12 @@ export function TransactionsClient({
               const window = defaultBoundsAround(row.amountCents);
               setRuleRow({
                 id: row.id,
-                bounded: true,
+                amountMode: 'about',
                 amountMin: centsToInput(window.minCents),
                 amountMax: centsToInput(window.maxCents),
+                // A whole dollar: a split point between two policies is a round number a person
+                // picks, not a premium read off a statement.
+                splitPoint: centsToInput(Math.round(Math.abs(row.amountCents) / 100) * 100),
                 categoryId: row.categoryId,
                 person: '',
               });
@@ -1707,47 +1723,105 @@ export function TransactionsClient({
         ) : null}
         <form action={createRuleAction} className="flex flex-col gap-3" data-testid="create-rule-form">
           <input type="hidden" name="normalizedMerchant" value={row.normalizedMerchant} />
-          <div className="flex flex-col gap-1">
-            <label className="flex items-center gap-2 text-sm text-ink">
-              <input
-                type="checkbox"
-                checked={ruleRow.bounded}
-                onChange={(e) => setRuleRow({ ...ruleRow, bounded: e.target.checked })}
-                className="accent-accent"
-              />
-              {`Only when the amount is about ${formatCents(absCents(row.amountCents))}`}
-            </label>
-            {ruleRow.bounded ? (
-              <div className="flex flex-wrap items-end gap-3 pl-6">
-                <Field label="Smallest">
-                  <input
-                    name="amountMin"
-                    value={ruleRow.amountMin}
-                    onChange={(e) => setRuleRow({ ...ruleRow, amountMin: e.target.value })}
-                    inputMode="decimal"
-                    className={inputClass}
-                  />
-                </Field>
-                <Field label="Largest">
-                  <input
-                    name="amountMax"
-                    value={ruleRow.amountMax}
-                    onChange={(e) => setRuleRow({ ...ruleRow, amountMax: e.target.value })}
-                    inputMode="decimal"
-                    className={inputClass}
-                  />
-                </Field>
-              </div>
-            ) : (
-              // The fields are still POSTED when the box is unticked, as empty strings, so the
-              // action reads one shape either way rather than inferring the window from whether a
-              // key is present at all.
-              <>
-                <input type="hidden" name="amountMin" value="" />
-                <input type="hidden" name="amountMax" value="" />
-              </>
-            )}
-          </div>
+          {/*
+            2026-09-14, the owner: "price from insurer can change after a year or months."
+
+            A window FENCED AROUND one premium is the wrong shape for the job this dialog exists
+            for. Two policies with one insurer are told apart by the gap BETWEEN them, not by the
+            precision of either -- and a range built around today's premium walks out of its own
+            window at the first renewal, after which the merchant-wide rule quietly catches the
+            charge and files it as the other policy. The rules page shows that only as an Affects
+            count drifting toward 0.
+
+            The shape that does not go stale is a pair of OPEN-ENDED rules meeting at a split point
+            between the two policies: "less than $200" for one, "$200 or more" for the other. Every
+            amount is then covered by exactly one of them, so a price rise of any size still lands
+            on the right side and there is no gap to fall into. That was always possible -- the
+            columns are independently nullable and matchRule has honoured a one-sided window since
+            migration 0024 -- but it was reachable only by knowing to clear one of two boxes. This
+            select is what makes the durable answer the easy one.
+
+            'about' stays the default: most rules made from a row are about one recurring charge,
+            where a window around it is exactly right.
+          */}
+          <Field
+            label="When the amount is"
+            hint="Two policies with one company? Give each a one-sided rule meeting in the middle — “less than $200” and “$200 or more” — and a price rise cannot fall out of either."
+          >
+            <select
+              name="amountMode"
+              value={ruleRow.amountMode}
+              onChange={(e) => setRuleRow({ ...ruleRow, amountMode: e.target.value as AmountMode })}
+              className={selectClass}
+            >
+              <option value="any">Any amount</option>
+              <option value="about">{`About ${formatCents(absCents(row.amountCents))}`}</option>
+              <option value="more">More than…</option>
+              <option value="less">Less than…</option>
+            </select>
+          </Field>
+          {/*
+            Every branch posts BOTH fields, an unused side as ''. The action reads one shape
+            whatever is on screen, and '' is what makes a side genuinely open rather than a very
+            large number standing in for infinity.
+
+            The values live in state rather than in the inputs, so switching shape and switching
+            back does not lose what was typed -- a person comparing "about" against "more than"
+            should not be punished for looking.
+          */}
+          {ruleRow.amountMode === 'about' ? (
+            <div className="flex flex-wrap items-end gap-3">
+              <Field label="Smallest">
+                <input
+                  name="amountMin"
+                  value={ruleRow.amountMin}
+                  onChange={(e) => setRuleRow({ ...ruleRow, amountMin: e.target.value })}
+                  inputMode="decimal"
+                  className={inputClass}
+                />
+              </Field>
+              <Field label="Largest">
+                <input
+                  name="amountMax"
+                  value={ruleRow.amountMax}
+                  onChange={(e) => setRuleRow({ ...ruleRow, amountMax: e.target.value })}
+                  inputMode="decimal"
+                  className={inputClass}
+                />
+              </Field>
+            </div>
+          ) : ruleRow.amountMode === 'more' ? (
+            <>
+              <Field label="More than" hint="Anything at or above this. Leave the other policy a rule that stops below it.">
+                <input
+                  name="amountMin"
+                  value={ruleRow.splitPoint}
+                  onChange={(e) => setRuleRow({ ...ruleRow, splitPoint: e.target.value })}
+                  inputMode="decimal"
+                  className={inputClass}
+                />
+              </Field>
+              <input type="hidden" name="amountMax" value="" />
+            </>
+          ) : ruleRow.amountMode === 'less' ? (
+            <>
+              <Field label="Less than" hint="Anything at or below this. Leave the other policy a rule that starts above it.">
+                <input
+                  name="amountMax"
+                  value={ruleRow.splitPoint}
+                  onChange={(e) => setRuleRow({ ...ruleRow, splitPoint: e.target.value })}
+                  inputMode="decimal"
+                  className={inputClass}
+                />
+              </Field>
+              <input type="hidden" name="amountMin" value="" />
+            </>
+          ) : (
+            <>
+              <input type="hidden" name="amountMin" value="" />
+              <input type="hidden" name="amountMax" value="" />
+            </>
+          )}
           <Field label="Category" hint="Leave this alone to write a rule about the person only.">
             <CategoryCombobox
               options={groupedCategories}

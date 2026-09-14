@@ -4368,7 +4368,7 @@ describe('TransactionsClient — creating a rule from a row', () => {
     expect(screen.queryByRole('menuitem', { name: /create a rule/i })).toBeNull();
   });
 
-  /** ±10% of $140.12, rounded outward to whole dollars, and the checkbox on by default. */
+  /** ±10% of $140.12, rounded outward to whole dollars, and "about" chosen by default. */
   it('prefills a window around the row own amount', () => {
     renderPage();
     openDialog();
@@ -4376,11 +4376,66 @@ describe('TransactionsClient — creating a rule from a row', () => {
     expect((screen.getByLabelText('Largest') as HTMLInputElement).value).toBe('155.00');
   });
 
-  it('hides the two money inputs when the amount is not part of the rule', () => {
+  it('hides the money inputs when the amount is not part of the rule', () => {
     renderPage();
     openDialog();
-    fireEvent.click(screen.getByRole('checkbox', { name: /only when the amount is about/i }));
+    fireEvent.change(screen.getByLabelText('When the amount is'), { target: { value: 'any' } });
     expect(screen.queryByLabelText('Smallest')).toBeNull();
+    expect(screen.queryByLabelText('Largest')).toBeNull();
+  });
+
+  /**
+   * The owner, 2026-09-14: "price from insurer can change after a year or months". A window fenced
+   * around one premium goes stale at the first renewal and the charge falls through to the
+   * merchant-wide rule silently. An open-ended pair -- "less than $200" for one policy, "more than
+   * $200" for the other -- covers every amount between them, so a price rise cannot fall out of
+   * either rule. This is what makes that shape one click rather than a thing to know.
+   */
+  it('offers a one-sided window, and posts only the side it asked for', async () => {
+    renderPage();
+    openDialog();
+    fireEvent.change(screen.getByLabelText('When the amount is'), { target: { value: 'more' } });
+    expect(screen.queryByLabelText('Largest')).toBeNull();
+    fireEvent.change(screen.getByLabelText('More than'), { target: { value: '200' } });
+    fireEvent.submit(screen.getByTestId('create-rule-form'));
+
+    await waitFor(() => expect(createRulesFromRowAction).toHaveBeenCalled());
+    const formData = vi.mocked(createRulesFromRowAction).mock.calls[0]?.[1] as FormData;
+    expect(formData.get('amountMin')).toBe('200');
+    // The other side stays empty, which is what makes it open rather than a very large number.
+    expect(formData.get('amountMax')).toBe('');
+  });
+
+  it('offers the other side too', async () => {
+    renderPage();
+    openDialog();
+    fireEvent.change(screen.getByLabelText('When the amount is'), { target: { value: 'less' } });
+    expect(screen.queryByLabelText('Smallest')).toBeNull();
+    fireEvent.change(screen.getByLabelText('Less than'), { target: { value: '200' } });
+    fireEvent.submit(screen.getByTestId('create-rule-form'));
+
+    await waitFor(() => expect(createRulesFromRowAction).toHaveBeenCalled());
+    const formData = vi.mocked(createRulesFromRowAction).mock.calls[0]?.[1] as FormData;
+    expect(formData.get('amountMax')).toBe('200');
+    expect(formData.get('amountMin')).toBe('');
+  });
+
+  /** Prefilled from the row so the field is never empty, and at a whole dollar because a split
+   *  point between two policies is a round number a person chooses, not a premium. */
+  it('prefills a one-sided window at a whole dollar', () => {
+    renderPage();
+    openDialog();
+    fireEvent.change(screen.getByLabelText('When the amount is'), { target: { value: 'more' } });
+    expect((screen.getByLabelText('More than') as HTMLInputElement).value).toBe('140.00');
+  });
+
+  it('keeps what was typed when the shape is changed and changed back', () => {
+    renderPage();
+    openDialog();
+    fireEvent.change(screen.getByLabelText('Smallest'), { target: { value: '100.00' } });
+    fireEvent.change(screen.getByLabelText('When the amount is'), { target: { value: 'any' } });
+    fireEvent.change(screen.getByLabelText('When the amount is'), { target: { value: 'about' } });
+    expect((screen.getByLabelText('Smallest') as HTMLInputElement).value).toBe('100.00');
   });
 
   it('counts before it writes, and writes nothing on Preview', async () => {
@@ -4414,7 +4469,7 @@ describe('TransactionsClient — creating a rule from a row', () => {
   it('posts an empty window when the amount is not part of the rule', async () => {
     renderPage();
     openDialog();
-    fireEvent.click(screen.getByRole('checkbox', { name: /only when the amount is about/i }));
+    fireEvent.change(screen.getByLabelText('When the amount is'), { target: { value: 'any' } });
     fireEvent.submit(screen.getByTestId('create-rule-form'));
 
     await waitFor(() => expect(createRulesFromRowAction).toHaveBeenCalled());

@@ -226,6 +226,16 @@ export const HELP_SECTIONS: HelpSection[] = [
           transactions it would touch before anything is written.
         </P>
         <P>
+          Prices rise. A rule fenced tightly around what a charge costs today stops matching the
+          year it goes up, and the charge quietly goes back to whatever the merchant&rsquo;s general
+          rule says. So when you are telling <em>two</em> things from one company apart, do not fence
+          each price &mdash; split the difference between them. If one policy runs about $130 and
+          the other about $300, give the first <B>Less than</B> $200 and the second{' '}
+          <B>More than</B> $200. Every amount now belongs to one of the two, a price can move a
+          long way before it crosses, and there is no gap left for a charge to fall into. Use{' '}
+          <B>About</B> for the other case: one recurring bill whose figure barely moves.
+        </P>
+        <P>
           A rule that names a person decides who a charge belongs to when it is imported, ahead of
           the card it was charged to and ahead of the account&rsquo;s owner. <B>Household</B> means
           the charge is nobody&rsquo;s in particular, and choosing it deliberately stops the card and

@@ -221,6 +221,20 @@ describe('the help page explains loan direction (spec BU)', () => {
     expect(text).toContain('Household');
     expect(text).toContain('Correcting a row always edits the rule about the');
   });
+
+  /**
+   * The owner, 2026-09-14: "price from insurer can change after a year or months". A window fenced
+   * around one premium goes stale at renewal and the charge falls back to the merchant-wide rule
+   * with nothing on screen to say so. Two one-sided rules meeting at a split point cover every
+   * amount, so there is no gap to fall into -- and the help has to SAY that, because the durable
+   * shape is not the one a person reaches for first.
+   */
+  it('says to split the difference between two policies rather than fence each price', () => {
+    const text = all();
+    expect(text).toContain('Prices rise.');
+    expect(text).toContain('split the difference between them');
+    expect(text).toContain('no gap left for a charge to fall into');
+  });
 });
 
 describe('the help page obeys the standing content rules', () => {
