@@ -22,6 +22,36 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+/**
+ * v1.37.0: a file is the first thing that happens on this page, and the two pickers stay disabled
+ * until there is one (owner report, 2026-09-13). Every test that previews therefore has to choose
+ * a file first -- and choosing one posts it to /api/import/detect, so the fetch mock has to answer
+ * that call before the preview one.
+ */
+/**
+ * What /api/import/detect answers when it could not tell -- which leaves both pickers blank on
+ * purpose (a pre-armed wrong account is worse than an empty one: dedup is per account, so a
+ * mis-aimed import writes a second copy of every row rather than merging).
+ */
+const DETECT_UNDECIDED_BODY = {
+  stagingId: '11111111-2222-3333-4444-555555555555',
+  filename: 'march.csv',
+  profile: null as { id: number; name: string } | null,
+  profileReason: 'None of your import profiles could read this file.',
+  profileConfidence: 'none',
+  source: 'csv',
+  account: null as { id: number; name: string } | null,
+  accountReason: 'Nothing in this file says which account it belongs to.',
+  accountConfidence: 'none',
+};
+
+function putFileOnPage(container: HTMLElement, name = 'march.csv'): void {
+  const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+  const file = new File(['2026-03-02,COFFEE,4.85'], name, { type: 'text/csv' });
+  Object.defineProperty(input, 'files', { value: [file], configurable: true });
+  fireEvent.change(input);
+}
+
 const TD_CHEQUING = getBuiltinPreset('TD Chequing/Debit');
 const TD_VISA = getBuiltinPreset('TD Visa');
 
@@ -98,10 +128,8 @@ describe('ImportClient — a pin that is not among the offered profiles behaves 
     return parsed.profileId === undefined ? null : String(parsed.profileId);
   }
 
-  it('posts the first offered profile on initial mount, not the stale pin, when the account is pinned to a profile not in the offered list', async () => {
-    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => previewBody({ profileId: PROFILES[0].id }) }));
-    vi.stubGlobal('fetch', fetchMock);
-    const { container } = render(
+  it('seeds the picker with the first offered profile, not the stale pin, when the account is pinned to a profile not in the offered list', () => {
+    const { getByLabelText } = render(
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 99 }]}
         profiles={PROFILES}
@@ -110,16 +138,11 @@ describe('ImportClient — a pin that is not among the offered profiles behaves 
       />,
     );
 
-    fireEvent.submit(container.querySelector('form')!);
-    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-
-    expect(profileIdSubmittedTo(fetchMock)).toBe(String(PROFILES[0].id));
+    expect((getByLabelText(/Import profile/) as HTMLSelectElement).value).toBe(String(PROFILES[0].id));
   });
 
-  it('posts the first offered profile when switching TO an account pinned to a profile not in the offered list', async () => {
-    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => previewBody({ profileId: PROFILES[0].id }) }));
-    vi.stubGlobal('fetch', fetchMock);
-    const { container, getByLabelText } = render(
+  it('falls back to the first offered profile when switching TO an account pinned to a profile not in the offered list', () => {
+    const { getByLabelText } = render(
       <ImportClient
         accounts={[
           { id: 10, name: 'Joint Chequing', importProfileId: 1 },
@@ -132,16 +155,12 @@ describe('ImportClient — a pin that is not among the offered profiles behaves 
     );
 
     fireEvent.change(getByLabelText(/Account/) as HTMLSelectElement, { target: { value: '11' } });
-    fireEvent.submit(container.querySelector('form')!);
-    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
 
-    expect(profileIdSubmittedTo(fetchMock)).toBe(String(PROFILES[0].id));
+    expect((getByLabelText(/Import profile/) as HTMLSelectElement).value).toBe(String(PROFILES[0].id));
   });
 
-  it('still honors the pin when it IS among the offered profiles, even when it is not profiles[0]', async () => {
-    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => previewBody({ profileId: PROFILES[1].id }) }));
-    vi.stubGlobal('fetch', fetchMock);
-    const { container } = render(
+  it('still honors the pin when it IS among the offered profiles, even when it is not profiles[0]', () => {
+    const { getByLabelText } = render(
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Visa', importProfileId: PROFILES[1].id }]}
         profiles={PROFILES}
@@ -150,9 +169,30 @@ describe('ImportClient — a pin that is not among the offered profiles behaves 
       />,
     );
 
-    fireEvent.submit(container.querySelector('form')!);
-    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect((getByLabelText(/Import profile/) as HTMLSelectElement).value).toBe(String(PROFILES[1].id));
+  });
 
+  it('posts whatever the pickers hold once a file has been read', async () => {
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) =>
+      String(url).includes('/detect')
+        ? { ok: true, json: async () => ({ ...DETECT_UNDECIDED_BODY, profile: { id: PROFILES[1].id, name: 'TD Visa' }, account: { id: 10, name: 'Joint Chequing' } }) }
+        : { ok: true, json: async () => previewBody({ profileId: PROFILES[1].id }) },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const { container } = render(
+      <ImportClient
+        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 99 }]}
+        profiles={PROFILES}
+        history={[]}
+        simplefinManaged={[]}
+      />,
+    );
+
+    putFileOnPage(container);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    fireEvent.submit(container.querySelector('form')!);
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     expect(profileIdSubmittedTo(fetchMock)).toBe(String(PROFILES[1].id));
   });
 });
@@ -255,20 +295,35 @@ const HISTORY: ImportHistoryRow[] = [
  * file therefore starts with a detect response -- this one answers "I could not tell", which leaves
  * both pickers exactly where the test set them and keeps these tests about what they were about.
  */
-const DETECT_UNDECIDED = {
+const DETECT_UNDECIDED = { ok: true, json: async () => DETECT_UNDECIDED_BODY };
+
+/** Detection that resolved both pickers -- the state a test about the PREVIEW stage needs. */
+const DETECT_RESOLVED = {
   ok: true,
   json: async () => ({
-    stagingId: '11111111-2222-3333-4444-555555555555',
-    filename: 'march.csv',
-    profile: null,
-    profileReason: 'None of your import profiles could read this file.',
-    profileConfidence: 'none',
-    source: 'csv',
-    account: null,
-    accountReason: 'Nothing in this file says which account it belongs to.',
-    accountConfidence: 'none',
+    ...DETECT_UNDECIDED_BODY,
+    profile: { id: 1, name: 'TD Chequing/Debit' },
+    profileReason: 'TD Chequing/Debit read all 5 of 5 rows in this file.',
+    profileConfidence: 'certain',
+    account: { id: 10, name: 'Joint Chequing' },
+    accountReason: '4 of 5 rows in this file are already in Joint Chequing.',
+    accountConfidence: 'certain',
   }),
 };
+
+/**
+ * A fetch stub for the two-hop upload: /api/import/detect answers first (resolving both pickers),
+ * everything else gets the preview body. Tests about the PREVIEW stage want this -- a single
+ * blanket response would hand the detect call a preview body, which resolves no profile, blanks
+ * the picker, and takes the whole save-mapping section off the screen.
+ */
+function twoHop(preview: Record<string, unknown> = {}) {
+  return vi.fn(async (url: string, _init?: RequestInit) =>
+    String(url).includes('/detect')
+      ? { ok: true, json: async () => (DETECT_RESOLVED.json as () => Promise<unknown>)() }
+      : { ok: true, json: async () => previewBody(preview) },
+  );
+}
 
 function previewBody(over: Record<string, unknown> = {}) {
   return {
@@ -295,10 +350,7 @@ function previewBody(over: Record<string, unknown> = {}) {
 
 describe('ImportClient — polish item 9: rows the profile silently skipped', () => {
   async function renderPreview(skipped: number) {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => ({ ok: true, json: async () => previewBody({ skipped }) })),
-    );
+    vi.stubGlobal('fetch', twoHop({ skipped }));
     const view = render(
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
@@ -423,12 +475,16 @@ describe('ImportClient — the Preview and Import buttons are busy-guarded', () 
     const pending: { release?: (value: unknown) => void } = {};
     vi.stubGlobal(
       'fetch',
-      vi.fn(
-        () =>
-          new Promise((resolve) => {
-            pending.release = resolve;
-          }),
-      ),
+      vi
+        .fn()
+        // v1.37.0: hop 1 answers immediately -- it is the PREVIEW call this test holds open.
+        .mockImplementationOnce(async () => DETECT_RESOLVED)
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              pending.release = resolve;
+            }),
+        ),
     );
 
     const { container, getByRole } = render(
@@ -440,8 +496,11 @@ describe('ImportClient — the Preview and Import buttons are busy-guarded', () 
       />,
     );
     const preview = () => getByRole('button', { name: /preview|working/i }) as HTMLButtonElement;
-    expect(preview().disabled).toBe(false);
+    // v1.37.0: disabled until there is a file to preview -- the pickers are answers ABOUT a file.
+    expect(preview().disabled).toBe(true);
 
+    putFileOnPage(container);
+    await waitFor(() => expect(preview().disabled).toBe(false));
     fireEvent.submit(container.querySelector('form')!);
     // This is a form action: a local `busy` flag set inside it does not render until the
     // action settles, so the old guard left the button clickable for the whole upload.
@@ -478,6 +537,9 @@ describe('ImportClient — the Preview and Import buttons are busy-guarded', () 
         simplefinManaged={[]}
       />,
     );
+    // v1.37.0: a file first -- the pickers and Preview wait for one, and choosing it is
+    // what stages the upload that the preview call below reuses.
+    putFileOnPage(container);
     fireEvent.submit(container.querySelector('form')!);
     await waitFor(() => expect(container.textContent).toContain('Preview —'));
 
@@ -516,6 +578,9 @@ describe('ImportClient — release review finding C: a failed re-preview must no
         simplefinManaged={[]}
       />,
     );
+    // v1.37.0: a file first -- the pickers and Preview wait for one, and choosing it is
+    // what stages the upload that the preview call below reuses.
+    putFileOnPage(container);
     fireEvent.submit(container.querySelector('form')!);
     await waitFor(() => expect(container.textContent).toContain('Preview —'));
 
@@ -567,6 +632,9 @@ describe('ImportClient — release review finding C: a failed re-preview must no
         simplefinManaged={[]}
       />,
     );
+    // v1.37.0: a file first -- the pickers and Preview wait for one, and choosing it is
+    // what stages the upload that the preview call below reuses.
+    putFileOnPage(container);
     fireEvent.submit(container.querySelector('form')!);
     await waitFor(() => expect(container.textContent).toContain('Preview —'));
 
@@ -603,6 +671,9 @@ describe('ImportClient — NEW-5 fix-round: loanMatchFailed gets the same honest
         simplefinManaged={[]}
       />,
     );
+    // v1.37.0: a file first -- the pickers and Preview wait for one, and choosing it is
+    // what stages the upload that the preview call below reuses.
+    putFileOnPage(container);
     fireEvent.submit(container.querySelector('form')!);
     await waitFor(() => expect(container.textContent).toContain('Preview —'));
     fireEvent.click(getByRole('button', { name: /^Import \d+ transactions$/ }));
@@ -644,6 +715,9 @@ describe('ImportClient — Carry 2: the post-commit message shows the attributio
         simplefinManaged={[]}
       />,
     );
+    // v1.37.0: a file first -- the pickers and Preview wait for one, and choosing it is
+    // what stages the upload that the preview call below reuses.
+    putFileOnPage(container);
     fireEvent.submit(container.querySelector('form')!);
     await waitFor(() => expect(container.textContent).toContain('Preview —'));
     fireEvent.click(getByRole('button', { name: /^Import \d+ transactions$/ }));
@@ -673,6 +747,9 @@ describe('ImportClient — Carry 2: the post-commit message shows the attributio
         simplefinManaged={[]}
       />,
     );
+    // v1.37.0: a file first -- the pickers and Preview wait for one, and choosing it is
+    // what stages the upload that the preview call below reuses.
+    putFileOnPage(container);
     fireEvent.submit(container.querySelector('form')!);
     await waitFor(() => expect(container.textContent).toContain('Preview —'));
     fireEvent.click(getByRole('button', { name: /^Import \d+ transactions$/ }));
@@ -718,6 +795,9 @@ describe('ImportClient — Lane 3b: the post-commit offer to check what rules di
         simplefinManaged={[]}
       />,
     );
+    // v1.37.0: a file first -- the pickers and Preview wait for one, and choosing it is
+    // what stages the upload that the preview call below reuses.
+    putFileOnPage(container);
     fireEvent.submit(container.querySelector('form')!);
     await waitFor(() => expect(container.textContent).toContain('Preview —'));
     fireEvent.click(getByRole('button', { name: /^Import \d+ transactions$/ }));
@@ -758,6 +838,9 @@ describe('ImportClient — Lane 3b: the post-commit offer to check what rules di
         simplefinManaged={[]}
       />,
     );
+    // v1.37.0: a file first -- the pickers and Preview wait for one, and choosing it is
+    // what stages the upload that the preview call below reuses.
+    putFileOnPage(container);
     fireEvent.submit(container.querySelector('form')!);
     await waitFor(() => expect(container.textContent).toContain('Preview —'));
     fireEvent.click(getByRole('button', { name: /^Import \d+ transactions$/ }));
@@ -796,6 +879,9 @@ describe('ImportClient — Lane 3b: the post-commit offer to check what rules di
         simplefinManaged={[]}
       />,
     );
+    // v1.37.0: a file first -- the pickers and Preview wait for one, and choosing it is
+    // what stages the upload that the preview call below reuses.
+    putFileOnPage(container);
     fireEvent.submit(container.querySelector('form')!);
     await waitFor(() => expect(container.textContent).toContain('Preview —'));
     fireEvent.click(getByRole('button', { name: /^Import \d+ transactions$/ }));
@@ -847,6 +933,9 @@ describe('ImportClient — F-03: the post-commit balance check', () => {
         simplefinManaged={[]}
       />,
     );
+    // v1.37.0: a file first -- the pickers and Preview wait for one, and choosing it is
+    // what stages the upload that the preview call below reuses.
+    putFileOnPage(container);
     fireEvent.submit(container.querySelector('form')!);
     await waitFor(() => expect(container.textContent).toContain('Preview —'));
     fireEvent.click(getByRole('button', { name: /^Import \d+ transactions$/ }));
@@ -885,6 +974,9 @@ describe('ImportClient — F-03: the post-commit balance check', () => {
         simplefinManaged={[]}
       />,
     );
+    // v1.37.0: a file first -- the pickers and Preview wait for one, and choosing it is
+    // what stages the upload that the preview call below reuses.
+    putFileOnPage(container);
     fireEvent.submit(container.querySelector('form')!);
     await waitFor(() => expect(container.textContent).toContain('Preview —'));
     fireEvent.click(getByRole('button', { name: /^Import \d+ transactions$/ }));
@@ -944,7 +1036,7 @@ describe('ImportClient — per-card assignment UI (MUST-6.1, MUST-6.2)', () => {
   }
 
   it('renders nothing about card assignments when the mapping has no cardCol -- the cardCol-null screen stays as it was', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => previewBody({ totalRows: 4 }) })));
+    vi.stubGlobal('fetch', twoHop({ totalRows: 4 }));
     const { container } = render(
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
@@ -954,6 +1046,9 @@ describe('ImportClient — per-card assignment UI (MUST-6.1, MUST-6.2)', () => {
         people={PEOPLE}
       />,
     );
+    // v1.37.0: a file first -- the pickers and Preview wait for one, and choosing it is
+    // what stages the upload that the preview call below reuses.
+    putFileOnPage(container);
     fireEvent.submit(container.querySelector('form')!);
     await waitFor(() => expect(container.textContent).toContain('Preview —'));
     expect(container.textContent).not.toMatch(/account owner \(default\)/i);
@@ -1253,10 +1348,7 @@ describe('ImportClient — responsive rows (v1.15.0, ruling S3)', () => {
 // make it parse. These tests exercise the button import-client.tsx wires to saveMappingAction.
 describe('ImportClient — Lane 5: saving a corrected mapping from the preview', () => {
   it('renders the save-mapping button in the preview step even when the preview reported errors and zero rows', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => ({ ok: true, json: async () => previewBody({ totalRows: 0, errorCount: 117, rows: [], errors: [] }) })),
-    );
+    vi.stubGlobal('fetch', twoHop({ totalRows: 0, errorCount: 117, rows: [], errors: [] }));
     const { container, getByRole } = render(
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
@@ -1265,6 +1357,9 @@ describe('ImportClient — Lane 5: saving a corrected mapping from the preview',
         simplefinManaged={[]}
       />,
     );
+    // v1.37.0: a file first -- the pickers and Preview wait for one, and choosing it is
+    // what stages the upload that the preview call below reuses.
+    putFileOnPage(container);
     fireEvent.submit(container.querySelector('form')!);
     await waitFor(() => expect(container.textContent).toContain('Preview —'));
     expect(container.textContent).toContain('117 errors');
@@ -1273,7 +1368,7 @@ describe('ImportClient — Lane 5: saving a corrected mapping from the preview',
   });
 
   it('offers an editable "New profile name" field, defaulted to the account name, only for a built-in profile', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => previewBody({}) })));
+    vi.stubGlobal('fetch', twoHop());
     const { container, getByLabelText, getByRole } = render(
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
@@ -1282,6 +1377,9 @@ describe('ImportClient — Lane 5: saving a corrected mapping from the preview',
         simplefinManaged={[]}
       />,
     );
+    // v1.37.0: a file first -- the pickers and Preview wait for one, and choosing it is
+    // what stages the upload that the preview call below reuses.
+    putFileOnPage(container);
     fireEvent.submit(container.querySelector('form')!);
     await waitFor(() => expect(container.textContent).toContain('Preview —'));
 
@@ -1291,7 +1389,23 @@ describe('ImportClient — Lane 5: saving a corrected mapping from the preview',
 
   it('labels the button "Update <profile name>" for a custom profile, with no editable name field, never a bare "Save"', async () => {
     const CUSTOM_PROFILES = [{ id: 3, name: 'Tangerine Chequing', isBuiltin: false, mapping: TD_CHEQUING }];
-    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => previewBody({ profileId: 3, mapping: TD_CHEQUING }) })));
+    // This household has ONE profile and it is not the id twoHop's detect answer names, so the
+    // detect response is written out here: a profile the picker does not offer would blank it.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, _init?: RequestInit) =>
+        String(url).includes('/detect')
+          ? {
+              ok: true,
+              json: async () => ({
+                ...DETECT_UNDECIDED_BODY,
+                profile: { id: 3, name: 'Tangerine Chequing' },
+                account: { id: 10, name: 'Joint Chequing' },
+              }),
+            }
+          : { ok: true, json: async () => previewBody({ profileId: 3, mapping: TD_CHEQUING }) },
+      ),
+    );
     const { container, getByRole, queryByLabelText, queryByRole } = render(
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 3 }]}
@@ -1300,6 +1414,9 @@ describe('ImportClient — Lane 5: saving a corrected mapping from the preview',
         simplefinManaged={[]}
       />,
     );
+    // v1.37.0: a file first -- the pickers and Preview wait for one, and choosing it is
+    // what stages the upload that the preview call below reuses.
+    putFileOnPage(container);
     fireEvent.submit(container.querySelector('form')!);
     await waitFor(() => expect(container.textContent).toContain('Preview —'));
 
@@ -1309,7 +1426,7 @@ describe('ImportClient — Lane 5: saving a corrected mapping from the preview',
   });
 
   it('submits the current mapping, profile, account and fork name when clicked', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => previewBody({}) })));
+    vi.stubGlobal('fetch', twoHop());
     const { container, getByRole } = render(
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
@@ -1318,6 +1435,9 @@ describe('ImportClient — Lane 5: saving a corrected mapping from the preview',
         simplefinManaged={[]}
       />,
     );
+    // v1.37.0: a file first -- the pickers and Preview wait for one, and choosing it is
+    // what stages the upload that the preview call below reuses.
+    putFileOnPage(container);
     fireEvent.submit(container.querySelector('form')!);
     await waitFor(() => expect(container.textContent).toContain('Preview —'));
 
@@ -1333,7 +1453,7 @@ describe('ImportClient — Lane 5: saving a corrected mapping from the preview',
   });
 
   it('shows the returned message inline once the save succeeds', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => previewBody({}) })));
+    vi.stubGlobal('fetch', twoHop());
     const { container, getByRole, getByText } = render(
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
@@ -1342,6 +1462,9 @@ describe('ImportClient — Lane 5: saving a corrected mapping from the preview',
         simplefinManaged={[]}
       />,
     );
+    // v1.37.0: a file first -- the pickers and Preview wait for one, and choosing it is
+    // what stages the upload that the preview call below reuses.
+    putFileOnPage(container);
     fireEvent.submit(container.querySelector('form')!);
     await waitFor(() => expect(container.textContent).toContain('Preview —'));
 
@@ -1355,7 +1478,7 @@ describe('ImportClient — Lane 5: saving a corrected mapping from the preview',
   });
 
   it('surfaces a refusal inline instead of failing silently (a self-scoped viewer, e.g.)', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => previewBody({}) })));
+    vi.stubGlobal('fetch', twoHop());
     const { container, getByRole, getByText } = render(
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
@@ -1364,6 +1487,9 @@ describe('ImportClient — Lane 5: saving a corrected mapping from the preview',
         simplefinManaged={[]}
       />,
     );
+    // v1.37.0: a file first -- the pickers and Preview wait for one, and choosing it is
+    // what stages the upload that the preview call below reuses.
+    putFileOnPage(container);
     fireEvent.submit(container.querySelector('form')!);
     await waitFor(() => expect(container.textContent).toContain('Preview —'));
 
@@ -1375,10 +1501,7 @@ describe('ImportClient — Lane 5: saving a corrected mapping from the preview',
   });
 
   it('renders no save-mapping panel at all for an OFX preview, which has no mapping to save', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => ({ ok: true, json: async () => previewBody({ source: 'ofx', dateFormatDetection: { candidates: [], status: 'none', detected: null }, columnOptions: [] }) })),
-    );
+    vi.stubGlobal('fetch', twoHop({ source: 'ofx', dateFormatDetection: { candidates: [], status: 'none', detected: null }, columnOptions: [] }));
     const { container, queryByRole } = render(
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
@@ -1387,6 +1510,9 @@ describe('ImportClient — Lane 5: saving a corrected mapping from the preview',
         simplefinManaged={[]}
       />,
     );
+    // v1.37.0: a file first -- the pickers and Preview wait for one, and choosing it is
+    // what stages the upload that the preview call below reuses.
+    putFileOnPage(container);
     fireEvent.submit(container.querySelector('form')!);
     await waitFor(() => expect(container.textContent).toContain('Preview —'));
 
@@ -1403,28 +1529,32 @@ describe('ImportClient — Lane 5: saving a corrected mapping from the preview',
  *
  * Neither answer decides anything: both pickers stay live and the preview is the real check.
  */
-describe('ImportClient — the file is read before the pickers are set', () => {
-  function detectBody(over: Record<string, unknown> = {}) {
-    return {
-      stagingId: '11111111-2222-3333-4444-555555555555',
-      filename: 'march.csv',
-      profile: { id: 2, name: 'TD Visa' },
-      profileReason: 'TD Visa read all 5 of 5 rows in this file.',
-      profileConfidence: 'certain',
-      source: 'csv',
-      account: { id: 11, name: 'Joint Visa' },
-      accountReason: '4 of 5 rows in this file are already in Joint Visa.',
-      accountConfidence: 'certain',
-      ...over,
-    };
-  }
+/**
+ * The two-hop upload was first written to run on PRESSING Preview; the owner's screenshot of a
+ * Scotiabank file sitting under "TD Visa" moved it to the moment the file is CHOSEN (the describe
+ * below). The tests that pinned the old timing were removed rather than kept alongside: two specs
+ * for one flow, one of them contradicting the shipped behaviour, is worse than none. What they
+ * asserted about the hops themselves -- detect first, preview from the staging id, no second
+ * upload -- is asserted below against the flow that actually ships.
+ */
+describe('ImportClient — the file is read as soon as it is chosen', () => {
+  const DETECTED = {
+    stagingId: '11111111-2222-3333-4444-555555555555',
+    filename: 'scotia.csv',
+    profile: { id: 2, name: 'TD Visa' },
+    profileReason: 'TD Visa read all 5 of 5 rows in this file.',
+    profileConfidence: 'certain',
+    source: 'csv',
+    account: { id: 11, name: 'Joint Visa' },
+    accountReason: '4 of 5 rows in this file are already in Joint Visa.',
+    accountConfidence: 'certain',
+  };
 
-  function twoHopFetch(detect: Record<string, unknown> = {}, preview: Record<string, unknown> = {}) {
-    return vi.fn(async (url: string, _init?: RequestInit) =>
-      String(url).includes('/detect')
-        ? { ok: true, json: async () => detectBody(detect) }
-        : { ok: true, json: async () => previewBody(preview) },
-    );
+  function chooseFile(container: HTMLElement) {
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File(['2026-03-02,COFFEE,4.85'], 'scotia.csv', { type: 'text/csv' });
+    Object.defineProperty(input, 'files', { value: [file], configurable: true });
+    fireEvent.change(input);
   }
 
   function renderClient() {
@@ -1441,86 +1571,154 @@ describe('ImportClient — the file is read before the pickers are set', () => {
     );
   }
 
-  it('asks /api/import/detect first, with the file itself', async () => {
-    const fetchMock = twoHopFetch();
+  it('posts the file to /api/import/detect on choosing it, before anything is pressed', async () => {
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => ({
+      ok: true,
+      json: async () => ({ ...DETECTED, requested: url }),
+    }));
     vi.stubGlobal('fetch', fetchMock);
     const { container } = renderClient();
 
-    fireEvent.submit(container.querySelector('form')!);
+    chooseFile(container);
 
-    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/api/import/detect');
-    expect(fetchMock.mock.calls[0]?.[1]?.body).toBeInstanceOf(FormData);
   });
 
-  it('previews with the staging id and the ids detection chose, not the ones the page opened with', async () => {
-    const fetchMock = twoHopFetch();
-    vi.stubGlobal('fetch', fetchMock);
-    const { container } = renderClient();
-
-    fireEvent.submit(container.querySelector('form')!);
-
-    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2));
-    const body = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body));
-    expect(String(fetchMock.mock.calls[1]?.[0])).toContain('/api/import/preview');
-    expect(body.stagingId).toBe('11111111-2222-3333-4444-555555555555');
-    expect(body.profileId).toBe(2);
-    expect(body.accountId).toBe(11);
-  });
-
-  it('moves both pickers to what it found', async () => {
-    vi.stubGlobal('fetch', twoHopFetch());
+  it('moves both pickers without waiting for Preview', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => DETECTED })));
     const { container, getByLabelText } = renderClient();
 
-    fireEvent.submit(container.querySelector('form')!);
+    chooseFile(container);
 
-    // Both in one waitFor: the two setState calls land in the same batch, but the batch flushes a
-    // tick after the detect response resolves, so reading one of them outside the wait races it.
     await waitFor(() => {
       expect((getByLabelText(/Account/) as HTMLSelectElement).value).toBe('11');
       expect((getByLabelText(/Import profile/) as HTMLSelectElement).value).toBe('2');
     });
   });
 
-  it('says what it found and why, for both', async () => {
-    vi.stubGlobal('fetch', twoHopFetch());
-    const { container, findByText } = renderClient();
-
-    fireEvent.submit(container.querySelector('form')!);
-
-    expect(await findByText(/TD Visa read all 5 of 5 rows/)).toBeTruthy();
-    expect(await findByText(/already in Joint Visa/)).toBeTruthy();
-  });
-
-  it('leaves a picker exactly where it was when detection could not tell', async () => {
-    vi.stubGlobal(
-      'fetch',
-      twoHopFetch({
-        profile: null,
-        profileReason: 'None of your import profiles could read this file.',
-        profileConfidence: 'none',
-        account: null,
-        accountReason: 'Nothing in this file says which account it belongs to.',
-        accountConfidence: 'none',
-      }),
+  it('previews from what detection already staged, without uploading the file a second time', async () => {
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) =>
+      String(url).includes('/detect')
+        ? { ok: true, json: async () => DETECTED }
+        : { ok: true, json: async () => previewBody({ accountId: 11, profileId: 2 }) },
     );
-    const { container, getByLabelText } = renderClient();
-
-    fireEvent.submit(container.querySelector('form')!);
-
-    await waitFor(() => expect(document.body.textContent).toContain('Nothing in this file says'));
-    expect((getByLabelText(/Account/) as HTMLSelectElement).value).toBe('10');
-    expect((getByLabelText(/Import profile/) as HTMLSelectElement).value).toBe('1');
-  });
-
-  it('reports a detect failure instead of previewing into the wrong account', async () => {
-    const fetchMock = vi.fn(async () => ({ ok: false, json: async () => ({ error: 'File is larger than 5000000 bytes' }) }));
     vi.stubGlobal('fetch', fetchMock);
     const { container } = renderClient();
 
+    chooseFile(container);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
     fireEvent.submit(container.querySelector('form')!);
 
-    await waitFor(() => expect(document.body.textContent).toContain('larger than'));
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    const second = fetchMock.mock.calls[1];
+    expect(String(second?.[0])).toContain('/api/import/preview');
+    // JSON, not multipart: the bytes were staged once and are reused by id.
+    expect(typeof second?.[1]?.body).toBe('string');
+    expect(JSON.parse(String(second?.[1]?.body)).stagingId).toBe(DETECTED.stagingId);
+  });
+
+  it('shows the filename once, not twice', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => DETECTED })));
+    const { container } = renderClient();
+    chooseFile(container);
+    await waitFor(() => expect(document.body.textContent).toContain('TD Visa read all'));
+    const occurrences = (container.textContent ?? '').split('scotia.csv').length - 1;
+    expect(occurrences).toBeLessThanOrEqual(1);
+  });
+});
+
+
+/**
+ * Owner, 2026-09-13, looking at the card with no file chosen: the Account and Import profile
+ * selects showed a leftover account and profile as though they meant something. They are answers
+ * ABOUT a file, so until there is one they are disabled rather than hidden -- hidden would also
+ * hide that the choice exists, and the card would jump when it appeared.
+ *
+ * And once the file has been read, the card says so in plain words rather than leaving the
+ * household to notice that two selects moved on their own.
+ */
+describe('ImportClient — the pickers wait for a file, and say what happened when one arrives', () => {
+  const DETECTED = {
+    stagingId: '11111111-2222-3333-4444-555555555555',
+    filename: 'scotia.csv',
+    profile: { id: 2, name: 'TD Visa' },
+    profileReason: 'TD Visa read all 5 of 5 rows in this file.',
+    profileConfidence: 'certain',
+    source: 'csv',
+    account: { id: 11, name: 'Joint Visa' },
+    accountReason: '4 of 5 rows in this file are already in Joint Visa.',
+    accountConfidence: 'certain',
+  };
+
+  function chooseFile(container: HTMLElement) {
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File(['2026-03-02,COFFEE,4.85'], 'scotia.csv', { type: 'text/csv' });
+    Object.defineProperty(input, 'files', { value: [file], configurable: true });
+    fireEvent.change(input);
+  }
+
+  function renderClient() {
+    return render(
+      <ImportClient
+        accounts={[
+          { id: 10, name: 'Joint Chequing', importProfileId: 1 },
+          { id: 11, name: 'Joint Visa', importProfileId: 2 },
+        ]}
+        profiles={PROFILES}
+        history={[]}
+        simplefinManaged={[]}
+      />,
+    );
+  }
+
+  it('disables both selects and Preview until a file has been read', () => {
+    const { getByLabelText, getByRole } = renderClient();
+    expect((getByLabelText(/Account/) as HTMLSelectElement).disabled).toBe(true);
+    expect((getByLabelText(/Import profile/) as HTMLSelectElement).disabled).toBe(true);
+    expect((getByRole('button', { name: /preview/i }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('enables them once the file has been read', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => DETECTED })));
+    const { container, getByLabelText, getByRole } = renderClient();
+
+    chooseFile(container);
+
+    await waitFor(() => expect((getByLabelText(/Account/) as HTMLSelectElement).disabled).toBe(false));
+    expect((getByLabelText(/Import profile/) as HTMLSelectElement).disabled).toBe(false);
+    expect((getByRole('button', { name: /preview/i }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('says in plain words what it chose and what to do next', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => DETECTED })));
+    const { container, findByText } = renderClient();
+
+    chooseFile(container);
+
+    expect(
+      await findByText(/We read the file and chose Joint Visa, using the TD Visa profile\. Check both, then press Preview\./),
+    ).toBeTruthy();
+  });
+
+  it('asks for the account outright when it could not tell', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          ...DETECTED,
+          account: null,
+          accountReason: 'Nothing in this file says which account it belongs to.',
+          accountConfidence: 'none',
+        }),
+      })),
+    );
+    const { container, findByText } = renderClient();
+
+    chooseFile(container);
+
+    expect(await findByText(/We could not tell which account this file belongs to/)).toBeTruthy();
   });
 });

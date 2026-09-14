@@ -227,6 +227,14 @@ export function ImportClient({
    * than none, and both selects stay live either way.
    */
   const [detection, setDetection] = useState<DetectionResult | null>(null);
+  /** True while hop 1 is in flight, so the card can say it is reading rather than sit silent. */
+  const [detecting, setDetecting] = useState(false);
+  /**
+   * Whether a file has been chosen at all. The gate for the two pickers and Preview is THIS, not
+   * whether detection succeeded: a file no profile could read is still importable once somebody
+   * picks the profile by hand, and disabling the controls that let them would strand it.
+   */
+  const [hasFile, setHasFile] = useState(false);
   const [summary, setSummary] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -277,46 +285,92 @@ export function ImportClient({
    * right mechanism for commit(), rePreview() and undo(), which are plain onClick/onChange
    * handlers and therefore render their state updates immediately.
    */
+  /**
+   * Hop 1, on CHOOSING the file rather than on pressing Preview.
+   *
+   * Owner report, 2026-09-13 (screenshot): a Scotiabank file chosen, and the two selects still
+   * showing the previous account and TD Visa. The card's own sentence -- "The account and the
+   * profile are set from what is in the file" -- was true only after Preview, which is not when
+   * somebody reads it. So the file is posted, staged and read the moment it is chosen, and the
+   * pickers move before anything is pressed.
+   */
+  async function detectFrom(file: File) {
+    setError(null);
+    setSummary(null);
+    setRuleOffer(null);
+    setPreview(null);
+    setDetection(null);
+    setDetecting(true);
+    try {
+      const formData = new FormData();
+      formData.set('file', file);
+      const response = await fetch('/api/import/detect', { method: 'POST', body: formData });
+      const detected = (await response.json()) as DetectionResult & { error?: string };
+      if (!response.ok) {
+        setError(detected.error ?? 'That file could not be read.');
+        return;
+      }
+      // Normalised on the way in: a body missing `profile`/`account` entirely (a truncated
+      // response, an older server behind a stale tab) would otherwise read as "present" against
+      // every `=== null` check below and crash the page on `.name`. Absent and "could not tell"
+      // are the same thing here, so they are stored the same way.
+      setDetection({ ...detected, profile: detected.profile ?? null, account: detected.account ?? null });
+      // A detection that could not tell leaves the picker where the household left it -- `?? id`
+      // rather than a fallback of its own, so "no answer" and "this answer" stay distinguishable.
+      /**
+       * A detection that could not tell BLANKS the picker rather than leaving whatever was there.
+       * The owner's case: a Scotiabank file dropped while the selects still read "TD Visa" is a
+       * page quietly proposing to import a statement into the wrong account with the wrong
+       * mapping, and a pre-armed wrong answer is worse than an empty one -- dedup is per account,
+       * so a mis-aimed import writes a second copy of every row rather than merging.
+       *
+       * 0 is the empty value both selects render as "Choose…", and Preview refuses it.
+       */
+      const nextProfileId = detected.profile?.id ?? 0;
+      const nextAccountId = detected.account?.id ?? 0;
+      setProfileId(nextProfileId);
+      setAccountId(nextAccountId);
+      setMapping(profiles.find((p) => p.id === nextProfileId)?.mapping ?? mapping);
+      setForkAccountName(accounts.find((a) => a.id === nextAccountId)?.name ?? '');
+      setMappingSaveState(null);
+    } catch {
+      setError('That file could not be read.');
+    } finally {
+      setDetecting(false);
+    }
+  }
+
+  /**
+   * Hop 2. The file was staged by detectFrom above, so this sends the staging id and whichever ids
+   * the pickers now hold -- no second upload, however many times a picker is changed and Preview
+   * pressed again.
+   *
+   * The multipart fallback exists for the case detection never ran or failed (its own error is
+   * already on screen): posting the form as it stands is still better than refusing to preview.
+   */
   async function upload(formData: FormData) {
     setError(null);
     setSummary(null);
     setRuleOffer(null);
-    setDetection(null);
 
-    // Hop 1: the file itself, posted ONCE. The server stages it and reads it -- which profile can
-    // parse it, and which account already holds rows from it -- so the pickers below can be set
-    // from the file rather than from whichever account happened to be first in the list.
-    const detectResponse = await fetch('/api/import/detect', { method: 'POST', body: formData });
-    const detected = (await detectResponse.json()) as DetectionResult & { error?: string };
-    if (!detectResponse.ok) {
-      // Stop here rather than previewing anyway: without a staging id there is nothing to preview,
-      // and guessing an account after a failed read is how a statement lands in the wrong one.
-      setError(detected.error ?? 'Upload failed');
-      return;
-    }
-    setDetection(detected);
-
-    // A detection that could not tell leaves the picker where the household left it -- `?? id`
-    // rather than a fallback of its own, so "no answer" and "this answer" stay distinguishable.
-    const nextProfileId = detected.profile?.id ?? profileId;
-    const nextAccountId = detected.account?.id ?? accountId;
-    const nextMapping = profiles.find((p) => p.id === nextProfileId)?.mapping ?? mapping;
-    setProfileId(nextProfileId);
-    setAccountId(nextAccountId);
-    setMapping(nextMapping);
-
-    // Hop 2: the preview, from the staged file. No second upload, so changing a picker and
-    // re-previewing costs a JSON round trip rather than the whole statement again.
-    const response = await fetch('/api/import/preview', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        stagingId: detected.stagingId,
-        filename: detected.filename,
-        accountId: nextAccountId,
-        profileId: nextProfileId,
-      }),
-    });
+    const staged = detection?.stagingId ?? null;
+    const response =
+      staged === null
+        ? await (async () => {
+            formData.set('accountId', String(accountId));
+            formData.set('profileId', String(profileId));
+            return fetch('/api/import/preview', { method: 'POST', body: formData });
+          })()
+        : await fetch('/api/import/preview', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              stagingId: staged,
+              filename: detection?.filename ?? '',
+              accountId,
+              profileId,
+            }),
+          });
     const body = await response.json();
     if (!response.ok) {
       setError(body.error ?? 'Upload failed');
@@ -324,10 +378,7 @@ export function ImportClient({
     }
     setPreview(body as PreviewResult);
     setMapping((body as PreviewResult).mapping);
-    // A fresh preview is a fresh save-mapping session: reseed the fork name from the real
-    // account name (rather than whatever an earlier account/file's edit left behind) and drop
-    // any leftover message from a previous file's save.
-    setForkAccountName(accounts.find((a) => a.id === nextAccountId)?.name ?? '');
+    setForkAccountName(accounts.find((a) => a.id === accountId)?.name ?? '');
     setMappingSaveState(null);
   }
 
@@ -635,17 +686,48 @@ export function ImportClient({
                   Ruling R9/T9: an OFX/QFX file skips the CSV mapping step entirely -- flow.ts
                   detects it by content, not by this accept attribute, which only shortens the
                   file picker's own filter. */}
+              {/* The one sentence somebody actually reads. The per-select hints underneath carry the
+                  evidence ("4 of 40 rows are already in Joint Visa"); this says what was decided and
+                  what to do about it, in the order those two things matter. */}
+              {detection === null ? null : (
+                <Notice tone={detection.account === null || detection.profile === null ? 'warning' : 'info'}>
+                  {detection.profile === null && detection.source === 'csv' ? (
+                    <>
+                      {`We could not tell which account this file belongs to or which profile reads it. `}
+                      Pick both below — or if this bank is new here, <strong>Add a bank</strong> at the top of this
+                      page walks through its columns once and remembers them.
+                    </>
+                  ) : detection.account === null ? (
+                    `We could not tell which account this file belongs to, though it reads as ${detection.profile?.name ?? 'an OFX/QFX file'}. Pick the account, then press Preview.`
+                  ) : (
+                    `We read the file and chose ${detection.account.name}${
+                      detection.profile === null ? '' : `, using the ${detection.profile.name} profile`
+                    }. Check both, then press Preview.`
+                  )}
+                </Notice>
+              )}
               <FileDrop
                 name="file"
                 accept=".csv,.ofx,.qfx,text/csv"
                 label="Choose a file"
                 hint="A CSV export, or an OFX/QFX file from your bank&rsquo;s &ldquo;download for Quicken&rdquo; option."
                 required
+                showChosenName={false}
+                onFile={(file) => {
+                  setHasFile(true);
+                  void detectFrom(file);
+                }}
               />
+              {detecting ? <p className="text-sm text-muted">Reading the file…</p> : null}
               <div className="flex flex-wrap items-end gap-4">
               <Field label="Account">
                 <select
                   value={accountId}
+                  // Disabled until a file is chosen: these are answers ABOUT a file, and before
+                  // there is one they would be showing a leftover account as though it meant
+                  // something (owner screenshot, 2026-09-13). Disabled rather than hidden, so the
+                  // choice is visibly there and the card does not jump when it appears.
+                  disabled={!hasFile}
                   onChange={(e) => {
                     const id = Number(e.target.value);
                     setAccountId(id);
@@ -667,6 +749,9 @@ export function ImportClient({
                   }}
                   className={selectClass}
                 >
+                  {/* Present only while nothing is resolved, so a household that HAS an answer is
+                      never offered a blank one to pick by accident. */}
+                  {accountId === 0 ? <option value={0}>Choose an account…</option> : null}
                   {accounts.map((account) => (
                     <option key={account.id} value={account.id}>
                       {account.name}
@@ -680,6 +765,7 @@ export function ImportClient({
               <Field label="Import profile">
                 <select
                   value={profileId}
+                  disabled={!hasFile}
                   onChange={(e) => {
                     const id = Number(e.target.value);
                     setProfileId(id);
@@ -688,6 +774,7 @@ export function ImportClient({
                   }}
                   className={selectClass}
                 >
+                  {profileId === 0 ? <option value={0}>Choose a profile…</option> : null}
                   {profiles.map((profile) => (
                     <option key={profile.id} value={profile.id}>
                       {profile.name}
@@ -701,7 +788,10 @@ export function ImportClient({
               </Field>
               </div>
               <div>
-                <SubmitButton>Preview</SubmitButton>
+                {/* Also refused while either picker is still unresolved -- see the '' options
+                    above: a file nothing could read leaves them blank ON PURPOSE, and previewing
+                    into "no account" would be previewing into whichever account sorts first. */}
+                <SubmitButton disabled={!hasFile || accountId === 0 || profileId === 0}>Preview</SubmitButton>
               </div>
             </form>
           </CardBody>

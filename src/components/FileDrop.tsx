@@ -68,6 +68,13 @@ export interface FileDropProps {
   className?: string;
   /** Called with whatever was accepted, from a drop or from the picker alike. */
   onFile?: (file: File) => void;
+  /**
+   * Whether to echo the chosen filename under the control. False where the browser's own file
+   * input already shows it -- the import page reported it twice otherwise (owner screenshot,
+   * 2026-09-13). A drop still needs it, because a dropped file's name does not always reach the
+   * input's own label.
+   */
+  showChosenName?: boolean;
 }
 
 /**
@@ -91,6 +98,7 @@ export function FileDrop({
   disabled = false,
   className = '',
   onFile,
+  showChosenName = true,
 }: FileDropProps): React.ReactElement {
   const inputId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -180,7 +188,7 @@ export function FileDrop({
           }}
         />
         <p className="text-xs text-muted">or drop it here</p>
-        {chosen === null ? null : <p className="text-sm text-ink">{chosen}</p>}
+        {chosen === null || !showChosenName ? null : <p className="text-sm text-ink">{chosen}</p>}
         {refusal === null ? null : (
           <p role="status" className="text-sm text-danger-text">
             {refusal}
