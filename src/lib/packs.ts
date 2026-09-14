@@ -1326,6 +1326,9 @@ export function planPackOriginCarry(input: {
   pattern: string;
   matchType: MatchType;
   ruleKind: RuleKind;
+  /** 2026-09-13 (migration 0024): part of the key, so part of "did this save re-key anything". */
+  amountMinCents?: number | null;
+  amountMaxCents?: number | null;
 }): string | null {
   if (input.fromRuleId === null) return null;
   const db = getDb();
@@ -1334,6 +1337,8 @@ export function planPackOriginCarry(input: {
       pattern: merchantRules.pattern,
       matchType: merchantRules.matchType,
       ruleKind: merchantRules.ruleKind,
+      amountMinCents: merchantRules.amountMinCents,
+      amountMaxCents: merchantRules.amountMaxCents,
       originKey: merchantRules.packOriginKey,
     })
     .from(merchantRules)
@@ -1344,7 +1349,13 @@ export function planPackOriginCarry(input: {
   // Same normalization the write itself applies (upsertRuleFromCorrection uppercases every pattern
   // at the choke point, v1.21.0 item 9), so "did this save re-key anything" is asked about the key
   // that will actually be stored, not the raw text typed into the form.
-  const target = { pattern: input.pattern.trim().toUpperCase(), matchType: input.matchType, ruleKind: input.ruleKind };
+  const target = {
+    pattern: input.pattern.trim().toUpperCase(),
+    matchType: input.matchType,
+    ruleKind: input.ruleKind,
+    amountMinCents: input.amountMinCents ?? null,
+    amountMaxCents: input.amountMaxCents ?? null,
+  };
   if (ruleKeyOf(target) === ruleKeyOf(from)) return null;
 
   const collision = db
@@ -1355,6 +1366,12 @@ export function planPackOriginCarry(input: {
         eq(merchantRules.pattern, target.pattern),
         eq(merchantRules.matchType, target.matchType),
         eq(merchantRules.ruleKind, target.ruleKind),
+        target.amountMinCents === null
+          ? isNull(merchantRules.amountMinCents)
+          : eq(merchantRules.amountMinCents, target.amountMinCents),
+        target.amountMaxCents === null
+          ? isNull(merchantRules.amountMaxCents)
+          : eq(merchantRules.amountMaxCents, target.amountMaxCents),
       ),
     )
     .get();

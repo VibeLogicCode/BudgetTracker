@@ -25,7 +25,12 @@ import {
   upsertRenameRule,
   type RuleScope,
 } from '@/lib/categorize/engine';
+import { boundsProblem } from '@/lib/categorize/amount-bounds';
+import { parseAmountToCents } from '@/lib/money';
 import {
+  amountBoundsAllowedForKind,
+  AMOUNT_BOUND_KIND_ERROR,
+  AMOUNT_BOUND_ORDER_ERROR,
   CATEGORY_RULE_NEEDS_CATEGORY_ERROR,
   deleteRule,
   listRules,
@@ -85,6 +90,24 @@ export async function saveRuleAction(_prev: RuleActionState, formData: FormData)
        * planPackOriginCarry (src/lib/packs.ts), which returns null for every case it cannot vouch for.
        */
       fromRuleId: z.coerce.number().int().positive().nullable(),
+      /**
+       * 2026-09-13 (migration 0024, ruling P19). The amount window, as typed. Strings rather than
+       * numbers because '' is a real answer here -- "open on that side" -- and because a person
+       * types "$125.00" as readily as "125"; parseAmountToCents below is what the whole app uses
+       * to read money a person wrote.
+       *
+       * WHY THE FORM HAD TO LEARN THESE AT ALL: this action upserts on the rule's IDENTITY with no
+       * row id, and 0024 made the window part of that identity. A form that did not post the
+       * window would resolve a bounded row's edit to the UNBOUNDED row, write that one, and say
+       * "Rule saved." -- leaving the bounded rule untouched and still winning on the next import
+       * with the answer the household had just tried to change.
+       */
+      amountMin: z.string().trim().max(30),
+      amountMax: z.string().trim().max(30),
+      /** '' is Household on an attribution rule, and is ignored on every other kind. */
+      attributedUserId: z.string().trim().refine((v) => v === '' || /^\d+$/.test(v), {
+        message: 'Invalid person selection.',
+      }),
     })
     .safeParse({
       pattern: formData.get('pattern') ?? '',
@@ -93,6 +116,9 @@ export async function saveRuleAction(_prev: RuleActionState, formData: FormData)
       categoryId: blankToNull(formData.get('categoryId')),
       renameTo: String(formData.get('renameTo') ?? ''),
       fromRuleId: blankToNull(formData.get('fromRuleId')),
+      amountMin: formData.get('amountMin') ?? '',
+      amountMax: formData.get('amountMax') ?? '',
+      attributedUserId: formData.get('attributedUserId') ?? '',
     });
   if (!parsed.success) return { error: 'Invalid rule.' };
 
@@ -111,11 +137,27 @@ export async function saveRuleAction(_prev: RuleActionState, formData: FormData)
   // makes that unanswerable afterward. See planPackOriginCarry (src/lib/packs.ts) for every case it
   // declines -- among them "a row is already there", which is what keeps a rule the household wrote
   // themselves from ever being handed a pack origin it did not come from.
+  // 2026-09-13. The window is part of the key now, so it has to travel with the other three or
+  // planPackOriginCarry would compare a bounded save against an unbounded key and read every such
+  // edit as a re-key. A pack can never write a bounded rule (packRuleSchema carries no such field),
+  // so in practice this always arrives null on a stamped row -- the parameter exists so the two
+  // sides of ruleKeyOf cannot disagree.
+  const amountMinCents = parsed.data.amountMin === '' ? null : parseAmountToCents(parsed.data.amountMin);
+  const amountMaxCents = parsed.data.amountMax === '' ? null : parseAmountToCents(parsed.data.amountMax);
+  if ((parsed.data.amountMin !== '' && amountMinCents === null) || (parsed.data.amountMax !== '' && amountMaxCents === null)) {
+    return { error: 'That amount is not a number.' };
+  }
+  if (boundsProblem(amountMinCents, amountMaxCents) !== null) return { error: AMOUNT_BOUND_ORDER_ERROR };
+  const bounded = amountMinCents !== null || amountMaxCents !== null;
+  if (bounded && !amountBoundsAllowedForKind(parsed.data.ruleKind)) return { error: AMOUNT_BOUND_KIND_ERROR };
+
   const originCarry = planPackOriginCarry({
     fromRuleId: parsed.data.fromRuleId,
     pattern: parsed.data.pattern,
     matchType: parsed.data.matchType,
     ruleKind: parsed.data.ruleKind,
+    amountMinCents,
+    amountMaxCents,
   });
   /** Called only on a write that actually happened -- never after a refusal, which wrote no row. */
   const carryOrigin = () => {
@@ -195,6 +237,16 @@ export async function saveRuleAction(_prev: RuleActionState, formData: FormData)
     matchType: parsed.data.matchType,
     ruleKind: parsed.data.ruleKind,
     categoryId,
+    amountMinCents,
+    amountMaxCents,
+    // '' is HOUSEHOLD on this kind, not "unset" -- and on every other kind the column is refused
+    // outright by the choke point, so it is only ever sent for an attribution rule.
+    attributedUserId:
+      parsed.data.ruleKind === 'attribution'
+        ? parsed.data.attributedUserId === ''
+          ? null
+          : Number(parsed.data.attributedUserId)
+        : undefined,
     createdBy: admin.id,
     actorRole: admin.role,
   });

@@ -5,6 +5,7 @@ import {
   previewCanadianPackInstall,
   previewCanadianPackRemoval,
 } from '@/lib/canadian-pack';
+import { listAttributablePeople } from '@/lib/auth/users';
 import { listCategories } from '@/lib/categories';
 import { ruleImpactCounts } from '@/lib/categorize/engine';
 import { findRedundantRules, listRules, type MatchType, type MerchantRuleRecord, type RuleKind } from '@/lib/categorize/rules';
@@ -14,7 +15,7 @@ import { MerchantRulesClient } from './merchant-rules-client';
 export const dynamic = 'force-dynamic';
 
 const PAGE_SIZE = 25;
-const KINDS: readonly RuleKind[] = ['category', 'rename', 'transfer', 'not_transfer'];
+const KINDS: readonly RuleKind[] = ['category', 'rename', 'transfer', 'not_transfer', 'attribution'];
 
 function currentQueryString(params: Record<string, string | string[] | undefined>): string {
   const qs = new URLSearchParams();
@@ -108,6 +109,7 @@ export default async function MerchantRulesPage({
       currentQuery={currentQueryString(params)}
       searchValue={one(params, 'q') ?? ''}
       activeKind={kind}
+      people={listAttributablePeople().map((person) => ({ id: person.id, name: person.name }))}
       redundantOnly={redundantOnly}
       presetOnly={presetOnly}
       presetCount={presetCount}

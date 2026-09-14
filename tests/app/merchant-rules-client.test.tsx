@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
-import { render, cleanup, fireEvent, screen, within } from '@testing-library/react';
+import { render, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { MerchantRulesClient } from '@/app/(app)/settings/merchant-rules/merchant-rules-client';
+import { saveRuleAction } from '@/app/(app)/settings/merchant-rules/actions';
 import type { CanadianPackState, CanadianPackUpdateDiff } from '@/lib/canadian-pack';
 import type { CategoryRecord } from '@/lib/categories';
 import type { MerchantRuleRecord, RuleKind } from '@/lib/categorize/rules';
@@ -69,6 +70,7 @@ function baseProps(overrides: Partial<Parameters<typeof MerchantRulesClient>[0]>
     presetOnly: false,
     presetCount: 0,
     kindCounts: { category: 1, transfer: 0, rename: 0, not_transfer: 0, attribution: 0 },
+    people: [],
     redundantCount: 0,
     impactCounts: {},
     redundantByRuleId: {},
@@ -1021,5 +1023,118 @@ describe('MerchantRulesClient — Canadian pack panel: update review (RowDialog)
     fireEvent.click(screen.getByRole('button', { name: 'Update' }));
     fireEvent.click(screen.getByRole('button', { name: 'Apply update to v2' }));
     expect(applyCanadianPackUpdateAction).toHaveBeenCalled();
+  });
+});
+
+/**
+ * 2026-09-13 (migration 0024, rulings P19 and P8). Two things a rule can now say that this page
+ * could not show or edit: an AMOUNT WINDOW and a PERSON.
+ *
+ * P19 is the reason the form had to change rather than merely the table. saveRuleAction upserts on
+ * the rule's identity with no row id, and the window is now PART of that identity -- so a form that
+ * did not post the window would resolve a bounded row's edit to the UNBOUNDED row, write that one
+ * instead, and say "Rule saved." The bounded rule would sit there unchanged, still winning on the
+ * next import with the answer the household had just tried to change.
+ */
+describe('MerchantRulesClient — an amount window and a person', () => {
+  it('prints the window in the Match column, so a rule that stopped matching explains itself', () => {
+    render(
+      <MerchantRulesClient
+        {...baseProps({
+          rows: [rule({ amountMinCents: 12500, amountMaxCents: 15500 })],
+          kindCounts: { category: 1, transfer: 0, rename: 0, not_transfer: 0, attribution: 0 },
+        })}
+      />,
+    );
+    expect(screen.getByText(/\$125\.00\s*[–-]\s*\$155\.00/)).toBeTruthy();
+  });
+
+  it('prints an open side as open rather than as a missing number', () => {
+    render(
+      <MerchantRulesClient
+        {...baseProps({
+          rows: [rule({ amountMinCents: 12500, amountMaxCents: null })],
+          kindCounts: { category: 1, transfer: 0, rename: 0, not_transfer: 0, attribution: 0 },
+        })}
+      />,
+    );
+    expect(screen.getByText(/\$125\.00 or more/)).toBeTruthy();
+  });
+
+  it('names the person a rule sets, and calls a blank one Household', () => {
+    render(
+      <MerchantRulesClient
+        {...baseProps({
+          rows: [
+            rule({ id: 1, pattern: 'SAMS GYM', ruleKind: 'attribution', categoryId: null, attributedUserId: 9 }),
+            rule({ id: 2, pattern: 'JOINT GYM', ruleKind: 'attribution', categoryId: null, attributedUserId: null }),
+          ],
+          people: [{ id: 9, name: 'Sam' }],
+          kindCounts: { category: 0, transfer: 0, rename: 0, not_transfer: 0, attribution: 2 },
+        })}
+      />,
+    );
+    expect(screen.getAllByText('Person').length).toBeGreaterThan(0);
+    expect(screen.getByText('Sam')).toBeTruthy();
+    expect(screen.getByText('Household')).toBeTruthy();
+  });
+
+  it('carries a bounded rule window through the edit form, rather than writing the merchant-wide row', async () => {
+    render(
+      <MerchantRulesClient
+        {...baseProps({
+          rows: [rule({ amountMinCents: 12500, amountMaxCents: 15500 })],
+          kindCounts: { category: 1, transfer: 0, rename: 0, not_transfer: 0, attribution: 0 },
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Actions for TIM HORTONS/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }));
+    fireEvent.submit(screen.getByTestId('rule-form'));
+
+    await waitFor(() => expect(saveRuleAction).toHaveBeenCalled());
+    const formData = vi.mocked(saveRuleAction).mock.calls[0]?.[1] as FormData;
+    expect(formData.get('amountMin')).toBe('125.00');
+    expect(formData.get('amountMax')).toBe('155.00');
+  });
+
+  it('posts the person a person rule names', async () => {
+    render(
+      <MerchantRulesClient
+        {...baseProps({
+          rows: [rule({ pattern: 'SAMS GYM', ruleKind: 'attribution', categoryId: null, attributedUserId: 9 })],
+          people: [{ id: 9, name: 'Sam' }],
+          kindCounts: { category: 0, transfer: 0, rename: 0, not_transfer: 0, attribution: 1 },
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Actions for SAMS GYM/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }));
+    fireEvent.submit(screen.getByTestId('rule-form'));
+
+    await waitFor(() => expect(saveRuleAction).toHaveBeenCalled());
+    const formData = vi.mocked(saveRuleAction).mock.calls[0]?.[1] as FormData;
+    expect(formData.get('ruleKind')).toBe('attribution');
+    expect(formData.get('attributedUserId')).toBe('9');
+  });
+
+  /**
+   * Ruling P12. Clearing a person rule would write NULL, which is Household rather than
+   * "undecided" -- so it asserts something instead of reverting anything, and nothing records who
+   * the row was on before. The same treatment not_transfer already gets on this page.
+   */
+  it('offers delete but never delete-and-clear on a person rule', () => {
+    render(
+      <MerchantRulesClient
+        {...baseProps({
+          rows: [rule({ pattern: 'SAMS GYM', ruleKind: 'attribution', categoryId: null, attributedUserId: 9 })],
+          people: [{ id: 9, name: 'Sam' }],
+          kindCounts: { category: 0, transfer: 0, rename: 0, not_transfer: 0, attribution: 1 },
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Actions for SAMS GYM/ }));
+    expect(screen.getByRole('menuitem', { name: /^Delete rule$/ })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: /clear from transactions/i })).toBeNull();
   });
 });

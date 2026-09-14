@@ -15,6 +15,7 @@ import { RowMenu, RowMenuButton, RowMenuForm } from '@/components/ui/RowMenu';
 import { TableWrap } from '@/components/ui/Table';
 import { Field, inputClass, selectClass } from '@/components/ui/form';
 import { categoryOptionGroups } from '@/lib/category-order';
+import { formatCents } from '@/lib/money';
 import type {
   CanadianPackInstallPreview,
   CanadianPackRemovalPreview,
@@ -41,6 +42,30 @@ import {
 } from './actions';
 
 const initial: RuleActionState = {};
+
+/**
+ * 2026-09-13. Cents as a money input holds them -- "125.00", never "$125.00" -- and '' for an open
+ * side, which is what the form posts back to mean "no bound here".
+ */
+function centsToInput(cents: number | null): string {
+  return cents === null ? '' : (cents / 100).toFixed(2);
+}
+
+/**
+ * The window as the Match column prints it. An open side is said in words rather than left as a
+ * dash beside a number: "$125.00 or more" is a claim a person can check against their statement,
+ * where "$125.00 – " reads as a rendering bug.
+ *
+ * This column is where a rule that has quietly stopped matching explains itself. Its Affects count
+ * drifts to 0 when a premium rises past the window, and that 0 means nothing without the window
+ * printed beside it.
+ */
+function boundsWords(minCents: number | null, maxCents: number | null): string | null {
+  if (minCents === null && maxCents === null) return null;
+  if (minCents !== null && maxCents !== null) return `${formatCents(minCents)} – ${formatCents(maxCents)}`;
+  return minCents !== null ? `${formatCents(minCents)} or more` : `up to ${formatCents(maxCents as number)}`;
+}
+
 
 const KIND_LABEL: Record<RuleKind, string> = {
   category: 'Category',
@@ -98,9 +123,23 @@ interface RuleFormValues {
    * written yet cannot belong to a pack.
    */
   isPreset: boolean;
+  /**
+   * 2026-09-13 (migration 0024, ruling P19). The amount window as the two money inputs hold it --
+   * strings, because '' is a real answer ("open on that side") and because these are fields a
+   * person types into. CARRIED even when the kind cannot hold a window, so switching the Kind
+   * select back does not lose what was typed.
+   */
+  amountMin: string;
+  amountMax: string;
+  /** '' is HOUSEHOLD on an attribution rule -- the same blank every person picker in the app
+   *  already uses for it -- and is ignored on every other kind. */
+  attributedUserId: string;
 }
 
-const BLANK: RuleFormValues = { id: null, pattern: '', matchType: 'exact', ruleKind: 'category', categoryId: null, renameTo: '', isPreset: false };
+const BLANK: RuleFormValues = {
+  id: null, pattern: '', matchType: 'exact', ruleKind: 'category', categoryId: null, renameTo: '',
+  isPreset: false, amountMin: '', amountMax: '', attributedUserId: '',
+};
 
 /**
  * Deliberately NOT an import of categoryLabel from @/lib/categories: that module reaches
@@ -497,6 +536,7 @@ export function MerchantRulesClient({
   presetOnly,
   presetCount,
   kindCounts,
+  people,
   redundantCount,
   impactCounts,
   redundantByRuleId,
@@ -519,6 +559,9 @@ export function MerchantRulesClient({
   presetOnly: boolean;
   presetCount: number;
   kindCounts: Record<RuleKind, number>;
+  /** 2026-09-13: everybody an attribution rule could name. Household is the blank option, not a
+   *  member of this list, exactly as on every other person picker in the app. */
+  people: { id: number; name: string }[];
   redundantCount: number;
   /** Sparse: absent means 0 (item 12's ruleImpactCounts never stores a zero entry). */
   impactCounts: Record<number, number>;
@@ -674,7 +717,7 @@ export function MerchantRulesClient({
         title={isNew ? 'New merchant rule' : `Edit rule for "${editing.pattern}"`}
         onClose={() => setEditing(null)}
       >
-        <form action={saveRule} onSubmit={() => setEditing(null)} className="flex flex-col gap-3">
+        <form action={saveRule} onSubmit={() => setEditing(null)} className="flex flex-col gap-3" data-testid="rule-form">
           {/* v1.25.0 (item 18). Which row this dialog was opened on -- absent for a new rule. It
               does NOT make the save an update-by-id (the note further down still holds, and the
               action still upserts on the key): it is the only way a save that lands under a NEW key
@@ -709,8 +752,59 @@ export function MerchantRulesClient({
               <option value="transfer">transfer</option>
               <option value="rename">rename</option>
               <option value="not_transfer">not a transfer (override)</option>
+              <option value="attribution">person</option>
             </select>
           </Field>
+          {/* 2026-09-13 (ruling P19). Shown for the two kinds that may carry a window. On any
+              other kind the fields are absent entirely rather than disabled -- a disabled pair of
+              money inputs on a rename rule invites the question "why not?", and the answer is that
+              a rename applies whatever the charge came to. */}
+          {editing.ruleKind === 'category' || editing.ruleKind === 'attribution' ? (
+            <Field
+              label="Amount range (optional)"
+              hint="Leave both empty and the rule is about the merchant, whatever the amount. Two rules for one merchant can hold different ranges — that is how one insurer's two policies stay apart."
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  name="amountMin"
+                  defaultValue={editing.amountMin}
+                  placeholder="125.00"
+                  inputMode="decimal"
+                  aria-label="Smallest amount"
+                  className={inputClass}
+                />
+                <span className="text-xs text-muted">to</span>
+                <input
+                  name="amountMax"
+                  defaultValue={editing.amountMax}
+                  placeholder="155.00"
+                  inputMode="decimal"
+                  aria-label="Largest amount"
+                  className={inputClass}
+                />
+              </div>
+            </Field>
+          ) : (
+            // Still POSTED, as empty strings, so the action reads one shape whatever the kind --
+            // and so an edit that switches a bounded rule to a kind that cannot hold a window
+            // writes the unbounded row rather than a half-updated one.
+            <>
+              <input type="hidden" name="amountMin" value="" />
+              <input type="hidden" name="amountMax" value="" />
+            </>
+          )}
+          {editing.ruleKind === 'attribution' ? (
+            <Field label="Person (person rules only)" hint="Household means the charge is nobody's in particular — the same blank every person picker in the app uses.">
+              <select name="attributedUserId" defaultValue={editing.attributedUserId} className={selectClass}>
+                <option value="">Household</option>
+                {people.map((person) => (
+                  <option key={person.id} value={String(person.id)}>{person.name}</option>
+                ))}
+              </select>
+            </Field>
+          ) : (
+            <input type="hidden" name="attributedUserId" value="" />
+          )}
           <Field label="Category (category rules only)">
             <select name="categoryId" defaultValue={editing.categoryId ?? ''} className={selectClass}>
               <option value="">(none -- transfer, not_transfer and rename rules)</option>
@@ -990,10 +1084,29 @@ export function MerchantRulesClient({
                         </span>
                       ) : null}
                     </td>
-                    <td className="text-xs text-muted" data-label="Match">{rule.matchType}</td>
+                    <td className="text-xs text-muted" data-label="Match">
+                      {rule.matchType}
+                      {/* The window, printed beside the match type rather than hidden in a
+                          tooltip: this is the column that tells "this rule stopped matching" from
+                          "this rule works", and the Affects 0 next to it means nothing alone. */}
+                      {boundsWords(rule.amountMinCents, rule.amountMaxCents) === null ? null : (
+                        <span className="block text-[11px] text-subtle">
+                          {boundsWords(rule.amountMinCents, rule.amountMaxCents)}
+                        </span>
+                      )}
+                    </td>
                     <td className="text-xs" data-label="Kind"><span className="badge badge--slate">{KIND_LABEL[rule.ruleKind]}</span></td>
                     <td className="text-xs text-muted" data-label="Category / renames to">
-                      {rule.ruleKind === 'category' ? categoryLabelFor(rule.categoryId, categories) : rule.ruleKind === 'rename' ? (rule.renameTo ?? '—') : '—'}
+                      {rule.ruleKind === 'category'
+                        ? categoryLabelFor(rule.categoryId, categories)
+                        : rule.ruleKind === 'rename'
+                          ? (rule.renameTo ?? '—')
+                          : rule.ruleKind === 'attribution'
+                            ? // NULL is Household, not "no outcome": the kind plus a blank IS the
+                              // whole instruction, which is why ruleOutcomeMissing says this row is
+                              // complete. Printing '—' here would read as a rule that does nothing.
+                              (people.find((person) => person.id === rule.attributedUserId)?.name ?? 'Household')
+                            : '—'}
                     </td>
                     <td className="text-xs" data-label="Status">
                       {disabled ? <span className="badge badge--muted">disabled</span> : <span className="badge badge--green">enabled</span>}
@@ -1013,6 +1126,9 @@ export function MerchantRulesClient({
                               categoryId: rule.categoryId,
                               renameTo: rule.renameTo ?? '',
                               isPreset: rule.packSource !== null,
+                              amountMin: centsToInput(rule.amountMinCents),
+                              amountMax: centsToInput(rule.amountMaxCents),
+                              attributedUserId: rule.attributedUserId === null ? '' : String(rule.attributedUserId),
                             })
                           }
                         >

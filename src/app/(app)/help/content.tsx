@@ -217,6 +217,28 @@ export const HELP_SECTIONS: HelpSection[] = [
           and create the rule in one press. <B>Mark as transfer</B> is there for the rows that are
           not spending at all, such as a credit-card payment from a chequing account.
         </P>
+        <P>
+          One merchant can need two answers. Two insurance policies with the same company differ
+          only by what they cost, so a rule about the merchant alone files both of them wherever
+          you corrected last. <B>Create a rule…</B> on a row&rsquo;s menu is the way out: it writes a
+          rule that only applies when the amount is about what that charge was, and you can set the
+          person at the same time. Press <B>Preview</B> first and it tells you how many
+          transactions it would touch before anything is written.
+        </P>
+        <P>
+          A rule that names a person decides who a charge belongs to when it is imported, ahead of
+          the card it was charged to and ahead of the account&rsquo;s owner. <B>Household</B> means
+          the charge is nobody&rsquo;s in particular, and choosing it deliberately stops the card and
+          the account owner deciding for you. Person rules never run on their own afterwards: a
+          person you set by hand stays set, and &ldquo;Run rules&rdquo; leaves it alone.
+        </P>
+        <P>
+          Which rule does a correction edit? Correcting a row always edits the rule about the
+          merchant, never an amount rule sitting under it. So if you have a rule for &ldquo;about
+          $130 from this insurer&rdquo; and you correct a $130 charge, the amount rule keeps its own
+          answer and goes on winning the next import. Change that one under{' '}
+          <B>Settings → Categories &amp; rules</B>.
+        </P>
       </>
     ),
   },

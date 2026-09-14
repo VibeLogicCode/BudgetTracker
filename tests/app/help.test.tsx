@@ -204,6 +204,23 @@ describe('the help page explains loan direction (spec BU)', () => {
     expect(text).toContain('matched by a payment rule keeps the wording the bank sent');
     expect(text).toContain('badge naming the loan');
   });
+
+  /**
+   * 2026-09-13, the owner: "insurance is with same company but different amount but imported
+   * categorizes the last setting i do so everything goes to home or auto" and "think about person
+   * too... even sets household, or individual person."
+   *
+   * The last assertion is ruling P18's stated gap, on purpose: a correction edits the
+   * MERCHANT-wide rule, so a household with an amount rule under it can make the two disagree.
+   * That is a thing the help has to say plainly, because nothing on screen shows it happening.
+   */
+  it('explains an amount rule, a person rule, and which of the two a correction edits', () => {
+    const text = all();
+    expect(text).toContain('only applies when the amount is about what that charge was');
+    expect(text).toContain('ahead of the card it was charged to');
+    expect(text).toContain('Household');
+    expect(text).toContain('Correcting a row always edits the rule about the');
+  });
 });
 
 describe('the help page obeys the standing content rules', () => {
