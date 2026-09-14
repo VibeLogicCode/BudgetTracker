@@ -294,6 +294,19 @@ const RULE_AUTHORING_PATHS: ReadonlyMap<string, IntentDeclaration> = new Map<str
     },
   ],
   [
+    'createRulesFromRow',
+    {
+      declaredBy: NAME_DECLARES_IT,
+      why:
+        '2026-09-13. The name contains the word create and the word rules, in the plural, because ' +
+        'creating up to TWO rules is the whole of what the kebab dialog behind it does -- the ' +
+        'button reads "Create rule(s) and apply to N" and the dialog states the count first. It ' +
+        'takes a normalizedMerchant, never a transactionId: it is not a per-row action that also ' +
+        'happens to touch a rule, which is the confusion the flags above exist to prevent. A flag ' +
+        'here could only ever be passed true.',
+    },
+  ],
+  [
     'upsertRenameRule',
     {
       declaredBy: NAME_DECLARES_IT,

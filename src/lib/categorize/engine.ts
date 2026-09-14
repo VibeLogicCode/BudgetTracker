@@ -5,7 +5,7 @@ import { nowIso } from '@/lib/clock';
 // Ruling R24 (R-03): the ONE definition of which display_description writer outranks which.
 import { displaySourceMayWrite, displaySourcesAbove, type DisplaySource } from '@/lib/display-source';
 import { applyPaymentMatchers, restoreLoanDescription } from '@/lib/loans';
-import { isBounded } from '@/lib/categorize/amount-bounds';
+import { amountWithinBounds, isBounded } from '@/lib/categorize/amount-bounds';
 import { classify, train, untrain } from './bayes';
 import { tokenize } from './normalize';
 import {
@@ -1474,6 +1474,225 @@ export function setTransferFlag(input: {
     deleteExactRule(row.normalizedMerchant, 'transfer');
   }
   return { ok: true };
+}
+
+/**
+ * 2026-09-13. The one engine function behind the kebab's "Create a rule…" dialog.
+ *
+ * The owner, twice: "insurance is with same company but different amount but imported categorizes
+ * the last setting i do so everything goes to home or auto. can i set in rule vendor + amount
+ * rule? they dont have to be automatic but something i create from kebab menu?" and "think about
+ * person too so its not just on vendor rule, even sets household, or individual person."
+ *
+ * So it writes UP TO TWO RULES -- a category rule and an attribution rule, both carrying the same
+ * amount window -- and then applies them to the merchant's own rows. Two rules rather than one
+ * because a person is a separate rule KIND (ruling P8: a person column on a category row would
+ * make a person-only rule a category rule with no category, which is the R-02 defect
+ * ruleOutcomeMissing exists to refuse). The dialog says "Create 2 rules" in as many words.
+ *
+ * OWNERSHIP IS SETTLED BEFORE ANY ROW IS TOUCHED, which ruling R4 has required since v1.13.0 --
+ * and it now spans TWO upserts, which is the new part. A member owning neither rule is refused
+ * before anything is written. A member owning ONE of the two is the case that needs the
+ * transaction: without it the first rule would be written, the second refused, and the household
+ * left with half of what the dialog promised -- one new rule, no rows changed, and an error
+ * message. So both upserts and every row write run inside one db.transaction, and a refusal on the
+ * second throws a sentinel that the outer catch turns back into the ordinary refusal result, with
+ * the first rule rolled back by the throw itself.
+ *
+ * IT DOES NOT INHERIT applyCategoryToMatching'S OVER-COUNT. That function discards
+ * confirmCategory's `has_splits` refusal and reports every id it looked at, so a household with
+ * split rows is told more was filed than was. Here the refusal is checked and the skipped rows are
+ * counted and returned, so the result sentence is true.
+ *
+ * Spec: docs/superpowers/specs/2026-09-13-vendor-amount-person-rules-design.md, ruling P16.
+ */
+export interface RulesFromRowInput {
+  normalizedMerchant: string;
+  /** The window both rules carry; both null writes merchant-wide rules. */
+  amountMinCents: number | null;
+  amountMaxCents: number | null;
+  /** The category to file matching rows as, or undefined for "leave the category as it is". */
+  categoryId?: number;
+  /**
+   * The person to put matching rows on: a user id, or null for HOUSEHOLD. `undefined` -- a
+   * distinct third value on purpose -- is "leave the person as it is", which is why this cannot
+   * simply be `number | null`: null already means something.
+   */
+  attributedUserId?: number | null;
+  userId: number;
+  /** The ACTOR's role, not the rule's. An admin may write over anyone's rule. */
+  actorRole: 'admin' | 'member';
+  at?: Date;
+}
+
+export interface RulesFromRowPreview {
+  /** Every non-transfer row from this merchant, window or no window. */
+  merchantRows: number;
+  /** Of those, the ones inside the window -- the rows the rules would actually reach. */
+  matchingRows: number;
+  categoryChanges: number;
+  personChanges: number;
+}
+
+export type RulesFromRowResult =
+  | { ok: true; rulesCreated: number; categoryChanged: number; personChanged: number; splitsSkipped: number }
+  | { ok: false; reason: 'owned_by_another'; ownerName: string };
+
+/** One wording, one place (MUST-19.11). */
+export const RULE_FROM_ROW_NEEDS_AN_OUTCOME = 'Pick a category, a person, or both.';
+
+/**
+ * The rows a dialog's choices would reach: this merchant, not a transfer, inside the window.
+ *
+ * ONE indexed select (transactions_normalized_merchant_idx), bounded by the merchant -- not a
+ * full-table pass. R-10's finding was about bulk rule operations each paying a whole scan; nothing
+ * here scans past the merchant the person is looking at.
+ *
+ * The window is compared in JavaScript rather than in SQL, deliberately: `abs(amount_cents)
+ * between ? and ?` written here would be a SECOND copy of amountWithinBounds, which
+ * tests/ops/amount-bounds.test.ts refuses and src/lib/display-source.ts is the cautionary tale
+ * for. One merchant's rows is a small enough set that the difference is not measurable.
+ */
+function rowsForRuleAuthoring(input: {
+  normalizedMerchant: string;
+  amountMinCents: number | null;
+  amountMaxCents: number | null;
+}) {
+  return getDb()
+    .select({
+      id: transactions.id,
+      amountCents: transactions.amountCents,
+      categoryId: transactions.categoryId,
+      attributedUserId: transactions.attributedUserId,
+    })
+    .from(transactions)
+    .where(and(eq(transactions.normalizedMerchant, input.normalizedMerchant), eq(transactions.isTransfer, false)))
+    .orderBy(asc(transactions.id))
+    .all();
+}
+
+export function previewRulesFromRow(input: RulesFromRowInput): RulesFromRowPreview {
+  const all = rowsForRuleAuthoring(input);
+  const matching = all.filter((row) => amountWithinBounds(row.amountCents, input.amountMinCents, input.amountMaxCents));
+  return {
+    merchantRows: all.length,
+    matchingRows: matching.length,
+    categoryChanges:
+      input.categoryId === undefined ? 0 : matching.filter((row) => row.categoryId !== input.categoryId).length,
+    personChanges:
+      input.attributedUserId === undefined
+        ? 0
+        : matching.filter((row) => row.attributedUserId !== input.attributedUserId).length,
+  };
+}
+
+/** Thrown by the second upsert so the first one's write is rolled back with it. Never escapes. */
+class RuleOwnedRefusal extends Error {
+  constructor(readonly ownerName: string) {
+    super('rule owned by another member');
+  }
+}
+
+export function createRulesFromRow(input: RulesFromRowInput): RulesFromRowResult {
+  if (input.categoryId === undefined && input.attributedUserId === undefined) {
+    // A programmer error, thrown rather than returned, the same shape and for the same reason as
+    // the refusals in upsertRuleFromCorrection: the dialog refuses this combination in words a
+    // person can act on, so reaching here means a caller was written that did not.
+    throw new Error(RULE_FROM_ROW_NEEDS_AN_OUTCOME);
+  }
+
+  const db = getDb();
+  const at = input.at ?? new Date();
+  const rows = rowsForRuleAuthoring(input).filter((row) =>
+    amountWithinBounds(row.amountCents, input.amountMinCents, input.amountMaxCents),
+  );
+
+  try {
+    return db.transaction((tx) => {
+      let rulesCreated = 0;
+
+      // BOTH rules first, before any row is touched -- ruling R4's invariant, now spanning two
+      // writes. upsertRuleFromCorrection goes through getDb(), which inside a better-sqlite3
+      // transaction resolves to this same connection, so its writes are part of this unit of work
+      // and a throw below rolls them back.
+      if (input.categoryId !== undefined) {
+        const upserted = upsertRuleFromCorrection({
+          pattern: input.normalizedMerchant,
+          matchType: 'exact',
+          ruleKind: 'category',
+          categoryId: input.categoryId,
+          amountMinCents: input.amountMinCents,
+          amountMaxCents: input.amountMaxCents,
+          createdBy: input.userId,
+          actorRole: input.actorRole,
+          at,
+        });
+        if (!upserted.ok) throw new RuleOwnedRefusal(upserted.ownerName);
+        rulesCreated += 1;
+      }
+
+      if (input.attributedUserId !== undefined) {
+        const upserted = upsertRuleFromCorrection({
+          pattern: input.normalizedMerchant,
+          matchType: 'exact',
+          ruleKind: 'attribution',
+          categoryId: null,
+          attributedUserId: input.attributedUserId,
+          amountMinCents: input.amountMinCents,
+          amountMaxCents: input.amountMaxCents,
+          createdBy: input.userId,
+          actorRole: input.actorRole,
+          at,
+        });
+        if (!upserted.ok) throw new RuleOwnedRefusal(upserted.ownerName);
+        rulesCreated += 1;
+      }
+
+      let categoryChanged = 0;
+      let splitsSkipped = 0;
+      if (input.categoryId !== undefined) {
+        for (const row of rows) {
+          // createRule: false -- the rule was resolved once above, for the whole batch, and
+          // re-checking ownership per row would ask the same question N times.
+          const written = confirmCategory({
+            transactionId: row.id,
+            categoryId: input.categoryId,
+            userId: input.userId,
+            createRule: false,
+            actorRole: input.actorRole,
+            at,
+          });
+          // A split row's parts ARE its categorization (spec ruling 2a), so it is skipped -- and,
+          // unlike applyCategoryToMatching, SAID to be skipped.
+          if (!written.ok) splitsSkipped += 1;
+          else if (row.categoryId !== input.categoryId) categoryChanged += 1;
+        }
+      }
+
+      let personChanged = 0;
+      if (input.attributedUserId !== undefined) {
+        const target = input.attributedUserId;
+        const ids = rows.filter((row) => row.attributedUserId !== target).map((row) => row.id);
+        for (let offset = 0; offset < ids.length; offset += ID_CHUNK) {
+          // Chunked for SQLite's bound-parameter ceiling, the same way every other bulk write here
+          // is -- see the note ID_CHUNK itself points at in dedup.ts.
+          const chunk = ids.slice(offset, offset + ID_CHUNK);
+          personChanged += tx
+            .update(transactions)
+            .set({ attributedUserId: target, updatedAt: nowIso(at) })
+            .where(inArray(transactions.id, chunk))
+            .run().changes;
+        }
+      }
+
+      return { ok: true as const, rulesCreated, categoryChanged, personChanged, splitsSkipped };
+    });
+  } catch (error) {
+    if (error instanceof RuleOwnedRefusal) {
+      return { ok: false, reason: 'owned_by_another', ownerName: error.ownerName };
+    }
+    throw error;
+  }
 }
 
 /**
