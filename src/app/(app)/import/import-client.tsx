@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { FileDrop } from '@/components/FileDrop';
 import { MappingEditor } from '@/components/MappingEditor';
 import { SubmitButton } from '@/components/SubmitButton';
 import { ImportIcon } from '@/components/icons';
@@ -15,6 +16,23 @@ import { SectionHeader } from '@/components/ui/SectionHeader';
 import { TableWrap } from '@/components/ui/Table';
 import { Field, hintClass, inputClass, selectClass } from '@/components/ui/form';
 import type { ImportMapping } from '@/lib/import/mapping';
+
+/**
+ * What /api/import/detect answers. Declared here rather than imported from the route so this
+ * 'use client' module never value-imports a server module (tests/ops/client-bundle.test.ts) --
+ * the route's own response is typed by its return, and this is the shape the browser reads.
+ */
+interface DetectionResult {
+  stagingId: string;
+  filename: string;
+  profile: { id: number; name: string } | null;
+  profileReason: string;
+  profileConfidence: 'certain' | 'likely' | 'none';
+  source: 'csv' | 'ofx';
+  account: { id: number; name: string } | null;
+  accountReason: string;
+  accountConfidence: 'certain' | 'likely' | 'none';
+}
 import type { CardValueSummary, PreviewResult } from '@/lib/import/preview';
 import type { ImportHistoryRow } from '@/lib/import/commit';
 // F-03 (v1.31.0): the sentence half of the post-commit balance check. Pure module (formatCents
@@ -202,6 +220,13 @@ export function ImportClient({
   const [profileId, setProfileId] = useState<number>(resolveOfferedProfileId(accounts[0]?.importProfileId, profiles));
   const [mapping, setMapping] = useState<ImportMapping | null>(profiles[0]?.mapping ?? null);
   const [preview, setPreview] = useState<PreviewResult | null>(null);
+  /**
+   * What /api/import/detect made of the file that was just uploaded: which profile can read it,
+   * which account it looks like it belongs to, and the evidence for each. Rendered beside the two
+   * pickers rather than instead of them -- a pre-selection nobody can see the reason for is worse
+   * than none, and both selects stay live either way.
+   */
+  const [detection, setDetection] = useState<DetectionResult | null>(null);
   const [summary, setSummary] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -256,9 +281,42 @@ export function ImportClient({
     setError(null);
     setSummary(null);
     setRuleOffer(null);
-    formData.set('accountId', String(accountId));
-    formData.set('profileId', String(profileId));
-    const response = await fetch('/api/import/preview', { method: 'POST', body: formData });
+    setDetection(null);
+
+    // Hop 1: the file itself, posted ONCE. The server stages it and reads it -- which profile can
+    // parse it, and which account already holds rows from it -- so the pickers below can be set
+    // from the file rather than from whichever account happened to be first in the list.
+    const detectResponse = await fetch('/api/import/detect', { method: 'POST', body: formData });
+    const detected = (await detectResponse.json()) as DetectionResult & { error?: string };
+    if (!detectResponse.ok) {
+      // Stop here rather than previewing anyway: without a staging id there is nothing to preview,
+      // and guessing an account after a failed read is how a statement lands in the wrong one.
+      setError(detected.error ?? 'Upload failed');
+      return;
+    }
+    setDetection(detected);
+
+    // A detection that could not tell leaves the picker where the household left it -- `?? id`
+    // rather than a fallback of its own, so "no answer" and "this answer" stay distinguishable.
+    const nextProfileId = detected.profile?.id ?? profileId;
+    const nextAccountId = detected.account?.id ?? accountId;
+    const nextMapping = profiles.find((p) => p.id === nextProfileId)?.mapping ?? mapping;
+    setProfileId(nextProfileId);
+    setAccountId(nextAccountId);
+    setMapping(nextMapping);
+
+    // Hop 2: the preview, from the staged file. No second upload, so changing a picker and
+    // re-previewing costs a JSON round trip rather than the whole statement again.
+    const response = await fetch('/api/import/preview', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        stagingId: detected.stagingId,
+        filename: detected.filename,
+        accountId: nextAccountId,
+        profileId: nextProfileId,
+      }),
+    });
     const body = await response.json();
     if (!response.ok) {
       setError(body.error ?? 'Upload failed');
@@ -269,7 +327,7 @@ export function ImportClient({
     // A fresh preview is a fresh save-mapping session: reseed the fork name from the real
     // account name (rather than whatever an earlier account/file's edit left behind) and drop
     // any leftover message from a previous file's save.
-    setForkAccountName(accounts.find((a) => a.id === accountId)?.name ?? '');
+    setForkAccountName(accounts.find((a) => a.id === nextAccountId)?.name ?? '');
     setMappingSaveState(null);
   }
 
@@ -564,10 +622,27 @@ export function ImportClient({
         <Card>
           <CardHeader
             title={<StepTitle n={1} state="active">Choose a file</StepTitle>}
-            description="Pick the account it belongs to and the profile that matches the bank's column layout."
+            description="Drop the statement in. The account and the profile are set from what is in the file — change either before you preview."
           />
           <CardBody>
-            <form action={upload} className="flex flex-wrap items-end gap-4">
+            <form action={upload} className="flex flex-col gap-4">
+              {/* The file comes FIRST now. Until v1.37.0 the account select led the page and drove
+                  everything after it (its pin chose the profile, and a switch cleared the preview),
+                  so the household had to answer "which account?" before the app had read a single
+                  row -- while the file itself is what actually knows. Both selects still work
+                  exactly as they did; they are now set FROM the file rather than before it.
+
+                  Ruling R9/T9: an OFX/QFX file skips the CSV mapping step entirely -- flow.ts
+                  detects it by content, not by this accept attribute, which only shortens the
+                  file picker's own filter. */}
+              <FileDrop
+                name="file"
+                accept=".csv,.ofx,.qfx,text/csv"
+                label="Choose a file"
+                hint="A CSV export, or an OFX/QFX file from your bank&rsquo;s &ldquo;download for Quicken&rdquo; option."
+                required
+              />
+              <div className="flex flex-wrap items-end gap-4">
               <Field label="Account">
                 <select
                   value={accountId}
@@ -586,6 +661,9 @@ export function ImportClient({
                     setPreview(null);
                     setSummary(null);
                     setError(null);
+                    // A picker the household has just set by hand is no longer "what the file
+                    // said", so the note beside it stops claiming to explain this value.
+                    setDetection(null);
                   }}
                   className={selectClass}
                 >
@@ -595,6 +673,9 @@ export function ImportClient({
                     </option>
                   ))}
                 </select>
+                {detection === null ? null : (
+                  <span className={hintClass}>{detection.accountReason}</span>
+                )}
               </Field>
               <Field label="Import profile">
                 <select
@@ -603,6 +684,7 @@ export function ImportClient({
                     const id = Number(e.target.value);
                     setProfileId(id);
                     setMapping(profiles.find((p) => p.id === id)?.mapping ?? null);
+                    setDetection(null);
                   }}
                   className={selectClass}
                 >
@@ -613,23 +695,14 @@ export function ImportClient({
                     </option>
                   ))}
                 </select>
+                {detection === null ? null : (
+                  <span className={hintClass}>{detection.profileReason}</span>
+                )}
               </Field>
-              <div className="flex flex-col gap-1">
-                {/* Ruling R9/T9: an OFX/QFX file skips the CSV mapping step entirely -- flow.ts
-                    detects it by content, not by this accept attribute, which only shortens the
-                    file picker's own filter. */}
-                <input
-                  type="file"
-                  name="file"
-                  accept=".csv,.ofx,.qfx,text/csv"
-                  required
-                  className={`${fileInputClass} py-2`}
-                />
-                <span className={hintClass}>
-                  A CSV export, or an OFX/QFX file from your bank&rsquo;s &ldquo;download for Quicken&rdquo; option.
-                </span>
               </div>
-              <SubmitButton>Preview</SubmitButton>
+              <div>
+                <SubmitButton>Preview</SubmitButton>
+              </div>
             </form>
           </CardBody>
         </Card>

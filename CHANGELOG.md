@@ -23,6 +23,18 @@ All notable changes to Budget Tracker are recorded here.
 
 ### Added
 
+- **Drop a statement straight onto the Import page**, or click to choose one as before. The same
+  control is one component, so the drop target is a real file input underneath: keyboard and
+  screen-reader users reach it exactly as they did. Two files at once, or a file the page cannot
+  read, are refused by name rather than silently taken.
+- **The account and the import profile are now set from the file itself.** Uploading reads the
+  statement first: each import profile you have is tried against it and the one that actually
+  parses it wins, then the account is chosen from rows that account already holds — so two exports
+  from one bank, which look identical, still land in the right place. Both pickers stay where you
+  can change them, each with a line saying what was found and why ("4 of 40 rows in this file are
+  already in Joint Visa"). When the evidence is thin — no overlap, two accounts on one profile —
+  nothing is pre-selected and the page says so, because a statement imported into the wrong
+  account writes a second copy of every row rather than merging.
 - **The preset-rules notice can be put down.** After an app update, Settings said the Canadian
   merchant pack you have installed is older than the one the build ships, and there was no way to
   acknowledge it — the notice returned on every visit until somebody went to Merchant rules and

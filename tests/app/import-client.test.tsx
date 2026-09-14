@@ -90,8 +90,12 @@ describe('ImportClient — a pin that is not among the offered profiles behaves 
   // regardless of what the <select> visually shows, so these tests submit the preview form and
   // inspect the real FormData sent to /api/import/preview.
   function profileIdSubmittedTo(fetchMock: ReturnType<typeof vi.fn>): string | null {
-    const body = fetchMock.mock.calls[0]?.[1]?.body as FormData;
-    return body.get('profileId') as string | null;
+    // v1.37.0: hop 1 posts the file alone; the ids travel in hop 2's JSON body. The point of
+    // these tests is unchanged -- what the client SENDS, not what the <select> happens to show.
+    const body = fetchMock.mock.calls[1]?.[1]?.body;
+    if (typeof body !== 'string') return null;
+    const parsed = JSON.parse(body) as { profileId?: number };
+    return parsed.profileId === undefined ? null : String(parsed.profileId);
   }
 
   it('posts the first offered profile on initial mount, not the stale pin, when the account is pinned to a profile not in the offered list', async () => {
@@ -244,6 +248,27 @@ const HISTORY: ImportHistoryRow[] = [
     createdAt: '2026-03-10T09:00:00.000Z',
   },
 ];
+
+/**
+ * v1.37.0: uploading is two hops. /api/import/detect stages the file and answers which profile and
+ * account it looks like; the preview call follows with that staging id. Every mock sequence in this
+ * file therefore starts with a detect response -- this one answers "I could not tell", which leaves
+ * both pickers exactly where the test set them and keeps these tests about what they were about.
+ */
+const DETECT_UNDECIDED = {
+  ok: true,
+  json: async () => ({
+    stagingId: '11111111-2222-3333-4444-555555555555',
+    filename: 'march.csv',
+    profile: null,
+    profileReason: 'None of your import profiles could read this file.',
+    profileConfidence: 'none',
+    source: 'csv',
+    account: null,
+    accountReason: 'Nothing in this file says which account it belongs to.',
+    accountConfidence: 'none',
+  }),
+};
 
 function previewBody(over: Record<string, unknown> = {}) {
   return {
@@ -432,7 +457,9 @@ describe('ImportClient — the Preview and Import buttons are busy-guarded', () 
       'fetch',
       vi
         .fn()
-        // first call: the preview upload, which resolves immediately
+        // v1.37.0: hop 1 is the detect call
+        .mockImplementationOnce(async () => DETECT_UNDECIDED)
+        // then: the preview upload, which resolves immediately
         .mockImplementationOnce(async () => ({ ok: true, json: async () => previewBody({ totalRows: 4 }) }))
         // second call: the commit, held open
         .mockImplementationOnce(
@@ -473,6 +500,8 @@ describe('ImportClient — release review finding C: a failed re-preview must no
       'fetch',
       vi
         .fn()
+        // v1.37.0: hop 1 is the detect call
+        .mockImplementationOnce(async () => DETECT_UNDECIDED)
         // first call: the initial upload/preview, succeeds with TD_CHEQUING (hasHeader: false)
         .mockImplementationOnce(async () => ({ ok: true, json: async () => previewBody({ totalRows: 4 }) }))
         // second call: the re-preview fired by toggling "Has header" below, fails
@@ -514,6 +543,7 @@ describe('ImportClient — release review finding C: a failed re-preview must no
       'fetch',
       vi
         .fn()
+        .mockImplementationOnce(async () => DETECT_UNDECIDED)
         .mockImplementationOnce(async () => ({
           ok: true,
           json: async () => previewBody({
@@ -557,6 +587,7 @@ describe('ImportClient — NEW-5 fix-round: loanMatchFailed gets the same honest
       'fetch',
       vi
         .fn()
+        .mockImplementationOnce(async () => DETECT_UNDECIDED)
         .mockImplementationOnce(async () => ({ ok: true, json: async () => previewBody({ totalRows: 4 }) }))
         .mockImplementationOnce(async () => ({
           ok: true,
@@ -589,6 +620,7 @@ describe('ImportClient — Carry 2: the post-commit message shows the attributio
       'fetch',
       vi
         .fn()
+        .mockImplementationOnce(async () => DETECT_UNDECIDED)
         .mockImplementationOnce(async () => ({ ok: true, json: async () => previewBody({ totalRows: 7 }) }))
         .mockImplementationOnce(async () => ({
           ok: true,
@@ -625,6 +657,7 @@ describe('ImportClient — Carry 2: the post-commit message shows the attributio
       'fetch',
       vi
         .fn()
+        .mockImplementationOnce(async () => DETECT_UNDECIDED)
         .mockImplementationOnce(async () => ({ ok: true, json: async () => previewBody({ totalRows: 4 }) }))
         .mockImplementationOnce(async () => ({
           ok: true,
@@ -660,6 +693,7 @@ describe('ImportClient — Lane 3b: the post-commit offer to check what rules di
       'fetch',
       vi
         .fn()
+        .mockImplementationOnce(async () => DETECT_UNDECIDED)
         .mockImplementationOnce(async () => ({ ok: true, json: async () => previewBody({ totalRows: 4 }) }))
         .mockImplementationOnce(async () => ({
           ok: true,
@@ -699,6 +733,7 @@ describe('ImportClient — Lane 3b: the post-commit offer to check what rules di
       'fetch',
       vi
         .fn()
+        .mockImplementationOnce(async () => DETECT_UNDECIDED)
         .mockImplementationOnce(async () => ({ ok: true, json: async () => previewBody({ totalRows: 4 }) }))
         .mockImplementationOnce(async () => ({
           ok: true,
@@ -736,6 +771,7 @@ describe('ImportClient — Lane 3b: the post-commit offer to check what rules di
       'fetch',
       vi
         .fn()
+        .mockImplementationOnce(async () => DETECT_UNDECIDED)
         .mockImplementationOnce(async () => ({ ok: true, json: async () => previewBody({ totalRows: 4 }) }))
         .mockImplementationOnce(async () => ({
           ok: true,
@@ -780,6 +816,7 @@ describe('ImportClient — F-03: the post-commit balance check', () => {
       'fetch',
       vi
         .fn()
+        .mockImplementationOnce(async () => DETECT_UNDECIDED)
         .mockImplementationOnce(async () => ({ ok: true, json: async () => previewBody({ totalRows: 4 }) }))
         .mockImplementationOnce(async () => ({
           ok: true,
@@ -824,6 +861,7 @@ describe('ImportClient — F-03: the post-commit balance check', () => {
       'fetch',
       vi
         .fn()
+        .mockImplementationOnce(async () => DETECT_UNDECIDED)
         .mockImplementationOnce(async () => ({ ok: true, json: async () => previewBody({ totalRows: 4 }) }))
         .mockImplementationOnce(async () => ({
           ok: true,
@@ -1354,5 +1392,135 @@ describe('ImportClient — Lane 5: saving a corrected mapping from the preview',
 
     expect(queryByRole('button', { name: /save as a new profile/i })).toBeNull();
     expect(queryByRole('button', { name: /^Update /i })).toBeNull();
+  });
+});
+
+
+/**
+ * The two-hop upload. The file is posted ONCE, to /api/import/detect, which stages it and answers
+ * which profile can read it and which account it belongs to; the preview call that follows carries
+ * the staging id and whichever ids won, so changing a picker afterwards never re-uploads anything.
+ *
+ * Neither answer decides anything: both pickers stay live and the preview is the real check.
+ */
+describe('ImportClient — the file is read before the pickers are set', () => {
+  function detectBody(over: Record<string, unknown> = {}) {
+    return {
+      stagingId: '11111111-2222-3333-4444-555555555555',
+      filename: 'march.csv',
+      profile: { id: 2, name: 'TD Visa' },
+      profileReason: 'TD Visa read all 5 of 5 rows in this file.',
+      profileConfidence: 'certain',
+      source: 'csv',
+      account: { id: 11, name: 'Joint Visa' },
+      accountReason: '4 of 5 rows in this file are already in Joint Visa.',
+      accountConfidence: 'certain',
+      ...over,
+    };
+  }
+
+  function twoHopFetch(detect: Record<string, unknown> = {}, preview: Record<string, unknown> = {}) {
+    return vi.fn(async (url: string, _init?: RequestInit) =>
+      String(url).includes('/detect')
+        ? { ok: true, json: async () => detectBody(detect) }
+        : { ok: true, json: async () => previewBody(preview) },
+    );
+  }
+
+  function renderClient() {
+    return render(
+      <ImportClient
+        accounts={[
+          { id: 10, name: 'Joint Chequing', importProfileId: 1 },
+          { id: 11, name: 'Joint Visa', importProfileId: 2 },
+        ]}
+        profiles={PROFILES}
+        history={[]}
+        simplefinManaged={[]}
+      />,
+    );
+  }
+
+  it('asks /api/import/detect first, with the file itself', async () => {
+    const fetchMock = twoHopFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    const { container } = renderClient();
+
+    fireEvent.submit(container.querySelector('form')!);
+
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2));
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/api/import/detect');
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toBeInstanceOf(FormData);
+  });
+
+  it('previews with the staging id and the ids detection chose, not the ones the page opened with', async () => {
+    const fetchMock = twoHopFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    const { container } = renderClient();
+
+    fireEvent.submit(container.querySelector('form')!);
+
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2));
+    const body = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body));
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain('/api/import/preview');
+    expect(body.stagingId).toBe('11111111-2222-3333-4444-555555555555');
+    expect(body.profileId).toBe(2);
+    expect(body.accountId).toBe(11);
+  });
+
+  it('moves both pickers to what it found', async () => {
+    vi.stubGlobal('fetch', twoHopFetch());
+    const { container, getByLabelText } = renderClient();
+
+    fireEvent.submit(container.querySelector('form')!);
+
+    // Both in one waitFor: the two setState calls land in the same batch, but the batch flushes a
+    // tick after the detect response resolves, so reading one of them outside the wait races it.
+    await waitFor(() => {
+      expect((getByLabelText(/Account/) as HTMLSelectElement).value).toBe('11');
+      expect((getByLabelText(/Import profile/) as HTMLSelectElement).value).toBe('2');
+    });
+  });
+
+  it('says what it found and why, for both', async () => {
+    vi.stubGlobal('fetch', twoHopFetch());
+    const { container, findByText } = renderClient();
+
+    fireEvent.submit(container.querySelector('form')!);
+
+    expect(await findByText(/TD Visa read all 5 of 5 rows/)).toBeTruthy();
+    expect(await findByText(/already in Joint Visa/)).toBeTruthy();
+  });
+
+  it('leaves a picker exactly where it was when detection could not tell', async () => {
+    vi.stubGlobal(
+      'fetch',
+      twoHopFetch({
+        profile: null,
+        profileReason: 'None of your import profiles could read this file.',
+        profileConfidence: 'none',
+        account: null,
+        accountReason: 'Nothing in this file says which account it belongs to.',
+        accountConfidence: 'none',
+      }),
+    );
+    const { container, getByLabelText } = renderClient();
+
+    fireEvent.submit(container.querySelector('form')!);
+
+    await waitFor(() => expect(document.body.textContent).toContain('Nothing in this file says'));
+    expect((getByLabelText(/Account/) as HTMLSelectElement).value).toBe('10');
+    expect((getByLabelText(/Import profile/) as HTMLSelectElement).value).toBe('1');
+  });
+
+  it('reports a detect failure instead of previewing into the wrong account', async () => {
+    const fetchMock = vi.fn(async () => ({ ok: false, json: async () => ({ error: 'File is larger than 5000000 bytes' }) }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { container } = renderClient();
+
+    fireEvent.submit(container.querySelector('form')!);
+
+    await waitFor(() => expect(document.body.textContent).toContain('larger than'));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
