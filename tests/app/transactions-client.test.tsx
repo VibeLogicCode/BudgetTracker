@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TransactionsClient } from '@/app/(app)/transactions/transactions-client';
-import { assignToBillAction, deleteTransactionAction, setCategoryAction } from '@/app/(app)/transactions/actions';
+import { assignToBillAction, createRulesFromRowAction, deleteTransactionAction, previewRowRuleAction, setCategoryAction } from '@/app/(app)/transactions/actions';
 import type { CategoryGroupPage, CategoryGroupRow, TransactionPage, TransactionRow } from '@/lib/transactions';
 import type { SplitRow } from '@/lib/splits';
 
@@ -34,6 +34,8 @@ vi.mock('@/app/(app)/transactions/actions', () => ({
   setRowTransferAction: vi.fn(async () => ({})),
   deleteTransactionAction: vi.fn(async () => ({})),
   assignToBillAction: vi.fn(async () => ({})),
+  previewRowRuleAction: vi.fn(async () => ({})),
+  createRulesFromRowAction: vi.fn(async () => ({})),
   // v1.19.0 Lane 2 item 5: "Accept all suggestions".
   acceptAllGuessesAction: vi.fn(async () => ({})),
 }));
@@ -4299,5 +4301,159 @@ describe('TransactionsClient — assigning a row to a bill', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: /delete/i }));
 
     await waitFor(() => expect(screen.getByText(/Transaction deleted\./)).toBeTruthy());
+  });
+});
+
+/**
+ * The owner, 2026-09-13: "insurance is with same company but different amount but imported
+ * categorizes the last setting i do so everything goes to home or auto. can i set in rule vendor +
+ * amount rule? they dont have to be automatic but something i create from kebab menu?" -- and
+ * "think about person too so its not just on vendor rule, even sets household, or individual
+ * person."
+ *
+ * Exercised in BOTH the table branch and the review-card branch. That is the PENDING-FIXES CB
+ * lesson stated as a test: this page renders rows twice, from one rowMenu, and an editor proved
+ * only in the table branch has been shipped invisible in the card branch before.
+ */
+describe('TransactionsClient — creating a rule from a row', () => {
+  const ROW = {
+    rawDescription: 'ACME INSURANCE',
+    normalizedMerchant: 'ACME INSURANCE',
+    amountCents: -14012,
+    categoryId: 42,
+    categoryName: 'Home Insurance',
+  } satisfies Partial<TransactionRow>;
+
+  function renderPage(over: { rowOver?: Partial<TransactionRow>; reviewMode?: boolean; selfScoped?: boolean } = {}) {
+    render(
+      <TransactionsClient
+        page={pageWithRow({ ...ROW, ...(over.rowOver ?? {}) })}
+        accounts={[{ id: 1, name: 'Joint Chequing' }]}
+        categories={[{ id: 42, name: 'Home Insurance', parentId: null, isArchived: false, sortOrder: 0 }]}
+        people={[{ id: 9, name: 'Sam' }]}
+        today="2026-03-02"
+        reviewMode={over.reviewMode}
+        selfScoped={over.selfScoped}
+      />,
+    );
+  }
+
+  function openDialog() {
+    openRowMenu('Actions for ACME INSURANCE');
+    fireEvent.click(screen.getByRole('menuitem', { name: /create a rule/i }));
+  }
+
+  it('offers the item on an ordinary row', () => {
+    renderPage();
+    openRowMenu('Actions for ACME INSURANCE');
+    expect(screen.getByRole('menuitem', { name: /create a rule/i })).toBeTruthy();
+  });
+
+  it('offers it in review mode too, where the rows render as cards', () => {
+    renderPage({ reviewMode: true });
+    openRowMenu('Actions for ACME INSURANCE');
+    fireEvent.click(screen.getByRole('menuitem', { name: /create a rule/i }));
+    expect(screen.getByTestId('create-rule-form')).toBeTruthy();
+  });
+
+  it('never offers it on a transfer, which has no category and belongs to nobody', () => {
+    renderPage({ rowOver: { isTransfer: true } });
+    openRowMenu('Actions for ACME INSURANCE');
+    expect(screen.queryByRole('menuitem', { name: /create a rule/i })).toBeNull();
+  });
+
+  it('never offers it to a viewer who can only see their own rows', () => {
+    renderPage({ selfScoped: true });
+    openRowMenu('Actions for ACME INSURANCE');
+    expect(screen.queryByRole('menuitem', { name: /create a rule/i })).toBeNull();
+  });
+
+  /** ±10% of $140.12, rounded outward to whole dollars, and the checkbox on by default. */
+  it('prefills a window around the row own amount', () => {
+    renderPage();
+    openDialog();
+    expect((screen.getByLabelText('Smallest') as HTMLInputElement).value).toBe('126.00');
+    expect((screen.getByLabelText('Largest') as HTMLInputElement).value).toBe('155.00');
+  });
+
+  it('hides the two money inputs when the amount is not part of the rule', () => {
+    renderPage();
+    openDialog();
+    fireEvent.click(screen.getByRole('checkbox', { name: /only when the amount is about/i }));
+    expect(screen.queryByLabelText('Smallest')).toBeNull();
+  });
+
+  it('counts before it writes, and writes nothing on Preview', async () => {
+    renderPage();
+    openDialog();
+    fireEvent.click(screen.getByRole('button', { name: /^preview$/i }));
+
+    await waitFor(() => expect(previewRowRuleAction).toHaveBeenCalled());
+    expect(createRulesFromRowAction).not.toHaveBeenCalled();
+    const formData = vi.mocked(previewRowRuleAction).mock.calls[0]?.[1] as FormData;
+    expect(formData.get('normalizedMerchant')).toBe('ACME INSURANCE');
+    expect(formData.get('amountMin')).toBe('126.00');
+  });
+
+  it('posts the window, the category and the person on Create', async () => {
+    renderPage();
+    openDialog();
+    // Scoped to the dialog: the page's own filter bar has a Person select too, and an unscoped
+    // query would find both and say so.
+    fireEvent.change(within(screen.getByTestId('create-rule-form')).getByLabelText('Person'), { target: { value: '9' } });
+    fireEvent.submit(screen.getByTestId('create-rule-form'));
+
+    await waitFor(() => expect(createRulesFromRowAction).toHaveBeenCalled());
+    const formData = vi.mocked(createRulesFromRowAction).mock.calls[0]?.[1] as FormData;
+    expect(formData.get('amountMin')).toBe('126.00');
+    expect(formData.get('amountMax')).toBe('155.00');
+    expect(formData.get('categoryId')).toBe('42');
+    expect(formData.get('person')).toBe('9');
+  });
+
+  it('posts an empty window when the amount is not part of the rule', async () => {
+    renderPage();
+    openDialog();
+    fireEvent.click(screen.getByRole('checkbox', { name: /only when the amount is about/i }));
+    fireEvent.submit(screen.getByTestId('create-rule-form'));
+
+    await waitFor(() => expect(createRulesFromRowAction).toHaveBeenCalled());
+    const formData = vi.mocked(createRulesFromRowAction).mock.calls[0]?.[1] as FormData;
+    expect(formData.get('amountMin')).toBe('');
+    expect(formData.get('amountMax')).toBe('');
+  });
+
+  it('shows the preview sentence beside the controls it is about, and stays open', async () => {
+    vi.mocked(previewRowRuleAction).mockResolvedValueOnce({
+      message: '4 transactions from this merchant, 2 of them inside this amount range. 2 would change category.',
+    });
+    renderPage();
+    openDialog();
+    fireEvent.click(screen.getByRole('button', { name: /^preview$/i }));
+
+    await waitFor(() => expect(screen.getByTestId('rule-preview').textContent).toMatch(/2 of them inside/));
+    expect(screen.getByTestId('create-rule-form')).toBeTruthy();
+  });
+
+  it('closes on a successful create, and says what it did', async () => {
+    vi.mocked(createRulesFromRowAction).mockResolvedValueOnce({
+      message: 'Created 2 rules. Filed 7 transactions. Set the person on 7 transactions.',
+    });
+    renderPage();
+    openDialog();
+    fireEvent.submit(screen.getByTestId('create-rule-form'));
+
+    await waitFor(() => expect(screen.queryByTestId('create-rule-form')).toBeNull());
+    expect(screen.getByText(/Created 2 rules\./)).toBeTruthy();
+  });
+
+  it('stays open on a refusal, with the reason where the person is looking', async () => {
+    vi.mocked(createRulesFromRowAction).mockResolvedValueOnce({ error: 'Pick a category, a person, or both.' });
+    renderPage();
+    openDialog();
+    fireEvent.submit(screen.getByTestId('create-rule-form'));
+
+    await waitFor(() => expect(screen.getAllByText(/Pick a category, a person, or both\./).length).toBeGreaterThan(0));
+    expect(screen.getByTestId('create-rule-form')).toBeTruthy();
   });
 });

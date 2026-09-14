@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { Fragment, useActionState, useEffect, useState } from 'react';
 import { CategoryCombobox } from '@/components/CategoryCombobox';
+import { defaultBoundsAround } from '@/lib/categorize/amount-bounds';
 import { FormError } from '@/components/FormError';
 import { QuickAddTransaction } from '@/components/QuickAddTransaction';
 import { SubmitButton } from '@/components/SubmitButton';
@@ -57,6 +58,8 @@ import {
   acceptAllGuessesAction,
   acceptGuessAction,
   applyToAllMatchingAction,
+  createRulesFromRowAction,
+  previewRowRuleAction,
   assignToLoanAction,
   bulkAssignToLoanAction,
   bulkCategorizeAction,
@@ -189,6 +192,15 @@ function startsNewDay(rows: TransactionRow[], index: number): boolean {
  * the card as money in, and netting it against the same period's spending would make that payment
  * vanish into a smaller "spent" number instead of showing up as the money it plainly is.
  */
+/**
+ * Cents as the plain number a money input holds -- "126.00", never "$126.00" and never a thousands
+ * separator. parseAmountToCents on the way back would cope with either, but a field prefilled with
+ * currency formatting invites a person to edit around the symbols rather than the number.
+ */
+function centsToInput(cents: number): string {
+  return (cents / 100).toFixed(2);
+}
+
 function outInWords(outCents: number, inCents: number): string {
   return `${formatCents(absCents(outCents))} out · ${formatCents(absCents(inCents))} in`;
 }
@@ -581,6 +593,20 @@ export function TransactionsClient({
    */
   const [assignBill, setAssignBill] = useState<{ id: number; itemId: string; installmentId: string } | null>(null);
   /**
+   * 2026-09-13. The kebab's "Create a rule…" editor -- one nullable slot, the same shape every
+   * other row editor on this page uses, so opening it on a different row replaces whichever was
+   * already open. Every field is CONTROLLED because the amount checkbox shows and hides the two
+   * money inputs, and an uncontrolled pair would lose whatever was typed each time it was toggled.
+   */
+  const [ruleRow, setRuleRow] = useState<{
+    id: number;
+    bounded: boolean;
+    amountMin: string;
+    amountMax: string;
+    categoryId: number | null;
+    person: string;
+  } | null>(null);
+  /**
    * v1.25.0 Lane R item R3. The two new bulk actions' own dialog state -- one nullable slot
    * each, the same "one editor, replacing whichever was open" shape `newLoan`/`noting` already
    * use above, scoped to the whole `selected` array rather than one row. `bulkLoan.itemId` is a
@@ -632,6 +658,11 @@ export function TransactionsClient({
     (_prev: ActionState, formData: FormData) => assignToBillAction(formData),
     initial,
   );
+  // Two instances, deliberately: one action counts and one writes, and a preview in flight must
+  // never be able to show a create's error (or the reverse) -- the same separation acceptState and
+  // acceptAllState already keep.
+  const [rulePreviewState, previewRuleAction] = useActionState(previewRowRuleAction, initial);
+  const [ruleCreateState, createRuleAction] = useActionState(createRulesFromRowAction, initial);
   const [splitState, splitAction] = useActionState(saveSplitsAction, initial);
   const [noteState, noteAction] = useActionState(saveNoteAction, initial);
   const [newLoanState, newLoanAction] = useActionState(createLoanFromTransactionAction, initial);
@@ -928,7 +959,7 @@ export function TransactionsClient({
     // menu doesnt close, transaction gets applied and no feedback to user that its done." Both
     // actions shipped wired to no banner at all, so each one landed its write in silence. They sit
     // with assignState/unassignState: one-off actions whose result is only ever seen here.
-    billState.message ?? deleteState.message ??
+    billState.message ?? deleteState.message ?? ruleCreateState.message ??
     acceptState.message ?? acceptAllState.message ?? rowTransferState.message;
   const error =
     newLoanState.error ?? applyAllState.error ??
@@ -936,7 +967,7 @@ export function TransactionsClient({
     renameState.error ?? assignState.error ?? unassignState.error ?? splitState.error ?? noteState.error ??
     bulkLoanState.error ?? bulkNoteState.error ??
     confirmGroupState.error ?? recatGroupState.error ??
-    billState.error ?? deleteState.error ??
+    billState.error ?? deleteState.error ?? ruleCreateState.error ??
     acceptState.error ?? acceptAllState.error ?? rowTransferState.error;
 
   // Review round: unlike renaming/noting/splitting (which close their own form onSubmit right
@@ -970,6 +1001,16 @@ export function TransactionsClient({
   // unpaid on that bill") must leave the bill and installment somebody just picked on screen to
   // correct, with the reason beside them, rather than discarding the choice and sending them back
   // through the row menu to make it again.
+  // Closes on the CREATE action's success only -- never on a preview, which is the whole point of
+  // pressing Preview, and never on a refusal, which must leave the window and the choices on
+  // screen to correct.
+  useEffect(() => {
+    if (ruleCreateState.message && !ruleCreateState.error) {
+      setRuleRow(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ruleCreateState]);
+
   useEffect(() => {
     if (billState.message && !billState.error) {
       setAssignBill(null);
@@ -1302,6 +1343,32 @@ export function TransactionsClient({
             Assign to bill…
           </RowMenuButton>
         )}
+        {/* 2026-09-13, owner report: "can i set in rule vendor + amount rule? ... something i
+            create from kebab menu?" Sits with Split and the two assign items, inside the
+            non-transfer block: a transfer has no category to file and belongs to nobody, so
+            neither outcome this dialog offers means anything on one.
+
+            Hidden from a self-scoped viewer. A rule is household-wide, so authoring one from a
+            view that only shows your own rows would reach past what that viewer can see. The two
+            actions refuse them regardless -- this only keeps a person from finding a control that
+            would then say no. */}
+        {row.isTransfer || selfScoped ? null : (
+          <RowMenuButton
+            onSelect={() => {
+              const window = defaultBoundsAround(row.amountCents);
+              setRuleRow({
+                id: row.id,
+                bounded: true,
+                amountMin: centsToInput(window.minCents),
+                amountMax: centsToInput(window.maxCents),
+                categoryId: row.categoryId,
+                person: '',
+              });
+            }}
+          >
+            Create a rule…
+          </RowMenuButton>
+        )}
         {/* 2026-09-13, owner report: Record payment on a bill writes a real transaction, and until
             now nothing could remove one. Offered ONLY on a row no import brought in -- an imported
             row belongs to its import, and Undo import is the operation that knows which rows that
@@ -1592,6 +1659,137 @@ export function TransactionsClient({
             <button type="button" className="btn btn--ghost btn--sm" onClick={() => setNewLoan(null)}>
               Cancel
             </button>
+          </div>
+        </form>
+      </RowDialog>
+    );
+  }
+
+  /**
+   * 2026-09-13. The owner, twice over: "insurance is with same company but different amount but
+   * imported categorizes the last setting i do so everything goes to home or auto. can i set in
+   * rule vendor + amount rule? they dont have to be automatic but something i create from kebab
+   * menu?" -- and "think about person too so its not just on vendor rule, even sets household, or
+   * individual person."
+   *
+   * NOT AUTOMATIC, in as many words. Preview counts and writes nothing; Create is a second,
+   * deliberate click that says how many rows it is about to touch. The apply-all item one line up
+   * in the menu is unchanged and stays the plain "every transaction from this merchant, one
+   * category" path -- this is the one that can say "and only when it is about this much, and it
+   * belongs to Sam".
+   *
+   * The amount checkbox is ON by default and prefilled from the row (defaultBoundsAround), because
+   * a person who opened this from a $140 insurance charge is nearly always here BECAUSE of the
+   * amount. Unticking it writes the merchant-wide rule instead.
+   */
+  function ruleDialog() {
+    if (!ruleRow) return null;
+    const row = findRow(ruleRow.id);
+    if (!row) return null;
+    return (
+      <RowDialog
+        dialogId="create-rule-dialog"
+        key={ruleRow.id}
+        title={`Rule for "${row.normalizedMerchant}"`}
+        onClose={() => setRuleRow(null)}
+      >
+        <p className="text-sm text-muted">
+          A rule files future imports on its own. Nothing is written until you press Create.
+        </p>
+        <FormError message={ruleCreateState.error ?? rulePreviewState.error} />
+        {/* The preview's own sentence stays in the dialog, beside the controls it is about --
+            the create action's result goes to the page banner instead, because the dialog is
+            closed by then. */}
+        {rulePreviewState.message ? (
+          <p role="status" className="text-sm text-ink" data-testid="rule-preview">
+            {rulePreviewState.message}
+          </p>
+        ) : null}
+        <form action={createRuleAction} className="flex flex-col gap-3" data-testid="create-rule-form">
+          <input type="hidden" name="normalizedMerchant" value={row.normalizedMerchant} />
+          <div className="flex flex-col gap-1">
+            <label className="flex items-center gap-2 text-sm text-ink">
+              <input
+                type="checkbox"
+                checked={ruleRow.bounded}
+                onChange={(e) => setRuleRow({ ...ruleRow, bounded: e.target.checked })}
+                className="accent-accent"
+              />
+              {`Only when the amount is about ${formatCents(absCents(row.amountCents))}`}
+            </label>
+            {ruleRow.bounded ? (
+              <div className="flex flex-wrap items-end gap-3 pl-6">
+                <Field label="Smallest">
+                  <input
+                    name="amountMin"
+                    value={ruleRow.amountMin}
+                    onChange={(e) => setRuleRow({ ...ruleRow, amountMin: e.target.value })}
+                    inputMode="decimal"
+                    className={inputClass}
+                  />
+                </Field>
+                <Field label="Largest">
+                  <input
+                    name="amountMax"
+                    value={ruleRow.amountMax}
+                    onChange={(e) => setRuleRow({ ...ruleRow, amountMax: e.target.value })}
+                    inputMode="decimal"
+                    className={inputClass}
+                  />
+                </Field>
+              </div>
+            ) : (
+              // The fields are still POSTED when the box is unticked, as empty strings, so the
+              // action reads one shape either way rather than inferring the window from whether a
+              // key is present at all.
+              <>
+                <input type="hidden" name="amountMin" value="" />
+                <input type="hidden" name="amountMax" value="" />
+              </>
+            )}
+          </div>
+          <Field label="Category" hint="Leave this alone to write a rule about the person only.">
+            <CategoryCombobox
+              options={groupedCategories}
+              value={ruleRow.categoryId}
+              onChange={(next) => setRuleRow({ ...ruleRow, categoryId: next })}
+              label="Category for this rule"
+              name="categoryId"
+              includeUncategorized={false}
+              placeholder="Leave as it is"
+            />
+          </Field>
+          {selfScoped ? null : (
+            <Field label="Person" hint="Household means this charge is nobody's in particular.">
+              <select
+                name="person"
+                value={ruleRow.person}
+                onChange={(e) => setRuleRow({ ...ruleRow, person: e.target.value })}
+                className={selectClass}
+              >
+                <option value="">Leave as it is</option>
+                <option value="household">Household</option>
+                {people.map((person) => (
+                  <option key={person.id} value={String(person.id)}>
+                    {person.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
+          <div className="flex flex-wrap justify-end gap-2">
+            <button type="button" className="btn btn--ghost btn--sm" onClick={() => setRuleRow(null)}>
+              Cancel
+            </button>
+            {/* A plain button rather than a SubmitButton: formAction is what sends this one
+                submit to the counting action instead of the writing one, and SubmitButton takes
+                no such prop by design -- it is the shape for a form with a single destination. */}
+            <button type="submit" formAction={previewRuleAction} className="btn btn--secondary btn--sm">
+              Preview
+            </button>
+            <SubmitButton size="sm" className="w-fit">
+              Create rule
+            </SubmitButton>
           </div>
         </form>
       </RowDialog>
@@ -2798,6 +2996,7 @@ export function TransactionsClient({
       {renameDialog()}
       {noteDialog()}
       {assignBillDialog()}
+      {ruleDialog()}
       {newLoanDialog()}
       {applyAllDialog()}
       {/* v1.26.0 Lane 1: same "rendered once here, looked up by row id" reasoning as the four row

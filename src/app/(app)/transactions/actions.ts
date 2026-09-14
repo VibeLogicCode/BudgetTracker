@@ -44,13 +44,17 @@ import {
   applyRenameRules,
   clearCategory,
   confirmCategory,
+  createRulesFromRow,
+  previewRulesFromRow,
+  RULE_FROM_ROW_NEEDS_AN_OUTCOME,
   setTransactionDisplayName,
   setTransferFlag,
   upsertRenameRule,
   type CategoryMatchResult,
   type RuleGuardedWriteResult,
 } from '@/lib/categorize/engine';
-import { ruleOwnedError } from '@/lib/categorize/rules';
+import { ruleOwnedError, AMOUNT_BOUND_ORDER_ERROR } from '@/lib/categorize/rules';
+import { boundsProblem } from '@/lib/categorize/amount-bounds';
 
 export interface ActionState {
   error?: string;
@@ -1160,4 +1164,130 @@ export async function assignToBillAction(formData: FormData): Promise<ActionStat
   revalidatePath('/dashboard');
   revalidatePath('/warranties');
   return { message: 'Assigned. That installment is marked paid by this transaction.' };
+}
+
+/**
+ * 2026-09-13. The kebab's "Create a rule…" dialog, in two actions: one that only counts, one that
+ * writes. The owner asked for exactly that shape -- "they dont have to be automatic but something
+ * i create from kebab menu" -- so nothing here happens without a second, deliberate click.
+ *
+ * Both refuse a self-scoped viewer, the same way applyToAllMatchingAction does and for the same
+ * reason: a rule is household-wide, so a viewer who can only see their own rows must not be able
+ * to author one. The menu item is hidden for them too; this is the guarantee, that is the courtesy.
+ */
+/** "1 transaction" / "2 transactions", so a sentence built from counts reads like English. */
+function rowWord(count: number, word: string): string {
+  return count === 1 ? word : `${word}s`;
+}
+
+const ruleFromRowFields = z.object({
+  normalizedMerchant: z.string().trim().min(1).max(200),
+  /** '' on either side is "open on that side"; the checkbox being off sends both empty. */
+  amountMin: z.string().trim(),
+  amountMax: z.string().trim(),
+  /** '' means "leave the category as it is" -- distinct from any category id. */
+  categoryId: z.string().trim().refine((v) => v === '' || /^\d+$/.test(v), { message: 'Pick a category.' }),
+  /**
+   * THREE states, which is why this is a string and not a number: '' is "leave the person as it
+   * is", 'household' is Household (a deliberate choice that writes NULL), and digits are a person.
+   * Collapsing the first two would make "leave alone" and "put it on nobody" the same instruction,
+   * and they are opposites.
+   */
+  person: z.string().trim().refine((v) => v === '' || v === 'household' || /^\d+$/.test(v), {
+    message: 'Invalid person selection.',
+  }),
+});
+
+interface ParsedRuleFromRow {
+  normalizedMerchant: string;
+  amountMinCents: number | null;
+  amountMaxCents: number | null;
+  categoryId?: number;
+  attributedUserId?: number | null;
+}
+
+function parseRuleFromRow(formData: FormData): { ok: true; value: ParsedRuleFromRow } | { ok: false; error: string } {
+  const parsed = ruleFromRowFields.safeParse({
+    normalizedMerchant: formData.get('normalizedMerchant') ?? '',
+    amountMin: formData.get('amountMin') ?? '',
+    amountMax: formData.get('amountMax') ?? '',
+    categoryId: formData.get('categoryId') ?? '',
+    person: formData.get('person') ?? '',
+  });
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? 'Invalid request.' };
+
+  const amountMinCents = parsed.data.amountMin === '' ? null : parseAmountToCents(parsed.data.amountMin);
+  const amountMaxCents = parsed.data.amountMax === '' ? null : parseAmountToCents(parsed.data.amountMax);
+  if ((parsed.data.amountMin !== '' && amountMinCents === null) || (parsed.data.amountMax !== '' && amountMaxCents === null)) {
+    return { ok: false, error: 'That amount is not a number.' };
+  }
+  // boundsProblem, not a comparison written here: the same check the write choke point and the
+  // table's own triggers make, so all three refuse the same two shapes (amount-bounds.ts).
+  if (boundsProblem(amountMinCents, amountMaxCents) !== null) return { ok: false, error: AMOUNT_BOUND_ORDER_ERROR };
+
+  const categoryId = parsed.data.categoryId === '' ? undefined : Number(parsed.data.categoryId);
+  const attributedUserId =
+    parsed.data.person === '' ? undefined : parsed.data.person === 'household' ? null : Number(parsed.data.person);
+  if (categoryId === undefined && attributedUserId === undefined) {
+    return { ok: false, error: RULE_FROM_ROW_NEEDS_AN_OUTCOME };
+  }
+  return { ok: true, value: { normalizedMerchant: parsed.data.normalizedMerchant, amountMinCents, amountMaxCents, categoryId, attributedUserId } };
+}
+
+export async function previewRowRuleAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  const user = await requireUser();
+  if (isSelfScoped(user)) return { error: 'Rules are set up for the whole household, so this is not available here.' };
+
+  const parsed = parseRuleFromRow(formData);
+  if (!parsed.ok) return { error: parsed.error };
+
+  const preview = previewRulesFromRow({ ...parsed.value, userId: user.id, actorRole: user.role });
+  const bounded = parsed.value.amountMinCents !== null || parsed.value.amountMaxCents !== null;
+  const scope = bounded
+    ? `${preview.merchantRows} ${rowWord(preview.merchantRows, 'transaction')} from this merchant, ${preview.matchingRows} of them inside this amount range`
+    : `${preview.matchingRows} ${rowWord(preview.matchingRows, 'transaction')} from this merchant`;
+  const changes: string[] = [];
+  if (parsed.value.categoryId !== undefined) {
+    changes.push(`${preview.categoryChanges} would change category`);
+  }
+  if (parsed.value.attributedUserId !== undefined) {
+    changes.push(`${preview.personChanges} would change person`);
+  }
+  return { message: `${scope}. ${changes.join('; ')}.` };
+}
+
+export async function createRulesFromRowAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  const user = await requireUser();
+  if (isSelfScoped(user)) return { error: 'Rules are set up for the whole household, so this is not available here.' };
+
+  const parsed = parseRuleFromRow(formData);
+  if (!parsed.ok) return { error: parsed.error };
+
+  let result;
+  try {
+    result = createRulesFromRow({ ...parsed.value, userId: user.id, actorRole: user.role });
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : 'Could not create that rule.' };
+  }
+  if (!result.ok) return { error: guardedWriteError(result) };
+
+  revalidatePath('/transactions');
+  revalidatePath('/settings/merchant-rules');
+  const parts = [`Created ${result.rulesCreated} ${rowWord(result.rulesCreated, 'rule')}.`];
+  if (parsed.value.categoryId !== undefined) {
+    parts.push(`Filed ${result.categoryChanged} ${rowWord(result.categoryChanged, 'transaction')}.`);
+  }
+  if (parsed.value.attributedUserId !== undefined) {
+    parts.push(`Set the person on ${result.personChanged} ${rowWord(result.personChanged, 'transaction')}.`);
+  }
+  if (result.splitsSkipped > 0) {
+    // Said out loud rather than folded into the count: a split row's parts ARE its categorization,
+    // so it was deliberately left alone and the household should not have to notice the shortfall.
+    parts.push(`Left ${result.splitsSkipped} split ${rowWord(result.splitsSkipped, 'transaction')} alone.`);
+  }
+  return { message: parts.join(' ') };
 }

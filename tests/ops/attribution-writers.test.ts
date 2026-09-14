@@ -58,6 +58,8 @@ const WRITERS: Record<string, string> = {
     'the hand edit, which is the LAST word by construction: nothing automatic writes this column after insert, so this deliberately consults nothing and simply does what a person asked',
   'src/lib/categorize/engine.ts#applyAttributionRule':
     'the rules page "Apply now" for an attribution rule: one of the three deliberate points (ruling P10), reached only by somebody pressing a button beside a rule that names a person, having been shown the count first. The rule IS the order here -- there is no card or owner to rank it against',
+  'src/lib/categorize/engine.ts#createRulesFromRow':
+    'the kebab dialog own pass, the second of the three deliberate points: it writes the rule and then applies it to the merchant rows it just counted for the person, in the same transaction',
 };
 
 /**
@@ -79,6 +81,11 @@ const WRITERS_NOT_CONSULTING: Record<string, string> = {
     'a deliberate per-rule apply has one candidate, the rule somebody pressed the button next to. ' +
     'Consulting the order would ask whether a card map should beat it, which is exactly the ' +
     'question the button already answered.',
+  'src/lib/categorize/engine.ts#createRulesFromRow':
+    'the applyAttributionRule reason at the moment the rule is born: the person in this write is ' +
+    'the one just typed into the dialog, over rows the dialog counted and named first. There is ' +
+    'no card cell and no account owner in scope to rank it against -- the order applies at ' +
+    'IMPORT, deciding a row nobody has spoken about yet, and this is the opposite situation.',
 };
 
 const EXPORTS = ['resolveAttribution', 'AttributionSource'];
