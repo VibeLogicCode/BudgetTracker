@@ -114,6 +114,26 @@ function pageWithRow(overrides: Partial<TransactionRow> = {}): TransactionPage {
   return { total: 1, page: 1, pageSize: 50, pageCount: 1, rows: [row], ...sumSigned([row]) };
 }
 
+/**
+ * Backlog BZ: the split parts and the recategorize dialog are CategoryComboboxes now, not
+ * <select>s -- a text input over a filtered listbox, so a test drives them the way a household
+ * does: type enough of the name, then click the option. The value a combobox holds is its input
+ * TEXT (the category's label), and the id it will post lives in the hidden field beside it.
+ */
+function chooseCategory(field: HTMLElement, label: string): void {
+  fireEvent.focus(field);
+  fireEvent.change(field, { target: { value: label } });
+  const option = screen.getAllByRole('option').find((node) => node.textContent === label);
+  if (option === undefined) throw new Error(`no category option named "${label}" after typing it`);
+  fireEvent.mouseDown(option);
+}
+
+/** What that combobox will actually post: the hidden input React keeps beside it. */
+function postedCategoryId(field: HTMLElement): string {
+  const hidden = field.parentElement?.querySelector('input[type="hidden"]') as HTMLInputElement | null;
+  return hidden?.value ?? '';
+}
+
 describe('TransactionsClient — archived-category silent-clear hazard', () => {
   it("renders an archived category's own label on its row instead of falling back to Uncategorized", () => {
     const { container } = render(
@@ -560,8 +580,9 @@ describe('Split editor (v1.7.0 Task 4)', () => {
     openRowMenu('Actions for TIM HORTONS');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Split…' }));
 
-    const categorySelects = screen.getAllByLabelText(/Category for part/) as HTMLSelectElement[];
-    expect(categorySelects.map((s) => s.value)).toEqual(['42', '7']);
+    // A combobox shows the category's NAME; the ids it will post sit in the hidden fields.
+    const categoryFields = screen.getAllByLabelText(/Category for part/) as HTMLInputElement[];
+    expect(categoryFields.map((field) => field.value)).toEqual(['Old Category', 'Coffee']);
 
     const amountInputs = screen.getAllByLabelText(/Amount for part/) as HTMLInputElement[];
     expect(amountInputs.map((i) => i.value)).toEqual(['3.00', '2.00']);
@@ -588,14 +609,14 @@ describe('Split editor (v1.7.0 Task 4)', () => {
     const saveButton = screen.getByRole('button', { name: 'Save split' }) as HTMLButtonElement;
     expect(saveButton.disabled).toBe(true);
 
-    const categorySelects = screen.getAllByLabelText(/Category for part/) as HTMLSelectElement[];
+    const categorySelects = screen.getAllByLabelText(/Category for part/) as HTMLInputElement[];
     const amountInputs = screen.getAllByLabelText(/Amount for part/) as HTMLInputElement[];
 
-    fireEvent.change(categorySelects[0], { target: { value: '42' } });
+    chooseCategory(categorySelects[0], 'Old Category');
     fireEvent.change(amountInputs[0], { target: { value: '30.00' } });
     expect(saveButton.disabled).toBe(true);
 
-    fireEvent.change(categorySelects[1], { target: { value: '7' } });
+    chooseCategory(categorySelects[1], 'Coffee');
     fireEvent.change(amountInputs[1], { target: { value: '20.00' } });
     expect(saveButton.disabled).toBe(false);
   });
@@ -746,9 +767,9 @@ describe('Split editor is a modal dialog, not a card at the top of the page (ite
     const saveButton = screen.getByRole('button', { name: 'Save split' }) as HTMLButtonElement;
     expect(saveButton.disabled).toBe(true);
 
-    const categorySelects = screen.getAllByLabelText(/Category for part/) as HTMLSelectElement[];
+    const categorySelects = screen.getAllByLabelText(/Category for part/) as HTMLInputElement[];
     const amountInputs = screen.getAllByLabelText(/Amount for part/) as HTMLInputElement[];
-    fireEvent.change(categorySelects[0], { target: { value: '42' } });
+    chooseCategory(categorySelects[0], 'Old Category');
     fireEvent.change(amountInputs[0], { target: { value: '5.00' } });
     expect(saveButton.disabled).toBe(false);
 
@@ -3807,7 +3828,7 @@ describe('v1.26.0 Lane 3a item 4: the group bulk actions', () => {
     // category nor the group's own is a safe default here.
     expect(screen.getByText('Pick a category to move all 37 transactions into.')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Move all 37' })).toHaveProperty('disabled', true);
-    fireEvent.change(screen.getByLabelText('Move them to'), { target: { value: '43' } });
+    chooseCategory(screen.getByLabelText('Move them to'), 'Coffee');
     expect(screen.getByText('All 37 transactions move from Groceries to Coffee.')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Move all 37' })).toHaveProperty('disabled', false);
   });
@@ -3818,7 +3839,7 @@ describe('v1.26.0 Lane 3a item 4: the group bulk actions', () => {
     spy.mockClear();
     const { container } = renderGrouped();
     fireEvent.click(screen.getAllByRole('button', { name: 'Recategorize the group…' })[0]);
-    fireEvent.change(screen.getByLabelText('Move them to'), { target: { value: '43' } });
+    chooseCategory(screen.getByLabelText('Move them to'), 'Coffee');
     fireEvent.submit(
       container.querySelector('[data-testid="group-recategorize-dialog-backdrop"] form') as HTMLFormElement,
     );
@@ -4030,5 +4051,61 @@ describe('v1.26.0 Lane 3a: what the review filter does and does not offer', () =
     renderReview();
     expect(screen.queryByRole('link', { name: 'By category' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'Rules' })).toBeNull();
+  });
+});
+
+
+/**
+ * The owner, 2026-09-13, looking at "Page 1 of 6 — 266 transactions": "how do i go to next page on
+ * transactions?" There was no way. The footer has printed a page count since F-02 while the flat
+ * list carried no pager at all -- the GROUPED view got Previous/Next groups links and this one was
+ * never given the same. `?page=` was already read (filter-params.ts readFilter), so every page
+ * after the first existed and was reachable only by typing a URL.
+ */
+describe('TransactionsClient — the flat list can be paged', () => {
+  function pagedRows(page: number, pageCount: number) {
+    const rows = pageWithRow().rows;
+    return { total: 266, page, pageSize: 50, pageCount, rows, ...sumSigned(rows) };
+  }
+
+  function renderAt(page: number, pageCount: number, query = '') {
+    return render(
+      <TransactionsClient
+        page={pagedRows(page, pageCount)}
+        accounts={[{ id: 1, name: 'Joint Chequing' }]}
+        categories={[{ id: 42, name: 'Old Category', parentId: null, isArchived: false, sortOrder: 0 }]}
+        people={[]}
+        today="2026-03-02"
+        currentQuery={query}
+      />,
+    );
+  }
+
+  it('offers a next link on the first page of several, and no previous link', () => {
+    const { getAllByRole } = renderAt(1, 6);
+    const next = getAllByRole('link', { name: /next page/i });
+    expect(next.length).toBeGreaterThan(0);
+    expect(next[0].getAttribute('href')).toBe('/transactions?page=2');
+    expect(() => getAllByRole('link', { name: /previous page/i })).toThrow();
+  });
+
+  it('offers both links in the middle, and keeps the filters that are already on', () => {
+    const { getAllByRole } = renderAt(3, 6, 'account=1&q=tim');
+    expect(getAllByRole('link', { name: /previous page/i })[0].getAttribute('href')).toBe(
+      '/transactions?account=1&q=tim&page=2',
+    );
+    expect(getAllByRole('link', { name: /next page/i })[0].getAttribute('href')).toBe('/transactions?account=1&q=tim&page=4');
+  });
+
+  it('offers no next link on the last page', () => {
+    const { getAllByRole } = renderAt(6, 6);
+    expect(() => getAllByRole('link', { name: /next page/i })).toThrow();
+    expect(getAllByRole('link', { name: /previous page/i }).length).toBeGreaterThan(0);
+  });
+
+  it('offers neither when everything fits on one page', () => {
+    const { queryAllByRole } = renderAt(1, 1);
+    expect(queryAllByRole('link', { name: /next page/i })).toHaveLength(0);
+    expect(queryAllByRole('link', { name: /previous page/i })).toHaveLength(0);
   });
 });

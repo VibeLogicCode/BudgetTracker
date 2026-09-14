@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { Fragment, useActionState, useEffect, useState } from 'react';
+import { CategoryCombobox } from '@/components/CategoryCombobox';
 import { FormError } from '@/components/FormError';
 import { QuickAddTransaction } from '@/components/QuickAddTransaction';
 import { SubmitButton } from '@/components/SubmitButton';
@@ -188,6 +189,39 @@ function outInWords(outCents: number, inCents: number): string {
  */
 function pageFooterWords(page: TransactionPage): string {
   return `Page ${page.page} of ${page.pageCount} — ${page.total} transaction${page.total === 1 ? '' : 's'} · ${outInWords(page.outCents, page.inCents)}`;
+}
+
+/**
+ * The flat list's pager, beside pageFooterWords in all three render branches (review mode, the
+ * mobile card list, the desktop table) for the same reason that function exists: three copies of
+ * a string drift, and so do three copies of a link.
+ *
+ * Reported by the owner 2026-09-13 -- "how do i go to next page on transactions?" -- looking at a
+ * footer that said "Page 1 of 6" and carried nothing to press. `?page=` has been read since the
+ * filter was extracted (readFilter, ./filter-params.ts), so every one of those pages already
+ * existed; only the way to reach one was missing, while the GROUPED view has had Previous/Next
+ * groups links all along.
+ *
+ * Real links rather than a client-side pager, exactly as the group pager is: the page is a server
+ * render of one indexed query, so a link is both the honest control and the one that survives a
+ * reload, a bookmark and the back button. filterHref leaves every other active filter in place.
+ */
+function rowPager(page: TransactionPage, currentQuery: string): React.ReactNode {
+  if (page.pageCount <= 1) return null;
+  return (
+    <>
+      {page.page > 1 ? (
+        <Link href={filterHref(currentQuery, 'page', String(page.page - 1))} className="btn btn--secondary btn--sm">
+          Previous page
+        </Link>
+      ) : null}
+      {page.page < page.pageCount ? (
+        <Link href={filterHref(currentQuery, 'page', String(page.page + 1))} className="btn btn--secondary btn--sm">
+          Next page
+        </Link>
+      ) : null}
+    </>
+  );
 }
 
 /** Chip filters (ruling D6) show roughly this many top-level categories before folding the rest
@@ -477,6 +511,10 @@ export function TransactionsClient({
   currentQuery?: string;
 }) {
   const [selected, setSelected] = useState<number[]>([]);
+  // Backlog BZ: the bulk toolbar's category, now that its control is a combobox rather than a
+  // <select> the form could read on its own. null is "nothing chosen yet" -- the hidden field
+  // posts empty, and bulkCatAction refuses an empty category exactly as it always did.
+  const [bulkCategoryId, setBulkCategoryId] = useState<number | null>(null);
   const [renaming, setRenaming] = useState<{ id: number; current: string; merchant: string } | null>(null);
   const [splitting, setSplitting] = useState<{
     id: number;
@@ -1831,11 +1869,21 @@ export function TransactionsClient({
       node: (
         <form action={bulkCatAction} className="flex flex-wrap items-center gap-2">
           <input type="hidden" name="ids" value={selected.join(',')} />
-          <select name="categoryId" aria-label="Category for the selected transactions" className={selectClass}>
-            {groupedCategories.map((opt) => (
-              <option key={opt.id} value={opt.id}>{'  '.repeat(opt.depth) + opt.label}</option>
-            ))}
-          </select>
+          {/* Backlog BZ, the deferred half: type to filter. A household with sixty categories
+              cannot reach "Home Insurance" through a native select's type-ahead, which only
+              matches from the start of a label. Uncategorized is off the list here -- this
+              control files a batch, and offering to un-file it is not a choice this screen
+              should make available. */}
+          <CategoryCombobox
+            options={groupedCategories}
+            value={bulkCategoryId}
+            onChange={setBulkCategoryId}
+            label="Category for the selected transactions"
+            name="categoryId"
+            includeUncategorized={false}
+            placeholder="Choose a category"
+            className="w-56"
+          />
           <label className="flex items-center gap-2 text-sm text-accent-soft-fg">
             <input type="checkbox" name="createRules" defaultChecked className="accent-accent" /> create rules
           </label>
@@ -2370,20 +2418,20 @@ export function TransactionsClient({
           <input type="hidden" name="scope" value={currentQuery} />
           <input type="hidden" name="groupCategoryId" value={group.categoryId === null ? '' : String(group.categoryId)} />
           <Field label="Move them to">
-            <select
+            {/* Backlog BZ (deferred half): type to filter. Nothing is pre-chosen -- null here is
+                "not picked yet", not Uncategorized, which is why includeUncategorized is off and
+                the placeholder carries the instruction. A dialog that opened pre-armed with a
+                destination is exactly what the old leading <option value=""> existed to avoid. */}
+            <CategoryCombobox
+              options={groupedCategories}
+              value={categoryId === '' ? null : Number(categoryId)}
+              onChange={(id) => setRecatGroup({ group, categoryId: id === null ? '' : String(id) })}
+              label="Move them to"
               name="categoryId"
-              value={categoryId}
-              onChange={(event) => setRecatGroup({ group, categoryId: event.target.value })}
-              autoFocus
-              className={selectClass}
-            >
-              {/* The unchosen state is a real option rather than an empty controlled value with no
-                  matching <option> -- a select whose value matches nothing renders as though the
-                  first category were selected in some browsers, which is exactly the pre-armed
-                  destination this dialog is avoiding. Same leading option the split editor uses. */}
-              <option value="">Choose a category</option>
-              {categoryOptGroups(categoryGroups)}
-            </select>
+              includeUncategorized={false}
+              placeholder="Choose a category"
+              className="w-full"
+            />
           </Field>
           <label className="flex items-center gap-2 text-sm text-ink">
             {/* Defaults ON, unlike the confirm dialog which creates no rules at all -- a
@@ -2543,18 +2591,18 @@ export function TransactionsClient({
               </div>
               {splitting.parts.map((part, index) => (
                 <div key={index} className="flex flex-wrap items-center gap-2">
-                  <select
-                    value={part.categoryId}
-                    onChange={(e) => updateSplitPart(index, { categoryId: e.target.value })}
-                    aria-label={`Category for part ${index + 1}`}
-                    className={`${selectClass} w-44`}
-                  >
-                    <option value="">Choose a category</option>
-                    {/* Backlog BZ: an <optgroup> per parent instead of the flat NBSP-indented
-                        list -- categoryOptGroups() already excludes archived categories,
-                        matching this select's own live-category-only rule. */}
-                    {categoryOptGroups(categoryGroups)}
-                  </select>
+                  {/* Backlog BZ (deferred half): a split is where a long category list is worst
+                      -- several parts, each needing a different branch. Same unchosen semantics as
+                      the recategorize dialog above. */}
+                  <CategoryCombobox
+                    options={groupedCategories}
+                    value={part.categoryId === '' ? null : Number(part.categoryId)}
+                    onChange={(id) => updateSplitPart(index, { categoryId: id === null ? '' : String(id) })}
+                    label={`Category for part ${index + 1}`}
+                    includeUncategorized={false}
+                    placeholder="Choose a category"
+                    className="w-44"
+                  />
                   <input
                     value={part.amount}
                     onChange={(e) => updateSplitPart(index, { amount: e.target.value })}
@@ -3159,7 +3207,10 @@ export function TransactionsClient({
                 </Fragment>
               ))}
             </ul>
-            <p className="text-sm text-muted">{pageFooterWords(page)}</p>
+            <p className="flex flex-wrap items-center gap-3 text-sm text-muted">
+              {pageFooterWords(page)}
+              {rowPager(page, currentQuery)}
+            </p>
           </>
         )
       ) : page.rows.length === 0 ? (
@@ -3200,7 +3251,10 @@ export function TransactionsClient({
             </Fragment>
           ))}
         </ul>
-        <p className="text-sm text-muted sm:hidden">{pageFooterWords(page)}</p>
+        <p className="flex flex-wrap items-center gap-3 text-sm text-muted sm:hidden">
+          {pageFooterWords(page)}
+          {rowPager(page, currentQuery)}
+        </p>
       <div className="hidden sm:block">
       <Card as="div">
         {/* v1.26.0 Lane 1 item 4 (the owner's actual workflow: auditing fifty rows after an
@@ -3440,7 +3494,12 @@ export function TransactionsClient({
         {/* No "Nothing matches these filters" check here any more -- that empty state is now
             hoisted above this whole card/table split (shared, not duplicated across two hidden
             trees), and this branch only ever renders once page.rows.length > 0 already. */}
-        <CardFooter>{pageFooterWords(page)}</CardFooter>
+        <CardFooter>
+          <span className="flex flex-wrap items-center gap-3">
+            <span>{pageFooterWords(page)}</span>
+            {rowPager(page, currentQuery)}
+          </span>
+        </CardFooter>
       </Card>
       </div>
       </>

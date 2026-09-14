@@ -23,6 +23,17 @@ All notable changes to Budget Tracker are recorded here.
 
 ### Added
 
+- **Transactions has Previous page / Next page buttons.** The footer has counted pages for
+  several releases — "Page 1 of 6" — while the list itself carried nothing to press, so every page
+  after the first was reachable only by typing `?page=` into the address bar. The grouped view has
+  had its own pager all along; the flat list now has the same one, in all three layouts (review
+  mode, the phone card list, the desktop table), and it keeps whatever filters are already on.
+- **Category pickers can be typed into.** Bulk categorize, the recategorize dialog and each part
+  of a split are now a filter-as-you-type box over the same grouped list: typing matches anywhere
+  in a category's name, not only at the start, so "Home Insurance" is reachable without knowing
+  which branch it hangs from. A matched child keeps its parent on screen for context, and a
+  matched parent keeps its children. The per-row picker inside the table is deliberately still a
+  plain select — it changes one row in place and saves on change.
 - **Drop a statement straight onto the Import page**, or click to choose one as before. The same
   control is one component, so the drop target is a real file input underneath: keyboard and
   screen-reader users reach it exactly as they did. Two files at once, or a file the page cannot
