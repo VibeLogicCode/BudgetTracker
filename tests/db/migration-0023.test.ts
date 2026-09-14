@@ -50,7 +50,7 @@ describe('drizzle/0023_summary_frequency.sql', () => {
     expect(row.summary_frequency).toBe('weekly');
   });
 
-  it('records itself in the journal, immediately after 0022, and is the newest', () => {
+  it('records itself in the journal, immediately after 0022', () => {
     const journal = JSON.parse(fs.readFileSync(path.join(root, 'drizzle/meta/_journal.json'), 'utf8')) as {
       entries: { idx: number; tag: string }[];
     };
@@ -58,7 +58,8 @@ describe('drizzle/0023_summary_frequency.sql', () => {
     expect(entry).toMatchObject({ idx: 23, tag: '0023_summary_frequency' });
     const idxs = journal.entries.map((e) => e.idx).sort((a, b) => a - b);
     expect(idxs.indexOf(23)).toBe(idxs.indexOf(22) + 1);
-    // This suite now owns the "I am the newest" claim, handed on from 0022's.
-    expect(Math.max(...idxs)).toBe(23);
+    // The "I am the newest" claim moved on to tests/db/migration-0024.test.ts, which is where it
+    // lives now -- the same hand-off 0022 made to this file. Asserting it here as well would mean
+    // two files to edit for every migration, and the one that is wrong is silent.
   });
 });

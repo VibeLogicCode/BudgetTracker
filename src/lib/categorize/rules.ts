@@ -1,4 +1,4 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { merchantRules, users } from '@/db/schema';
 import { wordBoundaryTokens } from '@/lib/categorize/normalize';
@@ -340,6 +340,12 @@ export function exactRuleOwner(
         eq(merchantRules.pattern, pattern),
         eq(merchantRules.matchType, 'exact'),
         eq(merchantRules.ruleKind, kind),
+        // 2026-09-13 (migration 0024): the UNBOUNDED rule, which is the one every caller of this
+        // function is asking about -- a teach or a correction writes the merchant-wide rule. A
+        // bounded rule for the same merchant is a different rule with its own owner, and reading
+        // its owner here would refuse a write nobody was making.
+        isNull(merchantRules.amountMinCents),
+        isNull(merchantRules.amountMaxCents),
       ),
     )
     .get();
@@ -442,6 +448,14 @@ export function upsertRuleFromCorrection(input: {
   // site. drizzle/0016_rule_hygiene.sql is the one-time catch-up for rows already in the table.
   const pattern = input.pattern.trim().toUpperCase();
 
+  /**
+   * 2026-09-13 (migration 0024). A rule's identity is now (pattern, match_type, rule_kind, bounds)
+   * -- two rules for one merchant can coexist when their amount ranges differ, which is the whole
+   * point of that migration. Every caller of THIS function writes an unbounded rule (nothing here
+   * takes bounds yet), so the identity it resolves is explicitly the UNBOUNDED row: without the two
+   * isNull clauses, a household with a bounded "INTACT $125-$155 -> Auto" rule would have their
+   * merchant-wide correction silently overwrite it.
+   */
   const existing = db
     .select({ id: merchantRules.id, createdBy: merchantRules.createdBy, ownerName: users.name })
     .from(merchantRules)
@@ -451,6 +465,8 @@ export function upsertRuleFromCorrection(input: {
         eq(merchantRules.pattern, pattern),
         eq(merchantRules.matchType, input.matchType),
         eq(merchantRules.ruleKind, input.ruleKind),
+        isNull(merchantRules.amountMinCents),
+        isNull(merchantRules.amountMaxCents),
       ),
     )
     .get();
@@ -463,6 +479,29 @@ export function upsertRuleFromCorrection(input: {
   ) {
     // Nothing is written. The caller turns this into a plain sentence for the person who tried.
     return { ok: false, reason: 'owned_by_another', ownerName: existing.ownerName ?? 'Another member' };
+  }
+
+  /**
+   * SELECT-then-write rather than ON CONFLICT (2026-09-13, migration 0024).
+   *
+   * merchant_rules_pattern_uq is now an EXPRESSION index -- it names coalesce(amount_min_cents,
+   * -1) and coalesce(amount_max_cents, -1) so that two unbounded rules still collide while two
+   * differently-bounded ones do not. SQLite requires an ON CONFLICT target to match a unique index
+   * exactly, expressions included, and drizzle's `target` takes columns; the old three-column
+   * target stopped matching any index at all and every write through here failed with "ON CONFLICT
+   * clause does not match any PRIMARY KEY or UNIQUE constraint".
+   *
+   * `existing` above already resolves the same row this would have conflicted with, and already
+   * runs the ownership refusal against it, so branching on it costs nothing extra. The update set
+   * and the insert values are unchanged, including which columns are deliberately absent from the
+   * update: createdBy (ruling R4) and pack_origin_key (see its schema docblock).
+   */
+  if (existing !== undefined) {
+    db.update(merchantRules)
+      .set({ categoryId: input.categoryId, renameTo, lastModifiedBy: input.createdBy, packSource, packVersion, installedAt })
+      .where(eq(merchantRules.id, existing.id))
+      .run();
+    return { ok: true, ruleId: existing.id };
   }
 
   db.insert(merchantRules)
@@ -486,15 +525,6 @@ export function upsertRuleFromCorrection(input: {
       packVersion,
       installedAt,
     })
-    .onConflictDoUpdate({
-      target: [merchantRules.pattern, merchantRules.matchType, merchantRules.ruleKind],
-      // createdBy is DELIBERATELY absent from this set object -- that is the whole of ruling R4.
-      // packSource/packVersion/installedAt ARE present, and that is deliberate too -- see this
-      // function's `pack` parameter docblock above for why an update through this function must
-      // write whatever provenance the caller passes (null for every non-pack caller), not
-      // preserve whatever was there before.
-      set: { categoryId: input.categoryId, renameTo, lastModifiedBy: input.createdBy, packSource, packVersion, installedAt },
-    })
     .run();
 
   const row = db
@@ -505,6 +535,8 @@ export function upsertRuleFromCorrection(input: {
         eq(merchantRules.pattern, pattern),
         eq(merchantRules.matchType, input.matchType),
         eq(merchantRules.ruleKind, input.ruleKind),
+        isNull(merchantRules.amountMinCents),
+        isNull(merchantRules.amountMaxCents),
       ),
     )
     .get();
@@ -518,7 +550,19 @@ export function deleteRule(id: number): void {
 export function deleteExactRule(pattern: string, kind: RuleKind): number {
   const result = getDb()
     .delete(merchantRules)
-    .where(and(eq(merchantRules.pattern, pattern), eq(merchantRules.matchType, 'exact'), eq(merchantRules.ruleKind, kind)))
+    .where(
+      and(
+        eq(merchantRules.pattern, pattern),
+        eq(merchantRules.matchType, 'exact'),
+        eq(merchantRules.ruleKind, kind),
+        // 2026-09-13 (migration 0024): deletes the merchant-wide rule ONLY. Without these two
+        // clauses, clearing a category for a merchant would silently take every amount-specific
+        // rule for it as well -- the household would lose the "$125-$155 is Auto" rule by
+        // correcting an unrelated charge from the same insurer.
+        isNull(merchantRules.amountMinCents),
+        isNull(merchantRules.amountMaxCents),
+      ),
+    )
     .run();
   return Number(result.changes ?? 0);
 }

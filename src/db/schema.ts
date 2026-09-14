@@ -407,8 +407,41 @@ export const merchantRules = sqliteTable(
      * drizzle/0018_pack_origin_key.sql's header for the defect this exists to fix.
      */
     packOriginKey: text('pack_origin_key'),
+    /**
+     * 2026-09-13, added by drizzle/0024_rule_bounds_and_attribution.sql. Declared last -- same
+     * ALTER-TABLE-ADD-COLUMN convention as the columns above.
+     *
+     * WHAT AMOUNT THIS RULE IS ABOUT, compared against abs(transactions.amount_cents) so a refund
+     * of a premium files with the premium. Both NULL means "this rule is about the merchant,
+     * whatever the amount", which is every row that existed before the migration.
+     *
+     * A RANGE rather than an exact amount or a tolerance: exact cents stops matching at the first
+     * renewal, and a tolerance is a centre plus a percentage whose effective range has to be
+     * recomputed to be read. The authoring dialog still asks in tolerance terms ("about $130") and
+     * stores what that computes to.
+     *
+     * The owner's case: one insurer, two policies, different premiums -- a merchant-only rule
+     * cannot tell them apart, so whichever category was saved last claimed every charge.
+     */
+    amountMinCents: integer('amount_min_cents'),
+    amountMaxCents: integer('amount_max_cents'),
+    /**
+     * 2026-09-13, same migration. The person an 'attribution' rule assigns a transaction to.
+     * NULL means HOUSEHOLD -- the same thing NULL already means in
+     * transactions.attributed_user_id, so there is no third state to tell apart. ON DELETE SET
+     * NULL: removing a person must not delete the household's rules, and a rule that falls back to
+     * Household is a safe resting state.
+     */
+    attributedUserId: integer('attributed_user_id').references(() => users.id, { onDelete: 'set null' }),
   },
-  (t) => [uniqueIndex('merchant_rules_pattern_uq').on(t.pattern, t.matchType, t.ruleKind)],
+  // NO uniqueIndex() declaration for merchant_rules_pattern_uq, deliberately. The real index is an
+  // EXPRESSION index -- (pattern, match_type, rule_kind, coalesce(amount_min_cents, -1),
+  // coalesce(amount_max_cents, -1)) -- which drizzle cannot express, and a weaker three-column
+  // declaration under the same name is worse than none, because a future drizzle-kit push could
+  // use it to replace the real one. Same reasoning, and same shape, as loan_matcher_rules_uq
+  // below. The index is created by drizzle/0024_rule_bounds_and_attribution.sql, which explains
+  // why coalesce is load-bearing, and tests/db/migration-0024.test.ts reads the live index SQL out
+  // of sqlite_master so a regression is a red test rather than a silent downgrade.
 );
 
 /**
