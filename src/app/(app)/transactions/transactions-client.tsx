@@ -924,6 +924,11 @@ export function TransactionsClient({
     // submit (groupConfirmDialog/groupRecategorizeDialog's own onSubmit), so the top banner is the
     // only place either one's result is ever seen, exactly like the two v1.25.0 bulk dialogs above.
     confirmGroupState.message ?? recatGroupState.message ??
+    // 2026-09-14, the owner on v1.38.0: "assign to bill works but when i assign to bill the UI
+    // menu doesnt close, transaction gets applied and no feedback to user that its done." Both
+    // actions shipped wired to no banner at all, so each one landed its write in silence. They sit
+    // with assignState/unassignState: one-off actions whose result is only ever seen here.
+    billState.message ?? deleteState.message ??
     acceptState.message ?? acceptAllState.message ?? rowTransferState.message;
   const error =
     newLoanState.error ?? applyAllState.error ??
@@ -931,6 +936,7 @@ export function TransactionsClient({
     renameState.error ?? assignState.error ?? unassignState.error ?? splitState.error ?? noteState.error ??
     bulkLoanState.error ?? bulkNoteState.error ??
     confirmGroupState.error ?? recatGroupState.error ??
+    billState.error ?? deleteState.error ??
     acceptState.error ?? acceptAllState.error ?? rowTransferState.error;
 
   // Review round: unlike renaming/noting/splitting (which close their own form onSubmit right
@@ -958,6 +964,18 @@ export function TransactionsClient({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assignState]);
+
+  // 2026-09-14. The bill editor closes on SUCCESS ONLY, the same idiom as the two loan effects
+  // above and for the same reason: a refusal ("that installment is already paid", "nothing left
+  // unpaid on that bill") must leave the bill and installment somebody just picked on screen to
+  // correct, with the reason beside them, rather than discarding the choice and sending them back
+  // through the row menu to make it again.
+  useEffect(() => {
+    if (billState.message && !billState.error) {
+      setAssignBill(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [billState]);
 
   // Same idiom as newLoan above: the "Apply a category to all N…" editor stays open on a
   // refusal (a rule someone else in the household owns) so its own inline error is visible

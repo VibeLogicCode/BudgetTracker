@@ -60,7 +60,7 @@ export default async function MerchantRulesPage({
   const redundantByRuleId = new Map(redundant.map((r) => [r.ruleId, r]));
   const presetCount = allRules.filter((rule) => rule.packSource !== null).length;
 
-  const kindCounts: Record<RuleKind, number> = { category: 0, transfer: 0, rename: 0, not_transfer: 0 };
+  const kindCounts: Record<RuleKind, number> = { category: 0, transfer: 0, rename: 0, not_transfer: 0, attribution: 0 };
   for (const rule of allRules) kindCounts[rule.ruleKind] += 1;
 
   let filtered = allRules;

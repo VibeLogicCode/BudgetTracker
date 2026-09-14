@@ -712,7 +712,6 @@ export function ImportClient({
                 label="Choose a file"
                 hint="A CSV export, or an OFX/QFX file from your bank&rsquo;s &ldquo;download for Quicken&rdquo; option."
                 required
-                showChosenName={false}
                 onFile={(file) => {
                   setHasFile(true);
                   void detectFrom(file);

@@ -574,6 +574,15 @@ function ruleAttributor(
  */
 function eligibleForRuleReapply(rule: MerchantRuleRecord, scope: RuleScope = {}): number[] {
   if (rule.ruleKind === 'rename') return [];
+  // 2026-09-13. The attribution kind CANNOT go through eligibleForRerun: ELIGIBLE is entirely
+  // about categories (an uncategorized or Bayes-guessed row, no splits), and a row whose category
+  // a person confirmed by hand is still a row whose PERSON this rule may legitimately set. Using
+  // it here would silently scope "Apply now" to the household's undecided rows only.
+  //
+  // ruleImpactIds is the right set and is already the forward-looking one -- the rows this rule
+  // would CHANGE -- so the number the dialog previews is the number the write then makes, and a
+  // second pass over the same rule honestly reports nothing left to do.
+  if (rule.ruleKind === 'attribution') return ruleImpactIds(rule.id, scope);
   const ids = eligibleForRerun(scope);
   if (ids.length === 0) return [];
   // v1.31.0 (R-06): NO second eligibility filter here. These ids came out of eligibleForRerun,
@@ -591,6 +600,14 @@ function eligibleForRuleReapply(rule: MerchantRuleRecord, scope: RuleScope = {})
 export function previewRuleReapply(ruleId: number, scope: RuleScope = {}): RerunPreview {
   const rule = listRules().find((r) => r.id === ruleId);
   if (!rule) return { eligible: 0, wouldChange: 0 };
+  // 2026-09-13. previewRerun re-simulates CATEGORIZATION over the ids it is given, which says
+  // nothing about a person and would report wouldChange: 0 for every attribution rule. The ids
+  // themselves already are the rows that would change (eligibleForRuleReapply's own note), so for
+  // this kind the two numbers are the same number and are stated as such.
+  if (rule.ruleKind === 'attribution') {
+    const ids = eligibleForRuleReapply(rule, scope);
+    return { eligible: ids.length, wouldChange: ids.length };
+  }
   return previewRerun(eligibleForRuleReapply(rule, scope));
 }
 
@@ -603,7 +620,43 @@ export function previewRuleReapply(ruleId: number, scope: RuleScope = {}): Rerun
 export function applyRuleNow(ruleId: number, scope: RuleScope = {}): EngineResult {
   const rule = listRules().find((r) => r.id === ruleId);
   if (!rule) return { processed: 0, categorized: 0, transfers: 0, skipped: 0, changed: 0 };
+  if (rule.ruleKind === 'attribution') return applyAttributionRule(rule, scope);
   return runEngine(eligibleForRuleReapply(rule, scope));
+}
+
+/**
+ * 2026-09-13. The second of the THREE deliberate points at which an attribution rule applies
+ * (ruling P10): the rules page's "Apply now". The other two are the import commit and the
+ * authoring dialog's own pass.
+ *
+ * DELIBERATELY NOT runEngine, and this is the crux of the whole kind. runEngine's safety rests on
+ * ELIGIBLE, which protects a human decision through categorization_source. attributed_user_id has
+ * no source column, so a re-run could not tell a person somebody chose by hand from the account
+ * owner the importer fell back to -- it would overwrite both. Routing this through runEngine would
+ * therefore make every "Run rules" click silently re-decide who every charge belongs to, which is
+ * the opposite of the owner's "they dont have to be automatic".
+ *
+ * This pass DOES overwrite a hand-set person, and that is correct here rather than inconsistent:
+ * somebody pressed a button next to a rule that names a person, having been shown the count first.
+ * applyCategoryToMatching has the same shape and the same justification.
+ */
+function applyAttributionRule(rule: MerchantRuleRecord, scope: RuleScope): EngineResult {
+  const ids = eligibleForRuleReapply(rule, scope);
+  if (ids.length === 0) return { processed: 0, categorized: 0, transfers: 0, skipped: 0, changed: 0 };
+  const at = nowIso(new Date());
+  let changed = 0;
+  getDb().transaction((tx) => {
+    for (let offset = 0; offset < ids.length; offset += ID_CHUNK) {
+      // Chunked for SQLite's bound-parameter ceiling, the same way every other bulk write here is.
+      const chunk = ids.slice(offset, offset + ID_CHUNK);
+      changed += tx
+        .update(transactions)
+        .set({ attributedUserId: rule.attributedUserId, updatedAt: at })
+        .where(inArray(transactions.id, chunk))
+        .run().changes;
+    }
+  });
+  return { processed: ids.length, categorized: 0, transfers: 0, skipped: 0, changed };
 }
 
 /**
@@ -729,6 +782,38 @@ export function ruleImpactCounts(ctx: CategorizeContext = buildContext()): Map<n
     bump(attributed(row.normalizedMerchant, null), row.c);
   }
 
+  // attribution: non-transfer rows whose STORED person differs from what the matching rule would
+  // set -- the forward-looking set, exactly as for the transfer kind, and for the same reason (see
+  // ruleImpactIds). Grouped by (merchant, person) so one verdict answers a whole group, plus the
+  // amount when any bounded rule exists. Skipped entirely when the household has no attribution
+  // rule at all, so nothing new is read on the overwhelmingly common path.
+  const attributionRules = ctx.rules.filter((r) => r.ruleKind === 'attribution');
+  if (attributionRules.length > 0) {
+    const byPerson = db
+      .select({
+        normalizedMerchant: transactions.normalizedMerchant,
+        amountCents: amountColumn,
+        attributedUserId: transactions.attributedUserId,
+        c: sql<number>`count(*)`,
+      })
+      .from(transactions)
+      .where(eq(transactions.isTransfer, false))
+      .groupBy(
+        ...(amountMatters
+          ? [transactions.normalizedMerchant, transactions.amountCents, transactions.attributedUserId]
+          : [transactions.normalizedMerchant, transactions.attributedUserId]),
+      )
+      .all();
+    const attributedPerson = ruleAttributor('attribution', ctx);
+    const targetOf = new Map(attributionRules.map((r) => [r.id, r.attributedUserId]));
+    for (const row of byPerson) {
+      const ruleId = attributedPerson(row.normalizedMerchant, row.amountCents);
+      if (ruleId === null) continue;
+      if (targetOf.get(ruleId) === row.attributedUserId) continue;
+      bump(ruleId, row.c);
+    }
+  }
+
   // rename: rows already carrying display_source = 'rename', attributed to whichever rename rule
   // currently resolves for their merchant. A rename cannot carry a window either.
   const renamed = db
@@ -797,12 +882,21 @@ export function ruleImpactIds(ruleId: number, scope: RuleScope = {}, ctx: Catego
       // 2026-09-13 (migration 0024): selected so attributedToRule can ask the amount question off
       // a fetched row, rather than this list disagreeing with what an import would really do.
       amountCents: transactions.amountCents,
+      /** 2026-09-13: what the row's person IS, so the attribution branch below can report what
+       *  applying the rule would CHANGE rather than every row it merely reaches. */
+      attributedUserId: transactions.attributedUserId,
     })
     .from(transactions)
     .where(and(candidateRowsFor(rule.ruleKind), ...bounds))
     .orderBy(asc(transactions.id))
     .all()
     .filter(attributedToRule(rule, ctx))
+    // 2026-09-13. FORWARD-LOOKING, the transfer kind's own definition of "Affects": the rows this
+    // rule would change if applied. A row already on the rule's person is not affected by it --
+    // counting it would make "Apply now" promise N and change fewer, and would leave the column
+    // unable to tell "this rule is doing something" from "this rule agrees with what is already
+    // there", which is the one question that column exists to answer.
+    .filter((row) => rule.ruleKind !== 'attribution' || row.attributedUserId !== rule.attributedUserId)
     .map((row) => row.id);
 }
 
@@ -819,6 +913,11 @@ export function ruleImpactIds(ruleId: number, scope: RuleScope = {}, ctx: Catego
  * transactionHasSplits' docblock carries the long version of this warning.
  */
 function candidateRowsFor(kind: RuleKind) {
+  // 2026-09-13: a transfer belongs to nobody in particular -- it is money moving between the
+  // household's own accounts, excluded from every report and budget -- so naming a person on one
+  // would be a claim no screen reads. Every other row is a candidate; whether the rule would
+  // actually CHANGE it is attributedToRule's question, not this one's.
+  if (kind === 'attribution') return eq(transactions.isTransfer, false);
   if (kind === 'transfer') return eq(transactions.isTransfer, false);
   if (kind === 'not_transfer') return eq(transactions.isTransfer, true);
   if (kind === 'rename') return eq(transactions.displaySource, 'rename');
@@ -873,6 +972,12 @@ export function ruleClearIds(ruleId: number, scope: RuleScope = {}, ctx: Categor
   const rule = ctx.rules.find((r) => r.id === ruleId);
   if (!rule) return [];
   if (rule.ruleKind === 'not_transfer') return [];
+  // 2026-09-13 (ruling P12). For a category rule "clear" means UNCATEGORIZED -- a real undecided
+  // state Needs review picks back up. NULL attribution is not undecided; it IS Household, so
+  // clearing would not revert anything, it would assert something. And nothing records what the
+  // row carried before (the same schema fact clearRuleFromTransactions states about categories),
+  // so "put it back" is not information this application has. Delete-only for this kind.
+  if (rule.ruleKind === 'attribution') return [];
   // v1.31.0 (R-08). THIS LINE is where "a rename revert ignores the date range" is decided, and as
   // of this release it is the only place that decides it. previewRuleClearAction and
   // deleteRuleAndClearAction each used to drop the scope themselves before calling in here, so one
@@ -953,6 +1058,9 @@ export function clearRuleFromTransactions(input: { ruleId: number; scope?: RuleS
   const rule = ctx.rules.find((r) => r.id === input.ruleId);
   if (!rule) return { rowsCleared: 0 };
   if (rule.ruleKind === 'not_transfer') return { rowsCleared: 0 };
+  // Ruling P12 again, guarded here as well as in ruleClearIds -- a stale form or a second session
+  // must not reach a write this kind does not have.
+  if (rule.ruleKind === 'attribution') return { rowsCleared: 0 };
   if (rule.ruleKind === 'rename') {
     return { rowsCleared: deleteRenameRule({ pattern: rule.pattern, matchType: rule.matchType }).rowsCleared };
   }

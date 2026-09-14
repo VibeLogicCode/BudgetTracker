@@ -69,10 +69,12 @@ export interface FileDropProps {
   /** Called with whatever was accepted, from a drop or from the picker alike. */
   onFile?: (file: File) => void;
   /**
-   * Whether to echo the chosen filename under the control. False where the browser's own file
-   * input already shows it -- the import page reported it twice otherwise (owner screenshot,
-   * 2026-09-13). A drop still needs it, because a dropped file's name does not always reach the
-   * input's own label.
+   * Whether to echo the chosen filename under the control. Default true, and there is now no
+   * reason for any caller to turn it off: the native input is visually hidden (see the render
+   * below), so this is the ONLY place a filename appears. It was added when the browser's own
+   * widget printed the name as well and the import page showed it twice (owner screenshot,
+   * 2026-09-13); the prop survives because a caller that shows the name in its own summary line
+   * may still legitimately not want it repeated here.
    */
   showChosenName?: boolean;
 }
@@ -162,13 +164,24 @@ export function FileDrop({
           if (depth.current === 0) setOver(false);
         }}
         onDrop={onDrop}
-        className={`flex flex-col items-center gap-2 rounded-lg border border-dashed px-4 py-6 text-center transition-colors ${
+        // focus-within, because the input that takes focus is visually hidden: without this a
+        // keyboard user tabbing onto the control would see nothing move at all.
+        className={`flex flex-col items-center gap-2 rounded-lg border border-dashed px-4 py-6 text-center transition-colors focus-within:border-accent ${
           over ? 'border-accent bg-surface-2' : 'border-line'
         } ${disabled ? 'opacity-60' : ''}`}
       >
-        <label htmlFor={inputId} className="text-sm font-medium text-ink">
-          {label}
-        </label>
+        {/*
+          VISUALLY HIDDEN, NOT HIDDEN. `sr-only` keeps the input in the tab order, keeps it the
+          element a screen reader announces, and keeps its <label> association intact -- `hidden`,
+          `display: none` or `disabled` would each take the keyboard path away, and the keyboard
+          path is the real one this component only decorates.
+
+          It is hidden because a file input's button is drawn by the operating system and cannot be
+          styled at all: on this app's dark surface it renders as a pale grey "Choose File / No
+          file chosen" rectangle that matches nothing around it, and it prints its own filename
+          beside our own. The owner reported exactly that, twice (2026-09-13 and again on v1.38.0).
+          The label below is the button instead.
+        */}
         <input
           id={inputId}
           ref={inputRef}
@@ -177,7 +190,7 @@ export function FileDrop({
           accept={accept}
           required={required}
           disabled={disabled}
-          className="text-sm"
+          className="sr-only"
           onChange={(event) => {
             const file = event.target.files?.[0];
             if (file === undefined) {
@@ -187,8 +200,20 @@ export function FileDrop({
             take(file);
           }}
         />
+        {/* The input's own <label>, styled as the button -- so the click target, the accessible
+            name and the visible control are one element rather than three that have to agree. */}
+        <label
+          htmlFor={inputId}
+          className={`btn btn--secondary btn--sm ${disabled ? 'pointer-events-none' : 'cursor-pointer'}`}
+        >
+          {label}
+        </label>
         <p className="text-xs text-muted">or drop it here</p>
-        {chosen === null || !showChosenName ? null : <p className="text-sm text-ink">{chosen}</p>}
+        {chosen === null || !showChosenName ? null : (
+          <p className="text-sm text-ink" data-testid="file-drop-chosen">
+            {chosen}
+          </p>
+        )}
         {refusal === null ? null : (
           <p role="status" className="text-sm text-danger-text">
             {refusal}

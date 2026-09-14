@@ -60,7 +60,7 @@ export async function saveRuleAction(_prev: RuleActionState, formData: FormData)
     .object({
       pattern: z.string().trim().min(1).max(200),
       matchType: z.enum(['exact', 'contains', 'word']),
-      ruleKind: z.enum(['category', 'transfer', 'rename', 'not_transfer']),
+      ruleKind: z.enum(['category', 'transfer', 'rename', 'not_transfer', 'attribution']),
       /**
        * v1.31.0 (review finding R-13, P3). Was `z.string()`, and the value was then handed to a
        * bare `Number(...)`. '' means "(none)" and is normalized to null before zod sees it
@@ -154,8 +154,14 @@ export async function saveRuleAction(_prev: RuleActionState, formData: FormData)
   // nothing, and the whole failure was that nothing was explained. matchRule skips such a row too
   // (ruleOutcomeMissing, src/lib/categorize/rules.ts) -- this is the boundary that stops one being
   // saved in the first place.
+  // 'attribution' joins the two transfer kinds here: its outcome is a PERSON, so a category on
+  // such a row would be a second outcome -- the shape ruling P8 rejected.
   const categoryId =
-    parsed.data.ruleKind === 'transfer' || parsed.data.ruleKind === 'not_transfer' ? null : parsed.data.categoryId;
+    parsed.data.ruleKind === 'transfer' ||
+    parsed.data.ruleKind === 'not_transfer' ||
+    parsed.data.ruleKind === 'attribution'
+      ? null
+      : parsed.data.categoryId;
   if (parsed.data.ruleKind === 'category' && categoryId === null) {
     return { error: CATEGORY_RULE_NEEDS_CATEGORY_ERROR };
   }
@@ -344,6 +350,12 @@ export async function deleteRuleAndClearAction(_prev: RuleActionState, formData:
     // Re-flagging rows AS transfers would move money out of every report -- see
     // clearRuleFromTransactions' docblock. Delete-only for this kind.
     return { error: 'A "not a transfer" rule can only be deleted -- clearing it would re-flag those transactions as transfers.' };
+  }
+  if (target.ruleKind === 'attribution') {
+    // Ruling P12, guarded here for the same reason as the line above. Blank is not "undecided" for
+    // a person -- it is Household -- so clearing would assert something rather than revert
+    // anything, and nothing records who the row was on before. Delete-only for this kind.
+    return { error: 'A person rule can only be deleted -- clearing it would put those transactions on the household rather than back the way they were.' };
   }
 
   // R-08: passed through unchanged, for the reason previewRuleClearAction states -- the engine

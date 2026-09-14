@@ -47,6 +47,10 @@ const KIND_LABEL: Record<RuleKind, string> = {
   transfer: 'Transfer',
   rename: 'Rename',
   not_transfer: 'Not a transfer',
+  // "Person" rather than "Attribution": every other screen in the app calls this column a person
+  // (the row's Person select, the Household/unattributed filter), and a kind chip is the wrong
+  // place to introduce a second word for it.
+  attribution: 'Person',
 };
 
 /** Reused across the search box, the four kind chips and the redundant chip -- every filter

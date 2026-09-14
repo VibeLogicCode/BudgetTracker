@@ -161,6 +161,49 @@ describe('rules pack privacy', () => {
     expect(previewRulesPackExport({ includeTransferRules: true }).some((r) => r.ruleKind === 'not_transfer')).toBe(false);
   });
 
+  /**
+   * 2026-09-13 (ruling P13). Two new things a pack must never carry, for the two reasons packs.ts
+   * already gives about not_transfer and about renames.
+   *
+   * A PERSON is one install's own wiring: user ids mean nothing anywhere else, and a rule naming
+   * "Sam" cannot be honoured by a household that has no Sam. A WINDOW is the household's own
+   * statement figures -- what they pay for insurance, to the dollar -- which is exactly the
+   * reasoning behind the rename opt-in one level up.
+   */
+  it('never exports an attribution rule, in either direction', () => {
+    const { db, userId } = setup();
+    const person = insertTestUser(db, { name: 'Sam', role: 'member' });
+    upsertRuleFromCorrection({
+      pattern: 'SAMS GYM', matchType: 'exact', ruleKind: 'attribution', categoryId: null,
+      attributedUserId: person, createdBy: userId, actorRole: 'admin',
+    });
+    expect(exportRulesPack({ includeTransferRules: true, includeRenameRules: true }).rules.some((r) => r.pattern === 'SAMS GYM')).toBe(false);
+    expect(previewRulesPackExport({ includeTransferRules: true, includeRenameRules: true }).some((r) => r.ruleKind === 'attribution')).toBe(false);
+  });
+
+  it('skips an attribution entry in an incoming pack, and counts it rather than failing the file', () => {
+    setup();
+    const pack = {
+      ...exportRulesPack(),
+      rules: [{ pattern: 'SAMS GYM', match_type: 'exact', rule_kind: 'attribution', category: null, rename_to: null }],
+    };
+    const preview = previewRulesPackImport(parseRulesPack(pack));
+    expect(preview.skippedRules).toBe(1);
+    expect(preview.skipped[0].reason).toMatch(/person|install/i);
+    expect(listRules().some((rule) => rule.ruleKind === 'attribution')).toBe(false);
+  });
+
+  it('never exports a rule that names an amount, because that is the household own figures', () => {
+    const { db, userId } = setup();
+    upsertRuleFromCorrection({
+      pattern: 'ACME INSURANCE', matchType: 'exact', ruleKind: 'category',
+      categoryId: categoryIdByName(db, 'Car Insurance'),
+      amountMinCents: 12500, amountMaxCents: 15500, createdBy: userId, actorRole: 'admin',
+    });
+    expect(exportRulesPack().rules.some((r) => r.pattern === 'ACME INSURANCE')).toBe(false);
+    expect(previewRulesPackExport().some((r) => r.pattern === 'ACME INSURANCE')).toBe(false);
+  });
+
   // Controller ruling (a) — revised 2026-08-31: rename is importable now (only export keeps the
   // opt-in). Importing a rename creates the rule -- it is never skipped.
   it('imports a rename rule entry rather than skipping it', () => {

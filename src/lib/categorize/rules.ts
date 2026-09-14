@@ -38,7 +38,32 @@ export type MatchType = 'exact' | 'contains' | 'word';
  * a 'contains' one, and matchRule honours it. A pack cannot -- IMPORTABLE_RULE_KINDS (packs.ts)
  * excludes this kind in both directions, because it describes one install's own account wiring.
  */
-export type RuleKind = 'category' | 'transfer' | 'rename' | 'not_transfer';
+export type RuleKind = 'category' | 'transfer' | 'rename' | 'not_transfer' | 'attribution';
+
+/**
+ * 2026-09-13. The owner: "think about person too so its not just on vendor rule, even sets
+ * household, or individual person."
+ *
+ * WHY A KIND AND NOT A COLUMN ON A CATEGORY RULE. A person column on the category kind would let
+ * one rule say both things -- and then a person-ONLY rule is a category rule with a NULL category,
+ * which is precisely the R-02 defect ruleOutcomeMissing exists to refuse: it wins its merchant,
+ * declines to file it, and shadows the shorter rule that would have. findRedundantRules'
+ * kind-specific "identical outcome" test, the pack exporter and the rules table's outcome column
+ * would each have to learn a second outcome on one row as well. A kind is what this codebase
+ * already uses for "a different thing a rule can say", and merchant_rules_pattern_uq includes
+ * rule_kind, so a category rule and an attribution rule on one pattern already coexist. The
+ * authoring dialog creates up to two rules and says so.
+ *
+ * NULL attributed_user_id on this kind means HOUSEHOLD -- the same thing NULL already means in
+ * transactions.attributed_user_id, so there is no third state to tell apart. The value of such a
+ * rule is that it STOPS the import-time fallback chain (the per-card map, then the account owner)
+ * putting the row on somebody.
+ *
+ * NEVER APPLIED BY runEngine (ruling P10): ELIGIBLE protects a human category decision through
+ * categorization_source, and attributed_user_id has no source column, so a re-run could not tell a
+ * hand-set person from the owner fallback. It applies at three deliberate points instead -- import
+ * commit, the authoring dialog's own pass, and the rules page's "Apply now".
+ */
 
 /**
  * v1.25.0 (item 16). The ONLY two kinds a 'word' rule may carry, and this is a deliberate
@@ -89,7 +114,7 @@ export function matchTypeAllowedForKind(matchType: MatchType, ruleKind: RuleKind
 
 /** One wording, one place (MUST-19.11) -- the form and the pack importer both say exactly this. */
 export const WORD_MATCH_KIND_ERROR =
-  'Whole word applies to category and rename rules only. A transfer or not-a-transfer rule is about one description you have actually seen, so it takes Exact or Contains.';
+  'Whole word applies to category and rename rules only. A transfer, not-a-transfer or person rule is about one description you have actually seen, so it takes Exact or Contains.';
 
 /**
  * 2026-09-13 (migration 0024). The only kinds a rule may carry an AMOUNT WINDOW on, and like
@@ -105,7 +130,7 @@ export const WORD_MATCH_KIND_ERROR =
  * that reached the table by some other route -- a hand-edited database, a backup from a build that
  * allowed it -- still cannot fire on a comparison its kind has no business making.
  */
-export const AMOUNT_BOUND_KINDS: readonly RuleKind[] = ['category'];
+export const AMOUNT_BOUND_KINDS: readonly RuleKind[] = ['category', 'attribution'];
 
 export function amountBoundsAllowedForKind(ruleKind: RuleKind): boolean {
   return AMOUNT_BOUND_KINDS.includes(ruleKind);
@@ -113,7 +138,7 @@ export function amountBoundsAllowedForKind(ruleKind: RuleKind): boolean {
 
 /** One wording, one place (MUST-19.11) -- the form, the dialog and the pack importer all say this. */
 export const AMOUNT_BOUND_KIND_ERROR =
-  'An amount range applies to category rules only. A transfer, not-a-transfer or rename rule is about the description and not about what the charge came to.';
+  'An amount range applies to category and person rules only. A transfer, not-a-transfer or rename rule is about the description and not about what the charge came to.';
 
 /** One wording, one place (MUST-19.11). The table refuses this too (drizzle/0024's triggers); this
  *  is the sentence a person gets instead of a constraint failure. */
@@ -458,6 +483,13 @@ export function upsertRuleFromCorrection(input: {
    */
   amountMinCents?: number | null;
   amountMaxCents?: number | null;
+  /**
+   * 2026-09-13 (migration 0024). The person an 'attribution' rule names, where NULL means
+   * Household. Unlike the bounds this is an OUTCOME, not part of the key, so an update through
+   * this function sets it the way it sets categoryId. Refused outright on every other kind: a
+   * second outcome on a category row is the shape ruling P8 rejected.
+   */
+  attributedUserId?: number | null;
   createdBy: number | null;
   /** The ACTOR's role, not the rule's. An admin may write over anyone's rule. */
   actorRole: 'admin' | 'member';
@@ -514,6 +546,14 @@ export function upsertRuleFromCorrection(input: {
   if (boundsGiven && !amountBoundsAllowedForKind(input.ruleKind)) {
     throw new Error(`${AMOUNT_BOUND_KIND_ERROR} (rule_kind "${input.ruleKind}")`);
   }
+  // Same shape and argument again: a programmer error, thrown rather than returned. A person on a
+  // category row would be a SECOND OUTCOME on one rule (ruling P8) -- two things findRedundantRules,
+  // the pack exporter and the rules table would each have to learn to compare.
+  if (input.attributedUserId !== undefined && input.attributedUserId !== null && input.ruleKind !== 'attribution') {
+    throw new Error(`Only an attribution rule names a person (rule_kind "${input.ruleKind}").`);
+  }
+  const attributedUserId = input.ruleKind === 'attribution' ? (input.attributedUserId ?? null) : null;
+
   const amountMinCents = boundsGiven ? (input.amountMinCents ?? null) : null;
   const amountMaxCents = boundsGiven ? (input.amountMaxCents ?? null) : null;
   // boundsProblem, not a comparison written here: the form and the authoring dialog have to refuse
@@ -627,7 +667,15 @@ export function upsertRuleFromCorrection(input: {
    */
   if (existing !== undefined) {
     db.update(merchantRules)
-      .set({ categoryId: input.categoryId, renameTo, lastModifiedBy: input.createdBy, packSource, packVersion, installedAt })
+      .set({
+        categoryId: input.categoryId,
+        renameTo,
+        attributedUserId,
+        lastModifiedBy: input.createdBy,
+        packSource,
+        packVersion,
+        installedAt,
+      })
       .where(eq(merchantRules.id, existing.id))
       .run();
     return { ok: true, ruleId: existing.id };
@@ -642,6 +690,7 @@ export function upsertRuleFromCorrection(input: {
       renameTo,
       amountMinCents,
       amountMaxCents,
+      attributedUserId,
       createdBy: input.createdBy,
       // A brand-new rule created by an admin starts with no attribution trail at all -- exactly
       // how every pre-v1.13.0 row and every system/pack-authored rule already reads (schema

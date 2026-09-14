@@ -7,6 +7,7 @@ import { todayIso } from '@/lib/dates';
 import { categoryLabel, createCategory, listCategories, type CategoryRecord } from '@/lib/categories';
 // applyRenameRules/buildContext: required care item 2 -- an imported rename has to be applied
 // retroactively, exactly as upsertRenameRule does for the form path (src/lib/categorize/engine.ts).
+import { isBounded } from '@/lib/categorize/amount-bounds';
 import { applyRenameRules, buildContext } from '@/lib/categorize/engine';
 import {
   CATEGORY_RULE_NEEDS_CATEGORY_ERROR,
@@ -189,9 +190,16 @@ export interface RulesImportSkip {
 
 function skipReason(rule: PackRule): string | null {
   if (!isImportableRuleKind(rule.rule_kind)) {
-    return rule.rule_kind === 'not_transfer'
-      ? "a \"not a transfer\" rule describes this install's own accounts and is never shared"
-      : `this install does not recognise the rule kind "${rule.rule_kind}"`;
+    if (rule.rule_kind === 'not_transfer') {
+      return "a \"not a transfer\" rule describes this install's own accounts and is never shared";
+    }
+    // 2026-09-13 (ruling P13). Same argument as not_transfer, one column over: a person rule names
+    // a user id, which is this install's own wiring and means nothing here -- a household with no
+    // Sam cannot honour a rule that names Sam. Skipped and counted, never a reason to fail a file.
+    if (rule.rule_kind === 'attribution') {
+      return "a person rule names somebody in the household that wrote it, and means nothing on this install";
+    }
+    return `this install does not recognise the rule kind "${rule.rule_kind}"`;
   }
   if (!isImportableMatchType(rule.match_type)) {
     return `this install does not recognise the match type "${rule.match_type}"`;
@@ -522,6 +530,14 @@ function exportableRules(opts: { includeTransferRules: boolean; includeRenameRul
     // never shareable, in either direction. rename now has its own opt-in below — same shape as
     // transfer's — rather than being excluded outright.
     if (rule.ruleKind === 'not_transfer') return false;
+    // 2026-09-13 (ruling P13). A person rule carries a user id that means nothing on any other
+    // install -- the not_transfer argument word for word. No opt-in: unlike a transfer or a
+    // rename there is no version of sharing it that would work.
+    if (rule.ruleKind === 'attribution') return false;
+    // And a WINDOW is the household's own statement figures -- what they pay for insurance, to the
+    // dollar. That is the same privacy reasoning the rename opt-in rests on, one step stronger,
+    // so a bounded rule is dropped whatever the toggles say.
+    if (isBounded(rule)) return false;
     if (rule.ruleKind === 'rename') return opts.includeRenameRules;
     return rule.ruleKind === 'transfer' ? opts.includeTransferRules : true;
   });

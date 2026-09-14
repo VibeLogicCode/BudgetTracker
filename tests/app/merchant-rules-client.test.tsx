@@ -68,7 +68,7 @@ function baseProps(overrides: Partial<Parameters<typeof MerchantRulesClient>[0]>
     redundantOnly: false,
     presetOnly: false,
     presetCount: 0,
-    kindCounts: { category: 1, transfer: 0, rename: 0, not_transfer: 0 },
+    kindCounts: { category: 1, transfer: 0, rename: 0, not_transfer: 0, attribution: 0 },
     redundantCount: 0,
     impactCounts: {},
     redundantByRuleId: {},
@@ -118,7 +118,7 @@ describe('MerchantRulesClient — rendering the row', () => {
   it('renders a rename rule showing its rename target, not a category', () => {
     render(
       <MerchantRulesClient
-        {...baseProps({ rows: [rule({ ruleKind: 'rename', categoryId: null, renameTo: "McDonald's" })], kindCounts: { category: 0, transfer: 0, rename: 1, not_transfer: 0 } })}
+        {...baseProps({ rows: [rule({ ruleKind: 'rename', categoryId: null, renameTo: "McDonald's" })], kindCounts: { category: 0, transfer: 0, rename: 1, not_transfer: 0, attribution: 0 } })}
       />,
     );
     expect(screen.getByText("McDonald's")).toBeTruthy();
@@ -138,7 +138,7 @@ describe('MerchantRulesClient — filter chips and search (item 10)', () => {
       <MerchantRulesClient
         {...baseProps({
           activeKind: 'rename',
-          kindCounts: { category: 5, transfer: 2, rename: 3, not_transfer: 1 },
+          kindCounts: { category: 5, transfer: 2, rename: 3, not_transfer: 1, attribution: 0 },
         })}
       />,
     );
@@ -498,7 +498,7 @@ describe('MerchantRulesClient — Delete this rule? (dialog 1, v1.24.0)', () => 
       <MerchantRulesClient
         {...baseProps({
           rows: [rule({ ruleKind: 'not_transfer', categoryId: null })],
-          kindCounts: { category: 0, transfer: 0, rename: 0, not_transfer: 1 },
+          kindCounts: { category: 0, transfer: 0, rename: 0, not_transfer: 1, attribution: 0 },
         })}
       />,
     );
@@ -512,7 +512,7 @@ describe('MerchantRulesClient — Delete this rule? (dialog 1, v1.24.0)', () => 
       <MerchantRulesClient
         {...baseProps({
           rows: [rule({ ruleKind: 'not_transfer', categoryId: null })],
-          kindCounts: { category: 0, transfer: 0, rename: 0, not_transfer: 1 },
+          kindCounts: { category: 0, transfer: 0, rename: 0, not_transfer: 1, attribution: 0 },
         })}
       />,
     );
@@ -573,6 +573,7 @@ describe('MerchantRulesClient — Delete rule and clear it from transactions (di
               transfer: kind === 'transfer' ? 1 : 0,
               rename: kind === 'rename' ? 1 : 0,
               not_transfer: 0,
+              attribution: kind === 'attribution' ? 1 : 0,
             },
           })}
         />,
@@ -656,7 +657,7 @@ describe('MerchantRulesClient — Delete rule and clear it from transactions (di
       <MerchantRulesClient
         {...baseProps({
           rows: [rule({ ruleKind: 'transfer', categoryId: null })],
-          kindCounts: { category: 0, transfer: 1, rename: 0, not_transfer: 0 },
+          kindCounts: { category: 0, transfer: 1, rename: 0, not_transfer: 0, attribution: 0 },
         })}
       />,
     );
@@ -687,7 +688,7 @@ describe('MerchantRulesClient — Delete rule and restore original descriptions 
       <MerchantRulesClient
         {...baseProps({
           rows: [rule({ ruleKind: 'rename', categoryId: null, renameTo: "McDonald's" })],
-          kindCounts: { category: 0, transfer: 0, rename: 1, not_transfer: 0 },
+          kindCounts: { category: 0, transfer: 0, rename: 1, not_transfer: 0, attribution: 0 },
         })}
       />,
     );
@@ -710,7 +711,7 @@ describe('MerchantRulesClient — Delete rule and restore original descriptions 
       <MerchantRulesClient
         {...baseProps({
           rows: [rule({ ruleKind: 'rename', categoryId: null, renameTo: "McDonald's" })],
-          kindCounts: { category: 0, transfer: 0, rename: 1, not_transfer: 0 },
+          kindCounts: { category: 0, transfer: 0, rename: 1, not_transfer: 0, attribution: 0 },
         })}
       />,
     );
@@ -725,7 +726,7 @@ describe('MerchantRulesClient — Delete rule and restore original descriptions 
       <MerchantRulesClient
         {...baseProps({
           rows: [rule({ ruleKind: 'rename', categoryId: null, renameTo: "McDonald's" })],
-          kindCounts: { category: 0, transfer: 0, rename: 1, not_transfer: 0 },
+          kindCounts: { category: 0, transfer: 0, rename: 1, not_transfer: 0, attribution: 0 },
         })}
       />,
     );

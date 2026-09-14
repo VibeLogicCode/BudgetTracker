@@ -4242,4 +4242,62 @@ describe('TransactionsClient — assigning a row to a bill', () => {
     const formData = vi.mocked(assignToBillAction).mock.calls[0]?.[0] as FormData;
     expect(formData.get('installmentId')).toBe('51');
   });
+
+  /**
+   * The owner, 2026-09-14, on v1.38.0: "assign to bill works but when i assign to bill the UI menu
+   * doesnt close, transaction gets applied and no feedback to user that its done."
+   *
+   * Both halves were the same omission. Every other action on this page contributes its result to
+   * the page's one banner (the `notice`/`error` pair) and every dialog that must survive a refusal
+   * closes on its own action's success. assignToBillAction was wired to neither, so the write
+   * landed, the dialog stayed open over it, and nothing on screen said anything at all.
+   */
+  it('closes the editor once the assignment succeeds', async () => {
+    vi.mocked(assignToBillAction).mockResolvedValueOnce({ message: 'Marked the 2026-03-31 installment paid.' });
+    renderWithBills();
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: /assign to bill/i }));
+    fireEvent.submit(screen.getByTestId('assign-bill-form'));
+
+    await waitFor(() => expect(screen.queryByTestId('assign-bill-form')).toBeNull());
+  });
+
+  it('says what happened, in the same banner every other action reports through', async () => {
+    vi.mocked(assignToBillAction).mockResolvedValueOnce({ message: 'Marked the 2026-03-31 installment paid.' });
+    renderWithBills();
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: /assign to bill/i }));
+    fireEvent.submit(screen.getByTestId('assign-bill-form'));
+
+    await waitFor(() => expect(screen.getByText(/Marked the 2026-03-31 installment paid\./)).toBeTruthy());
+  });
+
+  /**
+   * A refusal must leave the editor open, so the bill and installment somebody just picked are
+   * still there to correct -- the same reason the new-loan editor stays open on a refusal.
+   */
+  it('leaves the editor open when the server refuses, with the reason on screen', async () => {
+    vi.mocked(assignToBillAction).mockResolvedValueOnce({ error: 'That installment is already paid by another transaction.' });
+    renderWithBills();
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: /assign to bill/i }));
+    fireEvent.submit(screen.getByTestId('assign-bill-form'));
+
+    // Twice, deliberately: inline beside the controls somebody is looking at, and in the page's
+    // banner -- the same shape the new-loan editor's refusal already takes.
+    await waitFor(() => expect(screen.getAllByText(/already paid by another transaction/).length).toBeGreaterThan(0));
+    expect(screen.getByTestId('assign-bill-form')).toBeTruthy();
+  });
+
+  /** The same omission, one action over: deleteTransactionAction was wired to no banner either,
+   *  so a row vanished on the next refresh with nothing on screen to confirm it. */
+  it('says what a delete did, through that same banner', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    vi.mocked(deleteTransactionAction).mockResolvedValueOnce({ message: 'Transaction deleted.' });
+    renderWithBills();
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: /delete/i }));
+
+    await waitFor(() => expect(screen.getByText(/Transaction deleted\./)).toBeTruthy());
+  });
 });

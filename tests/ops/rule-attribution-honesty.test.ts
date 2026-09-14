@@ -71,6 +71,7 @@ const ALL_RULE_KINDS = Object.keys({
   transfer: true,
   rename: true,
   not_transfer: true,
+  attribution: true,
 } satisfies Record<RuleKind, true>) as RuleKind[];
 
 /**
@@ -195,6 +196,37 @@ const SCENARIOS: ReadonlyMap<RuleKind, Scenario> = new Map<RuleKind, Scenario>([
           'attribution surfaces above still have to be right, which is what this row checks.',
       },
       residue: (txnId) => countRows('is_transfer = 1', txnId),
+    },
+  ],
+  [
+    'attribution',
+    {
+      build: () => {
+        const { db, userId, add } = fixture();
+        const txnId = add('SAMS GYM MONTREAL');
+        // A second person, so the rule names somebody the row is not already on. The fixture's own
+        // rows carry NULL (Household), which is a legitimate target too -- see the unit tests in
+        // tests/lib/categorize/attribution-rules.test.ts for that direction.
+        const person = insertTestUser(db, { name: 'Sam', role: 'member' });
+        const rule = upsertRuleFromCorrection({
+          pattern: 'SAMS GYM', matchType: 'contains', ruleKind: 'attribution',
+          categoryId: null, attributedUserId: person, createdBy: userId, actorRole: 'admin',
+        });
+        if (!rule.ok) throw new Error('unexpected refusal');
+        return { ruleId: rule.ruleId, txnId, merchant: 'SAMS GYM MONTREAL' };
+      },
+      reapply: { attributes: true },
+      clear: {
+        attributes: false,
+        why:
+          'Clearing a person rule would mean writing NULL, which in this schema is not "undecided" ' +
+          'but HOUSEHOLD -- so it would assert something rather than revert anything. Nothing ' +
+          'records who the row was on before the rule touched it, exactly as nothing records a ' +
+          "category from before a rule set it, so \"put it back\" is not information this " +
+          'application has. ruleClearIds returns [] and clearRuleFromTransactions writes nothing; ' +
+          'the kind is delete-only, and the attribution surfaces above still have to be right.',
+      },
+      residue: (txnId) => countRows('attributed_user_id is not null', txnId),
     },
   ],
   [

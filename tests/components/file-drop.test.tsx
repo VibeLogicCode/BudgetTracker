@@ -41,6 +41,48 @@ describe('FileDrop: the click path is the real one', () => {
   });
 });
 
+/**
+ * The owner, twice -- 2026-09-13 and again on v1.38.0, 2026-09-14: "ui is still an issue here in
+ * 38 for drag and drop component", with a screenshot of the browser's own grey "Choose File / No
+ * file chosen" widget sitting in the middle of the drop zone, directly under our own heading that
+ * already said "Choose a file".
+ *
+ * The native control cannot be styled -- its button is drawn by the OS, so on a dark page it is a
+ * pale rectangle that matches nothing, and it prints its own filename, which is why the import
+ * page had to pass showChosenName={false} to stop the name appearing twice. So the input is
+ * visually hidden and its LABEL is the button, which is the standard way this is done and costs
+ * nothing in accessibility: the input is still in the tab order, still the thing a screen reader
+ * announces, and clicking the label still opens the picker.
+ */
+describe('FileDrop: the zone is ours, not the browser grey widget', () => {
+  it('hides the native input visually while leaving it reachable', () => {
+    const { container } = render(<FileDrop name="file" accept=".csv" label="Choose a file" />);
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    expect(input.className).toContain('sr-only');
+    // Not `hidden`, not display:none, not disabled -- any of those would take it out of the tab
+    // order and break the keyboard path this component exists to preserve.
+    expect(input.hasAttribute('hidden')).toBe(false);
+    expect(input.disabled).toBe(false);
+  });
+
+  it('offers one visible control, which is the input own label', () => {
+    const { container } = render(<FileDrop name="file" accept=".csv" label="Choose a file" />);
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const label = container.querySelector(`label[for="${input.id}"]`) as HTMLLabelElement;
+    expect(label).toBeTruthy();
+    expect(label.textContent).toContain('Choose a file');
+    // One heading, not two: the zone used to print our label AND the widget's own button text.
+    expect(screen.getAllByText('Choose a file')).toHaveLength(1);
+  });
+
+  it('prints the chosen filename itself, once', () => {
+    render(<FileDrop name="file" accept=".csv" label="Choose a file" />);
+    const input = screen.getByLabelText('Choose a file') as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [new File(['a,b'], 'march.csv', { type: 'text/csv' })] } });
+    expect(screen.getAllByText('march.csv')).toHaveLength(1);
+  });
+});
+
 describe('FileDrop: dropping a file', () => {
   it('reports the dropped file by name', () => {
     render(<FileDrop name="file" accept=".csv" label="Choose a file" />);
