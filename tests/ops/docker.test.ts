@@ -474,9 +474,28 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.36.1 release', () => {
+  it('MUST-7.1: the 1.37.0 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.36.1');
+    expect(pkg.version).toBe('1.37.0');
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toMatch(/^## \[1\.37\.0\] - 2026-09-13$/m);
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.37.0]'));
+    expect(changelog.indexOf('## [1.37.0]')).toBeLessThan(changelog.indexOf('## [1.36.1]'));
+    const current = changelog.slice(changelog.indexOf('## [1.37.0]'), changelog.indexOf('## [1.36.1]'));
+    // The owner's own report, so the symptom is recognisable if the pager ever goes missing again.
+    expect(current).toMatch(/Previous page \/ Next page/);
+    expect(current).toMatch(/Page 1 of 6/);
+    // The import half: detection reads the file before the pickers are set.
+    expect(current).toMatch(/set from the file itself/i);
+    expect(current).toMatch(/Drop a statement/i);
+    // Said plainly, because it is the reason detection refuses to guess.
+    expect(current).toMatch(/second copy of every row/i);
+    expect(current).toMatch(/No migration/i);
+  });
+
+  it('MUST-7.1: the 1.36.1 release is still recorded intact (append-only discipline)', () => {
+    const pkg = JSON.parse(read('package.json')) as { version: string };
+    expect(pkg.version).toBe('1.37.0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.36\.1\] - 2026-09-09$/m);
     expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.36.1]'));
@@ -492,7 +511,7 @@ describe('version and changelog', () => {
 
   it('MUST-7.1: the 1.36.0 release is still recorded intact (append-only discipline)', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.36.1');
+    expect(pkg.version).toBe('1.37.0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.36\.0\] - 2026-09-09$/m);
     expect(changelog.indexOf('## [1.36.0]')).toBeLessThan(changelog.indexOf('## [1.35.0]'));
@@ -510,7 +529,7 @@ describe('version and changelog', () => {
 
   it('MUST-7.1: the 1.35.0 release is still recorded intact (append-only discipline)', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.36.1');
+    expect(pkg.version).toBe('1.37.0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.35\.0\] - 2026-09-09$/m);
     expect(changelog.indexOf('## [1.35.0]')).toBeLessThan(changelog.indexOf('## [1.34.0]'));
@@ -531,7 +550,7 @@ describe('version and changelog', () => {
 
   it('MUST-7.1: the 1.34.0 release is still recorded intact (append-only discipline)', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.36.1');
+    expect(pkg.version).toBe('1.37.0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.34\.0\] - 2026-09-08$/m);
     expect(changelog.indexOf('## [1.34.0]')).toBeLessThan(changelog.indexOf('## [1.33.0]'));
@@ -551,7 +570,7 @@ describe('version and changelog', () => {
 
   it('MUST-7.1: the 1.33.0 release is still recorded intact (append-only discipline)', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.36.1');
+    expect(pkg.version).toBe('1.37.0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.33\.0\] - 2026-09-08$/m);
     expect(changelog.indexOf('## [1.33.0]')).toBeLessThan(changelog.indexOf('## [1.32.0]'));

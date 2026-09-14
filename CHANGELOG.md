@@ -21,6 +21,10 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.37.0] - 2026-09-13
+
+No migration.
+
 ### Added
 
 - **Transactions has Previous page / Next page buttons.** The footer has counted pages for
