@@ -23,6 +23,13 @@ All notable changes to Budget Tracker are recorded here.
 
 ### Added
 
+- **Assign a transaction to a bill.** A statement line that pays a bill can now be linked to that
+  bill's installment straight from the row menu, the way loans have worked since v1.7.0 — pick the
+  bill, and either take the installment due nearest that date or name one yourself. Nothing new is
+  written: the installment is marked paid *by that transaction*. **Record payment** is still there
+  for a payment that never appears on a statement (cash, a cheque), and it still writes a
+  transaction, which is the difference between the two. Unlinking is unchanged, on the bill's own
+  page.
 - **A transaction you entered by hand can be deleted.** Until now nothing in the app could remove
   a transaction — undoing an import was the only path, and it only removes rows an import brought
   in — so a row written by **Record payment** on a bill stayed for good. **Delete transaction** is

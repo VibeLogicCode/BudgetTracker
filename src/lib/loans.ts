@@ -642,6 +642,114 @@ function markMatchingUnpaid(
 }
 
 /**
+ * Link a transaction the bank already sent to one of a bill's installments.
+ *
+ * WHY IT EXISTS (owner report, 2026-09-13): "there is no way for me to assign a transaction to a
+ * bill or a contract? if i say record payment from the bill menu it creates a payment but i should
+ * only be assigning it a payment not manually creating a record." A loan has had
+ * assignTransactionToLoan on the row menu since v1.7.0; a bill had only the rule matcher (text,
+ * automatic) and Record payment (which WRITES a transaction). Neither is "this line on my
+ * statement is that bill's payment".
+ *
+ * It is the manual sibling of markMatchingUnpaid above, and differs from it in exactly the way
+ * assignTransactionToLoan differs from the rule path (MUST-11.16): a person is naming this pairing,
+ * so it is allowed to do what an automatic guess may not.
+ *   - `installmentId` names the row outright; without it the nearest unpaid due date is chosen, the
+ *     same rule (and the same tie-break: ties leave the earlier due date in place) the matcher uses.
+ *   - A suppression (`unlinked_at`) stops the RULE path because it is a person's earlier "no" to
+ *     exactly this pairing. A person naming the row now is a newer decision by the same authority,
+ *     so it is honoured and the suppression is cleared rather than left to refuse the next match.
+ *   - No date window. The matcher has one because it is guessing; this is not.
+ *
+ * Never invents an installment, and never writes a transaction: a bill with nothing unpaid is
+ * refused with a reason, because the alternative is fabricating a schedule row nobody scheduled.
+ */
+export function assignTransactionToBill(input: {
+  txnId: number;
+  itemId: number;
+  installmentId?: number;
+  at?: Date;
+}): { linked: boolean; installmentId?: number; reason?: string } {
+  const stamp = nowIso(input.at ?? new Date());
+  return getDb().transaction((tx) => {
+    const txn = tx
+      .select({ date: transactions.date })
+      .from(transactions)
+      .where(eq(transactions.id, input.txnId))
+      .get();
+    if (txn === undefined) return { linked: false, reason: 'That transaction no longer exists.' };
+
+    // The same LEFT-join-then-normalise kindOfItem does (installments.ts): kind lives on the TYPE,
+    // and an untyped item is a warranty, which is equally not a bill.
+    const item = tx
+      .select({ name: warrantyItems.name, kind: warrantyItemTypes.kind })
+      .from(warrantyItems)
+      .leftJoin(warrantyItemTypes, eq(warrantyItemTypes.id, warrantyItems.typeId))
+      .where(eq(warrantyItems.id, input.itemId))
+      .get();
+    if (item === undefined) return { linked: false, reason: 'That item no longer exists.' };
+    if (item.kind !== 'bill') {
+      return { linked: false, reason: `${item.name} has no installments to pay — only a bill does.` };
+    }
+
+    if (input.installmentId !== undefined) {
+      const named = tx
+        .select({ id: billInstallments.id, paidAt: billInstallments.paidAt, paidTxnId: billInstallments.paidTxnId })
+        .from(billInstallments)
+        .where(and(eq(billInstallments.id, input.installmentId), eq(billInstallments.itemId, input.itemId)))
+        .get();
+      if (named === undefined) return { linked: false, reason: 'That installment is not on this bill.' };
+      if (named.paidAt !== null && named.paidTxnId !== input.txnId) {
+        return { linked: false, reason: 'That installment is already marked paid. Un-mark it first.' };
+      }
+      return writeLink(tx, named.id, input.txnId, stamp);
+    }
+
+    const unpaid = tx
+      .select({ id: billInstallments.id, dueDate: billInstallments.dueDate })
+      .from(billInstallments)
+      .where(and(eq(billInstallments.itemId, input.itemId), isNull(billInstallments.paidAt)))
+      .orderBy(asc(billInstallments.dueDate), asc(billInstallments.id))
+      .all();
+    if (unpaid.length === 0) {
+      return { linked: false, reason: `${item.name} has no unpaid installments. Add one on its own page first.` };
+    }
+
+    let nearest = unpaid[0]!;
+    let best = Math.abs(daysBetweenIso(nearest.dueDate, txn.date));
+    for (const row of unpaid.slice(1)) {
+      const distance = Math.abs(daysBetweenIso(row.dueDate, txn.date));
+      // Strictly less than, so a tie leaves the earlier due date in place -- markMatchingUnpaid's
+      // own rule, quoted here rather than re-decided.
+      if (distance < best) {
+        best = distance;
+        nearest = row;
+      }
+    }
+    return writeLink(tx, nearest.id, input.txnId, stamp);
+  });
+}
+
+/** The one write both branches above end at: paid, by this transaction, suppression cleared. */
+function writeLink(
+  tx: ReturnType<typeof getDb>,
+  installmentId: number,
+  txnId: number,
+  stamp: string,
+): { linked: boolean; installmentId?: number; reason?: string } {
+  const result = tx
+    .update(billInstallments)
+    // unlinkedAt is cleared deliberately: a person has just said this pairing IS right, which
+    // supersedes whatever earlier unlink set it (item BA / MON-3's suppression is about stopping a
+    // RULE from re-marking, not about overruling the household).
+    .set({ paidAt: stamp, paidTxnId: txnId, unlinkedAt: null })
+    .where(eq(billInstallments.id, installmentId))
+    .run();
+  if (result.changes === 0) return { linked: false, reason: 'That installment could not be updated.' };
+  return { linked: true, installmentId };
+}
+
+/**
  * MUST-13.3: the rule matcher, in one db.transaction.
  *
  * MUST-13.4 (one link per transaction, from the rule path): step 3's "already has any link"

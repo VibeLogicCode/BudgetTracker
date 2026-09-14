@@ -20,6 +20,7 @@ import { readEnv } from '@/lib/env';
 // v1.26.0 Lane 3a: readFilter moved out of this file into a module the SERVER ACTIONS can share --
 // see filter-params.ts's own top-of-file docblock for why a group bulk action has to rebuild the
 // very filter this render used, and why two parsers would be two ways to misread one URL.
+import { unpaidInstallments } from '@/lib/warranty/installments';
 import { readFilter, readGroupMode, readGroupPage } from './filter-params';
 import { TransactionsClient } from './transactions-client';
 
@@ -174,6 +175,28 @@ export default async function TransactionsPage({
       loanOptions={listLoans(today, viewer)
         .filter((loan) => loan.currentBalanceCents !== null)
         .map((loan) => ({ id: loan.itemId, name: loan.name }))}
+      /* 2026-09-13, owner report: a bill's installments, so a statement line can be assigned to
+         one from the row menu instead of Record payment writing a second transaction. Every unpaid
+         installment, overdue included and with no window cap -- the household is naming a specific
+         pairing here, so the "what is coming up" framing the Dashboard card needs does not apply.
+         Empty for a household with no bills, which is what makes the row control disappear. */
+      billOptions={(() => {
+        const scope = ownerScope(viewer);
+        const rows = unpaidInstallments({
+          today,
+          windowEnd: '9999-12-31',
+          includeOverdue: true,
+          // R2: a self viewer is offered their own bills only, the same scope the row filter uses.
+          ...(scope === null ? {} : { ownerUserId: scope }),
+        });
+        const byItem = new Map<number, { id: number; name: string; installments: { id: number; dueDate: string; amountCents: number }[] }>();
+        for (const row of rows) {
+          const bill = byItem.get(row.itemId) ?? { id: row.itemId, name: row.itemName, installments: [] };
+          bill.installments.push({ id: row.installmentId, dueDate: row.dueDate, amountCents: row.amountCents });
+          byItem.set(row.itemId, bill);
+        }
+        return [...byItem.values()];
+      })()}
       loanLinks={Object.fromEntries(loanLinksForTransactions(page.rows.map((row) => row.id)))}
       splits={Object.fromEntries(splitsForTransactions(page.rows.map((row) => row.id)))}
     />

@@ -73,6 +73,7 @@ import {
   setAttributionAction,
   setCategoryAction,
   setRowTransferAction,
+  assignToBillAction,
   deleteTransactionAction,
   unassignFromLoanAction,
   type ActionState,
@@ -85,6 +86,17 @@ const COLUMN_COUNT = 8;
 
 interface Option { id: number; name: string; parentId?: number | null; isArchived?: boolean }
 interface LoanOption { id: number; name: string }
+
+/**
+ * A bill and the installments it still owes, for the row menu's Assign to bill (2026-09-13, owner
+ * report). Installments travel WITH the bill rather than as a second flat list, because the dialog
+ * only ever shows one bill's at a time and a flat list would have to be re-grouped to render.
+ */
+interface BillOption {
+  id: number;
+  name: string;
+  installments: { id: number; dueDate: string; amountCents: number }[];
+}
 
 /** Draft state for one row of the split editor. Amounts are kept as the raw dollar text the
  *  person is typing (parsed with parseAmountToCents only at remainder/submit time) so a
@@ -432,6 +444,7 @@ export function TransactionsClient({
   today,
   range = null,
   loanOptions = [],
+  billOptions = [],
   loanLinks = {},
   splits = {},
   defaultAccountId = null,
@@ -451,6 +464,7 @@ export function TransactionsClient({
   range?: ResolvedRange | null;
   /** v1.3.1: loans with a balance still owed. Empty for a household with none (MUST-14.9). */
   loanOptions?: LoanOption[];
+  billOptions?: BillOption[];
   loanLinks?: Record<number, LoanLink[]>;
   /** v1.7.0 Task 4: existing splits for the rows on this page, keyed by transaction id. A
    *  row absent from this map (or mapped to an empty array) has never been split. */
@@ -560,6 +574,13 @@ export function TransactionsClient({
   // value is an existing loan's id, and Save posts straight to assignToLoanAction instead.
   const [newLoan, setNewLoan] = useState<{ id: number; name: string; itemId: string } | null>(null);
   /**
+   * 2026-09-13 (owner report): the Assign-to-bill editor. Same one-nullable-slot shape as
+   * `newLoan` above -- opening it on another row replaces whatever was open. `installmentId` is
+   * '' for "the one nearest this transaction's date", which is what the server picks when nothing
+   * is named (assignTransactionToBill), so the empty value is a real answer rather than a gap.
+   */
+  const [assignBill, setAssignBill] = useState<{ id: number; itemId: string; installmentId: string } | null>(null);
+  /**
    * v1.25.0 Lane R item R3. The two new bulk actions' own dialog state -- one nullable slot
    * each, the same "one editor, replacing whichever was open" shape `newLoan`/`noting` already
    * use above, scoped to the whole `selected` array rather than one row. `bulkLoan.itemId` is a
@@ -605,6 +626,10 @@ export function TransactionsClient({
   );
   const [deleteState, deleteTransaction] = useActionState(
     (_prev: ActionState, formData: FormData) => deleteTransactionAction(formData),
+    initial,
+  );
+  const [billState, assignBillAction] = useActionState(
+    (_prev: ActionState, formData: FormData) => assignToBillAction(formData),
     initial,
   );
   const [splitState, splitAction] = useActionState(saveSplitsAction, initial);
@@ -1247,6 +1272,18 @@ export function TransactionsClient({
             Assign to loan…
           </RowMenuButton>
         )}
+        {/* 2026-09-13, owner report. Offered only when there IS a bill with something unpaid --
+            the same rule that hides Assign to loan for a household with no loans, and the reason
+            billOptions is empty rather than a list of bills with nothing to pay. */}
+        {row.isTransfer || billOptions.length === 0 ? null : (
+          <RowMenuButton
+            onSelect={() =>
+              setAssignBill({ id: row.id, itemId: String(billOptions[0]?.id ?? ''), installmentId: '' })
+            }
+          >
+            Assign to bill…
+          </RowMenuButton>
+        )}
         {/* 2026-09-13, owner report: Record payment on a bill writes a real transaction, and until
             now nothing could remove one. Offered ONLY on a row no import brought in -- an imported
             row belongs to its import, and Undo import is the operation that knows which rows that
@@ -1379,6 +1416,73 @@ export function TransactionsClient({
    * reads (transactionId always; loanName/loanDirection or itemId depending on the choice) are
    * exactly what's rendered below. Title names the row being assigned.
    */
+  /**
+   * 2026-09-13 (owner report): "there is no way for me to assign a transaction to a bill... if i
+   * say record payment from the bill menu it creates a payment but i should only be assigning it
+   * a payment not manually creating a record."
+   *
+   * The bill sibling of newLoanDialog below, minus its "New loan…" branch: a bill's installments
+   * are a schedule somebody entered, so this dialog assigns to one and never invents one. Leaving
+   * the installment select on "Nearest to this date" posts no installmentId, which is exactly the
+   * case assignTransactionToBill resolves by date -- so the default is a real answer, not a gap.
+   */
+  function assignBillDialog() {
+    if (!assignBill) return null;
+    const row = findRow(assignBill.id);
+    if (!row) return null;
+    const desc = row.displayDescription ?? row.rawDescription;
+    const bill = billOptions.find((option) => String(option.id) === assignBill.itemId);
+    return (
+      <RowDialog
+        dialogId="assign-bill-dialog"
+        key={assignBill.id}
+        title={`Assign ${desc} to a bill`}
+        onClose={() => setAssignBill(null)}
+      >
+        <form action={assignBillAction} className="flex flex-col gap-3" data-testid="assign-bill-form">
+          <input type="hidden" name="transactionId" value={row.id} />
+          <FormError message={billState.error} />
+          <Field label="Bill">
+            <select
+              name="itemId"
+              value={assignBill.itemId}
+              onChange={(e) => setAssignBill({ ...assignBill, itemId: e.target.value, installmentId: '' })}
+              className={selectClass}
+            >
+              {billOptions.map((option) => (
+                <option key={option.id} value={String(option.id)}>{option.name}</option>
+              ))}
+            </select>
+          </Field>
+          <Field
+            label="Installment"
+            hint="Leave this as it is and the one due nearest this transaction's date is the one marked paid."
+          >
+            <select
+              name="installmentId"
+              value={assignBill.installmentId}
+              onChange={(e) => setAssignBill({ ...assignBill, installmentId: e.target.value })}
+              className={selectClass}
+            >
+              <option value="">Nearest to this transaction&rsquo;s date</option>
+              {(bill?.installments ?? []).map((installment) => (
+                <option key={installment.id} value={String(installment.id)}>
+                  {`${installment.dueDate} — ${formatCents(installment.amountCents)}`}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <div className="flex justify-end gap-2">
+            <button type="button" className="btn btn--secondary btn--sm" onClick={() => setAssignBill(null)}>
+              Cancel
+            </button>
+            <SubmitButton className="btn btn--primary btn--sm">Assign</SubmitButton>
+          </div>
+        </form>
+      </RowDialog>
+    );
+  }
+
   function newLoanDialog() {
     if (!newLoan) return null;
     const row = findRow(newLoan.id);
@@ -2675,6 +2779,7 @@ export function TransactionsClient({
           renders here, once, rather than per row. */}
       {renameDialog()}
       {noteDialog()}
+      {assignBillDialog()}
       {newLoanDialog()}
       {applyAllDialog()}
       {/* v1.26.0 Lane 1: same "rendered once here, looked up by row id" reasoning as the four row

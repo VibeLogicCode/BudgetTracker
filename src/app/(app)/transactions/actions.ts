@@ -9,6 +9,7 @@ import { isSelfScoped, NOT_YOURS_ERROR, ownerScope } from '@/lib/auth/viewer';
 import { acceptsTransactions, getAccount, getOrCreateCashAccount, listAccounts } from '@/lib/accounts';
 import { setLastAccountId } from '@/lib/auth/users';
 import {
+  assignTransactionToBill,
   assignTransactionToLoan,
   createLoanFromTransaction,
   loanLinksForTransactions,
@@ -1117,4 +1118,46 @@ export async function deleteTransactionAction(formData: FormData): Promise<Actio
   revalidatePath('/reports');
   revalidatePath('/warranties');
   return { message: 'Transaction deleted.' };
+}
+
+/**
+ * Assign a transaction the bank already sent to one of a bill's installments (owner report,
+ * 2026-09-13). The sibling of assignToLoanAction, and thin for the same reason: every decision --
+ * which installment when none is named, what a suppression means, what is refused -- lives in
+ * assignTransactionToBill (src/lib/loans.ts), beside the rule matcher whose rules it quotes.
+ */
+export async function assignToBillAction(formData: FormData): Promise<ActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+  const user = await requireUser();
+  const parsed = z
+    .object({
+      transactionId: z.coerce.number().int().positive(),
+      itemId: z.coerce.number().int().positive(),
+      // '' means "whichever is nearest this transaction's date" -- the same answer the library
+      // gives when nothing is named, so an empty select is a choice and not a missing field.
+      installmentId: z.union([z.literal(''), z.coerce.number().int().positive()]).optional(),
+    })
+    .safeParse({
+      transactionId: formData.get('transactionId'),
+      itemId: formData.get('itemId'),
+      installmentId: formData.get('installmentId') ?? '',
+    });
+  if (!parsed.success) return { error: 'Invalid request.' };
+
+  // R2/R3: the viewer must be able to see the row it is about to link. getTransaction returns
+  // null for a row this viewer may not see, which is the same gate every other row action uses.
+  if (getTransaction(parsed.data.transactionId, user) === null) return { error: 'That transaction no longer exists.' };
+
+  const result = assignTransactionToBill({
+    txnId: parsed.data.transactionId,
+    itemId: parsed.data.itemId,
+    installmentId:
+      parsed.data.installmentId === '' || parsed.data.installmentId === undefined ? undefined : parsed.data.installmentId,
+  });
+  if (!result.linked) return { error: result.reason ?? 'That transaction could not be assigned.' };
+
+  revalidatePath('/transactions');
+  revalidatePath('/dashboard');
+  revalidatePath('/warranties');
+  return { message: 'Assigned. That installment is marked paid by this transaction.' };
 }

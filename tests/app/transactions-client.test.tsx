@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TransactionsClient } from '@/app/(app)/transactions/transactions-client';
-import { deleteTransactionAction, setCategoryAction } from '@/app/(app)/transactions/actions';
+import { assignToBillAction, deleteTransactionAction, setCategoryAction } from '@/app/(app)/transactions/actions';
 import type { CategoryGroupPage, CategoryGroupRow, TransactionPage, TransactionRow } from '@/lib/transactions';
 import type { SplitRow } from '@/lib/splits';
 
@@ -33,6 +33,7 @@ vi.mock('@/app/(app)/transactions/actions', () => ({
   applyToAllMatchingAction: vi.fn(async () => ({})),
   setRowTransferAction: vi.fn(async () => ({})),
   deleteTransactionAction: vi.fn(async () => ({})),
+  assignToBillAction: vi.fn(async () => ({})),
   // v1.19.0 Lane 2 item 5: "Accept all suggestions".
   acceptAllGuessesAction: vi.fn(async () => ({})),
 }));
@@ -4163,5 +4164,82 @@ describe('TransactionsClient — deleting a row nobody imported', () => {
     await waitFor(() => expect(deleteTransactionAction).toHaveBeenCalled());
     const formData = vi.mocked(deleteTransactionAction).mock.calls[0]?.[0] as FormData;
     expect(formData.get('transactionId')).toBe('1');
+  });
+});
+
+
+/**
+ * The owner, 2026-09-13: "there is no way for me to assign a transaction to a bill or a contract?
+ * if i say record payment from the bill menu it creates a payment but i should only be assigning
+ * it a payment not manually creating a record." Loans have had this since v1.7.0; bills had only
+ * a text-matching rule or Record payment, which writes a second transaction.
+ */
+describe('TransactionsClient — assigning a row to a bill', () => {
+  const BILLS = [
+    {
+      id: 5,
+      name: 'Property tax',
+      installments: [
+        { id: 51, dueDate: '2026-03-31', amountCents: 103906 },
+        { id: 52, dueDate: '2026-09-30', amountCents: 103906 },
+      ],
+    },
+  ];
+
+  function renderWithBills(bills = BILLS) {
+    return render(
+      <TransactionsClient
+        page={pageWithRow()}
+        accounts={[{ id: 1, name: 'Joint Chequing' }]}
+        categories={[{ id: 42, name: 'Old Category', parentId: null, isArchived: false, sortOrder: 0 }]}
+        people={[]}
+        today="2026-03-02"
+        billOptions={bills}
+      />,
+    );
+  }
+
+  it('offers the item only when a bill has something unpaid', () => {
+    renderWithBills([]);
+    openRowMenu('Actions for TIM HORTONS');
+    expect(screen.queryByRole('menuitem', { name: /assign to bill/i })).toBeNull();
+  });
+
+  it('opens an editor listing that bill and its installments', () => {
+    renderWithBills();
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: /assign to bill/i }));
+    expect(screen.getByLabelText('Bill')).toBeTruthy();
+    const installments = screen.getByLabelText('Installment') as HTMLSelectElement;
+    expect([...installments.options].map((option) => option.textContent)).toEqual([
+      'Nearest to this transaction’s date',
+      '2026-03-31 — $1,039.06',
+      '2026-09-30 — $1,039.06',
+    ]);
+  });
+
+  it('posts no installment id when the default is left alone, so the server picks by date', async () => {
+    renderWithBills();
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: /assign to bill/i }));
+    fireEvent.submit(screen.getByTestId('assign-bill-form'));
+
+    await waitFor(() => expect(assignToBillAction).toHaveBeenCalled());
+    const formData = vi.mocked(assignToBillAction).mock.calls[0]?.[0] as FormData;
+    expect(formData.get('transactionId')).toBe('1');
+    expect(formData.get('itemId')).toBe('5');
+    expect(formData.get('installmentId')).toBe('');
+  });
+
+  it('posts the installment somebody picked', async () => {
+    renderWithBills();
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: /assign to bill/i }));
+    fireEvent.change(screen.getByLabelText('Installment'), { target: { value: '51' } });
+    fireEvent.submit(screen.getByTestId('assign-bill-form'));
+
+    await waitFor(() => expect(assignToBillAction).toHaveBeenCalled());
+    const formData = vi.mocked(assignToBillAction).mock.calls[0]?.[0] as FormData;
+    expect(formData.get('installmentId')).toBe('51');
   });
 });
