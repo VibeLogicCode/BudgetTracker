@@ -1811,3 +1811,47 @@ item rather than folded in here:
 
 Today's only defence is `Unassign from <loan>` on the row menu, which does put the balance back —
 but only for a link somebody happens to notice.
+
+---
+
+## Vendor + amount + person rules — shipped in v1.39.0
+
+The owner, 2026-09-13, twice: *"insurance is with same company but different amount but imported
+categorizes the last setting i do so everything goes to home or auto. can i set in rule vendor +
+amount rule? they dont have to be automatic but something i create from kebab menu?"* and *"think
+about person too so its not just on vendor rule, even sets household, or individual person."*
+
+Planned in `docs/superpowers/specs/2026-09-13-vendor-amount-person-rules-design.md` (19 planner
+rulings P1–P19, tasks T1–T10). **T1–T9 shipped.** Migration `0024` landed in v1.38.0 and did
+nothing; v1.39.0 is the release that uses it.
+
+What that spec left open, and what is still open now:
+
+- **Q3 / T10 — which rule a correction edits. STILL OPEN, and the one to do next.** Correcting a
+  row in review writes the MERCHANT-wide rule (`confirmCategory` → `upsertRuleFromCorrection` with
+  no bounds). A household with an amount rule under that merchant can therefore correct a charge
+  inside the range, see the correction take, and watch the next import file it the old way — the
+  amount rule still wins and still holds its own answer. Nothing gets worse than before v1.39.0
+  (there were no amount rules to disagree with), so this shipped as a **stated gap**: the help text
+  says plainly which rule a correction edits, guarded by `tests/app/help.test.tsx`. The planner's
+  recommended fix is T10: when exactly one bounded exact rule covers the row's amount, teach edits
+  that one. ~1 h.
+- **Q2 / R27b-shaped — the renewal fall-through.** A premium that rises past a rule's maximum stops
+  matching it and the merchant-wide rule files the charge as the other policy, silently. The only
+  visible sign is the bounded rule's **Affects** drifting toward 0, which is why v1.39.0 prints the
+  range beside that number. Routing such a row into review is out of scope and recorded beside R27b.
+- **Q4 — should "Run rules" ever set a person?** Ruled no for v1.39.0 (P10): `attributed_user_id`
+  has no source column, so a re-run could not tell a person set by hand from the account-owner
+  fallback and would overwrite both. Doing it safely needs a `transactions.attribution_source`
+  column and a precedence module, the R24 shape.
+- **Q1 — "explicitly household" vs "nobody said".** They are one state with two labels in this
+  schema (NULL). Telling them apart is a `transactions` change v1.39.0 deliberately does not make.
+
+### R27a — the loan-rule tolerance, now cheaper than it was
+
+`amountWithinBounds` (`src/lib/categorize/amount-bounds.ts`) is the whole of "does this amount fall
+in that window", and `tests/ops/amount-bounds.test.ts` refuses a second copy of it anywhere under
+`src/`. So R27a is now: add a tolerance to the loan-rule form and call that predicate inside the
+`rules.find` in `applyPaymentMatchers` (`src/lib/loans.ts`), against
+`warranty_items.billing_amount_cents` ± the tolerance. The storage question — a per-rule tolerance
+column versus reading the item's own amount — is still R27a's own ruling to make. ~1.5 h.

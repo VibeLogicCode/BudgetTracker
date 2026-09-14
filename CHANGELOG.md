@@ -21,6 +21,63 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.39.0] - 2026-09-14
+
+Migration 0024 shipped in v1.38.0 and did nothing; this is the release that uses it. Rules can now
+be about an **amount** as well as a merchant, and a rule can name a **person**. Nothing you already
+have behaves differently — every existing rule is unbounded, and an unbounded rule works exactly as
+it always did.
+
+### Added
+
+- **A rule can be about an amount.** Two policies with one insurer differ only by premium, so a
+  rule that sees the merchant text alone cannot tell them apart and whichever category you saved
+  last claimed every charge from that company. A rule can now carry a range — "$125.00 – $155.00" —
+  and only fires when the charge falls inside it. Two rules for one merchant can hold different
+  ranges, which is the whole point. A rule with a range beats the merchant-wide rule when both
+  match, and the narrower of two ranges wins. The range is compared against the size of the charge,
+  so a refund of a premium files with the premium.
+- **A rule can name a person.** A new rule kind that sets who a transaction belongs to.
+  **Household** is a real choice, not an absence: it stops the card map and the account owner
+  deciding for you. At import a person rule wins over the card the charge was made on and over the
+  account's owner — a payment for one person's policy charged to another's card lands on the right
+  person. It never runs on its own afterwards: a person you set by hand stays set, and "Run rules"
+  does not touch the column.
+- **Create a rule… on a row's menu.** One dialog: the amount range prefilled from the row you
+  opened it on (about ±10%, editable, and you can turn it off), a category, and a person. **Preview**
+  says how many transactions match and how many would actually change, and writes nothing; the
+  second press creates the rule — up to two, since a category and a person are separate rules — and
+  applies them to the transactions from that merchant. Split rows are left alone and the result
+  says how many.
+- **The rules page shows both.** The Match column prints a rule's range beneath its match type, so a
+  rule whose "Affects" has drifted to 0 explains itself rather than looking broken. Person rules
+  carry a **Person** badge and name the person, or "Household". The rule form gained the range and
+  the person, which it had to: the form saves by a rule's identity, and the range is now part of
+  that — without the fields, editing an amount rule would have silently rewritten the merchant-wide
+  one instead and reported success.
+- **The import summary counts rule matches.** "8 rows to Alex, 3 rows by rule, 2 rows to the account
+  owner" — previously a row a rule decided was reported as having fallen back to the account owner,
+  which is the one thing that had not happened to it.
+
+### Fixed
+
+- **Assigning a transaction to a bill said nothing and left its editor open.** The write landed,
+  the dialog stayed over it, and no message appeared anywhere. It now closes on success and reports
+  what it did, and stays open on a refusal with the reason beside the bill and installment you
+  picked. Deleting a transaction was silent for the same reason and now reports too.
+- **The file drop area showed the browser's own grey "Choose File" widget.** That control is drawn
+  by the operating system and cannot be styled, so on a dark page it was a pale rectangle that
+  matched nothing and printed the filename a second time. The zone is the app's own now; the input
+  is still there, still reachable by keyboard, just not painted by the OS.
+
+### Changed
+
+- A pack never carries a person rule or a rule with an amount range, in either direction: a person
+  is a user id that means nothing on another install, and a range is your own statement figures.
+- Deleting a person rule is delete-only, the same as a "not a transfer" override. Clearing one would
+  write Household, which asserts something rather than reverting anything, and nothing records who
+  the transaction was on before.
+
 ## [1.38.0] - 2026-09-14
 
 Migration 0024 (`merchant_rules` amount bounds and an attribution column). Nothing uses the new
