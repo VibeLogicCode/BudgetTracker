@@ -21,6 +21,19 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.42.1] - 2026-09-15
+
+No migration.
+
+### Fixed
+
+- **A missing contract page reported itself as found.** The loading placeholder added to Contracts
+  & Coverage in v1.42.0 also covered the individual item pages beneath it, and a page that starts
+  drawing before it knows whether the item exists has already told the browser it found something.
+  Opening a contract that is not there showed the right "not found" screen but reported success
+  underneath — harmless to look at, wrong for anything checking links. That page loads without a
+  placeholder again; Dashboard, Budgets and Goals keep theirs.
+
 ## [1.42.0] - 2026-09-15
 
 No migration.
