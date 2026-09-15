@@ -6,6 +6,7 @@ import { ArrowRightIcon } from '@/components/icons';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { DaysRemainingPill } from '@/components/ui/DaysRemainingPill';
 import { ListRow } from '@/components/ui/ListRow';
+import { buttonClass } from '@/components/ui/Button';
 
 /** §17.19 / MUST-10.5: top 5, hidden when empty. */
 export const EXPIRING_WIDGET_LIMIT = 5;
@@ -26,7 +27,7 @@ export function ExpiringSoonCard({ items, today }: { items: WarrantyListItem[]; 
         action={
           <Link
             href="/warranties?status=expiring"
-            className="btn btn--ghost btn--sm text-accent-text hover:text-accent-text"
+            className={buttonClass('ghost', 'sm', 'text-accent-text hover:text-accent-text')}
           >
             View all
             <ArrowRightIcon className="h-4 w-4" />

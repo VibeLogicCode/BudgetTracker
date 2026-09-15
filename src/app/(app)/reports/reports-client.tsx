@@ -1,10 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import { CategoryBarChart } from '@/components/charts/CategoryBarChart';
-import { DebtTrendChart } from '@/components/charts/DebtTrendChart';
-import { NetWorthChart } from '@/components/charts/NetWorthChart';
-import { SavingsChart } from '@/components/charts/SavingsChart';
+// 2026-09-15: the charts come from the lazy barrel (src/components/charts/lazy.tsx), so recharts
+// is fetched when a chart is actually reached rather than in this page's first client bundle.
+// Type-only imports stay pointed at the real modules -- a `dynamic()` wrapper has no types to give.
+import { CategoryBarChart, DebtTrendChart, NetWorthChart, SavingsChart } from '@/components/charts/lazy';
 import { LoanIcon, ReportsIcon, TrendDownIcon, TrendFlatIcon, TrendUpIcon } from '@/components/icons';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -44,6 +44,7 @@ import { savingsRate } from '@/lib/savings-rate';
 // than each hand-rolling a querystring -- see its own docblock for why that mattered.
 import { transactionsHref, type TransactionsLinkScope, type TransactionsLinkTarget } from '@/lib/transaction-links';
 import type { TaxYearRow } from '@/lib/tax';
+import { buttonClass } from '@/components/ui/Button';
 
 /** Task 15b (v1.7.0): one taxYearReport() row, plus its place in the category tree. tax.ts's
  *  TaxYearRow does not carry parentId -- a tax-year row does not otherwise need it -- so the
@@ -223,7 +224,7 @@ export function ReportsClient({
         }
         actions={
           showExport ? (
-            <a href={exportHref} className="btn btn--secondary">
+            <a href={exportHref} className={buttonClass('secondary')}>
               Export CSV
             </a>
           ) : undefined
@@ -308,7 +309,7 @@ export function ReportsClient({
                 </select>
               </Field>
             ) : null}
-            <button type="submit" className="btn btn--primary">Apply</button>
+            <button type="submit" className={buttonClass('primary')}>Apply</button>
           </form>
         </CardBody>
       </Card>
@@ -330,7 +331,7 @@ export function ReportsClient({
               icon={ReportsIcon}
               title="Not enough history yet"
               action={
-                <Link href="/import" className="btn btn--secondary btn--sm">
+                <Link href="/import" className={buttonClass('secondary', 'sm')}>
                   Import older statements
                 </Link>
               }
@@ -342,7 +343,7 @@ export function ReportsClient({
               icon={ReportsIcon}
               title="No category has enough regular spend for a baseline yet"
               action={
-                <Link href="/import" className="btn btn--secondary btn--sm">
+                <Link href="/import" className={buttonClass('secondary', 'sm')}>
                   Import more statements
                 </Link>
               }
@@ -415,7 +416,7 @@ export function ReportsClient({
             icon={ReportsIcon}
             title="Nothing spent in this range"
             action={
-              <Link href="/reports" className="btn btn--secondary btn--sm">
+              <Link href="/reports" className={buttonClass('secondary', 'sm')}>
                 Clear filters
               </Link>
             }
@@ -484,7 +485,7 @@ export function ReportsClient({
             icon={ReportsIcon}
             title="No income in this range"
             action={
-              <Link href="/settings/managers" className="btn btn--secondary btn--sm">
+              <Link href="/settings/managers" className={buttonClass('secondary', 'sm')}>
                 Mark a category as income
               </Link>
             }
@@ -530,7 +531,7 @@ export function ReportsClient({
             icon={ReportsIcon}
             title="Nothing to show for this range"
             action={
-              <Link href="/reports" className="btn btn--secondary btn--sm">
+              <Link href="/reports" className={buttonClass('secondary', 'sm')}>
                 Clear filters
               </Link>
             }
@@ -550,7 +551,7 @@ export function ReportsClient({
             icon={ReportsIcon}
             title="No months to compare yet"
             action={
-              <Link href="/reports" className="btn btn--secondary btn--sm">
+              <Link href="/reports" className={buttonClass('secondary', 'sm')}>
                 Clear filters
               </Link>
             }
@@ -606,7 +607,7 @@ export function ReportsClient({
             icon={ReportsIcon}
             title="Nothing to compare yet"
             action={
-              <Link href="/reports" className="btn btn--secondary btn--sm">
+              <Link href="/reports" className={buttonClass('secondary', 'sm')}>
                 Clear filters
               </Link>
             }
@@ -667,7 +668,7 @@ export function ReportsClient({
               icon={ReportsIcon}
               title="Nothing to split yet"
               action={
-                <Link href="/reports" className="btn btn--secondary btn--sm">
+                <Link href="/reports" className={buttonClass('secondary', 'sm')}>
                   Clear filters
                 </Link>
               }
@@ -695,7 +696,7 @@ export function ReportsClient({
             icon={ReportsIcon}
             title="No merchant charges in this range"
             action={
-              <Link href="/reports" className="btn btn--secondary btn--sm">
+              <Link href="/reports" className={buttonClass('secondary', 'sm')}>
                 Clear filters
               </Link>
             }
@@ -745,7 +746,7 @@ export function ReportsClient({
               icon={ReportsIcon}
               title="No balances recorded yet"
               action={
-                <Link href="/settings/accounts" className="btn btn--secondary btn--sm">
+                <Link href="/settings/accounts" className={buttonClass('secondary', 'sm')}>
                   Record a balance
                 </Link>
               }
@@ -781,7 +782,7 @@ export function ReportsClient({
             description="Net spend in every tax-relevant category, by person, for one calendar year."
             action={
               taxYear !== null ? (
-                <a href={`/api/reports/tax-export?year=${taxYear}`} className="btn btn--secondary">
+                <a href={`/api/reports/tax-export?year=${taxYear}`} className={buttonClass('secondary')}>
                   Download CSV
                 </a>
               ) : null
@@ -792,7 +793,7 @@ export function ReportsClient({
               icon={ReportsIcon}
               title="Nothing marked tax-relevant yet"
               action={
-                <Link href="/settings/managers" className="btn btn--secondary btn--sm">
+                <Link href="/settings/managers" className={buttonClass('secondary', 'sm')}>
                   Mark categories as tax relevant
                 </Link>
               }
@@ -899,7 +900,7 @@ export function ReportsClient({
               icon={LoanIcon}
               title="Not enough history yet"
               action={
-                <Link href="/import" className="btn btn--secondary btn--sm">
+                <Link href="/import" className={buttonClass('secondary', 'sm')}>
                   Import older statements
                 </Link>
               }

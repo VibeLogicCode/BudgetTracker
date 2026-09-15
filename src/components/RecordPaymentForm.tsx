@@ -12,6 +12,7 @@ import { SubmitButton } from '@/components/SubmitButton';
 // resolveAtImport's docblock) -- the same reason every existing client component in this
 // codebase reaches its sibling 'use server' actions.ts via '../actions', not the `@/` alias.
 import { recordBillPaymentAction, type BillActionState } from '../app/(app)/bills/actions';
+import { buttonClass } from '@/components/ui/Button';
 
 const initial: BillActionState = {};
 
@@ -26,7 +27,7 @@ export function RecordPaymentForm({ installmentId }: { installmentId: number }) 
   return (
     <form action={dispatch} className="flex flex-col items-end gap-1">
       <input type="hidden" name="installmentId" value={installmentId} />
-      <SubmitButton className="btn btn--ghost btn--sm">Record payment</SubmitButton>
+      <SubmitButton className={buttonClass('ghost', 'sm')}>Record payment</SubmitButton>
       <FormError message={state.error} />
     </form>
   );

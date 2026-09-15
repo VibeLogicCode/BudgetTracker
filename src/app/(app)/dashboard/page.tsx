@@ -34,7 +34,8 @@ import { RuleLinkedPaymentsCard } from '@/components/RuleLinkedPaymentsCard';
 import { RuleReviewCard } from '@/components/RuleReviewCard';
 import { QuickAddTransaction, QuickAddTrigger } from '@/components/QuickAddTransaction';
 import { SendDigestNow } from '@/components/SendDigestNow';
-import { SavingsChart, type SavingsChartRow } from '@/components/charts/SavingsChart';
+import { SavingsChart } from '@/components/charts/lazy';
+import type { SavingsChartRow } from '@/components/charts/SavingsChart';
 import { AlertIcon, ArrowRightIcon, InfoIcon } from '@/components/icons';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -47,6 +48,7 @@ import { SectionHeader } from '@/components/ui/SectionHeader';
 import { StatTile, type DeltaTone } from '@/components/ui/StatTile';
 import { TableWrap } from '@/components/ui/Table';
 import { ExpiringSoonCard, EXPIRING_WIDGET_LIMIT } from '@/components/warranty/ExpiringSoonCard';
+import { buttonClass } from '@/components/ui/Button';
 
 /**
  * Item 1 (2026-08-30 plan): "+2.4% vs last month", derived from whatever prior-period figure
@@ -709,7 +711,7 @@ export default async function DashboardPage({
                   : `${formatCents(totals.totalSpentCents)} spent in total`
               }
               action={
-                <Link href="/budgets" className="btn btn--ghost btn--sm text-accent-text hover:text-accent-text">
+                <Link href="/budgets" className={buttonClass('ghost', 'sm', 'text-accent-text hover:text-accent-text')}>
                   Set limits
                   <ArrowRightIcon className="h-4 w-4" />
                 </Link>
@@ -727,7 +729,7 @@ export default async function DashboardPage({
                   size="compact"
                   title="Nothing spent yet this month. Import a statement and the categories will fill in here."
                   action={
-                    <Link href="/import" className="btn btn--secondary btn--sm">
+                    <Link href="/import" className={buttonClass('secondary', 'sm')}>
                       Import a statement
                     </Link>
                   }
@@ -835,7 +837,7 @@ export default async function DashboardPage({
                 size="compact"
                 title="No transactions yet to chart."
                 action={
-                  <Link href="/import" className="btn btn--secondary btn--sm">
+                  <Link href="/import" className={buttonClass('secondary', 'sm')}>
                     Import a statement
                   </Link>
                 }
@@ -858,7 +860,7 @@ export default async function DashboardPage({
                   size="compact"
                   title="No transactions this month yet."
                   action={
-                    <Link href="/import" className="btn btn--secondary btn--sm">
+                    <Link href="/import" className={buttonClass('secondary', 'sm')}>
                       Import a statement
                     </Link>
                   }
@@ -914,7 +916,7 @@ export default async function DashboardPage({
           <SectionHeader
             title="Goals"
             action={
-              <Link href="/goals" className="btn btn--ghost btn--sm text-accent-text hover:text-accent-text">
+              <Link href="/goals" className={buttonClass('ghost', 'sm', 'text-accent-text hover:text-accent-text')}>
                 Add goal
                 <ArrowRightIcon className="h-4 w-4" />
               </Link>

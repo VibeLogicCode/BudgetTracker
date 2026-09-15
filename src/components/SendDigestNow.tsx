@@ -7,6 +7,7 @@ import { RowDialog } from '@/components/ui/RowDialog';
 // A RELATIVE import, deliberately -- see DismissImportForm.tsx's own comment on the identical
 // line for why the client-bundle guard needs it that way for a 'use server' module.
 import { sendDigestNowAction, type SendDigestState } from '../app/(app)/dashboard/actions';
+import { buttonClass } from '@/components/ui/Button';
 
 const initial: SendDigestState = {};
 
@@ -61,7 +62,7 @@ export function SendDigestNow({ canNotifyHousehold }: { canNotifyHousehold: bool
     <span className="inline-flex flex-col items-start gap-1 sm:items-end">
       <button
         type="button"
-        className="btn btn--secondary btn--sm min-h-11 sm:min-h-0"
+        className={buttonClass('secondary', 'sm', 'min-h-11 sm:min-h-0')}
         onClick={() => setOpen(true)}
       >
         Send me a summary…
@@ -99,7 +100,7 @@ export function SendDigestNow({ canNotifyHousehold }: { canNotifyHousehold: bool
                   </SubmitButton>
                 </form>
               ) : null}
-              <button type="button" className="btn btn--ghost btn--sm" onClick={() => setOpen(false)}>
+              <button type="button" className={buttonClass('ghost', 'sm')} onClick={() => setOpen(false)}>
                 Cancel
               </button>
             </div>

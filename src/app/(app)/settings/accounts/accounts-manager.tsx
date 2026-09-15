@@ -33,6 +33,7 @@ import type { Discrepancy } from '@/lib/balance-reconcile';
 // runtime import of its own, but @/lib/accounts as a module also exports value-level functions
 // that reach @/db/client, so only the type may cross into this client component.
 import type { AccountType } from '@/lib/accounts';
+import { buttonClass } from '@/components/ui/Button';
 
 export interface AccountRow {
   id: number;
@@ -236,7 +237,7 @@ export function AccountsManager({
               // matching card uses. 44px floor (global constraint) via min-h-11, same as there.
               <button
                 type="button"
-                className="btn btn--secondary btn--sm min-h-11 sm:min-h-0"
+                className={buttonClass('secondary', 'sm', 'min-h-11 sm:min-h-0')}
                 aria-expanded={addAccountOpen}
                 aria-controls="add-account-body"
                 onClick={() => setAddAccountOpen((open) => !open)}
@@ -319,7 +320,7 @@ export function AccountsManager({
                 // the anchor would be a dead end.
                 <a
                   href="#add-account"
-                  className="btn btn--primary btn--sm"
+                  className={buttonClass('primary', 'sm')}
                   onClick={() => setAddAccountOpen(true)}
                 >
                   Add an account

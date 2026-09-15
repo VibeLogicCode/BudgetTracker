@@ -5,7 +5,6 @@ import { useActionState, useEffect, useState } from 'react';
 import { FormError } from '@/components/FormError';
 import { renderEmphasis } from '@/components/render-emphasis';
 import { SubmitButton } from '@/components/SubmitButton';
-import { buttonClass } from '@/components/ui/Button';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { Notice } from '@/components/ui/Notice';
 import { markRestartExpected } from '@/lib/update/restart-notice';
@@ -25,6 +24,7 @@ import {
   type UpdateActionState,
 } from './actions';
 import { pendingApplyMessage } from './pending-apply-message';
+import { buttonClass } from '@/components/ui/Button';
 
 export interface UpdatesViewProps {
   currentVersion: string;
@@ -247,7 +247,7 @@ export function UpdatesClient(props: UpdatesViewProps) {
             notice down for THIS bundled version only, so the next pack asks again. */}
         <form action={dismissPack} className="mt-2">
           <input type="hidden" name="version" value={String(props.canadianPackUpdate.bundledVersion)} />
-          <SubmitButton className="btn btn--secondary btn--sm">Not now</SubmitButton>
+          <SubmitButton className={buttonClass('secondary', 'sm')}>Not now</SubmitButton>
         </form>
       </Notice>
     );
@@ -270,7 +270,7 @@ export function UpdatesClient(props: UpdatesViewProps) {
           </p>
           <FormError message={error} />
           <form action={enable}>
-            <SubmitButton className="btn btn--primary">Enable update checks</SubmitButton>
+            <SubmitButton className={buttonClass('primary')}>Enable update checks</SubmitButton>
           </form>
         </CardBody>
       </Card>
@@ -396,10 +396,10 @@ export function UpdatesClient(props: UpdatesViewProps) {
               <input type="checkbox" name="autoApply" defaultChecked={resolved.autoApply} />
               Install small updates automatically
             </label>
-            <SubmitButton className="btn btn--ghost btn--sm">Save</SubmitButton>
+            <SubmitButton className={buttonClass('ghost', 'sm')}>Save</SubmitButton>
           </form>
           <form action={disable} className="ml-auto">
-            <SubmitButton className="btn btn--ghost">Disable update checks</SubmitButton>
+            <SubmitButton className={buttonClass('ghost')}>Disable update checks</SubmitButton>
           </form>
         </div>
 
@@ -408,7 +408,7 @@ export function UpdatesClient(props: UpdatesViewProps) {
             <p className="text-sm text-muted">Version {offered} is available — you chose to skip it for now.</p>
             <form action={dismiss}>
               <input type="hidden" name="version" value="" />
-              <SubmitButton className="btn btn--ghost btn--sm">Show again</SubmitButton>
+              <SubmitButton className={buttonClass('ghost', 'sm')}>Show again</SubmitButton>
             </form>
           </div>
         ) : !props.canApplyInApp ? (
@@ -454,13 +454,13 @@ export function UpdatesClient(props: UpdatesViewProps) {
                     that action settles, so setting it there left the panel (and therefore
                     reviewPending's "Fetching release notes…" line) invisible for the whole
                     length of the fetch; onClick fires before the transition starts. */}
-                <SubmitButton className="btn btn--primary" onClick={() => setPanelOpen(true)}>
+                <SubmitButton className={buttonClass('primary')} onClick={() => setPanelOpen(true)}>
                   Review and update
                 </SubmitButton>
               </form>
               <form action={dismiss}>
                 <input type="hidden" name="version" value={offered} />
-                <SubmitButton className="btn btn--ghost">Not now</SubmitButton>
+                <SubmitButton className={buttonClass('ghost')}>Not now</SubmitButton>
               </form>
             </div>
             {!panelOpen ? null : (
@@ -513,10 +513,10 @@ export function UpdatesClient(props: UpdatesViewProps) {
                       <input type="hidden" name="version" value={offered} />
                       {/* MUST-9.5: the version is in the LABEL, so a stale panel cannot install
                           something the reader did not read about. */}
-                      <SubmitButton className="btn btn--primary">Install {offered}</SubmitButton>
+                      <SubmitButton className={buttonClass('primary')}>Install {offered}</SubmitButton>
                     </form>
                   )}
-                  <button type="button" className="btn btn--ghost" onClick={() => setPanelOpen(false)}>
+                  <button type="button" className={buttonClass('ghost')} onClick={() => setPanelOpen(false)}>
                     Cancel
                   </button>
                 </div>
@@ -532,11 +532,11 @@ export function UpdatesClient(props: UpdatesViewProps) {
           <div className="flex flex-wrap items-center gap-3">
             <form action={apply}>
               <input type="hidden" name="version" value={offered} />
-              <SubmitButton className="btn btn--primary">Update now</SubmitButton>
+              <SubmitButton className={buttonClass('primary')}>Update now</SubmitButton>
             </form>
             <form action={dismiss}>
               <input type="hidden" name="version" value={offered} />
-              <SubmitButton className="btn btn--ghost">Not now</SubmitButton>
+              <SubmitButton className={buttonClass('ghost')}>Not now</SubmitButton>
             </form>
             {/* O-05: the override, and it appears ONLY after a backup failure has been shown --
                 `backupFailed` is set by applyUpdateAction on that one refusal and by nothing else.
@@ -547,7 +547,7 @@ export function UpdatesClient(props: UpdatesViewProps) {
               <form action={apply}>
                 <input type="hidden" name="version" value={offered} />
                 <input type="hidden" name="skipBackup" value="1" />
-                <SubmitButton className="btn btn--ghost">Update without a backup</SubmitButton>
+                <SubmitButton className={buttonClass('ghost')}>Update without a backup</SubmitButton>
               </form>
             ) : null}
           </div>

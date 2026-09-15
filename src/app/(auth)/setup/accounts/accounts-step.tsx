@@ -8,6 +8,7 @@ import { AuthCard } from '@/components/auth/AuthCard';
 import { CloseIcon } from '@/components/icons';
 import { Field, inputClass, selectClass } from '@/components/ui/form';
 import { saveSetupAccountsAction, type SetupAccountsState } from './actions';
+import { buttonClass } from '@/components/ui/Button';
 
 interface Row {
   name: string;
@@ -89,7 +90,7 @@ export function AccountsStep({ admin }: { admin: { id: number; name: string } })
                 <button
                   type="button"
                   onClick={() => setRows((current) => current.filter((_, i) => i !== index))}
-                  className="btn btn--ghost p-2"
+                  className={buttonClass('ghost', 'md', 'p-2')}
                   aria-label={`Remove account ${index + 1}`}
                 >
                   <CloseIcon className="h-4 w-4" />
@@ -102,7 +103,7 @@ export function AccountsStep({ admin }: { admin: { id: number; name: string } })
         <button
           type="button"
           onClick={() => setRows((current) => [...current, { ...emptyRow }])}
-          className="btn btn--secondary btn--sm w-fit"
+          className={buttonClass('secondary', 'sm', 'w-fit')}
         >
           Add another
         </button>

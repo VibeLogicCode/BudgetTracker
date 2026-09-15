@@ -10,6 +10,7 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { Field, selectClass, textareaClass } from '@/components/ui/form';
 import type { AccountLink, ConnectionRecord } from '@/lib/simplefin/connection';
 import { forgetConnectionAction, setSimplefinAutoSyncAction } from './actions';
+import { buttonClass } from '@/components/ui/Button';
 
 interface RemoteAccount {
   id: string;
@@ -192,7 +193,7 @@ export function ConnectionsClient({
               type="button"
               onClick={() => void claim()}
               disabled={busy || setupToken.trim().length === 0}
-              className="btn btn--primary w-fit"
+              className={buttonClass('primary', 'md', 'w-fit')}
             >
               {busy ? 'Claiming…' : 'Claim token'}
             </button>
@@ -213,10 +214,10 @@ export function ConnectionsClient({
             />
             <CardBody className="flex flex-col gap-3">
               <div className="flex flex-wrap gap-2">
-                <button type="button" onClick={() => void sync()} disabled={busy} className="btn btn--primary">
+                <button type="button" onClick={() => void sync()} disabled={busy} className={buttonClass('primary')}>
                   {busy ? 'Working…' : 'Sync now'}
                 </button>
-                <button type="button" onClick={() => void loadRemote()} disabled={busy} className="btn btn--secondary">
+                <button type="button" onClick={() => void loadRemote()} disabled={busy} className={buttonClass('secondary')}>
                   List remote accounts
                 </button>
                 <button
@@ -238,7 +239,7 @@ export function ConnectionsClient({
                     setNotice(result.message ?? null);
                     window.location.reload();
                   }}
-                  className="btn btn--ghost"
+                  className={buttonClass('ghost')}
                 >
                   Forget connection
                 </button>
@@ -282,7 +283,7 @@ export function ConnectionsClient({
                   size="compact"
                   title="Nothing linked yet. List the remote accounts to map them."
                   action={
-                    <button type="button" onClick={() => void loadRemote()} disabled={busy} className="btn btn--secondary btn--sm">
+                    <button type="button" onClick={() => void loadRemote()} disabled={busy} className={buttonClass('secondary', 'sm')}>
                       List remote accounts
                     </button>
                   }
@@ -302,7 +303,7 @@ export function ConnectionsClient({
                           {link.lastBalanceCents !== null ? <> · balance <Money cents={link.lastBalanceCents} plain /></> : null}
                         </span>
                       </span>
-                      <button type="button" onClick={() => void unlink(link.simplefinAccountId)} className="btn btn--ghost btn--sm">
+                      <button type="button" onClick={() => void unlink(link.simplefinAccountId)} className={buttonClass('ghost', 'sm')}>
                         unlink
                       </button>
                     </li>
@@ -351,7 +352,7 @@ export function ConnectionsClient({
                               const select = document.getElementById(`map-${account.id}`) as HTMLSelectElement | null;
                               if (select) void link(account, Number(select.value));
                             }}
-                            className="btn btn--secondary btn--sm"
+                            className={buttonClass('secondary', 'sm')}
                           >
                             Link
                           </button>

@@ -47,6 +47,7 @@ import type { Discrepancy } from '@/lib/balance-reconcile';
 import { transactionsHref } from '@/lib/transaction-links';
 import { saveMappingAction, setCardPersonAction } from './actions';
 import type { SaveMappingState } from './actions';
+import { buttonClass } from '@/components/ui/Button';
 
 interface AccountOption { id: number; name: string; importProfileId: number | null }
 interface ProfileOption { id: number; name: string; isBuiltin: boolean; mapping: ImportMapping }
@@ -542,7 +543,7 @@ export function ImportClient({
         title="Import"
         description="Upload a statement, check what it found, then add it. Nothing is written until you say so."
         actions={
-          <a href="/import/wizard" className="btn btn--secondary">
+          <a href="/import/wizard" className={buttonClass('secondary')}>
             Add a bank
           </a>
         }
@@ -634,7 +635,7 @@ export function ImportClient({
           <CardBody>
             <div className="flex flex-wrap items-center gap-3">
               <input type="file" accept=".csv,text/csv" disabled aria-label="Upload a CSV" className={fileInputClass} />
-              <button type="button" disabled className="btn btn--primary">
+              <button type="button" disabled className={buttonClass('primary')}>
                 Preview
               </button>
             </div>
@@ -663,7 +664,7 @@ export function ImportClient({
           <CardBody>
             <div className="flex flex-wrap items-center gap-3">
               <input type="file" accept=".csv,text/csv" disabled aria-label="Upload a CSV" className={fileInputClass} />
-              <button type="button" disabled className="btn btn--primary">
+              <button type="button" disabled className={buttonClass('primary')}>
                 Preview
               </button>
             </div>
@@ -861,7 +862,7 @@ export function ImportClient({
                     />
                   </Field>
                 ) : null}
-                <button type="button" onClick={() => void saveMapping()} disabled={busy} className="btn btn--secondary">
+                <button type="button" onClick={() => void saveMapping()} disabled={busy} className={buttonClass('secondary')}>
                   {currentProfile.isBuiltin ? 'Save as a new profile' : `Update ${currentProfile.name}`}
                 </button>
                 {mappingSaveState?.error ? <Notice tone="error">{mappingSaveState.error}</Notice> : null}
@@ -955,7 +956,7 @@ export function ImportClient({
 
             <div className="flex items-center gap-3 border-t border-line pt-4">
               <StepMark n={3} state="active" />
-              <button type="button" onClick={() => void commit()} disabled={busy} className="btn btn--primary btn--lg">
+              <button type="button" onClick={() => void commit()} disabled={busy} className={buttonClass('primary', 'lg')}>
                 Import {preview.totalRows - preview.duplicateCount} transactions
               </button>
             </div>
@@ -970,7 +971,7 @@ export function ImportClient({
             icon={ImportIcon}
             title="Nothing imported yet"
             action={
-              <a href="#choose-file" className="btn btn--primary btn--sm">
+              <a href="#choose-file" className={buttonClass('primary', 'sm')}>
                 Upload a statement
               </a>
             }
@@ -1040,7 +1041,7 @@ export function ImportClient({
                     <div className="flex flex-col items-end gap-1.5">
                       <a
                         href={transactionsHref({ range: null, person: null }, { kind: 'import', importId: row.id })}
-                        className="btn btn--secondary btn--sm min-h-11 sm:min-h-0"
+                        className={buttonClass('secondary', 'sm', 'min-h-11 sm:min-h-0')}
                       >
                         View rows
                       </a>
@@ -1048,7 +1049,7 @@ export function ImportClient({
                         type="button"
                         onClick={() => void undo(row.id)}
                         disabled={busy}
-                        className="btn btn--secondary btn--sm"
+                        className={buttonClass('secondary', 'sm')}
                       >
                         Undo
                       </button>

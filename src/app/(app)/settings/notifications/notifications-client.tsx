@@ -42,6 +42,7 @@ import {
 } from './actions';
 import { EmailGuide, GuidePanel, TelegramGuide } from './guides';
 import { NOTIFICATION_TABS, TAB_LABEL, type NotificationTab } from './tabs';
+import { buttonClass } from '@/components/ui/Button';
 
 /**
  * v1.29.0 (notifications page restructure). Six long cards on one scroll became four short
@@ -431,7 +432,7 @@ function TelegramFields({
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
-          className="btn btn--secondary"
+          className={buttonClass('secondary')}
           disabled={!telegram?.secretSet || detecting}
           onClick={detect}
         >
@@ -616,7 +617,7 @@ function HouseholdTelegramFields({
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
-          className="btn btn--secondary"
+          className={buttonClass('secondary')}
           disabled={!telegram?.secretSet || detecting}
           onClick={detect}
         >
@@ -843,7 +844,7 @@ export function NotificationsClient(data: NotificationsPageData) {
               Remove
             </SubmitButton>
           </form>
-          <button type="button" className="btn btn--secondary btn--sm" onClick={() => setRemovingHouseholdChannel(null)}>
+          <button type="button" className={buttonClass('secondary', 'sm')} onClick={() => setRemovingHouseholdChannel(null)}>
             Cancel
           </button>
         </div>
@@ -1253,7 +1254,7 @@ export function NotificationsClient(data: NotificationsPageData) {
                 icon={BellIcon}
                 title="Nothing sent yet."
                 action={
-                  <a href="/settings/notifications?tab=telegram#telegram-channel" className="btn btn--primary btn--sm">
+                  <a href="/settings/notifications?tab=telegram#telegram-channel" className={buttonClass('primary', 'sm')}>
                     Set up a channel
                   </a>
                 }

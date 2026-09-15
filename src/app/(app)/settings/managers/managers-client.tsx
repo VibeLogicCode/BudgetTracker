@@ -26,6 +26,7 @@ import {
   setProfileActiveAction,
   type ManagerState,
 } from './actions';
+import { buttonClass } from '@/components/ui/Button';
 
 const initial: ManagerState = {};
 
@@ -217,7 +218,7 @@ function CategoryRow({
         <form action={archiveCategory}>
           <input type="hidden" name="categoryId" value={category.id} />
           <input type="hidden" name="archived" value={category.isArchived ? '0' : '1'} />
-          <button type="submit" className="btn btn--ghost btn--sm px-2 text-xs">
+          <button type="submit" className={buttonClass('ghost', 'sm', 'px-2 text-xs')}>
             {category.isArchived ? 'restore' : 'archive'}
           </button>
         </form>
@@ -363,7 +364,7 @@ export function ManagersClient({
             // folds behind this toggle -- same shape as "Add an account" / "Add a type".
             <button
               type="button"
-              className="btn btn--secondary btn--sm min-h-11 sm:min-h-0"
+              className={buttonClass('secondary', 'sm', 'min-h-11 sm:min-h-0')}
               aria-expanded={addCategoryOpen}
               aria-controls="add-category-body"
               onClick={() => setAddCategoryOpen((open) => !open)}
@@ -435,7 +436,7 @@ export function ManagersClient({
                     <button
                       type="button"
                       onClick={() => setEditing(editing?.id === profile.id ? null : { id: profile.id, mapping: profile.mapping! })}
-                      className="btn btn--ghost btn--sm text-xs"
+                      className={buttonClass('ghost', 'sm', 'text-xs')}
                     >
                       {editing?.id === profile.id ? 'close' : 'edit mapping'}
                     </button>
@@ -447,7 +448,7 @@ export function ManagersClient({
                       <button
                         type="button"
                         onClick={() => setDeactivatingProfileId(profile.id)}
-                        className="btn btn--ghost btn--sm text-xs"
+                        className={buttonClass('ghost', 'sm', 'text-xs')}
                       >
                         deactivate
                       </button>
@@ -471,7 +472,7 @@ export function ManagersClient({
                     <button
                       type="button"
                       onClick={() => setDeletingProfileId(profile.id)}
-                      className="btn btn--ghost btn--sm money-neg text-xs"
+                      className={buttonClass('ghost', 'sm', 'money-neg text-xs')}
                     >
                       delete
                     </button>
@@ -494,7 +495,7 @@ export function ManagersClient({
                     <input type="hidden" name="profileId" value={profile.id} />
                     <input type="hidden" name="isActive" value="0" />
                     <SubmitButton size="sm">Deactivate anyway</SubmitButton>
-                    <button type="button" onClick={() => setDeactivatingProfileId(null)} className="btn btn--secondary btn--sm">
+                    <button type="button" onClick={() => setDeactivatingProfileId(null)} className={buttonClass('secondary', 'sm')}>
                       Cancel
                     </button>
                   </form>
@@ -509,7 +510,7 @@ export function ManagersClient({
                   <form action={removeProfile} className="flex gap-2">
                     <input type="hidden" name="profileId" value={profile.id} />
                     <SubmitButton variant="danger" size="sm">Delete permanently</SubmitButton>
-                    <button type="button" onClick={() => setDeletingProfileId(null)} className="btn btn--secondary btn--sm">
+                    <button type="button" onClick={() => setDeletingProfileId(null)} className={buttonClass('secondary', 'sm')}>
                       Cancel
                     </button>
                   </form>

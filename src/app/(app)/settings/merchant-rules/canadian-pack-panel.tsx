@@ -19,6 +19,7 @@ import type {
   CanadianPackUpdateDiff,
 } from '@/lib/canadian-pack';
 import { applyCanadianPackUpdateAction, installCanadianPackAction, removeCanadianPackAction, type RuleActionState } from './actions';
+import { buttonClass } from '@/components/ui/Button';
 
 const initial: RuleActionState = {};
 
@@ -104,7 +105,7 @@ export function CanadianPackPanel({
           <form action={install} onSubmit={() => setConfirmingInstall(false)}>
             <SubmitButton size="sm">Install now</SubmitButton>
           </form>
-          <button type="button" className="btn btn--ghost btn--sm" onClick={() => setConfirmingInstall(false)}>
+          <button type="button" className={buttonClass('ghost', 'sm')} onClick={() => setConfirmingInstall(false)}>
             Cancel
           </button>
         </div>
@@ -131,7 +132,7 @@ export function CanadianPackPanel({
           <form action={remove} onSubmit={() => setConfirmingRemove(false)}>
             <SubmitButton variant="danger" size="sm">Remove permanently</SubmitButton>
           </form>
-          <button type="button" className="btn btn--secondary btn--sm" onClick={() => setConfirmingRemove(false)}>
+          <button type="button" className={buttonClass('secondary', 'sm')} onClick={() => setConfirmingRemove(false)}>
             Cancel
           </button>
         </div>
@@ -230,7 +231,7 @@ export function CanadianPackPanel({
             <input type="hidden" name="deleteRemoved" value={deleteRemoved ? '1' : '0'} />
             <SubmitButton size="sm">{`Apply update to v${updateDiff.toVersion}`}</SubmitButton>
           </form>
-          <button type="button" className="btn btn--ghost btn--sm" onClick={() => setReviewingUpdate(false)}>
+          <button type="button" className={buttonClass('ghost', 'sm')} onClick={() => setReviewingUpdate(false)}>
             Cancel
           </button>
         </div>
@@ -252,7 +253,7 @@ export function CanadianPackPanel({
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {!state.installed ? (
-            <button type="button" className="btn btn--primary btn--sm" onClick={() => setConfirmingInstall(true)}>
+            <button type="button" className={buttonClass('primary', 'sm')} onClick={() => setConfirmingInstall(true)}>
               Install
             </button>
           ) : (
@@ -260,12 +261,12 @@ export function CanadianPackPanel({
               {state.updateAvailable ? (
                 <span className="flex items-center gap-2">
                   <Pill tone="accent">{`Update available (v${state.installedVersion} → v${state.bundledVersion})`}</Pill>
-                  <button type="button" className="btn btn--secondary btn--sm" onClick={() => setReviewingUpdate(true)}>
+                  <button type="button" className={buttonClass('secondary', 'sm')} onClick={() => setReviewingUpdate(true)}>
                     Update
                   </button>
                 </span>
               ) : null}
-              <button type="button" className="btn btn--danger btn--sm" onClick={() => setConfirmingRemove(true)}>
+              <button type="button" className={buttonClass('danger', 'sm')} onClick={() => setConfirmingRemove(true)}>
                 Remove all
               </button>
             </>

@@ -1,6 +1,7 @@
 'use client';
 
 import type { ScanQuad } from '@/lib/scanner/scan';
+import { buttonClass } from '@/components/ui/Button';
 
 /**
  * The before and after pane. Each image is at most 160 pixels tall, matching the existing
@@ -58,10 +59,10 @@ export function ReceiptScanPreview({
         Using the straightened photo in {secondsLeft} {secondsLeft === 1 ? 'second' : 'seconds'}
       </p>
       <div className="flex gap-2">
-        <button type="button" onClick={onUseThis} className="btn btn--primary btn--sm">
+        <button type="button" onClick={onUseThis} className={buttonClass('primary', 'sm')}>
           Use this
         </button>
-        <button type="button" onClick={onUseOriginal} className="btn btn--secondary btn--sm">
+        <button type="button" onClick={onUseOriginal} className={buttonClass('secondary', 'sm')}>
           Use the original
         </button>
       </div>

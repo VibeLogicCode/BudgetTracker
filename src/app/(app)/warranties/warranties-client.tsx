@@ -31,6 +31,7 @@ import {
 import type { RecurringChargeRow, RecurringLoad } from '@/lib/recurring';
 import { statusLabel, WARRANTY_STATUSES } from '@/lib/warranty/expiry';
 import type { WarrantySearchResult } from '@/lib/warranty/search';
+import { buttonClass } from '@/components/ui/Button';
 
 /**
  * Lane 4 (2026-08-30 one-design-language plan). The Item column already named the type as a
@@ -125,7 +126,7 @@ export function WarrantiesClient({
         title="Contracts & Coverage"
         description="Receipts, coverage and cancel-by dates for everything worth keeping the paperwork on."
         actions={
-          <Link href="/warranties/new" className="btn btn--primary">
+          <Link href="/warranties/new" className={buttonClass('primary')}>
             Add item
           </Link>
         }
@@ -223,7 +224,7 @@ export function WarrantiesClient({
                 ))}
               </select>
             </Field>
-            <button type="submit" className="btn btn--primary">Apply</button>
+            <button type="submit" className={buttonClass('primary')}>Apply</button>
           </form>
         </CardBody>
       </Card>
@@ -243,7 +244,7 @@ export function WarrantiesClient({
               icon={WarrantiesIcon}
               title="No matches for that search."
               action={
-                <Link href="/warranties" className="btn btn--secondary btn--sm">
+                <Link href="/warranties" className={buttonClass('secondary', 'sm')}>
                   Clear filters
                 </Link>
               }
@@ -255,7 +256,7 @@ export function WarrantiesClient({
               icon={WarrantiesIcon}
               title="Nothing tracked yet"
               action={
-                <Link href="/warranties/new" className="btn btn--primary btn--sm">
+                <Link href="/warranties/new" className={buttonClass('primary', 'sm')}>
                   Add the first one
                 </Link>
               }

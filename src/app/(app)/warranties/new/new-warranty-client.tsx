@@ -28,6 +28,7 @@ import {
 } from '@/lib/warranty/constants';
 import { computeExpiryDate } from '@/lib/warranty/expiry';
 import { createWarrantyAction, type WarrantyActionState } from '../actions';
+import { buttonClass } from '@/components/ui/Button';
 
 export interface WarrantyPrefill {
   purchaseDate?: string;
@@ -185,7 +186,7 @@ export function NewWarrantyClient({
     flag ? (
       <span className="flex items-center gap-1.5 text-xs text-warning">
         suggested from receipt
-        <button type="button" onClick={clear} className="btn btn--ghost btn--sm px-1.5 text-xs underline">
+        <button type="button" onClick={clear} className={buttonClass('ghost', 'sm', 'px-1.5 text-xs underline')}>
           clear
         </button>
       </span>
@@ -198,7 +199,7 @@ export function NewWarrantyClient({
         title="Add item"
         description="Attach the receipt first and the date, vendor and price fill themselves in."
         actions={
-          <Link href="/warranties" className="btn btn--ghost btn--sm">
+          <Link href="/warranties" className={buttonClass('ghost', 'sm')}>
             Back to items
           </Link>
         }

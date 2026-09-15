@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { Card, CardBody } from '@/components/ui/Card';
+import { buttonClass } from '@/components/ui/Button';
 
 /**
  * v1.12.1 (item W / UX-1). notFound() is called from src/app/(app)/warranties/[id]/page.tsx and
@@ -18,7 +19,7 @@ export default function NotFound() {
           Whatever was here has been deleted, or the address is not one this app knows. If you
           followed a bookmark, the item behind it no longer exists.
         </p>
-        <Link href="/dashboard" className="btn btn--primary">
+        <Link href="/dashboard" className={buttonClass('primary')}>
           Back to the Dashboard
         </Link>
       </CardBody>

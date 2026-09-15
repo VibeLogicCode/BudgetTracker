@@ -13,6 +13,7 @@ import { SubmitButton } from '@/components/SubmitButton';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { Field, inputClass, selectClass } from '@/components/ui/form';
 import { categoryOptionGroups, type CategoryLike } from '@/lib/category-order';
+import { buttonClass } from '@/components/ui/Button';
 
 const initial: { error?: string; message?: string } = {};
 
@@ -57,7 +58,7 @@ export function QuickAddTrigger() {
     <button
       type="button"
       // 44px floor (global constraint), same reasoning the page-variant toggle below documents.
-      className="btn btn--secondary btn--sm min-h-11 sm:min-h-0"
+      className={buttonClass('secondary', 'sm', 'min-h-11 sm:min-h-0')}
       aria-expanded={open}
       aria-controls={DASHBOARD_QUICK_ADD_ID}
       onClick={() => {
@@ -264,7 +265,7 @@ export function QuickAddTransaction({
             // than relied on from the class alone.
             <button
               type="button"
-              className="btn btn--secondary btn--sm min-h-11 sm:min-h-0"
+              className={buttonClass('secondary', 'sm', 'min-h-11 sm:min-h-0')}
               aria-expanded={open}
               aria-controls="quick-add-body"
               onClick={() => setPageOpen((prev) => !prev)}

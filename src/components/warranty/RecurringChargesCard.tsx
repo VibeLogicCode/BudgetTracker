@@ -10,6 +10,7 @@ import type { RecurringChargeRow } from '@/lib/recurring';
 // Every /transactions link in this app is built here (F-01). A hand-built querystring is what
 // drops the person scope and quietly answers a different question than the row above it.
 import { transactionsHref } from '@/lib/transaction-links';
+import { buttonClass } from '@/components/ui/Button';
 
 /**
  * F-05 (2026-09-02 review, v1.31.0). "Recurring charges": merchants whose charges have arrived
@@ -107,7 +108,7 @@ export function RecurringChargesCard({
                          transactions row menu already uses. */
                       <Link
                         href={`/warranties/new?transactionId=${row.transactionId}`}
-                        className="btn btn--secondary btn--sm min-h-11 sm:min-h-0"
+                        className={buttonClass('secondary', 'sm', 'min-h-11 sm:min-h-0')}
                       >
                         Track
                       </Link>

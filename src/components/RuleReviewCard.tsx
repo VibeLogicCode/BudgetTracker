@@ -3,6 +3,7 @@ import type { UnreviewedImportRow } from '@/lib/import/commit';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { DismissImportForm } from '@/components/DismissImportForm';
 import { ListRow } from '@/components/ui/ListRow';
+import { buttonClass } from '@/components/ui/Button';
 
 /**
  * v1.26.0 Lane 3b. The standing notice for "rules ran on an import and nobody has looked at
@@ -64,7 +65,7 @@ export function RuleReviewCard({ imports }: { imports: UnreviewedImportRow[] }) 
                     screen against these exact params -- never invent or rename one here. */}
                 <Link
                   href={`/transactions?import=${row.importId}&source=rule&group=category`}
-                  className="btn btn--secondary btn--sm"
+                  className={buttonClass('secondary', 'sm')}
                 >
                   Check
                 </Link>

@@ -11,6 +11,7 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { Field } from '@/components/ui/form';
 import type { RestoreOutcome, RestoreRequest } from '@/lib/backup/restore';
 import { runBackupNowAction, setRetentionAction, stageRestoreAction, type BackupActionState } from './actions';
+import { buttonClass } from '@/components/ui/Button';
 
 const initial: BackupActionState = {};
 
@@ -73,7 +74,7 @@ function RestorePanel({
         <input type="hidden" name="name" value={backup.name} />
         <input type="hidden" name="confirm" value={confirmed ? 'on' : ''} />
         <SubmitButton variant="danger" disabled={disabled || !confirmed}>Restore and restart</SubmitButton>
-        <button type="button" onClick={onCancel} disabled={disabled} className="btn btn--secondary">
+        <button type="button" onClick={onCancel} disabled={disabled} className={buttonClass('secondary')}>
           Cancel
         </button>
       </form>
@@ -145,7 +146,7 @@ export function BackupsClient({
         title="Backups"
         description="A nightly archive of the database and every receipt, kept on this machine."
         actions={
-          <a href="/api/backup/download" className="btn btn--primary">
+          <a href="/api/backup/download" className={buttonClass('primary')}>
             Download backup now
           </a>
         }
@@ -191,7 +192,7 @@ export function BackupsClient({
                 setRunning(false);
               }
             }}
-            className="btn btn--secondary"
+            className={buttonClass('secondary')}
           >
             {running ? 'Running…' : 'Run the nightly job now'}
           </button>
@@ -205,7 +206,7 @@ export function BackupsClient({
             icon={ImportIcon}
             title="No backups yet. The job runs at 02:00 local time."
             action={
-              <a href="/api/backup/download" className="btn btn--primary btn--sm">
+              <a href="/api/backup/download" className={buttonClass('primary', 'sm')}>
                 Download backup now
               </a>
             }
@@ -236,7 +237,7 @@ export function BackupsClient({
                       type="button"
                       onClick={() => openRow(backup.name)}
                       disabled={stagedElsewhere}
-                      className="btn btn--secondary btn--sm"
+                      className={buttonClass('secondary', 'sm')}
                     >
                       Restore
                     </button>

@@ -81,6 +81,7 @@ import {
   unassignFromLoanAction,
   type ActionState,
 } from './actions';
+import { buttonClass } from '@/components/ui/Button';
 
 // The table's own <colgroup> below carries one <col> per column: checkbox, date, account,
 // description, amount, category, person, kebab. The note sub-row spans all of them, read off
@@ -246,12 +247,12 @@ function rowPager(page: TransactionPage, currentQuery: string): React.ReactNode 
   return (
     <>
       {page.page > 1 ? (
-        <Link href={filterHref(currentQuery, 'page', String(page.page - 1))} className="btn btn--secondary btn--sm">
+        <Link href={filterHref(currentQuery, 'page', String(page.page - 1))} className={buttonClass('secondary', 'sm')}>
           Previous page
         </Link>
       ) : null}
       {page.page < page.pageCount ? (
-        <Link href={filterHref(currentQuery, 'page', String(page.page + 1))} className="btn btn--secondary btn--sm">
+        <Link href={filterHref(currentQuery, 'page', String(page.page + 1))} className={buttonClass('secondary', 'sm')}>
           Next page
         </Link>
       ) : null}
@@ -1472,7 +1473,7 @@ export function TransactionsClient({
           </fieldset>
           <div className="flex gap-2">
             <SubmitButton className="w-fit">Save name</SubmitButton>
-            <button type="button" className="btn btn--ghost btn--sm" onClick={() => setRenaming(null)}>
+            <button type="button" className={buttonClass('ghost', 'sm')} onClick={() => setRenaming(null)}>
               Cancel
             </button>
           </div>
@@ -1499,7 +1500,7 @@ export function TransactionsClient({
           </Field>
           <div className="flex gap-2">
             <SubmitButton className="w-fit">Save note</SubmitButton>
-            <button type="button" className="btn btn--ghost btn--sm" onClick={() => setNoting(null)}>
+            <button type="button" className={buttonClass('ghost', 'sm')} onClick={() => setNoting(null)}>
               Cancel
             </button>
           </div>
@@ -1574,10 +1575,10 @@ export function TransactionsClient({
             </select>
           </Field>
           <div className="flex justify-end gap-2">
-            <button type="button" className="btn btn--secondary btn--sm" onClick={() => setAssignBill(null)}>
+            <button type="button" className={buttonClass('secondary', 'sm')} onClick={() => setAssignBill(null)}>
               Cancel
             </button>
-            <SubmitButton className="btn btn--primary btn--sm">Assign</SubmitButton>
+            <SubmitButton className={buttonClass('primary', 'sm')}>Assign</SubmitButton>
           </div>
         </form>
       </RowDialog>
@@ -1672,7 +1673,7 @@ export function TransactionsClient({
           )}
           <div className="flex gap-2">
             <SubmitButton className="w-fit">Save</SubmitButton>
-            <button type="button" className="btn btn--ghost btn--sm" onClick={() => setNewLoan(null)}>
+            <button type="button" className={buttonClass('ghost', 'sm')} onClick={() => setNewLoan(null)}>
               Cancel
             </button>
           </div>
@@ -1852,13 +1853,13 @@ export function TransactionsClient({
             </Field>
           )}
           <div className="flex flex-wrap justify-end gap-2">
-            <button type="button" className="btn btn--ghost btn--sm" onClick={() => setRuleRow(null)}>
+            <button type="button" className={buttonClass('ghost', 'sm')} onClick={() => setRuleRow(null)}>
               Cancel
             </button>
             {/* A plain button rather than a SubmitButton: formAction is what sends this one
                 submit to the counting action instead of the writing one, and SubmitButton takes
                 no such prop by design -- it is the shape for a form with a single destination. */}
-            <button type="submit" formAction={previewRuleAction} className="btn btn--secondary btn--sm">
+            <button type="submit" formAction={previewRuleAction} className={buttonClass('secondary', 'sm')}>
               Preview
             </button>
             <SubmitButton size="sm" className="w-fit">
@@ -1920,7 +1921,7 @@ export function TransactionsClient({
           <SubmitButton variant="secondary" size="sm" className="w-fit">
             {hasMatchingCount ? `Apply to all ${matchingCount} matching + create rule` : 'Apply to all matching + create rule'}
           </SubmitButton>
-          <button type="button" className="btn btn--ghost btn--sm" onClick={() => setApplyAllRow(null)}>
+          <button type="button" className={buttonClass('ghost', 'sm')} onClick={() => setApplyAllRow(null)}>
             Cancel
           </button>
         </form>
@@ -1984,7 +1985,7 @@ export function TransactionsClient({
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
-            className="btn btn--secondary btn--sm"
+            className={buttonClass('secondary', 'sm')}
             onClick={(event) => {
               event.currentTarget.focus();
               setBankTextRow(null);
@@ -1997,19 +1998,19 @@ export function TransactionsClient({
             <>
               <Link
                 href={`/settings/merchant-rules?kind=rename&q=${encodeURIComponent(rule.pattern)}`}
-                className="btn btn--secondary btn--sm"
+                className={buttonClass('secondary', 'sm')}
               >
                 Edit the rule
               </Link>
               <Link
                 href={`/settings/merchant-rules?kind=rename&q=${encodeURIComponent(rule.pattern)}`}
-                className="btn btn--secondary btn--sm"
+                className={buttonClass('secondary', 'sm')}
               >
                 Delete the rule
               </Link>
             </>
           ) : null}
-          <button type="button" className="btn btn--ghost btn--sm" onClick={() => setBankTextRow(null)}>
+          <button type="button" className={buttonClass('ghost', 'sm')} onClick={() => setBankTextRow(null)}>
             Close
           </button>
         </div>
@@ -2347,7 +2348,7 @@ export function TransactionsClient({
             node: (
               <button
                 type="button"
-                className="btn btn--secondary"
+                className={buttonClass('secondary')}
                 onClick={() => setBulkLoan({ itemId: String(loanOptions[0].id) })}
               >
                 Assign to loan…
@@ -2359,7 +2360,7 @@ export function TransactionsClient({
     {
       key: 'note',
       node: (
-        <button type="button" className="btn btn--secondary" onClick={() => setBulkNoting(true)}>
+        <button type="button" className={buttonClass('secondary')} onClick={() => setBulkNoting(true)}>
           Note…
         </button>
       ),
@@ -2422,7 +2423,7 @@ export function TransactionsClient({
           </p>
           <div className="flex gap-2">
             <SubmitButton disabled={willChange === 0} className="w-fit">Assign</SubmitButton>
-            <button type="button" className="btn btn--ghost btn--sm" onClick={() => setBulkLoan(null)}>
+            <button type="button" className={buttonClass('ghost', 'sm')} onClick={() => setBulkLoan(null)}>
               Cancel
             </button>
           </div>
@@ -2457,7 +2458,7 @@ export function TransactionsClient({
           </p>
           <div className="flex gap-2">
             <SubmitButton className="w-fit">Save note</SubmitButton>
-            <button type="button" className="btn btn--ghost btn--sm" onClick={() => setBulkNoting(false)}>
+            <button type="button" className={buttonClass('ghost', 'sm')} onClick={() => setBulkNoting(false)}>
               Cancel
             </button>
           </div>
@@ -2569,7 +2570,7 @@ export function TransactionsClient({
             : landed.name;
     return (
       <div data-groups-breadcrumb className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted">
-        <Link href={backToGroupsHref()} className="btn btn--ghost btn--sm">
+        <Link href={backToGroupsHref()} className={buttonClass('ghost', 'sm')}>
           ← All categories
         </Link>
         {here !== null ? (
@@ -2612,7 +2613,7 @@ export function TransactionsClient({
             icon={TransactionsIcon}
             title="Nothing matches these filters"
             action={
-              <Link href="/transactions" className="btn btn--secondary btn--sm">
+              <Link href="/transactions" className={buttonClass('secondary', 'sm')}>
                 Clear filters
               </Link>
             }
@@ -2690,7 +2691,7 @@ export function TransactionsClient({
                     {`Showing ${group.preview.length} of ${group.count}`}
                   </p>
                   <div className="flex flex-wrap items-center gap-2 px-4 py-3 sm:px-5">
-                  <Link href={groupDrillHref(group)} className="btn btn--secondary btn--sm">
+                  <Link href={groupDrillHref(group)} className={buttonClass('secondary', 'sm')}>
                     {`See all ${group.count} in the list`}
                   </Link>
                   {/* The uncategorized cluster has no category to confirm -- confirmCategory needs a
@@ -2698,13 +2699,13 @@ export function TransactionsClient({
                       Recategorize IS offered for it (and is one of the more useful things here:
                       everything the rules had no opinion about, filed in one go). */}
                   {group.categoryId !== null ? (
-                    <button type="button" className="btn btn--secondary btn--sm" onClick={() => setConfirmGroup(group)}>
+                    <button type="button" className={buttonClass('secondary', 'sm')} onClick={() => setConfirmGroup(group)}>
                       These are all correct
                     </button>
                   ) : null}
                   <button
                     type="button"
-                    className="btn btn--secondary btn--sm"
+                    className={buttonClass('secondary', 'sm')}
                     // Opens with NO destination chosen (`categoryId: ''`), deliberately. Seeding the
                     // first category in the list would pre-arm a move of every row in this cluster
                     // into a category nobody picked, one stray Enter away; seeding the group's OWN
@@ -2735,12 +2736,12 @@ export function TransactionsClient({
                 leaves every other active filter alone (its own docblock) while resetting the ROW
                 page, which a grouped view has no use for. */}
             {groupPage.page > 1 ? (
-              <Link href={filterHref(currentQuery, 'gpage', String(groupPage.page - 1))} className="btn btn--secondary btn--sm">
+              <Link href={filterHref(currentQuery, 'gpage', String(groupPage.page - 1))} className={buttonClass('secondary', 'sm')}>
                 Previous groups
               </Link>
             ) : null}
             {groupPage.page < groupPage.pageCount ? (
-              <Link href={filterHref(currentQuery, 'gpage', String(groupPage.page + 1))} className="btn btn--secondary btn--sm">
+              <Link href={filterHref(currentQuery, 'gpage', String(groupPage.page + 1))} className={buttonClass('secondary', 'sm')}>
                 Next groups
               </Link>
             ) : null}
@@ -2796,7 +2797,7 @@ export function TransactionsClient({
           </p>
           <div className="flex gap-2">
             <SubmitButton className="w-fit">{`Confirm all ${count}`}</SubmitButton>
-            <button type="button" className="btn btn--ghost btn--sm" onClick={() => setConfirmGroup(null)}>
+            <button type="button" className={buttonClass('ghost', 'sm')} onClick={() => setConfirmGroup(null)}>
               Cancel
             </button>
           </div>
@@ -2867,7 +2868,7 @@ export function TransactionsClient({
           </p>
           <div className="flex gap-2">
             <SubmitButton disabled={categoryId === ''} className="w-fit">{`Move all ${count}`}</SubmitButton>
-            <button type="button" className="btn btn--ghost btn--sm" onClick={() => setRecatGroup(null)}>
+            <button type="button" className={buttonClass('ghost', 'sm')} onClick={() => setRecatGroup(null)}>
               Cancel
             </button>
           </div>
@@ -3036,7 +3037,7 @@ export function TransactionsClient({
                     type="button"
                     onClick={() => removeSplitPart(index)}
                     disabled={splitting.parts.length <= 2}
-                    className="btn btn--ghost btn--sm px-2 text-xs"
+                    className={buttonClass('ghost', 'sm', 'px-2 text-xs')}
                   >
                     Remove part
                   </button>
@@ -3044,14 +3045,14 @@ export function TransactionsClient({
               ))}
             </div>
             <div className="flex flex-wrap items-center gap-3">
-              <button type="button" onClick={addSplitPart} className="btn btn--secondary btn--sm">
+              <button type="button" onClick={addSplitPart} className={buttonClass('secondary', 'sm')}>
                 Add a part
               </button>
               <span className="text-sm text-muted">Remaining to assign: {formatCents(splitRemainderCents)}</span>
             </div>
             <div className="flex gap-2">
               <SubmitButton disabled={splitRemainderCents !== 0}>Save split</SubmitButton>
-              <button type="button" onClick={() => setSplitting(null)} className="btn btn--secondary">
+              <button type="button" onClick={() => setSplitting(null)} className={buttonClass('secondary')}>
                 Cancel
               </button>
             </div>
@@ -3142,7 +3143,7 @@ export function TransactionsClient({
                 // 44px square on a touch-sized viewport (the tap-target floor this file already
                 // applies elsewhere, e.g. confirmButton above), stepping down to a mouse-sized
                 // 32px at `sm` and up -- `relative` so the count badge below can pin to a corner.
-                className="btn btn--secondary relative h-11 w-11 shrink-0 p-0 sm:h-8 sm:w-8"
+                className={buttonClass('secondary', 'md', 'relative h-11 w-11 shrink-0 p-0 sm:h-8 sm:w-8')}
                 aria-expanded={filtersOpen}
                 aria-controls="transactions-filter-fields"
                 // The accessible name carries the same "Filters" / "Filters (N)" text the old
@@ -3487,7 +3488,7 @@ export function TransactionsClient({
                     (three states, not two; see that control's own comment for why burying it
                     behind this disclosure was the actual bug). */}
               </div>
-              <button type="submit" className="btn btn--primary">Filter</button>
+              <button type="submit" className={buttonClass('primary')}>Filter</button>
               {/* Inventory #3 / ruling R2: the review page's own "N waiting" eyebrow, repointed as
                   a filter chip on this page instead of a second page's header. Hidden entirely for
                   a self viewer -- the queue is household-wide by construction, and `reviewMode` is
@@ -3557,10 +3558,10 @@ export function TransactionsClient({
               title="Nothing to review. Everything is categorized."
               action={
                 <>
-                  <Link href="/transactions" className="btn btn--primary btn--sm">
+                  <Link href="/transactions" className={buttonClass('primary', 'sm')}>
                     See what was categorized
                   </Link>
-                  <Link href="/import" className="btn btn--secondary btn--sm">
+                  <Link href="/import" className={buttonClass('secondary', 'sm')}>
                     Bring in more
                   </Link>
                 </>
@@ -3635,7 +3636,7 @@ export function TransactionsClient({
             icon={TransactionsIcon}
             title="Nothing matches these filters"
             action={
-              <Link href="/transactions" className="btn btn--secondary btn--sm">
+              <Link href="/transactions" className={buttonClass('secondary', 'sm')}>
                 Clear filters
               </Link>
             }
@@ -3682,7 +3683,7 @@ export function TransactionsClient({
             the card list a few lines above already shows a rule-renamed row's bank text with no
             toggle needed at all. */}
         <div className="flex items-center justify-end border-b border-line px-4 py-2 sm:px-5">
-          <Link href={filterHref(currentQuery, 'bank', bankTextOn ? null : '1')} className="btn btn--secondary btn--sm">
+          <Link href={filterHref(currentQuery, 'bank', bankTextOn ? null : '1')} className={buttonClass('secondary', 'sm')}>
             {bankTextOn ? 'Hide bank text' : 'Show bank text'}
           </Link>
         </div>

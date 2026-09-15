@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { Card, CardBody } from '@/components/ui/Card';
 import { readRestartExpected } from '@/lib/update/restart-notice';
 import { APP_VERSION } from '@/lib/version';
+import { buttonClass } from '@/components/ui/Button';
 
 /**
  * v1.12.1 (item W / UX-1, ruling R7). Until now there was no error.tsx, not-found.tsx or
@@ -78,7 +79,7 @@ export default function AppError({
             after that, check the container&apos;s logs.
           </p>
           {digest}
-          <button type="button" onClick={() => window.location.reload()} className="btn btn--primary">
+          <button type="button" onClick={() => window.location.reload()} className={buttonClass('primary')}>
             Reload the page
           </button>
         </CardBody>
@@ -97,10 +98,10 @@ export default function AppError({
         </p>
         {digest}
         <div className="flex flex-wrap gap-2">
-          <button type="button" onClick={reset} className="btn btn--primary">
+          <button type="button" onClick={reset} className={buttonClass('primary')}>
             Try again
           </button>
-          <Link href="/dashboard" className="btn btn--secondary">
+          <Link href="/dashboard" className={buttonClass('secondary')}>
             Back to the Dashboard
           </Link>
         </div>

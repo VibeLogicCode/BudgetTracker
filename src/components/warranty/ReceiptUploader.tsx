@@ -5,6 +5,7 @@ import { Notice } from '@/components/ui/Notice';
 import { ReceiptScanPreview } from '@/components/warranty/ReceiptScanPreview';
 import { scanReceiptFile, type ScanQuad } from '@/lib/scanner/scan';
 import { SCANNER_AUTO_ACCEPT_MS } from '@/lib/warranty/ocr/onnx/constants';
+import { buttonClass } from '@/components/ui/Button';
 
 /**
  * The only file control in the feature. MUST-6.1 fixes its exact shape; MUST-10.2 fixes its
@@ -350,7 +351,7 @@ export function ReceiptUploader({
                 type="button"
                 onClick={() => remove(file.stagingId)}
                 aria-label={`Remove ${file.originalFilename}`}
-                className="btn btn--ghost btn--sm w-fit px-1.5 text-xs"
+                className={buttonClass('ghost', 'sm', 'w-fit px-1.5 text-xs')}
               >
                 Remove
               </button>

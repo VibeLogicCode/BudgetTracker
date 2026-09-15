@@ -6,6 +6,7 @@ import { Card, CardHeader } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { TableWrap } from '@/components/ui/Table';
+import { buttonClass } from '@/components/ui/Button';
 
 export const dynamic = 'force-dynamic';
 
@@ -37,7 +38,7 @@ export default async function AuditPage() {
             icon={SettingsIcon}
             title="Nothing to show"
             action={
-              <Link href="/settings" className="btn btn--secondary btn--sm">
+              <Link href="/settings" className={buttonClass('secondary', 'sm')}>
                 Back to Settings
               </Link>
             }

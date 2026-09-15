@@ -15,6 +15,7 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { Pill } from '@/components/ui/Pill';
 import type { ContributionRecord, GoalWithProgress } from '@/lib/goals';
 import { addContributionAction, archiveGoalAction, deleteContributionAction, type GoalActionState } from './actions';
+import { buttonClass } from '@/components/ui/Button';
 
 const initial: GoalActionState = {};
 
@@ -43,7 +44,7 @@ export function GoalsClient({
           <>
             {/* Archiving was previously one-way in the UI: archiveGoal(id, false) existed
                 but nothing could reach it, so an archived goal was gone for good. */}
-            <a className="btn btn--secondary btn--sm" href={showArchived ? '/goals' : '/goals?archived=1'}>
+            <a className={buttonClass('secondary', 'sm')} href={showArchived ? '/goals' : '/goals?archived=1'}>
               {showArchived ? 'Hide archived' : 'Show archived'}
             </a>
             {/* v1.20.0: "New goal" moved off this page onto its own route, /goals/new -- the
@@ -52,7 +53,7 @@ export function GoalsClient({
                 the whole gallery on this same page; two different idioms for "create a thing"
                 is exactly the drift the design-system work exists to remove, so this is now a
                 plain navigation like every other create button in the app. */}
-            <Link href="/goals/new" className="btn btn--primary btn--sm min-h-11 sm:min-h-0">
+            <Link href="/goals/new" className={buttonClass('primary', 'sm', 'min-h-11 sm:min-h-0')}>
               Add goal
             </Link>
           </>
@@ -99,7 +100,7 @@ export function GoalsClient({
               // v1.20.0: was a button that opened the on-page disclosure; the form it pointed
               // at now lives at /goals/new (see the header Link's own docblock above), so this
               // is a plain link there instead.
-              <Link href="/goals/new" className="btn btn--primary btn--sm">
+              <Link href="/goals/new" className={buttonClass('primary', 'sm')}>
                 Add a goal
               </Link>
             }
@@ -160,7 +161,7 @@ export function GoalsClient({
                               <button
                                 type="submit"
                                 aria-label={`Remove the ${contribution.date} contribution`}
-                                className="btn btn--ghost btn--sm px-1.5 text-xs"
+                                className={buttonClass('ghost', 'sm', 'px-1.5 text-xs')}
                               >
                                 remove
                               </button>
@@ -174,7 +175,7 @@ export function GoalsClient({
                   <form action={archive}>
                     <input type="hidden" name="goalId" value={goal.id} />
                     <input type="hidden" name="archived" value={goal.archived ? '0' : '1'} />
-                    <button type="submit" className="btn btn--ghost btn--sm w-fit px-0 text-xs">
+                    <button type="submit" className={buttonClass('ghost', 'sm', 'w-fit px-0 text-xs')}>
                       {goal.archived ? 'Restore' : 'Archive'}
                     </button>
                   </form>

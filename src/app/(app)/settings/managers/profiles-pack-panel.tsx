@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { Notice } from '@/components/ui/Notice';
 import type { ProfilesExportRow } from '@/lib/packs';
+import { buttonClass } from '@/components/ui/Button';
 
 const fileInputClass =
   'text-sm text-muted file:mr-3 file:rounded-md file:border-0 file:bg-accent-soft file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-accent-soft-fg';
@@ -84,7 +85,7 @@ export function ProfilesPackPanel({ rows }: { rows: ProfilesExportRow[] }) {
           ))}
           {rows.length === 0 ? <li className="px-1 py-2 text-xs text-subtle">No profiles to export yet.</li> : null}
         </ul>
-        <a href={exportHref} className="btn btn--primary w-fit">
+        <a href={exportHref} className={buttonClass('primary', 'md', 'w-fit')}>
           Download profile pack ({selected.length})
         </a>
       </div>
@@ -99,8 +100,8 @@ export function ProfilesPackPanel({ rows }: { rows: ProfilesExportRow[] }) {
           className={fileInputClass}
         />
         <div className="flex gap-2">
-          <button type="button" onClick={() => void send('preview')} className="btn btn--secondary">Preview</button>
-          <button type="button" onClick={() => void send('apply')} disabled={preview === null} className="btn btn--primary">
+          <button type="button" onClick={() => void send('preview')} className={buttonClass('secondary')}>Preview</button>
+          <button type="button" onClick={() => void send('apply')} disabled={preview === null} className={buttonClass('primary')}>
             Import
           </button>
         </div>

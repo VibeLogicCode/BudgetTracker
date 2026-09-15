@@ -20,6 +20,7 @@ import {
 } from './actions';
 import type { ItemTypeWithUsage } from '@/lib/warranty/types';
 import { ITEM_KINDS, ITEM_KIND_LABELS } from '@/lib/warranty/constants';
+import { buttonClass } from '@/components/ui/Button';
 
 const initialState: ItemTypesFormState = {};
 
@@ -83,7 +84,7 @@ export function ItemTypesManager({ types }: { types: ItemTypeWithUsage[] }) {
               // matching card uses. 44px floor (global constraint) via min-h-11, same as there.
               <button
                 type="button"
-                className="btn btn--secondary btn--sm min-h-11 sm:min-h-0"
+                className={buttonClass('secondary', 'sm', 'min-h-11 sm:min-h-0')}
                 aria-expanded={addTypeOpen}
                 aria-controls="add-type-body"
                 onClick={() => setAddTypeOpen((open) => !open)}
@@ -143,7 +144,7 @@ export function ItemTypesManager({ types }: { types: ItemTypeWithUsage[] }) {
               // anchor would be a dead end.
               <a
                 href="#add-type"
-                className="btn btn--primary btn--sm"
+                className={buttonClass('primary', 'sm')}
                 onClick={() => setAddTypeOpen(true)}
               >
                 Add a type

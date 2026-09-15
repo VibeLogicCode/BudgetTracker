@@ -2,6 +2,7 @@
 
 import { addMonths, isMonthKey, monthLabel } from '@/lib/dates';
 import { ChevronDownIcon } from '@/components/icons';
+import { buttonClass } from '@/components/ui/Button';
 
 /**
  * The one month navigator, shared by Budgets and the dashboard (savings-targets plan, Lane 3
@@ -65,7 +66,7 @@ export function MonthNav({
         {/* min-h-11 sm:min-h-0: the 44px tap-target floor this codebase already applies to
             every other dense control on a phone (AutoSave.tsx's AUTO_SAVE_CONTROL, the review
             picker, the filters toggle) -- .btn's own padding alone clears well under that. */}
-        <a className="btn btn--ghost btn--sm min-h-11 rounded-full sm:min-h-0" href={hrefFor(previous)}>
+        <a className={buttonClass('ghost', 'sm', 'min-h-11 rounded-full sm:min-h-0')} href={hrefFor(previous)}>
           ← {shortMonthLabel(previous)}
         </a>
         {/* The hidden extraParams fields and the jump input both need to live inside the same
@@ -108,7 +109,7 @@ export function MonthNav({
             />
           </label>
         </form>
-        <a className="btn btn--ghost btn--sm min-h-11 rounded-full sm:min-h-0" href={hrefFor(next)}>
+        <a className={buttonClass('ghost', 'sm', 'min-h-11 rounded-full sm:min-h-0')} href={hrefFor(next)}>
           {shortMonthLabel(next)} →
         </a>
       </nav>

@@ -45,6 +45,7 @@ import { categoryTransactionsAction } from './category-transactions-action';
 // doc comment -- imported by a relative specifier so tests/ops/client-bundle.test.ts's walk of
 // this file's @/-qualified value imports never has a reason to follow it into src/lib/budgets.ts.
 import { categoryHistoryAction, type CategoryHistoryMonth } from './category-history-action';
+import { buttonClass } from '@/components/ui/Button';
 
 const initial: BudgetActionState = {};
 
@@ -524,7 +525,7 @@ function ChildBreakdownRow({
         trailing={
           <button
             type="button"
-            className="btn btn--ghost btn--sm px-2 text-xs"
+            className={buttonClass('ghost', 'sm', 'px-2 text-xs')}
             aria-expanded={txOpen}
             onClick={() => setTxOpen((open) => !open)}
           >
@@ -596,7 +597,7 @@ function DirectSpendRow({
         trailing={
           <button
             type="button"
-            className="btn btn--ghost btn--sm px-2 text-xs"
+            className={buttonClass('ghost', 'sm', 'px-2 text-xs')}
             aria-expanded={txOpen}
             onClick={() => setTxOpen((open) => !open)}
           >
@@ -713,7 +714,7 @@ function BudgetCategoryCard({
       action={
         <button
           type="button"
-          className="btn btn--ghost btn--sm w-fit px-0 text-xs"
+          className={buttonClass('ghost', 'sm', 'w-fit px-0 text-xs')}
           aria-expanded={isOpen}
           onClick={() => (hasChildren ? groupState.toggle(row.categoryId) : setLeafTxOpen((open) => !open))}
         >
@@ -1030,7 +1031,7 @@ function EditRow({
                       type="submit"
                       aria-label={`Clear the budget for ${row.categoryName} from this month forward`}
                       title="Clears this budget from this month forward"
-                      className="btn btn--ghost btn--sm px-2 text-xs"
+                      className={buttonClass('ghost', 'sm', 'px-2 text-xs')}
                     >
                       clear
                     </button>
@@ -1049,7 +1050,7 @@ function EditRow({
                     <input type="hidden" name="categoryId" value={row.categoryId} />
                     <button
                       type="submit"
-                      className="btn btn--ghost btn--sm px-2 text-xs"
+                      className={buttonClass('ghost', 'sm', 'px-2 text-xs')}
                       title={`Median of the last ${suggestion.monthsUsed} full months${
                         suggestion.trend.direction === 'rising'
                           ? ', adjusted for a rising trend'
@@ -1113,7 +1114,7 @@ function EditRow({
             <div className="flex flex-wrap gap-2 pt-1">
               <button
                 type="button"
-                className="btn btn--secondary btn--sm min-h-11 sm:min-h-0"
+                className={buttonClass('secondary', 'sm', 'min-h-11 sm:min-h-0')}
                 disabled={warningPending}
                 onClick={() => void raiseParentToChildrenSum()}
               >
@@ -1125,7 +1126,7 @@ function EditRow({
               {ownGroupEdit !== null ? (
                 <button
                   type="button"
-                  className="btn btn--ghost btn--sm min-h-11 sm:min-h-0"
+                  className={buttonClass('ghost', 'sm', 'min-h-11 sm:min-h-0')}
                   disabled={warningPending}
                   onClick={() => void undoLastGroupEdit()}
                 >
@@ -1167,7 +1168,7 @@ function EditRow({
  *  in both places it appears (household, and each PersonalCard) -- one implementation, per D1. */
 function EditLimitsToggle({ open, onToggle }: { open: boolean; onToggle: () => void }) {
   return (
-    <button type="button" className="btn btn--ghost btn--sm" onClick={onToggle}>
+    <button type="button" className={buttonClass('ghost', 'sm')} onClick={onToggle}>
       {open ? 'Done editing' : 'Edit limits'}
     </button>
   );
@@ -1325,7 +1326,7 @@ function PersonalCard({
                     <input type="hidden" name="scope" value="personal" />
                     <input type="hidden" name="userId" value={person.userId} />
                     <input type="hidden" name="month" value={month} />
-                    <button type="submit" className="btn btn--secondary btn--sm">Copy previous month</button>
+                    <button type="submit" className={buttonClass('secondary', 'sm')}>Copy previous month</button>
                   </form>
                   {/* Same MUST-15.1 rule as the household section above. */}
                   {personPredict !== null && personPredict.suggestionOf.size > 0 ? (
@@ -1335,7 +1336,7 @@ function PersonalCard({
                       <input type="hidden" name="month" value={month} />
                       <button
                         type="submit"
-                        className="btn btn--secondary btn--sm"
+                        className={buttonClass('secondary', 'sm')}
                         title="Only fills in categories with no limit set. Nothing you have typed is changed."
                       >
                         Apply all suggestions
@@ -1350,7 +1351,7 @@ function PersonalCard({
               {groupIds.length > 0 ? (
                 <button
                   type="button"
-                  className="btn btn--ghost btn--sm"
+                  className={buttonClass('ghost', 'sm')}
                   onClick={groupState.anyCollapsed ? groupState.expandAll : groupState.collapseAll}
                 >
                   {groupState.anyCollapsed ? 'Expand all' : 'Collapse all'}
@@ -1664,7 +1665,7 @@ export function BudgetsClient({
                         only, since ruling T3 gives the target no per-person copy of its own. */}
                     <button
                       type="submit"
-                      className="btn btn--secondary btn--sm"
+                      className={buttonClass('secondary', 'sm')}
                       title="Also brings forward last month's savings target, if one was set."
                     >
                       Copy previous month
@@ -1679,7 +1680,7 @@ export function BudgetsClient({
                       <input type="hidden" name="month" value={month} />
                       <button
                         type="submit"
-                        className="btn btn--secondary btn--sm"
+                        className={buttonClass('secondary', 'sm')}
                         title="Only fills in categories with no limit set. Nothing you have typed is changed."
                       >
                         Apply all suggestions
@@ -1691,7 +1692,7 @@ export function BudgetsClient({
                   {householdGroupIds.length > 0 ? (
                     <button
                       type="button"
-                      className="btn btn--ghost btn--sm"
+                      className={buttonClass('ghost', 'sm')}
                       onClick={householdGroupState.anyCollapsed ? householdGroupState.expandAll : householdGroupState.collapseAll}
                     >
                       {householdGroupState.anyCollapsed ? 'Expand all' : 'Collapse all'}

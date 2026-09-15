@@ -5,6 +5,7 @@ import type { DateFormatDetection } from '@/lib/import/detect-date-format';
 import { DATE_FORMATS } from '@/lib/dates';
 import { Field, inputClass, labelClass, selectClass } from '@/components/ui/form';
 import { Notice } from '@/components/ui/Notice';
+import { buttonClass } from '@/components/ui/Button';
 
 /**
  * Which column of the bank's CSV holds what. Shared by the import preview and
@@ -125,7 +126,7 @@ export function MappingEditor({
               type="button"
               onClick={() => set('dateFormat', detected)}
               disabled={busy}
-              className="btn btn--secondary btn--sm"
+              className={buttonClass('secondary', 'sm')}
             >
               Use {detected}
             </button>

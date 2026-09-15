@@ -22,6 +22,7 @@ import {
   type UsersFormState,
 } from './actions';
 import type { UserRecord } from '@/lib/auth/users';
+import { buttonClass } from '@/components/ui/Button';
 
 const initialState: UsersFormState = {};
 
@@ -94,7 +95,7 @@ export function UsersManager({ users }: { users: UserRecord[] }) {
           // a second, independent feature.
           <button
             type="button"
-            className="btn btn--primary btn--sm min-h-11 sm:min-h-0"
+            className={buttonClass('primary', 'sm', 'min-h-11 sm:min-h-0')}
             aria-expanded={addUserOpen}
             aria-controls="add-user-body"
             onClick={() => setAddUserOpen((open) => !open)}

@@ -86,6 +86,7 @@ import {
   updateWarrantyAction,
   type WarrantyActionState,
 } from '../actions';
+import { buttonClass } from '@/components/ui/Button';
 
 const initial: WarrantyActionState = {};
 
@@ -176,7 +177,7 @@ type TypeOption = { id: number; name: string; kind: ItemKind };
 function LinkSubmitButton({ children }: { children: React.ReactNode }) {
   const { pending } = useFormStatus();
   return (
-    <button type="submit" disabled={pending} className="btn btn--ghost btn--sm px-1.5 text-xs">
+    <button type="submit" disabled={pending} className={buttonClass('ghost', 'sm', 'px-1.5 text-xs')}>
       {pending ? 'Working…' : children}
     </button>
   );
@@ -409,11 +410,11 @@ export function WarrantyDetailClient({
           <StatusBadge status={status} expiryDate={item.expiryDate} today={today} kind={item.kind} />
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Link href="/warranties" className="btn btn--ghost btn--sm">Back to items</Link>
-          <button type="button" onClick={() => setEditing((v) => !v)} className="btn btn--secondary btn--sm">
+          <Link href="/warranties" className={buttonClass('ghost', 'sm')}>Back to items</Link>
+          <button type="button" onClick={() => setEditing((v) => !v)} className={buttonClass('secondary', 'sm')}>
             {editing ? 'Cancel edit' : 'Edit'}
           </button>
-          <button type="button" onClick={() => setConfirming(true)} className="btn btn--ghost btn--sm money-neg">
+          <button type="button" onClick={() => setConfirming(true)} className={buttonClass('ghost', 'sm', 'money-neg')}>
             Delete item
           </button>
         </div>
@@ -433,7 +434,7 @@ export function WarrantyDetailClient({
               <input type="hidden" name="itemId" value={item.id} />
               <div className="flex gap-2">
                 <SubmitButton variant="danger">Delete permanently</SubmitButton>
-                <button type="button" onClick={() => setConfirming(false)} className="btn btn--secondary">
+                <button type="button" onClick={() => setConfirming(false)} className={buttonClass('secondary')}>
                   Cancel
                 </button>
               </div>
@@ -663,7 +664,7 @@ export function WarrantyDetailClient({
               size="compact"
               title="No transactions linked yet. A payment rule above, or the row menu on Transactions, creates one."
               action={
-                <Link href="/transactions" className="btn btn--secondary btn--sm">
+                <Link href="/transactions" className={buttonClass('secondary', 'sm')}>
                   Go to Transactions
                 </Link>
               }
@@ -769,7 +770,7 @@ export function WarrantyDetailClient({
                 icon={BellIcon}
                 title="No installments yet"
                 action={
-                  <a href="#add-installment" className="btn btn--primary btn--sm">
+                  <a href="#add-installment" className={buttonClass('primary', 'sm')}>
                     Add the first due date
                   </a>
                 }
@@ -898,7 +899,7 @@ export function WarrantyDetailClient({
                 )}
                 {/* One form, one submit. No auto-save (ruling B8): correcting an installment is
                     remove and re-add, exactly as the loan rules card next to it works. */}
-                <SubmitButton className="btn btn--primary self-start">Add installment</SubmitButton>
+                <SubmitButton className={buttonClass('primary', 'md', 'self-start')}>Add installment</SubmitButton>
               </form>
             ) : null}
           </CardBody>
@@ -919,7 +920,7 @@ export function WarrantyDetailClient({
               // toggle, not <details>).
               <button
                 type="button"
-                className="btn btn--secondary btn--sm min-h-11 sm:min-h-0"
+                className={buttonClass('secondary', 'sm', 'min-h-11 sm:min-h-0')}
                 aria-expanded={addRuleOpen}
                 aria-controls="add-rule-body"
                 onClick={() => setAddRuleOpen((open) => !open)}
@@ -954,7 +955,7 @@ export function WarrantyDetailClient({
                           <form action={removeRule}>
                             <input type="hidden" name="id" value={rule.id} />
                             <input type="hidden" name="itemId" value={item.id} />
-                            <SubmitButton className="btn btn--ghost btn--sm">Remove</SubmitButton>
+                            <SubmitButton className={buttonClass('ghost', 'sm')}>Remove</SubmitButton>
                           </form>
                         </td>
                       </tr>
@@ -1003,7 +1004,7 @@ export function WarrantyDetailClient({
                   ) : null}
                   <FormError message={ruleState.error} />
                   {ruleState.message === undefined ? null : <Notice tone="success">{ruleState.message}</Notice>}
-                  <SubmitButton className="btn btn--primary self-start">Add rule</SubmitButton>
+                  <SubmitButton className={buttonClass('primary', 'md', 'self-start')}>Add rule</SubmitButton>
                 </form>
               </div>
             ) : null}
@@ -1020,7 +1021,7 @@ export function WarrantyDetailClient({
             // stays visible; the file picker and Attach button (a create form) go behind a button.
             <button
               type="button"
-              className="btn btn--secondary btn--sm min-h-11 sm:min-h-0"
+              className={buttonClass('secondary', 'sm', 'min-h-11 sm:min-h-0')}
               aria-expanded={addReceiptOpen}
               aria-controls="add-receipt-body"
               onClick={toggleAddReceipt}
@@ -1038,7 +1039,7 @@ export function WarrantyDetailClient({
               size="compact"
               title="No receipts attached yet."
               action={
-                <button type="button" onClick={toggleAddReceipt} className="btn btn--secondary btn--sm">
+                <button type="button" onClick={toggleAddReceipt} className={buttonClass('secondary', 'sm')}>
                   Add receipt
                 </button>
               }

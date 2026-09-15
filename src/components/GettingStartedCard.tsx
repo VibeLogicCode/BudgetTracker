@@ -2,6 +2,7 @@ import Link from 'next/link';
 import type { OnboardingStep } from '@/lib/onboarding';
 import { Card, CardFooter, CardHeader } from '@/components/ui/Card';
 import { ListRow } from '@/components/ui/ListRow';
+import { buttonClass } from '@/components/ui/Button';
 
 /**
  * SELF-HIDING, in the manner of LoansCard: the dashboard renders it unconditionally and it is
@@ -37,7 +38,7 @@ export function GettingStartedCard({ steps }: { steps: OnboardingStep[] }) {
             title={step.title}
             meta={step.body}
             trailing={
-              <Link href={step.href} className="btn btn--secondary btn--sm">
+              <Link href={step.href} className={buttonClass('secondary', 'sm')}>
                 {step.cta}
               </Link>
             }

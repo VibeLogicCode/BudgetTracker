@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ChevronDownIcon, CloseIcon, LogoMark, MenuIcon, SettingsIcon, SignOutIcon } from '@/components/icons';
 import { ThemeToggle } from '@/components/theme/theme-toggle';
 import { activeNavItem, navGroups, REVIEW_NAV_HREF, type NavGroup } from './nav';
+import { buttonClass } from '@/components/ui/Button';
 
 export interface ShellUser {
   /** v1.13.0 micro-ruling M6: ShellUser is now Viewer-shaped (id/role/visibility) so it can be
@@ -121,7 +122,7 @@ export function AppShell({
             aria-expanded={menuOpen}
             aria-controls="mobile-nav"
             aria-label={menuOpen ? 'Close menu' : 'Open menu'}
-            className="btn btn--ghost -ml-1.5 p-2 lg:hidden"
+            className={buttonClass('ghost', 'md', '-ml-1.5 p-2 lg:hidden')}
           >
             {menuOpen ? <CloseIcon className="h-5 w-5" /> : <MenuIcon className="h-5 w-5" />}
           </button>
@@ -324,7 +325,7 @@ function UserMenu({ user }: { user: ShellUser }) {
         onClick={() => setOpen((value) => !value)}
         aria-haspopup="menu"
         aria-expanded={open}
-        className="btn btn--ghost gap-2 rounded-full py-1 pl-1 pr-2"
+        className={buttonClass('ghost', 'md', 'gap-2 rounded-full py-1 pl-1 pr-2')}
       >
         <span
           aria-hidden="true"

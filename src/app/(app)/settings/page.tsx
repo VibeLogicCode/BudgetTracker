@@ -24,6 +24,7 @@ import { AboutPanel } from './about-panel';
 import { ProfileForms } from './profile-forms';
 import { SessionsList, type SessionRowView } from './sessions-list';
 import { UpdatesCard } from './updates-card';
+import { buttonClass } from '@/components/ui/Button';
 
 export const dynamic = 'force-dynamic';
 
@@ -119,7 +120,7 @@ export default async function SettingsPage() {
             <SessionsList sessions={sessionRows} showIp={trustProxy} />
             <form action="/api/auth/logout" method="post">
               <input type="hidden" name="scope" value="all" />
-              <button type="submit" className="btn btn--secondary">
+              <button type="submit" className={buttonClass('secondary')}>
                 <SignOutIcon className="h-4 w-4" />
                 Log out everywhere
               </button>

@@ -11,6 +11,7 @@ import { useState } from 'react';
 import { Notice } from '@/components/ui/Notice';
 import { selectClass } from '@/components/ui/form';
 import type { RulesExportRow } from '@/lib/packs';
+import { buttonClass } from '@/components/ui/Button';
 
 interface ImportPreview {
   applied: false;
@@ -198,7 +199,7 @@ export function RulesPackPanel({ rows }: { rows: RulesExportRow[] }) {
           ))}
           {visible.length === 0 ? <li className="px-1 py-2 text-xs text-subtle">No rules to export yet.</li> : null}
         </ul>
-        <a href={exportHref} className="btn btn--primary w-fit">
+        <a href={exportHref} className={buttonClass('primary', 'md', 'w-fit')}>
           Download rules pack ({exportable.length - excluded.filter((id) => exportable.some((row) => row.ruleId === id)).length} rules)
         </a>
       </div>
@@ -224,8 +225,8 @@ export function RulesPackPanel({ rows }: { rows: RulesExportRow[] }) {
           </select>
         </label>
         <div className="flex gap-2">
-          <button type="button" onClick={() => void send('preview')} className="btn btn--secondary">Preview</button>
-          <button type="button" onClick={() => void send('apply')} disabled={preview === null} className="btn btn--primary">
+          <button type="button" onClick={() => void send('preview')} className={buttonClass('secondary')}>Preview</button>
+          <button type="button" onClick={() => void send('apply')} disabled={preview === null} className={buttonClass('primary')}>
             Import
           </button>
         </div>

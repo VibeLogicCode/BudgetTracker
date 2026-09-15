@@ -32,10 +32,21 @@ const MOTION_KEEP_ALLOWED: Record<string, string> = {
     'the Transactions route skeleton — same reason; this is the page the household opens most',
   'src/components/ui/AutoSave.tsx':
     'the save-in-progress spinner — stopped at one frame it says "this app has hung", which is the opposite of its job',
+  'src/components/ui/PageSkeleton.tsx':
+    'the shared route skeleton behind every loading.tsx — a still one is indistinguishable from a page that finished loading badly, which is the whole thing it exists to rule out',
 };
 
 const files = walk('src');
 const read = (file: string) => fs.readFileSync(path.join(ROOT, file), 'utf8');
+
+/**
+ * The repo's established stripComments pattern, and it earns its place here: the chart barrel
+ * (src/components/charts/lazy.tsx) explains in a comment why its own skeleton is deliberately NOT
+ * animated, and a raw text scan counted that explanation as a claim on the exemption. Punishing a
+ * file for documenting the rule is how the documentation gets deleted.
+ */
+const stripComments = (source: string): string =>
+  source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
 
 describe('reduced motion drops decoration and keeps feedback', () => {
   it('still resets animation and transition for everything unexempted', () => {
@@ -67,7 +78,7 @@ describe('reduced motion drops decoration and keeps feedback', () => {
   });
 
   it('nothing else claims the exemption', () => {
-    const users = files.filter((file) => read(file).includes('motion-keep'));
+    const users = files.filter((file) => stripComments(read(file)).includes('motion-keep'));
     expect(users.sort()).toEqual(Object.keys(MOTION_KEEP_ALLOWED).sort());
   });
 

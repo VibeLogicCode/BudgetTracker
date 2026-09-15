@@ -12,6 +12,7 @@ import {
   disableTotpAction,
   type ProfileFormState,
 } from './actions';
+import { buttonClass } from '@/components/ui/Button';
 
 const initialState: ProfileFormState = {};
 
@@ -110,7 +111,7 @@ export function ProfileForms({ totpEnabled, recoveryLeft }: { totpEnabled: boole
             <button
               type="button"
               onClick={async () => setEnrollment((await beginTotpEnrollmentAction()).enrollment)}
-              className="btn btn--secondary w-fit"
+              className={buttonClass('secondary', 'md', 'w-fit')}
             >
               Set up authenticator app
             </button>

@@ -40,6 +40,7 @@ import {
   setRuleDisabledAction,
   type RuleActionState,
 } from './actions';
+import { buttonClass } from '@/components/ui/Button';
 
 const initial: RuleActionState = {};
 
@@ -437,7 +438,7 @@ function ClearRuleDialog({
             {nothingToClear ? 'Delete rule' : isRename ? 'Delete and restore' : 'Delete and clear'}
           </SubmitButton>
         </form>
-        <button type="button" className="btn btn--secondary btn--sm" onClick={onClose}>
+        <button type="button" className={buttonClass('secondary', 'sm')} onClick={onClose}>
           Cancel
         </button>
       </div>
@@ -515,7 +516,7 @@ function RunRulesDialog({ action, onClose }: { action: (formData: FormData) => v
             Run rules
           </SubmitButton>
         </form>
-        <button type="button" className="btn btn--secondary btn--sm" onClick={onClose}>
+        <button type="button" className={buttonClass('secondary', 'sm')} onClick={onClose}>
           Cancel
         </button>
       </div>
@@ -651,7 +652,7 @@ export function MerchantRulesClient({
             <input type="hidden" name="ruleId" value={String(deletingRule.id)} />
             <SubmitButton variant="danger" size="sm">Delete rule</SubmitButton>
           </form>
-          <button type="button" className="btn btn--secondary btn--sm" onClick={() => setDeletingRule(null)}>
+          <button type="button" className={buttonClass('secondary', 'sm')} onClick={() => setDeletingRule(null)}>
             Cancel
           </button>
         </div>
@@ -699,7 +700,7 @@ export function MerchantRulesClient({
             <input type="hidden" name="ids" value={selected.join(',')} />
             <SubmitButton variant="danger" size="sm">Delete permanently</SubmitButton>
           </form>
-          <button type="button" className="btn btn--secondary btn--sm" onClick={() => setConfirmingBulkDelete(false)}>
+          <button type="button" className={buttonClass('secondary', 'sm')} onClick={() => setConfirmingBulkDelete(false)}>
             Cancel
           </button>
         </div>
@@ -841,7 +842,7 @@ export function MerchantRulesClient({
           ) : null}
           <div className="flex gap-2">
             <SubmitButton className="w-fit">{isNew ? 'Create rule' : 'Save rule'}</SubmitButton>
-            <button type="button" className="btn btn--ghost btn--sm" onClick={() => setEditing(null)}>Cancel</button>
+            <button type="button" className={buttonClass('ghost', 'sm')} onClick={() => setEditing(null)}>Cancel</button>
           </div>
         </form>
       </RowDialog>
@@ -864,7 +865,7 @@ export function MerchantRulesClient({
         title="Merchant rules"
         description="Category, rename, transfer and not-a-transfer rules -- searched, filtered and acted on in bulk, the same idiom as Transactions."
         actions={
-          <button type="button" className="btn btn--primary btn--sm min-h-11 sm:min-h-0" onClick={() => setEditing(BLANK)}>
+          <button type="button" className={buttonClass('primary', 'sm', 'min-h-11 sm:min-h-0')} onClick={() => setEditing(BLANK)}>
             New rule
           </button>
         }
@@ -912,7 +913,7 @@ export function MerchantRulesClient({
                 className={`${inputClass} min-w-[16rem]`}
               />
             </Field>
-            <button type="submit" className="btn btn--secondary btn--sm min-h-11 sm:min-h-0">Search</button>
+            <button type="submit" className={buttonClass('secondary', 'sm', 'min-h-11 sm:min-h-0')}>Search</button>
           </form>
 
           <div role="group" aria-label="Filter by kind" className="flex flex-wrap items-center gap-2">
@@ -944,7 +945,7 @@ export function MerchantRulesClient({
           <div className="flex flex-wrap items-center gap-3 border-t border-line pt-3">
             {/* Label unchanged ("Re-run rules"): the page guide above names this control, and the
                 dialog it now opens explains itself in full. */}
-            <button type="button" className="btn btn--secondary btn--sm" onClick={() => setRunningRules(true)}>
+            <button type="button" className={buttonClass('secondary', 'sm')} onClick={() => setRunningRules(true)}>
               Re-run rules
             </button>
             <span className="text-sm text-muted">
@@ -969,11 +970,11 @@ export function MerchantRulesClient({
               <SubmitButton variant="secondary" size="sm">Enable</SubmitButton>
             </form>
             {!confirmingBulkDelete ? (
-              <button type="button" className="btn btn--danger btn--sm" onClick={() => setConfirmingBulkDelete(true)}>
+              <button type="button" className={buttonClass('danger', 'sm')} onClick={() => setConfirmingBulkDelete(true)}>
                 Delete selected
               </button>
             ) : null}
-            <button type="button" className="btn btn--ghost btn--sm" onClick={() => setSelected([])}>Clear selection</button>
+            <button type="button" className={buttonClass('ghost', 'sm')} onClick={() => setSelected([])}>Clear selection</button>
           </div>
         </div>
       ) : null}
@@ -1002,7 +1003,7 @@ export function MerchantRulesClient({
           </p>
           <button
             type="button"
-            className="btn btn--secondary btn--sm w-fit"
+            className={buttonClass('secondary', 'sm', 'w-fit')}
             onClick={() => {
               setSelected(Object.keys(redundantByRuleId).map(Number));
               setConfirmingBulkDelete(true);
@@ -1016,7 +1017,7 @@ export function MerchantRulesClient({
       <Card>
         {rows.length === 0 ? (
           <CardBody>
-            <EmptyState title="No rules match this filter" action={<Link href="/settings/merchant-rules" className="btn btn--secondary btn--sm">Clear filters</Link>}>
+            <EmptyState title="No rules match this filter" action={<Link href="/settings/merchant-rules" className={buttonClass('secondary', 'sm')}>Clear filters</Link>}>
               Try a broader search, or clear the kind/redundant filter above.
             </EmptyState>
           </CardBody>
@@ -1185,8 +1186,8 @@ export function MerchantRulesClient({
           <CardFooter>
             <nav className="flex items-center gap-3" aria-label="Pages">
               <span>Page {page} of {pageCount} · {total} rule{total === 1 ? '' : 's'}</span>
-              {page > 1 ? <Link href={pageHref(currentQuery, page - 1)} className="btn btn--ghost btn--sm">Prev</Link> : null}
-              {page < pageCount ? <Link href={pageHref(currentQuery, page + 1)} className="btn btn--ghost btn--sm">Next</Link> : null}
+              {page > 1 ? <Link href={pageHref(currentQuery, page - 1)} className={buttonClass('ghost', 'sm')}>Prev</Link> : null}
+              {page < pageCount ? <Link href={pageHref(currentQuery, page + 1)} className={buttonClass('ghost', 'sm')}>Next</Link> : null}
             </nav>
           </CardFooter>
         ) : rows.length > 0 ? (

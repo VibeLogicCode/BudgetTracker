@@ -7,6 +7,7 @@ import { DaysRemainingPill } from '@/components/ui/DaysRemainingPill';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ListRow } from '@/components/ui/ListRow';
 import { RecordPaymentForm } from '@/components/RecordPaymentForm';
+import { buttonClass } from '@/components/ui/Button';
 
 /**
  * Item P (ruling P9). The notification evaluator has had a flood guard since v1.4
@@ -139,11 +140,11 @@ export function ComingUpCard({
             }
             action={
               bills.length > 0 ? (
-                <Link href="/warranties" className="btn btn--secondary btn--sm">
+                <Link href="/warranties" className={buttonClass('secondary', 'sm')}>
                   View bills
                 </Link>
               ) : (
-                <Link href="/warranties/new" className="btn btn--primary btn--sm">
+                <Link href="/warranties/new" className={buttonClass('primary', 'sm')}>
                   Add a bill
                 </Link>
               )

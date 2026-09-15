@@ -8,6 +8,7 @@ import { Card, CardBody } from '@/components/ui/Card';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Field, inputClass, selectClass } from '@/components/ui/form';
 import { createGoalAction, type GoalActionState } from '../actions';
+import { buttonClass } from '@/components/ui/Button';
 
 const initial: GoalActionState = {};
 
@@ -36,7 +37,7 @@ export function NewGoalClient({ people }: { people: { id: number; name: string }
         title="New goal"
         description="Name it, give it a target, and it starts tracking pace on the first contribution."
         actions={
-          <Link href="/goals" className="btn btn--ghost btn--sm">
+          <Link href="/goals" className={buttonClass('ghost', 'sm')}>
             Cancel
           </Link>
         }
