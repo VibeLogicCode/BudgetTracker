@@ -219,7 +219,8 @@ describe('the help page explains loan direction (spec BU)', () => {
     expect(text).toContain('only applies when the amount is about what that charge was');
     expect(text).toContain('ahead of the card it was charged to');
     expect(text).toContain('Household');
-    expect(text).toContain('Correcting a row always edits the rule about the');
+    expect(text).toContain('The one that actually decided the row');
+    expect(text).toContain('two overlapping amount rules');
   });
 
   /**

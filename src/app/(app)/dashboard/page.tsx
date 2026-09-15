@@ -14,7 +14,7 @@ import { unreviewedRuleImports } from '@/lib/import/commit';
 import { listLoans } from '@/lib/loans';
 import { netWorthHint, netWorthOverTime } from '@/lib/networth';
 import { onboardingSteps } from '@/lib/onboarding';
-import { cashflowTrend, categoryBreakdown, topMerchants, trimLeadingEmptyMonths } from '@/lib/reports';
+import { cashflowTrend, categoryBreakdown, topMerchants, trimLeadingEmptyMonths, type MonthTrendRow } from '@/lib/reports';
 import { recurringLoad } from '@/lib/recurring';
 import { cashRunway, cashRunwayHint, type CashRunway } from '@/lib/runway';
 // F-01 (v1.31.0): the same link builder the Reports cards use. A plain, client-safe module, so
@@ -515,6 +515,8 @@ export default async function DashboardPage({
         />
       </div>
 
+      <MonthFramingNote netCents={netCents} history={trimmedTrend} month={month} />
+
       {/* The supporting numbers, unchanged: still cards, still a grid. They are deliberately NOT
           nested inside the band above -- a card inside a card is the one container mistake this
           codebase has avoided everywhere else. */}
@@ -921,6 +923,72 @@ export default async function DashboardPage({
         </section>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * 2026-09-15. ONE LINE, on a month that ended in the red.
+ *
+ * From the `$impeccable critique`: "on the worst money day of the month this app goes red in six
+ * places at once and says nothing." The Net tile turns red, the budget bars turn red, the review
+ * callout goes amber, Needs a look appears, Contracts expiring appears, What we owe appears --
+ * all formally identical, none subordinated, and nothing anywhere frames the month as ONE month.
+ * The app handles bad news with grace in exactly one place (NeedsALookCard: "Nothing here is a
+ * problem on its own"), and that was the exception rather than the house style.
+ *
+ * WHAT IT SAYS, and what it refuses to say. Not "don't worry" -- reassurance this app has not
+ * earned and cannot check. The household's own history instead: how many of their recent months
+ * finished in the black. That is a fact they can verify on the chart further down the page, and it
+ * is the thing a person actually wants to know when a single month looks bad.
+ *
+ * IT SAYS NOTHING RATHER THAN SOMETHING EMPTY. Under two months of history there is no honest
+ * framing to give -- a first-run household would get a platitude, which is worse than silence and
+ * is exactly the kind of figure-without-backing this codebase refuses everywhere else (the
+ * "(partial)" note beside net worth, `AsOfTodayNote`, the suppressed savings target). A month in
+ * the black gets nothing either: the line exists to frame bad news, and narrating a good month
+ * would make it wallpaper by the time it was needed.
+ *
+ * `--surface-2` and `--muted`, deliberately quiet. This is the calm thing to land on among six
+ * loud ones; making it a seventh coloured banner would defeat its whole purpose.
+ */
+function MonthFramingNote({
+  netCents,
+  history,
+  month,
+}: {
+  netCents: number;
+  history: MonthTrendRow[];
+  month: string;
+}) {
+  if (netCents >= 0) return null;
+  // `history` is the trailing run ending at the CURRENT month, which is not necessarily the month
+  // being viewed -- so the month on screen is excluded by name rather than by position, and a
+  // household looking back at an old month still gets the same honest denominator.
+  const others = history.filter((row) => row.month !== month);
+  if (others.length < 2) return null;
+  const positive = others.filter((row) => row.netCents > 0).length;
+  const window = others.length + 1;
+
+  return (
+    <p data-month-framing className="rounded-md bg-surface-2 px-3.5 py-3 text-sm text-muted">
+      {positive > 0 ? (
+        <>
+          One month on its own says little.{' '}
+          <span className="font-medium text-ink">
+            {positive} of the last {window} months
+          </span>{' '}
+          ended with money kept.
+        </>
+      ) : (
+        <>
+          <span className="font-medium text-ink">
+            {positive} of the last {window} months
+          </span>{' '}
+          ended with money kept, so this is a run rather than a one-off. The budgets below are where
+          that gets addressed.
+        </>
+      )}
+    </p>
   );
 }
 

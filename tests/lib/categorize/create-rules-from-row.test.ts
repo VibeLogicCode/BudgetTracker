@@ -1,8 +1,8 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../../helpers/db';
-import { createRulesFromRow, previewRulesFromRow } from '@/lib/categorize/engine';
-import { listRules } from '@/lib/categorize/rules';
+import { confirmCategory, createRulesFromRow, previewRulesFromRow } from '@/lib/categorize/engine';
+import { listRules, upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { normalizeMerchant } from '@/lib/categorize/normalize';
 import { setTransactionSplits } from '@/lib/splits';
 import { nowIso } from '@/lib/clock';
@@ -243,5 +243,97 @@ describe('createRulesFromRow: a refusal leaves nothing behind', () => {
     // The category rule the first upsert would have written is gone with it.
     expect(listRules()).toHaveLength(before);
     expect(rowState(id)).toEqual({ categoryId: null, attributedUserId: alex });
+  });
+});
+
+/**
+ * T10 / Q3 of docs/superpowers/specs/2026-09-13-vendor-amount-person-rules-design.md, the gap
+ * v1.39.0 shipped knowingly and the help text had to apologise for.
+ *
+ * Correcting a row in review calls confirmCategory with createRule: true, which upserts the
+ * MERCHANT-WIDE exact rule. Once an amount rule exists under that merchant, the two disagree: you
+ * correct a $130 insurance charge, the correction takes on the row, and the next import files it
+ * the old way because the bounded rule still wins with its own answer. Nothing on screen explains
+ * it, and the household has no reason to suspect the rule they just edited was not the one acting.
+ *
+ * The fix is the planner's recommendation: when EXACTLY ONE bounded exact rule covers the row's
+ * amount, the correction edits that rule. Exactly one, because two overlapping windows have no
+ * single obvious target and guessing between them would be a worse failure than the one being
+ * fixed -- there the merchant-wide rule stays the honest default.
+ */
+describe('teaching a category edits the rule that actually decides the row', () => {
+  function insurance() {
+    const { alex, add } = fixture();
+    const auto = categoryIdByName(current!.db, 'Car Insurance');
+    const home = categoryIdByName(current!.db, 'Home Insurance');
+    const inside = add('ACME INSURANCE', -14012);
+    createRulesFromRow({
+      normalizedMerchant: MERCHANT, amountMinCents: 12500, amountMaxCents: 15500,
+      categoryId: auto, attributedUserId: undefined, userId: alex, actorRole: 'admin',
+    });
+    return { alex, auto, home, inside, add };
+  }
+
+  it('edits the bounded rule when one covers the amount, and leaves the merchant-wide rule alone', () => {
+    const { alex, home, inside } = insurance();
+    const merchantWide = categoryIdByName(current!.db, 'Groceries');
+    upsertRuleFromCorrection({
+      pattern: MERCHANT, matchType: 'exact', ruleKind: 'category', categoryId: merchantWide,
+      createdBy: alex, actorRole: 'admin',
+    });
+
+    expect(confirmCategory({ transactionId: inside, categoryId: home, userId: alex, createRule: true, actorRole: 'admin' }).ok).toBe(true);
+
+    const rules = listRules('category');
+    const bounded = rules.find((rule) => rule.amountMinCents === 12500);
+    const wide = rules.find((rule) => rule.amountMinCents === null);
+    expect(bounded?.categoryId).toBe(home);
+    // Untouched: the correction was about a $140.12 charge, which that rule does not decide.
+    expect(wide?.categoryId).toBe(merchantWide);
+  });
+
+  it('still writes the merchant-wide rule for a charge no window covers', () => {
+    const { alex, home, auto, add } = insurance();
+    const outside = add('ACME INSURANCE', -8940);
+
+    confirmCategory({ transactionId: outside, categoryId: home, userId: alex, createRule: true, actorRole: 'admin' });
+
+    const rules = listRules('category');
+    expect(rules.find((rule) => rule.amountMinCents === null)?.categoryId).toBe(home);
+    // The bounded rule keeps its own answer -- this correction said nothing about that window.
+    expect(rules.find((rule) => rule.amountMinCents === 12500)?.categoryId).toBe(auto);
+  });
+
+  /**
+   * Two windows both holding the amount have no single obvious target. Picking one would be a
+   * guess, and a guess that silently edits the wrong rule is worse than the gap this closes.
+   */
+  it('falls back to the merchant-wide rule when two windows both cover the amount', () => {
+    const { alex, home, add } = insurance();
+    const groceries = categoryIdByName(current!.db, 'Groceries');
+    upsertRuleFromCorrection({
+      pattern: MERCHANT, matchType: 'exact', ruleKind: 'category', categoryId: groceries,
+      amountMinCents: 13000, amountMaxCents: 20000, createdBy: alex, actorRole: 'admin',
+    });
+    const inside = add('ACME INSURANCE', -14012);
+
+    confirmCategory({ transactionId: inside, categoryId: home, userId: alex, createRule: true, actorRole: 'admin' });
+
+    const rules = listRules('category');
+    expect(rules.find((rule) => rule.amountMinCents === null)?.categoryId).toBe(home);
+    expect(rules.find((rule) => rule.amountMinCents === 12500)?.categoryId).not.toBe(home);
+    expect(rules.find((rule) => rule.amountMinCents === 13000)?.categoryId).not.toBe(home);
+  });
+
+  it('is unaffected for a household with no bounded rules at all', () => {
+    const { alex, add } = fixture();
+    const coffee = categoryIdByName(current!.db, 'Coffee');
+    const id = add('TIM HORTONS', -485);
+
+    confirmCategory({ transactionId: id, categoryId: coffee, userId: alex, createRule: true, actorRole: 'admin' });
+
+    const rules = listRules('category');
+    expect(rules).toHaveLength(1);
+    expect(rules[0]).toMatchObject({ pattern: 'TIM HORTONS', categoryId: coffee, amountMinCents: null });
   });
 });

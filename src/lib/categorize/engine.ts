@@ -1160,6 +1160,50 @@ function transactionHasSplits(transactionId: number): boolean {
  * successful rule write, never upstream of it -- so a refusal can never leave a half-applied
  * category sitting on a rule nobody agreed to.
  */
+/**
+ * 2026-09-15. WHICH RULE A CORRECTION EDITS -- task T10 / open question Q3 of
+ * docs/superpowers/specs/2026-09-13-vendor-amount-person-rules-design.md.
+ *
+ * v1.39.0 shipped the gap knowingly and the help text had to say so out loud: correcting a row
+ * always wrote the MERCHANT-WIDE exact rule, so once an amount rule existed under that merchant
+ * the two could disagree. A household corrected a $130 insurance charge, watched the correction
+ * take on the row, and the next import filed it the old way -- because the bounded rule still won
+ * and still held its own answer. Nothing on screen explained it, and there was no reason to
+ * suspect the rule you just edited was not the one deciding.
+ *
+ * So the correction now edits the rule that ACTUALLY decides this row: if exactly one bounded
+ * exact rule covers the row's amount, that one; otherwise the merchant-wide rule, as before.
+ *
+ * EXACTLY ONE, and the strictness is the point. Two overlapping windows have no single obvious
+ * target, and silently picking one -- the narrower, the older, whichever -- would be a guess that
+ * edits a rule the person was not looking at. That is a worse failure than the one this closes,
+ * because it is invisible in the same way and also destroys a rule that was doing its job. With
+ * two candidates the merchant-wide rule stays the honest default, and matchRule's own precedence
+ * (bounded beats unbounded) means the household sees the bounded answer keep winning, which is at
+ * least a visible disagreement rather than a silent rewrite.
+ *
+ * Costs nothing for the overwhelmingly common case: `isBounded` is false for every rule a
+ * household had before migration 0024, so the filter below is a walk over a list that yields
+ * nothing and the returned target is the unbounded one.
+ */
+function teachTarget(
+  normalizedMerchant: string,
+  amountCents: number | null,
+): { amountMinCents: number | null; amountMaxCents: number | null } {
+  const unbounded = { amountMinCents: null, amountMaxCents: null };
+  if (amountCents === null) return unbounded;
+  const covering = listRules('category').filter(
+    (rule) =>
+      rule.matchType === 'exact' &&
+      rule.pattern === normalizedMerchant &&
+      rule.disabledAt === null &&
+      isBounded(rule) &&
+      amountWithinBounds(amountCents, rule.amountMinCents, rule.amountMaxCents),
+  );
+  if (covering.length !== 1) return unbounded;
+  return { amountMinCents: covering[0].amountMinCents, amountMaxCents: covering[0].amountMaxCents };
+}
+
 export function confirmCategory(input: {
   transactionId: number;
   categoryId: number;
@@ -1176,6 +1220,9 @@ export function confirmCategory(input: {
       normalizedMerchant: transactions.normalizedMerchant,
       categoryId: transactions.categoryId,
       source: transactions.categorizationSource,
+      // 2026-09-15 (T10): the teach path has to know which rule actually decides this row, and
+      // that question is about the amount as much as the merchant.
+      amountCents: transactions.amountCents,
     })
     .from(transactions)
     .where(eq(transactions.id, input.transactionId))
@@ -1207,11 +1254,14 @@ export function confirmCategory(input: {
 
   // R4 ownership check FIRST: resolved (and can refuse) before anything else below is touched.
   if (input.createRule !== false && row.normalizedMerchant.length > 0) {
+    const target = teachTarget(row.normalizedMerchant, row.amountCents);
     const upserted = upsertRuleFromCorrection({
       pattern: row.normalizedMerchant,
       matchType: 'exact',
       ruleKind: 'category',
       categoryId: input.categoryId,
+      amountMinCents: target.amountMinCents,
+      amountMaxCents: target.amountMaxCents,
       createdBy: input.userId,
       actorRole: input.actorRole,
       at,

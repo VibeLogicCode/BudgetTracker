@@ -1354,3 +1354,90 @@ describe('DashboardPage — the body splits into act-on-this and read-this', () 
     expect(split.textContent).not.toContain('Spent this month');
   });
 });
+
+/**
+ * 2026-09-15, the `$impeccable critique` finding I weighted highest: "on the worst money day of
+ * the month this app goes red in six places at once and says nothing."
+ *
+ * A negative month lights up the Net tile, the budget bars, the review callout, Needs a look,
+ * Contracts expiring and What we owe — all formally identical, none subordinated, nothing calm to
+ * land on and nothing framing the month as ONE month. The app handles bad news with grace in
+ * exactly one place today (NeedsALookCard: "Nothing here is a problem on its own").
+ *
+ * The answer is one line, and it is deliberately NOT reassurance. It is the household's own
+ * history: how many of the recent months they finished in the black. That is a fact they can check
+ * and act on, where "don't worry" is neither.
+ *
+ * THE HARD PART IS WHEN TO SAY NOTHING. A first-run household has no history, so the sentence
+ * would either be a platitude or a lie. This app's whole discipline is refusing to state figures
+ * it cannot stand behind — so with fewer than two months of history, it says nothing at all.
+ */
+describe('DashboardPage — a negative month is framed, not just reddened', () => {
+  let t: TestDb | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+  const today = todayIso();
+
+  async function household() {
+    t = createTestDb();
+    const adult = await createUser({ name: 'Adult', username: 'adult', password: 'correct horse battery', role: 'admin' });
+    const accountId = createAccount({ name: 'Chequing', type: 'chequing', ownerUserId: adult.id });
+    return { adult, accountId };
+  }
+
+  function spend(accountId: number, adultId: number, date: string, amountCents: number) {
+    createManualTransaction({
+      accountId, date, description: 'BIG STORE', amountCents, categoryId: null,
+      attributedUserId: adultId, userId: adultId, actorRole: 'admin',
+    });
+  }
+
+  const dash = async () =>
+    render(await (await import('@/app/(app)/dashboard/page')).default({ searchParams: Promise.resolve({}) }));
+
+  it('says nothing when the month is positive', async () => {
+    const { adult, accountId } = await household();
+    spend(accountId, adult.id, today, 400_000);
+    const { container } = await dash();
+    expect(container.textContent).not.toMatch(/months? of the last/i);
+  });
+
+  /** No history means no honest sentence, so there is none. */
+  it('says nothing on a first run, where there is no history to frame anything with', async () => {
+    const { adult, accountId } = await household();
+    spend(accountId, adult.id, today, -5_000);
+    const { container } = await dash();
+    expect(container.textContent).not.toMatch(/months? of the last/i);
+  });
+
+  it('frames a negative month with how many recent months ended in the black', async () => {
+    const { adult, accountId } = await household();
+    // Three earlier months finishing positive, then this one deep in the red.
+    for (const back of [1, 2, 3]) {
+      spend(accountId, adult.id, `${addMonths(currentMonth(), -back)}-05`, 300_000);
+    }
+    spend(accountId, adult.id, today, -80_000);
+
+    const { container } = await dash();
+    const note = container.querySelector('[data-month-framing]') as HTMLElement;
+    expect(note).toBeTruthy();
+    expect(note.textContent).toMatch(/3 of the last 4 months/i);
+  });
+
+  /** It must not claim a good run that did not happen. */
+  it('tells the truth when the recent months were mostly negative too', async () => {
+    const { adult, accountId } = await household();
+    for (const back of [1, 2, 3]) {
+      spend(accountId, adult.id, `${addMonths(currentMonth(), -back)}-05`, -20_000);
+    }
+    spend(accountId, adult.id, today, -80_000);
+
+    const { container } = await dash();
+    const note = container.querySelector('[data-month-framing]') as HTMLElement;
+    expect(note.textContent).toMatch(/0 of the last 4 months/i);
+    // No false comfort: the sentence changes when the history does not support one.
+    expect(note.textContent).not.toMatch(/one month/i);
+  });
+});

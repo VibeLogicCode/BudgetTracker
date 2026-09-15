@@ -243,11 +243,13 @@ export const HELP_SECTIONS: HelpSection[] = [
           person you set by hand stays set, and &ldquo;Run rules&rdquo; leaves it alone.
         </P>
         <P>
-          Which rule does a correction edit? Correcting a row always edits the rule about the
-          merchant, never an amount rule sitting under it. So if you have a rule for &ldquo;about
-          $130 from this insurer&rdquo; and you correct a $130 charge, the amount rule keeps its own
-          answer and goes on winning the next import. Change that one under{' '}
-          <B>Settings → Categories &amp; rules</B>.
+          Which rule does a correction edit? The one that actually decided the row. Correct a $130
+          charge while a rule covers &ldquo;about $130 from this insurer&rdquo;, and that rule is
+          the one that changes &mdash; not the merchant&rsquo;s general rule sitting behind it.
+          Correct a charge no amount rule covers and the general rule changes instead, as it always
+          has. The one case the app will not guess at is two overlapping amount rules both covering
+          the same charge: there it edits the general rule and leaves both alone, because picking
+          one of them would be changing a rule you were not looking at.
         </P>
       </>
     ),

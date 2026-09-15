@@ -1827,7 +1827,12 @@ nothing; v1.39.0 is the release that uses it.
 
 What that spec left open, and what is still open now:
 
-- **Q3 / T10 — which rule a correction edits. STILL OPEN, and the one to do next.** Correcting a
+- **Q3 / T10 — which rule a correction edits. SHIPPED 2026-09-15 (v1.41.1).** `teachTarget`
+  (`src/lib/categorize/engine.ts`) resolves the rule a correction edits: exactly one bounded exact
+  rule covering the row's amount wins, otherwise the merchant-wide rule as before. Two overlapping
+  windows deliberately fall back rather than guess — silently editing a rule the person was not
+  looking at is a worse failure than the one being closed. The help text no longer apologises for
+  the gap. Original statement of the problem, kept for the record:** Correcting a
   row in review writes the MERCHANT-wide rule (`confirmCategory` → `upsertRuleFromCorrection` with
   no bounds). A household with an amount rule under that merchant can therefore correct a charge
   inside the range, see the correction take, and watch the next import file it the old way — the
