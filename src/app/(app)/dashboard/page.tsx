@@ -45,38 +45,19 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { PillNav } from '@/components/ui/PillNav';
 import { ProgressBar } from '@/components/ui/ProgressBar';
 import { SectionHeader } from '@/components/ui/SectionHeader';
-import { StatTile, type DeltaTone } from '@/components/ui/StatTile';
+import { StatTile } from '@/components/ui/StatTile';
+import { monthDelta } from '@/lib/delta';
 import { TableWrap } from '@/components/ui/Table';
 import { ExpiringSoonCard, EXPIRING_WIDGET_LIMIT } from '@/components/warranty/ExpiringSoonCard';
 import { buttonClass } from '@/components/ui/Button';
 
 /**
- * Item 1 (2026-08-30 plan): "+2.4% vs last month", derived from whatever prior-period figure
- * the tile already has a twin query for (see prevMonthCashflow/netWorthPrev below -- none of
- * this widens what the page COMPUTES for its headline values, only what it fetches
- * ALONGSIDE them to describe a trend). `prev === 0` returns null rather than a fabricated
- * percentage (a household with $0 spent last month dividing by zero is not "infinite percent
- * more", it is nothing to compare against) -- callers render no delta at all in that case, which
- * ruling calls out as strictly better than a wrong one.
+ * 2026-09-15: moved to src/lib/delta.ts and given a readability ceiling. The old local version
+ * guarded only `prev === 0`, so a prior month of a few dollars produced "-1109.4% vs last month"
+ * on the owner's real dashboard -- correct, and about the denominator rather than the household.
+ * See that module for why the line switches to an absolute figure past the ceiling.
  */
-function deltaPct(curr: number, prev: number): number | null {
-  if (prev === 0) return null;
-  return ((curr - prev) / Math.abs(prev)) * 100;
-}
-
-/**
- * The one place sign and tone are reconciled (item 1's own warning: "getting that backwards is
- * worse than shipping no delta at all"). `goodWhenUp` names what kind of figure this is -- money
- * IN going up is good news (spending going up is bad news) -- rather than the tone ever being
- * guessed from the number's arithmetic sign alone.
- */
-function deltaProps(curr: number, prev: number, goodWhenUp: boolean): { delta?: string; deltaTone?: DeltaTone } {
-  const pct = deltaPct(curr, prev);
-  if (pct === null) return {};
-  const sign = pct > 0 ? '+' : '';
-  const tone: DeltaTone = pct === 0 ? 'default' : (pct > 0) === goodWhenUp ? 'positive' : 'negative';
-  return { delta: `${sign}${pct.toFixed(1)}% vs last month`, deltaTone: tone };
-}
+const deltaProps = monthDelta;
 
 export const dynamic = 'force-dynamic';
 
@@ -284,6 +265,8 @@ export default async function DashboardPage({
     )?.spentCents ?? 0;
 
   const budgetRows = rows.filter((row) => !row.isIncome && (row.limitCents !== null || row.spentCents !== 0));
+  /** Of the rows this page actually draws -- see the budgets CardHeader below for why it says this. */
+  const overBudgetCount = budgetRows.filter((row) => row.overBudget).length;
   const scopedPerson = scopeUserId === null ? null : people.find((person) => person.id === scopeUserId);
 
   // Ruling R6. Self-hiding widget: absent whenever there is nothing to say.
@@ -525,8 +508,12 @@ export default async function DashboardPage({
 
       {/* The supporting numbers, unchanged: still cards, still a grid. They are deliberately NOT
           nested inside the band above -- a card inside a card is the one container mistake this
-          codebase has avoided everywhere else. */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          codebase has avoided everywhere else.
+
+          2026-09-15: the column count moved to `.stat-grid` in globals.css. Four of these six
+          tiles self-hide on their own condition, so the count is two to six and a fixed
+          `lg:grid-cols-3` stranded the fifth tile beside a dead cell. See that rule's docblock. */}
+      <div className="stat-grid gap-4">
         <StatTile
           label="Money in"
           value={formatCents(incomeCents)}
@@ -538,7 +525,25 @@ export default async function DashboardPage({
           label="Net this month"
           value={formatCents(netCents, { showSign: true })}
           tone={netCents < 0 ? 'negative' : 'positive'}
-          hint={netCents < 0 ? 'Spending outran income' : 'Kept, after everything went out'}
+          /*
+            2026-09-15. The untracked-savings warning lives HERE now, not on the savings tile.
+            Ruling T1 case 3 surfaces the trap where money moved to a bank this app does not track
+            counts as spending -- which is a caveat about THIS figure, and it used to sit on a tile
+            that only renders when a savings target exists. A household with no target got the
+            number without the warning that it may be understated.
+          */
+          hint={
+            <>
+              {netCents < 0 ? 'Spending outran income' : 'Kept, after everything went out'}
+              {savings?.noSavingsAccount ? (
+                <>
+                  <br />
+                  No savings-type account is set up. Money moved to a bank this app doesn&apos;t
+                  track counts as spending unless the transaction is marked a transfer.
+                </>
+              ) : null}
+            </>
+          }
           {...deltaProps(
             netCents,
             // Item 4: this fallback now matches netCents' OWN fallback above -- spentCents/
@@ -636,7 +641,15 @@ export default async function DashboardPage({
             }
           />
         )}
-        {savings !== null ? <SavedThisMonthTile progress={savings} /> : null}
+        {/*
+            2026-09-15. Only when a TARGET exists. Without one this tile printed the identical
+            figure to "Net this month" beside it -- two cards, one fact, the second admitting in
+            its own hint that nothing had moved to savings. With a target it is about progress
+            toward something Net knows nothing about, which is a different statement and earns the
+            space. The untracked-savings warning moved to the Net tile above, since it is a caveat
+            about that figure rather than about this one.
+        */}
+        {savings !== null && savings.target !== null ? <SavedThisMonthTile progress={savings} /> : null}
         {runway !== null ? <CashRunwayTile runway={runway} /> : null}
       </div>
 
@@ -705,10 +718,25 @@ export default async function DashboardPage({
           <Card>
             <CardHeader
               title={`${monthLabel(month)} budgets`}
+              /*
+                2026-09-15. This line used to be `$A of $B budgeted · $C spent in total`, and both
+                halves were wrong to be here. The first is word for word the headline band's own
+                hint, three sections up the same page. The second looked like the band's headline
+                figure and was a DIFFERENT NUMBER: `totalSpentCents` counts categorized rows only,
+                the band counts everything, and the page offered no way to learn what the gap was
+                (it is the band's own "not categorized yet" line).
+
+                So the card says the thing only this card can say -- how the list underneath it is
+                doing. `overBudget` is decided in budgetTotals' own file against the effective
+                limit, so this counts rather than recomputes, and it counts the rows actually
+                RENDERED below rather than every row in the household.
+              */
               description={
-                totals.budgetedLimitCents > 0
-                  ? `${formatCents(totals.budgetedSpentCents)} of ${formatCents(totals.budgetedLimitCents)} budgeted · ${formatCents(totals.totalSpentCents)} spent in total`
-                  : `${formatCents(totals.totalSpentCents)} spent in total`
+                overBudgetCount > 0
+                  ? `${overBudgetCount} over ${overBudgetCount === 1 ? 'its' : 'their'} limit`
+                  : totals.budgetedLimitCents > 0
+                    ? 'All within their limits'
+                    : 'Where the month went, by category'
               }
               action={
                 <Link href="/budgets" className={buttonClass('ghost', 'sm', 'text-accent-text hover:text-accent-text')}>

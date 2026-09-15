@@ -943,6 +943,70 @@
     }
   }
 
+  /* ----- The dashboard's supporting-number tiles (2026-09-15) -----
+     Read off the owner's own dashboard: five tiles in a three-column grid, so the last row held
+     two and a dead cell. The eye does not read that gap as "there were only five" -- it reads it
+     as a tile that failed to load, on the one page whose job is to be trusted at a glance.
+
+     WHY THIS IS CSS AND NOT A CLASS LIST. Four of the six tiles self-hide independently (Net
+     worth needs a balance on file, Recorded billing needs a recorded item, Saved needs a target,
+     Cash runway needs both), so the child count is genuinely unknown until render. `lg:grid-cols-3`
+     is an assertion about a number the page does not have. `:nth-last-child(n)` on the FIRST child
+     is the standard way to ask "how many siblings are there" -- the first child's index counted
+     from the end IS the count -- and it asks the DOM, after the fact, which is the only place the
+     answer exists.
+
+     SIX TRACKS because 6 divides by both 2 and 3: a tile spans 2 for three-per-row, 3 for
+     two-per-row, and the layout can switch between them per count without a second grid.
+
+       2 -> 2        4 -> 2 + 2        6 -> 3 + 3
+       3 -> 3        5 -> 3 + 2 (the trailing pair widened to close the row)
+
+     A browser without :has() gets three per row and the old dead cell back at five -- cosmetic,
+     the same worst case the other :has() rules in this file accept. */
+  .stat-grid {
+    display: grid;
+  }
+
+  @media (min-width: 40rem) {
+    .stat-grid {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .stat-grid > * {
+      grid-column: span 2;
+    }
+
+    /* Tablet keeps two per row, so only an odd count can strand one: it takes the whole row.
+       Bounded to below `lg` because the six-track rules below are a different arithmetic and
+       this selector is specific enough to win over them if it were allowed to reach that far. */
+    @media (max-width: 63.999rem) {
+      .stat-grid > :first-child:nth-last-child(odd) ~ :last-child,
+      .stat-grid > :only-child {
+        grid-column: span 4;
+      }
+    }
+  }
+
+  @media (min-width: 64rem) {
+    .stat-grid {
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+    }
+
+    .stat-grid > * {
+      grid-column: span 2;
+    }
+
+    .stat-grid:has(> :first-child:nth-last-child(2)) > *,
+    .stat-grid:has(> :first-child:nth-last-child(4)) > * {
+      grid-column: span 3;
+    }
+
+    .stat-grid:has(> :first-child:nth-last-child(5)) > :nth-last-child(-n + 2) {
+      grid-column: span 3;
+    }
+  }
+
   /* ----- Ambient wash behind the signed-out pages ----- */
   .auth-wash {
     background-image:

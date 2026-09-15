@@ -5,6 +5,7 @@ import { sql } from 'drizzle-orm';
 import { createAccount } from '@/lib/accounts';
 import { createUser } from '@/lib/auth/users';
 import { createCategory } from '@/lib/categories';
+import { upsertBudget } from '@/lib/budgets';
 import { nowIso } from '@/lib/clock';
 import { recordBalanceSnapshot } from '@/lib/networth';
 import { createManualTransaction } from '@/lib/transactions';
@@ -1439,5 +1440,182 @@ describe('DashboardPage — a negative month is framed, not just reddened', () =
     expect(note.textContent).toMatch(/0 of the last 4 months/i);
     // No false comfort: the sentence changes when the history does not support one.
     expect(note.textContent).not.toMatch(/one month/i);
+  });
+});
+
+/**
+ * 2026-09-15, from the owner's own dashboard. Three things that a screenshot made obvious and no
+ * test had ever asked about.
+ */
+describe('DashboardPage — the stat tiles say one thing each', () => {
+  let t: TestDb | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+  const today = todayIso();
+
+  async function household() {
+    t = createTestDb();
+    const adult = await createUser({ name: 'Adult', username: 'adult', password: 'correct horse battery', role: 'admin' });
+    const accountId = createAccount({ name: 'Chequing', type: 'chequing', ownerUserId: adult.id });
+    createManualTransaction({
+      accountId, date: today, description: 'BIG STORE', amountCents: -5_000, categoryId: null,
+      attributedUserId: adult.id, userId: adult.id, actorRole: 'admin',
+    });
+    return { adult, accountId };
+  }
+
+  const dash = async () =>
+    render(await (await import('@/app/(app)/dashboard/page')).default({ searchParams: Promise.resolve({}) }));
+
+  /**
+   * "Net this month" and "Saved this month" rendered the SAME figure as two peer tiles, and the
+   * second admitted in its own hint that nothing had moved to savings. Two cards, one fact.
+   *
+   * Saved earns its place only when a target exists — then it is about progress toward something
+   * Net knows nothing about. With no target it is Net wearing a different label.
+   */
+  it('does not repeat the net figure as a second tile when no savings target is set', async () => {
+    await household();
+    const { container } = await dash();
+    expect(container.textContent).toContain('Net this month');
+    expect(container.textContent).not.toContain('Saved this month');
+  });
+
+  /**
+   * The warning that made the old tile worth keeping is a caveat about the NET figure — money sent
+   * to an untracked bank counts as spending — so it belongs on the tile it qualifies, not on one
+   * that may not render.
+   */
+  it('keeps the untracked-savings warning, on the figure it is about', async () => {
+    await household();
+    const { container } = await dash();
+    expect(container.textContent).toMatch(/No savings-type account is set up/i);
+  });
+
+  /**
+   * A percentage against a near-zero prior month reads "-1109.4% vs last month", which is correct
+   * and useless. src/lib/delta.ts owns the rule; this is the page actually using it.
+   */
+  it('never prints an unreadable percentage', async () => {
+    await household();
+    const { container } = await dash();
+    const absurd = [...(container.textContent ?? '').matchAll(/([-+]?\d+(?:\.\d+)?)%\s+vs last month/g)]
+      .map((m) => Math.abs(Number(m[1])))
+      .filter((pct) => pct > 300);
+    expect(absurd).toEqual([]);
+  });
+});
+
+/**
+ * 2026-09-15, read off the owner's own live dashboard rather than a test fixture.
+ *
+ * The supporting-numbers grid was `sm:grid-cols-2 lg:grid-cols-3` over a run of tiles that
+ * self-hide independently — Net worth, Recorded billing, Saved, Cash runway are each conditional,
+ * so the count is anywhere from two to six. At five the last row held two tiles and one dead cell,
+ * and the eye reads that gap as a tile that failed to load.
+ *
+ * A fixed column count cannot be right for a variable child count. The grid is a 6-track one now
+ * and the CSS picks the spans from how many children there actually are, so every row is full at
+ * every count. That decision lives in globals.css, which is why half of this block reads the
+ * stylesheet: a Tailwind class list in the page cannot express "it depends how many".
+ */
+describe('DashboardPage — the stat grid never leaves a dead cell', () => {
+  let t: TestDb | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  const CSS = fs.readFileSync(path.join(process.cwd(), 'src/app/globals.css'), 'utf8');
+
+  async function household() {
+    t = createTestDb();
+    const adult = await createUser({ name: 'Adult', username: 'adult', password: 'correct horse battery', role: 'admin' });
+    const accountId = createAccount({ name: 'Chequing', type: 'chequing', ownerUserId: adult.id });
+    createManualTransaction({
+      accountId, date: todayIso(), description: 'BIG STORE', amountCents: -5_000, categoryId: null,
+      attributedUserId: adult.id, userId: adult.id, actorRole: 'admin',
+    });
+    return { adult, accountId };
+  }
+
+  it('hands the column count to CSS instead of pinning it in the markup', async () => {
+    await household();
+    const { container } = await render(
+      await (await import('@/app/(app)/dashboard/page')).default({ searchParams: Promise.resolve({}) }),
+    );
+    const grid = container.querySelector('.stat-grid');
+    expect(grid).not.toBeNull();
+    expect(grid!.className).not.toMatch(/grid-cols-\d/);
+  });
+
+  it('defines a span for every count the tiles can produce', () => {
+    // Two (Money in + Net, the only unconditional pair) through six (all four optionals present).
+    for (const count of [2, 4, 5]) {
+      expect(CSS).toContain(`:first-child:nth-last-child(${count})`);
+    }
+  });
+
+  it('lays the odd counts out on a track grid that divides by both two and three', () => {
+    const block = CSS.slice(CSS.indexOf('.stat-grid'));
+    expect(block).toContain('repeat(6, minmax(0, 1fr))');
+  });
+});
+
+/**
+ * The month's spend was stated three times on one page: the headline band ("Spent this month"),
+ * that band's own hint ("$A of $B budgeted"), and the budgets card header, which repeated the
+ * budgeted pair AND added "$C spent in total".
+ *
+ * Worse than repetition: $C is the CATEGORIZED total (budgetTotals' own totalSpentCents) while the
+ * band's figure is all spend, so the page printed two different numbers under two readings of the
+ * same words. A reader who notices the gap has no way to learn what it is from the page.
+ *
+ * The band keeps both statements — it is the figure and its budget position. The budgets card says
+ * what only it can say: how the categories below are doing against their limits.
+ */
+describe('DashboardPage — the month total is stated once', () => {
+  let t: TestDb | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  async function householdWithALimit() {
+    t = createTestDb();
+    const adult = await createUser({ name: 'Adult', username: 'adult', password: 'correct horse battery', role: 'admin' });
+    const accountId = createAccount({ name: 'Chequing', type: 'chequing', ownerUserId: adult.id });
+    const categoryId = createCategory({ name: 'Groceries', parentId: null });
+    upsertBudget({ scope: 'household', userId: null, categoryId, month: currentMonth(), amountCents: 20_000 });
+    createManualTransaction({
+      accountId, date: todayIso(), description: 'BIG STORE', amountCents: -25_000, categoryId,
+      attributedUserId: adult.id, userId: adult.id, actorRole: 'admin',
+    });
+    return { adult, categoryId };
+  }
+
+  const dash = async () =>
+    render(await (await import('@/app/(app)/dashboard/page')).default({ searchParams: Promise.resolve({}) }));
+
+  it('drops the budgets card\u2019s restatement of a figure the band already carries', async () => {
+    await householdWithALimit();
+    const { container } = await dash();
+    expect(container.textContent).not.toContain('spent in total');
+  });
+
+  it('says "of $X budgeted" exactly once', async () => {
+    await householdWithALimit();
+    const { container } = await dash();
+    const stated = [...(container.textContent ?? '').matchAll(/of \$[\d,]+\.\d\d budgeted/g)];
+    expect(stated).toHaveLength(1);
+  });
+
+  /** What the card replaces it with has to be worth the line: the state of the list below it. */
+  it('tells the reader instead how the categories are doing', async () => {
+    await householdWithALimit();
+    const { container } = await dash();
+    expect(container.textContent).toMatch(/1 over its limit/);
   });
 });

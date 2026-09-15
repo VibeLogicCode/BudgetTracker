@@ -21,6 +21,27 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.43.0] - 2026-09-15
+
+No migration.
+
+### Changed
+
+- **An over-budget bar now shows how far over.** A category at 117% of its limit and one at 370%
+  both drew the same full red bar, so the one that was nearly four times over looked identical to
+  the one that had just tipped past. Past the limit the bar's track now stands for the whole spend
+  and a notch marks where the limit fell, so the overshoot is the gap after it.
+- **The dashboard's budgets card says how the categories are doing.** Its heading used to repeat
+  the month's budgeted figure word for word from the headline at the top of the page, and add a
+  "spent in total" that was a different number again (it counted categorized rows only, while the
+  headline counts everything). It now says how many categories are over their limit.
+
+### Fixed
+
+- **The supporting tiles no longer leave a blank cell.** Four of the six tiles on the dashboard
+  appear only when they have something to say, so the row could end with a gap that read as a tile
+  that failed to load. Each row is filled now, at every count.
+
 ## [1.42.1] - 2026-09-15
 
 No migration.
