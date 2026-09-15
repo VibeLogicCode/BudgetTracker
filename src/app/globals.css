@@ -33,11 +33,24 @@
   /* Hairlines */
   --line: #e2e2ef;
   --line-strong: #cfcfe4;
+  /* 2026-09-15. SEPARATE FROM --line-strong, and the separation is the whole point. A divider is
+     decorative and has no contrast floor; the visual boundary of a form control is held to 3:1
+     (WCAG 1.4.11), and --line-strong was 1.53:1 against a white field -- so every input, select
+     and textarea in an app that is mostly forms had an edge a low-vision reader could not find.
+     One token cannot be both without darkening every hairline in the app into a grid. 3.59:1 on
+     --field-bg, 3.14:1 on --surface-2. */
+  --field-border: #85859f;
 
   /* Text hierarchy */
   --ink: #16162b;
   --muted: #5a5a72;
-  --subtle: #6e6e88;
+  /* 2026-09-15: was #6e6e88, which cleared AA on --surface and --canvas (4.94 / 4.55) and was
+     never checked against --surface-2 -- where it landed at 4.32:1, under the 4.5 floor. That is
+     every .data-table thead th in the app, the transactions day-group headers and the import
+     wizard's inactive step chips. Darkened until the WORST of its three grounds passes:
+     4.87 on --surface-2, 5.58 on --surface, 5.13 on --canvas, 4.55 on --surface-3.
+     tests/ops/contrast.test.ts recomputes all of them, so this cannot drift back. */
+  --subtle: #66667e;
   /* Placeholder task (owner screenshot fix): `--subtle` clears 4.94:1 against --field-bg here --
      comfortably AA for normal text, which is exactly the bug (a hinted field read almost as
      strongly as a filled one, so it looked pre-filled). --placeholder sits below every other
@@ -107,6 +120,9 @@
 
   --line: #2a2c40;
   --line-strong: #3a3d55;
+  /* Same role as the light value above, recomputed against this theme's own --field-bg (#10111c)
+     rather than assumed to carry over: 3.86:1 there, 3.62:1 on --surface. */
+  --field-border: #6c708a;
 
   --ink: #ededf5;
   --muted: #a9adc4;
@@ -166,6 +182,7 @@
 
   --color-line: var(--line);
   --color-line-strong: var(--line-strong);
+  --color-field-border: var(--field-border);
 
   --color-ink: var(--ink);
   --color-muted: var(--muted);
@@ -391,7 +408,7 @@
   .field-control {
     width: 100%;
     border-radius: var(--radius-sm);
-    border: 1px solid var(--line-strong);
+    border: 1px solid var(--field-border);
     background: var(--field-bg);
     color: var(--ink);
     padding: 0.5rem 0.75rem;
@@ -506,7 +523,10 @@
   .btn--secondary {
     background: var(--surface);
     color: var(--ink);
-    border-color: var(--line-strong);
+    /* 2026-09-15: --field-border, not --line-strong. A secondary button sits on the same surface
+       it is drawn on, so its border IS the affordance -- the thing that says "this is a control"
+       rather than a line between two regions. Same 3:1 floor as an input's edge. */
+    border-color: var(--field-border);
     box-shadow: var(--elev-flat);
   }
 
@@ -893,7 +913,25 @@
 
 /* Motion is a nicety; anyone who has asked for less gets none. */
 @media (prefers-reduced-motion: reduce) {
-  *,
+  /*
+    `:not()` is load-bearing, and 2026-09-15 is when it was added.
+
+    The blanket rule underneath this is the standard reduced-motion reset, and for decoration it is
+    right: a hover tint, a button's 0.5px press, a panel sliding in are all things somebody who
+    asked for less motion should stop receiving. But it was applied to EVERYTHING, and two of the
+    things it caught are not decoration -- they are the only feedback the app gives:
+
+      - `animate-pulse` on the four loading skeletons (reports/loading.tsx, transactions/loading.tsx).
+        Frozen, they are four grey boxes that look like a broken page rather than a loading one.
+      - `animate-spin` on the AutoSave indicator (src/components/ui/AutoSave.tsx). A spinner stopped
+        at one frame reads as an app that has hung, which is the opposite of what it is there to say.
+
+    Reduced motion means less movement, not less information. These two keep moving; everything
+    else still stops. Neither is a flashing or parallax risk -- a slow opacity pulse and a small
+    rotation are the two mildest forms of motion there are, and WCAG 2.3.1's flash threshold is
+    three per second, which neither approaches.
+  */
+  *:not(.motion-keep),
   *::before,
   *::after {
     animation-duration: 0.01ms !important;

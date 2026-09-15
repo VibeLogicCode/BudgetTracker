@@ -18,8 +18,8 @@ export default function ReportsLoading() {
       {[0, 1, 2].map((card) => (
         <Card key={card}>
           <CardBody className="flex flex-col gap-3 py-8">
-            <span className="h-4 w-40 animate-pulse rounded bg-surface-2" />
-            <span className="h-32 w-full animate-pulse rounded bg-surface-2" />
+            <span className="h-4 w-40 motion-keep animate-pulse rounded bg-surface-2" />
+            <span className="h-32 w-full motion-keep animate-pulse rounded bg-surface-2" />
           </CardBody>
         </Card>
       ))}

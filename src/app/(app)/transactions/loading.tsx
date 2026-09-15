@@ -12,9 +12,9 @@ export default function TransactionsLoading() {
       </p>
       <Card>
         <CardBody className="flex flex-col gap-3 py-8">
-          <span className="h-4 w-56 animate-pulse rounded bg-surface-2" />
+          <span className="h-4 w-56 motion-keep animate-pulse rounded bg-surface-2" />
           {[0, 1, 2, 3, 4, 5, 6, 7].map((row) => (
-            <span key={row} className="h-6 w-full animate-pulse rounded bg-surface-2" />
+            <span key={row} className="h-6 w-full motion-keep animate-pulse rounded bg-surface-2" />
           ))}
         </CardBody>
       </Card>
