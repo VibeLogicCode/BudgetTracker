@@ -467,3 +467,66 @@ describe('applyPaymentMatchers: a batch of same-loan repayments clamps in sequen
     expect(ctx.balanceOf(itemId)).toBe(0);
   });
 });
+
+/**
+ * R27a (docs/PENDING-FIXES.md), the item the R27 ruling exposed: "a loan rule should be able to
+ * carry an expected amount... A $400 monthly repayment then stops matching a $60 dinner split."
+ *
+ * The matcher was a bare substring test on the merchant plus an optional account, with no amount
+ * check at all — so a rule broad enough to catch "he repays me by e-transfer" was broad enough to
+ * catch every other e-transfer, and a wrong match MOVES A LOAN BALANCE. That is the real cost the
+ * R27 ruling identified: the rename was never the defect.
+ *
+ * THE BAND IS DELIBERATELY LOOSE. It reads the item's own recorded billing amount — no migration,
+ * exactly as R27a proposed — and rejects only what is wildly off. A tight window would break
+ * legitimate variance (a repayment rounded up, a bill that rose at renewal) on households that
+ * are relying on these rules today, and this is a behaviour change landing on existing data. Half
+ * to double the recorded amount kills the $60-against-$400 case, which is the one R27a names,
+ * and leaves normal drift alone. A per-rule tolerance is the follow-up if this is ever too loose.
+ *
+ * An item with NO recorded billing amount is unchanged: nothing to compare against, no check.
+ */
+describe('R27a: a rule will not match an amount nowhere near the item own', () => {
+  function seedBilledLoan(amountCents: number | null): number {
+    // This file's own helpers, against this file's own `t` -- setupLoanTest() opens a SECOND
+    // database, which `spend()` below would not be writing to.
+    const itemId = makeItem(typeOfKind('loan', `Car loan ${amountCents ?? 'none'}`), 'Car loan', 2_000_000);
+    if (amountCents !== null) {
+      t.sqlite.prepare('update warranty_items set billing_amount_cents = ? where id = ?').run(amountCents, itemId);
+    }
+    return itemId;
+  }
+
+  it('still matches a payment close to the recorded amount', () => {
+    const itemId = seedBilledLoan(40_000);
+    saveLoanRule({ itemId, merchantContains: 'E-TRANSFER', accountId: null, enabled: true });
+    const txnId = spend('e-transfer', -41_500);
+
+    expect(applyPaymentMatchers([txnId], new Date(NOW))).toBe(1);
+  });
+
+  it('refuses a payment nowhere near it -- the $60 split against a $400 repayment', () => {
+    const itemId = seedBilledLoan(40_000);
+    saveLoanRule({ itemId, merchantContains: 'E-TRANSFER', accountId: null, enabled: true });
+    const txnId = spend('e-transfer', -6_000);
+
+    expect(applyPaymentMatchers([txnId], new Date(NOW))).toBe(0);
+  });
+
+  it('leaves an item with no recorded amount matching exactly as it did before', () => {
+    const itemId = seedBilledLoan(null);
+    saveLoanRule({ itemId, merchantContains: 'E-TRANSFER', accountId: null, enabled: true });
+    const txnId = spend('e-transfer', -6_000);
+
+    expect(applyPaymentMatchers([txnId], new Date(NOW))).toBe(1);
+  });
+
+  /** The band is generous on purpose: a repayment that drifted up is still that repayment. */
+  it('tolerates real drift in both directions', () => {
+    const itemId = seedBilledLoan(40_000);
+    saveLoanRule({ itemId, merchantContains: 'E-TRANSFER', accountId: null, enabled: true });
+
+    expect(applyPaymentMatchers([spend('e-transfer', -22_000)], new Date(NOW))).toBe(1);
+    expect(applyPaymentMatchers([spend('e-transfer', -75_000)], new Date(NOW))).toBe(1);
+  });
+});

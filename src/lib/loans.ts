@@ -2,6 +2,7 @@ import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, sql } from 'drizzl
 import { getDb } from '@/db/client';
 import { accounts, billInstallments, loanMatcherRules, loanPayments, transactions, users, warrantyItemTypes, warrantyItems } from '@/db/schema';
 import { canActOnOwner, ownerScope, HOUSEHOLD_VIEWER, NOT_YOURS_ERROR, type Viewer } from '@/lib/auth/viewer';
+import { amountWithinBounds } from '@/lib/categorize/amount-bounds';
 import { nowIso } from '@/lib/clock';
 // v1.31.0 R-03 / ruling R24: which display_description writer outranks which, defined once.
 import { displaySourceMayWrite } from '@/lib/display-source';
@@ -217,6 +218,9 @@ interface ActiveRule {
   /** v1.14.0 (spec BU). 'owed' for every bill row -- a bill has no direction of its own, and
    *  loanFieldsAllowedForKind gates the other value to loan-kind items only (ruling P3). */
   direction: LoanDirection;
+  /** R27a: what the item is recorded as billing, or null when nobody has said. See
+   *  amountPlausibleFor below for why a null means "no amount check" rather than "no match". */
+  billingAmountCents: number | null;
 }
 
 /**
@@ -228,6 +232,44 @@ interface ActiveRule {
  * no balance to move, so requiring a non-null one would make every bill rule permanently inert
  * -- the rule would save, report success, and never fire.
  */
+/**
+ * R27a (docs/PENDING-FIXES.md), the item the R27 ruling exposed: "a loan rule should be able to
+ * carry an expected amount, matched within a tolerance. A $400 monthly repayment then stops
+ * matching a $60 dinner split."
+ *
+ * Until now this matcher was a bare substring test on the merchant plus an optional account, with
+ * NO AMOUNT CHECK AT ALL. So a rule broad enough to catch "he repays me by e-transfer" was broad
+ * enough to catch every other e-transfer — and a wrong match here does not merely mislabel a row,
+ * it MOVES A LOAN BALANCE. That was the real cost the R27 ruling identified; the rename it started
+ * out about was never the defect.
+ *
+ * READS THE ITEM'S OWN RECORDED AMOUNT, so there is no migration and no new field to fill in —
+ * exactly what R27a proposed. An item nobody has told what it bills has nothing to compare
+ * against, and matches exactly as it did before.
+ *
+ * THE BAND IS DELIBERATELY LOOSE, and that is the whole design decision here. This is a behaviour
+ * change landing on households already relying on these rules, so a tight window would silently
+ * stop matching payments that are legitimately variable — a repayment rounded up, a bill that rose
+ * at renewal, an extra month paid at once. Half to double the recorded amount kills the
+ * $60-against-$400 case R27a actually names and leaves ordinary drift alone. If this ever proves
+ * too loose for somebody, the follow-up is a per-rule tolerance column, which is R27a's own open
+ * storage question and needs a migration this does not.
+ *
+ * Compared through `amountWithinBounds` (src/lib/categorize/amount-bounds.ts) rather than a `>=`
+ * pair written here: that is the ONE amount predicate, and tests/ops/amount-bounds.test.ts refuses
+ * a second copy of it anywhere under src/.
+ */
+const AMOUNT_BAND = { low: 0.5, high: 2 };
+
+function amountPlausibleFor(rule: ActiveRule, amountCents: number): boolean {
+  if (rule.billingAmountCents === null || rule.billingAmountCents <= 0) return true;
+  return amountWithinBounds(
+    amountCents,
+    Math.round(rule.billingAmountCents * AMOUNT_BAND.low),
+    Math.round(rule.billingAmountCents * AMOUNT_BAND.high),
+  );
+}
+
 function activeRules(tx: ReturnType<typeof getDb>): ActiveRule[] {
   return tx
     .select({
@@ -238,6 +280,9 @@ function activeRules(tx: ReturnType<typeof getDb>): ActiveRule[] {
       balanceCents: sql<number | null>`${warrantyItems.currentBalanceCents}`,
       kind: sql<'loan' | 'bill'>`${warrantyItemTypes.kind}`,
       direction: warrantyItems.loanDirection,
+      // R27a: what this item is RECORDED as billing. Null on an item nobody has told, in which
+      // case there is nothing to compare a payment against and the amount check does not apply.
+      billingAmountCents: warrantyItems.billingAmountCents,
     })
     .from(loanMatcherRules)
     .innerJoin(warrantyItems, eq(warrantyItems.id, loanMatcherRules.itemId))
@@ -800,7 +845,8 @@ export function applyPaymentMatchers(txnIds: number[], at: Date = new Date(), re
         const match = rules.find(
           (rule) =>
             txn.normalizedMerchant.includes(rule.merchantContains) &&
-            (rule.accountId === null || rule.accountId === txn.accountId),
+            (rule.accountId === null || rule.accountId === txn.accountId) &&
+            amountPlausibleFor(rule, txn.amountCents),
         );
         if (match === undefined) continue;
 

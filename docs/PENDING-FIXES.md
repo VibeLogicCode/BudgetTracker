@@ -1801,9 +1801,13 @@ assignment you make yourself renames the row").
 wrongly matched row already moves a loan's balance today, rename or no rename. Recorded as its own
 item rather than folded in here:
 
-- **R27a — a loan rule should be able to carry an expected amount, matched within a tolerance.**
-  A $400 monthly repayment then stops matching a $60 dinner split. Biggest gain of the three,
-  no migration if it reads the item's existing payment amount.
+- **R27a — SHIPPED 2026-09-15 (v1.41.1).** `amountPlausibleFor` (`src/lib/loans.ts`) compares a
+  candidate payment against the item's own `billing_amount_cents` through `amountWithinBounds`,
+  the one amount predicate. No migration, exactly as proposed. The band is DELIBERATELY loose —
+  half to double the recorded amount — because this is a behaviour change landing on households
+  already relying on these rules: it kills the $60-against-$400 case and leaves legitimate drift
+  (a rounded-up repayment, a renewal increase) alone. An item with no recorded billing amount is
+  unchanged. A per-rule tolerance column remains the follow-up if the band is ever too loose.
 - **R27b — rule-linked loan payments could land in the review queue** rather than applying
   silently, so a wrong link costs a click instead of going unnoticed.
 - **R27c — warn when a rule's text is generic** (`INTERAC`, `E-TRANSFER`, `WITHDRAWAL`, `DRAFT`)

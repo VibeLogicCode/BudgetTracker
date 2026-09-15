@@ -21,6 +21,32 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.41.1] - 2026-09-15
+
+No migration.
+
+### Fixed
+
+- **A correction now edits the rule that actually decided the row.** If an amount rule covers the
+  charge you are correcting, that rule changes — not the merchant's general rule sitting behind
+  it. Before this, you could correct a $130 insurance charge, watch it take, and see the next
+  import file it the old way, because the amount rule still won and still held its old answer. The
+  one case it will not guess at is two overlapping amount rules both covering the same charge:
+  there it edits the general rule and leaves both alone, rather than changing one you were not
+  looking at.
+- **A loan or bill rule no longer matches a payment nowhere near the expected amount.** The
+  matcher was merchant text and nothing else, so a rule broad enough to catch "he repays me by
+  e-transfer" caught every other e-transfer — and a wrong match there moves a loan balance. It now
+  checks the item's own recorded billing amount, with a deliberately generous band (half to double)
+  so ordinary variation still matches. An item you have not told what it bills is unchanged.
+
+### Added
+
+- **A negative month gets one line of context.** When a month ends in the red the dashboard says
+  how many of your recent months ended with money kept, instead of turning six things red and
+  saying nothing. It stays quiet on a first run, where there is no history to say anything honest
+  with, and on a month that ended fine.
+
 ## [1.41.0] - 2026-09-15
 
 No migration.
