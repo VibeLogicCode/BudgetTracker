@@ -1873,3 +1873,29 @@ in that window", and `tests/ops/amount-bounds.test.ts` refuses a second copy of 
 `rules.find` in `applyPaymentMatchers` (`src/lib/loans.ts`), against
 `warranty_items.billing_amount_cents` ± the tolerance. The storage question — a per-rule tolerance
 column versus reading the item's own amount — is still R27a's own ruling to make. ~1.5 h.
+
+---
+
+## UP-3 (the pack-update notice) — the auto-apply half is REFUSED, 2026-09-15
+
+UP-3 had two halves. **Dismissible shipped in v1.37.0** (`dismissPackUpdateAction`, a "Not now"
+button on the notice). The second half — *"or auto-applied when the household has not customised
+it"* — is closed here as refused rather than left open, so it stops being re-proposed every time
+somebody reads the backlog.
+
+**Why.** `applyCanadianPackUpdate`'s own docblock forbids it in as many words, and the argument is
+right: *"a rule's outcome decides how money gets categorized, and this app never recategorizes
+anything without a human's say-so."* Every neighbouring path keeps the same discipline —
+`rerunEngine` and `applyRuleNow` both require a person to press something, and both show a count
+first. A pack update that applied itself would be the one place in this app where the categorisation
+of real money changed because a version number moved.
+
+"Has not customised it" does not rescue the idea either. It means *no rule carries a household
+stamp today* — which says nothing about whether the new pack's rules suit this household's
+merchants. A household that never edited the pack is precisely the one least likely to notice it
+silently start filing things differently.
+
+**What would change the ruling:** the owner deciding they want it anyway. It is their app and the
+risk is theirs to take; this is a recommendation, not a veto. If it is ever wired up, the honest
+shape would be an opt-in setting that is off by default, plus a digest line naming what changed —
+not a silent tick.
