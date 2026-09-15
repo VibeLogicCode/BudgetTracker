@@ -21,6 +21,17 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.44.1] - 2026-09-15
+
+No migration. No change to the app — v1.44.0's own release build failed on a test of the new import
+screen, so no image was ever published for it. This is that release, with the test corrected.
+
+### Fixed
+
+- **A test of the new import screen looked for its words in the wrong place.** It searched the whole
+  page for each status name, and the explanation added above the list names every one of them, so
+  each was found twice. It now reads the labels on the rows themselves.
+
 ## [1.44.0] - 2026-09-15
 
 No migration.

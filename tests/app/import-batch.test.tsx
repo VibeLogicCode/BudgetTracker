@@ -98,6 +98,12 @@ describe('BatchClient: the list', () => {
     expect(body.getAll('files')).toHaveLength(3);
   });
 
+  /**
+   * Asserted on the BADGES, not on the page text. The page guide above the list explains what each
+   * status means and therefore contains every one of these words -- a getByText finds two of each
+   * and fails, which is exactly how this test broke once the guide was added. Reading the badges
+   * also asserts something the text search could not: one badge per row, in the row order.
+   */
   it('names each status on its row', async () => {
     answerDetect([
       row({ filename: 'jan.csv', status: 'ready' }),
@@ -105,12 +111,15 @@ describe('BatchClient: the list', () => {
       row({ filename: 'new-bank.csv', status: 'needs-you', reason: 'None of your import profiles could read this file.' }),
       row({ filename: 'scan.pdf', status: 'unsupported', stagingId: null, reason: 'This file could not be read.' }),
     ]);
-    render(<BatchClient {...props} />);
+    const { container } = render(<BatchClient {...props} />);
     dropFiles(['jan.csv']);
-    await waitFor(() => expect(screen.getByText('Ready')).toBeTruthy());
-    expect(screen.getByText('Already imported')).toBeTruthy();
-    expect(screen.getByText('Needs you')).toBeTruthy();
-    expect(screen.getByText('Skipped')).toBeTruthy();
+    await waitFor(() => expect(container.querySelectorAll('.badge')).toHaveLength(4));
+    expect([...container.querySelectorAll('.badge')].map((badge) => badge.textContent)).toEqual([
+      'Ready',
+      'Already imported',
+      'Needs you',
+      'Skipped',
+    ]);
   });
 
   /**
