@@ -204,3 +204,49 @@ describe('CategoryCombobox: pickers that do not offer Uncategorized', () => {
     expect((container.querySelector('input[type="hidden"]') as HTMLInputElement).value).toBe('');
   });
 });
+
+/**
+ * 2026-09-15, found by the `$impeccable critique` evidence pass and confirmed by reading the DOM
+ * chain: the listbox was `position: absolute`, and EVERY call site renders inside `RowDialog`,
+ * whose panel wraps `<Card as="div">` -- and `.card` carries `overflow-hidden`. So a category list
+ * opened low in a dialog was clipped by its own container: the split editor, the recategorize
+ * dialog, and the Create-a-rule dialog shipped in v1.39.0.
+ *
+ * `RowMenu` had already solved this exact problem and its docblock says so in capitals
+ * ("POSITIONING IS THE WHOLE DESIGN ... it is NOT absolute, and must never become absolute"),
+ * naming the clipped-label defect it was written to remove. The combobox simply never inherited
+ * the fix. These tests are what stop it regressing a third time.
+ */
+describe('CategoryCombobox: the listbox escapes its container', () => {
+  it('is fixed, not absolute, so an overflow-hidden ancestor cannot clip it', () => {
+    render(<CategoryCombobox options={OPTIONS} value={null} onChange={() => {}} label="Category" />);
+    open();
+    const listbox = screen.getByRole('listbox');
+    // The class is what a reviewer greps for; the inline style is what the browser honours.
+    expect(listbox.className).not.toMatch(/\babsolute\b/);
+    expect(listbox.style.position).toBe('fixed');
+  });
+
+  it('places itself from the input own rect, the way RowMenu does', () => {
+    render(<CategoryCombobox options={OPTIONS} value={null} onChange={() => {}} label="Category" />);
+    const input = open();
+    vi.spyOn(input, 'getBoundingClientRect').mockReturnValue({
+      top: 100, bottom: 140, left: 40, right: 240, width: 200, height: 40, x: 40, y: 100, toJSON: () => ({}),
+    } as DOMRect);
+    // Re-open so the placement runs against the mocked rect.
+    fireEvent.blur(input);
+    fireEvent.focus(input);
+    const listbox = screen.getByRole('listbox');
+    expect(listbox.style.width).toBe('200px');
+    expect(parseFloat(listbox.style.top)).toBeGreaterThanOrEqual(140);
+  });
+
+  /** A dropdown that stays put while the page scrolls under it is worse than one that closes. */
+  it('closes on scroll rather than floating away from its field', () => {
+    render(<CategoryCombobox options={OPTIONS} value={null} onChange={() => {}} label="Category" />);
+    open();
+    expect(screen.queryByRole('listbox')).toBeTruthy();
+    fireEvent.scroll(window);
+    expect(screen.queryByRole('listbox')).toBeNull();
+  });
+});
