@@ -17,15 +17,40 @@ export default function GlobalError({
 }) {
   return (
     <html lang="en">
+      {/*
+        2026-09-15, `$impeccable critique` minor finding. This file renders OUTSIDE the React tree
+        and outside globals.css -- it replaces the root layout when the layout itself failed -- so
+        it cannot reach a single design token and every colour here has to be a literal. That part
+        is correct and stays.
+        What was wrong is that the literals were LIGHT-ONLY, so a household running the app in dark
+        mode got a full-white page at the exact moment something had already gone wrong. A bare
+        `prefers-color-scheme` block is the one theming mechanism available without a stylesheet or
+        a class on <html>; it follows the device rather than the in-app toggle, which is the best
+        obtainable here and far better than always being wrong for half the day.
+      */}
+      <style
+        dangerouslySetInnerHTML={{
+          __html: `
+            :root { color-scheme: light dark; }
+            .bt-crash { background: #f5f5fa; color: #16162b; }
+            .bt-crash .bt-ref { color: #5a5a72; }
+            .bt-crash .bt-retry { background: #16162b; color: #ffffff; border-color: #16162b; }
+            @media (prefers-color-scheme: dark) {
+              .bt-crash { background: #0e0f17; color: #ededf5; }
+              .bt-crash .bt-ref { color: #a9adc4; }
+              .bt-crash .bt-retry { background: #ededf5; color: #0e0f17; border-color: #ededf5; }
+            }
+          `,
+        }}
+      />
       <body
+        className="bt-crash"
         style={{
           margin: 0,
           minHeight: '100vh',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          background: '#f5f5fa',
-          color: '#111827',
           fontFamily: 'system-ui, -apple-system, Segoe UI, sans-serif',
         }}
       >
@@ -36,19 +61,19 @@ export default function GlobalError({
             again, and if it keeps happening, check the container log.
           </p>
           {error.digest ? (
-            <p style={{ margin: '0 0 1rem', fontSize: '0.8125rem', color: '#4b5563' }}>
+            <p className="bt-ref" style={{ margin: '0 0 1rem', fontSize: '0.8125rem' }}>
               Reference: <code>{error.digest}</code>
             </p>
           ) : null}
           <button
             type="button"
             onClick={reset}
+            className="bt-retry"
             style={{
               padding: '0.5rem 1rem',
-              border: '1px solid #111827',
+              borderWidth: '1px',
+              borderStyle: 'solid',
               borderRadius: '0.375rem',
-              background: '#111827',
-              color: '#ffffff',
               cursor: 'pointer',
             }}
           >

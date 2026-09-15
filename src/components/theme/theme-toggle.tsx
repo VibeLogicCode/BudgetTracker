@@ -57,7 +57,10 @@ export function ThemeToggle({ className = '' }: { className?: string }) {
             aria-pressed={active}
             aria-label={`${label} theme`}
             title={`${label} theme`}
-            className={`btn btn--ghost rounded-full p-1.5 ${
+            // 2026-09-15: min-h-11/min-w-11 below `sm`, the same 44px floor PillNav, MonthNav and
+            // .field-control already keep. At p-1.5 these were ~28px -- three small targets in a
+            // row, on the control a phone user reaches for most often after the menu.
+            className={`btn btn--ghost min-h-11 min-w-11 rounded-full p-1.5 sm:min-h-0 sm:min-w-0 ${
               active ? 'bg-surface text-accent-text shadow-flat' : 'text-subtle hover:text-ink'
             }`}
           >

@@ -130,8 +130,22 @@ export function AppShell({
             <LogoMark className="h-7 w-7" />
           </Link>
 
+          {/*
+            2026-09-15, `$impeccable critique` P1: `lg:hidden`.
+
+            At desktop width the hamburger and the mobile logo are both hidden, so this span was
+            the header's entire left side -- carrying the current section's name, which is the SAME
+            WORD PageHeader renders as an <h1> about 28px below it. The app stated its own location
+            twice on every page, the smaller one first, in permanently-visible sticky space.
+
+            It stays below `lg`, where it is not redundant: the rail is gone there, the phone menu
+            is closed, and once the page scrolls the <h1> is off-screen -- so this is the only
+            thing telling a reader which section they are in.
+          */}
           <div className="flex min-w-0 flex-1 items-center gap-2">
-            <span className="truncate text-[0.9375rem] font-semibold text-ink">{current?.label ?? 'Budget Tracker'}</span>
+            <span className="truncate text-[0.9375rem] font-semibold text-ink lg:hidden">
+              {current?.label ?? 'Budget Tracker'}
+            </span>
           </div>
 
           <ThemeToggle />

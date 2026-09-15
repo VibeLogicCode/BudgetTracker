@@ -11,6 +11,16 @@
  * identically from a server component and needs no client bundle. Callers derive `open` from
  * something they already know — nothing here is stored, so there is no per-user flag and no
  * migration behind a panel.
+ *
+ * 2026-09-15, `$impeccable critique` P1. This used `bg-info-soft` / `text-info-soft-fg` — byte for
+ * byte the treatment `Notice tone="info"` uses for a real statement about the household's DATA
+ * ("Viewing March 2026. Net worth still reflects today"). It renders at the top of nine pages,
+ * closed, permanently. Two things went wrong at once: info-blue stopped meaning "something is
+ * true about your money" and started meaning wallpaper, so the genuine banner beside it got
+ * skipped; and the guide copy, which is some of the best writing in the product, was dressed as
+ * the thing readers are trained to dismiss.
+ *
+ * It is a quiet panel on `--surface` now. `--info-soft` is reserved for statements about data.
  */
 export function GuidePanel({
   summary,
@@ -22,8 +32,8 @@ export function GuidePanel({
   children: React.ReactNode;
 }) {
   return (
-    <details open={open} className="rounded-md bg-info-soft px-3.5 py-3 text-sm text-info-soft-fg">
-      <summary className="cursor-pointer font-semibold">{summary}</summary>
+    <details open={open} className="rounded-md border border-line bg-surface px-3.5 py-3 text-sm text-muted">
+      <summary className="cursor-pointer font-medium text-ink">{summary}</summary>
       <div className="mt-3 flex flex-col gap-3">{children}</div>
     </details>
   );

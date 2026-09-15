@@ -17,6 +17,10 @@ export const metadata: Metadata = {
   },
   icons: {
     apple: '/icons/apple-touch-icon.png',
+    // 2026-09-15: without this the browser falls back to /favicon.ico, which this app does not
+    // ship -- so every page load logged a 404 and the tab showed the browser's blank sheet. The
+    // PWA icons were always here; nothing pointed the tab at one.
+    icon: '/icons/icon-192.png',
   },
 };
 

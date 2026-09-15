@@ -78,3 +78,8 @@ vitest.config.ts
 # Screen recordings dropped in the repo root while demoing. Gitignored, but .gitignore has never
 # had any bearing on what Docker sends -- which is this whole section's point.
 screen-*.mp4
+
+# Impeccable design-critique snapshots (.impeccable/critique/*.md). Development records of what a
+# review found and when -- the running image has no use for them, and they name defects the build
+# may already have fixed.
+.impeccable

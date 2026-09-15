@@ -63,15 +63,24 @@ describe('GuidePanel: the shared shell', () => {
     expect(container.querySelector('details')?.open).toBe(false);
   });
 
-  it('keeps the info-panel styling in one place', () => {
+  /**
+   * 2026-09-15: the panel no longer wears `--info-soft`. That treatment is identical to
+   * `Notice tone="info"`, which states things about the household's DATA -- so a guide printed at
+   * the top of nine pages in the same blue taught readers to skip the colour, and the genuine
+   * banner beside it went with it. The styling is still in ONE place, which is what this test is
+   * actually for; only which style it is has changed.
+   */
+  it('keeps the guide styling in one place, and out of the notice colour', () => {
     const { container } = render(
       <GuidePanel summary="What is this page for?" open>
         <p>body</p>
       </GuidePanel>,
     );
     const details = container.querySelector('details');
-    expect(details?.className).toContain('bg-info-soft');
-    expect(details?.className).toContain('text-info-soft-fg');
+    expect(details?.className).toContain('bg-surface');
+    expect(details?.className).toContain('border-line');
+    // The reserved colour: a guide must never look like a statement about the reader's money.
+    expect(details?.className).not.toContain('info-soft');
     expect(container.querySelector('summary')?.className).toContain('cursor-pointer');
   });
 
