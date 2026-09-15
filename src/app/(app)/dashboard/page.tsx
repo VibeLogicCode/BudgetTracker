@@ -632,149 +632,175 @@ export default async function DashboardPage({
         {runway !== null ? <CashRunwayTile runway={runway} /> : null}
       </div>
 
-      {/* Ruling R6 (item AJ / PROD-2): self-hiding, above ExpiringSoonCard -- it is the card
-          that asks for attention, and the cards below it are reference. Ruling T7: insights are
-          always "as of today" (householdInsights takes `today`, never `month`), so a note is
-          added only while it actually has something to say and the viewed month differs. */}
-      {!isCurrentMonth && insights.length > 0 ? <AsOfTodayNote month={month} /> : null}
-      <NeedsALookCard rows={insights} />
+      {/*
+        2026-09-15, `$impeccable critique` P0. The body was one column of cards at identical
+        weight, so "7 transactions need review" and "a warranty expires in 83 days" looked equally
+        urgent and the page answered nobody's actual question, which is "is this month okay".
 
-      {/* v1.26.0 Lane 3b. Self-hiding, same family as NeedsALookCard just above -- unlike that
-          card, "unreviewed" has no month of its own (unreviewedRuleImports reads only whether
-          rulesReviewedAt is null), so it carries no AsOfTodayNote and renders identically
-          regardless of which month MonthNav is pointed at. */}
-      <RuleReviewCard imports={unreviewedImports} />
+        Two columns at `lg`, and the COLUMN is the ranking -- no new colour, no new elevation, no
+        badge. Left: the things that ask for something. Right: the things the household reads.
+        Below `lg` it is one column again, in this same DOM order, so a phone still meets the
+        act-on-this cards first.
 
-      {!isCurrentMonth && expiring.length > 0 ? <AsOfTodayNote month={month} /> : null}
-      <ExpiringSoonCard items={expiring} today={today} />
+        The stat band above and the charts below stay full width: one is the month's headline and
+        the other needs the room.
 
-      {/* MUST-15.1: self-hiding. Rendered unconditionally; absent when there is nothing to say.
-          Ruling R2: a loan balance is household money, so this is hidden entirely for a self
-          viewer -- there is no honest per-person share of it to show instead. Ruling T7: loans
-          are always "as of today" (listLoans takes `today`, never `month`). */}
-      {selfScoped ? null : (
-        <>
-          {!isCurrentMonth && owedLoans.length > 0 ? <AsOfTodayNote month={month} /> : null}
-          <LoansCard loans={owedLoans} totalOwedCents={totalOwedCents} />
-        </>
-      )}
+        THE ASIDE COLLAPSES WHEN IT IS EMPTY, and that is done in CSS rather than here. Every card
+        in it self-hides behind its own filter -- a lent loan with an untracked balance still
+        counts, one repaid to zero does not -- so predicting emptiness in this file would mean
+        copying three filters that would then drift. `.dash-split` in globals.css does it off
+        `:empty` instead; a browser without `:has()` simply keeps the two columns, which is a
+        cosmetic gutter rather than a broken page.
+      */}
+      <div data-dash-split className="dash-split grid gap-4 sm:gap-5 lg:grid-cols-3">
+        <div data-dash-main className="dash-main flex flex-col gap-4 sm:gap-5 lg:col-span-2">
+          {/* Ruling R6 (item AJ / PROD-2): self-hiding, above ExpiringSoonCard -- it is the card
+              that asks for attention, and the cards below it are reference. Ruling T7: insights are
+              always "as of today" (householdInsights takes `today`, never `month`), so a note is
+              added only while it actually has something to say and the viewed month differs. */}
+          {!isCurrentMonth && insights.length > 0 ? <AsOfTodayNote month={month} /> : null}
+          <NeedsALookCard rows={insights} />
 
-      {/* v1.14.0: NOT behind selfScoped -- ruling R2 hides household balances from a child, and
-          every row here is a row that child owns (listLoans has already scoped them). Ruling
-          T7: same "as of today" reasoning as the Loans card above. */}
-      {!isCurrentMonth && lentLoans.length > 0 ? <AsOfTodayNote month={month} /> : null}
-      <WhoOwesUsCard loans={lentLoans} totalLentCents={totalLentCents} selfScoped={selfScoped} />
+          {/* v1.26.0 Lane 3b. Self-hiding, same family as NeedsALookCard just above -- unlike that
+              card, "unreviewed" has no month of its own (unreviewedRuleImports reads only whether
+              rulesReviewedAt is null), so it carries no AsOfTodayNote and renders identically
+              regardless of which month MonthNav is pointed at. */}
+          <RuleReviewCard imports={unreviewedImports} />
 
-      {/* Task 9 / ruling T7: "Safe to spend is hidden entirely for a past month" -- this card's
-          own footer sentence blends the (always-current) upcoming-bills list with month-scoped
-          safeToSpend figures, and the two are not separable within the card (there is one footer
-          sentence, not two). Hiding the whole card for any month other than the current one is
-          the closest honest reading of "hidden entirely" -- "how much can we still spend" has no
-          meaning for a month that is not the one in progress, in either direction. This lane's
-          own conversion of ComingUpCard.tsx (item 3's days-remaining pill, its rows to ListRow)
-          does not touch this gate: what the card computes and when it renders is unchanged, only
-          how each row reads. */}
-      {isCurrentMonth ? (
-        <ComingUpCard
-          bills={bills}
-          budgetedRemainingCents={spendPlan.budgetedRemainingCents}
-          billsDueCents={spendPlan.billsDueCents}
-          hasBudgetedLimits={householdTotals.budgetedLimitCents > 0}
-          monthEndDate={monthEnd(month)}
-          canRecord={hasAccounts}
-          today={today}
-        />
-      ) : null}
+          {/* Task 9 / ruling T7: "Safe to spend is hidden entirely for a past month" -- this card's
+              own footer sentence blends the (always-current) upcoming-bills list with month-scoped
+              safeToSpend figures, and the two are not separable within the card (there is one footer
+              sentence, not two). Hiding the whole card for any month other than the current one is
+              the closest honest reading of "hidden entirely" -- "how much can we still spend" has no
+              meaning for a month that is not the one in progress, in either direction. This lane's
+              own conversion of ComingUpCard.tsx (item 3's days-remaining pill, its rows to ListRow)
+              does not touch this gate: what the card computes and when it renders is unchanged, only
+              how each row reads. */}
+          {isCurrentMonth ? (
+            <ComingUpCard
+              bills={bills}
+              budgetedRemainingCents={spendPlan.budgetedRemainingCents}
+              billsDueCents={spendPlan.billsDueCents}
+              hasBudgetedLimits={householdTotals.budgetedLimitCents > 0}
+              monthEndDate={monthEnd(month)}
+              canRecord={hasAccounts}
+              today={today}
+            />
+          ) : null}
 
-      <Card>
-        <CardHeader
-          title={`${monthLabel(month)} budgets`}
-          description={
-            totals.budgetedLimitCents > 0
-              ? `${formatCents(totals.budgetedSpentCents)} of ${formatCents(totals.budgetedLimitCents)} budgeted · ${formatCents(totals.totalSpentCents)} spent in total`
-              : `${formatCents(totals.totalSpentCents)} spent in total`
-          }
-          action={
-            <Link href="/budgets" className="btn btn--ghost btn--sm text-accent-text hover:text-accent-text">
-              Set limits
-              <ArrowRightIcon className="h-4 w-4" />
-            </Link>
-          }
-        />
-        {budgetRows.length === 0 ? (
-          <CardBody>
-            {/* Item 2 (2026-08-30 plan): the shared EmptyState, `size="compact"` -- see that
-                component's own docblock for why a card-scoped empty box drops the icon circle
-                and bold title the page-level default carries. Guard 1
-                (tests/ops/onboarding-coverage.test.ts) requires a real action on every
-                EmptyState; the honest next step for "nothing spent yet" is the same one the
-                sentence already names -- go import a statement. */}
-            <EmptyState
-              size="compact"
-              title="Nothing spent yet this month. Import a statement and the categories will fill in here."
+          <Card>
+            <CardHeader
+              title={`${monthLabel(month)} budgets`}
+              description={
+                totals.budgetedLimitCents > 0
+                  ? `${formatCents(totals.budgetedSpentCents)} of ${formatCents(totals.budgetedLimitCents)} budgeted · ${formatCents(totals.totalSpentCents)} spent in total`
+                  : `${formatCents(totals.totalSpentCents)} spent in total`
+              }
               action={
-                <Link href="/import" className="btn btn--secondary btn--sm">
-                  Import a statement
+                <Link href="/budgets" className="btn btn--ghost btn--sm text-accent-text hover:text-accent-text">
+                  Set limits
+                  <ArrowRightIcon className="h-4 w-4" />
                 </Link>
               }
             />
-          </CardBody>
-        ) : (
-          <TableWrap bare className="border-t border-line" responsive>
-            <thead>
-              <tr>
-                <th scope="col">Category</th>
-                <th scope="col" className="w-1/2">
-                  Progress
-                </th>
-                <th scope="col" className="text-right">
-                  Spent
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {budgetRows.map((row) => (
-                <tr key={row.categoryId}>
-                  {/* v1.15.0 (responsive rows): the category is what tells one row from another
-                      on this widget, so it is the phone card's headline. */}
-                  <td className="font-medium text-ink cell-stack-headline" data-label="Category">{row.categoryName}</td>
-                  <td data-label="Progress">
-                    {/* Ruling D1: the shared ProgressBar (Lane 0) rather than a second hand-rolled
-                        bar. Item 4 (2026-08-30 plan): BudgetProgressBar.tsx is gone -- Budgets
-                        moved to this same shared ProgressBar first (budgets-client.tsx), which
-                        left it unused everywhere, and this page's own two bars (this one, the
-                        StatTile footer above) were the last holdouts still worth naming here.
-                        Its D5 threshold scale (< 80 calm, 80-100 warning, > 100 over) is the
-                        default, so `tone` is left to auto-derive from `pct`. */}
-                    {row.limitCents === null ? (
-                      <span className="text-xs text-subtle">No budget</span>
-                    ) : (
-                      <ProgressBar
-                        pct={
-                          row.limitCents === 0
-                            ? row.spentCents > 0
-                              ? 100
-                              : 0
-                            : Math.round((row.spentCents / row.limitCents) * 100)
-                        }
-                        label={`${row.categoryName} budget used`}
-                      />
-                    )}
-                  </td>
-                  {/* Spent is the one money figure this widget carries, so it is the phone
-                      card's amount slot. */}
-                  <td className="money text-right whitespace-nowrap cell-stack-amount" data-label="Spent">
-                    {formatCents(row.spentCents)}
-                    {row.limitCents === null ? null : (
-                      <span className="text-subtle"> / {formatCents(row.limitCents)}</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </TableWrap>
-        )}
-      </Card>
+            {budgetRows.length === 0 ? (
+              <CardBody>
+                {/* Item 2 (2026-08-30 plan): the shared EmptyState, `size="compact"` -- see that
+                    component's own docblock for why a card-scoped empty box drops the icon circle
+                    and bold title the page-level default carries. Guard 1
+                    (tests/ops/onboarding-coverage.test.ts) requires a real action on every
+                    EmptyState; the honest next step for "nothing spent yet" is the same one the
+                    sentence already names -- go import a statement. */}
+                <EmptyState
+                  size="compact"
+                  title="Nothing spent yet this month. Import a statement and the categories will fill in here."
+                  action={
+                    <Link href="/import" className="btn btn--secondary btn--sm">
+                      Import a statement
+                    </Link>
+                  }
+                />
+              </CardBody>
+            ) : (
+              <TableWrap bare className="border-t border-line" responsive>
+                <thead>
+                  <tr>
+                    <th scope="col">Category</th>
+                    <th scope="col" className="w-1/2">
+                      Progress
+                    </th>
+                    <th scope="col" className="text-right">
+                      Spent
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {budgetRows.map((row) => (
+                    <tr key={row.categoryId}>
+                      {/* v1.15.0 (responsive rows): the category is what tells one row from another
+                          on this widget, so it is the phone card's headline. */}
+                      <td className="font-medium text-ink cell-stack-headline" data-label="Category">{row.categoryName}</td>
+                      <td data-label="Progress">
+                        {/* Ruling D1: the shared ProgressBar (Lane 0) rather than a second hand-rolled
+                            bar. Item 4 (2026-08-30 plan): BudgetProgressBar.tsx is gone -- Budgets
+                            moved to this same shared ProgressBar first (budgets-client.tsx), which
+                            left it unused everywhere, and this page's own two bars (this one, the
+                            StatTile footer above) were the last holdouts still worth naming here.
+                            Its D5 threshold scale (< 80 calm, 80-100 warning, > 100 over) is the
+                            default, so `tone` is left to auto-derive from `pct`. */}
+                        {row.limitCents === null ? (
+                          <span className="text-xs text-subtle">No budget</span>
+                        ) : (
+                          <ProgressBar
+                            pct={
+                              row.limitCents === 0
+                                ? row.spentCents > 0
+                                  ? 100
+                                  : 0
+                                : Math.round((row.spentCents / row.limitCents) * 100)
+                            }
+                            label={`${row.categoryName} budget used`}
+                          />
+                        )}
+                      </td>
+                      {/* Spent is the one money figure this widget carries, so it is the phone
+                          card's amount slot. */}
+                      <td className="money text-right whitespace-nowrap cell-stack-amount" data-label="Spent">
+                        {formatCents(row.spentCents)}
+                        {row.limitCents === null ? null : (
+                          <span className="text-subtle"> / {formatCents(row.limitCents)}</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </TableWrap>
+            )}
+          </Card>
+        </div>
+
+        <aside data-dash-aside className="dash-aside flex flex-col gap-4 empty:hidden sm:gap-5">
+          {!isCurrentMonth && expiring.length > 0 ? <AsOfTodayNote month={month} /> : null}
+          <ExpiringSoonCard items={expiring} today={today} />
+
+          {/* MUST-15.1: self-hiding. Rendered unconditionally; absent when there is nothing to say.
+              Ruling R2: a loan balance is household money, so this is hidden entirely for a self
+              viewer -- there is no honest per-person share of it to show instead. Ruling T7: loans
+              are always "as of today" (listLoans takes `today`, never `month`). */}
+          {selfScoped ? null : (
+            <>
+              {!isCurrentMonth && owedLoans.length > 0 ? <AsOfTodayNote month={month} /> : null}
+              <LoansCard loans={owedLoans} totalOwedCents={totalOwedCents} />
+            </>
+          )}
+
+          {/* v1.14.0: NOT behind selfScoped -- ruling R2 hides household balances from a child, and
+              every row here is a row that child owns (listLoans has already scoped them). Ruling
+              T7: same "as of today" reasoning as the Loans card above. */}
+          {!isCurrentMonth && lentLoans.length > 0 ? <AsOfTodayNote month={month} /> : null}
+          <WhoOwesUsCard loans={lentLoans} totalLentCents={totalLentCents} selfScoped={selfScoped} />
+        </aside>
+      </div>
 
       <div className="grid gap-5 lg:grid-cols-5">
         <Card className={selfScoped ? 'lg:col-span-5' : 'lg:col-span-3'}>

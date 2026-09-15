@@ -903,6 +903,27 @@
     }
   }
 
+  /* ----- The dashboard's two columns (2026-09-15) -----
+     Left is what asks for something, right is what the household reads. The column IS the
+     ranking, which is why nothing here adds a colour or an elevation step to say the same thing
+     a second time.
+
+     THE ONE RULE THAT EARNS ITS PLACE: every card in the aside self-hides when it has nothing to
+     show, each behind its own filter, so the page cannot predict an empty aside without copying
+     three filters that would then drift out of sync with the components. `:empty` asks the DOM
+     instead, after the fact, which is the only place the answer actually exists. When the aside
+     renders nothing, the main column takes the full width rather than leaving a third of the page
+     blank -- which is exactly what a self-scoped viewer would have seen, since loans are hidden
+     from them entirely.
+
+     A browser without :has() keeps two columns and an empty gutter. Cosmetic, not broken -- the
+     same worst case the other :has() rules in this file accept. */
+  @media (min-width: 64rem) {
+    .dash-split:has(> .dash-aside:empty) > .dash-main {
+      grid-column: 1 / -1;
+    }
+  }
+
   /* ----- Ambient wash behind the signed-out pages ----- */
   .auth-wash {
     background-image:

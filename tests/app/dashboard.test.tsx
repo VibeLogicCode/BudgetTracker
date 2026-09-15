@@ -1268,3 +1268,89 @@ describe('sending a spending summary on demand', () => {
     }
   });
 });
+
+/**
+ * 2026-09-15, `$impeccable critique` P0, the remaining half: "the dashboard has no hierarchy -- it
+ * is thirteen equal cards in one column." v1.40.0 gave the headline figure a ground; this splits
+ * the BODY, so the column a card sits in is itself the priority signal.
+ *
+ *   left  (2/3) -- cards that ask for something: Needs a look, rules to review, bills coming up,
+ *                  the month's budgets.
+ *   right (1/3) -- reference the household reads rather than acts on: contracts expiring, what we
+ *                  owe, who owes us.
+ *
+ * Not a cosmetic reshuffle: a person opening the app has one question, "is this month okay", and a
+ * single column of identical rectangles refuses to rank anything for them.
+ */
+describe('DashboardPage — the body splits into act-on-this and read-this', () => {
+  let t: TestDb | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+  const today = todayIso();
+
+  async function household() {
+    t = createTestDb();
+    const adult = await createUser({ name: 'Adult', username: 'adult', password: 'correct horse battery', role: 'admin' });
+    const accountId = createAccount({ name: 'Chequing', type: 'chequing', ownerUserId: adult.id });
+    recordBalanceSnapshot({ accountId, date: today, balanceCents: 500_000, source: 'manual' });
+    return { adult, accountId };
+  }
+
+  it('renders both columns, and the aside sits inside the split', async () => {
+    await household();
+    const { container } = render(await (await import('@/app/(app)/dashboard/page')).default({ searchParams: Promise.resolve({}) }));
+    const split = container.querySelector('[data-dash-split]');
+    expect(split).toBeTruthy();
+    expect(split?.querySelector('[data-dash-main]')).toBeTruthy();
+    expect(split?.querySelector('[data-dash-aside]')).toBeTruthy();
+  });
+
+  /**
+   * THE FAILURE MODE THIS GUARDS. Every card in the aside self-hides when it has nothing to show,
+   * and each does it behind its OWN filter (a lent loan with a null balance still counts; one
+   * repaid to zero does not). The page cannot predict that without copying three filters, so the
+   * collapse is done in CSS off `:empty` -- which only works if the aside really is empty rather
+   * than holding a stray whitespace node or a wrapper.
+   */
+  it('leaves the aside genuinely empty when a household has nothing to read, so the CSS can collapse it', async () => {
+    await household();
+    const { container } = render(await (await import('@/app/(app)/dashboard/page')).default({ searchParams: Promise.resolve({}) }));
+    const aside = container.querySelector('[data-dash-aside]') as HTMLElement;
+    expect(aside.children.length).toBe(0);
+    expect(aside.textContent).toBe('');
+  });
+
+  it('puts a loan in the aside, not the main column', async () => {
+    const { adult } = await household();
+    const loanType = createItemType('Car loan type', 'loan');
+    createWarrantyItem({
+      name: 'Civic', vendor: null, model: null, serial: null, purchaseDate: '2026-01-01',
+      warrantyMonths: null, isLifetime: false, priceCents: null, ownerUserId: adult.id,
+      transactionId: null, typeId: loanType.id, notes: null, principalCents: 100_000,
+      interestRateBps: null, currentBalanceCents: 100_000, balanceUpdatedAt: today,
+      loanDirection: 'owed',
+    });
+    const { container } = render(await (await import('@/app/(app)/dashboard/page')).default({ searchParams: Promise.resolve({}) }));
+    const aside = container.querySelector('[data-dash-aside]') as HTMLElement;
+    expect(aside.textContent).toContain('Civic');
+    expect((container.querySelector('[data-dash-main]') as HTMLElement).textContent).not.toContain('Civic');
+  });
+
+  /** The budgets card is the month's main act-on-this surface; it belongs on the left. */
+  it('keeps the budgets card in the main column', async () => {
+    await household();
+    const { container } = render(await (await import('@/app/(app)/dashboard/page')).default({ searchParams: Promise.resolve({}) }));
+    const main = container.querySelector('[data-dash-main]') as HTMLElement;
+    expect(main.textContent).toContain('budgets');
+  });
+
+  /** The stat band and the charts stay full width -- the split is the BODY only. */
+  it('leaves the headline band and the charts outside the split', async () => {
+    await household();
+    const { container } = render(await (await import('@/app/(app)/dashboard/page')).default({ searchParams: Promise.resolve({}) }));
+    const split = container.querySelector('[data-dash-split]') as HTMLElement;
+    expect(split.textContent).not.toContain('Spent this month');
+  });
+});
