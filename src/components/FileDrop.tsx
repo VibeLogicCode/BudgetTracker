@@ -37,6 +37,40 @@ export function rejectionFor(files: readonly File[], extensions: string[]): stri
   return `That looks like ${files[0]!.name}. Drop a ${orList(extensions)} file instead.`;
 }
 
+/** One file that could not be taken, and the same sentence `rejectionFor` would have given for it. */
+export interface RejectedFile {
+  file: File;
+  reason: string;
+}
+
+/**
+ * 2026-09-15. The multi-file counterpart of `rejectionFor`, and deliberately a DIFFERENT SHAPE
+ * rather than a relaxation of it.
+ *
+ * `rejectionFor` answers "may this drop proceed?" with one sentence, which is the right question
+ * when exactly one file may land. For many files it is the wrong question: the realistic drop is a
+ * bank folder holding nine statements and a PDF, and refusing all ten because of the one would be
+ * worse than the one-at-a-time flow it replaces. So this partitions instead of judging, and the
+ * caller imports the good ones while saying what it skipped -- which is what the owner asked for
+ * ("icase onf the files is not supported it should handle it accodingy").
+ *
+ * The per-file reason is `rejectionFor`'s own sentence, so both modes refuse a .pdf in the same
+ * words.
+ */
+export function partitionDrop(
+  files: readonly File[],
+  extensions: string[],
+): { accepted: File[]; rejected: RejectedFile[] } {
+  const accepted: File[] = [];
+  const rejected: RejectedFile[] = [];
+  for (const file of files) {
+    const reason = rejectionFor([file], extensions);
+    if (reason === null) accepted.push(file);
+    else rejected.push({ file, reason });
+  }
+  return { accepted, rejected };
+}
+
 /**
  * Hands the browser's own input the dropped file, so the surrounding <form> submits it exactly as
  * it would a file chosen through the picker -- no parallel upload path, no second code path on
@@ -69,6 +103,16 @@ export interface FileDropProps {
   /** Called with whatever was accepted, from a drop or from the picker alike. */
   onFile?: (file: File) => void;
   /**
+   * Take more than one file. Off by default: every caller in the app but the batch import screen
+   * lands exactly one file, and `rejectionFor` refusing a two-file drop is a real guard for them.
+   */
+  multiple?: boolean;
+  /**
+   * The multi counterpart of `onFile`, called with the ACCEPTED files only -- see `partitionDrop`
+   * for why the rejects do not cancel the rest. Only ever called when `multiple` is set.
+   */
+  onFiles?: (files: File[]) => void;
+  /**
    * Whether to echo the chosen filename under the control. Default true, and there is now no
    * reason for any caller to turn it off: the native input is visually hidden (see the render
    * below), so this is the ONLY place a filename appears. It was added when the browser's own
@@ -100,6 +144,8 @@ export function FileDrop({
   disabled = false,
   className = '',
   onFile,
+  multiple = false,
+  onFiles,
   showChosenName = true,
 }: FileDropProps): React.ReactElement {
   const inputId = useId();
@@ -117,6 +163,30 @@ export function FileDrop({
     onFile?.(file);
   }
 
+  /**
+   * The multi path. Deliberately does NOT attach anything to the input: a drop's own FileList
+   * holds the rejects too, and there is no way to build a filtered one that every target browser
+   * accepts. A multi caller reads `onFiles` and posts the array itself, so the input's list is not
+   * the source of truth the way it is for the single, form-posting path above.
+   */
+  function takeMany(files: File[]): void {
+    const { accepted, rejected } = partitionDrop(files, extensions);
+    if (files.length === 0) {
+      setChosen(null);
+      setRefusal('That drop carried no file.');
+      return;
+    }
+    setRefusal(
+      rejected.length === 0
+        ? null
+        : `Skipped ${orList(rejected.map((entry) => entry.file.name))} — ${
+            extensions.length === 0 ? 'not a file this page reads' : `only ${orList(extensions)} files can be read here`
+          }.`,
+    );
+    setChosen(accepted.length === 0 ? null : `${accepted.length} ${accepted.length === 1 ? 'file' : 'files'}`);
+    if (accepted.length > 0) onFiles?.(accepted);
+  }
+
   function onDrop(event: React.DragEvent<HTMLDivElement>): void {
     event.preventDefault();
     depth.current = 0;
@@ -127,6 +197,10 @@ export function FileDrop({
     // moment the input's value is reset, and every later read then sees an empty list.
     const transfer = event.dataTransfer ?? null;
     const files: File[] = transfer === null ? [] : Array.from(transfer.files ?? []);
+    if (multiple) {
+      takeMany(files);
+      return;
+    }
     const refused = rejectionFor(files, extensions);
     if (refused !== null) {
       setChosen(null);
@@ -188,10 +262,15 @@ export function FileDrop({
           type="file"
           name={name}
           accept={accept}
+          multiple={multiple}
           required={required}
           disabled={disabled}
           className="sr-only"
           onChange={(event) => {
+            if (multiple) {
+              takeMany(Array.from(event.target.files ?? []));
+              return;
+            }
             const file = event.target.files?.[0];
             if (file === undefined) {
               setChosen(null);

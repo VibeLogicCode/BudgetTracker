@@ -10,7 +10,7 @@ import { monthLabel } from '@/lib/dates';
 import { monthState, openMonths } from '@/lib/month-close';
 import { CloseMonthCard, type OpenMonthView } from '@/components/CloseMonthCard';
 import { SendDigestNow } from '@/components/SendDigestNow';
-import { ImportClient } from './import-client';
+import { BatchClient } from './batch-client';
 
 export const dynamic = 'force-dynamic';
 
@@ -64,7 +64,13 @@ export default async function ImportPage() {
     <div className="flex justify-end">
       <SendDigestNow canNotifyHousehold />
     </div>
-    <ImportClient
+    {/*
+      2026-09-15. BatchClient rather than ImportClient directly. It is a shell around the very same
+      component, not a replacement for it: it takes a drop of N files, shows what each one is, and
+      mounts THIS ImportClient (same props, plus the detection it already has) the moment a row is
+      opened. A household that drops one file reaches the identical wizard one click later.
+    */}
+    <BatchClient
       accounts={csvAccounts.map((a) => ({ id: a.id, name: a.name, importProfileId: a.importProfileId }))}
       // A profile with an unreadable stored mapping (see ProfileRecord.mappingError) is not
       // offered here — there is nothing usable to import a file with. Nor is a DEACTIVATED

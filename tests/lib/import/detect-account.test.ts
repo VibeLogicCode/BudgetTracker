@@ -135,6 +135,64 @@ describe('detectImportAccount: the fallbacks, in order', () => {
     expect(result.reason).toContain('accountactivity.csv');
   });
 
+  /**
+   * 2026-09-15, ruling B4. This branch took the single most recent `imports` row matching the
+   * filename and never asked whether EARLIER ones went somewhere else -- and its own comment
+   * already called the signal "weak on its own -- a bank that names every export
+   * accountactivity.csv defeats it".
+   *
+   * That weakness was contained while a human was in the loop: they read the sentence and then
+   * read a preview. The batch screen (src/lib/import/batch.ts) auto-imports on `likely`, so
+   * nobody reads it any more, and a filename two accounts share would silently land a statement
+   * in whichever one was used last. Disagreement now means the signal says nothing, which is this
+   * file's own stated principle everywhere else: a wrong answer is worse than no answer.
+   */
+  it('says nothing when one filename has gone to two different accounts', () => {
+    current = createSeededTestDb();
+    const user = insertTestUser(current.db, { role: 'admin' });
+    const chequing = insertTestAccount(current.db, { name: 'TD Chequing' });
+    const other = insertTestAccount(current.db, { name: 'Scotia', institution: 'Scotiabank' });
+    // The same export name used by both accounts, neither overlapping the file being detected.
+    importInto(chequing, user, 'accountactivity.csv', fixtureRows('td-visa.csv', BUILTIN_PRESETS['TD Visa'].mapping));
+    importInto(other, user, 'accountactivity.csv', fixtureRows('td-visa.csv', BUILTIN_PRESETS['TD Visa'].mapping));
+
+    const result = detectImportAccount({
+      rows: fixtureRows('td-chequing.csv'),
+      filename: 'accountactivity.csv',
+      profileId: null,
+      accounts: [
+        { id: chequing, name: 'TD Chequing', importProfileId: null },
+        { id: other, name: 'Scotia', importProfileId: null },
+      ],
+    });
+
+    expect(result.account).toBeNull();
+    expect(result.confidence).toBe('none');
+  });
+
+  /** Repeated agreement is the ordinary case and must still speak, or the fallback is dead. */
+  it('still speaks when every past import of that filename agrees', () => {
+    current = createSeededTestDb();
+    const user = insertTestUser(current.db, { role: 'admin' });
+    const chequing = insertTestAccount(current.db, { name: 'TD Chequing' });
+    const other = insertTestAccount(current.db, { name: 'Scotia', institution: 'Scotiabank' });
+    importInto(chequing, user, 'accountactivity.csv', fixtureRows('td-visa.csv', BUILTIN_PRESETS['TD Visa'].mapping));
+    importInto(chequing, user, 'accountactivity.csv', fixtureRows('td-visa.csv', BUILTIN_PRESETS['TD Visa'].mapping));
+
+    const result = detectImportAccount({
+      rows: fixtureRows('td-chequing.csv'),
+      filename: 'accountactivity.csv',
+      profileId: null,
+      accounts: [
+        { id: chequing, name: 'TD Chequing', importProfileId: null },
+        { id: other, name: 'Scotia', importProfileId: null },
+      ],
+    });
+
+    expect(result.account?.id).toBe(chequing);
+    expect(result.confidence).toBe('likely');
+  });
+
   it('falls back to the only account pinned to the detected profile', () => {
     current = createSeededTestDb();
     const tdProfile = createProfile({ name: 'TD test', institution: 'TD', mapping: TD_CHEQUING });

@@ -21,6 +21,30 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.44.0] - 2026-09-15
+
+No migration.
+
+### Added
+
+- **Drop every statement at once.** The import page used to take one file at a time, so ten
+  downloads meant ten trips through the same three steps. Drop the whole lot now — or a zip of them
+  — and each one is read and sorted before anything is written. The ones it recognised import
+  together after showing you what it is about to do; anything it could not place says why and waits
+  for you. Click any file to open it in the ordinary import screen, unchanged.
+- **A file you already imported says so up front.** It was always safe to import one twice —
+  matching rows are counted as duplicates and left out — but you only found out after picking the
+  file and waiting for it. Now it is marked before you do anything.
+- **Zip files are opened for you.** A zip of statements is unpacked and its contents join the list.
+  Nested archives are listed rather than opened.
+
+### Fixed
+
+- **A filename used by two accounts no longer picks one of them.** Where a file went last time is
+  one of the hints used to guess its account, and it took the most recent answer without checking
+  that earlier ones agreed. A bank that names every export the same thing could therefore point at
+  whichever account was used last. It now says nothing when the history disagrees.
+
 ## [1.43.0] - 2026-09-15
 
 No migration.

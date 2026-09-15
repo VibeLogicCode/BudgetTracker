@@ -49,9 +49,9 @@ import { saveMappingAction, setCardPersonAction } from './actions';
 import type { SaveMappingState } from './actions';
 import { buttonClass } from '@/components/ui/Button';
 
-interface AccountOption { id: number; name: string; importProfileId: number | null }
-interface ProfileOption { id: number; name: string; isBuiltin: boolean; mapping: ImportMapping }
-interface PersonOption { id: number; name: string }
+export interface AccountOption { id: number; name: string; importProfileId: number | null }
+export interface ProfileOption { id: number; name: string; isBuiltin: boolean; mapping: ImportMapping }
+export interface PersonOption { id: number; name: string }
 
 /**
  * One card value's assignment row (spec 2026-08-22 v1.6.0, MUST-6.1/MUST-6.2). Each row's save
@@ -205,6 +205,8 @@ export function ImportClient({
   history,
   simplefinManaged,
   people = [],
+  initialDetection = null,
+  onBackToList,
 }: {
   accounts: AccountOption[];
   profiles: ProfileOption[];
@@ -216,10 +218,35 @@ export function ImportClient({
    * their mapping, so the section never renders) does not need to pass it.
    */
   people?: PersonOption[];
+  /**
+   * 2026-09-15. A file the BATCH screen already staged and detected, opened here to be looked at
+   * properly. When it is present this component starts where `detectFrom` would have left it --
+   * same detection object, same two pre-selected pickers, same mapping -- instead of waiting for
+   * a file to be chosen, so clicking a row in the list lands on a page mid-flow rather than on an
+   * empty one asking for the file again.
+   *
+   * It seeds `useState` initialisers and nothing watches it afterwards, which is correct because
+   * the caller remounts this component per row (`key={stagingId}`): a row is a different file,
+   * and carrying the previous file's mapping into it is the class of bug the whole detect-on-
+   * choose change of v1.37.0 was written to kill.
+   */
+  initialDetection?: DetectionResult | null;
+  /** Rendered as "Back to the list" when the batch screen owns this component. */
+  onBackToList?: () => void;
 }) {
-  const [accountId, setAccountId] = useState<number>(accounts[0]?.id ?? 0);
-  const [profileId, setProfileId] = useState<number>(resolveOfferedProfileId(accounts[0]?.importProfileId, profiles));
-  const [mapping, setMapping] = useState<ImportMapping | null>(profiles[0]?.mapping ?? null);
+  const [accountId, setAccountId] = useState<number>(
+    initialDetection?.account?.id ?? accounts[0]?.id ?? 0,
+  );
+  const [profileId, setProfileId] = useState<number>(
+    initialDetection?.profile?.id ?? resolveOfferedProfileId(accounts[0]?.importProfileId, profiles),
+  );
+  const [mapping, setMapping] = useState<ImportMapping | null>(
+    (initialDetection?.profile === undefined || initialDetection.profile === null
+      ? undefined
+      : profiles.find((profile) => profile.id === initialDetection.profile?.id)?.mapping) ??
+      profiles[0]?.mapping ??
+      null,
+  );
   const [preview, setPreview] = useState<PreviewResult | null>(null);
   /**
    * What /api/import/detect made of the file that was just uploaded: which profile can read it,
@@ -227,7 +254,7 @@ export function ImportClient({
    * pickers rather than instead of them -- a pre-selection nobody can see the reason for is worse
    * than none, and both selects stay live either way.
    */
-  const [detection, setDetection] = useState<DetectionResult | null>(null);
+  const [detection, setDetection] = useState<DetectionResult | null>(initialDetection ?? null);
   /** True while hop 1 is in flight, so the card can say it is reading rather than sit silent. */
   const [detecting, setDetecting] = useState(false);
   /**
@@ -235,7 +262,7 @@ export function ImportClient({
    * whether detection succeeded: a file no profile could read is still importable once somebody
    * picks the profile by hand, and disabling the controls that let them would strand it.
    */
-  const [hasFile, setHasFile] = useState(false);
+  const [hasFile, setHasFile] = useState((initialDetection ?? null) !== null);
   const [summary, setSummary] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -539,6 +566,14 @@ export function ImportClient({
 
   return (
     <div className="flex flex-col gap-4 sm:gap-5">
+      {/* Only when the batch screen opened this file. The way BACK is the thing a one-file-at-a-
+          time page never needed and a list of ten does -- without it, looking at row 4 costs the
+          other nine, because there is nothing on the page that remembers them. */}
+      {onBackToList === undefined ? null : (
+        <button type="button" onClick={onBackToList} className={`${buttonClass('ghost', 'sm')} self-start`}>
+          ← Back to the list
+        </button>
+      )}
       <PageHeader
         title="Import"
         description="Upload a statement, check what it found, then add it. Nothing is written until you say so."

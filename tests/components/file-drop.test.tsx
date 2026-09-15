@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, cleanup, screen, fireEvent } from '@testing-library/react';
-import { FileDrop, extensionsFromAccept, rejectionFor } from '@/components/FileDrop';
+import { FileDrop, extensionsFromAccept, partitionDrop, rejectionFor } from '@/components/FileDrop';
 
 afterEach(cleanup);
 
@@ -148,5 +148,92 @@ describe('the two pure helpers', () => {
 
   it('accepts any file when the accept list names no extensions at all', () => {
     expect(rejectionFor([new File(['x'], 'a.pdf')], [])).toBeNull();
+  });
+});
+
+/**
+ * 2026-09-15. The owner downloads ten statements and feeds them in one at a time: "throughwing all
+ * together lets app handle the process". `rejectionFor` refused a multi-file drop outright, in one
+ * line, and that line is the whole of what stood in the way.
+ *
+ * THE RULE THAT SHAPES ALL OF THIS: a mixed drop must not be refused wholesale. Nine statements and
+ * one PDF is the realistic drop -- a bank folder has a PDF in it -- and throwing the nine away
+ * because of the one would be worse than what it replaces. So multi mode PARTITIONS rather than
+ * refuses, which is also the owner's own ask ("icase onf the files is not supported it should
+ * handle it accodingy").
+ */
+describe('partitionDrop: a bad file does not condemn the good ones', () => {
+  it('splits a mixed drop, keeping the good and naming each reject', () => {
+    const good = csv('jan.csv');
+    const bad = new File(['x'], 'scan.pdf');
+    const result = partitionDrop([good, bad], ['.csv']);
+    expect(result.accepted).toEqual([good]);
+    expect(result.rejected).toHaveLength(1);
+    expect(result.rejected[0]!.file).toBe(bad);
+    expect(result.rejected[0]!.reason).toMatch(/\.csv/);
+  });
+
+  it('keeps every file when the accept list names no extensions', () => {
+    const files = [new File(['x'], 'a.pdf'), new File(['x'], 'b.xls')];
+    expect(partitionDrop(files, []).accepted).toEqual(files);
+  });
+
+  it('reports an all-bad drop as all rejected, with nothing accepted', () => {
+    const result = partitionDrop([new File(['x'], 'a.pdf'), new File(['x'], 'b.docx')], ['.csv']);
+    expect(result.accepted).toEqual([]);
+    expect(result.rejected).toHaveLength(2);
+  });
+
+  it('handles an empty drop without inventing a file', () => {
+    expect(partitionDrop([], ['.csv'])).toEqual({ accepted: [], rejected: [] });
+  });
+});
+
+describe('FileDrop in multiple mode', () => {
+  it('tells the browser picker it may take more than one', () => {
+    const { container } = render(<FileDrop name="file" accept=".csv" label="Choose files" multiple />);
+    expect((container.querySelector('input[type="file"]') as HTMLInputElement).multiple).toBe(true);
+  });
+
+  it('hands every dropped file to onFiles', () => {
+    const onFiles = vi.fn();
+    render(<FileDrop name="file" accept=".csv" label="Choose files" multiple onFiles={onFiles} />);
+    drop(zone(), [csv('jan.csv'), csv('feb.csv'), csv('mar.csv')]);
+    expect(onFiles).toHaveBeenCalledTimes(1);
+    expect(onFiles.mock.calls[0]![0].map((file: File) => file.name)).toEqual(['jan.csv', 'feb.csv', 'mar.csv']);
+  });
+
+  /** The realistic drop: a folder of statements with a PDF in it. */
+  it('imports the good ones and says which it could not take', () => {
+    const onFiles = vi.fn();
+    render(<FileDrop name="file" accept=".csv" label="Choose files" multiple onFiles={onFiles} />);
+    drop(zone(), [csv('jan.csv'), new File(['x'], 'scan.pdf'), csv('feb.csv')]);
+    expect(onFiles.mock.calls[0]![0].map((file: File) => file.name)).toEqual(['jan.csv', 'feb.csv']);
+    expect(screen.getByRole('status').textContent).toContain('scan.pdf');
+  });
+
+  it('calls nothing when every file was refused', () => {
+    const onFiles = vi.fn();
+    render(<FileDrop name="file" accept=".csv" label="Choose files" multiple onFiles={onFiles} />);
+    drop(zone(), [new File(['x'], 'a.pdf'), new File(['x'], 'b.docx')]);
+    expect(onFiles).not.toHaveBeenCalled();
+    expect(screen.getByRole('status').textContent).toMatch(/a\.pdf/);
+  });
+
+  it('takes a multi selection from the picker too, not only from a drop', () => {
+    const onFiles = vi.fn();
+    const { container } = render(<FileDrop name="file" accept=".csv" label="Choose files" multiple onFiles={onFiles} />);
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [csv('jan.csv'), csv('feb.csv')] } });
+    expect(onFiles.mock.calls[0]![0]).toHaveLength(2);
+  });
+
+  /** Regression: every other caller in the app is single, and must stay refused. */
+  it('still refuses two files when multiple is not set', () => {
+    const onFile = vi.fn();
+    render(<FileDrop name="file" accept=".csv" label="Choose a file" onFile={onFile} />);
+    drop(zone(), [csv('jan.csv'), csv('feb.csv')]);
+    expect(onFile).not.toHaveBeenCalled();
+    expect(screen.getByRole('status').textContent).toMatch(/one file at a time/i);
   });
 });

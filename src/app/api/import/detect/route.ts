@@ -3,12 +3,10 @@ import { userFromRequest } from '@/lib/auth/session';
 import { isSelfScoped } from '@/lib/auth/viewer';
 import { acceptsTransactions, listAccounts } from '@/lib/accounts';
 import { isSimplefinManaged } from '@/lib/simplefin/connection';
-import { detectImportAccount } from '@/lib/import/detect-account';
-import { detectImportProfile } from '@/lib/import/detect-profile';
-import { looksLikeOfx, parseOfx } from '@/lib/import/ofx';
-import { ImportLimitError, MAX_FILE_BYTES, parseCsv } from '@/lib/import/parse';
+import { detectStagedFile } from '@/lib/import/batch';
+import { ImportLimitError, MAX_FILE_BYTES } from '@/lib/import/parse';
 import { hasReadableMapping, listProfiles } from '@/lib/import/presets';
-import { StagingError, writeStagedFile } from '@/lib/import/staging';
+import { StagingError } from '@/lib/import/staging';
 
 /**
  * The first hop of an import: the browser posts the file, this stages it ONCE and answers which
@@ -64,24 +62,17 @@ export async function POST(request: Request): Promise<Response> {
     .map((account) => ({ id: account.id, name: account.name, importProfileId: account.importProfileId }));
 
   try {
-    const stagingId = writeStagedFile(buf);
-    const profileDetection = detectImportProfile({ buf, filename: file.name, candidates: profiles });
-
-    // The rows the account scorer needs, read the way this file is actually going to be read: an
-    // OFX file by its own parser (it names its own fields and has no mapping), a CSV by whichever
-    // mapping just won. With no profile detected there is nothing to parse the file WITH, so the
-    // account scorer falls back to its filename and profile-pin signals over an empty row list.
-    const mapping = profiles.find((profile) => profile.id === profileDetection.profile?.id)?.mapping ?? null;
-    const rows = looksLikeOfx(file.name, buf)
-      ? parseOfx(buf).rows
-      : mapping === null
-        ? []
-        : parseCsv(buf, mapping).rows;
-
-    const accountDetection = detectImportAccount({
-      rows,
+    /*
+      2026-09-15, ruling B9. This block used to hold the staging, parsing and both detections
+      inline. It moved WHOLE into detectStagedFile (src/lib/import/batch.ts) when the batch screen
+      needed the identical work for N files -- not copied there, moved, so there is exactly one
+      detection path. Two copies would drift, and the drift would stay invisible until this page
+      and the batch list disagreed about the same file.
+    */
+    const { stagingId, account: accountDetection, profile: profileDetection } = detectStagedFile({
+      buf,
       filename: file.name,
-      profileId: profileDetection.profile?.id ?? null,
+      profiles,
       accounts,
     });
 

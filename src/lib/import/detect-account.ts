@@ -1,4 +1,4 @@
-import { desc, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { imports } from '@/db/schema';
 import { computeRowHashes, findExistingByExternalIds, findExistingByHashes } from './dedup';
@@ -152,15 +152,30 @@ function overlapCount(accountId: number, rows: CandidateRow[]): number {
 /** The newest import of a file with exactly this name, if it landed in an account still on offer. */
 function lastAccountForFilename(filename: string, accounts: AccountCandidate[]): AccountCandidate | undefined {
   if (filename.length === 0) return undefined;
-  const row = getDb()
-    .select({ accountId: imports.accountId })
+  /*
+    2026-09-15, ruling B4. This used to take the single most recent row (`orderBy(desc(id)).limit(1)`)
+    and hand back its account. It never asked whether EARLIER imports of the same filename went
+    somewhere else -- so a household whose bank names every export accountactivity.csv, and who
+    imports it into two accounts, got back whichever was used last, at confidence `likely`, with a
+    sentence that mentioned neither the other account nor the conflict.
+
+    That was containable while a person was in the loop: they read the sentence and then read a
+    preview before anything committed. The batch screen (src/lib/import/batch.ts) auto-imports on
+    `likely`, and nobody reads the sentence there -- so a shared export name would silently land a
+    statement in the wrong account, which is the exact outcome decide()'s own docblock calls "a mess
+    to unpick by hand".
+
+    Disagreement therefore means this signal says NOTHING and the cascade moves on to the profile
+    pin below. Saying nothing is this file's stated principle in every other branch; this is the one
+    place it was not being applied.
+  */
+  const seen = getDb()
+    .selectDistinct({ accountId: imports.accountId })
     .from(imports)
     .where(eq(imports.filename, filename))
-    .orderBy(desc(imports.id))
-    .limit(1)
-    .get();
-  if (row === undefined) return undefined;
-  return accounts.find((account) => account.id === row.accountId);
+    .all();
+  if (seen.length !== 1) return undefined;
+  return accounts.find((account) => account.id === seen[0]!.accountId);
 }
 
 /**
