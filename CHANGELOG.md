@@ -21,6 +21,30 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.41.2] - 2026-09-15
+
+No migration.
+
+### Added
+
+- **A rule that links a payment to a loan now says so, where you will see it.** Matching rules go
+  on merchant text, and a repayment often arrives as something generic like "E-TRANSFER" — so a
+  rule broad enough to catch yours can catch other things too, and a wrong match moves a loan
+  balance. The dashboard now lists the links a rule made in the last 30 days, each with a button to
+  undo it, and puts the balance back when you do. Links you made by hand are never listed: you
+  already named those. The card disappears when there is nothing to check.
+- **Saving a matching rule tells you how broad it is.** If the text you typed already matches more
+  than a handful of transactions you have, the confirmation says how many, so "E-TRANSFER" does not
+  look the same as "E-TRANSFER SAM" until the next statement arrives. It never refuses the rule —
+  it is your bank's wording and you may have a good reason.
+
+### Changed
+
+- The pack-update notice will not start applying itself. Dismissing it has been possible since
+  v1.37.0; auto-applying was considered and refused, because a preset update that applied itself
+  would be the one place in this app where how your money is categorised changes without you
+  saying so.
+
 ## [1.41.1] - 2026-09-15
 
 No migration.
