@@ -11,7 +11,7 @@ import { addMonths, currentMonth, isMonthKey, monthEnd, monthLabel, monthStart, 
 import { listGoals } from '@/lib/goals';
 import { householdInsights } from '@/lib/insights';
 import { unreviewedRuleImports } from '@/lib/import/commit';
-import { listLoans } from '@/lib/loans';
+import { listLoans, ruleLinkedPayments } from '@/lib/loans';
 import { netWorthHint, netWorthOverTime } from '@/lib/networth';
 import { onboardingSteps } from '@/lib/onboarding';
 import { cashflowTrend, categoryBreakdown, topMerchants, trimLeadingEmptyMonths, type MonthTrendRow } from '@/lib/reports';
@@ -30,6 +30,7 @@ import { GoalCard } from '@/components/GoalCard';
 import { LoansCard } from '@/components/LoansCard';
 import { WhoOwesUsCard } from '@/components/WhoOwesUsCard';
 import { NeedsALookCard } from '@/components/NeedsALookCard';
+import { RuleLinkedPaymentsCard } from '@/components/RuleLinkedPaymentsCard';
 import { RuleReviewCard } from '@/components/RuleReviewCard';
 import { QuickAddTransaction, QuickAddTrigger } from '@/components/QuickAddTransaction';
 import { SendDigestNow } from '@/components/SendDigestNow';
@@ -290,6 +291,9 @@ export default async function DashboardPage({
   // an account-level event, not a per-person one (see its own doc comment) -- so it is read only
   // for a household viewer, the same gate LoansCard's household balance already uses below.
   const unreviewedImports = selfScoped ? [] : unreviewedRuleImports();
+  // R27b. 30 days: long enough that a monthly repayment's link is still on screen at the next
+  // login, short enough that the card empties on its own rather than becoming a permanent list.
+  const ruleLinkedLoanPayments = selfScoped ? [] : ruleLinkedPayments(30);
 
   // Task 10 (ruling R7): the same component and the same manualEntryAction as /transactions'
   // own quick-add, so hand entry does not drift between the two surfaces.
@@ -668,6 +672,12 @@ export default async function DashboardPage({
               rulesReviewedAt is null), so it carries no AsOfTodayNote and renders identically
               regardless of which month MonthNav is pointed at. */}
           <RuleReviewCard imports={unreviewedImports} />
+
+      {/* R27b: self-hiding, and in the MAIN column beside the other attention cards -- a wrong
+          loan link has already moved a balance, which makes it something to act on rather than
+          something to read. Hidden from a self viewer for the same reason LoansCard is: a loan
+          balance is household money (ruling R2). */}
+      {selfScoped ? null : <RuleLinkedPaymentsCard payments={ruleLinkedLoanPayments} />}
 
           {/* Task 9 / ruling T7: "Safe to spend is hidden entirely for a past month" -- this card's
               own footer sentence blends the (always-current) upcoming-bills list with month-scoped

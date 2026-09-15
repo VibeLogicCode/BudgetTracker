@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, like, lt, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { accounts, billInstallments, loanMatcherRules, loanPayments, transactions, users, warrantyItemTypes, warrantyItems } from '@/db/schema';
 import { canActOnOwner, ownerScope, HOUSEHOLD_VIEWER, NOT_YOURS_ERROR, type Viewer } from '@/lib/auth/viewer';
@@ -161,6 +161,111 @@ export function saveLoanRule(input: {
   return row.id;
 }
 
+/**
+ * R27c (docs/PENDING-FIXES.md): how many transactions a proposed rule would actually reach, in
+ * THIS household's own data, before it is saved.
+ *
+ * WHY A COUNT AND NOT A WORD LIST. The obvious version of R27c is a blocklist -- INTERAC,
+ * E-TRANSFER, WITHDRAWAL, DRAFT -- and it is wrong in both directions. "E-TRANSFER" is a disaster
+ * for a household that moves money that way every week and completely fine for one that has sent
+ * two in its life; meanwhile the genuinely dangerous text for some other household is a word
+ * nobody thought to list. The only honest reading of "too broad" is how much it actually catches
+ * here, which is a number this app can compute exactly.
+ *
+ * It answers the question the matcher will really ask: same substring test, same optional account
+ * scope, same outgoing-only rule, and the same R27a amount band -- otherwise the count would
+ * promise matches `applyPaymentMatchers` would then refuse, which is a worse kind of wrong than
+ * saying nothing.
+ *
+ * NEVER REFUSES. This is a sentence the form shows, not a gate. The household may have a good
+ * reason, the rule is reversible, and the three-character floor in saveLoanRule already stops the
+ * genuinely absurd case. R27's own ruling is the argument for restraint here: the descriptions on
+ * a repayment ARE generic, and the app has no standing to say the household is wrong about their
+ * own bank.
+ */
+/**
+ * R27b (docs/PENDING-FIXES.md): "rule-linked loan payments could land in the review queue rather
+ * than applying silently, so a wrong link costs a click instead of going unnoticed."
+ *
+ * The R27 ruling is why this is the item that mattered of the three it spawned. A loan can be
+ * repaid by e-transfer, cash or bank draft; the matcher is a substring test over generic text; and
+ * a wrong match does not merely mislabel a row, it MOVES A LOAN BALANCE. Until now the only way to
+ * catch one was to happen to notice it on the row menu.
+ *
+ * NO MIGRATION. `loan_payments.source` has recorded 'rule' against 'manual' since the table was
+ * created -- what was missing was anywhere to SEE the rule-made ones. A manual link is a person
+ * naming this row and needs no second opinion, which is the same asymmetry the R27 ruling drew
+ * when it decided only a manual assign earns a rename.
+ *
+ * A WINDOW, not the whole history: a link from eight months ago that the household has lived with
+ * is not news, and a list that only grows is one nobody reads. `days` is the caller's choice.
+ */
+export interface RuleLinkedPayment {
+  txnId: number;
+  itemId: number;
+  itemName: string;
+  amountCents: number;
+  appliedCents: number;
+  date: string;
+  description: string;
+  linkedAt: string;
+}
+
+export function ruleLinkedPayments(days: number, now: Date = new Date()): RuleLinkedPayment[] {
+  const since = new Date(now.getTime() - days * 24 * 60 * 60 * 1000).toISOString();
+  return getDb()
+    .select({
+      txnId: loanPayments.txnId,
+      itemId: loanPayments.itemId,
+      itemName: warrantyItems.name,
+      amountCents: loanPayments.amountCents,
+      appliedCents: loanPayments.appliedCents,
+      date: transactions.date,
+      description: transactions.rawDescription,
+      linkedAt: loanPayments.createdAt,
+    })
+    .from(loanPayments)
+    .innerJoin(warrantyItems, eq(warrantyItems.id, loanPayments.itemId))
+    .innerJoin(transactions, eq(transactions.id, loanPayments.txnId))
+    .where(and(eq(loanPayments.source, 'rule'), gte(loanPayments.createdAt, since)))
+    .orderBy(desc(loanPayments.id))
+    .all();
+}
+
+const AMOUNT_BAND = { low: 0.5, high: 2 };
+
+export function loanRuleReach(input: { itemId: number; merchantContains: string; accountId: number | null }): number {
+  const needle = input.merchantContains.trim().toUpperCase();
+  if (needle.length === 0) return 0;
+  const db = getDb();
+  const item = db
+    .select({ billingAmountCents: warrantyItems.billingAmountCents })
+    .from(warrantyItems)
+    .where(eq(warrantyItems.id, input.itemId))
+    .get();
+
+  const rows = db
+    .select({ amountCents: transactions.amountCents })
+    .from(transactions)
+    .where(
+      and(
+        // Outgoing only: a repayment rule never matches money arriving, so counting deposits
+        // would inflate the warning with rows that could not link (applyPaymentMatchers' own
+        // `amountCents >= 0` skip).
+        lt(transactions.amountCents, 0),
+        like(transactions.normalizedMerchant, `%${needle}%`),
+        ...(input.accountId === null ? [] : [eq(transactions.accountId, input.accountId)]),
+      ),
+    )
+    .all();
+
+  const billing = item?.billingAmountCents ?? null;
+  if (billing === null || billing <= 0) return rows.length;
+  return rows.filter((row) =>
+    amountWithinBounds(row.amountCents, Math.round(billing * AMOUNT_BAND.low), Math.round(billing * AMOUNT_BAND.high)),
+  ).length;
+}
+
 export function deleteLoanRule(id: number): boolean {
   return getDb().delete(loanMatcherRules).where(eq(loanMatcherRules.id, id)).run().changes > 0;
 }
@@ -259,8 +364,6 @@ interface ActiveRule {
  * pair written here: that is the ONE amount predicate, and tests/ops/amount-bounds.test.ts refuses
  * a second copy of it anywhere under src/.
  */
-const AMOUNT_BAND = { low: 0.5, high: 2 };
-
 function amountPlausibleFor(rule: ActiveRule, amountCents: number): boolean {
   if (rule.billingAmountCents === null || rule.billingAmountCents <= 0) return true;
   return amountWithinBounds(

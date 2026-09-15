@@ -18,6 +18,7 @@ import {
   deleteLoanRule,
   listLoanRules,
   recomputeLoanBalance,
+  loanRuleReach,
   saveLoanRule,
   unlinkItemTransaction,
 } from '@/lib/loans';
@@ -577,6 +578,13 @@ export async function reRunOcrAction(
 
 const RULE_TOO_SHORT = 'Use at least three characters, or this will match almost everything.';
 const RULE_LIMIT = 'Five rules per loan is the limit.';
+/**
+ * R27c. Above this many existing matches, the save message says so. Five is a judgement, not a
+ * measurement: one or two hits is a rule doing its job, and by half a dozen the text is reaching
+ * things the household did not have in mind. Deliberately a WARNING threshold and not a limit --
+ * nothing here refuses.
+ */
+const RULE_REACH_WARN_AT = 5;
 const RULE_DUPLICATE = 'That rule already exists on this loan.';
 
 const loanRuleSchema = z.object({
@@ -609,6 +617,15 @@ export async function saveLoanRuleAction(_prev: WarrantyActionState, formData: F
   if (!matchingAllowedForKind(item.kind)) return { error: MATCHING_KIND_ERROR };
   if (listLoanRules(item.id).length >= MAX_RULES_PER_LOAN) return { error: RULE_LIMIT };
 
+  // R27c: asked BEFORE the write, because the count is about what is already in the table and the
+  // rule itself does not change that -- but reading it after would invite somebody to "simplify"
+  // it into a post-write query that silently includes rows this rule just linked.
+  const reach = loanRuleReach({
+    itemId: parsed.data.itemId,
+    merchantContains: parsed.data.merchantContains,
+    accountId: parsed.data.accountId,
+  });
+
   let ruleId: number;
   try {
     ruleId = saveLoanRule({
@@ -626,6 +643,12 @@ export async function saveLoanRuleAction(_prev: WarrantyActionState, formData: F
   }
 
   let message = 'Rule saved. It will apply to payments that arrive from now on.';
+  // R27c. Stated, never refused: the household may have a good reason, and a loan repayment
+  // genuinely does arrive as "E-TRANSFER" for a lot of people -- which is the R27 ruling's own
+  // point. The number is this household's own data, so it says something a word list could not.
+  if (reach > RULE_REACH_WARN_AT) {
+    message += ` That text already matches ${reach} transactions here, so check it is specific enough.`;
+  }
   // Loan-only, deliberately. Retroactively marking a year of installments paid from a year of
   // transactions is exactly the mistake the checkbox's own hint warns about, and a bill has
   // three or four installments a year that are one click each. The checkbox is not rendered for

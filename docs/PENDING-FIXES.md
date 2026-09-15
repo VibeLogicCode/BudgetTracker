@@ -1808,10 +1808,19 @@ item rather than folded in here:
   already relying on these rules: it kills the $60-against-$400 case and leaves legitimate drift
   (a rounded-up repayment, a renewal increase) alone. An item with no recorded billing amount is
   unchanged. A per-rule tolerance column remains the follow-up if the band is ever too loose.
-- **R27b — rule-linked loan payments could land in the review queue** rather than applying
-  silently, so a wrong link costs a click instead of going unnoticed.
-- **R27c — warn when a rule's text is generic** (`INTERAC`, `E-TRANSFER`, `WITHDRAWAL`, `DRAFT`)
-  and show how many existing transactions it would match, before the rule is saved.
+- **R27b — SHIPPED 2026-09-15 (v1.41.2).** `ruleLinkedPayments` (`src/lib/loans.ts`) +
+  `RuleLinkedPaymentsCard` on the dashboard, self-hiding, 30-day window, rule-made links only
+  (`loan_payments.source` has distinguished them since the table existed — no migration). NOT the
+  category review queue despite the wording: that queue answers "what is this charge?", a loan link
+  answers "is this the loan I think it is?", and folding them together would make both mean less.
+  The control is UNLINK, not dismiss — a wrong link has already moved a balance, so acknowledging
+  it would leave the household reading a number the app knows is wrong.
+- **R27c — SHIPPED 2026-09-15 (v1.41.2).** `loanRuleReach` (`src/lib/loans.ts`) counts what a
+  proposed rule would actually reach in THIS household's data — same substring test, account scope,
+  outgoing-only rule and R27a amount band the matcher itself uses — and `saveLoanRuleAction` adds a
+  sentence to its success message above five hits. A COUNT rather than the word list the item
+  suggested: "E-TRANSFER" is a disaster for a household that uses them weekly and fine for one with
+  two, so a blocklist would be wrong in both directions. It never refuses.
 
 Today's only defence is `Unassign from <loan>` on the row menu, which does put the balance back —
 but only for a link somebody happens to notice.

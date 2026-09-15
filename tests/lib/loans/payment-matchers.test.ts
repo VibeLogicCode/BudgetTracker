@@ -2,7 +2,15 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../helpers/db';
-import { applyPaymentMatchers, reverseInstallmentLinksForTransactions, saveLoanRule } from '@/lib/loans';
+import {
+  applyPaymentMatchers,
+  assignTransactionToLoan,
+  loanRuleReach,
+  reverseInstallmentLinksForTransactions,
+  ruleLinkedPayments,
+  saveLoanRule,
+  unlinkItemTransaction,
+} from '@/lib/loans';
 import { setupLoanTest } from './fixtures';
 import { addInstallment, listInstallments, markInstallmentPaid, unmarkInstallmentPaid } from '@/lib/warranty/installments';
 
@@ -528,5 +536,123 @@ describe('R27a: a rule will not match an amount nowhere near the item own', () =
 
     expect(applyPaymentMatchers([spend('e-transfer', -22_000)], new Date(NOW))).toBe(1);
     expect(applyPaymentMatchers([spend('e-transfer', -75_000)], new Date(NOW))).toBe(1);
+  });
+});
+
+/**
+ * R27c (docs/PENDING-FIXES.md): "warn when a rule's text is generic (INTERAC, E-TRANSFER,
+ * WITHDRAWAL, DRAFT) and show how many existing transactions it would match, before the rule is
+ * saved."
+ *
+ * The three-character floor stops `AB` but not `E-TRANSFER`, and the R27 ruling is the reason that
+ * matters: a loan can be repaid by e-transfer, cash or bank draft, and those descriptions are
+ * generic. A rule broad enough to catch the repayment is broad enough to catch everything else the
+ * household does by e-transfer, and a wrong match moves a loan balance.
+ *
+ * A COUNT, NOT A WORD LIST. `loanRuleReach` asks how many transactions the text would actually hit
+ * in THIS household's own data, which is the only honest version of "too broad": "E-TRANSFER" is a
+ * disaster for a household that uses them constantly and completely fine for one that has two.
+ * A hard-coded list of scary words would be wrong in both directions.
+ *
+ * It never refuses. The household may have a good reason, and the rule is reversible; the job here
+ * is to say what will happen before it does.
+ */
+describe('R27c: how broad a loan rule actually is, before it is saved', () => {
+  it('counts the transactions the text would reach', () => {
+    const itemId = makeItem(typeOfKind('loan', 'Reach loan'), 'Car loan', 2_000_000);
+    spend('e-transfer to sam', -40_000);
+    spend('e-transfer to alex', -2_000);
+    spend('e-transfer groceries', -8_000);
+    spend('tim hortons', -500);
+
+    expect(loanRuleReach({ itemId, merchantContains: 'E-TRANSFER', accountId: null })).toBe(3);
+  });
+
+  it('counts only the named account when the rule is scoped to one', () => {
+    const itemId = makeItem(typeOfKind('loan', 'Scoped loan'), 'Car loan', 2_000_000);
+    const other = insertTestAccount(t.db, { name: 'Savings' });
+    spend('e-transfer to sam', -40_000);
+    spend('e-transfer elsewhere', -1_000, { accountId: other });
+
+    expect(loanRuleReach({ itemId, merchantContains: 'E-TRANSFER', accountId: other })).toBe(1);
+  });
+
+  /** The amount band from R27a applies here too, or the count would promise matches that the
+   *  matcher itself would then refuse. */
+  it('respects the item own recorded amount, so the count matches what would really link', () => {
+    const itemId = makeItem(typeOfKind('loan', 'Billed loan'), 'Car loan', 2_000_000);
+    t.sqlite.prepare('update warranty_items set billing_amount_cents = ? where id = ?').run(40_000, itemId);
+    spend('e-transfer to sam', -40_000);
+    spend('e-transfer dinner split', -6_000);
+
+    expect(loanRuleReach({ itemId, merchantContains: 'E-TRANSFER', accountId: null })).toBe(1);
+  });
+
+  it('ignores money coming in, which a repayment rule never matches anyway', () => {
+    const itemId = makeItem(typeOfKind('loan', 'Income loan'), 'Car loan', 2_000_000);
+    spend('e-transfer to sam', -40_000);
+    t.sqlite
+      .prepare(
+        `insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, is_transfer, created_by, created_at, updated_at)
+         values (?, '2026-08-01', 'e-transfer in', 'E-TRANSFER IN', 90000, 0, ?, ?, ?)`,
+      )
+      .run(accountId, userId, NOW, NOW);
+
+    expect(loanRuleReach({ itemId, merchantContains: 'E-TRANSFER', accountId: null })).toBe(1);
+  });
+});
+
+/**
+ * R27b (docs/PENDING-FIXES.md): "rule-linked loan payments could land in the review queue rather
+ * than applying silently, so a wrong link costs a click instead of going unnoticed."
+ *
+ * The R27 ruling's own reasoning is why this matters more than the rename it started as: a loan
+ * can be repaid by e-transfer, cash or bank draft, the matcher is a substring test, and a wrong
+ * match MOVES A LOAN BALANCE. Today's only defence is noticing it on the row menu.
+ *
+ * NO MIGRATION: `loan_payments.source` has recorded 'rule' vs 'manual' since the table existed.
+ * What was missing was somewhere to see the rule-made ones. A manual link is a person naming this
+ * row and needs no review, which is exactly the asymmetry the R27 ruling drew.
+ */
+describe('R27b: rule-made links are reviewable', () => {
+  it('lists a link a rule made, with what it did to the balance', () => {
+    const itemId = makeItem(typeOfKind('loan', 'Reviewable loan'), 'Car loan', 2_000_000);
+    saveLoanRule({ itemId, merchantContains: 'E-TRANSFER', accountId: null, enabled: true });
+    const txnId = spend('e-transfer to sam', -40_000);
+    applyPaymentMatchers([txnId], new Date(NOW));
+
+    const rows = ruleLinkedPayments(30, new Date(NOW));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ txnId, itemId, itemName: 'Car loan', appliedCents: 40_000 });
+  });
+
+  it('never lists a link a person made by hand -- that one needs no second opinion', () => {
+    const itemId = makeItem(typeOfKind('loan', 'Manual loan'), 'Car loan', 2_000_000);
+    const txnId = spend('cheque 1041', -40_000);
+    assignTransactionToLoan({ txnId, itemId });
+
+    expect(ruleLinkedPayments(30, new Date(NOW))).toEqual([]);
+  });
+
+  it('drops out of the list once the household unlinks it', () => {
+    const itemId = makeItem(typeOfKind('loan', 'Unlinked loan'), 'Car loan', 2_000_000);
+    saveLoanRule({ itemId, merchantContains: 'E-TRANSFER', accountId: null, enabled: true });
+    const txnId = spend('e-transfer to sam', -40_000);
+    applyPaymentMatchers([txnId], new Date(NOW));
+    expect(ruleLinkedPayments(30, new Date(NOW))).toHaveLength(1);
+
+    unlinkItemTransaction(itemId, txnId);
+
+    expect(ruleLinkedPayments(30, new Date(NOW))).toEqual([]);
+  });
+
+  /** A window, not the whole history: an old link the household has lived with is not news. */
+  it('only looks back over the window it is given', () => {
+    const itemId = makeItem(typeOfKind('loan', 'Old loan'), 'Car loan', 2_000_000);
+    saveLoanRule({ itemId, merchantContains: 'E-TRANSFER', accountId: null, enabled: true });
+    const txnId = spend('e-transfer to sam', -40_000);
+    applyPaymentMatchers([txnId], new Date('2026-01-01T00:00:00.000Z'));
+
+    expect(ruleLinkedPayments(30, new Date(NOW))).toEqual([]);
   });
 });

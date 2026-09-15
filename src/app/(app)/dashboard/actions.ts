@@ -8,6 +8,7 @@ import { requireUser } from '@/lib/auth/session';
 import { isSelfScoped } from '@/lib/auth/viewer';
 import { todayIso } from '@/lib/dates';
 import { markImportRulesReviewed } from '@/lib/import/commit';
+import { unlinkItemTransaction } from '@/lib/loans';
 import { readEnv } from '@/lib/env';
 import { isEventEnabled } from '@/lib/notify/config';
 import { CHANNELS } from '@/lib/notify/events';
@@ -201,4 +202,35 @@ export async function sendDigestNowAction(
 
   // Still not revalidating /dashboard: nothing this page renders changes.
   return { sent: parsed.data };
+}
+
+/**
+ * R27b. Undo a link a matching rule made, from the dashboard card that surfaces them.
+ *
+ * UNLINK RATHER THAN DISMISS, and the difference is the whole point. The neighbouring card offers
+ * "Dismiss" for a rule-categorized import, because that is a thing to acknowledge. A wrong LOAN
+ * link has already moved a balance, so acknowledging it would leave the household reading a number
+ * the app knows is wrong. `unlinkItemTransaction` is the existing reversal and puts the balance
+ * back; this action is only the button in front of it.
+ */
+export type UnlinkRulePaymentState = { error?: string; message?: string };
+
+export async function unlinkRulePaymentAction(
+  _prev: UnlinkRulePaymentState,
+  formData: FormData,
+): Promise<UnlinkRulePaymentState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+  await requireUser();
+
+  const parsed = z
+    .object({ txnId: z.coerce.number().int().positive(), itemId: z.coerce.number().int().positive() })
+    .safeParse({ txnId: formData.get('txnId'), itemId: formData.get('itemId') });
+  if (!parsed.success) return { error: 'Invalid request.' };
+
+  const undone = unlinkItemTransaction(parsed.data.itemId, parsed.data.txnId);
+  if (!undone) return { error: 'That link is already gone.' };
+
+  revalidatePath('/dashboard');
+  revalidatePath('/warranties');
+  return { message: 'Unlinked, and the balance has gone back.' };
 }
