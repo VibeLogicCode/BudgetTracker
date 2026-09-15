@@ -1079,7 +1079,7 @@ export function MerchantRulesClient({
                           title={`Already covered by the ${coveredBy.matchType} rule "${coveredBy.pattern}"`}
                         >
                           <span className="badge badge--amber">redundant</span>
-                          <span className="text-[11px] font-normal text-muted">
+                          <span className="text-2xs font-normal text-muted">
                             {`covered by ${coveredBy.matchType} "${coveredBy.pattern}"`}
                           </span>
                         </span>
@@ -1091,7 +1091,7 @@ export function MerchantRulesClient({
                           tooltip: this is the column that tells "this rule stopped matching" from
                           "this rule works", and the Affects 0 next to it means nothing alone. */}
                       {boundsWords(rule.amountMinCents, rule.amountMaxCents) === null ? null : (
-                        <span className="block text-[11px] text-subtle">
+                        <span className="block text-2xs text-subtle">
                           {boundsWords(rule.amountMinCents, rule.amountMaxCents)}
                         </span>
                       )}

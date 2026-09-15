@@ -215,6 +215,25 @@
 
   --color-focus: var(--focus);
 
+  /* ----- Type scale (2026-09-15) -----
+     TWO NAMED STEPS, and neither is new: both sizes were already in the app, spelled by hand as
+     arbitrary values at ten call sites -- `text-[0.6875rem]` and `text-[11px]` are the SAME size
+     in two spellings, which is how a scale stops being a scale.
+
+     `2xs` (11px) is the micro-label: the `.eyebrow` treatment, a column caption, the "View"/"Sort"
+     labels on the transactions toolbar. `md` (15px) is the step Tailwind leaves out between `sm`
+     (14px) and `base` (16px) -- the app invented it anyway for the shell's wordmark and the header
+     title, because 14px read as body text there and 16px read as a heading.
+
+     Naming them is the whole change. An arbitrary value is invisible to a scale audit and cannot
+     be adjusted in one place; tests/ops/type-scale.test.ts now refuses new ones. */
+  --text-2xs: 0.6875rem;
+  --text-md: 0.9375rem;
+  /* The page title above `sm`. 28px, deliberately between Tailwind's 2xl (24) and 3xl (30): the
+     smaller reads as a card heading and the larger as a marketing page. One call site
+     (PageHeader), named anyway so no arbitrary font size survives anywhere in the app. */
+  --text-display: 1.75rem;
+
   --radius-xs: 0.375rem;
   --radius-sm: 0.5rem;
   --radius-md: 0.75rem;
@@ -330,7 +349,7 @@
      The small caps label above a number. Structural, not decorative: it names
      what the number counts. */
   .eyebrow {
-    font-size: 0.6875rem;
+    font-size: var(--text-2xs);
     font-weight: 600;
     letter-spacing: 0.08em;
     text-transform: uppercase;

@@ -2212,7 +2212,7 @@ export function TransactionsClient({
             grid: see this function's own docblock, point 2/3, for why. */}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-line pt-2 sm:pt-3">
           <span className="flex items-center gap-1.5">
-            <span className="shrink-0 text-[0.6875rem] font-medium text-muted">This transaction only</span>
+            <span className="shrink-0 text-2xs font-medium text-muted">This transaction only</span>
             {/* v1.7.0 Task 4: a split transaction has no ONE category -- same rule as the table
                 row, now honoured here too (never checked from this card before this task). */}
             {rowSplits.length > 0 ? (
@@ -2233,7 +2233,7 @@ export function TransactionsClient({
             )}
           </span>
           <span className="flex items-center gap-1.5">
-            <span className="shrink-0 text-[0.6875rem] font-medium text-muted">Person</span>
+            <span className="shrink-0 text-2xs font-medium text-muted">Person</span>
             {selfScoped ? (
               <span className="text-xs text-muted">{row.attributedUserName ?? 'Household'}</span>
             ) : (
@@ -3311,7 +3311,7 @@ export function TransactionsClient({
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
               {reviewMode ? null : (
                 <span className={`${rowVisibility(activeGroupView !== '')} flex-wrap items-center gap-1.5`}>
-                  <span className="text-[0.6875rem] font-medium uppercase tracking-wide text-muted">View</span>
+                  <span className="text-2xs font-medium uppercase tracking-wide text-muted">View</span>
                   <PillNav
                     groupLabel="How to show the transactions"
                     options={GROUP_VIEW_OPTIONS.map(
@@ -3326,7 +3326,7 @@ export function TransactionsClient({
                 </span>
               )}
               <span className={`${rowVisibility(activeSort !== '')} flex-wrap items-center gap-1.5`}>
-                <span className="text-[0.6875rem] font-medium uppercase tracking-wide text-muted">Sort</span>
+                <span className="text-2xs font-medium uppercase tracking-wide text-muted">Sort</span>
                 <PillNav
                   groupLabel="Sort the transactions"
                   options={SORT_OPTIONS.map(
@@ -3361,7 +3361,7 @@ export function TransactionsClient({
               </span>
               {reviewMode ? null : (
                 <span className={`${rowVisibility(activeSource !== '')} flex-wrap items-center gap-1.5`}>
-                  <span className="text-[0.6875rem] font-medium uppercase tracking-wide text-muted">Set by</span>
+                  <span className="text-2xs font-medium uppercase tracking-wide text-muted">Set by</span>
                   <PillNav
                     groupLabel="Filter by what set the category"
                     options={SOURCE_FILTER_OPTIONS.map(

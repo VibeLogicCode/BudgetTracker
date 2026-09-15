@@ -106,7 +106,7 @@ export function AppShell({
           aria-label="Budget Tracker home"
         >
           <LogoMark className="h-8 w-8" />
-          <span className="text-[0.9375rem] font-semibold tracking-tight">Budget Tracker</span>
+          <span className="text-md font-semibold tracking-tight">Budget Tracker</span>
         </Link>
         <nav aria-label="Sections" className="flex-1 overflow-y-auto px-3 pb-4">
           <NavList groups={groups} pathname={pathname} reviewCount={reviewCount} reviewActive={reviewActive} rail />
@@ -144,7 +144,7 @@ export function AppShell({
             thing telling a reader which section they are in.
           */}
           <div className="flex min-w-0 flex-1 items-center gap-2">
-            <span className="truncate text-[0.9375rem] font-semibold text-ink lg:hidden">
+            <span className="truncate text-md font-semibold text-ink lg:hidden">
               {current?.label ?? 'Budget Tracker'}
             </span>
           </div>

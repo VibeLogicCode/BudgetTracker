@@ -21,6 +21,30 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.42.0] - 2026-09-15
+
+No migration.
+
+### Changed
+
+- **Charts load when you reach them, not before.** The charting library is by a wide margin the
+  largest thing this app sends to a browser, and it was being sent on first load of both the
+  dashboard and Reports — so a household that never scrolled to a chart paid for it before the page
+  was usable. The charts now arrive on their own, behind a placeholder the same size, so nothing
+  moves when they land.
+- **Four more pages show something while they load.** Every page in this app runs its queries when
+  you ask for it, and only two had a placeholder — so on anything slower than a laptop, clicking
+  Dashboard, Budgets, Goals or Contracts & Coverage looked like nothing had happened. They now show
+  the shape of the page while it is being built.
+- **One way to build a button.** Forty-one files were writing out button classes by hand instead of
+  using the builder that exists for it, which is the kind of drift that makes two buttons on one
+  screen slowly stop matching. Nothing looks different; there is now one place to change it, and a
+  test that keeps it that way.
+- **Every text size in the app has a name.** The scale had ten hand-written one-offs filling its
+  gaps — two of which were the same size written two different ways. The sizes the app had already
+  invented are now part of the scale (an 11px label step, a 15px step between small and base, and
+  the page-title size), so they can be adjusted in one place instead of forty.
+
 ## [1.41.2] - 2026-09-15
 
 No migration.
