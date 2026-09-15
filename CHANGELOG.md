@@ -21,6 +21,57 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.40.0] - 2026-09-15
+
+No migration. A design pass over the whole app, from an audit and a design review.
+
+### Added
+
+- **The nav rail shows the sequence it always described.** The ten entries are grouped —
+  **This month** (Dashboard, Transactions, Review, Import), **Planning** (Budgets, Goals,
+  Contracts & Coverage, Reports), then a hairline and the back office. The list has followed the
+  order money moves through the app since it was written; nothing ever rendered that, so it read
+  as ten identical doors. A group a viewer can see nothing in is dropped rather than heading an
+  empty list.
+- **The month's headline figure has a ground.** "Spent this month" sits on its own band instead of
+  in a box identical to the one holding "Top merchants" further down the page.
+
+### Fixed
+
+- **Category dropdowns were clipped inside dialogs.** The listbox was absolutely positioned inside
+  a container that hides overflow, so a category list opened low in a dialog was cut off by its own
+  box — the split editor, recategorize, and the Create-a-rule dialog added in v1.39.0. It now uses
+  the same technique the row menu has used since v1.15.0.
+- **Two contrast failures.** Table headers (and the transactions day headers, and the import step
+  chips) sat at 4.32:1 against their background, under the 4.5:1 floor for normal text. Every
+  input, select, textarea and secondary button had an edge at 1.53:1, against a 3:1 floor for the
+  boundary of a control. Both are now measured by a test rather than asserted in a comment.
+- **Reduced motion switched off feedback, not just decoration.** Anyone who asks their system for
+  less motion also lost the loading skeletons and the save spinner. A spinner frozen at one frame
+  reads as an app that has hung, which is the opposite of what it is for. Those keep moving;
+  everything else still stops.
+- **The sticky header repeated the page title.** At desktop width it printed the section name that
+  the page heading renders in full just below it. It stays on a phone, where the rail is gone and
+  the heading scrolls away.
+- **The page guide wore the notice colour.** "What is this page for?" used the same blue as a real
+  statement about your money ("Viewing March 2026. Net worth still reflects today"), on nine pages,
+  so the colour stopped meaning anything. The guide is a quiet panel now.
+- **The crash page ignored dark mode** — a white page at the worst possible moment. It follows the
+  system setting now.
+- **The theme toggle's three buttons were too small to hit on a phone** (~28px against the 44px
+  floor every other control keeps).
+- **The browser tab icon 404'd on every page load.** The icons were always there; nothing pointed
+  the tab at one.
+
+### Changed
+
+- **One chip shape.** The two chip components rendered side by side on the dashboard at different
+  paddings and weights. Both vocabularies stay — colour-named for warranty status, which is
+  specified by colour; meaning-named elsewhere — but there is now a single shape.
+- **Section titles outrank the cards inside them.** A section heading was 11px uppercase grey while
+  a card heading was 16px semibold; "Goals" read as subordinate to "Top merchants", which titles
+  one card inside it.
+
 ## [1.39.1] - 2026-09-14
 
 No migration.
