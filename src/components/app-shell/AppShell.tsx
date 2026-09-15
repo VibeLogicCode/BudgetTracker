@@ -5,7 +5,7 @@ import { usePathname, useSearchParams } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { ChevronDownIcon, CloseIcon, LogoMark, MenuIcon, SettingsIcon, SignOutIcon } from '@/components/icons';
 import { ThemeToggle } from '@/components/theme/theme-toggle';
-import { activeNavItem, visibleNav, REVIEW_NAV_HREF, type NavItem } from './nav';
+import { activeNavItem, navGroups, REVIEW_NAV_HREF, type NavGroup } from './nav';
 
 export interface ShellUser {
   /** v1.13.0 micro-ruling M6: ShellUser is now Viewer-shaped (id/role/visibility) so it can be
@@ -43,7 +43,7 @@ export function AppShell({
   const reviewActive = useSearchParams().get('review') === '1' && pathname === '/transactions';
   const [menuOpen, setMenuOpen] = useState(false);
   const current = activeNavItem(pathname);
-  const items = visibleNav(user);
+  const groups = navGroups(user);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const menuPanelRef = useRef<HTMLDivElement>(null);
 
@@ -108,7 +108,7 @@ export function AppShell({
           <span className="text-[0.9375rem] font-semibold tracking-tight">Budget Tracker</span>
         </Link>
         <nav aria-label="Sections" className="flex-1 overflow-y-auto px-3 pb-4">
-          <NavList items={items} pathname={pathname} reviewCount={reviewCount} reviewActive={reviewActive} rail />
+          <NavList groups={groups} pathname={pathname} reviewCount={reviewCount} reviewActive={reviewActive} rail />
         </nav>
       </aside>
 
@@ -151,7 +151,7 @@ export function AppShell({
           >
             <nav aria-label="Sections">
               <NavList
-                items={items}
+                groups={groups}
                 pathname={pathname}
                 reviewCount={reviewCount}
                 reviewActive={reviewActive}
@@ -198,14 +198,14 @@ export function AppShell({
 }
 
 function NavList({
-  items,
+  groups,
   pathname,
   reviewCount,
   reviewActive,
   rail = false,
   onNavigate,
 }: {
-  items: NavItem[];
+  groups: NavGroup[];
   pathname: string;
   reviewCount: number;
   /** True on /transactions?review=1: the Review entry is current and Transactions is not. */
@@ -219,43 +219,65 @@ function NavList({
 }) {
   const active = activeNavItem(pathname);
   return (
-    <ul className="flex flex-col gap-0.5">
-      {items.map((item) => {
-        // The review filter and the plain transactions list share a pathname, so the two entries
-        // are told apart by the query string, not by activeNavItem (which never sees it).
-        const isReviewItem = item.href === REVIEW_NAV_HREF;
-        const isActive = isReviewItem ? reviewActive : active?.href === item.href && !reviewActive;
-        const badge = isReviewItem && reviewCount > 0 ? reviewCount : null;
-        return (
-          <li key={item.href}>
-            <Link
-              href={item.href}
-              onClick={onNavigate}
-              aria-current={isActive ? 'page' : undefined}
-              className={`relative flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors ${
-                isActive
-                  ? 'bg-accent-soft font-semibold text-accent-soft-fg'
-                  : 'font-medium text-muted hover:bg-surface-2 hover:text-ink'
-              }`}
-            >
-              {isActive && rail ? (
-                <span
-                  aria-hidden="true"
-                  className="absolute -left-3 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-accent"
-                />
-              ) : null}
-              <item.Icon className={`h-[1.15rem] w-[1.15rem] shrink-0 ${isActive ? 'text-accent-text' : 'text-subtle'}`} />
-              <span className="flex-1 truncate">{item.label}</span>
-              {badge !== null ? (
-                <span className="badge badge--amber tabnum" aria-label={`${badge} to review`}>
-                  {badge}
-                </span>
-              ) : null}
-            </Link>
-          </li>
-        );
-      })}
-    </ul>
+    <div className="flex flex-col">
+      {groups.map((group, index) => (
+        // More space ABOVE a run than inside it, so the gap reads as a division rather than as
+        // loose spacing. The first run sits flush -- it needs no separation from the logo above it.
+        <div key={group.id} className={index === 0 ? '' : 'mt-4'}>
+          {group.label === null ? (
+            // The back office. A rule instead of a word: naming this pair "Other" would print
+            // something a reader already knows from "Settings" and "Help".
+            <div data-nav-rule className="mb-2 border-t border-line" />
+          ) : (
+            // aria-hidden because the run's accessible name comes off the <ul> below -- without it
+            // a screen reader reads the name twice, once as stray text and once as the list label.
+            <span aria-hidden="true" className="eyebrow block px-3 pb-1.5">
+              {group.label}
+            </span>
+          )}
+          <ul aria-label={group.label ?? undefined} className="flex flex-col gap-0.5">
+            {group.items.map((item) => {
+              // The review filter and the plain transactions list share a pathname, so the two
+              // entries are told apart by the query string, not by activeNavItem (which never
+              // sees it).
+              const isReviewItem = item.href === REVIEW_NAV_HREF;
+              const isActive = isReviewItem ? reviewActive : active?.href === item.href && !reviewActive;
+              const badge = isReviewItem && reviewCount > 0 ? reviewCount : null;
+              return (
+                <li key={item.href}>
+                  <Link
+                    href={item.href}
+                    onClick={onNavigate}
+                    aria-current={isActive ? 'page' : undefined}
+                    className={`relative flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors ${
+                      isActive
+                        ? 'bg-accent-soft font-semibold text-accent-soft-fg'
+                        : 'font-medium text-muted hover:bg-surface-2 hover:text-ink'
+                    }`}
+                  >
+                    {isActive && rail ? (
+                      <span
+                        aria-hidden="true"
+                        className="absolute -left-3 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-accent"
+                      />
+                    ) : null}
+                    <item.Icon
+                      className={`h-[1.15rem] w-[1.15rem] shrink-0 ${isActive ? 'text-accent-text' : 'text-subtle'}`}
+                    />
+                    <span className="flex-1 truncate">{item.label}</span>
+                    {badge !== null ? (
+                      <span className="badge badge--amber tabnum" aria-label={`${badge} to review`}>
+                        {badge}
+                      </span>
+                    ) : null}
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ))}
+    </div>
   );
 }
 

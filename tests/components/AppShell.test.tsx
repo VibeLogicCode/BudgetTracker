@@ -231,3 +231,72 @@ describe('v1.12.1: safe-area insets for an installed home-screen app (item AY / 
     expect(main).not.toContain('pr-[env(safe-area-inset-right)]');
   });
 });
+
+/**
+ * 2026-09-15, `$impeccable critique` priority issue P0: "the nav rail is ten undifferentiated
+ * doors." The grouping data lives in nav.ts (tests/components/nav.test.ts covers it); these are
+ * the rendering guarantees.
+ */
+describe('the rail renders the money-flow sequence it always described', () => {
+  const renderShell = () =>
+    render(
+      <AppShell user={user} reviewCount={0} version="1.2.3">
+        <p>child</p>
+      </AppShell>,
+    );
+
+  it('prints the two run labels', () => {
+    renderShell();
+    expect(screen.getAllByText('This month').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Planning').length).toBeGreaterThan(0);
+  });
+
+  /**
+   * A screen reader gets the run's name from the list's accessible name, so the visible word is
+   * `aria-hidden` -- otherwise the group is announced twice, once as stray text and once as the
+   * list label.
+   */
+  it('names each run to assistive tech without announcing the label twice', () => {
+    const { container } = renderShell();
+    const lists = [...container.querySelectorAll('ul[aria-label]')].map((ul) => ul.getAttribute('aria-label'));
+    expect(lists).toContain('This month');
+    expect(lists).toContain('Planning');
+    const visible = screen.getAllByText('This month')[0];
+    expect(visible.getAttribute('aria-hidden')).toBe('true');
+  });
+
+  /** The back office is separated by a rule and carries no words. */
+  it('gives the back office a hairline and no label', () => {
+    const { container } = renderShell();
+    const labels = [...container.querySelectorAll('ul[aria-label]')].map((ul) => ul.getAttribute('aria-label'));
+    expect(labels).not.toContain('Other');
+    expect(labels).not.toContain('Admin');
+    expect(container.querySelector('[data-nav-rule]')).toBeTruthy();
+  });
+
+  /** A run label is a caption, never a target: it must not be a link and must not take focus. */
+  it('never makes a run label focusable or clickable', () => {
+    renderShell();
+    const label = screen.getAllByText('This month')[0];
+    expect(label.closest('a')).toBeNull();
+    expect(label.tagName).toBe('SPAN');
+    expect(label.hasAttribute('tabindex')).toBe(false);
+  });
+
+  /** Both renderings of the nav -- the desktop rail and the phone panel -- come from one NavList,
+   *  so the grouping cannot ship to one and not the other (the CB lesson, PENDING-FIXES). */
+  it('groups the phone menu too, not just the rail', () => {
+    renderShell();
+    fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
+    const panel = document.getElementById('mobile-nav') as HTMLElement;
+    expect(panel.querySelector('ul[aria-label="This month"]')).toBeTruthy();
+    expect(panel.querySelector('ul[aria-label="Planning"]')).toBeTruthy();
+  });
+
+  it('still renders every entry, grouped or not', () => {
+    renderShell();
+    for (const item of NAV) {
+      expect(screen.getAllByRole('link', { name: new RegExp(item.label.replace('&', '&')) }).length).toBeGreaterThan(0);
+    }
+  });
+});

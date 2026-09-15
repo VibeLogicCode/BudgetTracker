@@ -24,6 +24,24 @@ export interface NavItem {
   href: string;
   label: string;
   Icon: (props: IconProps) => React.ReactElement;
+  /** Which run of the rail this entry belongs to. See NAV_GROUPS and navGroups below. */
+  group: NavGroupId;
+}
+
+/**
+ * 2026-09-15. The three runs of the rail.
+ *
+ * 'month'    -- the money-flow sequence NAV's own docblock below has always described.
+ * 'planning' -- the surfaces a household reads and sets rather than acts on this week.
+ * 'admin'    -- the back office. Deliberately unlabelled; see NAV_GROUPS.
+ */
+export type NavGroupId = 'month' | 'planning' | 'admin';
+
+export interface NavGroup {
+  id: NavGroupId;
+  /** Printed above the run. NULL means the run carries a hairline and no words. */
+  label: string | null;
+  items: NavItem[];
 }
 
 /**
@@ -42,26 +60,26 @@ export interface NavItem {
  * it belongs in that flow, and this count moves with it; Help stays at the end.
  */
 export const NAV: NavItem[] = [
-  { href: '/dashboard', label: 'Dashboard', Icon: DashboardIcon },
-  { href: '/transactions', label: 'Transactions', Icon: TransactionsIcon },
+  { href: '/dashboard', label: 'Dashboard', Icon: DashboardIcon, group: 'month' },
+  { href: '/transactions', label: 'Transactions', Icon: TransactionsIcon, group: 'month' },
   // Review round (fold /review in): ruling R7 keeps this entry, its label, its icon and its
   // count badge -- only the href changes, from the second page it used to be to the filter that
   // replaced it. `/review` itself still exists and still works (ruling R6, review/page.tsx is
   // now a bare redirect to this same href), so a bookmark or a typed-in address is unaffected;
   // this is only the link the app itself renders.
-  { href: REVIEW_NAV_HREF, label: 'Review', Icon: ReviewIcon },
-  { href: '/import', label: 'Import', Icon: ImportIcon },
-  { href: '/budgets', label: 'Budgets', Icon: BudgetsIcon },
-  { href: '/goals', label: 'Goals', Icon: GoalsIcon },
+  { href: REVIEW_NAV_HREF, label: 'Review', Icon: ReviewIcon, group: 'month' },
+  { href: '/import', label: 'Import', Icon: ImportIcon, group: 'month' },
+  { href: '/budgets', label: 'Budgets', Icon: BudgetsIcon, group: 'planning' },
+  { href: '/goals', label: 'Goals', Icon: GoalsIcon, group: 'planning' },
   // v1.2.2 Task 2: renamed from "Warranties" -- the tracker now covers warranties,
   // subscriptions, contracts and loans. No dedicated short-label mechanism exists on NavItem
   // (checked AppShell: NavList already renders every label inside a `truncate` span in both
   // the desktop rail and the phone menu), so this longer label relies on that existing
   // ellipsis behaviour rather than introducing a new field for one nav item.
-  { href: '/warranties', label: 'Contracts & Coverage', Icon: WarrantiesIcon },
-  { href: '/reports', label: 'Reports', Icon: ReportsIcon },
-  { href: '/settings', label: 'Settings', Icon: SettingsIcon },
-  { href: '/help', label: 'Help', Icon: InfoIcon },
+  { href: '/warranties', label: 'Contracts & Coverage', Icon: WarrantiesIcon, group: 'planning' },
+  { href: '/reports', label: 'Reports', Icon: ReportsIcon, group: 'planning' },
+  { href: '/settings', label: 'Settings', Icon: SettingsIcon, group: 'admin' },
+  { href: '/help', label: 'Help', Icon: InfoIcon, group: 'admin' },
 ];
 
 /**
@@ -101,4 +119,46 @@ export function activeNavItem(pathname: string): NavItem | undefined {
     }
   }
   return best;
+}
+
+/**
+ * 2026-09-15, from the `$impeccable critique` design review. Heuristic 8 (Aesthetic and minimalist
+ * design) scored 2 of 4, on one finding: "the nav rail is ten undifferentiated doors."
+ *
+ * The rail always HAD a structure -- NAV's docblock above describes the order money moves through
+ * the app, and has since the list was written. Nothing ever rendered it. Ten flat rows at one
+ * weight make a lookup table; the docblock describes a SEQUENCE, and a sequence shown is a rail
+ * that teaches the app to somebody who has not read the help page.
+ *
+ * WHY THE BACK OFFICE HAS NO LABEL. Settings and Help get a hairline instead. Calling that pair
+ * "Other" or "Admin" would print a word that tells a reader nothing the two links do not already
+ * say -- decoration wearing a label's clothes.
+ *
+ * WHY THIS IS A VIEW AND NOT A REORDER. NAV stays exactly as it was, in its original order, with
+ * every entry present: tests/ops/onboarding-coverage.test.ts greps the full list for per-page
+ * guides, and tests/components/AppShell.test.tsx pins Help as the last entry and requires it in
+ * the rail (so moving Help to the footer, which the critique proposed, is refused here -- the
+ * footer link is a supplement for a reader who never reads the rail, not a replacement). Grouping
+ * READS NAV; it never rewrites it. A new entry must be given a `group` -- the compiler requires
+ * it -- so one cannot silently fall out of the rail.
+ */
+const NAV_GROUPS: readonly { id: NavGroupId; label: string | null }[] = [
+  { id: 'month', label: 'This month' },
+  { id: 'planning', label: 'Planning' },
+  { id: 'admin', label: null },
+];
+
+/**
+ * The rail's runs for one viewer, in order, with empty runs dropped.
+ *
+ * Dropping is load-bearing rather than defensive: a self viewer loses Import, Review and Settings
+ * (see visibleNav above), so a run can genuinely empty out. A label printed over nothing is the
+ * heading-outlives-its-content failure, and the reader who would hit it is this household's most
+ * likely one -- the member who only ever checks their own spending.
+ */
+export function navGroups(viewer: Viewer): NavGroup[] {
+  const items = visibleNav(viewer);
+  return NAV_GROUPS.map(({ id, label }) => ({ id, label, items: items.filter((item) => item.group === id) })).filter(
+    (group) => group.items.length > 0,
+  );
 }
