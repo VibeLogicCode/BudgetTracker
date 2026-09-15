@@ -4,9 +4,14 @@
  * whole section of them (a dashboard block, a page's own sub-list) that never had a shared
  * header at all before this release.
  *
- * Reuses `.eyebrow` (globals.css) rather than inventing a second small-caps treatment: the same
- * uppercase/letter-spacing rule that already names what a StatTile's number counts now also
- * names what a section holds.
+ * 2026-09-15, `$impeccable critique` P2: this used `.eyebrow` -- 11px uppercase --subtle -- while
+ * CardHeader titles a single card at 16px semibold --ink. So "Goals", which introduces an entire
+ * GRID of cards, rendered visually subordinate to "Top merchants", which titles one card inside a
+ * section. The ladder ran backwards.
+ *
+ * It now sits one step ABOVE CardHeader (text-lg over text-base) rather than far below it, which
+ * is the smallest change that puts the ladder the right way up -- a step, not a shout. `.eyebrow`
+ * keeps the job it was invented for: naming what a StatTile's number counts.
  */
 export function SectionHeader({
   title,
@@ -21,7 +26,7 @@ export function SectionHeader({
 }) {
   return (
     <div className={`flex flex-wrap items-center justify-between gap-2 ${className}`}>
-      <h2 className="eyebrow flex min-w-0 items-center gap-1.5">
+      <h2 className="flex min-w-0 items-center gap-1.5 text-lg font-semibold tracking-tight text-ink">
         {icon ? (
           <span aria-hidden="true" className="text-subtle">
             {icon}

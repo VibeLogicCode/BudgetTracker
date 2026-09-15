@@ -462,7 +462,12 @@ describe('AccountsManager — reconciliation diagnostics (spec 2026-08-23 v1.8.0
         profiles={PROFILES}
       />,
     );
-    expect(container.querySelectorAll('.badge').length).toBe(0);
+    // 2026-09-15: `.badge` is now the ONE chip geometry in the app, so the Type pill this row
+    // has always rendered matches it too (Pill composes .badge rather than re-describing its
+    // padding and weight). The intent is unchanged and is what the name says -- the DIAGNOSTIC
+    // adds no chip of its own -- so the assertion is "still exactly the Type pill", not "none".
+    expect(container.querySelectorAll('.badge').length).toBe(1);
+    expect(container.querySelector('.badge')?.textContent).toBe('chequing');
     expect(screen.getByText('chequing')).toBeTruthy();
     expect(screen.getByText('active')).toBeTruthy();
     expect(screen.getByText(/probably missing rows/i)).toBeTruthy();

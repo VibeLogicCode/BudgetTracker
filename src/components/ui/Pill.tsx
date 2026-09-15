@@ -14,12 +14,26 @@
  */
 export type PillTone = 'neutral' | 'accent' | 'positive' | 'warning' | 'negative';
 
+/**
+ * 2026-09-15, `$impeccable critique` P2: "two badge systems on one screen". `.badge--*` and this
+ * component both rendered on the dashboard at once -- the nav review count as a badge, a
+ * NeedsALookCard kind label as a Pill -- at two paddings, two weights and two line-heights. Two
+ * sizes of the same idea, which is the kind of small inconsistency that makes a careful product
+ * read as assembled rather than designed.
+ *
+ * The two VOCABULARIES both earn their place and are kept: `.badge--*` is hue-named because
+ * warranty status is specified by colour (spec 10.2 -- active neutral, expiring amber, expired
+ * red, lifetime blue) and renaming those after semantic tokens would lose the mapping; Pill is
+ * semantic because MetricCard's tones are. What is now shared is the GEOMETRY. Pill maps its tone
+ * onto the hue class that already carries the same tokens, so there is one chip shape in the app
+ * and `.badge` in globals.css is the single place its padding and weight are decided.
+ */
 const TONE_CLASS: Record<PillTone, string> = {
-  neutral: 'bg-neutral-soft text-neutral-soft-fg',
-  accent: 'bg-accent-soft text-accent-soft-fg',
-  positive: 'bg-positive-soft text-positive-soft-fg',
-  warning: 'bg-warning-soft text-warning-soft-fg',
-  negative: 'bg-negative-soft text-negative-soft-fg',
+  neutral: 'badge--slate',
+  accent: 'badge--accent',
+  positive: 'badge--green',
+  warning: 'badge--amber',
+  negative: 'badge--red',
 };
 
 export function Pill({
@@ -33,7 +47,9 @@ export function Pill({
 }) {
   return (
     <span
-      className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-medium leading-none ${TONE_CLASS[tone]} ${className}`}
+      // `.badge` carries the shape (radius, padding, size, weight, nowrap); `shrink-0` is the one
+      // thing this component adds, because a Pill sits in a flex row beside a title that may wrap.
+      className={`badge shrink-0 ${TONE_CLASS[tone]} ${className}`}
     >
       {children}
     </span>

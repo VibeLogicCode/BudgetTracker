@@ -1736,7 +1736,11 @@ describe('Review mode (ruling R5): the card list replaces the table', () => {
       />,
     );
     expect(screen.queryByText('uncategorized')).toBeNull();
-    expect(container.querySelector('.badge--slate')).toBeNull();
+    // 2026-09-15: `.badge--slate` is now the neutral chip geometry for BOTH vocabularies (Pill
+    // composes it), so a bare class check catches any unrelated neutral chip on the card. The
+    // assertion is about this one chip's absence, so it names it.
+    const chips = [...container.querySelectorAll('.badge--slate')].map((node) => node.textContent);
+    expect(chips).not.toContain('uncategorized');
   });
 
   it('labels the per-row select "This transaction only" and sends teach=1', async () => {
@@ -2746,8 +2750,11 @@ describe('Chip filters (ruling D6): top-level categories, wrapping, no picker du
       />,
     );
     const chips = within(screen.getByRole('group', { name: 'Filter by category' }));
-    expect(chips.getByText('Groceries').className).toContain('bg-accent-soft');
-    expect(chips.getByText('All').className).not.toContain('bg-accent-soft');
+    // 2026-09-15: an active chip is `badge--accent` rather than the raw `bg-accent-soft` pair --
+    // Pill maps its semantic tone onto the hue class that already carries those very tokens, so
+    // the rendered colour is identical and only the spelling moved.
+    expect(chips.getByText('Groceries').className).toContain('badge--accent');
+    expect(chips.getByText('All').className).not.toContain('badge--accent');
   });
 });
 
