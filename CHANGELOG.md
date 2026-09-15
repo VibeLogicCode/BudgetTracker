@@ -21,6 +21,25 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.41.0] - 2026-09-15
+
+No migration.
+
+### Changed
+
+- **The dashboard body is two columns on a wide screen.** It was one column of cards at identical
+  weight, so "7 transactions need review" and "a warranty expires in 83 days" looked equally
+  urgent and the page never answered the question you actually open it with — is this month okay?
+  Now the left two-thirds carries what asks something of you (things worth a look, rules to
+  review, bills coming up, the month's budgets) and the right third carries what you read
+  (contracts expiring, what we owe, who owes us). The column is the ranking: nothing gained a new
+  colour, a badge or a shadow to say the same thing a second time.
+
+  On a phone it is one column again, in that same order, so the act-on-this cards still come
+  first. The right-hand column disappears entirely when it has nothing in it — which is what a
+  household member who only sees their own spending gets, since loan balances are hidden from
+  them — rather than leaving a third of the page blank.
+
 ## [1.40.0] - 2026-09-15
 
 No migration. A design pass over the whole app, from an audit and a design review.
