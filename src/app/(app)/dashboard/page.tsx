@@ -460,9 +460,22 @@ export default async function DashboardPage({
           operations is the only thing on this page worth reading. */}
       <GettingStartedCard steps={setupSteps} />
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      {/*
+        2026-09-15, `$impeccable critique` P0: "thirteen equal cards in one column."
+
+        The month's headline figure used to be the first of four tiles in one grid, in a box
+        identical to the one holding "Top merchants" further down. `money-xl` in a box reads as an
+        item in a list; on a ground it reads as the subject of the page. So the band and the grid
+        are two elements now, wrapped in one card so they still read as a single object: the figure
+        on `--surface-2`, the supporting numbers beneath it on `--surface`, one hairline between.
+
+        This is the cheapest of the three moves the critique proposed and the most visible. The
+        two-column split of the page body below is NOT done here -- it is a larger restructure of
+        ten conditionally-rendered sections, and it is recorded in the critique snapshot.
+      */}
+      <div className="overflow-hidden rounded-lg border border-line">
         <StatTile
-          className="sm:col-span-2"
+          variant="bare"
           emphasis
           label="Spent this month"
           value={formatCents(spentCents)}
@@ -500,6 +513,12 @@ export default async function DashboardPage({
             ) : null
           }
         />
+      </div>
+
+      {/* The supporting numbers, unchanged: still cards, still a grid. They are deliberately NOT
+          nested inside the band above -- a card inside a card is the one container mistake this
+          codebase has avoided everywhere else. */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <StatTile
           label="Money in"
           value={formatCents(incomeCents)}

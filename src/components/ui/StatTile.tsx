@@ -43,6 +43,7 @@ export function StatTile({
   delta,
   deltaTone = 'default',
   footer,
+  variant = 'card',
   className = '',
 }: {
   label: React.ReactNode;
@@ -53,10 +54,27 @@ export function StatTile({
   delta?: React.ReactNode;
   deltaTone?: DeltaTone;
   footer?: React.ReactNode;
+  /**
+   * 2026-09-15, `$impeccable critique` P0 ("thirteen equal cards in one column").
+   *
+   * 'card' is every tile in the grid. 'bare' is the month's headline figure, which stops being one
+   * card among four and gets a GROUND instead -- `--surface-2`, no border, no radius of its own.
+   * A `money-xl` figure inside a box identical to the one holding "Top merchants" reads as an item
+   * in a list; the same figure on a ground reads as what the page is about, which is the whole
+   * point of having promoted it to `money-xl` in the first place.
+   *
+   * Only the container changes. The eyebrow, the money treatment and the tone colours are
+   * identical either way -- this is a hierarchy change, not a second tile design.
+   */
+  variant?: 'card' | 'bare';
   className?: string;
 }) {
   return (
-    <div className={`card flex flex-col gap-2 p-4 sm:p-5 ${className}`}>
+    <div
+      className={`flex flex-col gap-2 p-4 sm:p-5 ${
+        variant === 'bare' ? 'bg-surface-2' : 'card'
+      } ${className}`}
+    >
       <span className="eyebrow">{label}</span>
       <span className={`${emphasis ? 'money-xl' : 'money-lg'} ${TONE_CLASS[tone]}`}>{value}</span>
       {hint ? <p className="text-sm text-muted">{hint}</p> : null}
