@@ -41,7 +41,7 @@ if (restoreOutcome === 'restart') {
 // reason a person has to act on -- a migration that will not apply, an orphaned row after an
 // upgrade -- and an unwrapped throw here fails register(), which restarts the container, which
 // fails the healthcheck, which restarts the container. The only record of why used to be a stack
-// trace in `docker logs` that the owner had to know to go and read. A frame and a named rescue
+// trace in `docker logs` that the report had to know to go and read. A frame and a named rescue
 // command make it findable in a wall of restart noise.
 try {
   getDb();

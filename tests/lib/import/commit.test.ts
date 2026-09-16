@@ -218,7 +218,7 @@ function amexTwoCardRows(accountId: number, cardCol: number | null) {
 }
 
 describe('commitImport — per-card attribution (MUST-3.3)', () => {
-  it('attributes each row to the card map entry matching Account # (index 4), falling back to the owner for an unmapped value and a blank one', () => {
+  it('attributes each row to the card map entry matching Account # (index 4), falling back to the report for an unmapped value and a blank one', () => {
     current = createSeededTestDb();
     const alex = insertTestUser(current.db, { name: 'Alex', username: 'alex' });
     const sam = insertTestUser(current.db, { name: 'Sam', username: 'sam' });
@@ -268,7 +268,7 @@ describe('commitImport — per-card attribution (MUST-3.3)', () => {
     expect(result.attributionSummary).toBeNull();
   });
 
-  it('falls back to the owner when cardCol points past a row shorter than that index', () => {
+  it('falls back to the report when cardCol points past a row shorter than that index', () => {
     current = createSeededTestDb();
     const owner = insertTestUser(current.db, { name: 'Account Owner', username: 'owner' });
     const accountId = insertTestAccount(current.db, { ownerUserId: owner });

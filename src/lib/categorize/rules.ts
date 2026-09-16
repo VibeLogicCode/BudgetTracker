@@ -41,7 +41,7 @@ export type MatchType = 'exact' | 'contains' | 'word';
 export type RuleKind = 'category' | 'transfer' | 'rename' | 'not_transfer' | 'attribution';
 
 /**
- * 2026-09-13. The owner: "think about person too so its not just on vendor rule, even sets
+ * 2026-09-13. The report: "think about person too so its not just on vendor rule, even sets
  * household, or individual person."
  *
  * WHY A KIND AND NOT A COLUMN ON A CATEGORY RULE. A person column on the category kind would let
@@ -61,7 +61,7 @@ export type RuleKind = 'category' | 'transfer' | 'rename' | 'not_transfer' | 'at
  *
  * NEVER APPLIED BY runEngine (ruling P10): ELIGIBLE protects a human category decision through
  * categorization_source, and attributed_user_id has no source column, so a re-run could not tell a
- * hand-set person from the owner fallback. It applies at three deliberate points instead -- import
+ * hand-set person from the report fallback. It applies at three deliberate points instead -- import
  * commit, the authoring dialog's own pass, and the rules page's "Apply now".
  */
 
@@ -389,7 +389,7 @@ export function matchRule(
  * commitment rather than more of the same one. Somebody who wrote "$125 to $155" described one
  * charge from that merchant, not the merchant; and a bounded rule has already proved it describes
  * THIS row, because it only reached this comparison by matching the amount. So when both match, it
- * matched more completely. Without this step the owner's own case loses: a bounded and an
+ * matched more completely. Without this step a real case loses: a bounded and an
  * unbounded exact rule on one merchant tie on length AND on match type, so step 5 would hand the
  * charge to the older row -- the merchant-wide one they were trying to override.
  *
@@ -612,7 +612,7 @@ export function upsertRuleFromCorrection(input: {
    * point of that migration. So the row this write is ABOUT is the one carrying the same window,
    * and a caller that passes no window is talking about the unbounded row and only that one.
    *
-   * Load-bearing in exactly the owner's case: without the window in this WHERE, a household with a
+   * Load-bearing in exactly the reported case: without the window in this WHERE, a household with a
    * bounded "ACME $125-$155 -> Car insurance" rule would have every merchant-wide correction
    * silently overwrite it -- which is the defect 0024 exists to end, reintroduced at the write
    * side.
@@ -875,7 +875,7 @@ function coverageEligible(narrowType: MatchType, broadType: MatchType): boolean 
  * "redundant" claim invites somebody to delete a rule that was doing real work.
  *
  *   - broad UNBOUNDED: covers whatever window the narrow rule has, since it fires on every amount.
- *     Note this is still only "redundant" when the outcomes agree -- the owner's own pair
+ *     Note this is still only "redundant" when the outcomes agree -- a real pair
  *     (merchant-wide -> Home insurance, $125-$155 -> Car insurance) disagree and are never flagged.
  *   - broad BOUNDED, narrow UNBOUNDED: NEVER covered. The unbounded rule fires on amounts the
  *     bounded one refuses, so deleting it would change what happens to those rows. This asymmetry

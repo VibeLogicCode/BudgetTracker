@@ -76,7 +76,7 @@ export const ConfirmIcon: IconComponent = Check;
 export const UnconfirmedIcon: IconComponent = Circle;
 /** "Accept all suggestions" -- the bayes guesses the review queue is clearing in bulk. */
 export const SuggestIcon: IconComponent = Sparkles;
-/** Owner report (item 2, Transactions): a saved note used to vanish from the row entirely --
+/** Reported (item 2, Transactions): a saved note used to vanish from the row entirely --
  *  nothing said one existed until the Note… editor was reopened blind. This is the small icon
  *  button transactions-client.tsx renders beside a row's merchant whenever `notes` is
  *  non-empty, so a note is visible (and its text readable from the button's own `title`)

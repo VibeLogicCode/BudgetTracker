@@ -10,7 +10,7 @@ const fill = () => bar().querySelector('[data-bar-fill]') as HTMLElement;
 const limit = () => bar().querySelector('[data-bar-limit]') as HTMLElement | null;
 
 /**
- * 2026-09-15, from the owner's own budgets card: Housing at 117% of its limit and Health at 370%
+ * 2026-09-15, from a real budgets card: Housing at 117% of its limit and Health at 370%
  * rendered as IDENTICAL full red bars. The fill is clamped to 100%, which is right — a bar cannot
  * overflow its track — but clamping threw away the one thing a reader needs at that moment, which
  * is how far over.

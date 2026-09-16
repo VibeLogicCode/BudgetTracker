@@ -228,7 +228,7 @@ describe('createWarrantyItem', () => {
     expect(getWarrantyItem(unknown, HOUSEHOLD)?.expiryDate).toBeNull();
   });
 
-  it('joins the owner name for display', () => {
+  it('joins the report name for display', () => {
     const id = createWarrantyItem(input());
     expect(getWarrantyItem(id, HOUSEHOLD)?.ownerName).toBe('Alice');
   });

@@ -7,7 +7,7 @@ import { buttonClass } from '@/components/ui/Button';
 
 /**
  * v1.26.0 Lane 3b. The standing notice for "rules ran on an import and nobody has looked at
- * what they did" -- the owner's own objection was "i still need to confirm or deny no? i dont
+ * what they did" -- a real objection was "i still need to confirm or deny no? i dont
  * just want to auto apply rules and never see what happened on my import." A rule-assigned row
  * never enters the review queue (REVIEW_WHERE treats `source = 'rule'` as settled), so without
  * this card the only way to find out what a rule did was to remember to go looking.

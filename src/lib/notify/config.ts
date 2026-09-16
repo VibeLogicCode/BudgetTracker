@@ -407,7 +407,7 @@ export function hasAnyEnabledTarget(): boolean {
 }
 
 /**
- * 2026-09-09 (owner report: "i only import data on sundays i dont want daily messages they need to
+ * 2026-09-09 (reported: "i only import data on sundays i dont want daily messages they need to
  * be weekly only or when i press notify in app manually").
  *
  * HOW OFTEN the spending summary is sent. Deliberately separate from digestWeekday/digestHour,
@@ -561,7 +561,7 @@ export function isEventEnabled(
   channel: Channel,
   options?: {
     /**
-     * 2026-09-08 (owner report: "i tried pressing send notification and it didnt do anything").
+     * 2026-09-08 (reported: a press that appeared to do nothing).
      * Skip the per-event TOGGLE only -- never the checks below it.
      *
      * Set exclusively for an on-demand send the person just asked for by pressing a button. Their

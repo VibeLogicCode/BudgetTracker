@@ -24,7 +24,7 @@ function percentChange(curr: number, prev: number): number | null {
 }
 
 /**
- * 2026-09-15. The owner's own dashboard read "-1109.4% vs last month" on one tile and "-99.0% vs
+ * 2026-09-15. A real dashboard read "-1109.4% vs last month" on one tile and "-99.0% vs
  * last month" on another sitting beside a couple of hundred dollars. Both were arithmetically
  * correct and told a reader nothing.
  *

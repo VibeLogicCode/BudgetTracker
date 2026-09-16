@@ -99,7 +99,7 @@ describe('ruling R3 / SEC-1: a receipt is not readable by the household at large
     expect(response.status).toBe(404);
   });
 
-  it('the owner still gets the bytes', async () => {
+  it('the report still gets the bytes', async () => {
     const response = await requestAs(adminToken, receiptOnAdminItem);
     expect(response.status).toBe(200);
   });

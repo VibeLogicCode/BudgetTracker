@@ -442,7 +442,7 @@ describe('transfer toggling', () => {
 });
 
 /**
- * v1.27.0 item 1 (the owner's report, verbatim: "when i add items to loan they are marked transfer
+ * v1.27.0 item 1 (reported: "when i add items to loan they are marked transfer
  * by default but it also adds a rule ... next time i buy from best buy woodbridge i dont want it to
  * automatically caretgorize it as transfer").
  *
@@ -454,7 +454,7 @@ describe('transfer toggling', () => {
 describe('v1.27.0 item 1: learnRule: false sets the flag and authors NO rule', () => {
   it('sets is_transfer and creates no merchant rule of any kind', () => {
     const { sqlite, add, userId } = setup();
-    // The owner's shape: a shop they buy from normally, this once a reimbursement.
+    // The reported shape: a shop they buy from normally, this once a reimbursement.
     const id = add('MAPLEVIEW ELECTRONICS WOODBRIDGE');
     expect(setTransferFlag({ transactionId: id, isTransfer: true, userId, actorRole: 'admin', learnRule: false })).toEqual({ ok: true });
 
@@ -560,7 +560,7 @@ describe('v1.27.0 item 1: learnRule: false sets the flag and authors NO rule', (
   });
 
   /**
-   * THE BUG, end to end and in the owner's own terms: file one purchase from a shop against a loan
+   * THE BUG, end to end and in a real terms: file one purchase from a shop against a loan
    * (flag set, no rule), then let the NEXT purchase from that same shop arrive the way a real one
    * does -- through the engine. It must be ordinary spending.
    */
@@ -1361,7 +1361,7 @@ describe('ruling R4, fix round 2 (item BJ): setTransferFlag refuses over the rul
 });
 
 /**
- * v1.24.0 (owner ask: "user deletes the rule but nothing gets fixed... delete rule and remove it
+ * v1.24.0 (the ask: "user deletes the rule but nothing gets fixed... delete rule and remove it
  * from transactions, all or for a date range"). Two things are being pinned here, and the first
  * matters more than it looks: ruleImpactIds must agree EXACTLY with ruleImpactCounts, because the
  * rules table shows the count and the dialog's button acts on the ids. If those two definitions

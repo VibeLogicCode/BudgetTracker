@@ -211,7 +211,7 @@ async function run(file: File): Promise<ScanResult> {
 /**
  * MUST-8.15: never throws, never rejects, and never blocks an upload. Every failure returns
  * the original file with one console.debug line. The failure of an assistive crop is not a
- * failure the owner needs to hear about, and the server-side pipeline then does exactly
+ * failure the report needs to hear about, and the server-side pipeline then does exactly
  * what it would have done without a scanner.
  */
 export async function scanReceiptFile(file: File): Promise<ScanResult> {

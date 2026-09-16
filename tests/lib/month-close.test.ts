@@ -5,7 +5,7 @@ import { normalizeMerchant } from '@/lib/categorize/normalize';
 import { closeMonth, closeMonthsAutomatically, closedMonthsAwaitingSummary, markMonthSummarySent, monthState, openMonths } from '@/lib/month-close';
 
 /**
- * 2026-09-08. Owner report: "what happens if 1 of the accounts doesnt have any entry for 15 days in
+ * 2026-09-08. Reported: "what happens if 1 of the accounts doesnt have any entry for 15 days in
  * next month and there is nothing to import ... because we have simplefin too transactions can auto
  * come in too using logic we have now is not reliable."
  *

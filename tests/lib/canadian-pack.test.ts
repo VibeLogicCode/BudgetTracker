@@ -927,7 +927,7 @@ describe('v1.31.0 pack additions: a rejected candidate (bare CRAVE) proves the c
 });
 
 /**
- * UP-3 (the owner's 2026-09-04 screen recording): right after an app update the Settings page
+ * UP-3 (the reported 2026-09-04 screen recording): right after an app update the Settings page
  * carries a notice saying the installed pack is older than the one this build ships. It is
  * correct -- applyCanadianPackUpdate's docblock is explicit that a version comparison alone may
  * never apply anything -- but with no way to put it down it reads as a chore that cannot be

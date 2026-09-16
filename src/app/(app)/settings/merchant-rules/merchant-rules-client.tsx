@@ -158,7 +158,7 @@ function categoryLabelFor(id: number | null, categories: CategoryRecord[]): stri
 }
 
 /**
- * v1.24.0 (owner ask): "all date ranges or user chooses". One control, two dialogs -- Delete and
+ * v1.24.0 (asked for): "all date ranges or user chooses". One control, two dialogs -- Delete and
  * clear, and Run rules -- because a person setting a range in one of them and then the other must
  * meet the same two fields in the same order, not two different inventions.
  *
@@ -451,7 +451,7 @@ function ClearRuleDialog({
  * inline "Re-run rules" panel (and is quoted in RowDialog.tsx's own when-to-use docblock as the
  * worked example of a page-level panel that correctly stayed inline). That reasoning was sound on
  * its own terms -- a re-run only ever adds, so there was nothing destructive to weigh -- but the
- * owner asked for the dialog anyway (2026-09-01: "when we click re-run it should open a dialogue
+ * the dialog was asked for anyway (2026-09-01: "when we click re-run it should open a dialogue
  * saying re-runs rules for all or specific date range... blurred popup with proper disclaimer"),
  * and the reason is one this file could not see from inside its own decision: with delete-and-clear
  * now asking the SAME "all time or a date range" question in a blurred dialog, leaving the re-run
@@ -620,7 +620,7 @@ export function MerchantRulesClient({
 
   /**
    * Dialog 1 of v1.24.0, replacing the `window.confirm` that RowMenuForm used to put up for this
-   * row's Delete. It says the one thing the old one-liner could not fit and the owner asked for:
+   * row's Delete. It says the one thing the old one-liner could not fit and what was asked for:
    * that the transactions this rule already changed KEEP what it gave them -- which is exactly why
    * the second menu item (Delete and clear) has to exist at all.
    *
@@ -661,7 +661,7 @@ export function MerchantRulesClient({
   }
 
   /**
-   * Owner ask (2026-08-31), same conversion as the Canadian pack panel's three confirmations
+   * Asked 2026-08-31, same conversion as the Canadian pack panel's three confirmations
    * (canadian-pack-panel.tsx, its own docblock spells out the rule this follows): this confirm is
    * PAGE-LEVEL -- it acts on a multi-row SELECTION, not one row a person can keep looking at while
    * they decide -- and it states a real consequence (how many transactions a rename rule among
@@ -928,8 +928,8 @@ export function MerchantRulesClient({
               // v1.27.0, owner finding: a redundant rule changes NO categorization today --
               // longest-pattern-wins means the covering rule already produces the identical
               // outcome, so this is a tidy-up, not a fault. 'warning' carried the same visual
-              // weight as something broken, which is exactly the confusion the owner reported
-              // ("a yellow banner catches eye but i dont know what to do"). Same tone as the
+              // weight as something broken, which is exactly the confusion the a reported
+              // (a warning banner that catches the eye without saying what to do about it). Same tone as the
               // Preset chip below when active -- neither filter is flagging a problem.
               <Link href={chipHref(currentQuery, { redundant: redundantOnly ? null : '1' })} className="inline-flex min-h-11 items-center sm:min-h-0">
                 <Pill tone={redundantOnly ? 'accent' : 'neutral'}>{`Redundant (${redundantCount})`}</Pill>
@@ -1147,7 +1147,7 @@ export function MerchantRulesClient({
                           v1.24.0. Two delete items for a category or transfer rule -- "the rule
                           only" and "the rule and what it did" -- because those are two genuinely
                           different acts and the old single Delete quietly did the first while a
-                          person expected the second (the owner's report: "user deletes the rule
+                          person expected the second (the report: "user deletes the rule
                           but nothing gets fixed").
 
                           A RENAME rule keeps ONE item: deleting it already reverts every row it
@@ -1161,7 +1161,7 @@ export function MerchantRulesClient({
                           (clearRuleFromTransactions) so a stale form cannot reach it.
 
                           Both items now open a RowDialog. The window.confirm they replace could
-                          not hold the disclosure this decision needs, and the owner asked for the
+                          not hold the disclosure this decision needs, and what was asked for the
                           same blurred popup the notes editor uses.
                         */}
                         {rule.ruleKind === 'rename' ? (

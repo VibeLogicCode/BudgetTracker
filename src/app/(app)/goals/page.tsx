@@ -17,7 +17,7 @@ export default async function GoalsPage({
   // revalidatePath, so a useState toggle would reset itself on every action anyway.
   const showArchived = raw === '1';
   const goals = listGoals({ includeArchived: showArchived }, user);
-  // v1.20.0: the owner roster this page used to compute for the "New goal" form's Owner
+  // v1.20.0: the report roster this page used to compute for the "New goal" form's Owner
   // <select> moved to goals/new/page.tsx along with the form itself -- this page no longer
   // renders that control, so isSelfScoped/listAttributablePeople have nothing left to feed
   // here (see goals/new/page.tsx's own docblock for where that computation now lives).

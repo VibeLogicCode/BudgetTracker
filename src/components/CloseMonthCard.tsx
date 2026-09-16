@@ -22,7 +22,7 @@ export interface OpenMonthView {
  * 2026-09-08. "September is not closed" — the one place the household says last month's data is
  * all in, so the monthly summary can wait for it instead of firing on a calendar date.
  *
- * WHY A BUTTON AND NOT A RULE, in the owner's words: "what happens if 1 of the accounts doesnt have
+ * WHY A BUTTON AND NOT A RULE, in the report: "what happens if 1 of the accounts doesnt have
  * any entry for 15 days in next month and there is nothing to import ... because we have simplefin
  * too transactions can auto come in too using logic we have not is not reliable."
  *

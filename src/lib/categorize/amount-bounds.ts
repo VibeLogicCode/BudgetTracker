@@ -2,7 +2,7 @@
  * 2026-09-13. ONE predicate for "does this amount fall inside that window", and the arithmetic
  * that proposes a window from a single charge.
  *
- * The owner's report: "insurance is with same company but different amount but imported
+ * The report: "insurance is with same company but different amount but imported
  * categorizes the last setting i do so everything goes to home or auto. can i set in rule vendor +
  * amount rule?" Two policies with one insurer differ only by premium, so a rule that sees the
  * merchant text alone cannot tell them apart. merchant_rules.amount_min_cents/amount_max_cents

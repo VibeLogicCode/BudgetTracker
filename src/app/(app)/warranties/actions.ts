@@ -348,7 +348,7 @@ function messageOf(error: unknown, fallback: string): string {
 /**
  * IMPORTANT 2c: ownerUserId and transactionId are only shape-checked by zod (positive
  * integer). Neither is confirmed to exist before the write, so a tampered value (or a
- * genuine race, e.g. the owner's account being deleted between page load and submit) reaches
+ * genuine race, e.g. the reported account being deleted between page load and submit) reaches
  * the database and fails its FK constraint. Translate that raw SqliteError into the same
  * kind of written message a precheck would have produced, instead of leaking
  * "FOREIGN KEY constraint failed" through messageOf()'s generic Error branch. Modelled on
@@ -857,7 +857,7 @@ const recomputeBalanceSchema = z.object({ itemId: z.coerce.number().int().positi
 
 /**
  * Item 6 (v1.21.0 backlog): "there must be a route back" for a loan whose balance predates the
- * link()-order fix and is already wrong -- the owner's own case had no repair short of deleting
+ * link()-order fix and is already wrong -- a real case had no repair short of deleting
  * and recreating the item. recomputeLoanBalance (src/lib/loans.ts) replays every linked payment
  * in the order its TRANSACTION actually happened, not the order it was linked, and reports the
  * corrected figure; every member may run it, the same "shared bookkeeping, not a destructive

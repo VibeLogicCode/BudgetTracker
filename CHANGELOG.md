@@ -21,6 +21,27 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.46.0] - 2026-09-16
+
+No migration.
+
+### Changed
+
+- **Looking at a file no longer commits you to it.** Opening a file from the list offered one way
+  out — import it — with the way back a small link at the top of a page long enough to scroll it out
+  of sight. Import, **Discard this file** and **Back to the list** now sit together at the point the
+  decision is made. Discard drops that file and leaves the rest of the batch alone.
+- **History is behind a button.** It is a reference — what came in, and the undo beside it — not
+  part of importing, so it no longer sits under the thing you are working on. **Show history** on
+  the file list opens it. It is gone entirely from the single-file view, where it answered a
+  question nobody was asking at that moment.
+
+### Fixed
+
+- **Notes in the source no longer quote the person who reported a problem.** Comments throughout the
+  codebase recorded bug reports as verbatim quotations. This is a public repository; the wording was
+  replaced with plain descriptions of the defect, which is all the code ever needed.
+
 ## [1.45.0] - 2026-09-15
 
 No migration.

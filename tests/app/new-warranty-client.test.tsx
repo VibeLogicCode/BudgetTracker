@@ -38,7 +38,7 @@ function renderForm(
 }
 
 describe('NewWarrantyClient', () => {
-  it('renders every field of §10.3 and defaults the owner to the current user', () => {
+  it('renders every field of §10.3 and defaults the report to the current user', () => {
     const { container } = renderForm();
     for (const name of ['name', 'vendor', 'model', 'serial', 'purchaseDate', 'warrantyMonths', 'price', 'notes']) {
       expect(container.querySelector(`[name="${name}"]`), `missing ${name}`).toBeTruthy();

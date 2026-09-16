@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
  * merchant IS the fact. "File this reimbursement against the work loan" does not -- what makes
  * that money not-spending is the LOAN LINK, and the shop it happened to be spent at is incidental.
  *
- * v1.27.0 item 1 exists because those two got conflated. The owner reported it: "when i add items
+ * v1.27.0 item 1 exists because those two got conflated. The a reported it: "when i add items
  * to loan they are marked transfer by default but it also adds a rule ... next time i buy from
  * [that shop] i dont want it to automatically caretgorize it as transfer". The assign-to-loan
  * editor's "Also mark as a transfer" checkbox was pre-armed ON and posted to setTransferFlag,
@@ -531,7 +531,7 @@ describe('v1.27.0 item 1: every rule-authoring path in engine.ts declares its in
         'REQUIRED boolean with no default, the way setTransferFlag has learnRule and clearCategory ' +
         'has deleteRule, and gate BOTH the upsert and any housekeeping delete on it; or (b) a path ' +
         'whose own NAME says it edits a rule, in which case say so with a reason. If it is (a) and ' +
-        'you were about to default the flag ON, read the owner report at the top of this file.',
+        'you were about to default the flag ON, read the a report at the top of this file.',
     ).toEqual([...RULE_AUTHORING_PATHS.keys()].sort());
   });
 
@@ -595,7 +595,7 @@ describe('v1.27.0 item 1: the intent flags stay required, and the loan path stay
 
   /**
    * The regression itself, asserted structurally as well as behaviourally (the behavioural test is
-   * tests/app/transactions-actions.test.ts, named after the owner's report). A structural check
+   * tests/app/transactions-actions.test.ts, named after the reported report). A structural check
    * earns its place here because the behavioural one can be satisfied by a fixture that never
    * exercises the checkbox, whereas this reads the literal a person would have to change.
    */

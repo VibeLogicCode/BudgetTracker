@@ -842,7 +842,7 @@ export async function assignToLoanAction(formData: FormData): Promise<ActionStat
   // and its revalidatePath calls above already ran, so only the transfer half of this submit is
   // what a person needs to be told failed.
   //
-  // v1.27.0 item 1 (the owner's report): `learnRule: false`. This checkbox is pre-armed ON, and
+  // v1.27.0 item 1 (the reported report): `learnRule: false`. This checkbox is pre-armed ON, and
   // setTransferFlag used to answer it by upserting an exact TRANSFER RULE for the merchant -- so
   // assigning one reimbursement to a work loan taught the household that every future purchase
   // from that shop is a transfer, and the next one was flagged out of spending on import with
@@ -1100,7 +1100,7 @@ export async function saveSplitsAction(_prev: ActionState, formData: FormData): 
 }
 
 /**
- * Delete a transaction nobody imported (owner report, 2026-09-13: Record payment writes a real
+ * Delete a transaction nobody imported (reported 2026-09-13: Record payment writes a real
  * transaction and there was no way to remove one).
  *
  * Thin on purpose: every decision -- imported rows are refused, the three reversals, the audit
@@ -1125,7 +1125,7 @@ export async function deleteTransactionAction(formData: FormData): Promise<Actio
 }
 
 /**
- * Assign a transaction the bank already sent to one of a bill's installments (owner report,
+ * Assign a transaction the bank already sent to one of a bill's installments (a report,
  * 2026-09-13). The sibling of assignToLoanAction, and thin for the same reason: every decision --
  * which installment when none is named, what a suppression means, what is refused -- lives in
  * assignTransactionToBill (src/lib/loans.ts), beside the rule matcher whose rules it quotes.
@@ -1168,7 +1168,7 @@ export async function assignToBillAction(formData: FormData): Promise<ActionStat
 
 /**
  * 2026-09-13. The kebab's "Create a rule…" dialog, in two actions: one that only counts, one that
- * writes. The owner asked for exactly that shape -- "they dont have to be automatic but something
+ * writes. What was asked for exactly that shape -- "they dont have to be automatic but something
  * i create from kebab menu" -- so nothing here happens without a second, deliberate click.
  *
  * Both refuse a self-scoped viewer, the same way applyToAllMatchingAction does and for the same

@@ -163,7 +163,7 @@ describe('MUST-9.10: unusual_transaction end to end', () => {
   });
 
   it('MUST-9.36: the same charge reaches every admin with the event enabled', () => {
-    // v1.31.0 owner ruling (item M-8): the audience narrows to role 'admin', not to "every
+    // v1.31.0 a ruling (item M-8): the audience narrows to role 'admin', not to "every
     // notifiable user" as MUST-9.36 originally read. Both users below are admins (emailUser()'s
     // default), so this still proves the fan-out over MULTIPLE recipients; the narrowing itself
     // is pinned separately below.
@@ -533,10 +533,10 @@ describe('evaluator-to-renderer wiring', () => {
 });
 
 /**
- * v1.31.0 owner ruling (item M-8, docs/reviews/2026-09-02-review-for-opus.md). v1.30.0 closed
+ * v1.31.0 a ruling (item M-8, docs/reviews/2026-09-02-review-for-opus.md). v1.30.0 closed
  * every OTHER path by which household money figures reached a self-scoped member by push,
  * leaving unusual_transaction and duplicate_charge alone as documented, intentional exceptions
- * (MUST-9.36 -- "a large charge is a household fact"). The owner has now ruled: narrow the
+ * (MUST-9.36 -- "a large charge is a household fact"). The report has now ruled: narrow the
  * AUDIENCE to admins rather than scope the figures (which would gut the feature: an anomaly
  * alert is only useful when it names the charge somebody did not recognise) or drop the feature
  * (which would lose a genuine early warning). Role is the axis, not visibility -- an admin whose
@@ -544,7 +544,7 @@ describe('evaluator-to-renderer wiring', () => {
  * every combination: a household-visibility member, a self-scoped member, a household-visibility
  * admin and a self-scoped admin.
  */
-describe('owner ruling (v1.31.0, item M-8): unusual_transaction and duplicate_charge narrow to admins', () => {
+describe('a ruling (v1.31.0, item M-8): unusual_transaction and duplicate_charge narrow to admins', () => {
   it('a household-visibility member and a self-scoped member get neither event; every admin, self-scoped or not, gets both unchanged', () => {
     const admin = emailUser('admin');
     const adminSelf = emailUser('admin');
@@ -593,7 +593,7 @@ describe('owner ruling (v1.31.0, item M-8): unusual_transaction and duplicate_ch
   });
 });
 
-describe('owner ruling (v1.31.0, item M-8): the family channel keeps working for a household-eligible anomaly event', () => {
+describe('a ruling (v1.31.0, item M-8): the family channel keeps working for a household-eligible anomaly event', () => {
   /**
    * The trap two earlier agents hit on this exact subsystem (v1.30.0's two S-18 corrections):
    * narrowing a per-user delivery must not silence the shared family channel. unusual_transaction

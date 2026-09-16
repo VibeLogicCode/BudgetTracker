@@ -135,7 +135,7 @@ const updateAccountSchema = z.object({
  *
  * - Mapping: the select only ever offers active+readable profiles (the same two conditions
  *   import/page.tsx's picker applies, MUST-4.1), re-checked server-side rather than trusted
- *   from the submitted value, same as the owner check below. But this check only runs when the
+ *   from the submitted value, same as the report check below. But this check only runs when the
  *   submitted profile actually DIFFERS from the account's current pin -- the editor's <select>
  *   always defaults to the current pin, dormant or not (spec 2026-08-22 v1.6.0's dormant-pin
  *   rule), so a save aimed at the name or owner and just echoing the pin back must not fail, or

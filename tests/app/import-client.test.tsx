@@ -24,7 +24,7 @@ afterEach(() => {
 
 /**
  * v1.37.0: a file is the first thing that happens on this page, and the two pickers stay disabled
- * until there is one (owner report, 2026-09-13). Every test that previews therefore has to choose
+ * until there is one (reported 2026-09-13). Every test that previews therefore has to choose
  * a file first -- and choosing one posts it to /api/import/detect, so the fetch mock has to answer
  * that call before the preview one.
  */
@@ -69,7 +69,6 @@ describe('ImportClient — the profile follows the account (I4)', () => {
           { id: 11, name: 'Joint Visa', importProfileId: 2 },
         ]}
         profiles={PROFILES}
-        history={[]}
         simplefinManaged={[]}
       />,
     );
@@ -92,7 +91,6 @@ describe('ImportClient — the profile follows the account (I4)', () => {
           { id: 11, name: 'Brand New Account', importProfileId: null },
         ]}
         profiles={PROFILES}
-        history={[]}
         simplefinManaged={[]}
       />,
     );
@@ -133,7 +131,6 @@ describe('ImportClient — a pin that is not among the offered profiles behaves 
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 99 }]}
         profiles={PROFILES}
-        history={[]}
         simplefinManaged={[]}
       />,
     );
@@ -149,7 +146,6 @@ describe('ImportClient — a pin that is not among the offered profiles behaves 
           { id: 11, name: 'Deactivated Pin', importProfileId: 99 },
         ]}
         profiles={PROFILES}
-        history={[]}
         simplefinManaged={[]}
       />,
     );
@@ -164,7 +160,6 @@ describe('ImportClient — a pin that is not among the offered profiles behaves 
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Visa', importProfileId: PROFILES[1].id }]}
         profiles={PROFILES}
-        history={[]}
         simplefinManaged={[]}
       />,
     );
@@ -183,7 +178,6 @@ describe('ImportClient — a pin that is not among the offered profiles behaves 
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 99 }]}
         profiles={PROFILES}
-        history={[]}
         simplefinManaged={[]}
       />,
     );
@@ -200,7 +194,7 @@ describe('ImportClient — a pin that is not among the offered profiles behaves 
 describe('ImportClient — zero CSV accounts (C1c / I5)', () => {
   it('explains what to do and disables the upload instead of offering a broken form', () => {
     const { getByText, queryByLabelText, getByLabelText } = render(
-      <ImportClient accounts={[]} profiles={PROFILES} history={[]} simplefinManaged={[]} />,
+      <ImportClient accounts={[]} profiles={PROFILES} simplefinManaged={[]} />,
     );
 
     expect(getByText(/No accounts to import into yet/i)).toBeTruthy();
@@ -214,7 +208,7 @@ describe('ImportClient — zero CSV accounts (C1c / I5)', () => {
 
   it('says why when every account is SimpleFIN-managed rather than repeating the generic message', () => {
     const { getByText } = render(
-      <ImportClient accounts={[]} profiles={PROFILES} history={[]} simplefinManaged={['Bridge Chequing']} />,
+      <ImportClient accounts={[]} profiles={PROFILES} simplefinManaged={['Bridge Chequing']} />,
     );
     expect(getByText(/Every account you have is synced from SimpleFIN/i)).toBeTruthy();
   });
@@ -224,7 +218,6 @@ describe('ImportClient — zero CSV accounts (C1c / I5)', () => {
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
         profiles={PROFILES}
-        history={[]}
         simplefinManaged={[]}
       />,
     );
@@ -247,7 +240,6 @@ describe('ImportClient — F2: zero active/readable mappings is a dead end witho
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: null }]}
         profiles={[]}
-        history={[]}
         simplefinManaged={[]}
       />,
     );
@@ -264,7 +256,6 @@ describe('ImportClient — F2: zero active/readable mappings is a dead end witho
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
         profiles={PROFILES}
-        history={[]}
         simplefinManaged={[]}
       />,
     );
@@ -355,7 +346,6 @@ describe('ImportClient — polish item 9: rows the profile silently skipped', ()
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
         profiles={PROFILES}
-        history={[]}
         simplefinManaged={[]}
       />,
     );
@@ -374,99 +364,6 @@ describe('ImportClient — polish item 9: rows the profile silently skipped', ()
   it('says nothing at all when nothing was skipped', async () => {
     const { container } = await renderPreview(0);
     expect(container.textContent).not.toContain('skipped by profile rules');
-  });
-});
-
-describe('ImportClient — polish item 8: the undo button is busy-guarded', () => {
-  it('disables Undo while the lookup request is in flight', async () => {
-    const pending: { release?: (value: unknown) => void } = {};
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(
-        () =>
-          new Promise((resolve) => {
-            pending.release = resolve;
-          }),
-      ),
-    );
-
-    const { getByText } = render(
-      <ImportClient
-        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
-        profiles={PROFILES}
-        history={HISTORY}
-        simplefinManaged={[]}
-      />,
-    );
-
-    const undo = getByText('Undo') as HTMLButtonElement;
-    expect(undo.disabled).toBe(false);
-    fireEvent.click(undo);
-    // A second click here used to fire the whole delete sequence again.
-    await waitFor(() => expect(undo.disabled).toBe(true));
-
-    pending.release?.({ ok: false, json: async () => ({ error: 'nope' }) });
-    await waitFor(() => expect(undo.disabled).toBe(false));
-  });
-});
-
-describe('ImportClient — undo reports every table it touched (item AE / MON-5 follow-up)', () => {
-  it('appends the balance-figure count to the undo summary when snapshots were removed', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
-    vi.stubGlobal(
-      'fetch',
-      vi
-        .fn()
-        // lookup call
-        .mockImplementationOnce(async () => ({ ok: true, json: async () => ({ importId: 77, willDelete: 3, willKeep: 1 }) }))
-        // confirmed undo call
-        .mockImplementationOnce(async () => ({
-          ok: true,
-          json: async () => ({ deleted: 3, kept: 1, loanLinksReversed: 0, snapshotsDeleted: 2 }),
-        })),
-    );
-
-    const { getByText } = render(
-      <ImportClient
-        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
-        profiles={PROFILES}
-        history={HISTORY}
-        simplefinManaged={[]}
-      />,
-    );
-
-    fireEvent.click(getByText('Undo'));
-
-    await waitFor(() => expect(getByText(/Undo complete/)).toBeTruthy());
-    expect(getByText(/3 deleted, 1 kept, and 2 balance figures removed\./)).toBeTruthy();
-  });
-
-  it('says nothing extra when no snapshot was removed', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
-    vi.stubGlobal(
-      'fetch',
-      vi
-        .fn()
-        .mockImplementationOnce(async () => ({ ok: true, json: async () => ({ importId: 77, willDelete: 3, willKeep: 1 }) }))
-        .mockImplementationOnce(async () => ({
-          ok: true,
-          json: async () => ({ deleted: 3, kept: 1, loanLinksReversed: 0, snapshotsDeleted: 0 }),
-        })),
-    );
-
-    const { getByText, queryByText } = render(
-      <ImportClient
-        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
-        profiles={PROFILES}
-        history={HISTORY}
-        simplefinManaged={[]}
-      />,
-    );
-
-    fireEvent.click(getByText('Undo'));
-
-    await waitFor(() => expect(getByText(/Undo complete: 3 deleted, 1 kept\./)).toBeTruthy());
-    expect(queryByText(/balance figure/)).toBeNull();
   });
 });
 
@@ -491,7 +388,6 @@ describe('ImportClient — the Preview and Import buttons are busy-guarded', () 
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
         profiles={PROFILES}
-        history={[]}
         simplefinManaged={[]}
       />,
     );
@@ -533,7 +429,6 @@ describe('ImportClient — the Preview and Import buttons are busy-guarded', () 
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
         profiles={PROFILES}
-        history={[]}
         simplefinManaged={[]}
       />,
     );
@@ -574,7 +469,6 @@ describe('ImportClient — release review finding C: a failed re-preview must no
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
         profiles={PROFILES}
-        history={[]}
         simplefinManaged={[]}
       />,
     );
@@ -628,7 +522,6 @@ describe('ImportClient — release review finding C: a failed re-preview must no
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
         profiles={PROFILES}
-        history={[]}
         simplefinManaged={[]}
       />,
     );
@@ -667,7 +560,6 @@ describe('ImportClient — NEW-5 fix-round: loanMatchFailed gets the same honest
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
         profiles={PROFILES}
-        history={[]}
         simplefinManaged={[]}
       />,
     );
@@ -711,7 +603,6 @@ describe('ImportClient — Carry 2: the post-commit message shows the attributio
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
         profiles={PROFILES}
-        history={[]}
         simplefinManaged={[]}
       />,
     );
@@ -743,7 +634,6 @@ describe('ImportClient — Carry 2: the post-commit message shows the attributio
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
         profiles={PROFILES}
-        history={[]}
         simplefinManaged={[]}
       />,
     );
@@ -760,7 +650,7 @@ describe('ImportClient — Carry 2: the post-commit message shows the attributio
 });
 
 // v1.26.0 Lane 3b. The post-commit OFFER to inspect what rules did on THIS import -- the
-// owner's own objection was "i still need to confirm or deny no? i dont just want to auto
+// the objection raised was that rules should not apply silently, with no chance to
 // apply rules and never see what happened on my import." rulesApplied and importId already
 // reach the /api/import/commit JSON body (CommitFlowResult, src/lib/import/flow.ts); this is
 // the display half.
@@ -791,7 +681,6 @@ describe('ImportClient — Lane 3b: the post-commit offer to check what rules di
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
         profiles={PROFILES}
-        history={[]}
         simplefinManaged={[]}
       />,
     );
@@ -834,7 +723,6 @@ describe('ImportClient — Lane 3b: the post-commit offer to check what rules di
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
         profiles={PROFILES}
-        history={[]}
         simplefinManaged={[]}
       />,
     );
@@ -875,7 +763,6 @@ describe('ImportClient — Lane 3b: the post-commit offer to check what rules di
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
         profiles={PROFILES}
-        history={[]}
         simplefinManaged={[]}
       />,
     );
@@ -929,7 +816,6 @@ describe('ImportClient — F-03: the post-commit balance check', () => {
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
         profiles={PROFILES}
-        history={[]}
         simplefinManaged={[]}
       />,
     );
@@ -970,7 +856,6 @@ describe('ImportClient — F-03: the post-commit balance check', () => {
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
         profiles={PROFILES}
-        history={[]}
         simplefinManaged={[]}
       />,
     );
@@ -989,22 +874,6 @@ describe('ImportClient — F-03: the post-commit balance check', () => {
 
 // F-03 (v1.31.0): the History table's "View rows" link -- the rows THIS import added, reached
 // through transactionsHref (src/lib/transaction-links.ts) rather than a hand-built querystring.
-describe('ImportClient — F-03: History "View rows" link', () => {
-  it('links each History row to exactly its own import, with no date or person filter riding along', () => {
-    const { getByRole } = render(
-      <ImportClient
-        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
-        profiles={PROFILES}
-        history={HISTORY}
-        simplefinManaged={[]}
-      />,
-    );
-
-    const link = getByRole('link', { name: /view rows/i });
-    expect(link.getAttribute('href')).toBe('/transactions?import=77');
-  });
-});
-
 // MUST-6.1/6.2 (spec 2026-08-22 v1.6.0): the preview screen's per-card-value assignment UI.
 describe('ImportClient — per-card assignment UI (MUST-6.1, MUST-6.2)', () => {
   const PEOPLE = [
@@ -1025,7 +894,6 @@ describe('ImportClient — per-card assignment UI (MUST-6.1, MUST-6.2)', () => {
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
         profiles={PROFILES}
-        history={[]}
         simplefinManaged={[]}
         people={people}
       />,
@@ -1041,7 +909,6 @@ describe('ImportClient — per-card assignment UI (MUST-6.1, MUST-6.2)', () => {
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
         profiles={PROFILES}
-        history={[]}
         simplefinManaged={[]}
         people={PEOPLE}
       />,
@@ -1173,7 +1040,6 @@ describe('ImportClient — F1: a saved assignment updates the row immediately in
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
         profiles={PROFILES}
-        history={[]}
         simplefinManaged={[]}
         people={PEOPLE}
       />,
@@ -1253,7 +1119,6 @@ describe('ImportClient — no CSV mapping editor for an OFX preview (item BP)', 
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
         profiles={PROFILES}
-        history={[]}
         simplefinManaged={[]}
       />,
     );
@@ -1302,46 +1167,6 @@ describe('ImportClient — no CSV mapping editor for an OFX preview (item BP)', 
   });
 });
 
-describe('ImportClient — responsive rows (v1.15.0, ruling S3)', () => {
-  it('the History row\'s File cell carries cell-stack-headline; the preview table stays untouched (ruling S4)', () => {
-    // No preview is rendered here (nothing was uploaded), so the History table is the only
-    // <table> on the page -- the exact case ruling S4 exists for: the preview grid must never
-    // gain cell-stack-headline or go responsive.
-    const { container } = render(
-      <ImportClient
-        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
-        profiles={PROFILES}
-        history={HISTORY}
-        simplefinManaged={[]}
-      />,
-    );
-    const historyTable = container.querySelector('table');
-    // When: Account: File: By: Added: Dupes: Errors: Undo -- File is the third cell.
-    const headlineCell = historyTable?.querySelector('tbody tr td:nth-child(3)');
-    expect(headlineCell?.className).toContain('cell-stack-headline');
-  });
-
-  // v1.16.0 Lane C item 3: When and Account are context for the row (the file is what tells one
-  // import from another), so both now carry cell-stack-meta -- a small muted line under the
-  // File headline instead of two more labelled rows of their own.
-  it('the History row\'s When and Account cells carry cell-stack-meta', () => {
-    const { container } = render(
-      <ImportClient
-        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
-        profiles={PROFILES}
-        history={HISTORY}
-        simplefinManaged={[]}
-      />,
-    );
-    const historyTable = container.querySelector('table');
-    // When: Account: File: By: Added: Dupes: Errors: Undo.
-    const whenCell = historyTable?.querySelector('tbody tr td:nth-child(1)');
-    const accountCell = historyTable?.querySelector('tbody tr td:nth-child(2)');
-    expect(whenCell?.className).toContain('cell-stack-meta');
-    expect(accountCell?.className).toContain('cell-stack-meta');
-  });
-});
-
 // Lane 5 (2026-08-30 savings-targets plan, ruling T8/T9/T10). Before this button existed, the
 // only way to reach forkProfileIfBuiltin was a SUCCESSFUL commit (flow.ts:75-83) -- so a file
 // whose preview reported 0 rows and 117 errors could never save the corrected mapping that would
@@ -1353,7 +1178,6 @@ describe('ImportClient — Lane 5: saving a corrected mapping from the preview',
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
         profiles={PROFILES}
-        history={[]}
         simplefinManaged={[]}
       />,
     );
@@ -1373,7 +1197,6 @@ describe('ImportClient — Lane 5: saving a corrected mapping from the preview',
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
         profiles={PROFILES}
-        history={[]}
         simplefinManaged={[]}
       />,
     );
@@ -1410,7 +1233,6 @@ describe('ImportClient — Lane 5: saving a corrected mapping from the preview',
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 3 }]}
         profiles={CUSTOM_PROFILES}
-        history={[]}
         simplefinManaged={[]}
       />,
     );
@@ -1431,7 +1253,6 @@ describe('ImportClient — Lane 5: saving a corrected mapping from the preview',
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
         profiles={PROFILES}
-        history={[]}
         simplefinManaged={[]}
       />,
     );
@@ -1458,7 +1279,6 @@ describe('ImportClient — Lane 5: saving a corrected mapping from the preview',
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
         profiles={PROFILES}
-        history={[]}
         simplefinManaged={[]}
       />,
     );
@@ -1483,7 +1303,6 @@ describe('ImportClient — Lane 5: saving a corrected mapping from the preview',
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
         profiles={PROFILES}
-        history={[]}
         simplefinManaged={[]}
       />,
     );
@@ -1506,7 +1325,6 @@ describe('ImportClient — Lane 5: saving a corrected mapping from the preview',
       <ImportClient
         accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
         profiles={PROFILES}
-        history={[]}
         simplefinManaged={[]}
       />,
     );
@@ -1530,7 +1348,7 @@ describe('ImportClient — Lane 5: saving a corrected mapping from the preview',
  * Neither answer decides anything: both pickers stay live and the preview is the real check.
  */
 /**
- * The two-hop upload was first written to run on PRESSING Preview; the owner's screenshot of a
+ * The two-hop upload was first written to run on PRESSING Preview; a reported screen of a
  * Scotiabank file sitting under "TD Visa" moved it to the moment the file is CHOSEN (the describe
  * below). The tests that pinned the old timing were removed rather than kept alongside: two specs
  * for one flow, one of them contradicting the shipped behaviour, is worse than none. What they
@@ -1565,7 +1383,6 @@ describe('ImportClient — the file is read as soon as it is chosen', () => {
           { id: 11, name: 'Joint Visa', importProfileId: 2 },
         ]}
         profiles={PROFILES}
-        history={[]}
         simplefinManaged={[]}
       />,
     );
@@ -1667,7 +1484,6 @@ describe('ImportClient — the pickers wait for a file, and say what happened wh
           { id: 11, name: 'Joint Visa', importProfileId: 2 },
         ]}
         profiles={PROFILES}
-        history={[]}
         simplefinManaged={[]}
       />,
     );

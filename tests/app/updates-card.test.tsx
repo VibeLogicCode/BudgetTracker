@@ -576,7 +576,7 @@ describe('item M-6: pending is not derived from the clock during the first rende
   });
 });
 /**
- * v1.32.0 (UP-1). From the owner's 58-second recording of a real v1.30.0 -> v1.31.0 update: the
+ * v1.32.0 (UP-1). From the reported 58-second recording of a real v1.30.0 -> v1.31.0 update: the
  * button said "Working...", the line above it still said "Last checked" with a stamp from hours
  * earlier, and neither changed for long enough that they reloaded the page at about 22 seconds.
  * The update itself worked; what the app SAID while it worked did not.

@@ -103,7 +103,7 @@ describe('MUST-4.2 / MUST-4.3 / MUST-4.4: the release request, exactly', () => {
 
 /**
  * v1.32.0 (UP-1). One 15-second budget used to serve both endpoints, so pressing Check now
- * could sit on "Working…" for fifteen seconds -- the owner's recording of a real update shows
+ * could sit on "Working…" for fifteen seconds -- the reported recording of a real update shows
  * them reloading the page at about 22 seconds rather than waiting it out.
  *
  * Asserted on AbortSignal.timeout()'s argument rather than by waiting one out, because the

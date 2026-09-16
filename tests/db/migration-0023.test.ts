@@ -9,7 +9,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 /**
  * 2026-09-09. notification_user_settings.summary_frequency: how often the spending summary is sent.
  *
- * Owner report: "i only import data on sundays i dont want daily messages they need to be weekly
+ * Reported: "i only import data on sundays i dont want daily messages they need to be weekly
  * only or when i press notify in app manually." The two columns beside it answer WHEN; this answers
  * HOW OFTEN, which previously had no answer at all.
  */

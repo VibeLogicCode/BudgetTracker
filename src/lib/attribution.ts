@@ -1,7 +1,7 @@
 /**
  * 2026-09-13. WHO A TRANSACTION BELONGS TO, decided once at insert -- the order, in one place.
  *
- * The owner: "think about person too so its not just on vendor rule, even sets household, or
+ * The report: "think about person too so its not just on vendor rule, even sets household, or
  * individual person."
  *
  * THE ORDER, and the argument for it (ruling P11):

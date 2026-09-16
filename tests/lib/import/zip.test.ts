@@ -3,7 +3,7 @@ import zlib from 'node:zlib';
 import { ZipError, readZipEntries, looksLikeZip, MAX_ZIP_ENTRIES } from '@/lib/import/zip';
 
 /**
- * 2026-09-15, ruling B11/B12. The owner asked for it in the first sentence of the request: "if its
+ * 2026-09-15, ruling B11/B12. Asked for alongside the multi-file drop: "if its
  * a zip it should inzip and import".
  *
  * WHY THE TESTS BUILD REAL ARCHIVES rather than mocking a reader. Every guard in zip.ts is about

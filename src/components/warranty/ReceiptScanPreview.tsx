@@ -6,7 +6,7 @@ import { buttonClass } from '@/components/ui/Button';
 /**
  * The before and after pane. Each image is at most 160 pixels tall, matching the existing
  * receipt tiles. The countdown is visible for the whole four seconds, so nothing happens
- * without the owner having had the chance to see it; Use the original is framed as an undo
+ * without the report having had the chance to see it; Use the original is framed as an undo
  * of something already decided rather than a step in a manual pipeline.
  */
 export function ReceiptScanPreview({

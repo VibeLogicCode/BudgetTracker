@@ -425,9 +425,9 @@ describe('MUST-14.8 / MUST-14.9: the row control', () => {
   });
 
   /**
-   * v1.27.0 item 1 (the owner's report: "it also adds a rule ... next time i buy from [that shop] i
+   * v1.27.0 item 1 (the report: "it also adds a rule ... next time i buy from [that shop] i
    * dont want it to automatically caretgorize it as transfer"). The control's copy has to answer
-   * the question the owner had to discover by being bitten by it, because the per-row "Mark as
+   * the question the report had to discover by being bitten by it, because the per-row "Mark as
    * transfer" control one menu away DOES author a rule and says so in its own success message.
    * Asserted as copy rather than left to the docblock: a person reading a pre-armed checkbox is the
    * only protection against a surprise they cannot see.
@@ -660,7 +660,7 @@ describe('Split editor (v1.7.0 Task 4)', () => {
 });
 
 /**
- * Owner report (item 1): the split editor used to render at the very top of the page (a plain
+ * Reported (item 1): the split editor used to render at the very top of the page (a plain
  * Card, wherever `splitting` happened to sit in the JSX), so pressing Split… looked like it did
  * nothing until a person scrolled up -- and once there, they had lost track of which row they
  * were splitting. It is a real modal dialog now: a dimmed/blurred backdrop that closes it on
@@ -786,7 +786,7 @@ describe('Split editor is a modal dialog, not a card at the top of the page (ite
 });
 
 /**
- * Owner report (item 2): a note used to vanish from the row the instant it was saved -- nothing
+ * Reported (item 2): a note used to vanish from the row the instant it was saved -- nothing
  * said one existed, so telling which rows carried one (or reading it back) meant reopening the
  * Note… editor blind, one row at a time.
  */
@@ -836,7 +836,7 @@ describe('Note indicator (item 2): a saved note is no longer invisible', () => {
     fireEvent.click(rowScope().getByRole('button', { name: 'Edit note for TIM HORTONS' }));
     // Unify-the-editors task (2026-08-30): the note editor is a dialog now, rendered once at the
     // top level of the page (not nested inside the table this row's own trigger lives in),
-    // titled "Note for TIM HORTONS" -- the copy pattern the owner's report asked to keep, now
+    // titled "Note for TIM HORTONS" -- the copy pattern the reported report asked to keep, now
     // carried by the dialog's own accessible name rather than the field's label.
     expect(screen.getByRole('dialog', { name: /Note for TIM HORTONS/ })).toBeTruthy();
     const textarea = screen.getByLabelText('Note') as HTMLTextAreaElement;
@@ -860,7 +860,7 @@ describe('Note indicator (item 2): a saved note is no longer invisible', () => {
 });
 
 /**
- * Owner report (item 3): the review card had no way at all to attribute a transaction to a
+ * Reported (item 3): the review card had no way at all to attribute a transaction to a
  * household member -- triaging a shared import meant categorizing in review, then flipping back
  * to plain Transactions just to say who a charge belonged to.
  */
@@ -1322,7 +1322,7 @@ describe('v1.13.0 ruling R13: the Note… row action', () => {
 
     // Unify-the-editors task (2026-08-30): a dialog now, rendered once at the top level of the
     // page -- role="dialog" per RowDialog's own contract, titled "Note for TIM HORTONS" (the
-    // exact copy pattern the owner's report asked to keep), with a plain "Note" field inside.
+    // exact copy pattern the reported report asked to keep), with a plain "Note" field inside.
     expect(screen.getByRole('dialog', { name: /Note for TIM HORTONS/ })).toBeTruthy();
     const textarea = screen.getByLabelText('Note') as HTMLTextAreaElement;
     expect(textarea.value).toBe('paid in cash');
@@ -2150,9 +2150,9 @@ describe('v1.15.0 ruling S2/S3: the table row carries data-label and cell-stack 
   });
 
   // v1.16.0 Lane C item 3: this used to be `cell-stack-hide`, which dropped the account entirely
-  // from the phone card -- the owner asked for it back, so it now carries `cell-stack-meta`
+  // from the phone card -- it was asked for back, so it now carries `cell-stack-meta`
   // instead, reading as context under the merchant rather than vanishing outright.
-  it('the account cell carries the cell-stack-meta role, not cell-stack-hide -- the owner asked for it back', () => {
+  it('the account cell carries the cell-stack-meta role, not cell-stack-hide -- it was asked for back', () => {
     const { container } = render(
       <TransactionsClient page={pageWithRow()} accounts={[]} categories={[]} people={[]} today="2026-03-02" />,
     );
@@ -2459,7 +2459,7 @@ describe('v1.15.0 ruling S7: the filter controls disclosure', () => {
 });
 
 /**
- * Task 3c (owner report, phone screenshot from Transactions): ruling S7's disclosure above only
+ * Task 3c (reported, phone screenshot from Transactions): ruling S7's disclosure above only
  * ever gated the four selects (Account/Category/Person/Dates) -- the transfer/queue row, the
  * View/Sort/Set-by rows and the top-level category chips stayed visible unconditionally at every
  * width, which is exactly what stacked six control rows above a phone's data. Below `sm` each of
@@ -2587,12 +2587,12 @@ describe('Task 3c: rows fold below sm only when their own filter is at default',
 });
 
 /**
- * Owner report (item 3): the visible "Search" label pushed the field down a line, which left the
+ * Reported (item 3): the visible "Search" label pushed the field down a line, which left the
  * Filters icon beside it floating above centre with a dead band around it -- the label added
  * nothing the new placeholder does not already say, so it is gone, and the field keeps its
  * accessible name through `aria-label` instead of a visible <span>.
  */
-describe('Owner report (item 3): the search field has no visible label but keeps an accessible name', () => {
+describe('Reported (item 3): the search field has no visible label but keeps an accessible name', () => {
   it('has an accessible name a screen reader can still compute, with no visible "Search" text', () => {
     render(
       <TransactionsClient page={pageWithRow()} accounts={[]} categories={[]} people={[]} today="2026-03-02" />,
@@ -2621,7 +2621,7 @@ describe('Owner report (item 3): the search field has no visible label but keeps
 });
 
 /**
- * F-02 (v1.31.0, owner's question: "how much went on the Visa this month?"). The flat list's own
+ * F-02 (v1.31.0, the question asked: "how much went on the Visa this month?"). The flat list's own
  * footer, on both render paths (the mobile card list and the desktop table share one `page` prop
  * but render it in two DOM subtrees -- transactionCard's own docblock explains why) and in review
  * mode's single card-list tree.
@@ -2701,7 +2701,7 @@ describe('Chip filters (ruling D6): top-level categories, wrapping, no picker du
     expect(chips.getByText('Category 10')).toBeTruthy();
   });
 
-  // Bug fix (owner report): chip hrefs are now built from the `currentQuery` prop page.tsx hands
+  // Bug fix (a report): chip hrefs are now built from the `currentQuery` prop page.tsx hands
   // down (already parsed server-side), not from `window.location.search` -- so these three pass
   // it directly instead of faking the browser URL with pushState, the same way the real server
   // render never has a `window.location` to read in the first place.
@@ -3039,7 +3039,7 @@ describe('Coordinator fix (2026-08-30): card density -- three lines, not four', 
 });
 
 /**
- * Owner report (item 4): the placeholder task. `.field-control::placeholder` used to be a bare
+ * Reported (item 4): the placeholder task. `.field-control::placeholder` used to be a bare
  * `color: var(--subtle)` -- a readable secondary-TEXT colour, so a hinted field read almost as
  * strongly as one that already had a real value typed into it. This proves the fix at the TOKEN
  * level, not just the rule: `--placeholder` exists in BOTH themes (a colour tuned for one theme
@@ -3051,7 +3051,7 @@ describe('Coordinator fix (2026-08-30): card density -- three lines, not four', 
  * edit to any of these tokens is checked against the rule itself, not a hardcoded ratio that
  * would drift out of sync with it.
  */
-describe('Owner report (item 4): placeholder text recedes but stays legible, in both themes', () => {
+describe('Reported (item 4): placeholder text recedes but stays legible, in both themes', () => {
   const css = fs.readFileSync(
     path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../src/app/globals.css'),
     'utf8',
@@ -3179,14 +3179,14 @@ describe('Coordinator check: an uncategorized row never pre-selects the first re
 });
 
 /**
- * v1.26.0 Lane 1 (owner report: a row reading "Amazon" with a small blue `rule` badge --
- * "shows amazon i dont know what orignal entry was so maybe its wrong maybe its not"). Covers the
+ * v1.26.0 Lane 1 (reported: a row reading "Amazon" with a small blue `rule` badge --
+ * a normalized merchant with no way back to the original description, so there is no telling whether it is right). Covers the
  * whole task's brief: the card shows a rule-renamed row's bank text unconditionally, the table
  * hides it behind the badge-turned-button (noteIndicator's own touch-target mechanics, copied not
  * reinvented), `?bank=1` reveals it table-wide, the dialog wording is honest per display_source,
  * and "Rename just this one" reaches the existing manual-rename path rather than a second one.
  */
-describe('v1.26.0 Lane 1: bank text (owner report -- "shows amazon i dont know what orignal entry was")', () => {
+describe('v1.26.0 Lane 1: bank text (a report -- a normalized merchant with no way back to the original description)', () => {
   it('review mode: a rule-renamed row shows the bank text with no interaction', () => {
     const { container } = render(
       <TransactionsClient

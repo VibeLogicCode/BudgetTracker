@@ -75,7 +75,7 @@ let warnedAboutProxyMismatch = false;
  *    proxy said so in X-Forwarded-Proto AND the operator told us to believe that proxy.
  * 2. Is the operator in the quiet failure mode SEC-7 names -- an HTTPS proxy in front, TRUST_PROXY
  *    left at its default 0 -- in which case the 30-day session cookie is not marked Secure and
- *    nothing anywhere says so? That gets a loud line in the log the owner reads when something is
+ *    nothing anywhere says so? That gets a loud line in the log the report reads when something is
  *    wrong. No admin banner: surfacing it on /settings would mean carrying state from here into a
  *    server component, which is new storage this release does not add (ruling R6).
  */

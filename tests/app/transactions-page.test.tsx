@@ -110,7 +110,7 @@ describe('TransactionsPage: ?review=1 (ruling R2)', () => {
 });
 
 /**
- * Item 2 (owner report): a saved note used to vanish from the row entirely -- nothing said one
+ * Item 2 (a report): a saved note used to vanish from the row entirely -- nothing said one
  * existed until the Note… editor was reopened blind. transactions-client.tsx's own note
  * indicator renders only when `row.notes` is non-empty, with the note text as its `title` -- so
  * finding that literal title in the rendered page proves `notes` actually survived
@@ -160,7 +160,7 @@ describe('Item 2: a transaction note reaches the client end-to-end', () => {
 });
 
 /**
- * Bug fix (owner report): categoryChipHref used to build every chip's href from `currentSearch`,
+ * Bug fix (a report): categoryChipHref used to build every chip's href from `currentSearch`,
  * a `useState('')` an effect filled in from `window.location.search` on mount. This test renders
  * the real page the way a first paint actually happens -- no `window.history.pushState`, so
  * `window.location.search` stays empty exactly as it would server-side -- while page.tsx itself
@@ -215,7 +215,7 @@ describe('Chip filters (ruling D6) bug fix: hrefs come from the SERVER-known fil
 });
 
 /**
- * v1.24.0 Lane A item 2 (owner report: "currently once i apply a trasnfer its hard to find that
+ * v1.24.0 Lane A item 2 (reported: "currently once i apply a trasnfer its hard to find that
  * data again"). readFilter (page.tsx, not exported) parses `?transfers=` into
  * TransactionFilter.transferView -- proven here end-to-end through the real page and a real
  * transfer/non-transfer pair, the same way the note test above (Item 2) proves a value reaches
@@ -333,7 +333,7 @@ describe('TransactionsPage: ?queue= parses to reviewQueue (Lane R item R1)', () 
 });
 
 /**
- * v1.26.0 Lane 1 (owner report: "shows amazon i dont know what orignal entry was so maybe its
+ * v1.26.0 Lane 1 (reported: "shows amazon i dont know what orignal entry was so maybe its
  * wrong maybe its not"). Proves renameRules (page.tsx's own prop -- see its doc comment) actually
  * reaches the client end-to-end: a real rename rule in the database, matched against a real
  * renamed row's normalizedMerchant the SAME way applyRenameRules/resolveRename

@@ -29,7 +29,7 @@ import { RowMenu, RowMenuButton, RowMenuForm, RowMenuLink } from '@/components/u
 // SuggestIcon marks "Accept all suggestions" as the bulk sibling of the per-row Bayes guess, and
 // FilterIcon (fix round) is the glyph on the filter disclosure button that replaced the old
 // "Filters (N)" text button -- see that button's own comment below for why. That file's own
-// NoteIcon (lucide's StickyNote) is NOT used here any more -- the owner's second rejection of the
+// NoteIcon (lucide's StickyNote) is NOT used here any more -- the reported second rejection of the
 // note indicator was that it reads as a generic document, not "a note exists"; see note-glyph.tsx
 // for its hand-drawn replacement and why it could not simply be swapped in-place there instead.
 import { categoryIcon, ConfirmIcon, FilterIcon, MoneyInIcon, MoneyOutIcon, SuggestIcon, UnconfirmedIcon } from '@/components/ui/icons';
@@ -178,7 +178,7 @@ function startsNewDay(rows: TransactionRow[], index: number): boolean {
 }
 
 /**
- * F-02 (v1.31.0, owner's question: "how much went on the Visa this month?"). The "N transactions"
+ * F-02 (v1.31.0, the question asked: "how much went on the Visa this month?"). The "N transactions"
  * text every footer on this page already showed answered a count, never a sum -- this appends the
  * sum, as TWO figures rather than one net.
  *
@@ -232,7 +232,7 @@ function pageFooterWords(page: TransactionPage): string {
  * mobile card list, the desktop table) for the same reason that function exists: three copies of
  * a string drift, and so do three copies of a link.
  *
- * Reported by the owner 2026-09-13 -- "how do i go to next page on transactions?" -- looking at a
+ * Reported by the report 2026-09-13 -- "how do i go to next page on transactions?" -- looking at a
  * footer that said "Page 1 of 6" and carried nothing to press. `?page=` has been read since the
  * filter was extracted (readFilter, ./filter-params.ts), so every one of those pages already
  * existed; only the way to reach one was missing, while the GROUPED view has had Previous/Next
@@ -280,7 +280,7 @@ const VISIBLE_CHIP_COUNT = 8;
  * src/app/(app)/settings/merchant-rules/merchant-rules-client.tsx's own chipHref already applied
  * to ITS chips (see that function's own comment: "copy the idiom, not invent a second one").
  *
- * Bug fix (owner report, categoryChipHref's original defect): this used to read
+ * Bug fix (a report, categoryChipHref's original defect): this used to read
  * `window.location.search`, captured into a `useState('')` an effect filled in on mount.
  * Server-side (and for one render on the client, before that effect ever ran) that state is
  * empty, so the FIRST paint of every chip pointed at a bare `/transactions?category=N` -- account,
@@ -311,7 +311,7 @@ function categoryChipHref(current: string, categoryId: string | null): string {
 }
 
 /**
- * v1.24.0 Lane A item 2 (owner report: "currently once i apply a trasnfer its hard to find that
+ * v1.24.0 Lane A item 2 (reported: "currently once i apply a trasnfer its hard to find that
  * data again"). The three states TransactionFilter.transferView understands
  * (src/lib/transactions.ts), paired with the `transfers` query value each one navigates to.
  * `'all'` clears the param entirely (filterHref's own null-means-delete contract) rather than
@@ -514,7 +514,7 @@ export function TransactionsClient({
    *  category to all N matching…" kebab item never appears for a table row. */
   matchingCounts?: Record<number, number>;
   /**
-   * v1.26.0 Lane 1 (owner report: "shows amazon i dont know what orignal entry was so maybe its
+   * v1.26.0 Lane 1 (reported: "shows amazon i dont know what orignal entry was so maybe its
    * wrong maybe its not"). Keyed by transaction id, only for a row whose display_source is
    * 'rename' AND whose current rename rule could actually be resolved (page.tsx's own doc
    * comment on this prop has the "why absent, not null" reasoning) -- what bankTextDialog (below)
@@ -536,7 +536,7 @@ export function TransactionsClient({
    */
   groups?: CategoryGroupPage | null;
   /**
-   * Bug fix (owner report, category chips silently dropping every other filter): the querystring
+   * Bug fix (a report, category chips silently dropping every other filter): the querystring
    * this request arrived with, already parsed by page.tsx (readFilter's own `params`) and handed
    * down as a plain string rather than re-derived from `window.location.search` on the client.
    * categoryChipHref (above) and `activeCategoryChip` (below) are the only two things that read
@@ -556,7 +556,7 @@ export function TransactionsClient({
   const [renaming, setRenaming] = useState<{ id: number; current: string; merchant: string } | null>(null);
   const [splitting, setSplitting] = useState<{
     id: number;
-    /** Owner report (item 1): the modal dialog names the transaction it is editing (merchant,
+    /** Reported (item 1): the modal dialog names the transaction it is editing (merchant,
      *  date, amount) in its own header, so a person is never left wondering which row Split…
      *  was for once the row itself is out of view behind the backdrop. Captured here, at open
      *  time, rather than re-looked-up from `page.rows` on every render of the dialog. */
@@ -597,7 +597,7 @@ export function TransactionsClient({
   // value is an existing loan's id, and Save posts straight to assignToLoanAction instead.
   const [newLoan, setNewLoan] = useState<{ id: number; name: string; itemId: string } | null>(null);
   /**
-   * 2026-09-13 (owner report): the Assign-to-bill editor. Same one-nullable-slot shape as
+   * 2026-09-13 (a report): the Assign-to-bill editor. Same one-nullable-slot shape as
    * `newLoan` above -- opening it on another row replaces whatever was open. `installmentId` is
    * '' for "the one nearest this transaction's date", which is what the server picks when nothing
    * is named (assignTransactionToBill), so the empty value is a real answer rather than a gap.
@@ -722,7 +722,7 @@ export function TransactionsClient({
       // still counts here and still opens the disclosure, exactly like `category` does).
       params.get('transfers') === '0' || params.get('transfers') === 'only' ? params.get('transfers') : null,
       params.get('range') || params.get('from') || params.get('to') ? '1' : null,
-      // Fix round (owner report, phone screenshot): the audit bar (View/Sort/Set by) and the
+      // Fix round (reported, phone screenshot): the audit bar (View/Sort/Set by) and the
       // review queue's chip row read their own filter off these four params the same way the
       // seven above already do, and this task made three of those rows fold below `sm` when
       // they're at default -- so this count has to know about all four now, or the funnel reads
@@ -847,7 +847,7 @@ export function TransactionsClient({
     queueParam === 'suggested' ? 'suggested' : queueParam === 'uncategorized' ? 'uncategorized' : '';
 
   /**
-   * v1.26.0 Lane 1 item 4 (the owner's actual workflow -- auditing fifty rows after an import,
+   * v1.26.0 Lane 1 item 4 (the reported actual workflow -- auditing fifty rows after an import,
    * which per-row clicking does not scale to). Same "read it off currentQuery" idiom as
    * activeQueueChip/activeTransferView just above -- absent, or a hand-edited junk value, both
    * mean off; only the literal '1' turns it on. TABLE-only: the card list already shows a
@@ -909,7 +909,7 @@ export function TransactionsClient({
   const importParam = new URLSearchParams(currentQuery).get('import');
   const activeImportId = importParam !== null && /^\d+$/.test(importParam) ? importParam : null;
 
-  // Fix round (owner report, phone screenshot): six stacked control rows sat above the data at
+  // Fix round (reported, phone screenshot): six stacked control rows sat above the data at
   // every width, because ruling S7's disclosure (`filtersOpen`, above) only ever gated the four
   // selects -- this helper extends the SAME idea to the rest of the rows below it, without
   // touching the one ruling S7 already covers.
@@ -969,7 +969,7 @@ export function TransactionsClient({
     // submit (groupConfirmDialog/groupRecategorizeDialog's own onSubmit), so the top banner is the
     // only place either one's result is ever seen, exactly like the two v1.25.0 bulk dialogs above.
     confirmGroupState.message ?? recatGroupState.message ??
-    // 2026-09-14, the owner on v1.38.0: "assign to bill works but when i assign to bill the UI
+    // 2026-09-14, the report on v1.38.0: "assign to bill works but when i assign to bill the UI
     // menu doesnt close, transaction gets applied and no feedback to user that its done." Both
     // actions shipped wired to no banner at all, so each one landed its write in silence. They sit
     // with assignState/unassignState: one-off actions whose result is only ever seen here.
@@ -1094,7 +1094,7 @@ export function TransactionsClient({
   const splitRemainderCents = splitting ? splitting.amountCents - sumCents(activeSplitParts.map(draftPartCents)) : 0;
 
   /**
-   * Owner report (item 2), THIRD pass -- the first two both shipped and were both rejected from
+   * Reported (item 2), THIRD pass -- the first two both shipped and were both rejected from
    * the same screenshot review. Attempt 1: nothing on the row said a note existed at all. Attempt
    * 2 (`ml-1.5 inline-flex h-11 w-11 ... bg-info-soft`, kept in git history) fixed that but broke
    * two other things the screenshot called out: the merchant `<strong>`/`<span>` this renders
@@ -1163,8 +1163,8 @@ export function TransactionsClient({
   }
 
   /**
-   * v1.26.0 Lane 1 (owner's screenshot: a row reading "Amazon" with a small blue `rule` badge --
-   * "shows amazon i dont know what orignal entry was so maybe its wrong maybe its not"). A
+   * v1.26.0 Lane 1 (reported: a row reading "Amazon" with a small blue `rule` badge --
+   * a normalized merchant with no way back to the original description, so there is no telling whether it is right). A
    * `contains` rename rule can fire on text that is not the brand at all, so a clean display name
    * alone never lets the household tell a correct rename from a wrong one -- the bank's own
    * wording used to live only in a `title`, invisible on a phone and to a keyboard user.
@@ -1179,7 +1179,7 @@ export function TransactionsClient({
    * the flex `gap-1.5` these badges sit in) growing to match, `title` stays a hover bonus never
    * the only route, and the accessible name states what activating it does, the same
    * "Edit note for X" shape noteIndicator's own label uses. Deliberately NOT a colour warning
-   * (the owner's own yellow suggestion, declined by the coordinator): a rename is a normal event
+   * (a real yellow suggestion, declined by the coordinator): a rename is a normal event
    * on this page, and the badge already carries "something changed here" without needing to look
    * alarming to say it -- fifty amber-bordered rows after one import would be ignored exactly the
    * way fifty red ones would.
@@ -1345,7 +1345,7 @@ export function TransactionsClient({
             Assign to loan…
           </RowMenuButton>
         )}
-        {/* 2026-09-13, owner report. Offered only when there IS a bill with something unpaid --
+        {/* 2026-09-13, a report. Offered only when there IS a bill with something unpaid --
             the same rule that hides Assign to loan for a household with no loans, and the reason
             billOptions is empty rather than a list of bills with nothing to pay. */}
         {row.isTransfer || billOptions.length === 0 ? null : (
@@ -1357,7 +1357,7 @@ export function TransactionsClient({
             Assign to bill…
           </RowMenuButton>
         )}
-        {/* 2026-09-13, owner report: "can i set in rule vendor + amount rule? ... something i
+        {/* 2026-09-13, reported: "can i set in rule vendor + amount rule? ... something i
             create from kebab menu?" Sits with Split and the two assign items, inside the
             non-transfer block: a transfer has no category to file and belongs to nobody, so
             neither outcome this dialog offers means anything on one.
@@ -1386,7 +1386,7 @@ export function TransactionsClient({
             Create a rule…
           </RowMenuButton>
         )}
-        {/* 2026-09-13, owner report: Record payment on a bill writes a real transaction, and until
+        {/* 2026-09-13, reported: Record payment on a bill writes a real transaction, and until
             now nothing could remove one. Offered ONLY on a row no import brought in -- an imported
             row belongs to its import, and Undo import is the operation that knows which rows that
             import alone covers (deleteManualTransaction says the same thing server-side, and says
@@ -1442,7 +1442,7 @@ export function TransactionsClient({
    */
   const findRow = (id: number) => page.rows.find((row) => row.id === id);
 
-  /** Owner report (item 1): names the row it acts on ("Rename Coffee run"), the copy pattern the
+  /** Reported (item 1): names the row it acts on ("Rename Coffee run"), the copy pattern the
    *  note dialog below established first. Nothing about what this SUBMITS changed from the
    *  inline sub-row it replaces -- same hidden field, same `scope` radios, same renameAction,
    *  same validation; only the shell around it did. */
@@ -1484,7 +1484,7 @@ export function TransactionsClient({
 
   /** Ruling R13: NOT an auto-save (v1.11.0's rule) -- a free-text field that saves on blur loses
    *  a half-typed sentence, which is the one thing a note must never do. Title names the row
-   *  ("Note for SQ *UNKNOWN VENDOR 8841"), the exact copy pattern the owner's report asked to
+   *  ("Note for SQ *UNKNOWN VENDOR 8841"), the exact copy pattern the reported report asked to
    *  keep; the field's own label is plain "Note" now that the dialog's title already says whose. */
   function noteDialog() {
     if (!noting) return null;
@@ -1519,7 +1519,7 @@ export function TransactionsClient({
    * exactly what's rendered below. Title names the row being assigned.
    */
   /**
-   * 2026-09-13 (owner report): "there is no way for me to assign a transaction to a bill... if i
+   * 2026-09-13 (a report): "there is no way for me to assign a transaction to a bill... if i
    * say record payment from the bill menu it creates a payment but i should only be assigning it
    * a payment not manually creating a record."
    *
@@ -1653,7 +1653,7 @@ export function TransactionsClient({
             // common case is that a loan payment should also leave spending -- a person who wants
             // the payment counted as ordinary spending can still untick it.
             //
-            // v1.27.0 item 1 (the owner's report). The copy used to stop at "(keeps it out of
+            // v1.27.0 item 1 (the reported report). The copy used to stop at "(keeps it out of
             // spending)", which was true and incomplete: ticking it ALSO wrote a household-wide
             // exact transfer rule for the merchant, so one reimbursement filed against a work loan
             // silently taught the app to flag every future purchase from that shop. The rule write
@@ -1725,7 +1725,7 @@ export function TransactionsClient({
         <form action={createRuleAction} className="flex flex-col gap-3" data-testid="create-rule-form">
           <input type="hidden" name="normalizedMerchant" value={row.normalizedMerchant} />
           {/*
-            2026-09-14, the owner: "price from insurer can change after a year or months."
+            2026-09-14, the report: "price from insurer can change after a year or months."
 
             A window FENCED AROUND one premium is the wrong shape for the job this dialog exists
             for. Two policies with one insurer are told apart by the gap BETWEEN them, not by the
@@ -2135,7 +2135,7 @@ export function TransactionsClient({
             >
               {row.displayDescription ?? row.normalizedMerchant}
             </strong>
-            {/* v1.26.0 Lane 1 item 1 (owner report: "shows amazon i dont know what orignal entry
+            {/* v1.26.0 Lane 1 item 1 (reported: "shows amazon i dont know what orignal entry
                 was so maybe its wrong maybe its not"). A rule-renamed row shows the bank text
                 UNCONDITIONALLY -- a `contains` rule can fire on text that is not the brand at
                 all, and a card is where this app asks a person to VERIFY a row, so the bank's own
@@ -2885,7 +2885,7 @@ export function TransactionsClient({
     // Lane 0 shell tightening: gap-6 -> gap-4 sm:gap-5, the same page-level stack gap every other
     // page converts to this release, landing everywhere at once (Lane 0's own docblock).
     <div data-page-width={reviewMode ? undefined : 'wide'} className="flex flex-col gap-4 sm:gap-5">
-      {/* v1.24.0 Lane A item 1 (owner report: "Review page still says trasaction. can we change
+      {/* v1.24.0 Lane A item 1 (reported: "Review page still says trasaction. can we change
           that its confusing?"). The review queue is a FILTER on this page, not a separate page --
           the PageGuide right below already branches on reviewMode for exactly that reason -- so
           the header has to say which one a person is looking at instead of always saying
@@ -2968,7 +2968,7 @@ export function TransactionsClient({
       {notice ? <Notice tone="success">{notice}</Notice> : null}
 
       {/*
-        Owner report (item 1): this used to be a plain Card rendered wherever `splitting` happened
+        Reported (item 1): this used to be a plain Card rendered wherever `splitting` happened
         to sit in the JSX (the very top of the page) -- so pressing Split… appeared to do nothing
         until a person scrolled up to find it, and once there they had lost sight of which row it
         belonged to. Unify-the-editors task (2026-08-30): the dimmed/blurred backdrop, role=dialog/
@@ -3129,7 +3129,7 @@ export function TransactionsClient({
             {activeSort !== '' ? <input type="hidden" name="dir" value={activeDirection} /> : null}
             {activeSource !== '' ? <input type="hidden" name="source" value={activeSource} /> : null}
             {activeImportId !== null ? <input type="hidden" name="import" value={activeImportId} /> : null}
-            {/* Fix round (owner ask): one row, at every width, replaces the old "Filters (N)"
+            {/* Fix round (asked for): one row, at every width, replaces the old "Filters (N)"
                 text button that only showed below `sm` plus a field block that was simply always
                 visible at `sm` and up -- two different shapes for the same fields depending on
                 viewport. Now there is one shape everywhere: the filter icon plus the merchant
@@ -3167,11 +3167,11 @@ export function TransactionsClient({
                 ) : null}
               </button>
               {/*
-                Owner report (item 3): Field's own stacked shape (a label span above the
+                Reported (item 3): Field's own stacked shape (a label span above the
                 control, see src/components/ui/form.tsx) made this the tallest thing on the
                 row -- `items-center` above then centred the Filters button against that taller
                 column, which is exactly the "icon floats above centre with a dead band around
-                it" the owner screenshotted. A bare <input> is the fix, not a shorter Field: the
+                it" the report screenshotted. A bare <input> is the fix, not a shorter Field: the
                 visible "Search" label added nothing a placeholder this specific does not already
                 say, so it is gone rather than shrunk, and `aria-label` carries the same wording
                 to a screen reader now that there is no visible text to compute a name from.
@@ -3179,7 +3179,7 @@ export function TransactionsClient({
                 (AUTO_SAVE_CONTROL's idiom elsewhere in this file), so the two sit at the same
                 height on the same row instead of the input being shorter and off-centre.
               */}
-              {/* F-07 (v1.31.0, owner's question: "Where is that $47.13 charge the bank called
+              {/* F-07 (v1.31.0, the question asked: "Where is that $47.13 charge the bank called
                   about?"). No new control -- this box already learns to recognise money in
                   buildWhere (src/lib/transactions.ts), so the placeholder gains "or an amount"
                   rather than a second field beside it. */}
@@ -3192,7 +3192,7 @@ export function TransactionsClient({
             </div>
 
             {/*
-              v1.24.0 Lane A item 2 (owner report: "currently once i apply a trasnfer its hard to
+              v1.24.0 Lane A item 2 (reported: "currently once i apply a trasnfer its hard to
               find that data again"). ALWAYS visible, never folded behind the Filters(N)
               disclosure the old two-state checkbox lived in. Burying it there is what made a
               mis-tagged transfer unreachable in the first place: REVIEW_WHERE
@@ -3231,7 +3231,7 @@ export function TransactionsClient({
               `?queue=` composes with `?review=1` the same way `?transfers=` composes with the
               ordinary list, so the two controls never need to be visible at once.
             */}
-            {/* Fix round (owner report, phone screenshot): folds below `sm` once its own filter is
+            {/* Fix round (reported, phone screenshot): folds below `sm` once its own filter is
                 back at default, same as every row rowVisibility (above) covers -- see that
                 helper's doc comment for why an unconditional fold was rejected. `reviewMode`'s own
                 queue-chip branch and the ordinary transfer-view branch share one row, so one
@@ -3298,7 +3298,7 @@ export function TransactionsClient({
               do; a hand-typed `?group=category&review=1` is still honoured (page.tsx never checks
               review mode for it), it just is not advertised.
 
-              Fix round (owner report, phone screenshot): View/Sort/Set by each fold below `sm`
+              Fix round (reported, phone screenshot): View/Sort/Set by each fold below `sm`
               once THEIR OWN filter is back at default (rowVisibility, above) -- three independent
               folds, not one shared with the row around them, because a phone screen showing "Set
               by: Rules" has no reason to also show an idle "View" row. The import-batch chip just
@@ -3400,7 +3400,7 @@ export function TransactionsClient({
                 exactly as they were -- the same "just this one param" contract the existing "Needs
                 review" link below already keeps for `review`.
 
-                Fix round (owner report, phone screenshot): below `sm` this row now folds like every
+                Fix round (reported, phone screenshot): below `sm` this row now folds like every
                 other row rowVisibility (above) covers, once no category chip is active -- see that
                 helper's own doc comment for the reasoning. */}
             {topLevelChips.length > 0 ? (
@@ -3674,7 +3674,7 @@ export function TransactionsClient({
         </p>
       <div className="hidden sm:block">
       <Card as="div">
-        {/* v1.26.0 Lane 1 item 4 (the owner's actual workflow: auditing fifty rows after an
+        {/* v1.26.0 Lane 1 item 4 (the reported actual workflow: auditing fifty rows after an
             import, which per-row clicking does not scale to). One link flips `?bank=1` for the
             WHOLE table -- filterHref (this file's own generalization, see its docblock) keeps
             every other active filter on the querystring untouched, and the state lives in the
@@ -3778,7 +3778,7 @@ export function TransactionsClient({
                     does not have. v1.16.0 Lane C item 3: this used to be `cell-stack-hide`,
                     dropping it from the phone card entirely on the reasoning that an account name
                     repeats identically down the column and is already the Account filter above --
-                    but the owner asked for it back, so it now reads as `cell-stack-meta` context
+                    but it was asked for back, so it now reads as `cell-stack-meta` context
                     under the merchant instead of vanishing outright. */}
                 <td className="text-muted cell-stack-meta" title={row.accountName} data-label="Account">{row.accountName}</td>
                 <td className="cell-stack-headline" data-label="Description">

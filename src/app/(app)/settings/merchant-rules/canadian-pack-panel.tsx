@@ -1,6 +1,6 @@
 'use client';
 
-// Backlog item 17 ("an imported pack cannot be un-imported") plus the owner's follow-up ask to
+// Backlog item 17 ("an imported pack cannot be un-imported") plus the reported follow-up ask to
 // make the Canadian merchant pack installable/removable/version-aware from inside the app,
 // instead of the download-and-import-a-file path RulesPackPanel still offers (kept, on purpose --
 // see this feature's spec, Part 1: that panel is for sharing a pack with ANOTHER install, this one
@@ -55,7 +55,7 @@ export function CanadianPackPanel({
     : `installed, v${state.installedVersion} · ${state.presentCount} of ${state.totalCount} present`;
 
   /**
-   * Owner ask (2026-08-31): these three confirmations shipped in v1.23.0 as inline disclosures
+   * Asked 2026-08-31: these three confirmations shipped in v1.23.0 as inline disclosures
    * (a plain bordered div toggled by useState), because the brief that produced this file spelled
    * out what each one had to SAY and DO and never named an idiom, so it fell back to copying the
    * nearest pattern in this same file rather than the dialog every OTHER page-level confirm with

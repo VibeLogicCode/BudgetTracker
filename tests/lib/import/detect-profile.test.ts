@@ -99,7 +99,7 @@ describe('detectImportProfile: two presets describing one layout', () => {
 
 describe('detectImportProfile: when it cannot tell', () => {
   /**
-   * The two TD presets are the case the owner raised: two exports from one bank that look alike.
+   * The two TD presets are the case the report raised: two exports from one bank that look alike.
    * They are separable HERE (five columns and ISO dates vs four and MM/DD/YYYY) and the tests
    * above prove it -- but a file that no offered profile can read cleanly must say so rather
    * than hand back whichever scored least badly.

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { monthDelta } from '@/lib/delta';
 
 /**
- * 2026-09-15, from the owner's own dashboard: a tile read "-1109.4% vs last month" and another
+ * 2026-09-15, from a real dashboard: a tile read "-1109.4% vs last month" and another
  * "-99.0% vs last month" beside a figure of a couple of hundred dollars.
  *
  * Both were arithmetically correct and humanly useless. A percentage is a ratio, and a ratio to a
@@ -25,7 +25,7 @@ describe('monthDelta: a percentage that stops being readable becomes a figure', 
   });
 
   it('switches to an absolute figure when the ratio explodes', () => {
-    // The owner's own tile: a small prior month turns an ordinary swing into -1109%.
+    // A real tile: a small prior month turns an ordinary swing into -1109%.
     const result = monthDelta(-469_385, 46_500, true);
     expect(result.delta).not.toMatch(/%/);
     expect(result.delta).toMatch(/lower than last month/);

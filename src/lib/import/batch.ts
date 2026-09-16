@@ -7,12 +7,12 @@ import { writeStagedFile } from './staging';
 /**
  * 2026-09-15. Dropping ten statements at once instead of picking them one at a time.
  *
- * The owner's request, and the pain under it, verbatim: "i download 10 files nd then 1 by 1 i g
- * through it and sometimes i import same ile again. throughwing all together lets app handle the
- * process". The full reasoning is docs/superpowers/specs/2026-09-15-batch-import-design.md; the
+ * The reported problem: ten statements downloaded in one sitting, then fed in one at a time,
+ * with the occasional file imported twice because nothing said it had already been done. The
+ * full reasoning is docs/superpowers/specs/2026-09-15-batch-import-design.md; the
  * rulings referenced below (B1-B9) are that document's.
  *
- * RULING B1, AND THE POINT OF THIS FILE: the detection is NOT changing. The owner said so twice,
+ * RULING B1, AND THE POINT OF THIS FILE: the detection is NOT changing. This was stated twice,
  * once with an asterisk. detectImportAccount and detectImportProfile run per file exactly as they
  * run on the one-file page, and everything here only READS the `confidence` and `reason` they
  * already return. There is no second scorer in this file and there must never be one -- a gate
@@ -67,7 +67,7 @@ function matchedRowsForDetectedAccount(detection: AccountDetection): number {
  * for its own `likely`, and has done since long before this file existed. Routing on it is
  * obeying an instruction the codebase already gives.
  *
- * RULING B6 -- the account may be `likely`. Asked of the owner and answered on 2026-09-15. The
+ * RULING B6 -- the account may be `likely`. Decided on 2026-09-15. The
  * reason it is the right call rather than a concession: account `certain` requires row OVERLAP
  * (detect-account.ts branch 1), so a clean monthly statement that overlaps nothing can never be
  * `certain` however obvious its account is. A `certain`-only gate would leave the common case
@@ -86,7 +86,7 @@ export function classifyDetection(detection: FileDetection): FileClassification 
   }
 
   /*
-    RULING B3, and the owner's actual complaint. The first draft of this design added an
+    RULING B3, and the reported problem. The first draft of this design added an
     `imports.content_hash` column so a re-import could be spotted before any work was done. It is
     not needed: matchedRows is ALREADY how many of this file's rows that account holds, computed
     on every detect call, so all-of-them is already sayable from numbers in hand.
@@ -120,7 +120,7 @@ export interface FileCounts {
 }
 
 /**
- * 2026-09-15, owner report on v1.44.1 with screenshots: "on first page it should show summary like
+ * 2026-09-15, reported after v1.44.1: "on first page it should show summary like
  * last screenshot showing how many duplicates and what it will import."
  *
  * The list said "7 rows", which reads as a promise to add seven. It was going to add ONE -- six of

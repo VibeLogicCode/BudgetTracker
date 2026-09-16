@@ -8,7 +8,7 @@
  * nav, and a person-scope pills nav) that need a shared right edge. That reasoning was sound for
  * the dashboard and wrong for everyone else -- every other page passes a small handful of plain
  * buttons/links through `actions`, and `flex-col` stacked those vertically too, leaving dead
- * space beside each one for no reason (the owner's own complaint, reported on /goals: "Hide
+ * space beside each one for no reason (a real complaint, reported on /goals: "Hide
  * archived" and "Add goal" sat on separate lines with nothing between them).
  *
  * The slot is ONE ROW of actions that wraps if it must, full width and left-aligned below `sm`,

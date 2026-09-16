@@ -49,7 +49,7 @@ describe('the app not-found boundary (item W / UX-1)', () => {
   });
 });
 /**
- * v1.32.0 (UP-2). The screen the owner's recording caught: Update now, Watchtower kills the
+ * v1.32.0 (UP-2). The screen the reported recording caught: Update now, Watchtower kills the
  * container, and this boundary tells a household that just authorised a restart that "the app
  * could not finish loading this screen... this usually clears on its own". The other screen in
  * that recording is the browser's own ERR_CONNECTION_RESET page, which belongs to Chrome and is

@@ -177,7 +177,7 @@ describe('ruling R14: the stale-import alert names the account', () => {
   it('2026-09-09: two quiet accounts are ONE message that names both, not two messages', () => {
     // Ruling R14 required the message to NAME the account, because five household-wide messages
     // read as five identical repeats. One message naming all of them satisfies that better than
-    // one message each -- which is the owner's "1 message per X is too repetitive" complaint.
+    // one message each -- which is the reported "1 message per X is too repetitive" complaint.
     const accountC = insertTestAccount(t.db, { name: 'Visa', type: 'credit' });
     importAt(userId, '2026-07-20T12:00:00.000Z', accountC);
     expect(evaluateStaleImport({ userId, now: new Date('2026-08-27T09:00:00Z'), tz: 'America/Toronto' })).toBe(1);

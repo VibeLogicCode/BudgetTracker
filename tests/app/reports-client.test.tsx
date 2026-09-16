@@ -865,7 +865,7 @@ describe('ReportsClient — F-08: the same period a year earlier', () => {
 });
 
 /**
- * UP-4 (v1.32.0, owner ask 2026-09-04). Nothing here changes an aggregate or a filter -- these
+ * UP-4 (v1.32.0, asked 2026-09-04). Nothing here changes an aggregate or a filter -- these
  * pin the COPY fix: the page now states the resolved dates a preset range summed, both in the
  * eyebrow (visible regardless of which card someone is looking at, since the picker itself hides
  * its own From/To inputs for a non-custom preset -- DateRangePicker.tsx) and in the Category

@@ -154,7 +154,7 @@ export async function sendDigestNowAction(
   });
 
   /**
-   * Owner report, 2026-09-08: "i tried pressing send notification and it didnt do anything", for
+   * Reported 2026-09-08: a press that appeared to do nothing, for
    * BOTH options. Two separate defects, both in this function, both fixed here.
    *
    * FIRST: the return value was discarded and this returned `sent` unconditionally, so the card

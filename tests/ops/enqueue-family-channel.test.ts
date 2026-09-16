@@ -92,7 +92,7 @@ const ENQUEUE_SITES: EnqueueSite[] = [
     familyChannelOnly: 'absent',
     why: "the body carries one transaction's merchant, account name, date, amount and category straight out of readSlice(), which selects every household transaction with no attribution filter, and the loop fans that one render out over every recipient participants() returns.",
     exception:
-      "Ruling R16 (v1.30.0) parked this as an open question (item M-8): MUST-9.36 in docs/superpowers/specs/2026-08-18-predictive-dateranges-design.md:622 makes the three anomaly detectors household-wide BY DESIGN, in direct conflict with ruling R2. v1.31.0's owner ruling resolved M-8 for this event by narrowing the RECIPIENT LIST to role === 'admin' (anomalies.ts's participants(), not a familyChannelOnly at this call) rather than scoping the figures (which would gut the feature) or dropping it (which would lose a genuine early warning): an admin is treated as unrestricted regardless of visibility (micro-ruling M1), so no self-scoped recipient reaches this call any more and there is nothing left for familyChannelOnly to withhold. subscription_creep (the site below) is a separate call, evaluated per notifiable user rather than through participants(), and is unchanged by this ruling.",
+      "Ruling R16 (v1.30.0) parked this as an open question (item M-8): MUST-9.36 in docs/superpowers/specs/2026-08-18-predictive-dateranges-design.md:622 makes the three anomaly detectors household-wide BY DESIGN, in direct conflict with ruling R2. v1.31.0's a ruling resolved M-8 for this event by narrowing the RECIPIENT LIST to role === 'admin' (anomalies.ts's participants(), not a familyChannelOnly at this call) rather than scoping the figures (which would gut the feature) or dropping it (which would lose a genuine early warning): an admin is treated as unrestricted regardless of visibility (micro-ruling M1), so no self-scoped recipient reaches this call any more and there is nothing left for familyChannelOnly to withhold. subscription_creep (the site below) is a separate call, evaluated per notifiable user rather than through participants(), and is unchanged by this ruling.",
   },
   {
     file: 'src/lib/notify/evaluate/anomalies.ts',
@@ -118,7 +118,7 @@ const ENQUEUE_SITES: EnqueueSite[] = [
       + "called once per notifiable user and enqueues to input.userId, so its recipient list is unchanged. "
       + "MUST-9.36's household-wide rule (docs/superpowers/specs/2026-08-18-predictive-dateranges-design.md:622) "
       + "therefore still governs this event exactly as shipped -- a standing spec decision, not an open "
-      + "conflict awaiting a ruling. Ruling R16 is spent: it parked item M-8 for v1.30.0 and the owner ruled on "
+      + "conflict awaiting a ruling. Ruling R16 is spent: it parked item M-8 for v1.30.0 and the report ruled on "
       + "it in v1.31.0.",
   },
   {

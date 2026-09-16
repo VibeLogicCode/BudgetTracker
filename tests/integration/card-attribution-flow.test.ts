@@ -45,7 +45,7 @@ afterEach(() => {
  * fallback-to-owner paths, in the same file as the two matched cardholders.
  */
 describe('per-card attribution: preview -> assign -> commit -> undo -> re-import dedup', () => {
-  it('attributes each row to the right cardholder, falls back to the owner for the rest, survives undo, and fully dedups on re-import', () => {
+  it('attributes each row to the right cardholder, falls back to the report for the rest, survives undo, and fully dedups on re-import', () => {
     current = createSeededTestDb();
     const importedBy = insertTestUser(current.db, { name: 'Admin', username: 'admin' });
     const alexId = insertTestUser(current.db, { name: 'Alex', username: 'alex' });

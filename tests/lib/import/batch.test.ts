@@ -129,7 +129,7 @@ describe('classifyDetection: needs you', () => {
 });
 
 /**
- * Ruling B3, and the owner's actual complaint: "sometimes i import same ile again". No column is
+ * Ruling B3, and the reported problem: the same file occasionally imported twice. No column is
  * added for this. `matchedRows` is already how many of the file's rows that account holds, and it
  * is already computed on every detect call -- when it equals the row count, every row is in, and
  * the file is a re-import.
@@ -190,7 +190,7 @@ describe('classifyDetection: already imported', () => {
 });
 
 /**
- * 2026-09-15, owner report on v1.44.1 with screenshots: "on first page it should show summary like
+ * 2026-09-15, reported after v1.44.1: "on first page it should show summary like
  * last screenshot showing how many duplicates and what it will import."
  *
  * The list said "7 rows", which reads as "about to add 7". It was about to add ONE -- six of the

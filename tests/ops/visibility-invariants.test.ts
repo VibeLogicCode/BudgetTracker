@@ -44,7 +44,7 @@ const REQUIRE_VIEWER: { file: string; fn: string }[] = [
   { file: 'src/lib/networth.ts', fn: 'netWorthOverTime' },
   // Addendum A: a WRITER, not a read model -- it is listed here for the one guarantee this list
   // mechanically asserts, that the viewer parameter exists and is never optional. That is what
-  // stops a future caller compiling a create that skips the owner rules (rulings A10, A12).
+  // stops a future caller compiling a create that skips the report rules (rulings A10, A12).
   { file: 'src/lib/loans.ts', fn: 'createLoanFromTransaction' },
   // Controller ruling R11 (task-3, S-01). categoryTransactionsAction posted the caller's own
   // scope/userId straight through with no owner narrowing of any kind, so a self-scoped member

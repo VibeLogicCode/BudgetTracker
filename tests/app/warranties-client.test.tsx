@@ -66,7 +66,7 @@ describe('WarrantiesClient', () => {
     // non-subscription item -- rather than the bare date.
     expect(screen.getByText(/2028-08-16/)).toBeTruthy();
     // M15: the status filter's <select> now also spells out "Active" as an option label
-    // (statusLabel(), not the raw 'active' code), and the owner filter's <select> lists
+    // (statusLabel(), not the raw 'active' code), and the report filter's <select> lists
     // Alice by name -- scope both assertions to the table body to avoid a duplicate-text
     // ambiguity against those two filter controls.
     const tbodyText = container.querySelector('tbody')?.textContent;

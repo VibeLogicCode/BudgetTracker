@@ -397,7 +397,7 @@ export function ReportsClient({
       ) : null}
 
       <Card>
-        {/* UP-4 (v1.32.0, owner ask 2026-09-04): this description already named the COMPARISON
+        {/* UP-4 (v1.32.0, asked 2026-09-04): this description already named the COMPARISON
             window precisely (`${priorYearRange.from} to ${priorYearRange.to}` below, unchanged) --
             it just never named its OWN window the same way, so a household reading "over the
             range" here had nowhere on this card to learn what "the range" actually resolved to.
@@ -955,7 +955,7 @@ function DrillLink({
 }
 
 /**
- * UP-4 (v1.32.0, owner ask 2026-09-04). **Not a filter fix** -- every card's own range/person scope
+ * UP-4 (v1.32.0, asked 2026-09-04). **Not a filter fix** -- every card's own range/person scope
  * (`rangeClauses`, src/lib/reports.ts) was verified end to end; this is the copy that made the
  * correct number read as broken. `range.label` alone is a PRESET NAME ("Last month"), never a
  * date, and a name has no relationship to when "now" was when it resolved. Three days into

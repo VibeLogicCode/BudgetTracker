@@ -792,7 +792,7 @@ function runBootRestore(now: Date): BootOutcome {
 
 /**
  * MUST-20.20, and the single most important line in this file. ${DATA_DIR} is a bind mount
- * the owner can edit, so every input here is untrusted; and a container that refuses to boot
+ * the report can edit, so every input here is untrusted; and a container that refuses to boot
  * is a worse outcome than a restore that did not happen — the same call MUST-7.6 already
  * makes for the OCR assets. Every failure is recorded and swallowed — this function itself
  * never throws.

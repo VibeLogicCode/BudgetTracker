@@ -586,7 +586,7 @@ function link(
  * Reuses recomputeBalance exactly as link() now does, just invoked over the whole ledger on
  * demand instead of triggered by inserting one more row: existing loans self-heal only as NEW
  * activity touches them, so a loan with no reason to get a new link soon needs a way back that
- * does not require deleting and recreating it, which is the thing the owner actually had to do.
+ * does not require deleting and recreating it, which is the thing the report actually had to do.
  *
  * Does not touch balance_updated_at (MUST-11.8): this recomputes what the payments already on
  * record imply, in the order they actually happened -- it is not a person typing a new number.
@@ -792,7 +792,7 @@ function markMatchingUnpaid(
 /**
  * Link a transaction the bank already sent to one of a bill's installments.
  *
- * WHY IT EXISTS (owner report, 2026-09-13): "there is no way for me to assign a transaction to a
+ * WHY IT EXISTS (reported 2026-09-13): "there is no way for me to assign a transaction to a
  * bill or a contract? if i say record payment from the bill menu it creates a payment but i should
  * only be assigning it a payment not manually creating a record." A loan has had
  * assignTransactionToLoan on the row menu since v1.7.0; a bill had only the rule matcher (text,

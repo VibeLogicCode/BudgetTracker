@@ -54,7 +54,7 @@ import { buttonClass } from '@/components/ui/Button';
 /**
  * 2026-09-15: moved to src/lib/delta.ts and given a readability ceiling. The old local version
  * guarded only `prev === 0`, so a prior month of a few dollars produced "-1109.4% vs last month"
- * on the owner's real dashboard -- correct, and about the denominator rather than the household.
+ * on the reported real dashboard -- correct, and about the denominator rather than the household.
  * See that module for why the line switches to an absolute figure past the ceiling.
  */
 const deltaProps = monthDelta;
@@ -241,7 +241,7 @@ export default async function DashboardPage({
    * exclusions -- the same source Money in/Net already read, so the three headline tiles
    * reconcile on their face: Money in - Spent = Net, always. Before this, the tile read
    * `totals.totalSpentCents` (budgetProgress, CATEGORIZED rows only), which could -- and on the
-   * owner's own reported case, did -- disagree with Net by exactly the amount of uncategorized
+   * a real reported case, did -- disagree with Net by exactly the amount of uncategorized
    * spend. `totals.totalSpentCents` keeps its home in this tile's own hint and the progress bar
    * below it, where a budget-relative comparison belongs; it is not deleted, only demoted.
    */

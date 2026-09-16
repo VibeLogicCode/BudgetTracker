@@ -42,7 +42,7 @@ function personOf(txnId: number): number | null {
  * itself.
  */
 describe('resolveAttribution: rule, then card, then the account owner', () => {
-  it('takes the rule when there is one, over the card and the owner alike', () => {
+  it('takes the rule when there is one, over the card and the report alike', () => {
     expect(resolveAttribution({ ruleUserId: 7, ruleMatched: true, cardUserId: 3, ownerUserId: 1 })).toEqual({
       userId: 7,
       source: 'rule',

@@ -128,7 +128,7 @@ export async function POST(request: Request): Promise<Response> {
       ONE BAD FILE MUST NOT COST THE OTHERS. Every failure here becomes an `unsupported` ROW rather
       than a non-200 for the whole request -- the drop that motivated this feature is a bank folder
       with a PDF in it, and answering that drop with a single error would be worse than the
-      one-at-a-time flow it replaces. The owner asked for exactly this handling.
+      one-at-a-time flow it replaces. This handling was asked for explicitly.
     */
     if (file.size > MAX_FILE_BYTES) {
       rows.push(unsupported(file.name, `This file is larger than ${Math.floor(MAX_FILE_BYTES / (1024 * 1024))} MB.`));
@@ -144,7 +144,7 @@ export async function POST(request: Request): Promise<Response> {
     }
 
     // Ruling B11. A zip is opened here and its contents join the list as ordinary files -- the
-    // owner's first sentence: "if its a zip it should inzip and import". zip.ts owns every guard
+    // owner's first sentence: a zip should be opened and its contents imported. zip.ts owns every guard
     // (traversal, entry count, and the decompressed total, which is the one an upload-size check
     // cannot see); a refusal from it is this one file's problem, exactly like any other.
     if (looksLikeZip(file.name, buf)) {

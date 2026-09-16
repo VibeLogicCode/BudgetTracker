@@ -74,7 +74,7 @@ describe('§10.1: budget events', () => {
   });
 
   /**
-   * Owner report, 2026-09-08: a Telegram alert read "Budget 98.61999999999999%: Home Improvement".
+   * Reported 2026-09-08: a Telegram alert read "Budget 98.61999999999999%: Home Improvement".
    * $147.93 of $150.00 really is that number in binary floating point; the defect was publishing it.
    */
   it('rounds the percentage to two decimals instead of printing the raw float', () => {
@@ -83,7 +83,7 @@ describe('§10.1: budget events', () => {
       scope: 'household',
       categoryName: 'Home Improvement',
       month: '2026-09',
-      // The exact value the owner was sent.
+      // The exact value the report was sent.
       pct: (14793 / 15000) * 100,
       spentCents: 14793,
       limitCents: 15000,

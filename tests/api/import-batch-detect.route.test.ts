@@ -69,7 +69,7 @@ interface Row {
 const rowsOf = async (response: Response): Promise<Row[]> => ((await response.json()) as { rows: Row[] }).rows;
 
 /**
- * 2026-09-15. N files in, one classified row each back. The owner's ask, verbatim: "do you think we
+ * 2026-09-15. N files in, one classified row each back. The reported ask, verbatim: "do you think we
  * can add abiltiy to import multiple fdiles at once?"
  *
  * WHAT THIS FILE DOES NOT COVER: whether the detections are correct. That is
@@ -187,7 +187,7 @@ describe('POST /api/import/batch/detect: bounds', () => {
 });
 
 /**
- * Ruling B11, and the owner's first sentence: "if its a zip it should inzip and import". Every
+ * Ruling B11: a zip should be opened and its contents imported like any other drop. Every
  * guard lives in src/lib/import/zip.ts and is tested against real hostile archives there
  * (tests/lib/import/zip.test.ts) -- what this covers is the ROUTE's half: an archive becomes
  * ordinary rows, and a refusal from the reader costs only the archive.

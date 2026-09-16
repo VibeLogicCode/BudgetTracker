@@ -762,7 +762,7 @@ describe('the app makes no network call unless SimpleFIN is configured', () => {
 
   it('the scheduler only ever syncs through the explicit, opt-in auto-sync gate (Task 8, design ruling 7)', () => {
     // Superseded assertion (pre-v1.7.0): this used to assert scheduler.ts never mentioned
-    // SimpleFIN at all -- sync was 100% manual, full stop. The owner's v1.7.0 design ruling 7
+    // SimpleFIN at all -- sync was 100% manual, full stop. The reported v1.7.0 design ruling 7
     // deliberately adds a user-selectable auto-sync cadence (off by default: absence of the
     // simplefin_auto_sync setting means off, the same discipline as every other gate in this
     // file). The invariant this describe block actually cares about -- "no network call

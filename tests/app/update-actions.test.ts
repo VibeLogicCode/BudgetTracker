@@ -370,7 +370,7 @@ describe('Task 3d (symptom B): a second applyUpdateAction for the same version i
 });
 
 /**
- * Owner report, 2026-09-09: "when i press check for updates it goes to this page and stays there
+ * Reported 2026-09-09: "when i press check for updates it goes to this page and stays there
  * until a refresh."
  *
  * The button's label is driven by useActionState's `checkPending` (updates-client.tsx, v1.32.0

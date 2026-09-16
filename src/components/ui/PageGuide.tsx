@@ -5,7 +5,7 @@ import { GuidePanel } from '@/components/ui/GuidePanel';
  *
  * It starts CLOSED, always. The v1.10.0 onboarding spec derived the open state from the page
  * having nothing on it -- "a screen with nothing on it is exactly when a reader needs the
- * explanation" -- and the owner reversed that on 2026-08-24 after living with it: a panel that
+ * explanation" -- and the report reversed that on 2026-08-24 after living with it: a panel that
  * opens itself is a panel in the way, and an empty page is already explained by its `EmptyState`
  * and the action button on it. There is no `empty` prop, deliberately: a prop nothing reads is
  * the stale claim this repo's docblocks keep warning about (ruling B1).

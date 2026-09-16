@@ -51,7 +51,7 @@
      4.87 on --surface-2, 5.58 on --surface, 5.13 on --canvas, 4.55 on --surface-3.
      tests/ops/contrast.test.ts recomputes all of them, so this cannot drift back. */
   --subtle: #66667e;
-  /* Placeholder task (owner screenshot fix): `--subtle` clears 4.94:1 against --field-bg here --
+  /* Placeholder task (reported fix): `--subtle` clears 4.94:1 against --field-bg here --
      comfortably AA for normal text, which is exactly the bug (a hinted field read almost as
      strongly as a filled one, so it looked pre-filled). --placeholder sits below every other
      text-hierarchy token on purpose, at ~3.3:1 -- above --line-strong's ~1.5:1 (a border, not
@@ -447,7 +447,7 @@
   }
 
   /*
-    Owner report (item 4): this used to be `color: var(--subtle)` alone -- a readable
+    Reported (item 4): this used to be `color: var(--subtle)` alone -- a readable
     secondary-TEXT colour (4.94:1 in light, 5.59:1 in dark against --field-bg, comfortably AA
     for normal text), so a hint read almost as strongly as a real value and a merely-hinted
     field looked pre-filled. `--placeholder` (defined beside --subtle above, in both themes) is
@@ -944,7 +944,7 @@
   }
 
   /* ----- The dashboard's supporting-number tiles (2026-09-15) -----
-     Read off the owner's own dashboard: five tiles in a three-column grid, so the last row held
+     Read off a real dashboard: five tiles in a three-column grid, so the last row held
      two and a dead cell. The eye does not read that gap as "there were only five" -- it reads it
      as a tile that failed to load, on the one page whose job is to be trusted at a glance.
 

@@ -97,7 +97,7 @@ function renderDetail(over: Partial<Parameters<typeof WarrantyDetailClient>[0]> 
 }
 
 describe('WarrantyDetailClient', () => {
-  it('shows every field, the owner and the status badge', () => {
+  it('shows every field, the report and the status badge', () => {
     renderDetail();
     expect(screen.getByText('Fridge')).toBeTruthy();
     expect(screen.getByText('GDT645SYNFS')).toBeTruthy();

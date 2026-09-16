@@ -152,14 +152,14 @@ describe('the two pure helpers', () => {
 });
 
 /**
- * 2026-09-15. The owner downloads ten statements and feeds them in one at a time: "throughwing all
+ * 2026-09-15. The report downloads ten statements and feeds them in one at a time: "throughwing all
  * together lets app handle the process". `rejectionFor` refused a multi-file drop outright, in one
  * line, and that line is the whole of what stood in the way.
  *
  * THE RULE THAT SHAPES ALL OF THIS: a mixed drop must not be refused wholesale. Nine statements and
  * one PDF is the realistic drop -- a bank folder has a PDF in it -- and throwing the nine away
  * because of the one would be worse than what it replaces. So multi mode PARTITIONS rather than
- * refuses, which is also the owner's own ask ("icase onf the files is not supported it should
+ * refuses, which is also a real ask ("icase onf the files is not supported it should
  * handle it accodingy").
  */
 describe('partitionDrop: a bad file does not condemn the good ones', () => {

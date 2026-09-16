@@ -652,7 +652,7 @@ describe('assignToLoanAction: the opt-in "also mark as a transfer" checkbox', ()
 });
 
 /**
- * v1.27.0 item 1 -- the owner's report, verbatim:
+ * v1.27.0 item 1 -- reported:
  *
  *   "when i add items to loan they are marked transfer by default but it also adds a rule. for
  *    example i moved this to work loan as this was re ebuisnment but next time i buy from
@@ -664,7 +664,7 @@ describe('assignToLoanAction: the opt-in "also mark as a transfer" checkbox', ()
  * screen to say a rule had been written. The fix is `learnRule: false` on this path only.
  */
 describe('assignToLoanAction: filing one reimbursement against a loan must not teach the merchant', () => {
-  /** The owner's own shape: a shop the household buys from normally, this once reimbursed. */
+  /** A real shape: a shop the household buys from normally, this once reimbursed. */
   function seedLoanAndPurchase(): { itemId: number; txnId: number } {
     const { accountId, userId } = ctx!;
     const itemId = seedLoanItem({ balanceCents: 2_000_000 });
@@ -1017,7 +1017,7 @@ describe("renameTransactionAction — ruling R4: a member cannot overwrite anoth
     const ownerId = ctx!.userId; // 'Alice', admin, seeded by setup()
     const memberId = insertTestUser(db, { name: 'Bob', username: 'bob', role: 'member' });
 
-    // The owner creates the rename rule first, as an admin (createdBy is recorded).
+    // The report creates the rename rule first, as an admin (createdBy is recorded).
     upsertRuleFromCorrection({
       pattern: normalizeMerchant('CITY GROCER'),
       matchType: 'exact',

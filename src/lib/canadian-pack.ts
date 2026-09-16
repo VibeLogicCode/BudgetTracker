@@ -119,7 +119,7 @@ export interface CanadianPackState {
 const DISMISSED_VERSION_KEY = `pack.${CANADIAN_PACK_ID}.dismissedVersion`;
 
 /**
- * UP-3 (the owner's 2026-09-04 screen recording): right after an app update, Settings says the
+ * UP-3 (the reported 2026-09-04 screen recording): right after an app update, Settings says the
  * installed pack is older than the one this build ships and sends the reader to Merchant rules.
  * The sentence is true and the link is the only honest place to act, but a notice that cannot be
  * put down reads as homework rather than as information.

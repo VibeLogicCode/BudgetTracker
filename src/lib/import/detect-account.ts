@@ -57,7 +57,7 @@ function decide(input: {
 
   // 1. The rows themselves. Two statements from one bank can be shaped identically and still
   //    contain different transactions, which is exactly the case a layout-based guess cannot
-  //    answer -- see the owner's two-TD-accounts question.
+  //    answer -- see the two-accounts-at-one-bank case.
   const best = ranked[0];
   const runnerUp = ranked[1];
   if (best !== undefined && best.matchedRows > 0 && (runnerUp === undefined || runnerUp.matchedRows === 0)) {

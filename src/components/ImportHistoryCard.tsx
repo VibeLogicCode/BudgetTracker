@@ -16,7 +16,7 @@ import type { ImportHistoryRow } from '@/lib/import/commit';
  * 2026-09-15: EXTRACTED, unchanged, from import-client.tsx. It had lived inside that component
  * since the page was written, which was fine while that component WAS the import page -- and
  * stopped being fine the moment the batch screen became the landing surface, because History then
- * only existed once a household had clicked into a single file. The owner reported exactly that:
+ * only existed once a household had clicked into a single file. Reported directly:
  * "i should also have a history button on new page to take me to page that shows me history of
  * what was imported like in older screenshot."
  *

@@ -50,7 +50,7 @@ export interface TransactionFilter {
   accountId?: number | null;
   categoryId?: number | 'uncategorized' | null;
   /**
-   * v1.21.0 item 3 (owner's screenshot of the chip row: "filter on page transactions only
+   * v1.21.0 item 3 (a reported screen, chip row: "filter on page transactions only
    * filter where i directly assign parent and ignore all child"). Only meaningful when
    * `categoryId` is a number:
    *   - false/omitted (what a chip does) -- `categoryId` AND its children match. The category
@@ -72,7 +72,7 @@ export interface TransactionFilter {
   search?: string | null;
   uncategorizedOnly?: boolean;
   /**
-   * v1.24.0 Lane A item 2 (owner report: "currently once i apply a trasnfer its hard to find
+   * v1.24.0 Lane A item 2 (reported: "currently once i apply a trasnfer its hard to find
    * that data again"). Three states, not a boolean -- a mis-tagged transfer needs a way BACK.
    * REVIEW_WHERE (src/lib/categorize/engine.ts) excludes every transfer unconditionally, so a
    * row wrongly flagged a transfer was already invisible to the review queue before this field
@@ -233,7 +233,7 @@ export interface TransactionPage {
   pageSize: number;
   pageCount: number;
   /**
-   * F-02 (v1.31.0, owner's question: "how much went on the Visa this month?"). Signed sums over
+   * F-02 (v1.31.0, the question asked: "how much went on the Visa this month?"). Signed sums over
    * the WHOLE filtered set (every page, not just `rows`), same `where` as `total` -- see
    * listTransactions for why that is one query, not two.
    *
@@ -390,7 +390,7 @@ function buildWhere(filter: TransactionFilter, viewer: Viewer): SQL | undefined 
     const trimmedSearch = filter.search.trim();
     const needle = `%${escapeLikeNeedle(trimmedSearch.toUpperCase())}%`;
     /**
-     * F-07 (v1.31.0, owner's question: "Where is that $47.13 charge the bank called about?"). The
+     * F-07 (v1.31.0, the question asked: "Where is that $47.13 charge the bank called about?"). The
      * bank gives a person an amount, not a name, and the search box only ever matched text -- so
      * one more OR arm, added only when the trimmed query itself parses as money.
      *
@@ -1307,7 +1307,7 @@ export function countExcludingCategory(categoryId: number): number {
 /**
  * Delete a transaction nobody imported.
  *
- * WHY THIS EXISTS (owner report, 2026-09-13): "it recorded this payment now which i have no way of
+ * WHY THIS EXISTS (reported 2026-09-13): "it recorded this payment now which i have no way of
  * removing." Record payment on a bill writes a real transaction, and until this function there was
  * no delete path in the app at all -- undoImport was the only code that removed transaction rows,
  * and it only removes rows an import created. So a row typed in by hand, or written by Record

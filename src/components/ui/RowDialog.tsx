@@ -7,7 +7,7 @@ import { Card, CardBody, CardHeader } from '@/components/ui/Card';
  * Unify-the-editors task (2026-08-30). Every "edit one thing about this row" control on
  * Transactions used to pick between two idioms: the split editor was a real modal (backdrop,
  * focus trap, Escape, scroll lock, focus restored to the trigger), while note/rename/assign-to-
- * loan/apply-to-all were inline sub-rows wedged between a row and the next. The owner's report
+ * loan/apply-to-all were inline sub-rows wedged between a row and the next. The report
  * was exactly that split: pressing "Add note" did not bring up the dialog they expected -- it
  * shoved the table down the page instead. This component is the one idiom the fix settles on,
  * factored out of the split editor's own implementation (transactions-client.tsx's previous
@@ -37,7 +37,7 @@ import { Card, CardBody, CardHeader } from '@/components/ui/Card';
  */
 
 /**
- * Owner report (item 1): nothing native (no <dialog>.showModal() here -- this app hand-rolls its
+ * Reported (item 1): nothing native (no <dialog>.showModal() here -- this app hand-rolls its
  * own overlays rather than take on a dialog library) keeps Tab cycling inside a dialog on its
  * own. `input[type="hidden"]` is excluded even though the plain tag-name selectors below would
  * otherwise match it: a hidden field can never actually receive focus in a real browser, and
@@ -48,7 +48,7 @@ import { Card, CardBody, CardHeader } from '@/components/ui/Card';
  */
 
 /**
- * WHEN TO USE THIS vs a plain inline confirm (owner ask, 2026-08-31). The question came up because
+ * WHEN TO USE THIS vs a plain inline confirm (asked 2026-08-31). The question came up because
  * v1.23.0's Canadian merchant pack panel (settings/merchant-rules/canadian-pack-panel.tsx) shipped
  * its install/remove-all/review-update confirmations as three inline `useState` disclosures --
  * not because that was a considered choice, but because the brief that produced that file spelled
@@ -88,7 +88,7 @@ import { Card, CardBody, CardHeader } from '@/components/ui/Card';
  * The one carve-out this docblock used to name -- "a page-level panel that only ever previews a
  * safe, reversible, non-destructive operation with nothing to lose has no obligation to become a
  * dialog", with merchant-rules-client.tsx's inline "Re-run rules" preview as its worked example --
- * was RETIRED in v1.24.0 at the owner's ask, and the reason is worth keeping rather than quietly
+ * was RETIRED in v1.24.0 at the reported ask, and the reason is worth keeping rather than quietly
  * deleting. The reasoning was locally sound: a re-run only ever adds, so there was nothing
  * destructive to weigh. What it could not see is that the same page's Delete-and-clear now asks
  * the SAME question ("all time, or a date range?") in a dialog, and leaving the re-run inline

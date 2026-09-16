@@ -113,7 +113,7 @@ function answerDetect(rows: BatchRow[]): ReturnType<typeof vi.fn> {
 }
 
 /**
- * 2026-09-15. The owner's ask: "throughwing all together lets app handle the process".
+ * 2026-09-15. The reported ask: drop everything at once and let the app work through it.
  *
  * WHAT THIS FILE DOES NOT COVER: whether a file was classified correctly. Ruling B1 puts that
  * entirely in the detectors, and tests/lib/import/batch.test.ts covers the routing between them
@@ -180,7 +180,7 @@ describe('BatchClient: the list', () => {
 });
 
 /**
- * The owner's own choice, asked and answered on 2026-09-15: "Likely is enough, but show me first."
+ * Chosen deliberately on 2026-09-15: "Likely is enough, but show me first."
  * The group button must not be the thing that writes.
  */
 describe('BatchClient: nothing commits without a confirmation', () => {
@@ -192,7 +192,7 @@ describe('BatchClient: nothing commits without a confirmation', () => {
   });
 
   /**
-   * The headline is what will ARRIVE, not how many rows were read. The owner's screenshots were of
+   * The headline is what will ARRIVE, not how many rows were read. The a reported screens were of
    * six files holding 180 rows between them, 179 of which were already in -- "180 rows" would have
    * been true and useless.
    */
@@ -211,7 +211,7 @@ describe('BatchClient: nothing commits without a confirmation', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  /** And the same on the list itself, per file, which is where the owner asked for it. */
+  /** And the same on the list itself, per file, which is where what was asked for it. */
   it('says what each file will import, on its own row', async () => {
     answerDetect([row({ filename: 'jan.csv', counts: { totalRows: 7, duplicateCount: 6, errorCount: 0, willImport: 1 } })]);
     render(<BatchClient {...props} />);
@@ -308,7 +308,7 @@ describe('BatchClient: opening one row', () => {
 });
 
 /**
- * 2026-09-15, owner report on v1.44.1 with screenshots: "when i click on the row that said ready it
+ * 2026-09-15, reported after v1.44.1: "when i click on the row that said ready it
  * took me to old page. it should have view rows option whichi should take me to last screenshot
  * similar to what i used to see."
  *
@@ -371,7 +371,7 @@ describe('BatchClient: opening a row goes straight to the rows', () => {
 });
 
 /**
- * 2026-09-15, owner report on v1.44.1: "i should also have a history button on new page to take me
+ * 2026-09-15, reported after v1.44.1: "i should also have a history button on new page to take me
  * to page that shows me history of what was imported like in older screenshot."
  *
  * History was a card inside ImportClient, so the moment the batch screen became what the page
@@ -379,48 +379,103 @@ describe('BatchClient: opening a row goes straight to the rows', () => {
  * a release earlier, and the reason both happened is that the landing surface changed and the
  * things bolted to the old one came unstuck.
  */
-describe('BatchClient: history is on the landing screen', () => {
+describe('BatchClient: history is a reference, not part of importing', () => {
   const entry: ImportHistoryRow = {
     id: 12,
     accountId: 7,
     profileId: 3,
     createdAt: '2026-09-15T19:51:00.000Z',
-    accountName: 'Joint - CC Amex',
+    accountName: 'Joint Chequing',
     filename: 'activity.csv',
     importedBy: 1,
-    importedByName: 'Jot',
+    importedByName: 'Alex',
     rowsAdded: 6,
     rowsDuplicate: 109,
     rowsError: 0,
   };
 
-  it('shows past imports before anything has been dropped', () => {
+  it('stays out of the way until it is asked for', () => {
     render(<BatchClient {...props} history={[entry]} />);
-    expect(screen.getByText('History')).toBeTruthy();
-    expect(screen.getByText('activity.csv')).toBeTruthy();
+    expect(screen.queryByText('activity.csv')).toBeNull();
+    expect(screen.getByText('Show history')).toBeTruthy();
   });
 
-  it('keeps the undo beside each one', () => {
+  it('opens on the toggle, undo and all', () => {
     render(<BatchClient {...props} history={[entry]} />);
+    fireEvent.click(screen.getByText('Show history'));
+    expect(screen.getByText('activity.csv')).toBeTruthy();
     expect(screen.getByText('Undo')).toBeTruthy();
   });
 
-  it('is still there once a drop has produced a list', async () => {
-    answerDetect([row({ filename: 'jan.csv' })]);
+  it('closes again', () => {
     render(<BatchClient {...props} history={[entry]} />);
-    dropFiles(['jan.csv']);
-    await waitFor(() => expect(screen.getByText('jan.csv')).toBeTruthy());
-    expect(screen.getByText('activity.csv')).toBeTruthy();
+    fireEvent.click(screen.getByText('Show history'));
+    fireEvent.click(screen.getByText('Hide history'));
+    expect(screen.queryByText('activity.csv')).toBeNull();
   });
 
-  /** The wizard keeps its own copy, so opening a file does not lose the list either. */
-  it('is still there inside the wizard a row opens', async () => {
+  /**
+   * A long table of past imports underneath the rows you are deciding about answers a question
+   * nobody is asking at that moment.
+   */
+  it('is absent entirely from the screen a row opens', async () => {
     answerDetect([row({ filename: 'jan.csv' })]);
     render(<BatchClient {...props} history={[entry]} />);
     dropFiles(['jan.csv']);
     await waitFor(() => expect(screen.getByText('jan.csv')).toBeTruthy());
     fireEvent.click(within(screen.getByTestId('batch-list')).getByText('View rows'));
     await waitFor(() => expect(screen.getByText(/7 rows, 6 duplicates/)).toBeTruthy());
-    expect(screen.getByText('activity.csv')).toBeTruthy();
+    expect(screen.queryByText('History')).toBeNull();
+    expect(screen.queryByText('activity.csv')).toBeNull();
+  });
+});
+
+/**
+ * Viewing a file's rows used to offer exactly one way out: import it. The way back was a small
+ * link at the top of a page long enough to scroll it out of sight, which reads as no way back at
+ * all -- so looking at a file meant committing to it or losing the batch.
+ */
+describe('BatchClient: three ways out of a file, not one', () => {
+  const openFirstRow = async () => {
+    render(<BatchClient {...props} />);
+    dropFiles(['jan.csv']);
+    await waitFor(() => expect(screen.getByText('jan.csv')).toBeTruthy());
+    fireEvent.click(within(screen.getByTestId('batch-list')).getAllByText('View rows')[0]!);
+    await waitFor(() => expect(screen.getByText(/7 rows, 6 duplicates/)).toBeTruthy());
+  };
+
+  it('offers import, discard and back together, where the decision is made', async () => {
+    answerDetect([row({ filename: 'jan.csv' })]);
+    await openFirstRow();
+    expect(screen.getByText('Import 1 transactions')).toBeTruthy();
+    expect(screen.getByText('Discard this file')).toBeTruthy();
+    expect(screen.getByText('Back to the list')).toBeTruthy();
+  });
+
+  it('back keeps the file on the list', async () => {
+    answerDetect([row({ filename: 'jan.csv' }), row({ filename: 'feb.csv' })]);
+    await openFirstRow();
+    fireEvent.click(screen.getByText('Back to the list'));
+    await waitFor(() => expect(screen.getByText('jan.csv')).toBeTruthy());
+    expect(screen.getByText('feb.csv')).toBeTruthy();
+  });
+
+  it('discard drops that file and leaves the rest of the batch alone', async () => {
+    answerDetect([
+      row({ filename: 'jan.csv', stagingId: '11111111-1111-4111-8111-111111111111' }),
+      row({ filename: 'feb.csv', stagingId: '33333333-3333-4333-8333-333333333333' }),
+    ]);
+    await openFirstRow();
+    fireEvent.click(screen.getByText('Discard this file'));
+    await waitFor(() => expect(screen.getByText('feb.csv')).toBeTruthy());
+    expect(screen.queryByText('jan.csv')).toBeNull();
+  });
+
+  it('discard writes nothing', async () => {
+    const fetchMock = answerDetect([row({ filename: 'jan.csv' })]);
+    await openFirstRow();
+    fireEvent.click(screen.getByText('Discard this file'));
+    await waitFor(() => expect(screen.getByText('Drop your statements')).toBeTruthy());
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('/commit'))).toBe(false);
   });
 });

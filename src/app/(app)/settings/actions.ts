@@ -173,13 +173,13 @@ export async function confirmTotpEnrollmentAction(_prev: ProfileFormState, formD
  * v1.12.1 (item AA / SEC-4). This took no password, no current code and no confirmation beyond a
  * button click, so anyone at an unlocked browser -- or holding a stolen session cookie -- could
  * strip the account's second factor in one click and convert a temporary foothold into a durable
- * one, with the owner never told. Enrollment is done carefully by comparison: the candidate secret
+ * one, with the report never told. Enrollment is done carefully by comparison: the candidate secret
  * is held server-side in an encrypted, short-lived cookie precisely so a client cannot supply its
  * own. The teardown was the unprotected half of the pair.
  *
  * Three changes, matching what the ADMIN MFA reset already does
  * (src/app/(app)/settings/users/actions.ts:96): the current password is verified with the same
- * block changePasswordAction uses, every other session is destroyed, and the owner is told.
+ * block changePasswordAction uses, every other session is destroyed, and the report is told.
  */
 export async function disableTotpAction(_prev: ProfileFormState, formData: FormData): Promise<ProfileFormState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
@@ -260,7 +260,7 @@ export interface UpdateActionState {
   message?: string;
   /**
    * Task 3d (symptom A). The design bet, recorded in the v1.13.1 comment below, was that Next
-   * re-streams fresh server-component props as part of the action response. The owner's report
+   * re-streams fresh server-component props as part of the action response. The report
    * is that on this install they do not arrive: Check now says a version is available while the
    * card header still reads "Up to date" until the page is reloaded by hand.
    *
@@ -451,7 +451,7 @@ export async function checkForUpdateNowAction(_prev: UpdateActionState, formData
   /**
    * NO revalidatePath HERE, and this is the one action where that matters.
    *
-   * Owner report, 2026-09-09: "when i press check for updates it goes to this page and stays
+   * Reported 2026-09-09: "when i press check for updates it goes to this page and stays
    * there until a refresh." The button's label comes from useActionState's `checkPending`
    * (updates-client.tsx, v1.32.0 UP-1), which stays true for the WHOLE transition — the GitHub
    * request AND everything a revalidation causes to re-render behind it. UPDATE_PATH is

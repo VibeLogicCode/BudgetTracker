@@ -186,7 +186,7 @@ describe('what an attribution rule affects, and what "Apply now" does', () => {
    * Ruling P10: never inside runEngine. ELIGIBLE protects a human CATEGORY decision through
    * categorization_source; attributed_user_id has no source column, so a re-run could not tell a
    * person somebody set by hand from the account-owner fallback and would overwrite the hand edit.
-   * The owner asked for exactly this: "they dont have to be automatic".
+   * What was asked for exactly this: these need not apply automatically.
    */
   it('is never applied by a plain engine run', () => {
     const { admin, other, add } = fixture();

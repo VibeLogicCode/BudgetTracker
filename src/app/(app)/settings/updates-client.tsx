@@ -106,7 +106,7 @@ const RESOLVED_KEYS = [
  * Task 3d (symptom A). Every update action now hands back exactly what it just wrote
  * (actions.ts's UpdateActionState fields); this is the ONE place that decides which source wins
  * when props and several action results might all disagree. An action result beats props,
- * because props may be from a render Next never refreshed (the owner's report); among action
+ * because props may be from a render Next never refreshed (the reported report); among action
  * results the freshest wins.
  *
  * `!== undefined` is deliberate, not a truthiness or `||` test: an action that ran and found
@@ -333,7 +333,7 @@ export function UpdatesClient(props: UpdatesViewProps) {
           v1.32.0 (UP-1). Two things were wrong with this line while a check was running: it said
           "Last checked" beside a request that was, at that moment, deciding whether that stamp
           was still true, and it named no operation and no duration, so fifteen seconds of a
-          working GitHub call and a hung one looked identical. The owner's recording of a real
+          working GitHub call and a hung one looked identical. The reported recording of a real
           update shows them reloading the page at about 22 seconds for exactly that reason.
 
           Of the three ways to stop a stale stamp claiming to be current — hide it, grey it, or

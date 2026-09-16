@@ -354,7 +354,7 @@ export function runEngine(txnIds: number[]): EngineResult {
 }
 
 /**
- * v1.24.0 (owner ask: "can we do date range on this... date should be on re-apply logic too").
+ * v1.24.0 (the ask: "can we do date range on this... date should be on re-apply logic too").
  * Inclusive ISO `YYYY-MM-DD` bounds on transactions.date; null/undefined on either side means
  * unbounded on that side, so `{}` is "all time" and stays the default everywhere.
  *
@@ -634,7 +634,7 @@ export function applyRuleNow(ruleId: number, scope: RuleScope = {}): EngineResul
  * no source column, so a re-run could not tell a person somebody chose by hand from the account
  * owner the importer fell back to -- it would overwrite both. Routing this through runEngine would
  * therefore make every "Run rules" click silently re-decide who every charge belongs to, which is
- * the opposite of the owner's "they dont have to be automatic".
+ * the opposite of the reported these need not apply automatically.
  *
  * This pass DOES overwrite a hand-set person, and that is correct here rather than inconsistent:
  * somebody pressed a button next to a rule that names a person, having been shown the count first.
@@ -829,7 +829,7 @@ export function ruleImpactCounts(ctx: CategorizeContext = buildContext()): Map<n
 }
 
 /**
- * v1.24.0 (owner ask: "user deletes the rule but nothing gets fixed... delete rule and remove it
+ * v1.24.0 (the ask: "user deletes the rule but nothing gets fixed... delete rule and remove it
  * from transactions"). The IDS behind ruleImpactCounts' figure for ONE rule, optionally bounded to
  * a date range. Not a second definition of "affects": each branch below is the same predicate
  * ruleImpactCounts' own branch for that kind uses, narrowed from `count(*)` to a list of ids and
@@ -1004,7 +1004,7 @@ export function ruleClearIds(ruleId: number, scope: RuleScope = {}, ctx: Categor
 }
 
 /**
- * v1.24.0, the owner's actual ask: "when we add a merchant rule and reapply, if the user messes up
+ * v1.24.0, the reported actual ask: "when we add a merchant rule and reapply, if the user messes up
  * the transactions get updated. User deletes the rule but nothing gets fixed... delete rule and
  * remove it from transactions, all or for a date range."
  *
@@ -1389,7 +1389,7 @@ export function clearCategory(input: {
  * does not own it gets the whole action refused -- no row touched, no rule deleted -- exactly
  * as confirmCategory and upsertRuleFromCorrection already refuse for the rule they write.
  *
- * v1.27.0 item 1 (the owner's report, verbatim: "when i add items to loan they are marked
+ * v1.27.0 item 1 (reported: "when i add items to loan they are marked
  * transfer by default but it also adds a rule ... next time i buy from best buy woodbridge i
  * dont want it to automatically caretgorize it as transfer"). `learnRule` splits the two things
  * this function used to do as one -- see its own docblock just below.
@@ -1401,7 +1401,7 @@ export function setTransferFlag(input: {
   /** The ACTOR's role, not the rule's. An admin may write over anyone's rule. */
   actorRole: 'admin' | 'member';
   /**
-   * v1.27.0 item 1 (the owner's report). REQUIRED, with no default, so the compiler makes every
+   * v1.27.0 item 1 (the reported report). REQUIRED, with no default, so the compiler makes every
    * call site say what it means -- the same shape, for the same bug class, as clearCategory's
    * `deleteRule` above: a per-row UI action silently rewriting household-wide rules.
    *

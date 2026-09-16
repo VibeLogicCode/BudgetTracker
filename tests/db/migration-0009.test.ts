@@ -345,7 +345,7 @@ describe('budget_rollover constraints', () => {
  * Coverage-gap fix (final pre-release review, 2026-08-22): migrations 0004 and 0008 each carry
  * an "idempotent reboot" test and an "upgrade from a pre-migration database" test; 0009 only
  * ever exercised a fresh single-shot install. This matters for a concrete, near-term reason:
- * the owner is about to purge and re-import on real data, and the restore-from-backup path
+ * the report is about to purge and re-import on real data, and the restore-from-backup path
  * re-runs migrations on the next boot -- so the upgrade path below is a real first-week
  * scenario, not a hypothetical one.
  */

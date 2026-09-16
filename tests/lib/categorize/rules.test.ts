@@ -830,7 +830,7 @@ describe('ruling R4 (item AH / SEC-6): a member cannot overwrite another person 
 });
 
 /**
- * 2026-09-13, the owner's report: "insurance is with same company but different amount but
+ * 2026-09-13, the report: "insurance is with same company but different amount but
  * imported categorizes the last setting i do so everything goes to home or auto. can i set in
  * rule vendor + amount rule?"
  *
@@ -860,7 +860,7 @@ describe('matchRule: a rule that is about an amount as well as a merchant', () =
   it('files the charge inside the window by the bounded rule, even though it is the NEWER row', () => {
     const { bounded, rules } = twoPolicies();
     // Both rules tie on pattern length and match type, so the pre-0024 chain would hand this to
-    // the lower id -- the merchant-wide rule, which is exactly the owner's complaint.
+    // the lower id -- the merchant-wide rule, which is exactly the reported complaint.
     expect(matchRule('ACME INSURANCE', 'category', rules, -14012)?.id).toBe(bounded);
   });
 

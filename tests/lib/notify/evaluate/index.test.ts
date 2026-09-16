@@ -141,7 +141,7 @@ describe('the weekly digest existence pre-check', () => {
 });
 
 /**
- * Owner report, 2026-09-08: "it shouldnt send notifications on boot. when it reboots it sends
+ * Reported 2026-09-08: "it shouldnt send notifications on boot. when it reboots it sends
  * notifications about budget."
  *
  * The boot pass exists for SLOT catch-up (MUST-6.1) -- a container that was off overnight still
@@ -166,7 +166,7 @@ describe('the boot pass does not fire tick-triggered events', () => {
   it('never fires per-category budget alerts at all -- they are a section of the weekly summary now', () => {
     const budgets = vi.spyOn(budgetModule, 'evaluateBudgets').mockReturnValue(0);
     try {
-      // Both paths. The owner's complaint was six messages for four budgets; the figures moved
+      // Both paths. The reported complaint was six messages for four budgets; the figures moved
       // into the digest (evaluate/digest.ts, collectBudgets) and this evaluator stopped running.
       runScheduledEvaluation(new Date('2026-09-08T12:00:00Z'), { atBoot: true });
       runScheduledEvaluation(new Date('2026-09-08T12:05:00Z'));

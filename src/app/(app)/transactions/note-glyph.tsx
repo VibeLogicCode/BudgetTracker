@@ -1,5 +1,5 @@
 /**
- * Owner report, second rejection (2026-08-30): the note indicator's glyph was `NoteIcon` from
+ * Reported, second rejection (2026-08-30): the note indicator's glyph was `NoteIcon` from
  * src/components/ui/icons.tsx, which is lucide's `StickyNote` -- a page with a folded corner. That
  * reads as "here is a generic document", not "there is a note attached to this charge", which is
  * the one thing this glyph exists to say at a glance. src/components/ui/icons.tsx is held by

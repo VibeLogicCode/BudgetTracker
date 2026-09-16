@@ -5,7 +5,7 @@
  * `padded={false}` is for cards whose child bleeds to the edge — a table or a
  * chart — so the border radius clips it instead of floating inside a gutter.
  *
- * Padding tightened from `p-5 sm:p-6` to `p-4 sm:p-5` (the owner's "too much wasted space"
+ * Padding tightened from `p-5 sm:p-6` to `p-4 sm:p-5` (the reported "too much wasted space"
  * complaint) across every sub-component below; `.card` itself (globals.css) dropped its
  * box-shadow in the same pass, so a card's edge is carried by the hairline border alone.
  */

@@ -66,7 +66,7 @@ describe('subscription wording (MUST-19.10 / MUST-19.11)', () => {
  * v1.2.2 Task 2 controller ruling: `purchaseDateLabel`, `termLabel`, `expiryDateLabel` and
  * `coveredThroughLabel` (the boolean-keyed detail/form label helpers) are DELETED, superseded
  * by the kind-keyed matrix below -- not kept as wrappers, unlike expiryNoun/expiryPhrase/
- * expiringSoonLabel above. The owner approved the resulting wording changes as deliberate.
+ * expiringSoonLabel above. The report approved the resulting wording changes as deliberate.
  * Old -> new, logged here so the change is traceable from the test that used to pin the old
  * text:
  *

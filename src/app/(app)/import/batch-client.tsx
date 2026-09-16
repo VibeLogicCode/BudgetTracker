@@ -16,9 +16,9 @@ import type { ImportHistoryRow } from '@/lib/import/commit';
 /**
  * 2026-09-15. Ten statements dropped at once, detected together, shown as one list.
  *
- * The owner's complaint, verbatim: "i download 10 files nd then 1 by 1 i g through it and sometimes
- * i import same ile again. throughwing all together lets app handle the process". The design and
- * its rulings are docs/superpowers/specs/2026-09-15-batch-import-design.md.
+ * The reported problem: ten statements downloaded in one sitting, then fed in one at a time,
+ * with the occasional file imported twice because nothing said it had already been done. The
+ * design and its rulings are docs/superpowers/specs/2026-09-15-batch-import-design.md.
  *
  * WHAT THIS COMPONENT IS NOT. It is not a second import screen. It decides nothing about a file --
  * every status on it comes from the SAME two detectors the one-file page uses (ruling B1), and
@@ -79,6 +79,7 @@ export function BatchClient(props: {
   const [outcomes, setOutcomes] = useState<CommitOutcome[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
 
   const ready = useMemo(() => (rows ?? []).filter((row) => row.status === 'ready'), [rows]);
 
@@ -199,6 +200,14 @@ export function BatchClient(props: {
               }
         }
         onBackToList={() => setOpen(null)}
+        onDiscard={() => {
+          // Off the list and back to it. The staged bytes are left to the ordinary sweep that
+          // clears DATA_DIR/tmp (src/lib/import/staging.ts) rather than deleted through a route
+          // of their own -- discarding is a change of mind about importing, not a demand that
+          // something be erased, and the sweep already owns that file's lifetime.
+          setRows((previous) => (previous ?? []).filter((entry) => entry.stagingId !== open.stagingId));
+          setOpen(null);
+        }}
       />
     );
   }
@@ -306,7 +315,7 @@ export function BatchClient(props: {
             }
           />
 
-          {/* "Likely is enough, but show me first" -- the owner's own choice, asked and answered on
+          {/* "Likely is enough, but show me first" -- chosen deliberately on
               2026-09-15. The group button opens this rather than committing, so the one screen
               nobody previewed is still a screen somebody accepted. */}
           {!confirming ? null : (
@@ -389,7 +398,7 @@ export function BatchClient(props: {
                         The click target says what it does. A whole row that is silently a button
                         is a guess, and the two things a row can lead to are genuinely different:
                         a file we could read opens on its rows, one we could not opens on the
-                        pickers that fix it (owner report, 2026-09-15).
+                        pickers that fix it (reported 2026-09-15).
                       */}
                       {!openable ? null : (
                         <span className="text-sm font-medium text-accent-text underline underline-offset-2">
@@ -407,13 +416,22 @@ export function BatchClient(props: {
       )}
 
       {/*
-        2026-09-15. History lives on the landing screen, not one click in. It used to be a card
-        inside ImportClient, which meant that the moment this screen became what the page opens on,
-        "what did I import, and can I take it back" vanished unless you happened to click a file
-        first. The owner reported it. Inline at the bottom, exactly where it always was, rather
-        than behind a button: it is a thing you glance at, and a glance should not cost a click.
+        Behind a toggle, and only on this screen. History is a reference -- "what did I bring in,
+        and can I take it back" -- not part of importing, and a long table under the thing you are
+        working on is noise most of the time. It is gone entirely from the single-file view, where
+        it answered a question nobody was asking at that moment.
       */}
-      <ImportHistoryCard history={history} />
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={() => setShowHistory((shown) => !shown)}
+          aria-expanded={showHistory}
+          className={buttonClass('secondary', 'sm')}
+        >
+          {showHistory ? 'Hide history' : 'Show history'}
+        </button>
+      </div>
+      {showHistory ? <ImportHistoryCard history={history} /> : null}
     </div>
   );
 }

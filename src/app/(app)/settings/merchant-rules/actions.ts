@@ -373,7 +373,7 @@ export async function previewRuleClearAction(
 }
 
 /**
- * v1.24.0, the owner's ask in full: "delete rule and un-apply from transactions... showing user
+ * v1.24.0, the reported ask in full: "delete rule and un-apply from transactions... showing user
  * this cannot be undone, this will update transactions, all date ranges or user chooses".
  *
  * CLEAR FIRST, DELETE SECOND, and the order is load-bearing: attribution is derived, never stored

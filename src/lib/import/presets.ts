@@ -51,7 +51,7 @@ export const BUILTIN_PRESETS: Record<BuiltinPresetName, BuiltinPreset> = {
       cardCol: null,
       // Real export (fixture-validated 2026-08-16, same file as the dateFormat note above):
       // a fifth column carrying the account's running balance after each row. This is the
-      // ONE built-in preset that ships v1.8.0's balanceCol pre-mapped — the owner's real TD
+      // ONE built-in preset that ships v1.8.0's balanceCol pre-mapped — the reported real TD
       // Chequing/Debit statement is the file that motivated the whole feature (spec
       // 2026-08-23 Task 3).
       balanceCol: 4,
@@ -148,7 +148,7 @@ export const BUILTIN_PRESETS: Record<BuiltinPresetName, BuiltinPreset> = {
    *   Account Type, Account Number, Transaction Date, Cheque Number, Description 1, Description 2, CAD$, USD$
    * Guessed: that Transaction Date is MM/DD/YYYY (RBC's own docs show both, by locale) and that the
    * CAD$ column is signed with debits negative. Both are the FIRST things to check against a real
-   * file. Everything else is read straight off that header. Ask the owner for one redacted header
+   * file. Everything else is read straight off that header. Ask the report for one redacted header
    * line and delete this paragraph when it matches.
    */
   'RBC Chequing/Visa': {

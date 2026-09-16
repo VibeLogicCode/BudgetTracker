@@ -206,7 +206,7 @@ describe('the help page explains loan direction (spec BU)', () => {
   });
 
   /**
-   * 2026-09-13, the owner: "insurance is with same company but different amount but imported
+   * 2026-09-13, the report: "insurance is with same company but different amount but imported
    * categorizes the last setting i do so everything goes to home or auto" and "think about person
    * too... even sets household, or individual person."
    *

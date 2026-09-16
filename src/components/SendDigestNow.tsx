@@ -46,7 +46,7 @@ export function SendDigestNow({ canNotifyHousehold }: { canNotifyHousehold: bool
 
   return (
     /**
-     * Owner report, 2026-09-08: "doesnt fit the width or height of add transaction, seems out of
+     * Reported 2026-09-08: "doesnt fit the width or height of add transaction, seems out of
      * place". Two separate mistakes, both here.
      *
      * HEIGHT: the button carried `btn btn--secondary btn--sm` and stopped there, while

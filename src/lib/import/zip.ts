@@ -3,8 +3,8 @@ import { MAX_FILE_BYTES } from './parse';
 
 /**
  * 2026-09-15, rulings B11 and B12. A zip of statements, opened so the files inside can be imported
- * like any other drop. The owner asked for it in the first sentence of the request: "if its a zip
- * it should inzip and import".
+ * like any other drop. Asked for alongside the multi-file drop: an archive should be opened and
+ * its contents imported.
  *
  * WHY THIS IS HAND-WRITTEN rather than a dependency (ruling B12). `tar` is in this app's
  * dependencies for backups; zip is a different container and no zip library is present. The part

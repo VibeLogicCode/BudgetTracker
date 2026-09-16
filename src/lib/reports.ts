@@ -471,7 +471,7 @@ export interface TopMerchantRow {
 /**
  * v1.21.0 plan, item 8b. Before this fix, a big-box store split across several
  * `normalized_merchant` values (differing store numbers/city suffixes normalize.ts's
- * deterministic rules do not strip) stayed split here even after the owner wrote a `contains
+ * deterministic rules do not strip) stayed split here even after the report wrote a `contains
  * WALMART -> Walmart` rename rule -- that rule already relabels the Transactions list (it writes
  * `display_description`/`display_source = 'rename'` at engine.ts:793), but this report grouped
  * and displayed `transactions.normalized_merchant` directly and never consulted it.

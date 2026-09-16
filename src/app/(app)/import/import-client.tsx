@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from 'react';
 import { FileDrop } from '@/components/FileDrop';
 import { MappingEditor } from '@/components/MappingEditor';
 import { SubmitButton } from '@/components/SubmitButton';
-import { ImportHistoryCard } from '@/components/ImportHistoryCard';
 import { AutoSaveSelect, type AutoSaveResult } from '@/components/ui/AutoSave';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { Money } from '@/components/ui/Money';
@@ -200,15 +199,14 @@ const fileInputClass =
 export function ImportClient({
   accounts,
   profiles,
-  history,
   simplefinManaged,
   people = [],
   initialDetection = null,
   onBackToList,
+  onDiscard,
 }: {
   accounts: AccountOption[];
   profiles: ProfileOption[];
-  history: ImportHistoryRow[];
   simplefinManaged: string[];
   /**
    * Active users, offered on each card value's person select (MUST-6.1). Optional and
@@ -229,8 +227,10 @@ export function ImportClient({
    * choose change of v1.37.0 was written to kill.
    */
   initialDetection?: DetectionResult | null;
-  /** Rendered as "Back to the list" when the batch screen owns this component. */
+  /** Return to the file list, keeping every other file in the batch. */
   onBackToList?: () => void;
+  /** Drop this file from the batch without importing it. Absent outside the batch screen. */
+  onDiscard?: () => void;
 }) {
   /*
     THE `?? 0` WHEN A DETECTION IS PRESENT IS LOAD-BEARING, and it is detectFrom's own rule
@@ -275,7 +275,7 @@ export function ImportClient({
   const [summary, setSummary] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // v1.26.0 Lane 3b. The post-commit offer to inspect what rules did (the owner: "i still need
+  // v1.26.0 Lane 3b. The post-commit offer to inspect what rules did (the report: "i still need
   // to confirm or deny no? i dont just want to auto apply rules and never see what happened on
   // my import."). Its own state rather than folded into `summary` -- the offer carries an
   // importId a plain string cannot, and it must be cleared by a fresh preview the same way
@@ -324,7 +324,7 @@ export function ImportClient({
   /**
    * Hop 1, on CHOOSING the file rather than on pressing Preview.
    *
-   * Owner report, 2026-09-13 (screenshot): a Scotiabank file chosen, and the two selects still
+   * Reported 2026-09-13: a Scotiabank file chosen, and the two selects still
    * showing the previous account and TD Visa. The card's own sentence -- "The account and the
    * profile are set from what is in the file" -- was true only after Preview, which is not when
    * somebody reads it. So the file is posted, staged and read the moment it is chosen, and the
@@ -355,7 +355,7 @@ export function ImportClient({
       // rather than a fallback of its own, so "no answer" and "this answer" stay distinguishable.
       /**
        * A detection that could not tell BLANKS the picker rather than leaving whatever was there.
-       * The owner's case: a Scotiabank file dropped while the selects still read "TD Visa" is a
+       * The reported case: a Scotiabank file dropped while the selects still read "TD Visa" is a
        * page quietly proposing to import a statement into the wrong account with the wrong
        * mapping, and a pre-armed wrong answer is worse than an empty one -- dedup is per account,
        * so a mis-aimed import writes a second copy of every row rather than merging.
@@ -419,7 +419,7 @@ export function ImportClient({
   }
 
   /**
-   * 2026-09-15, owner report on v1.44.1: "when i click on the row that said ready it took me to old
+   * 2026-09-15, reported after v1.44.1: "when i click on the row that said ready it took me to old
    * page. it should have view rows option whichi should take me to last screenshot".
    *
    * When the batch screen opens a row it hands over a file that is ALREADY staged, with both
@@ -741,7 +741,7 @@ export function ImportClient({
               )}
               {/*
                 A drop zone asking for a file that is already loaded is what made the batch screen
-                confusing (owner screenshot, 2026-09-15): the card said "Choose a file" over an
+                confusing (reported 2026-09-15): the card said "Choose a file" over an
                 empty control while the file sat staged on the server. When this component was
                 opened ON a file, the control is replaced by the file's own name -- the two pickers
                 below it still do everything they did, so nothing is taken away.
@@ -771,7 +771,7 @@ export function ImportClient({
                   value={accountId}
                   // Disabled until a file is chosen: these are answers ABOUT a file, and before
                   // there is one they would be showing a leftover account as though it meant
-                  // something (owner screenshot, 2026-09-13). Disabled rather than hidden, so the
+                  // something (reported 2026-09-13). Disabled rather than hidden, so the
                   // choice is visibly there and the card does not jump when it appears.
                   disabled={!hasFile}
                   onChange={(e) => {
@@ -1000,20 +1000,31 @@ export function ImportClient({
               </details>
             ) : null}
 
-            <div className="flex items-center gap-3 border-t border-line pt-4">
+            {/*
+              Three ways out, together, at the point the decision is made. There used to be one --
+              import -- with the way back a small link at the top of a long page, which reads as no
+              way back at all once the rows have scrolled it off screen. A screen that shows you
+              something and offers only the irreversible action is not offering a choice.
+            */}
+            <div className="flex flex-wrap items-center gap-3 border-t border-line pt-4">
               <StepMark n={3} state="active" />
               <button type="button" onClick={() => void commit()} disabled={busy} className={buttonClass('primary', 'lg')}>
                 Import {preview.totalRows - preview.duplicateCount} transactions
               </button>
+              {onDiscard === undefined ? null : (
+                <button type="button" onClick={onDiscard} disabled={busy} className={buttonClass('secondary')}>
+                  Discard this file
+                </button>
+              )}
+              {onBackToList === undefined ? null : (
+                <button type="button" onClick={onBackToList} disabled={busy} className={buttonClass('ghost')}>
+                  Back to the list
+                </button>
+              )}
             </div>
           </CardBody>
         </Card>
       ) : null}
-
-      {/* 2026-09-15: extracted to src/components/ImportHistoryCard.tsx so the batch screen can
-          show it too -- History used to live only here, which put it one click out of reach the
-          moment that screen became the landing surface. Same table, same undo, same rows. */}
-      <ImportHistoryCard history={history} />
 
       <p className="text-sm text-muted">
         Importing from a bank that is not listed? Either adjust the columns in the preview editor above (editing a built-in profile automatically saves a

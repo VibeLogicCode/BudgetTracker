@@ -991,7 +991,7 @@ describe('v1.18.0 Lane 2 items 1-2: a group collapses, and its header already ca
 });
 
 /**
- * v1.21.0 item 2 (owner's screenshot: a parent reading $628.55 over children totalling
+ * v1.21.0 item 2 (reported: a parent reading $628.55 over children totalling
  * $183.55, because the direct-to-parent spend counted in the headline but rendered nowhere).
  * These render the card grid (the default mode -- "View breakdown", not Edit limits), since
  * that is where BudgetCategoryCard's breakdown -- and this new row inside it -- lives.

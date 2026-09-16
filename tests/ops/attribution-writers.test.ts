@@ -17,7 +17,7 @@ function walk(dir: string): string[] {
 
 /** The repo's established stripComments pattern. It matters more than usual here: three of the
  *  writers below argue about this order at length in prose, and src/lib/attribution.ts quotes the
- *  owner's own words. A guard that punished explaining the order would get its docblocks deleted. */
+ *  the reported wording. A guard that punished explaining the order would get its docblocks deleted. */
 function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
 }

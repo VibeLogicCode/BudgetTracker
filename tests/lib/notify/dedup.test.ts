@@ -252,7 +252,7 @@ describe('MUST-3.12: a year of daily evaluations against a fixed item set', () =
          * is genuinely nothing new to report — and the app now says nothing instead of sending 52
          * summaries about a week in which, as far as it knows, nothing happened.
          *
-         * That is the owner's complaint answered at the root: "i only import data on sundays i
+         * That is the reported complaint answered at the root: "i only import data on sundays i
          * dont want daily messages". A summary about no new data is the definition of noise.
          */
         weekly_digest: 7,

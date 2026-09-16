@@ -232,7 +232,7 @@ export interface SinkingFund {
  * to what the bills side already has (an unpaid installment on a linked item) so the row can
  * say what it is saving for.
  *
- * The owner explicitly refused a per-category monthly target: rollover IS the envelope, and
+ * The report explicitly refused a per-category monthly target: rollover IS the envelope, and
  * this is the sentence that makes it legible. Do not add a target column here later without
  * reopening R11.
  *

@@ -251,7 +251,7 @@ export function startScheduler(): void {
   // next cron tick. The update check goes first, ahead of the notification tick.
   runUpdateTick();
   // atBoot: slot catch-up still runs (MUST-6.1); budget/anomaly/savings-target alerts do not.
-  // Owner report 2026-09-08 -- a restart should not produce a burst of alerts.
+  // Reported 2026-09-08 -- a restart should not produce a burst of alerts.
   runNotifyTick(new Date(), { atBoot: true });
   // Task 8: same reasoning as the two ticks above -- a container that was off catches up on
   // a due auto-sync immediately at boot rather than waiting up to five minutes.

@@ -23,7 +23,7 @@ export interface CommitFlowResult {
   needsReview: number;
   /**
    * v1.26.0 Lane 2 item 4. How many of the rows this import ADDED came out of the engine carrying
-   * `categorization_source = 'rule'` -- the number the owner's objection is about ("i dont just want
+   * `categorization_source = 'rule'` -- the number the the objection raised is about ("i dont just want
    * to auto apply rules and never see what happened on my import"). Distinct from
    * EngineResult.categorized, which counts rule and Bayes assignments together, and from
    * `needsReview` above, which by construction EXCLUDES every one of these rows: REVIEW_WHERE

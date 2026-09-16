@@ -60,7 +60,7 @@ export function buildSavingsSeries(data: SavingsChartRow[]): SavingsSeriesPoint[
 }
 
 /**
- * v1.21.0 plan, item 5. Rebuilt after the owner's screenshot showed a chart with three separate
+ * v1.21.0 plan, item 5. Rebuilt after a reported screen showed a chart with three separate
  * defects, all traced to the same root cause: this used to be ONE chart carrying five series
  * across two y-axes. The `dataviz` skill's first rule is "one axis -- two measures of different
  * scale become two charts, never a dual-axis chart" (the skill's own #1 chart mistake), and every
@@ -75,7 +75,7 @@ export function buildSavingsSeries(data: SavingsChartRow[]): SavingsSeriesPoint[
  *    series rendered as near-identical purple lines at two different scales, so the legend could
  *    not be matched back to the plot.
  *
- * The fix the plan agreed with the owner is exactly the skill's own remedy: split into two
+ * The fix the plan agreed with the report is exactly the skill's own remedy: split into two
  * charts, one axis each. Bars for Income/Spend plus the Net/Target lines that are directly
  * comparable to them (same "one month's flow" scale) stay together in `MonthlyFlowChart`;
  * Cumulative saved -- the only series with a running-total scale -- gets its own smaller chart

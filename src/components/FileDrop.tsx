@@ -51,8 +51,8 @@ export interface RejectedFile {
  * when exactly one file may land. For many files it is the wrong question: the realistic drop is a
  * bank folder holding nine statements and a PDF, and refusing all ten because of the one would be
  * worse than the one-at-a-time flow it replaces. So this partitions instead of judging, and the
- * caller imports the good ones while saying what it skipped -- which is what the owner asked for
- * ("icase onf the files is not supported it should handle it accodingy").
+ * caller imports the good ones while saying what it skipped -- which is what was asked for
+ * (an unsupported file should be handled gracefully rather than refusing the drop).
  *
  * The per-file reason is `rejectionFor`'s own sentence, so both modes refuse a .pdf in the same
  * words.
@@ -116,7 +116,7 @@ export interface FileDropProps {
    * Whether to echo the chosen filename under the control. Default true, and there is now no
    * reason for any caller to turn it off: the native input is visually hidden (see the render
    * below), so this is the ONLY place a filename appears. It was added when the browser's own
-   * widget printed the name as well and the import page showed it twice (owner screenshot,
+   * widget printed the name as well and the import page showed it twice (reported,
    * 2026-09-13); the prop survives because a caller that shows the name in its own summary line
    * may still legitimately not want it repeated here.
    */
@@ -253,7 +253,7 @@ export function FileDrop({
           It is hidden because a file input's button is drawn by the operating system and cannot be
           styled at all: on this app's dark surface it renders as a pale grey "Choose File / No
           file chosen" rectangle that matches nothing around it, and it prints its own filename
-          beside our own. The owner reported exactly that, twice (2026-09-13 and again on v1.38.0).
+          beside our own. Reported directly, twice (2026-09-13 and again on v1.38.0).
           The label below is the button instead.
         */}
         <input

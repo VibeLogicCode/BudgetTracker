@@ -5,7 +5,7 @@ import { listCategories } from '@/lib/categories';
 import { findUserById, listAttributablePeople } from '@/lib/auth/users';
 import { loanLinksForTransactions, listLoans } from '@/lib/loans';
 import { resolveRenameRule, reviewQueueCount } from '@/lib/categorize/engine';
-// v1.26.0 Lane 1 (owner report: "shows amazon i dont know what orignal entry was so maybe its
+// v1.26.0 Lane 1 (reported: "shows amazon i dont know what orignal entry was so maybe its
 // wrong maybe its not"). Read-only imports: listRules for the rule set, and (v1.31.0 R-09)
 // resolveRenameRule from the engine for the resolution itself -- this page used to spell the
 // resolution out with matchRule plus its own emptiness test, which was a second definition of
@@ -27,7 +27,7 @@ import { TransactionsClient } from './transactions-client';
 export const dynamic = 'force-dynamic';
 
 /**
- * Bug fix (owner report): TransactionsClient's category chips used to build their hrefs from
+ * Bug fix (a report): TransactionsClient's category chips used to build their hrefs from
  * `window.location.search`, read in a client effect -- empty on first paint (server-side, and for
  * one client render before that effect runs), so every chip's href dropped every OTHER active
  * filter, `review=1` included. Next.js hands this route the already-parsed params, not the literal
@@ -175,7 +175,7 @@ export default async function TransactionsPage({
       loanOptions={listLoans(today, viewer)
         .filter((loan) => loan.currentBalanceCents !== null)
         .map((loan) => ({ id: loan.itemId, name: loan.name }))}
-      /* 2026-09-13, owner report: a bill's installments, so a statement line can be assigned to
+      /* 2026-09-13, reported: a bill's installments, so a statement line can be assigned to
          one from the row menu instead of Record payment writing a second transaction. Every unpaid
          installment, overdue included and with no window cap -- the household is naming a specific
          pairing here, so the "what is coming up" framing the Dashboard card needs does not apply.

@@ -738,7 +738,7 @@ describe('DashboardPage — ruling T7 (month filter)', () => {
   });
 
   /**
-   * v1.21.0 plan, item 5, defect 1. This is the owner's own reported shape: a household a few
+   * v1.21.0 plan, item 5, defect 1. This is a real reported shape: a household a few
    * weeks old, whose only real history is the last couple of months, used to see all 12 trailing
    * months plotted (ten of them at a flat 0,0) and a card confidently titled "12-month cashflow".
    */
@@ -1104,7 +1104,7 @@ describe('sending a spending summary on demand', () => {
   });
 
   /**
-   * Owner report, 2026-09-08. This helper used to stop at creating the user, and every test below
+   * Reported, 2026-09-08. This helper used to stop at creating the user, and every test below
    * still passed -- because the action reported success without checking whether anything had
    * actually been enqueued. A user with NO configured channel has nowhere to deliver to, which is
    * the state these tests were silently asserting was a successful send. Configuring a real email
@@ -1139,7 +1139,7 @@ describe('sending a spending summary on demand', () => {
     const { sendDigestNowAction } = await import('@/app/(app)/dashboard/actions');
     const fd = new FormData();
     fd.set('scope', 'self');
-    // The owner's actual configuration: digest routed to the family channel, so their personal
+    // The reported actual configuration: digest routed to the family channel, so their personal
     // toggle is off. Refusing here is what made the button a no-op for them.
     expect(await sendDigestNowAction({}, fd)).toEqual({ sent: 'self' });
   });
@@ -1155,7 +1155,7 @@ describe('sending a spending summary on demand', () => {
   });
 
   it('drains the outbox rather than leaving the message for the five-minute tick', async () => {
-    // The defect the owner hit: "they came with a real delay". enqueue() only writes a pending
+    // The defect the report hit: "they came with a real delay". enqueue() only writes a pending
     // row; without kickOutbox() delivery waits for the scheduler. A source assertion, because the
     // drain is fire-and-forget by design and has no return value to await.
     const source = fs.readFileSync(path.join(process.cwd(), 'src/app/(app)/dashboard/actions.ts'), 'utf8');
@@ -1444,7 +1444,7 @@ describe('DashboardPage — a negative month is framed, not just reddened', () =
 });
 
 /**
- * 2026-09-15, from the owner's own dashboard. Three things that a screenshot made obvious and no
+ * 2026-09-15, from a real dashboard. Three things that a screenshot made obvious and no
  * test had ever asked about.
  */
 describe('DashboardPage — the stat tiles say one thing each', () => {
@@ -1509,7 +1509,7 @@ describe('DashboardPage — the stat tiles say one thing each', () => {
 });
 
 /**
- * 2026-09-15, read off the owner's own live dashboard rather than a test fixture.
+ * 2026-09-15, read off a real dashboard rather than a test fixture.
  *
  * The supporting-numbers grid was `sm:grid-cols-2 lg:grid-cols-3` over a run of tiles that
  * self-hide independently — Net worth, Recorded billing, Saved, Cash runway are each conditional,

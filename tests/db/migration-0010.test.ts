@@ -273,7 +273,7 @@ describe('a v1.7.x database (no 0010 applied) boots and migrates cleanly', () =>
     delete process.env.BUDGET_MIGRATIONS_DIR; // falls back to the real drizzle/, which includes 0010
     const upgraded = openDatabase(file);
     try {
-      // THE DELIBERATE ROW LOSS. Owner ruling 2026-08-23: dummy data only, nothing worth
+      // THE DELIBERATE ROW LOSS. A ruling 2026-08-23: dummy data only, nothing worth
       // preserving, so 0010 drops and recreates rather than doing the 12-step INSERT ... SELECT
       // rebuild. Asserted rather than merely commented so the behaviour reads as a decision.
       // See 0010_balances.sql's header for why this must not be copied once real data lands.

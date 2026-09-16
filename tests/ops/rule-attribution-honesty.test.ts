@@ -342,7 +342,7 @@ describe('v1.31.0 R-01: attribution simulates the match for every combination th
  * exactly the R-01 failure shape -- "Affects" reading 0 while imports file rows by the rule --
  * reached through a dimension R-01's own exemption did not exist to cover.
  *
- * The owner's case, with invented figures: one insurer, two policies. Spec:
+ * The reported case, with invented figures: one insurer, two policies. Spec:
  * docs/superpowers/specs/2026-09-13-vendor-amount-person-rules-design.md, ruling P7.
  */
 describe('migration 0024: attribution simulates the AMOUNT too, not only the text', () => {

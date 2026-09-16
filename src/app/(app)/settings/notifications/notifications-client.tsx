@@ -525,7 +525,7 @@ function HouseholdTelegramFields({
    * family channel -- never applied once one already exists. This exists because of the
    * household API's own constraint (src/lib/notify/household.ts: upsertHouseholdTarget refuses
    * ANY empty destination, so there is no household equivalent of the personal form's
-   * token-only save while Detect chat ID is used to discover one). The owner's own bug report
+   * token-only save while Detect chat ID is used to discover one). A real bug report
    * is the common case this answers directly: a bot already running in a group chat shared
    * with a spouse IS that admin's own personal Telegram destination already -- so prefilling
    * from it turns "you must already know the chat ID" into "here is a likely guess, confirm or

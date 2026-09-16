@@ -76,7 +76,7 @@ describe('listTransactions', () => {
   });
 
   /**
-   * F-02 (v1.31.0, owner's question: "how much went on the Visa this month?"). outCents/inCents
+   * F-02 (v1.31.0, the question asked: "how much went on the Visa this month?"). outCents/inCents
    * sum the WHOLE filtered set -- every page, not just the rows a paginated call returns -- over
    * the identical `where` `total` already runs.
    */
@@ -156,7 +156,7 @@ describe('listTransactions', () => {
   });
 
   /**
-   * v1.21.0 item 3 (owner's screenshot of the chip row: "filter on page transactions only
+   * v1.21.0 item 3 (a reported screen, chip row: "filter on page transactions only
    * filter where i directly assign parent and ignore all child"). A top-level chip's own
    * meaning is "this category and its children" -- the same rule foldRollup (budgets.ts) and
    * categoryBreakdown's parentId ?? categoryId (reports.ts) already use for the SAME category's
@@ -245,7 +245,7 @@ describe('listTransactions', () => {
   });
 
   /**
-   * F-07 (v1.31.0, owner's question: "Where is that $47.13 charge the bank called about?"). No
+   * F-07 (v1.31.0, the question asked: "Where is that $47.13 charge the bank called about?"). No
    * new control, no new URL param -- the search box itself learns to recognise money, matching by
    * MAGNITUDE (abs(amount_cents)) so a person who only knows what the bank told them finds the
    * charge whichever sign it happens to be stored as.
@@ -281,7 +281,7 @@ describe('listTransactions', () => {
   });
 
   /**
-   * v1.24.0 Lane A item 2 (owner report: "currently once i apply a trasnfer its hard to find
+   * v1.24.0 Lane A item 2 (reported: "currently once i apply a trasnfer its hard to find
    * that data again"). `transferView: 'only'` is the new state -- the recovery path for a
    * mis-tagged transfer, which REVIEW_WHERE (src/lib/categorize/engine.ts) excludes
    * unconditionally, so it needs its own way back into view. All three states proven against the
@@ -1063,8 +1063,8 @@ describe('transactionOwners (item BL)', () => {
 //
 // Why any of this exists: rules auto-categorize on import and a rule-assigned row NEVER enters the
 // review queue (REVIEW_WHERE is `category IS NULL OR source = 'bayes'`), so before this release
-// there was no surface anywhere that showed what the rules had done to an import. The owner:
-// "i dont just want to auto apply rules and never see what happened on my import."
+// there was no surface anywhere that showed what the rules had done to an import. The report:
+// rules should not apply silently, with no way to see what they did to an import
 // ---------------------------------------------------------------------------------------------
 
 /** An imports row, so a transaction can belong to a real batch. */

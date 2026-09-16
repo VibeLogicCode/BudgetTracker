@@ -4,7 +4,7 @@ import { formatSemver, parseSemver } from '@/lib/update/semver';
  * v1.32.0 (UP-2). The one definition of "this browser was told, a moment ago, that the app is
  * about to be replaced".
  *
- * The symptom, from the owner's recording of a real update on their NAS: press Update now,
+ * The symptom, from the reported recording of a real update on their NAS: press Update now,
  * Watchtower pulls the new image and kills the container, the tab is still sitting on the app,
  * and Next renders src/app/(app)/error.tsx — which says "The app could not finish loading this
  * screen… this usually clears on its own". Every word of that is right for a crash and wrong

@@ -562,7 +562,7 @@ function ChildBreakdownRow({
 }
 
 /**
- * v1.21.0 item 2 (owner's screenshot: a parent reading $628.55 over children totalling $183.55).
+ * v1.21.0 item 2 (reported: a parent reading $628.55 over children totalling $183.55).
  * The label is **"Not in a sub-category"** -- reused verbatim wherever this same bucket shows up
  * elsewhere (the un-rolled Reports breakdown names it identically, per the 2026-08-30 plan).
  *
@@ -931,7 +931,7 @@ function EditRow({
         hidden={hidden}
         className={`border-b border-line px-4 py-2 last:border-b-0 sm:px-5 ${depth === 0 ? 'bg-surface-2' : ''}`}
       >
-        {/* 2026-09-01 fix (owner's screenshot: "when roll over text comes in it messes up the
+        {/* 2026-09-01 fix (reported: "when roll over text comes in it messes up the
             allignemnt"). Tier 1 -- every CONTROL in the row (name/disclosure, the amount input
             or its read-only span, clear, the suggestion button, the rollover checkbox) lives in
             this one flex-wrap container, and nothing else does. The carried-amount and
@@ -943,7 +943,7 @@ function EditRow({
             flex layout altogether: a control's position here now depends only on the OTHER
             controls, never on whether a note happens to exist this month. */}
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          {/* 2026-08-30 fix (owner's screenshot): "Food" and "Transport" clipped their own "Over
+          {/* 2026-08-30 fix (a reported screen): "Food" and "Transport" clipped their own "Over
               b…" pill on a narrow phone. This div had no `flex-wrap` of its own, and Pill.tsx
               carries `shrink-0` -- so once the name (which had no `min-w-0`, and therefore
               refused to shrink below its own text width either) and the pill together outgrew

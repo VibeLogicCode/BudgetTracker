@@ -30,7 +30,7 @@ export const GITHUB_SCHEDULED_TIMEOUT_MS = 15_000;
  * Review and update panel's changelog read.
  *
  * Five seconds, because a button that has not answered in five is indistinguishable from a
- * button that is never going to — the owner's own recording of a real update shows them
+ * button that is never going to — a real recording of a real update shows them
  * reloading the page at about 22 seconds, which is exactly the reflex the previous release set
  * out to remove. The worst case a household now sees is five seconds of a labelled wait and
  * then a plain sentence saying GitHub did not answer, with the button right there to press

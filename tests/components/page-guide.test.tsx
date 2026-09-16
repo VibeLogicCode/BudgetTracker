@@ -9,7 +9,7 @@ afterEach(cleanup);
 /**
  * v1.12.0 REVERSAL (spec docs/superpowers/specs/2026-08-24-bills-with-due-dates-design.md,
  * item N / ruling B1). This panel used to derive its open state from the page being empty, and
- * two tests here pinned that derivation in both directions. The owner lived with it and
+ * two tests here pinned that derivation in both directions. The report lived with it and
  * disagreed: a panel that opens itself is a panel in the way, and an empty page is already
  * explained by its EmptyState and its action button. The derivation is gone, the `empty` prop
  * is gone with it, and the single test below replaces both -- kept as a test rather than a

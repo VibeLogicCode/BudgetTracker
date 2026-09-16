@@ -70,7 +70,7 @@ export function categoryOptions(all: CategoryLike[]): CategoryOption[] {
 }
 
 /**
- * Backlog BZ (owner ruling A, 2026-08-29). The same order categoryOptions() produces, arranged
+ * Backlog BZ (a ruling A, 2026-08-29). The same order categoryOptions() produces, arranged
  * for `<optgroup>`: a parent that HAS children becomes a group whose label is the parent's name,
  * with the parent itself as the first selectable option inside it, and a top-level category with
  * no children stays a plain ungrouped option.

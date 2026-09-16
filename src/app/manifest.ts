@@ -4,7 +4,7 @@ import type { MetadataRoute } from 'next';
  * Next's metadata-route convention: this file compiles to GET /manifest.webmanifest, and the
  * root layout's `metadata.manifest` link points at that exact path (see src/app/layout.tsx).
  *
- * Task 17 scope only (owner ruling 9): manifest + icons + installability. No service worker,
+ * Task 17 scope only (a ruling 9): manifest + icons + installability. No service worker,
  * no offline caching, no install-prompt UI.
  *
  * Colors are copied verbatim from the LIGHT theme in src/app/globals.css (`:root`), matching

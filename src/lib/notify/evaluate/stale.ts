@@ -66,7 +66,7 @@ export function evaluateStaleImport(input: { userId: number; now: Date; tz: stri
    * Ruling R14 split the household-wide alert per account so that five lagging accounts could not
    * mask each other, and that was right. What it produced, for a household on manual CSV across
    * five accounts, was five notifications in the same minute saying the same sentence with a
-   * different name in it -- the owner's "1 message per X, too repetitive" complaint exactly.
+   * different name in it -- the reported "1 message per X, too repetitive" complaint exactly.
    *
    * R14's requirement is that the message NAMES the account. One message that names all five
    * satisfies it; nothing is masked, and the household reads it once. The cadence is unchanged:

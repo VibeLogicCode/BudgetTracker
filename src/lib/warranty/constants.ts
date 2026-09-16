@@ -304,7 +304,7 @@ export function isLoanRepayment(direction: LoanDirection, amountCents: number): 
 /**
  * Plain-language, in the voice of the household. Used by both item forms and the detail row.
  *
- * Owner ruling (2026-08-28): the words must make obvious, on their own, what was lent out and
+ * A ruling (2026-08-28): the words must make obvious, on their own, what was lent out and
  * what was borrowed -- 'We owe this' / 'Owed to us' read as a matched pair only when set side
  * by side, and out of that context ("Direction: Owed to us") neither one says which way the
  * money moves without the reader stopping to work it out.

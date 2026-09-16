@@ -431,7 +431,7 @@ export function evaluateMonthBoundary(input: { userId: number | null; now: Date;
    * 1st to the 3rd".
    *
    * The calendar gate produced a summary of a partial month, every month, for any household whose
-   * statements arrive after the 3rd — which is most of them. The owner's is imported by hand on
+   * statements arrive after the 3rd — which is most of them. The reported is imported by hand on
    * Sundays, so a September summary sent on October 1st routinely described about three weeks.
    *
    * Nothing fires until the month is closed (src/lib/month-close.ts). A month nobody ever closes

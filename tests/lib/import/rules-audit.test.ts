@@ -285,7 +285,7 @@ describe('commitStagedImport reports what the rules did, and never marks the imp
     });
 
     expect(result.rowsAdded).toBe(2);
-    // The number the owner's objection is about. Distinct from needsReview, which by construction
+    // The number the the objection raised is about. Distinct from needsReview, which by construction
     // EXCLUDES every rule-assigned row: REVIEW_WHERE treats a rule assignment as settled.
     expect(result.rulesApplied).toBe(1);
     expect(result.needsReview).toBe(1);

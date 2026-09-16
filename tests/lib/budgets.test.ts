@@ -283,7 +283,7 @@ describe('budgetProgress', () => {
   });
 
   /**
-   * v1.21.0 item 2 (owner's screenshot: a parent reading $628.55 over children totalling
+   * v1.21.0 item 2 (reported: a parent reading $628.55 over children totalling
    * $183.55, because the direct-to-parent spend counted in the headline but rendered nowhere).
    * `directSpentCents` is the seed foldRollup adds children to -- read back here rather than
    * recomputed, so this pins that it stays exactly the parent's OWN spend, never rolled, while

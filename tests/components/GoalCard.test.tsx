@@ -22,7 +22,7 @@ function goal(over: Partial<GoalWithProgress> & { targetCents: number; targetDat
 }
 
 describe('GoalCard', () => {
-  it('shows the owner badge as Shared for a household goal', () => {
+  it('shows the report badge as Shared for a household goal', () => {
     render(<GoalCard goal={goal({ targetCents: 100000, targetDate: '2026-12-01', contributions: [] })} />);
     expect(screen.getByText('Shared')).toBeTruthy();
   });

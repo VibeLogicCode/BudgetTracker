@@ -335,7 +335,7 @@ export const merchantRules = sqliteTable(
      */
     matchType: text('match_type', { enum: ['exact', 'contains', 'word'] }).notNull(),
     /**
-     * 'attribution' is 2026-09-13 (the owner: "think about person too... even sets household, or
+     * 'attribution' is 2026-09-13 (the report: "think about person too... even sets household, or
      * individual person"). NO MIGRATION widened this column and none was needed:
      * drizzle/0000_init.sql declares rule_kind as `text DEFAULT 'category' NOT NULL` with no CHECK,
      * so this enum has only ever been a TypeScript-level claim -- exactly as 'word' was for
@@ -430,7 +430,7 @@ export const merchantRules = sqliteTable(
      * recomputed to be read. The authoring dialog still asks in tolerance terms ("about $130") and
      * stores what that computes to.
      *
-     * The owner's case: one insurer, two policies, different premiums -- a merchant-only rule
+     * The reported case: one insurer, two policies, different premiums -- a merchant-only rule
      * cannot tell them apart, so whichever category was saved last claimed every charge.
      */
     amountMinCents: integer('amount_min_cents'),

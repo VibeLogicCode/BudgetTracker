@@ -234,10 +234,10 @@ describe('item BK: viewerFor skips rather than falling back to a household scope
 });
 
 /**
- * 2026-09-08, owner report: "there is 1 message per budget can we not send a summary message with
+ * 2026-09-08, reported: "there is 1 message per budget can we not send a summary message with
  * key figures and less repetative text so its easier to read and digest info".
  *
- * The owner's Sunday-only import habit is what makes this correct rather than merely tidier: with
+ * The reported Sunday-only import habit is what makes this correct rather than merely tidier: with
  * one import a week there is no moment between summaries at which a budget figure could have
  * moved, so a per-category alert on a five-minute tick was reporting news that had already been
  * reported.

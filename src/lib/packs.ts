@@ -658,7 +658,7 @@ export function findCategory(all: CategoryRecord[], name: string, parentName: st
   // signature as R-02's defect -- a rule that looks installed and quietly stops money being
   // visible.
   //
-  // PREFERENCE, NOT REFUSAL, and this is the owner call the finding asked for. When only an
+  // PREFERENCE, NOT REFUSAL, and this is the report call the finding asked for. When only an
   // archived row exists, that row is still returned: refusing would make importing a pack into a
   // household that has archived a category fail with nothing to do about it except un-archive by
   // hand, and CREATING a second row of the same name is worse -- two categories called Coffee is

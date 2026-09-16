@@ -172,7 +172,7 @@ export function runScheduledEvaluation(
   now: Date = new Date(),
   options?: {
     /**
-     * Owner report, 2026-09-08: "it shouldnt send notifications on boot. when it reboots it sends
+     * Reported 2026-09-08: "it shouldnt send notifications on boot. when it reboots it sends
      * notifications about budget".
      *
      * SLOT events still catch up at boot -- that is MUST-6.1, and it is the whole reason a
@@ -212,7 +212,7 @@ export function runScheduledEvaluation(
            * It was the one detector still sending a message PER CATEGORY -- up to five a day, on
            * this daily slot. For a household that imports on Sundays that meant five notifications
            * on Sunday about five categories, six days of silence while the figures did not move,
-           * and five more the following Sunday. The owner's original complaint, exactly:
+           * and five more the following Sunday. The reported original complaint, exactly:
            * "there is 1 message per budget can we not send a summary message ... less repetitive".
            *
            * The projection is now a section of the weekly summary, between Over and Close
@@ -243,7 +243,7 @@ export function runScheduledEvaluation(
     }
 
     /**
-     * 2026-09-08. THE ANCHOR, and the reason the owner stopped getting stale summaries.
+     * 2026-09-08. THE ANCHOR, and the reason the report stopped getting stale summaries.
      *
      * He imports once a week, on Sundays. The old rule fired at the weekly slot if it was inside a
      * 48-hour catch-up window, which produced two bad outcomes: a summary on Monday whether or not
@@ -339,7 +339,7 @@ export function runScheduledEvaluation(
   }
 
   /**
-   * 2026-09-08 (owner report: "there is 1 message per budget can we not send a summary message
+   * 2026-09-08 (reported: "there is 1 message per budget can we not send a summary message
    * with key figures and less repetative text so its easier to read and digest info").
    *
    * evaluateBudgets is NO LONGER CALLED. Every figure it used to send one message at a time --

@@ -1,26 +1,21 @@
 # Dropping many statements at once — design
 
 **Date:** 2026-09-15
-**Status:** Owner feature request (2026-09-15). Rulings **B1–B12** below are the planner's; each
-names the code fact that forced it and each is reversible by the owner.
+**Status:** Feature request (2026-09-15). Rulings **B1–B12** below are the planner's; each names
+the code fact that forced it and each is reversible.
 **Target release:** v1.44.0 (built on v1.43.0).
-**Migration:** none. See B3 — the "you already imported this" signal the owner asked for turns out
+**Migration:** none. See B3 — the "you already imported this" signal that was asked for turns out
 to be computable from numbers the existing detector already produces, so no column is added.
 
 ---
 
 ## Problem
 
-The owner, verbatim:
+The request: import several files at once, including a zip that should be unpacked and imported,
+with unsupported files handled gracefully rather than refusing the drop.
 
-> *"import file is working really well. do you think we can add abiltiy to import multiple fdiles at
-> once? or even drag and drop 5 files at once if its a zip it should inzip and import. icase onf the
-> files is not supported it should handle it accodingy?"*
-
-And the pain underneath it, verbatim:
-
-> *"problem i have now is i download 10 files nd then 1 by 1 i g through it and sometimes i import
-> same ile again. throughwing all together lets app handle the process"*
+The pain underneath it: ten statements downloaded in one sitting, then fed in one at a time, with
+the occasional file imported twice because nothing said it had already been done.
 
 Today the import page takes exactly one file. `FileDrop`'s `rejectionFor`
 (`src/components/FileDrop.tsx:33`) refuses a multi-file drop outright:
@@ -37,7 +32,7 @@ read.
 
 ## What is NOT changing
 
-**B1. The detection logic is untouched.** The owner was explicit ("detection logic\*", twice).
+**B1. The detection logic is untouched.** This was stated explicitly, twice.
 `detectImportAccount` (`src/lib/import/detect-account.ts`) and `detectImportProfile`
 (`src/lib/import/detect-profile.ts`) run per file exactly as they run now. This design only *reads*
 the `confidence: 'certain' | 'likely' | 'none'` and the `reason` sentence they already return, and
@@ -74,7 +69,7 @@ tightened: if the filename's past imports disagree about the account, it returns
 `'none'` and the file lands in "needs you" instead.
 
 This is the only line of detection this design touches, and it exists solely because auto-import
-removes the human who used to catch it. The owner may strike it, in which case `likely`-from-
+removes the human who used to catch it. This may be struck, in which case `likely`-from-
 filename must not auto-import at all.
 
 ## The four statuses
@@ -93,7 +88,7 @@ Every one is derived from an output that exists today.
 files need human eyes before this design existed; routing on it is reading an existing instruction,
 not inventing a policy. `certain` is `cleanRate >= 0.95` (`detect-profile.ts:72`).
 
-**B6. Account `likely` IS enough** (owner's choice, asked and answered 2026-09-15). The reasoning
+**B6. Account `likely` IS enough** (decided 2026-09-15). The reasoning
 that made it the right call: account `certain` requires row *overlap* (`detect-account.ts:63`), so a
 clean discrete monthly statement with no overlap can never be `certain` by construction. Gating on
 `certain` would leave the common case permanently amber and the feature would not help.
@@ -104,17 +99,15 @@ gate reads the confidence, not the profile id, so this falls out without a speci
 
 ## Flow
 
-**B8. Detect all up front, then show one list.** Not a one-file-at-a-time queue — the owner rejected
-that shape explicitly ("i liked what we decided up top of processing all and them showing rather
-then 1 by 1").
+**B8. Detect all up front, then show one list.** Not a one-file-at-a-time queue — that shape was rejected explicitly in favour of processing everything first and then showing it.
 
 1. Drop N files, or pick them. `POST /api/import/batch/detect` receives all of them.
 2. Per file, server-side: stage it, run the existing detectors, classify. One row back per file.
 3. One list renders: filename, detected account, detected mapping, row count, status, and the
    detector's reason where there is one to show.
 4. **Import the ready ones** opens a combined confirmation first — every ready file with its row
-   count and its duplicate count — and commits only after that is accepted (owner's choice: "Likely
-   is enough, but show me first").
+   count and its duplicate count — and commits only after that is accepted (the decision was:
+   likely is enough, but show the files first).
 5. Any row, ready or not, can be clicked to open today's wizard on that already-staged file:
    preview, mapping editor, card-people, all unchanged.
 
@@ -125,8 +118,7 @@ the drift would be invisible until the two screens disagreed about the same file
 
 **B10. Unsupported files never fail the batch.** `rejectionFor` already produces a per-file sentence.
 In multi mode the refused files are listed as `unsupported` with that sentence and the rest proceed —
-the owner asked for exactly this ("icase onf the files is not supported it should handle it
-accodingy").
+this was asked for explicitly.
 
 ## Zip (second phase)
 

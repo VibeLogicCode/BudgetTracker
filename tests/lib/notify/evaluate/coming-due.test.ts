@@ -98,7 +98,7 @@ function queued(): { dedup_key: string; subject: string }[] {
  * item is still announced once ever, an edited date is still a new fact and a new announcement, the
  * verb still comes from the item's kind, and the cap still bounds one evaluation. They are now
  * asserted against ONE outbox row whose body names everything, rather than against a row each --
- * which is the owner's "1 message per X ... can we not send a summary" complaint, applied to the
+ * which is the reported "1 message per X ... can we not send a summary" complaint, applied to the
  * one remaining evaluator that still worked that way.
  */
 function bodies(): string[] {

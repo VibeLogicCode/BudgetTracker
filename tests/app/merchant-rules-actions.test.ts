@@ -301,7 +301,7 @@ describe('previewRerunAllAction / rerunAllAction (item 11: global Re-run rules)'
 });
 
 /**
- * v1.24.0 (owner ask: "delete rule and un-apply from transactions... all date ranges or user
+ * v1.24.0 (the ask: "delete rule and un-apply from transactions... all date ranges or user
  * chooses"). The order these two do their work in is the part worth pinning: attribution is
  * DERIVED (no rule id is stored on a transaction), so the rule has to still exist while the rows
  * are being resolved. Deleting first would clear nothing at all and still report success.

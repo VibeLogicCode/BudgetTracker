@@ -161,7 +161,7 @@ describe('MerchantRulesClient — filter chips and search (item 10)', () => {
   });
 
   /**
-   * v1.27.0, owner finding: "a yellow banner catches eye but i dont know what to do" -- a
+   * v1.27.0, owner finding: a warning banner that catches the eye without saying what to do about it -- a
    * redundant rule changes NO categorization today, so 'warning' overstated it. Checked on the
    * rendered class list rather than a snapshot, since Pill's TONE_CLASS map is what actually
    * decides the colour (see Pill.tsx).
@@ -274,7 +274,7 @@ describe('MerchantRulesClient — multi-select and bulk delete states its real c
 });
 
 /**
- * Owner ask (2026-08-31): this confirm moved from a plain bordered div under the toolbar to a
+ * Asked 2026-08-31: this confirm moved from a plain bordered div under the toolbar to a
  * RowDialog (see that component's own docblock, and merchant-rules-client.tsx's bulkDeleteDialog
  * docblock, for why: page-level, a multi-row selection rather than one row to keep looking at,
  * and a real consequence to read first). The shell RowDialog itself owes every caller -- role,
@@ -412,7 +412,7 @@ describe('MerchantRulesClient — per-rule Apply now (item 11: scoped, understan
 });
 
 /**
- * v1.24.0 (owner ask, 2026-09-01: "when we click re-run it should open a dialogue... blurred popup
+ * v1.24.0 (asked 2026-09-01: "when we click re-run it should open a dialogue... blurred popup
  * with proper disclaimer"). The preview-then-confirm behaviour item 11 built is unchanged; it moved
  * from an inline strip into a RowDialog and gained the all-time/date-range choice. See
  * RunRulesDialog's own docblock in merchant-rules-client.tsx (and the retired carve-out in
@@ -466,7 +466,7 @@ describe('MerchantRulesClient — Run rules now (dialog 4, RowDialog, v1.24.0)',
 });
 
 /**
- * v1.24.0, dialogs 1-3. The owner's report was that deleting a rule left the transactions it had
+ * v1.24.0, dialogs 1-3. The report was that deleting a rule left the transactions it had
  * already changed exactly as the rule made them, with nothing on screen saying so ("user deletes
  * the rule but nothing gets fixed"). The fix is two menu items and three dialogs whose copy is
  * kind-true: a category/transfer clear genuinely cannot be undone (nothing records the previous
@@ -553,7 +553,7 @@ describe('MerchantRulesClient — Delete rule and clear it from transactions (di
     await screen.findByText(/41 transactions were categorized by this rule/);
     const text = screen.getByRole('dialog').textContent ?? '';
     expect(text).toMatch(/If another rule also matches one of these, it will not take over automatically/);
-    // The unqualified claim the owner read as "everything becomes uncategorized" must be gone.
+    // The unqualified claim the report read as "everything becomes uncategorized" must be gone.
     expect(text).not.toMatch(/so these stay uncategorized until you run rules again/);
   });
 
@@ -748,7 +748,7 @@ describe('MerchantRulesClient — sharing a rules pack still lives on this page 
 });
 
 /**
- * Owner ask (2026-08-31): the Canadian pack panel's three confirmations (install, remove-all,
+ * Asked 2026-08-31: the Canadian pack panel's three confirmations (install, remove-all,
  * review-update) moved from inline disclosures to RowDialog -- see canadian-pack-panel.tsx's own
  * docblock, and RowDialog's, for why. The shell RowDialog owes every caller (role, aria-modal,
  * Escape, backdrop, focus trap, focus-restore) is asserted once, in full, against the split editor

@@ -193,7 +193,7 @@ export async function setCardPersonAction(_prev: CardPersonState, formData: Form
  * 2026-09-08. "September is complete" — the household's own statement that last month's data is
  * all in, which is the only reliable way to know it.
  *
- * Owner report: "what happens if 1 of the accounts doesnt have any entry for 15 days in next month
+ * Reported: "what happens if 1 of the accounts doesnt have any entry for 15 days in next month
  * and there is nothing to import ... using logic we have now is not reliable." A quiet account has
  * nothing to import, so no amount of inference over import timing can tell "complete" from
  * "nothing to fetch". One person pressing one button settles it for every manual account at once.

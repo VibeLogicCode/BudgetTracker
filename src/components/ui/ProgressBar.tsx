@@ -11,7 +11,7 @@
  * -- the bar says "maxed out", the number next to it says by how much.
  *
  * 2026-09-15, THE LIMIT MARKER. D4's clamp is still right, but on its own it threw away the one
- * thing a reader needs at the moment a budget breaks: how far over. On the owner's own budgets
+ * thing a reader needs at the moment a budget breaks: how far over. On a real budgets
  * card, Housing at 117% and Health at 370% drew the IDENTICAL full red bar, and those two numbers
  * call for very different reactions. So past 100% the track stops meaning "the limit" and starts
  * meaning "the whole spend", and a marker is drawn where the limit now falls -- 100/pct along it.

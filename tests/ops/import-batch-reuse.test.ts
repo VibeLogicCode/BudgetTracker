@@ -56,7 +56,7 @@ describe('the batch routes reuse, rather than reimplement', () => {
   });
 
   /**
-   * Ruling B1, the one the owner stated twice. The batch route reads the detectors' verdicts and
+   * Ruling B1, the one the report stated twice. The batch route reads the detectors' verdicts and
    * classifies; it must not call a detector itself, because a second call site is a second chance
    * to pass different arguments than the wizard would.
    */

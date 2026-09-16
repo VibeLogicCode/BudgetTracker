@@ -41,7 +41,7 @@ export const MAX_NEW_ROWS_PER_USER_PER_EVALUATION = 20;
  * MUST-6.12 used to be the whole design: one outbox row per item, key `due:<itemId>:<expiryDate>`,
  * so an item was announced once and never nagged again. The property was right; the delivery was
  * not. Three bills and two warranties inside the window meant five notifications in the same
- * minute, each with its own subject line, which is the complaint the owner made about budgets
+ * minute, each with its own subject line, which is the complaint the report made about budgets
  * ("1 message per budget ... can we not send a summary message") and which applies here word for
  * word.
  *

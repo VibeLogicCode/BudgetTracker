@@ -23,7 +23,7 @@ const TOP_CATEGORIES = 5;
 const TOP_MERCHANTS = 3;
 
 /**
- * 2026-09-08 (owner report: one message per budget, too repetitive). The digest now carries the
+ * 2026-09-08 (reported: one message per budget, too repetitive). The digest now carries the
  * FIGURES for every budget that is over or close, which is what the per-category alerts used to
  * carry one message at a time.
  *
@@ -43,7 +43,7 @@ const CLOSE_PCT = 80;
  * It was the last detector still sending one message per category -- up to five a day, on a DAILY
  * slot, for a household that imports once a week. So on a Sunday import it could produce five
  * notifications about five categories, then say nothing new for six days while the figures did not
- * move, then do it again. Every objection the owner raised about the per-budget alerts applies to
+ * move, then do it again. Every objection the report raised about the per-budget alerts applies to
  * it word for word, and it sits beside those same figures naturally: over, heading over, close.
  *
  * NOTHING IS RECOMPUTED. projectMonthEnd and both thresholds are the same ones evaluate/pace.ts
@@ -255,7 +255,7 @@ export function evaluateWeeklyDigest(input: {
     // A manual send is a person asking for this report right now, so their SCHEDULED-delivery
     // toggle does not get to refuse it. Without this the button was a no-op for every household
     // that had routed the digest to its family channel -- which is most of the ones who would
-    // press it (owner report, 2026-09-08).
+    // press it (a report, 2026-09-08).
     ignoreEventPreference: input.manual !== undefined,
     subject,
     body,
