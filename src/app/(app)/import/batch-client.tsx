@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import { FileDrop } from '@/components/FileDrop';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { Notice } from '@/components/ui/Notice';
+import { ImportHistoryCard } from '@/components/ImportHistoryCard';
 import { PageGuide } from '@/components/ui/PageGuide';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Pill, type PillTone } from '@/components/ui/Pill';
@@ -39,6 +40,7 @@ export interface BatchRow {
   profile: { id: number; name: string } | null;
   profileConfidence: 'certain' | 'likely' | 'none' | null;
   source: 'csv' | 'ofx' | null;
+  counts: { totalRows: number; duplicateCount: number; errorCount: number; willImport: number } | null;
 }
 
 interface CommitOutcome {
@@ -70,6 +72,7 @@ export function BatchClient(props: {
   simplefinManaged: string[];
   people?: PersonOption[];
 }) {
+  const { history } = props;
   const [rows, setRows] = useState<BatchRow[] | null>(null);
   const [open, setOpen] = useState<BatchRow | null>(null);
   const [confirming, setConfirming] = useState(false);
@@ -78,6 +81,20 @@ export function BatchClient(props: {
   const [error, setError] = useState<string | null>(null);
 
   const ready = useMemo(() => (rows ?? []).filter((row) => row.status === 'ready'), [rows]);
+
+  /** What the whole go-group will actually do, summed from each file's own preview. */
+  const readyTotals = useMemo(
+    () =>
+      ready.reduce(
+        (total, row) => ({
+          totalRows: total.totalRows + (row.counts?.totalRows ?? row.rowCount),
+          duplicateCount: total.duplicateCount + (row.counts?.duplicateCount ?? 0),
+          willImport: total.willImport + (row.counts?.willImport ?? row.rowCount),
+        }),
+        { totalRows: 0, duplicateCount: 0, willImport: 0 },
+      ),
+    [ready],
+  );
 
   /**
    * Which mapping a ready row commits with. The profile the DETECTOR chose, never the account's
@@ -295,13 +312,18 @@ export function BatchClient(props: {
           {!confirming ? null : (
             <CardBody>
               <Notice tone="info">
+                {/* The honest headline: what will ARRIVE, not how many rows were read. */}
                 <p className="font-medium text-ink">
-                  {`About to import ${ready.length} ${ready.length === 1 ? 'file' : 'files'}, ${ready.reduce((total, row) => total + row.rowCount, 0)} rows.`}
+                  {`About to import ${readyTotals.willImport} ${readyTotals.willImport === 1 ? 'transaction' : 'transactions'} from ${ready.length} ${ready.length === 1 ? 'file' : 'files'}.`}
                 </p>
+                {readyTotals.duplicateCount === 0 ? null : (
+                  <p className="text-muted">{`${readyTotals.duplicateCount} of the ${readyTotals.totalRows} rows read are already here and will be left out.`}</p>
+                )}
                 <ul className="mt-2 flex flex-col gap-1">
                   {ready.map((row) => (
                     <li key={row.stagingId ?? row.filename}>
-                      {row.filename} → {row.account?.name ?? 'no account'} · {row.rowCount} rows
+                      {row.filename} → {row.account?.name ?? 'no account'} ·{' '}
+                      {row.counts === null ? `${row.rowCount} rows` : `${row.counts.willImport} of ${row.counts.totalRows} rows`}
                     </li>
                   ))}
                 </ul>
@@ -317,7 +339,14 @@ export function BatchClient(props: {
             </CardBody>
           )}
 
-          <ul className="border-t border-line text-sm">
+          {/*
+            "View rows" also appears in History below, where it means "the transactions this import
+            already created". Here it means "what is in this file before anything is imported".
+            Both are the right words for their own card, and the two cards are far apart with their
+            own headings -- but the duplication is deliberate rather than accidental, and this is
+            where it is written down.
+          */}
+          <ul data-testid="batch-list" className="border-t border-line text-sm">
             {rows.map((row) => {
               const openable = row.stagingId !== null;
               return (
@@ -333,11 +362,42 @@ export function BatchClient(props: {
                       <span className="text-xs text-muted">
                         {row.account === null ? 'No account decided' : row.account.name}
                         {row.profile === null ? '' : ` · ${row.profile.name}`}
-                        {row.rowCount > 0 ? ` · ${row.rowCount} rows` : ''}
                       </span>
+                      {/*
+                        2026-09-15. "7 rows" used to be the whole of this line, and it reads as a
+                        promise to add seven when the file is about to add one. These are the
+                        preview's OWN numbers (see countsFor in the batch detect route), so the
+                        figure here is the figure on the screen the row opens.
+                      */}
+                      {row.counts === null ? (
+                        row.rowCount > 0 ? <span className="text-xs text-muted">{`${row.rowCount} rows`}</span> : null
+                      ) : (
+                        <span className="text-xs text-muted">
+                          {`${row.counts.totalRows} rows`}
+                          {row.counts.duplicateCount > 0 ? ` · ${row.counts.duplicateCount} already here` : ''}
+                          {row.counts.errorCount > 0 ? ` · ${row.counts.errorCount} unreadable` : ''}
+                          {' · '}
+                          <span className={row.counts.willImport > 0 ? 'font-medium text-ink' : ''}>
+                            {row.counts.willImport === 0 ? 'nothing to import' : `${row.counts.willImport} to import`}
+                          </span>
+                        </span>
+                      )}
                       {row.reason === null ? null : <span className="text-xs text-subtle">{row.reason}</span>}
                     </span>
-                    <Pill tone={STATUS_TONE[row.status]}>{STATUS_LABEL[row.status]}</Pill>
+                    <span className="flex shrink-0 items-center gap-3">
+                      {/*
+                        The click target says what it does. A whole row that is silently a button
+                        is a guess, and the two things a row can lead to are genuinely different:
+                        a file we could read opens on its rows, one we could not opens on the
+                        pickers that fix it (owner report, 2026-09-15).
+                      */}
+                      {!openable ? null : (
+                        <span className="text-sm font-medium text-accent-text underline underline-offset-2">
+                          {row.status === 'needs-you' ? 'Set it up' : 'View rows'}
+                        </span>
+                      )}
+                      <Pill tone={STATUS_TONE[row.status]}>{STATUS_LABEL[row.status]}</Pill>
+                    </span>
                   </button>
                 </li>
               );
@@ -345,6 +405,15 @@ export function BatchClient(props: {
           </ul>
         </Card>
       )}
+
+      {/*
+        2026-09-15. History lives on the landing screen, not one click in. It used to be a card
+        inside ImportClient, which meant that the moment this screen became what the page opens on,
+        "what did I import, and can I take it back" vanished unless you happened to click a file
+        first. The owner reported it. Inline at the bottom, exactly where it always was, rather
+        than behind a button: it is a thing you glance at, and a glance should not cost a click.
+      */}
+      <ImportHistoryCard history={history} />
     </div>
   );
 }

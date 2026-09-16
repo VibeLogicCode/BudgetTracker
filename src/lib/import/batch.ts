@@ -110,6 +110,38 @@ export function classifyDetection(detection: FileDetection): FileClassification 
   return { status: 'ready', reason: detection.account.reason };
 }
 
+/** What a file will actually do, in the same words the preview screen uses. */
+export interface FileCounts {
+  totalRows: number;
+  duplicateCount: number;
+  errorCount: number;
+  /** Rows that will actually arrive. The number the household is really asking for. */
+  willImport: number;
+}
+
+/**
+ * 2026-09-15, owner report on v1.44.1 with screenshots: "on first page it should show summary like
+ * last screenshot showing how many duplicates and what it will import."
+ *
+ * The list said "7 rows", which reads as a promise to add seven. It was going to add ONE -- six of
+ * the seven were already in the account -- and the only number that mattered was the one number
+ * not on the screen.
+ *
+ * `willImport` is deliberately the SAME arithmetic the commit button already does
+ * (import-client.tsx: `preview.totalRows - preview.duplicateCount`), with errored rows taken off
+ * as well since those never arrive either. The inputs come from `buildPreview`, the very call the
+ * preview screen makes -- a count derived any other way could disagree with the screen two clicks
+ * later, and a household with no way to tell which was right would be correct to trust neither.
+ */
+export function fileCounts(preview: { totalRows: number; duplicateCount: number; errorCount: number }): FileCounts {
+  return {
+    totalRows: preview.totalRows,
+    duplicateCount: preview.duplicateCount,
+    errorCount: preview.errorCount,
+    willImport: Math.max(0, preview.totalRows - preview.duplicateCount - preview.errorCount),
+  };
+}
+
 /**
  * RULING B9: ONE DETECTION PATH. This is the body that used to sit inline in
  * src/app/api/import/detect/route.ts between writeStagedFile and its Response.json, moved here so

@@ -21,6 +21,33 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.45.0] - 2026-09-15
+
+No migration.
+
+### Changed
+
+- **Opening a file from the list goes straight to its rows.** Clicking a file took you to a screen
+  asking you to choose a file — the one you had just clicked — and you had to press Preview to see
+  what you came to see. It now reads the rows on the way in and lands on them, and the card names
+  the file instead of offering an empty drop zone. Each row says what clicking it will do: **View
+  rows** for a file that was recognised, **Set it up** for one that needs you.
+- **The list says what each file will actually import.** It used to say "7 rows", which reads as a
+  promise to add seven when six of them are already in the account and only one is new. Each file
+  now shows its rows, how many are already here, and how many will arrive — the same figures the
+  preview screen itself reports. The confirmation before a group import counts transactions rather
+  than rows.
+
+### Fixed
+
+- **History is back on the import page.** It used to sit at the bottom of the single-file screen,
+  so when the file list became what the page opens on, "what did I import, and can I take it back"
+  was one click out of reach. It is at the bottom of the list again, undo included.
+- **A file the app could not place no longer arrives with an account already filled in.** Opening
+  one from the list pre-selected the first account in the list, which is exactly the pre-armed
+  wrong answer this app removed a release ago — and importing into the wrong account writes a
+  second copy of every row rather than merging. The pickers start empty again.
+
 ## [1.44.1] - 2026-09-15
 
 No migration. No change to the app — v1.44.0's own release build failed on a test of the new import

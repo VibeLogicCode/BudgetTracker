@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classifyDetection, type FileDetection } from '@/lib/import/batch';
+import { classifyDetection, fileCounts, type FileDetection } from '@/lib/import/batch';
 import type { AccountDetection } from '@/lib/import/detect-account';
 import type { ProfileDetection } from '@/lib/import/detect-profile';
 
@@ -186,5 +186,41 @@ describe('classifyDetection: already imported', () => {
       account: account({ scores: [{ accountId: 7, name: 'Joint Visa', matchedRows: 40 }] }),
     });
     expect(classifyDetection(d).status).not.toBe('ready');
+  });
+});
+
+/**
+ * 2026-09-15, owner report on v1.44.1 with screenshots: "on first page it should show summary like
+ * last screenshot showing how many duplicates and what it will import."
+ *
+ * The list said "7 rows", which reads as "about to add 7". It was about to add ONE -- six of the
+ * seven were already in the account. The number that matters was the one number not on the screen.
+ *
+ * These come from `buildPreview`, the same call the preview screen itself makes, rather than from
+ * arithmetic of this file's own. A count derived some other way could disagree with the screen
+ * two clicks later, and a household with no way to tell which is right would be correct to trust
+ * neither.
+ */
+describe('fileCounts', () => {
+  it('reports what will actually import, not how many rows the file has', () => {
+    expect(fileCounts({ totalRows: 7, duplicateCount: 6, errorCount: 0 })).toEqual({
+      totalRows: 7,
+      duplicateCount: 6,
+      errorCount: 0,
+      willImport: 1,
+    });
+  });
+
+  /** The commit button's own arithmetic (import-client.tsx): total minus duplicates. */
+  it('counts an errored row as one that will not arrive', () => {
+    expect(fileCounts({ totalRows: 10, duplicateCount: 2, errorCount: 3 }).willImport).toBe(5);
+  });
+
+  it('never reports a negative', () => {
+    expect(fileCounts({ totalRows: 3, duplicateCount: 3, errorCount: 2 }).willImport).toBe(0);
+  });
+
+  it('says nothing will import when everything is already here', () => {
+    expect(fileCounts({ totalRows: 19, duplicateCount: 19, errorCount: 0 }).willImport).toBe(0);
   });
 });

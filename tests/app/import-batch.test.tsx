@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
-import { render, cleanup, fireEvent, waitFor, screen } from '@testing-library/react';
+import { render, cleanup, fireEvent, waitFor, screen, within } from '@testing-library/react';
 import { BatchClient, type BatchRow } from '@/app/(app)/import/batch-client';
 import { getBuiltinPreset } from '@/lib/import/presets';
+import type { ImportHistoryRow } from '@/lib/import/commit';
 
 // Same reason as tests/app/import-client.test.tsx: opening a row mounts the real ImportClient,
 // whose card-assignment and mapping saves go through Next server actions that touch next/headers
@@ -42,6 +43,7 @@ const row = (over: Partial<BatchRow> = {}): BatchRow => ({
   profile: { id: 3, name: 'TD Chequing/Debit' },
   profileConfidence: 'certain',
   source: 'csv',
+  counts: { totalRows: 7, duplicateCount: 6, errorCount: 0, willImport: 1 },
   ...over,
 });
 
@@ -51,10 +53,48 @@ function dropFiles(names: string[]): void {
   fireEvent.drop(screen.getByTestId('file-drop'), { dataTransfer: { files, types: ['Files'] } });
 }
 
+/** What /api/import/preview answers -- only the fields the screen actually renders. */
+const PREVIEW = {
+  stagingId: '11111111-1111-4111-8111-111111111111',
+  filename: 'jan.csv',
+  accountId: 7,
+  profileId: 3,
+  encoding: 'utf-8',
+  mapping: MAPPING,
+  rows: [
+    {
+      rowIndex: 0,
+      rawDate: '2026-09-10',
+      date: '2026-09-10',
+      rawDescription: 'DOLLAR TREE',
+      normalizedMerchant: 'DOLLAR TREE',
+      amountCents: -2769,
+      occurrenceIndex: 0,
+      dedupHash: 'abc',
+      externalId: null,
+      isDuplicate: false,
+      duplicateTransactionId: null,
+      predictedCategoryId: null,
+    },
+  ],
+  errors: [],
+  totalRows: 7,
+  duplicateCount: 6,
+  errorCount: 0,
+  skipped: 0,
+  truncated: false,
+  source: 'csv',
+  cardValues: [],
+  dateFormatDetection: { status: 'none' },
+};
+
 function answerDetect(rows: BatchRow[]): ReturnType<typeof vi.fn> {
   const fetchMock = vi.fn(async (url: string) => {
     if (String(url).includes('/api/import/batch/detect')) {
       return { ok: true, json: async () => ({ rows }) } as unknown as Response;
+    }
+    if (String(url).includes('/api/import/preview')) {
+      return { ok: true, json: async () => PREVIEW } as unknown as Response;
     }
     if (String(url).includes('/api/import/batch/commit')) {
       return {
@@ -151,15 +191,47 @@ describe('BatchClient: nothing commits without a confirmation', () => {
     await waitFor(() => expect(screen.getByText('Import the 2 ready ones')).toBeTruthy());
   });
 
-  it('shows the files and their rows before writing anything', async () => {
-    const fetchMock = answerDetect([row({ filename: 'jan.csv', rowCount: 40 }), row({ filename: 'feb.csv', rowCount: 12 })]);
+  /**
+   * The headline is what will ARRIVE, not how many rows were read. The owner's screenshots were of
+   * six files holding 180 rows between them, 179 of which were already in -- "180 rows" would have
+   * been true and useless.
+   */
+  it('counts what will arrive, not what was read', async () => {
+    const fetchMock = answerDetect([
+      row({ filename: 'jan.csv', counts: { totalRows: 40, duplicateCount: 36, errorCount: 0, willImport: 4 } }),
+      row({ filename: 'feb.csv', counts: { totalRows: 12, duplicateCount: 10, errorCount: 0, willImport: 2 } }),
+    ]);
     render(<BatchClient {...props} />);
     dropFiles(['jan.csv']);
     await waitFor(() => expect(screen.getByText('Import the 2 ready ones')).toBeTruthy());
     fireEvent.click(screen.getByText('Import the 2 ready ones'));
-    expect(screen.getByText(/About to import 2 files, 52 rows/)).toBeTruthy();
+    expect(screen.getByText(/About to import 6 transactions from 2 files/)).toBeTruthy();
+    expect(screen.getByText(/46 of the 52 rows read are already here/)).toBeTruthy();
     // The confirmation is a screen, not a request: still exactly the one detect call so far.
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  /** And the same on the list itself, per file, which is where the owner asked for it. */
+  it('says what each file will import, on its own row', async () => {
+    answerDetect([row({ filename: 'jan.csv', counts: { totalRows: 7, duplicateCount: 6, errorCount: 0, willImport: 1 } })]);
+    render(<BatchClient {...props} />);
+    dropFiles(['jan.csv']);
+    await waitFor(() => expect(screen.getByText(/7 rows/)).toBeTruthy());
+    expect(screen.getByText(/6 already here/)).toBeTruthy();
+    expect(screen.getByText('1 to import')).toBeTruthy();
+  });
+
+  it('says so plainly when a file would add nothing', async () => {
+    answerDetect([
+      row({
+        filename: 'old.csv',
+        status: 'already-imported',
+        counts: { totalRows: 19, duplicateCount: 19, errorCount: 0, willImport: 0 },
+      }),
+    ]);
+    render(<BatchClient {...props} />);
+    dropFiles(['old.csv']);
+    await waitFor(() => expect(screen.getByText('nothing to import')).toBeTruthy());
   });
 
   it('commits only after the confirmation is accepted', async () => {
@@ -232,5 +304,123 @@ describe('BatchClient: opening one row', () => {
     const selects = [...container.querySelectorAll('select')].map((select) => select.value);
     expect(selects).toContain('7');
     expect(selects).toContain('3');
+  });
+});
+
+/**
+ * 2026-09-15, owner report on v1.44.1 with screenshots: "when i click on the row that said ready it
+ * took me to old page. it should have view rows option whichi should take me to last screenshot
+ * similar to what i used to see."
+ *
+ * The file was already staged and both pickers were already right -- the row carries the detection
+ * -- but opening it only SEEDED that state and then sat on step 1 behind an empty drop zone and a
+ * Preview button. Clicking a row is a request to see the rows, so seeing them should not cost a
+ * second press of a button that asks for a file already in hand.
+ */
+describe('BatchClient: opening a row goes straight to the rows', () => {
+  it('previews the staged file without waiting to be asked', async () => {
+    const fetchMock = answerDetect([row({ filename: 'jan.csv' })]);
+    render(<BatchClient {...props} />);
+    dropFiles(['jan.csv']);
+    await waitFor(() => expect(screen.getByText('jan.csv')).toBeTruthy());
+    fireEvent.click(within(screen.getByTestId('batch-list')).getByText('View rows'));
+    await waitFor(() => expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('/api/import/preview'))).toBe(true));
+  });
+
+  it('lands on the row table, not on "choose a file"', async () => {
+    answerDetect([row({ filename: 'jan.csv' })]);
+    render(<BatchClient {...props} />);
+    dropFiles(['jan.csv']);
+    await waitFor(() => expect(screen.getByText('jan.csv')).toBeTruthy());
+    fireEvent.click(within(screen.getByTestId('batch-list')).getByText('View rows'));
+    // The preview header and the commit button, both of which only render once rows are in hand.
+    await waitFor(() => expect(screen.getByText(/7 rows, 6 duplicates, 0 errors/)).toBeTruthy());
+    expect(screen.getByText('Import 1 transactions')).toBeTruthy();
+  });
+
+  /** A drop zone asking for a file that is already loaded is the thing that made this confusing. */
+  it('names the loaded file instead of offering an empty drop zone', async () => {
+    answerDetect([row({ filename: 'jan.csv' })]);
+    const { container } = render(<BatchClient {...props} />);
+    dropFiles(['jan.csv']);
+    await waitFor(() => expect(screen.getByText('jan.csv')).toBeTruthy());
+    fireEvent.click(within(screen.getByTestId('batch-list')).getByText('View rows'));
+    await waitFor(() => expect(screen.getByText(/7 rows, 6 duplicates/)).toBeTruthy());
+    expect(container.querySelector('[data-testid="file-drop"]')).toBeNull();
+  });
+
+  /**
+   * A needs-you file is staged just like a ready one -- what it lacks is an account or a mapping,
+   * not bytes. So it opens on the same screen, still naming the file, and the way forward is the
+   * two pickers rather than a second copy of the file. What must NOT happen is an auto-preview:
+   * the preview route refuses an unresolved id, and firing it would put an error on screen before
+   * the household has done anything wrong.
+   */
+  it('opens a needs-you file on its pickers, and previews nothing yet', async () => {
+    const fetchMock = answerDetect([
+      row({ filename: 'new-bank.csv', status: 'needs-you', account: null, profile: null, stagingId: '22222222-2222-4222-8222-222222222222' }),
+    ]);
+    const { container } = render(<BatchClient {...props} />);
+    dropFiles(['new-bank.csv']);
+    await waitFor(() => expect(screen.getByText('new-bank.csv')).toBeTruthy());
+    fireEvent.click(within(screen.getByTestId('batch-list')).getByText('Set it up'));
+    await waitFor(() => expect(screen.getByText(/Upload a statement, check what it found/)).toBeTruthy());
+    expect(container.querySelectorAll('select').length).toBeGreaterThanOrEqual(2);
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('/api/import/preview'))).toBe(false);
+  });
+});
+
+/**
+ * 2026-09-15, owner report on v1.44.1: "i should also have a history button on new page to take me
+ * to page that shows me history of what was imported like in older screenshot."
+ *
+ * History was a card inside ImportClient, so the moment the batch screen became what the page
+ * opens on, it vanished unless you clicked into a file first. Same class of miss as the page guide
+ * a release earlier, and the reason both happened is that the landing surface changed and the
+ * things bolted to the old one came unstuck.
+ */
+describe('BatchClient: history is on the landing screen', () => {
+  const entry: ImportHistoryRow = {
+    id: 12,
+    accountId: 7,
+    profileId: 3,
+    createdAt: '2026-09-15T19:51:00.000Z',
+    accountName: 'Joint - CC Amex',
+    filename: 'activity.csv',
+    importedBy: 1,
+    importedByName: 'Jot',
+    rowsAdded: 6,
+    rowsDuplicate: 109,
+    rowsError: 0,
+  };
+
+  it('shows past imports before anything has been dropped', () => {
+    render(<BatchClient {...props} history={[entry]} />);
+    expect(screen.getByText('History')).toBeTruthy();
+    expect(screen.getByText('activity.csv')).toBeTruthy();
+  });
+
+  it('keeps the undo beside each one', () => {
+    render(<BatchClient {...props} history={[entry]} />);
+    expect(screen.getByText('Undo')).toBeTruthy();
+  });
+
+  it('is still there once a drop has produced a list', async () => {
+    answerDetect([row({ filename: 'jan.csv' })]);
+    render(<BatchClient {...props} history={[entry]} />);
+    dropFiles(['jan.csv']);
+    await waitFor(() => expect(screen.getByText('jan.csv')).toBeTruthy());
+    expect(screen.getByText('activity.csv')).toBeTruthy();
+  });
+
+  /** The wizard keeps its own copy, so opening a file does not lose the list either. */
+  it('is still there inside the wizard a row opens', async () => {
+    answerDetect([row({ filename: 'jan.csv' })]);
+    render(<BatchClient {...props} history={[entry]} />);
+    dropFiles(['jan.csv']);
+    await waitFor(() => expect(screen.getByText('jan.csv')).toBeTruthy());
+    fireEvent.click(within(screen.getByTestId('batch-list')).getByText('View rows'));
+    await waitFor(() => expect(screen.getByText(/7 rows, 6 duplicates/)).toBeTruthy());
+    expect(screen.getByText('activity.csv')).toBeTruthy();
   });
 });

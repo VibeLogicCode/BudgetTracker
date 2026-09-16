@@ -3,7 +3,9 @@ import { userFromRequest } from '@/lib/auth/session';
 import { isSelfScoped } from '@/lib/auth/viewer';
 import { acceptsTransactions, listAccounts } from '@/lib/accounts';
 import { isSimplefinManaged } from '@/lib/simplefin/connection';
-import { classifyDetection, detectStagedFile, type FileStatus } from '@/lib/import/batch';
+import { classifyDetection, detectStagedFile, fileCounts, type FileCounts, type FileStatus } from '@/lib/import/batch';
+import { buildPreview } from '@/lib/import/preview';
+import type { ImportMapping } from '@/lib/import/mapping';
 import { ImportLimitError, MAX_FILE_BYTES } from '@/lib/import/parse';
 import { hasReadableMapping, listProfiles } from '@/lib/import/presets';
 import { StagingError } from '@/lib/import/staging';
@@ -36,6 +38,13 @@ export interface BatchDetectRow {
   profile: { id: number; name: string } | null;
   profileConfidence: string | null;
   source: string | null;
+  /**
+   * 2026-09-15. What this file will actually DO -- rows, duplicates, errors and the number that
+   * matters, how many will arrive. Null whenever no account or no mapping was resolved, because
+   * there is then nothing to count the file against, which is precisely why such a row needs a
+   * person. See fileCounts() in src/lib/import/batch.ts for why these come from buildPreview.
+   */
+  counts: FileCounts | null;
 }
 
 export async function POST(request: Request): Promise<Response> {
@@ -102,6 +111,7 @@ export async function POST(request: Request): Promise<Response> {
         profile: detection.profile.profile,
         profileConfidence: detection.profile.confidence,
         source: detection.profile.source,
+        counts: countsFor(detection, profiles),
       });
     } catch (error) {
       if (error instanceof ImportLimitError || error instanceof StagingError) {
@@ -160,6 +170,49 @@ export async function POST(request: Request): Promise<Response> {
   return Response.json({ rows });
 }
 
+/**
+ * The real preview for a file whose account and mapping are both settled, so the list can say what
+ * it will import rather than only how many rows it holds. THE SAME CALL the preview screen makes
+ * -- see fileCounts() for why anything else would be a number the screen could contradict.
+ *
+ * Null rather than zeros when there is nothing to count against: an unresolved account means the
+ * duplicate check has no account to run in, and reporting "0 duplicates" there would be a claim
+ * this route cannot support. An OFX file has a null profile and still counts fine, because
+ * buildPreview dispatches on the file's content exactly as flow.ts does (ruling R9).
+ *
+ * A throw is swallowed to null on purpose: a count is a convenience on a row that already has its
+ * status and its reason, and losing the convenience must not cost the row.
+ */
+function countsFor(
+  detection: ReturnType<typeof detectStagedFile>,
+  profiles: { id: number; name: string; mapping: ImportMapping }[],
+): FileCounts | null {
+  const account = detection.account.account;
+  if (account === null) return null;
+
+  const profileId = detection.profile.profile?.id ?? null;
+  const detected = profiles.find((profile) => profile.id === profileId);
+  // An OFX file has no profile and needs none -- buildPreview dispatches on the file's content
+  // (ruling R9) and never looks at the mapping for one. It still has to be HANDED a mapping, so
+  // any offered one does; with no profiles at all there is nothing to hand it and nothing to count.
+  const mapping = detected?.mapping ?? (detection.profile.source === 'ofx' ? profiles[0]?.mapping : undefined);
+  if (mapping === undefined) return null;
+
+  try {
+    return fileCounts(
+      buildPreview({
+        stagingId: detection.stagingId,
+        filename: detection.filename,
+        accountId: account.id,
+        profileId,
+        mapping,
+      }),
+    );
+  } catch {
+    return null;
+  }
+}
+
 function unsupported(filename: string, reason: string): BatchDetectRow {
   return {
     status: 'unsupported',
@@ -172,5 +225,6 @@ function unsupported(filename: string, reason: string): BatchDetectRow {
     profile: null,
     profileConfidence: null,
     source: null,
+    counts: null,
   };
 }
