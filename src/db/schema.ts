@@ -801,9 +801,11 @@ export const warrantyItems = sqliteTable(
      *   - CHECK (interest_rate_bps IS NULL OR (>= 0 AND <= 1000000))
      *   - CHECK (current_balance_cents IS NULL OR current_balance_cents >= 0)
      *
-     * MUST-13.1: interest_rate_bps is DISPLAY ONLY. Basis points, so 5.49% is 549. No code
-     * path multiplies, accrues, projects or amortises with it, and a grep invariant in
-     * tests/ops/loan-invariants.test.ts keeps it that way.
+     * Basis points, so 5.49% is 549. v1.47.0 replaced MUST-13.1 ("this is display only") with
+     * MUST-13.1': interest is DERIVED, never stored, computed only in src/lib/loans/interest.ts,
+     * and shown only for a loan whose `interest_rate_basis` a person has set. The bare number here
+     * still says nothing about PERIOD -- that is what the basis column is for -- so nothing may
+     * multiply it without reading the basis first. Guard G1 in tests/ops/loan-invariants.test.ts.
      *
      * MUST-11.7/MUST-11.8: current_balance_cents and balance_updated_at are both set or
      * both NULL -- a CROSS-COLUMN rule, enforced in src/lib/warranty/items.ts rather than

@@ -84,7 +84,9 @@ export interface WarrantyItemRow {
   /**
    * v1.3.1 (spec §11.2). Loan money. Always present on a read row (NULL for every
    * non-loan item), never omitted -- matching every other nullable column above.
-   * MUST-13.1: interestRateBps is basis points and is DISPLAY ONLY.
+   * interestRateBps is basis points (5.49% is 549). Since v1.47.0 it IS calculated with -- but
+   * only through `interestRateBasis`, which says how the rate is charged, and only in
+   * src/lib/loans/interest.ts (MUST-13.1').
    */
   principalCents: number | null;
   interestRateBps: number | null;

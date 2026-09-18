@@ -19,14 +19,16 @@ import {
   type BillingCycle,
   type LoanDirection,
 } from '@/lib/warranty/constants';
-import { simulate, type InterestBasis, type MonthRow } from '@/lib/loans/interest';
+import { chargeCents, ratePpb, simulate, type InterestBasis, type MonthRow } from '@/lib/loans/interest';
 import { createWarrantyItem, type WarrantyInput } from '@/lib/warranty/items';
 import { createItemType, listItemTypes, ItemTypeError, type ItemType } from '@/lib/warranty/types';
 
 /**
  * Loan money-tracking (spec 2026-08-17 §13).
  *
- * MUST-13.1: interest_rate_bps is DISPLAY ONLY. Nothing in this file multiplies, accrues,
+ * v1.47.0: interest is computed now, but not here. MUST-13.1' puts every interest calculation in
+ * src/lib/loans/interest.ts, a pure module this file feeds; what remains true is that nothing in
+ * this file multiplies, accrues,
  * projects or amortises with it. Task 14 is expected to lock that in with its own grep-style
  * invariant test, the same way tests/lib/loans/invariants.test.ts (added by Task 10's round-3
  * fix) locks in transactions.amount_cents' immutability.
@@ -1940,7 +1942,8 @@ export interface PayoffProjection {
  * Task 16 (v1.7.0): a payoff projection, DISPLAY ONLY -- like payoffFraction and
  * nextPaymentDate above it, this never writes to the database and is never read back into any
  * balance-affecting code in this file. It deliberately never touches interest_rate_bps: that
- * column is display only (MUST-13.1, guarded by tests/ops/loan-invariants.test.ts's whole-file
+ * column was display only (MUST-13.1, retired in v1.47.0 -- see MUST-13.1' and ruling I18, which
+ * make this projection interest-aware when a basis is set; the whole-file
  * regex scan, and re-guarded function-scoped by tests/lib/loan-payoff.test.ts). A projection
  * built only from what the household has actually paid needs no rate at all.
  *
@@ -1998,7 +2001,13 @@ export interface PayoffProjection {
  */
 export function payoffProjection(itemId: number, today: string): PayoffProjection | null {
   const item = getDb()
-    .select({ balanceCents: warrantyItems.currentBalanceCents, direction: warrantyItems.loanDirection })
+    .select({
+      balanceCents: warrantyItems.currentBalanceCents,
+      direction: warrantyItems.loanDirection,
+      rateBps: warrantyItems.interestRateBps,
+      basis: warrantyItems.interestRateBasis,
+      principalCents: warrantyItems.principalCents,
+    })
     .from(warrantyItems)
     .where(eq(warrantyItems.id, itemId))
     .get();
@@ -2039,6 +2048,59 @@ export function payoffProjection(itemId: number, today: string): PayoffProjectio
   // payment counts as zero" means in practice: months.map fills every one of the 6 slots.
   const monthlyAppliedCents = meanCents(months.map((month) => byMonth.get(month) ?? 0)) ?? 0;
   if (monthlyAppliedCents === 0) return null;
+
+  /*
+    RULING L6: a balance being DRAWN ON has no payoff month. The query above sums repayments only
+    (amount_cents < 0), so a line of credit with advances in the same window would project a date
+    from half the story -- confidently wrong, and wrong in the optimistic direction.
+
+    NARROWED TO apr_daily, which is the revolving case L6 was written about. A one-off disbursement
+    on an ordinary loan is a different event: v1.21.0 fixed a reproduction where a $5,900
+    disbursement against a $6,000 balance made the pace look like six months instead of sixty, and
+    the fix was to exclude disbursements from the PACE while still projecting from the balance.
+    Refusing to project at all there would overturn that fix for a case it was right about. A line
+    of credit is the one whose balance is drawn on as a matter of course.
+  */
+  const advances = item?.basis !== 'apr_daily' ? undefined : getDb()
+    .select({ n: sql<number>`count(*)` })
+    .from(loanPayments)
+    .innerJoin(transactions, eq(transactions.id, loanPayments.txnId))
+    .where(
+      and(
+        eq(loanPayments.itemId, itemId),
+        gt(transactions.amountCents, 0),
+        gte(sql`substr(${transactions.date}, 1, 7)`, months[0]!),
+        lte(sql`substr(${transactions.date}, 1, 7)`, months[months.length - 1]!),
+      ),
+    )
+    .get();
+  if ((advances?.n ?? 0) > 0) return null;
+
+  /*
+    RULING I18. Without a basis this stays the division it always was. With one, dividing would be
+    optimistic by YEARS on a mortgage -- and the dashboard card and the loan page would then print
+    different payoff dates for the same loan, which is the contradiction that makes a household stop
+    believing both. So it simulates forward at the same pace instead, adding each month's charge.
+
+    A payment that does not clear the month's interest never pays the loan off, and the balance is
+    growing: null, and the page says "at this pace the balance is not going down."
+  */
+  if (item?.basis != null) {
+    const ppb = ratePpb(item.rateBps ?? 0, item.basis);
+    let owing = balanceCents;
+    for (let elapsed = 1; elapsed <= 1200; elapsed += 1) {
+      const charge =
+        item.basis === 'simple_on_principal'
+          ? chargeCents(item.principalCents ?? 0, ppb)
+          : chargeCents(owing, ppb);
+      const next = owing + charge - monthlyAppliedCents;
+      if (next >= owing) return null;
+      owing = next;
+      if (owing <= 0) return { monthlyAppliedCents, projectedPayoffMonth: addMonths(thisMonth, elapsed) };
+    }
+    // See ABSURD-PACE BOUND above: beyond a century out, null is the honest answer.
+    return null;
+  }
 
   const monthsNeeded = Math.ceil(balanceCents / monthlyAppliedCents);
   // See ABSURD-PACE BOUND above: beyond a century out, null is the honest answer.

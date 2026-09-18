@@ -19,7 +19,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { BellIcon } from '@/components/icons';
 import { Field, inputClass, labelClass, selectClass, textareaClass } from '@/components/ui/form';
 import { AutoSaveSelect } from '@/components/ui/AutoSave';
-import { formatCents } from '@/lib/money';
+import { formatCents, formatRateBps } from '@/lib/money';
 /**
  * v1.31.0 (controller-added alongside the P3 sweep). All three "show me this transaction" links
  * on this page go through transactionsHref, the ONE builder of a `/transactions?...` link
@@ -625,7 +625,7 @@ export function WarrantyDetailClient({
                 <dl className="flex flex-col gap-2">
                   {item.principalCents === null ? null : <Detail label="Original">{formatCents(item.principalCents)}</Detail>}
                   {item.interestRateBps === null ? null : (
-                    <Detail label="Rate">{(item.interestRateBps / 100).toFixed(2)}%</Detail>
+                    <Detail label="Rate">{formatRateBps(item.interestRateBps)}%</Detail>
                   )}
                   {lastPaymentAt === null ? null : <Detail label="Last payment">{lastPaymentAt.slice(0, 10)}</Detail>}
                   {/* Item 6 (v1.16.0 plan): the bare "Payments linked: N" row is gone -- the
@@ -1158,7 +1158,7 @@ function EditForm({
   // -SELECTED-kind treatment as the billing pair above.
   const [principal, setPrincipal] = useState(item.principalCents === null ? '' : (item.principalCents / 100).toFixed(2));
   const [interestRate, setInterestRate] = useState(
-    item.interestRateBps === null ? '' : (item.interestRateBps / 100).toFixed(2),
+    item.interestRateBps === null ? '' : formatRateBps(item.interestRateBps),
   );
   const [currentBalance, setCurrentBalance] = useState(
     item.currentBalanceCents === null ? '' : (item.currentBalanceCents / 100).toFixed(2),
@@ -1314,7 +1314,7 @@ function EditForm({
                     className={inputClass}
                   />
                 </Field>
-                <Field label="Interest rate" hint="Shown for reference only — this app does no interest math.">
+                <Field label="Interest rate" hint="Set how it is charged below to see interest estimates.">
                   <span className="flex items-center gap-2">
                     <input
                       name="interestRate"

@@ -81,3 +81,19 @@ export function pctOf(part: number, whole: number): number | null {
   if (whole === 0) return null;
   return (part / whole) * 100;
 }
+
+/**
+ * A rate in basis points, as a percentage for display: 549 becomes "5.49".
+ *
+ * ONE PLACE, and guard G1 (tests/ops/loan-invariants.test.ts) keeps it that way. Before v1.47.0 the
+ * division lived inline at three call sites, which was harmless while nothing calculated with the
+ * rate. Now that interest is computed, the guard's job is to make every arithmetic use of the rate
+ * visible, and three identical display divisions scattered through components would be three
+ * results it had to keep waving through -- at which point it would stop catching a real one.
+ *
+ * Display only: it returns a string and is never an input to an interest calculation. The
+ * calculation converts basis points itself, once, in src/lib/loans/interest.ts.
+ */
+export function formatRateBps(bps: number): string {
+  return (bps / 100).toFixed(2);
+}

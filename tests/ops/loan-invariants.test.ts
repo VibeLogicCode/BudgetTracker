@@ -52,14 +52,123 @@ describe('ruling P4: one helper owns the sign flip', () => {
   });
 });
 
-describe('MUST-13.1: the interest rate is display only', () => {
-  it('no arithmetic operator is ever applied to interestRateBps in src/lib/loans.ts', () => {
-    const offenders = read('src/lib/loans.ts')
-      .split('\n')
-      .map((line, index) => ({ line: line.trim(), number: index + 1 }))
-      .filter((entry) => !entry.line.startsWith('//') && !entry.line.startsWith('*'))
-      .filter((entry) => /interestRateBps\s*[*/+-]|[*/+-]\s*interestRateBps/.test(entry.line));
+/**
+ * MUST-13.1 IS RETIRED, and this block is what replaces it.
+ *
+ * The old rule was "the interest rate is display only", held by a regex forbidding any arithmetic
+ * on interestRateBps anywhere in src/lib/loans.ts. v1.47.0 computes interest, so that rule had to
+ * go -- but the reason it existed did not. What it was really protecting was that a rate with no
+ * stated period cannot be multiplied by anything without inventing the period, and that a figure
+ * the app cannot stand behind must not be presented as though it could.
+ *
+ * MUST-13.1' says the same thing in the shape the feature now needs:
+ *   interest is DERIVED, never stored; computed only in src/lib/loans/interest.ts; and shown only
+ *   for a loan whose basis a person has set.
+ *
+ * WHAT THESE GUARDS DELIBERATELY DO NOT CATCH: whether the arithmetic is CORRECT. That is
+ * tests/lib/loans/interest.test.ts and interest-simulation.test.ts, where every figure is
+ * hand-computed. These four are about where the arithmetic is allowed to live.
+ */
+describe("MUST-13.1' G1: the rate is multiplied in exactly two places", () => {
+  it('only interest.ts and the form boundary do arithmetic on the rate', () => {
+    const offenders = srcFiles()
+      .filter((file) => {
+        const relative = path.relative(root, file).replace(/\\/g, '/');
+        if (relative === 'src/lib/loans/interest.ts') return false;
+        // readInterestRateBps parses a typed percentage into basis points. That is a unit
+        // conversion at the edge, not an interest calculation.
+        if (relative === 'src/app/(app)/warranties/actions.ts') return false;
+        // formatRateBps: the single display division, which exists precisely so this guard has
+        // one result to allow instead of three scattered through components.
+        if (relative === 'src/lib/money.ts') return false;
+        return true;
+      })
+      .flatMap((file) => {
+        const relative = path.relative(root, file).replace(/\\/g, '/');
+        return stripComments(fs.readFileSync(file, 'utf8'))
+          .split('\n')
+          .map((line, index) => ({ file: relative, line: line.trim(), number: index + 1 }))
+          .filter((entry) => /interestRateBps\s*[*/+-]|[*/+-]\s*interestRateBps|interest_rate_bps\s*[*/+-]/.test(entry.line));
+      });
     expect(offenders).toEqual([]);
+  });
+});
+
+describe("MUST-13.1' G2: the engine stays pure", () => {
+  const engine = () => read('src/lib/loans/interest.ts');
+
+  /** It is handed its inputs. A module that can reach the database can be asked to store a result. */
+  it('reaches no database', () => {
+    // stripComments, because the module's own docblock EXPLAINS that it imports nothing from
+    // '@/db' -- punishing a file for documenting the rule is how the documentation gets deleted.
+    expect(stripComments(engine())).not.toMatch(/@\/db|getDb/);
+  });
+
+  /**
+   * It is handed "today" too. A pure function of its inputs is one a test can pin to a hand-computed
+   * figure, which is the only reason those figures mean anything.
+   */
+  it('reads no clock', () => {
+    // `new Date(iso)` with an argument is pure -- it is how a date string is parsed. What is banned
+    // is asking the environment what time it is now.
+    expect(stripComments(engine())).not.toMatch(/new Date\(\)|Date\.now\(|todayIso\(/);
+  });
+
+  /**
+   * Ruling P4, unchanged: the caller re-signs into the loan's frame with loanSignedDelta before
+   * anything arrives, so the engine never learns which way a loan points. A direction literal here
+   * would be a second place that convention lives.
+   */
+  it('never spells the direction', () => {
+    expect(stripComments(engine())).not.toMatch(/'lent'|"lent"/);
+  });
+});
+
+describe("MUST-13.1' G3: interest never becomes a writer", () => {
+  /**
+   * Interest is derived, so nothing about it may write a balance. The permitted writers are the
+   * ones that existed before this release, plus setLoanAnchor -- the single human-balance writer
+   * ruling R2 introduced. A sixth would mean an estimate had found its way into a stored figure.
+   */
+  it('the balance writers are the known five plus setLoanAnchor', () => {
+    const source = stripComments(read('src/lib/loans.ts'));
+    // link, recomputeLoanBalance, unassignTransactionFromLoan, reverseLoanLinksForTransactions,
+    // and setLoanAnchor. A sixth would mean an estimate had found its way into a stored figure.
+    const writes = source.split('.set({ currentBalanceCents').length - 1;
+    expect(writes).toBe(5);
+    expect(source).toContain('export function setLoanAnchor');
+  });
+
+  /** Ruling I15: the payment is the spend; counting interest inside it would double-count. */
+  it('interest never reaches a category, a budget or a transaction', () => {
+    const engine = read('src/lib/loans/interest.ts');
+    for (const forbidden of ['categories', 'budgets', 'transactions', 'Fees > Interest']) {
+      expect({ forbidden, present: engine.includes(forbidden) }).toEqual({ forbidden, present: false });
+    }
+  });
+});
+
+describe("MUST-13.1' G4: the copy no longer claims the app does no interest maths", () => {
+  /**
+   * Five places said so in as many words, and a stale docblock is treated as a defect in this
+   * repo. They were rewritten in the same commit that made them false.
+   */
+  it('nothing still says the rate is display only', () => {
+    /*
+      The specific stale sentences, not every use of the words "display only" -- a receipt's stored
+      filename and the payoff fraction are both display-only and always were, so a blanket scan
+      would force those comments to be reworded for no reason and would go on doing it forever.
+    */
+    const claims: [file: string, claim: RegExp][] = [
+      ['src/db/schema.ts', /interest_rate_bps is DISPLAY ONLY/],
+      ['src/lib/loans.ts', /MUST-13\.1: interest_rate_bps is DISPLAY ONLY/],
+      ['src/lib/warranty/items.ts', /interestRateBps is basis points and is DISPLAY ONLY/],
+      ['src/app/(app)/warranties/[id]/warranty-detail-client.tsx', /does no interest math/],
+      ['src/app/(app)/warranties/new/new-warranty-client.tsx', /does no interest math/],
+    ];
+    for (const [file, claim] of claims) {
+      expect({ file, stale: claim.test(read(file)) }).toEqual({ file, stale: false });
+    }
   });
 });
 

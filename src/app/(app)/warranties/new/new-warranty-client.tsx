@@ -423,7 +423,7 @@ export function NewWarrantyClient({
                       className={inputClass}
                     />
                   </Field>
-                  <Field label="Interest rate" hint="Shown for reference only — this app does no interest math.">
+                  <Field label="Interest rate" hint="Set how it is charged below to see interest estimates.">
                     <span className="flex items-center gap-2">
                       <input
                         name="interestRate"

@@ -1,5 +1,5 @@
 import { monthLabel } from '@/lib/dates';
-import { formatCents } from '@/lib/money';
+import { formatCents, formatRateBps } from '@/lib/money';
 import type { LoanSummary } from '@/lib/loans';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { ProgressBar } from '@/components/ui/ProgressBar';
@@ -74,7 +74,7 @@ export function LoansCard({ loans, totalOwedCents }: { loans: LoanSummary[]; tot
             )}
             <span className="flex flex-wrap gap-x-3 text-xs text-subtle">
               {loan.nextPaymentDate === null ? null : <span>Next payment {loan.nextPaymentDate}</span>}
-              {loan.interestRateBps === null ? null : <span>Rate {(loan.interestRateBps / 100).toFixed(2)}%</span>}
+              {loan.interestRateBps === null ? null : <span>Rate {formatRateBps(loan.interestRateBps)}%</span>}
               {loan.payoffProjection == null ? null : (
                 <span>Paid off around {monthLabel(loan.payoffProjection.projectedPayoffMonth)} at this pace</span>
               )}

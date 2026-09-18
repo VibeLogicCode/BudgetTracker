@@ -291,11 +291,13 @@ describe('payoffProjection: source guards', () => {
     return source.slice(start, i);
   }
 
-  it('never references interestRateBps or interest_rate_bps', () => {
-    const body = functionSource('payoffProjection');
-    expect(body).not.toMatch(/interestRateBps/);
-    expect(body).not.toMatch(/interest_rate_bps/);
-  });
+  /**
+   * v1.47.0: the "never references interestRateBps" case that stood here is RETIRED with MUST-13.1.
+   * Interest is computed now, and payoffProjection is interest-aware on purpose (ruling I18) --
+   * without that, this function and the loan page would print different payoff dates for the same
+   * loan. Its replacement, MUST-13.1', is in tests/ops/loan-invariants.test.ts: arithmetic on the
+   * rate may appear only in src/lib/loans/interest.ts and at the form boundary.
+   */
 
   it('never touches the clock: no new Date(, Date.now(, or todayIso( inside the function', () => {
     const body = functionSource('payoffProjection');
