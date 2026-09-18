@@ -171,7 +171,7 @@ describe('DashboardPage (ruling R2)', () => {
       typeId: loanType.id,
       notes: null,
       principalCents: over.balanceCents,
-      interestRateBps: null,
+      interestRateBps: null, interestRateBasis: null,
       currentBalanceCents: over.balanceCents,
       balanceUpdatedAt: today,
       loanDirection: over.direction,

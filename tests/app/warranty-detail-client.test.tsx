@@ -45,7 +45,7 @@ function item(over: Partial<WarrantyItemRow> = {}): WarrantyItemRow {
     typeId: null, typeName: null, isSubscription: false, kind: 'warranty', notes: 'kitchen',
     createdAt: '2026-08-16T00:00:00.000Z', updatedAt: '2026-08-16T00:00:00.000Z',
     billingCycle: null, billingAmountCents: null,
-    principalCents: null, interestRateBps: null, currentBalanceCents: null, balanceUpdatedAt: null,
+    principalCents: null, interestRateBps: null, interestRateBasis: null, currentBalanceCents: null, balanceUpdatedAt: null,
     // v1.13.0 Task 5: budgetCategoryId is on every WarrantyItemRow now (ruling R11 / M9).
     budgetCategoryId: null,
     // v1.14.0 (spec BU, T1): required on every row -- 'owed' is the default for every

@@ -30,7 +30,7 @@ function loanWith(over: Record<string, unknown> = {}): { itemId: number; user: n
     transactionId: null,
     typeId: loanTypeId(),
     notes: null,
-    interestRateBps: 500,
+    interestRateBps: 500, interestRateBasis: null,
     ...over,
   } as Parameters<typeof createWarrantyItem>[0]);
   return { itemId, user, accountId };

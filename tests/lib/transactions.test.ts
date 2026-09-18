@@ -662,7 +662,7 @@ describe('bulkAssignToLoan (v1.25.0 Lane R item R3)', () => {
       typeId: loanType.id,
       notes: null,
       principalCents: 3_000_000,
-      interestRateBps: 0,
+      interestRateBps: 0, interestRateBasis: null,
       currentBalanceCents: balanceCents,
       balanceUpdatedAt: nowIso(),
       loanDirection: 'owed',

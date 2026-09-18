@@ -431,7 +431,7 @@ describe('loan money surfaces on list rows', () => {
       vendor: null, model: null, serial: null,
       purchaseDate: '2026-08-16', warrantyMonths: null, isLifetime: false,
       priceCents: null, ownerUserId: owner, transactionId: null, typeId: loan.id, notes: null,
-      principalCents: 2500000, interestRateBps: 549, currentBalanceCents: 2000000,
+      principalCents: 2500000, interestRateBps: 549, interestRateBasis: null, currentBalanceCents: 2000000,
       balanceUpdatedAt: '2026-08-16T00:00:00.000Z',
     });
     const row = searchWarrantyItems({ today: TODAY }, HOUSEHOLD).rows.find((r) => r.id === id)!;

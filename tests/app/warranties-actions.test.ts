@@ -177,7 +177,7 @@ function seedLoanItem(opts: { balanceCents?: number } = {}): number {
     typeId: loanType.id,
     notes: null,
     principalCents: 3_000_000,
-    interestRateBps: 549,
+    interestRateBps: 549, interestRateBasis: null,
     currentBalanceCents: opts.balanceCents ?? 2_000_000,
     balanceUpdatedAt: nowIso(),
   });

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '@/db/client';
+import type { InterestBasis } from '@/lib/loans/interest';
 import { users, warrantyItemTypes, warrantyItems, warrantyReceipts } from '@/db/schema';
 import { ownerScope, type Viewer } from '@/lib/auth/viewer';
 import { nowIso } from '@/lib/clock';
@@ -90,6 +91,12 @@ export interface WarrantyItemRow {
    */
   principalCents: number | null;
   interestRateBps: number | null;
+  /**
+   * v1.47.0. HOW the rate is charged -- the one thing a bare rate cannot say, and without which
+   * nothing may be computed from it (ruling I5). NULL is the value every existing loan carries and
+   * means "nobody has told us": no estimate, no split, no change from before the upgrade.
+   */
+  interestRateBasis: InterestBasis | null;
   currentBalanceCents: number | null;
   balanceUpdatedAt: string | null;
   /**
@@ -155,6 +162,12 @@ export interface WarrantyInput {
    */
   principalCents?: number | null;
   interestRateBps?: number | null;
+  /**
+   * v1.47.0. HOW the rate is charged -- the one thing a bare rate cannot say, and without which
+   * nothing may be computed from it (ruling I5). Omitted or NULL is what every existing loan
+   * carries and means "nobody has told us": no estimate, no split, no change from before.
+   */
+  interestRateBasis?: InterestBasis | null;
   currentBalanceCents?: number | null;
   balanceUpdatedAt?: string | null;
   /**
@@ -250,6 +263,10 @@ export function warrantyInputSchema(today: string) {
         .optional(),
       // MUST-14.4: 0-10000%, range-checked in zod as well as in SQL.
       interestRateBps: z.number().int().min(0).max(1_000_000, 'That rate is out of range.').nullable().optional(),
+      interestRateBasis: z
+        .enum(['none', 'apr_monthly', 'apr_semiannual', 'per_month', 'simple_on_principal', 'apr_daily'])
+        .nullable()
+        .optional(),
       currentBalanceCents: z
         .number()
         .int('The balance must be a whole number of cents')
@@ -306,6 +323,7 @@ const ITEM_COLUMNS = {
   billingAmountCents: warrantyItems.billingAmountCents,
   principalCents: warrantyItems.principalCents,
   interestRateBps: warrantyItems.interestRateBps,
+  interestRateBasis: warrantyItems.interestRateBasis,
   currentBalanceCents: warrantyItems.currentBalanceCents,
   balanceUpdatedAt: warrantyItems.balanceUpdatedAt,
   budgetCategoryId: warrantyItems.budgetCategoryId,
@@ -360,15 +378,50 @@ function assertLoanFieldsMatchKind(
     interestRateBps: number | null;
     currentBalanceCents: number | null;
     balanceUpdatedAt: string | null;
+    interestRateBasis: InterestBasis | null;
   },
 ): void {
   const empty =
     values.principalCents === null &&
     values.interestRateBps === null &&
     values.currentBalanceCents === null &&
-    values.balanceUpdatedAt === null;
+    values.balanceUpdatedAt === null &&
+    values.interestRateBasis === null;
   if (empty) return;
   if (!loanFieldsAllowedForKind(kindForTypeId(typeId))) throw new Error(LOAN_KIND_ERROR);
+}
+
+/**
+ * Ruling I6: the cross-column rules the basis brings with it.
+ *
+ * These are app-layer for the reason 0007 already gave about the other loan columns -- SQLite
+ * cannot add a CHECK to an existing table and have it re-validate the rows already in it. The SQL
+ * CHECK on the column itself only says the value is one of the six.
+ *
+ * Each rule exists because breaking it would make the app compute something it cannot mean: a
+ * basis with no rate has nothing to multiply; an interest-free loan carrying a rate is two
+ * contradictory claims; and charging on the original amount needs an original amount to charge on.
+ */
+function assertInterestBasisIsUsable(values: {
+  interestRateBasis: InterestBasis | null;
+  interestRateBps: number | null;
+  principalCents: number | null;
+}): void {
+  const basis = values.interestRateBasis;
+  if (basis === null) return;
+
+  if (basis === 'none') {
+    if ((values.interestRateBps ?? 0) !== 0) {
+      throw new Error('An interest-free loan cannot also carry an interest rate. Clear the rate, or choose how it is charged.');
+    }
+    return;
+  }
+  if (values.interestRateBps === null) {
+    throw new Error('Saying how a rate is charged needs an interest rate to charge.');
+  }
+  if (basis === 'simple_on_principal' && values.principalCents === null) {
+    throw new Error('A rate charged on the original amount needs that original amount recorded.');
+  }
 }
 
 /**
@@ -446,11 +499,13 @@ export function createWarrantyItem(
   const interestRateBps = input.interestRateBps ?? null;
   const currentBalanceCents = input.currentBalanceCents ?? null;
   const balanceUpdatedAt = input.balanceUpdatedAt ?? null;
+  const interestRateBasis = input.interestRateBasis ?? null;
   const loanDirection = input.loanDirection ?? 'owed';
   assertBillingMatchesKind(input.typeId, billingCycle, billingAmountCents);
-  assertLoanFieldsMatchKind(input.typeId, { principalCents, interestRateBps, currentBalanceCents, balanceUpdatedAt });
+  assertLoanFieldsMatchKind(input.typeId, { principalCents, interestRateBps, currentBalanceCents, balanceUpdatedAt, interestRateBasis });
   assertBalanceAnchorPairing(currentBalanceCents, balanceUpdatedAt);
   assertLoanDirectionMatchesKind(input.typeId, loanDirection);
+  assertInterestBasisIsUsable({ interestRateBasis, interestRateBps, principalCents });
 
   const db = getDb();
   const expiryDate = computeExpiryDate(input);
@@ -508,11 +563,13 @@ export function updateWarrantyItem(id: number, input: WarrantyInput, at: string 
   const interestRateBps = input.interestRateBps ?? null;
   const currentBalanceCents = input.currentBalanceCents ?? null;
   const balanceUpdatedAt = input.balanceUpdatedAt ?? null;
+  const interestRateBasis = input.interestRateBasis ?? null;
   const loanDirection = input.loanDirection ?? 'owed';
   assertBillingMatchesKind(input.typeId, billingCycle, billingAmountCents);
-  assertLoanFieldsMatchKind(input.typeId, { principalCents, interestRateBps, currentBalanceCents, balanceUpdatedAt });
+  assertLoanFieldsMatchKind(input.typeId, { principalCents, interestRateBps, currentBalanceCents, balanceUpdatedAt, interestRateBasis });
   assertBalanceAnchorPairing(currentBalanceCents, balanceUpdatedAt);
   assertLoanDirectionMatchesKind(input.typeId, loanDirection);
+  assertInterestBasisIsUsable({ interestRateBasis, interestRateBps, principalCents });
 
   const result = getDb()
     .update(warrantyItems)
@@ -522,6 +579,7 @@ export function updateWarrantyItem(id: number, input: WarrantyInput, at: string 
       billingAmountCents,
       principalCents,
       interestRateBps,
+      interestRateBasis,
       currentBalanceCents,
       balanceUpdatedAt,
       loanDirection,

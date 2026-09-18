@@ -5,6 +5,7 @@ import { EXPIRING_SOON_DAYS, type WarrantyStatus } from '@/lib/warranty/expiry';
 import { STATUS_CASE_SQL } from '@/lib/warranty/expiry-sql';
 import type { WarrantyItemRow } from '@/lib/warranty/items';
 import { WARRANTY_SORTS, isWarrantySort, type BillingCycle, type ItemKind, type LoanDirection, type WarrantySort } from '@/lib/warranty/constants';
+import type { InterestBasis } from '@/lib/loans/interest';
 
 /** §17.22 */
 export const WARRANTY_PAGE_SIZE = 50;
@@ -139,6 +140,7 @@ interface RawRow {
   billing_amount_cents: number | null;
   principal_cents: number | null;
   interest_rate_bps: number | null;
+  interest_rate_basis: InterestBasis | null;
   loan_direction: LoanDirection;
   current_balance_cents: number | null;
   balance_updated_at: string | null;
@@ -176,6 +178,7 @@ function toListItem(row: RawRow): WarrantyListItem {
     billingAmountCents: row.billing_amount_cents,
     principalCents: row.principal_cents,
     interestRateBps: row.interest_rate_bps,
+    interestRateBasis: row.interest_rate_basis,
     loanDirection: row.loan_direction,
     currentBalanceCents: row.current_balance_cents,
     balanceUpdatedAt: row.balance_updated_at,
