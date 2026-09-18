@@ -191,7 +191,11 @@ describe('MUST-14.1 / MUST-12.3: the loan surfaces', () => {
 
     fireEvent.change(container.querySelector('select[name="typeId"]')!, { target: { value: '3' } }); // Car loan
     expect(screen.getByText('Balance still owed')).toBeTruthy();
-    expect(screen.getByText('Shown for reference only — this app does no interest math.')).toBeTruthy();
+    // v1.47.0: the rate is no longer decorative, so its hint no longer says it is. The fieldset
+    // now also carries the field that turns interest on -- which is the thing worth asserting is
+    // present, because without it the rate stays inert.
+    expect(screen.getByText('Set how it is charged below to see interest estimates.')).toBeTruthy();
+    expect(screen.getByText('How the rate is charged')).toBeTruthy();
     expect(container.querySelector('input[name="principal"]')).toBeTruthy();
     expect(container.querySelector('input[name="interestRate"]')).toBeTruthy();
     expect(container.querySelector('input[name="currentBalance"]')).toBeTruthy();

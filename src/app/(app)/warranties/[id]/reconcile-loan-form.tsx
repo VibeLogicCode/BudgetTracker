@@ -7,7 +7,10 @@ import { Notice } from '@/components/ui/Notice';
 import { Field, inputClass } from '@/components/ui/form';
 import { buttonClass } from '@/components/ui/Button';
 import { formatCents } from '@/lib/money';
-import { reconcileLoanAction } from '@/app/(app)/warranties/actions';
+// Relative, like every other client component in this route folder: a '@/' edge into a
+// 'use server' module is one tests/ops/client-bundle.test.ts follows into better-sqlite3, and
+// living beside the route it belongs to is the shape the rest of the app already uses.
+import { reconcileLoanAction } from '../actions';
 import type { LoanInterest } from '@/lib/loans';
 import type { LoanDirection } from '@/lib/warranty/constants';
 

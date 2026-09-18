@@ -474,9 +474,23 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-7.1: the 1.46.0 release', () => {
+  it('MUST-7.1: the 1.47.0 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.46.0');
+    expect(pkg.version).toBe('1.47.0');
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toMatch(/^## \[1\.47\.0\] - 2026-09-18$/m);
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.47.0]'));
+    expect(changelog.indexOf('## [1.47.0]')).toBeLessThan(changelog.indexOf('## [1.46.0]'));
+    const current = changelog.slice(changelog.indexOf('## [1.47.0]'), changelog.indexOf('## [1.46.0]'));
+    expect(current).toMatch(/Interest on loans/i);
+    expect(current).toMatch(/Reconcile to a statement/i);
+    expect(current).toMatch(/not estimates/i);
+    expect(current).toMatch(/Before updating/);
+  });
+
+  it('MUST-7.1: the 1.46.0 release is still recorded intact (append-only discipline)', () => {
+    const pkg = JSON.parse(read('package.json')) as { version: string };
+    expect(pkg.version).toBe('1.47.0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.46\.0\] - 2026-09-16$/m);
     expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.46.0]'));
@@ -490,7 +504,7 @@ describe('version and changelog', () => {
 
   it('MUST-7.1: the 1.45.0 release is still recorded intact (append-only discipline)', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.46.0');
+    expect(pkg.version).toBe('1.47.0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.45\.0\] - 2026-09-15$/m);
     expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.45.0]'));
@@ -505,7 +519,7 @@ describe('version and changelog', () => {
 
   it('MUST-7.1: the 1.44.1 release is still recorded intact (append-only discipline)', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.46.0');
+    expect(pkg.version).toBe('1.47.0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.44\.1\] - 2026-09-15$/m);
     expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.44.1]'));
@@ -517,7 +531,7 @@ describe('version and changelog', () => {
 
   it('MUST-7.1: the 1.44.0 release is still recorded intact (append-only discipline)', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.46.0');
+    expect(pkg.version).toBe('1.47.0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.44\.0\] - 2026-09-15$/m);
     expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.44.0]'));
@@ -532,7 +546,7 @@ describe('version and changelog', () => {
 
   it('MUST-7.1: the 1.43.0 release is still recorded intact (append-only discipline)', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.46.0');
+    expect(pkg.version).toBe('1.47.0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.43\.0\] - 2026-09-15$/m);
     expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.43.0]'));
@@ -546,7 +560,7 @@ describe('version and changelog', () => {
 
   it('MUST-7.1: the 1.42.1 release is still recorded intact (append-only discipline)', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.46.0');
+    expect(pkg.version).toBe('1.47.0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.42\.1\] - 2026-09-15$/m);
     expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.42.1]'));
@@ -558,7 +572,7 @@ describe('version and changelog', () => {
 
   it('MUST-7.1: the 1.42.0 release is still recorded intact (append-only discipline)', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.46.0');
+    expect(pkg.version).toBe('1.47.0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.42\.0\] - 2026-09-15$/m);
     expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.42.0]'));
@@ -573,7 +587,7 @@ describe('version and changelog', () => {
 
   it('MUST-7.1: the 1.41.2 release is still recorded intact (append-only discipline)', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.46.0');
+    expect(pkg.version).toBe('1.47.0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.41\.2\] - 2026-09-15$/m);
     expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.41.2]'));
@@ -586,7 +600,7 @@ describe('version and changelog', () => {
 
   it('MUST-7.1: the 1.41.1 release is still recorded intact (append-only discipline)', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.46.0');
+    expect(pkg.version).toBe('1.47.0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.41\.1\] - 2026-09-15$/m);
     expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.41.1]'));
@@ -600,7 +614,7 @@ describe('version and changelog', () => {
 
   it('MUST-7.1: the 1.41.0 release is still recorded intact (append-only discipline)', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.46.0');
+    expect(pkg.version).toBe('1.47.0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.41\.0\] - 2026-09-15$/m);
     expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.41.0]'));
@@ -613,7 +627,7 @@ describe('version and changelog', () => {
 
   it('MUST-7.1: the 1.40.0 release is still recorded intact (append-only discipline)', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.46.0');
+    expect(pkg.version).toBe('1.47.0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.40\.0\] - 2026-09-15$/m);
     expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.40.0]'));
@@ -630,7 +644,7 @@ describe('version and changelog', () => {
 
   it('MUST-7.1: the 1.39.1 release is still recorded intact (append-only discipline)', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.46.0');
+    expect(pkg.version).toBe('1.47.0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.39\.1\] - 2026-09-14$/m);
     expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.39.1]'));
@@ -646,7 +660,7 @@ describe('version and changelog', () => {
 
   it('MUST-7.1: the 1.39.0 release is still recorded intact (append-only discipline)', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.46.0');
+    expect(pkg.version).toBe('1.47.0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.39\.0\] - 2026-09-14$/m);
     expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.39.0]'));
@@ -666,7 +680,7 @@ describe('version and changelog', () => {
 
   it('MUST-7.1: the 1.38.0 release is still recorded intact (append-only discipline)', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.46.0');
+    expect(pkg.version).toBe('1.47.0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.38\.0\] - 2026-09-14$/m);
     expect(changelog.indexOf('## [1.38.0]')).toBeLessThan(changelog.indexOf('## [1.37.0]'));
@@ -679,7 +693,7 @@ describe('version and changelog', () => {
 
   it('MUST-7.1: the 1.37.0 release is still recorded intact (append-only discipline)', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.46.0');
+    expect(pkg.version).toBe('1.47.0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.37\.0\] - 2026-09-13$/m);
     expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.37.0]'));
@@ -698,7 +712,7 @@ describe('version and changelog', () => {
 
   it('MUST-7.1: the 1.36.1 release is still recorded intact (append-only discipline)', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.46.0');
+    expect(pkg.version).toBe('1.47.0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.36\.1\] - 2026-09-09$/m);
     expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.36.1]'));
@@ -714,7 +728,7 @@ describe('version and changelog', () => {
 
   it('MUST-7.1: the 1.36.0 release is still recorded intact (append-only discipline)', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.46.0');
+    expect(pkg.version).toBe('1.47.0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.36\.0\] - 2026-09-09$/m);
     expect(changelog.indexOf('## [1.36.0]')).toBeLessThan(changelog.indexOf('## [1.35.0]'));
@@ -732,7 +746,7 @@ describe('version and changelog', () => {
 
   it('MUST-7.1: the 1.35.0 release is still recorded intact (append-only discipline)', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.46.0');
+    expect(pkg.version).toBe('1.47.0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.35\.0\] - 2026-09-09$/m);
     expect(changelog.indexOf('## [1.35.0]')).toBeLessThan(changelog.indexOf('## [1.34.0]'));
@@ -753,7 +767,7 @@ describe('version and changelog', () => {
 
   it('MUST-7.1: the 1.34.0 release is still recorded intact (append-only discipline)', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.46.0');
+    expect(pkg.version).toBe('1.47.0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.34\.0\] - 2026-09-08$/m);
     expect(changelog.indexOf('## [1.34.0]')).toBeLessThan(changelog.indexOf('## [1.33.0]'));
@@ -773,7 +787,7 @@ describe('version and changelog', () => {
 
   it('MUST-7.1: the 1.33.0 release is still recorded intact (append-only discipline)', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.46.0');
+    expect(pkg.version).toBe('1.47.0');
     const changelog = read('CHANGELOG.md');
     expect(changelog).toMatch(/^## \[1\.33\.0\] - 2026-09-08$/m);
     expect(changelog.indexOf('## [1.33.0]')).toBeLessThan(changelog.indexOf('## [1.32.0]'));

@@ -396,6 +396,52 @@ export const HELP_SECTIONS: HelpSection[] = [
           own card on the Dashboard and their own line on the debt report.
         </P>
         <P>
+          <B>Interest.</B> Recording a rate on its own does nothing — a rate is just a number until
+          the app knows how it is charged, and 5.49% could mean per year or per month. Choose{' '}
+          <B>How the rate is charged</B> on the loan and the app starts estimating: what this month
+          costs, what a year would cost if the balance stayed where it is, how much interest has
+          built up since your last statement, and how much of each payment went on interest rather
+          than the loan itself. Leave it unset and nothing changes — which is how every loan starts.
+        </P>
+        <P>
+          Six ways a rate can be charged, because households really do meet all of them:{' '}
+          <B>interest-free</B> (every payment comes off the balance);{' '}
+          <B>a yearly rate with a twelfth charged each month</B> (most car and personal loans);{' '}
+          <B>compounded twice a year</B> (Canadian mortgages — about 1% a month less than simply
+          dividing by twelve, which is why it is its own option); <B>a monthly rate</B>;{' '}
+          <B>a yearly rate on the original amount</B> (the &ldquo;5% a year on the $10,000&rdquo;
+          agreement, where the charge never changes as you repay); and{' '}
+          <B>worked out daily</B>, for a line of credit whose balance moves during the month.
+        </P>
+        <P>
+          <B>These figures are estimates, and the app says so.</B> Your lender charges interest on
+          its own days, rounds its own way, adds fees the app never sees, and may have changed your
+          rate. The app cannot reproduce that exactly and does not pretend to — so every
+          rate-derived figure is labelled an estimate and dated from the last balance you confirmed.
+        </P>
+        <P>
+          <B>Reconcile to a statement</B> is what keeps it honest. Type what the statement says and
+          that figure becomes the new starting point; everything before it is closed off with a
+          record of how far the estimate was out. Do that each time a statement arrives and the
+          estimate never drifts far. The app keeps the list, so over time you can see whether it
+          runs high or low for that lender. If your statement is a PDF or a CSV you can hand it to
+          the form and it will fill in what it can find — you still check the figures before saving.
+        </P>
+        <P>
+          Two of the numbers on a loan are <B>not</B> estimates. How much the balance moved between
+          two statements beyond the payments you linked is exactly what the lender added, fees
+          included. And if you type in the interest figure your statement prints, the app can total
+          those across statements and tell you what you have really paid — no rate, no arithmetic of
+          its own.
+        </P>
+        <P>
+          <B>A line of credit</B> can go either way here. If your lender gives you a CSV, add it as
+          a Credit account instead: the interest arrives as a real transaction, which beats any
+          estimate. If you only ever see it through your chequing account, add it as a loan with{' '}
+          <B>worked out daily</B>, assign the draws as well as the payments, and reconcile from each
+          statement. Do not do both for the same line of credit — it would be counted twice.
+        </P>
+        <P>
           You don&rsquo;t have to start on this page to record a loan. From the Transactions
           page, a row&rsquo;s menu offers <B>Assign to &lt;loan name&gt;</B> for an
           existing loan — money out on a loan you lent out adds to what they owe, money in

@@ -2359,7 +2359,16 @@ export function loansTotalOwedCents(): number {
   // reads this function and correctly stops counting those loans without being edited itself.
   return listLoans(todayIso(), HOUSEHOLD_VIEWER)
     .filter((loan) => loan.loanDirection === 'owed')
-    .reduce((sum, loan) => sum + (loan.currentBalanceCents ?? 0), 0);
+    /*
+      v1.47.0 (ruling I16): owing-now when the loan has an interest estimate, the stored balance
+      otherwise. Interest that has been charged and not yet paid IS owed, so leaving it out would
+      understate the household's debt -- and would make net worth disagree with the figure printed
+      at the top of the loan's own page.
+
+      Every loan without a basis falls through to exactly today's arithmetic, which is every loan
+      on every existing install until somebody chooses one.
+    */
+    .reduce((sum, loan) => sum + (loan.interest?.owingCents ?? loan.currentBalanceCents ?? 0), 0);
 }
 
 // ---------------------------------------------------------------- read model (debt over time)

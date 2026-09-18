@@ -90,7 +90,7 @@ import {
 } from '../actions';
 import { buttonClass } from '@/components/ui/Button';
 import { LoanInterestCard } from '@/components/LoanInterestCard';
-import { ReconcileLoanForm } from '@/components/ReconcileLoanForm';
+import { ReconcileLoanForm } from './reconcile-loan-form';
 import type { LoanInterest, LoanReconciliation } from '@/lib/loans';
 
 const initial: WarrantyActionState = {};

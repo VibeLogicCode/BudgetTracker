@@ -21,6 +21,49 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.47.0] - 2026-09-18
+
+**Before updating:** this adds a column and a table, and changes nothing you can see until you
+choose how a loan's rate is charged. Every existing loan keeps the balance and the figures it has
+today.
+
+### Added
+
+- **Interest on loans, at last.** The app stored an interest rate and did nothing with it. Tell a
+  loan how its rate is charged and it works out what this month costs, what a year would cost if the
+  balance stayed where it is, how much has built up since your last statement, and how much of each
+  payment went on interest rather than the loan.
+- **Six ways a rate can be charged**, because households meet all of them: interest-free; a yearly
+  rate with a twelfth each month; compounded twice a year for Canadian mortgages; a monthly rate; a
+  yearly rate on the original amount for the "5% a year on the $10,000" agreement; and worked out
+  daily for a line of credit. The Canadian option matters — dividing a yearly rate by twelve
+  overstates a $300,000 mortgage by roughly $156 a year.
+- **Reconcile to a statement.** The app cannot reproduce your lender's arithmetic and does not
+  pretend to, so instead it is correctable: type what the statement says and that becomes the new
+  starting point, with a record of how far the estimate was out. Each one is kept, so over time you
+  can see whether the estimate runs high or low for that lender. Hand it a PDF or a CSV and it fills
+  in what it can find — showing the words around each figure, so you can see why it chose one — and
+  still waits for you to confirm.
+- **Two figures that are not estimates.** How much the balance moved between two statements beyond
+  the payments you linked is exactly what the lender added, fees included. And the interest figure
+  your own statement prints, once you enter it, totals across statements with no arithmetic of the
+  app's own.
+
+### Changed
+
+- **The payoff date takes interest into account** for a loan with a rate set, instead of dividing
+  the balance by recent payments — which on a mortgage was optimistic by years, and would have made
+  the dashboard contradict the loan page. It says nothing at all when a payment does not cover the
+  month's interest, and when a line of credit is being drawn on.
+- **What is owed includes interest charged but not yet paid**, on the loan card and in net worth.
+
+### Fixed
+
+- **A payment dated before your latest statement no longer moves the balance twice.** A statement
+  figure already contains everything up to its date, so such a payment is recorded without being
+  applied again — which also means removing one can no longer push the balance above the figure you
+  confirmed.
+
 ## [1.46.0] - 2026-09-16
 
 No migration.
