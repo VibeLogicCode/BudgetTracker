@@ -136,15 +136,14 @@ describe('migration 0024: bounds and attribution on merchant_rules', () => {
     ).toMatch(/foreign key/i);
   });
 
-  it('records itself in the journal, immediately after 0023, and is the newest', () => {
+  it('records itself in the journal, immediately after 0023', () => {
     const journal = JSON.parse(
       fs.readFileSync(path.join(process.cwd(), 'drizzle/meta/_journal.json'), 'utf8'),
     ) as { entries: { idx: number; tag: string }[] };
     expect(journal.entries.find((row) => row.tag === '0024_rule_bounds_and_attribution')).toMatchObject({ idx: 24 });
     const idxs = journal.entries.map((entry) => entry.idx).sort((a, b) => a - b);
     expect(idxs.indexOf(24)).toBe(idxs.indexOf(23) + 1);
-    // This suite now owns the "I am the newest" claim, handed on from 0023's.
-    expect(Math.max(...idxs)).toBe(24);
+    // The "I am the newest" claim moved on to 0025's suite, as it moved here from 0023's.
   });
 
   it('refuses a range whose minimum is above its maximum', () => {

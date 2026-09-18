@@ -106,22 +106,25 @@ describe('MUST-11.5 / MUST-11.17: the shapes exist after migration', () => {
     expect(byName.get('balance_updated_at')).toBe('text');
   });
 
-  it('creates both tables, empty', () => {
+  /** v1.47.0: loan_anchors joined them (drizzle/0025). Three now, not two. */
+  it('creates all three tables, empty', () => {
     const names = t.sqlite
       .prepare(`select name from sqlite_master where type = 'table' and name like 'loan_%' order by name`)
       .all() as { name: string }[];
-    expect(names.map((r) => r.name)).toEqual(['loan_matcher_rules', 'loan_payments']);
-    for (const table of ['loan_matcher_rules', 'loan_payments']) {
+    expect(names.map((r) => r.name)).toEqual(['loan_anchors', 'loan_matcher_rules', 'loan_payments']);
+    for (const table of ['loan_anchors', 'loan_matcher_rules', 'loan_payments']) {
       const { n } = t.sqlite.prepare(`select count(*) as n from ${table}`).get() as { n: number };
       expect(n).toBe(0);
     }
   });
 
-  it('creates all five named indexes', () => {
+  /** v1.47.0: loan_anchors_item_idx joined them. Six now, not five. */
+  it('creates all six named indexes', () => {
     const names = t.sqlite
       .prepare(`select name from sqlite_master where type = 'index' and name like 'loan_%' order by name`)
       .all() as { name: string }[];
     expect(names.map((r) => r.name)).toEqual([
+      'loan_anchors_item_idx',
       'loan_matcher_rules_item_idx',
       'loan_matcher_rules_uq',
       'loan_payments_item_idx',

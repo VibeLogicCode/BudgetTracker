@@ -1,9 +1,8 @@
 -- 2026-09-13. A rule can now be about an AMOUNT as well as a merchant, and can name a PERSON.
 --
--- Owner report: "insurance is with same company but different amount but imported categorizes the
--- last setting i do so everything goes to home or auto. can i set in rule vendor + amount rule?"
--- and, separately: "think about person too so its not just on vendor rule, even sets household, or
--- individual person."
+-- Reported: two insurance policies with one company differ only by amount, and whichever category
+-- was saved last claimed both. Asked for alongside it: a rule should be able to set the person too,
+-- household or an individual.
 --
 -- Two policies with one insurer differ only by premium. A rule that matches on merchant text alone
 -- cannot tell them apart, so whichever category was saved last claimed every charge from that

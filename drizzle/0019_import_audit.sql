@@ -25,7 +25,7 @@
 -- Rules auto-categorize on import, and a rule-assigned row NEVER enters the review queue:
 -- REVIEW_WHERE (src/lib/categorize/engine.ts) is `is_transfer = 0 AND (category_id IS NULL OR
 -- categorization_source = 'bayes')`, so `categorization_source = 'rule'` is treated as settled and
--- is never offered for confirmation. The owner's objection, verbatim: "rules are supposed to auto
+-- is never offered for confirmation. The objection raised: rules are meant to apply automatically, so a rule-assigned row
 -- cateogrize on import but i still need to confirm or deny no? i dont just want to auto apply rules
 -- and never see what happened on my import."
 --

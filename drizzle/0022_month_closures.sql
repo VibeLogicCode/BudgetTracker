@@ -1,7 +1,7 @@
 -- 2026-09-08. Which months the household has declared complete, so last month's summary can wait
 -- for last month's data instead of firing on a calendar date and reporting a partial month.
 --
--- Owner report: "what happens if 1 of the accounts doesnt have any entry for 15 days in next month
+-- Reported: what happens when one account has no entry for a fortnight into the next month
 -- and there is nothing to import ... because we have simplefin too transactions can auto come in
 -- too using logic we have now is not reliable."
 --

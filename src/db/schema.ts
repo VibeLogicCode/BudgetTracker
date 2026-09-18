@@ -840,6 +840,31 @@ export const warrantyItems = sqliteTable(
      *   - CHECK (loan_direction IN ('owed','lent'))
      */
     loanDirection: text('loan_direction', { enum: ['owed', 'lent'] }).notNull().default('owed'),
+    /**
+     * v1.47.0, added by drizzle/0025_loan_interest.sql. Declared last -- the same ALTER TABLE ADD
+     * COLUMN convention every loan column above follows.
+     *
+     * HOW the rate is charged, which `interest_rate_bps` alone cannot say: 549 is 5.49% a year or
+     * 5.49% a month, a factor of twelve either way. Every rate stored before this release was typed
+     * under a promise that nothing would be computed from it (the form said so), so NULL means
+     * "nobody has told us" and NOTHING is computed for that loan -- no estimate, no split, no
+     * change at all from before the upgrade. A person chooses per loan; there is no default.
+     *
+     * 'none' is interest-free, which is a POSITIVE claim and not the same as NULL: the screen says
+     * "every payment is principal" and the loan still projects a payoff date.
+     *
+     * NOT represented here -- SQL only:
+     *   - CHECK (interest_rate_basis IS NULL OR IN (the six values))
+     * Cross-column rules live in src/lib/warranty/items.ts, beside the other loan asserts: a basis
+     * needs a rate unless it is 'none'; 'simple_on_principal' needs principal_cents; a non-loan
+     * item carries none of them.
+     *
+     * MUST-13.1' (replacing "the rate is display only"): interest is DERIVED, never stored, and
+     * computed only in src/lib/loans/interest.ts.
+     */
+    interestRateBasis: text('interest_rate_basis', {
+      enum: ['none', 'apr_monthly', 'apr_semiannual', 'per_month', 'simple_on_principal', 'apr_daily'],
+    }),
   },
   (t) => [
     index('warranty_items_expiry_idx').on(t.expiryDate),
@@ -847,6 +872,68 @@ export const warrantyItems = sqliteTable(
     index('warranty_items_transaction_idx').on(t.transactionId),
     index('warranty_items_type_idx').on(t.typeId),
   ],
+);
+
+/**
+ * One row per figure a person CONFIRMED about a loan -- a statement balance, or the figure they and
+ * a relative agree on. v1.47.0, drizzle/0025_loan_interest.sql. Design:
+ * docs/superpowers/specs/2026-09-18-loan-interest-design.md (rulings A1, R1-R12).
+ *
+ * WHY IT EXISTS. The app's interest figure drifts from the lender's -- different posting days,
+ * different rounding, fees, a rate that changed. The remedy is not more arithmetic, it is a way to
+ * correct the app from the statement and record what the drift turned out to be. That keeps every
+ * rate-derived figure honestly labelled "our estimate since your 1 Sep statement", and it makes two
+ * figures sayable as FACT: the movement between two rows beyond the linked payments (what the
+ * lender really added, fees included), and `statedInterestCents`, the figure the statement printed.
+ *
+ * APPEND-ONLY. Correcting a statement is a SECOND row, never an edit, so there is deliberately no
+ * unique index on (item_id, as_of_date) -- deleting or rewriting a row would make the log lie about
+ * what was seen. Ordering is (as_of_date, id) everywhere. `warranty_items.current_balance_cents`
+ * and `balance_updated_at` are a CACHE of the newest row here.
+ *
+ * NOT represented here -- SQL only:
+ *   - CHECK (as_of_date LIKE '____-__-__')   -- LIKE, not GLOB (0011's lesson)
+ *   - CHECK (balance_cents >= 0)
+ *   - CHECK (stated_interest_cents IS NULL OR >= 0)
+ *   - CHECK on source, interest_rate_basis and prefilled_from
+ */
+export const loanAnchors = sqliteTable(
+  'loan_anchors',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    itemId: integer('item_id')
+      .notNull()
+      .references(() => warrantyItems.id, { onDelete: 'cascade' }),
+    /** The statement's OWN date, not the day it was typed -- the thing the old anchor could not say. */
+    asOfDate: text('as_of_date').notNull(),
+    balanceCents: integer('balance_cents').notNull(),
+    /** Which code path wrote it. Where the NUMBER came from is `prefilledFrom`, a separate fact. */
+    source: text('source', { enum: ['migrated', 'form', 'first-entry', 'reconcile'] }).notNull(),
+    createdAt: text('created_at').notNull(),
+    createdByUserId: integer('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+    note: text('note'),
+    /** The rate in force FROM this date, so a closed period keeps the rate that applied to it. */
+    interestRateBps: integer('interest_rate_bps'),
+    interestRateBasis: text('interest_rate_basis', {
+      enum: ['none', 'apr_monthly', 'apr_semiannual', 'per_month', 'simple_on_principal', 'apr_daily'],
+    }),
+    /** Signed in the loan's frame: linked movements after the previous row, through this one. */
+    paymentsBetweenCents: integer('payments_between_cents'),
+    /** Our estimate for the period this row closes. NULL when that period had no basis set. */
+    estimatedInterestCents: integer('estimated_interest_cents'),
+    /** What the app believed the balance was on `asOfDate`, before this row corrected it. */
+    appBalanceCents: integer('app_balance_cents'),
+    /** balanceCents - appBalanceCents. Arithmetic on two knowns, so a fact. */
+    differenceCents: integer('difference_cents'),
+    /** The interest the STATEMENT printed: the one interest figure needing no qualification. */
+    statedInterestCents: integer('stated_interest_cents'),
+    /** Provenance, kept apart from `source`: what was proposed, and did a person have to correct it. */
+    prefilledFrom: text('prefilled_from', { enum: ['pdf', 'csv'] }),
+    prefillBalanceCents: integer('prefill_balance_cents'),
+    /** The stored statement, when kept. SET NULL so deleting the file leaves the figure truthful. */
+    receiptId: integer('receipt_id').references(() => warrantyReceipts.id, { onDelete: 'set null' }),
+  },
+  (t) => [index('loan_anchors_item_idx').on(t.itemId, t.asOfDate, t.id)],
 );
 
 export const warrantyReceipts = sqliteTable(

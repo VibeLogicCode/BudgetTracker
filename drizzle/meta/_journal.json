@@ -176,6 +176,13 @@
       "when": 1757721600000,
       "tag": "0024_rule_bounds_and_attribution",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1758153600000,
+      "tag": "0025_loan_interest",
+      "breakpoints": true
     }
   ]
 }

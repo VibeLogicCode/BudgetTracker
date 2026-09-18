@@ -1,6 +1,6 @@
 -- 2026-09-09. How often a person wants the spending summary, in their own words.
 --
--- Owner report: "i only import data on sundays i dont want daily messages they need to be weekly
+-- Reported: statements are imported weekly, so a daily message has nothing new to say
 -- only or when i press notify in app manually."
 --
 -- The weekday and hour columns beside this one answer WHEN, and they stay: they are the anchor the

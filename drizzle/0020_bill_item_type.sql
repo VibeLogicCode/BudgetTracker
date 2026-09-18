@@ -5,7 +5,7 @@
 -- had seeded 'Contract' and 'Loan' exactly so those kinds were reachable the moment they existed;
 -- bills shipped without the equivalent. So the feature is complete and working, and the only way to
 -- reach it is to already know it is there and go and create the type by hand -- which is how the
--- household put it: "user doesnt know its available".
+-- household put it: a feature nobody can tell is there.
 --
 -- A seed row is the right fix rather than a UI hint. Every other kind that a person is expected to
 -- use arrives with its type already present (Laptop and Appliance in 0003, Subscription in 0003,
