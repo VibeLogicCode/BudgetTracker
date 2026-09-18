@@ -353,7 +353,12 @@ describe('v1.0.0 DB-only restore (MUST-12.9)', () => {
     // Ruling P3: no require() in an ESM vitest file — use a dynamic import instead.
     const { default: Database } = await import('better-sqlite3');
     const copy = new Database(legacy);
-    copy.exec('drop table warranty_receipts; drop table warranty_items;');
+    // loan_anchors goes FIRST (v1.47.0): it points at both of the others, so dropping
+    // warranty_items while it still exists makes SQLite apply its ON DELETE CASCADE, which then
+    // needs the already-dropped warranty_receipts to honour its own ON DELETE SET NULL. A real
+    // v1.0.0 artifact has none of the three -- this fixture builds one by removing them from a
+    // current schema, so it has to remove them in dependency order.
+    copy.exec('drop table loan_anchors; drop table warranty_receipts; drop table warranty_items;');
     copy.close();
 
     const target = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-restore-target-'));

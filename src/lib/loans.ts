@@ -1,6 +1,6 @@
-import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, like, lt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, like, lt, lte, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
-import { accounts, billInstallments, loanMatcherRules, loanPayments, transactions, users, warrantyItemTypes, warrantyItems } from '@/db/schema';
+import { accounts, billInstallments, loanAnchors, loanMatcherRules, loanPayments, transactions, users, warrantyItemTypes, warrantyItems } from '@/db/schema';
 import { canActOnOwner, ownerScope, HOUSEHOLD_VIEWER, NOT_YOURS_ERROR, type Viewer } from '@/lib/auth/viewer';
 import { amountWithinBounds } from '@/lib/categorize/amount-bounds';
 import { nowIso } from '@/lib/clock';
@@ -19,6 +19,7 @@ import {
   type BillingCycle,
   type LoanDirection,
 } from '@/lib/warranty/constants';
+import type { InterestBasis } from '@/lib/loans/interest';
 import { createWarrantyItem, type WarrantyInput } from '@/lib/warranty/items';
 import { createItemType, listItemTypes, ItemTypeError, type ItemType } from '@/lib/warranty/types';
 
@@ -451,6 +452,30 @@ function recomputeBalance(
   direction: LoanDirection,
   currentTotal: number,
 ): { balance: number; appliedByTxnId: Map<number, number> } {
+  /*
+    v1.47.0 (rulings A4, R5). The anchor VALUE is stored now, so the implied-anchor recovery below
+    is no longer the only way to find the starting figure -- and it was never a very good one: it
+    reconstructed "what a person typed" by undoing every payment ever linked, which is why a late
+    import could double-subtract and a deleted old payment could push the balance above the
+    statement.
+
+    With a row in loan_anchors the replay starts from the figure a person actually confirmed, and
+    THE WALL applies: a movement dated on or before that statement's date is already inside it, so
+    it is recorded with applied_cents = 0 rather than moved a second time. That is the existing
+    "recorded, not moved" convention (NEW-2), and it is what makes reversing such a row a no-op --
+    which is why MUST-13.16's delete path needed no change for any of this.
+
+    No anchor row means no confirmed figure has ever been stored for this loan, so the old
+    reconstruction is kept as the fallback and behaves exactly as it did before this release.
+  */
+  const anchor = tx
+    .select({ asOfDate: loanAnchors.asOfDate, balanceCents: loanAnchors.balanceCents })
+    .from(loanAnchors)
+    .where(eq(loanAnchors.itemId, itemId))
+    .orderBy(desc(loanAnchors.asOfDate), desc(loanAnchors.id))
+    .limit(1)
+    .get();
+
   const rows = tx
     .select({
       id: loanPayments.id,
@@ -464,10 +489,12 @@ function recomputeBalance(
     .where(eq(loanPayments.itemId, itemId))
     .all();
 
-  let impliedAnchor = currentTotal;
-  for (const row of rows) {
-    const wasRepayment = isLoanRepayment(direction, row.txnAmountCents);
-    impliedAnchor -= wasRepayment ? -row.appliedCents : row.appliedCents;
+  let impliedAnchor = anchor?.balanceCents ?? currentTotal;
+  if (anchor === undefined) {
+    for (const row of rows) {
+      const wasRepayment = isLoanRepayment(direction, row.txnAmountCents);
+      impliedAnchor -= wasRepayment ? -row.appliedCents : row.appliedCents;
+    }
   }
 
   // Chronological order -- the one thing insertion order corrupted. A tie (same date) breaks by
@@ -479,6 +506,14 @@ function recomputeBalance(
   let balance = impliedAnchor;
   const appliedByTxnId = new Map<number, number>();
   for (const row of rows) {
+    // The wall. Everything dated on or before the confirmed figure is already inside it.
+    if (anchor !== undefined && row.txnDate <= anchor.asOfDate) {
+      appliedByTxnId.set(row.txnId, 0);
+      if (row.appliedCents !== 0) {
+        tx.update(loanPayments).set({ appliedCents: 0 }).where(eq(loanPayments.id, row.id)).run();
+      }
+      continue;
+    }
     const magnitude = Math.abs(row.txnAmountCents);
     const isRepayment = isLoanRepayment(direction, row.txnAmountCents);
     // Repayments clamp at zero against the balance AS OF THIS ROW'S OWN chronological position;
@@ -578,6 +613,185 @@ function link(
     .where(eq(warrantyItems.id, input.itemId))
     .run();
   return { appliedCents: appliedByTxnId.get(input.txnId) ?? 0, balance };
+}
+
+/** One row of a loan's statement history, newest last. */
+export interface LoanAnchor {
+  id: number;
+  asOfDate: string;
+  balanceCents: number;
+  source: 'migrated' | 'form' | 'first-entry' | 'reconcile';
+  createdAt: string;
+  createdByUserId: number | null;
+  note: string | null;
+  interestRateBps: number | null;
+  interestRateBasis: InterestBasis | null;
+  paymentsBetweenCents: number | null;
+  estimatedInterestCents: number | null;
+  appBalanceCents: number | null;
+  differenceCents: number | null;
+  statedInterestCents: number | null;
+  prefilledFrom: 'pdf' | 'csv' | null;
+  prefillBalanceCents: number | null;
+  receiptId: number | null;
+}
+
+/** Oldest first, the order every reader wants: a history reads forward. */
+export function listLoanAnchors(itemId: number): LoanAnchor[] {
+  return getDb()
+    .select()
+    .from(loanAnchors)
+    .where(eq(loanAnchors.itemId, itemId))
+    .orderBy(asc(loanAnchors.asOfDate), asc(loanAnchors.id))
+    .all()
+    .map((row) => ({
+      id: row.id,
+      asOfDate: row.asOfDate,
+      balanceCents: row.balanceCents,
+      source: row.source,
+      createdAt: row.createdAt,
+      createdByUserId: row.createdByUserId,
+      note: row.note,
+      interestRateBps: row.interestRateBps,
+      interestRateBasis: row.interestRateBasis,
+      paymentsBetweenCents: row.paymentsBetweenCents,
+      estimatedInterestCents: row.estimatedInterestCents,
+      appBalanceCents: row.appBalanceCents,
+      differenceCents: row.differenceCents,
+      statedInterestCents: row.statedInterestCents,
+      prefilledFrom: row.prefilledFrom,
+      prefillBalanceCents: row.prefillBalanceCents,
+      receiptId: row.receiptId,
+    }));
+}
+
+/**
+ * RULING R2: THE ONE WRITER of a human balance.
+ *
+ * Every figure a person confirms about a loan goes through here -- the Reconcile action (all three
+ * intake routes converge on it), the item form's balance field for a loan with no anchor yet, and
+ * createLoanFromTransaction. Nothing else may write current_balance_cents from a human figure.
+ *
+ * What it does, in order: work out what the app BELIEVED the balance was on that date, so the row
+ * can record the difference honestly; append the row; then replay the confirmed figure forward
+ * through the movements linked after it and cache the result on the item.
+ *
+ * WHAT IT DELIBERATELY DOES NOT DO: attribute the difference. difference_cents is arithmetic on two
+ * knowns and therefore a fact; how much of it was interest, fees, or a payment nobody linked is not
+ * knowable here, is not stored, and is not guessed (ruling R4). The screen lists the candidates in
+ * one sentence and asserts none of them.
+ *
+ * balance_updated_at becomes the STATEMENT's date, not the moment of typing. That is the whole
+ * point of the as-of date: a statement dated the 1st and entered on the 18th used to move the
+ * balance as though it were true on the 18th.
+ */
+export function setLoanAnchor(input: {
+  itemId: number;
+  /** The statement's own date. */
+  asOfDate: string;
+  balanceCents: number;
+  source: 'migrated' | 'form' | 'first-entry' | 'reconcile';
+  actorUserId: number | null;
+  note?: string | null;
+  rateBps?: number | null;
+  basis?: InterestBasis | null;
+  statedInterestCents?: number | null;
+  prefilledFrom?: 'pdf' | 'csv' | null;
+  prefillBalanceCents?: number | null;
+  receiptId?: number | null;
+  at?: Date;
+}): { balanceCents: number } {
+  const stamp = nowIso(input.at ?? new Date());
+
+  return getDb().transaction((tx) => {
+    const item = tx
+      .select({
+        balance: warrantyItems.currentBalanceCents,
+        direction: warrantyItems.loanDirection,
+        rateBps: warrantyItems.interestRateBps,
+        basis: warrantyItems.interestRateBasis,
+      })
+      .from(warrantyItems)
+      .where(eq(warrantyItems.id, input.itemId))
+      .get();
+    if (!item) throw new Error('That loan no longer exists.');
+
+    const previous = tx
+      .select({ asOfDate: loanAnchors.asOfDate, balanceCents: loanAnchors.balanceCents })
+      .from(loanAnchors)
+      .where(eq(loanAnchors.itemId, input.itemId))
+      .orderBy(desc(loanAnchors.asOfDate), desc(loanAnchors.id))
+      .limit(1)
+      .get();
+
+    /*
+      What the app believed on the as-of date, and what was linked between the two statements. Both
+      are computed from the previous anchor forward, so they describe the period this row CLOSES --
+      the row is the boundary, and the comparison belongs to the period behind it.
+    */
+    const between = previous === undefined ? [] : movementsBetween(tx, input.itemId, previous.asOfDate, input.asOfDate);
+    const paymentsBetween = between.reduce(
+      (total, row) => total + loanSignedDelta(item.direction, row.txnAmountCents < 0 ? -row.appliedCents : row.appliedCents),
+      0,
+    );
+    const appBalance = previous === undefined ? null : previous.balanceCents + paymentsBetween;
+
+    tx.insert(loanAnchors)
+      .values({
+        itemId: input.itemId,
+        asOfDate: input.asOfDate,
+        balanceCents: input.balanceCents,
+        source: input.source,
+        createdAt: stamp,
+        createdByUserId: input.actorUserId,
+        note: input.note ?? null,
+        // The rate IN FORCE FROM THIS DATE. Snapshotted so a closed period keeps being estimated
+        // with the rate that actually applied to it, and editing the rate later cannot rewrite
+        // history (ruling R7).
+        interestRateBps: input.rateBps === undefined ? item.rateBps : input.rateBps,
+        interestRateBasis: input.basis === undefined ? item.basis : input.basis,
+        paymentsBetweenCents: previous === undefined ? null : paymentsBetween,
+        estimatedInterestCents: null,
+        appBalanceCents: appBalance,
+        differenceCents: appBalance === null ? null : input.balanceCents - appBalance,
+        statedInterestCents: input.statedInterestCents ?? null,
+        prefilledFrom: input.prefilledFrom ?? null,
+        prefillBalanceCents: input.prefillBalanceCents ?? null,
+        receiptId: input.receiptId ?? null,
+      })
+      .run();
+
+    // Replay forward from the figure just confirmed. recomputeBalance reads the newest anchor row
+    // itself, which is the one written immediately above, so the wall is already in place.
+    const { balance } = recomputeBalance(tx, input.itemId, item.direction, input.balanceCents);
+    tx.update(warrantyItems)
+      .set({ currentBalanceCents: balance, balanceUpdatedAt: input.asOfDate + 'T00:00:00.000Z' })
+      .where(eq(warrantyItems.id, input.itemId))
+      .run();
+
+    return { balanceCents: balance };
+  });
+}
+
+/** Linked movements dated after one statement and up to and including the next. */
+function movementsBetween(
+  tx: ReturnType<typeof getDb>,
+  itemId: number,
+  afterDate: string,
+  throughDate: string,
+): { appliedCents: number; txnAmountCents: number }[] {
+  return tx
+    .select({ appliedCents: loanPayments.appliedCents, txnAmountCents: transactions.amountCents })
+    .from(loanPayments)
+    .innerJoin(transactions, eq(transactions.id, loanPayments.txnId))
+    .where(
+      and(
+        eq(loanPayments.itemId, itemId),
+        gt(transactions.date, afterDate),
+        lte(transactions.date, throughDate),
+      ),
+    )
+    .all();
 }
 
 /**
