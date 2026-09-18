@@ -19,7 +19,7 @@ import {
   type BillingCycle,
   type LoanDirection,
 } from '@/lib/warranty/constants';
-import type { InterestBasis } from '@/lib/loans/interest';
+import { simulate, type InterestBasis, type MonthRow } from '@/lib/loans/interest';
 import { createWarrantyItem, type WarrantyInput } from '@/lib/warranty/items';
 import { createItemType, listItemTypes, ItemTypeError, type ItemType } from '@/lib/warranty/types';
 
@@ -2074,6 +2074,138 @@ export interface LoanSummary {
   /** Task 16 (v1.7.0): from payoffProjection() above, DISPLAY ONLY. Optional so pre-existing
    *  LoanSummary fixtures/tests need no changes; absent and null both mean "nothing to show". */
   payoffProjection?: PayoffProjection | null;
+  /**
+   * v1.47.0. The interest estimate, or null when there is nothing honest to say -- which is the
+   * case for every loan on every existing install until a person chooses a basis (ruling I5), and
+   * for any loan with no confirmed figure to start from.
+   */
+  interest?: LoanInterest | null;
+  /** The statement history and what it lets the screen claim (rulings R9, R10). */
+  reconciliation?: LoanReconciliation | null;
+}
+
+/**
+ * What the app estimates about interest on one loan, all of it DERIVED at read time and none of it
+ * stored (ruling I12). Every figure here is an estimate and the UI labels it as one; the two
+ * figures that are NOT estimates live on LoanReconciliation.
+ */
+export interface LoanInterest {
+  basis: InterestBasis;
+  /** The statement this estimate runs from. Every claim on screen is dated with it. */
+  anchorDate: string;
+  anchorBalanceCents: number;
+  /** principal + interest charged and not yet paid. The headline figure. */
+  owingCents: number;
+  /** Interest charged and still unpaid. */
+  potCents: number;
+  thisMonthChargeCents: number;
+  /**
+   * Twelve times this month's charge. Labelled "if the balance stayed where it is" and never
+   * "annual interest": on any amortising loan the balance falls all year, so the plain reading
+   * would overstate it (ruling I20, flag 1).
+   */
+  yearAtCurrentBalanceCents: number;
+  interestSinceAnchorCents: number;
+  months: MonthRow[];
+}
+
+export interface LoanReconciliation {
+  anchors: LoanAnchor[];
+  newest: LoanAnchor | null;
+  /** Has anybody ever checked the estimate against a statement, as opposed to just typing a figure? */
+  everReconciled: boolean;
+  /** Newest statement more than two months old -- two missed statements (ruling R10). */
+  stale: boolean;
+  /**
+   * Sum of the interest figures the STATEMENTS printed, with how many carried one. Not an
+   * estimate: this is the lender's own number, so the screen states it without qualification
+   * (ruling I21). Null when no statement has carried one.
+   */
+  statedInterestTotalCents: number | null;
+  statedInterestCount: number;
+}
+
+/**
+ * The interest estimate for one loan, and the state of its statement history.
+ *
+ * RULING I14: every figure here comes out of src/lib/loans/interest.ts, which is pure -- this
+ * function's whole job is to gather that module's inputs from the database and hand them over in
+ * the loan's own frame. It decides nothing about interest itself.
+ *
+ * NULL INTEREST is the common and unremarkable answer: no basis set (every loan on every existing
+ * install, until a person says how the rate is charged) or no confirmed figure to run from. The
+ * reconciliation half is returned either way, because "you have never checked this against a
+ * statement" is worth saying about a loan with no basis too.
+ */
+function interestFor(
+  itemId: number,
+  today: string,
+  item: {
+    direction: LoanDirection;
+    rateBps: number | null;
+    basis: InterestBasis | null;
+    principalCents: number | null;
+  },
+): { interest: LoanInterest | null; reconciliation: LoanReconciliation } {
+  const anchors = listLoanAnchors(itemId);
+  const newest = anchors.length === 0 ? null : anchors[anchors.length - 1]!;
+
+  const stated = anchors.filter((row) => row.statedInterestCents !== null);
+  const reconciliation: LoanReconciliation = {
+    anchors,
+    newest,
+    everReconciled: anchors.some((row) => row.source === 'reconcile'),
+    // Two months without a statement. One rule for every loan and every basis (ruling R10).
+    stale: newest !== null && newest.asOfDate < addMonths(monthOf(today), -2) + '-01',
+    statedInterestTotalCents:
+      stated.length === 0 ? null : stated.reduce((total, row) => total + (row.statedInterestCents ?? 0), 0),
+    statedInterestCount: stated.length,
+  };
+
+  if (newest === null || item.basis === null) return { interest: null, reconciliation };
+
+  /*
+    Movements in the loan's OWN frame, dated by the TRANSACTION (the v1.25.0 rule), from the
+    confirmed figure forward. loanSignedDelta is applied here so interest.ts never learns which way
+    the loan points -- ruling P4, which is also why the literal stays out of this file.
+  */
+  const movements = getDb()
+    .select({ date: transactions.date, appliedCents: loanPayments.appliedCents, txnAmountCents: transactions.amountCents })
+    .from(loanPayments)
+    .innerJoin(transactions, eq(transactions.id, loanPayments.txnId))
+    .where(and(eq(loanPayments.itemId, itemId), gt(transactions.date, newest.asOfDate)))
+    .orderBy(asc(transactions.date), asc(loanPayments.id))
+    .all()
+    .map((row) => ({
+      date: row.date,
+      amountCents: loanSignedDelta(item.direction, row.txnAmountCents < 0 ? -row.appliedCents : row.appliedCents),
+    }));
+
+  const result = simulate({
+    anchorDate: newest.asOfDate,
+    anchorBalanceCents: newest.balanceCents,
+    basis: item.basis,
+    rateBps: item.rateBps ?? 0,
+    principalCents: item.principalCents,
+    movements,
+    asOf: today,
+  });
+
+  const thisMonth = result.months[result.months.length - 1]?.chargedCents ?? 0;
+  return {
+    interest: {
+      basis: item.basis,
+      anchorDate: newest.asOfDate,
+      anchorBalanceCents: newest.balanceCents,
+      owingCents: result.owingCents,
+      potCents: result.potCents,
+      thisMonthChargeCents: thisMonth,
+      yearAtCurrentBalanceCents: thisMonth * 12,
+      interestSinceAnchorCents: result.interestSinceAnchorCents,
+      months: result.months,
+    },
+    reconciliation,
+  };
 }
 
 /**
@@ -2094,6 +2226,7 @@ export function listLoans(today: string, viewer: Viewer): LoanSummary[] {
       ownerName: users.name,
       principalCents: warrantyItems.principalCents,
       interestRateBps: warrantyItems.interestRateBps,
+      interestRateBasis: warrantyItems.interestRateBasis,
       currentBalanceCents: warrantyItems.currentBalanceCents,
       balanceUpdatedAt: warrantyItems.balanceUpdatedAt,
       billingCycle: warrantyItems.billingCycle,
@@ -2118,19 +2251,32 @@ export function listLoans(today: string, viewer: Viewer): LoanSummary[] {
     .orderBy(asc(warrantyItems.name), asc(warrantyItems.id))
     .all();
 
-  return rows.map((row) => ({
-    ...row,
-    payoffFraction: payoff(row.principalCents, row.currentBalanceCents),
-    nextPaymentDate: nextPayment({
-      startDate: row.startDate,
-      cycle: row.billingCycle,
-      expiryDate: row.expiryDate,
-      today,
-    }),
-    // Task 16 (v1.7.0): attached here, rather than as a new LoansCard prop, so the card stays
-    // a pure presentational component fed by listLoans()'s existing `today` parameter.
-    payoffProjection: payoffProjection(row.itemId, today),
-  }));
+  return rows.map((row) => {
+    const { interestRateBasis, ...summary } = row;
+    // v1.47.0: attached the same way payoffProjection is, for the same reason -- the card and the
+    // detail page stay presentational, fed by listLoans()'s own `today`.
+    const derived = interestFor(row.itemId, today, {
+      direction: row.loanDirection,
+      rateBps: row.interestRateBps,
+      basis: interestRateBasis,
+      principalCents: row.principalCents,
+    });
+    return {
+      ...summary,
+      payoffFraction: payoff(row.principalCents, row.currentBalanceCents),
+      nextPaymentDate: nextPayment({
+        startDate: row.startDate,
+        cycle: row.billingCycle,
+        expiryDate: row.expiryDate,
+        today,
+      }),
+      // Task 16 (v1.7.0): attached here, rather than as a new LoansCard prop, so the card stays
+      // a pure presentational component fed by listLoans()'s existing `today` parameter.
+      payoffProjection: payoffProjection(row.itemId, today),
+      interest: derived.interest,
+      reconciliation: derived.reconciliation,
+    };
+  });
 }
 
 /**
