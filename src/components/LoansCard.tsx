@@ -78,6 +78,21 @@ export function LoansCard({ loans, totalOwedCents }: { loans: LoanSummary[]; tot
               {loan.payoffProjection == null ? null : (
                 <span>Paid off around {monthLabel(loan.payoffProjection.projectedPayoffMonth)} at this pace</span>
               )}
+              {/*
+                v1.47.0. One word of qualification -- "est." -- and no disclaimer sentence: the
+                explanation belongs where the numbers are explained, one tap away on the loan
+                itself (ruling I19). Absent entirely until somebody sets a basis.
+              */}
+              {loan.interest == null || loan.interest.thisMonthChargeCents === 0 ? null : (
+                <span>~{formatCents(loan.interest.thisMonthChargeCents)}/mo interest, est.</span>
+              )}
+              {/*
+                Ruling R10: staleness is INFORMATION, not a scolding. One muted phrase, only when
+                two statements have been missed, and never a banner or a notification.
+              */}
+              {loan.reconciliation?.stale !== true || loan.reconciliation.newest === null ? null : (
+                <span>Not checked since {monthLabel(loan.reconciliation.newest.asOfDate.slice(0, 7))}</span>
+              )}
             </span>
           </li>
         ))}

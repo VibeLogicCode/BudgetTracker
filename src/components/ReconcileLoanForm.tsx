@@ -44,6 +44,42 @@ export function ReconcileLoanForm({
   const [state, action] = useActionState(reconcileLoanAction, {} as Awaited<ReturnType<typeof reconcileLoanAction>>);
   const [asOfDate, setAsOfDate] = useState(today);
   const [statementBalance, setStatementBalance] = useState('');
+  const [statedInterest, setStatedInterest] = useState('');
+  const [reading, setReading] = useState(false);
+  const [readError, setReadError] = useState<string | null>(null);
+  const [others, setOthers] = useState<Chips | null>(null);
+
+  /**
+   * Ruling S1. The file is read, the fields are FILLED IN, and nothing is saved -- a person still
+   * presses the button below. The chips show every other figure the reader found with the words
+   * around it, because seeing "Minimum payment due $312.00" is how somebody knows why not to pick
+   * it, and no scoring function is going to be right about every lender's layout.
+   */
+  async function readStatement(file: File): Promise<void> {
+    setReadError(null);
+    setReading(true);
+    try {
+      const body = new FormData();
+      body.set('statement', file);
+      const response = await fetch('/api/loans/statement-prefill', { method: 'POST', body });
+      const found = (await response.json()) as PrefillResponse;
+      if (!response.ok) {
+        setReadError(found.error ?? 'That statement could not be read. Type the figures instead.');
+        return;
+      }
+      if (found.balance != null) setStatementBalance(centsToInput(found.balance.valueCents));
+      if (found.statementDate != null) setAsOfDate(found.statementDate.date);
+      if (found.interest != null) setStatedInterest(centsToInput(found.interest.valueCents));
+      setOthers(found.others ?? null);
+      if (found.balance == null) {
+        setReadError('Could not find a balance in that statement — type it from the page.');
+      }
+    } catch {
+      setReadError('That statement could not be read. Type the figures instead.');
+    } finally {
+      setReading(false);
+    }
+  }
 
   const typed = parseLoose(statementBalance);
   const estimate = interest?.owingCents ?? null;
@@ -52,6 +88,30 @@ export function ReconcileLoanForm({
   return (
     <form action={action} className="flex flex-col gap-4">
       <input type="hidden" name="itemId" value={itemId} />
+
+      {/*
+        Three ways in, one way out: typing, a PDF, or a CSV all fill these same fields and all end
+        at the same button. There is no separate "import" path that could write without a person
+        looking at what it read (ruling S1).
+      */}
+      <div className="flex flex-col gap-2">
+        <label className="text-sm text-muted">
+          Have the statement as a file?{' '}
+          <input
+            type="file"
+            accept=".pdf,application/pdf,.csv,text/csv"
+            disabled={reading}
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file !== undefined) void readStatement(file);
+            }}
+            className="text-sm"
+          />
+        </label>
+        {reading ? <p className="text-sm text-muted">Reading the statement…</p> : null}
+        {readError === null ? null : <Notice tone="warning">{readError}</Notice>}
+        {others === null ? null : <Chips others={others} onPickBalance={setStatementBalance} onPickDate={setAsOfDate} />}
+      </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="Statement date" hint="The date the statement is for, not the day you are typing it.">
@@ -89,7 +149,14 @@ export function ReconcileLoanForm({
         label={direction === 'lent' ? 'Interest they paid you this period (optional)' : 'Interest charged this statement (optional)'}
         hint="If the statement prints it, this is the one interest figure the app never has to estimate."
       >
-        <input name="statedInterest" inputMode="decimal" placeholder="e.g. 1251.04" className={inputClass} />
+        <input
+          name="statedInterest"
+          inputMode="decimal"
+          placeholder="e.g. 1251.04"
+          value={statedInterest}
+          onChange={(event) => setStatedInterest(event.target.value)}
+          className={inputClass}
+        />
       </Field>
 
       <Field label="Note (optional)">
@@ -138,4 +205,69 @@ function parseLoose(raw: string): number | null {
   const value = Number(cleaned);
   if (!Number.isFinite(value)) return null;
   return Math.round(Math.abs(value) * 100);
+}
+
+/** Every other figure the reader found, so a person can correct a wrong pick in one click. */
+interface Chips {
+  balance: { valueCents: number; snippet: string }[];
+  statementDate: { date: string; snippet: string }[];
+  interest: { valueCents: number; snippet: string }[];
+}
+
+interface PrefillResponse {
+  balance?: { valueCents: number } | null;
+  statementDate?: { date: string } | null;
+  interest?: { valueCents: number } | null;
+  others?: Chips | null;
+  error?: string;
+}
+
+function Chips({
+  others,
+  onPickBalance,
+  onPickDate,
+}: {
+  others: Chips;
+  onPickBalance: (value: string) => void;
+  onPickDate: (value: string) => void;
+}) {
+  if (others.balance.length === 0 && others.statementDate.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-1">
+      <p className="text-xs text-subtle">Other figures found — pick one if we chose wrongly:</p>
+      <div className="flex flex-wrap gap-2">
+        {others.balance.slice(0, 5).map((candidate, index) => (
+          <button
+            key={`balance-${index}`}
+            type="button"
+            onClick={() => onPickBalance(centsToInput(candidate.valueCents))}
+            className="rounded-md border border-line px-2 py-1 text-left text-xs text-muted hover:border-accent"
+            /* The snippet is text from an arbitrary PDF: rendered as a text node and as a title,
+               never as markup (MUST-13.3 restated for this surface). */
+            title={candidate.snippet}
+          >
+            {formatCents(candidate.valueCents)}
+            <span className="block max-w-56 truncate text-subtle">{candidate.snippet}</span>
+          </button>
+        ))}
+        {others.statementDate.slice(0, 3).map((candidate, index) => (
+          <button
+            key={`date-${index}`}
+            type="button"
+            onClick={() => onPickDate(candidate.date)}
+            className="rounded-md border border-line px-2 py-1 text-left text-xs text-muted hover:border-accent"
+            title={candidate.snippet}
+          >
+            {candidate.date}
+            <span className="block max-w-56 truncate text-subtle">{candidate.snippet}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Cents back into something the text field can show, and the server can parse again. */
+function centsToInput(cents: number): string {
+  return (cents / 100).toFixed(2);
 }

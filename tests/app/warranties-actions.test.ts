@@ -58,6 +58,7 @@ import {
   deleteLoanRuleAction,
   deleteReceiptAction,
   deleteWarrantyAction,
+  reconcileLoanAction,
   recomputeLoanBalanceAction,
   removeInstallmentAction,
   reRunOcrAction,
@@ -188,6 +189,9 @@ describe('cross-origin rejection comes FIRST (MUST-13.1)', () => {
     ['createWarrantyAction', (fd) => createWarrantyAction({}, fd)],
     ['updateWarrantyAction', (fd) => updateWarrantyAction({}, fd)],
     ['deleteWarrantyAction', (fd) => deleteWarrantyAction({}, fd)],
+    // v1.47.0: reconciling a loan to a statement writes a human balance, so it is refused
+    // cross-origin before it reads anything, like every other writer here.
+    ['reconcileLoanAction', (fd) => reconcileLoanAction({}, fd)],
     ['attachReceiptsAction', (fd) => attachReceiptsAction({}, fd)],
     ['deleteReceiptAction', (fd) => deleteReceiptAction({}, fd)],
     ['reRunOcrAction', (fd) => reRunOcrAction({}, fd)],
