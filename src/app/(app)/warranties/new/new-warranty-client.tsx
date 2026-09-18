@@ -29,6 +29,7 @@ import {
 import { computeExpiryDate } from '@/lib/warranty/expiry';
 import { createWarrantyAction, type WarrantyActionState } from '../actions';
 import { buttonClass } from '@/components/ui/Button';
+import { BASIS_LABELS, BASIS_ORDER } from '@/lib/loans/basis-labels';
 
 export interface WarrantyPrefill {
   purchaseDate?: string;
@@ -436,6 +437,17 @@ export function NewWarrantyClient({
                       <span className="text-sm text-muted">%</span>
                     </span>
                   </Field>
+              {/* Ruling I5: no default. See the detail form's own note. */}
+              <Field label="How the rate is charged" hint="Leave unset to keep the rate for reference only.">
+                <select name="interestRateBasis" defaultValue="" className={selectClass}>
+                  <option value="">Not set — no interest estimates</option>
+                  {BASIS_ORDER.map((basis) => (
+                    <option key={basis} value={basis}>
+                      {BASIS_LABELS[basis]}
+                    </option>
+                  ))}
+                </select>
+              </Field>
                   <Field label={balanceLabelForDirection(loanDirection)} hint={balanceHintForDirection(loanDirection)}>
                     <input
                       name="currentBalance"

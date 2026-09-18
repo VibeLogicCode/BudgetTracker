@@ -79,6 +79,8 @@ function renderDetail(over: Partial<Parameters<typeof WarrantyDetailClient>[0]> 
       people={people}
       types={types}
       today={TODAY}
+      interest={null}
+      reconciliation={null}
       linkedTransaction={null}
       linkRemoved={false}
       rules={[]}

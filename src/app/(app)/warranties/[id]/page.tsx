@@ -60,6 +60,10 @@ export default async function WarrantyDetailPage({ params }: { params: Promise<{
         .map((category) => ({ id: category.id, name: category.name }))}
       accounts={listAccounts({}, viewer).map((a) => ({ id: a.id, name: a.name }))}
       payoffFraction={loanSummary?.payoffFraction ?? null}
+      /* v1.47.0: both null for a non-loan item, and for a loan until somebody says how its rate
+         is charged -- which is every loan on every existing install (ruling I5). */
+      interest={loanSummary?.interest ?? null}
+      reconciliation={loanSummary?.reconciliation ?? null}
       lastPaymentAt={loanSummary?.lastPaymentAt ?? null}
       paymentCount={loanSummary?.paymentCount ?? 0}
       // Item 6 (v1.16.0 plan): the Linked transactions card. Fetched for every kind -- the

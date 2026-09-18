@@ -19,6 +19,8 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { BellIcon } from '@/components/icons';
 import { Field, inputClass, labelClass, selectClass, textareaClass } from '@/components/ui/form';
 import { AutoSaveSelect } from '@/components/ui/AutoSave';
+import { BASIS_HINTS, BASIS_LABELS, BASIS_ORDER } from '@/lib/loans/basis-labels';
+import type { InterestBasis } from '@/lib/loans/interest';
 import { formatCents, formatRateBps } from '@/lib/money';
 /**
  * v1.31.0 (controller-added alongside the P3 sweep). All three "show me this transaction" links
@@ -87,6 +89,9 @@ import {
   type WarrantyActionState,
 } from '../actions';
 import { buttonClass } from '@/components/ui/Button';
+import { LoanInterestCard } from '@/components/LoanInterestCard';
+import { ReconcileLoanForm } from '@/components/ReconcileLoanForm';
+import type { LoanInterest, LoanReconciliation } from '@/lib/loans';
 
 const initial: WarrantyActionState = {};
 
@@ -205,6 +210,8 @@ export function WarrantyDetailClient({
   rules,
   accounts,
   payoffFraction,
+  interest,
+  reconciliation,
   lastPaymentAt,
   paymentCount,
   installments,
@@ -225,6 +232,9 @@ export function WarrantyDetailClient({
   accounts: { id: number; name: string }[];
   /** v1.3.1: from listLoans().find(...) on the server -- MUST-15.4's payoff math. */
   payoffFraction: number | null;
+  /** v1.47.0. Null until a person says how the rate is charged; see LoanInterestCard. */
+  interest: LoanInterest | null;
+  reconciliation: LoanReconciliation | null;
   lastPaymentAt: string | null;
   paymentCount: number;
   /** v1.12.0: a bill's due-date schedule. Always supplied; the card decides whether to render
@@ -236,6 +246,7 @@ export function WarrantyDetailClient({
   /** Item 6 (v1.16.0 plan): the Linked transactions card's rows and total, for every kind. */
   ledger: ItemLedger;
 }) {
+  const [reconciling, setReconciling] = useState(false);
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
   // Bug fix (v1.2.4): the swapped-in section (read-only view OR edit form, never both) lives
@@ -637,6 +648,43 @@ export function WarrantyDetailClient({
               )}
             </MetricCard>
           )}
+
+          {/*
+            v1.47.0. Everything interest has done since the last figure a person confirmed, and the
+            way to correct it from a statement. Renders nothing at all when no basis is set, which
+            is every loan on every existing install until somebody chooses one (ruling I5).
+          */}
+          {item.kind !== 'loan' ? null : (
+            <LoanInterestCard
+              interest={interest}
+              reconciliation={reconciliation}
+              direction={item.loanDirection}
+              onReconcile={
+                reconciling ? null : (
+                  <button type="button" onClick={() => setReconciling(true)} className={buttonClass('secondary', 'sm')}>
+                    Reconcile to a statement…
+                  </button>
+                )
+              }
+            />
+          )}
+          {item.kind === 'loan' && reconciling ? (
+            <Card>
+              <CardHeader
+                title="Reconcile to a statement"
+                description="Type what the statement says. That figure becomes the new starting point, and what we estimated is kept beside it."
+              />
+              <CardBody>
+                <ReconcileLoanForm
+                  itemId={item.id}
+                  direction={item.loanDirection}
+                  interest={interest}
+                  today={today}
+                  onClose={() => setReconciling(false)}
+                />
+              </CardBody>
+            </Card>
+          ) : null}
           </>
         )}
       </div>
@@ -1160,6 +1208,7 @@ function EditForm({
   const [interestRate, setInterestRate] = useState(
     item.interestRateBps === null ? '' : formatRateBps(item.interestRateBps),
   );
+  const [interestRateBasis, setInterestRateBasis] = useState<string>(item.interestRateBasis ?? '');
   const [currentBalance, setCurrentBalance] = useState(
     item.currentBalanceCents === null ? '' : (item.currentBalanceCents / 100).toFixed(2),
   );
@@ -1314,7 +1363,7 @@ function EditForm({
                     className={inputClass}
                   />
                 </Field>
-                <Field label="Interest rate" hint="Set how it is charged below to see interest estimates.">
+                <Field label="Interest rate" hint="Say how it is charged to see interest estimates.">
                   <span className="flex items-center gap-2">
                     <input
                       name="interestRate"
@@ -1326,6 +1375,35 @@ function EditForm({
                     />
                     <span className="text-sm text-muted">%</span>
                   </span>
+                </Field>
+                {/*
+                  Ruling I5: NO DEFAULT, and "Not set" is a real answer rather than a placeholder.
+                  Every rate already stored was typed while this form promised the app did no
+                  interest maths, so quietly assuming a period would reinterpret it -- a monthly
+                  rate read as a yearly one is understated twelve-fold. Nothing is computed until
+                  somebody picks a line here.
+                */}
+                <Field
+                  label="How the rate is charged"
+                  hint={
+                    interestRateBasis === ''
+                      ? 'Leave this unset and the rate is shown for reference only, as before.'
+                      : BASIS_HINTS[interestRateBasis as InterestBasis]
+                  }
+                >
+                  <select
+                    name="interestRateBasis"
+                    value={interestRateBasis}
+                    onChange={(e) => setInterestRateBasis(e.target.value)}
+                    className={selectClass}
+                  >
+                    <option value="">Not set — no interest estimates</option>
+                    {BASIS_ORDER.map((basis) => (
+                      <option key={basis} value={basis}>
+                        {BASIS_LABELS[basis]}
+                      </option>
+                    ))}
+                  </select>
                 </Field>
                 <Field label={balanceLabelForDirection(loanDirection)} hint={balanceHintForDirection(loanDirection)}>
                   <input

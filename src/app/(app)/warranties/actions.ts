@@ -61,6 +61,8 @@ import {
   type ItemKind,
   type LoanDirection,
 } from '@/lib/warranty/constants';
+import { INTEREST_BASES, type InterestBasis } from '@/lib/loans/interest';
+import { setLoanAnchor } from '@/lib/loans';
 
 export interface WarrantyActionState {
   error?: string;
@@ -196,6 +198,19 @@ function readInterestRateBps(formData: FormData): number | null {
   return Math.round(percent * 100);
 }
 
+/**
+ * The rate basis, as a value the item layer will accept. An empty select is NULL -- "nobody has
+ * told us" -- which is the value every existing loan carries and the one that computes nothing.
+ * Anything unrecognised is refused rather than coerced: this is the field that decides whether a
+ * rate means per year or per month, so a silent fallback would be a twelve-times error.
+ */
+function readInterestRateBasis(formData: FormData): InterestBasis | null {
+  const raw = str(formData, 'interestRateBasis').trim();
+  if (raw.length === 0) return null;
+  if (!(INTEREST_BASES as readonly string[]).includes(raw)) throw new Error('That is not a way a rate can be charged.');
+  return raw as InterestBasis;
+}
+
 function readBalanceCents(formData: FormData): number | null {
   const raw = str(formData, 'currentBalance').trim();
   if (raw.length === 0) return null;
@@ -306,6 +321,7 @@ function readItemInput(
     loanDirection: readLoanDirection(formData),
     principalCents: readPrincipalCents(formData),
     interestRateBps: readInterestRateBps(formData),
+    interestRateBasis: readInterestRateBasis(formData),
     currentBalanceCents: effectiveBalanceCents,
     // MUST-11.8: the HUMAN anchor. Written here and NOWHERE else -- never by a matched
     // payment, never by an unassign, never by an import undo. It answers "when did a person
@@ -440,6 +456,65 @@ export async function updateWarrantyAction(
 
   revalidateAll(id.data);
   return { message: `${ITEM_KIND_LABELS[savedKind]} updated.` };
+}
+
+/**
+ * Reconcile a loan against a statement: the manual, logged correction this whole feature is built
+ * around (rulings R1, R2, R8).
+ *
+ * The app's interest estimate drifts from the lender's, and the answer is not more arithmetic but a
+ * way to correct it from the statement and record what the drift turned out to be. Every route into
+ * this -- typing the figures, a CSV, a PDF -- ends here, because in all three a PERSON confirmed the
+ * number (ruling S1). Extraction only ever fills the form in.
+ *
+ * It appends; it never edits. Correcting a statement you entered wrongly is a second reconciliation,
+ * not a rewrite, so the log keeps saying what was actually seen at the time.
+ */
+export async function reconcileLoanAction(
+  _prev: WarrantyActionState,
+  formData: FormData,
+): Promise<WarrantyActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+  const user = await requireUser();
+
+  const id = idField.safeParse(formData.get('itemId'));
+  if (!id.success) return { error: 'Invalid request.' };
+
+  const item = getWarrantyItem(id.data, user);
+  if (!item) return { error: 'That item no longer exists.' };
+  if (!canActOnOwner(item.ownerUserId, user)) return { error: NOT_YOURS_ERROR };
+  if (item.kind !== 'loan') return { error: 'Only a loan can be reconciled to a statement.' };
+
+  const asOfDate = str(formData, 'asOfDate').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(asOfDate)) return { error: 'Enter the statement date as YYYY-MM-DD.' };
+
+  const balanceCents = parseAmountToCents(str(formData, 'statementBalance').trim());
+  if (balanceCents === null) return { error: 'Enter the balance shown on the statement.' };
+
+  // Optional, and the most valuable field on the form when it is filled in: the interest the
+  // STATEMENT printed is the lender's own figure, so summing it needs no rate and no convention.
+  const statedRaw = str(formData, 'statedInterest').trim();
+  const statedInterestCents = statedRaw.length === 0 ? null : parseAmountToCents(statedRaw);
+  if (statedRaw.length > 0 && statedInterestCents === null) return { error: 'That interest figure is not a number.' };
+
+  const note = str(formData, 'note').trim();
+
+  try {
+    setLoanAnchor({
+      itemId: id.data,
+      asOfDate,
+      balanceCents: Math.abs(balanceCents),
+      source: 'reconcile',
+      actorUserId: user.id,
+      note: note.length === 0 ? null : note.slice(0, 500),
+      statedInterestCents: statedInterestCents === null ? null : Math.abs(statedInterestCents),
+    });
+  } catch (error) {
+    return failure(error, 'Could not save that statement.');
+  }
+
+  revalidateAll(id.data);
+  return { message: `Reconciled to the statement of ${asOfDate}.` };
 }
 
 export async function deleteWarrantyAction(
