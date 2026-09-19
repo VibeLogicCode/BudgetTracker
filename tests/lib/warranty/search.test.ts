@@ -431,9 +431,14 @@ describe('loan money surfaces on list rows', () => {
       vendor: null, model: null, serial: null,
       purchaseDate: '2026-08-16', warrantyMonths: null, isLifetime: false,
       priceCents: null, ownerUserId: owner, transactionId: null, typeId: loan.id, notes: null,
-      principalCents: 2500000, interestRateBps: 549, interestRateBasis: null, currentBalanceCents: 2000000,
+      principalCents: 2500000, interestRateBps: 549, interestRateBasis: 'apr_monthly', currentBalanceCents: 2000000,
       balanceUpdatedAt: '2026-08-16T00:00:00.000Z',
-    });
+    },
+    [],
+    // v1.48.0: the creation time is what the ledger seeds against, so it is pinned here rather
+    // than left to the wall clock -- otherwise this row's balance moves by however much interest
+    // has posted between the fixture's date and the day the suite happens to run.
+    `${TODAY}T00:00:00.000Z`);
     const row = searchWarrantyItems({ today: TODAY }, HOUSEHOLD).rows.find((r) => r.id === id)!;
     expect(row.principalCents).toBe(2500000);
     expect(row.interestRateBps).toBe(549);

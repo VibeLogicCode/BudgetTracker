@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { todayIso } from '@/lib/dates';
+import { listLoanAnchors } from '@/lib/loans';
 import { sql } from 'drizzle-orm';
 import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
 import { nowIso } from '@/lib/clock';
@@ -131,6 +133,13 @@ function baseFields(over: Record<string, string> = {}): Record<string, string> {
     transactionId: '',
     notes: '',
     staged: '[]',
+    /*
+      v1.48.0, D1. The real form's select always posts a value, and readInterestRateBasis drops it
+      again when no rate was typed -- so this is safe on a warranty and required on a loan. Putting
+      it in the base rather than in each loan case keeps the edit bodies below matching what a
+      browser would actually send.
+    */
+    interestRateBasis: 'apr_monthly',
     ...over,
   };
 }
@@ -146,10 +155,28 @@ async function redirectPath(run: () => Promise<unknown>): Promise<string> {
   throw new Error('expected a redirect');
 }
 
-/** v1.3.1: baseFields() plus a fresh loan-kind type, so the loan fieldset's readers fire. */
+/**
+ * v1.3.1: baseFields() plus a fresh loan-kind type, so the loan fieldset's readers fire.
+ *
+ * v1.48.0 adds the two fields the real form now always posts for a loan: a basis (D1 refuses a
+ * rate without one) and an as-of date for the balance. The as-of date is TODAY so that no posting
+ * period has closed -- these tests are about the readers round-tripping what was typed, and a
+ * ledger quietly adding a month of interest underneath them would be testing something else.
+ */
 function loanForm(over: Record<string, string> = {}): Record<string, string> {
   const loanType = createItemType(`Loan ${randomUUID()}`, 'loan');
-  return baseFields({ typeId: String(loanType.id), principal: '', interestRate: '', currentBalance: '', ...over });
+  return baseFields({
+    typeId: String(loanType.id),
+    principal: '',
+    interestRate: '',
+    interestRateBasis: 'apr_monthly',
+    // todayIso(), NOT toISOString().slice(0,10): the app works in local dates, and an evening run
+    // in a western timezone would otherwise date this fixture's statement a day AHEAD of the one
+    // the action writes -- which is the very confusion v1.48.0 exists to remove.
+    balanceAsOfDate: todayIso(),
+    currentBalance: '',
+    ...over,
+  });
 }
 
 /** Most recently created item -- for tests that don't need the redirect path itself. */
@@ -178,7 +205,9 @@ function seedLoanItem(opts: { balanceCents?: number } = {}): number {
     typeId: loanType.id,
     notes: null,
     principalCents: 3_000_000,
-    interestRateBps: 549, interestRateBasis: null,
+    // v1.48.0, D1: a rate needs a basis. These fixtures are about linking payments, so they
+    // carry no rate at all rather than switching on a ledger no assertion here looks at.
+    interestRateBps: null, interestRateBasis: null,
     currentBalanceCents: opts.balanceCents ?? 2_000_000,
     balanceUpdatedAt: nowIso(),
   });
@@ -867,7 +896,13 @@ describe('MUST-14.4 / MUST-14.7 / MUST-14.14: the loan readers and the rule acti
     const after = getWarrantyItem(id, ADMIN)!;
     expect(after.currentBalanceCents).toBe(2_400_000);
     expect(after.balanceUpdatedAt).not.toBeNull();
-    expect(after.balanceUpdatedAt).not.toBe(before.balanceUpdatedAt);
+    /*
+      v1.48.0, D5. balance_updated_at is now a DATE, derived from the statement's as-of day rather
+      than the instant of the save -- that is what stopped an evening save printing tomorrow. Two
+      edits on the same day therefore share it, so the fresh-anchor claim is checked where the fact
+      now lives: a new row in the loan's statement history.
+    */
+    expect(listLoanAnchors(id).at(-1)).toMatchObject({ balanceCents: 2_400_000, source: 'form' });
   });
 });
 
@@ -956,7 +991,13 @@ describe('Fix wave item 4: the seed decides "untouched", not the live stored val
     // left behind either.
     expect(after.currentBalanceCents).toBe(2_400_000);
     expect(after.balanceUpdatedAt).not.toBeNull();
-    expect(after.balanceUpdatedAt).not.toBe(before.balanceUpdatedAt);
+    /*
+      v1.48.0, D5. balance_updated_at is now a DATE, derived from the statement's as-of day rather
+      than the instant of the save -- that is what stopped an evening save printing tomorrow. Two
+      edits on the same day therefore share it, so the fresh-anchor claim is checked where the fact
+      now lives: a new row in the loan's statement history.
+    */
+    expect(listLoanAnchors(id).at(-1)).toMatchObject({ balanceCents: 2_400_000, source: 'form' });
   });
 });
 

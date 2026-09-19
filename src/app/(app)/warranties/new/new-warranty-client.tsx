@@ -86,6 +86,12 @@ export function NewWarrantyClient({
   // MUST-11.4 / MUST-10.3: values that arrive as prefill are user-visible by the time the
   // form renders, so `touched` starts true for them and OCR can never overwrite them.
   const [purchaseDate, setPurchaseDate] = useState(prefill.purchaseDate ?? '');
+  /**
+   * v1.48.0, D3. The date the balance is true as of, which follows the borrowed date until somebody
+   * moves it -- a new loan's balance is almost always simply the amount borrowed, on the day it was.
+   */
+  const [balanceAsOfDate, setBalanceAsOfDate] = useState(prefill.purchaseDate ?? '');
+  const [balanceDateTouched, setBalanceDateTouched] = useState(false);
   const [vendor, setVendor] = useState(prefill.vendor ?? '');
   const [price, setPrice] = useState(centsToInput(prefill.priceCents));
   const [touched, setTouched] = useState({
@@ -123,6 +129,7 @@ export function NewWarrantyClient({
     const current = touchedRef.current;
     if (fields.purchaseDate && !current.purchaseDate) {
       setPurchaseDate(fields.purchaseDate);
+      if (!balanceDateTouched) setBalanceAsOfDate(fields.purchaseDate);
       setSuggested((s) => ({ ...s, purchaseDate: true }));
     }
     if (fields.vendor && !current.vendor) {
@@ -324,6 +331,8 @@ export function NewWarrantyClient({
                   value={purchaseDate}
                   onChange={(e) => {
                     setPurchaseDate(e.target.value);
+                    // D3: the as-of date trails the borrowed date until somebody sets it themselves.
+                    if (!balanceDateTouched) setBalanceAsOfDate(e.target.value);
                     setTouched((t) => ({ ...t, purchaseDate: true }));
                     setSuggested((s) => ({ ...s, purchaseDate: false }));
                   }}
@@ -437,10 +446,13 @@ export function NewWarrantyClient({
                       <span className="text-sm text-muted">%</span>
                     </span>
                   </Field>
-              {/* Ruling I5: no default. See the detail form's own note. */}
-              <Field label="How the rate is charged" hint="Leave unset to keep the rate for reference only.">
-                <select name="interestRateBasis" defaultValue="" className={selectClass}>
-                  <option value="">Not set — no interest estimates</option>
+              {/* v1.48.0, D1: ruling I5's "no default" is withdrawn. See the detail form's note. */}
+              <Field
+                label="How the rate is charged"
+                hint="Most car, personal and bank loans quote a yearly rate and charge a twelfth each month."
+              >
+                <select name="interestRateBasis" defaultValue="apr_monthly" className={selectClass}>
+                  {interestRate.trim() === '' ? <option value="">Not set — no interest estimates</option> : null}
                   {BASIS_ORDER.map((basis) => (
                     <option key={basis} value={basis}>
                       {BASIS_LABELS[basis]}
@@ -455,6 +467,26 @@ export function NewWarrantyClient({
                       placeholder="e.g. 19550.00"
                       value={currentBalance}
                       onChange={(e) => setCurrentBalance(e.target.value)}
+                      className={inputClass}
+                    />
+                  </Field>
+                  {/*
+                    D3. The loan's first statement. Defaults to the day it was borrowed, which is
+                    right whenever the balance typed above is simply the amount borrowed -- and it
+                    is what lets the app show the interest already owed on a loan entered late.
+                  */}
+                  <Field
+                    label="Balance as of"
+                    hint="Defaults to the day it started. Change it if the balance above is from a later statement."
+                  >
+                    <input
+                      type="date"
+                      name="balanceAsOfDate"
+                      value={balanceAsOfDate}
+                      onChange={(e) => {
+                        setBalanceDateTouched(true);
+                        setBalanceAsOfDate(e.target.value);
+                      }}
                       className={inputClass}
                     />
                   </Field>

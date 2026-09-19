@@ -246,6 +246,13 @@ export function WarrantyDetailClient({
   /** Item 6 (v1.16.0 plan): the Linked transactions card's rows and total, for every kind. */
   ledger: ItemLedger;
 }) {
+  /**
+   * v1.48.0, D5. The date of the newest statement -- the figure's OWN date. The balance card shows
+   * this instead of slicing balance_updated_at, which is a UTC instant: a loan saved on a September
+   * evening in Toronto used to print the 19th while the person looking at it was still on the 18th.
+   */
+  const anchorDate = reconciliation?.newest?.asOfDate ?? item.balanceUpdatedAt?.slice(0, 10) ?? null;
+
   const [reconciling, setReconciling] = useState(false);
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -460,7 +467,7 @@ export function WarrantyDetailClient({
           scrolled-down user would never see it appear. */}
       <div ref={swapSectionRef}>
         {editing ? (
-          <EditForm item={item} people={people} types={types} today={today} action={editAction} />
+          <EditForm item={item} people={people} types={types} today={today} anchorDate={anchorDate} action={editAction} />
         ) : (
           <>
           <Card>
@@ -575,13 +582,31 @@ export function WarrantyDetailClient({
               MUST-14.3: every row omitted when its value is null; the whole card omitted when
               there is no principal AND no balance -- a loan item that has not had its money
               fields filled in yet renders exactly like it did before this feature. */}
+          {/*
+            D2. A rate with no way of charging it computes nothing, so the app says so rather than
+            leaving a household to wonder why a loan with 10% on it shows no interest. Nothing is
+            assumed on their behalf: every rate already stored was typed while the form promised no
+            interest maths, and reading a monthly rate as a yearly one understates it twelvefold.
+          */}
+          {item.interestRateBps !== null && item.interestRateBps > 0 && item.interestRateBasis === null ? (
+            <Notice tone="warning">
+              This loan has a rate but no charging method. Pick one to see interest.
+            </Notice>
+          ) : null}
           {item.currentBalanceCents === null && item.principalCents === null ? null : (
             <MetricCard
               title={balanceLabelForDirection(item.loanDirection)}
               value={item.currentBalanceCents === null ? '—' : formatCents(item.currentBalanceCents)}
-              // MUST-11.8: "You set this on" and "Last payment" are labelled DIFFERENTLY,
-              // because they answer different questions. balance_updated_at is the human anchor.
-              status={item.balanceUpdatedAt === null ? undefined : `You set this on ${item.balanceUpdatedAt.slice(0, 10)}`}
+              /*
+                MUST-11.8: "You set this on" and "Last payment" are labelled DIFFERENTLY, because
+                they answer different questions.
+
+                v1.48.0, D5: the date comes from the STATEMENT the figure belongs to, not from
+                slicing a UTC timestamp. A loan saved on a September evening in Toronto used to
+                print the 19th, because the instant had already rolled over in UTC while the person
+                looking at it was still on the 18th.
+              */
+              status={anchorDate === null ? undefined : `You set this on ${anchorDate}`}
               // Item 3 (2026-08-30 plan): the shared ProgressBar (Lane 0), `tone="calm"` fixed
               // rather than derived from `pct` -- same reasoning as LoansCard's own row (more
               // paid off is unambiguously good here, never a warning-system reading). This was
@@ -1167,12 +1192,15 @@ function EditForm({
   people,
   types,
   today,
+  anchorDate,
   action,
 }: {
   item: WarrantyItemRow;
   people: { id: number; name: string }[];
   types: TypeOption[];
   today: string;
+  /** v1.48.0, D5. The newest statement's own date, or null when the loan has never had one. */
+  anchorDate: string | null;
   action: (formData: FormData) => void;
 }) {
   const [isLifetime, setIsLifetime] = useState(item.isLifetime);
@@ -1208,7 +1236,14 @@ function EditForm({
   const [interestRate, setInterestRate] = useState(
     item.interestRateBps === null ? '' : formatRateBps(item.interestRateBps),
   );
-  const [interestRateBasis, setInterestRateBasis] = useState<string>(item.interestRateBasis ?? '');
+  const [interestRateBasis, setInterestRateBasis] = useState<string>(item.interestRateBasis ?? 'apr_monthly');
+  /** v1.48.0. The three ledger fields the edit form now carries (D3, C1, R2). */
+  const [balanceAsOfDate, setBalanceAsOfDate] = useState<string>(anchorDate ?? today);
+  const [postingDay, setPostingDay] = useState<string>(item.postingDay === null ? '' : String(item.postingDay));
+  const [rateEffectiveFrom, setRateEffectiveFrom] = useState<string>(today);
+  const rateChanged =
+    interestRate.trim() !== (item.interestRateBps === null ? '' : formatRateBps(item.interestRateBps)) ||
+    interestRateBasis !== (item.interestRateBasis ?? 'apr_monthly');
   const [currentBalance, setCurrentBalance] = useState(
     item.currentBalanceCents === null ? '' : (item.currentBalanceCents / 100).toFixed(2),
   );
@@ -1377,17 +1412,19 @@ function EditForm({
                   </span>
                 </Field>
                 {/*
-                  Ruling I5: NO DEFAULT, and "Not set" is a real answer rather than a placeholder.
-                  Every rate already stored was typed while this form promised the app did no
-                  interest maths, so quietly assuming a period would reinterpret it -- a monthly
-                  rate read as a yearly one is understated twelve-fold. Nothing is computed until
-                  somebody picks a line here.
+                  v1.48.0, D1: ruling I5's "no default" is WITHDRAWN. A rate with no period cannot
+                  be multiplied, so a rate saved without one produced nothing at all -- a loan could
+                  show a rate and no interest, which is the state this release exists to fix. Once a
+                  rate is typed the "Not set" line goes and a yearly rate charged monthly is
+                  offered, which is what most car, personal and bank loans actually are.
+
+                  The escape hatch is still here: clear the rate and the question disappears with it.
                 */}
                 <Field
                   label="How the rate is charged"
                   hint={
                     interestRateBasis === ''
-                      ? 'Leave this unset and the rate is shown for reference only, as before.'
+                      ? 'Type a rate above and pick how it is charged to see interest.'
                       : BASIS_HINTS[interestRateBasis as InterestBasis]
                   }
                 >
@@ -1397,7 +1434,7 @@ function EditForm({
                     onChange={(e) => setInterestRateBasis(e.target.value)}
                     className={selectClass}
                   >
-                    <option value="">Not set — no interest estimates</option>
+                    {interestRate.trim() === '' ? <option value="">Not set — no interest estimates</option> : null}
                     {BASIS_ORDER.map((basis) => (
                       <option key={basis} value={basis}>
                         {BASIS_LABELS[basis]}
@@ -1405,6 +1442,25 @@ function EditForm({
                     ))}
                   </select>
                 </Field>
+                {/*
+                  R2. A rate that CHANGES needs to say from when, or correcting it in September
+                  would silently restate what July was charged. Only shown once it differs from
+                  what is stored -- there is nothing to date until then.
+                */}
+                {interestRate.trim() !== '' && rateChanged ? (
+                  <Field
+                    label="New rate applies from"
+                    hint="Periods that have already closed keep the rate they were charged at."
+                  >
+                    <input
+                      type="date"
+                      name="rateEffectiveFrom"
+                      value={rateEffectiveFrom}
+                      onChange={(e) => setRateEffectiveFrom(e.target.value)}
+                      className={inputClass}
+                    />
+                  </Field>
+                ) : null}
                 <Field label={balanceLabelForDirection(loanDirection)} hint={balanceHintForDirection(loanDirection)}>
                   <input
                     name="currentBalance"
@@ -1413,6 +1469,37 @@ function EditForm({
                     value={currentBalance}
                     onChange={(e) => setCurrentBalance(e.target.value)}
                     className={inputClass}
+                  />
+                </Field>
+                {/*
+                  D3/D4. A balance is true AS OF a date. Typing one here records a statement, the
+                  same kind of row Reconcile writes, so the history shows where every figure came
+                  from -- and the ledger has a dated point to start estimating forward from.
+                */}
+                <Field
+                  label="Balance as of"
+                  hint="The date this figure is true on. A statement's own date, not the day you typed it."
+                >
+                  <input
+                    type="date"
+                    name="balanceAsOfDate"
+                    value={balanceAsOfDate}
+                    onChange={(e) => setBalanceAsOfDate(e.target.value)}
+                    className={inputClass}
+                  />
+                </Field>
+                {/* C1. Almost every loan leaves this alone; a lender that bills on its own day does not. */}
+                <Field
+                  label="Interest posts on day"
+                  hint="Of the month. Blank means the day the loan started."
+                >
+                  <input
+                    name="postingDay"
+                    inputMode="numeric"
+                    placeholder="e.g. 1"
+                    value={postingDay}
+                    onChange={(e) => setPostingDay(e.target.value)}
+                    className={`${inputClass} w-24`}
                   />
                 </Field>
               </>

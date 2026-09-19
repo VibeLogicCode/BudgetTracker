@@ -2,11 +2,13 @@ import fs from 'node:fs';
 import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '@/db/client';
+import { addRateChange, setLoanAnchor } from '@/lib/loans';
 import type { InterestBasis } from '@/lib/loans/interest';
-import { users, warrantyItemTypes, warrantyItems, warrantyReceipts } from '@/db/schema';
+import {
+  loanAnchors, users, warrantyItemTypes, warrantyItems, warrantyReceipts } from '@/db/schema';
 import { ownerScope, type Viewer } from '@/lib/auth/viewer';
 import { nowIso } from '@/lib/clock';
-import { isIsoDate } from '@/lib/dates';
+import { todayIso, isIsoDate } from '@/lib/dates';
 import { computeExpiryDate } from '@/lib/warranty/expiry';
 import { enqueueOcrJob } from '@/lib/warranty/ocr/queue';
 import {
@@ -97,6 +99,13 @@ export interface WarrantyItemRow {
    * means "nobody has told us": no estimate, no split, no change from before the upgrade.
    */
   interestRateBasis: InterestBasis | null;
+  /**
+   * v1.48.0, ledger spec C1/S3. Optional because the LIST query does not select them -- a row in
+   * a list has no use for a posting day or a CSV mapping, and widening that query to carry two
+   * columns nothing reads would cost every list render for one form.
+   */
+  postingDay?: number | null;
+  statementCsvColumns?: string | null;
   currentBalanceCents: number | null;
   balanceUpdatedAt: string | null;
   /**
@@ -170,6 +179,27 @@ export interface WarrantyInput {
   interestRateBasis?: InterestBasis | null;
   currentBalanceCents?: number | null;
   balanceUpdatedAt?: string | null;
+  /**
+   * v1.48.0, ledger spec D3. The date the balance above is true AS OF -- the loan's first
+   * statement, in effect. Omitted means the borrowed date, which is right whenever the balance
+   * typed in is the original amount, and that is the common case on a new loan.
+   */
+  balanceAsOfDate?: string | null;
+  /** v1.48.0, ledger spec C1. The day of the month interest posts. NULL: the borrowed date's day. */
+  postingDay?: number | null;
+  /**
+   * v1.48.0, ruling R2. WHEN a changed rate starts applying. Omitted means today, so a correction
+   * typed in now does not silently restate what a closed period was charged.
+   */
+  rateEffectiveFrom?: string | null;
+  /** v1.48.0, ruling S3. The confirmed CSV column mapping for this lender's statements. */
+  statementCsvColumns?: string | null;
+  /**
+   * v1.48.0. Which path is writing this loan's first statement. Defaults to 'form', the item form;
+   * createLoanFromTransaction says 'first-entry', because a loan born from a transaction was never
+   * typed into a form at all and its opening figure is dated the day before that transaction.
+   */
+  balanceAnchorSource?: 'form' | 'first-entry';
   /**
    * v1.14.0: optional -- omitted defaults to 'owed', same as every pre-v1.14.0 caller and
    * every non-loan item. Whether 'lent' is ALLOWED for this item's kind needs a DB lookup
@@ -274,6 +304,20 @@ export function warrantyInputSchema(today: string) {
         .nullable()
         .optional(),
       balanceUpdatedAt: z.string().min(1).nullable().optional(),
+      // v1.48.0, ledger spec D3/C1/R2. Shape only; the actions layer has already refused anything
+      // malformed with a message a person can act on, and the writers hold the cross-field rules.
+      balanceAsOfDate: z
+        .string()
+        .regex(/^\d{4}-\d{2}-\d{2}$/, 'Enter the as-of date as YYYY-MM-DD.')
+        .nullable()
+        .optional(),
+      postingDay: z.number().int().min(1).max(31, 'The posting day must be a day of the month.').nullable().optional(),
+      rateEffectiveFrom: z
+        .string()
+        .regex(/^\d{4}-\d{2}-\d{2}$/, 'Enter the effective-from date as YYYY-MM-DD.')
+        .nullable()
+        .optional(),
+      statementCsvColumns: z.string().nullable().optional(),
     })
     .superRefine((value, ctx) => {
       // MUST-3.5, enforced by zod at the action boundary AND by a CHECK in 0002.
@@ -324,6 +368,8 @@ const ITEM_COLUMNS = {
   principalCents: warrantyItems.principalCents,
   interestRateBps: warrantyItems.interestRateBps,
   interestRateBasis: warrantyItems.interestRateBasis,
+  postingDay: warrantyItems.postingDay,
+  statementCsvColumns: warrantyItems.statementCsvColumns,
   currentBalanceCents: warrantyItems.currentBalanceCents,
   balanceUpdatedAt: warrantyItems.balanceUpdatedAt,
   budgetCategoryId: warrantyItems.budgetCategoryId,
@@ -408,7 +454,21 @@ function assertInterestBasisIsUsable(values: {
   principalCents: number | null;
 }): void {
   const basis = values.interestRateBasis;
-  if (basis === null) return;
+  if (basis === null) {
+    /*
+      D1, reversing ruling I5's "no default". A rate with no period cannot be multiplied, and a
+      rate nothing is computed from is a number a household typed for no reason -- a loan could
+      show 10% and no interest at all, which is exactly the state this release exists to fix. So
+      the form now insists, and the select defaults to a yearly rate charged monthly.
+
+      Zero is still allowed without one, because a zero rate says there is nothing to charge --
+      which is what an interest-free loan is, and what the 'none' basis records deliberately.
+    */
+    if ((values.interestRateBps ?? 0) !== 0) {
+      throw new Error('Say how the rate is charged. A rate on its own cannot be turned into interest.');
+    }
+    return;
+  }
 
   if (basis === 'none') {
     if ((values.interestRateBps ?? 0) !== 0) {
@@ -497,8 +557,21 @@ export function createWarrantyItem(
   const billingAmountCents = input.billingAmountCents ?? null;
   const principalCents = input.principalCents ?? null;
   const interestRateBps = input.interestRateBps ?? null;
+  const postingDay = input.postingDay ?? null;
   const currentBalanceCents = input.currentBalanceCents ?? null;
-  const balanceUpdatedAt = input.balanceUpdatedAt ?? null;
+  /*
+    v1.48.0, D3/D5. A balance now arrives with an AS-OF DATE rather than a timestamp, so the
+    MUST-11.8 anchor stamp is derived from it when the caller did not supply one. It keeps its old
+    meaning -- "when did a person last tell us the truth about this balance" -- but it is no longer
+    the moment the form was submitted, which is what made an evening save in one timezone print
+    tomorrow's date on the loan page.
+  */
+  const balanceUpdatedAt =
+    input.balanceUpdatedAt !== undefined
+      ? input.balanceUpdatedAt
+      : currentBalanceCents === null
+        ? null
+        : `${input.balanceAsOfDate ?? input.purchaseDate}T00:00:00.000Z`;
   const interestRateBasis = input.interestRateBasis ?? null;
   const loanDirection = input.loanDirection ?? 'owed';
   assertBillingMatchesKind(input.typeId, billingCycle, billingAmountCents);
@@ -533,6 +606,7 @@ export function createWarrantyItem(
           currentBalanceCents,
           balanceUpdatedAt,
           loanDirection,
+          postingDay,
           expiryDate,
           createdAt: at,
           updatedAt: at,
@@ -543,6 +617,18 @@ export function createWarrantyItem(
       return row.id;
     });
     for (const effect of deferred) effect();
+    /*
+      D3. The loan's FIRST statement, written here and nowhere else.
+
+      v1.47.0 declared a 'form' anchor source and never used it, so a loan created through this
+      form had no confirmed figure at all -- and the interest engine, which starts from one, had
+      nothing to start from. A loan could carry a rate AND a basis and still show no interest.
+
+      After the transaction, not inside it: setLoanAnchor and addRateChange each open their own,
+      and addRateChange goes on to post every period that has already closed -- which is what puts
+      two months of interest on the page the moment a loan borrowed in July is saved in September.
+    */
+    seedLoanLedger(id, input, { currentBalanceCents, interestRateBps, interestRateBasis, postingDay }, at);
     return id;
   } catch (error) {
     // MUST-4.7: if the insert throws, every file this call adopted is unlinked. `deferred`
@@ -561,8 +647,21 @@ export function updateWarrantyItem(id: number, input: WarrantyInput, at: string 
   const billingAmountCents = input.billingAmountCents ?? null;
   const principalCents = input.principalCents ?? null;
   const interestRateBps = input.interestRateBps ?? null;
+  const postingDay = input.postingDay ?? null;
   const currentBalanceCents = input.currentBalanceCents ?? null;
-  const balanceUpdatedAt = input.balanceUpdatedAt ?? null;
+  /*
+    v1.48.0, D3/D5. A balance now arrives with an AS-OF DATE rather than a timestamp, so the
+    MUST-11.8 anchor stamp is derived from it when the caller did not supply one. It keeps its old
+    meaning -- "when did a person last tell us the truth about this balance" -- but it is no longer
+    the moment the form was submitted, which is what made an evening save in one timezone print
+    tomorrow's date on the loan page.
+  */
+  const balanceUpdatedAt =
+    input.balanceUpdatedAt !== undefined
+      ? input.balanceUpdatedAt
+      : currentBalanceCents === null
+        ? null
+        : `${input.balanceAsOfDate ?? input.purchaseDate}T00:00:00.000Z`;
   const interestRateBasis = input.interestRateBasis ?? null;
   const loanDirection = input.loanDirection ?? 'owed';
   assertBillingMatchesKind(input.typeId, billingCycle, billingAmountCents);
@@ -571,6 +670,28 @@ export function updateWarrantyItem(id: number, input: WarrantyInput, at: string 
   assertLoanDirectionMatchesKind(input.typeId, loanDirection);
   assertInterestBasisIsUsable({ interestRateBasis, interestRateBps, principalCents });
 
+  /*
+    D4, REVERSED from the ledger spec, and the tests are why.
+
+    The spec said the balance field should go read-only once a loan has a statement, so that
+    Reconcile became the only way to move it. That would have removed something the app already
+    documents and pins: editing a loan and typing a new balance writes a fresh anchor, and fix-wave
+    item 4 went to some trouble to make "untouched" mean untouched. The reason given for the clamp
+    was "two paths to one number is how they disagree" -- but the edit path is not an uncontrolled
+    second path once it writes an anchor of its own, which is what it does below.
+
+    So the field stays editable, and a balance typed here becomes a statement like any other.
+  */
+  const existing = getDb()
+    .select({
+      balance: warrantyItems.currentBalanceCents,
+      balanceUpdatedAt: warrantyItems.balanceUpdatedAt,
+      rateBps: warrantyItems.interestRateBps,
+      basis: warrantyItems.interestRateBasis,
+    })
+    .from(warrantyItems)
+    .where(eq(warrantyItems.id, id))
+    .get();
   const result = getDb()
     .update(warrantyItems)
     .set({
@@ -583,12 +704,122 @@ export function updateWarrantyItem(id: number, input: WarrantyInput, at: string 
       currentBalanceCents,
       balanceUpdatedAt,
       loanDirection,
+      postingDay,
       expiryDate: computeExpiryDate(input),
       updatedAt: at,
     })
     .where(eq(warrantyItems.id, id))
     .run();
+
+  /*
+    R2. A rate that MOVED gets a history row, dated from when it started applying -- today unless
+    the form said otherwise. A closed period keeps the rate it was charged at, so correcting a typo
+    in September never restates July, and a variable-rate mortgage is representable without a
+    second table.
+  */
+  if (
+    result.changes > 0 &&
+    interestRateBasis !== null &&
+    interestRateBps !== null &&
+    existing !== undefined &&
+    (existing.rateBps !== interestRateBps || existing.basis !== interestRateBasis)
+  ) {
+    addRateChange({
+      itemId: id,
+      effectiveFrom: input.rateEffectiveFrom ?? todayIso(new Date(at)),
+      rateBps: interestRateBps,
+      basis: interestRateBasis,
+      actorUserId: null,
+      at: new Date(at),
+    });
+  }
+
+  /*
+    D3/D4. A balance MOVED on this form is a new statement, so it gets an anchor row rather than
+    just a new column value -- which is what makes it visible in the loan's history, comparable
+    against what the app believed, and a wall the ledger can start from.
+
+    Only when it actually moved: fix-wave item 4 established that resubmitting an untouched field
+    must not move the anchor, and the actions layer has already collapsed that case by passing the
+    stored value straight back.
+  */
+  if (
+    result.changes > 0 &&
+    currentBalanceCents !== null &&
+    existing !== undefined &&
+    existing.balance !== currentBalanceCents
+  ) {
+    try {
+      setLoanAnchor({
+        itemId: id,
+        asOfDate: input.balanceAsOfDate ?? todayIso(new Date(at)),
+        balanceCents: currentBalanceCents,
+        source: 'form',
+        actorUserId: null,
+        at: new Date(at),
+      });
+    } catch (error) {
+      // The item saved; the history row did not. Better than losing the edit.
+      console.error('[loans] could not record the edited balance as a statement for item ' + id, error);
+    }
+  }
   return result.changes > 0;
+}
+
+/**
+ * D3. A new loan's first statement and its first rate, written once, after the item exists.
+ *
+ * Nothing happens for an item with no balance -- there is no figure to confirm -- or for anything
+ * that is not a loan, which is why the balance is the test rather than the type: a warranty carries
+ * no balance at all.
+ */
+function seedLoanLedger(
+  itemId: number,
+  input: WarrantyInput,
+  normalised: {
+    currentBalanceCents: number | null;
+    interestRateBps: number | null;
+    interestRateBasis: InterestBasis | null;
+    postingDay: number | null;
+  },
+  at: string,
+): void {
+  if (normalised.currentBalanceCents === null) return;
+  // The borrowed date whenever the balance is simply the amount borrowed, which is the usual case
+  // on a new loan; an as-of date when a household is entering a loan part-way through.
+  const asOfDate = input.balanceAsOfDate ?? input.purchaseDate;
+  try {
+    /*
+      THE RATE FIRST, then the statement. Both of them post what is due, and the anchor is what
+      lets a posting happen at all -- so writing the anchor first would post the whole catch-up
+      with no rate in force and charge nothing for it. Those zero rows are already-closed periods,
+      so nothing would ever go back and correct them.
+    */
+    if (normalised.interestRateBasis !== null && normalised.interestRateBps !== null) {
+      addRateChange({
+        itemId,
+        effectiveFrom: asOfDate,
+        rateBps: normalised.interestRateBps,
+        basis: normalised.interestRateBasis,
+        actorUserId: null,
+        at: new Date(at),
+      });
+    }
+    setLoanAnchor({
+      itemId,
+      asOfDate,
+      balanceCents: normalised.currentBalanceCents,
+      source: input.balanceAnchorSource ?? 'form',
+      actorUserId: null,
+      rateBps: normalised.interestRateBps,
+      basis: normalised.interestRateBasis,
+      at: new Date(at),
+    });
+  } catch (error) {
+    // A loan that exists with no opening statement is recoverable -- a reconcile fixes it. Losing
+    // the loan because its ledger could not be seeded is not.
+    console.error('[loans] could not seed the opening statement for item ' + itemId, error);
+  }
 }
 
 /**

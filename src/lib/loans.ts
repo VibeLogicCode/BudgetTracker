@@ -1982,6 +1982,14 @@ export function createLoanFromTransaction(input: NewLoanFromTransaction, viewer:
         notes: null,
         currentBalanceCents: seedCents,
         balanceUpdatedAt: stamp, // MUST-11.7: both, or neither
+        /*
+          v1.48.0. The opening figure is true the day BEFORE the transaction that created the loan
+          -- which is what lets that transaction then be applied. Dating it on the same day would
+          put it behind the anchor wall, where a movement is recorded and deliberately not moved,
+          and the loan would open at its seed with the transaction that created it doing nothing.
+        */
+        balanceAsOfDate: addDaysIso(txn.date, -1),
+        balanceAnchorSource: 'first-entry',
         loanDirection: input.direction,
       } satisfies WarrantyInput,
       [],

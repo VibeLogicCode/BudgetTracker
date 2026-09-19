@@ -358,11 +358,33 @@ describe('MUST-12.1 / MUST-12.2 / MUST-11.7: loan money on an item', () => {
     ).toThrowError('A balance and the date it was set must both be present, or both absent.');
   });
 
+  /** v1.48.0, D1: a rate needs a basis now, so these two carry one. The claim is unchanged. */
   it('MUST-14.4: the rate round-trips through basis points and 100.01% is rejected in SQL', () => {
     const loanType = createItemType('Car loan 3', 'loan');
-    const id = createWarrantyItem({ ...input(), typeId: loanType.id, interestRateBps: 549 });
+    const id = createWarrantyItem({
+      ...input(),
+      typeId: loanType.id,
+      interestRateBps: 549,
+      interestRateBasis: 'apr_monthly',
+    });
     expect(getWarrantyItem(id, HOUSEHOLD)?.interestRateBps).toBe(549);
-    expect(() => createWarrantyItem({ ...input(), typeId: loanType.id, interestRateBps: 1_000_001 })).toThrow();
+    expect(() =>
+      createWarrantyItem({
+        ...input(),
+        typeId: loanType.id,
+        interestRateBps: 1_000_001,
+        interestRateBasis: 'apr_monthly',
+      }),
+    ).toThrow();
+  });
+
+  /** D1 itself: the rate and the way it is charged now travel together or not at all. */
+  it('D1: a rate with no basis is refused, and no rate at all is fine', () => {
+    const loanType = createItemType('Car loan 4', 'loan');
+    expect(() => createWarrantyItem({ ...input(), typeId: loanType.id, interestRateBps: 549 })).toThrowError(
+      /how the rate is charged/i,
+    );
+    expect(createWarrantyItem({ ...input(), typeId: loanType.id })).toBeGreaterThan(0);
   });
 });
 

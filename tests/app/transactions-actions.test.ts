@@ -135,7 +135,9 @@ function seedLoanItem(opts: { balanceCents?: number; loan_direction?: 'owed' | '
     typeId: loanType.id,
     notes: null,
     principalCents: 3_000_000,
-    interestRateBps: 549, interestRateBasis: null,
+    // v1.48.0, D1: a rate needs a basis. These fixtures are about linking payments, so they
+    // carry no rate at all rather than switching on a ledger no assertion here looks at.
+    interestRateBps: null, interestRateBasis: null,
     currentBalanceCents: opts.balanceCents ?? 2_000_000,
     balanceUpdatedAt: nowIso(),
     loanDirection: opts.loan_direction ?? 'owed',

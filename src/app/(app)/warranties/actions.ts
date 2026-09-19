@@ -204,11 +204,39 @@ function readInterestRateBps(formData: FormData): number | null {
  * Anything unrecognised is refused rather than coerced: this is the field that decides whether a
  * rate means per year or per month, so a silent fallback would be a twelve-times error.
  */
-function readInterestRateBasis(formData: FormData): InterestBasis | null {
+function readInterestRateBasis(formData: FormData, rateBps: number | null): InterestBasis | null {
   const raw = str(formData, 'interestRateBasis').trim();
   if (raw.length === 0) return null;
+  /*
+    v1.48.0, D1's other half. The select now carries a default, so it posts a value whether or not
+    a rate was typed -- and a basis with no rate to charge is refused by the item layer. No rate
+    means no basis: there is nothing for it to describe.
+  */
+  if (rateBps === null || rateBps === 0) return null;
   if (!(INTEREST_BASES as readonly string[]).includes(raw)) throw new Error('That is not a way a rate can be charged.');
   return raw as InterestBasis;
+}
+
+/**
+ * v1.48.0, ledger spec D3/C1/R2. The three dates and the one day-number the ledger needs.
+ *
+ * Each is optional and each is REFUSED rather than coerced when it is present and wrong -- the
+ * same rule readInterestRateBasis follows, and for the same reason: a silently wrong date here
+ * moves a statement, and a silently wrong posting day moves a whole cycle.
+ */
+function readIsoDate(formData: FormData, field: string): string | null {
+  const raw = str(formData, field).trim();
+  if (raw.length === 0) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) throw new Error('Enter that date as YYYY-MM-DD.');
+  return raw;
+}
+
+function readPostingDay(formData: FormData): number | null {
+  const raw = str(formData, 'postingDay').trim();
+  if (raw.length === 0) return null;
+  const day = Number(raw);
+  if (!Number.isInteger(day) || day < 1 || day > 31) throw new Error('The posting day must be a day of the month, 1 to 31.');
+  return day;
 }
 
 function readBalanceCents(formData: FormData): number | null {
@@ -297,6 +325,7 @@ function readItemInput(
   const owner = readOptionalId(formData, 'ownerUserId') ?? fallbackOwnerId;
   // Hoisted so the anchor written just below can be derived from the SAME parsed value,
   // rather than re-reading (and re-parsing) the balance field a second time.
+  const rateBps = readInterestRateBps(formData);
   const balanceCents = readBalanceCents(formData);
   const seedCents = readSeedBalanceCents(formData);
   // No existing row (create) is always a fresh write, exactly as before this fix.
@@ -320,8 +349,11 @@ function readItemInput(
     billingAmountCents: readBillingAmountCents(formData),
     loanDirection: readLoanDirection(formData),
     principalCents: readPrincipalCents(formData),
-    interestRateBps: readInterestRateBps(formData),
-    interestRateBasis: readInterestRateBasis(formData),
+    interestRateBps: rateBps,
+    interestRateBasis: readInterestRateBasis(formData, rateBps),
+    balanceAsOfDate: readIsoDate(formData, 'balanceAsOfDate'),
+    postingDay: readPostingDay(formData),
+    rateEffectiveFrom: readIsoDate(formData, 'rateEffectiveFrom'),
     currentBalanceCents: effectiveBalanceCents,
     // MUST-11.8: the HUMAN anchor. Written here and NOWHERE else -- never by a matched
     // payment, never by an unassign, never by an import undo. It answers "when did a person
