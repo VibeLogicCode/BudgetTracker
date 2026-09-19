@@ -67,7 +67,7 @@ describe('GET /api/loans/[id]/ledger.csv', () => {
     No byte-order mark: every other CSV this app writes goes without one, and one export behaving
     differently from the rest is a worse trade than a spreadsheet nicety is worth.
   */
-  it('leads with the six column headings', async () => {
+  it('leads with its column headings', async () => {
     const { token, itemId } = setup();
     const text = await (await GET(request(itemId, token), params(itemId))).text();
     expect(text.startsWith('Date,Description,Payment,Interest,Principal,Balance')).toBe(true);
@@ -103,5 +103,20 @@ describe('GET /api/loans/[id]/ledger.csv', () => {
   it('is a 404 for an item that has no ledger', async () => {
     const { token } = setup();
     expect((await GET(request(9999, token), params(9999))).status).toBe(404);
+  });
+});
+
+/**
+ * Review F7. The card explains a charge by opening a row; a spreadsheet has no rows to open, so
+ * what had accrued by the day a payment landed -- the figure that explains why a $500 payment took
+ * $437 off the balance -- gets a column of its own.
+ */
+describe('F7: the accrued-to-date column', () => {
+  it('carries seven columns, the last one named', async () => {
+    const { token, itemId } = setup();
+    const response = await GET(request(itemId, token), params(itemId));
+    const header = (await response.text()).split('\n')[0]!.trim();
+    expect(header.split(',')).toHaveLength(7);
+    expect(header).toContain('Interest accrued to date');
   });
 });

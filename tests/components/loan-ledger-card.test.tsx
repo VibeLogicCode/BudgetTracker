@@ -10,9 +10,9 @@ afterEach(cleanup);
 const textOf = (node: Element | null | undefined): string => node?.textContent ?? '';
 
 /**
- * The ledger card (ledger spec U1–U8): the bank-statement view the owner asked for.
+ * The ledger card (ledger spec U1–U8), rebuilt in v1.49.0 against review F2/F5/F7.
  *
- * The figures below are the worked example, $10,000 at 10% with $5,000 paid on the 15th, so the
+ * The figures below are the worked example -- $10,000 at 10% with $5,000 paid on the 15th -- so the
  * numbers this file asserts are the same ones the engine's own tests pin.
  */
 function ledger(over: Partial<Ledger> = {}): Ledger {
@@ -32,9 +32,10 @@ function ledger(over: Partial<Ledger> = {}): Ledger {
         date: '2026-07-15',
         description: 'Payment',
         paymentCents: 500_000,
-        interestCents: 3_763,
+        interestCents: null,
         principalCents: null,
         balanceCents: 500_000,
+        detail: { paidToInterestCents: 3_763, accruedToDayCents: 3_763 },
       },
       {
         kind: 'interest',
@@ -70,127 +71,158 @@ function ledger(over: Partial<Ledger> = {}): Ledger {
     owingCents: 508_360,
     interestThisPeriodCents: 4_217,
     interestPaidToDateCents: 6_048,
+    interestPostedSinceStartCents: 6_048,
     principalPaidToDateCents: 493_952,
     yearAtThisBalanceCents: 50_605,
     ...over,
   };
 }
 
-const table = () => screen.getByRole('table', { name: /ledger/i });
+const table = () => screen.getByRole('table');
 const bodyRows = () => within(table()).getAllByRole('row').slice(1);
 
-describe('the header figures (P6, U4)', () => {
-  it('names the three balances the way the rest of the app does', () => {
-    render(<LoanLedgerCard ledger={ledger()} direction="owed" />);
-    expect(textOf(screen.getByText('Owing today').parentElement)).toContain('$5,083.60');
-    // "Balance" is also a column header, so the figure is read off the dt in the summary list.
-    const balance = screen.getAllByText('Balance').find((node) => node.tagName === 'DT');
-    expect(textOf(balance?.parentElement)).toContain('$5,060.48');
-    expect(textOf(screen.getByText('Accrued so far').parentElement)).toContain('$23.12');
+/**
+ * Review F2, and the owner's ruling on it. The card printed seven figures of equal weight, three of
+ * them balances, beside a MetricCard on the same page carrying a fourth. There is one number that
+ * answers "what do I owe"; the parts belong under it as arithmetic.
+ */
+describe('F2: one hero, and the parts as a sentence under it', () => {
+  it('puts owing-today in display type and nothing else', () => {
+    const { container } = render(<LoanLedgerCard ledger={ledger()} direction="owed" />);
+    const heroes = container.querySelectorAll('.money-xl');
+    expect(heroes).toHaveLength(1);
+    expect(textOf(heroes[0])).toBe('$5,083.60');
+    expect(textOf(screen.getByText('Owing today'))).toBe('Owing today');
   });
 
-  it('shows what a year costs, and what has gone on interest so far', () => {
+  it('shows the arithmetic once, as a sentence', () => {
     render(<LoanLedgerCard ledger={ledger()} direction="owed" />);
-    expect(textOf(screen.getByText('A year at this balance').parentElement)).toContain('$506.05');
+    const sentence = screen.getByText(/balance \+/);
+    expect(textOf(sentence)).toBe('$5,060.48 balance + $23.12 building up this cycle');
+  });
+
+  it('carries exactly three figures in the footer strip, and two when interest-free', () => {
+    const { container, rerender } = render(<LoanLedgerCard ledger={ledger()} direction="owed" />);
+    expect(container.querySelectorAll('.stat-grid > *')).toHaveLength(3);
+    expect(textOf(screen.getByText('This cycle').parentElement)).toContain('$42.17');
     expect(textOf(screen.getByText('Paid in interest').parentElement)).toContain('$60.48');
     expect(textOf(screen.getByText('Paid off the loan').parentElement)).toContain('$4,939.52');
+
+    rerender(<LoanLedgerCard ledger={ledger()} direction="owed" interestFree />);
+    expect(container.querySelectorAll('.stat-grid > *')).toHaveLength(2);
+    expect(screen.queryByText('This cycle')).toBeNull();
   });
 
-  /** The whole card is an estimate on top of a confirmed figure, and says so once. */
-  it('says the figures are an estimate', () => {
-    render(<LoanLedgerCard ledger={ledger()} direction="owed" />);
-    expect(screen.getAllByText(/estimate/i).length).toBeGreaterThan(0);
-  });
-});
-
-describe('the rows (U2, U3)', () => {
-  it('has the six columns a statement has', () => {
-    render(<LoanLedgerCard ledger={ledger()} direction="owed" />);
-    expect(within(table()).getAllByRole('columnheader').map((cell) => cell.textContent)).toEqual([
-      'Date',
-      'Description',
-      'Payment',
-      'Interest',
-      'Principal',
-      'Balance',
-    ]);
-  });
-
-  it('lists every row oldest first, ending on what has accrued', () => {
-    render(<LoanLedgerCard ledger={ledger()} direction="owed" />);
-    const rows = bodyRows();
-    expect(rows).toHaveLength(4);
-    expect(textOf(rows[0])).toContain('Opening balance');
-    expect(textOf(rows[3])).toContain('Accrued so far');
-  });
-
-  /** U3: a payment shows what had built up by the day it landed, so the split is visible. */
-  it('shows the payment, what had accrued by then, and the balance after', () => {
-    render(<LoanLedgerCard ledger={ledger()} direction="owed" />);
-    const payment = textOf(bodyRows()[1]);
-    expect(payment).toContain('$5,000.00');
-    expect(payment).toContain('$37.63');
-  });
-
-  it('states on the posting row how much of the period went on interest', () => {
-    render(<LoanLedgerCard ledger={ledger()} direction="owed" />);
-    expect(textOf(bodyRows()[2])).toContain('covered interest');
-  });
-
-  /** U8: enough to check the charge by hand against a statement. */
-  it('carries the rate, the balance charged on and the day count on the posting row', () => {
-    render(<LoanLedgerCard ledger={ledger()} direction="owed" />);
-    const title = screen.getByTitle(/10\.00%/).getAttribute('title') ?? '';
-    expect(title).toContain('$7,258.06');
-    expect(title).toContain('31 days');
+  /** An interest-free loan has no arithmetic to show either: every payment is principal. */
+  it('drops the sentence for an interest-free loan', () => {
+    render(<LoanLedgerCard ledger={ledger()} direction="owed" interestFree />);
+    expect(screen.queryByText(/building up this cycle/)).toBeNull();
   });
 });
 
-describe('by month (U5)', () => {
-  it('collapses to one row per period, and back again', () => {
-    render(<LoanLedgerCard ledger={ledger()} direction="owed" />);
-    fireEvent.click(screen.getByRole('button', { name: /by month/i }));
-    const rows = bodyRows();
-    expect(rows).toHaveLength(2);
-    expect(textOf(rows[0])).toContain('2026-07-01');
-    expect(textOf(rows[0])).toContain('$5,000.00');
-    expect(textOf(rows[1])).toContain('Accrued so far');
+describe('F5: the card is built from the house primitives', () => {
+  it('renders exactly one table, not one nested in another', () => {
+    const { container } = render(<LoanLedgerCard ledger={ledger()} direction="owed" />);
+    expect(container.querySelectorAll('table')).toHaveLength(1);
+  });
 
-    fireEvent.click(screen.getByRole('button', { name: /every entry/i }));
-    expect(bodyRows()).toHaveLength(4);
+  it('gives every column header a scope and stacks on a phone', () => {
+    const { container } = render(<LoanLedgerCard ledger={ledger()} direction="owed" />);
+    const headers = container.querySelectorAll('thead th');
+    expect(headers).toHaveLength(6);
+    expect([...headers].every((th) => th.getAttribute('scope') === 'col')).toBe(true);
+    expect(textOf(headers[5])).toBe('Running balance');
+    expect(container.querySelector('table')?.className).toContain('data-table--stack');
+  });
+
+  it('labels every money cell for the stacked layout', () => {
+    render(<LoanLedgerCard ledger={ledger()} direction="owed" />);
+    const labels = [...bodyRows()[0]!.querySelectorAll('td')].map((td) => td.getAttribute('data-label'));
+    expect(labels).toEqual(['Date', 'Description', 'Payment', 'Interest', 'Principal', 'Running balance']);
+  });
+
+  /** F7: the currency sign is printed once, in the hero -- not ninety times down the table. */
+  it('prints amounts without a currency sign, and a dash for nothing', () => {
+    render(<LoanLedgerCard ledger={ledger()} direction="owed" />);
+    const opening = [...bodyRows()[0]!.querySelectorAll('td')].map((td) => textOf(td));
+    expect(opening[2]).toBe('—');
+    expect(opening[5]).toBe('10,000.00');
+  });
+
+  it('has no title attribute anywhere', () => {
+    const { container } = render(<LoanLedgerCard ledger={ledger()} direction="owed" />);
+    expect(container.querySelectorAll('[title]')).toHaveLength(0);
   });
 });
 
-describe('wording by direction (U6)', () => {
-  it('says earned rather than charged for money lent out', () => {
+/**
+ * F5 again. The working behind a charge was in a `title` -- a hover tooltip, which a phone cannot
+ * reach, a keyboard cannot reach and most screen readers do not announce. It is a disclosure now.
+ */
+describe('F5: the working opens instead of hovering', () => {
+  it('opens a row naming the rate, the basis and the balance it was charged on', () => {
+    render(<LoanLedgerCard ledger={ledger()} direction="owed" />);
+    const toggle = screen.getByRole('button', { name: 'Interest posted' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+
+    fireEvent.click(toggle);
+
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    const working = screen.getByText(/Rate 10.00%/);
+    expect(textOf(working)).toContain('Yearly rate, one twelfth charged each month');
+    expect(textOf(working)).toContain('on an average balance of $7,258.06 over 31 days');
+  });
+
+  it('offers no disclosure on a row with no working to show', () => {
+    render(<LoanLedgerCard ledger={ledger()} direction="owed" />);
+    expect(screen.queryByRole('button', { name: 'Opening balance' })).toBeNull();
+  });
+});
+
+describe('the by-month toggle', () => {
+  it('reports its state, and folds the payments into the period when pressed', () => {
+    render(<LoanLedgerCard ledger={ledger()} direction="owed" />);
+    const toggle = screen.getByRole('button', { name: 'By month' });
+    expect(toggle.getAttribute('aria-pressed')).toBe('false');
+
+    fireEvent.click(toggle);
+
+    expect(toggle.getAttribute('aria-pressed')).toBe('true');
+    // Opening and the standalone payment are folded away; the period and the accrual remain.
+    expect(bodyRows()).toHaveLength(2);
+    expect(textOf(bodyRows()[0])).toContain('2026-07-01 to 2026-08-01');
+  });
+});
+
+/** U6: every word on the card comes from INTEREST_WORDING, chosen by direction. */
+describe('a loan pointed the other way', () => {
+  it('reads as money owed TO the household', () => {
     render(<LoanLedgerCard ledger={ledger()} direction="lent" />);
-    expect(screen.getAllByText(/Interest earned/i).length).toBeGreaterThan(0);
-    expect(textOf(screen.getByText('They have paid').parentElement)).toContain('$60.48');
+    expect(screen.getByText('Owed to you today')).toBeTruthy();
+    expect(screen.getByText('Interest they have paid you')).toBeTruthy();
+    expect(screen.getByText('They have paid off')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Interest earned' })).toBeTruthy();
+    expect(within(table()).getByText('They paid')).toBeTruthy();
+  });
+
+  it('titles the card by direction', () => {
+    const { rerender } = render(<LoanLedgerCard ledger={ledger()} direction="owed" />);
+    expect(screen.getByText('Interest charged')).toBeTruthy();
+    rerender(<LoanLedgerCard ledger={ledger()} direction="lent" />);
+    expect(screen.getAllByText('Interest earned').length).toBeGreaterThan(0);
   });
 });
 
-describe('an interest-free loan', () => {
-  it('shows the ledger without an interest column full of zeroes being the point', () => {
-    render(
-      <LoanLedgerCard
-        ledger={ledger({ accruedCents: 0, yearAtThisBalanceCents: 0, interestPaidToDateCents: 0 })}
-        direction="owed"
-        interestFree
-      />,
-    );
-    expect(screen.getAllByText(/every payment/i).length).toBeGreaterThan(0);
-    expect(screen.queryByText('A year at this balance')).toBeNull();
-  });
-});
-
-describe('the download (U7)', () => {
-  it('offers the rows as a file when a link is given', () => {
-    render(<LoanLedgerCard ledger={ledger()} direction="owed" downloadHref="/api/loans/7/ledger.csv" />);
-    expect(screen.getByRole('link', { name: /download/i }).getAttribute('href')).toBe('/api/loans/7/ledger.csv');
+describe('the toolbar', () => {
+  it('offers the download only when a route was given', () => {
+    const { rerender } = render(<LoanLedgerCard ledger={ledger()} direction="owed" />);
+    expect(screen.queryByRole('link', { name: /spreadsheet/i })).toBeNull();
+    rerender(<LoanLedgerCard ledger={ledger()} direction="owed" downloadHref="/api/loans/1/ledger.csv" />);
+    expect(screen.getByRole('link', { name: /spreadsheet/i }).getAttribute('href')).toBe('/api/loans/1/ledger.csv');
   });
 
-  it('offers nothing when there is no link', () => {
-    render(<LoanLedgerCard ledger={ledger()} direction="owed" />);
-    expect(screen.queryByRole('link', { name: /download/i })).toBeNull();
+  it('renders the reconcile control the caller passes', () => {
+    render(<LoanLedgerCard ledger={ledger()} direction="owed" onReconcile={<button type="button">Reconcile…</button>} />);
+    expect(screen.getByRole('button', { name: 'Reconcile…' })).toBeTruthy();
   });
 });

@@ -32,17 +32,74 @@ export const BASIS_HINTS: Record<InterestBasis, string> = {
   apr_daily: 'A balance that moves during the month, so each day is worked out on that day’s balance.',
 };
 
-/** What the screen calls the charge, which differs by which way the loan points (ruling I16). */
-export const INTEREST_WORDING: Record<'owed' | 'lent', { charged: string; paid: string; free: string }> = {
+/**
+ * What the screen calls each figure, which differs by which way the loan points (ruling I16).
+ *
+ * EVERY label the loan page prints comes from here. F5 (review) found the ledger card spelling one
+ * of them inline -- `direction === 'lent' ? 'They have paid' : 'Paid in interest'` -- which already
+ * disagreed with `INTEREST_WORDING.lent.paid` three lines away in this file. One table, and a
+ * direction that cannot be half-applied.
+ */
+export const INTEREST_WORDING: Record<
+  'owed' | 'lent',
+  {
+    charged: string;
+    paid: string;
+    free: string;
+    /** The hero: what the whole thing comes to today, interest included. */
+    owingToday: string;
+    /** What has been written down, before this cycle's accrual. */
+    balance: string;
+    /** This cycle so far, never yet charged. */
+    accruing: string;
+    /** Principal repaid since the statement. */
+    paidOff: string;
+  }
+> = {
   owed: {
     charged: 'Interest charged',
     paid: 'Paid in interest',
     free: 'Interest-free — every payment is principal',
+    owingToday: 'Owing today',
+    balance: 'Balance',
+    accruing: 'building up this cycle',
+    paidOff: 'Paid off the loan',
   },
   lent: {
     charged: 'Interest earned',
     paid: 'Interest they have paid you',
     free: 'Interest-free — every payment reduces what they owe',
+    owingToday: 'Owed to you today',
+    balance: 'Balance',
+    accruing: 'building up this cycle',
+    paidOff: 'They have paid off',
+  },
+};
+
+/**
+ * U6. The engine writes one description per row; the direction decides which words a person reads.
+ *
+ * F7 (review): a lookup on the row's KIND, not a chain of String.replace over the sentence the
+ * engine wrote. replace() rewrites the first match only and matches anywhere -- "Payment" inside
+ * "Payment reversed" became "They paid reversed" -- and it silently did nothing at all for a
+ * description nobody had thought to list.
+ */
+export const LEDGER_ROW_WORDS: Record<'owed' | 'lent', Record<string, string>> = {
+  owed: {
+    opening: 'Opening balance',
+    advance: 'Advance',
+    payment: 'Payment',
+    interest: 'Interest posted',
+    adjustment: 'Correction',
+    accrued: 'Building up this cycle',
+  },
+  lent: {
+    opening: 'Opening balance',
+    advance: 'Lent out',
+    payment: 'They paid',
+    interest: 'Interest earned',
+    adjustment: 'Correction',
+    accrued: 'Building up this cycle',
   },
 };
 

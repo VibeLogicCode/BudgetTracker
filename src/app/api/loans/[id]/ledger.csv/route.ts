@@ -47,6 +47,13 @@ export async function GET(
       Interest: dollars(row.interestCents),
       Principal: dollars(row.principalCents),
       Balance: dollars(row.balanceCents),
+      /*
+        F7 (review). What had built up by the day a payment landed -- the figure that explains why
+        a $500 payment took $437 off the balance. The card shows it by opening a row; a spreadsheet
+        has no rows to open, so it gets a column. Blank on every row that is not a payment, because
+        it is not additive with the Interest column beside it (see LedgerRow.detail's own note).
+      */
+      'Interest accrued to date': dollars(row.detail?.accruedToDayCents ?? null),
     })),
     [
       { key: 'Date', header: 'Date' },
@@ -55,6 +62,7 @@ export async function GET(
       { key: 'Interest', header: 'Interest' },
       { key: 'Principal', header: 'Principal' },
       { key: 'Balance', header: 'Balance' },
+      { key: 'Interest accrued to date', header: 'Interest accrued to date' },
     ],
   );
 

@@ -1,10 +1,11 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
-import { TableWrap } from '@/components/ui/Table';
+import { AmountCell, TableWrap } from '@/components/ui/Table';
+import { buttonClass } from '@/components/ui/Button';
 import { formatCents, formatRateBps } from '@/lib/money';
-import { BASIS_LABELS, INTEREST_WORDING } from '@/lib/loans/basis-labels';
+import { BASIS_LABELS, INTEREST_WORDING, LEDGER_ROW_WORDS } from '@/lib/loans/basis-labels';
 import type { Ledger, LedgerRow } from '@/lib/loans/ledger';
 import type { LoanDirection } from '@/lib/warranty/constants';
 
@@ -16,8 +17,15 @@ import type { LoanDirection } from '@/lib/warranty/constants';
  * loan there is no statement to compare against, so this IS the record -- which is why every row
  * carries where its figure came from, and why the posting rows can be checked by hand.
  *
- * It replaces LoanInterestCard, whose month table answered a narrower question (what has interest
- * done since the last statement) and could not show a payment at all.
+ * ONE HERO (review F2, owner ruling). v1.48.0's card printed seven figures of equal weight, three
+ * of which were balances -- "Owing today", "Balance", and a Balance column whose last cell was a
+ * third figure again -- beside a MetricCard on the same page showing a fourth. A household cannot
+ * hold four balances for one loan, and it should not have to: there is one number that answers
+ * "what do I owe", and the parts belong under it as arithmetic, not beside it as rivals.
+ *
+ * F5: the card is built from the house primitives now -- .eyebrow labels, .money-xl for the hero,
+ * AmountCell for every money cell, TableWrap's own <table> rather than a second one nested inside
+ * it, and a disclosure row in place of the `title` attribute nobody on a phone could reach.
  */
 export function LoanLedgerCard({
   ledger,
@@ -37,118 +45,171 @@ export function LoanLedgerCard({
 }) {
   const [byMonth, setByMonth] = useState(false);
   const words = INTEREST_WORDING[direction];
-  const rows = byMonth ? collapseToPeriods(ledger.rows) : ledger.rows;
+  // C12: the collapse walks every row, and nothing about it changes while the toggle sits still.
+  const rows = useMemo(() => (byMonth ? collapseToPeriods(ledger.rows) : ledger.rows), [byMonth, ledger.rows]);
 
   return (
     <Card>
       <CardHeader
-        title={interestFree ? words.free : `Ledger — ${words.charged.toLowerCase()}`}
+        title={interestFree ? words.free : words.charged}
         description={
           interestFree
             ? 'Every payment comes off the loan.'
-            : 'Every figure here is an estimate between statements, worked out from the rate and what you have paid.'
+            : 'Estimated between statements, from the rate and what has been paid.'
         }
         action={onReconcile}
       />
       <CardBody className="flex flex-col gap-5">
-        <dl className="stat-grid">
-          <Figure label="Owing today" value={formatCents(ledger.owingCents)} strong />
-          <Figure label="Balance" value={formatCents(ledger.postedBalanceCents)} />
-          <Figure label="Accrued so far" value={formatCents(ledger.accruedCents)} />
+        {/*
+          THE HERO, and the only figure on this card in display type. The two parts underneath are
+          a sentence rather than two more tiles: they are how this number is arrived at, and a tile
+          each is what made three balances look like three separate facts (F2).
+        */}
+        <div className="flex flex-col gap-1">
+          <p className="eyebrow">{words.owingToday}</p>
+          <p className="money-xl text-ink">{formatCents(ledger.owingCents)}</p>
           {interestFree ? null : (
-            <>
-              <Figure label="This cycle" value={formatCents(ledger.interestThisPeriodCents)} />
-              <Figure label="A year at this balance" value={formatCents(ledger.yearAtThisBalanceCents)} />
-            </>
+            <p className="text-sm text-muted">
+              {formatCents(ledger.postedBalanceCents)} {words.balance.toLowerCase()} +{' '}
+              {formatCents(ledger.accruedCents)} {words.accruing}
+            </p>
           )}
-          <Figure label={direction === 'lent' ? 'They have paid' : 'Paid in interest'} value={formatCents(ledger.interestPaidToDateCents)} />
-          <Figure label="Paid off the loan" value={formatCents(ledger.principalPaidToDateCents)} />
+        </div>
+
+        {/*
+          The footer strip: exactly three figures, or two when the loan is interest-free. Both
+          counts are ones .stat-grid tunes (globals.css); the seven the old card rendered were laid
+          out 3/3/1, which is the shape that made the hero look like one of seven equal things.
+        */}
+        <dl className="stat-grid">
+          {interestFree ? null : <Figure label="This cycle" value={formatCents(ledger.interestThisPeriodCents)} />}
+          <Figure label={words.paid} value={formatCents(ledger.interestPaidToDateCents)} />
+          <Figure label={words.paidOff} value={formatCents(ledger.principalPaidToDateCents)} />
         </dl>
 
         <div className="flex flex-wrap items-center justify-between gap-2 print:hidden">
-          <button type="button" onClick={() => setByMonth(!byMonth)} className="text-sm text-accent hover:underline">
-            {byMonth ? 'Show every entry' : 'Show by month'}
+          <button
+            type="button"
+            aria-pressed={byMonth}
+            onClick={() => setByMonth(!byMonth)}
+            className={buttonClass('secondary', 'sm', 'min-h-11 sm:min-h-0')}
+          >
+            By month
           </button>
           {downloadHref === undefined ? null : (
-            <a href={downloadHref} className="text-sm text-accent hover:underline">
+            <a href={downloadHref} className={buttonClass('ghost', 'sm', 'min-h-11 sm:min-h-0')}>
               Download as a spreadsheet
             </a>
           )}
         </div>
 
-        <TableWrap bare>
-          <table className="data-table" aria-label="Ledger">
-            <thead>
-              <tr>
-                <th scope="col">Date</th>
-                <th scope="col">Description</th>
-                <th scope="col" className="text-right">
-                  Payment
-                </th>
-                <th scope="col" className="text-right">
-                  Interest
-                </th>
-                <th scope="col" className="text-right">
-                  Principal
-                </th>
-                <th scope="col" className="text-right">
-                  Balance
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row, index) => (
-                <Row key={`${row.kind}-${row.date}-${index}`} row={row} direction={direction} />
-              ))}
-            </tbody>
-          </table>
+        {/*
+          F5: TableWrap renders the <table> itself, so thead/tbody are its direct children. The old
+          card nested a second <table> inside it -- invalid, and it also meant `responsive` could
+          not reach the rows, so this table scrolled sideways on a phone while the narrower table
+          below it stacked into cards.
+        */}
+        <TableWrap bare responsive minWidth="52rem">
+          <thead>
+            <tr>
+              <th scope="col">Date</th>
+              <th scope="col">Description</th>
+              <th scope="col" className="text-right">
+                Payment
+              </th>
+              <th scope="col" className="text-right">
+                Interest
+              </th>
+              <th scope="col" className="text-right">
+                Principal
+              </th>
+              <th scope="col" className="text-right">
+                Running balance
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, index) => (
+              <Row key={`${row.kind}-${row.date}-${index}`} row={row} direction={direction} />
+            ))}
+          </tbody>
         </TableWrap>
       </CardBody>
     </Card>
   );
 }
 
-function Figure({ label, value, strong = false }: { label: string; value: string; strong?: boolean }) {
+function Figure({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex flex-col gap-1">
-      <dt className="text-sm text-muted">{label}</dt>
-      <dd className={strong ? 'text-xl font-semibold text-ink' : 'text-lg text-ink'}>{value}</dd>
+      <dt className="eyebrow">{label}</dt>
+      <dd className="money-lg text-ink">{value}</dd>
     </div>
   );
 }
 
+/**
+ * One ledger row, plus -- on a row that carries the working -- a disclosure holding it.
+ *
+ * U8 wants the rate, the balance it was charged on and the day count available: the three numbers
+ * somebody needs to reproduce a charge on paper when a statement disagrees. v1.48.0 put them in a
+ * `title` attribute, which is a hover tooltip: unreachable by touch, unreachable by keyboard, and
+ * invisible to a screen reader in most combinations. A button that opens a row says the same thing
+ * to everybody.
+ */
 function Row({ row, direction }: { row: LedgerRow; direction: LoanDirection }) {
+  const [open, setOpen] = useState(false);
   const accrued = row.kind === 'accrued';
-  /*
-    U8. Rate, the balance it was charged on, and the day count: the three numbers somebody needs to
-    reproduce the charge on paper when a statement disagrees. A title rather than a visible column,
-    because five loans' worth of it would bury the ledger.
-  */
-  const detail =
-    row.detail === undefined
-      ? undefined
-      : `${formatRateBps(row.detail.rateBps)}% · ${BASIS_LABELS[row.detail.basis]} · on an average balance of ` +
-        `${formatCents(row.detail.averageDailyBalanceCents)} over ${row.detail.daysCounted} days`;
+  const working = workingOf(row);
+  // The currency sign is printed once, in the hero. Ninety cells of "$" is noise (F7).
+  const money = (cents: number | null) => (cents === null ? '—' : formatCents(cents, { currency: false }));
 
   return (
-    <tr className={accrued ? 'italic text-muted' : undefined}>
-      <td>{row.date}</td>
-      <td title={detail}>{describe(row, direction)}</td>
-      <td className="text-right tabular-nums">{row.paymentCents === null ? '' : formatCents(row.paymentCents)}</td>
-      <td className="text-right tabular-nums">{row.interestCents === null ? '' : formatCents(row.interestCents)}</td>
-      <td className="text-right tabular-nums">{row.principalCents === null ? '' : formatCents(row.principalCents)}</td>
-      <td className="text-right tabular-nums">{formatCents(row.balanceCents)}</td>
-    </tr>
+    <>
+      <tr className={accrued ? 'italic text-muted' : undefined}>
+        <td data-label="Date">{row.date}</td>
+        <td data-label="Description">
+          {working === null ? (
+            describe(row, direction)
+          ) : (
+            <button
+              type="button"
+              aria-expanded={open}
+              onClick={() => setOpen(!open)}
+              className="text-left text-accent-text hover:underline"
+            >
+              {describe(row, direction)}
+            </button>
+          )}
+        </td>
+        <AmountCell data-label="Payment">{money(row.paymentCents)}</AmountCell>
+        <AmountCell data-label="Interest">{money(row.interestCents)}</AmountCell>
+        <AmountCell data-label="Principal">{money(row.principalCents)}</AmountCell>
+        <AmountCell data-label="Running balance">{money(row.balanceCents)}</AmountCell>
+      </tr>
+      {working === null || !open ? null : (
+        <tr className="text-sm text-muted">
+          <td colSpan={6}>{working}</td>
+        </tr>
+      )}
+    </>
   );
 }
 
-/** U6. The engine writes one wording; the direction decides which words a person reads. */
+/** The sentence behind a charge, or null when this row has no working to show. */
+function workingOf(row: LedgerRow): string | null {
+  const detail = row.detail;
+  if (detail?.rateBps === undefined || detail.basis === undefined) return null;
+  const parts = [`Rate ${formatRateBps(detail.rateBps)}%`, BASIS_LABELS[detail.basis]];
+  if (detail.averageDailyBalanceCents !== undefined && detail.daysCounted !== undefined) {
+    parts.push(`on an average balance of ${formatCents(detail.averageDailyBalanceCents)} over ${detail.daysCounted} days`);
+  }
+  return parts.join(' · ');
+}
+
+/** U6/F7: a lookup on the row's kind, never a rewrite of the sentence the engine wrote. */
 function describe(row: LedgerRow, direction: LoanDirection): string {
-  if (direction === 'owed') return row.description;
-  return row.description
-    .replace('Interest posted', INTEREST_WORDING.lent.charged)
-    .replace('Payment', 'They paid')
-    .replace('Advance', 'Lent out');
+  return LEDGER_ROW_WORDS[direction][row.kind] ?? row.description;
 }
 
 /**

@@ -424,6 +424,65 @@ export function WarrantyDetailClient({
   const termWordLabel = formTermLabel(item.kind);
   const expiryLabel = formEndLabel(item.kind);
 
+  /*
+    The loan money block's controls and details, rendered the same whether they sit inside the
+    MetricCard (no ledger on the page) or under the plain card beside the ledger's own hero. One
+    definition, because a household must not lose "Recompute balance" by having a basis set.
+  */
+  const moneyBlockDetails = (
+    <>
+      {/* F8 fix-round: a plain-voice heads-up next to the number people are about to
+                    unassign a payment from -- removing an old link doesn't just undo one
+                    transaction in isolation, it can leave the balance ahead of what the
+                    household's latest paper statement says, and that's worth saying before
+                    someone clicks Unassign expecting a plain undo. Gated on currentBalanceCents
+                    too (micro round): a null balance isn't shown at all above, so a hint about
+                    "the balance" would be pointing at a number that isn't even on the page. */}
+                {item.currentBalanceCents === null || paymentCount === 0 ? null : (
+                  <p className="text-xs text-subtle">
+                    Removing an old payment can push the balance above your latest statement figure.
+                  </p>
+                )}
+                {/* Item 6 (v1.21.0 backlog): the repair action for a balance that predates the
+                    link()-order fix -- the "route back" the backlog required so a corrupted loan
+                    no longer has to be deleted and recreated. Loan-only (item.kind check mirrors
+                    the server action's own gate) and only shown once there is at least one linked
+                    payment to replay. */}
+                {item.kind === 'loan' && item.currentBalanceCents !== null && paymentCount > 0 ? (
+                  <form action={recomputeDispatch} className="flex flex-col items-start gap-1.5">
+                    <input type="hidden" name="itemId" value={item.id} />
+                    <SubmitButton variant="secondary" size="sm">
+                      Recompute balance
+                    </SubmitButton>
+                    <p className="text-xs text-subtle">
+                      Replays every linked payment in the order it actually happened, in case one was linked out of order.
+                    </p>
+                    <FormError message={recomputeState.error} />
+                    {recomputeState.message === undefined ? null : <Notice tone="success">{recomputeState.message}</Notice>}
+                  </form>
+                ) : null}
+                {/* F11 fix-round: the Detail rows below are dt/dd pairs and belong inside a
+                    dl, same as the summary grid above -- they were previously loose divs. */}
+                {item.principalCents === null &&
+                item.interestRateBps === null &&
+                lastPaymentAt === null &&
+                paymentCount === 0 ? null : (
+                  <dl className="flex flex-col gap-2">
+                    {item.principalCents === null ? null : <Detail label="Original">{formatCents(item.principalCents)}</Detail>}
+                    {item.interestRateBps === null ? null : (
+                      <Detail label="Rate">{formatRateBps(item.interestRateBps)}%</Detail>
+                    )}
+                    {lastPaymentAt === null ? null : <Detail label="Last payment">{lastPaymentAt.slice(0, 10)}</Detail>}
+                    {/* Item 6 (v1.16.0 plan): the bare "Payments linked: N" row is gone -- the
+                        Linked transactions card below lists the payments themselves, which is
+                        the whole point of that task. paymentCount is still read above (the
+                        statement-drift hint) and in this dl's own render-gate; only the count
+                        row itself is retired. */}
+                  </dl>
+                )}
+    </>
+  );
+
   return (
     <div className="flex flex-col gap-4 sm:gap-5">
       <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
@@ -597,7 +656,26 @@ export function WarrantyDetailClient({
               This loan has a rate but no charging method. Pick one to see interest.
             </Notice>
           ) : null}
-          {item.currentBalanceCents === null && item.principalCents === null ? null : (
+          {/*
+            F2 (review, owner ruling): ONE HERO. When the ledger card is on the page it carries
+            "Owing today" in display type, and this card's own balance was a SECOND hero for the
+            same loan -- a stored figure that legitimately differs from owing-today between a due
+            posting and the nightly sweep, printed the same size, six inches away. So when there is
+            a ledger, the money block keeps its controls and its details and loses its hero; a loan
+            with no ledger (no basis yet, or no statement to run from) keeps the MetricCard, because
+            then there is no other number on the page at all.
+          */}
+          {item.currentBalanceCents === null && item.principalCents === null ? null : loanLedgerRows !== null ? (
+            <Card>
+              <CardHeader title="This loan" description="What it started as, and what it costs." />
+              <CardBody className="flex flex-col gap-4">
+                {payoffFraction === null ? null : (
+                  <ProgressBar pct={Math.round(payoffFraction * 100)} tone="calm" label={`${item.name} paid off`} />
+                )}
+                {moneyBlockDetails}
+              </CardBody>
+            </Card>
+          ) : (
             <MetricCard
               title={balanceLabelForDirection(item.loanDirection)}
               value={item.currentBalanceCents === null ? '—' : formatCents(item.currentBalanceCents)}
@@ -626,55 +704,7 @@ export function WarrantyDetailClient({
                 )
               }
             >
-              {/* F8 fix-round: a plain-voice heads-up next to the number people are about to
-                  unassign a payment from -- removing an old link doesn't just undo one
-                  transaction in isolation, it can leave the balance ahead of what the
-                  household's latest paper statement says, and that's worth saying before
-                  someone clicks Unassign expecting a plain undo. Gated on currentBalanceCents
-                  too (micro round): a null balance isn't shown at all above, so a hint about
-                  "the balance" would be pointing at a number that isn't even on the page. */}
-              {item.currentBalanceCents === null || paymentCount === 0 ? null : (
-                <p className="text-xs text-subtle">
-                  Removing an old payment can push the balance above your latest statement figure.
-                </p>
-              )}
-              {/* Item 6 (v1.21.0 backlog): the repair action for a balance that predates the
-                  link()-order fix -- the "route back" the backlog required so a corrupted loan
-                  no longer has to be deleted and recreated. Loan-only (item.kind check mirrors
-                  the server action's own gate) and only shown once there is at least one linked
-                  payment to replay. */}
-              {item.kind === 'loan' && item.currentBalanceCents !== null && paymentCount > 0 ? (
-                <form action={recomputeDispatch} className="flex flex-col items-start gap-1.5">
-                  <input type="hidden" name="itemId" value={item.id} />
-                  <SubmitButton variant="secondary" size="sm">
-                    Recompute balance
-                  </SubmitButton>
-                  <p className="text-xs text-subtle">
-                    Replays every linked payment in the order it actually happened, in case one was linked out of order.
-                  </p>
-                  <FormError message={recomputeState.error} />
-                  {recomputeState.message === undefined ? null : <Notice tone="success">{recomputeState.message}</Notice>}
-                </form>
-              ) : null}
-              {/* F11 fix-round: the Detail rows below are dt/dd pairs and belong inside a
-                  dl, same as the summary grid above -- they were previously loose divs. */}
-              {item.principalCents === null &&
-              item.interestRateBps === null &&
-              lastPaymentAt === null &&
-              paymentCount === 0 ? null : (
-                <dl className="flex flex-col gap-2">
-                  {item.principalCents === null ? null : <Detail label="Original">{formatCents(item.principalCents)}</Detail>}
-                  {item.interestRateBps === null ? null : (
-                    <Detail label="Rate">{formatRateBps(item.interestRateBps)}%</Detail>
-                  )}
-                  {lastPaymentAt === null ? null : <Detail label="Last payment">{lastPaymentAt.slice(0, 10)}</Detail>}
-                  {/* Item 6 (v1.16.0 plan): the bare "Payments linked: N" row is gone -- the
-                      Linked transactions card below lists the payments themselves, which is
-                      the whole point of that task. paymentCount is still read above (the
-                      statement-drift hint) and in this dl's own render-gate; only the count
-                      row itself is retired. */}
-                </dl>
-              )}
+              {moneyBlockDetails}
             </MetricCard>
           )}
 
