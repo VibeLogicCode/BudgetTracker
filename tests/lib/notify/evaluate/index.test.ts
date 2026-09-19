@@ -13,6 +13,7 @@ import * as anomaliesModule from '@/lib/notify/evaluate/anomalies';
 import * as monthlyModule from '@/lib/notify/evaluate/monthly';
 import * as budgetModule from '@/lib/notify/evaluate/budget';
 import * as savingsModule from '@/lib/notify/evaluate/savings';
+import * as loanEventsModule from '@/lib/notify/evaluate/loans';
 
 let t: TestDb;
 const originalTz = process.env.TZ;
@@ -208,5 +209,33 @@ describe('the boot pass does not fire tick-triggered events', () => {
     // way round would silence every budget alert forever, so it is pinned rather than assumed.
     expect(source).toContain('runNotifyTick(new Date(), { atBoot: true })');
     expect(source).toMatch(/runNotifyTick\(\);/);
+  });
+});
+
+/**
+ * Review C7. The three ledger-era evaluators sat OUTSIDE the daily slot memo, so every five-minute
+ * tick inside the twelve-hour catch-up window re-ran them -- a query per loan for its expiry,
+ * another for its newest posting, a third for its newest statement, and a full outbox scan each,
+ * for figures that move once a day at most.
+ */
+describe('C7: the loan evaluators run once per daily slot, not once per tick', () => {
+  it('runs them on the first tick of a slot and not again until the next one', () => {
+    const userId = insertTestUser(t.db);
+    const missed = vi.spyOn(loanEventsModule, 'evaluateLoanPaymentMissed').mockReturnValue(0);
+    const reconcile = vi.spyOn(loanEventsModule, 'evaluateLoanReconcileDue').mockReturnValue(0);
+    try {
+      runScheduledEvaluation(new Date('2026-08-17T09:00:00Z'));
+      runScheduledEvaluation(new Date('2026-08-17T09:05:00Z'));
+      runScheduledEvaluation(new Date('2026-08-17T09:10:00Z'));
+      // The member, then the family channel's own pass -- once each, however many ticks.
+      expect(missed.mock.calls.map((args) => args[0].userId)).toEqual([userId, null]);
+      expect(reconcile.mock.calls.map((args) => args[0].userId)).toEqual([userId, null]);
+
+      runScheduledEvaluation(new Date('2026-08-18T09:00:00Z'));
+      expect(missed.mock.calls.map((args) => args[0].userId)).toEqual([userId, null, userId, null]);
+    } finally {
+      missed.mockRestore();
+      reconcile.mockRestore();
+    }
   });
 });

@@ -202,12 +202,7 @@ export function runScheduledEvaluation(
       if (daily.fires) {
         evaluateComingDue({ userId: user.id, now, tz });
         evaluateStaleImport({ userId: user.id, now, tz });
-        // v1.48.0, ledger spec N3/N4/N6. Three more daily-slot evaluators, each of which decides
-        // for itself whether this recipient is subscribed -- the same shape as the two above.
-        evaluateLoanPaymentMissed({ userId: user.id, now, tz });
-        evaluateLoanReconcileDue({ userId: user.id, now, tz });
-        evaluateGoals({ userId: user.id, now, tz });
-        // MUST-10.9: skip the three newer evaluators once this daily slot has already been
+        // MUST-10.9: skip the newer evaluators once this daily slot has already been
         // processed, rather than recomputing them on every 5-minute tick inside the 12-hour
         // catch-up window. Recorded only after all three return without throwing, so a
         // transient failure retries on the next tick instead of being silently skipped.
@@ -229,6 +224,18 @@ export function runScheduledEvaluation(
            *
            * The function and the event id stay, as evaluateBudgets and evaluateSavingsTargetMet do.
            */
+          /*
+            v1.48.0, ledger spec N3/N4/N6, moved INSIDE the slot memo in v1.49.0 (review C7).
+
+            These three sat outside it, so every five-minute tick inside the twelve-hour catch-up
+            window re-ran them: a query per loan for its expiry, another for its newest posting, a
+            third for its newest statement, and a full scan of the outbox each -- for figures that
+            move once a day at most. Each still decides for itself whether the recipient is
+            subscribed, exactly as the two above do.
+          */
+          evaluateLoanPaymentMissed({ userId: user.id, now, tz });
+          evaluateLoanReconcileDue({ userId: user.id, now, tz });
+          evaluateGoals({ userId: user.id, now, tz });
           evaluateSubscriptionCreep({ userId: user.id, now, tz });
           // 2026-09-09: the month-boundary reports moved OUT of the daily slot and into
           // flushMonthSummaries below. Their trigger is the month being closed -- a person pressing

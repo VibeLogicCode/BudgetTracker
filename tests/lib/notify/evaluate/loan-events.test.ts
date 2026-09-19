@@ -213,3 +213,47 @@ describe('N6: the goal events', () => {
     expect(outbox('goal_reached')).toEqual([]);
   });
 });
+
+/**
+ * Review B7. The missed-payment check read loan_postings.payments_cents -- a figure frozen when the
+ * period closed. Postings are written onConflictDoNothing, so a payment imported AFTERWARDS (a
+ * statement that arrives a week late, which is the ordinary case) never updates that column. The
+ * ledger card recomputed the period from the payments themselves and showed the payment; the
+ * notification, reading the frozen figure, said none was recorded. Two screens, one period,
+ * opposite answers.
+ */
+describe('B7: missed-payment reads the payments, not a frozen column', () => {
+  it('stays quiet when the payment was imported after the period closed', () => {
+    c = setupLoanTest();
+    emailTarget();
+    const itemId = seedLoan();
+    // The period closes with nothing recorded -- payments_cents is frozen at zero.
+    postAllDueInterest('2026-09-18', NOW);
+    expect(
+      (
+        c.t.sqlite
+          .prepare("select payments_cents as p from loan_postings where item_id = ? and period_end = '2026-09-01'")
+          .get(itemId) as { p: number }
+      ).p,
+    ).toBe(0);
+
+    // The statement arrives late, carrying a payment dated INSIDE that period.
+    const txnId = c.spend('CAR LOAN PAYMENT', -45_000, { date: '2026-08-15' });
+    assignTransactionToLoan({ txnId, itemId, viewer: HOUSEHOLD_VIEWER, at: new Date('2026-09-17T12:00:00.000Z') });
+
+    expect(evaluateLoanPaymentMissed({ userId: c.userId, now: NOW, tz: 'UTC' })).toBe(0);
+    expect(outbox('loan_payment_missed')).toHaveLength(0);
+  });
+
+  it('still fires when nothing was paid into the period at all', () => {
+    c = setupLoanTest();
+    emailTarget();
+    const itemId = seedLoan();
+    postAllDueInterest('2026-09-18', NOW);
+    // A payment OUTSIDE the closed period says nothing about it.
+    const txnId = c.spend('CAR LOAN PAYMENT', -45_000, { date: '2026-09-15' });
+    assignTransactionToLoan({ txnId, itemId, viewer: HOUSEHOLD_VIEWER, at: new Date('2026-09-17T12:00:00.000Z') });
+
+    expect(evaluateLoanPaymentMissed({ userId: c.userId, now: NOW, tz: 'UTC' })).toBe(1);
+  });
+});

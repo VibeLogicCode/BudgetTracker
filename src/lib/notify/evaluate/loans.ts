@@ -9,10 +9,10 @@
  * several messages naming one each (the 2026-09-09 ruling), a cap on how many are named, and a
  * batch dedup key carrying the per-item keys so nothing is announced twice.
  */
-import { and, asc, desc, eq, gt, isNotNull, lte } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, isNotNull, lte } from 'drizzle-orm';
 import { getDb } from '@/db/client';
-import { loanAnchors, loanPostings, notificationOutbox, warrantyItems } from '@/db/schema';
-import { addMonths, monthOf, todayIso } from '@/lib/dates';
+import { loanAnchors, loanPayments, loanPostings, notificationOutbox, transactions, warrantyItems } from '@/db/schema';
+import { addDaysIso, addMonths, monthOf, todayIso } from '@/lib/dates';
 import { isEventEnabled } from '@/lib/notify/config';
 import { CHANNELS } from '@/lib/notify/events';
 import { familyChannelNeedsOwnPass } from '@/lib/notify/family-pass';
@@ -33,12 +33,23 @@ function batchKey(prefix: string, keys: string[]): string {
   return `${prefix}:batch:${[...keys].sort().join(',')}`;
 }
 
-/** Keys already announced, recovered by splitting every batch row this event has written. */
-function alreadyAnnounced(eventId: string, userId: number | null): Set<string> {
+/**
+ * Keys already announced, recovered by splitting every batch row this event has written.
+ *
+ * C8 (review): BOUNDED, and served by an index. This scanned the whole outbox -- every row of every
+ * event, growing for ever -- to answer a question only the recent past can affect: a period that
+ * closed two months ago is not going to be announced again, because its key names a date the
+ * evaluators no longer look at. Sixty days is comfortably wider than the widest window any caller
+ * uses (the reconcile check's two months).
+ */
+const ANNOUNCED_LOOKBACK_DAYS = 60;
+
+function alreadyAnnounced(eventId: string, userId: number | null, now: Date = new Date()): Set<string> {
+  const cutoff = addDaysIso(todayIso(now), -ANNOUNCED_LOOKBACK_DAYS);
   const rows = getDb()
     .select({ dedupKey: notificationOutbox.dedupKey })
     .from(notificationOutbox)
-    .where(eq(notificationOutbox.eventId, eventId))
+    .where(and(eq(notificationOutbox.eventId, eventId), gte(notificationOutbox.createdAt, cutoff)))
     .all();
   const seen = new Set<string>();
   for (const row of rows) {
@@ -73,6 +84,8 @@ function loansFor(userId: number | null): {
   name: string;
   direction: 'owed' | 'lent';
   ownerUserId: number | null;
+  /** C7: selected here, not re-queried per loan by the missed-payment check. */
+  expiryDate: string | null;
 }[] {
   const rows = getDb()
     .select({
@@ -80,6 +93,7 @@ function loansFor(userId: number | null): {
       name: warrantyItems.name,
       direction: warrantyItems.loanDirection,
       ownerUserId: warrantyItems.ownerUserId,
+      expiryDate: warrantyItems.expiryDate,
     })
     .from(warrantyItems)
     .where(isNotNull(warrantyItems.interestRateBasis))
@@ -123,7 +137,7 @@ export function raiseInterestPosted(input: { posted: PostedLoan[]; at: Date }): 
     } else if (!CHANNELS.some((channel) => isEventEnabled(userId, 'loan_interest_posted', channel))) {
       continue;
     }
-    const announced = alreadyAnnounced('loan_interest_posted', userId);
+    const announced = alreadyAnnounced('loan_interest_posted', userId, input.at);
     const fresh = loans.filter((row) => !announced.has(`loan:posted:${row.itemId}:${row.periodEnd}`));
     if (fresh.length === 0) continue;
     const shown = fresh.slice(0, MAX_NAMED);
@@ -163,29 +177,62 @@ export function raiseInterestPosted(input: { posted: PostedLoan[]; at: Date }): 
 export function evaluateLoanPaymentMissed(input: { userId: number | null; now: Date; tz: string }): number {
   if (!subscribed('loan_payment_missed', input.userId)) return 0;
   const today = todayIso(input.now, input.tz);
-  const announced = alreadyAnnounced('loan_payment_missed', input.userId);
+  const announced = alreadyAnnounced('loan_payment_missed', input.userId, input.now);
+
+  const loans = loansFor(input.userId).filter((loan) => loan.expiryDate === null || loan.expiryDate >= today);
+  if (loans.length === 0) return 0;
+
+  /*
+    C7: ONE probe for every loan's newest closed period, not one query per loan. The max/join shape
+    is the same question the per-loan query asked -- the newest posting at or before today -- and
+    the id tie-break is kept, because two periods can close on one date after a statement is
+    withdrawn and re-cut.
+  */
+  const ids = loans.map((loan) => loan.id);
+  const newestByItem = new Map<number, { periodStart: string; periodEnd: string }>();
+  for (const row of getDb()
+    .select({
+      itemId: loanPostings.itemId,
+      periodStart: loanPostings.periodStart,
+      periodEnd: loanPostings.periodEnd,
+    })
+    .from(loanPostings)
+    .where(and(inArray(loanPostings.itemId, ids), eq(loanPostings.kind, 'posting'), lte(loanPostings.periodEnd, today)))
+    .orderBy(asc(loanPostings.periodEnd), asc(loanPostings.id))
+    .all()) {
+    // Ascending, so the last row seen for an item is its newest.
+    newestByItem.set(row.itemId, { periodStart: row.periodStart, periodEnd: row.periodEnd });
+  }
+
+  /*
+    B7. WHAT WAS ACTUALLY PAID INTO THE PERIOD, read from the payments themselves.
+
+    This used to read loan_postings.payments_cents -- a figure frozen when the period closed. The
+    postings are written onConflictDoNothing, so a payment imported AFTERWARDS (a statement that
+    arrives a week late, which is the ordinary case) never updates it. The ledger card recomputes
+    the period from the payments and shows the payment; this notification, reading the frozen
+    figure, announced that none had been recorded. One period, two screens, opposite answers.
+
+    Dated by the TRANSACTION, half-open [start, end), which is the same window the engine walks.
+  */
+  const paidInPeriod = new Set<number>();
+  if (newestByItem.size > 0) {
+    for (const row of getDb()
+      .select({ itemId: loanPayments.itemId, date: transactions.date })
+      .from(loanPayments)
+      .innerJoin(transactions, eq(transactions.id, loanPayments.txnId))
+      .where(inArray(loanPayments.itemId, [...newestByItem.keys()]))
+      .all()) {
+      const period = newestByItem.get(row.itemId);
+      if (period === undefined) continue;
+      if (row.date >= period.periodStart && row.date < period.periodEnd) paidInPeriod.add(row.itemId);
+    }
+  }
 
   const candidates: { key: string; name: string; periodStart: string; periodEnd: string; direction: 'owed' | 'lent' }[] = [];
-  for (const loan of loansFor(input.userId)) {
-    const expiry = getDb()
-      .select({ expiryDate: warrantyItems.expiryDate })
-      .from(warrantyItems)
-      .where(eq(warrantyItems.id, loan.id))
-      .get();
-    if (expiry?.expiryDate != null && expiry.expiryDate < today) continue;
-
-    const newest = getDb()
-      .select({
-        periodStart: loanPostings.periodStart,
-        periodEnd: loanPostings.periodEnd,
-        paymentsCents: loanPostings.paymentsCents,
-      })
-      .from(loanPostings)
-      .where(and(eq(loanPostings.itemId, loan.id), eq(loanPostings.kind, 'posting'), lte(loanPostings.periodEnd, today)))
-      .orderBy(desc(loanPostings.periodEnd), desc(loanPostings.id))
-      .limit(1)
-      .get();
-    if (newest === undefined || newest.paymentsCents > 0) continue;
+  for (const loan of loans) {
+    const newest = newestByItem.get(loan.id);
+    if (newest === undefined || paidInPeriod.has(loan.id)) continue;
 
     const key = `loan:missed:${loan.id}:${newest.periodEnd}`;
     if (announced.has(key)) continue;
@@ -226,7 +273,7 @@ export function evaluateLoanReconcileDue(input: { userId: number | null; now: Da
   if (!subscribed('loan_reconcile_due', input.userId)) return 0;
   const today = todayIso(input.now, input.tz);
   const cutoff = `${addMonths(monthOf(today), -STALE_MONTHS)}-01`;
-  const announced = alreadyAnnounced('loan_reconcile_due', input.userId);
+  const announced = alreadyAnnounced('loan_reconcile_due', input.userId, input.now);
 
   const candidates: { key: string; name: string; lastStatement: string }[] = [];
   for (const loan of loansFor(input.userId)) {
