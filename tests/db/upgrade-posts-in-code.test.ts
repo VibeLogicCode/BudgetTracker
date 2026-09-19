@@ -70,6 +70,7 @@ describe('M3: the first sweep after an upgrade', () => {
       items: 1,
       posted: 2,
       adjusted: 0,
+      failed: 0,
     });
     expect(postings(itemId)).toEqual([
       { period_end: '2026-08-01', interest_cents: 8_333 },
@@ -96,6 +97,7 @@ describe('M3: the first sweep after an upgrade', () => {
       items: 0,
       posted: 0,
       adjusted: 0,
+      failed: 0,
     });
     expect(postings(itemId)).toEqual([]);
     expect(balanceOf(itemId)).toBe(1_000_000);
@@ -109,6 +111,7 @@ describe('M3: the first sweep after an upgrade', () => {
       items: 0,
       posted: 0,
       adjusted: 0,
+      failed: 0,
     });
   });
 

@@ -45,14 +45,14 @@ function backfillStatement(): string {
  * interest engine.
  */
 describe('0026: the migration records itself', () => {
-  it('sits immediately after 0025 in the journal, and is the newest', () => {
+  /** The "I am the newest" claim moved on to 0027's suite, as 0026 took it from 0025's. */
+  it('sits immediately after 0025 in the journal', () => {
     const journal = JSON.parse(
       fs.readFileSync(path.join(process.cwd(), 'drizzle/meta/_journal.json'), 'utf8'),
     ) as { entries: { idx: number; tag: string }[] };
     expect(journal.entries.find((row) => row.tag === '0026_loan_ledger')).toMatchObject({ idx: 26 });
     const idxs = journal.entries.map((entry) => entry.idx).sort((a, b) => a - b);
     expect(idxs.indexOf(26)).toBe(idxs.indexOf(25) + 1);
-    expect(Math.max(...idxs)).toBe(26);
   });
 });
 

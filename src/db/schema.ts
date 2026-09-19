@@ -557,16 +557,29 @@ export const budgets = sqliteTable(
  *     deliberately NOT declared below -- a weaker index with the same name is worse than
  *     none, because a future drizzle-kit push could use it to replace the real one.
  */
-export const budgetRollover = sqliteTable('budget_rollover', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  scope: text('scope', { enum: ['household', 'personal'] }).notNull(),
-  userId: integer('user_id').references(() => users.id),
-  categoryId: integer('category_id')
-    .notNull()
-    .references(() => categories.id),
-  startMonth: text('start_month').notNull(),
-  createdAt: text('created_at').notNull(),
-});
+export const budgetRollover = sqliteTable(
+  'budget_rollover',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    scope: text('scope', { enum: ['household', 'personal'] }).notNull(),
+    userId: integer('user_id').references(() => users.id),
+    categoryId: integer('category_id')
+      .notNull()
+      .references(() => categories.id),
+    startMonth: text('start_month').notNull(),
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => [
+    /*
+      v1.49.0. A PLAIN lookup index, deliberately under its own name and NOT the unique one the
+      docblock above refuses to redeclare. rolloverStartMonth runs once per category inside
+      budgetProgress, which the dashboard calls two or three times a render, and the expression
+      index cannot serve the coalesce(user_id, -1) shape the ORM emits -- so this was a full scan
+      per category. Nothing about uniqueness changes.
+    */
+    index('budget_rollover_scope_idx').on(t.scope, t.userId, t.categoryId),
+  ],
+);
 // budget_rollover_uq is an expression index; see drizzle/0009_finish_line.sql
 
 /**
@@ -880,6 +893,8 @@ export const warrantyItems = sqliteTable(
     index('warranty_items_owner_idx').on(t.ownerUserId),
     index('warranty_items_transaction_idx').on(t.transactionId),
     index('warranty_items_type_idx').on(t.typeId),
+    // "Which items are loans with a rate": the posting sweep and both loan notifiers.
+    index('warranty_items_basis_idx').on(t.interestRateBasis).where(sql`interest_rate_basis is not null`),
   ],
 );
 
@@ -941,6 +956,13 @@ export const loanAnchors = sqliteTable(
     prefillBalanceCents: integer('prefill_balance_cents'),
     /** The stored statement, when kept. SET NULL so deleting the file leaves the figure truthful. */
     receiptId: integer('receipt_id').references(() => warrantyReceipts.id, { onDelete: 'set null' }),
+    /**
+     * v1.49.0. Withdrawn by a person, usually because the date or the figure was mistyped. The row
+     * stays -- this app never forgets what somebody entered -- but the two newest-anchor reads skip
+     * it, so the statement before it governs again. Without this a wrong year was unrecoverable
+     * through the app, because a later correction always has an earlier date and never wins.
+     */
+    retractedAt: text('retracted_at'),
   },
   (t) => [index('loan_anchors_item_idx').on(t.itemId, t.asOfDate, t.id)],
 );
@@ -1308,6 +1330,9 @@ export const notificationOutbox = sqliteTable(
   (t) => [
     index('notification_outbox_due_idx').on(t.status, t.nextAttemptAt),
     index('notification_outbox_user_idx').on(t.userId, t.id),
+    // alreadyAnnounced() rebuilds "what has been said" from every row of an event. Covering, so
+    // the scan never reads the pages holding the message bodies.
+    index('notification_outbox_event_idx').on(t.eventId, t.dedupKey),
   ],
 );
 
@@ -1396,6 +1421,8 @@ export const loanPayments = sqliteTable(
   (t) => [
     uniqueIndex('loan_payments_txn_item_uq').on(t.txnId, t.itemId),
     index('loan_payments_item_idx').on(t.itemId, t.id),
+    // ruleLinkedPayments, on every dashboard load.
+    index('loan_payments_source_idx').on(t.source, t.createdAt),
     index('loan_payments_txn_idx').on(t.txnId),
   ],
 );

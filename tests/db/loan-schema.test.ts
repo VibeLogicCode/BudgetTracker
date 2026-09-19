@@ -124,8 +124,8 @@ describe('MUST-11.5 / MUST-11.17: the shapes exist after migration', () => {
     }
   });
 
-  /** v1.47.0 added loan_anchors_item_idx; v1.48.0 added the three ledger ones. Nine now. */
-  it('creates all nine named indexes', () => {
+  /** v1.47.0 added loan_anchors_item_idx; v1.48.0 three ledger ones; v1.49.0 the source one. Ten. */
+  it('creates all ten named indexes', () => {
     const names = t.sqlite
       .prepare(`select name from sqlite_master where type = 'index' and name like 'loan_%' order by name`)
       .all() as { name: string }[];
@@ -134,6 +134,7 @@ describe('MUST-11.5 / MUST-11.17: the shapes exist after migration', () => {
       'loan_matcher_rules_item_idx',
       'loan_matcher_rules_uq',
       'loan_payments_item_idx',
+      'loan_payments_source_idx',
       'loan_payments_txn_idx',
       'loan_payments_txn_item_uq',
       'loan_postings_item_idx',

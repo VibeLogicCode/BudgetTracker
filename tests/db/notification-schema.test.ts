@@ -69,13 +69,15 @@ describe('MUST-3.13: the tables and indexes exist after migration', () => {
     ]);
   });
 
-  it('creates all five named indexes', () => {
+  it('creates all six named indexes', () => {
     const names = t.sqlite
       .prepare(`select name from sqlite_master where type = 'index' and name like 'notification_%' order by name`)
       .all() as { name: string }[];
     expect(names.map((r) => r.name)).toEqual([
       'notification_outbox_dedup_uq',
       'notification_outbox_due_idx',
+      // v1.49.0 (drizzle/0027): covering, so alreadyAnnounced()'s scan never reads a message body.
+      'notification_outbox_event_idx',
       'notification_outbox_user_idx',
       // v1.28.0 (drizzle/0021): the PARTIAL unique index that makes a second family Telegram
       // impossible. tests/db/migration-0021.test.ts proves it is partial and that it bites.
