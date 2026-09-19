@@ -69,6 +69,27 @@ export function nextPostingDate(afterIso: string, postingDay: number): string {
   throw new Error('nextPostingDate found no date after ' + afterIso);
 }
 
+/**
+ * The last posting date STRICTLY before `beforeIso`. The mirror of nextPostingDate, and the way a
+ * period learns the length of the CYCLE it belongs to: a period that starts mid-cycle is a fragment
+ * of the cycle ending on its own posting date, not a short cycle of its own (C2, A2).
+ */
+export function previousPostingDate(beforeIso: string, postingDay: number): string {
+  let year = Number(beforeIso.slice(0, 4));
+  let month = Number(beforeIso.slice(5, 7));
+  for (let guard = 0; guard < 24; guard++) {
+    const candidate = clampedDate(year, month, postingDay);
+    if (candidate < beforeIso) return candidate;
+    month -= 1;
+    if (month < 1) {
+      month = 12;
+      year -= 1;
+    }
+  }
+  // Unreachable, for the same reason nextPostingDate's guard is.
+  throw new Error('previousPostingDate found no date before ' + beforeIso);
+}
+
 export interface PeriodBoundary {
   start: string;
   /** Exclusive: the posting date, and the next period's start. */
@@ -228,6 +249,465 @@ export function periodCharge(input: {
   const base = rate.basis === 'simple_on_principal' ? (input.principalCents ?? 0) : sum / daysCounted;
   const raw = (base * ppb * daysCounted) / (PPB * cycleDays);
   return { interestCents: Math.floor(raw + 0.5), averageDailyBalanceCents, daysCounted, daysInPeriod };
+}
+
+/**
+ * One row of loan_postings, in the engine's own shape. The database mirror of this is written by
+ * postDueInterest; nothing here knows the table exists.
+ */
+export interface StoredPosting {
+  kind: 'posting' | 'adjustment';
+  periodStart: string;
+  periodEnd: string;
+  openingCents: number;
+  /** Signed. A posting is never negative; an adjustment usually is. */
+  interestCents: number;
+  paymentsCents: number;
+  advancesCents: number;
+  closingCents: number;
+  rateBps: number | null;
+  basis: InterestBasis | null;
+  averageDailyBalanceCents: number | null;
+  note: string | null;
+}
+
+export interface LedgerInput {
+  /** The newest figure a person confirmed: an anchor's date. Nothing before it is estimated. */
+  startDate: string;
+  startBalanceCents: number;
+  /** The original amount. Required by simple_on_principal, ignored by every other basis. */
+  principalCents: number | null;
+  postingDay: number;
+  rateHistory: RateInForce[];
+  /** Signed in the loan's frame, and already past the anchor wall. Negative repays. */
+  movements: Movement[];
+  /** What is already written down. */
+  stored: StoredPosting[];
+  today: string;
+}
+
+export type LedgerRowKind = 'opening' | 'advance' | 'payment' | 'interest' | 'adjustment' | 'accrued';
+
+export interface LedgerRow {
+  kind: LedgerRowKind;
+  date: string;
+  description: string;
+  paymentCents: number | null;
+  interestCents: number | null;
+  principalCents: number | null;
+  balanceCents: number;
+  /** On an interest row: enough to check the charge by hand (U8). */
+  detail?: {
+    rateBps: number;
+    basis: InterestBasis;
+    averageDailyBalanceCents: number;
+    daysCounted: number;
+    cycleDays: number;
+    paidToInterestCents: number;
+  };
+}
+
+export interface Ledger {
+  rows: LedgerRow[];
+  /** Closed periods with nothing written down for them yet, oldest first (P2). */
+  duePostings: StoredPosting[];
+  /** The one correction the stored rows need to match the facts, or null (K2). */
+  dueAdjustment: StoredPosting | null;
+  /** Everything posted, plus movements: the figure the database keeps (P5). */
+  postedBalanceCents: number;
+  /** This cycle so far, never stored (C3). */
+  accruedCents: number;
+  owingCents: number;
+  /** What the whole of this cycle costs at the balance as it stands. */
+  interestThisPeriodCents: number;
+  interestPaidToDateCents: number;
+  principalPaidToDateCents: number;
+  yearAtThisBalanceCents: number;
+}
+
+/** A period as the engine works it out, before anything is written down. */
+interface TruePeriod extends StoredPosting {
+  kind: 'posting';
+  cycleDays: number;
+  /** Every movement inside it, so the row builder does not have to filter twice. */
+  inside: Movement[];
+}
+
+function inWindow(movements: Movement[], from: string, toExclusive: string): Movement[] {
+  return movements.filter((movement) => movement.date >= from && movement.date < toExclusive);
+}
+
+/**
+ * The truth for every closed period, from facts alone -- stored rows are not consulted.
+ *
+ * This is what makes a correction possible: the engine can always say what the balance SHOULD be,
+ * independently of what was written down when, and the difference between the two is the
+ * adjustment (K1).
+ */
+function computePeriods(input: LedgerInput): {
+  closed: TruePeriod[];
+  open: { start: string; end: string; cycleDays: number; openingCents: number };
+} {
+  const closed: TruePeriod[] = [];
+  let balance = input.startBalanceCents;
+  for (const boundary of periodBoundaries(input.startDate, input.postingDay, input.today)) {
+    const cycleDays = daysBetweenIso(previousPostingDate(boundary.end, input.postingDay), boundary.end);
+    if (!boundary.closed) {
+      return { closed, open: { start: boundary.start, end: boundary.end, cycleDays, openingCents: balance } };
+    }
+    const inside = inWindow(input.movements, boundary.start, boundary.end);
+    const rate = rateOn(boundary.start, input.rateHistory);
+    const charge = periodCharge({
+      start: boundary.start,
+      end: boundary.end,
+      cycleDays,
+      openingCents: balance,
+      principalCents: input.principalCents,
+      movements: inside,
+      rate,
+    });
+    const paymentsCents = inside.reduce(
+      (total, movement) => (movement.amountCents < 0 ? total - movement.amountCents : total),
+      0,
+    );
+    const advancesCents = inside.reduce(
+      (total, movement) => (movement.amountCents > 0 ? total + movement.amountCents : total),
+      0,
+    );
+    const closingCents = Math.max(0, balance - paymentsCents + advancesCents + charge.interestCents);
+    closed.push({
+      kind: 'posting',
+      periodStart: boundary.start,
+      periodEnd: boundary.end,
+      openingCents: balance,
+      interestCents: charge.interestCents,
+      paymentsCents,
+      advancesCents,
+      closingCents,
+      rateBps: rate?.rateBps ?? null,
+      basis: rate?.basis ?? null,
+      averageDailyBalanceCents: charge.averageDailyBalanceCents,
+      note: null,
+      cycleDays,
+      inside,
+    });
+    balance = closingCents;
+  }
+  // Unreachable: periodBoundaries always ends on an open period.
+  throw new Error('computePeriods found no open period');
+}
+
+/** A posting row, with the two fields only the engine's own walk needs stripped off. */
+function asStored(period: TruePeriod): StoredPosting {
+  const { cycleDays: _cycleDays, inside: _inside, ...rest } = period;
+  return rest;
+}
+
+function money(cents: number): string {
+  return (Math.abs(cents) / 100).toFixed(2);
+}
+
+/**
+ * The whole ledger: what to write down, what it costs, and the rows a person reads.
+ *
+ * Called on every page load and before every posting, so it must be cheap and must agree with
+ * itself: building a ledger, storing what it says is due, and building it again has to leave
+ * nothing due. That property is what lets the same function serve the screen and the scheduler.
+ */
+export function buildLedger(input: LedgerInput): Ledger {
+  const { closed, open } = computePeriods(input);
+  const storedPostings = input.stored.filter((row) => row.kind === 'posting');
+  const storedEnds = new Set(storedPostings.map((row) => row.periodEnd));
+  const duePostings = closed.filter((period) => !storedEnds.has(period.periodEnd)).map(asStored);
+
+  /*
+    K1/K2. Compare what the facts say the balance was when the open period began against what the
+    written-down rows replay to. A gap means something was recorded after its period had already
+    closed -- a payment imported late, a rate corrected, a link undone -- and a gap is settled with
+    one dated adjustment rather than by rewriting the periods, because a lender does not restate a
+    statement it has already sent and neither should this.
+  */
+  const beforeOpen = input.movements.filter((movement) => movement.date < open.start);
+  const writtenInterest = [...input.stored, ...duePostings].reduce((total, row) => total + row.interestCents, 0);
+  const replayedAtOpen = Math.max(
+    0,
+    input.startBalanceCents + beforeOpen.reduce((total, movement) => total + movement.amountCents, 0) + writtenInterest,
+  );
+  const gap = open.openingCents - replayedAtOpen;
+
+  let dueAdjustment: StoredPosting | null = null;
+  if (gap !== 0 && storedPostings.length > 0) {
+    const newest = storedPostings.reduce((best, row) => (row.periodEnd > best.periodEnd ? row : best));
+    const late = input.movements.filter((movement) => movement.date <= newest.periodEnd);
+    const described = late
+      .map(
+        (movement) =>
+          (movement.amountCents < 0 ? 'Payment' : 'Advance') +
+          ' of ' +
+          money(movement.amountCents) +
+          ' dated ' +
+          movement.date,
+      )
+      .join('; ');
+    dueAdjustment = {
+      kind: 'adjustment',
+      periodStart: input.today,
+      periodEnd: input.today,
+      openingCents: replayedAtOpen,
+      interestCents: gap,
+      paymentsCents: 0,
+      advancesCents: 0,
+      closingCents: replayedAtOpen + gap,
+      rateBps: null,
+      basis: null,
+      averageDailyBalanceCents: null,
+      note:
+        (described === '' ? 'A change' : described) +
+        ' recorded after the ' +
+        newest.periodEnd +
+        ' posting. Interest ' +
+        (gap < 0 ? '−' : '+') +
+        money(gap) +
+        '.',
+    };
+  }
+
+  // Rows. One chronological pass: movements as they land, a posting on each period end, any stored
+  // adjustment where it was recorded, and the accrual last.
+  const openMovements = inWindow(input.movements, open.start, addDaysIso(input.today, 1));
+  const openRate = rateOn(open.start, input.rateHistory);
+
+  interface Descriptor {
+    date: string;
+    order: number;
+    make: (balance: number) => { row: LedgerRow; next: number };
+  }
+  const descriptors: Descriptor[] = [];
+
+  const movementDescriptor = (
+    movement: Movement,
+    period: { start: string; end: string; cycleDays: number; openingCents: number; inside: Movement[] },
+    rate: RateInForce | null,
+  ): Descriptor => ({
+    date: movement.date,
+    order: 0,
+    make: (balance) => {
+      const next = Math.max(0, balance + movement.amountCents);
+      // What had built up by the day the money moved. Shown beside the payment so a person can see
+      // the part of it that never touched the loan.
+      const accruedToDay = periodCharge({
+        start: period.start,
+        end: period.end,
+        upTo: movement.date,
+        cycleDays: period.cycleDays,
+        openingCents: period.openingCents,
+        principalCents: input.principalCents,
+        movements: period.inside,
+        rate,
+      }).interestCents;
+      return {
+        next,
+        row:
+          movement.amountCents < 0
+            ? {
+                kind: 'payment',
+                date: movement.date,
+                description: 'Payment',
+                paymentCents: -movement.amountCents,
+                interestCents: accruedToDay,
+                principalCents: null,
+                balanceCents: next,
+              }
+            : {
+                kind: 'advance',
+                date: movement.date,
+                description: 'Advance',
+                paymentCents: null,
+                interestCents: null,
+                principalCents: movement.amountCents,
+                balanceCents: next,
+              },
+      };
+    },
+  });
+
+  let interestPaidToDateCents = 0;
+  let principalPaidToDateCents = 0;
+  const storedByEnd = new Map(storedPostings.map((row) => [row.periodEnd, row]));
+
+  for (const period of closed) {
+    /*
+      A period that has already been posted shows THE FIGURE THAT WAS POSTED, not today's
+      recomputation of it. That is the whole difference between a ledger and a projection: a late
+      payment does not change what August charged, it produces an adjustment (K2). Taking the
+      recomputed figure here as well as the adjustment would count the correction twice.
+    */
+    const posted = storedByEnd.get(period.periodEnd) ?? period;
+    const rate = rateOn(period.periodStart, input.rateHistory);
+    for (const movement of period.inside) {
+      descriptors.push(
+        movementDescriptor(
+          movement,
+          {
+            start: period.periodStart,
+            end: period.periodEnd,
+            cycleDays: period.cycleDays,
+            openingCents: period.openingCents,
+            inside: period.inside,
+          },
+          rate,
+        ),
+      );
+    }
+    // A payment covers the period's interest first, then the loan itself (I1).
+    const paidToInterestCents = Math.min(period.paymentsCents, posted.interestCents);
+    interestPaidToDateCents += paidToInterestCents;
+    principalPaidToDateCents += period.paymentsCents - paidToInterestCents;
+    descriptors.push({
+      date: period.periodEnd,
+      order: 1,
+      make: (balance) => {
+        // Running arithmetic, not the stored closing: a movement recorded late sits between the
+        // opening and this posting, so the balance column has to carry it forward.
+        const next = Math.max(0, balance + posted.interestCents);
+        return {
+          next,
+          row: {
+            kind: 'interest',
+            date: period.periodEnd,
+            description:
+              period.paymentsCents > 0
+                ? 'Interest posted. Of ' +
+                  money(period.paymentsCents) +
+                  ' paid this period, ' +
+                  money(paidToInterestCents) +
+                  ' covered interest.'
+                : 'Interest posted',
+            paymentCents: null,
+            interestCents: posted.interestCents,
+            principalCents: null,
+            balanceCents: next,
+            detail:
+              posted.rateBps === null || posted.basis === null
+                ? undefined
+                : {
+                    rateBps: posted.rateBps,
+                    basis: posted.basis,
+                    averageDailyBalanceCents: posted.averageDailyBalanceCents ?? period.openingCents,
+                    daysCounted: daysBetweenIso(period.periodStart, period.periodEnd),
+                    cycleDays: period.cycleDays,
+                    paidToInterestCents,
+                  },
+          },
+        };
+      },
+    });
+  }
+
+  for (const movement of openMovements) {
+    descriptors.push(movementDescriptor(movement, { ...open, inside: openMovements }, openRate));
+  }
+
+  for (const adjustment of input.stored.filter((row) => row.kind === 'adjustment')) {
+    descriptors.push({
+      date: adjustment.periodEnd,
+      order: 2,
+      make: (balance) => {
+        const next = Math.max(0, balance + adjustment.interestCents);
+        return {
+          next,
+          row: {
+            kind: 'adjustment',
+            date: adjustment.periodEnd,
+            description: adjustment.note ?? 'Adjustment',
+            paymentCents: null,
+            interestCents: adjustment.interestCents,
+            principalCents: null,
+            balanceCents: next,
+          },
+        };
+      },
+    });
+  }
+
+  descriptors.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.order - b.order));
+
+  const rows: LedgerRow[] = [
+    {
+      kind: 'opening',
+      date: input.startDate,
+      description: 'Opening balance',
+      paymentCents: null,
+      interestCents: null,
+      principalCents: null,
+      balanceCents: input.startBalanceCents,
+    },
+  ];
+  let running = input.startBalanceCents;
+  for (const descriptor of descriptors) {
+    const made = descriptor.make(running);
+    running = made.next;
+    rows.push(made.row);
+  }
+
+  const postedBalanceCents = running;
+  const accrued = periodCharge({
+    start: open.start,
+    end: open.end,
+    upTo: input.today,
+    cycleDays: open.cycleDays,
+    openingCents: open.openingCents,
+    principalCents: input.principalCents,
+    movements: openMovements,
+    rate: openRate,
+  });
+  const owingCents = postedBalanceCents + accrued.interestCents;
+  rows.push({
+    kind: 'accrued',
+    date: input.today,
+    description: 'Accrued so far (' + accrued.daysCounted + ' of ' + accrued.daysInPeriod + ' days)',
+    paymentCents: null,
+    interestCents: accrued.interestCents,
+    principalCents: null,
+    balanceCents: owingCents,
+  });
+
+  const thisPeriod = periodCharge({
+    start: open.start,
+    end: open.end,
+    cycleDays: open.cycleDays,
+    openingCents: postedBalanceCents,
+    principalCents: input.principalCents,
+    movements: [],
+    rate: openRate,
+  });
+
+  /*
+    "A year at this balance" is twelve charges at the rate in force, or three hundred and sixty-five
+    for a daily one -- not a compounded projection. It answers "what is this costing me", which is
+    what a household asks, and a compounded figure would silently assume nothing is ever repaid.
+  */
+  const yearBase = openRate?.basis === 'simple_on_principal' ? input.principalCents ?? 0 : postedBalanceCents;
+  const yearAtThisBalanceCents =
+    openRate === null || openRate.basis === 'none'
+      ? 0
+      : Math.floor(
+          (yearBase * ratePpb(openRate.rateBps, openRate.basis) * (openRate.basis === 'apr_daily' ? 365 : 12)) / PPB +
+            0.5,
+        );
+
+  return {
+    rows,
+    duePostings,
+    dueAdjustment,
+    postedBalanceCents,
+    accruedCents: accrued.interestCents,
+    owingCents,
+    interestThisPeriodCents: thisPeriod.interestCents,
+    interestPaidToDateCents,
+    principalPaidToDateCents,
+    yearAtThisBalanceCents,
+  };
 }
 
 export { PPB, chargeCents, ratePpb };
