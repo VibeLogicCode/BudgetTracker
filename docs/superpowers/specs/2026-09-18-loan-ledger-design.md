@@ -443,6 +443,39 @@ was not worth it. A PDF is kept, which is the case the request described. The en
 to `warranty_items`' own rate columns when a loan has a basis and an empty rate history -- without
 it, a database restored from an older backup would silently stop charging interest.
 
+## 16a. What v1.49.0 changed about this design
+
+The whole-app review after v1.48.0 (`docs/reviews/2026-09-19-v1.48.0-review.md`) found five things
+this spec had settled the wrong way, or had not settled at all. Each is now the rule.
+
+**The wall is `period_start`, not `period_end` (A1/A2).** A statement supersedes every period that
+BEGAN before it. Filtering on the period's END meant a correction dated today -- whose own period
+began last month -- survived a statement dated last week and was counted a second time on top of it.
+An adjustment's `period_start` now names the period it corrects rather than the day it was found,
+and migration 0027 backfills the rows v1.48.0 wrote the other way.
+
+**`loan_postings.payments_cents` is APPLIED cents.** The figure a period records is what actually
+came off the balance, after the cap, not the raw size of the transactions. The two differ whenever a
+payment exceeded what was owed at that moment, and the ledger card was already showing the applied
+figure -- so the column was the thing that disagreed.
+
+**One balance rule, one walk.** The truth walk, the stored replay and the row builder were three
+implementations of "apply a payment, capped at what is owed". They disagreed by a cent or two, and
+the difference was then written down as an interest adjustment: a loan could report $0.00 on its
+card, $2.03 on its ledger, and announce itself paid off, all at once. They share one `walkPeriods`
+now, and `recomputeBalance` interleaves payments and postings in one chronological pass rather than
+adding every posted figure before the payments are seen.
+
+**D4 stays reversed.** The decision recorded at §16 stands.
+
+**The hero is Owing today, and the balance MetricCard is gone** for a loan that has a ledger (owner
+ruling, 2026-09-19). v1.48.0 printed four balances for one loan across two cards; there is one
+number that answers "what do I owe", and the parts sit under it as arithmetic.
+
+**The page is "Loans & Coverage"** (owner ruling, 2026-09-19). The nav entry, the page title, the
+back link, the dashboard card and the transactions row menu had five different names for one
+destination, none of which contained the word "loan".
+
 ## 17. Open questions
 
 - Should `loan_payment_missed` fire for a loan whose term has ended (payoff date in the past)? Plan

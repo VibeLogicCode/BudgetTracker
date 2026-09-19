@@ -21,6 +21,73 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.49.0] - 2026-09-19
+
+**Before updating:** balances on loans **with a rate** may move again. Three rules changed together:
+a payment is now capped at what was owed on the day it landed, interest charged and not yet paid is
+carried forward rather than quietly dropped, and a statement supersedes every period that BEGAN
+before it. The dashboard's **What we owe** also includes interest built up since the last charge, so
+it will read higher than in 1.48.0 even where nothing else changed. Loans without a charging method
+do not move at all, and nothing is deleted: every figure appears as a dated row you can read.
+
+### Security
+
+- Household budget figures are no longer reachable by a member limited to their own records. The
+  "apply this suggestion" action computed the figure from the whole household's history and printed
+  it in its confirmation message; the same gate now covers setting a limit, copying last month
+  forward, rollover and the savings target.
+- Linking a transaction to a loan, unlinking one, and undoing a rule's link all check that the
+  person may see both the transaction and the loan. Two of the three checked neither.
+- Two settings actions that preview a rule's effect had no same-origin check. A test now walks every
+  server action in the app and fails if one is missing it.
+- A staged receipt belongs to whoever uploaded it: another member polling its id is told nothing.
+- Downloading a stored receipt now honours the forced-password-change gate, like every other export.
+- The health endpoint no longer names the build or repeats a database error to an unauthenticated
+  caller; both are logged instead.
+
+### Fixed
+
+- **The ledger and the balance column agree.** They were computed three different ways and differed
+  by a cent or two, and the difference was then written down as an interest correction — a loan
+  could read $0.00 on its card, $2.03 on its ledger, and announce itself paid off, all at once.
+- A statement typed with the wrong year can be **withdrawn**. The row stays in the history, marked,
+  and the balance returns to the statement before it. Previously the newest date governed and the
+  correct statement, being older, could never win.
+- Statement dates are bounded: not after today, not before the loan started.
+- A payoff projection on a line of credit charged one day's interest per month, so a balance that
+  was barely moving was told it would clear in five years.
+- Deleting a transaction, or undoing an import, now brings the loan's postings up to date instead of
+  leaving them counting a payment that no longer exists.
+- A rules re-run no longer clears a transfer flag somebody set by hand or by assigning a loan
+  payment — which had been moving real money back into spending totals.
+- Un-flagging a transfer holds against a `contains` rule that would otherwise re-apply it.
+- Deleting a split transaction no longer teaches the categoriser the wrong thing.
+- A SimpleFIN sync where one bank failed no longer advances the window past the outage, and the
+  automatic path now reports it.
+- Month close compares the sync against the household's own day, not UTC's, so a month cannot close
+  a day early.
+- A savings goal being fed a token amount says nothing rather than projecting the year 4551.
+
+### Changed
+
+- **Contracts & Coverage is now Loans & Coverage**, everywhere: the menu, the page, the back link,
+  the dashboard card and the transactions row menu had five names for one destination.
+- The loan page shows **one** figure in large type — Owing today — with the balance and this cycle's
+  accrual as a sentence under it. The separate balance card is gone for a loan with a ledger.
+- "What we owe" on the dashboard is that same figure, summed, so the total and the rows agree.
+- Loan names on the dashboard link to the loan.
+- Notification settings are grouped into money, loans and goals, and the app itself.
+- The ledger table stacks properly on a phone, its interest rows open to show the working instead of
+  hiding it in a hover tooltip, and long ledgers show the most recent hundred entries first.
+
+### Added
+
+- Filter Loans & Coverage by kind: loans, bills, subscriptions, contracts, warranties.
+- An "Interest accrued to date" column in the ledger spreadsheet.
+- The reconcile preview compares against the app's estimate **for the statement's own date**, not
+  for today.
+- Four indexes, and a glossary entry each for Owing today, Accrued, Principal and Basis.
+
 ## [1.48.0] - 2026-09-19
 
 **Before updating:** loans that already say how their rate is charged will show a **higher balance**
