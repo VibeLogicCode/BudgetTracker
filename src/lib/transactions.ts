@@ -30,7 +30,7 @@ import { transactionImports } from '@/db/schema';
 // F-07 (v1.31.0). See buildWhere's search clause below for why this is the ONLY new import the
 // feature needs -- the split editor already proved this parser handles a person's typed amount.
 import { parseAmountToCents } from '@/lib/money';
-import { EFFECTIVE_AMOUNT, EFFECTIVE_CATEGORY } from '@/lib/splits';
+import { EFFECTIVE_AMOUNT, EFFECTIVE_CATEGORY, transactionHasSplits } from '@/lib/splits';
 
 /**
  * v1.13.0 ruling R4 (item I4). Thrown by createManualTransaction when the row's own category
@@ -1374,7 +1374,14 @@ export function deleteManualTransaction(input: {
 
   const touchedLoans: number[] = [];
   const result = db.transaction(() => {
-    if (row.categorizationSource === 'manual' && row.categoryId !== null) {
+    /*
+      E3 (review). The same guard clearCategory carries, and for the reason its docblock gives: a
+      split row's own category_id is a placeholder -- its PARTS are where the money went -- so
+      unlearning the parent's tokens against it teaches Bayes something that never happened.
+      clearCategory refuses outright on a split row; a delete cannot refuse, so it skips the
+      untrain and removes the row.
+    */
+    if (row.categorizationSource === 'manual' && row.categoryId !== null && !transactionHasSplits(input.txnId)) {
       untrain(tokenize(row.normalizedMerchant), row.categoryId);
     }
     touchedLoans.push(...reverseLoanLinksForTransactions([input.txnId]).itemIds);

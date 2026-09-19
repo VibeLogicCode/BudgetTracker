@@ -2185,3 +2185,185 @@ describe('v1.31.0 R-10: many rules, one rename pass', () => {
     expect(readLabel(sqlite, id)).toEqual({ text: null, source: null });
   });
 });
+
+/**
+ * Review E1. "Also mark as a transfer" on a loan assignment writes NO rule -- deliberately, since
+ * one transfer rule for a merchant like HONDA FIN would catch every unrelated payment to it. The
+ * row is left is_transfer = 1, category NULL, source 'none', which is exactly the shape runEngine
+ * calls eligible. The next re-run asked the rules whether this merchant is a transfer, got no for
+ * an answer, and wrote that answer over a person's decision -- moving a loan payment back into
+ * spend, where every report and budget counts it as money gone.
+ *
+ * The flag is one-directional now for a row somebody decided about.
+ */
+describe('E1: a re-run never clears a transfer somebody decided', () => {
+  function loanPaymentFlaggedAsTransfer(): { sqlite: TestDb['sqlite']; txnId: number; itemId: number } {
+    const { db, sqlite, userId, accountId, add } = setup();
+    const typeId = db.get<{ id: number }>(sql`
+      insert into warranty_item_types (name, is_subscription, kind, created_at)
+      values ('Car loan', 0, 'loan', ${nowIso()}) returning id`).id;
+    const itemId = db.get<{ id: number }>(sql`
+      insert into warranty_items (name, purchase_date, is_lifetime, owner_user_id, type_id, current_balance_cents, balance_updated_at, created_at, updated_at)
+      values ('Civic', '2024-01-15', 0, ${userId}, ${typeId}, 2000000, ${nowIso()}, ${nowIso()}, ${nowIso()}) returning id`).id;
+    void accountId;
+    const txnId = add('HONDA FIN SVC', -45_000);
+    assignTransactionToLoan({ txnId, itemId, viewer: HOUSEHOLD_VIEWER });
+    sqlite.prepare('update transactions set is_transfer = 1 where id = ?').run(txnId);
+    return { sqlite, txnId, itemId };
+  }
+
+  it('leaves the flag alone when the rules say nothing about the merchant', () => {
+    const { sqlite, txnId } = loanPaymentFlaggedAsTransfer();
+    runEngine([txnId]);
+    expect(readTxn(sqlite, txnId).is_transfer).toBe(1);
+  });
+
+  it('leaves it alone on a household-wide re-run too', () => {
+    const { sqlite, txnId } = loanPaymentFlaggedAsTransfer();
+    rerunEngine();
+    expect(readTxn(sqlite, txnId).is_transfer).toBe(1);
+  });
+
+  /**
+   * A re-run never lowers the flag on ANY row now, which puts transfers on the same footing as
+   * categories: deleting a rule changes nothing retroactively (setRuleDisabled and
+   * clearRuleFromTransactions both say so in as many words), and the CLEAR action is what reaches
+   * back over the rows. Until this release a transfer flag was the exception, because a flagged row
+   * with no category stays eligible for ever and so got re-answered on every run.
+   */
+  it('leaves an ordinary flagged row alone too; clearing the rule is what reaches back', () => {
+    const { sqlite, userId, add } = setup();
+    const txnId = add('TRANSFER TO SAVINGS', -50_000);
+    const upserted = upsertRuleFromCorrection({
+      pattern: 'TRANSFER TO SAVINGS',
+      matchType: 'exact',
+      ruleKind: 'transfer',
+      categoryId: null,
+      createdBy: userId,
+      actorRole: 'admin',
+    });
+    if (!upserted.ok) throw new Error('fixture rule was refused');
+    runEngine([txnId]);
+    expect(readTxn(sqlite, txnId).is_transfer).toBe(1);
+
+    // A re-run on its own leaves it: the rule still matches, and would not lower it even if not.
+    runEngine([txnId]);
+    expect(readTxn(sqlite, txnId).is_transfer).toBe(1);
+
+    expect(clearRuleFromTransactions({ ruleId: upserted.ruleId })).toEqual({ rowsCleared: 1 });
+    expect(readTxn(sqlite, txnId).is_transfer).toBe(0);
+  });
+
+  it('still SETS the flag when a rule says so', () => {
+    const { db, sqlite, userId, add } = setup();
+    const txnId = add('TRANSFER TO SAVINGS', -50_000);
+    upsertRuleFromCorrection({
+      pattern: 'TRANSFER TO SAVINGS',
+      matchType: 'exact',
+      ruleKind: 'transfer',
+      categoryId: null,
+      createdBy: userId,
+      actorRole: 'admin',
+    });
+    void db;
+    runEngine([txnId]);
+    expect(readTxn(sqlite, txnId).is_transfer).toBe(1);
+  });
+});
+
+/**
+ * Review E4. Un-flagging wrote the 'not_transfer' override only when the merchant matched the
+ * hard-coded card-payment list, because that was the only case the code knew could re-flag the row
+ * without a rule of its own. A `contains` transfer rule does the same thing and was not considered:
+ * deleting the EXACT rule for this merchant leaves the contains rule matching, and the next re-run
+ * puts the flag straight back.
+ */
+describe('E4: un-flagging holds against a rule that still matches', () => {
+  it('writes the override when a contains rule would re-claim the row', () => {
+    const { db, sqlite, userId, add } = setup();
+    const txnId = add('E-TRANSFER TO SAM', -20_000);
+    upsertRuleFromCorrection({
+      pattern: 'E-TRANSFER',
+      matchType: 'contains',
+      ruleKind: 'transfer',
+      categoryId: null,
+      createdBy: userId,
+      actorRole: 'admin',
+    });
+    runEngine([txnId]);
+    expect(readTxn(sqlite, txnId).is_transfer).toBe(1);
+
+    expect(setTransferFlag({ transactionId: txnId, isTransfer: false, learnRule: true, userId, actorRole: 'admin' })).toEqual({
+      ok: true,
+    });
+    expect(readTxn(sqlite, txnId).is_transfer).toBe(0);
+
+    // The point of the test: the re-run must not undo the person's decision.
+    runEngine([txnId]);
+    expect(readTxn(sqlite, txnId).is_transfer).toBe(0);
+    void db;
+  });
+
+  it('still just deletes the exact rule when nothing else would match', () => {
+    const { sqlite, userId, add } = setup();
+    const txnId = add('TRANSFER TO SAVINGS', -50_000);
+    upsertRuleFromCorrection({
+      pattern: 'TRANSFER TO SAVINGS',
+      matchType: 'exact',
+      ruleKind: 'transfer',
+      categoryId: null,
+      createdBy: userId,
+      actorRole: 'admin',
+    });
+    runEngine([txnId]);
+    setTransferFlag({ transactionId: txnId, isTransfer: false, learnRule: true, userId, actorRole: 'admin' });
+
+    expect(listRules('transfer')).toEqual([]);
+    // No override is written when there is nothing left to override.
+    expect(listRules('not_transfer')).toEqual([]);
+    runEngine([txnId]);
+    expect(readTxn(sqlite, txnId).is_transfer).toBe(0);
+  });
+});
+
+/**
+ * Review E5. Every other table walker in this file memoizes per merchant through ruleAttributor;
+ * the rename pass asked resolveRename once per ROW, so a table of 5,000 rows against 300 rename
+ * rules walked the rule list 5,000 times for what is at most a few hundred distinct answers.
+ */
+describe('E5: the rename pass resolves each merchant once', () => {
+  function timeRenamePass(distinctMerchants: number): number {
+    const { db, userId, accountId } = setup();
+    for (let index = 0; index < 1_200; index += 1) {
+      upsertRenameRule({ pattern: `NOMATCH${index}`, matchType: 'contains', renameTo: `No ${index}`, userId, actorRole: 'admin' });
+    }
+    const ids: number[] = [];
+    for (let index = 0; index < 5_000; index += 1) {
+      const merchant = `SHOP ${index % distinctMerchants}`;
+      ids.push(
+        db.get<{ id: number }>(sql`
+          insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, categorization_source, created_by, created_at, updated_at)
+          values (${accountId}, '2026-03-02', ${merchant}, ${merchant}, -1000, 'none', ${userId}, ${nowIso()}, ${nowIso()})
+          returning id`).id,
+      );
+    }
+    const started = performance.now();
+    applyRenameRules(ids);
+    const elapsed = performance.now() - started;
+    current?.cleanup();
+    current = null;
+    return elapsed;
+  }
+
+  /**
+   * SCALED, not pinned to a clock: the same 5,000 rows and 1,200 rules twice over, differing only in
+   * how many DISTINCT merchants they carry. Without the memo both walk the rule list 5,000 times
+   * and come out level; with it, the twenty-merchant pass walks it twenty times. A wall-clock
+   * ceiling would only measure the machine.
+   */
+  it('costs far less when the same merchants repeat', () => {
+    const manyDistinct = timeRenamePass(5_000);
+    const fewDistinct = timeRenamePass(20);
+    expect(fewDistinct).toBeLessThan(manyDistinct / 2);
+  });
+});

@@ -1,4 +1,4 @@
-import { asc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { categories, transactions, transactionSplits } from '@/db/schema';
 import { runEngine } from '@/lib/categorize/engine';
@@ -59,6 +59,36 @@ const SPLIT_SELECTION = {
  */
 export const EFFECTIVE_CATEGORY = sql<number | null>`coalesce(${transactionSplits.categoryId}, ${transactions.categoryId})`;
 export const EFFECTIVE_AMOUNT = sql<number>`coalesce(${transactionSplits.amountCents}, ${transactions.amountCents})`;
+
+/**
+ * Does this transaction have splits?
+ *
+ * Lives here, beside the table it asks about, because two modules need the answer for the same
+ * reason: a split row's category is not what its parts say it is, so anything that reads the
+ * parent's own category as a fact about the household's spending is reading a placeholder. The
+ * engine refuses to confirm, clear or flag such a row; the delete path had to stop UNTRAINING one
+ * (review E3), and a second hand-written copy of the subquery is how those two would drift.
+ *
+ * Deliberately a `.where()` predicate rather than a computed `.select()` field: a drizzle column
+ * reference interpolated into a raw `sql` fragment is not table-qualified in a SELECT list the way
+ * it is in a condition, so as a select field the correlated subquery's bare `id` would resolve
+ * against transaction_splits' OWN id and match every row the moment any split exists anywhere.
+ * Served by transaction_splits_txn_idx (migration 0009).
+ */
+export function transactionHasSplits(transactionId: number): boolean {
+  return (
+    getDb()
+      .select({ id: transactions.id })
+      .from(transactions)
+      .where(
+        and(
+          eq(transactions.id, transactionId),
+          sql`exists (select 1 from ${transactionSplits} where ${transactionSplits.txnId} = ${transactions.id})`,
+        ),
+      )
+      .get() !== undefined
+  );
+}
 
 export function getSplits(txnId: number): SplitRow[] {
   return getDb().select(SPLIT_SELECTION).from(transactionSplits).where(eq(transactionSplits.txnId, txnId)).orderBy(asc(transactionSplits.id)).all();

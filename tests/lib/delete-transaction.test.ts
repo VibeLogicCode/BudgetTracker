@@ -6,6 +6,9 @@ import { commitImport } from '@/lib/import/commit';
 import { computeRowHashes } from '@/lib/import/dedup';
 import { listAudit } from '@/lib/audit';
 import { assignTransactionToLoan } from '@/lib/loans';
+import { setTransactionSplits } from '@/lib/splits';
+import { confirmCategory } from '@/lib/categorize/engine';
+
 import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
 
 let current: TestDb | null = null;
@@ -193,5 +196,84 @@ describe('deleteManualTransaction: what a delete has to undo first', () => {
       sql`select coalesce(sum(count), 0) as total from bayes_tokens`,
     ).total;
     expect(after).toBe(0);
+  });
+});
+
+/**
+ * Review E3. clearCategory refuses to untrain a split parent, and its docblock says why: a split
+ * row's category is not what the parts say it is, so unlearning the parent's tokens teaches Bayes
+ * the opposite of what happened. The delete path ran the same untrain with no such guard.
+ */
+describe('E3: deleting a split parent does not untrain Bayes', () => {
+  function splitParent(): { txnId: number; userId: number; groceries: number } {
+    current = createSeededTestDb();
+    const userId = admin();
+    const accountId = insertTestAccount(current.db);
+    const groceries = categoryIdByName(current.db, 'Groceries');
+    const txnId = createManualTransaction({
+      accountId,
+      date: '2026-09-13',
+      description: 'COSTCO WHOLESALE',
+      amountCents: -20_000,
+      categoryId: null,
+      attributedUserId: null,
+      userId,
+      actorRole: 'admin',
+    });
+    // Confirming is what TRAINS Bayes and stamps the row 'manual' -- the two conditions the
+    // delete path's untrain reads. Splitting afterwards is the ordinary order: a person files the
+    // row, then breaks it up.
+    confirmCategory({ transactionId: txnId, categoryId: groceries, userId, actorRole: 'admin' });
+    setTransactionSplits({
+      txnId,
+      parts: [
+        { categoryId: groceries, amountCents: -15_000, note: null },
+        { categoryId: categoryIdByName(current.db, 'Restaurants'), amountCents: -5_000, note: null },
+      ],
+      userId,
+    });
+    return { txnId, userId, groceries };
+  }
+
+  /** What Bayes actually holds for this merchant: one row per token per category. */
+  const trained = (categoryId: number): number =>
+    (
+      current!.sqlite
+        .prepare("select coalesce(sum(count), 0) as n from bayes_tokens where token = 'COSTCO' and category_id = ?")
+        .get(categoryId) as { n: number }
+    ).n;
+
+  it('leaves the merchant trained exactly as it was before the delete', () => {
+    const { txnId, userId, groceries } = splitParent();
+    const before = trained(groceries);
+    expect(before).toBeGreaterThan(0);
+
+    expect(deleteManualTransaction({ txnId, userId, viewer: HOUSEHOLD_VIEWER })).toEqual({ ok: true });
+
+    expect(trained(groceries)).toBe(before);
+  });
+
+  /** An ordinary manual row is still untrained, which is the behaviour this guard narrows. */
+  it('still untrains a manual row with no splits', () => {
+    current = createSeededTestDb();
+    const userId = admin();
+    const accountId = insertTestAccount(current.db);
+    const groceries = categoryIdByName(current.db, 'Groceries');
+    const txnId = createManualTransaction({
+      accountId,
+      date: '2026-09-13',
+      description: 'COSTCO WHOLESALE',
+      amountCents: -20_000,
+      categoryId: null,
+      attributedUserId: null,
+      userId,
+      actorRole: 'admin',
+    });
+    confirmCategory({ transactionId: txnId, categoryId: groceries, userId, actorRole: 'admin' });
+    expect(trained(groceries)).toBeGreaterThan(0);
+
+    deleteManualTransaction({ txnId, userId, viewer: HOUSEHOLD_VIEWER });
+
+    expect(trained(groceries)).toBe(0);
   });
 });

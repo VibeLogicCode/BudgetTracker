@@ -2,6 +2,7 @@ import { and, asc, eq, gte, inArray, isNotNull, isNull, lte, ne, notInArray, or,
 import { getDb } from '@/db/client';
 import { loanPayments, transactions, transactionSplits } from '@/db/schema';
 import { nowIso } from '@/lib/clock';
+import { transactionHasSplits } from '@/lib/splits';
 // Ruling R24 (R-03): the ONE definition of which display_description writer outranks which.
 import { displaySourceMayWrite, displaySourcesAbove, type DisplaySource } from '@/lib/display-source';
 import { applyPaymentMatchers, restoreLoanDescription } from '@/lib/loans';
@@ -218,6 +219,28 @@ function isEligibleRow(row: { categoryId: number | null; source: string; hasSpli
   return (row.categoryId === null || row.source === 'bayes') && row.hasSplits === 0;
 }
 
+/**
+ * REVIEW E1. THE TRANSFER FLAG IS ONE-DIRECTIONAL HERE: this engine raises it, and never lowers it.
+ *
+ * "Also mark as a transfer" on a loan assignment deliberately writes NO rule -- one transfer rule
+ * for a merchant like HONDA FIN would catch every unrelated payment to it (setTransferFlag's own
+ * comment says so). What it leaves behind is is_transfer = 1, category NULL, source 'none', which
+ * is precisely the shape this engine calls eligible. So the next re-run asked the rules whether
+ * that merchant is a transfer, got no, and wrote that answer over a person's decision -- and since
+ * every report and budget aggregate excludes transfers, a loan payment silently reappeared as money
+ * spent, months after anybody would think to look.
+ *
+ * Lowering was never this function's job in the first place. A flag the rules set is cleared by
+ * clearRuleFromTransactions when the rule goes; a flag a person set is cleared by that person
+ * through setTransferFlag. Both paths write is_transfer = false themselves. Between them there is
+ * no case left where a re-run is the right thing to clear a flag -- and the alternative fix,
+ * reading loan_payments here to spot the rows worth protecting, would have put the link table in
+ * front of the categorizer, which is the one thing MUST-13.2 exists to prevent.
+ */
+function transferFlagAfterRun(row: { isTransfer: boolean }, outcome: { isTransfer: boolean }): boolean {
+  return outcome.isTransfer || row.isTransfer;
+}
+
 /** Chunked well under SQLite's bound-parameter ceiling — see the note in dedup.ts. */
 const ID_CHUNK = 400;
 
@@ -330,13 +353,13 @@ export function runEngine(txnIds: number[]): EngineResult {
       // v1.21.0 (item 11): EngineResult.changed. Compared against what the row ALREADY carried,
       // not against what this loop just wrote to a different row -- so a re-guess that lands on
       // the same category, or a row that was already flagged a transfer, does not inflate the count.
-      if (outcome.categoryId !== row.categoryId || outcome.isTransfer !== row.isTransfer) changed += 1;
+      if (outcome.categoryId !== row.categoryId || transferFlagAfterRun(row, outcome) !== row.isTransfer) changed += 1;
       tx.update(transactions)
         .set({
           categoryId: outcome.categoryId,
           categorizationSource: outcome.source,
           confidence: outcome.confidence,
-          isTransfer: outcome.isTransfer,
+          isTransfer: transferFlagAfterRun(row, outcome),
           updatedAt: nowIso(at),
         })
         .where(eq(transactions.id, row.id))
@@ -443,7 +466,11 @@ export function previewRerun(txnIds: number[]): RerunPreview {
       { id: row.id, normalizedMerchant: row.normalizedMerchant, amountCents: row.amountCents },
       ctx,
     );
-    if (outcome.categoryId !== row.categoryId || outcome.isTransfer !== row.isTransfer) wouldChange += 1;
+    // E1: the same one-directional rule the run itself applies, or the preview would promise a
+    // change ("N would change") that the run then declines to make.
+    if (outcome.categoryId !== row.categoryId || transferFlagAfterRun(row, outcome) !== row.isTransfer) {
+      wouldChange += 1;
+    }
   }
   return { eligible: eligible.length, wouldChange };
 }
@@ -1108,33 +1135,10 @@ export function clearRuleFromTransactions(input: { ruleId: number; scope?: RuleS
 }
 
 /**
- * Same "not exists (select 1 from transaction_splits ...)" shape as ELIGIBLE/REVIEW_WHERE
- * above -- polarity flipped (this asks whether a split EXISTS, they ask whether one does
- * not) and scoped to one row instead of filtering a table scan. Used by confirmCategory,
- * setTransferFlag and clearCategory to refuse a write on a transaction that has splits; see
- * their doc comments for why. Deliberately a `.where()` predicate rather than a computed
- * `.select()` field: a
- * drizzle column reference interpolated into a raw `sql` fragment used as a SELECT-list value
- * is not table-qualified the way the same reference is when it appears in a `.where()`
- * condition, so embedding it as a select field here would let the correlated subquery's bare
- * `id` resolve against transaction_splits' OWN id column instead of the outer transactions
- * row -- silently matching every row once ANY split exists anywhere. Served by
- * transaction_splits_txn_idx (migration 0009).
+ * E3 (review): the predicate moved to src/lib/splits.ts, beside the table it asks about, because
+ * the delete path in transactions.ts needs the same answer for the same reason. Its docblock there
+ * carries the correlated-subquery warning this comment used to.
  */
-function transactionHasSplits(transactionId: number): boolean {
-  const row = getDb()
-    .select({ id: transactions.id })
-    .from(transactions)
-    .where(
-      and(
-        eq(transactions.id, transactionId),
-        sql`exists (select 1 from ${transactionSplits} where ${transactionSplits.txnId} = ${transactions.id})`,
-      ),
-    )
-    .get();
-  return row !== undefined;
-}
-
 /**
  * The confirmed state. Sets source = 'manual' (the Bayes training set),
  * upserts an exact merchant rule, and updates token counts, decrementing the
@@ -1361,6 +1365,23 @@ export function clearCategory(input: {
 }
 
 /**
+ * E4. Would a transfer rule OTHER than this merchant's own exact one still claim this row?
+ *
+ * setTransferFlag deletes the exact rule when somebody un-flags a transfer, which is right as far
+ * as it goes. It is not far enough: a `contains` transfer rule (the rules form writes them, and so
+ * does a pack) goes on matching afterwards, so the next re-run re-flags the row and the person's
+ * decision lasts until they next look. Asking matchRule with the exact rule removed from the set is
+ * the only honest way to answer this -- the matcher owns what "matches" means, and a second copy of
+ * that logic here is how the two would drift.
+ */
+function otherTransferRuleMatches(normalizedMerchant: string, ctx: CategorizeContext = buildContext()): boolean {
+  const others = ctx.rules.filter(
+    (rule) => !(rule.ruleKind === 'transfer' && rule.matchType === 'exact' && rule.pattern === normalizedMerchant),
+  );
+  return matchRule(normalizedMerchant, 'transfer', others) !== null;
+}
+
+/**
  * Returns `{ ok: false, reason: 'has_splits' }`, and does NOTHING (no is_transfer write, no rule
  * created or removed), for a transaction that has splits. Spec ruling 2a: a split's parts ARE its
  * categorization, and setTransactionSplits already refuses to split a transfer in the first place
@@ -1483,10 +1504,17 @@ export function setTransferFlag(input: {
       at,
     });
     if (!upserted.ok) return { ok: false, reason: 'owned_by_another', ownerName: upserted.ownerName };
-  } else if (input.learnRule && matchesCardPattern) {
-    // The card-payment pattern list would re-catch this merchant on the very
-    // next runEngine/rerun. Merely deleting a (nonexistent) transfer rule would
-    // not stop that, so teach an exact 'not_transfer' override instead.
+  } else if (input.learnRule && (matchesCardPattern || otherTransferRuleMatches(row.normalizedMerchant))) {
+    /*
+      Anything that would RE-CLAIM this row after the exact rule goes needs an override, not a
+      deletion (review E4).
+
+      The card-payment pattern list was the only such thing this branch knew about, because it is
+      the only one with no rule behind it. But a `contains` transfer rule does exactly the same
+      thing: deleting the exact rule for this merchant leaves the contains rule matching, and the
+      next re-run puts the flag straight back over the person's decision. otherTransferRuleMatches
+      asks the engine's own matcher, so this cannot drift from what the matcher actually does.
+    */
     const upserted = upsertRuleFromCorrection({
       pattern: row.normalizedMerchant,
       matchType: 'exact',
@@ -1518,6 +1546,9 @@ export function setTransferFlag(input: {
     // Ownership of this rule was already settled above (item BJ) -- a refusal never reaches here.
     deleteExactRule(row.normalizedMerchant, 'not_transfer');
   } else if (!matchesCardPattern) {
+    // E4: the exact rule still goes -- an override plus the rule it overrides is two rules saying
+    // opposite things about one merchant, and the household would have to read both to predict
+    // either. The override above is what holds the line against everything else that matches.
     // Only a learned transfer rule (or a purely manual flag) could have flagged
     // this row — today's behaviour is unchanged: remove that rule.
     // Ownership of this rule was already settled above (item BJ) -- a refusal never reaches here.
@@ -2000,9 +2031,26 @@ export function applyRenameRules(txnIds?: number[], ctx: CategorizeContext = bui
   const at = nowIso();
   let changed = 0;
 
+  /*
+    E5 (review). ONE RESOLUTION PER MERCHANT, not per row.
+
+    resolveRename walks the rename rules; this loop called it once for every row, so a table of
+    5,000 rows against 300 rules walked that list 5,000 times to produce at most a few hundred
+    distinct answers. Every other table walker in this file already memoizes per merchant through
+    ruleAttributor -- this pass was the one that did not.
+  */
+  const renames = new Map<string, string | null>();
+  const renameFor = (merchant: string): string | null => {
+    const seen = renames.get(merchant);
+    if (seen !== undefined) return seen;
+    const resolved = resolveRename(merchant, ctx);
+    renames.set(merchant, resolved);
+    return resolved;
+  };
+
   db.transaction((tx) => {
     for (const row of rows) {
-      const rename = resolveRename(row.normalizedMerchant, ctx);
+      const rename = renameFor(row.normalizedMerchant);
 
       if (rename === null) {
         // Only clear what a rule set; a NULL display_source row has nothing to clear.
