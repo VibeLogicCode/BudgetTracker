@@ -21,6 +21,14 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.50.1] - 2026-09-19
+
+### Fixed
+
+- The kind filter on Loans & Coverage rendered as a blob on a phone. Six options wrap onto two rows
+  at that width, and the control's shell was a full pill radius — right for the two- and
+  three-option controls it was built for, wrong around a two-row box.
+
 ## [1.50.0] - 2026-09-19
 
 ### Added

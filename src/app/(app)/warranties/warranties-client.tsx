@@ -205,6 +205,18 @@ export function WarrantiesClient({
       */}
       <PillNav
         groupLabel="Which kinds to show"
+        /*
+          Reported 2026-09-19: the pills render wrong on a phone. PillNav's default shell is
+          `rounded-full`, which is right for the two- and three-option controls it was built for
+          (Budgets scope, the person picker) because those never wrap. Six options on a 390px
+          screen wrap onto two rows, and a full pill radius around a two-row box reads as a blob
+          rather than a control.
+
+          `rounded-2xl` is the same chrome with a radius that survives wrapping, and the options
+          themselves stay `rounded-full`. Overridden here rather than in PillNav so the existing
+          two callers keep the shape they were designed with.
+        */
+        className="flex flex-wrap items-center gap-1 rounded-2xl border border-line bg-surface-2 p-1"
         options={[
           { key: 'all', href: hrefWithKind(''), label: 'All', active: kind === '' },
           ...ITEM_KINDS.map((value) => ({

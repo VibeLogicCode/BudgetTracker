@@ -404,6 +404,18 @@ describe('the recorded-billing header line (F-05)', () => {
  * whatever search, status and owner are already set rather than clearing them.
  */
 describe('F4: the kind pills', () => {
+  /**
+   * Reported 2026-09-19: "i love the pill but on phone it does render properly." Six options wrap
+   * onto two rows at phone width, and PillNav's default `rounded-full` shell -- right for the two-
+   * and three-option controls it was built for -- draws a blob around a two-row box.
+   */
+  it('uses a shell whose radius survives wrapping', () => {
+    renderList(result([item()]));
+    const nav = screen.getByRole('navigation', { name: 'Which kinds to show' });
+    expect(nav.className).toContain('flex-wrap');
+    expect(nav.className).not.toContain('rounded-full');
+  });
+
   it('offers All and one pill per kind, with All selected by default', () => {
     renderList(result([item()]));
     const nav = screen.getByRole('navigation', { name: 'Which kinds to show' });
