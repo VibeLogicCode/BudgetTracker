@@ -420,6 +420,29 @@ export const HELP_SECTIONS: HelpSection[] = [
           rate-derived figure is labelled an estimate and dated from the last balance you confirmed.
         </P>
         <P>
+          <B>The ledger.</B> A loan with a rate shows a table laid out like a bank statement: every
+          payment, every amount drawn, and one <B>Interest posted</B> line each cycle. The cycle
+          runs from the day of the month the loan started &mdash; borrowed on the 17th, it posts on
+          the 17th &mdash; and you can change that day if your lender bills on a different one.
+        </P>
+        <P>
+          Interest builds up <B>daily, on whatever you owed that day</B>. A payment on the 15th
+          genuinely halves what the second half of the month costs, and the ledger shows that rather
+          than charging a whole month on the opening balance. Three figures sit above the table:{' '}
+          <B>Balance</B> (everything posted so far), <B>Accrued so far</B> (this cycle, not yet
+          added), and <B>Owing today</B> (the two together). Hover an interest line to see the rate,
+          the average balance it was worked out on and the number of days &mdash; enough to check it
+          against a statement by hand.
+        </P>
+        <P>
+          <B>A payment you record late does not rewrite history.</B> If it belongs to a cycle that
+          has already posted, the ledger adds one <B>Adjustment</B> line dated the day you recorded
+          it, and the total comes out the same as if it had been there all along. That is what a
+          lender does, and it means the figures you saw last month are still the figures you saw
+          last month. Interest posts every night and again whenever a payment lands, so nothing
+          waits for you to open the page.
+        </P>
+        <P>
           <B>Reconcile to a statement</B> is what keeps it honest. Type what the statement says and
           that figure becomes the new starting point; everything before it is closed off with a
           record of how far the estimate was out. Do that each time a statement arrives and the

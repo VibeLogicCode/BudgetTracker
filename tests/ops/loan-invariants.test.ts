@@ -95,23 +95,33 @@ describe("MUST-13.1' G1: the rate is multiplied in exactly two places", () => {
 });
 
 describe("MUST-13.1' G2: the engine stays pure", () => {
-  const engine = () => read('src/lib/loans/interest.ts');
+  /**
+   * BOTH engine files since v1.48.0. ledger.ts does the walking now and interest.ts keeps the rate
+   * arithmetic; the purity rule is what lets either be pinned to a figure worked out by hand, so
+   * it has to cover whichever one is doing the work.
+   */
+  const ENGINES = ['src/lib/loans/interest.ts', 'src/lib/loans/ledger.ts'];
+  const engines = () => ENGINES.map((file) => ({ file, source: stripComments(read(file)) }));
 
-  /** It is handed its inputs. A module that can reach the database can be asked to store a result. */
+  /** They are handed their inputs. A module that can reach the database can be asked to store a result. */
   it('reaches no database', () => {
-    // stripComments, because the module's own docblock EXPLAINS that it imports nothing from
+    // stripComments, because a module's own docblock EXPLAINS that it imports nothing from
     // '@/db' -- punishing a file for documenting the rule is how the documentation gets deleted.
-    expect(stripComments(engine())).not.toMatch(/@\/db|getDb/);
+    for (const { file, source } of engines()) {
+      expect({ file, impure: /@\/db|getDb/.test(source) }).toEqual({ file, impure: false });
+    }
   });
 
   /**
-   * It is handed "today" too. A pure function of its inputs is one a test can pin to a hand-computed
-   * figure, which is the only reason those figures mean anything.
+   * They are handed "today" too. A pure function of its inputs is one a test can pin to a
+   * hand-computed figure, which is the only reason those figures mean anything.
    */
   it('reads no clock', () => {
-    // `new Date(iso)` with an argument is pure -- it is how a date string is parsed. What is banned
-    // is asking the environment what time it is now.
-    expect(stripComments(engine())).not.toMatch(/new Date\(\)|Date\.now\(|todayIso\(/);
+    // `new Date(iso)` with an argument is pure -- it is how a date string is parsed, and it is how
+    // ledger.ts asks how long a month is. What is banned is asking the environment for the time.
+    for (const { file, source } of engines()) {
+      expect({ file, impure: /new Date\(\)|Date\.now\(|todayIso\(/.test(source) }).toEqual({ file, impure: false });
+    }
   });
 
   /**
@@ -120,7 +130,9 @@ describe("MUST-13.1' G2: the engine stays pure", () => {
    * would be a second place that convention lives.
    */
   it('never spells the direction', () => {
-    expect(stripComments(engine())).not.toMatch(/'lent'|"lent"/);
+    for (const { file, source } of engines()) {
+      expect({ file, spelled: /'lent'|"lent"/.test(source) }).toEqual({ file, spelled: false });
+    }
   });
 });
 
@@ -193,6 +205,17 @@ describe("MUST-13.1' G4: the copy no longer claims the app does no interest math
       ['src/lib/warranty/items.ts', /interestRateBps is basis points and is DISPLAY ONLY/],
       ['src/app/(app)/warranties/[id]/warranty-detail-client.tsx', /does no interest math/],
       ['src/app/(app)/warranties/new/new-warranty-client.tsx', /does no interest math/],
+      /*
+        v1.48.0, D1. Ruling I5's "no default" is withdrawn, so the two hints that invited a person
+        to leave the basis unset are now false as well: the form insists on one the moment a rate
+        is typed. Same rule as the five above -- the specific stale sentence, not the words.
+      */
+      ['src/app/(app)/warranties/new/new-warranty-client.tsx', /Leave unset to keep the rate for reference only/],
+      ['src/app/(app)/warranties/new/new-warranty-client.tsx', /Set how it is charged below to see interest estimates/],
+      [
+        'src/app/(app)/warranties/[id]/warranty-detail-client.tsx',
+        /Leave this unset and the rate is shown for reference only/,
+      ],
     ];
     for (const [file, claim] of claims) {
       expect({ file, stale: claim.test(read(file)) }).toEqual({ file, stale: false });

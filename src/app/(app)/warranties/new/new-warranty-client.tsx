@@ -433,7 +433,7 @@ export function NewWarrantyClient({
                       className={inputClass}
                     />
                   </Field>
-                  <Field label="Interest rate" hint="Set how it is charged below to see interest estimates.">
+                  <Field label="Interest rate" hint="The rate the lender quotes. Say below how it is charged.">
                     <span className="flex items-center gap-2">
                       <input
                         name="interestRate"
