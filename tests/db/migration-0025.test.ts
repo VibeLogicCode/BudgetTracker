@@ -81,16 +81,24 @@ describe('0025: the rate basis column', () => {
     expect(columns('warranty_items')).toContain('interest_rate_basis');
   });
 
-  /** Ruling I5: every existing rate was typed under a promise that nothing was computed from it. */
-  it('is NULL for a loan created without one, so nothing is computed', () => {
+  /**
+   * Ruling I5 said every existing rate was typed under a promise that nothing was computed from it,
+   * so a rate could be saved with no basis. v1.48.0's D1 withdrew that for NEW saves -- a rate with
+   * no period cannot be multiplied, so the form insists. What 0025 still has to guarantee is the
+   * half that matters: the column is nullable, and a row that already holds NULL keeps it.
+   */
+  it('is NULL for a loan with no rate, and stays NULL where a row already has it', () => {
     current = createSeededTestDb();
     const user = insertTestUser(current.db, { role: 'admin' });
     const typeId = loanTypeId();
-    const itemId = loan(user, typeId, { principalCents: 30_000_000, interestRateBps: 500 });
-    const row = current.sqlite
-      .prepare('select interest_rate_basis as basis from warranty_items where id = ?')
-      .get(itemId) as { basis: string | null };
-    expect(row.basis).toBeNull();
+    const itemId = loan(user, typeId, { principalCents: 30_000_000 });
+    const basisOf = () =>
+      (current!.sqlite.prepare('select interest_rate_basis as basis from warranty_items where id = ?').get(itemId) as {
+        basis: string | null;
+      }).basis;
+    expect(basisOf()).toBeNull();
+    current.sqlite.prepare('update warranty_items set interest_rate_bps = 500 where id = ?').run(itemId);
+    expect(basisOf()).toBeNull();
   });
 
   it('refuses a value outside the six the app knows', () => {

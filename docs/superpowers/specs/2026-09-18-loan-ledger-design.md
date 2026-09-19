@@ -414,7 +414,36 @@ appear under "Loans and goals".
 **T6.** Form: rate without basis is rejected; new loan writes a `form` anchor dated as chosen;
 "You set this on" shows the anchor date; edit balance is read-only once an anchor exists.
 
-## 16. Open questions
+## 16. What was built differently, and why
+
+Three rulings were reversed by the code or the tests while this was implemented. Each is recorded
+where it happened as well as here.
+
+**D4 reversed.** The spec said a loan's balance field should go read-only once it had a statement,
+so that Reconcile became the only way to move it. The existing suite showed that would remove a
+documented capability: editing a loan and typing a balance already wrote a fresh anchor, and
+fix-wave item 4 had gone to trouble to make "untouched" mean untouched. The stated reason -- two
+paths to one number -- stops applying once the edit path writes a proper statement row, which is
+what it now does. The field stays editable and records a statement like any other.
+
+**apr_daily does not compound inside a period.** The spec said daily compounding. The v1.47.0 pin
+($20,000 at 8% costs $131.51 over thirty days) says otherwise, and that figure is one a household
+may already have checked against a statement. Unpaid interest still compounds at the posting date,
+which is where a lender compounds it. The pin won.
+
+**A short period is pro-rated by its CYCLE, not by itself.** The spec's formula divided by the
+period's own day count, which would have charged a full month's interest for the twelve days
+between a mid-month statement and the next posting day. It divides by the length of the cycle the
+fragment belongs to instead.
+
+**Two things the spec deferred, and one it did not.** CSV statements are stored only as figures, not
+as files: `warranty_receipts` is wired to an OCR queue, a thumbnailer and a type sniffer that
+between them know four formats, and teaching all three about CSV to keep a file nothing reads back
+was not worth it. A PDF is kept, which is the case the request described. The engine also falls back
+to `warranty_items`' own rate columns when a loan has a basis and an empty rate history -- without
+it, a database restored from an older backup would silently stop charging interest.
+
+## 17. Open questions
 
 - Should `loan_payment_missed` fire for a loan whose term has ended (payoff date in the past)? Plan
   assumes **no**: a finished term with a balance is already "overdue", a different message. Not built.

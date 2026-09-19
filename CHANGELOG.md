@@ -21,6 +21,53 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.48.0] - 2026-09-19
+
+**Before updating:** loans that already say how their rate is charged will show a **higher balance**
+after this update — the interest posted since their last statement, which the app was estimating but
+never adding. Loans without a charging method do not move at all. Nothing is deleted and nothing is
+rewritten; the new figures appear as dated rows you can read.
+
+### Added
+
+- A loan with a rate now shows a **ledger laid out like a bank statement**: every payment, every
+  amount drawn, one "Interest posted" line each cycle, and what has accrued since. Columns for the
+  payment, the interest, the principal and the balance after each line.
+- The cycle runs from **the day of the month the loan started**, not from the 1st. Borrowed on the
+  17th, it posts on the 17th. You can change the day if your lender bills on a different one.
+- Interest accrues **daily, on what you actually owed that day**. Pay $5,000 on the 15th of a
+  $10,000 month and that month costs $60.48 rather than $83.33.
+- **A payment recorded late does not rewrite history.** If it belongs to a cycle that already
+  posted, the ledger adds one "Adjustment" line dated the day you recorded it, and the total comes
+  out the same as if it had been there all along.
+- Hover an interest line for the rate, the average balance it was worked out on and the day count —
+  enough to check the charge against a statement by hand.
+- Interest posts every night and again whenever a payment lands, so nothing waits for you to open
+  the page. A machine that was switched off catches up when it starts.
+- **Download the ledger as a spreadsheet**, and a "by month" view that collapses it to one row per
+  cycle.
+
+### Changed
+
+- A rate now has to say **how it is charged**. New loans default to a yearly rate charged monthly,
+  which is what most car, personal and bank loans are. Existing loans with a rate and no method show
+  a banner and are left exactly as they are.
+- A loan's balance is recorded **as of a date**, and a new loan's opening figure is dated the day it
+  was borrowed — so a loan entered late already shows the interest it has run up.
+- "You set this on" shows the **statement's own date**. It used to slice a UTC timestamp, so an
+  evening save could print tomorrow.
+- A rate you change asks **when it starts applying**. Cycles that have already closed keep the rate
+  they were charged at.
+- The debt chart no longer carries today's interest back through last year, and can show how much of
+  the debt is interest.
+
+- A statement that arrives as a **CSV** now fills the reconcile form. The columns are detected, with
+  a picker when it is unsure or when you disagree, and the choice is remembered for that loan.
+- **"Keep this statement with the loan"** stores the PDF alongside it, and is on by default.
+- Six new notifications: interest was added to a loan, no payment on a loan this period, time to
+  check a loan against its statement, a loan is paid off, you reached a savings goal, and a savings
+  goal is behind pace. The two that ask something of you are off until you switch them on.
+
 ## [1.47.0] - 2026-09-18
 
 **Before updating:** this adds a column and a table, and changes nothing you can see until you
