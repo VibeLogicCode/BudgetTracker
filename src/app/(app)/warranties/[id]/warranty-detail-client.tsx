@@ -89,7 +89,8 @@ import {
   type WarrantyActionState,
 } from '../actions';
 import { buttonClass } from '@/components/ui/Button';
-import { LoanInterestCard } from '@/components/LoanInterestCard';
+import { LoanLedgerCard } from '@/components/LoanLedgerCard';
+import type { Ledger } from '@/lib/loans/ledger';
 import { ReconcileLoanForm } from './reconcile-loan-form';
 import type { LoanInterest, LoanReconciliation } from '@/lib/loans';
 
@@ -211,6 +212,7 @@ export function WarrantyDetailClient({
   accounts,
   payoffFraction,
   interest,
+  loanLedgerRows,
   reconciliation,
   lastPaymentAt,
   paymentCount,
@@ -232,8 +234,10 @@ export function WarrantyDetailClient({
   accounts: { id: number; name: string }[];
   /** v1.3.1: from listLoans().find(...) on the server -- MUST-15.4's payoff math. */
   payoffFraction: number | null;
-  /** v1.47.0. Null until a person says how the rate is charged; see LoanInterestCard. */
+  /** v1.47.0. Null until a person says how the rate is charged; see LoanLedgerCard. */
   interest: LoanInterest | null;
+  /** v1.48.0. The loan's ledger, or null when it has no basis or has never been anchored. */
+  loanLedgerRows: Ledger | null;
   reconciliation: LoanReconciliation | null;
   lastPaymentAt: string | null;
   paymentCount: number;
@@ -675,15 +679,16 @@ export function WarrantyDetailClient({
           )}
 
           {/*
-            v1.47.0. Everything interest has done since the last figure a person confirmed, and the
-            way to correct it from a statement. Renders nothing at all when no basis is set, which
-            is every loan on every existing install until somebody chooses one (ruling I5).
+            v1.48.0. The ledger: every payment, every advance, one posting a cycle, and what has
+            accrued since. Renders nothing until a loan has both a way of charging its rate and a
+            statement to estimate forward from -- the banner above says so when it does not.
           */}
-          {item.kind !== 'loan' ? null : (
-            <LoanInterestCard
-              interest={interest}
-              reconciliation={reconciliation}
+          {item.kind !== 'loan' || loanLedgerRows === null ? null : (
+            <LoanLedgerCard
+              ledger={loanLedgerRows}
               direction={item.loanDirection}
+              interestFree={item.interestRateBasis === 'none'}
+              downloadHref={`/api/loans/${item.id}/ledger.csv`}
               onReconcile={
                 reconciling ? null : (
                   <button type="button" onClick={() => setReconciling(true)} className={buttonClass('secondary', 'sm')}>
@@ -692,6 +697,17 @@ export function WarrantyDetailClient({
                 )
               }
             />
+          )}
+          {/*
+            A loan with a statement but no rate still gets the Reconcile button: recording what a
+            lender says is useful on its own, and it is how a household starts.
+          */}
+          {item.kind !== 'loan' || loanLedgerRows !== null || reconciling ? null : (
+            <div className="flex justify-end">
+              <button type="button" onClick={() => setReconciling(true)} className={buttonClass('secondary', 'sm')}>
+                Reconcile to a statement…
+              </button>
+            </div>
           )}
           {item.kind === 'loan' && reconciling ? (
             <Card>

@@ -80,6 +80,7 @@ function renderDetail(over: Partial<Parameters<typeof WarrantyDetailClient>[0]> 
       types={types}
       today={TODAY}
       interest={null}
+      loanLedgerRows={null}
       reconciliation={null}
       linkedTransaction={null}
       linkRemoved={false}

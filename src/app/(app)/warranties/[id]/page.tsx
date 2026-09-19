@@ -4,7 +4,7 @@ import { requireUser } from '@/lib/auth/session';
 import { listAttributablePeople } from '@/lib/auth/users';
 import { listCategories } from '@/lib/categories';
 import { todayIso } from '@/lib/dates';
-import { itemLedger, listLoanRules, listLoans } from '@/lib/loans';
+import { itemLedger, listLoanRules, listLoans, loanLedger } from '@/lib/loans';
 import { displayNameOf, getTransaction } from '@/lib/transactions';
 import { warrantyStatus } from '@/lib/warranty/expiry';
 import { getWarrantyItem, listWarrantyReceipts } from '@/lib/warranty/items';
@@ -63,6 +63,9 @@ export default async function WarrantyDetailPage({ params }: { params: Promise<{
       /* v1.47.0: both null for a non-loan item, and for a loan until somebody says how its rate
          is charged -- which is every loan on every existing install (ruling I5). */
       interest={loanSummary?.interest ?? null}
+      /* v1.48.0. The ledger itself -- null for a non-loan item, and for a loan with no basis or
+         no statement to start from. The card is what replaced LoanInterestCard's month table. */
+      loanLedgerRows={loanLedger(item.id, today)}
       reconciliation={loanSummary?.reconciliation ?? null}
       lastPaymentAt={loanSummary?.lastPaymentAt ?? null}
       paymentCount={loanSummary?.paymentCount ?? 0}
