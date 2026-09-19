@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildLedger, type LedgerInput, type StoredPosting } from '@/lib/loans/ledger';
+import { buildLedger, LedgerRangeError, type LedgerInput, type StoredPosting } from '@/lib/loans/ledger';
 
 /**
  * The whole ledger, from facts (ledger spec §6–§7).
@@ -73,7 +73,13 @@ describe('buildLedger: payments', () => {
     expect(payment.date).toBe('2026-07-15');
     expect(payment.paymentCents).toBe(500_000);
     expect(payment.balanceCents).toBe(500_000);
-    expect(payment.interestCents).toBe(3_763); // fourteen days of the full balance
+    /*
+      v1.49.0 (review B8): the accrued-to-day figure moved OUT of interestCents, because it is a
+      subset of the posting row's figure for the same period and summing the column over-counted.
+      Same number, somewhere it cannot be added up by mistake.
+    */
+    expect(payment.interestCents).toBeNull();
+    expect(payment.detail?.accruedToDayCents).toBe(3_763); // fourteen days of the full balance
   });
 
   /** U3: the split is stated on the posting row, because that is the period it belongs to. */
@@ -219,5 +225,84 @@ describe('buildLedger: a statement mid-cycle (C2)', () => {
     expect(ledger.duePostings[0]!.periodStart).toBe('2026-08-20');
     expect(ledger.duePostings[0]!.periodEnd).toBe('2026-09-01');
     expect(ledger.duePostings[0]!.interestCents).toBe(3_258); // 1,010,000 x 10%/12 x 12/31
+  });
+});
+
+/**
+ * Review findings B3, B4, B8, A4. What the card prints under the table, and what a payment row is
+ * allowed to claim about interest.
+ */
+describe('paid to date carries arrears and counts the open period (B3, B4)', () => {
+  const base: LedgerInput = {
+    startDate: '2026-06-01',
+    startBalanceCents: 1_000_000,
+    principalCents: 1_000_000,
+    postingDay: 1,
+    rateHistory: [{ effectiveFrom: '2026-06-01', rateBps: 100, basis: 'per_month' }],
+    movements: [],
+    stored: [],
+    today: '2026-08-15',
+  };
+
+  /**
+   * June goes unpaid ($100.00 charged), July pays $500 on the 31st. That payment clears June's
+   * arrears AND July's charge before any of it touches the loan, so $200.84 went on interest --
+   * not the $100.84 a per-period cap reports.
+   */
+  it('a payment clears arrears before it is called principal', () => {
+    const ledger = buildLedger({ ...base, movements: [{ date: '2026-07-31', amountCents: -50_000 }] });
+    expect(ledger.interestPaidToDateCents).toBe(20_084);
+    expect(ledger.principalPaidToDateCents).toBe(29_916);
+    // And the two agree with the balance the card shows beside them.
+    expect(ledger.interestPaidToDateCents + ledger.principalPaidToDateCents).toBe(50_000);
+  });
+
+  it('counts a payment made in the open period', () => {
+    const ledger = buildLedger({ ...base, movements: [{ date: '2026-08-10', amountCents: -50_000 }] });
+    expect(ledger.interestPaidToDateCents + ledger.principalPaidToDateCents).toBe(50_000);
+  });
+
+  it('reports the interest posted since the start, separately from what was paid', () => {
+    const ledger = buildLedger({ ...base, movements: [{ date: '2026-07-31', amountCents: -50_000 }] });
+    // June 100.00 + July 100.84 (on the opening balance, the payment lands on the 31st).
+    expect(ledger.interestPostedSinceStartCents).toBe(20_084);
+  });
+});
+
+describe('the Interest column is additive (B8)', () => {
+  it('leaves a payment row’s interest null and carries accrued-to-day in its detail', () => {
+    const ledger = buildLedger({
+      startDate: '2026-07-01',
+      startBalanceCents: 1_000_000,
+      principalCents: 1_000_000,
+      postingDay: 1,
+      rateHistory: [{ effectiveFrom: '2026-07-01', rateBps: 1000, basis: 'apr_monthly' }],
+      movements: [{ date: '2026-07-15', amountCents: -500_000 }],
+      stored: [],
+      today: '2026-08-02',
+    });
+    const payment = ledger.rows.find((row) => row.kind === 'payment')!;
+    expect(payment.interestCents).toBeNull();
+    expect(payment.detail?.accruedToDayCents).toBe(3_763);
+    // Summing the column now equals what was actually charged.
+    const column = ledger.rows.reduce((total, row) => total + (row.interestCents ?? 0), 0);
+    expect(column).toBe(6_048 + ledger.accruedCents);
+  });
+});
+
+describe('a date range the engine cannot walk (A4)', () => {
+  it('throws a typed error rather than a bare one', () => {
+    expect(() =>
+      buildLedger({
+        startDate: '1900-01-01',
+        startBalanceCents: 1,
+        principalCents: null,
+        postingDay: 1,
+        rateHistory: [],
+        movements: [],
+        stored: [],
+        today: '2026-09-19',
+      }),
+    ).toThrow(LedgerRangeError);
   });
 });

@@ -99,8 +99,21 @@ describe('listLoans: interest once a basis is set', () => {
       Lower is not the point; being checkable is. This is the figure a household can reproduce from
       the ledger's own posting row, which carries the rate, the average balance and the day count.
     */
+    /*
+      v1.49.0 re-pins this by hand. The v1.48.0 figure (29,934,841) came out of a row walk that
+      clamped differently from the period walk beside it, and was 5,740 low; the review's finding B5
+      is that exact disagreement. Worked out on paper:
+
+        fourteen days at 30,000,000 and sixteen at 29,820,000  = 897,120,000
+        average daily balance                                   = 29,904,000
+        5% a year, one twelfth a month, thirty of thirty-one days = 120,581
+        29,820,000 + 120,581                                    = 29,940,581
+
+      Still below the old calendar-month answer of 29,945,000, for the reason v1.48.0 gave: the
+      payment on the 15th lowers the second half of the month, and the 31st is not over.
+    */
     const interest = loanOf(itemId, '2026-01-31').interest!;
-    expect(interest.owingCents).toBe(29_934_841);
+    expect(interest.owingCents).toBe(29_940_581);
     expect(interest.owingCents).toBeLessThan(29_945_000);
   });
 
