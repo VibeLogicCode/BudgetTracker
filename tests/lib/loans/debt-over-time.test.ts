@@ -196,11 +196,23 @@ describe('MUST-15.7: the reconstruction, clause by clause', () => {
     expect(series.find((p) => p.month === '2026-08')!.owedCents).toBe(1_000_000);
   });
 
-  it('MUST-15.8: the whole series is computed from exactly TWO queries', () => {
+  /**
+   * MUST-15.8, at three since v1.48.0: the loans, their payments, and their postings.
+   *
+   * The number is not the point -- the point is that it does not grow. Three CONSTANT queries feed
+   * a fold over months in memory; what this guards against is a query per loan or per month, which
+   * is how a twenty-four-month chart over a dozen loans becomes three hundred round trips.
+   */
+  it('MUST-15.8: the whole series is computed from a fixed three queries, whatever the span', () => {
     seedItem({ name: 'Loan', createdAt: '2024-01-01T00:00:00.000Z', balanceCents: 1_955_000, balanceUpdatedAt: '2026-06-10T00:00:00.000Z' });
+    seedItem({ name: 'Second', createdAt: '2024-01-01T00:00:00.000Z', balanceCents: 500_000, balanceUpdatedAt: '2026-06-10T00:00:00.000Z' });
     const before = queryCount();
     debtOverTime(24, { endMonth: '2026-08', today: '2026-08-18' });
-    expect(queryCount() - before).toBe(2);
+    const short = queryCount() - before;
+    const middle = queryCount();
+    debtOverTime(3, { endMonth: '2026-08', today: '2026-08-18' });
+    expect(short).toBe(3);
+    expect(queryCount() - middle).toBe(3);
   });
 
   it('with no loans at all, every point is null', () => {
@@ -328,8 +340,63 @@ describe('debtOverTime splits the two directions (rulings P5, P6)', () => {
   it('a household with no loans at all still returns both series as null', () => {
     const points = debtOverTime(2, { endMonth: '2026-08', today: '2026-08-18' });
     expect(points).toEqual([
-      { month: '2026-07', owedCents: null, lentCents: null },
-      { month: '2026-08', owedCents: null, lentCents: null },
+      { month: '2026-07', owedCents: null, lentCents: null, interestCents: 0 },
+      { month: '2026-08', owedCents: null, lentCents: null, interestCents: 0 },
     ]);
+  });
+});
+
+/**
+ * v1.48.0, ledger spec G1/G2. Interest that has POSTED is part of today's balance, so the
+ * reconstruction has to undo it walking backwards -- exactly as it already undoes payments.
+ *
+ * Without this, every historical month would carry interest that had not been charged yet, and the
+ * debt chart would show a household having owed more in January than it did.
+ */
+describe('v1.48.0: posted interest is undone walking backwards', () => {
+  function posting(itemId: number, periodEnd: string, interestCents: number): void {
+    t.sqlite
+      .prepare(
+        `insert into loan_postings
+           (item_id, kind, period_start, period_end, opening_cents, interest_cents, closing_cents, created_at)
+         values (?, 'posting', ?, ?, 0, ?, 0, ?)`,
+      )
+      .run(itemId, periodEnd, periodEnd, interestCents, `${periodEnd}T00:00:00.000Z`);
+  }
+
+  it('leaves a month before the posting free of it', () => {
+    const itemId = seedItem({ balanceCents: 1_016_736, balanceUpdatedAt: '2026-07-01T00:00:00.000Z' });
+    posting(itemId, '2026-08-01', 8_333);
+    posting(itemId, '2026-09-01', 8_403);
+
+    const points = debtOverTime(3, { endMonth: '2026-09', today: '2026-09-18' });
+    const byMonth = new Map(points.map((point) => [point.month, point.owedCents]));
+    expect(byMonth.get('2026-07')).toBe(1_000_000);
+    expect(byMonth.get('2026-08')).toBe(1_008_333);
+    expect(byMonth.get('2026-09')).toBe(1_016_736);
+  });
+
+  it('reports the interest posted up to each month as its own series', () => {
+    const itemId = seedItem({ balanceCents: 1_016_736, balanceUpdatedAt: '2026-07-01T00:00:00.000Z' });
+    posting(itemId, '2026-08-01', 8_333);
+    posting(itemId, '2026-09-01', 8_403);
+
+    const points = debtOverTime(3, { endMonth: '2026-09', today: '2026-09-18' });
+    expect(points.map((point) => point.interestCents)).toEqual([0, 8_333, 16_736]);
+  });
+
+  it('adds up interest across loans', () => {
+    const first = seedItem({ name: 'A', balanceCents: 500_000, balanceUpdatedAt: '2026-07-01T00:00:00.000Z' });
+    const second = seedItem({ name: 'B', balanceCents: 300_000, balanceUpdatedAt: '2026-07-01T00:00:00.000Z' });
+    posting(first, '2026-08-01', 1_000);
+    posting(second, '2026-08-01', 2_000);
+    const points = debtOverTime(2, { endMonth: '2026-08', today: '2026-08-18' });
+    expect(points.at(-1)!.interestCents).toBe(3_000);
+  });
+
+  it('reports no interest at all when nothing has posted', () => {
+    seedItem({ balanceCents: 500_000, balanceUpdatedAt: '2026-07-01T00:00:00.000Z' });
+    const points = debtOverTime(2, { endMonth: '2026-08', today: '2026-08-18' });
+    expect(points.map((point) => point.interestCents)).toEqual([0, 0]);
   });
 });

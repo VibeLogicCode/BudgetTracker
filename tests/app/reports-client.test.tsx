@@ -380,9 +380,9 @@ describe('ReportsClient — Net worth card', () => {
 
 describe('ReportsClient — the debt card carries both series (rulings P12, P14)', () => {
   const twoSeries = [
-    { month: '2026-06', owedCents: 200_000, lentCents: 50_000 },
-    { month: '2026-07', owedCents: 190_000, lentCents: 50_000 },
-    { month: '2026-08', owedCents: 180_000, lentCents: 30_000 },
+    { month: '2026-06', owedCents: 200_000, lentCents: 50_000 , interestCents: 0 },
+    { month: '2026-07', owedCents: 190_000, lentCents: 50_000 , interestCents: 0 },
+    { month: '2026-08', owedCents: 180_000, lentCents: 30_000 , interestCents: 0 },
   ];
 
   it('names both lines in the card description when a lent loan has a balance', () => {

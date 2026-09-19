@@ -3,7 +3,7 @@ import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } fr
 import { listItemTypes } from '@/lib/warranty/types';
 import { createWarrantyItem } from '@/lib/warranty/items';
 import { createManualTransaction } from '@/lib/transactions';
-import { assignTransactionToLoan, listLoans, setLoanAnchor } from '@/lib/loans';
+import { assignTransactionToLoan, listLoans, loanLedger, setLoanAnchor } from '@/lib/loans';
 import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
 
 let current: TestDb | null = null;
@@ -88,9 +88,20 @@ describe('listLoans: interest once a basis is set', () => {
     });
     assignTransactionToLoan({ txnId, itemId });
 
+    /*
+      v1.48.0. This figure MOVED, and the move is the release.
+
+      v1.47.0 charged a full month on the opening balance: 30,000,000 x 5%/12 = 125,000, giving
+      29,945,000. Interest now accrues on what was actually owed each day, so the 180,000 paid on
+      the 15th lowers the second half of the month -- and the 31st is not over, so thirty days are
+      counted rather than thirty-one. Both pull the same way, and the estimate comes out lower.
+
+      Lower is not the point; being checkable is. This is the figure a household can reproduce from
+      the ledger's own posting row, which carries the rate, the average balance and the day count.
+    */
     const interest = loanOf(itemId, '2026-01-31').interest!;
-    expect(interest.owingCents).toBe(29_945_000);
-    expect(interest.interestSinceAnchorCents).toBe(125_000);
+    expect(interest.owingCents).toBe(29_934_841);
+    expect(interest.owingCents).toBeLessThan(29_945_000);
   });
 
   /** The figure a household checks against its statement. */
@@ -130,15 +141,27 @@ describe('listLoans: interest once a basis is set', () => {
     expect(loanOf(itemId).interest).toBeNull();
   });
 
-  it('gives a month-by-month list, which is the "how it grew" view', () => {
+  /**
+   * v1.48.0. The "how it grew" view moved OFF this summary and onto the ledger, which shows it
+   * per posting rather than per calendar month -- LoanLedgerCard and tests/lib/loans/postings own
+   * it now. What the summary still has to guarantee is that it agrees with that ledger, because a
+   * dashboard and a loan page printing different balances is the failure this consolidation
+   * exists to prevent.
+   */
+  it('agrees with the loan ledger, figure for figure', () => {
     const { itemId, user } = mortgage();
     setBasis(itemId, 'apr_monthly');
     setLoanAnchor({ itemId, asOfDate: '2026-01-01', balanceCents: 30_000_000, source: 'reconcile', actorUserId: user });
-    expect(loanOf(itemId, '2026-03-31').interest!.months.map((month) => month.month)).toEqual([
-      '2026-01',
-      '2026-02',
-      '2026-03',
-    ]);
+    current!.sqlite
+      .prepare(
+        `insert into loan_rate_history (item_id, effective_from, rate_bps, basis, created_at)
+         values (?, '2026-01-01', 500, 'apr_monthly', '2026-01-01T00:00:00.000Z')`,
+      )
+      .run(itemId);
+    const summary = loanOf(itemId, '2026-03-31').interest!;
+    const ledger = loanLedger(itemId, '2026-03-31')!;
+    expect(summary.owingCents).toBe(ledger.owingCents);
+    expect(summary.yearAtCurrentBalanceCents).toBe(ledger.yearAtThisBalanceCents);
   });
 });
 

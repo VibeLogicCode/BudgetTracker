@@ -21,7 +21,7 @@ import {
   type BillingCycle,
   type LoanDirection,
 } from '@/lib/warranty/constants';
-import { chargeCents, ratePpb, simulate, type InterestBasis, type MonthRow } from '@/lib/loans/interest';
+import { chargeCents, ratePpb, type InterestBasis } from '@/lib/loans/interest';
 import { raiseInterestPosted, type PostedLoan } from '@/lib/notify/evaluate/loans';
 import { raiseLoanPaidOff } from '@/lib/notify/raise';
 import {
@@ -978,6 +978,28 @@ function ledgerFacts(
     .where(eq(loanRateHistory.itemId, itemId))
     .orderBy(asc(loanRateHistory.effectiveFrom), asc(loanRateHistory.id))
     .all();
+
+  /*
+    THE ITEM'S OWN COLUMNS ARE THE FALLBACK, and this is load-bearing rather than defensive.
+
+    rateOn returns null before the first history row, and a period with no rate charges nothing --
+    so a loan that has a basis and an empty history would silently stop earning interest, with no
+    error and nothing on screen to say why. Migration 0026 backfills a row for every loan that had
+    a basis at upgrade time, but a row can still be missing: a database restored from an older
+    backup, a basis set outside the form, a history deleted.
+
+    warranty_items.interest_rate_bps and .interest_rate_basis are the CURRENT truth by design, so
+    reading them here is not a guess. Dated from the statement, because that is the earliest point
+    anything is estimated from.
+  */
+  if (history.length === 0) {
+    const rateBps = tx
+      .select({ rateBps: warrantyItems.interestRateBps })
+      .from(warrantyItems)
+      .where(eq(warrantyItems.id, itemId))
+      .get()?.rateBps;
+    history.push({ effectiveFrom: anchor.asOfDate, rateBps: rateBps ?? 0, basis: item.basis });
+  }
 
   return {
     direction: item.direction,
@@ -2622,7 +2644,6 @@ export interface LoanInterest {
    */
   yearAtCurrentBalanceCents: number;
   interestSinceAnchorCents: number;
-  months: MonthRow[];
 }
 
 export interface LoanReconciliation {
@@ -2697,28 +2718,33 @@ function interestFor(
       amountCents: loanSignedDelta(item.direction, row.txnAmountCents < 0 ? -row.appliedCents : row.appliedCents),
     }));
 
-  const result = simulate({
-    anchorDate: newest.asOfDate,
-    anchorBalanceCents: newest.balanceCents,
-    basis: item.basis,
-    rateBps: item.rateBps ?? 0,
-    principalCents: item.principalCents,
-    movements,
-    asOf: today,
-  });
+  /*
+    v1.48.0. The SAME engine the ledger card reads, so the dashboard, net worth and the loan page
+    cannot print different figures for one loan.
 
-  const thisMonth = result.months[result.months.length - 1]?.chargedCents ?? 0;
+    Until this release the summary came from simulate(), which walked calendar months while the
+    ledger walks the loan's own posting cycle. Both were defensible; having both was not -- a
+    household seeing one balance on the dashboard and another on the loan itself has no way to
+    know which to believe, and would be right to believe neither.
+  */
+  const ledger = loanLedger(itemId, today);
+  if (ledger === null) return { interest: null, reconciliation };
+  void movements;
+
   return {
     interest: {
       basis: item.basis,
       anchorDate: newest.asOfDate,
       anchorBalanceCents: newest.balanceCents,
-      owingCents: result.owingCents,
-      potCents: result.potCents,
-      thisMonthChargeCents: thisMonth,
-      yearAtCurrentBalanceCents: thisMonth * 12,
-      interestSinceAnchorCents: result.interestSinceAnchorCents,
-      months: result.months,
+      owingCents: ledger.owingCents,
+      // What has been charged and not yet paid: everything posted since the statement, less what
+      // the payments covered.
+      potCents: Math.max(0, ledger.owingCents - ledger.postedBalanceCents + ledger.accruedCents),
+      thisMonthChargeCents: ledger.interestThisPeriodCents,
+      yearAtCurrentBalanceCents: ledger.yearAtThisBalanceCents,
+      interestSinceAnchorCents: ledger.interestPaidToDateCents + ledger.accruedCents +
+        Math.max(0, ledger.postedBalanceCents - newest.balanceCents +
+          movements.reduce((total, movement) => total - movement.amountCents, 0)),
     },
     reconciliation,
   };
@@ -2840,6 +2866,14 @@ export interface DebtPoint {
    * does, null is the honest value -- no lent loan can exist before the item forms ship.
    */
   lentCents: number | null;
+  /**
+   * v1.48.0, ledger spec G2. Interest POSTED across every loan up to and including this month.
+   *
+   * Cumulative, not per-month, so the series reads as "how much of this debt is interest" against
+   * the balance line above it -- which is the question the owner asked, in the words "how the
+   * intrest has been growing".
+   */
+  interestCents: number;
 }
 
 /**
@@ -2934,7 +2968,7 @@ export function debtOverTime(months: number, opts: { endMonth?: string; today?: 
     .innerJoin(warrantyItemTypes, eq(warrantyItemTypes.id, warrantyItems.typeId))
     .where(eq(warrantyItemTypes.kind, 'loan'))
     .all();
-  if (loans.length === 0) return keys.map((month) => ({ month, owedCents: null, lentCents: null }));
+  if (loans.length === 0) return keys.map((month) => ({ month, owedCents: null, lentCents: null, interestCents: 0 }));
 
   const applied = getDb()
     .select({
@@ -2957,6 +2991,32 @@ export function debtOverTime(months: number, opts: { endMonth?: string; today?: 
     const inner = byItem.get(row.itemId) ?? new Map<string, number>();
     inner.set(row.month, (inner.get(row.month) ?? 0) + (row.total ?? 0));
     byItem.set(row.itemId, inner);
+  }
+
+  /*
+    v1.48.0, G1. Interest that has POSTED is part of the stored balance, so walking backwards has to
+    undo it exactly as the payments above are undone. Without this every historical month would
+    carry interest that had not been charged yet, and the chart would show a household owing more
+    last January than it actually did.
+
+    Bucketed by the posting's own period_end, which is the day the charge became real -- the same
+    principle as bucketing payments by the transaction's date rather than when the link was made.
+  */
+  const postings = getDb()
+    .select({
+      itemId: loanPostings.itemId,
+      month: sql<string>`substr(${loanPostings.periodEnd}, 1, 7)`,
+      total: sql<number>`sum(${loanPostings.interestCents})`,
+    })
+    .from(loanPostings)
+    .groupBy(loanPostings.itemId, sql`substr(${loanPostings.periodEnd}, 1, 7)`)
+    .all();
+
+  const postedByItem = new Map<number, Map<string, number>>();
+  for (const row of postings) {
+    const inner = postedByItem.get(row.itemId) ?? new Map<string, number>();
+    inner.set(row.month, (inner.get(row.month) ?? 0) + (row.total ?? 0));
+    postedByItem.set(row.itemId, inner);
   }
 
   // v1.14.0: the old code started `total = 0` (never null, once loans.length > 0 was already
@@ -2989,6 +3049,10 @@ export function debtOverTime(months: number, opts: { endMonth?: string; today?: 
         continue;
       }
       let balance = loan.balanceCents;
+      // G1: every posting after this month is undone, the same way a later payment is.
+      for (const [postedMonth, cents] of postedByItem.get(loan.itemId) ?? []) {
+        if (postedMonth > month) balance -= cents;
+      }
       for (const [paymentMonth, cents] of byItem.get(loan.itemId) ?? []) {
         // "the transaction's own month > E's month" is the whole of every LATER month, since E
         // is a month end (v1.25.0: paymentMonth is keyed off transactions.date now, not
@@ -3001,10 +3065,20 @@ export function debtOverTime(months: number, opts: { endMonth?: string; today?: 
       if (owedSide) owedTotal = (owedTotal ?? 0) + balance;
       else lentTotal = (lentTotal ?? 0) + balance;
     }
+    // G2. Interest posted up to and including this month, across every loan. Never null: zero is
+    // the true answer for a household that has posted none, and a broken line would imply unknown.
+    let interestCents = 0;
+    for (const inner of postedByItem.values()) {
+      for (const [postedMonth, cents] of inner) {
+        if (postedMonth <= month) interestCents += cents;
+      }
+    }
+
     return {
       month,
       owedCents: owedUnknown ? null : owedTotal,
       lentCents: lentUnknown ? null : lentTotal,
+      interestCents,
     };
   });
 }

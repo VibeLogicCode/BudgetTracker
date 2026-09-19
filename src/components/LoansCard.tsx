@@ -33,6 +33,8 @@ import { ProgressBar } from '@/components/ui/ProgressBar';
  * still adopting the shared bar.
  */
 export function LoansCard({ loans, totalOwedCents }: { loans: LoanSummary[]; totalOwedCents: number }) {
+  // Summed from the loans already on screen, so the caption can never disagree with the rows.
+  const interestThisMonthCents = loans.reduce((total, loan) => total + (loan.interest?.thisMonthChargeCents ?? 0), 0);
   const shown = loans.filter((loan) => loan.currentBalanceCents !== null || loan.principalCents !== null);
   if (shown.length === 0) return null;
 
@@ -45,7 +47,16 @@ export function LoansCard({ loans, totalOwedCents }: { loans: LoanSummary[]; tot
     <Card>
       <CardHeader
         title="What we owe"
-        description="Loans the household is paying back."
+        /*
+          v1.48.0, G3. What this month's interest is costing, across the loans that have a rate and
+          a way of charging it. A household paying four loans has no other place to see that figure
+          in one line, and it is the number that makes the total above worth looking at twice.
+        */
+        description={
+          interestThisMonthCents > 0
+            ? `Loans the household is paying back. ${formatCents(interestThisMonthCents)} in interest this month.`
+            : 'Loans the household is paying back.'
+        }
         action={
           <span className="flex items-center gap-2">
             {hasUntrackedBalance ? (
