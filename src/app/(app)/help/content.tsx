@@ -359,13 +359,16 @@ export const HELP_SECTIONS: HelpSection[] = [
   },
   {
     id: 'coverage',
-    title: 'Contracts & Coverage',
+    title: 'Loans & Coverage',
     body: (
       <>
-        <Where path="/warranties">seventh in the menu —</Where>
+        {/* F7 (review): no ordinal. A self-visibility member's menu is shorter, so "seventh" is
+            wrong for them -- and this section is the one a person arrives at looking for a loan,
+            which is exactly when a miscount costs them the page. */}
+        <Where path="/warranties">under Planning in the menu —</Where>
         <P>
-          One list for everything you keep paperwork on: warranties, subscriptions, contracts,
-          loans and bills. Which of the five an entry behaves as comes from its <B>item type</B>,
+          One list for everything you keep paperwork on: loans, bills, subscriptions, contracts and
+          warranties. Which of the five an entry behaves as comes from its <B>item type</B>,
           and the wording follows — a subscription shows a <B>cancel by</B> date where a warranty
           shows an expiry date. The Dashboard reminds you before a date arrives, which is the
           whole reason to record one.

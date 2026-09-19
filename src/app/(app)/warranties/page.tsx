@@ -3,6 +3,7 @@ import { listUsers } from '@/lib/auth/users';
 import { ownerScope } from '@/lib/auth/viewer';
 import { addDaysIso, todayIso } from '@/lib/dates';
 import { recurringCharges, recurringLoad } from '@/lib/recurring';
+import { isItemKind } from '@/lib/warranty/constants';
 import { isWarrantyStatus } from '@/lib/warranty/expiry';
 import { unpaidInstallments } from '@/lib/warranty/installments';
 import { isWarrantySort, searchWarrantyItems } from '@/lib/warranty/search';
@@ -27,6 +28,7 @@ export default async function WarrantiesPage({
   const status = one('status');
   const owner = one('owner');
   const typeId = one('typeId');
+  const kind = one('kind');
   const sortRaw = one('sort');
   const sort = isWarrantySort(sortRaw) ? sortRaw : 'expiry';
   const page = /^\d+$/.test(one('page')) ? Number(one('page')) : 1;
@@ -39,6 +41,8 @@ export default async function WarrantiesPage({
       ownerUserId: /^\d+$/.test(owner) ? Number(owner) : null,
       // Delta T9: composes with q/status/owner/sort like every other filter.
       typeId: /^\d+$/.test(typeId) ? Number(typeId) : null,
+      // F4: one pill per kind. An unrecognised value reads as no filter, like every other param.
+      kind: isItemKind(kind) ? kind : null,
       sort,
       page,
       today,
@@ -106,6 +110,7 @@ export default async function WarrantiesPage({
       status={status}
       owner={owner}
       typeId={typeId}
+      kind={isItemKind(kind) ? kind : ''}
       sort={sort}
       billSchedules={billSchedules}
     />

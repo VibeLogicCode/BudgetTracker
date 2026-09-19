@@ -59,7 +59,7 @@ export function RuleLinkedPaymentsCard({ payments }: { payments: RuleLinkedPayme
             {/* The same overflow shape RuleReviewCard uses: point at the surface that lists every
                 one of them rather than inventing a page for this overflow line alone. */}
             <Link href="/warranties" className="text-accent-text underline">
-              {`${hiddenCount} more on Contracts & Coverage`}
+              {`${hiddenCount} more on Loans & Coverage`}
             </Link>
           </li>
         ) : null}

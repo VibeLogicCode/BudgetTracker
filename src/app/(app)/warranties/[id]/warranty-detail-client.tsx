@@ -432,7 +432,7 @@ export function WarrantyDetailClient({
           <StatusBadge status={status} expiryDate={item.expiryDate} today={today} kind={item.kind} />
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Link href="/warranties" className={buttonClass('ghost', 'sm')}>Back to items</Link>
+          <Link href="/warranties" className={buttonClass('ghost', 'sm')}>Back to Loans &amp; Coverage</Link>
           <button type="button" onClick={() => setEditing((v) => !v)} className={buttonClass('secondary', 'sm')}>
             {editing ? 'Cancel edit' : 'Edit'}
           </button>

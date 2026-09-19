@@ -13,6 +13,7 @@ import { Notice } from '@/components/ui/Notice';
 import { PageGuide } from '@/components/ui/PageGuide';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { SectionHeader } from '@/components/ui/SectionHeader';
+import { PillNav } from '@/components/ui/PillNav';
 import { TableWrap } from '@/components/ui/Table';
 import { Field, inputClass, selectClass } from '@/components/ui/form';
 import { daysBetweenIso } from '@/lib/dates';
@@ -23,6 +24,8 @@ import {
   billingCycleSuffixForKind,
   billScheduleLabel,
   expiryPhraseForKind,
+  ITEM_KINDS,
+  ITEM_KIND_PLURALS,
   openEndedDisplayLabel,
   WARRANTY_SORTS,
   type ItemKind,
@@ -71,6 +74,7 @@ export function WarrantiesClient({
   status,
   owner,
   typeId,
+  kind,
   sort,
   billSchedules,
   recurring,
@@ -92,6 +96,8 @@ export function WarrantiesClient({
   status: string;
   owner: string;
   typeId: string;
+  /** F4: '' for All, otherwise one of ITEM_KINDS. A pill, not a select -- see the nav below. */
+  kind: string;
   sort: WarrantySort;
   /** Item Q: a Bill's next due date and overdue count, keyed by item id. Built server-side in
    *  page.tsx from unpaidInstallments() -- see that file's docblock for why. */
@@ -116,6 +122,23 @@ export function WarrantiesClient({
 
   const recordedLine = recordedBillingSentence(recurringLoad);
 
+  /**
+   * The current URL with one pill's kind swapped in. Every other filter rides along, because a
+   * household that has searched and then narrows to loans expects both to apply -- and the page
+   * is a plain GET form, so the URL is the whole state (ruling P12).
+   */
+  const hrefWithKind = (value: string): string => {
+    const params = new URLSearchParams();
+    if (query) params.set('q', query);
+    if (status) params.set('status', status);
+    if (owner) params.set('owner', owner);
+    if (typeId) params.set('typeId', typeId);
+    if (sort !== 'expiry') params.set('sort', sort);
+    if (value) params.set('kind', value);
+    const search = params.toString();
+    return search.length === 0 ? '/warranties' : `/warranties?${search}`;
+  };
+
   return (
     // Item 4 (v1.16.0 plan): the trimmed colgroup below still needs more than the shell's
     // standard 72rem (max-w-6xl) cap to sit comfortably beside eight columns -- the same
@@ -123,8 +146,8 @@ export function WarrantiesClient({
     // (see globals.css's `main:has(> [data-page-width='wide'])` rule).
     <div data-page-width="wide" className="flex flex-col gap-4 sm:gap-5">
       <PageHeader
-        title="Contracts & Coverage"
-        description="Receipts, coverage and cancel-by dates for everything worth keeping the paperwork on."
+        title="Loans & Coverage"
+        description="Loans, bills, subscriptions, contracts and warranties — with the receipts, statements and dates that go with them."
         actions={
           <Link href="/warranties/new" className={buttonClass('primary')}>
             Add item
@@ -174,12 +197,33 @@ export function WarrantiesClient({
 
       {result.error ? <Notice tone="error">{result.error}</Notice> : null}
 
+      {/*
+        F4 (review). The question a household actually arrives with is "show me the loans", and
+        answering it meant knowing which of several type rows happen to be loans. One pill per kind,
+        linkable like every other filter on this page (ruling P12), and composing with them rather
+        than replacing them -- each pill keeps whatever search, status and owner are already set.
+      */}
+      <PillNav
+        groupLabel="Which kinds to show"
+        options={[
+          { key: 'all', href: hrefWithKind(''), label: 'All', active: kind === '' },
+          ...ITEM_KINDS.map((value) => ({
+            key: value,
+            href: hrefWithKind(value),
+            label: ITEM_KIND_PLURALS[value],
+            active: kind === value,
+          })),
+        ]}
+      />
+
       <Card>
         <CardBody className="pt-5">
-          {/* A plain GET form: ?q=/?status=/?owner=/?typeId=/?sort= are all linkable and survive
-              refresh (Ruling P12). The type filter chip composes with every other filter here --
-              it does not replace any of them (type-deltas.md T9). */}
+          {/* A plain GET form: ?q=/?status=/?owner=/?typeId=/?kind=/?sort= are all linkable and
+              survive refresh (Ruling P12). The type filter chip composes with every other filter
+              here -- it does not replace any of them (type-deltas.md T9). */}
           <form method="get" className="flex flex-wrap items-end gap-3">
+            {/* The pill's choice rides along with Apply, so the two controls compose. */}
+            <input type="hidden" name="kind" value={kind} />
             {/* Item 4 (v1.16.0 plan): flex-1 beside four ~150px selects used to give this field
                 roughly 400px on its own, out of proportion with the row beside it. max-w-sm
                 caps it while keeping flex-1's grow-to-fill-the-gap behaviour on a wide screen. */}
@@ -235,7 +279,7 @@ export function WarrantiesClient({
             reads naturally. */}
         {result.rows.length > 0 ? (
           <CardBody className="pb-0">
-            <SectionHeader title={`Items (${result.total})`} icon={<WarrantiesIcon className="h-4 w-4" />} />
+            <SectionHeader title={`Everything tracked (${result.total})`} icon={<WarrantiesIcon className="h-4 w-4" />} />
           </CardBody>
         ) : null}
         {result.rows.length === 0 ? (
@@ -261,8 +305,8 @@ export function WarrantiesClient({
                 </Link>
               }
             >
-              Add a warranty, subscription, contract, or loan — snap the receipt and this will remember the
-              model, the price and when the cover runs out.
+              Add a loan, bill, subscription, contract or warranty — snap the receipt and this will remember
+              the model, the price, the statements and when the cover runs out.
             </EmptyState>
           )
         ) : (

@@ -91,6 +91,13 @@ export interface WarrantySearchFilter {
   status?: WarrantyStatus | null;
   /** Delta T6: composes with q/ownerUserId/status/sort like every other filter here. */
   typeId?: number | null;
+  /**
+   * F4 (review). The KIND -- loan, bill, subscription, contract, warranty -- rather than a specific
+   * type row. A household has one question far more often than any other ("show me the loans"), and
+   * answering it meant knowing which of several type rows happen to be loans. Composes with every
+   * other filter, the same as typeId beside it.
+   */
+  kind?: ItemKind | null;
   sort?: WarrantySort;
   page?: number;
   today?: string;
@@ -238,6 +245,12 @@ export function searchWarrantyItems(filter: WarrantySearchFilter, viewer: Viewer
   if (filter.typeId != null) {
     where.push('i.type_id = ?');
     whereParams.push(filter.typeId);
+  }
+  if (filter.kind != null) {
+    // The kind lives on the TYPE, and the join above is already unconditional (delta T6), so an
+    // untyped item simply has no kind and matches no pill -- which is the honest answer.
+    where.push('t.kind = ?');
+    whereParams.push(filter.kind);
   }
   const whereSql = where.length > 0 ? `where ${where.join(' and ')}` : '';
 

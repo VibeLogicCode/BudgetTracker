@@ -50,7 +50,7 @@ afterEach(() => {
 });
 
 // v1.11.0 Task 3: the row's actions collapsed into a kebab (RowMenu), which renders its
-// items only once opened -- so any test that used to find "Create warranty", "Split…" or a
+// items only once opened -- so any test that used to find "Add to Loans & Coverage…", "Split…" or a
 // loan link/select directly in the DOM must open the row's menu first, the same way a person
 // would click the ⋯ button before seeing them.
 //
@@ -209,7 +209,7 @@ describe('TransactionsClient — archived-category silent-clear hazard', () => {
   });
 });
 
-describe('Create warranty row action (§11)', () => {
+describe('Add to Loans & Coverage row action (§11)', () => {
   it('links a normal row to the add form carrying only the transaction id', () => {
     const { container } = render(
       <TransactionsClient page={pageWithRow({ id: 77 })} accounts={[]} categories={[]} people={[]} today="2026-08-16" />,
@@ -217,7 +217,7 @@ describe('Create warranty row action (§11)', () => {
     openRowMenu('Actions for TIM HORTONS');
     const link = container.querySelector('a[href="/warranties/new?transactionId=77"]');
     expect(link).toBeTruthy();
-    expect(link!.textContent).toMatch(/create warranty/i);
+    expect(link!.textContent).toMatch(/add to loans & coverage/i);
   });
 
   it('hides the action on a transfer row (MUST-11.2)', () => {
@@ -298,7 +298,7 @@ describe('Show all from this merchant row action (F-01)', () => {
     render(<TransactionsClient page={pageWithRow({ id: 78, isTransfer: true })} {...baseProps} />);
     openRowMenu('Actions for TIM HORTONS');
 
-    expect(screen.queryByRole('menuitem', { name: 'Create warranty' })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: /add to loans & coverage/i })).toBeNull();
     expect(screen.getByRole('menuitem', { name: ITEM })).toBeTruthy();
   });
 });

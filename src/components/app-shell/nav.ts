@@ -71,12 +71,18 @@ export const NAV: NavItem[] = [
   { href: '/import', label: 'Import', Icon: ImportIcon, group: 'month' },
   { href: '/budgets', label: 'Budgets', Icon: BudgetsIcon, group: 'planning' },
   { href: '/goals', label: 'Goals', Icon: GoalsIcon, group: 'planning' },
-  // v1.2.2 Task 2: renamed from "Warranties" -- the tracker now covers warranties,
-  // subscriptions, contracts and loans. No dedicated short-label mechanism exists on NavItem
-  // (checked AppShell: NavList already renders every label inside a `truncate` span in both
-  // the desktop rail and the phone menu), so this longer label relies on that existing
-  // ellipsis behaviour rather than introducing a new field for one nav item.
-  { href: '/warranties', label: 'Contracts & Coverage', Icon: WarrantiesIcon, group: 'planning' },
+  /*
+    v1.2.2 Task 2 renamed this from "Warranties" once the tracker covered subscriptions and
+    contracts too. v1.49.0 (review F4, owner ruling) renames it again, for a reason the first
+    rename did not have to face: the loans live here now, and "Contracts & Coverage" names neither
+    the biggest number in the app nor anything a person looking for their mortgage would click.
+    The word "loan" appeared nowhere in the navigation at all.
+
+    No dedicated short-label mechanism exists on NavItem (NavList renders every label inside a
+    `truncate` span in both the desktop rail and the phone menu), so this longer label relies on
+    that existing ellipsis behaviour rather than introducing a new field for one nav item.
+  */
+  { href: '/warranties', label: 'Loans & Coverage', Icon: WarrantiesIcon, group: 'planning' },
   { href: '/reports', label: 'Reports', Icon: ReportsIcon, group: 'planning' },
   { href: '/settings', label: 'Settings', Icon: SettingsIcon, group: 'admin' },
   { href: '/help', label: 'Help', Icon: InfoIcon, group: 'admin' },

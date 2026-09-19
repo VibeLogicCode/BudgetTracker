@@ -130,7 +130,7 @@ export function ComingUpCard({
                 <>
                   Nothing due in the next 30 days. Older overdue bills are on the{' '}
                   <Link href="/warranties" className="font-medium text-accent-text">
-                    Warranties &amp; bills page
+                    Loans &amp; Coverage page
                   </Link>
                   .
                 </>

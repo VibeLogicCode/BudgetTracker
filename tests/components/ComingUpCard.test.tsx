@@ -234,12 +234,12 @@ describe('ComingUpCard record-payment button', () => {
       expect(container.textContent).toContain('and anything overdue in the last 90 days.');
     });
 
-    it('points to the Warranties & bills page instead of claiming nothing is due, when every unpaid bill is beyond the 90-day bound', () => {
+    it('points to the Loans & Coverage page instead of claiming nothing is due, when every unpaid bill is beyond the 90-day bound', () => {
       const ancient = bill({ installmentId: 99, itemId: 99, name: 'Forgotten', dueDate: '2025-01-01', amountCents: 50000, overdue: true });
       render(<ComingUpCard {...base} today={TODAY} bills={[ancient]} />);
       expect(screen.queryByText('No bills due in the next 30 days.')).toBeNull();
       expect(screen.getByText(/Nothing due in the next 30 days\. Older overdue bills are on the/)).toBeTruthy();
-      const link = screen.getByRole('link', { name: /Warranties & bills page/i });
+      const link = screen.getByRole('link', { name: /Loans & Coverage page/i });
       expect(link.getAttribute('href')).toBe('/warranties');
     });
 

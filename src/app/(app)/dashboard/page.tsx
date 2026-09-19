@@ -197,7 +197,7 @@ export default async function DashboardPage({
    *
    * Only the RECORDED figure is on the dashboard, not the detected-rhythm list. A tile is the
    * most authoritative shape this app has -- one big number, no room for the disclosure a
-   * cadence guess needs -- so the guessing half stays on the Contracts & Coverage card where its
+   * cadence guess needs -- so the guessing half stays on the Loans & Coverage card where its
    * caveat can sit beside it, and this tile carries a figure that needs none.
    */
   const recorded = recurringLoad({ today, ownerUserId: scopeUserId, viewer });
@@ -631,7 +631,7 @@ export default async function DashboardPage({
             household that has recorded no billing amounts reads no tile, rather than a
             confident "$0.00" that looks like a statement about their spending. `Recorded` is
             in the label, not just the hint: the number is the sum of what was typed in, and
-            the Recurring charges card on Contracts & Coverage exists precisely because that
+            the Recurring charges card on Loans & Coverage exists precisely because that
             differs from what the household actually pays. */}
         {recorded.itemCount === 0 ? null : (
           <StatTile
@@ -642,7 +642,7 @@ export default async function DashboardPage({
                 A month, across {recorded.itemCount} recorded {recorded.itemCount === 1 ? 'item' : 'items'}
                 {recorded.annualCents > 0 ? `, plus ${formatCents(recorded.annualCents)} a year billed annually` : ''}.{' '}
                 <Link href="/warranties" className="underline hover:text-ink">
-                  Contracts &amp; Coverage
+                  Loans &amp; Coverage
                 </Link>
               </>
             }

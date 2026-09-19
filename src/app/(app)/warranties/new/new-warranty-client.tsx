@@ -203,12 +203,12 @@ export function NewWarrantyClient({
   return (
     <div className="flex flex-col gap-4 sm:gap-5">
       <PageHeader
-        eyebrow="Contracts & Coverage"
+        eyebrow="Loans & Coverage"
         title="Add item"
         description="Attach the receipt first and the date, vendor and price fill themselves in."
         actions={
           <Link href="/warranties" className={buttonClass('ghost', 'sm')}>
-            Back to items
+            Back to Loans &amp; Coverage
           </Link>
         }
       />

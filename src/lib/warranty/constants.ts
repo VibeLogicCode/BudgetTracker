@@ -29,6 +29,18 @@ export function isItemKind(value: string): value is ItemKind {
   return (ITEM_KINDS as readonly string[]).includes(value);
 }
 
+/**
+ * F4: the kind filter's pills. Plural, because a pill names a SET -- "Loans", not "Loan" -- which
+ * is a different job from ITEM_KIND_LABELS below, where each label names one item's kind.
+ */
+export const ITEM_KIND_PLURALS: Record<ItemKind, string> = {
+  warranty: 'Warranties',
+  subscription: 'Subscriptions',
+  contract: 'Contracts',
+  loan: 'Loans',
+  bill: 'Bills',
+};
+
 /** Human labels for the admin page's kind <select> (five options, one per kind). */
 export const ITEM_KIND_LABELS: Record<ItemKind, string> = {
   warranty: 'Warranty',

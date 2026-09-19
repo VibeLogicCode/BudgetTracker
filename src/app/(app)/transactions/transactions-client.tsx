@@ -1261,7 +1261,7 @@ export function TransactionsClient({
    * review card list (`<li>`) below -- the Goal this release is built around ("every feature
    * built for Transactions is automatically available while reviewing") is exactly what a
    * second, hand-maintained copy of this menu would quietly stop being true for. Rename…,
-   * Note…, Split…, Create warranty and every loan item are unchanged from the table's own menu;
+   * Note…, Split…, "Add to Loans & Coverage…" and every loan item are unchanged from the table's own menu;
    * the transfer toggle (ruling R4) is new on every row in both modes; Accept/Apply-to-all are
    * new and review-mode-only (inventory #5/#7).
    */
@@ -1322,7 +1322,7 @@ export function TransactionsClient({
         {row.isTransfer ? null : (
           <>
             <RowMenuButton onSelect={() => openSplitEditor(row)}>Split…</RowMenuButton>
-            <RowMenuLink href={`/warranties/new?transactionId=${row.id}`}>Create warranty</RowMenuLink>
+            <RowMenuLink href={`/warranties/new?transactionId=${row.id}`}>Add to Loans &amp; Coverage…</RowMenuLink>
           </>
         )}
         {row.isTransfer

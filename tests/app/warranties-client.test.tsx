@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach } from 'vitest';
-import { render, cleanup, screen } from '@testing-library/react';
+import { render, cleanup, screen, within } from '@testing-library/react';
 import { WarrantiesClient } from '@/app/(app)/warranties/warranties-client';
 import type { RecurringChargeRow } from '@/lib/recurring';
 import type { WarrantyListItem, WarrantySearchResult } from '@/lib/warranty/search';
@@ -45,6 +45,7 @@ function renderList(res: WarrantySearchResult, over: Partial<Parameters<typeof W
       status=""
       owner=""
       typeId=""
+      kind=""
       sort="expiry"
       billSchedules={{}}
       recurring={[]}
@@ -115,7 +116,7 @@ describe('WarrantiesClient', () => {
   it('distinguishes "nothing tracked yet" from "no matches for that search"', () => {
     renderList(result([]));
     expect(screen.getByText(/Nothing tracked yet/i)).toBeTruthy();
-    expect(screen.getByText(/warranty, subscription, contract, or loan/i)).toBeTruthy();
+    expect(screen.getByText(/loan, bill, subscription, contract or warranty/i)).toBeTruthy();
     cleanup();
     renderList(result([]), { query: 'zzzz' });
     expect(screen.getByText(/No matches/i)).toBeTruthy();
@@ -123,9 +124,9 @@ describe('WarrantiesClient', () => {
 
   // v1.2.2 Task 2: page title "Warranties" -> "Contracts & Coverage"; button "Add warranty"
   // -> "Add item" (section rename, labels only -- the route stays /warranties/new).
-  it('titles the page "Contracts & Coverage" and offers Add item', () => {
+  it('titles the page "Loans & Coverage" and offers Add item', () => {
     const { container } = renderList(result([item()]));
-    expect(screen.getByText('Contracts & Coverage')).toBeTruthy();
+    expect(screen.getByText('Loans & Coverage')).toBeTruthy();
     expect(screen.getByText('Add item')).toBeTruthy();
     expect(container.querySelector('a[href="/warranties/new"]')).toBeTruthy();
   });
@@ -394,5 +395,47 @@ describe('the recorded-billing header line (F-05)', () => {
     });
     // Not "$0.00 a month", which reads as a finding about the household rather than an empty record.
     expect(container.textContent).not.toContain('Recorded billing:');
+  });
+});
+
+/**
+ * Review F4. The question a household arrives with is "show me the loans", and the page could only
+ * answer "show me items of type 14". One pill per kind, each a real URL, each composing with
+ * whatever search, status and owner are already set rather than clearing them.
+ */
+describe('F4: the kind pills', () => {
+  it('offers All and one pill per kind, with All selected by default', () => {
+    renderList(result([item()]));
+    const nav = screen.getByRole('navigation', { name: 'Which kinds to show' });
+    const labels = within(nav).getAllByRole('link').map((link) => link.textContent);
+    expect(labels).toEqual(['All', 'Warranties', 'Subscriptions', 'Contracts', 'Loans', 'Bills']);
+    expect(within(nav).getByRole('link', { name: 'All' }).getAttribute('aria-current')).toBe('page');
+  });
+
+  it('marks the active kind and links each pill to its own filtered URL', () => {
+    renderList(result([item()]), { kind: 'loan' });
+    const nav = screen.getByRole('navigation', { name: 'Which kinds to show' });
+    expect(within(nav).getByRole('link', { name: 'Loans' }).getAttribute('aria-current')).toBe('page');
+    expect(within(nav).getByRole('link', { name: 'Bills' }).getAttribute('href')).toBe('/warranties?kind=bill');
+    // All clears the kind and nothing else.
+    expect(within(nav).getByRole('link', { name: 'All' }).getAttribute('href')).toBe('/warranties');
+  });
+
+  it('carries every other filter into each pill, so they compose', () => {
+    renderList(result([item()]), { kind: '', query: 'honda', status: 'active', owner: '7' });
+    const nav = screen.getByRole('navigation', { name: 'Which kinds to show' });
+    const href = within(nav).getByRole('link', { name: 'Loans' }).getAttribute('href') ?? '';
+    expect(href).toContain('q=honda');
+    expect(href).toContain('status=active');
+    expect(href).toContain('owner=7');
+    expect(href).toContain('kind=loan');
+  });
+
+  /** And Apply keeps the pill's choice, rather than silently widening back to everything. */
+  it('rides the chosen kind along with the filter form', () => {
+    const { container } = renderList(result([item()]), { kind: 'loan' });
+    const hidden = container.querySelector('form input[name="kind"]');
+    expect(hidden).not.toBeNull();
+    expect((hidden as HTMLInputElement).value).toBe('loan');
   });
 });
