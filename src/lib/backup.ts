@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { purgeOldLoginAttempts } from '@/lib/auth/ratelimit';
+import { todayIso } from '@/lib/dates';
+import { postAllDueInterest } from '@/lib/loans';
 import { purgeExpiredSessions } from '@/lib/auth/session';
 import { purgeStagedFiles } from '@/lib/import/staging';
 import { purgeOldOutboxRows } from '@/lib/notify/outbox';
@@ -171,6 +173,21 @@ export interface NightlyJobResult {
  * before.
  */
 export function runNightlyJob(at: Date = new Date()): NightlyJobResult {
+  /*
+    Ledger spec P3. Interest posts BEFORE the backup, so tonight's archive already contains
+    tonight's postings -- restoring it puts the loans back exactly where they were, rather than a
+    day behind. Swallowed: a loan that cannot be posted must not cost the household its backup,
+    and the next sweep will try again.
+  */
+  try {
+    const swept = postAllDueInterest(todayIso(at), at);
+    if (swept.posted > 0 || swept.adjusted > 0) {
+      console.log(`[loans] posted ${swept.posted} period(s) and ${swept.adjusted} adjustment(s) across ${swept.items} loan(s)`);
+    }
+  } catch (error) {
+    console.error('[loans] posting due interest failed; the backup still runs', error);
+  }
+
   let backup: BackupFile | undefined;
   let pruned: string[] = [];
   let backupError: unknown;

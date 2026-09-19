@@ -22,6 +22,8 @@ import {
   type LoanDirection,
 } from '@/lib/warranty/constants';
 import { chargeCents, ratePpb, simulate, type InterestBasis, type MonthRow } from '@/lib/loans/interest';
+import { raiseInterestPosted, type PostedLoan } from '@/lib/notify/evaluate/loans';
+import { raiseLoanPaidOff } from '@/lib/notify/raise';
 import {
   buildLedger,
   postingDayFor,
@@ -990,15 +992,17 @@ export function loanLedger(itemId: number, today: string): Ledger | null {
 export function postDueInterest(
   itemId: number,
   today: string,
-  opts: { actorUserId?: number | null; at?: Date } = {},
+  opts: { actorUserId?: number | null; at?: Date; collect?: PostedLoan[] } = {},
 ): { posted: StoredPosting[]; adjusted: StoredPosting | null } {
   const stamp = nowIso(opts.at ?? new Date());
-  return getDb().transaction((tx) => {
+  const written = getDb().transaction((tx) => {
     const facts = ledgerFacts(tx, itemId, today);
     if (facts === null) return { posted: [], adjusted: null };
 
     const ledger = buildLedger(facts.input);
-    if (ledger.duePostings.length === 0 && ledger.dueAdjustment === null) return { posted: [], adjusted: null };
+    if (ledger.duePostings.length === 0 && ledger.dueAdjustment === null) {
+      return { posted: [] as StoredPosting[], adjusted: null as StoredPosting | null };
+    }
 
     const write = (row: StoredPosting) =>
       tx
@@ -1040,6 +1044,58 @@ export function postDueInterest(
 
     return { posted: ledger.duePostings, adjusted: ledger.dueAdjustment };
   });
+
+  /*
+    N2. One line per LOAN, not per period: catching up three missed months is one thing that
+    happened, not three. And when a sweep is running, the lines are collected so the whole sweep
+    sends one message -- five loans posting on the same night is one message naming five, which is
+    the 2026-09-09 ruling about coming_due applied to this event.
+  */
+  if (written.posted.length > 0 || written.adjusted !== null) {
+    const line = postedLine(itemId, written);
+    if (line !== null) {
+      if (opts.collect !== undefined) opts.collect.push(line);
+      else announce([line], opts.at ?? new Date());
+    }
+  }
+  return written;
+}
+
+/** What one loan did in this call, as the single line N2 puts in the message. */
+function postedLine(
+  itemId: number,
+  written: { posted: StoredPosting[]; adjusted: StoredPosting | null },
+): PostedLoan | null {
+  const item = getDb()
+    .select({
+      name: warrantyItems.name,
+      ownerUserId: warrantyItems.ownerUserId,
+      balance: warrantyItems.currentBalanceCents,
+    })
+    .from(warrantyItems)
+    .where(eq(warrantyItems.id, itemId))
+    .get();
+  if (!item) return null;
+  const rows = [...written.posted, ...(written.adjusted === null ? [] : [written.adjusted])];
+  const newest = rows.reduce((best, row) => (row.periodEnd > best.periodEnd ? row : best));
+  return {
+    itemId,
+    itemName: item.name,
+    ownerUserId: item.ownerUserId,
+    // The whole catch-up, summed: what this loan charged since anyone last looked.
+    interestCents: rows.reduce((total, row) => total + row.interestCents, 0),
+    balanceCents: item.balance ?? newest.closingCents,
+    periodEnd: newest.periodEnd,
+    adjusted: written.adjusted !== null,
+  };
+}
+
+function announce(lines: PostedLoan[], at: Date): void {
+  try {
+    raiseInterestPosted({ posted: lines, at });
+  } catch (error) {
+    console.error('[loans] could not announce a posting', error);
+  }
 }
 
 /**
@@ -1056,12 +1112,15 @@ export function postAllDueInterest(today: string, at: Date = new Date()): { item
   let items = 0;
   let posted = 0;
   let adjusted = 0;
+  // Collected rather than sent one at a time: the sweep is one event, however many loans it touched.
+  const lines: PostedLoan[] = [];
   for (const { id } of ids) {
-    const result = postDueInterest(id, today, { at });
+    const result = postDueInterest(id, today, { at, collect: lines });
     if (result.posted.length > 0 || result.adjusted !== null) items += 1;
     posted += result.posted.length;
     if (result.adjusted !== null) adjusted += 1;
   }
+  if (lines.length > 0) announce(lines, at);
   return { items, posted, adjusted };
 }
 
@@ -1078,6 +1137,39 @@ function postAfterChange(itemId: number, at: Date): void {
     postDueInterest(itemId, todayIso(at), { at });
   } catch (error) {
     console.error('[loans] could not post due interest for item ' + itemId, error);
+  }
+}
+
+/**
+ * N5. Announce a loan that has just reached zero.
+ *
+ * Takes the balance BEFORE and reads the one after, so it can tell "just cleared" from "was
+ * already clear" -- a payment against a loan sitting at zero is not a payoff. The direction is
+ * passed through to the renderer, which owns the wording; this file still never spells it (P4).
+ */
+function announceIfPaidOff(itemId: number, before: number | null, at: Date): void {
+  try {
+    if (before === null || before <= 0) return;
+    const item = getDb()
+      .select({
+        name: warrantyItems.name,
+        balance: warrantyItems.currentBalanceCents,
+        ownerUserId: warrantyItems.ownerUserId,
+        direction: warrantyItems.loanDirection,
+      })
+      .from(warrantyItems)
+      .where(eq(warrantyItems.id, itemId))
+      .get();
+    if (!item || item.balance !== 0) return;
+    raiseLoanPaidOff({
+      itemId,
+      itemName: item.name,
+      ownerUserId: item.ownerUserId,
+      direction: item.direction,
+      at,
+    });
+  } catch (error) {
+    console.error('[loans] could not announce a paid-off loan', error);
   }
 }
 
@@ -1721,6 +1813,7 @@ export function assignTransactionToLoan(input: { txnId: number; itemId: number; 
 } {
   const at = input.at ?? new Date();
   const stamp = nowIso(at);
+  const before = balanceOfItem(input.itemId);
   const outcome = getDb().transaction((tx) => {
     const txn = tx
       .select({ amountCents: transactions.amountCents })
@@ -1772,8 +1865,22 @@ export function assignTransactionToLoan(input: { txnId: number; itemId: number; 
 
   // P4. A payment changes what the period cost, so the ledger catches up at once rather than
   // waiting for 2am -- which is what makes the figure on screen right the moment money is assigned.
-  if (outcome.linked) postAfterChange(input.itemId, at);
+  if (outcome.linked) {
+    postAfterChange(input.itemId, at);
+    announceIfPaidOff(input.itemId, before, at);
+  }
   return outcome;
+}
+
+/** The stored balance, read outside any transaction. Used to spot a zero crossing (N5). */
+function balanceOfItem(itemId: number): number | null {
+  return (
+    getDb()
+      .select({ balance: warrantyItems.currentBalanceCents })
+      .from(warrantyItems)
+      .where(eq(warrantyItems.id, itemId))
+      .get()?.balance ?? null
+  );
 }
 
 export interface NewLoanFromTransaction {

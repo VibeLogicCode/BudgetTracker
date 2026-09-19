@@ -19,6 +19,14 @@ export const NAME_MAX = 80;
 export const USER_AGENT_MAX = 120;
 
 /** MUST-10.3: every value from user or import data is plain text and bounded. */
+/**
+ * MUST-6.13's overflow line. The items beyond the cap are counted rather than named, and stay
+ * unannounced, so they are still new tomorrow.
+ */
+function more(count: number): string[] {
+  return count > 0 ? [`And ${count} more.`] : [];
+}
+
 export function truncateText(value: string, max: number): string {
   if (value.length <= max) return value;
   return `${value.slice(0, max - 1)}…`;
@@ -80,6 +88,35 @@ export interface StaleAccountLine {
 }
 
 export type RenderInput =
+  | {
+      /** v1.48.0, ledger spec N5. The direction decides the wording, never the caller. */
+      event: 'loan_paid_off';
+      itemName: string;
+      direction: 'owed' | 'lent';
+    }
+  | {
+      event: 'loan_interest_posted';
+      loans: { name: string; interestCents: number; balanceCents: number; adjusted: boolean }[];
+      more: number;
+    }
+  | {
+      event: 'loan_payment_missed';
+      loans: { name: string; periodStart: string; periodEnd: string; direction: 'owed' | 'lent' }[];
+      more: number;
+    }
+  | {
+      event: 'loan_reconcile_due';
+      loans: { name: string; lastStatement: string }[];
+      more: number;
+    }
+  | { event: 'goal_reached'; goalName: string; targetCents: number }
+  | {
+      event: 'goal_off_pace';
+      goalName: string;
+      requiredMonthlyCents: number;
+      avgMonthlyCents: number;
+      targetDate: string;
+    }
   | {
       event: 'coming_due';
       /**
@@ -839,6 +876,78 @@ export function renderEvent(input: RenderInput): { subject: string; body: string
           `${money(input.spentCents)} of ${money(input.limitCents)}, ${money(input.spentCents - input.limitCents)} over.`,
       };
     }
+    case 'loan_interest_posted': {
+      const lines = input.loans.map(
+        (loan) =>
+          `${truncateText(loan.name, NAME_MAX)}: ${loan.adjusted ? 'adjusted by ' : ''}${formatCents(loan.interestCents)}` +
+          ` (balance ${formatCents(loan.balanceCents)})`,
+      );
+      return {
+        subject:
+          input.loans.length === 1
+            ? `Interest added to ${truncateText(input.loans[0]!.name, NAME_MAX)}`
+            : `Interest added to ${input.loans.length} loans`,
+        body: ['Interest added:', ...lines, ...more(input.more)].join('\n'),
+      };
+    }
+
+    case 'loan_payment_missed': {
+      const lines = input.loans.map((loan) =>
+        loan.direction === 'lent'
+          ? `${truncateText(loan.name, NAME_MAX)}: nothing received for ${loan.periodStart} to ${loan.periodEnd}.`
+          : `No payment was recorded on ${truncateText(loan.name, NAME_MAX)} for ${loan.periodStart} to ${loan.periodEnd}.`,
+      );
+      return {
+        subject:
+          input.loans.length === 1
+            ? `No payment on ${truncateText(input.loans[0]!.name, NAME_MAX)} this period`
+            : `${input.loans.length} loans had no payment this period`,
+        body: [...lines, ...more(input.more)].join('\n'),
+      };
+    }
+
+    case 'loan_reconcile_due': {
+      const lines = input.loans.map(
+        (loan) => `${truncateText(loan.name, NAME_MAX)}: last statement ${loan.lastStatement}.`,
+      );
+      return {
+        subject:
+          input.loans.length === 1
+            ? `Time to check ${truncateText(input.loans[0]!.name, NAME_MAX)} against its statement`
+            : `${input.loans.length} loans are due a statement check`,
+        body: [
+          ...lines,
+          ...more(input.more),
+          '',
+          'Open the loan and use Reconcile to a statement. Until then its figures are an estimate on top of an old one.',
+        ].join('\n'),
+      };
+    }
+
+    case 'goal_reached':
+      return {
+        subject: `You reached ${truncateText(input.goalName, NAME_MAX)}`,
+        body: `${truncateText(input.goalName, NAME_MAX)} has hit its ${formatCents(input.targetCents)} target.`,
+      };
+
+    case 'goal_off_pace':
+      return {
+        subject: `${truncateText(input.goalName, NAME_MAX)} is behind pace`,
+        body: [
+          `Reaching ${truncateText(input.goalName, NAME_MAX)} by ${input.targetDate} needs ${formatCents(input.requiredMonthlyCents)} a month.`,
+          `The average so far is ${formatCents(input.avgMonthlyCents)}.`,
+        ].join('\n'),
+      };
+
+    case 'loan_paid_off':
+      return {
+        subject: `${truncateText(input.itemName, NAME_MAX)} is paid off`,
+        body:
+          input.direction === 'lent'
+            ? `${truncateText(input.itemName, NAME_MAX)} has been repaid in full. Nothing is outstanding.`
+            : `${truncateText(input.itemName, NAME_MAX)} has reached a zero balance. Nothing more is owed.`,
+      };
+
     case 'backup_failed':
       return {
         subject: 'Nightly backup failed',

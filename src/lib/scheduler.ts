@@ -1,4 +1,6 @@
 import cron, { type ScheduledTask } from 'node-cron';
+import { todayIso } from '@/lib/dates';
+import { postAllDueInterest } from '@/lib/loans';
 import { runNightlyJob } from '@/lib/backup';
 import { notifyCanadianPackUpdateAvailable } from '@/lib/canadian-pack';
 import { readEnv } from '@/lib/env';
@@ -69,6 +71,20 @@ export function runNotifyTick(now: Date = new Date(), options?: { atBoot?: boole
 
   ticking = true;
   try {
+    /*
+      Ledger spec P3. A machine that was switched off for a month catches up here, within five
+      minutes of coming back, rather than waiting for the next 2am. Only at boot: an ordinary
+      five-minute tick must not sweep every loan, and the nightly job already owns the routine
+      case.
+    */
+    if (options?.atBoot === true) {
+      try {
+        postAllDueInterest(todayIso(now), now);
+      } catch (error) {
+        console.error('[loans] boot catch-up of due interest failed', error);
+      }
+    }
+
     // MUST-6.4: the dormancy bail, right after the single-flight guard above. Two indexed
     // reads against tables that are empty on a dormant install. Nothing below this line
     // executes, so no evaluator runs, no renderer runs, and no transport module is even

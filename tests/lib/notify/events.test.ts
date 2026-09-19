@@ -44,14 +44,14 @@ describe('MUST-2.1: events.ts is pure and client-safe', () => {
   });
 });
 
-describe('the twenty-three registered events', () => {
-  it('has exactly twenty-three entries with unique, well-formed ids', () => {
+describe('the twenty-nine registered events', () => {
+  it('has exactly twenty-nine entries with unique, well-formed ids', () => {
     // Backlog item 17 / Part 4 (preset pack version awareness): pack_update_available brought
     // this from 22 to 23, the same way each addition before it moved the count (see the >=
     // precedent lower down for events whose OWN historical contribution is what is pinned).
-    expect(NOTIFICATION_EVENTS).toHaveLength(23);
+    expect(NOTIFICATION_EVENTS).toHaveLength(29);
     const ids = NOTIFICATION_EVENTS.map((e) => e.id);
-    expect(new Set(ids).size).toBe(23);
+    expect(new Set(ids).size).toBe(29);
     for (const id of ids) expect(id).toMatch(/^[a-z][a-z0-9_]*$/);
   });
 
@@ -82,6 +82,12 @@ describe('the twenty-three registered events', () => {
       ['savings_target_pace', 'all', 'daily_slot', true],
       ['savings_month_closed', 'all', 'daily_slot', true],
       ['pack_update_available', 'admin', 'tick', true],
+      ['loan_interest_posted', 'all', 'tick', true],
+      ['loan_payment_missed', 'all', 'daily_slot', true],
+      ['loan_reconcile_due', 'all', 'daily_slot', false],
+      ['loan_paid_off', 'all', 'immediate', true],
+      ['goal_reached', 'all', 'tick', true],
+      ['goal_off_pace', 'all', 'daily_slot', false],
     ]);
   });
 
@@ -93,6 +99,10 @@ describe('the twenty-three registered events', () => {
       'budget_pace',
       'coming_due',
       'duplicate_charge',
+      'goal_reached',
+      'loan_interest_posted',
+      'loan_paid_off',
+      'loan_payment_missed',
       'mfa_disabled',
       'new_signin',
       'pack_update_available',
@@ -132,8 +142,8 @@ describe('lookup helpers', () => {
     // 'all') widen both counts by three more.
     // pack_update_available (backlog item 17 / Part 4) is audience 'admin' too, so it widens only
     // the admin count, same as backup_failed/restore_outcome/sync_failed above it.
-    expect(eventsFor('member')).toHaveLength(18);
-    expect(eventsFor('admin')).toHaveLength(23);
+    expect(eventsFor('member')).toHaveLength(24);
+    expect(eventsFor('admin')).toHaveLength(29);
   });
 
   it('exposes the two channels', () => {
@@ -271,7 +281,7 @@ describe('Task 16 (v1.7.0): the monthly_digest registry entry', () => {
     // backlog item 17 / Part 4's pack_update_available brings it to 23 -- this assertion tracks
     // the current total, not monthly_digest's own historical contribution (see the >= pattern
     // used above for update_available/sync_failed, which exists for exactly this reason).
-    expect(NOTIFICATION_EVENTS).toHaveLength(23);
+    expect(NOTIFICATION_EVENTS).toHaveLength(29);
     const entry = eventDef('monthly_digest');
     expect(entry).toEqual({
       id: 'monthly_digest',
@@ -356,6 +366,14 @@ describe('v1.28.0: which events may reach a family channel', () => {
     savings_target_met: true,
     savings_target_pace: true,
     savings_month_closed: true,
+    // v1.48.0. A loan is household money by any reading: what it costs, whether it was paid, and
+    // the day it is finally gone. So is a savings goal the household is putting money into.
+    loan_interest_posted: true,
+    loan_payment_missed: true,
+    loan_reconcile_due: true,
+    loan_paid_off: true,
+    goal_reached: true,
+    goal_off_pace: true,
     // An account, a session, or an operational outcome. None of it is money, and a group chat is
     // the wrong place for any of it -- for new_signin most obviously, because the one person who
     // needs to act on it is the one person the message is about.

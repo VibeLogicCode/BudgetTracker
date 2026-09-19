@@ -164,6 +164,42 @@ const HOUSEHOLD_PASS_OWNERS: Record<string, HouseholdPassOwner> = {
     entryPoint: 'evaluateSavingsDaily',
     why: 'the other half of evaluateSavingsDaily, on the same null recipient and the same pooled figures.',
   },
+  loan_interest_posted: {
+    kind: 'household-pass',
+    file: 'src/lib/notify/evaluate/loans.ts',
+    entryPoint: null,
+    why: 'raised from the posting path rather than a slot (the interesting moment is the posting itself), so raiseInterestPosted adds the room to its own recipient map when familyChannelNeedsOwnPass says no member is subscribed.',
+  },
+  loan_payment_missed: {
+    kind: 'household-pass',
+    file: 'src/lib/notify/evaluate/loans.ts',
+    entryPoint: 'evaluateLoanPaymentMissed',
+    why: 'a daily-slot event: the household block calls it with userId null, and loansFor(null) widens the roster from one owner to every loan in the install.',
+  },
+  loan_reconcile_due: {
+    kind: 'household-pass',
+    file: 'src/lib/notify/evaluate/loans.ts',
+    entryPoint: 'evaluateLoanReconcileDue',
+    why: 'the other daily-slot loan event, on the same null recipient and the same widened roster.',
+  },
+  loan_paid_off: {
+    kind: 'household-pass',
+    file: 'src/lib/notify/raise.ts',
+    entryPoint: null,
+    why: 'the first IMMEDIATE event the family channel is eligible for: raiseLoanPaidOff appends the room to its recipient list under familyChannelNeedsOwnPass, so the room hears it exactly when no member does.',
+  },
+  goal_reached: {
+    kind: 'household-pass',
+    file: 'src/lib/notify/evaluate/goals.ts',
+    entryPoint: 'evaluateGoals',
+    why: 'evaluateGoals runs on the daily slot and is called with userId null by the household block; a null recipient reads the goals through HOUSEHOLD_VIEWER rather than one person\'s.',
+  },
+  goal_off_pace: {
+    kind: 'household-pass',
+    file: 'src/lib/notify/evaluate/goals.ts',
+    entryPoint: 'evaluateGoals',
+    why: 'the other half of the same pass, over the same household-wide goal rows.',
+  },
 };
 
 /** The source of `file` from the declaration of `fn` onwards. */

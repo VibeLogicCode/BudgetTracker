@@ -292,6 +292,68 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     defaultEnabled: true,
     householdEligible: false,
   },
+  /*
+    v1.48.0, ledger spec N2-N6. Six events off the loan ledger and the savings goals.
+
+    Two are default-OFF, and deliberately: loan_reconcile_due asks a household to go and find a
+    statement, and goal_off_pace says a plan is slipping. Neither is wrong-or-imminent in the sense
+    MUST-4.1 means, and both are the kind of message that trains a person to stop reading a channel
+    if it arrives uninvited.
+  */
+  {
+    id: 'loan_interest_posted',
+    label: 'Interest was added to a loan',
+    blurb: 'A loan charged its interest for the period that just closed. One message naming every loan that posted.',
+    audience: 'all',
+    trigger: 'tick',
+    defaultEnabled: true,
+    householdEligible: true,
+  },
+  {
+    id: 'loan_payment_missed',
+    label: 'No payment on a loan this period',
+    blurb: 'A loan reached its posting day with no payment recorded against the period it closed.',
+    audience: 'all',
+    trigger: 'daily_slot',
+    defaultEnabled: true,
+    householdEligible: true,
+  },
+  {
+    id: 'loan_reconcile_due',
+    label: 'Time to check a loan against its statement',
+    blurb: 'A loan with a rate has gone two months without a statement, so its figures are an estimate on top of an old one.',
+    audience: 'all',
+    trigger: 'daily_slot',
+    defaultEnabled: false,
+    householdEligible: true,
+  },
+  {
+    id: 'loan_paid_off',
+    label: 'A loan is paid off',
+    blurb: 'The balance on a loan reached zero. Sent the moment the payment that cleared it is recorded.',
+    audience: 'all',
+    trigger: 'immediate',
+    defaultEnabled: true,
+    householdEligible: true,
+  },
+  {
+    id: 'goal_reached',
+    label: 'You reached a savings goal',
+    blurb: 'A savings goal hit the amount you set for it.',
+    audience: 'all',
+    trigger: 'tick',
+    defaultEnabled: true,
+    householdEligible: true,
+  },
+  {
+    id: 'goal_off_pace',
+    label: 'A savings goal is behind pace',
+    blurb: 'A goal with a target date needs more each month than you have been putting in. Once a month, not every day.',
+    audience: 'all',
+    trigger: 'daily_slot',
+    defaultEnabled: false,
+    householdEligible: true,
+  },
 ];
 
 export function eventDef(id: string): NotificationEventDef | undefined {

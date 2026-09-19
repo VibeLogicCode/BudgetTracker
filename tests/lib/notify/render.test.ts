@@ -629,6 +629,57 @@ const SAMPLES_BY_EVENT: Record<string, RenderInput[]> = {
   savings_target_pace: [
     { event: 'savings_target_pace', month: '2026-08', dayOfMonth: 10, netCents: 40000, targetCents: 310000, proRatedTargetCents: 100000 },
   ],
+  loan_interest_posted: [
+    { event: 'loan_interest_posted', loans: [{ name: 'Car loan', interestCents: 8403, balanceCents: 1016736, adjusted: false }], more: 0 },
+    {
+      event: 'loan_interest_posted',
+      loans: [
+        { name: 'Car loan', interestCents: 8403, balanceCents: 1016736, adjusted: false },
+        { name: 'Mortgage', interestCents: 123712, balanceCents: 29900000, adjusted: true },
+      ],
+      more: 2,
+    },
+  ],
+  loan_payment_missed: [
+    {
+      event: 'loan_payment_missed',
+      loans: [{ name: 'Car loan', periodStart: '2026-08-01', periodEnd: '2026-09-01', direction: 'owed' }],
+      more: 0,
+    },
+    {
+      event: 'loan_payment_missed',
+      loans: [
+        { name: 'Car loan', periodStart: '2026-08-01', periodEnd: '2026-09-01', direction: 'owed' },
+        { name: 'Money lent', periodStart: '2026-08-01', periodEnd: '2026-09-01', direction: 'lent' },
+      ],
+      more: 1,
+    },
+  ],
+  loan_reconcile_due: [
+    { event: 'loan_reconcile_due', loans: [{ name: 'Mortgage', lastStatement: '2026-06-01' }], more: 0 },
+    {
+      event: 'loan_reconcile_due',
+      loans: [
+        { name: 'Mortgage', lastStatement: '2026-06-01' },
+        { name: 'Line of credit', lastStatement: '2026-05-15' },
+      ],
+      more: 0,
+    },
+  ],
+  loan_paid_off: [
+    { event: 'loan_paid_off', itemName: 'Car loan', direction: 'owed' },
+    { event: 'loan_paid_off', itemName: 'Money lent', direction: 'lent' },
+  ],
+  goal_reached: [{ event: 'goal_reached', goalName: 'New roof', targetCents: 500000 }],
+  goal_off_pace: [
+    {
+      event: 'goal_off_pace',
+      goalName: 'New roof',
+      requiredMonthlyCents: 45000,
+      avgMonthlyCents: 20000,
+      targetDate: '2027-06-01',
+    },
+  ],
   savings_month_closed: [
     { event: 'savings_month_closed', month: '2026-07', netCents: 150000, targetCents: 100000, met: true, streak: 1 },
     { event: 'savings_month_closed', month: '2026-07', netCents: 150000, targetCents: 100000, met: true, streak: 3 },

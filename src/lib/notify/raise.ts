@@ -13,6 +13,7 @@ import {
   restoreOutcomeKey,
   syncFailedKey,
 } from '@/lib/notify/events';
+import { familyChannelNeedsOwnPass } from '@/lib/notify/family-pass';
 import { enqueue, kickOutbox } from '@/lib/notify/outbox';
 import { renderEvent } from '@/lib/notify/render';
 
@@ -245,5 +246,56 @@ export function raiseSyncFailed(input: { error: unknown; at: Date }): void {
     if (queued > 0) kickOutbox(input.at);
   } catch (error) {
     console.error('[notify] sync failure raise failed', error);
+  }
+}
+
+/**
+ * N5. A loan has reached zero.
+ *
+ * Raised from the balance path rather than a nightly sweep, because the moment it happens is the
+ * moment it is worth saying -- and because a sweep would have to remember which loans it had
+ * already announced. The dedup key is the item alone, so a loan that is drawn on again and cleared
+ * again does announce a second time, which is right for a line of credit.
+ *
+ * Swallowed like every other raise (MUST-6.19): clearing a loan must not fail because a message
+ * could not be queued.
+ */
+export function raiseLoanPaidOff(input: {
+  itemId: number;
+  itemName: string;
+  ownerUserId: number | null;
+  direction: 'owed' | 'lent';
+  at: Date;
+}): void {
+  try {
+    const { subject, body } = renderEvent({
+      event: 'loan_paid_off',
+      itemName: input.itemName,
+      direction: input.direction,
+    });
+    /*
+      RULING R23's household pass, on a raise rather than an evaluator -- this is the first
+      immediate event the family channel is eligible for. Same rule as everywhere else: the room
+      gets its own row only when no member is subscribed personally, so the message never arrives
+      twice. familyChannelNeedsOwnPass is the one definition of that.
+    */
+    const recipients: { userId: number | null }[] =
+      input.ownerUserId === null ? [] : [{ userId: input.ownerUserId }];
+    if (familyChannelNeedsOwnPass('loan_paid_off')) recipients.push({ userId: null });
+
+    let queued = 0;
+    for (const { userId } of recipients) {
+      queued += enqueue({
+        userId,
+        eventId: 'loan_paid_off',
+        dedupKey: `loan:paidoff:${input.itemId}`,
+        subject,
+        body,
+        at: input.at,
+      }).inserted.length;
+    }
+    if (queued > 0) kickOutbox(input.at);
+  } catch (error) {
+    console.error('[notify] loan paid-off raise failed', error);
   }
 }

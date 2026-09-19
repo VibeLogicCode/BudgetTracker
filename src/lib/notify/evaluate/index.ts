@@ -6,6 +6,8 @@ import { getUserSettings, notifiableUsers } from '@/lib/notify/config';
 import { closeMonthsAutomatically } from '@/lib/month-close';
 import { evaluateAnomalies, evaluateSubscriptionCreep } from '@/lib/notify/evaluate/anomalies';
 import { evaluateComingDue } from '@/lib/notify/evaluate/coming-due';
+import { evaluateGoals } from '@/lib/notify/evaluate/goals';
+import { evaluateLoanPaymentMissed, evaluateLoanReconcileDue } from '@/lib/notify/evaluate/loans';
 import { evaluateWeeklyDigest } from '@/lib/notify/evaluate/digest';
 import { flushMonthSummaries } from '@/lib/notify/evaluate/monthly';
 import { evaluateSavingsDaily } from '@/lib/notify/evaluate/savings';
@@ -200,6 +202,11 @@ export function runScheduledEvaluation(
       if (daily.fires) {
         evaluateComingDue({ userId: user.id, now, tz });
         evaluateStaleImport({ userId: user.id, now, tz });
+        // v1.48.0, ledger spec N3/N4/N6. Three more daily-slot evaluators, each of which decides
+        // for itself whether this recipient is subscribed -- the same shape as the two above.
+        evaluateLoanPaymentMissed({ userId: user.id, now, tz });
+        evaluateLoanReconcileDue({ userId: user.id, now, tz });
+        evaluateGoals({ userId: user.id, now, tz });
         // MUST-10.9: skip the three newer evaluators once this daily slot has already been
         // processed, rather than recomputing them on every 5-minute tick inside the 12-hour
         // catch-up window. Recorded only after all three return without throwing, so a
@@ -423,6 +430,11 @@ function runHouseholdEvaluation(now: Date, tz: string): void {
       // reads the projection in the household weekly summary, which buildHouseholdDigest already
       // carries the budget block of.
       evaluateSubscriptionCreep({ userId: null, now, tz });
+      // R23's household pass for the three v1.48.0 slot events. Each returns 0 immediately unless
+      // familyChannelNeedsOwnPass says the room is the only subscriber left.
+      evaluateLoanPaymentMissed({ userId: null, now, tz });
+      evaluateLoanReconcileDue({ userId: null, now, tz });
+      evaluateGoals({ userId: null, now, tz });
       // 2026-09-09: the room's month-boundary reports moved to flushMonthSummaries too, which
       // makes the family-channel pass for them part of the same loop the marking depends on.
       evaluateSavingsDaily({ userId: null, now, tz });
