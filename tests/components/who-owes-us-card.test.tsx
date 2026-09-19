@@ -9,6 +9,9 @@ afterEach(() => cleanup());
 /** A local helper, modelled on tests/app/loans-card.test.tsx's literal fixture style -- this
  *  file does not import a fixture from another test file. */
 function lent(over: Partial<LoanSummary> = {}): LoanSummary {
+  // B6: owingTodayCents is what the row prints, and for a loan with no interest estimate it IS the
+  // stored balance -- so it follows an override of that field unless the test names it itself.
+  const balance = 'currentBalanceCents' in over ? (over.currentBalanceCents ?? null) : 50_000;
   return {
     itemId: 1,
     name: 'Loan to a friend',
@@ -16,7 +19,8 @@ function lent(over: Partial<LoanSummary> = {}): LoanSummary {
     ownerName: 'Alice',
     principalCents: 80_000,
     interestRateBps: null,
-    currentBalanceCents: 50_000,
+    currentBalanceCents: balance,
+    owingTodayCents: balance,
     balanceUpdatedAt: '2026-08-01T00:00:00.000Z',
     billingCycle: null,
     billingAmountCents: null,

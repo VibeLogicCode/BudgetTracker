@@ -2907,6 +2907,19 @@ export interface LoanRow {
 
 /** A loan row plus everything the engine derives about it. */
 export interface LoanSummary extends LoanRow {
+  /**
+   * B6 (review). THE "WHAT WE OWE" QUANTITY, and the only one any surface should print.
+   *
+   * Owing today when the loan has an interest estimate, the stored balance otherwise -- interest
+   * charged and not yet paid IS owed. Three surfaces used to answer this question three ways: the
+   * dashboard summed currentBalanceCents, the loan page printed owingCents, and loansTotalOwedCents
+   * existed to settle it and had no callers at all. A household reading two different totals for
+   * one debt has no way to know which to believe, and is right not to believe either.
+   *
+   * Null only when the balance itself is untracked, which every reader renders as a dash rather
+   * than folding into a total as zero.
+   */
+  owingTodayCents: number | null;
   /** Task 16 (v1.7.0): from payoffProjection() above, DISPLAY ONLY. Optional so pre-existing
    *  LoanSummary fixtures/tests need no changes; absent and null both mean "nothing to show". */
   payoffProjection?: PayoffProjection | null;
@@ -3136,6 +3149,7 @@ export function listLoanSummaries(today: string, viewer: Viewer): LoanSummary[] 
     );
     return {
       ...toLoanRow(row, today),
+      owingTodayCents: derived.interest?.owingCents ?? row.currentBalanceCents,
       // Task 16 (v1.7.0): attached here, rather than as a new LoansCard prop, so the card stays
       // a pure presentational component fed by the caller's existing `today` parameter.
       payoffProjection: payoffProjection(row.itemId, today),
@@ -3181,6 +3195,7 @@ export function loanDetail(itemId: number, today: string, viewer: Viewer): LoanD
   return {
     summary: {
       ...toLoanRow(row, today),
+      owingTodayCents: derived.interest?.owingCents ?? row.currentBalanceCents,
       payoffProjection: payoffProjection(itemId, today),
       interest: derived.interest,
       reconciliation: derived.reconciliation,
@@ -3189,41 +3204,12 @@ export function loanDetail(itemId: number, today: string, viewer: Viewer): LoanD
   };
 }
 
-/**
- * Whole-household total, same reasoning as netWorthOverTime and safeToSpend: a loan total has no
- * per-person attribution to restrict (dashboard/page.tsx's own comment on the `listLoans` call it
- * makes directly says the same thing). Not in this task's exported-viewer interface list, so this
- * stays viewer-free; HOUSEHOLD_VIEWER is 'household' visibility, which ownerScope
- * (src/lib/auth/viewer.ts) resolves to null -- no restriction -- without ever reading its id.
- *
- * v1.31.0 item M-1: that viewer used to be a local literal here, one of three hand-built copies
- * (notify/evaluate/digest.ts's exported HOUSEHOLD_VIEWER and notify/evaluate/savings.ts's
- * HOUSEHOLD_WIDE were the others). One definition now, guarded by
- * tests/ops/viewer-construction.test.ts.
- */
-export function loansTotalOwedCents(): number {
-  /*
-    v1.14.0 (spec BU, ruling P6): money someone owes the household is not a debt the household owes,
-    so a loan pointed the other way does not belong in this total.
-
-    WHO READS THIS. The claim that used to sit here -- that networth.ts reads this function -- was
-    never true: net worth takes its debt from debtOverTime, and the dashboard sums stored balances
-    of its own (review B6). So the app has had three ways of saying what the household owes. Routing
-    every surface through this one is the fix, and it lands with the dashboard work.
-  */
-  return listLoanSummaries(todayIso(), HOUSEHOLD_VIEWER)
-    .filter((loan) => loan.loanDirection === 'owed')
-    /*
-      v1.47.0 (ruling I16): owing-now when the loan has an interest estimate, the stored balance
-      otherwise. Interest that has been charged and not yet paid IS owed, so leaving it out would
-      understate the household's debt -- and would make net worth disagree with the figure printed
-      at the top of the loan's own page.
-
-      Every loan without a basis falls through to exactly today's arithmetic, which is every loan
-      on every existing install until somebody chooses one.
-    */
-    .reduce((sum, loan) => sum + (loan.interest?.owingCents ?? loan.currentBalanceCents ?? 0), 0);
-}
+/*
+  B6. loansTotalOwedCents lived here and had no caller in src/ at all -- it existed to be the one
+  definition of what the household owes, while the dashboard summed stored balances of its own and
+  net worth took its debt from debtOverTime. LoanSummary.owingTodayCents is that definition now, on
+  the row itself, where a surface cannot print a total its own rows contradict.
+*/
 
 // ---------------------------------------------------------------- read model (debt over time)
 

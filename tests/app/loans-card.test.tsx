@@ -14,6 +14,7 @@ const civic: LoanSummary = {
   principalCents: 2_800_000,
   interestRateBps: 549,
   currentBalanceCents: 1_955_000,
+  owingTodayCents: 1_955_000,
   balanceUpdatedAt: '2026-08-01T00:00:00.000Z',
   billingCycle: 'monthly',
   billingAmountCents: 45_000,
@@ -79,7 +80,7 @@ describe('MUST-15.1 … MUST-15.3: the dashboard card', () => {
 
   it('review fix-round: the total carries an accessible "Total owed" name, and the hint appears only when a shown loan has no tracked balance', () => {
     const { rerender } = render(<LoansCard loans={[civic, principalOnly]} totalOwedCents={1_955_000} />);
-    expect(screen.getByLabelText('Total owed $19,550.00')).toBeTruthy();
+    expect(screen.getByLabelText('Total owed today $19,550.00')).toBeTruthy();
     expect(screen.getByText('(excludes loans without a tracked balance)')).toBeTruthy();
 
     rerender(<LoansCard loans={[civic]} totalOwedCents={1_955_000} />);

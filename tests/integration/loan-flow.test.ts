@@ -8,7 +8,7 @@ import {
   debtOverTime,
   deleteLoanRule,
   listLoanRules,
-  loansTotalOwedCents,
+  listLoanSummaries,
   saveLoanRule,
   unassignTransactionFromLoan,
 } from '@/lib/loans';
@@ -97,8 +97,12 @@ it('MUST-19.5: create -> rule -> import -> undo -> re-import -> manual assign ->
   // MUST-13.2: the category totals are UNCHANGED by the linking.
   expect(categoryBreakdown({ from: '2026-01-01', to: '2026-12-31' }, HOUSEHOLD)).toEqual(breakdownBeforeLink);
 
-  // The dashboard summary and the debt series agree with the balance.
-  expect(loansTotalOwedCents()).toBe(1_910_000);
+  // The dashboard summary and the debt series agree with the balance. B6: the dashboard's total is
+  // the sum of owingTodayCents, which is what each row on the card prints.
+  const owingToday = listLoanSummaries('2026-08-18', HOUSEHOLD)
+    .filter((loan) => loan.loanDirection === 'owed')
+    .reduce((sum, loan) => sum + (loan.owingTodayCents ?? 0), 0);
+  expect(owingToday).toBe(1_910_000);
   expect(debtOverTime(3, { endMonth: '2026-08', today: '2026-08-18' }).at(-1)!.owedCents).toBe(1_910_000);
 
   // Undo restores the balance to exactly what it was...

@@ -208,8 +208,10 @@ export default async function DashboardPage({
   // true rather than accidentally true, and the lent rows are a different question entirely.
   const owedLoans = loans.filter((loan) => loan.loanDirection === 'owed');
   const lentLoans = loans.filter((loan) => loan.loanDirection !== 'owed');
-  const totalOwedCents = owedLoans.reduce((sum, loan) => sum + (loan.currentBalanceCents ?? 0), 0);
-  const totalLentCents = lentLoans.reduce((sum, loan) => sum + (loan.currentBalanceCents ?? 0), 0);
+  // B6: owingTodayCents, the one quantity -- the same figure each row prints and the loan's own
+  // page puts at the top. These summed stored balances while the rows printed something else.
+  const totalOwedCents = owedLoans.reduce((sum, loan) => sum + (loan.owingTodayCents ?? 0), 0);
+  const totalLentCents = lentLoans.reduce((sum, loan) => sum + (loan.owingTodayCents ?? 0), 0);
 
   /**
    * Ruling R2: NO net worth for a self viewer. Net worth is the household's balance sheet --

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { applyPaymentMatchers, assignTransactionToLoan, listLoanSummaries, loansTotalOwedCents, payoffProjection, saveLoanRule } from '@/lib/loans';
+import { applyPaymentMatchers, assignTransactionToLoan, listLoanSummaries, payoffProjection, saveLoanRule, setLoanAnchor } from '@/lib/loans';
 import type { Viewer } from '@/lib/auth/viewer';
 import { todayIso } from '@/lib/dates';
 import { setupLoanTest, type LoanTestContext } from './fixtures';
@@ -167,16 +167,44 @@ describe('v1.13.0 ruling R2: listLoanSummaries takes a viewer', () => {
   });
 });
 
-describe('loansTotalOwedCents', () => {
-  it('sums current_balance_cents across every loan, treating null as zero', () => {
+/**
+ * Review B6. loansTotalOwedCents was deleted: it existed to be the one definition of what the
+ * household owes and had no caller at all, while the dashboard summed stored balances of its own.
+ * The definition lives on the row now, as owingTodayCents, where a total cannot disagree with the
+ * rows it is printed above.
+ */
+describe('owingTodayCents: the one "what we owe" quantity', () => {
+  it('is the stored balance for a loan with no interest estimate, and null when untracked', () => {
     seedLoanFull({ name: 'A', balanceCents: 500_00 });
     seedLoanFull({ name: 'B', balanceCents: null });
     seedLoanFull({ name: 'C', balanceCents: 1_000_00 });
-    expect(loansTotalOwedCents()).toBe(1_500_00);
+    const byName = new Map(listLoanSummaries('2026-08-27', HOUSEHOLD_VIEWER).map((row) => [row.name, row]));
+    expect(byName.get('A')!.owingTodayCents).toBe(500_00);
+    expect(byName.get('B')!.owingTodayCents).toBeNull();
+    expect(byName.get('C')!.owingTodayCents).toBe(1_000_00);
+    // A total the dashboard could print, summed the way the dashboard sums it.
+    const total = [...byName.values()].reduce((sum, row) => sum + (row.owingTodayCents ?? 0), 0);
+    expect(total).toBe(1_500_00);
   });
 
-  it('is zero with no loans at all', () => {
-    expect(loansTotalOwedCents()).toBe(0);
+  it('is owing-today, interest included, once a loan has an estimate', () => {
+    const itemId = seedLoanFull({ name: 'Mortgage', balanceCents: 30_000_00 });
+    ctx.t.sqlite
+      .prepare("update warranty_items set interest_rate_bps = 500, interest_rate_basis = 'apr_monthly' where id = ?")
+      .run(itemId);
+    setLoanAnchor({
+      itemId,
+      asOfDate: '2026-06-01',
+      balanceCents: 30_000_00,
+      source: 'reconcile',
+      actorUserId: ctx.userId,
+      at: new Date('2026-06-01T12:00:00.000Z'),
+    });
+
+    const row = listLoanSummaries('2026-08-27', HOUSEHOLD_VIEWER).find((loan) => loan.name === 'Mortgage')!;
+    expect(row.interest).not.toBeNull();
+    expect(row.owingTodayCents).toBe(row.interest!.owingCents);
+    expect(row.owingTodayCents!).toBeGreaterThan(30_000_00);
   });
 });
 
@@ -191,10 +219,13 @@ describe('direction on the read model (rulings P6, P9, P10)', () => {
     ]);
   });
 
-  it('loansTotalOwedCents counts owed loans only — money lent out is not a debt', () => {
+  /** B6: the dashboard partitions by direction and totals each side from owingTodayCents. */
+  it('the owed total counts owed loans only — money lent out is not a debt', () => {
     ctx.seedLoan({ balanceCents: 200_000 });
     ctx.seedLoan({ balanceCents: 50_000, direction: 'lent' });
-    expect(loansTotalOwedCents()).toBe(200_000);
+    const rows = listLoanSummaries('2026-08-18', HOUSEHOLD_VIEWER);
+    const owed = rows.filter((row) => row.loanDirection === 'owed').reduce((sum, row) => sum + (row.owingTodayCents ?? 0), 0);
+    expect(owed).toBe(200_000);
   });
 
   it('payoffProjection is null for a lent loan (ruling P9)', () => {

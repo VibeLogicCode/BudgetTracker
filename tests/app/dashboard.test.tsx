@@ -299,7 +299,7 @@ describe('DashboardPage (ruling R2)', () => {
     expect(screen.getByText('Loan to a friend')).toBeTruthy();
     // Each card's own total is exactly its own loan's balance -- the owed total does not
     // include the lent loan's balance, and vice versa.
-    expect(screen.getByLabelText('Total owed $2,000.00')).toBeTruthy();
+    expect(screen.getByLabelText('Total owed today $2,000.00')).toBeTruthy();
     expect(screen.getByLabelText('Total $500.00')).toBeTruthy();
   });
 

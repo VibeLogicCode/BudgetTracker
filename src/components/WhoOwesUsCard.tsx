@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { formatCents } from '@/lib/money';
 import type { LoanSummary } from '@/lib/loans';
 import { Card, CardHeader } from '@/components/ui/Card';
@@ -73,8 +74,15 @@ export function WhoOwesUsCard({
         {shown.map((loan) => (
           <ListRow
             key={loan.itemId}
-            title={loan.name}
-            amount={loan.currentBalanceCents === null ? '—' : formatCents(loan.currentBalanceCents)}
+            /* F4 (review): a way in, the same as the loans card beside it. A name on a dashboard
+               row is a question, and the answer was four clicks away. */
+            title={
+              <Link href={`/warranties/${loan.itemId}`} className="text-accent-text hover:underline">
+                {loan.name}
+              </Link>
+            }
+            /* B6: the one owing quantity, so a row can never disagree with the total above it. */
+            amount={loan.owingTodayCents === null ? '—' : formatCents(loan.owingTodayCents)}
           />
         ))}
       </ul>

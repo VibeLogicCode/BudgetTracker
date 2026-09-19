@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { monthLabel } from '@/lib/dates';
 import { formatCents, formatRateBps } from '@/lib/money';
 import type { LoanSummary } from '@/lib/loans';
@@ -52,9 +53,15 @@ export function LoansCard({ loans, totalOwedCents }: { loans: LoanSummary[]; tot
           a way of charging it. A household paying four loans has no other place to see that figure
           in one line, and it is the number that makes the total above worth looking at twice.
         */
+        /*
+          B10 (review): "this cycle", not "this month". The figure is what the CURRENT billing cycle
+          costs -- a loan whose cycle starts on the 12th is not describing a calendar month -- and
+          the loan page's own card already says "this cycle". Two words for one quantity is how a
+          household ends up believing neither.
+        */
         description={
           interestThisMonthCents > 0
-            ? `Loans the household is paying back. ${formatCents(interestThisMonthCents)} in interest this month.`
+            ? `Loans the household is paying back. ${formatCents(interestThisMonthCents)} in interest this cycle.`
             : 'Loans the household is paying back.'
         }
         action={
@@ -62,7 +69,7 @@ export function LoansCard({ loans, totalOwedCents }: { loans: LoanSummary[]; tot
             {hasUntrackedBalance ? (
               <span className="text-xs text-subtle">(excludes loans without a tracked balance)</span>
             ) : null}
-            <span className="money-lg" aria-label={`Total owed ${formatCents(totalOwedCents)}`}>
+            <span className="money-lg" aria-label={`Total owed today ${formatCents(totalOwedCents)}`}>
               {formatCents(totalOwedCents)}
             </span>
           </span>
@@ -72,9 +79,20 @@ export function LoansCard({ loans, totalOwedCents }: { loans: LoanSummary[]; tot
         {shown.map((loan) => (
           <li key={loan.itemId} className="flex flex-col gap-1.5 border-b border-line px-5 py-3 last:border-b-0 sm:px-6">
             <span className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-              <span className="font-medium text-ink">{loan.name}</span>
+              {/*
+                F4 (review): the row is a way IN. A household reading "Civic $18,266" on the
+                dashboard has exactly one next question -- what is this made of -- and the answer
+                was four clicks away through a menu entry with no word about loans in it.
+              */}
+              <Link href={`/warranties/${loan.itemId}`} className="font-medium text-accent-text hover:underline">
+                {loan.name}
+              </Link>
+              {/*
+                B6: the SAME quantity the header totals, so the rows can never add up to something
+                else. This printed the stored balance while the header summed owing-today.
+              */}
               <span className="money whitespace-nowrap">
-                {loan.currentBalanceCents === null ? '—' : formatCents(loan.currentBalanceCents)}
+                {loan.owingTodayCents === null ? '—' : formatCents(loan.owingTodayCents)}
               </span>
             </span>
             {loan.payoffFraction === null ? null : (
@@ -95,7 +113,8 @@ export function LoansCard({ loans, totalOwedCents }: { loans: LoanSummary[]; tot
                 itself (ruling I19). Absent entirely until somebody sets a basis.
               */}
               {loan.interest == null || loan.interest.thisMonthChargeCents === 0 ? null : (
-                <span>~{formatCents(loan.interest.thisMonthChargeCents)}/mo interest, est.</span>
+                // B10: "this cycle", matching the header above and the loan's own page.
+                <span>~{formatCents(loan.interest.thisMonthChargeCents)} interest this cycle, est.</span>
               )}
               {/*
                 Ruling R10: staleness is INFORMATION, not a scolding. One muted phrase, only when
