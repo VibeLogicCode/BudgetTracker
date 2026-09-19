@@ -1,6 +1,10 @@
 'use server';
 
 import { headers } from 'next/headers';
+import { createHash } from 'node:crypto';
+import { getDb } from '@/db/client';
+import { warrantyReceipts } from '@/db/schema';
+import { writeReceiptFile } from '@/lib/warranty/receipts';
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
@@ -62,7 +66,7 @@ import {
   type LoanDirection,
 } from '@/lib/warranty/constants';
 import { INTEREST_BASES, type InterestBasis } from '@/lib/loans/interest';
-import { setLoanAnchor } from '@/lib/loans';
+import { rememberStatementCsvColumns, setLoanAnchor } from '@/lib/loans';
 
 export interface WarrantyActionState {
   error?: string;
@@ -531,6 +535,34 @@ export async function reconcileLoanAction(
 
   const note = str(formData, 'note').trim();
 
+  /*
+    S4. The statement itself, when the person kept it -- and they keep it unless they untick the
+    box, which is the owner's own choice: the document is the evidence behind the one figure the
+    app states without qualification, and it cannot be recovered later if it was never stored.
+
+    PDF ONLY, deliberately. warranty_receipts is wired to an OCR queue, a thumbnailer and a type
+    sniffer that between them know four formats; teaching all of them about CSV to store a file
+    nothing would ever read back is a poor trade. A CSV's provenance is still recorded on the
+    anchor row (prefilledFrom), so the history says where the figure came from either way.
+  */
+  const keep = formData.get('keepStatement') !== null;
+  const uploaded = formData.get('statement');
+  let receiptId: number | null = null;
+  let prefilledFrom: 'pdf' | 'csv' | null = null;
+  if (uploaded instanceof File && uploaded.size > 0) {
+    prefilledFrom = /\.csv$/i.test(uploaded.name) || uploaded.type === 'text/csv' ? 'csv' : 'pdf';
+    if (keep && prefilledFrom === 'pdf') {
+      try {
+        receiptId = await storeStatementReceipt(id.data, uploaded);
+      } catch (error) {
+        // The figures matter more than the document: the reconcile goes through either way.
+        console.error('[loans] could not keep the statement file', error);
+      }
+    }
+  }
+
+  const mappingUsed = readStatementMapping(formData);
+
   try {
     setLoanAnchor({
       itemId: id.data,
@@ -540,7 +572,12 @@ export async function reconcileLoanAction(
       actorUserId: user.id,
       note: note.length === 0 ? null : note.slice(0, 500),
       statedInterestCents: statedInterestCents === null ? null : Math.abs(statedInterestCents),
+      prefilledFrom,
+      receiptId,
     });
+    // S3. Remembered only once a person has actually saved with it, so a mapping that was tried
+    // and abandoned is never the one offered next month.
+    if (mappingUsed !== null) rememberStatementCsvColumns(id.data, mappingUsed);
   } catch (error) {
     return failure(error, 'Could not save that statement.');
   }
@@ -991,4 +1028,40 @@ export async function recomputeLoanBalanceAction(_prev: WarrantyActionState, for
   } catch (error) {
     return failure(error, 'Could not recompute that balance.');
   }
+}
+
+/**
+ * S4. Store an uploaded statement as one of the loan's receipts.
+ *
+ * Goes through the same path a receipt upload does -- a server-generated filename, the sha256, the
+ * size -- so the file lands under the same rules (MUST-4.2) and the OCR sweep treats it like any
+ * other PDF.
+ */
+async function storeStatementReceipt(itemId: number, file: File): Promise<number> {
+  const buffer = Buffer.from(await file.arrayBuffer());
+  const storedFilename = writeReceiptFile(buffer, 'application/pdf');
+  const row = getDb()
+    .insert(warrantyReceipts)
+    .values({
+      warrantyItemId: itemId,
+      originalFilename: file.name.slice(0, 200),
+      storedFilename,
+      mime: 'application/pdf',
+      sizeBytes: buffer.byteLength,
+      sha256: createHash('sha256').update(buffer).digest('hex'),
+      ocrStatus: 'pending',
+      createdAt: nowIso(),
+    })
+    .returning({ id: warrantyReceipts.id })
+    .get();
+  return row.id;
+}
+
+/** S3. The three columns the person read this statement with, as stored JSON. */
+function readStatementMapping(formData: FormData): string | null {
+  const date = str(formData, 'columnDate').trim();
+  const balance = str(formData, 'columnBalance').trim();
+  if (date.length === 0 || balance.length === 0) return null;
+  const interest = str(formData, 'columnInterest').trim();
+  return JSON.stringify({ date, balance, interest: interest.length === 0 ? null : interest });
 }

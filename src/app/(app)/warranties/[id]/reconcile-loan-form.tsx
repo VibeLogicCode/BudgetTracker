@@ -51,6 +51,9 @@ export function ReconcileLoanForm({
   const [reading, setReading] = useState(false);
   const [readError, setReadError] = useState<string | null>(null);
   const [others, setOthers] = useState<Chips | null>(null);
+  /** v1.48.0, S2/S3/S4. The CSV picker's state, and whether the file is kept with the loan. */
+  const [csv, setCsv] = useState<CsvShape | null>(null);
+  const [pickedFile, setPickedFile] = useState<File | null>(null);
 
   /**
    * Ruling S1. The file is read, the fields are FILLED IN, and nothing is saved -- a person still
@@ -58,12 +61,20 @@ export function ReconcileLoanForm({
    * around it, because seeing "Minimum payment due $312.00" is how somebody knows why not to pick
    * it, and no scoring function is going to be right about every lender's layout.
    */
-  async function readStatement(file: File): Promise<void> {
+  async function readStatement(file: File, mapping?: { date: string; balance: string; interest: string }): Promise<void> {
     setReadError(null);
     setReading(true);
+    setPickedFile(file);
     try {
       const body = new FormData();
       body.set('statement', file);
+      // S3: which loan, so the route can try the mapping confirmed for this lender last time.
+      body.set('itemId', String(itemId));
+      if (mapping !== undefined) {
+        body.set('columnDate', mapping.date);
+        body.set('columnBalance', mapping.balance);
+        body.set('columnInterest', mapping.interest);
+      }
       const response = await fetch('/api/loans/statement-prefill', { method: 'POST', body });
       const found = (await response.json()) as PrefillResponse;
       if (!response.ok) {
@@ -74,7 +85,8 @@ export function ReconcileLoanForm({
       if (found.statementDate != null) setAsOfDate(found.statementDate.date);
       if (found.interest != null) setStatedInterest(centsToInput(found.interest.valueCents));
       setOthers(found.others ?? null);
-      if (found.balance == null) {
+      setCsv(found.csv ?? null);
+      if (found.balance == null && found.csv === undefined) {
         setReadError('Could not find a balance in that statement — type it from the page.');
       }
     } catch {
@@ -114,6 +126,24 @@ export function ReconcileLoanForm({
         {reading ? <p className="text-sm text-muted">Reading the statement…</p> : null}
         {readError === null ? null : <Notice tone="warning">{readError}</Notice>}
         {others === null ? null : <Chips others={others} onPickBalance={setStatementBalance} onPickDate={setAsOfDate} />}
+        {csv === null || pickedFile === null ? null : (
+          <ColumnPicker
+            csv={csv}
+            onChoose={(mapping) => void readStatement(pickedFile, mapping)}
+          />
+        )}
+        {/*
+          S4. Kept by DEFAULT, which is the owner's own choice: a statement is the evidence behind
+          the one figure the app states without qualification, and a household that wanted it and
+          did not tick a box cannot get it back. Unticking is one click; re-downloading a statement
+          from a bank six months later is not.
+        */}
+        {pickedFile === null ? null : (
+          <label className="flex items-center gap-2 text-sm text-muted">
+            <input type="checkbox" name="keepStatement" defaultChecked className="size-4" />
+            Keep this statement with the loan
+          </label>
+        )}
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
@@ -218,6 +248,8 @@ interface Chips {
 }
 
 interface PrefillResponse {
+  csv?: CsvShape;
+  prefilledFrom?: 'pdf' | 'csv';
   balance?: { valueCents: number } | null;
   statementDate?: { date: string } | null;
   interest?: { valueCents: number } | null;
@@ -273,4 +305,104 @@ function Chips({
 /** Cents back into something the text field can show, and the server can parse again. */
 function centsToInput(cents: number): string {
   return (cents / 100).toFixed(2);
+}
+
+/** What the route says about a CSV it has just read (S1). */
+interface CsvShape {
+  headers: string[];
+  mapping: { date: string | null; balance: string | null; interest: string | null };
+  confident: boolean;
+  preview: string[][];
+}
+
+/**
+ * S2. Three selects and a few rows of the file.
+ *
+ * Shown whenever the route was unsure, and reachable on demand when it was confident and wrong --
+ * a lender that labels its balance column "Amount" is not a bug to be fixed in a keyword list, it
+ * is a case for asking. Choosing re-reads the file server-side; nothing is parsed in the browser,
+ * so there is one implementation of what a statement says.
+ */
+function ColumnPicker({
+  csv,
+  onChoose,
+}: {
+  csv: CsvShape;
+  onChoose: (mapping: { date: string; balance: string; interest: string }) => void;
+}) {
+  const [open, setOpen] = useState(!csv.confident);
+  const [date, setDate] = useState(csv.mapping.date ?? '');
+  const [balance, setBalance] = useState(csv.mapping.balance ?? '');
+  const [interest, setInterest] = useState(csv.mapping.interest ?? '');
+
+  if (!open) {
+    return (
+      <button type="button" onClick={() => setOpen(true)} className="self-start text-sm text-accent hover:underline">
+        Wrong column?
+      </button>
+    );
+  }
+
+  const options = (allowBlank: boolean) => (
+    <>
+      {allowBlank ? <option value="">Not in this file</option> : <option value="">Choose…</option>}
+      {csv.headers.map((heading) => (
+        <option key={heading} value={heading}>
+          {heading}
+        </option>
+      ))}
+    </>
+  );
+
+  return (
+    <div className="flex flex-col gap-3 rounded-md border border-line p-3">
+      <p className="text-sm text-muted">Which column is which?</p>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <label className="flex flex-col gap-1 text-sm">
+          Date
+          <select value={date} onChange={(event) => setDate(event.target.value)} className="rounded-md border border-line px-2 py-1">
+            {options(false)}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-sm">
+          Balance
+          <select value={balance} onChange={(event) => setBalance(event.target.value)} className="rounded-md border border-line px-2 py-1">
+            {options(false)}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-sm">
+          Interest
+          <select value={interest} onChange={(event) => setInterest(event.target.value)} className="rounded-md border border-line px-2 py-1">
+            {options(true)}
+          </select>
+        </label>
+      </div>
+      {csv.preview.length === 0 ? null : (
+        <div className="overflow-x-auto">
+          <table className="text-xs text-subtle">
+            <tbody>
+              {csv.preview.map((row, rowIndex) => (
+                <tr key={rowIndex}>
+                  {row.map((cell, cellIndex) => (
+                    /* Text from an arbitrary file, rendered as a text node and never as markup. */
+                    <td key={cellIndex} className="max-w-40 truncate px-2 py-0.5">
+                      {cell}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <button
+        type="button"
+        disabled={date === '' || balance === ''}
+        onClick={() => onChoose({ date, balance, interest })}
+        className="self-start text-sm text-accent hover:underline disabled:text-subtle"
+      >
+        Read it again with these columns
+      </button>
+    </div>
+  );
 }

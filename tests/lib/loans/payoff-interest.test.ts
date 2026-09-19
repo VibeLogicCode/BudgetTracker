@@ -30,9 +30,12 @@ function loanWith(over: Record<string, unknown> = {}): { itemId: number; user: n
     transactionId: null,
     typeId: loanTypeId(),
     notes: null,
-    interestRateBps: 500, interestRateBasis: null,
+    // v1.48.0, D1: a rate needs a basis to be SAVED. setBasis below moves it afterwards, which is
+    // how this file reproduces the loans an existing install holds with no basis at all.
+    interestRateBps: 500, interestRateBasis: 'apr_monthly',
     ...over,
   } as Parameters<typeof createWarrantyItem>[0]);
+  setBasis(itemId, null);
   return { itemId, user, accountId };
 }
 

@@ -827,6 +827,27 @@ export function setLoanAnchor(input: {
  * This is the other question: what did it charge in March, which a variable-rate mortgage makes a
  * real one.
  */
+/**
+ * S3. The CSV column mapping this loan's statements were last read with.
+ *
+ * Stored on the item rather than in a settings table because it belongs to the lender, and the
+ * loan is the only place the app knows which lender a statement came from.
+ */
+/** S3. Remember the columns this lender's statements were read with. */
+export function rememberStatementCsvColumns(itemId: number, columnsJson: string): void {
+  getDb().update(warrantyItems).set({ statementCsvColumns: columnsJson }).where(eq(warrantyItems.id, itemId)).run();
+}
+
+export function statementCsvColumnsFor(itemId: number): string | null {
+  return (
+    getDb()
+      .select({ columns: warrantyItems.statementCsvColumns })
+      .from(warrantyItems)
+      .where(eq(warrantyItems.id, itemId))
+      .get()?.columns ?? null
+  );
+}
+
 export function listRateHistory(itemId: number): RateInForce[] {
   return getDb()
     .select({

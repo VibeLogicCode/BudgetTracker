@@ -31,13 +31,20 @@ function mortgage(over: Record<string, unknown> = {}): { itemId: number; user: n
     transactionId: null,
     typeId: loanTypeId(),
     notes: null,
-    interestRateBps: 500, interestRateBasis: null,
+    /*
+      v1.48.0, D1: a rate cannot be SAVED without a basis any more, so the fixture supplies one and
+      the tests below move it with setBasis. The scenarios are unchanged -- an existing install
+      still holds loans whose basis is null, and setBasis(itemId, null) is how this file reproduces
+      one of those rather than pretending the form can still create it.
+    */
+    interestRateBps: 500, interestRateBasis: 'apr_monthly',
     ...over,
   } as Parameters<typeof createWarrantyItem>[0]);
+  setBasis(itemId, null);
   return { itemId, user, accountId };
 }
 
-const setBasis = (itemId: number, basis: string): void => {
+const setBasis = (itemId: number, basis: string | null): void => {
   current!.sqlite.prepare('update warranty_items set interest_rate_basis = ? where id = ?').run(basis, itemId);
 };
 
