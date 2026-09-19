@@ -58,10 +58,19 @@ function balanceLabelForDirection(direction: string): string {
   return direction === 'lent' ? 'Balance still owed to you' : 'Balance still owed';
 }
 
+/**
+ * Reported 2026-09-19: a loan was entered with an original amount, a start date and a rate, and the
+ * page then showed no interest and no ledger at all. The balance field had been left empty, and
+ * nothing said that it is the one field the whole ledger runs from -- the hint talked about what
+ * linked payments would do to it later, which is true and is not the point.
+ *
+ * The original amount cannot stand in for it: on a loan entered two years after it started, taking
+ * the original as today's balance would charge two years of interest on a figure nobody owes.
+ */
 function balanceHintForDirection(direction: string): string {
   return direction === 'lent'
-    ? "Today's balance. Repayments you link will take it down; further advances raise it."
-    : "Today's balance. Payments you link will take it down from here.";
+    ? 'Needed for interest — the ledger runs from this figure. Repayments you link take it down; further advances raise it.'
+    : 'Needed for interest — the ledger runs from this figure, not from the original amount. Payments you link take it down from here.';
 }
 
 export function NewWarrantyClient({

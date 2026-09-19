@@ -21,6 +21,29 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.50.0] - 2026-09-19
+
+### Added
+
+- **Record a payment on a loan by hand, on any past date.** A payment that never came through an
+  import — cash, an e-transfer, or a month of them entered after the fact — had no way in: the only
+  route was to import the transaction first and link it. It is written as an ordinary transaction
+  and linked to the loan, so budgets and reports still count it, and a back-dated one is applied in
+  the cycle it belongs to with the interest worked out again from there.
+- A loan with a rate and no balance now says so, and offers the field it needs. Previously it showed
+  a dash and no ledger, with nothing on the page explaining why.
+
+### Changed
+
+- **Edit opens in a dialog**, the same shell Rename and Note use on Transactions: backdrop, focus
+  trap, Escape, and focus returned to the button afterwards. It used to replace the page in place at
+  a fixed 42rem, which on a wide screen read as a card rendered at half width.
+- The ledger's grouping control shows which view is on — "Every entry" and "By month" as two
+  options — instead of one button whose label never changed.
+- The Reports filter row lines up: two of its fields carried hints inside a bottom-aligned row,
+  which pushed those controls out of line with the rest. The hints are one sentence under the row.
+- The balance field on a new loan says what depends on it.
+
 ## [1.49.0] - 2026-09-19
 
 **Before updating:** balances on loans **with a rate** may move again. Three rules changed together:

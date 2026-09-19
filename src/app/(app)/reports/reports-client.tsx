@@ -295,11 +295,21 @@ export function ReportsClient({
                 </select>
               </Field>
             ) : null}
-            <Field label="Compare month" hint="Feeds the year-over-year card below.">
+            {/*
+              Reported 2026-09-19: the row did not line up. Two of the four fields carried a `hint`
+              and two did not, and `items-end` aligns the BOTTOM of each child -- so a hint under
+              one control pushed that control up while the plain selects stayed down, and Apply
+              landed level with the hints rather than with the controls it submits.
+
+              The hints say the same thing in one sentence under the row, where they also read
+              better: both are about which card below the field feeds, which is a fact about the
+              page rather than about how to fill the field in.
+            */}
+            <Field label="Compare month">
               <input type="month" name="yoyMonth" defaultValue={yoyMonth} max={monthOf(today)} className={inputClass} />
             </Field>
             {taxYears.length > 0 ? (
-              <Field label="Tax year" hint="Feeds the tax year card below.">
+              <Field label="Tax year">
                 <select name="taxYear" defaultValue={taxYear ?? ''} className={selectClass}>
                   {taxYears.map((year) => (
                     <option key={year} value={year}>
@@ -311,6 +321,10 @@ export function ReportsClient({
             ) : null}
             <button type="submit" className={buttonClass('primary')}>Apply</button>
           </form>
+          <p className="text-xs text-subtle">
+            The dates{showPersonSplit ? ' and person' : ''} drive every card. Compare month feeds
+            year-over-year{taxYears.length > 0 ? ', and Tax year feeds the tax year card' : ''}.
+          </p>
         </CardBody>
       </Card>
 

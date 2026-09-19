@@ -179,18 +179,33 @@ describe('F5: the working opens instead of hovering', () => {
   });
 });
 
-describe('the by-month toggle', () => {
-  it('reports its state, and folds the payments into the period when pressed', () => {
+/**
+ * Reported 2026-09-19: "i click on month and view changes by date range but label stays same." It
+ * was one button carrying aria-pressed -- which a screen reader announces and a sighted reader
+ * cannot see. Two options now, so the control shows which view is on rather than only knowing it.
+ */
+describe('the grouping control', () => {
+  it('shows which view is on, and folds the payments into the period when grouped', () => {
     render(<LoanLedgerCard ledger={ledger()} direction="owed" />);
-    const toggle = screen.getByRole('button', { name: 'By month' });
-    expect(toggle.getAttribute('aria-pressed')).toBe('false');
+    const everyEntry = screen.getByRole('button', { name: 'Every entry' });
+    const byMonth = screen.getByRole('button', { name: 'By month' });
+    expect(everyEntry.getAttribute('aria-pressed')).toBe('true');
+    expect(byMonth.getAttribute('aria-pressed')).toBe('false');
 
-    fireEvent.click(toggle);
+    fireEvent.click(byMonth);
 
-    expect(toggle.getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: 'By month' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: 'Every entry' }).getAttribute('aria-pressed')).toBe('false');
     // Opening and the standalone payment are folded away; the period and the accrual remain.
     expect(bodyRows()).toHaveLength(2);
     expect(textOf(bodyRows()[0])).toContain('2026-07-01 to 2026-08-01');
+  });
+
+  it('goes back to every entry', () => {
+    render(<LoanLedgerCard ledger={ledger()} direction="owed" />);
+    fireEvent.click(screen.getByRole('button', { name: 'By month' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Every entry' }));
+    expect(bodyRows()).toHaveLength(4);
   });
 });
 

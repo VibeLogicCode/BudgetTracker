@@ -115,14 +115,31 @@ export const LoanLedgerCard = memo(function LoanLedgerCard({
         </dl>
 
         <div className="flex flex-wrap items-center justify-between gap-2 print:hidden">
-          <button
-            type="button"
-            aria-pressed={byMonth}
-            onClick={() => setByMonth(!byMonth)}
-            className={buttonClass('secondary', 'sm', 'min-h-11 sm:min-h-0')}
-          >
-            By month
-          </button>
+          {/*
+            Reported 2026-09-19: "i click on month and view changes by date range but label stays
+            same". It was one button reading "By month" with aria-pressed -- which a screen reader
+            announces and a sighted reader cannot see, so after pressing it there was nothing on the
+            page saying which of the two views was on. Two options, the active one filled: the
+            control now shows the state instead of only carrying it.
+          */}
+          <div role="group" aria-label="How to group the ledger" className="flex flex-wrap items-center gap-1">
+            <button
+              type="button"
+              aria-pressed={!byMonth}
+              onClick={() => setByMonth(false)}
+              className={buttonClass(byMonth ? 'ghost' : 'secondary', 'sm', 'min-h-11 sm:min-h-0')}
+            >
+              Every entry
+            </button>
+            <button
+              type="button"
+              aria-pressed={byMonth}
+              onClick={() => setByMonth(true)}
+              className={buttonClass(byMonth ? 'secondary' : 'ghost', 'sm', 'min-h-11 sm:min-h-0')}
+            >
+              By month
+            </button>
+          </div>
           {downloadHref === undefined ? null : (
             <a href={downloadHref} className={buttonClass('ghost', 'sm', 'min-h-11 sm:min-h-0')}>
               Download as a spreadsheet

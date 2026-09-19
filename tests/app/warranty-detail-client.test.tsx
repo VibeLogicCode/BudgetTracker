@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, cleanup, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { WarrantyDetailClient } from '@/app/(app)/warranties/[id]/warranty-detail-client';
 import { deleteLoanRuleAction, unlinkLedgerTransactionAction, updateWarrantyAction } from '@/app/(app)/warranties/actions';
 import type { ItemLedger } from '@/lib/loans';
@@ -114,35 +114,51 @@ describe('WarrantyDetailClient', () => {
 
   // --- Bug fix (v1.2.4): edit replaces the view, kind-aware success message ---
 
-  it('hides the read-only detail view while editing and restores it via Cancel edit', () => {
+  /**
+   * Reported 2026-09-19: "why does the edit card open half the width of the cards below? why don't
+   * we follow the design language we have on other pages where edit opens with a blurred
+   * background?" Both halves of that were fair. The form carried its own `max-w-2xl` inside a
+   * full-width column, and Rename/Note on Transactions had been using RowDialog -- backdrop, focus
+   * trap, Escape -- since v1.21.0. The edit form is the same shell now.
+   */
+  it('opens the edit form in a dialog, over a page that stays put', () => {
     renderDetail();
-    // 'Home Depot' (the item's vendor) only ever appears as read-only TEXT in the detail
-    // view -- the edit form shows the same value as an <input defaultValue>, which
-    // getByText/queryByText do not match.
-    expect(screen.getByText('Home Depot')).toBeTruthy();
-    expect(screen.queryByText('Edit this item')).toBeNull();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    const open = screen.getByRole('button', { name: /^edit$/i });
+    expect(open.getAttribute('aria-expanded')).toBe('false');
 
-    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
-    expect(screen.queryByText('Home Depot')).toBeNull();
-    expect(screen.getByText('Edit this item')).toBeTruthy();
+    fireEvent.click(open);
 
-    fireEvent.click(screen.getByRole('button', { name: /cancel edit/i }));
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText('Edit Fridge')).toBeTruthy();
+    // The read-only view is NOT torn down any more: it is behind the backdrop, which is the point
+    // of a modal -- you can still see what you were looking at.
     expect(screen.getByText('Home Depot')).toBeTruthy();
-    expect(screen.queryByText('Edit this item')).toBeNull();
+    expect(screen.getByRole('button', { name: /^edit$/i }).getAttribute('aria-expanded')).toBe('true');
   });
 
-  it('closes the edit form and restores the view after a successful save, showing the kind-aware message', async () => {
+  it('closes on Cancel and on Escape', () => {
+    renderDetail();
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^cancel$/i }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('closes the dialog after a successful save, showing the kind-aware message', async () => {
     vi.mocked(updateWarrantyAction).mockResolvedValueOnce({ message: 'Subscription updated.' });
     renderDetail();
     fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
-    expect(screen.getByText('Edit this item')).toBeTruthy();
 
     const saveButton = screen.getByRole('button', { name: /save changes/i });
     fireEvent.submit(saveButton.closest('form')!);
 
     await waitFor(() => {
       expect(screen.getByText('Subscription updated.')).toBeTruthy();
-      expect(screen.queryByText('Edit this item')).toBeNull();
+      expect(screen.queryByRole('dialog')).toBeNull();
       expect(screen.getByText('Home Depot')).toBeTruthy();
     });
   });

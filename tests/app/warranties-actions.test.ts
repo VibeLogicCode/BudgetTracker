@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { todayIso } from '@/lib/dates';
-import { listLoanAnchors } from '@/lib/loans';
+import { listLoanAnchors, setLoanAnchor } from '@/lib/loans';
 import { sql } from 'drizzle-orm';
 import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
 import { nowIso } from '@/lib/clock';
@@ -61,6 +61,7 @@ import {
   deleteReceiptAction,
   deleteWarrantyAction,
   reconcileLoanAction,
+  recordLoanPaymentAction,
   retractLoanAnchorAction,
   recomputeLoanBalanceAction,
   removeInstallmentAction,
@@ -222,6 +223,9 @@ describe('cross-origin rejection comes FIRST (MUST-13.1)', () => {
     // v1.47.0: reconciling a loan to a statement writes a human balance, so it is refused
     // cross-origin before it reads anything, like every other writer here.
     ['reconcileLoanAction', (fd) => reconcileLoanAction({}, fd)],
+    // Reported 2026-09-19: a payment entered by hand, back-dated. It writes a transaction, so it
+    // carries the same origin gate every other write on this page does.
+    ['recordLoanPaymentAction', (fd) => recordLoanPaymentAction({}, fd)],
     ['retractLoanAnchorAction', (fd) => retractLoanAnchorAction({}, fd)],
     ['attachReceiptsAction', (fd) => attachReceiptsAction({}, fd)],
     ['deleteReceiptAction', (fd) => deleteReceiptAction({}, fd)],
@@ -1304,5 +1308,121 @@ describe('A10: the statement file is stored after the statement row', () => {
       sql`select receipt_id from loan_anchors where source = 'reconcile' order by id desc limit 1`,
     );
     expect(anchor?.receipt_id).not.toBeNull();
+  });
+});
+
+/**
+ * Reported 2026-09-19: "can i add a manual payment option to loan where it wasnt in transactions
+ * and back date it ... that will recompute the interest?"
+ *
+ * The answer had been no: a loan's balance could only be moved by importing the transaction first
+ * and linking it. Cash, an e-transfer nobody has imported, or a month of payments entered after the
+ * fact had no route in at all.
+ */
+describe('recordLoanPaymentAction: a payment entered by hand', () => {
+  function loanWithLedger(): number {
+    const itemId = seedLoanItem({ balanceCents: 1_000_000 });
+    current!.sqlite
+      .prepare("update warranty_items set interest_rate_bps = 1200, interest_rate_basis = 'apr_monthly' where id = ?")
+      .run(itemId);
+    setLoanAnchor({
+      itemId,
+      asOfDate: '2026-06-01',
+      balanceCents: 1_000_000,
+      source: 'reconcile',
+      actorUserId: ownerId,
+      at: new Date('2026-06-01T12:00:00.000Z'),
+    });
+    return itemId;
+  }
+
+  function payment(itemId: number, over: Record<string, string> = {}): FormData {
+    const accountId = insertTestAccount(current!.db, { name: `Chequing ${randomUUID()}` });
+    const fd = new FormData();
+    fd.set('itemId', String(itemId));
+    fd.set('accountId', String(accountId));
+    fd.set('amount', '450.00');
+    fd.set('paidOn', todayIso());
+    for (const [key, value] of Object.entries(over)) fd.set(key, value);
+    return fd;
+  }
+
+  const balanceOf = (itemId: number) =>
+    current!.db.get<{ b: number }>(sql`select current_balance_cents as b from warranty_items where id = ${itemId}`).b;
+
+  it('writes a real transaction, links it, and takes it off the balance', async () => {
+    const itemId = loanWithLedger();
+    const before = balanceOf(itemId);
+
+    const result = await recordLoanPaymentAction({}, payment(itemId));
+
+    expect(result.error).toBeUndefined();
+    expect(result.message).toMatch(/Payment of \$450\.00 recorded/);
+    /*
+      The seed's own clock is the statement date, so nothing was due yet when it was written --
+      linking this payment is what runs the catch-up. The balance is therefore the statement, plus
+      every cycle that has closed since, less the payment: stated against the postings themselves
+      rather than a figure typed here, which would only be this test agreeing with itself.
+    */
+    const posted = current!.db.get<{ total: number }>(
+      sql`select coalesce(sum(interest_cents), 0) as total from loan_postings where item_id = ${itemId}`,
+    ).total;
+    expect(posted).toBeGreaterThan(0);
+    expect(balanceOf(itemId)).toBe(before + posted - 45_000);
+    // MUST-13.2: it is an ordinary transaction, so every other total in the app still sees it.
+    const txn = current!.db.get<{ amount: number; date: string }>(
+      sql`select amount_cents as amount, date from transactions order by id desc limit 1`,
+    );
+    expect(txn.amount).toBe(-45_000);
+    expect(current!.db.get<{ n: number }>(sql`select count(*) as n from loan_payments`).n).toBe(1);
+  });
+
+  /**
+   * The point of the feature, as an A/B rather than a hand-computed figure: the SAME payment, the
+   * same loan, differing only in its date. Paid back in June it has been reducing the balance every
+   * cycle since, so the interest charged after it is smaller and the loan ends up lower than the
+   * identical payment made today.
+   */
+  it('applies a back-dated payment at its own date and works the interest out again', async () => {
+    const backdated = loanWithLedger();
+    await recordLoanPaymentAction({}, payment(backdated, { paidOn: '2026-06-15', amount: '1000.00' }));
+
+    const todayPaid = loanWithLedger();
+    await recordLoanPaymentAction({}, payment(todayPaid, { paidOn: todayIso(), amount: '1000.00' }));
+
+    expect(balanceOf(backdated)).toBeLessThan(balanceOf(todayPaid));
+  });
+
+  it('refuses a date in the future or before the loan started', async () => {
+    const itemId = loanWithLedger();
+    expect((await recordLoanPaymentAction({}, payment(itemId, { paidOn: '2099-01-01' }))).error).toBe(
+      'A payment cannot be dated after today.',
+    );
+    expect((await recordLoanPaymentAction({}, payment(itemId, { paidOn: '2020-01-01' }))).error).toBe(
+      'That date is before the loan started.',
+    );
+    expect(current!.db.get<{ n: number }>(sql`select count(*) as n from transactions`).n).toBe(0);
+  });
+
+  it('refuses an amount that is not one, and a non-loan item', async () => {
+    const itemId = loanWithLedger();
+    expect((await recordLoanPaymentAction({}, payment(itemId, { amount: 'soon' }))).error).toBe('Enter how much was paid.');
+
+    const to = await redirectPath(() => createWarrantyAction({}, formData(baseFields())));
+    const warrantyId = Number(to.split('/').pop());
+    expect((await recordLoanPaymentAction({}, payment(warrantyId))).error).toBe('Only a loan takes payments this way.');
+  });
+
+  /** Money lent OUT: a repayment received is money in, so the transaction is positive (ruling P4). */
+  it('records a repayment on a lent loan as money coming in', async () => {
+    const itemId = loanWithLedger();
+    current!.sqlite.prepare("update warranty_items set loan_direction = 'lent' where id = ?").run(itemId);
+
+    await recordLoanPaymentAction({}, payment(itemId));
+
+    expect(
+      current!.db.get<{ amount: number }>(sql`select amount_cents as amount from transactions order by id desc limit 1`)
+        .amount,
+    ).toBe(45_000);
   });
 });

@@ -14,9 +14,10 @@ import { CROSS_ORIGIN_ERROR, isSameOrigin } from '@/lib/auth/csrf';
 import { requireUser } from '@/lib/auth/session';
 import { NOT_YOURS_ERROR, canActOnOwner } from '@/lib/auth/viewer';
 import { nowIso } from '@/lib/clock';
-import { todayIso } from '@/lib/dates';
+import { isIsoDate, todayIso } from '@/lib/dates';
 import {
   MAX_RULES_PER_LOAN,
+  assignTransactionToLoan,
   backfillLoanRule,
   checkLoanBackfill,
   deleteLoanRule,
@@ -67,6 +68,7 @@ import {
 } from '@/lib/warranty/constants';
 import { INTEREST_BASES, type InterestBasis } from '@/lib/loans/interest';
 import { attachStatementReceipt, rememberStatementCsvColumns, retractLoanAnchor, setLoanAnchor } from '@/lib/loans';
+import { createManualTransaction } from '@/lib/transactions';
 
 export interface WarrantyActionState {
   error?: string;
@@ -604,6 +606,95 @@ export async function reconcileLoanAction(
 
   revalidateAll(id.data);
   return { message: `Reconciled to the statement of ${asOfDate}.` };
+}
+
+/**
+ * Record a payment on a loan by hand, on any past date.
+ *
+ * Reported 2026-09-19: "can i add a manual payment option to loan where it wasnt in transactions
+ * and back date it ... that will recompute the interest?"
+ *
+ * WHY THIS WRITES A REAL TRANSACTION rather than a loan-only payment row. A loan payment IS
+ * spending -- MUST-13.2 is the rule that a car payment still belongs in the Transport budget and
+ * in the reports -- so a private row that only the loan knew about would take the money out of
+ * every other total in the app. This creates the transaction the household actually made and links
+ * it, which is the same pair of writes the row menu on Transactions performs, and the same pair a
+ * matched import performs. The loan gains nothing the rest of the app does not also see.
+ *
+ * BACK-DATING IS THE POINT, and the engine already handles it: recomputeBalance replays payments
+ * and postings together in date order (LEDGER_EVENTS), so a payment dated inside a cycle that has
+ * already closed is applied at its own date, and postDueInterest writes the one correction the
+ * closed periods need. Nothing is rewritten -- the correction is a dated row, exactly as a lender
+ * would show it.
+ *
+ * The SIGN comes from the loan's own direction (ruling P4): a payment on a loan the household owes
+ * is money out, and a repayment received on money lent out is money in. isLoanRepayment is the one
+ * definition of that, so this hands it a signed amount rather than deciding for itself.
+ */
+export async function recordLoanPaymentAction(
+  _prev: WarrantyActionState,
+  formData: FormData,
+): Promise<WarrantyActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+  const user = await requireUser();
+
+  const parsed = z
+    .object({
+      itemId: z.coerce.number().int().positive(),
+      accountId: z.coerce.number().int().positive(),
+    })
+    .safeParse({ itemId: formData.get('itemId'), accountId: formData.get('accountId') });
+  if (!parsed.success) return { error: 'Pick the account the payment came from.' };
+
+  const item = getWarrantyItem(parsed.data.itemId, user);
+  if (!item) return { error: NOT_YOURS_ERROR };
+  if (item.kind !== 'loan') return { error: 'Only a loan takes payments this way.' };
+
+  const date = str(formData, 'paidOn').trim();
+  if (!isIsoDate(date)) return { error: 'Enter the payment date as YYYY-MM-DD.' };
+  if (date > todayIso()) return { error: 'A payment cannot be dated after today.' };
+  if (date < item.purchaseDate) return { error: 'That date is before the loan started.' };
+
+  const amountCents = parseAmountToCents(str(formData, 'amount').trim());
+  if (amountCents === null || amountCents === 0) return { error: 'Enter how much was paid.' };
+
+  const note = str(formData, 'note').trim();
+
+  let txnId: number;
+  try {
+    txnId = createManualTransaction({
+      accountId: parsed.data.accountId,
+      date,
+      // The loan's own name, so the row reads the same in Transactions as the link does here.
+      description: note.length > 0 ? note : `Payment — ${item.name}`,
+      // Ruling P4: the direction decides the sign, and isLoanRepayment owns that rule.
+      amountCents: item.loanDirection === 'owed' ? -Math.abs(amountCents) : Math.abs(amountCents),
+      categoryId: null,
+      attributedUserId: item.ownerUserId,
+      userId: user.id,
+      actorRole: user.role,
+    });
+  } catch (error) {
+    return failure(error, 'Could not record that payment.');
+  }
+
+  try {
+    // Links it, replays the loan from its statement, and posts whatever the back-date made due.
+    const result = assignTransactionToLoan({ txnId, itemId: parsed.data.itemId, viewer: user });
+    revalidateAll(parsed.data.itemId);
+    revalidatePath('/transactions');
+    if (!result.linked) {
+      return { message: 'That payment was recorded, but it was already linked to this loan.' };
+    }
+    return {
+      message:
+        result.appliedCents === 0
+          ? `Payment of ${formatCents(Math.abs(amountCents))} recorded on ${date}. The balance did not move -- it was already at zero.`
+          : `Payment of ${formatCents(result.appliedCents)} recorded on ${date}. Interest has been worked out again from that date.`,
+    };
+  } catch (error) {
+    return failure(error, 'The payment was recorded but could not be linked to this loan.');
+  }
 }
 
 export async function deleteWarrantyAction(

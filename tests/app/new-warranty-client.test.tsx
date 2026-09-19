@@ -242,7 +242,7 @@ describe('the loan hints follow the selected Direction (review C)', () => {
     fireEvent.change(container.querySelector('select[name="typeId"]')!, { target: { value: '3' } }); // Car loan
     expect(screen.getByText('What you borrowed. Used for the payoff bar.')).toBeTruthy();
     expect(screen.getByText('Balance still owed')).toBeTruthy();
-    expect(screen.getByText("Today's balance. Payments you link will take it down from here.")).toBeTruthy();
+    expect(screen.getByText("Needed for interest — the ledger runs from this figure, not from the original amount. Payments you link take it down from here.")).toBeTruthy();
   });
 
   it('flips to the lent frame when Direction is set to Lent out — they owe us', () => {
@@ -252,7 +252,7 @@ describe('the loan hints follow the selected Direction (review C)', () => {
     expect(screen.getByText('What you lent out. Used for the payoff bar.')).toBeTruthy();
     expect(screen.getByText('Balance still owed to you')).toBeTruthy();
     expect(
-      screen.getByText("Today's balance. Repayments you link will take it down; further advances raise it."),
+      screen.getByText("Needed for interest — the ledger runs from this figure. Repayments you link take it down; further advances raise it."),
     ).toBeTruthy();
     // The label change is a REPLACEMENT, not an addition -- the old label must not linger.
     expect(screen.queryByText('Balance still owed')).toBeNull();

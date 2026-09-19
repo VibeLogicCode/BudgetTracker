@@ -10,6 +10,7 @@ import { ReceiptUploader, type StagedFile } from '@/components/warranty/ReceiptU
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { ListRow } from '@/components/ui/ListRow';
 import { MetricCard } from '@/components/ui/MetricCard';
+import { RowDialog } from '@/components/ui/RowDialog';
 import { Money } from '@/components/ui/Money';
 import { Notice } from '@/components/ui/Notice';
 import { ProgressBar } from '@/components/ui/ProgressBar';
@@ -92,6 +93,7 @@ import { buttonClass } from '@/components/ui/Button';
 import { LoanLedgerCard } from '@/components/LoanLedgerCard';
 import type { Ledger } from '@/lib/loans/ledger';
 import { ReconcileLoanForm } from './reconcile-loan-form';
+import { RecordLoanPaymentForm } from './record-loan-payment-form';
 import type { LoanInterest, LoanReconciliation } from '@/lib/loans';
 
 const initial: WarrantyActionState = {};
@@ -261,6 +263,8 @@ export function WarrantyDetailClient({
   const anchorDate = reconciliation?.newest?.asOfDate ?? item.balanceUpdatedAt?.slice(0, 10) ?? null;
 
   const [reconciling, setReconciling] = useState(false);
+  /** Reported 2026-09-19: a payment that never came through an import, entered by hand, back-dated. */
+  const [recordingPayment, setRecordingPayment] = useState(false);
   const reconcileRef = useRef<HTMLDivElement | null>(null);
   /**
    * F7. Open the edit form and land on the basis select, for the banner that says a rate needs one.
@@ -458,6 +462,34 @@ export function WarrantyDetailClient({
     its header -- rather than below the whole table where nothing scrolled to it. Focus moves to the
     first field on open, so pressing the button lands somewhere.
   */
+  /**
+   * The two things a person does TO a loan, in one slot so the card with the ledger and the card a
+   * loan-without-a-ledger falls back to offer exactly the same pair.
+   */
+  const loanActions =
+    item.kind !== 'loan' ? null : (
+      <span className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          aria-haspopup="dialog"
+          aria-expanded={recordingPayment}
+          onClick={() => setRecordingPayment(true)}
+          className={buttonClass('secondary', 'sm', 'min-h-11 sm:min-h-0')}
+        >
+          Record a payment…
+        </button>
+        <button
+          type="button"
+          aria-expanded={reconciling}
+          aria-controls={RECONCILE_PANEL_ID}
+          onClick={() => setReconciling(!reconciling)}
+          className={buttonClass('secondary', 'sm', 'min-h-11 sm:min-h-0')}
+        >
+          {reconciling ? 'Close' : 'Reconcile to a statement…'}
+        </button>
+      </span>
+    );
+
   const reconcilePanel =
     item.kind !== 'loan' || !reconciling ? null : (
       <div id={RECONCILE_PANEL_ID} ref={reconcileRef} className="rounded-lg border border-line bg-surface-2 p-4">
@@ -534,8 +566,19 @@ export function WarrantyDetailClient({
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Link href="/warranties" className={buttonClass('ghost', 'sm')}>Back to Loans &amp; Coverage</Link>
-          <button type="button" onClick={() => setEditing((v) => !v)} className={buttonClass('secondary', 'sm')}>
-            {editing ? 'Cancel edit' : 'Edit'}
+          {/*
+            Always "Edit". It used to read "Cancel edit" while the form was open, which made sense
+            when the form replaced the page; now the form is a dialog and this button sits behind
+            its backdrop, where nothing can click it. Cancel lives inside the dialog, beside Save.
+          */}
+          <button
+            type="button"
+            aria-haspopup="dialog"
+            aria-expanded={editing}
+            onClick={() => setEditing(true)}
+            className={buttonClass('secondary', 'sm')}
+          >
+            Edit
           </button>
           <button type="button" onClick={() => setConfirming(true)} className={buttonClass('ghost', 'sm', 'money-neg')}>
             Delete item
@@ -566,14 +609,56 @@ export function WarrantyDetailClient({
         </Card>
       ) : null}
 
-      {/* Bug fix (v1.2.4): the read-only view and the edit form now occupy the SAME position
-          -- exactly one of them renders, never both -- so opening Edit replaces the view in
-          place instead of appending a second form below it (and below Receipts) where a
-          scrolled-down user would never see it appear. */}
+      {/*
+        THE EDIT FORM IS A DIALOG, the same shell Rename and Note use on Transactions (RowDialog:
+        backdrop, focus trap, Escape, body-scroll lock, focus returned to the button afterwards).
+
+        v1.2.4 swapped the read-only view for the form in place, to stop the form appearing below
+        the fold where a scrolled-down reader would never see it. That solved the right problem
+        with the wrong tool, and it showed: the form carried a `max-w-2xl` cap, so on a wide screen
+        it sat at half the width of every card beneath it and read as a rendering fault. A dialog
+        answers both -- it is centred, it is the only thing on screen, and 42rem is a deliberate
+        reading width there rather than an unexplained gap.
+      */}
+      {editing ? (
+        <RowDialog
+          dialogId="edit-item-dialog"
+          title={`Edit ${item.name}`}
+          description="Everything the app knows about this item. Money fields are grouped at the end."
+          onClose={() => setEditing(false)}
+        >
+          <EditForm
+            item={item}
+            people={people}
+            types={types}
+            today={today}
+            anchorDate={anchorDate}
+            action={editAction}
+            onCancel={() => setEditing(false)}
+          />
+        </RowDialog>
+      ) : null}
+
+      {recordingPayment && item.kind === 'loan' ? (
+        <RowDialog
+          dialogId="record-payment-dialog"
+          title={`Record a payment on ${item.name}`}
+          description="A payment that never came through an import — cash, an e-transfer, or one entered after the fact. It is written as an ordinary transaction and linked to this loan."
+          onClose={() => setRecordingPayment(false)}
+        >
+          <RecordLoanPaymentForm
+            itemId={item.id}
+            direction={item.loanDirection}
+            accounts={accounts}
+            today={today}
+            startDate={item.purchaseDate}
+            onClose={() => setRecordingPayment(false)}
+          />
+        </RowDialog>
+      ) : null}
+
       <div ref={swapSectionRef}>
-        {editing ? (
-          <EditForm item={item} people={people} types={types} today={today} anchorDate={anchorDate} action={editAction} />
-        ) : (
+        {
           <>
           <Card>
             <CardBody className="pt-5">
@@ -693,6 +778,29 @@ export function WarrantyDetailClient({
             assumed on their behalf: every rate already stored was typed while the form promised no
             interest maths, and reading a monthly rate as a yearly one understates it twelvefold.
           */}
+          {/*
+            Reported 2026-09-19: "where does it show me interest that has computed since?" -- on a
+            loan with a rate, a basis and a start date, but no balance. The answer was nowhere, and
+            the page said nothing: a dash where the balance goes and no ledger card at all.
+
+            The engine needs a figure that was TRUE ON A DATE to run forward from, and the original
+            amount is not one -- on a loan entered two years late it would charge two years of
+            interest on a figure nobody owes. So the page asks for the one thing it is missing.
+          */}
+          {item.kind === 'loan' &&
+          item.currentBalanceCents === null &&
+          item.interestRateBps !== null &&
+          item.interestRateBps > 0 &&
+          item.interestRateBasis !== null ? (
+            <Notice tone="info">
+              No interest yet: this loan has no balance recorded, and the ledger runs from a figure
+              that was true on a date rather than from the original amount.{' '}
+              <button type="button" onClick={() => setReconciling(true)} className="underline">
+                Enter the balance as of a date
+              </button>{' '}
+              and the ledger starts there.
+            </Notice>
+          ) : null}
           {item.interestRateBps !== null && item.interestRateBps > 0 && item.interestRateBasis === null ? (
             <Notice tone="warning">
               This loan has a rate but no charging method. Pick one to see interest.{' '}
@@ -770,23 +878,13 @@ export function WarrantyDetailClient({
               interestFree={item.interestRateBasis === 'none'}
               downloadHref={`/api/loans/${item.id}/ledger.csv`}
               /*
-                F1 (review). THE BUTTON STAYS. It used to UNMOUNT on open, which is what dropped
-                focus to <body> -- a keyboard or screen-reader user pressed it and the page went
-                quiet, with the form they had just opened mounted below the whole ledger table and
-                no scroll to it. A disclosure that stays put, says whether it is open, and names
+                F1 (review). THE BUTTONS STAY. Reconcile used to UNMOUNT on open, which is what
+                dropped focus to <body> -- a keyboard or screen-reader user pressed it and the page
+                went quiet, with the form they had just opened mounted below the whole ledger table
+                and no scroll to it. A disclosure that stays put, says whether it is open, and names
                 what it controls is the ordinary answer.
               */
-              onReconcile={
-                <button
-                  type="button"
-                  aria-expanded={reconciling}
-                  aria-controls={RECONCILE_PANEL_ID}
-                  onClick={() => setReconciling(!reconciling)}
-                  className={buttonClass('secondary', 'sm', 'min-h-11 sm:min-h-0')}
-                >
-                  {reconciling ? 'Close' : 'Reconcile to a statement…'}
-                </button>
-              }
+              onReconcile={loanActions}
             >
               {reconcilePanel}
             </LoanLedgerCard>
@@ -801,23 +899,13 @@ export function WarrantyDetailClient({
               <CardHeader
                 title="Reconcile to a statement"
                 description="Type what the statement says. That figure becomes the new starting point, and what we estimated is kept beside it."
-                action={
-                  <button
-                    type="button"
-                    aria-expanded={reconciling}
-                    aria-controls={RECONCILE_PANEL_ID}
-                    onClick={() => setReconciling(!reconciling)}
-                    className={buttonClass('secondary', 'sm', 'min-h-11 sm:min-h-0')}
-                  >
-                    {reconciling ? 'Close' : 'Reconcile to a statement…'}
-                  </button>
-                }
+                action={loanActions}
               />
               {reconcilePanel === null ? null : <CardBody>{reconcilePanel}</CardBody>}
             </Card>
           )}
           </>
-        )}
+        }
       </div>
 
       {/* Item 6 (v1.16.0 plan): rendered for EVERY item kind, unconditionally -- it replaces the
@@ -1300,6 +1388,7 @@ function EditForm({
   today,
   anchorDate,
   action,
+  onCancel,
 }: {
   item: WarrantyItemRow;
   people: { id: number; name: string }[];
@@ -1308,6 +1397,8 @@ function EditForm({
   /** v1.48.0, D5. The newest statement's own date, or null when the loan has never had one. */
   anchorDate: string | null;
   action: (formData: FormData) => void;
+  /** Closes the dialog this form is mounted in. */
+  onCancel: () => void;
 }) {
   const [isLifetime, setIsLifetime] = useState(item.isLifetime);
   const [months, setMonths] = useState(item.warrantyMonths === null ? '' : String(item.warrantyMonths));
@@ -1374,10 +1465,12 @@ function EditForm({
     }
   }, [loanApplicable]);
 
+  /*
+    No Card and no width cap: RowDialog is the shell now, and it supplies both the heading and the
+    42rem reading width. The `max-w-2xl` that used to live here was what made this form render at
+    half the width of the cards below it on a wide screen.
+  */
   return (
-    <Card className="max-w-2xl">
-      <CardHeader title="Edit this item" />
-      <CardBody>
         <form action={action} className="flex flex-col gap-4">
           <input type="hidden" name="itemId" value={item.id} />
           <input type="hidden" name="transactionId" value={item.transactionId ?? ''} />
@@ -1675,9 +1768,14 @@ function EditForm({
             <textarea name="notes" maxLength={2000} rows={3} defaultValue={item.notes ?? ''} className={textareaClass} />
           </Field>
 
-          <SubmitButton className="w-fit">Save changes</SubmitButton>
+          <div className="flex flex-wrap gap-2">
+            <SubmitButton className="w-fit">Save changes</SubmitButton>
+            {/* The dialog also closes on Escape and on the backdrop; a visible Cancel is what a
+                fifteen-field form owes somebody who opened it by accident. */}
+            <button type="button" onClick={onCancel} className={buttonClass('secondary')}>
+              Cancel
+            </button>
+          </div>
         </form>
-      </CardBody>
-    </Card>
   );
 }
