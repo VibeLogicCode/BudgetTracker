@@ -226,3 +226,43 @@ describe('the toolbar', () => {
     expect(screen.getByRole('button', { name: 'Reconcile…' })).toBeTruthy();
   });
 });
+
+/**
+ * Review C12. A line of credit three years in has upwards of a thousand rows, and the ledger is
+ * read from the bottom: what happened lately, and what is building up now. Rendering every row cost
+ * a 60-100 KB flight payload and a re-render on every keystroke in the edit form beside it.
+ */
+describe('C12: the expanded view is capped', () => {
+  function longLedger(count: number): Ledger {
+    const rows = Array.from({ length: count }, (_, index) => ({
+      kind: 'payment' as const,
+      date: `2026-01-${String((index % 28) + 1).padStart(2, '0')}`,
+      description: 'Payment',
+      paymentCents: 1_000 + index,
+      interestCents: null,
+      principalCents: null,
+      balanceCents: 1_000_000 - index,
+    }));
+    return ledger({ rows });
+  }
+
+  it('shows the most recent hundred, and says so', () => {
+    render(<LoanLedgerCard ledger={longLedger(250)} direction="owed" />);
+    expect(bodyRows()).toHaveLength(100);
+    expect(screen.getByText(/Showing the most recent 100 of 250 entries/)).toBeTruthy();
+    // The most recent rows are the ones kept: the last payment is the biggest index.
+    expect(textOf(bodyRows().at(-1))).toContain('12.49');
+  });
+
+  it('shows all of them when asked', () => {
+    render(<LoanLedgerCard ledger={longLedger(250)} direction="owed" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Show all 250' }));
+    expect(bodyRows()).toHaveLength(250);
+    expect(screen.queryByText(/Showing the most recent/)).toBeNull();
+  });
+
+  it('says nothing about a cap on a short ledger', () => {
+    render(<LoanLedgerCard ledger={ledger()} direction="owed" />);
+    expect(screen.queryByText(/Showing the most recent/)).toBeNull();
+  });
+});

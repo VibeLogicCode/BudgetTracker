@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { AmountCell, TableWrap } from '@/components/ui/Table';
 import { buttonClass } from '@/components/ui/Button';
@@ -27,7 +27,15 @@ import type { LoanDirection } from '@/lib/warranty/constants';
  * AmountCell for every money cell, TableWrap's own <table> rather than a second one nested inside
  * it, and a disclosure row in place of the `title` attribute nobody on a phone could reach.
  */
-export function LoanLedgerCard({
+/**
+ * C12 (review). MEMOISED, and the reason is the page it sits on.
+ *
+ * warranty-detail-client.tsx is one 1,500-line client component holding the edit form, so every
+ * keystroke in a field re-rendered this card: the collapse walked again, and a long line of credit
+ * re-rendered several hundred rows. Nothing this card shows can change while somebody types a
+ * vendor name, and its props are stable objects from the server render.
+ */
+export const LoanLedgerCard = memo(function LoanLedgerCard({
   ledger,
   direction,
   interestFree = false,
@@ -51,9 +59,20 @@ export function LoanLedgerCard({
   children?: React.ReactNode;
 }) {
   const [byMonth, setByMonth] = useState(false);
+  const [showAll, setShowAll] = useState(false);
   const words = INTEREST_WORDING[direction];
   // C12: the collapse walks every row, and nothing about it changes while the toggle sits still.
-  const rows = useMemo(() => (byMonth ? collapseToPeriods(ledger.rows) : ledger.rows), [byMonth, ledger.rows]);
+  const all = useMemo(() => (byMonth ? collapseToPeriods(ledger.rows) : ledger.rows), [byMonth, ledger.rows]);
+  /*
+    C12. THE MOST RECENT HUNDRED, unless asked otherwise.
+
+    A line of credit three years in has upwards of a thousand rows, and the ledger is read from the
+    bottom -- what happened lately, and what is building up now. Rendering all of it costs a flight
+    payload of 60-100 KB and a re-render nobody sees the value of. "Show all" is one press, and the
+    by-month view usually makes it unnecessary.
+  */
+  const rows = showAll || all.length <= ROW_CAP ? all : all.slice(-ROW_CAP);
+  const hidden = all.length - rows.length;
 
   return (
     <Card>
@@ -117,6 +136,15 @@ export function LoanLedgerCard({
           not reach the rows, so this table scrolled sideways on a phone while the narrower table
           below it stacked into cards.
         */}
+        {hidden === 0 ? null : (
+          <p className="text-sm text-muted">
+            Showing the most recent {rows.length} of {all.length} entries.{' '}
+            <button type="button" onClick={() => setShowAll(true)} className="text-accent-text hover:underline">
+              Show all {all.length}
+            </button>
+          </p>
+        )}
+
         <TableWrap bare responsive minWidth="52rem">
           <thead>
             <tr>
@@ -145,7 +173,10 @@ export function LoanLedgerCard({
       </CardBody>
     </Card>
   );
-}
+});
+
+/** How many entries the expanded view renders before it offers the rest behind a press (C12). */
+const ROW_CAP = 100;
 
 function Figure({ label, value }: { label: string; value: string }) {
   return (
