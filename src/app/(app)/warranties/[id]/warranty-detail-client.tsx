@@ -262,6 +262,18 @@ export function WarrantyDetailClient({
 
   const [reconciling, setReconciling] = useState(false);
   const reconcileRef = useRef<HTMLDivElement | null>(null);
+  /**
+   * F7. Open the edit form and land on the basis select, for the banner that says a rate needs one.
+   *
+   * The focus runs after the form has mounted, which is why it is a frame later rather than a call
+   * straight after setEditing: the select does not exist yet at the moment the button is pressed.
+   */
+  const openBasisEditor = (): void => {
+    setEditing(true);
+    setTimeout(() => {
+      document.querySelector<HTMLSelectElement>('select[name="interestRateBasis"]')?.focus();
+    }, 0);
+  };
   useEffect(() => {
     if (!reconciling) return;
     const field = reconcileRef.current?.querySelector<HTMLInputElement>('input[name="asOfDate"]');
@@ -683,7 +695,15 @@ export function WarrantyDetailClient({
           */}
           {item.interestRateBps !== null && item.interestRateBps > 0 && item.interestRateBasis === null ? (
             <Notice tone="warning">
-              This loan has a rate but no charging method. Pick one to see interest.
+              This loan has a rate but no charging method. Pick one to see interest.{' '}
+              {/*
+                F7: the banner names a fix and offers no way to it. The edit form is behind a button
+                further down the page, and the field is one of fifteen once it opens -- so this
+                opens the form and puts the cursor in the select the sentence is about.
+              */}
+              <button type="button" onClick={openBasisEditor} className="underline">
+                Choose how the rate is charged
+              </button>
             </Notice>
           ) : null}
           {/*
@@ -1473,7 +1493,15 @@ function EditForm({
                 entirely otherwise, so an absent field posts as blank -> null, the same
                 mechanism every other optional field on this form uses. */}
             {loanApplicable ? (
-              <>
+              /*
+                F7 (review): ONE GROUP, named. Seven money fields -- amount, rate, how the rate is
+                charged, direction, balance, the date that balance is true as of, the posting day --
+                sat in the same flat run as Name, Vendor and Serial, so the form read as fifteen
+                unrelated questions. A fieldset with a legend is what a browser and a screen reader
+                both already understand by "these belong together".
+              */
+              <fieldset className="flex flex-col gap-4 rounded-lg border border-line p-4">
+                <legend className="px-1 text-sm font-medium text-ink">About this loan</legend>
                 <Field label="Original amount" hint={principalHintForDirection(loanDirection)}>
                   <input
                     name="principal"
@@ -1575,20 +1603,30 @@ function EditForm({
                   />
                 </Field>
                 {/* C1. Almost every loan leaves this alone; a lender that bills on its own day does not. */}
+                {/*
+                  F7: the label used to be "Interest posts on day" with "Of the month." stranded in
+                  the hint, so the question only made sense read in two pieces -- and the field took
+                  any text at all, while the column's CHECK constraint refuses anything outside
+                  1..31. A number input with the bounds on it says the same rule before the save
+                  does.
+                */}
                 <Field
-                  label="Interest posts on day"
-                  hint="Of the month. Blank means the day the loan started."
+                  label="Interest posts on day of the month"
+                  hint="Blank means the day the loan started."
                 >
                   <input
                     name="postingDay"
-                    inputMode="numeric"
+                    type="number"
+                    min={1}
+                    max={31}
+                    step={1}
                     placeholder="e.g. 1"
                     value={postingDay}
                     onChange={(e) => setPostingDay(e.target.value)}
                     className={`${inputClass} w-24`}
                   />
                 </Field>
-              </>
+              </fieldset>
             ) : null}
           </div>
 

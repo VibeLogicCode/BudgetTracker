@@ -407,7 +407,10 @@ export function NewWarrantyClient({
                   entirely otherwise, so an absent field posts as blank -> null, the same
                   mechanism every other optional field on this form uses. */}
               {loanApplicable ? (
-                <>
+                // F7 (review): one named group, the same as the edit form. Seven money questions in
+                // the same flat run as Name and Vendor read as seven unrelated ones.
+                <fieldset className="flex flex-col gap-4 rounded-lg border border-line p-4">
+                  <legend className="px-1 text-sm font-medium text-ink">About this loan</legend>
                   {/* v1.14.0 (spec BU, ruling P16). First field in the block, so a reader picks
                       the direction before typing amounts. Reuses loanFieldsAllowedForKind as
                       its gate, exactly like the fields below -- no second predicate. */}
@@ -490,7 +493,7 @@ export function NewWarrantyClient({
                       className={inputClass}
                     />
                   </Field>
-                </>
+                </fieldset>
               ) : null}
             </div>
 

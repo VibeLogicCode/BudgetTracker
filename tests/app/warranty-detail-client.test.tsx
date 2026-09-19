@@ -254,16 +254,21 @@ describe('WarrantyDetailClient', () => {
   // select. v1.10.2 froze the type after the first save, so there is no switch left to make:
   // the labels follow the item's own saved kind, and each kind gets its own render.
   it("words the term legend and the open-ended label from the item's saved kind", () => {
-    // Scoped to the <legend> element itself: the read-only summary above the edit form
-    // renders the SAME text via the item's kind, so a page-wide getByText would match both.
+    /*
+      Scoped to the <legend> elements themselves: the read-only summary above the edit form renders
+      the SAME text via the item's kind, so a page-wide getByText would match both. v1.49.0 (F7)
+      added a second fieldset -- "About this loan" -- so the term legend is found by its own text
+      rather than by being the first one in the form.
+    */
+    const legends = (container: HTMLElement) => [...container.querySelectorAll('form legend')].map((node) => node.textContent);
     const { container } = renderDetail({ item: item({ typeId: 1, typeName: 'Appliance', kind: 'warranty' }) });
     fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
-    expect(container.querySelector('form legend')!.textContent).toBe('Warranty (months)');
+    expect(legends(container)).toContain('Warranty (months)');
 
     cleanup();
     const loan = renderDetail({ item: item({ typeId: 3, typeName: 'Car loan', kind: 'loan' }) });
     fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
-    expect(loan.container.querySelector('form legend')!.textContent).toBe('Term (months)');
+    expect(legends(loan.container)).toEqual(['About this loan', 'Term (months)']);
     // formOpenEndedLabel('loan') === 'Ongoing (no end date)'.
     expect(screen.getByText('Ongoing (no end date)')).toBeTruthy();
   });
@@ -1043,5 +1048,45 @@ describe('F1: the reconcile disclosure', () => {
     fireEvent.click(screen.getByRole('button', { name: /reconcile to a statement/i }));
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(document.getElementById('reconcile-panel')).toBeNull();
+  });
+});
+
+/**
+ * Review F7. Three small things on the loan form, each of which cost a household a step: the seven
+ * money fields sat in the same flat run as Name and Vendor; the posting-day question only made
+ * sense if you read its label and its hint as one sentence, and took any text at all; and the
+ * banner telling somebody to pick a charging method offered no way to go and pick one.
+ */
+describe('F7: the loan fields', () => {
+  const loan = { item: item({ typeId: 3, typeName: 'Car loan', kind: 'loan' }) };
+
+  it('groups them under one legend', () => {
+    const { container } = renderDetail(loan);
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    const group = [...container.querySelectorAll('fieldset')].find(
+      (node) => node.querySelector('legend')?.textContent === 'About this loan',
+    );
+    expect(group).toBeTruthy();
+    expect(group!.querySelector('[name="principal"]')).toBeTruthy();
+    expect(group!.querySelector('[name="interestRateBasis"]')).toBeTruthy();
+    expect(group!.querySelector('[name="postingDay"]')).toBeTruthy();
+  });
+
+  it('asks the posting day as one question, bounded to a real day', () => {
+    const { container } = renderDetail(loan);
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    const field = container.querySelector<HTMLInputElement>('[name="postingDay"]')!;
+    expect(field.type).toBe('number');
+    expect(field.min).toBe('1');
+    expect(field.max).toBe('31');
+    expect(screen.getByText('Interest posts on day of the month')).toBeTruthy();
+  });
+
+  it('offers a way to the fix from the rate-without-basis banner', () => {
+    renderDetail({
+      item: item({ typeId: 3, typeName: 'Car loan', kind: 'loan', interestRateBps: 549, interestRateBasis: null }),
+    });
+    fireEvent.click(screen.getByRole('button', { name: /choose how the rate is charged/i }));
+    expect(document.querySelector('select[name="interestRateBasis"]')).toBeTruthy();
   });
 });
