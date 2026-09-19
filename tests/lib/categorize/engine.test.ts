@@ -2332,13 +2332,18 @@ describe('E4: un-flagging holds against a rule that still matches', () => {
  * rules walked the rule list 5,000 times for what is at most a few hundred distinct answers.
  */
 describe('E5: the rename pass resolves each merchant once', () => {
-  function timeRenamePass(distinctMerchants: number): number {
+  /**
+   * How many times the pass consulted the rule list. resolveRename reads ctx.rules on every call,
+   * so a getter counts the calls exactly -- deterministic, where a wall-clock comparison measures
+   * the machine as much as the code.
+   */
+  function ruleListReads(rowCount: number, distinctMerchants: number): number {
     const { db, userId, accountId } = setup();
-    for (let index = 0; index < 1_200; index += 1) {
+    for (let index = 0; index < 50; index += 1) {
       upsertRenameRule({ pattern: `NOMATCH${index}`, matchType: 'contains', renameTo: `No ${index}`, userId, actorRole: 'admin' });
     }
     const ids: number[] = [];
-    for (let index = 0; index < 5_000; index += 1) {
+    for (let index = 0; index < rowCount; index += 1) {
       const merchant = `SHOP ${index % distinctMerchants}`;
       ids.push(
         db.get<{ id: number }>(sql`
@@ -2347,23 +2352,24 @@ describe('E5: the rename pass resolves each merchant once', () => {
           returning id`).id,
       );
     }
-    const started = performance.now();
-    applyRenameRules(ids);
-    const elapsed = performance.now() - started;
-    current?.cleanup();
-    current = null;
-    return elapsed;
+
+    const base = buildContext();
+    let reads = 0;
+    applyRenameRules(ids, {
+      get rules() {
+        reads += 1;
+        return base.rules;
+      },
+    });
+    return reads;
   }
 
-  /**
-   * SCALED, not pinned to a clock: the same 5,000 rows and 1,200 rules twice over, differing only in
-   * how many DISTINCT merchants they carry. Without the memo both walk the rule list 5,000 times
-   * and come out level; with it, the twenty-merchant pass walks it twenty times. A wall-clock
-   * ceiling would only measure the machine.
-   */
-  it('costs far less when the same merchants repeat', () => {
-    const manyDistinct = timeRenamePass(5_000);
-    const fewDistinct = timeRenamePass(20);
-    expect(fewDistinct).toBeLessThan(manyDistinct / 2);
+  it('consults the rules once per merchant, not once per row', () => {
+    // Two hundred rows over ten merchants: ten resolutions, not two hundred.
+    expect(ruleListReads(200, 10)).toBeLessThanOrEqual(10);
+  });
+
+  it('still resolves every distinct merchant', () => {
+    expect(ruleListReads(200, 40)).toBe(40);
   });
 });

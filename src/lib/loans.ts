@@ -8,7 +8,7 @@ import { amountWithinBounds } from '@/lib/categorize/amount-bounds';
 import { nowIso } from '@/lib/clock';
 // v1.31.0 R-03 / ruling R24: which display_description writer outranks which, defined once.
 import { displaySourceMayWrite } from '@/lib/display-source';
-import { addDaysIso, addMonths, addMonthsClamped, daysBetweenIso, monthEnd, monthOf, monthRange, todayIso } from '@/lib/dates';
+import { addDaysIso, addMonths, addMonthsClamped, daysBetweenIso, monthEnd, monthOf, monthRange, monthStart, todayIso } from '@/lib/dates';
 import type { RateVerdict } from '@/lib/notify/ratelimit';
 import { meanCents } from '@/lib/predict/stats';
 import { displayNameOf, getTransaction } from '@/lib/transactions';
@@ -3330,6 +3330,21 @@ export function debtOverTime(months: number, opts: { endMonth?: string; today?: 
     .all();
   if (loans.length === 0) return keys.map((month) => ({ month, owedCents: null, lentCents: null, interestCents: 0 }));
 
+  /*
+    C11 (review). THE WINDOW, not all history.
+
+    Both aggregates below feed one question: what has to be UNDONE to walk today's balance back to
+    the end of month M. Only movements in a month LATER than M matter, and M is never earlier than
+    the first key -- so a movement at or before the first key's month can be excluded outright. A
+    household with five years of statements and a twenty-four-month chart was aggregating every row
+    it had ever imported, per render, to use the last two years of them.
+
+    The cumulative interest line (G2) is the one figure that does look further back, so what falls
+    outside the window is summed once, below, rather than kept row by row.
+  */
+  const windowStart = keys[0] as string;
+  const afterWindowStart = monthStart(addMonths(windowStart, 1));
+
   const applied = getDb()
     .select({
       itemId: loanPayments.itemId,
@@ -3343,6 +3358,7 @@ export function debtOverTime(months: number, opts: { endMonth?: string; today?: 
     })
     .from(loanPayments)
     .innerJoin(transactions, eq(transactions.id, loanPayments.txnId))
+    .where(gte(transactions.date, afterWindowStart))
     .groupBy(loanPayments.itemId, sql`substr(${transactions.date}, 1, 7)`)
     .all();
 
@@ -3369,8 +3385,20 @@ export function debtOverTime(months: number, opts: { endMonth?: string; today?: 
       total: sql<number>`sum(${loanPostings.interestCents})`,
     })
     .from(loanPostings)
+    // From the first key's month forward: earlier postings are never undone (they are inside every
+    // month the chart draws), and their contribution to the cumulative line is the scalar below.
+    .where(gte(loanPostings.periodEnd, monthStart(windowStart)))
     .groupBy(loanPostings.itemId, sql`substr(${loanPostings.periodEnd}, 1, 7)`)
     .all();
+
+  // Everything charged before the window opened, as one figure. G2's line is cumulative over all
+  // time, so the window alone would restart it from zero at the left edge of every chart.
+  const interestBeforeWindow =
+    getDb()
+      .select({ total: sql<number>`coalesce(sum(${loanPostings.interestCents}), 0)` })
+      .from(loanPostings)
+      .where(lt(loanPostings.periodEnd, monthStart(windowStart)))
+      .get()?.total ?? 0;
 
   const postedByItem = new Map<number, Map<string, number>>();
   for (const row of postings) {
@@ -3388,6 +3416,28 @@ export function debtOverTime(months: number, opts: { endMonth?: string; today?: 
   // are different claims and a direction nobody uses should make the honest one.
   const hasOwed = loans.some((loan) => loan.direction === 'owed');
   const hasLent = loans.some((loan) => loan.direction !== 'owed');
+
+  /*
+    C11. The cumulative interest line, in ONE pass over the window.
+
+    This used to be re-folded inside the month loop -- every posting of every loan, re-summed for
+    every month drawn -- which is months x postings work for a running total the axis itself
+    supplies. A9: adjustments are counted alongside postings on purpose. A correction IS a net
+    change to what was charged, and leaving it out would draw a line that disagrees with the
+    ledger's own total.
+  */
+  const interestByMonth = new Map<string, number>();
+  for (const inner of postedByItem.values()) {
+    for (const [postedMonth, cents] of inner) {
+      interestByMonth.set(postedMonth, (interestByMonth.get(postedMonth) ?? 0) + cents);
+    }
+  }
+  const cumulativeInterest = new Map<string, number>();
+  let runningInterest = interestBeforeWindow;
+  for (const month of keys) {
+    runningInterest += interestByMonth.get(month) ?? 0;
+    cumulativeInterest.set(month, runningInterest);
+  }
 
   return keys.map((month) => {
     const end = monthEnd(month);
@@ -3425,20 +3475,14 @@ export function debtOverTime(months: number, opts: { endMonth?: string; today?: 
       if (owedSide) owedTotal = (owedTotal ?? 0) + balance;
       else lentTotal = (lentTotal ?? 0) + balance;
     }
-    // G2. Interest posted up to and including this month, across every loan. Never null: zero is
-    // the true answer for a household that has posted none, and a broken line would imply unknown.
-    let interestCents = 0;
-    for (const inner of postedByItem.values()) {
-      for (const [postedMonth, cents] of inner) {
-        if (postedMonth <= month) interestCents += cents;
-      }
-    }
-
     return {
       month,
       owedCents: owedUnknown ? null : owedTotal,
       lentCents: lentUnknown ? null : lentTotal,
-      interestCents,
+      // G2. Interest posted up to and including this month, across every loan. Never null: zero is
+      // the true answer for a household that has posted none, and a broken line would imply
+      // unknown. C11: read off the cumulative map built once above, not re-folded per month.
+      interestCents: cumulativeInterest.get(month) ?? interestBeforeWindow,
     };
   });
 }

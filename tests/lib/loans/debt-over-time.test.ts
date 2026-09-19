@@ -198,13 +198,15 @@ describe('MUST-15.7: the reconstruction, clause by clause', () => {
   });
 
   /**
-   * MUST-15.8, at three since v1.48.0: the loans, their payments, and their postings.
+   * MUST-15.8, at FOUR since v1.49.0: the loans, their payments, their postings inside the window,
+   * and one scalar for the interest charged before it (review C11 -- the cumulative line is the one
+   * figure that looks further back than the chart does).
    *
-   * The number is not the point -- the point is that it does not grow. Three CONSTANT queries feed
-   * a fold over months in memory; what this guards against is a query per loan or per month, which
-   * is how a twenty-four-month chart over a dozen loans becomes three hundred round trips.
+   * The number is not the point -- the point is that it does not grow. Four CONSTANT queries feed a
+   * fold over months in memory; what this guards against is a query per loan or per month, which is
+   * how a twenty-four-month chart over a dozen loans becomes three hundred round trips.
    */
-  it('MUST-15.8: the whole series is computed from a fixed three queries, whatever the span', () => {
+  it('MUST-15.8: the whole series is computed from a fixed four queries, whatever the span', () => {
     seedItem({ name: 'Loan', createdAt: '2024-01-01T00:00:00.000Z', balanceCents: 1_955_000, balanceUpdatedAt: '2026-06-10T00:00:00.000Z' });
     seedItem({ name: 'Second', createdAt: '2024-01-01T00:00:00.000Z', balanceCents: 500_000, balanceUpdatedAt: '2026-06-10T00:00:00.000Z' });
     const before = queryCount();
@@ -212,8 +214,8 @@ describe('MUST-15.7: the reconstruction, clause by clause', () => {
     const short = queryCount() - before;
     const middle = queryCount();
     debtOverTime(3, { endMonth: '2026-08', today: '2026-08-18' });
-    expect(short).toBe(3);
-    expect(queryCount() - middle).toBe(3);
+    expect(short).toBe(4);
+    expect(queryCount() - middle).toBe(4);
   });
 
   it('with no loans at all, every point is null', () => {
@@ -399,5 +401,57 @@ describe('v1.48.0: posted interest is undone walking backwards', () => {
     seedItem({ balanceCents: 500_000, balanceUpdatedAt: '2026-07-01T00:00:00.000Z' });
     const points = debtOverTime(2, { endMonth: '2026-08', today: '2026-08-18' });
     expect(points.map((point) => point.interestCents)).toEqual([0, 0]);
+  });
+});
+
+/**
+ * Review C11. Both aggregates used to read every payment and every posting the household had ever
+ * recorded, per render, to produce a chart of the last twenty-four months. The lower bound is the
+ * fix; the cumulative interest line, which genuinely does look further back, gets one scalar.
+ */
+describe('C11: the series reads its own window', () => {
+  /** A posting, written straight in -- this file's other posting helper is scoped to its describe. */
+  function charge(itemId: number, periodEnd: string, interestCents: number): void {
+    t.sqlite
+      .prepare(
+        `insert into loan_postings
+           (item_id, kind, period_start, period_end, opening_cents, interest_cents, closing_cents, created_at)
+         values (?, 'posting', ?, ?, 0, ?, 0, ?)`,
+      )
+      .run(itemId, periodEnd, periodEnd, interestCents, `${periodEnd}T00:00:00.000Z`);
+  }
+
+  it('leaves a payment from before the window out of the aggregate', () => {
+    const itemId = seedItem({
+      name: 'Loan',
+      createdAt: '2020-01-01T00:00:00.000Z',
+      balanceCents: 1_000_000,
+      balanceUpdatedAt: '2021-01-01T00:00:00.000Z',
+    });
+    // Five years back: outside any window this chart draws, and never undone by it.
+    link(itemId, { signedAmountCents: -500_000, appliedCents: 500_000, createdAt: '2021-03-15T00:00:00.000Z', txnDate: '2021-03-15' });
+    link(itemId, { signedAmountCents: -45_000, appliedCents: 45_000, createdAt: '2026-07-15T00:00:00.000Z', txnDate: '2026-07-15' });
+
+    const series = debtOverTime(3, { endMonth: '2026-08', today: '2026-08-18' });
+    // June is the balance plus only the payment made after it -- the 2021 one is inside the anchor.
+    expect(series.find((point) => point.month === '2026-06')!.owedCents).toBe(1_045_000);
+    expect(series.find((point) => point.month === '2026-08')!.owedCents).toBe(1_000_000);
+  });
+
+  it('keeps the cumulative interest line whole across the left edge', () => {
+    const itemId = seedItem({
+      name: 'Loan',
+      createdAt: '2020-01-01T00:00:00.000Z',
+      balanceCents: 1_000_000,
+      balanceUpdatedAt: '2021-01-01T00:00:00.000Z',
+    });
+    charge(itemId, '2024-02-01', 1_000);
+    charge(itemId, '2026-07-01', 250);
+
+    const series = debtOverTime(3, { endMonth: '2026-08', today: '2026-08-18' });
+    // The 2024 charge is before the window and still counted: the line is cumulative over all time.
+    expect(series.find((point) => point.month === '2026-06')!.interestCents).toBe(1_000);
+    expect(series.find((point) => point.month === '2026-07')!.interestCents).toBe(1_250);
+    expect(series.find((point) => point.month === '2026-08')!.interestCents).toBe(1_250);
   });
 });
