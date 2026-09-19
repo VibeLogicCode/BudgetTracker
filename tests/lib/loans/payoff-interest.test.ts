@@ -139,3 +139,44 @@ describe('payoffProjection: a balance being drawn on', () => {
     expect(payoffProjection(itemId, '2026-07-15')).not.toBeNull();
   });
 });
+
+/**
+ * Review B1. ratePpb(bps, 'apr_daily') is a DAY's rate, and the projection charged it once per
+ * MONTH -- a thirtieth of what the loan costs. A line of credit at 19.99% was told it would be paid
+ * off in five years against a payment that does not cover its interest.
+ *
+ * The projection now asks periodCharge for each month, the same function the ledger asks, so the
+ * dashboard's payoff date and the ledger's cycle charge cannot describe different loans.
+ */
+describe('payoffProjection: a daily rate costs a month, not a day', () => {
+  function lineOfCredit(monthlyPaymentCents: number): number {
+    const { itemId, user, accountId } = loanWith({ interestRateBps: 1999 });
+    setLoanAnchor({ itemId, asOfDate: '2025-12-31', balanceCents: 2_000_000, source: 'reconcile', actorUserId: user });
+    setBasis(itemId, 'apr_daily');
+    sixMonthsOfPayments(accountId, user, itemId, -monthlyPaymentCents);
+    return itemId;
+  }
+
+  /** $20,000 at 19.99% is about $10.95 a day: $335 a month, which $100 does not touch. */
+  it('projects nothing when the payment cannot cover a month of daily interest', () => {
+    expect(payoffProjection(lineOfCredit(10_000), '2026-07-15')).toBeNull();
+  });
+
+  it('still projects when the payment clears the month', () => {
+    expect(payoffProjection(lineOfCredit(70_000), '2026-07-15')).not.toBeNull();
+  });
+
+  /**
+   * Pinned against a hand simulation, because the whole point of B1 is that the app was confidently
+   * printing the wrong month.
+   *
+   * Balance at 2026-07-15 is $18,266.46. The daily rate is round(1999 x 100_000 / 365) = 547,671
+   * parts per billion, so a 31-day month at that balance costs $310.16 and a 30-day month $300.15,
+   * falling as the balance does. Against $700 a month, the balance reaches zero in the 35th month:
+   * June 2029. Charging a single day per month instead -- the defect -- reached zero in 27 months,
+   * October 2028, a year and eight months early.
+   */
+  it('lands where a month of daily charges puts it', () => {
+    expect(payoffProjection(lineOfCredit(70_000), '2026-07-15')!.projectedPayoffMonth).toBe('2029-06');
+  });
+});

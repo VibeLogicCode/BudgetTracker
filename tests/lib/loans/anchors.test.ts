@@ -224,7 +224,7 @@ describe('withdrawing a statement', () => {
     const { itemId, user, accountId } = makeLoan();
     setLoanAnchor({ itemId, asOfDate: '2026-07-01', balanceCents: 20_000_000, source: 'form', actorUserId: user });
     const txnId = pay(accountId, user, '2026-08-15', -100_000);
-    assignTransactionToLoan({ txnId, itemId, actorUserId: user });
+    assignTransactionToLoan({ txnId, itemId });
     expect(balanceOf(itemId)).toBe(19_900_000);
 
     setLoanAnchor({ itemId, asOfDate: '2027-06-01', balanceCents: 50_000_000, source: 'reconcile', actorUserId: user });

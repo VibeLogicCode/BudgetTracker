@@ -3,7 +3,7 @@ import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } fr
 import { listItemTypes } from '@/lib/warranty/types';
 import { createWarrantyItem } from '@/lib/warranty/items';
 import { createManualTransaction } from '@/lib/transactions';
-import { assignTransactionToLoan, listLoans, loanLedger, setLoanAnchor } from '@/lib/loans';
+import { assignTransactionToLoan, listLoans, loanLedger, postDueInterest, setLoanAnchor } from '@/lib/loans';
 import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
 
 let current: TestDb | null = null;
@@ -229,5 +229,104 @@ describe('listLoans: the reconciliation state', () => {
     const { itemId, user } = mortgage();
     setLoanAnchor({ itemId, asOfDate: '2026-01-01', balanceCents: 30_000_000, source: 'reconcile', actorUserId: user });
     expect(loanOf(itemId).reconciliation!.statedInterestTotalCents).toBeNull();
+  });
+});
+
+/**
+ * Review B2. potCents read `owing - posted + accrued`, and owing IS posted + accrued, so the figure
+ * was exactly twice this cycle's accrual -- it ignored every period already written down and
+ * counted the open one twice. interestSinceAnchorCents added what had been PAID to what had been
+ * charged, so making a payment appeared to increase the interest charged.
+ *
+ * Both now come off the ledger's own totals, which is the only way the loan page and the dashboard
+ * can agree about one loan.
+ */
+describe('listLoans: the interest figures come off the ledger', () => {
+  function charged(): { itemId: number; user: number; accountId: number } {
+    const made = mortgage();
+    setLoanAnchor({
+      itemId: made.itemId,
+      asOfDate: '2026-01-01',
+      balanceCents: 30_000_000,
+      source: 'reconcile',
+      actorUserId: made.user,
+    });
+    setBasis(made.itemId, 'apr_monthly');
+    return made;
+  }
+
+  it('counts interest charged and unpaid once, not twice', () => {
+    const { itemId } = charged();
+    const ledger = loanLedger(itemId, '2026-04-20')!;
+    // Periods have closed since the statement and nothing has been paid against any of them.
+    expect(ledger.interestPostedSinceStartCents).toBeGreaterThan(0);
+    expect(loanOf(itemId, '2026-04-20').interest!.potCents).toBe(
+      ledger.interestPostedSinceStartCents + ledger.accruedCents,
+    );
+  });
+
+  it('reports everything charged since the statement, paid or not', () => {
+    const { itemId, user, accountId } = charged();
+    const txnId = createManualTransaction({
+      accountId,
+      date: '2026-03-10',
+      description: 'MORTGAGE PAYMENT',
+      amountCents: -200_000,
+      categoryId: null,
+      attributedUserId: user,
+      userId: user,
+      actorRole: 'admin',
+    });
+    assignTransactionToLoan({ txnId, itemId });
+
+    const ledger = loanLedger(itemId, '2026-04-20')!;
+    const interest = loanOf(itemId, '2026-04-20').interest!;
+    expect(ledger.interestPaidToDateCents).toBeGreaterThan(0);
+    expect(interest.interestSinceAnchorCents).toBe(ledger.interestPostedSinceStartCents + ledger.accruedCents);
+    // A payment pays interest first, so the pot is smaller than the total charged -- never larger.
+    expect(interest.potCents).toBeLessThan(interest.interestSinceAnchorCents);
+    expect(interest.potCents).toBe(
+      Math.max(0, ledger.interestPostedSinceStartCents - ledger.interestPaidToDateCents) + ledger.accruedCents,
+    );
+  });
+});
+
+/**
+ * Review A7. When a loan has a basis but no rate-history row, the item's own columns are the
+ * fallback -- deliberately, because a period with no rate charges nothing and the loan would
+ * otherwise stop earning interest silently. But the fallback substituted 0 for a MISSING rate,
+ * which writes "this loan is interest-free" into closed periods forever. A missing rate has no
+ * ledger at all.
+ */
+describe('a rate that is missing, not zero', () => {
+  function rateless(): { itemId: number; user: number } {
+    const { itemId, user } = mortgage();
+    setLoanAnchor({ itemId, asOfDate: '2026-01-01', balanceCents: 30_000_000, source: 'form', actorUserId: user });
+    setBasis(itemId, 'apr_monthly');
+    current!.sqlite.prepare('update warranty_items set interest_rate_bps = null where id = ?').run(itemId);
+    current!.sqlite.prepare('delete from loan_rate_history where item_id = ?').run(itemId);
+    current!.sqlite.prepare('delete from loan_postings where item_id = ?').run(itemId);
+    return { itemId, user };
+  }
+
+  it('shows no ledger rather than claiming nothing is owed in interest', () => {
+    const { itemId } = rateless();
+    expect(loanLedger(itemId, '2026-04-20')).toBeNull();
+    expect(loanOf(itemId, '2026-04-20').interest).toBeNull();
+  });
+
+  it('posts nothing into the history', () => {
+    const { itemId } = rateless();
+    expect(postDueInterest(itemId, '2026-04-20').posted).toEqual([]);
+    expect(current!.sqlite.prepare('select count(*) as n from loan_postings where item_id = ?').get(itemId)).toEqual({
+      n: 0,
+    });
+  });
+
+  /** A rate of zero that somebody actually typed is a different claim, and it still computes. */
+  it('still computes for a rate that really is zero', () => {
+    const { itemId } = rateless();
+    current!.sqlite.prepare('update warranty_items set interest_rate_bps = 0 where id = ?').run(itemId);
+    expect(loanLedger(itemId, '2026-04-20')).not.toBeNull();
   });
 });

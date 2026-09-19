@@ -26,6 +26,7 @@ import { raiseInterestPosted, type PostedLoan } from '@/lib/notify/evaluate/loan
 import { raiseLoanPaidOff } from '@/lib/notify/raise';
 import {
   buildLedger,
+  periodCharge,
   postingDayFor,
   type Ledger,
   type LedgerInput,
@@ -1077,7 +1078,15 @@ function ledgerFacts(
       .from(warrantyItems)
       .where(eq(warrantyItems.id, itemId))
       .get()?.rateBps;
-    history.push({ effectiveFrom: anchor.asOfDate, rateBps: rateBps ?? 0, basis: item.basis });
+    /*
+      A MISSING rate is not a rate of zero (review A7). `?? 0` turned "we do not know what this
+      loan costs" into the positive claim that it costs nothing, and that claim was then written
+      into closed periods, where it stays. No rate, no ledger: the screen says the rate is missing
+      and the sweep posts nothing, which is recoverable. A rate somebody actually typed as 0 is a
+      different statement and still computes.
+    */
+    if (rateBps === null || rateBps === undefined) return null;
+    history.push({ effectiveFrom: anchor.asOfDate, rateBps, basis: item.basis });
   }
 
   return {
@@ -2712,13 +2721,28 @@ export function payoffProjection(itemId: number, today: string): PayoffProjectio
     growing: null, and the page says "at this pace the balance is not going down."
   */
   if (item?.basis != null) {
-    const ppb = ratePpb(item.rateBps ?? 0, item.basis);
+    // A7 again: no rate means nothing honest to project, rather than a projection at zero interest.
+    if (item.rateBps === null) return null;
+    const rate: RateInForce = { effectiveFrom: today, rateBps: item.rateBps, basis: item.basis };
     let owing = balanceCents;
     for (let elapsed = 1; elapsed <= 1200; elapsed += 1) {
-      const charge =
-        item.basis === 'simple_on_principal'
-          ? chargeCents(item.principalCents ?? 0, ppb)
-          : chargeCents(owing, ppb);
+      /*
+        THE ENGINE'S OWN ARITHMETIC, month by month (review B1).
+
+        This loop used to charge ratePpb() once per iteration. That is right for the monthly bases,
+        where the periodic rate IS a month -- and wrong by a factor of thirty for apr_daily, where
+        it is a day. A line of credit at 19.99% was projected to clear in five years against a
+        payment that does not cover its interest. periodCharge dispatches on the basis and counts
+        the month's real days, so the payoff date and the ledger's cycle charge come from one place.
+      */
+      const charge = periodCharge({
+        start: addMonths(thisMonth, elapsed - 1) + '-01',
+        end: addMonths(thisMonth, elapsed) + '-01',
+        openingCents: owing,
+        principalCents: item.principalCents,
+        movements: [],
+        rate,
+      }).interestCents;
       const next = owing + charge - monthlyAppliedCents;
       if (next >= owing) return null;
       owing = next;
@@ -2852,23 +2876,6 @@ function interestFor(
   if (newest === null || item.basis === null) return { interest: null, reconciliation };
 
   /*
-    Movements in the loan's OWN frame, dated by the TRANSACTION (the v1.25.0 rule), from the
-    confirmed figure forward. loanSignedDelta is applied here so interest.ts never learns which way
-    the loan points -- ruling P4, which is also why the literal stays out of this file.
-  */
-  const movements = getDb()
-    .select({ date: transactions.date, appliedCents: loanPayments.appliedCents, txnAmountCents: transactions.amountCents })
-    .from(loanPayments)
-    .innerJoin(transactions, eq(transactions.id, loanPayments.txnId))
-    .where(and(eq(loanPayments.itemId, itemId), gt(transactions.date, newest.asOfDate)))
-    .orderBy(asc(transactions.date), asc(loanPayments.id))
-    .all()
-    .map((row) => ({
-      date: row.date,
-      amountCents: loanSignedDelta(item.direction, row.txnAmountCents < 0 ? -row.appliedCents : row.appliedCents),
-    }));
-
-  /*
     v1.48.0. The SAME engine the ledger card reads, so the dashboard, net worth and the loan page
     cannot print different figures for one loan.
 
@@ -2879,7 +2886,6 @@ function interestFor(
   */
   const ledger = loanLedger(itemId, today);
   if (ledger === null) return { interest: null, reconciliation };
-  void movements;
 
   return {
     interest: {
@@ -2887,14 +2893,21 @@ function interestFor(
       anchorDate: newest.asOfDate,
       anchorBalanceCents: newest.balanceCents,
       owingCents: ledger.owingCents,
-      // What has been charged and not yet paid: everything posted since the statement, less what
-      // the payments covered.
-      potCents: Math.max(0, ledger.owingCents - ledger.postedBalanceCents + ledger.accruedCents),
+      /*
+        What has been charged and not yet paid (review B2).
+
+        The old expression was `owing - posted + accrued`, and owing IS posted + accrued, so it
+        reduced to twice this cycle's accrual: every period already written down was ignored and the
+        open one was counted twice. Both figures now come straight off the ledger's own totals --
+        the same totals the loan page prints -- so the two screens cannot disagree.
+      */
+      potCents:
+        Math.max(0, ledger.interestPostedSinceStartCents - ledger.interestPaidToDateCents) + ledger.accruedCents,
       thisMonthChargeCents: ledger.interestThisPeriodCents,
       yearAtCurrentBalanceCents: ledger.yearAtThisBalanceCents,
-      interestSinceAnchorCents: ledger.interestPaidToDateCents + ledger.accruedCents +
-        Math.max(0, ledger.postedBalanceCents - newest.balanceCents +
-          movements.reduce((total, movement) => total - movement.amountCents, 0)),
+      // Everything CHARGED since the statement, paid or not. Adding what was paid on top of what
+      // was posted, as this did, made a payment look like it increased the interest charged.
+      interestSinceAnchorCents: ledger.interestPostedSinceStartCents + ledger.accruedCents,
     },
     reconciliation,
   };
@@ -2984,9 +2997,15 @@ export function listLoans(today: string, viewer: Viewer): LoanSummary[] {
  * tests/ops/viewer-construction.test.ts.
  */
 export function loansTotalOwedCents(): number {
-  // v1.14.0 (spec BU, ruling P6): money someone owes the household is not a debt the household
-  // owes, so a loan pointed the other way does not belong in this total -- src/lib/networth.ts
-  // reads this function and correctly stops counting those loans without being edited itself.
+  /*
+    v1.14.0 (spec BU, ruling P6): money someone owes the household is not a debt the household owes,
+    so a loan pointed the other way does not belong in this total.
+
+    WHO READS THIS. The claim that used to sit here -- that networth.ts reads this function -- was
+    never true: net worth takes its debt from debtOverTime, and the dashboard sums stored balances
+    of its own (review B6). So the app has had three ways of saying what the household owes. Routing
+    every surface through this one is the fix, and it lands with the dashboard work.
+  */
   return listLoans(todayIso(), HOUSEHOLD_VIEWER)
     .filter((loan) => loan.loanDirection === 'owed')
     /*
