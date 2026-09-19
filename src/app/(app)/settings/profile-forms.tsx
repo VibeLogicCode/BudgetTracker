@@ -88,7 +88,7 @@ export function ProfileForms({ totpEnabled, recoveryLeft }: { totpEnabled: boole
               alt="TOTP enrollment QR code"
               width={240}
               height={240}
-              className="rounded-md border border-line bg-white p-2"
+              className="rounded-md border border-line bg-surface p-2"
             />
             <code className="break-all rounded-md bg-surface-2 px-2 py-1.5 font-mono text-xs text-muted">{enrollment.secret}</code>
             {/*

@@ -105,22 +105,19 @@ describe('table cells never truncate silently', () => {
  * means" defect the truncation guard above exists for, just triggered by going responsive
  * instead of by going narrow.
  *
- * This is a FLOOR (`data-label=` count >= `<th scope="col">` count), not an exact count, for the
- * same reason the fixed/minWidth guard above is grep rather than a render test: several pages
- * render more than one table per file, and some of those tables are not `responsive` at all, so
- * an exact match between one table's headers and the whole file's labels would report failures
- * that are not real. A floor still catches the actual bug -- a responsive table added without
- * labelling its cells -- because that file's `data-label=` count stays at whatever the OTHER
- * tables in it already contribute, which is below the new header count.
+ * COUNTED AGAINST THE CELLS, not the headers. This used to be a floor -- data-label count >=
+ * `<th scope="col">` count -- which was a proxy, and v1.49.0 (review F6) showed why: scoping every
+ * header in the notification settings tripped it, because two of that table's columns come from one
+ * `CHANNELS.map` and therefore share a single `data-label={...}` in the source while every RENDERED
+ * cell has one. Counting `<td>`s is the thing ruling S2 actually says, and a loop cannot skew it.
  *
- * NOTE for whoever runs this next: lanes 2-4 of the v1.15.0 plan are landing `responsive` on
- * their own tables concurrently with this guard being written. Until every lane has added its
- * `data-label`s, this test can fail on files this lane does not own -- that is expected mid-
- * migration, not a bug in the guard. Fix it by finishing the labelling in that file, not by
- * loosening this check.
+ * Still a file-level count rather than a per-table one, for the reason the fixed/minWidth guard
+ * above is a grep: several pages render more than one table, and a `<td>` in a non-responsive table
+ * beside a responsive one is not a defect. The bug this catches -- a responsive table added with
+ * unlabelled cells -- still shows up, because those cells push the unlabelled count above zero.
  */
 describe('a responsive table labels every cell (ruling S2)', () => {
-  it('every file with a responsive TableWrap has at least as many data-label= as <th scope="col">', () => {
+  it('every <td> in a file with a responsive TableWrap carries a data-label', () => {
     const bad: string[] = [];
     for (const rel of tsxFiles('src')) {
       const source = fs.readFileSync(path.join(root, rel), 'utf8');
@@ -129,11 +126,18 @@ describe('a responsive table labels every cell (ruling S2)', () => {
       );
       if (!isResponsive) continue;
 
-      const labelCount = (source.match(/data-label=/g) ?? []).length;
-      const headerCount = (source.match(/<th scope="col"/g) ?? []).length;
-      if (labelCount < headerCount) {
-        bad.push(`${rel}: ${labelCount} data-label= vs ${headerCount} <th scope="col">`);
-      }
+      /*
+        Comments first: several files DESCRIBE their `<td>` markup in prose, and a sentence about a
+        cell is not a cell. Then each opening tag whole, newlines included -- these are formatted
+        one attribute per line, so a single-line match would read every multi-line cell as bare.
+
+        A cell spanning the whole row (a disclosure, an empty state) labels nothing: there is no
+        column for it to name, and the stacked layout prints it as its own line either way.
+      */
+      const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+      const cells = [...code.matchAll(/<td[\s\S]*?>/g)].map((match) => match[0]);
+      const unlabelled = cells.filter((cell) => !cell.includes('data-label') && !cell.includes('colSpan')).length;
+      if (unlabelled > 0) bad.push(`${rel}: ${unlabelled} of ${cells.length} <td> without data-label`);
     }
     expect(bad).toEqual([]);
   });

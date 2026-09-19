@@ -354,11 +354,11 @@ export function ReportsClient({
             <TableWrap bare responsive>
               <thead>
                 <tr>
-                  <th>Category</th>
-                  <th className="text-right">Median</th>
-                  <th className="text-right">Average</th>
-                  <th>Trend</th>
-                  <th className="text-right">Suggested</th>
+                  <th scope="col">Category</th>
+                  <th scope="col" className="text-right">Median</th>
+                  <th scope="col" className="text-right">Average</th>
+                  <th scope="col">Trend</th>
+                  <th scope="col" className="text-right">Suggested</th>
                 </tr>
               </thead>
               <tbody>

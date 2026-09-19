@@ -212,6 +212,7 @@ describe('MUST-11.3: the matrix is generated from the registry', () => {
       trigger: 'tick',
       defaultEnabled: false,
       householdEligible: false,
+      group: 'money',
     } as const;
     const { container } = render(<NotificationsClient {...props({ tab: 'events', events: [...eventsFor('admin'), future] })} />);
     expect(container.textContent).toContain('On pace to overshoot');
@@ -231,8 +232,15 @@ describe('MUST-11.3: the matrix is generated from the registry', () => {
     const telegram = container.querySelector('input[name="pref:coming_due:telegram"]') as HTMLInputElement;
     const email = container.querySelector('input[name="pref:coming_due:email"]') as HTMLInputElement;
     expect(telegram.disabled).toBe(true);
-    expect(telegram.title).toBe('Set up this channel first.');
+    /*
+      F6 (review): the explanation is VISIBLE now, not a `title`. A tooltip on a disabled input is
+      the one control a browser will not fire hover events for on touch, so on a phone the box was
+      simply dead with no reason given.
+    */
+    expect(telegram.title).toBe('');
+    expect(telegram.closest('td')?.textContent).toContain('Set up this channel first.');
     expect(email.disabled).toBe(false);
+    expect(email.closest('td')?.textContent).not.toContain('Set up this channel first.');
   });
 
   it('reflects the effective value, not the raw stored one', () => {
@@ -995,5 +1003,33 @@ describe('v1.29.0: four URL-driven tabs', () => {
   it('a member on the Email tab does not see the "Outbound email (SMTP)" heading', () => {
     const { container } = render(<NotificationsClient {...props({ role: 'member', tab: 'email' })} />);
     expect(container.textContent).not.toContain('Outbound email (SMTP)');
+  });
+});
+
+/**
+ * Review F5. Twenty-nine preferences in one flat run: "Coming due" next to "New sign-in" next to
+ * "Loan interest posted". A household deciding what it wants to hear about had to read every line
+ * to find the three it cared about.
+ */
+describe('F5: the preferences are grouped', () => {
+  it('renders one heading per group, in order', () => {
+    const { container } = render(<NotificationsClient {...props({ tab: 'events' })} />);
+    const headings = [...container.querySelectorAll('th[scope="rowgroup"]')].map(
+      (node) => node.querySelector('span')?.textContent,
+    );
+    expect(headings).toEqual(['Money coming and going', 'Loans and goals', 'This app and your account']);
+  });
+
+  it('files the loan and goal events under "Loans and goals"', () => {
+    const { container } = render(<NotificationsClient {...props({ tab: 'events' })} />);
+    const rows = [...container.querySelectorAll('tbody tr')];
+    const start = rows.findIndex((row) => row.querySelector('th[scope="rowgroup"] span')?.textContent === 'Loans and goals');
+    const end = rows.findIndex((row, index) => index > start && row.querySelector('th[scope="rowgroup"]'));
+    const inGroup = rows
+      .slice(start + 1, end === -1 ? rows.length : end)
+      .flatMap((row) => [...row.querySelectorAll('input')].map((input) => input.getAttribute('name') ?? ''));
+    for (const event of ['loan_interest_posted', 'loan_payment_missed', 'loan_reconcile_due', 'loan_paid_off', 'goal_reached', 'goal_off_pace']) {
+      expect({ event, present: inGroup.some((name) => name.includes(event)) }).toEqual({ event, present: true });
+    }
   });
 });

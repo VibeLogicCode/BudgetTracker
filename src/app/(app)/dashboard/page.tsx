@@ -1127,22 +1127,21 @@ function SavedThisMonthTile({ progress }: { progress: SavingsProgress }) {
         </>
       }
       footer={
+        /*
+          F7 (review): the SHARED ProgressBar, not a second hand-rolled one. This markup was a copy
+          of it -- same track, same fill, same aria -- with its own tone rule, so a change to the
+          house bar reached every bar in the app except this one.
+
+          The tone is passed rather than derived: "met the target" is good news at any percentage,
+          where the shared default reads 80% as a warning because it was written for budgets, where
+          spending most of the limit IS one.
+        */
         targetCents !== null && targetCents > 0 ? (
-          <div
-            role="progressbar"
-            aria-label="Savings target progress"
-            aria-valuenow={clampedPct}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            className="h-2 w-full overflow-hidden rounded-full bg-surface-3"
-          >
-            <div
-              style={{ width: `${clampedPct}%` }}
-              className={`h-full rounded-full transition-[width] duration-300 ease-out ${
-                netCents >= targetCents ? 'bg-positive-solid' : 'bg-warning-solid'
-              }`}
-            />
-          </div>
+          <ProgressBar
+            pct={clampedPct}
+            tone={netCents >= targetCents ? 'calm' : 'warning'}
+            label="Savings target progress"
+          />
         ) : null
       }
     />

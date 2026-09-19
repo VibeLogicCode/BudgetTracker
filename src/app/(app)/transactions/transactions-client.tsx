@@ -3780,7 +3780,10 @@ export function TransactionsClient({
                     repeats identically down the column and is already the Account filter above --
                     but it was asked for back, so it now reads as `cell-stack-meta` context
                     under the merchant instead of vanishing outright. */}
-                <td className="text-muted cell-stack-meta" title={row.accountName} data-label="Account">{row.accountName}</td>
+                {/* F6: no title. The cell is not truncated, so the attribute repeated text already
+                    on screen -- and a tooltip that says what the cell says is noise a screen reader
+                    reads twice. */}
+                <td className="text-muted cell-stack-meta" data-label="Account">{row.accountName}</td>
                 <td className="cell-stack-headline" data-label="Description">
                   <span className="flex flex-wrap items-center gap-1.5">
                     {/* Renaming happens from the row menu now. The title stays: it is the only

@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState, useState } from 'react';
+import { Fragment, useActionState, useState } from 'react';
 import { BellIcon } from '@/components/icons';
 import { Button } from '@/components/ui/Button';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
@@ -15,7 +15,7 @@ import { SubmitButton } from '@/components/SubmitButton';
 import type { SmtpPreset, SmtpRecord, TargetRecord, UserSettings } from '@/lib/notify/config';
 import type { SMTP_PRESETS } from '@/lib/notify/config';
 import type { Channel, NotificationEventDef } from '@/lib/notify/events';
-import { eventDef } from '@/lib/notify/events';
+import { eventDef, NOTIFICATION_GROUPS } from '@/lib/notify/events';
 // v1.28.0 Lane 2 (family channels): the household row shape lives in its own module, distinct
 // from the personal TargetRecord above (src/lib/notify/household.ts's own docblock explains
 // why the two are not shared).
@@ -1082,38 +1082,71 @@ export function NotificationsClient(data: NotificationsPageData) {
                 <TableWrap responsive>
                   <thead>
                     <tr>
-                      <th className="text-left">Event</th>
-                      <th>Telegram</th>
-                      <th>Email</th>
+                      <th scope="col" className="text-left">Event</th>
+                      <th scope="col">Telegram</th>
+                      <th scope="col">Email</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {data.events.map((event) => (
-                      <tr key={event.id}>
-                        {/* v1.15.0 (responsive rows): the event name is what tells one row from
-                            another in this matrix, so it is the phone card's headline. No
-                            cell-stack-amount: nothing on this row is money. */}
-                        <td className="text-left cell-stack-headline" data-label="Event">
-                          <span className="font-semibold text-ink">{event.label}</span>
-                          <span className="block text-muted">{event.blurb}</span>
-                        </td>
-                        {CHANNELS.map((channel) => {
-                          const configured = data.targets[channel]?.enabled ?? false;
-                          return (
-                            <td key={channel} className="text-center" data-label={channel === 'telegram' ? 'Telegram' : 'Email'}>
-                              <input
-                                type="checkbox"
-                                name={`pref:${event.id}:${channel}`}
-                                defaultChecked={data.prefs[`${event.id}:${channel}`] ?? event.defaultEnabled}
-                                disabled={!configured}
-                                title={configured ? undefined : NO_CHANNEL_TOOLTIP}
-                                aria-label={`${event.label} on ${channel}`}
-                              />
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    ))}
+                    {/*
+                      F5 (review): THREE GROUPS, not one run of twenty-nine rows. "Coming due" sat
+                      next to "New sign-in" next to "Loan interest posted", so a household deciding
+                      what it wanted to hear about had to read every line to find the three it
+                      cared about. The grouping lives on the event definitions (events.ts), so this
+                      page cannot drift from what an event actually is.
+                    */}
+                    {NOTIFICATION_GROUPS.map((group) => {
+                      const events = data.events.filter((event) => event.group === group.id);
+                      if (events.length === 0) return null;
+                      return (
+                        <Fragment key={group.id}>
+                          <tr>
+                            {/* A row header, which is what a group heading inside a table is. */}
+                            <th scope="rowgroup" colSpan={3} className="bg-surface-2 text-left">
+                              <span className="font-semibold text-ink">{group.title}</span>
+                              <span className="block font-normal text-muted">{group.blurb}</span>
+                            </th>
+                          </tr>
+                          {events.map((event) => (
+                            <tr key={event.id}>
+                              {/* v1.15.0 (responsive rows): the event name is what tells one row
+                                  from another in this matrix, so it is the phone card's headline.
+                                  No cell-stack-amount: nothing on this row is money. */}
+                              <td className="text-left cell-stack-headline" data-label="Event">
+                                <span className="font-semibold text-ink">{event.label}</span>
+                                <span className="block text-muted">{event.blurb}</span>
+                              </td>
+                              {CHANNELS.map((channel) => {
+                                const configured = data.targets[channel]?.enabled ?? false;
+                                return (
+                                  <td
+                                    key={channel}
+                                    className="text-center"
+                                    data-label={channel === 'telegram' ? 'Telegram' : 'Email'}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      name={`pref:${event.id}:${channel}`}
+                                      defaultChecked={data.prefs[`${event.id}:${channel}`] ?? event.defaultEnabled}
+                                      disabled={!configured}
+                                      aria-label={`${event.label} on ${channel}`}
+                                    />
+                                    {/*
+                                      F6: why the box is disabled, VISIBLY. It was a `title` -- a
+                                      hover tooltip on a disabled input, which is the one control a
+                                      browser will not even fire hover events for on touch.
+                                    */}
+                                    {configured ? null : (
+                                      <span className="block text-xs text-subtle">{NO_CHANNEL_TOOLTIP}</span>
+                                    )}
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          ))}
+                        </Fragment>
+                      );
+                    })}
                   </tbody>
                 </TableWrap>
                 <p className="text-sm text-muted">{PRIVACY_SENTENCE}</p>
@@ -1201,9 +1234,9 @@ export function NotificationsClient(data: NotificationsPageData) {
                   <TableWrap responsive>
                     <thead>
                       <tr>
-                        <th className="text-left">Event</th>
-                        <th>Telegram</th>
-                        <th>Email</th>
+                        <th scope="col" className="text-left">Event</th>
+                        <th scope="col">Telegram</th>
+                        <th scope="col">Email</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1266,11 +1299,11 @@ export function NotificationsClient(data: NotificationsPageData) {
                 <TableWrap responsive>
                   <thead>
                     <tr>
-                      <th className="text-left">When</th>
-                      {data.role === 'admin' ? <th className="text-left">Who</th> : null}
-                      <th className="text-left">Event</th>
-                      <th className="text-left">Channel</th>
-                      <th className="text-left">Status</th>
+                      <th scope="col" className="text-left">When</th>
+                      {data.role === 'admin' ? <th scope="col" className="text-left">Who</th> : null}
+                      <th scope="col" className="text-left">Event</th>
+                      <th scope="col" className="text-left">Channel</th>
+                      <th scope="col" className="text-left">Status</th>
                     </tr>
                   </thead>
                   <tbody>

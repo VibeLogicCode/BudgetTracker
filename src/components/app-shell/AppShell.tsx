@@ -325,6 +325,12 @@ function UserMenu({ user }: { user: ShellUser }) {
         onClick={() => setOpen((value) => !value)}
         aria-haspopup="menu"
         aria-expanded={open}
+        /*
+          F6 (review). Below 640px the name beside the initial is hidden and the initial itself is
+          aria-hidden, so this button had NO accessible name at all on a phone -- a screen reader
+          announced "button", for the control that holds sign-out.
+        */
+        aria-label="Account menu"
         className={buttonClass('ghost', 'md', 'gap-2 rounded-full py-1 pl-1 pr-2')}
       >
         <span

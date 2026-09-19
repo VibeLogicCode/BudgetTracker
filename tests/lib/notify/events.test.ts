@@ -199,6 +199,7 @@ describe('MUST-6.1: the update_available registry entry', () => {
       trigger: 'tick',
       defaultEnabled: true,
       householdEligible: false,
+      group: 'account',
     });
   });
 
@@ -228,6 +229,7 @@ describe('Task 8 (v1.7.0): the sync_failed registry entry', () => {
       trigger: 'immediate',
       defaultEnabled: true,
       householdEligible: false,
+      group: 'account',
     });
   });
 
@@ -291,6 +293,7 @@ describe('Task 16 (v1.7.0): the monthly_digest registry entry', () => {
       trigger: 'daily_slot',
       defaultEnabled: false,
       householdEligible: true,
+      group: 'money',
     });
   });
 
@@ -323,6 +326,7 @@ describe('backlog item 17 / Part 4: the pack_update_available registry entry', (
       trigger: 'tick',
       defaultEnabled: true,
       householdEligible: false,
+      group: 'account',
     });
   });
 

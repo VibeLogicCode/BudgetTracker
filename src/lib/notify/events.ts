@@ -63,7 +63,26 @@ export interface NotificationEventDef {
    * pairing it is far likelier to be a mistake than a new idea.
    */
   readonly householdEligible: boolean;
+  /**
+   * F5 (review). Which heading this event sits under in Settings.
+   *
+   * The preferences table was a flat run of twenty-nine rows: "Coming due" next to "New sign-in"
+   * next to "Loan interest posted". A household deciding what it wants to hear about had to read
+   * every line to find the three it cared about. Three groups is what the list already was, in
+   * spirit -- money, the things the household is paying off or saving toward, and the account
+   * itself -- so the grouping is recorded here rather than guessed at by the page.
+   */
+  readonly group: NotificationGroup;
 }
+
+export type NotificationGroup = 'money' | 'loans-goals' | 'account';
+
+/** The order the settings page renders them in, and what each heading says. */
+export const NOTIFICATION_GROUPS: readonly { id: NotificationGroup; title: string; blurb: string }[] = [
+  { id: 'money', title: 'Money coming and going', blurb: 'Budgets, spending and the regular summaries.' },
+  { id: 'loans-goals', title: 'Loans and goals', blurb: 'What is being paid off, and what is being saved toward.' },
+  { id: 'account', title: 'This app and your account', blurb: 'Backups, updates, sign-ins and connections.' },
+];
 
 /**
  * MUST-4.1: the defaults split on one line: ON for "something is wrong, or a deadline is
@@ -76,6 +95,7 @@ export interface NotificationEventDef {
 export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
   {
     id: 'coming_due',
+    group: 'money',
     label: 'Something is coming due',
     blurb: 'A warranty, subscription, contract or loan reaches its date soon, or a bill installment is due. One message listing everything.',
     audience: 'all',
@@ -85,6 +105,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
   },
   {
     id: 'budget_threshold',
+    group: 'money',
     label: 'A budget is getting close',
     blurb: 'A category has passed the percentage you set. Reported in the spending summary rather than as its own message.',
     audience: 'all',
@@ -94,6 +115,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
   },
   {
     id: 'budget_exceeded',
+    group: 'money',
     label: 'A budget has gone over',
     blurb: 'A category has spent more than its limit. Reported in the spending summary rather than as its own message.',
     audience: 'all',
@@ -103,6 +125,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
   },
   {
     id: 'backup_failed',
+    group: 'account',
     label: 'The nightly backup failed',
     blurb: 'The unattended 2am backup did not complete.',
     audience: 'admin',
@@ -112,6 +135,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
   },
   {
     id: 'weekly_digest',
+    group: 'money',
     label: 'Weekly spending summary',
     blurb: 'What the household spent over the last seven days.',
     audience: 'all',
@@ -121,6 +145,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
   },
   {
     id: 'new_signin',
+    group: 'account',
     label: 'New sign-in to your account',
     blurb: 'Somebody signed in as you, from somewhere.',
     audience: 'all',
@@ -130,6 +155,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
   },
   {
     id: 'password_changed',
+    group: 'account',
     label: 'Your password was changed',
     blurb: 'Somebody changed the password on your account.',
     audience: 'all',
@@ -139,6 +165,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
   },
   {
     id: 'mfa_disabled',
+    group: 'account',
     label: 'Two-factor was switched off',
     blurb: 'Two-factor authentication was turned off on your account.',
     audience: 'all',
@@ -148,6 +175,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
   },
   {
     id: 'restore_outcome',
+    group: 'account',
     label: 'A restore finished',
     blurb: 'A backup was restored into this install, successfully or not.',
     audience: 'admin',
@@ -157,6 +185,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
   },
   {
     id: 'stale_import',
+    group: 'money',
     label: 'Nothing has been imported lately',
     blurb: 'An account has gone the number of weeks you set with no import. One message a week naming every quiet account.',
     audience: 'all',
@@ -166,6 +195,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
   },
   {
     id: 'update_available',
+    group: 'account',
     label: 'An update is available',
     blurb: 'A new MAJOR version of Budget Tracker is published and needs your say-so. Smaller releases are shown in Settings only.',
     audience: 'admin',
@@ -175,6 +205,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
   },
   {
     id: 'budget_pace',
+    group: 'money',
     label: 'On pace to go over budget',
     blurb: 'A category is heading past its limit before the month is out. Reported in the spending summary rather than as its own message.',
     audience: 'all',
@@ -184,6 +215,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
   },
   {
     id: 'unusual_transaction',
+    group: 'money',
     label: 'An unusually large charge',
     blurb: 'A charge is several times what that merchant usually costs.',
     audience: 'all',
@@ -193,6 +225,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
   },
   {
     id: 'subscription_creep',
+    group: 'money',
     label: 'A recurring charge went up',
     blurb: 'A subscription or bill came in higher than the last few did.',
     audience: 'all',
@@ -202,6 +235,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
   },
   {
     id: 'duplicate_charge',
+    group: 'money',
     label: 'A possible duplicate charge',
     blurb: 'The same merchant charged the same amount twice within a few days.',
     audience: 'all',
@@ -211,6 +245,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
   },
   {
     id: 'predicted_vs_actual',
+    group: 'money',
     label: 'Last month, predicted against actual',
     blurb: 'Early each month, how the month just gone compared with what the six months before it pointed at.',
     audience: 'all',
@@ -220,6 +255,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
   },
   {
     id: 'suggested_budget_refresh',
+    group: 'money',
     label: 'New month, new suggested budgets',
     blurb: 'Early each month, the categories whose suggested budget has moved away from the limit you have set.',
     audience: 'all',
@@ -229,6 +265,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
   },
   {
     id: 'sync_failed',
+    group: 'account',
     label: 'A SimpleFIN sync failed',
     blurb: 'The unattended sync could not finish and needs a look.',
     audience: 'admin',
@@ -238,6 +275,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
   },
   {
     id: 'monthly_digest',
+    group: 'money',
     label: 'Monthly household summary',
     blurb: 'Income, spending and budgets for the month that just ended.',
     audience: 'all',
@@ -249,6 +287,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     // Lane 2, spec docs/superpowers/plans/2026-08-30-savings-targets.md. Ruling T3: household
     // scope only, so this fires against ONE pooled figure -- never a per-person one.
     id: 'savings_target_met',
+    group: 'loans-goals',
     label: "You hit this month's savings target",
     blurb: "How the month came out against the savings target you set. Reported in the monthly summary rather than on the day it happens.",
     audience: 'all',
@@ -260,6 +299,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     // Ruling T5: pro-rated against the day of the month, not a projection to month end --
     // see evaluate/savings.ts's fireSavingsPace for why that distinction matters here.
     id: 'savings_target_pace',
+    group: 'loans-goals',
     label: 'On pace to miss the savings target',
     blurb: "Net so far this month is behind the pace this month's savings target needs.",
     audience: 'all',
@@ -269,6 +309,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
   },
   {
     id: 'savings_month_closed',
+    group: 'loans-goals',
     label: "Last month's savings, against target",
     blurb: "How last month's net compared with the savings target you set for it.",
     audience: 'all',
@@ -285,6 +326,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     // notifyCanadianPackUpdateAvailable, called from runUpdateTick alongside the app's own check;
     // see that function's docblock for why it only ever NOTIFIES, never applies anything).
     id: 'pack_update_available',
+    group: 'account',
     label: 'A merchant rules pack update is available',
     blurb: 'A merchant rules pack has a newer version. Shown on the Merchant rules page rather than sent, since nothing breaks by waiting.',
     audience: 'admin',
@@ -302,6 +344,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
   */
   {
     id: 'loan_interest_posted',
+    group: 'loans-goals',
     label: 'Interest was added to a loan',
     blurb: 'A loan charged its interest for the period that just closed. One message naming every loan that posted.',
     audience: 'all',
@@ -311,6 +354,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
   },
   {
     id: 'loan_payment_missed',
+    group: 'loans-goals',
     label: 'No payment on a loan this period',
     blurb: 'A loan reached its posting day with no payment recorded against the period it closed.',
     audience: 'all',
@@ -320,6 +364,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
   },
   {
     id: 'loan_reconcile_due',
+    group: 'loans-goals',
     label: 'Time to check a loan against its statement',
     blurb: 'A loan with a rate has gone two months without a statement, so its figures are an estimate on top of an old one.',
     audience: 'all',
@@ -329,6 +374,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
   },
   {
     id: 'loan_paid_off',
+    group: 'loans-goals',
     label: 'A loan is paid off',
     blurb: 'The balance on a loan reached zero. Sent the moment the payment that cleared it is recorded.',
     audience: 'all',
@@ -338,6 +384,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
   },
   {
     id: 'goal_reached',
+    group: 'loans-goals',
     label: 'You reached a savings goal',
     blurb: 'A savings goal hit the amount you set for it.',
     audience: 'all',
@@ -347,6 +394,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
   },
   {
     id: 'goal_off_pace',
+    group: 'loans-goals',
     label: 'A savings goal is behind pace',
     blurb: 'A goal with a target date needs more each month than you have been putting in. Once a month, not every day.',
     audience: 'all',

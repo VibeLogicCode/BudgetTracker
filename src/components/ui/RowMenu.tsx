@@ -57,7 +57,7 @@ function useRowMenuClose(): () => void {
  * desktop fall back to its unconstrained, padding-driven height exactly as before.
  */
 const ITEM_CLASS =
-  'flex w-full min-h-11 items-center rounded-xs px-2.5 py-2.5 text-left text-sm text-ink hover:bg-surface-2 focus:bg-surface-2 focus:outline-none sm:min-h-0 sm:py-1.5 sm:text-xs';
+  'flex w-full min-h-11 items-center rounded-xs px-2.5 py-2.5 text-left text-sm text-ink hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:outline-none sm:min-h-0 sm:py-1.5 sm:text-xs';
 
 function menuItems(root: HTMLElement | null): HTMLElement[] {
   return root === null ? [] : Array.from(root.querySelectorAll<HTMLElement>('[role="menuitem"]'));
