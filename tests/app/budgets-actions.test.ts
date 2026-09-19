@@ -631,3 +631,79 @@ describe('categoryHistoryAction — F-06: the six-month spend/limit strip', () =
     expect('error' in badCategory && badCategory.error).toBeTruthy();
   });
 });
+
+/**
+ * Review D5, the same rule as D1 applied to the writes beside the suggestions. The budgets page
+ * hides the household scope from a self-visibility member; nothing stopped them posting it. Either
+ * the hiding means something or it does not, and one rule stated once is the only version of this
+ * anybody can act on: household budget rows are household figures, so a self-visibility member
+ * neither reads nor writes them.
+ */
+describe('D5: the household scope is closed to a self-visibility member on every budget write', () => {
+  const NOT_YOURS = 'That belongs to someone else in the household.';
+
+  function asSelfMember(): { alice: number; groceries: number } {
+    const { alice, groceries } = setup();
+    setUserVisibility(alice, 'self');
+    currentUser = { id: alice, name: 'Alice', username: 'alice', role: 'member', visibility: 'self' };
+    return { alice, groceries };
+  }
+
+  it('setLimitAction refuses household scope and writes nothing', async () => {
+    const { groceries } = asSelfMember();
+    const state = await setLimitAction(
+      {},
+      formData({ scope: 'household', userId: '', month: '2026-03', categoryId: String(groceries), amount: '500' }),
+    );
+    expect(state.error).toBe(NOT_YOURS);
+    expect(resolveBudget('household', null, groceries, '2026-03')).toBeNull();
+  });
+
+  it('setLimitAction still writes their own personal budget', async () => {
+    const { alice, groceries } = asSelfMember();
+    const state = await setLimitAction(
+      {},
+      formData({ scope: 'personal', userId: '', month: '2026-03', categoryId: String(groceries), amount: '500' }),
+    );
+    expect(state.error).toBeUndefined();
+    expect(resolveBudget('personal', alice, groceries, '2026-03')).toBe(50000);
+  });
+
+  it('copyPreviousMonthAction refuses household scope', async () => {
+    const { groceries } = asSelfMember();
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-02', amountCents: 40000 });
+    const state = await copyPreviousMonthAction({}, formData({ scope: 'household', userId: '', month: '2026-03' }));
+    expect(state.error).toBe(NOT_YOURS);
+    expect(resolveBudget('household', null, groceries, '2026-03')).toBe(40000);
+  });
+
+  it('setRolloverAction refuses household scope', async () => {
+    const { groceries } = asSelfMember();
+    const state = await setRolloverAction(
+      {},
+      formData({ scope: 'household', userId: '', month: '2026-03', categoryId: String(groceries), enabled: 'on' }),
+    );
+    expect(state.error).toBe(NOT_YOURS);
+    expect(rolloverStartMonth('household', null, groceries)).toBeNull();
+  });
+
+  /** The savings target has no scope field because it has only one: the household's. */
+  it('setSavingsTargetAction refuses a self-visibility member outright', async () => {
+    asSelfMember();
+    const state = await setSavingsTargetAction({}, formData({ month: '2026-03', mode: 'percent', value: '10' }));
+    expect(state.error).toBe(NOT_YOURS);
+    expect(getSavingsTarget('2026-03')).toBeNull();
+  });
+
+  it('an admin is unaffected', async () => {
+    const { admin, groceries } = setup();
+    currentUser = { id: admin, name: 'Admin', username: 'admin', role: 'admin' };
+
+    expect(
+      (await setLimitAction({}, formData({ scope: 'household', userId: '', month: '2026-03', categoryId: String(groceries), amount: '500' })))
+        .error,
+    ).toBeUndefined();
+    expect(resolveBudget('household', null, groceries, '2026-03')).toBe(50000);
+    expect((await setSavingsTargetAction({}, formData({ month: '2026-03', mode: 'percent', value: '10' }))).error).toBeUndefined();
+  });
+});

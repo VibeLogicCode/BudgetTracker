@@ -6,7 +6,14 @@ import { nowIso } from '@/lib/clock';
 import { addMonths, currentMonth } from '@/lib/dates';
 import { readEnv } from '@/lib/env';
 
-let currentUser: { id: number; name: string; username: string; role: 'admin' | 'member' } = {
+let currentUser: {
+  id: number;
+  name: string;
+  username: string;
+  role: 'admin' | 'member';
+  /** Undefined reads as 'household' to ownerScope; only the D1 tests below name 'self'. */
+  visibility?: 'household' | 'self';
+} = {
   id: 1,
   name: 'Alice',
   username: 'alice',
@@ -513,5 +520,76 @@ describe('v1.7.0 Task 11: the current-month guard holds even when the category h
     const state = await applyAllSuggestionsAction({}, formData({ scope: 'household', userId: '', month: PAST_MONTH }));
     expect(state.error).toBe('Suggestions are only available for the current month.');
     expect(resolveBudget('household', null, groceries, PAST_MONTH)).toBeNull();
+  });
+});
+
+/**
+ * Review D1, the highest-severity finding of the v1.48.0 review. The MUST-7.6 check above fires
+ * only for scope 'personal', so a self-visibility member -- in practice a child's account -- could
+ * post scope=household and have suggestionsFor compute over the WHOLE household's history. The
+ * write went through, and the success message printed the figure: iterating categoryId enumerated
+ * the household's per-category spend, one message at a time.
+ *
+ * Household budget rows are household figures. A self-visibility member neither reads nor writes
+ * them, and that is now the first thing both suggestion actions check.
+ */
+describe('D1: household scope is closed to a self-visibility member', () => {
+  const NOT_YOURS = 'That belongs to someone else in the household.';
+
+  it('refuses one suggestion, writes nothing, and never prints a figure', async () => {
+    const { db, flatSix } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    flatSix(groceries, 60000);
+    currentUser = { ...currentUser, visibility: 'self' };
+
+    const state = await applySuggestionAction(
+      {},
+      formData({ scope: 'household', userId: '', month: TARGET, categoryId: String(groceries) }),
+    );
+
+    expect(state.error).toBe(NOT_YOURS);
+    expect(state.message ?? '').not.toContain('$');
+    expect(resolveBudget('household', null, groceries, TARGET)).toBeNull();
+  });
+
+  it('refuses apply-all, and reports no count either', async () => {
+    const { db, flatSix } = setup();
+    flatSix(categoryIdByName(db, 'Groceries'), 60000);
+    currentUser = { ...currentUser, visibility: 'self' };
+
+    const state = await applyAllSuggestionsAction({}, formData({ scope: 'household', userId: '', month: TARGET }));
+
+    expect(state.error).toBe(NOT_YOURS);
+    expect(state.message).toBeUndefined();
+    expect(resolveBudget('household', null, categoryIdByName(db, 'Groceries'), TARGET)).toBeNull();
+  });
+
+  /** Their own personal scope is untouched: that is their own figure. */
+  it('still lets them apply a suggestion to their own personal budget', async () => {
+    const { db, alice, flatSix } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    flatSix(groceries, 60000, alice);
+    currentUser = { ...currentUser, visibility: 'self' };
+
+    const state = await applySuggestionAction(
+      {},
+      formData({ scope: 'personal', userId: '', month: TARGET, categoryId: String(groceries) }),
+    );
+
+    expect(state.error).toBeUndefined();
+    expect(resolveBudget('personal', alice, groceries, TARGET)).toBe(60000);
+  });
+
+  it('leaves a household-visibility member and an admin exactly as they were', async () => {
+    const { db, flatSix } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    flatSix(groceries, 60000);
+
+    currentUser = { ...currentUser, visibility: 'household' };
+    expect(
+      (await applySuggestionAction({}, formData({ scope: 'household', userId: '', month: TARGET, categoryId: String(groceries) })))
+        .error,
+    ).toBeUndefined();
+    expect(resolveBudget('household', null, groceries, TARGET)).toBe(60000);
   });
 });

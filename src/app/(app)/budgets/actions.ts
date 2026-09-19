@@ -4,6 +4,7 @@ import { headers } from 'next/headers';
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { isSameOrigin } from '@/lib/auth/csrf';
+import { isSelfScoped, NOT_YOURS_ERROR } from '@/lib/auth/viewer';
 import { requireUser } from '@/lib/auth/session';
 import { clearBudget, copyBudgetsFromPreviousMonth, resolveBudget, setRollover, upsertBudget, type BudgetScope } from '@/lib/budgets';
 import { currentMonth, isMonthKey } from '@/lib/dates';
@@ -15,6 +16,26 @@ import { copySavingsTargetForward, saveSavingsTarget } from '@/lib/savings-targe
 export interface BudgetActionState {
   error?: string;
   message?: string;
+}
+
+/*
+  THE HOUSEHOLD-SCOPE RULE, stated once for every write in this file (review D1, D5).
+
+  Household budget rows are household figures: the limit, the rollover policy, the savings target
+  and any suggestion computed for them are all derived from what the whole household spent. A
+  self-visibility member neither reads nor writes them. The budgets page already hides the scope
+  from such a member; until this release nothing stopped them posting it anyway.
+
+  D1 is why this is a leak and not merely an untidy permission: applySuggestionAction recomputed the
+  suggestion server-side from the household's own history and put the figure in its success
+  message, so iterating categoryId enumerated the household's per-category spend one message at a
+  time -- on an account whose whole purpose is that it cannot see those figures.
+
+  An admin is never self-scoped (ownerScope, src/lib/auth/viewer.ts, returns null for role admin
+  whatever the visibility column says), so nothing below narrows an admin.
+*/
+function refuseHouseholdScope(user: Parameters<typeof isSelfScoped>[0], scope: 'household' | 'personal'): boolean {
+  return scope === 'household' && isSelfScoped(user);
 }
 
 const CROSS_ORIGIN_ERROR = 'Cross-origin request rejected';
@@ -40,6 +61,7 @@ export async function setLimitAction(_prev: BudgetActionState, formData: FormDat
   if (!scope.success || !month.success || !categoryId.success || !rawUserId.success) {
     return { error: 'Invalid request.' };
   }
+  if (refuseHouseholdScope(user, scope.data)) return { error: NOT_YOURS_ERROR };
 
   // Members may edit household budgets and their OWN personal budgets (spec section 6).
   const userId = scope.data === 'personal' ? (rawUserId.data === '' ? user.id : Number(rawUserId.data)) : null;
@@ -69,6 +91,7 @@ export async function copyPreviousMonthAction(_prev: BudgetActionState, formData
   const month = monthSchema.safeParse(String(formData.get('month') ?? ''));
   const rawUserId = userIdField.safeParse(String(formData.get('userId') ?? ''));
   if (!scope.success || !month.success || !rawUserId.success) return { error: 'Invalid request.' };
+  if (refuseHouseholdScope(user, scope.data)) return { error: NOT_YOURS_ERROR };
 
   const userId = scope.data === 'personal' ? (rawUserId.data === '' ? user.id : Number(rawUserId.data)) : null;
   if (scope.data === 'personal' && userId !== user.id && user.role !== 'admin') {
@@ -106,7 +129,10 @@ const savingsTargetModeSchema = z.enum(['percent', 'amount']);
 export async function setSavingsTargetAction(_prev: BudgetActionState, formData: FormData): Promise<BudgetActionState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
 
-  await requireUser();
+  const user = await requireUser();
+  // D5: the savings target has no scope field because it has only one -- the household's.
+  if (refuseHouseholdScope(user, 'household')) return { error: NOT_YOURS_ERROR };
+
   const month = monthSchema.safeParse(String(formData.get('month') ?? ''));
   const mode = savingsTargetModeSchema.safeParse(formData.get('mode'));
   if (!month.success || !mode.success) return { error: 'Invalid request.' };
@@ -165,6 +191,9 @@ export async function applySuggestionAction(_prev: BudgetActionState, formData: 
     return { error: NOT_CURRENT_MONTH_ERROR };
   }
 
+  // D1: before suggestionsFor, which would otherwise compute over the whole household's history.
+  if (refuseHouseholdScope(user, scope.data)) return { error: NOT_YOURS_ERROR };
+
   // MUST-7.6: setLimitAction's rule, verbatim.
   const userId = scope.data === 'personal' ? (rawUserId.data === '' ? user.id : Number(rawUserId.data)) : null;
   if (scope.data === 'personal' && userId !== user.id && user.role !== 'admin') {
@@ -205,6 +234,8 @@ export async function applyAllSuggestionsAction(_prev: BudgetActionState, formDa
   if (month.data !== currentMonth(new Date(), readEnv().tz)) {
     return { error: NOT_CURRENT_MONTH_ERROR };
   }
+
+  if (refuseHouseholdScope(user, scope.data)) return { error: NOT_YOURS_ERROR };
 
   const userId = scope.data === 'personal' ? (rawUserId.data === '' ? user.id : Number(rawUserId.data)) : null;
   if (scope.data === 'personal' && userId !== user.id && user.role !== 'admin') {
@@ -250,6 +281,8 @@ export async function setRolloverAction(_prev: BudgetActionState, formData: Form
   if (!scope.success || !month.success || !categoryId.success || !rawUserId.success) {
     return { error: 'Invalid request.' };
   }
+
+  if (refuseHouseholdScope(user, scope.data)) return { error: NOT_YOURS_ERROR };
 
   const userId = scope.data === 'personal' ? (rawUserId.data === '' ? user.id : Number(rawUserId.data)) : null;
   if (scope.data === 'household' && user.role !== 'admin') {
