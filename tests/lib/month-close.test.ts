@@ -114,3 +114,37 @@ describe('the summary is enqueued once per closed month', () => {
     expect(second.summary_sent_at).toBe(first.summary_sent_at);
   });
 });
+
+/**
+ * Review E6. A sync's last_sync_at is a UTC instant; the cutoff it was compared against is a
+ * household date. In Toronto a 21:00 sync on 2 April stamps 03:00 UTC on the 3rd, so the account
+ * read as "synced past the 3rd" and last month closed a day early -- taking its summary, and the
+ * chance to catch a late transaction, with it.
+ */
+describe('E6: readiness is judged on the household day, not the UTC one', () => {
+  function linkedAccount(lastSyncAt: string): void {
+    const accountId = insertTestAccount(t.db, { name: 'Chequing' });
+    spend(accountId, '2026-03-05');
+    t.db.run(
+      sql`insert into simplefin_connections
+            (access_url_encrypted, claimed_at, last_sync_at, requests_today, requests_date, enabled, created_at)
+          values ('x', '2026-01-01T00:00:00.000Z', ${lastSyncAt}, 0, '2026-01-01', 1, '2026-01-01T00:00:00.000Z')`,
+    );
+    t.db.run(
+      sql`insert into simplefin_account_links (simplefin_account_id, account_id, currency, created_at)
+          values ('remote-1', ${accountId}, 'CAD', '2026-01-01T00:00:00.000Z')`,
+    );
+  }
+
+  /** The cutoff for March is 3 April (month end plus the three-day posting lag). */
+  it('a 21:00 local sync on 2 April is not yet past a cutoff of 3 April', () => {
+    // 2026-04-02T21:00 in Toronto is 2026-04-03T01:00Z: the same instant, a different date.
+    linkedAccount('2026-04-03T01:00:00.000Z');
+    expect(monthState('2026-03').accounts[0]!.synced).toBe(false);
+  });
+
+  it('the same sync a day later does satisfy it', () => {
+    linkedAccount('2026-04-04T01:00:00.000Z');
+    expect(monthState('2026-03').accounts[0]!.synced).toBe(true);
+  });
+});

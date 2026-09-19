@@ -513,3 +513,63 @@ describe('runSimplefinTick — registration (mirrors the house style for runUpda
     expect(isSchedulerRunning()).toBe(false);
   });
 });
+
+/**
+ * Review E2, the other half. A bank the bridge could not reach comes back in `errlist`, and the
+ * manual sync page shows it. The AUTOMATIC path had nobody to show it to: it awaited runSync,
+ * discarded the result, and only ever alerted when runSync THREW. So the one sync nobody watches
+ * was the one that reported nothing, and the household's first sign of a twelve-day outage was a
+ * missing week in its own reports.
+ */
+describe('runSimplefinTick — a partial failure reaches the household', () => {
+  function dueConnection(): number {
+    const adminId = adminWithEmail();
+    saveClaimedConnection(FAKE_ACCESS_URL);
+    setSetting(SETTING_AUTO_SYNC, 'daily');
+    setSetting(SETTING_AUTO_SYNC_USER_ID, String(adminId));
+    return adminId;
+  }
+
+  function stubSync(errlist: string[]): ReturnType<typeof vi.spyOn> {
+    const now = new Date();
+    return vi.spyOn(syncModule, 'runSync').mockResolvedValue({
+      ranAt: now.toISOString(),
+      accounts: [],
+      errlist,
+      totalAdded: 0,
+      totalDuplicates: 0,
+      engine: { processed: 0, categorized: 0, transfers: 0, skipped: 0, changed: 0 },
+      engineFailed: false,
+      loanLinksCreated: 0,
+      loanMatchFailed: false,
+    });
+  }
+
+  it('raises sync_failed naming the bank the bridge could not reach', async () => {
+    dueConnection();
+    const spy = stubSync(['Bank X needs re-authentication']);
+    try {
+      runSimplefinTick(new Date());
+      await vi.waitFor(() => expect(outboxCount()).toBeGreaterThan(0));
+      const row = outboxRows()[0]!;
+      expect(row.event_id).toBe('sync_failed');
+      expect(`${row.subject} ${row.body}`).toContain('Bank X needs re-authentication');
+      // The bridge URL carries basic-auth credentials and must never reach a notification.
+      expect(`${row.subject} ${row.body}`).not.toContain('fake-pass');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('says nothing at all after a clean run', async () => {
+    dueConnection();
+    const spy = stubSync([]);
+    try {
+      runSimplefinTick(new Date());
+      await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+      expect(outboxCount()).toBe(0);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});

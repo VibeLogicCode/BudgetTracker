@@ -376,3 +376,58 @@ describe('runSync', () => {
     spy.mockRestore();
   });
 });
+
+/**
+ * Review E2. The bridge reports a bank it could not reach in `errlist`, and the sync went on to
+ * stamp last_sync_at anyway. The next window starts from that stamp, and the overlap is five days,
+ * so a bank down for twelve days loses days one to seven for good -- with nothing on screen, no
+ * alert, and no way to notice except a household spotting the gap in its own statements months
+ * later.
+ */
+describe('E2: a partial bridge failure never advances the window', () => {
+  const lastSyncOf = () => getConnection()!.lastSyncAt;
+
+  it('leaves last_sync_at where it was when any bank failed', async () => {
+    const { userId } = setup();
+    const before = lastSyncOf();
+    await runSync({ userId, fetcher: bridge({ accounts: [], errlist: ['Bank X needs re-authentication'] }), now: NOW });
+    expect(lastSyncOf()).toBe(before);
+  });
+
+  it('still imports what the banks that DID answer sent', async () => {
+    const { userId, sqlite } = setup();
+    const payload = accountSet([
+      { id: 'txn-1', posted: Math.floor(Date.parse('2026-08-10T15:00:00Z') / 1000), amount: '-12.34', description: 'SHOP', pending: false },
+    ]);
+    const result = await runSync({
+      userId,
+      fetcher: bridge({ ...payload, errlist: ['Bank X needs re-authentication'] }),
+      now: NOW,
+    });
+    expect(result.totalAdded).toBe(1);
+    expect((sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c).toBe(1);
+  });
+
+  /**
+   * The point of not advancing: the NEXT run reaches back over the outage. A window that started
+   * from the failed run's own timestamp could only ever reach back its five-day overlap.
+   */
+  it('lets the next run reach back over the whole outage', async () => {
+    const { userId } = setup();
+    const outage = new Date('2026-08-15T12:00:00.000Z');
+    await runSync({ userId, fetcher: bridge({ accounts: [], errlist: ['Bank X down'] }), now: outage });
+    const twelveDaysLater = new Date('2026-08-27T12:00:00.000Z');
+    const window = syncWindow({ lastSyncAt: lastSyncOf(), now: twelveDaysLater });
+    // The outage began on the 15th; the window has to start on or before it. A stamp written by
+    // the failed run would have started this window on the 22nd -- five days of overlap, seven
+    // days short.
+    expect(postedToIsoDate(window.startDate) <= '2026-08-15').toBe(true);
+  });
+
+  it('advances it again on a clean run', async () => {
+    const { userId } = setup();
+    const before = lastSyncOf();
+    await runSync({ userId, fetcher: bridge(accountSet([])), now: new Date('2026-08-16T12:00:00.000Z') });
+    expect(lastSyncOf()).not.toBe(before);
+  });
+});

@@ -1,6 +1,7 @@
 import { getAccount } from '@/lib/accounts';
 import { runEngine, type EngineResult } from '@/lib/categorize/engine';
 import { nowIso } from '@/lib/clock';
+import { todayIso } from '@/lib/dates';
 import { readEnv } from '@/lib/env';
 import { commitImport, type CommitRow } from '@/lib/import/commit';
 import { DEDUP_HASH_VERSION } from '@/lib/import/dedup';
@@ -79,8 +80,22 @@ export interface SyncResult {
   loanMatchFailed: boolean;
 }
 
+/**
+ * The label the import history shows for this run -- in the HOUSEHOLD's clock, not UTC (review E8).
+ *
+ * nowIso gives an instant; a person reading "simplefin 2026-04-03 01:00" at nine in the evening on
+ * the 2nd has to work out that it means now. The date comes from todayIso, which already knows the
+ * zone, and the time from the same Date rendered in it.
+ */
 function syncLabel(at: Date): string {
-  return `simplefin ${nowIso(at).slice(0, 16).replace('T', ' ')}`;
+  const { tz } = readEnv();
+  const time = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(at);
+  return `simplefin ${todayIso(at, tz)} ${time}`;
 }
 
 export async function runSync(input: { userId: number; fetcher?: Fetcher; now?: Date }): Promise<SyncResult> {
@@ -241,7 +256,19 @@ export async function runSync(input: { userId: number; fetcher?: Fetcher; now?: 
   // Same out-param pattern as flow.ts for F5's loanMatchFailed.
   const loanMatchReport = { failed: false };
   const loanLinksCreated = applyPaymentMatchers(insertedIds, undefined, loanMatchReport);
-  markSynced(now);
+
+  /*
+    THE WINDOW ONLY MOVES WHEN EVERY BANK ANSWERED (review E2).
+
+    last_sync_at is where the next window starts, and the overlap is five days. Stamping it after a
+    run the bridge told us was partial meant a bank down for twelve days lost days one to seven
+    permanently -- no gap on screen, no alert, and no way back except a household noticing months
+    later that a week of its own statements is missing.
+
+    What DID arrive is already committed above, and duplicates are impossible (every row carries a
+    dedup hash), so re-fetching the overlap next time costs a little bandwidth and nothing else.
+  */
+  if (set.errlist.length === 0) markSynced(now);
 
   return {
     ranAt: nowIso(now),

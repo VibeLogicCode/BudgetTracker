@@ -3,6 +3,7 @@ import { getDb } from '@/db/client';
 import { accounts, monthClosures, simplefinAccountLinks, simplefinConnections, transactions } from '@/db/schema';
 import { nowIso } from '@/lib/clock';
 import { addDaysIso, monthEnd, monthOf, todayIso } from '@/lib/dates';
+import { readEnv } from '@/lib/env';
 
 /**
  * 2026-09-08. "Is last month's data all in?" — and the answer is a recorded fact, not a guess.
@@ -79,7 +80,14 @@ export function accountReadiness(month: string): AccountReadiness[] {
   const byAccount = new Map<number, AccountReadiness>();
   for (const row of rows) {
     const linked = row.simplefinId !== null;
-    const synced = linked && row.lastSyncAt !== null && row.lastSyncAt.slice(0, 10) >= cutoff;
+    /*
+      E6. last_sync_at is a UTC INSTANT and the cutoff is a household DATE, so slicing the first ten
+      characters compared two different things. A 21:00 sync on 2 April in Toronto stamps 03:00 UTC
+      on the 3rd, which read as "synced past the 3rd" and closed March a day early -- taking its
+      summary, and the chance to catch a late transaction, with it. todayIso is the one place that
+      knows what day it is here.
+    */
+    const synced = linked && row.lastSyncAt !== null && todayIso(new Date(row.lastSyncAt), readEnv().tz) >= cutoff;
     const existing = byAccount.get(row.accountId);
     // Several connection rows can join the same account; keep the most favourable sync.
     if (existing === undefined || (synced && !existing.synced)) {

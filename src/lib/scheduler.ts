@@ -238,7 +238,22 @@ async function runAutoSimplefinSync(now: Date): Promise<void> {
   if (!Number.isFinite(userId) || !adminUserIds().includes(userId)) {
     throw new Error('The automatic sync user is no longer an active admin. Re-save automatic sync in Settings → Connections.');
   }
-  await runSync({ userId, now });
+  const result = await runSync({ userId, now });
+
+  /*
+    A BANK THAT DID NOT ANSWER IS A FAILURE HERE, even though the call itself succeeded (review E2).
+
+    The manual sync page shows errlist to the person who pressed the button. This path has nobody
+    watching it, and until now it alerted only when runSync THREW -- so the one sync nobody sees was
+    also the one that reported nothing. The window no longer advances through a partial run
+    (sync.ts), which means the data is recoverable; this is what makes it known.
+
+    Thrown rather than enqueued directly, so it travels the same catch as every other failure and
+    the household gets one kind of alert for one kind of problem.
+  */
+  if (result.errlist.length > 0) {
+    throw new Error(`Some accounts did not sync: ${result.errlist.join('; ')}`);
+  }
 }
 
 /** Idempotent: safe to call more than once per process (e.g. hot-reload in dev). */
