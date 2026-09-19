@@ -11,6 +11,7 @@ let current: TestDb | null = null;
 let dataDir: string;
 let originalDataDir: string | undefined;
 let token: string;
+let userId: number;
 
 const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(64)]);
 
@@ -19,7 +20,8 @@ beforeEach(() => {
   originalDataDir = process.env.DATA_DIR;
   process.env.DATA_DIR = dataDir;
   current = createSeededTestDb();
-  token = createSession(insertTestUser(current.db, { username: 'alice' })).token;
+  userId = insertTestUser(current.db, { username: 'alice' });
+  token = createSession(userId).token;
 });
 
 afterEach(() => {
@@ -42,14 +44,14 @@ function poll(stagingId: string, opts: { token?: string | null; origin?: string 
 
 describe('GET /api/warranties/receipts/stage/[stagingId]', () => {
   it('reports pending while the sidecar is absent', async () => {
-    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', userId);
     const response = await poll(stagingId);
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: 'pending' });
   });
 
   it('returns the suggestions on done, and never the raw OCR text', async () => {
-    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', userId);
     writeSidecar(stagingId, {
       status: 'done',
       text: 'RAW OCR TEXT THE CLIENT MUST NOT RECEIVE',
@@ -64,7 +66,7 @@ describe('GET /api/warranties/receipts/stage/[stagingId]', () => {
   });
 
   it('returns the error text on failed', async () => {
-    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', userId);
     writeSidecar(stagingId, { status: 'failed', error: 'OCR timed out.' });
     expect(await (await poll(stagingId)).json()).toEqual({ status: 'failed', error: 'OCR timed out.' });
   });
@@ -75,13 +77,48 @@ describe('GET /api/warranties/receipts/stage/[stagingId]', () => {
   });
 
   it('401s without a session and 403s a mismatched Origin', async () => {
-    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', userId);
     expect((await poll(stagingId, { token: null })).status).toBe(401);
     expect((await poll(stagingId, { origin: 'http://evil.example' })).status).toBe(403);
   });
 
   it('allows a headerless request (plain HTTP on the LAN)', async () => {
-    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', userId);
     expect((await poll(stagingId, { origin: null })).status).toBe(200);
+  });
+});
+
+/**
+ * Review D7. A staging id was a bearer token: any signed-in member who had one could read the OCR
+ * suggestions off somebody else's receipt -- its vendor, its date, its price. The upload now
+ * records who staged it, and a poll by anybody else reads exactly like an id that does not exist.
+ */
+describe('D7: a staged upload belongs to whoever staged it', () => {
+  it('tells another member nothing, even when the suggestions are ready', async () => {
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', userId);
+    writeSidecar(stagingId, { status: 'done', suggestions: { vendor: 'HOME DEPOT', priceCents: 4200 } });
+    const otherToken = createSession(insertTestUser(current!.db, { username: 'bob' })).token;
+
+    const response = await poll(stagingId, { token: otherToken });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: 'pending' });
+  });
+
+  it('still serves the member who staged it', async () => {
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', userId);
+    writeSidecar(stagingId, { status: 'done', suggestions: { vendor: 'HOME DEPOT', priceCents: 4200 } });
+    expect(await (await poll(stagingId)).json()).toEqual({
+      status: 'done',
+      suggestions: { vendor: 'HOME DEPOT', priceCents: 4200 },
+    });
+  });
+
+  /** A file staged by an older version has no owner recorded, so nobody can claim it. */
+  it('refuses an upload with no recorded uploader', async () => {
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', userId);
+    fs.rmSync(path.join(dataDir, 'tmp', `${stagingId}.owner.json`), { force: true });
+    writeSidecar(stagingId, { status: 'done', suggestions: { vendor: 'HOME DEPOT' } });
+    expect(await (await poll(stagingId)).json()).toEqual({ status: 'pending' });
   });
 });

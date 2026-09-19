@@ -24,45 +24,31 @@ export async function GET(): Promise<Response> {
   // Unauthenticated by design: this is the container healthcheck.
   const time = () => new Date().toISOString();
 
-  // `version` is on the 503 responses ONLY. "Which build is the one that is broken?" is exactly
-  // the question being asked when this endpoint fails, and answering it is the reason it is here.
-  //
-  // v1.12.1 (item BG / SEC-11): it is NOT on the 200. The old comment argued the leak was nil
-  // because the footer of every page shows the same string -- true, and beside the point: the
-  // footer is behind a session and this route is deliberately not. Anyone who can reach the app,
-  // which is anyone at all if it is reverse-proxied to the internet, could read the exact release
-  // and match it to an advisory without signing in. The Docker healthcheck reads only `r.ok`
-  // (Dockerfile), so it is unaffected.
+  /*
+    NOTHING BUT THE VERDICT LEAVES THIS ROUTE (review D9).
+
+    v1.12.1 took the version off the 200 for the right reason -- the footer that shows the same
+    string is behind a session and this route is not -- and then left it on the 503s, arguing that
+    "which build is broken?" is the question being asked when it fails. But an unauthenticated
+    caller decides when it fails only in the sense that they can keep asking; a database that is
+    down is exactly when the version and a raw driver message are worth most to somebody probing,
+    and they are worth nothing to the healthcheck, which reads only r.ok (Dockerfile).
+
+    The operator loses nothing: the same two facts are logged server-side, where the person who can
+    read the log is the person who can fix the app.
+  */
 
   try {
     const row = getSqlite().prepare('select 1 as ok').get() as { ok: number };
     if (row.ok !== 1) throw new Error('unexpected result');
   } catch (error) {
-    return Response.json(
-      {
-        status: 'error',
-        db: 'error',
-        dataDir: 'unknown',
-        error: error instanceof Error ? error.message : 'unknown',
-        version: APP_VERSION,
-        time: time(),
-      },
-      { status: 503 },
-    );
+    console.error('[health] database check failed on ' + APP_VERSION, error);
+    return Response.json({ status: 'error', db: 'error', dataDir: 'unknown', time: time() }, { status: 503 });
   }
 
   if (!isDataDirWritable()) {
-    return Response.json(
-      {
-        status: 'error',
-        db: 'ok',
-        dataDir: 'error',
-        error: 'data directory is not writable',
-        version: APP_VERSION,
-        time: time(),
-      },
-      { status: 503 },
-    );
+    console.error('[health] data directory is not writable on ' + APP_VERSION);
+    return Response.json({ status: 'error', db: 'ok', dataDir: 'error', time: time() }, { status: 503 });
   }
 
   return Response.json({ status: 'ok', db: 'ok', dataDir: 'ok', time: time() }, { status: 200 });

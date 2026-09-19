@@ -35,10 +35,17 @@ describe('GET /api/health', () => {
     current.sqlite.close();
     const response = await GET();
     expect(response.status).toBe(503);
-    const body = await response.json();
+    const body = (await response.json()) as Record<string, unknown>;
     expect(body.status).toBe('error');
-    // "Which build is the broken one?" is asked precisely when this returns 503.
-    expect(body.version).toBe(APP_VERSION);
+    expect(body.db).toBe('error');
+    /*
+      Review D9. This used to assert the OPPOSITE -- that the 503 names the build, because "which
+      build is broken?" is the question being asked when it fails. But the asker is unauthenticated
+      and this is the moment the answer is worth most to somebody probing, while the healthcheck
+      itself reads only r.ok. The version and the driver's own message are logged instead.
+    */
+    expect('version' in body).toBe(false);
+    expect('error' in body).toBe(false);
     setDbForTests(null);
   });
 
@@ -55,10 +62,13 @@ describe('GET /api/health', () => {
     try {
       const response = await GET();
       expect(response.status).toBe(503);
-      const body = (await response.json()) as { status: string; db: string; dataDir: string };
+      const body = (await response.json()) as Record<string, unknown>;
       expect(body.status).toBe('error');
       expect(body.db).toBe('ok');
       expect(body.dataDir).toBe('error');
+      // D9 again: no build, and no sentence describing the host's filesystem.
+      expect('version' in body).toBe(false);
+      expect('error' in body).toBe(false);
     } finally {
       if (original === undefined) delete process.env.DATA_DIR;
       else process.env.DATA_DIR = original;
@@ -67,7 +77,7 @@ describe('GET /api/health', () => {
   });
 });
 
-describe('v1.12.1: /api/health does not name the build to a stranger (item BG / SEC-11)', () => {
+describe('v1.12.1 and review D9: /api/health never names the build to a stranger', () => {
   it('the 200 body carries no version', async () => {
     current = createTestDb();
     const response = await GET();

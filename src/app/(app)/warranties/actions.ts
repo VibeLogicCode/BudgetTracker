@@ -439,7 +439,7 @@ export async function createWarrantyAction(
     // reasoning as readMonths()'s "The term" above.
     if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Could not save that item.' };
     if (!typeExistsOrNull(parsed.data.typeId)) return { error: ITEM_TYPE_MISSING_ERROR };
-    itemId = createWarrantyItem(parsed.data, staged);
+    itemId = createWarrantyItem(parsed.data, staged, undefined, user.id);
   } catch (error) {
     return failure(error, 'Could not save that item.');
   }
@@ -647,7 +647,7 @@ export async function attachReceiptsAction(
   let duplicate = false;
   try {
     const staged = readStaged(formData);
-    attached = attachStagedReceipts(id.data, staged);
+    attached = attachStagedReceipts(id.data, staged, undefined, user.id);
     // MUST-6.9: a duplicate digest on the same item WARNS; it never blocks. A duplicate is
     // a user judgement, not an error. Two rows sharing a digest is exactly that case.
     for (const receiptId of attached) {

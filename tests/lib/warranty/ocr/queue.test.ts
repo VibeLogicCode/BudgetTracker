@@ -77,7 +77,7 @@ function makeReceipt(itemId: number, storedFilename: string, status = 'pending')
 describe('staged jobs', () => {
   it('writes a done sidecar with the raw text and the suggestions', async () => {
     setOcrEngineForTests({ recognize: async () => ({ text: 'HOME DEPOT #7042\nTOTAL 42.00' }) });
-    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     expect(enqueueOcrJob({ kind: 'staged', stagingId })).toBe(true);
     await drainOcrQueue();
     const sidecar = readSidecar(stagingId);
@@ -93,7 +93,7 @@ describe('staged jobs', () => {
         throw new OcrUnavailableError();
       },
     });
-    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     enqueueOcrJob({ kind: 'staged', stagingId });
     await drainOcrQueue();
     expect(readSidecar(stagingId)).toEqual({ status: 'failed', error: OCR_UNAVAILABLE_MESSAGE });
@@ -105,7 +105,7 @@ describe('staged jobs', () => {
         throw new ScannedPdfError();
       },
     });
-    const stagingId = writeStagedReceipt(Buffer.from('%PDF-1.7\n'), 'application/pdf');
+    const stagingId = writeStagedReceipt(Buffer.from('%PDF-1.7\n'), 'application/pdf', 1);
     enqueueOcrJob({ kind: 'staged', stagingId });
     await drainOcrQueue();
     expect(readSidecar(stagingId)?.error).toBe(SCANNED_PDF_MESSAGE);
@@ -194,8 +194,8 @@ describe('claiming and FIFO order (MUST-7.10)', () => {
         return { text: 'ok' };
       },
     });
-    const a = writeStagedReceipt(JPEG, 'image/jpeg');
-    const b = writeStagedReceipt(JPEG, 'image/jpeg');
+    const a = writeStagedReceipt(JPEG, 'image/jpeg', 1);
+    const b = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     expect(enqueueOcrJob({ kind: 'staged', stagingId: a })).toBe(true);
     expect(enqueueOcrJob({ kind: 'staged', stagingId: a })).toBe(false);
     expect(isOcrJobClaimed({ kind: 'staged', stagingId: a })).toBe(true);
@@ -242,8 +242,8 @@ describe('queue depth (Ruling P6 — real assertions, not a vacuous +1)', () => 
     });
     setOcrEngineForTests({ recognize: () => first });
 
-    const a = writeStagedReceipt(JPEG, 'image/jpeg');
-    const b = writeStagedReceipt(JPEG, 'image/jpeg');
+    const a = writeStagedReceipt(JPEG, 'image/jpeg', 1);
+    const b = writeStagedReceipt(JPEG, 'image/jpeg', 1);
 
     expect(ocrQueueDepth()).toBe(0);
     enqueueOcrJob({ kind: 'staged', stagingId: a });
@@ -276,13 +276,13 @@ describe('queue never strands a job (IMPORTANT 3 fix report — Ruling P15 revis
     });
     setOcrEngineForTests({ recognize: () => first });
 
-    const a = writeStagedReceipt(JPEG, 'image/jpeg');
+    const a = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     enqueueOcrJob({ kind: 'staged', stagingId: a });
 
     // `a` is now the sole in-flight job (queue array empty, pump draining, pump !== null).
     // enqueueOcrJob for `b` must therefore take the "trust the existing pump" branch rather
     // than starting a second one.
-    const b = writeStagedReceipt(JPEG, 'image/jpeg');
+    const b = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     setOcrEngineForTests({
       recognize: async () => ({ text: 'b-result' }),
     });
@@ -299,7 +299,7 @@ describe('queue never strands a job (IMPORTANT 3 fix report — Ruling P15 revis
 
   it('path 2 — an enqueue landing immediately after the queue has drained to idle starts a fresh pump', async () => {
     setOcrEngineForTests({ recognize: async () => ({ text: 'a-result' }) });
-    const a = writeStagedReceipt(JPEG, 'image/jpeg');
+    const a = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     enqueueOcrJob({ kind: 'staged', stagingId: a });
     await drainOcrQueue();
     // The queue is now fully idle: pump === null, queue empty. This is the OTHER half of
@@ -308,7 +308,7 @@ describe('queue never strands a job (IMPORTANT 3 fix report — Ruling P15 revis
     expect(ocrQueueDepth()).toBe(0);
 
     setOcrEngineForTests({ recognize: async () => ({ text: 'b-result' }) });
-    const b = writeStagedReceipt(JPEG, 'image/jpeg');
+    const b = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     expect(enqueueOcrJob({ kind: 'staged', stagingId: b })).toBe(true);
     await drainOcrQueue();
 
@@ -455,7 +455,7 @@ describe('defect fix (v1.5.0): reconcileOcrCrashOnBoot', () => {
   });
 
   it('condemns a crashed STAGED job by writing a failed sidecar, not a database row', () => {
-    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     const key = `s:${stagingId}`;
     for (let crash = 1; crash <= OCR_CRASH_ATTEMPT_LIMIT; crash += 1) {
       markOcrJobInFlight(key);

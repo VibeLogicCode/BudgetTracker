@@ -1,6 +1,6 @@
 import { isSameOriginOrHeaderless } from '@/lib/auth/csrf';
 import { userFromRequest } from '@/lib/auth/session';
-import { STAGING_ID_RE, readSidecar } from '@/lib/warranty/staging';
+import { STAGING_ID_RE, readSidecar, stagedByViewer } from '@/lib/warranty/staging';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,6 +31,14 @@ export async function GET(request: Request, ctx: { params: Promise<{ stagingId: 
   // Validated against the UUID regex BEFORE any path is built (§6.3). Ruling P10b: imported
   // from staging.ts, not duplicated here.
   if (!STAGING_ID_RE.test(stagingId)) return Response.json({ error: 'Invalid staging id' }, { status: 400 });
+
+  /*
+    D7. Only the member who staged this upload may poll it. The refusal is the SAME
+    { status: 'pending' } an unknown id gets, because that is already this endpoint's answer for
+    "nothing to tell you" and the client bounds its own polling -- so a wrong id says nothing about
+    whether it exists, and nobody hangs.
+  */
+  if (!stagedByViewer(stagingId, user.id)) return Response.json({ status: 'pending' });
 
   const sidecar = readSidecar(stagingId);
   if (sidecar === null) return Response.json({ status: 'pending' });

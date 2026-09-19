@@ -58,7 +58,7 @@ function baseInput(): WarrantyInput {
 }
 
 function attach(bytes: Buffer, mime: ReceiptMime, originalFilename: string) {
-  const stagingId = writeStagedReceipt(bytes, mime);
+  const stagingId = writeStagedReceipt(bytes, mime, 1);
   writeSidecar(stagingId, { status: 'done', text: 'text' });
   const itemId = createWarrantyItem(baseInput(), [{ stagingId, originalFilename }]);
   return listWarrantyReceipts(itemId)[0];
@@ -149,5 +149,21 @@ describe('GET /api/warranties/receipts/[id]', () => {
     expect(response.status).toBe(410);
     expect(response.headers.get('content-type')).toContain('text/plain');
     expect(await response.text()).toBe('Receipt file is missing from this install.');
+  });
+});
+
+/**
+ * Review D8. A member who has not finished setting their password has a session but is not through
+ * the door: the three CSV exports and the backup download all refuse them, and a stored receipt is
+ * a document of the same kind. This route was the one that had been missed.
+ */
+describe('D8: the forced-password-change gate', () => {
+  it('returns 403 while the flag is set, and the file once it is cleared', async () => {
+    const receipt = attach(JPEG, 'image/jpeg', 'till receipt.jpg');
+    current!.sqlite.prepare('update users set must_change_password = 1 where id = ?').run(ownerId);
+    expect((await fetchReceipt(receipt.id)).status).toBe(403);
+
+    current!.sqlite.prepare('update users set must_change_password = 0 where id = ?').run(ownerId);
+    expect((await fetchReceipt(receipt.id)).status).toBe(200);
   });
 });

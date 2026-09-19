@@ -48,7 +48,7 @@ function baseInput(ownerUserId: number): WarrantyInput {
 }
 
 function attachReceipt(ownerUserId: number): number {
-  const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+  const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
   writeSidecar(stagingId, { status: 'done', text: 'text' });
   const itemId = createWarrantyItem(baseInput(ownerUserId), [{ stagingId, originalFilename: 'a.jpg' }]);
   return listWarrantyReceipts(itemId)[0].id;

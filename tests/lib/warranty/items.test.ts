@@ -501,7 +501,7 @@ describe('updateWarrantyItem', () => {
 
 describe('attachStagedReceipts (MUST-6.8)', () => {
   it('moves the file into receipts/, inserts the row, and deletes the sidecar', async () => {
-    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     writeSidecar(stagingId, { status: 'done', text: 'STAGED RECEIPT TEXT' });
     const id = createWarrantyItem(input(), [ref(stagingId)]);
 
@@ -523,7 +523,7 @@ describe('attachStagedReceipts (MUST-6.8)', () => {
   });
 
   it('inserts as pending and enqueues an OCR job when there is no sidecar', async () => {
-    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     const id = createWarrantyItem(input(), [ref(stagingId)]);
     const [receipt] = listWarrantyReceipts(id);
     // The commit enqueued it; draining runs the injected fake engine.
@@ -538,20 +538,20 @@ describe('attachStagedReceipts (MUST-6.8)', () => {
   });
 
   it('skips a staged file that no longer sniffs to an accepted type', () => {
-    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     fs.writeFileSync(findStagedReceipt(stagingId)!.path, Buffer.from('PK not an image'));
     const id = createWarrantyItem(input(), [ref(stagingId)]);
     expect(listWarrantyReceipts(id)).toHaveLength(0);
   });
 
   it('attaches to an existing item and flags a duplicate sha256 without blocking (MUST-6.9)', () => {
-    const first = writeStagedReceipt(JPEG, 'image/jpeg');
+    const first = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     const id = createWarrantyItem(input(), [ref(first)]);
     const digest = listWarrantyReceipts(id)[0].sha256;
     expect(sha256AlreadyOnItem(id, digest)).toBe(true);
     expect(sha256AlreadyOnItem(id, 'b'.repeat(64))).toBe(false);
 
-    const second = writeStagedReceipt(JPEG, 'image/jpeg');
+    const second = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     expect(attachStagedReceipts(id, [ref(second)])).toHaveLength(1);
     expect(listWarrantyReceipts(id)).toHaveLength(2);
   });
@@ -559,7 +559,7 @@ describe('attachStagedReceipts (MUST-6.8)', () => {
 
 describe('commit-time re-validation (M4 / M5)', () => {
   it('skips a staged file that has grown past MAX_RECEIPT_BYTES since upload, without failing the save', () => {
-    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     // Simulate a staged file that grew (or was swapped) between upload and save.
     const oversized = Buffer.concat([JPEG, Buffer.alloc(MAX_RECEIPT_BYTES)]);
     fs.writeFileSync(findStagedReceipt(stagingId)!.path, oversized);
@@ -570,14 +570,14 @@ describe('commit-time re-validation (M4 / M5)', () => {
   });
 
   it('skips a staged file that has been truncated to zero bytes', () => {
-    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     fs.writeFileSync(findStagedReceipt(stagingId)!.path, Buffer.alloc(0));
     const id = createWarrantyItem(input(), [ref(stagingId)]);
     expect(listWarrantyReceipts(id)).toHaveLength(0);
   });
 
   it('sanitises slashes, backslashes, quotes and control characters out of originalFilename', () => {
-    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     const nul = String.fromCharCode(0);
     const id = createWarrantyItem(input(), [ref(stagingId, `..\\/evil${nul}"name.jpg`)]);
     const [receipt] = listWarrantyReceipts(id);
@@ -585,7 +585,7 @@ describe('commit-time re-validation (M4 / M5)', () => {
   });
 
   it('falls back to a generated name when sanitising leaves nothing displayable', () => {
-    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     const id = createWarrantyItem(input(), [ref(stagingId, '///\\\\"""')]);
     const [receipt] = listWarrantyReceipts(id);
     expect(receipt.originalFilename).toBe(`receipt.${receipt.storedFilename.split('.').pop()}`);
@@ -594,11 +594,11 @@ describe('commit-time re-validation (M4 / M5)', () => {
 
 describe('deferred post-transaction effects (IMPORTANT 3)', () => {
   it('a mid-transaction throw leaves an earlier sidecar intact and enqueues nothing', () => {
-    const survivorId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const survivorId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     writeSidecar(survivorId, { status: 'done', text: 'SIDECAR SHOULD SURVIVE' });
     // No sidecar for this one: committing successfully would have enqueued an OCR job for it.
-    const pendingId = writeStagedReceipt(JPEG, 'image/jpeg');
-    const failingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const pendingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
+    const failingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
 
     // Force the THIRD receipt's INSERT to fail, deterministically, so the whole transaction
     // rolls back -- simulating "something goes wrong mid-commit" without depending on a real
@@ -635,9 +635,9 @@ describe('deferred post-transaction effects (IMPORTANT 3)', () => {
   });
 
   it('a successful commit still deletes sidecars and enqueues OCR jobs as before', async () => {
-    const withSidecar = writeStagedReceipt(JPEG, 'image/jpeg');
+    const withSidecar = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     writeSidecar(withSidecar, { status: 'done', text: 'SHOULD BE DELETED' });
-    const withoutSidecar = writeStagedReceipt(JPEG, 'image/jpeg');
+    const withoutSidecar = writeStagedReceipt(JPEG, 'image/jpeg', 1);
 
     const id = createWarrantyItem(input(), [ref(withSidecar), ref(withoutSidecar)]);
 
@@ -655,7 +655,7 @@ describe('deferred post-transaction effects (IMPORTANT 3)', () => {
 
 describe('deletion (MUST-4.8)', () => {
   it('removes the receipt row, its FTS text and its file', () => {
-    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     writeSidecar(stagingId, { status: 'done', text: 'DELETEME TOKEN' });
     const id = createWarrantyItem(input(), [ref(stagingId)]);
     const [receipt] = listWarrantyReceipts(id);
@@ -671,8 +671,8 @@ describe('deletion (MUST-4.8)', () => {
   });
 
   it('deleting the item cascades the rows and unlinks every file', () => {
-    const a = writeStagedReceipt(JPEG, 'image/jpeg');
-    const b = writeStagedReceipt(JPEG, 'image/jpeg');
+    const a = writeStagedReceipt(JPEG, 'image/jpeg', 1);
+    const b = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     const id = createWarrantyItem(input(), [ref(a), ref(b)]);
     const stored = listWarrantyReceipts(id).map((r) => r.storedFilename);
     expect(stored).toHaveLength(2);
@@ -688,7 +688,7 @@ describe('deletion (MUST-4.8)', () => {
 
 describe('resetReceiptForReOcr (MUST-7.16)', () => {
   it('sets pending, clears text and error, and re-enqueues', async () => {
-    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     writeSidecar(stagingId, { status: 'failed', error: 'OCR timed out.' });
     const id = createWarrantyItem(input(), [ref(stagingId)]);
     const [receipt] = listWarrantyReceipts(id);
@@ -707,7 +707,7 @@ describe('resetReceiptForReOcr (MUST-7.16)', () => {
 
 describe('listStoredFilenames', () => {
   it('returns every stored_filename for the orphan sweep', () => {
-    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     const id = createWarrantyItem(input(), [ref(stagingId)]);
     expect(listStoredFilenames()).toEqual([listWarrantyReceipts(id)[0].storedFilename]);
   });
@@ -715,7 +715,7 @@ describe('listStoredFilenames', () => {
 
 describe('missing files degrade quietly (MUST-4.10)', () => {
   it('reports fileExists false instead of throwing', () => {
-    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     const id = createWarrantyItem(input(), [ref(stagingId)]);
     const [receipt] = listWarrantyReceipts(id);
     fs.rmSync(path.join(dataDir, 'receipts', receipt.storedFilename), { force: true });

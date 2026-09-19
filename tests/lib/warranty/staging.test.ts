@@ -34,13 +34,13 @@ const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(
 
 describe('writeStagedReceipt / findStagedReceipt', () => {
   it('writes into the existing DATA_DIR/tmp so purgeStagedFiles already covers it', () => {
-    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     expect(STAGING_ID_RE.test(stagingId)).toBe(true);
     expect(fs.existsSync(path.join(receiptTempDir(), `${stagingId}.jpg`))).toBe(true);
   });
 
   it('finds a staged file and reports its mime from the stored extension', () => {
-    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     const found = findStagedReceipt(stagingId);
     expect(found?.mime).toBe('image/jpeg');
     expect(found?.path).toBe(path.join(receiptTempDir(), `${stagingId}.jpg`));
@@ -58,7 +58,7 @@ describe('writeStagedReceipt / findStagedReceipt', () => {
   });
 
   it('deletes the staged file and is safe to call twice', () => {
-    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     deleteStagedReceipt(stagingId);
     expect(findStagedReceipt(stagingId)).toBeNull();
     expect(() => deleteStagedReceipt(stagingId)).not.toThrow();
@@ -67,7 +67,7 @@ describe('writeStagedReceipt / findStagedReceipt', () => {
 
 describe('OCR sidecar (MUST-6.7)', () => {
   it('round-trips a done payload with suggestions', () => {
-    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     writeSidecar(stagingId, {
       status: 'done',
       text: 'HOME DEPOT\nTOTAL 42.00',
@@ -81,24 +81,24 @@ describe('OCR sidecar (MUST-6.7)', () => {
   });
 
   it('round-trips a failed payload', () => {
-    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     writeSidecar(stagingId, { status: 'failed', error: 'OCR timed out.' });
     expect(readSidecar(stagingId)).toEqual({ status: 'failed', error: 'OCR timed out.' });
   });
 
   it('reads null before the worker has written anything (still pending)', () => {
-    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     expect(readSidecar(stagingId)).toBeNull();
   });
 
   it('reads null rather than throwing on a corrupt sidecar', () => {
-    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     fs.writeFileSync(sidecarPath(stagingId), '{not json');
     expect(readSidecar(stagingId)).toBeNull();
   });
 
   it('reads null on a structurally-invalid sidecar (valid JSON, wrong shape) rather than trusting a bad cast (M4)', () => {
-    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     fs.writeFileSync(sidecarPath(stagingId), JSON.stringify({ status: 'not-a-real-status' }));
     expect(readSidecar(stagingId)).toBeNull();
 
@@ -113,7 +113,7 @@ describe('OCR sidecar (MUST-6.7)', () => {
   });
 
   it('deletes the sidecar and is safe to call twice', () => {
-    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     writeSidecar(stagingId, { status: 'done', text: 'x' });
     deleteSidecar(stagingId);
     expect(readSidecar(stagingId)).toBeNull();

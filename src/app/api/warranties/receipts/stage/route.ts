@@ -112,7 +112,7 @@ export async function POST(request: Request): Promise<Response> {
 
   const staged = prepared.map((part) => {
     // MUST-6.6: write to ${DATA_DIR}/tmp, then enqueue an OCR job of kind 'staged'.
-    const stagingId = writeStagedReceipt(part.buf, part.mime!);
+    const stagingId = writeStagedReceipt(part.buf, part.mime!, user.id);
     enqueueOcrJob({ kind: 'staged', stagingId });
     return {
       stagingId,

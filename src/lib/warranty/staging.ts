@@ -71,12 +71,53 @@ function assertStagingId(stagingId: string): void {
   }
 }
 
-export function writeStagedReceipt(buf: Buffer, mime: ReceiptMime): string {
+export function writeStagedReceipt(buf: Buffer, mime: ReceiptMime, uploadedBy: number): string {
   const dir = receiptTempDir();
   fs.mkdirSync(dir, { recursive: true });
   const stagingId = randomUUID();
   fs.writeFileSync(path.join(dir, `${stagingId}.${extForMime(mime)}`), buf);
+  /*
+    D7. WHO UPLOADED THIS. A staging id is a UUID, so guessing one is not the worry; being handed
+    one is. Until this release the poll endpoint and the commit path accepted any staging id from
+    any signed-in member, so a receipt's OCR suggestions -- a vendor, a date, a price off somebody
+    else's receipt -- belonged to whoever asked for them.
+
+    A separate small file rather than a field on the OCR sidecar, because the sidecar is written by
+    the queue when the job FINISHES and this has to be known from the moment the file lands.
+  */
+  fs.writeFileSync(ownerPath(stagingId), JSON.stringify({ uploadedBy }), 'utf8');
   return stagingId;
+}
+
+function ownerPath(stagingId: string): string {
+  assertStagingId(stagingId);
+  return path.join(receiptTempDir(), `${stagingId}.owner.json`);
+}
+
+/**
+ * The id of the member who staged this upload, or null when nothing was recorded -- which is the
+ * case for a file staged by an older version and for an id that never existed. Callers treat null
+ * as "not mine": an upload with no owner cannot be claimed by anybody, and the 24-hour sweep takes
+ * it away shortly.
+ */
+export function stagedUploader(stagingId: string): number | null {
+  const file = ownerPath(stagingId);
+  if (!fs.existsSync(file)) return null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as { uploadedBy?: unknown };
+    return typeof parsed.uploadedBy === 'number' ? parsed.uploadedBy : null;
+  } catch {
+    return null;
+  }
+}
+
+/** True when this member staged this upload. The one question every caller actually asks. */
+export function stagedByViewer(stagingId: string, userId: number): boolean {
+  return stagedUploader(stagingId) === userId;
+}
+
+export function deleteStagedOwner(stagingId: string): void {
+  fs.rmSync(ownerPath(stagingId), { force: true });
 }
 
 export function findStagedReceipt(stagingId: string): { path: string; mime: ReceiptMime } | null {

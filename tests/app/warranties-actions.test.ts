@@ -298,7 +298,7 @@ describe('createWarrantyAction', () => {
   });
 
   it('commits staged receipts with the item', async () => {
-    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     writeSidecar(stagingId, { status: 'done', text: 'STAGED WORD' });
     const to = await redirectPath(() =>
       createWarrantyAction(
@@ -638,7 +638,7 @@ describe('updateWarrantyAction', () => {
 
 describe('deleteWarrantyAction', () => {
   it('removes the item, its receipt rows, its FTS entries and its files, then redirects', async () => {
-    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     writeSidecar(stagingId, { status: 'done', text: 'DOOMED WORD' });
     const to = await redirectPath(() =>
       createWarrantyAction(
@@ -690,12 +690,12 @@ describe('attachReceiptsAction / deleteReceiptAction / reRunOcrAction', () => {
     const to = await redirectPath(() => createWarrantyAction({}, formData(baseFields())));
     const id = Number(to.split('/').pop());
 
-    const first = writeStagedReceipt(JPEG, 'image/jpeg');
+    const first = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     await attachReceiptsAction(
       {},
       formData({ itemId: String(id), staged: JSON.stringify([{ stagingId: first, originalFilename: 'a.jpg' }]) }),
     );
-    const second = writeStagedReceipt(JPEG, 'image/jpeg');
+    const second = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     const result = await attachReceiptsAction(
       {},
       formData({ itemId: String(id), staged: JSON.stringify([{ stagingId: second, originalFilename: 'a.jpg' }]) }),
@@ -705,7 +705,7 @@ describe('attachReceiptsAction / deleteReceiptAction / reRunOcrAction', () => {
   });
 
   it('deletes one receipt', async () => {
-    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     const to = await redirectPath(() =>
       createWarrantyAction(
         {},
@@ -721,7 +721,7 @@ describe('attachReceiptsAction / deleteReceiptAction / reRunOcrAction', () => {
   });
 
   it('re-runs OCR and is safe to click twice', async () => {
-    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     writeSidecar(stagingId, { status: 'failed', error: 'OCR timed out.' });
     const to = await redirectPath(() =>
       createWarrantyAction(
@@ -746,7 +746,7 @@ describe('attachReceiptsAction / deleteReceiptAction / reRunOcrAction', () => {
   // closing the same existence-oracle leak api/warranties/receipts/[id]/route.ts already
   // closes by answering 404 rather than 403.
   it('refuses for a self-scoped viewer who cannot see the receipt\'s item, and the OCR state is untouched', async () => {
-    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     writeSidecar(stagingId, { status: 'failed', error: 'OCR timed out.' });
     const to = await redirectPath(() =>
       createWarrantyAction(
@@ -1089,7 +1089,7 @@ describe('ruling R3: destructive actions are owner-or-admin, and are recorded', 
     adminOwnedItemId = seedItem(adminId, 'Admin Item');
     memberOwnedItemId = seedItem(memberId, 'Member Item');
 
-    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     writeSidecar(stagingId, { status: 'done', text: 'admin receipt text' });
     [receiptOnAdminItem] = attachStagedReceipts(adminOwnedItemId, [{ stagingId, originalFilename: 'a.jpg' }]);
   });

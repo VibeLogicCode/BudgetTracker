@@ -19,7 +19,7 @@ import {
   sha256Bytes,
 } from '@/lib/warranty/receipts';
 import { sniffReceiptType, type ReceiptMime } from '@/lib/warranty/sniff';
-import { deleteSidecar, findStagedReceipt, readSidecar } from '@/lib/warranty/staging';
+import { deleteSidecar, deleteStagedOwner, findStagedReceipt, readSidecar, stagedByViewer } from '@/lib/warranty/staging';
 import {
   billingAllowedForKind,
   BILLING_CYCLES,
@@ -550,6 +550,7 @@ export function createWarrantyItem(
   input: WarrantyInput,
   staged: StagedReceiptRef[] = [],
   at: string = nowIso(),
+  claimedBy?: number,
 ): number {
   // v1.3.0: checked BEFORE the transaction even opens -- a mismatch here writes nothing,
   // exactly like typeExistsOrNull's early return in actions.ts.
@@ -613,7 +614,7 @@ export function createWarrantyItem(
         })
         .returning({ id: warrantyItems.id })
         .get();
-      commitStaged(tx, row.id, staged, at, adopted, deferred);
+      commitStaged(tx, row.id, staged, at, adopted, deferred, claimedBy);
       return row.id;
     });
     for (const effect of deferred) effect();
@@ -900,6 +901,7 @@ export function attachStagedReceipts(
   itemId: number,
   staged: StagedReceiptRef[],
   at: string = nowIso(),
+  claimedBy?: number,
 ): number[] {
   const db = getDb();
   // Ruling P9: same during-the-loop tracking as createWarrantyItem's adoption pass.
@@ -907,7 +909,7 @@ export function attachStagedReceipts(
   // IMPORTANT 3: same deferred-until-committed pattern as createWarrantyItem.
   const deferred: Array<() => void> = [];
   try {
-    const receiptIds = db.transaction((tx) => commitStaged(tx, itemId, staged, at, adopted, deferred).receiptIds);
+    const receiptIds = db.transaction((tx) => commitStaged(tx, itemId, staged, at, adopted, deferred, claimedBy).receiptIds);
     for (const effect of deferred) effect();
     return receiptIds;
   } catch (error) {
@@ -949,10 +951,22 @@ function commitStaged(
   at: string,
   adopted: string[],
   deferred: Array<() => void>,
+  claimedBy?: number,
 ): { receiptIds: number[] } {
   const receiptIds: number[] = [];
 
   for (const ref of staged) {
+    /*
+      D7, the other half. The poll endpoint now refuses a staging id its caller did not stage, and
+      so does this: a save that names somebody else's staged upload attaches nothing, silently,
+      exactly as a purged one does. Skipping rather than throwing is this loop's existing
+      convention -- one unusable receipt never fails a member's whole save.
+
+      claimedBy is optional because the two library-level callers that have no session behind them
+      (the loan created from a transaction) stage nothing.
+    */
+    if (claimedBy !== undefined && !stagedByViewer(ref.stagingId, claimedBy)) continue;
+
     const found = findStagedReceipt(ref.stagingId);
     // Purged by the 24 h sweep, or lost to a restart. Skip it; the save still succeeds.
     if (found === null) continue;
@@ -996,7 +1010,11 @@ function commitStaged(
 
     receiptIds.push(inserted.id);
     const stagingId = ref.stagingId;
-    deferred.push(() => deleteSidecar(stagingId));
+    deferred.push(() => {
+      deleteSidecar(stagingId);
+      // D7: the uploader record goes with the sidecar it sat beside, so tmp is left as it was.
+      deleteStagedOwner(stagingId);
+    });
     // No sidecar means OCR had not finished when the member saved: record 'pending' and let
     // the queue (and, after a crash, the scheduler sweep) pick it up (§7.5).
     if (sidecar === null) {

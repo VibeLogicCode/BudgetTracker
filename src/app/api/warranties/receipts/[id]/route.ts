@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { Readable } from 'node:stream';
 import { isSameOriginOrHeaderless } from '@/lib/auth/csrf';
 import { userFromRequest } from '@/lib/auth/session';
+import { mustChangePassword } from '@/lib/auth/users';
 import { canActOnOwner } from '@/lib/auth/viewer';
 import { getWarrantyItem, getWarrantyReceipt } from '@/lib/warranty/items';
 import { resolveReceiptPath } from '@/lib/warranty/receipts';
@@ -55,6 +56,11 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
   // 2. Session.
   const user = userFromRequest(request);
   if (!user) return new Response('Unauthorized', { status: 401 });
+
+  // D8: the same gate the three CSV routes and the backup download carry. A member who has not
+  // finished setting their password has a session but is not through the door yet, and a receipt
+  // is a document like any other export.
+  if (mustChangePassword(user.id)) return new Response('Finish setting your password first.', { status: 403 });
 
   // 3. A positive integer id, or nothing.
   const { id: raw } = await ctx.params;

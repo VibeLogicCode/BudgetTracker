@@ -357,6 +357,13 @@ export async function previewRuleClearAction(
   from: string | null,
   to: string | null,
 ): Promise<{ affected: number; kind: RuleKind | null; error?: string }> {
+  /*
+    D6. An exported async function in a 'use server' module is a POST endpoint whether or not a
+    <form> is bound to it, and this one counts rows across the household's whole transaction table.
+    It is not bound to a form -- it is called as a plain RPC from the dialog -- which is exactly why
+    it was missed. tests/ops/server-action-origin.test.ts now finds the next one.
+  */
+  if (!isSameOrigin(await headers())) return { affected: 0, kind: null, error: CROSS_ORIGIN_ERROR };
   await requireAdmin();
   const target = findRuleOr(ruleId);
   if (!target) return { affected: 0, kind: null, error: 'That rule no longer exists.' };
@@ -553,6 +560,9 @@ export async function previewRerunAllAction(
   from: string | null = null,
   to: string | null = null,
 ): Promise<{ eligible: number; wouldChange: number }> {
+  // D6, as above. Zeros are this function's own "nothing to say" answer, so a refused request
+  // reads exactly like an unusable date range and the dialog already handles it.
+  if (!isSameOrigin(await headers())) return { eligible: 0, wouldChange: 0 };
   await requireAdmin();
   const scope = parseScope(from, to);
   if (!scope.ok) return { eligible: 0, wouldChange: 0 };
