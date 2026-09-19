@@ -1,7 +1,7 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
-import { budgetProgress, budgetTotals, categorySpend, categoryTransactions, clearBudget, copyBudgetsFromPreviousMonth, flattenBudgetRows, resolveBudget, upsertBudget } from '@/lib/budgets';
+import { budgetProgress, budgetTotals, categorySpend, categoryTransactions, clearBudget, copyBudgetsFromPreviousMonth, effectiveBudget, flattenBudgetRows, resolveBudget, setRollover, upsertBudget } from '@/lib/budgets';
 import { archiveCategory } from '@/lib/categories';
 import { nowIso } from '@/lib/clock';
 import { assignTransactionToLoan } from '@/lib/loans';
@@ -818,5 +818,80 @@ describe('loan principal movements are excluded from budget spend too (C-02)', (
     expect(groceriesRow.spentCents).toBe(0);
     expect(groceriesRow.overBudget).toBe(false);
     expect(budgetTotals(rows)).toMatchObject({ budgetedSpentCents: 0, totalSpentCents: 0 });
+  });
+});
+
+/**
+ * Review C3. budgetProgress asked two questions per category (its limit, and whether it rolls
+ * over), and every rollover category then re-ran a 24-month GROUP BY that had already computed
+ * every other category's answer in the same pass. Forty categories cost eighty queries plus a
+ * series each -- and the dashboard calls this three times per render.
+ */
+describe('C3: budgetProgress reads in batches, not per category', () => {
+  function manyCategories(count: number): number[] {
+    const ids: number[] = [];
+    for (let index = 0; index < count; index += 1) {
+      ids.push(
+        current!.db.get<{ id: number }>(sql`
+          insert into categories (name, parent_id, is_income, is_archived)
+          values (${`Cat ${index}`}, null, 0, 0) returning id`).id,
+      );
+    }
+    return ids;
+  }
+
+  /** Statements prepared while `run` executes -- better-sqlite3 exposes no counter. */
+  function statements(run: () => void): number {
+    let prepared = 0;
+    const original = current!.sqlite.prepare.bind(current!.sqlite);
+    const spy = vi.spyOn(current!.sqlite, 'prepare').mockImplementation(((text: string) => {
+      prepared += 1;
+      return original(text);
+    }) as TestDb['sqlite']['prepare']);
+    try {
+      run();
+    } finally {
+      spy.mockRestore();
+    }
+    return prepared;
+  }
+
+  it('costs a handful of statements for forty budgeted categories', () => {
+    setup();
+    for (const categoryId of manyCategories(40)) {
+      upsertBudget({ scope: 'household', userId: null, categoryId, month: '2026-03', amountCents: 10_000 });
+    }
+    expect(statements(() => void budgetProgress('2026-03'))).toBeLessThanOrEqual(8);
+  });
+
+  /** And the rollover series is one pass across every category that carries one, not one each. */
+  it('does not re-run the lookback series per rollover category', () => {
+    setup();
+    const ids = manyCategories(20);
+    for (const categoryId of ids) {
+      upsertBudget({ scope: 'household', userId: null, categoryId, month: '2026-01', amountCents: 10_000 });
+      setRollover({ scope: 'household', userId: null, categoryId, enabled: true, startMonth: '2026-01' });
+    }
+    expect(statements(() => void budgetProgress('2026-03'))).toBeLessThanOrEqual(10);
+  });
+
+  it('reports the same figures it did before the batching', () => {
+    const { spend } = setup();
+    const groceries = categoryIdByName(current!.db, 'Groceries');
+    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-01', amountCents: 50_000 });
+    setRollover({ scope: 'household', userId: null, categoryId: groceries, enabled: true, startMonth: '2026-01' });
+    spend({ categoryId: groceries, amountCents: -20_000, date: '2026-01-10' });
+    spend({ categoryId: groceries, amountCents: -10_000, date: '2026-02-10' });
+    spend({ categoryId: groceries, amountCents: -5_000, date: '2026-03-10' });
+
+    const row = flattenBudgetRows(budgetProgress('2026-03')).find((r) => r.categoryId === groceries)!;
+    // January left $300 and February $400 unspent, so March carries $700 on top of its own $500.
+    expect(row).toMatchObject({ baseLimitCents: 50_000, carryCents: 70_000, limitCents: 120_000, spentCents: 5_000 });
+    // The unbatched path, asked directly, must agree figure for figure.
+    expect(effectiveBudget('household', null, groceries, '2026-03')).toEqual({
+      baseCents: 50_000,
+      carryCents: 70_000,
+      effectiveCents: 120_000,
+    });
   });
 });

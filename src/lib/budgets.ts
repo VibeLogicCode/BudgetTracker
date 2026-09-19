@@ -474,17 +474,186 @@ function resolveBudgetSeries(
  * this function costs a small, constant number of queries no matter how many months it
  * walks -- never a query per month.
  */
+/**
+ * C3 (review). Everything budgetProgress needs about EVERY category, in two queries plus one.
+ *
+ * The page walks forty categories. Each one used to ask resolveBudget and rolloverStartMonth for
+ * itself -- two queries a category, eighty a call -- and each rollover category then re-ran a
+ * 24-month GROUP BY that had already computed every other category's answer in the same pass and
+ * thrown it away. The dashboard calls budgetProgress three times, so that was the cost three times
+ * over on the most-visited page in the app.
+ *
+ * Nothing about WHAT is computed changes: the batched reads answer the same questions the
+ * per-category ones did, in the same order of precedence, and the carry walk below is untouched.
+ * The heavy series is built lazily, so a household with no rollover category never pays for it.
+ */
+interface BudgetLookups {
+  limits: Map<number, number | null>;
+  rolloverStarts: Map<number, string | null>;
+  /** Spend by category by month across the whole lookback, folded to include children. */
+  spendSeries: () => Map<number, Map<string, number>>;
+  /** The budget in force for a category in each month of the lookback. */
+  baseSeries: () => Map<number, Map<string, number | null>>;
+}
+
+function budgetLookups(scope: BudgetScope, userId: number | null, month: string): BudgetLookups {
+  const limits = new Map<number, number | null>();
+  // resolveBudget's own rule -- the NEWEST row at or before the month -- asked for every category
+  // at once. Ordered ascending so a later row simply overwrites an earlier one.
+  for (const row of getDb()
+    .select({ categoryId: budgets.categoryId, amountCents: budgets.amountCents })
+    .from(budgets)
+    .where(and(scopeCondition(scope, userId), lte(budgets.effectiveMonth, month)))
+    .orderBy(asc(budgets.effectiveMonth))
+    .all()) {
+    limits.set(row.categoryId, row.amountCents);
+  }
+
+  const rolloverStarts = new Map<number, string | null>();
+  for (const row of getDb()
+    .select({ categoryId: budgetRollover.categoryId, startMonth: budgetRollover.startMonth })
+    .from(budgetRollover)
+    .where(
+      scope === 'personal'
+        ? and(eq(budgetRollover.scope, 'personal'), eq(budgetRollover.userId, userId as number))
+        : and(eq(budgetRollover.scope, 'household'), isNull(budgetRollover.userId)),
+    )
+    .all()) {
+    rolloverStarts.set(row.categoryId, row.startMonth);
+  }
+
+  const lookback = monthRange(addMonths(month, -24), addMonths(month, -1));
+  let spend: Map<number, Map<string, number>> | null = null;
+  let base: Map<number, Map<string, number | null>> | null = null;
+
+  return {
+    limits,
+    rolloverStarts,
+    spendSeries: () => {
+      if (spend !== null) return spend;
+      spend = spendSeriesByCategory(scope, userId, lookback);
+      return spend;
+    },
+    baseSeries: () => {
+      if (base !== null) return base;
+      base = baseSeriesByCategory(scope, userId, lookback);
+      return base;
+    },
+  };
+}
+
+/**
+ * The same grouped query categorySpendWithRollupSeries already ran, kept whole.
+ *
+ * That function computed every category's monthly totals and then discarded all but one subtree's,
+ * once per rollover category. This keeps the lot and folds each parent's children in afterwards --
+ * the rollup rule foldRollup owns, applied per month.
+ */
+function spendSeriesByCategory(
+  scope: BudgetScope,
+  userId: number | null,
+  months: string[],
+): Map<number, Map<string, number>> {
+  const byCategory = new Map<number, Map<string, number>>();
+  if (months.length === 0) return byCategory;
+
+  const clauses = [
+    gte(transactions.date, monthStart(months[0] as string)),
+    lte(transactions.date, monthEnd(months[months.length - 1] as string)),
+    ...SPEND_ROW_WHERE,
+    sql`${EFFECTIVE_CATEGORY} is not null`,
+  ];
+  if (scope === 'personal' && userId !== null) clauses.push(eq(transactions.attributedUserId, userId));
+
+  const rows = getDb()
+    .select({
+      month: sql<string>`substr(${transactions.date}, 1, 7)`,
+      categoryId: EFFECTIVE_CATEGORY,
+      total: sql<number>`sum(${EFFECTIVE_AMOUNT})`,
+    })
+    .from(transactions)
+    .leftJoin(transactionSplits, eq(transactionSplits.txnId, transactions.id))
+    .where(and(...clauses))
+    .groupBy(sql`substr(${transactions.date}, 1, 7)`, EFFECTIVE_CATEGORY)
+    .all();
+
+  const direct = new Map<number, Map<string, number>>();
+  for (const row of rows) {
+    if (row.categoryId === null) continue;
+    const forCategory = direct.get(row.categoryId) ?? new Map<string, number>();
+    forCategory.set(row.month, (forCategory.get(row.month) ?? 0) + netSpentCents(row.total ?? 0));
+    direct.set(row.categoryId, forCategory);
+  }
+
+  const categories = listCategories({ includeArchived: true });
+  for (const category of categories) {
+    const folded = new Map<string, number>();
+    for (const m of months) folded.set(m, 0);
+    const ids = [category.id, ...categories.filter((child) => child.parentId === category.id).map((child) => child.id)];
+    for (const id of ids) {
+      for (const [m, cents] of direct.get(id) ?? []) {
+        if (folded.has(m)) folded.set(m, (folded.get(m) ?? 0) + cents);
+      }
+    }
+    byCategory.set(category.id, folded);
+  }
+  return byCategory;
+}
+
+/** resolveBudgetSeries for every category at once, same "newest row at or before" walk. */
+function baseSeriesByCategory(
+  scope: BudgetScope,
+  userId: number | null,
+  months: string[],
+): Map<number, Map<string, number | null>> {
+  const byCategory = new Map<number, Map<string, number | null>>();
+  if (months.length === 0) return byCategory;
+
+  const rows = getDb()
+    .select({ categoryId: budgets.categoryId, effectiveMonth: budgets.effectiveMonth, amountCents: budgets.amountCents })
+    .from(budgets)
+    .where(and(scopeCondition(scope, userId), lte(budgets.effectiveMonth, months[months.length - 1] as string)))
+    .orderBy(asc(budgets.effectiveMonth))
+    .all();
+
+  const perCategory = new Map<number, { effectiveMonth: string; amountCents: number | null }[]>();
+  for (const row of rows) {
+    const list = perCategory.get(row.categoryId) ?? [];
+    list.push({ effectiveMonth: row.effectiveMonth, amountCents: row.amountCents });
+    perCategory.set(row.categoryId, list);
+  }
+
+  for (const [categoryId, list] of perCategory) {
+    const series = new Map<string, number | null>();
+    let index = 0;
+    let current: number | null = null;
+    for (const m of months) {
+      while (index < list.length && list[index]!.effectiveMonth <= m) {
+        current = list[index]!.amountCents;
+        index += 1;
+      }
+      series.set(m, current);
+    }
+    byCategory.set(categoryId, series);
+  }
+  return byCategory;
+}
+
 export function effectiveBudget(
   scope: BudgetScope,
   userId: number | null,
   categoryId: number,
   month: string,
+  /** C3: the batched reads, when a caller has already made them. */
+  lookups?: BudgetLookups,
 ): { baseCents: number | null; carryCents: number; effectiveCents: number | null } {
   assertMonth(month);
   if (scope === 'personal' && userId === null) throw new Error('Personal effective budget requires a user');
 
-  const baseCents = resolveBudget(scope, userId, categoryId, month);
-  const startMonth = rolloverStartMonth(scope, userId, categoryId);
+  const baseCents =
+    lookups === undefined ? resolveBudget(scope, userId, categoryId, month) : (lookups.limits.get(categoryId) ?? null);
+  const startMonth =
+    lookups === undefined ? rolloverStartMonth(scope, userId, categoryId) : (lookups.rolloverStarts.get(categoryId) ?? null);
 
   if (startMonth === null || month <= startMonth) {
     return { baseCents, carryCents: 0, effectiveCents: baseCents };
@@ -494,8 +663,14 @@ export function effectiveBudget(
   const windowStart = startMonth > lookbackFloor ? startMonth : lookbackFloor;
   const months = monthRange(windowStart, addMonths(month, -1));
 
-  const baseByMonth = resolveBudgetSeries(scope, userId, categoryId, months);
-  const spentByMonth = categorySpendWithRollupSeries(scope, userId, categoryId, months);
+  const baseByMonth =
+    lookups === undefined
+      ? resolveBudgetSeries(scope, userId, categoryId, months)
+      : (lookups.baseSeries().get(categoryId) ?? new Map<string, number | null>());
+  const spentByMonth =
+    lookups === undefined
+      ? categorySpendWithRollupSeries(scope, userId, categoryId, months)
+      : (lookups.spendSeries().get(categoryId) ?? new Map<string, number>());
 
   let carry = 0;
   for (const m of months) {
@@ -527,9 +702,10 @@ function buildRow(
   month: string,
   renderChildren: CategoryRecord[],
   rollupChildren: CategoryRecord[],
+  lookups?: BudgetLookups,
 ): BudgetRow {
   const childRows = renderChildren.map((child) =>
-    buildRow(child, spendByCategory, scope, userId, month, [], []),
+    buildRow(child, spendByCategory, scope, userId, month, [], [], lookups),
   );
   // Rollup rule: a parent counts its own transactions plus ALL children's — including
   // an archived child's, which is never rendered as its own row (rollupChildren is
@@ -543,7 +719,7 @@ function buildRow(
     rollupChildren.map((child) => child.id),
     spendByCategory,
   );
-  const { baseCents, carryCents, effectiveCents } = effectiveBudget(scope, userId, category.id, month);
+  const { baseCents, carryCents, effectiveCents } = effectiveBudget(scope, userId, category.id, month, lookups);
   return {
     categoryId: category.id,
     categoryName: category.name,
@@ -588,6 +764,10 @@ export function budgetProgress(month: string, scope: BudgetScope = 'household', 
   const presentIds = new Set(all.map((category) => category.id));
   const isTopLevel = (category: CategoryRecord) => category.parentId === null || !presentIds.has(category.parentId);
 
+  // C3: two queries for every category's limit and rollover start, in place of two per category.
+  const lookups = budgetLookups(scope, userId, month);
+  const limitOf = (categoryId: number): number | null => lookups.limits.get(categoryId) ?? null;
+
   return all
     .filter((category) => isTopLevel(category))
     .map((parent) => {
@@ -603,7 +783,7 @@ export function budgetProgress(month: string, scope: BudgetScope = 'household', 
         (row) =>
           !row.isArchived ||
           (spendByCategory.get(row.id) ?? 0) !== 0 ||
-          resolveBudget(scope, userId, row.id, month) !== null,
+          limitOf(row.id) !== null,
       );
       return { parent, allChildren, renderChildren };
     })
@@ -624,10 +804,10 @@ export function budgetProgress(month: string, scope: BudgetScope = 'household', 
         !parent.isArchived ||
         (spendByCategory.get(parent.id) ?? 0) !== 0 ||
         renderChildren.length > 0 ||
-        resolveBudget(scope, userId, parent.id, month) !== null,
+        limitOf(parent.id) !== null,
     )
     .map(({ parent, allChildren, renderChildren }) =>
-      buildRow(parent, spendByCategory, scope, userId, month, renderChildren, allChildren),
+      buildRow(parent, spendByCategory, scope, userId, month, renderChildren, allChildren, lookups),
     );
 }
 

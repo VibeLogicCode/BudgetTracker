@@ -128,6 +128,35 @@ function resolveTargetCents(target: SavingsTarget | null, incomeCents: number): 
 }
 
 /**
+ * C5 (review). The target figure for a run of months, from income the caller already has.
+ *
+ * The dashboard's savings chart maps over cashflowTrend(12)'s rows and used to call savingsProgress
+ * for each one -- and savingsProgress runs cashflowTrend(1) again for that month, plus a savings
+ * -account probe. Twelve months of a chart the trend had already computed cost about forty queries
+ * to recompute the same income figures.
+ *
+ * Only the TARGET is derived here, because the target is the only thing those rows were taking from
+ * savingsProgress. Ruling T1 still holds: "saved" has one definition and it is the trend's own net,
+ * which the caller passes in rather than this function re-deriving.
+ */
+export function savingsTargetsFor(rows: { month: string; incomeCents: number }[]): Map<string, number | null> {
+  const result = new Map<string, number | null>();
+  if (rows.length === 0) return result;
+
+  const stored = new Map<string, SavingsTarget>();
+  for (const row of getDb()
+    .select({ month: savingsTargets.month, mode: savingsTargets.mode, value: savingsTargets.value })
+    .from(savingsTargets)
+    .where(inArray(savingsTargets.month, rows.map((row) => row.month)))
+    .all()) {
+    stored.set(row.month, row);
+  }
+
+  for (const row of rows) result.set(row.month, resolveTargetCents(stored.get(row.month) ?? null, row.incomeCents));
+  return result;
+}
+
+/**
  * Ruling T1a: flagged transfer DEPOSITS (positive amounts) landing in an account of
  * `type = 'savings'` this month. Disclosure only -- see this module's docblock -- so it is
  * computed independently of cashflowTrend's income/spend series rather than folded into it.

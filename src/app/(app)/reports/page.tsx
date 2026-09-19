@@ -201,6 +201,9 @@ export default async function ReportsPage({
   // existing install; hasLent decides only whether a second LINE and a legend appear.
   // C1: two booleans, so the cheap row read -- this used to build every loan's ledger.
   const loansForFlags = showHouseholdTotals ? listLoanRows(today, viewer) : [];
+  // C6: ONE debt series for both charts. netWorthOverTime used to compute its own over the same
+  // 24-month window -- the same three queries and the same fold over every loan's history.
+  const debtSeries = showHouseholdTotals ? debtOverTime(24) : [];
   const hasLoans = loansForFlags.some((loan) => loan.currentBalanceCents !== null);
   const hasLent = loansForFlags.some((loan) => loan.loanDirection !== 'owed' && loan.currentBalanceCents !== null);
 
@@ -223,13 +226,13 @@ export default async function ReportsPage({
         viewer,
       )}
       split={personSpendSplit({ from, to }, viewer)}
-      debt={showHouseholdTotals ? debtOverTime(24) : []}
+      debt={debtSeries}
       hasLoans={hasLoans}
       hasLent={hasLent}
       // Same fixed trailing-24-month window as the Debt over time card above, deliberately
       // independent of the date-range picker at the top of the page (a net worth trend, like a
       // debt trend, is a "how did we get here" widget, not a "for this custom range" one).
-      netWorth={showHouseholdTotals ? netWorthOverTime(24, { today, viewer }) : []}
+      netWorth={showHouseholdTotals ? netWorthOverTime(24, { today, viewer, debtSeries }) : []}
       baselines={baselines}
       baselineMonthsUsed={baseline === null ? 0 : baseline.months.length}
       merchants={topMerchants({ from, to, limit: 15, attributedUserId: person }, viewer)}

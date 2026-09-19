@@ -21,7 +21,7 @@ import { cashRunway, cashRunwayHint, type CashRunway } from '@/lib/runway';
 // this Server Component may value-import it (tests/ops/client-bundle.test.ts) and the two
 // surfaces cannot drift about what a merchant drill-down carries.
 import { transactionsHref } from '@/lib/transaction-links';
-import { savingsProgress, type SavingsProgress } from '@/lib/savings-target';
+import { savingsProgress, type SavingsProgress, savingsTargetsFor } from '@/lib/savings-target';
 import { expiringSoonItems } from '@/lib/warranty/search';
 import { formatCents } from '@/lib/money';
 import { ComingUpCard } from '@/components/ComingUpCard';
@@ -109,9 +109,14 @@ export default async function DashboardPage({
   // viewer must still never receive it, the same gate `savings`/`runway` below already use for
   // every other household-wide figure on this page, so their rows carry `null` rather than a
   // call to savingsProgress at all.
+  //
+  // C5 (review): the targets come from ONE read against the income the trend already computed.
+  // Mapping savingsProgress over these rows re-ran cashflowTrend(1) per month -- about forty
+  // queries to recompute figures sitting in `trimmedTrend`.
+  const savingsTargets = selfScoped ? new Map<string, number | null>() : savingsTargetsFor(trimmedTrend);
   const savingsChartData: SavingsChartRow[] = trimmedTrend.map((row) => ({
     ...row,
-    targetCents: selfScoped ? null : savingsProgress(row.month, viewer).targetCents,
+    targetCents: selfScoped ? null : (savingsTargets.get(row.month) ?? null),
   }));
   // Item 5: the title never claims a month count the trim above did not actually deliver. Only
   // the "12-month" case gets the special-cased noun (matching how every other count-bearing

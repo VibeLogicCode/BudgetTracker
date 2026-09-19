@@ -6,7 +6,7 @@ import { balancesAsOf } from '@/lib/balance';
 import type { Viewer } from '@/lib/auth/viewer';
 import { nowIso } from '@/lib/clock';
 import { addMonths, daysBetweenIso, isIsoDate, monthEnd, monthOf, monthRange, todayIso } from '@/lib/dates';
-import { debtOverTime } from '@/lib/loans';
+import { debtOverTime, type DebtPoint } from '@/lib/loans';
 import { STALE_SNAPSHOT_DAYS } from '@/lib/networth-constants';
 
 /**
@@ -312,7 +312,21 @@ export { STALE_SNAPSHOT_DAYS };
  * than years of daily granularity) O(months) query pairs is not a real cost. debtOverTime is
  * the one other query this function makes, and only once, not per month.
  */
-export function netWorthOverTime(months: number, opts: { endMonth?: string; today?: string; viewer: Viewer }): NetWorthPoint[] {
+export function netWorthOverTime(
+  months: number,
+  opts: {
+    endMonth?: string;
+    today?: string;
+    viewer: Viewer;
+    /**
+     * C6 (review): the debt series, when the caller has already computed it over the same window.
+     * /reports renders debtOverTime(24) beside this chart and this function computed it a second
+     * time -- the same three queries and the same fold over every loan's history, for the same
+     * answer. Omitted, it is computed here as before.
+     */
+    debtSeries?: DebtPoint[];
+  },
+): NetWorthPoint[] {
   const today = opts.today ?? todayIso();
   const endMonth = opts.endMonth ?? monthOf(today);
   const keys = monthRange(addMonths(endMonth, -(months - 1)), endMonth);
@@ -334,8 +348,9 @@ export function netWorthOverTime(months: number, opts: { endMonth?: string; toda
   if (firstDate === null) return [];
 
   // Item 7: one call to debtOverTime, both series read off its result -- never a second query
-  // for the lent side, and never a second reconstruction of loan history.
-  const debtSeries = debtOverTime(months, { endMonth, today });
+  // for the lent side, and never a second reconstruction of loan history. C6: and never a second
+  // call at all when the caller already made one over this window.
+  const debtSeries = opts.debtSeries ?? debtOverTime(months, { endMonth, today });
   const debtByMonth = new Map(debtSeries.map((point) => [point.month, point.owedCents]));
   const lentByMonth = new Map(debtSeries.map((point) => [point.month, point.lentCents]));
 
