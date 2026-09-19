@@ -11,7 +11,7 @@ import { addMonths, currentMonth, isMonthKey, monthEnd, monthLabel, monthStart, 
 import { listGoals } from '@/lib/goals';
 import { householdInsights } from '@/lib/insights';
 import { unreviewedRuleImports } from '@/lib/import/commit';
-import { listLoans, ruleLinkedPayments } from '@/lib/loans';
+import { listLoanSummaries, ruleLinkedPayments } from '@/lib/loans';
 import { netWorthHint, netWorthOverTime } from '@/lib/networth';
 import { onboardingSteps } from '@/lib/onboarding';
 import { cashflowTrend, categoryBreakdown, topMerchants, trimLeadingEmptyMonths, type MonthTrendRow } from '@/lib/reports';
@@ -198,7 +198,7 @@ export default async function DashboardPage({
   const recorded = recurringLoad({ today, ownerUserId: scopeUserId, viewer });
   // Review fix-round: one read-model scan, not two -- loansTotalOwedCents() would otherwise
   // call listLoans() again just to re-derive the sum LoansCard's own props already carry.
-  const loans = listLoans(today, viewer);
+  const loans = listLoanSummaries(today, viewer);
   // v1.14.0 (spec BU): one scan, partitioned. LoansCard's "What we owe" is now
   // true rather than accidentally true, and the lent rows are a different question entirely.
   const owedLoans = loans.filter((loan) => loan.loanDirection === 'owed');
@@ -828,7 +828,7 @@ export default async function DashboardPage({
           {/* MUST-15.1: self-hiding. Rendered unconditionally; absent when there is nothing to say.
               Ruling R2: a loan balance is household money, so this is hidden entirely for a self
               viewer -- there is no honest per-person share of it to show instead. Ruling T7: loans
-              are always "as of today" (listLoans takes `today`, never `month`). */}
+              are always "as of today" (listLoanSummaries takes `today`, never `month`). */}
           {selfScoped ? null : (
             <>
               {!isCurrentMonth && owedLoans.length > 0 ? <AsOfTodayNote month={month} /> : null}
@@ -837,7 +837,7 @@ export default async function DashboardPage({
           )}
 
           {/* v1.14.0: NOT behind selfScoped -- ruling R2 hides household balances from a child, and
-              every row here is a row that child owns (listLoans has already scoped them). Ruling
+              every row here is a row that child owns (listLoanSummaries has already scoped them). Ruling
               T7: same "as of today" reasoning as the Loans card above. */}
           {!isCurrentMonth && lentLoans.length > 0 ? <AsOfTodayNote month={month} /> : null}
           <WhoOwesUsCard loans={lentLoans} totalLentCents={totalLentCents} selfScoped={selfScoped} />

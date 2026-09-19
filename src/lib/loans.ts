@@ -2867,7 +2867,18 @@ export function payoffProjection(itemId: number, today: string): PayoffProjectio
   return { monthlyAppliedCents, projectedPayoffMonth: addMonths(thisMonth, monthsNeeded) };
 }
 
-export interface LoanSummary {
+/**
+ * C1 (review). What a loan is, before anything is DERIVED from it.
+ *
+ * Three pages used to call listLoans -- the transactions page for a dropdown of names, the reports
+ * page for two booleans, and the item page for every item kind including the ones that are not
+ * loans at all -- and every one of them built a full ledger per loan and threw it away. That is
+ * roughly a hundred queries on the most-visited page in the app, for figures nothing renders.
+ *
+ * So the read model comes in two sizes. This is the cheap one: one query, no engine, no interest.
+ * LoanSummary below adds the derived figures, and only the surfaces that show them ask for it.
+ */
+export interface LoanRow {
   itemId: number;
   name: string;
   ownerUserId: number;
@@ -2892,6 +2903,10 @@ export interface LoanSummary {
   nextPaymentDate: string | null;
   lastPaymentAt: string | null;
   paymentCount: number;
+}
+
+/** A loan row plus everything the engine derives about it. */
+export interface LoanSummary extends LoanRow {
   /** Task 16 (v1.7.0): from payoffProjection() above, DISPLAY ONLY. Optional so pre-existing
    *  LoanSummary fixtures/tests need no changes; absent and null both mean "nothing to show". */
   payoffProjection?: PayoffProjection | null;
@@ -2966,6 +2981,13 @@ function interestFor(
     basis: InterestBasis | null;
     principalCents: number | null;
   },
+  /**
+   * C2: the ledger, built by the caller. The loan page builds one; this used to build a second
+   * from the same facts, and a third arrived through loanLedger on the page itself -- eleven
+   * buildLedger runs to render one loan. Passing it in costs nothing and is one fewer place that
+   * can disagree about what the ledger says.
+   */
+  ledger: Ledger | null,
 ): { interest: LoanInterest | null; reconciliation: LoanReconciliation } {
   const anchors = listLoanAnchors(itemId);
   const newest = anchors.length === 0 ? null : anchors[anchors.length - 1]!;
@@ -2993,7 +3015,6 @@ function interestFor(
     household seeing one balance on the dashboard and another on the loan itself has no way to
     know which to believe, and would be right to believe neither.
   */
-  const ledger = loanLedger(itemId, today);
   if (ledger === null) return { interest: null, reconciliation };
 
   return {
@@ -3030,9 +3051,13 @@ function interestFor(
  * reversal helpers are background machinery run by an import or a scheduler, not by a person looking
  * at a screen -- there is no viewer to pass and no screen to protect.
  */
-export function listLoans(today: string, viewer: Viewer): LoanSummary[] {
+function loanBaseRows(viewer: Viewer, itemId?: number) {
   const scope = ownerScope(viewer);
-  const rows = getDb()
+  const kind = eq(warrantyItemTypes.kind, 'loan');
+  const conditions = [kind];
+  if (scope !== null) conditions.push(eq(warrantyItems.ownerUserId, scope));
+  if (itemId !== undefined) conditions.push(eq(warrantyItems.id, itemId));
+  return getDb()
     .select({
       itemId: warrantyItems.id,
       name: warrantyItems.name,
@@ -3057,40 +3082,111 @@ export function listLoans(today: string, viewer: Viewer): LoanSummary[] {
     .from(warrantyItems)
     .innerJoin(warrantyItemTypes, eq(warrantyItemTypes.id, warrantyItems.typeId))
     .innerJoin(users, eq(users.id, warrantyItems.ownerUserId))
-    .where(
-      scope === null
-        ? eq(warrantyItemTypes.kind, 'loan')
-        : and(eq(warrantyItemTypes.kind, 'loan'), eq(warrantyItems.ownerUserId, scope)),
-    )
+    .where(and(...conditions))
     .orderBy(asc(warrantyItems.name), asc(warrantyItems.id))
     .all();
+}
 
-  return rows.map((row) => {
-    const { interestRateBasis, ...summary } = row;
+function toLoanRow(row: ReturnType<typeof loanBaseRows>[number], today: string): LoanRow {
+  const { interestRateBasis: _basis, ...rest } = row;
+  return {
+    ...rest,
+    payoffFraction: payoff(row.principalCents, row.currentBalanceCents),
+    nextPaymentDate: nextPayment({
+      startDate: row.startDate,
+      cycle: row.billingCycle,
+      expiryDate: row.expiryDate,
+      today,
+    }),
+  };
+}
+
+/**
+ * C1. Every loan, with nothing derived from the engine. ONE query.
+ *
+ * For a dropdown of names, a "does this household have loans at all" boolean, or any other caller
+ * that will not render an interest figure. The expensive half is listLoanSummaries below.
+ *
+ * v1.13.0 ruling R2: `viewer` is REQUIRED, as it is on every loan read -- a loan's balance is among
+ * the most private numbers in the app.
+ */
+export function listLoanRows(today: string, viewer: Viewer): LoanRow[] {
+  return loanBaseRows(viewer).map((row) => toLoanRow(row, today));
+}
+
+/**
+ * Every loan, with the interest estimate, the reconciliation state and the payoff projection.
+ *
+ * One ledger per loan, built once here and handed to interestFor rather than built again inside it.
+ */
+export function listLoanSummaries(today: string, viewer: Viewer): LoanSummary[] {
+  return loanBaseRows(viewer).map((row) => {
     // v1.47.0: attached the same way payoffProjection is, for the same reason -- the card and the
-    // detail page stay presentational, fed by listLoans()'s own `today`.
-    const derived = interestFor(row.itemId, today, {
-      direction: row.loanDirection,
-      rateBps: row.interestRateBps,
-      basis: interestRateBasis,
-      principalCents: row.principalCents,
-    });
+    // detail page stay presentational, fed by the caller's own `today`.
+    const derived = interestFor(
+      row.itemId,
+      today,
+      {
+        direction: row.loanDirection,
+        rateBps: row.interestRateBps,
+        basis: row.interestRateBasis,
+        principalCents: row.principalCents,
+      },
+      loanLedger(row.itemId, today),
+    );
     return {
-      ...summary,
-      payoffFraction: payoff(row.principalCents, row.currentBalanceCents),
-      nextPaymentDate: nextPayment({
-        startDate: row.startDate,
-        cycle: row.billingCycle,
-        expiryDate: row.expiryDate,
-        today,
-      }),
+      ...toLoanRow(row, today),
       // Task 16 (v1.7.0): attached here, rather than as a new LoansCard prop, so the card stays
-      // a pure presentational component fed by listLoans()'s existing `today` parameter.
+      // a pure presentational component fed by the caller's existing `today` parameter.
       payoffProjection: payoffProjection(row.itemId, today),
       interest: derived.interest,
       reconciliation: derived.reconciliation,
     };
   });
+}
+
+/** Everything the loan page renders about one loan, from ONE read of the facts (review C2). */
+export interface LoanDetail {
+  summary: LoanSummary;
+  ledger: Ledger | null;
+}
+
+/**
+ * C2. One loan, read once.
+ *
+ * The item page used to call listLoans -- building every OTHER loan's ledger to find this one --
+ * and then loanLedger for the same loan again, while interestFor built a third from the same facts
+ * and read the movements twice. Around 105 queries and eleven engine runs to render one page.
+ *
+ * Null when the viewer may not see the item, or it is not a loan.
+ */
+export function loanDetail(itemId: number, today: string, viewer: Viewer): LoanDetail | null {
+  const row = loanBaseRows(viewer, itemId)[0];
+  if (row === undefined) return null;
+
+  const facts = ledgerFacts(getDb(), itemId, today);
+  const ledger = facts === null ? null : buildLedger(facts.input);
+  const derived = interestFor(
+    itemId,
+    today,
+    {
+      direction: row.loanDirection,
+      rateBps: row.interestRateBps,
+      basis: row.interestRateBasis,
+      principalCents: row.principalCents,
+    },
+    ledger,
+  );
+
+  return {
+    summary: {
+      ...toLoanRow(row, today),
+      payoffProjection: payoffProjection(itemId, today),
+      interest: derived.interest,
+      reconciliation: derived.reconciliation,
+    },
+    ledger,
+  };
 }
 
 /**
@@ -3115,7 +3211,7 @@ export function loansTotalOwedCents(): number {
     of its own (review B6). So the app has had three ways of saying what the household owes. Routing
     every surface through this one is the fix, and it lands with the dashboard work.
   */
-  return listLoans(todayIso(), HOUSEHOLD_VIEWER)
+  return listLoanSummaries(todayIso(), HOUSEHOLD_VIEWER)
     .filter((loan) => loan.loanDirection === 'owed')
     /*
       v1.47.0 (ruling I16): owing-now when the loan has an interest estimate, the stored balance

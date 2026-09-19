@@ -4,7 +4,7 @@ import { requireUser } from '@/lib/auth/session';
 import { listAttributablePeople } from '@/lib/auth/users';
 import { listCategories } from '@/lib/categories';
 import { todayIso } from '@/lib/dates';
-import { itemLedger, listLoanRules, listLoans, loanLedger } from '@/lib/loans';
+import { itemLedger, listLoanRules, loanDetail } from '@/lib/loans';
 import { displayNameOf, getTransaction } from '@/lib/transactions';
 import { warrantyStatus } from '@/lib/warranty/expiry';
 import { getWarrantyItem, listWarrantyReceipts } from '@/lib/warranty/items';
@@ -26,10 +26,15 @@ export default async function WarrantyDetailPage({ params }: { params: Promise<{
 
   const txn = item.transactionId === null ? null : getTransaction(item.transactionId, viewer);
   const today = todayIso();
-  // v1.3.1: the loan summary (payoff fraction, last payment, payment count) this item's
-  // read-only money block renders -- undefined for a non-loan item, or a loan whose money
-  // fields haven't been filled in yet.
-  const loanSummary = listLoans(today, viewer).find((loan) => loan.itemId === item.id);
+  /*
+    v1.3.1: the loan summary (payoff fraction, last payment, payment count) this item's read-only
+    money block renders -- null for a non-loan item, or a loan whose money fields are not filled in.
+
+    C2 (review): ONE read. This used to call listLoans, building every OTHER loan's ledger to find
+    this one, and then loanLedger below built a third for the same loan from the same facts.
+  */
+  const detail = loanDetail(item.id, today, viewer);
+  const loanSummary = detail?.summary;
 
   return (
     <WarrantyDetailClient
@@ -65,7 +70,7 @@ export default async function WarrantyDetailPage({ params }: { params: Promise<{
       interest={loanSummary?.interest ?? null}
       /* v1.48.0. The ledger itself -- null for a non-loan item, and for a loan with no basis or
          no statement to start from. The card is what replaced LoanInterestCard's month table. */
-      loanLedgerRows={loanLedger(item.id, today)}
+      loanLedgerRows={detail?.ledger ?? null}
       reconciliation={loanSummary?.reconciliation ?? null}
       lastPaymentAt={loanSummary?.lastPaymentAt ?? null}
       paymentCount={loanSummary?.paymentCount ?? 0}

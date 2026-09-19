@@ -2,7 +2,7 @@ import { requireUser } from '@/lib/auth/session';
 import { isSelfScoped, ownerScope } from '@/lib/auth/viewer';
 import { listUsers } from '@/lib/auth/users';
 import { listCategories } from '@/lib/categories';
-import { debtOverTime, listLoans } from '@/lib/loans';
+import { debtOverTime, listLoanRows } from '@/lib/loans';
 import { netWorthOverTime } from '@/lib/networth';
 import {
   cashflowTrend,
@@ -199,7 +199,8 @@ export default async function ReportsPage({
   // v1.14.0 (ruling P12): ONE read, two flags. hasLoans keeps its exact meaning -- any loan with
   // a tracked balance, either direction -- so the card's visibility does not change for any
   // existing install; hasLent decides only whether a second LINE and a legend appear.
-  const loansForFlags = showHouseholdTotals ? listLoans(today, viewer) : [];
+  // C1: two booleans, so the cheap row read -- this used to build every loan's ledger.
+  const loansForFlags = showHouseholdTotals ? listLoanRows(today, viewer) : [];
   const hasLoans = loansForFlags.some((loan) => loan.currentBalanceCents !== null);
   const hasLent = loansForFlags.some((loan) => loan.loanDirection !== 'owed' && loan.currentBalanceCents !== null);
 

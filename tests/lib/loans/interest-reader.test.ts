@@ -3,7 +3,7 @@ import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } fr
 import { listItemTypes } from '@/lib/warranty/types';
 import { createWarrantyItem } from '@/lib/warranty/items';
 import { createManualTransaction } from '@/lib/transactions';
-import { assignTransactionToLoan, listLoans, loanLedger, postDueInterest, setLoanAnchor } from '@/lib/loans';
+import { assignTransactionToLoan, listLoanSummaries, loanLedger, postDueInterest, setLoanAnchor } from '@/lib/loans';
 import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
 
 let current: TestDb | null = null;
@@ -49,7 +49,7 @@ const setBasis = (itemId: number, basis: string | null): void => {
 };
 
 const loanOf = (itemId: number, today = '2026-02-28') =>
-  listLoans(today, HOUSEHOLD_VIEWER).find((loan) => loan.itemId === itemId)!;
+  listLoanSummaries(today, HOUSEHOLD_VIEWER).find((loan) => loan.itemId === itemId)!;
 
 /**
  * Ruling I5, and the promise this release has to keep to every existing install: a loan whose basis
@@ -57,7 +57,7 @@ const loanOf = (itemId: number, today = '2026-02-28') =>
  * did no interest maths, so guessing a period now would silently understate a monthly-quoted rate
  * twelve-fold.
  */
-describe('listLoans: a loan with no basis is untouched', () => {
+describe('listLoanSummaries: a loan with no basis is untouched', () => {
   it('reports no interest at all', () => {
     const { itemId, user } = mortgage();
     setLoanAnchor({ itemId, asOfDate: '2026-01-01', balanceCents: 30_000_000, source: 'form', actorUserId: user });
@@ -71,7 +71,7 @@ describe('listLoans: a loan with no basis is untouched', () => {
   });
 });
 
-describe('listLoans: interest once a basis is set', () => {
+describe('listLoanSummaries: interest once a basis is set', () => {
   it('estimates what is owed now, from the confirmed figure forward', () => {
     const { itemId, user, accountId } = mortgage();
     setBasis(itemId, 'apr_monthly');
@@ -182,7 +182,7 @@ describe('listLoans: interest once a basis is set', () => {
  * Rulings R9 and R10: what the screen may claim depends on whether anybody has ever checked the
  * estimate against a statement, and how long ago.
  */
-describe('listLoans: the reconciliation state', () => {
+describe('listLoanSummaries: the reconciliation state', () => {
   it('knows a loan has never been checked against a statement', () => {
     const { itemId, user } = mortgage();
     setLoanAnchor({ itemId, asOfDate: '2026-01-01', balanceCents: 30_000_000, source: 'form', actorUserId: user });
@@ -241,7 +241,7 @@ describe('listLoans: the reconciliation state', () => {
  * Both now come off the ledger's own totals, which is the only way the loan page and the dashboard
  * can agree about one loan.
  */
-describe('listLoans: the interest figures come off the ledger', () => {
+describe('listLoanSummaries: the interest figures come off the ledger', () => {
   function charged(): { itemId: number; user: number; accountId: number } {
     const made = mortgage();
     setLoanAnchor({

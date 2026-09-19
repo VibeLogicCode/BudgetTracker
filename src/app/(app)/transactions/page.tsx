@@ -3,7 +3,7 @@ import { isSelfScoped, ownerScope } from '@/lib/auth/viewer';
 import { acceptsTransactions, listAccounts } from '@/lib/accounts';
 import { listCategories } from '@/lib/categories';
 import { findUserById, listAttributablePeople } from '@/lib/auth/users';
-import { loanLinksForTransactions, listLoans } from '@/lib/loans';
+import { loanLinksForTransactions, listLoanRows } from '@/lib/loans';
 import { resolveRenameRule, reviewQueueCount } from '@/lib/categorize/engine';
 // v1.26.0 Lane 1 (reported: "shows amazon i dont know what orignal entry was so maybe its
 // wrong maybe its not"). Read-only imports: listRules for the rule set, and (v1.31.0 R-09)
@@ -172,7 +172,8 @@ export default async function TransactionsPage({
       defaultAccountId={findUserById(viewer.id)?.lastAccountId ?? null}
       // MUST-14.9: empty for a household with no loans (or none with a balance still owed),
       // which is exactly what makes the row control disappear entirely on that page.
-      loanOptions={listLoans(today, viewer)
+      /* C1: names and balances only, so the cheap read -- no ledger is built for a dropdown. */
+      loanOptions={listLoanRows(today, viewer)
         .filter((loan) => loan.currentBalanceCents !== null)
         .map((loan) => ({ id: loan.itemId, name: loan.name }))}
       /* 2026-09-13, reported: a bill's installments, so a statement line can be assigned to

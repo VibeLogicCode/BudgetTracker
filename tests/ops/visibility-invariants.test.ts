@@ -25,7 +25,16 @@ const REQUIRE_VIEWER: { file: string; fn: string }[] = [
   { file: 'src/lib/goals.ts', fn: 'listGoals' },
   { file: 'src/lib/goals.ts', fn: 'getGoal' },
   { file: 'src/lib/goals.ts', fn: 'listContributions' },
-  { file: 'src/lib/loans.ts', fn: 'listLoans' },
+  /*
+    C1/C2 (v1.49.0). listLoans became two reads: listLoanRows, one query and no engine, for the
+    callers that render a name or a boolean; listLoanSummaries for the ones that render an interest
+    figure. loanDetail is the loan page's single read. All three take the viewer, and all three are
+    listed, because a loan's balance is among the most private numbers in the app whichever of them
+    a future caller reaches for.
+  */
+  { file: 'src/lib/loans.ts', fn: 'listLoanRows' },
+  { file: 'src/lib/loans.ts', fn: 'listLoanSummaries' },
+  { file: 'src/lib/loans.ts', fn: 'loanDetail' },
   { file: 'src/lib/warranty/items.ts', fn: 'getWarrantyItem' },
   { file: 'src/lib/warranty/search.ts', fn: 'searchWarrantyItems' },
   { file: 'src/lib/warranty/search.ts', fn: 'expiringSoonItems' },

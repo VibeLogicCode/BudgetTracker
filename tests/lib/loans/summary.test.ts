@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { applyPaymentMatchers, assignTransactionToLoan, listLoans, loansTotalOwedCents, payoffProjection, saveLoanRule } from '@/lib/loans';
+import { applyPaymentMatchers, assignTransactionToLoan, listLoanSummaries, loansTotalOwedCents, payoffProjection, saveLoanRule } from '@/lib/loans';
 import type { Viewer } from '@/lib/auth/viewer';
 import { todayIso } from '@/lib/dates';
 import { setupLoanTest, type LoanTestContext } from './fixtures';
@@ -18,7 +18,7 @@ afterEach(() => {
 const household: Viewer = { id: 1, role: 'admin', visibility: 'household' };
 
 /**
- * Full control over the columns listLoans() reads, beyond what the shared seedLoan fixture
+ * Full control over the columns listLoanSummaries() reads, beyond what the shared seedLoan fixture
  * exposes (purchase_date, billing_cycle, billing_amount_cents, expiry_date, is_lifetime).
  */
 function seedLoanFull(over: {
@@ -37,7 +37,7 @@ function seedLoanFull(over: {
   const expiryDate = over.expiryDate ?? null;
   // CHECK (warranty_months IS NULL) = (expiry_date IS NULL) on warranty_items: the two are
   // paired. The real app computes expiry_date FROM warranty_months at write time; these
-  // tests only exercise listLoans()'s read side, so any non-null placeholder satisfies it.
+  // tests only exercise listLoanSummaries()'s read side, so any non-null placeholder satisfies it.
   const warrantyMonths = expiryDate === null ? null : 1;
   const row = ctx.t.sqlite
     .prepare(
@@ -66,7 +66,7 @@ function seedLoanFull(over: {
   return row.id;
 }
 
-describe('MUST-15.4: listLoans read model', () => {
+describe('MUST-15.4: listLoanSummaries read model', () => {
   it('payoffFraction is clamp(1 - balance/principal, 0, 1), and null when principal or balance is unset', () => {
     const partial = seedLoanFull({ name: 'Partial', principalCents: 1_000_000, balanceCents: 250_000 });
     const noPrincipal = seedLoanFull({ name: 'NoPrincipal', principalCents: null, balanceCents: 250_000 });
@@ -74,7 +74,7 @@ describe('MUST-15.4: listLoans read model', () => {
     const zeroPrincipal = seedLoanFull({ name: 'ZeroPrincipal', principalCents: 0, balanceCents: 0 });
     const paidOff = seedLoanFull({ name: 'PaidOff', principalCents: 1_000_000, balanceCents: 0 });
 
-    const byId = new Map(listLoans(todayIso(), household).map((loan) => [loan.itemId, loan]));
+    const byId = new Map(listLoanSummaries(todayIso(), household).map((loan) => [loan.itemId, loan]));
     expect(byId.get(partial)!.payoffFraction).toBe(0.75);
     expect(byId.get(noPrincipal)!.payoffFraction).toBeNull();
     expect(byId.get(noBalance)!.payoffFraction).toBeNull();
@@ -93,7 +93,7 @@ describe('MUST-15.4: listLoans read model', () => {
       expiryDate: '2026-08-20', // before the next monthly date (2026-09-15)
     });
 
-    const byId = new Map(listLoans('2026-08-18', household).map((loan) => [loan.itemId, loan]));
+    const byId = new Map(listLoanSummaries('2026-08-18', household).map((loan) => [loan.itemId, loan]));
     expect(byId.get(monthly)!.nextPaymentDate).toBe('2026-09-15');
     expect(byId.get(annual)!.nextPaymentDate).toBe('2027-01-15');
     expect(byId.get(noCycle)!.nextPaymentDate).toBeNull();
@@ -108,14 +108,14 @@ describe('MUST-15.4: listLoans read model', () => {
     const txn2 = ctx.spend('HONDA FIN SVC', -10_000, { date: '2026-02-01' });
     applyPaymentMatchers([txn2], new Date('2026-02-02T00:00:00.000Z'));
 
-    const loan = listLoans(todayIso(), household).find((row) => row.itemId === itemId)!;
+    const loan = listLoanSummaries(todayIso(), household).find((row) => row.itemId === itemId)!;
     expect(loan.paymentCount).toBe(2);
     expect(loan.lastPaymentAt).toBe('2026-02-02T00:00:00.000Z');
   });
 
   it('a loan with no payments has paymentCount 0 and lastPaymentAt null', () => {
     const itemId = seedLoanFull({ name: 'Untouched' });
-    const loan = listLoans(todayIso(), household).find((row) => row.itemId === itemId)!;
+    const loan = listLoanSummaries(todayIso(), household).find((row) => row.itemId === itemId)!;
     expect(loan.paymentCount).toBe(0);
     expect(loan.lastPaymentAt).toBeNull();
   });
@@ -125,7 +125,7 @@ describe('MUST-15.4: listLoans read model', () => {
       .prepare(`insert into users (name, username, password_hash, role, totp_enabled, is_active, created_at) values (?, ?, 'x', 'admin', 0, 1, ?) returning id`)
       .get('Bea', `bea${Math.random().toString(36).slice(2, 8)}`, '2026-08-18T12:00:00.000Z') as { id: number };
     const itemId = seedLoanFull({ name: 'Beas Loan', ownerUserId: otherOwner.id });
-    const loan = listLoans(todayIso(), household).find((row) => row.itemId === itemId)!;
+    const loan = listLoanSummaries(todayIso(), household).find((row) => row.itemId === itemId)!;
     expect(loan.ownerName).toBe('Bea');
   });
 
@@ -141,19 +141,19 @@ describe('MUST-15.4: listLoans read model', () => {
       .run(ctx.userId, warrantyType.id, '2026-08-18T12:00:00.000Z', '2026-08-18T12:00:00.000Z');
     const loan = seedLoanFull({ name: 'Civic' });
 
-    const names = listLoans(todayIso(), household).map((row) => row.name);
+    const names = listLoanSummaries(todayIso(), household).map((row) => row.name);
     expect(names).toEqual(['Civic']);
-    expect(listLoans(todayIso(), household).map((row) => row.itemId)).toEqual([loan]);
+    expect(listLoanSummaries(todayIso(), household).map((row) => row.itemId)).toEqual([loan]);
   });
 
   it('orders by name', () => {
     seedLoanFull({ name: 'Zamboni Loan' });
     seedLoanFull({ name: 'Auto Loan' });
-    expect(listLoans(todayIso(), household).map((row) => row.name)).toEqual(['Auto Loan', 'Zamboni Loan']);
+    expect(listLoanSummaries(todayIso(), household).map((row) => row.name)).toEqual(['Auto Loan', 'Zamboni Loan']);
   });
 });
 
-describe('v1.13.0 ruling R2: listLoans takes a viewer', () => {
+describe('v1.13.0 ruling R2: listLoanSummaries takes a viewer', () => {
   it('a self viewer sees only loans on items they own', () => {
     const child = ctx.t.sqlite
       .prepare(`insert into users (name, username, password_hash, role, totp_enabled, is_active, created_at) values (?, ?, 'x', 'member', 0, 1, ?) returning id`)
@@ -162,8 +162,8 @@ describe('v1.13.0 ruling R2: listLoans takes a viewer', () => {
     seedLoanFull({ name: 'Student loan', ownerUserId: child.id });
 
     const childViewer: Viewer = { id: child.id, role: 'member', visibility: 'self' };
-    expect(listLoans('2026-08-27', childViewer).map((row) => row.name)).toEqual(['Student loan']);
-    expect(listLoans('2026-08-27', household)).toHaveLength(2);
+    expect(listLoanSummaries('2026-08-27', childViewer).map((row) => row.name)).toEqual(['Student loan']);
+    expect(listLoanSummaries('2026-08-27', household)).toHaveLength(2);
   });
 });
 
@@ -181,10 +181,10 @@ describe('loansTotalOwedCents', () => {
 });
 
 describe('direction on the read model (rulings P6, P9, P10)', () => {
-  it('listLoans reports each loan’s direction', () => {
+  it('listLoanSummaries reports each loan’s direction', () => {
     ctx.seedLoan({ name: 'Civic', balanceCents: 200_000 });
     ctx.seedLoan({ name: 'Loan to a friend', balanceCents: 50_000, direction: 'lent' });
-    const rows = listLoans('2026-08-18', household);
+    const rows = listLoanSummaries('2026-08-18', household);
     expect(rows.map((row) => [row.name, row.loanDirection])).toEqual([
       ['Civic', 'owed'],
       ['Loan to a friend', 'lent'],
@@ -206,7 +206,7 @@ describe('direction on the read model (rulings P6, P9, P10)', () => {
 
   it('payoffFraction is kept, and reads as "fraction repaid" (ruling P10)', () => {
     ctx.seedLoan({ name: 'Loan to a friend', balanceCents: 20_000, principalCents: 80_000, direction: 'lent' });
-    const row = listLoans('2026-08-18', household).find((r) => r.name === 'Loan to a friend');
+    const row = listLoanSummaries('2026-08-18', household).find((r) => r.name === 'Loan to a friend');
     expect(row?.payoffFraction).toBeCloseTo(0.75, 5);
   });
 });
