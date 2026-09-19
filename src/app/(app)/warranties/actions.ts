@@ -66,7 +66,7 @@ import {
   type LoanDirection,
 } from '@/lib/warranty/constants';
 import { INTEREST_BASES, type InterestBasis } from '@/lib/loans/interest';
-import { rememberStatementCsvColumns, setLoanAnchor } from '@/lib/loans';
+import { rememberStatementCsvColumns, retractLoanAnchor, setLoanAnchor } from '@/lib/loans';
 
 export interface WarrantyActionState {
   error?: string;
@@ -523,6 +523,13 @@ export async function reconcileLoanAction(
 
   const asOfDate = str(formData, 'asOfDate').trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(asOfDate)) return { error: 'Enter the statement date as YYYY-MM-DD.' };
+  /*
+    BOUNDED, because the shape check alone let a mistyped year through and there was no way back:
+    a statement dated 2027 governs the balance, zeroes every payment behind its wall, and cannot be
+    beaten by entering the right one afterwards -- the right one is older, so it never wins
+    (review A3). Withdrawing one is now possible too, but not making the mess is better.
+  */
+  if (asOfDate > todayIso()) return { error: 'The statement date cannot be after today.' };
 
   const balanceCents = parseAmountToCents(str(formData, 'statementBalance').trim());
   if (balanceCents === null) return { error: 'Enter the balance shown on the statement.' };
@@ -562,6 +569,11 @@ export async function reconcileLoanAction(
   }
 
   const mappingUsed = readStatementMapping(formData);
+
+  const loanStart = getWarrantyItem(id.data, user)?.purchaseDate;
+  if (loanStart !== undefined && asOfDate < loanStart) {
+    return { error: 'The statement date is before the loan started.' };
+  }
 
   try {
     setLoanAnchor({
@@ -1064,4 +1076,35 @@ function readStatementMapping(formData: FormData): string | null {
   if (date.length === 0 || balance.length === 0) return null;
   const interest = str(formData, 'columnInterest').trim();
   return JSON.stringify({ date, balance, interest: interest.length === 0 ? null : interest });
+}
+
+/**
+ * A3. Withdraw a statement that should not have been entered.
+ *
+ * Gated on the ITEM through the viewer, like every other write on this page -- an anchor id alone
+ * would let a member move a balance on a loan they cannot see.
+ */
+export async function retractLoanAnchorAction(
+  _prev: WarrantyActionState,
+  formData: FormData,
+): Promise<WarrantyActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+  const user = await requireUser();
+
+  const parsed = z
+    .object({ itemId: z.coerce.number().int().positive(), anchorId: z.coerce.number().int().positive() })
+    .safeParse({ itemId: formData.get('itemId'), anchorId: formData.get('anchorId') });
+  if (!parsed.success) return { error: 'Invalid request.' };
+  if (!getWarrantyItem(parsed.data.itemId, user)) return { error: NOT_YOURS_ERROR };
+
+  try {
+    if (!retractLoanAnchor({ anchorId: parsed.data.anchorId, actorUserId: user.id })) {
+      return { error: 'That statement has already been withdrawn.' };
+    }
+  } catch (error) {
+    return failure(error, 'Could not withdraw that statement.');
+  }
+
+  revalidateAll(parsed.data.itemId);
+  return { message: 'Statement withdrawn. The balance is back to the statement before it.' };
 }

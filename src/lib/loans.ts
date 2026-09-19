@@ -485,7 +485,8 @@ function recomputeBalance(
   const anchor = tx
     .select({ asOfDate: loanAnchors.asOfDate, balanceCents: loanAnchors.balanceCents })
     .from(loanAnchors)
-    .where(eq(loanAnchors.itemId, itemId))
+    // A withdrawn statement no longer governs: the one before it does (review A3).
+    .where(and(eq(loanAnchors.itemId, itemId), isNull(loanAnchors.retractedAt)))
     .orderBy(desc(loanAnchors.asOfDate), desc(loanAnchors.id))
     .limit(1)
     .get();
@@ -673,6 +674,8 @@ function link(
 
 /** One row of a loan's statement history, newest last. */
 export interface LoanAnchor {
+  /** Withdrawn by a person; kept in the history, ignored by every balance read (review A3). */
+  retractedAt: string | null;
   id: number;
   asOfDate: string;
   balanceCents: number;
@@ -702,6 +705,7 @@ export function listLoanAnchors(itemId: number): LoanAnchor[] {
     .all()
     .map((row) => ({
       id: row.id,
+      retractedAt: row.retractedAt,
       asOfDate: row.asOfDate,
       balanceCents: row.balanceCents,
       source: row.source,
@@ -782,7 +786,13 @@ export function setLoanAnchor(input: {
     const previous = tx
       .select({ asOfDate: loanAnchors.asOfDate, balanceCents: loanAnchors.balanceCents })
       .from(loanAnchors)
-      .where(and(eq(loanAnchors.itemId, input.itemId), lt(loanAnchors.asOfDate, input.asOfDate)))
+      .where(
+        and(
+          eq(loanAnchors.itemId, input.itemId),
+          lt(loanAnchors.asOfDate, input.asOfDate),
+          isNull(loanAnchors.retractedAt),
+        ),
+      )
       .orderBy(desc(loanAnchors.asOfDate), desc(loanAnchors.id))
       .limit(1)
       .get();
@@ -863,7 +873,7 @@ export function setLoanAnchor(input: {
       tx
         .select({ asOfDate: loanAnchors.asOfDate })
         .from(loanAnchors)
-        .where(eq(loanAnchors.itemId, input.itemId))
+        .where(and(eq(loanAnchors.itemId, input.itemId), isNull(loanAnchors.retractedAt)))
         .orderBy(desc(loanAnchors.asOfDate), desc(loanAnchors.id))
         .limit(1)
         .get()?.asOfDate === input.asOfDate;
@@ -982,7 +992,8 @@ function ledgerFacts(
   const anchor = tx
     .select({ asOfDate: loanAnchors.asOfDate, balanceCents: loanAnchors.balanceCents })
     .from(loanAnchors)
-    .where(eq(loanAnchors.itemId, itemId))
+    // A withdrawn statement no longer governs: the one before it does (review A3).
+    .where(and(eq(loanAnchors.itemId, itemId), isNull(loanAnchors.retractedAt)))
     .orderBy(desc(loanAnchors.asOfDate), desc(loanAnchors.id))
     .limit(1)
     .get();
@@ -1256,6 +1267,52 @@ export function postAllDueInterest(
   }
   if (lines.length > 0) announce(lines, at);
   return { items, posted, adjusted, failed };
+}
+
+/**
+ * A3. Withdraw a statement.
+ *
+ * A statement typed with the wrong year could not be undone: the newest as_of_date governs, the
+ * table is append-only, and entering the right one does not help because the right one is older and
+ * never wins. The balance sat on a figure nobody meant, every payment was zeroed behind its wall,
+ * and the only route back was direct SQL.
+ *
+ * The row is kept -- this app does not forget what somebody entered, and the reconciliation history
+ * is a record of what was seen -- but every balance read skips it, so the statement before it takes
+ * over. The postings that ran from the withdrawn date are re-cut on the way out.
+ */
+export function retractLoanAnchor(input: { anchorId: number; actorUserId: number | null; at?: Date }): boolean {
+  const at = input.at ?? new Date();
+  const stamp = nowIso(at);
+  const itemId = getDb().transaction((tx) => {
+    const row = tx
+      .select({ itemId: loanAnchors.itemId, asOfDate: loanAnchors.asOfDate, retractedAt: loanAnchors.retractedAt })
+      .from(loanAnchors)
+      .where(eq(loanAnchors.id, input.anchorId))
+      .get();
+    if (!row || row.retractedAt !== null) return null;
+
+    tx.update(loanAnchors).set({ retractedAt: stamp }).where(eq(loanAnchors.id, input.anchorId)).run();
+    // Anything posted from the withdrawn statement forward described a cycle cut at a date that no
+    // longer means anything, so it goes and the sweep below re-cuts it from the statement that now
+    // governs. Postings before it are untouched history.
+    tx.delete(loanPostings)
+      .where(and(eq(loanPostings.itemId, row.itemId), gte(loanPostings.periodStart, row.asOfDate)))
+      .run();
+
+    const item = tx
+      .select({ direction: warrantyItems.loanDirection, balance: warrantyItems.currentBalanceCents })
+      .from(warrantyItems)
+      .where(eq(warrantyItems.id, row.itemId))
+      .get();
+    if (item) {
+      postDueInterest(row.itemId, todayIso(at), { tx, actorUserId: input.actorUserId, at });
+      const { balance } = recomputeBalance(tx, row.itemId, item.direction, item.balance ?? 0);
+      tx.update(warrantyItems).set({ currentBalanceCents: balance }).where(eq(warrantyItems.id, row.itemId)).run();
+    }
+    return row.itemId;
+  });
+  return itemId !== null;
 }
 
 /**

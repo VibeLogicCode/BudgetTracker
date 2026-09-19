@@ -7,6 +7,7 @@ import {
   assignTransactionToLoan,
   unassignTransactionFromLoan,
   listLoanAnchors,
+  retractLoanAnchor,
   setLoanAnchor,
 } from '@/lib/loans';
 
@@ -184,5 +185,64 @@ describe('the wall: movements already inside the confirmed figure', () => {
     setLoanAnchor({ itemId, asOfDate: '2026-09-01', balanceCents: 19_900_000, source: 'reconcile', actorUserId: user });
     expect(appliedFor(txnId)).toBe(0);
     expect(balanceOf(itemId)).toBe(19_900_000);
+  });
+});
+
+/**
+ * Review A3. A statement typed with the wrong year used to be unrecoverable through the app: the
+ * newest as_of_date governs, the table is append-only, and the correct statement is older, so
+ * entering it afterwards never wins.
+ */
+describe('withdrawing a statement', () => {
+  function withTypo(): { itemId: number; user: number; typoId: number } {
+    const { itemId, user } = makeLoan();
+    setLoanAnchor({ itemId, asOfDate: '2026-07-01', balanceCents: 20_000_000, source: 'form', actorUserId: user });
+    setLoanAnchor({ itemId, asOfDate: '2027-06-01', balanceCents: 50_000_000, source: 'reconcile', actorUserId: user });
+    const typoId = listLoanAnchors(itemId).find((row) => row.asOfDate === '2027-06-01')!.id;
+    return { itemId, user, typoId };
+  }
+
+  it('puts the balance back to the statement before it', () => {
+    const { itemId, user, typoId } = withTypo();
+    expect(balanceOf(itemId)).toBe(50_000_000);
+    expect(retractLoanAnchor({ anchorId: typoId, actorUserId: user })).toBe(true);
+    expect(balanceOf(itemId)).toBe(20_000_000);
+  });
+
+  /** Withdrawn, not deleted: the reconciliation history is a record of what somebody saw. */
+  it('keeps the row in the history, marked', () => {
+    const { itemId, user, typoId } = withTypo();
+    retractLoanAnchor({ anchorId: typoId, actorUserId: user });
+    const anchors = listLoanAnchors(itemId);
+    expect(anchors).toHaveLength(2);
+    expect(anchors.find((row) => row.id === typoId)!.retractedAt).not.toBeNull();
+    expect(anchors.find((row) => row.asOfDate === '2026-07-01')!.retractedAt).toBeNull();
+  });
+
+  /** Payments linked after the statement that now governs are replayed over it again. */
+  it('replays the movements the withdrawn statement had walled off', () => {
+    const { itemId, user, accountId } = makeLoan();
+    setLoanAnchor({ itemId, asOfDate: '2026-07-01', balanceCents: 20_000_000, source: 'form', actorUserId: user });
+    const txnId = pay(accountId, user, '2026-08-15', -100_000);
+    assignTransactionToLoan({ txnId, itemId, actorUserId: user });
+    expect(balanceOf(itemId)).toBe(19_900_000);
+
+    setLoanAnchor({ itemId, asOfDate: '2027-06-01', balanceCents: 50_000_000, source: 'reconcile', actorUserId: user });
+    const typoId = listLoanAnchors(itemId).find((row) => row.asOfDate === '2027-06-01')!.id;
+    expect(balanceOf(itemId)).toBe(50_000_000);
+
+    retractLoanAnchor({ anchorId: typoId, actorUserId: user });
+    expect(balanceOf(itemId)).toBe(19_900_000);
+  });
+
+  it('refuses to withdraw the same statement twice', () => {
+    const { user, typoId } = withTypo();
+    expect(retractLoanAnchor({ anchorId: typoId, actorUserId: user })).toBe(true);
+    expect(retractLoanAnchor({ anchorId: typoId, actorUserId: user })).toBe(false);
+  });
+
+  it('is false for a statement that does not exist', () => {
+    makeLoan();
+    expect(retractLoanAnchor({ anchorId: 9_999, actorUserId: null })).toBe(false);
   });
 });

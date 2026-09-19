@@ -717,31 +717,13 @@ export function updateWarrantyItem(id: number, input: WarrantyInput, at: string 
     in September never restates July, and a variable-rate mortgage is representable without a
     second table.
   */
-  if (
-    result.changes > 0 &&
-    interestRateBasis !== null &&
-    interestRateBps !== null &&
-    existing !== undefined &&
-    (existing.rateBps !== interestRateBps || existing.basis !== interestRateBasis)
-  ) {
-    addRateChange({
-      itemId: id,
-      effectiveFrom: input.rateEffectiveFrom ?? todayIso(new Date(at)),
-      rateBps: interestRateBps,
-      basis: interestRateBasis,
-      actorUserId: null,
-      at: new Date(at),
-    });
-  }
-
   /*
-    D3/D4. A balance MOVED on this form is a new statement, so it gets an anchor row rather than
-    just a new column value -- which is what makes it visible in the loan's history, comparable
-    against what the app believed, and a wall the ledger can start from.
+    A6. THE STATEMENT FIRST, then the rate.
 
-    Only when it actually moved: fix-wave item 4 established that resubmitting an untouched field
-    must not move the anchor, and the actions layer has already collapsed that case by passing the
-    stored value straight back.
+    addRateChange ends by posting every closed period, so running it before the anchor existed
+    posted them against the OLD statement at the NEW rate -- and the correction that followed then
+    had to undo work that should never have happened. Writing the balance's statement first means
+    the rate change posts against the figure a person just confirmed.
   */
   if (
     result.changes > 0 &&
@@ -759,10 +741,27 @@ export function updateWarrantyItem(id: number, input: WarrantyInput, at: string 
         at: new Date(at),
       });
     } catch (error) {
-      // The item saved; the history row did not. Better than losing the edit.
       console.error('[loans] could not record the edited balance as a statement for item ' + id, error);
     }
   }
+
+  if (
+    result.changes > 0 &&
+    interestRateBasis !== null &&
+    interestRateBps !== null &&
+    existing !== undefined &&
+    (existing.rateBps !== interestRateBps || existing.basis !== interestRateBasis)
+  ) {
+    addRateChange({
+      itemId: id,
+      effectiveFrom: input.rateEffectiveFrom ?? todayIso(new Date(at)),
+      rateBps: interestRateBps,
+      basis: interestRateBasis,
+      actorUserId: null,
+      at: new Date(at),
+    });
+  }
+
   return result.changes > 0;
 }
 
@@ -788,6 +787,18 @@ function seedLoanLedger(
   // The borrowed date whenever the balance is simply the amount borrowed, which is the usual case
   // on a new loan; an as-of date when a household is entering a loan part-way through.
   const asOfDate = input.balanceAsOfDate ?? input.purchaseDate;
+  /*
+    Same bound as the reconcile form: a balance cannot be true as of a day that has not happened.
+
+    The later of the two readings of "today" -- the household's local day, and the day the caller's
+    own timestamp names. A caller that stamps midnight UTC is on the previous local day west of
+    Greenwich, and refusing its own date would be an off-by-one about timezones rather than the
+    mistyped year this exists to catch.
+  */
+  const latestAllowed = [todayIso(new Date(at)), at.slice(0, 10)].sort().at(-1)!;
+  if (asOfDate > latestAllowed) {
+    throw new Error('The date a balance is true as of cannot be after today.');
+  }
   try {
     /*
       THE RATE FIRST, then the statement. Both of them post what is due, and the anchor is what
