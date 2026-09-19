@@ -170,15 +170,18 @@ describe('NewWarrantyClient', () => {
   // v1.2.2 Task 2: dynamic form labels -- the Purchase-date field label, the term-length
   // legend and the Lifetime checkbox's own label all follow the SELECTED type's kind live.
   it('follows the SELECTED type kind live for the date label, term legend and open-ended label', () => {
+    // v1.49.0 (F7): the loan fields are their own fieldset, so the term legend is found by its own
+    // text rather than by being the only one on the form.
+    const legends = (root: HTMLElement) => [...root.querySelectorAll('legend')].map((node) => node.textContent);
     const { container } = renderForm();
     expect(screen.getByText('Purchase date')).toBeTruthy();
-    expect(container.querySelector('legend')!.textContent).toBe('Warranty (months)');
+    expect(legends(container)).toContain('Warranty (months)');
     expect(screen.getByText('Lifetime warranty')).toBeTruthy();
 
     fireEvent.change(container.querySelector('select[name="typeId"]')!, { target: { value: '3' } });
     expect(screen.getByText('Start date')).toBeTruthy();
     expect(screen.queryByText('Purchase date')).toBeNull();
-    expect(container.querySelector('legend')!.textContent).toBe('Term (months)');
+    expect(legends(container)).toEqual(['About this loan', 'Term (months)']);
     expect(screen.getByText('Ongoing (no end date)')).toBeTruthy();
   });
 });
