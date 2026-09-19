@@ -5,7 +5,7 @@ import { ownerScope, type Viewer } from '@/lib/auth/viewer';
 import { listCategories } from '@/lib/categories';
 import { resolveRename } from '@/lib/categorize/engine';
 import { listRules } from '@/lib/categorize/rules';
-import { addMonths, monthEnd, monthOf, monthRange, monthStart } from '@/lib/dates';
+import { addMonths, monthEnd, monthOf, monthRange, monthStart, todayIso } from '@/lib/dates';
 import { netSpentCents } from '@/lib/money';
 import { savingsRate, type SavingsRate } from '@/lib/savings-rate';
 import { EFFECTIVE_AMOUNT, EFFECTIVE_CATEGORY, splitsForTransactions } from '@/lib/splits';
@@ -176,7 +176,9 @@ export function cashflowTrend(
   viewer: Viewer,
 ): MonthTrendRow[] {
   const scope = scopeFor(opts.attributedUserId, viewer);
-  const endMonth = opts.endMonth ?? monthOf(new Date().toISOString().slice(0, 10));
+  // B9: the household's own month, not UTC's. Unreachable today -- every caller passes endMonth --
+  // which is how it survived four reviews; tests/ops/no-utc-date-slice.test.ts now watches for it.
+  const endMonth = opts.endMonth ?? monthOf(todayIso());
   const startMonth = addMonths(endMonth, -(months - 1));
   const keys = monthRange(startMonth, endMonth);
 

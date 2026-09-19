@@ -530,7 +530,7 @@ describe('runSimplefinTick — a partial failure reaches the household', () => {
     return adminId;
   }
 
-  function stubSync(errlist: string[]): ReturnType<typeof vi.spyOn> {
+  function stubSync(errlist: string[]) {
     const now = new Date();
     return vi.spyOn(syncModule, 'runSync').mockResolvedValue({
       ranAt: now.toISOString(),

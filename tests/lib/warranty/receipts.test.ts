@@ -178,7 +178,7 @@ describe('writeReceiptFile / adoptReceiptFile', () => {
     // entry keeps `known` non-empty (re-review fix): an empty known set would instead be
     // caught by purgeOrphanReceipts' own belt-and-braces guard (BLOCKER 1b) before the age
     // check ever runs, which would shadow the very regression this test exists to catch.
-    const removed = purgeOrphanReceipts(new Set([crypto.randomUUID() + '.jpg']));
+    const removed = purgeOrphanReceipts(() => new Set([crypto.randomUUID() + '.jpg']));
     expect(removed).toBe(0);
     expect(receiptFileExists(name)).toBe(true);
   });
@@ -195,7 +195,7 @@ describe('purgeOrphanReceipts (MUST-4.9)', () => {
     fs.utimesSync(resolveReceiptPath(oldOrphan), twoDaysAgo, twoDaysAgo);
     fs.utimesSync(resolveReceiptPath(known), twoDaysAgo, twoDaysAgo);
 
-    const removed = purgeOrphanReceipts(new Set([known]), undefined, now);
+    const removed = purgeOrphanReceipts(() => new Set([known]), undefined, now);
     expect(removed).toBe(1);
     expect(receiptFileExists(known)).toBe(true);
     expect(receiptFileExists(oldOrphan)).toBe(false);
@@ -208,12 +208,12 @@ describe('purgeOrphanReceipts (MUST-4.9)', () => {
     fs.writeFileSync(stray, 'x');
     const long_ago = new Date('2020-01-01T00:00:00.000Z');
     fs.utimesSync(stray, long_ago, long_ago);
-    expect(purgeOrphanReceipts(new Set(), undefined, new Date('2026-08-16T12:00:00.000Z'))).toBe(0);
+    expect(purgeOrphanReceipts(() => new Set(), undefined, new Date('2026-08-16T12:00:00.000Z'))).toBe(0);
     expect(fs.existsSync(stray)).toBe(true);
   });
 
   it('returns 0 when the directory does not exist yet', () => {
-    expect(purgeOrphanReceipts(new Set())).toBe(0);
+    expect(purgeOrphanReceipts(() => new Set())).toBe(0);
   });
 
   it('skips a directory entry that happens to match STORED_NAME_RE rather than crashing the sweep (Ruling P14)', () => {
@@ -224,7 +224,7 @@ describe('purgeOrphanReceipts (MUST-4.9)', () => {
     fs.utimesSync(path.join(receiptsDir(), weirdDirName), longAgo, longAgo);
     let removed = -1;
     expect(() => {
-      removed = purgeOrphanReceipts(new Set(), undefined, new Date('2026-08-16T12:00:00.000Z'));
+      removed = purgeOrphanReceipts(() => new Set(), undefined, new Date('2026-08-16T12:00:00.000Z'));
     }).not.toThrow();
     expect(removed).toBe(0);
     expect(fs.existsSync(path.join(receiptsDir(), weirdDirName))).toBe(true);
@@ -246,7 +246,7 @@ describe('purgeOrphanReceipts (MUST-4.9)', () => {
     fs.utimesSync(resolveReceiptPath(orphanB), longAgo, longAgo);
 
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const removed = purgeOrphanReceipts(new Set(), undefined, new Date('2026-08-16T12:00:00.000Z'));
+    const removed = purgeOrphanReceipts(() => new Set(), undefined, new Date('2026-08-16T12:00:00.000Z'));
     expect(removed).toBe(0);
     expect(receiptFileExists(orphanA)).toBe(true);
     expect(receiptFileExists(orphanB)).toBe(true);
@@ -261,9 +261,36 @@ describe('purgeOrphanReceipts (MUST-4.9)', () => {
     fs.utimesSync(resolveReceiptPath(orphan), longAgo, longAgo);
     fs.utimesSync(resolveReceiptPath(known), longAgo, longAgo);
 
-    const removed = purgeOrphanReceipts(new Set([known]), undefined, new Date('2026-08-16T12:00:00.000Z'));
+    const removed = purgeOrphanReceipts(() => new Set([known]), undefined, new Date('2026-08-16T12:00:00.000Z'));
     expect(removed).toBe(1);
     expect(receiptFileExists(known)).toBe(true);
     expect(receiptFileExists(orphan)).toBe(false);
+  });
+});
+
+/**
+ * Review E9. The docblock asked callers to read the database "strictly AFTER" this function's
+ * directory listing, and then took a Set -- which a caller can only build beforehand. The ordering
+ * it demanded was the one thing its own signature ruled out. A thunk makes it structural.
+ */
+describe('E9: the known set is read after the directory, not before', () => {
+  it('calls the thunk, and calls it after readdirSync', () => {
+    // One real file, so the directory exists and the sweep gets past its early return.
+    const known = writeReceiptFile(Buffer.from('known'), 'image/jpeg');
+    const order: string[] = [];
+    const realReaddir = fs.readdirSync;
+    const readdir = vi.spyOn(fs, 'readdirSync').mockImplementation(((...args: unknown[]) => {
+      order.push('readdir');
+      return (realReaddir as (...a: unknown[]) => unknown)(...args);
+    }) as typeof fs.readdirSync);
+    try {
+      purgeOrphanReceipts(() => {
+        order.push('known');
+        return new Set<string>([known]);
+      });
+    } finally {
+      readdir.mockRestore();
+    }
+    expect(order).toEqual(['readdir', 'known']);
   });
 });

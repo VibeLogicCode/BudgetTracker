@@ -62,6 +62,8 @@ export const contributionSchema = z.object({
 });
 
 const TRAILING_MONTHS = 3;
+/** E10: ten years. Beyond it there is no projection to make, only a number that reads as a bug. */
+const MAX_PROJECTED_MONTHS = 120;
 
 export function computePace(input: {
   targetCents: number;
@@ -92,7 +94,20 @@ export function computePace(input: {
   const noPace = !met && avgMonthlyCents <= 0;
   let projectedFinishMonth: string | null = null;
   if (met) projectedFinishMonth = currentMonthKey;
-  else if (avgMonthlyCents > 0) projectedFinishMonth = addMonths(currentMonthKey, Math.ceil(remainingCents / avgMonthlyCents));
+  else if (avgMonthlyCents > 0) {
+    /*
+      BOUNDED AT TEN YEARS (review E10). A goal saved into at a dollar a month projects a finish
+      date centuries out, and the page printed it: "September 4551" is not a date anybody can act
+      on, and it reads as a bug rather than as the honest "at this pace, never" it means. null is
+      what every reader here already renders as "no projection yet" -- the Goals page and
+      evaluateGoals both handle it -- so nothing downstream needs teaching.
+
+      120 months is the same century-scale reasoning payoffProjection's own cap uses, tightened to
+      a decade because a savings goal is not a mortgage.
+    */
+    const monthsNeeded = Math.ceil(remainingCents / avgMonthlyCents);
+    projectedFinishMonth = monthsNeeded > MAX_PROJECTED_MONTHS ? null : addMonths(currentMonthKey, monthsNeeded);
+  }
 
   // ---- required monthly ----
   let monthsRemaining: number | null = null;

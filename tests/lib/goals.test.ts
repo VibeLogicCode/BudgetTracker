@@ -227,3 +227,42 @@ describe('goal storage', () => {
     expect(getGoal(4242, household, TODAY)).toBeNull();
   });
 });
+
+/**
+ * Review E10. A goal saved into at a token amount projects a finish date centuries out, and the
+ * page printed it: "September 4551" reads as a bug, not as the "at this pace, never" it means.
+ * null is what every reader here already renders as "no projection yet".
+ */
+describe('E10: a projection beyond ten years is no projection', () => {
+  it('returns null rather than a year nobody can act on', () => {
+    const pace = computePace({
+      targetCents: 10_000_00,
+      targetDate: null,
+      // A dollar a month against ten thousand: 30,299 months, the year 4551.
+      contributions: [
+        { date: '2026-06-01', amountCents: 100 },
+        { date: '2026-07-01', amountCents: 100 },
+        { date: '2026-08-01', amountCents: 100 },
+      ],
+      today: TODAY,
+    });
+    expect(pace.avgMonthlyCents).toBe(100);
+    expect(pace.projectedFinishMonth).toBeNull();
+    // Not "no pace": they ARE saving, and the required-monthly figure still means something.
+    expect(pace.noPace).toBe(false);
+  });
+
+  it('still projects inside the bound', () => {
+    const pace = computePace({
+      targetCents: 100_000,
+      targetDate: null,
+      contributions: [
+        { date: '2026-06-01', amountCents: 10_000 },
+        { date: '2026-07-01', amountCents: 10_000 },
+        { date: '2026-08-01', amountCents: 10_000 },
+      ],
+      today: TODAY,
+    });
+    expect(pace.projectedFinishMonth).not.toBeNull();
+  });
+});

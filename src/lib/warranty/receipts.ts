@@ -151,23 +151,27 @@ export function deleteReceiptFile(storedFilename: string): void {
  * than 24 h are removed. Entries that do not match STORED_NAME_RE are left alone — this
  * sweep deletes only files it could itself have created.
  *
- * `known` should be the set of stored_filename values currently in the database,
- * queried by the caller as close as possible to — and, where the caller controls
- * ordering, strictly AFTER — this function's directory read. writeReceiptFile's write
- * order (write the file, then insert its DB row; MUST-4.7) means a just-adopted file
- * can briefly exist on disk before its row commits. Reading `known` too early widens
- * that race window. adoptReceiptFile() closes the same window from the other side by
- * stamping the file's mtime to "now" on adoption, so a file caught mid-insert is still
- * protected by the age check even if it isn't (yet) in `known`.
+ * `known` is a THUNK, not a set, and this function calls it AFTER reading the directory
+ * (review E9). The docblock used to ask callers to query the database "strictly after" the read
+ * and then took a Set, which a caller can only produce beforehand -- the ordering it demanded was
+ * the one thing its own signature made impossible. Now the ordering is structural.
+ *
+ * It matters because writeReceiptFile writes the file first and inserts its row second (MUST-4.7),
+ * so a just-adopted file exists on disk before its row commits. A known set read before the
+ * directory listing widens that window by however long the listing takes. adoptReceiptFile closes
+ * the same window from the other side by stamping the file's mtime on adoption, so a file caught
+ * mid-insert is still protected by the age check below; this removes the other half.
  */
 export function purgeOrphanReceipts(
-  known: Set<string>,
+  known: () => Set<string>,
   olderThanMs: number = ORPHAN_MIN_AGE_MS,
   now: Date = new Date(),
 ): number {
   const dir = receiptsDir();
   if (!fs.existsSync(dir)) return 0;
   const entries = fs.readdirSync(dir);
+  // AFTER the listing. See the docblock: this order is the whole point of the thunk.
+  const knownNames = known();
 
   // Fix report BLOCKER 1b, belt-and-braces: `known` is empty either because there are
   // genuinely zero warranty_receipts rows, or — the dangerous case — because a v1.0.0
@@ -181,7 +185,7 @@ export function purgeOrphanReceipts(
   // a crash-orphan left over on a zero-receipt install is swept later, once at least one
   // receipt row exists and `known` is no longer empty (MUST-4.9, amended at final review).
   if (
-    known.size === 0 &&
+    knownNames.size === 0 &&
     entries.some((entry) => {
       if (!STORED_NAME_RE.test(entry)) return false;
       try {
@@ -201,7 +205,7 @@ export function purgeOrphanReceipts(
   let removed = 0;
   for (const entry of entries) {
     if (!STORED_NAME_RE.test(entry)) continue;
-    if (known.has(entry)) continue;
+    if (knownNames.has(entry)) continue;
     const file = path.join(dir, entry);
     let stats: fs.Stats;
     try {

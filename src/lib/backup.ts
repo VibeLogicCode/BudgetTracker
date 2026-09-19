@@ -142,7 +142,8 @@ export function runMaintenanceSweep(at: Date = new Date()): SweepResult {
     stagedFilesPurged: purgeStagedFiles(undefined, at),
     // MUST-4.9: files in receipts/ with no matching stored_filename row AND an mtime older
     // than 24 h. The age guard prevents a race with an in-flight upload.
-    receiptOrphansPurged: purgeOrphanReceipts(new Set(listStoredFilenames()), undefined, at),
+    // E9: a thunk, so the table is read after the directory listing rather than before it.
+    receiptOrphansPurged: purgeOrphanReceipts(() => new Set(listStoredFilenames()), undefined, at),
     // MUST-20.33: budget.pre-restore-*.db (+ -wal/-shm), receipts.pre-restore-*/ and
     // restore-failed-*/ older than 30 days, except the most recent of each kind.
     preRestoreCopiesPurged: purgePreRestoreCopies(at),

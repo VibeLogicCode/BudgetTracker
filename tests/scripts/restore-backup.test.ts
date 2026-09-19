@@ -432,7 +432,7 @@ describe('v1.0.0 DB-only restore (MUST-12.9)', () => {
     const savedDataDir = process.env.DATA_DIR;
     process.env.DATA_DIR = target;
     try {
-      const removed = purgeOrphanReceipts(new Set());
+      const removed = purgeOrphanReceipts(() => new Set());
       expect(removed).toBe(0);
     } finally {
       if (savedDataDir === undefined) delete process.env.DATA_DIR;
