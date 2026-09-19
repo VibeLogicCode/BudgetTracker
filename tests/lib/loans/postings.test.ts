@@ -204,7 +204,7 @@ describe('postAllDueInterest (P3)', () => {
   it('covers every loan with a basis and leaves the others alone', () => {
     const itemId = seedInterestLoan();
     const other = c.seedLoan({ name: 'No basis', balanceCents: 500_000 });
-    expect(postAllDueInterest('2026-09-18')).toEqual({ items: 1, posted: 2, adjusted: 0 });
+    expect(postAllDueInterest('2026-09-18')).toEqual({ items: 1, posted: 2, adjusted: 0, failed: 0 });
     expect(c.balanceOf(itemId)).toBe(1_016_736);
     expect(c.balanceOf(other.itemId)).toBe(500_000);
   });
@@ -212,7 +212,7 @@ describe('postAllDueInterest (P3)', () => {
   it('reports nothing to do on a second sweep', () => {
     seedInterestLoan();
     postAllDueInterest('2026-09-18');
-    expect(postAllDueInterest('2026-09-18')).toEqual({ items: 0, posted: 0, adjusted: 0 });
+    expect(postAllDueInterest('2026-09-18')).toEqual({ items: 0, posted: 0, adjusted: 0, failed: 0 });
   });
 });
 
@@ -263,5 +263,89 @@ describe('rate history (R1–R2)', () => {
     expect(c.t.sqlite.prepare('select interest_rate_bps from warranty_items where id = ?').get(itemId)).toEqual({
       interest_rate_bps: 1200,
     });
+  });
+});
+
+/**
+ * Review A1/A2/A4/A11. The wall, atomicity, and one bad loan not starving the rest.
+ */
+describe('the wall selects by the period a row belongs to (A1)', () => {
+  it('a statement supersedes a correction to a period that began before it', () => {
+    const itemId = seedInterestLoan();
+    postDueInterest(itemId, '2026-09-18');
+    const txnId = c.spend('LENDER', -500_000, { date: '2026-08-10' });
+    assignTransactionToLoan({ txnId, itemId, at: new Date('2026-09-18T12:00:00.000Z') });
+    postDueInterest(itemId, '2026-09-18');
+    expect(postings(itemId).some((row) => row.kind === 'adjustment')).toBe(true);
+
+    setLoanAnchor({
+      itemId,
+      asOfDate: '2026-09-01',
+      balanceCents: 510_000,
+      source: 'reconcile',
+      actorUserId: c.userId,
+      at: new Date('2026-09-18T13:00:00.000Z'),
+    });
+
+    // Everything that began before 2026-09-01 is inside the statement now: both postings and the
+    // correction that fixed one of them. Nothing may be re-applied on top.
+    expect(c.balanceOf(itemId)).toBe(510_000);
+    const ledger = loanLedger(itemId, '2026-09-18')!;
+    expect(ledger.postedBalanceCents).toBe(510_000);
+    expect(ledger.rows.filter((row) => row.kind === 'adjustment')).toHaveLength(0);
+  });
+});
+
+describe('reconcile is atomic (A2)', () => {
+  it('a mid-cycle statement leaves the balance at the statement, not the statement plus a month', () => {
+    const itemId = seedInterestLoan();
+    postDueInterest(itemId, '2026-09-18');
+    setLoanAnchor({
+      itemId,
+      asOfDate: '2026-08-15',
+      balanceCents: 1_000_000,
+      source: 'reconcile',
+      actorUserId: c.userId,
+      at: new Date('2026-09-18T12:00:00.000Z'),
+    });
+    const after = postings(itemId).filter((row) => row.period_start >= '2026-08-15');
+    expect(after.map((row) => [row.period_start, row.period_end])).toEqual([['2026-08-15', '2026-09-01']]);
+    // 1,000,000 at 10%/12, seventeen of thirty-one days.
+    expect(after[0]!.interest_cents).toBe(4_570);
+    expect(c.balanceOf(itemId)).toBe(1_004_570);
+  });
+
+  it('an older statement entered after a newer one compares against the anchor before it (A11)', () => {
+    const itemId = seedInterestLoan();
+    setLoanAnchor({ itemId, asOfDate: '2026-09-01', balanceCents: 1_016_736, source: 'reconcile', actorUserId: c.userId });
+    setLoanAnchor({ itemId, asOfDate: '2026-08-01', balanceCents: 1_008_000, source: 'reconcile', actorUserId: c.userId });
+    // The newest BY DATE still governs the balance.
+    expect(c.balanceOf(itemId)).toBe(1_016_736);
+  });
+});
+
+describe('one bad loan does not starve the sweep (A4)', () => {
+  it('isolates a loan whose engine cannot walk its dates, and counts it', () => {
+    const good = seedInterestLoan();
+    const bad = c.seedLoan({ name: 'Bad', balanceCents: 100, principalCents: 100 });
+    c.t.sqlite
+      .prepare(
+        `update warranty_items set purchase_date = '1900-01-01', interest_rate_bps = 1000, interest_rate_basis = 'apr_monthly' where id = ?`,
+      )
+      .run(bad.itemId);
+    c.t.sqlite
+      .prepare(
+        `insert into loan_anchors (item_id, as_of_date, balance_cents, source, created_at) values (?, '1900-01-01', 100, 'migrated', '2026-01-01T00:00:00.000Z')`,
+      )
+      .run(bad.itemId);
+    c.t.sqlite
+      .prepare(
+        `insert into loan_rate_history (item_id, effective_from, rate_bps, basis, created_at) values (?, '1900-01-01', 1000, 'apr_monthly', '2026-01-01T00:00:00.000Z')`,
+      )
+      .run(bad.itemId);
+
+    const result = postAllDueInterest('2026-09-18');
+    expect(result.failed).toBe(1);
+    expect(c.balanceOf(good)).toBe(1_016_736);
   });
 });

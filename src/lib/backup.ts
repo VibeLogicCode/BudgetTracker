@@ -184,6 +184,7 @@ export function runNightlyJob(at: Date = new Date()): NightlyJobResult {
     if (swept.posted > 0 || swept.adjusted > 0) {
       console.log(`[loans] posted ${swept.posted} period(s) and ${swept.adjusted} adjustment(s) across ${swept.items} loan(s)`);
     }
+    if (swept.failed > 0) console.error(`[loans] ${swept.failed} loan(s) could not be posted; see the errors above`);
   } catch (error) {
     console.error('[loans] posting due interest failed; the backup still runs', error);
   }

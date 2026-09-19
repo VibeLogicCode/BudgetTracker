@@ -520,15 +520,15 @@ function recomputeBalance(
     Accrued-but-unposted interest is deliberately absent: the stored balance is what has actually
     been charged, and "owing today" is computed on top of it by the engine (P6).
   */
-  const postedInterest =
+  const postedRows =
     anchor === undefined
-      ? 0
-      : (tx
-          .select({ total: sql<number>`coalesce(sum(${loanPostings.interestCents}), 0)` })
+      ? []
+      : tx
+          .select({ at: loanPostings.periodEnd, interestCents: loanPostings.interestCents })
           .from(loanPostings)
-          .where(and(eq(loanPostings.itemId, itemId), gt(loanPostings.periodEnd, anchor.asOfDate)))
-          .get()?.total ?? 0);
-  impliedAnchor += postedInterest;
+          .where(and(eq(loanPostings.itemId, itemId), gte(loanPostings.periodStart, anchor.asOfDate)))
+          .orderBy(asc(loanPostings.periodEnd), asc(loanPostings.id))
+          .all();
 
   // Chronological order -- the one thing insertion order corrupted. A tie (same date) breaks by
   // payment id ascending, so an EXISTING row (a smaller id, since it was inserted first) always
@@ -536,8 +536,28 @@ function recomputeBalance(
   // out of order, which is every existing test in this suite.
   rows.sort((a, b) => (a.txnDate === b.txnDate ? a.id - b.id : a.txnDate < b.txnDate ? -1 : 1));
 
+  /*
+    LEDGER_EVENTS. One chronological walk over payments AND postings together.
+
+    v1.48.0 added every posted interest figure to the opening balance BEFORE walking the payments,
+    which meant a payment could be capped against interest that posted months after it -- and the
+    ledger engine, which interleaves, then disagreed with this column by the amount that cap
+    swallowed. The review reproduced it as a loan reading $0.00 on its card and $2.03 on its ledger.
+
+    Interleaved, the two walk the same events in the same order under the same cap, so they cannot
+    disagree. A posting lands on its period end; a payment on its transaction's date; a payment on
+    the same day as a posting comes first, because the household paid before the lender charged.
+  */
   let balance = impliedAnchor;
   const appliedByTxnId = new Map<number, number>();
+  let postingIndex = 0;
+  const applyPostingsThrough = (date: string | null): void => {
+    while (postingIndex < postedRows.length && (date === null || postedRows[postingIndex]!.at <= date)) {
+      balance = Math.max(0, balance + postedRows[postingIndex]!.interestCents);
+      postingIndex += 1;
+    }
+  };
+
   for (const row of rows) {
     // The wall. Everything dated on or before the confirmed figure is already inside it.
     if (anchor !== undefined && row.txnDate <= anchor.asOfDate) {
@@ -547,6 +567,8 @@ function recomputeBalance(
       }
       continue;
     }
+    // Every posting that closed BEFORE this payment landed, applied first.
+    applyPostingsThrough(row.txnDate === null ? null : addDaysIso(row.txnDate, -1));
     const magnitude = Math.abs(row.txnAmountCents);
     const isRepayment = isLoanRepayment(direction, row.txnAmountCents);
     // Repayments clamp at zero against the balance AS OF THIS ROW'S OWN chronological position;
@@ -558,8 +580,9 @@ function recomputeBalance(
       tx.update(loanPayments).set({ appliedCents: applied }).where(eq(loanPayments.id, row.id)).run();
     }
   }
+  applyPostingsThrough(null);
 
-  return { balance, appliedByTxnId };
+  return { balance: Math.max(0, balance), appliedByTxnId };
 }
 
 /**
@@ -750,10 +773,16 @@ export function setLoanAnchor(input: {
       .get();
     if (!item) throw new Error('That loan no longer exists.');
 
+    /*
+      The anchor STRICTLY BEFORE this one, not the newest overall. Entering an older statement after
+      a newer one used to compare it against the newer figure -- an empty movementsBetween and a
+      difference_cents describing two unrelated dates, written into a column the schema calls a
+      fact (review A11).
+    */
     const previous = tx
       .select({ asOfDate: loanAnchors.asOfDate, balanceCents: loanAnchors.balanceCents })
       .from(loanAnchors)
-      .where(eq(loanAnchors.itemId, input.itemId))
+      .where(and(eq(loanAnchors.itemId, input.itemId), lt(loanAnchors.asOfDate, input.asOfDate)))
       .orderBy(desc(loanAnchors.asOfDate), desc(loanAnchors.id))
       .limit(1)
       .get();
@@ -797,27 +826,60 @@ export function setLoanAnchor(input: {
 
     // Replay forward from the figure just confirmed. recomputeBalance reads the newest anchor row
     // itself, which is the one written immediately above, so the wall is already in place.
+    /*
+      P4/C2, INSIDE this transaction. A statement moves the start point, so every period between it
+      and today is due again -- from the statement's own date, which is usually mid-cycle and so a
+      short first period. Doing it here means the committed balance is the settled one: there is no
+      window in which the database holds "the statement plus a month of superseded interest",
+      which is what the post-commit version left behind whenever its swallowed call failed.
+    */
+    /*
+      A period that STRADDLES the statement is gone: the statement covers part of it and is the
+      authority for that part, so the cycle is re-cut from the statement's own date. Those rows are
+      deleted rather than left, because the partial unique index on (item, period_end) would
+      otherwise silently refuse the short period that replaces them -- and the household would end
+      up with the superseded figure and no sign of it.
+
+      Periods entirely BEFORE the statement are untouched history; periods entirely after cannot
+      exist yet. This is the one place a posting is ever removed, and only a person entering a
+      statement can cause it.
+    */
+    tx.delete(loanPostings)
+      .where(
+        and(
+          eq(loanPostings.itemId, input.itemId),
+          lt(loanPostings.periodStart, input.asOfDate),
+          gt(loanPostings.periodEnd, input.asOfDate),
+        ),
+      )
+      .run();
+
+    postDueInterest(input.itemId, todayIso(at), { tx, actorUserId: input.actorUserId, at });
+
     const { balance } = recomputeBalance(tx, input.itemId, item.direction, input.balanceCents);
+    // An older statement entered after a newer one must not drag the anchor stamp backwards: the
+    // newest by date still governs, and debtOverTime reads this column as its known/unknown wall.
+    const isNewest =
+      tx
+        .select({ asOfDate: loanAnchors.asOfDate })
+        .from(loanAnchors)
+        .where(eq(loanAnchors.itemId, input.itemId))
+        .orderBy(desc(loanAnchors.asOfDate), desc(loanAnchors.id))
+        .limit(1)
+        .get()?.asOfDate === input.asOfDate;
     tx.update(warrantyItems)
-      .set({ currentBalanceCents: balance, balanceUpdatedAt: input.asOfDate + 'T00:00:00.000Z' })
+      .set(
+        isNewest
+          ? { currentBalanceCents: balance, balanceUpdatedAt: input.asOfDate + 'T00:00:00.000Z' }
+          : { currentBalanceCents: balance },
+      )
       .where(eq(warrantyItems.id, input.itemId))
       .run();
 
     return { balanceCents: balance };
   });
 
-  /*
-    P4/C2. A statement moves the start point, so every period between it and today is due again --
-    from the statement's own date, which is usually mid-cycle and therefore a short first period.
-    Posting here is what makes the loan page correct the moment a reconcile is saved.
-  */
-  postAfterChange(input.itemId, at);
-  const posted = getDb()
-    .select({ balanceCents: warrantyItems.currentBalanceCents })
-    .from(warrantyItems)
-    .where(eq(warrantyItems.id, input.itemId))
-    .get();
-  return posted?.balanceCents == null ? settled : { balanceCents: posted.balanceCents };
+  return settled;
 }
 
 /**
@@ -964,7 +1026,13 @@ function ledgerFacts(
       note: loanPostings.note,
     })
     .from(loanPostings)
-    .where(and(eq(loanPostings.itemId, itemId), gt(loanPostings.periodEnd, anchor.asOfDate)))
+    /*
+      BY PERIOD START, not period end. A statement supersedes every period that BEGAN before it --
+      including a correction, whose periodStart names the period it corrects rather than the day it
+      was found. Filtering on periodEnd meant an adjustment dated today survived a statement dated
+      last week and was counted a second time on top of it (review A1).
+    */
+    .where(and(eq(loanPostings.itemId, itemId), gte(loanPostings.periodStart, anchor.asOfDate)))
     .orderBy(asc(loanPostings.periodEnd), asc(loanPostings.id))
     .all();
 
@@ -1035,10 +1103,17 @@ export function loanLedger(itemId: number, today: string): Ledger | null {
 export function postDueInterest(
   itemId: number,
   today: string,
-  opts: { actorUserId?: number | null; at?: Date; collect?: PostedLoan[] } = {},
+  opts: { actorUserId?: number | null; at?: Date; collect?: PostedLoan[]; tx?: ReturnType<typeof getDb> } = {},
 ): { posted: StoredPosting[]; adjusted: StoredPosting | null } {
   const stamp = nowIso(opts.at ?? new Date());
-  const written = getDb().transaction((tx) => {
+  /*
+    An OPTIONAL transaction handle, so a caller that must be atomic with its own write (setLoanAnchor)
+    can hand one down. better-sqlite3 nests through savepoints, so the earlier note here claiming a
+    nested db.transaction would deadlock was wrong -- and the cost of believing it was a reconcile
+    that committed a balance it already knew to be too high, then corrected it afterwards in a call
+    whose failure was swallowed (review A2).
+  */
+  const run = (tx: ReturnType<typeof getDb>) => {
     const facts = ledgerFacts(tx, itemId, today);
     if (facts === null) return { posted: [], adjusted: null };
 
@@ -1086,7 +1161,9 @@ export function postDueInterest(
     }
 
     return { posted: ledger.duePostings, adjusted: ledger.dueAdjustment };
-  });
+  };
+
+  const written = opts.tx === undefined ? getDb().transaction(run) : run(opts.tx);
 
   /*
     N2. One line per LOAN, not per period: catching up three missed months is one thing that
@@ -1145,7 +1222,10 @@ function announce(lines: PostedLoan[], at: Date): void {
  * P3. Every loan that has a basis, in one sweep. The nightly job and the boot catch-up both call
  * this, so a machine that was switched off for a month posts the month it missed.
  */
-export function postAllDueInterest(today: string, at: Date = new Date()): { items: number; posted: number; adjusted: number } {
+export function postAllDueInterest(
+  today: string,
+  at: Date = new Date(),
+): { items: number; posted: number; adjusted: number; failed: number } {
   const ids = getDb()
     .select({ id: warrantyItems.id })
     .from(warrantyItems)
@@ -1155,16 +1235,27 @@ export function postAllDueInterest(today: string, at: Date = new Date()): { item
   let items = 0;
   let posted = 0;
   let adjusted = 0;
+  let failed = 0;
   // Collected rather than sent one at a time: the sweep is one event, however many loans it touched.
   const lines: PostedLoan[] = [];
   for (const { id } of ids) {
-    const result = postDueInterest(id, today, { at, collect: lines });
-    if (result.posted.length > 0 || result.adjusted !== null) items += 1;
-    posted += result.posted.length;
-    if (result.adjusted !== null) adjusted += 1;
+    /*
+      PER ITEM. One loan with a corrupt date used to throw out of the loop, so every loan after it
+      silently stopped posting and the nightly job logged a single line (review A4). A failure is
+      counted and reported instead.
+    */
+    try {
+      const result = postDueInterest(id, today, { at, collect: lines });
+      if (result.posted.length > 0 || result.adjusted !== null) items += 1;
+      posted += result.posted.length;
+      if (result.adjusted !== null) adjusted += 1;
+    } catch (error) {
+      failed += 1;
+      console.error('[loans] could not post due interest for item ' + id, error);
+    }
   }
   if (lines.length > 0) announce(lines, at);
-  return { items, posted, adjusted };
+  return { items, posted, adjusted, failed };
 }
 
 /**
@@ -1179,6 +1270,8 @@ function postAfterChange(itemId: number, at: Date): void {
   try {
     postDueInterest(itemId, todayIso(at), { at });
   } catch (error) {
+    // A LedgerRangeError here means a corrupt date on THIS loan; every other loan is unaffected and
+    // the payment that triggered this has already been linked. Log and carry on (review A4).
     console.error('[loans] could not post due interest for item ' + itemId, error);
   }
 }
