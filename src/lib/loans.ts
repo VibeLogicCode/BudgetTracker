@@ -1,6 +1,8 @@
 import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, like, lt, lte, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
-import { accounts, billInstallments, loanAnchors, loanMatcherRules, loanPayments, transactions, users, warrantyItemTypes, warrantyItems } from '@/db/schema';
+import { accounts, billInstallments, loanAnchors,
+  loanPostings,
+  loanRateHistory, loanMatcherRules, loanPayments, transactions, users, warrantyItemTypes, warrantyItems } from '@/db/schema';
 import { canActOnOwner, ownerScope, HOUSEHOLD_VIEWER, NOT_YOURS_ERROR, type Viewer } from '@/lib/auth/viewer';
 import { amountWithinBounds } from '@/lib/categorize/amount-bounds';
 import { nowIso } from '@/lib/clock';
@@ -20,6 +22,14 @@ import {
   type LoanDirection,
 } from '@/lib/warranty/constants';
 import { chargeCents, ratePpb, simulate, type InterestBasis, type MonthRow } from '@/lib/loans/interest';
+import {
+  buildLedger,
+  postingDayFor,
+  type Ledger,
+  type LedgerInput,
+  type RateInForce,
+  type StoredPosting,
+} from '@/lib/loans/ledger';
 import { createWarrantyItem, type WarrantyInput } from '@/lib/warranty/items';
 import { createItemType, listItemTypes, ItemTypeError, type ItemType } from '@/lib/warranty/types';
 
@@ -499,6 +509,25 @@ function recomputeBalance(
     }
   }
 
+  /*
+    v1.48.0 (ledger spec P5). Interest that has been POSTED is part of the balance, so the replay
+    adds it alongside the movements. Only rows after the anchor count -- a statement is the truth
+    for its own date, so anything the app posted before it has already been superseded by the
+    figure a person confirmed, exactly as the movement wall below says of payments.
+
+    Accrued-but-unposted interest is deliberately absent: the stored balance is what has actually
+    been charged, and "owing today" is computed on top of it by the engine (P6).
+  */
+  const postedInterest =
+    anchor === undefined
+      ? 0
+      : (tx
+          .select({ total: sql<number>`coalesce(sum(${loanPostings.interestCents}), 0)` })
+          .from(loanPostings)
+          .where(and(eq(loanPostings.itemId, itemId), gt(loanPostings.periodEnd, anchor.asOfDate)))
+          .get()?.total ?? 0);
+  impliedAnchor += postedInterest;
+
   // Chronological order -- the one thing insertion order corrupted. A tie (same date) breaks by
   // payment id ascending, so an EXISTING row (a smaller id, since it was inserted first) always
   // replays before a same-day new one -- exactly today's behaviour whenever nothing is actually
@@ -703,9 +732,10 @@ export function setLoanAnchor(input: {
   receiptId?: number | null;
   at?: Date;
 }): { balanceCents: number } {
-  const stamp = nowIso(input.at ?? new Date());
+  const at = input.at ?? new Date();
+  const stamp = nowIso(at);
 
-  return getDb().transaction((tx) => {
+  const settled = getDb().transaction((tx) => {
     const item = tx
       .select({
         balance: warrantyItems.currentBalanceCents,
@@ -773,6 +803,282 @@ export function setLoanAnchor(input: {
 
     return { balanceCents: balance };
   });
+
+  /*
+    P4/C2. A statement moves the start point, so every period between it and today is due again --
+    from the statement's own date, which is usually mid-cycle and therefore a short first period.
+    Posting here is what makes the loan page correct the moment a reconcile is saved.
+  */
+  postAfterChange(input.itemId, at);
+  const posted = getDb()
+    .select({ balanceCents: warrantyItems.currentBalanceCents })
+    .from(warrantyItems)
+    .where(eq(warrantyItems.id, input.itemId))
+    .get();
+  return posted?.balanceCents == null ? settled : { balanceCents: posted.balanceCents };
+}
+
+/**
+ * R1. The rate history for a loan, oldest first.
+ *
+ * warranty_items still holds the CURRENT rate, so every reader written before v1.48.0 is untouched.
+ * This is the other question: what did it charge in March, which a variable-rate mortgage makes a
+ * real one.
+ */
+export function listRateHistory(itemId: number): RateInForce[] {
+  return getDb()
+    .select({
+      effectiveFrom: loanRateHistory.effectiveFrom,
+      rateBps: loanRateHistory.rateBps,
+      basis: loanRateHistory.basis,
+    })
+    .from(loanRateHistory)
+    .where(eq(loanRateHistory.itemId, itemId))
+    .orderBy(asc(loanRateHistory.effectiveFrom), asc(loanRateHistory.id))
+    .all();
+}
+
+/**
+ * R2. Record a rate from a date, and post whatever that makes due.
+ *
+ * Two writes in one transaction: the history row, which is what a closed period will be re-read
+ * against, and the item's own columns, which every existing reader uses for "what does it charge
+ * now". Keeping both is what lets this land without rewriting those readers.
+ */
+export function addRateChange(input: {
+  itemId: number;
+  effectiveFrom: string;
+  rateBps: number;
+  basis: InterestBasis;
+  actorUserId: number | null;
+  at?: Date;
+}): void {
+  const at = input.at ?? new Date();
+  const stamp = nowIso(at);
+  getDb().transaction((tx) => {
+    tx.insert(loanRateHistory)
+      .values({
+        itemId: input.itemId,
+        effectiveFrom: input.effectiveFrom,
+        rateBps: input.rateBps,
+        basis: input.basis,
+        createdAt: stamp,
+        createdByUserId: input.actorUserId,
+      })
+      .run();
+    tx.update(warrantyItems)
+      .set({ interestRateBps: input.rateBps, interestRateBasis: input.basis, updatedAt: stamp })
+      .where(eq(warrantyItems.id, input.itemId))
+      .run();
+  });
+  postDueInterest(input.itemId, todayIso(at), { actorUserId: input.actorUserId, at });
+}
+
+/** Everything the pure engine needs, read in one place so the reader and the writer cannot diverge. */
+function ledgerFacts(
+  tx: ReturnType<typeof getDb>,
+  itemId: number,
+  today: string,
+): { input: LedgerInput; direction: LoanDirection } | null {
+  const item = tx
+    .select({
+      purchaseDate: warrantyItems.purchaseDate,
+      principalCents: warrantyItems.principalCents,
+      postingDay: warrantyItems.postingDay,
+      direction: warrantyItems.loanDirection,
+      basis: warrantyItems.interestRateBasis,
+    })
+    .from(warrantyItems)
+    .where(eq(warrantyItems.id, itemId))
+    .get();
+  // No basis means the rate was typed under a promise that nothing would be computed from it (D2).
+  if (!item || item.basis === null) return null;
+
+  const anchor = tx
+    .select({ asOfDate: loanAnchors.asOfDate, balanceCents: loanAnchors.balanceCents })
+    .from(loanAnchors)
+    .where(eq(loanAnchors.itemId, itemId))
+    .orderBy(desc(loanAnchors.asOfDate), desc(loanAnchors.id))
+    .limit(1)
+    .get();
+  // Nothing has ever been confirmed, so there is no figure to estimate forward from.
+  if (anchor === undefined) return null;
+
+  /*
+    Movements in the loan's OWN frame, dated by the TRANSACTION (the v1.25.0 rule). loanSignedDelta
+    is applied here so the engine never learns which way the loan points -- ruling P4, which is also
+    why the literal stays out of ledger.ts.
+  */
+  const movements = tx
+    .select({
+      date: transactions.date,
+      appliedCents: loanPayments.appliedCents,
+      txnAmountCents: transactions.amountCents,
+    })
+    .from(loanPayments)
+    .innerJoin(transactions, eq(transactions.id, loanPayments.txnId))
+    .where(and(eq(loanPayments.itemId, itemId), gt(transactions.date, anchor.asOfDate)))
+    .orderBy(asc(transactions.date), asc(loanPayments.id))
+    .all()
+    .map((row) => ({
+      date: row.date,
+      amountCents: loanSignedDelta(item.direction, row.txnAmountCents < 0 ? -row.appliedCents : row.appliedCents),
+    }));
+
+  const stored = tx
+    .select({
+      kind: loanPostings.kind,
+      periodStart: loanPostings.periodStart,
+      periodEnd: loanPostings.periodEnd,
+      openingCents: loanPostings.openingCents,
+      interestCents: loanPostings.interestCents,
+      paymentsCents: loanPostings.paymentsCents,
+      advancesCents: loanPostings.advancesCents,
+      closingCents: loanPostings.closingCents,
+      rateBps: loanPostings.rateBps,
+      basis: loanPostings.basis,
+      averageDailyBalanceCents: loanPostings.averageDailyBalanceCents,
+      note: loanPostings.note,
+    })
+    .from(loanPostings)
+    .where(and(eq(loanPostings.itemId, itemId), gt(loanPostings.periodEnd, anchor.asOfDate)))
+    .orderBy(asc(loanPostings.periodEnd), asc(loanPostings.id))
+    .all();
+
+  const history = tx
+    .select({
+      effectiveFrom: loanRateHistory.effectiveFrom,
+      rateBps: loanRateHistory.rateBps,
+      basis: loanRateHistory.basis,
+    })
+    .from(loanRateHistory)
+    .where(eq(loanRateHistory.itemId, itemId))
+    .orderBy(asc(loanRateHistory.effectiveFrom), asc(loanRateHistory.id))
+    .all();
+
+  return {
+    direction: item.direction,
+    input: {
+      startDate: anchor.asOfDate,
+      startBalanceCents: anchor.balanceCents,
+      principalCents: item.principalCents,
+      postingDay: postingDayFor(item.purchaseDate, item.postingDay),
+      rateHistory: history,
+      movements,
+      stored,
+      today,
+    },
+  };
+}
+
+/** The ledger for a loan, or null when it has no basis or has never been anchored. */
+export function loanLedger(itemId: number, today: string): Ledger | null {
+  const facts = ledgerFacts(getDb(), itemId, today);
+  return facts === null ? null : buildLedger(facts.input);
+}
+
+/**
+ * P2. Write down every closed period that has none, and settle any correction the stored rows need.
+ *
+ * Idempotent, because it is called from everywhere: the nightly sweep, the boot catch-up, a payment
+ * being linked or unlinked, a rate change, a reconcile. The engine decides what is missing by
+ * comparing periods to rows, so calling this twice in a second writes once.
+ *
+ * It never writes current_balance_cents itself -- it calls recomputeBalance, which stays the single
+ * writer of that column (guard G3).
+ */
+export function postDueInterest(
+  itemId: number,
+  today: string,
+  opts: { actorUserId?: number | null; at?: Date } = {},
+): { posted: StoredPosting[]; adjusted: StoredPosting | null } {
+  const stamp = nowIso(opts.at ?? new Date());
+  return getDb().transaction((tx) => {
+    const facts = ledgerFacts(tx, itemId, today);
+    if (facts === null) return { posted: [], adjusted: null };
+
+    const ledger = buildLedger(facts.input);
+    if (ledger.duePostings.length === 0 && ledger.dueAdjustment === null) return { posted: [], adjusted: null };
+
+    const write = (row: StoredPosting) =>
+      tx
+        .insert(loanPostings)
+        .values({
+          itemId,
+          kind: row.kind,
+          periodStart: row.periodStart,
+          periodEnd: row.periodEnd,
+          openingCents: row.openingCents,
+          interestCents: row.interestCents,
+          paymentsCents: row.paymentsCents,
+          advancesCents: row.advancesCents,
+          closingCents: row.closingCents,
+          rateBps: row.rateBps,
+          basis: row.basis,
+          averageDailyBalanceCents: row.averageDailyBalanceCents,
+          note: row.note,
+          createdAt: stamp,
+          createdByUserId: opts.actorUserId ?? null,
+        })
+        // Two callers racing on the same period (a payment landing as the nightly sweep runs) must
+        // not produce two rows. The partial unique index makes the second a no-op.
+        .onConflictDoNothing()
+        .run();
+
+    for (const row of ledger.duePostings) write(row);
+    if (ledger.dueAdjustment !== null) write(ledger.dueAdjustment);
+
+    const item = tx
+      .select({ direction: warrantyItems.loanDirection, balance: warrantyItems.currentBalanceCents })
+      .from(warrantyItems)
+      .where(eq(warrantyItems.id, itemId))
+      .get();
+    if (item) {
+      const { balance } = recomputeBalance(tx, itemId, item.direction, item.balance ?? 0);
+      tx.update(warrantyItems).set({ currentBalanceCents: balance }).where(eq(warrantyItems.id, itemId)).run();
+    }
+
+    return { posted: ledger.duePostings, adjusted: ledger.dueAdjustment };
+  });
+}
+
+/**
+ * P3. Every loan that has a basis, in one sweep. The nightly job and the boot catch-up both call
+ * this, so a machine that was switched off for a month posts the month it missed.
+ */
+export function postAllDueInterest(today: string, at: Date = new Date()): { items: number; posted: number; adjusted: number } {
+  const ids = getDb()
+    .select({ id: warrantyItems.id })
+    .from(warrantyItems)
+    .where(isNotNull(warrantyItems.interestRateBasis))
+    .all();
+
+  let items = 0;
+  let posted = 0;
+  let adjusted = 0;
+  for (const { id } of ids) {
+    const result = postDueInterest(id, today, { at });
+    if (result.posted.length > 0 || result.adjusted !== null) items += 1;
+    posted += result.posted.length;
+    if (result.adjusted !== null) adjusted += 1;
+  }
+  return { items, posted, adjusted };
+}
+
+/**
+ * P4. Bring a loan's postings up to date after something changed underneath them.
+ *
+ * Called AFTER the caller's own transaction has committed, never inside it: postDueInterest opens
+ * one of its own, and nesting would deadlock better-sqlite3. It is also deliberately swallowed --
+ * a payment must still link, and an import must still finish, if posting interest fails. The next
+ * nightly sweep picks it up.
+ */
+function postAfterChange(itemId: number, at: Date): void {
+  try {
+    postDueInterest(itemId, todayIso(at), { at });
+  } catch (error) {
+    console.error('[loans] could not post due interest for item ' + itemId, error);
+  }
 }
 
 /** Linked movements dated after one statement and up to and including the next. */
@@ -1413,8 +1719,9 @@ export function assignTransactionToLoan(input: { txnId: number; itemId: number; 
   linked: boolean;
   appliedCents: number;
 } {
-  const stamp = nowIso(input.at ?? new Date());
-  return getDb().transaction((tx) => {
+  const at = input.at ?? new Date();
+  const stamp = nowIso(at);
+  const outcome = getDb().transaction((tx) => {
     const txn = tx
       .select({ amountCents: transactions.amountCents })
       .from(transactions)
@@ -1462,6 +1769,11 @@ export function assignTransactionToLoan(input: { txnId: number; itemId: number; 
     applyLoanDescription(tx, input.txnId, item.name, item.direction, txn.amountCents, stamp);
     return { linked: true, appliedCents: result.appliedCents };
   });
+
+  // P4. A payment changes what the period cost, so the ledger catches up at once rather than
+  // waiting for 2am -- which is what makes the figure on screen right the moment money is assigned.
+  if (outcome.linked) postAfterChange(input.itemId, at);
+  return outcome;
 }
 
 export interface NewLoanFromTransaction {
@@ -1609,8 +1921,9 @@ export function createLoanFromTransaction(input: NewLoanFromTransaction, viewer:
  * describes the linkage itself, not the amount it moved.
  */
 export function unassignTransactionFromLoan(input: { txnId: number; itemId: number; at?: Date }): boolean {
+  const at = input.at ?? new Date();
   const stamp = nowIso(input.at);
-  return getDb().transaction((tx) => {
+  const removed = getDb().transaction((tx) => {
     const row = tx
       .select({
         appliedCents: loanPayments.appliedCents,
@@ -1639,6 +1952,11 @@ export function unassignTransactionFromLoan(input: { txnId: number; itemId: numb
     revertLoanDescription(tx, input.txnId, stamp);
     return true;
   });
+
+  // P4, and K3 in particular: undoing a payment inside a period that has already posted produces a
+  // REVERSING adjustment here, so the ledger settles itself without anyone opening the page.
+  if (removed) postAfterChange(input.itemId, at);
+  return removed;
 }
 
 /**

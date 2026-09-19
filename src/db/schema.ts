@@ -1027,7 +1027,7 @@ export const warrantyReceipts = sqliteTable(
     originalFilename: text('original_filename').notNull(),
     /** Server-generated `${randomUUID()}.${sniffedExt}` (MUST-4.2). */
     storedFilename: text('stored_filename').notNull(),
-    mime: text('mime', { enum: ['image/jpeg', 'image/png', 'image/webp', 'application/pdf', 'text/csv'] }).notNull(),
+    mime: text('mime', { enum: ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'] }).notNull(),
     sizeBytes: integer('size_bytes').notNull(),
     sha256: text('sha256').notNull(),
     ocrText: text('ocr_text'),
