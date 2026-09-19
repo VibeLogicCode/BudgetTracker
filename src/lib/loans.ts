@@ -631,6 +631,48 @@ function recomputeBalance(
  * re-deriving a running total by hand -- either of which is a second place this number could drift
  * from what recomputeBalance just decided.
  */
+function linkRow(
+  tx: ReturnType<typeof getDb>,
+  input: { txnId: number; itemId: number; signedAmountCents: number; source: 'rule' | 'manual'; at: string },
+): boolean {
+  const result = tx
+    .insert(loanPayments)
+    .values({
+      txnId: input.txnId,
+      itemId: input.itemId,
+      amountCents: Math.abs(input.signedAmountCents),
+      appliedCents: 0,
+      source: input.source,
+      createdAt: input.at,
+    })
+    .onConflictDoNothing()
+    .run();
+  return result.changes > 0;
+}
+
+/**
+ * Replay one loan and store the result. The ONE place current_balance_cents is written by machine.
+ *
+ * C10: split out of link() so a caller linking a batch can insert every row and replay ONCE. link()
+ * replaying per row made an import quadratic -- fifty matched payments replayed a fifty-row ledger
+ * fifty times -- and the intermediate answers were thrown away anyway, since the last replay is the
+ * only one that describes the finished batch.
+ */
+function replayAndStore(
+  tx: ReturnType<typeof getDb>,
+  itemId: number,
+  direction: LoanDirection,
+  currentTotal: number,
+): { balance: number; appliedByTxnId: Map<number, number> } {
+  const result = recomputeBalance(tx, itemId, direction, currentTotal);
+  tx.update(warrantyItems)
+    .set({ currentBalanceCents: result.balance })
+    // MUST-11.8: balance_updated_at is NOT touched. It is the human anchor.
+    .where(eq(warrantyItems.id, itemId))
+    .run();
+  return result;
+}
+
 function link(
   tx: ReturnType<typeof getDb>,
   input: {
@@ -643,33 +685,13 @@ function link(
     direction: LoanDirection;
   },
 ): { appliedCents: number; balance: number | null } | null {
-  const magnitude = Math.abs(input.signedAmountCents);
+  if (!linkRow(tx, input)) return null;
 
   // NEW-2 (unchanged): an untracked balance takes no move in either direction, so there is
-  // nothing for recomputeBalance to do -- the link is recorded plainly, once, with no placeholder
-  // to resolve later.
-  if (input.balanceCents === null) {
-    const result = tx
-      .insert(loanPayments)
-      .values({ txnId: input.txnId, itemId: input.itemId, amountCents: magnitude, appliedCents: 0, source: input.source, createdAt: input.at })
-      .onConflictDoNothing()
-      .run();
-    return result.changes === 0 ? null : { appliedCents: 0, balance: null };
-  }
+  // nothing to replay -- the link is recorded plainly, once, with no placeholder to resolve later.
+  if (input.balanceCents === null) return { appliedCents: 0, balance: null };
 
-  const insertResult = tx
-    .insert(loanPayments)
-    .values({ txnId: input.txnId, itemId: input.itemId, amountCents: magnitude, appliedCents: 0, source: input.source, createdAt: input.at })
-    .onConflictDoNothing()
-    .run();
-  if (insertResult.changes === 0) return null;
-
-  const { balance, appliedByTxnId } = recomputeBalance(tx, input.itemId, input.direction, input.balanceCents);
-  tx.update(warrantyItems)
-    .set({ currentBalanceCents: balance })
-    // MUST-11.8: balance_updated_at is NOT touched. It is the human anchor.
-    .where(eq(warrantyItems.id, input.itemId))
-    .run();
+  const { balance, appliedByTxnId } = replayAndStore(tx, input.itemId, input.direction, input.balanceCents);
   return { appliedCents: appliedByTxnId.get(input.txnId) ?? 0, balance };
 }
 
@@ -1750,6 +1772,8 @@ export function applyPaymentMatchers(txnIds: number[], at: Date = new Date(), re
       // not the way the account does, so the sign flip needs each item's own direction on hand.
       const directions = new Map(rules.map((rule) => [rule.itemId, rule.direction]));
       const linked = alreadyLinked(tx, txnIds);
+      // C10: the loans this batch actually wrote a row against, replayed once each at the end.
+      const touched = new Set<number>();
 
       let created = 0;
       for (const txn of candidates(tx, txnIds)) {
@@ -1776,26 +1800,27 @@ export function applyPaymentMatchers(txnIds: number[], at: Date = new Date(), re
           continue;
         }
 
-        const direction = directions.get(match.itemId) ?? 'owed';
-        const result = link(tx, {
-          txnId: txn.id,
-          itemId: match.itemId,
-          signedAmountCents: txn.amountCents,
-          balanceCents: balances.get(match.itemId) ?? 0,
-          source: 'rule',
-          at: stamp,
-          direction,
-        });
-        if (result === null) continue;
-        // Item 6 (v1.21.0 backlog): link() itself now recomputes the WHOLE balance by replaying
-        // every linked payment in true chronological order (recomputeBalance) -- so the fresh
-        // total it returns is stored here directly, not accumulated as a running delta the way
-        // this loop used to. A delta-accumulation is exactly the shape that let a stale or
-        // wrongly-ordered running figure drift from what the database actually holds; replacing
-        // it wholesale each call cannot drift, because there is nothing left to drift FROM.
-        balances.set(match.itemId, result.balance);
+        if (!linkRow(tx, { txnId: txn.id, itemId: match.itemId, signedAmountCents: txn.amountCents, source: 'rule', at: stamp })) {
+          continue;
+        }
+        touched.add(match.itemId);
         linked.add(txn.id);
         created += 1;
+      }
+
+      /*
+        ONE REPLAY PER LOAN, after every row is in (review C10).
+
+        Item 6 (v1.21.0 backlog) established that the balance is REPLACED by a full chronological
+        replay rather than advanced by a running delta -- that still holds, and is what makes this
+        safe: the replay reads the whole ledger from the statement forward, so it does not care how
+        many rows arrived since the last one. Doing it per row was therefore quadratic work for an
+        answer only the last pass could give.
+      */
+      for (const itemId of touched) {
+        const balance = balances.get(itemId);
+        if (balance === null || balance === undefined) continue;
+        replayAndStore(tx, itemId, directions.get(itemId) ?? 'owed', balance);
       }
       return created;
     });
@@ -1853,35 +1878,26 @@ export function backfillLoanRule(
         .limit(cap)
         .all();
 
-      let balance = anchoredBalance;
-      let linked = 0;
-      let appliedTotal = 0;
+      const linkedTxnIds: number[] = [];
       for (const row of rows) {
         // The query above already filters to amount_cents < 0 (an outgoing transaction, same
-        // rule as applyPaymentMatchers -- ruling P8), so row.amountCents is always negative
-        // here. Ruling P4: pass the loan's OWN direction through link(), and move the running
-        // balance the way the loan moves, not the way the account does.
-        //
-        // Item 6 (v1.21.0 backlog): `balance` is REPLACED by link()'s own returned fresh total
-        // (recomputeBalance's answer, having just replayed every linked payment -- this one
-        // included -- in true chronological order), not advanced by a delta this loop
-        // accumulates by hand. `rule.balanceCents` is never actually null for a loan-kind row
-        // (see the comment on anchoredBalance above), so `?? balance` only satisfies the type.
-        const result = link(tx, {
-          txnId: row.id,
-          itemId: rule.itemId,
-          signedAmountCents: row.amountCents,
-          balanceCents: balance,
-          source: 'rule',
-          at: stamp,
-          direction: rule.direction,
-        });
-        if (result === null) continue;
-        balance = result.balance ?? balance;
-        appliedTotal += result.appliedCents;
-        linked += 1;
+        // rule as applyPaymentMatchers -- ruling P8), so row.amountCents is always negative here.
+        if (linkRow(tx, { txnId: row.id, itemId: rule.itemId, signedAmountCents: row.amountCents, source: 'rule', at: stamp })) {
+          linkedTxnIds.push(row.id);
+        }
       }
-      return { linked, appliedCents: appliedTotal };
+      if (linkedTxnIds.length === 0) return { linked: 0, appliedCents: 0 };
+
+      /*
+        C10, and a more honest total besides. Every row goes in, then the loan is replayed once and
+        each row's share is read out of that one answer -- so what is reported is what the FINISHED
+        backfill applied, in true date order, rather than a sum of intermediate figures that an
+        older payment arriving later could change. Ruling P4: the loan's own direction, not the
+        account's.
+      */
+      const { appliedByTxnId } = replayAndStore(tx, rule.itemId, rule.direction, anchoredBalance);
+      const appliedTotal = linkedTxnIds.reduce((total, txnId) => total + (appliedByTxnId.get(txnId) ?? 0), 0);
+      return { linked: linkedTxnIds.length, appliedCents: appliedTotal };
     });
   } catch (error) {
     console.error('[loans] backfill failed', error);
@@ -2246,6 +2262,7 @@ export function unassignTransactionFromLoan(input: { txnId: number; itemId: numb
         appliedCents: loanPayments.appliedCents,
         txnAmountCents: transactions.amountCents,
         direction: warrantyItems.loanDirection,
+        balanceCents: warrantyItems.currentBalanceCents,
       })
       .from(loanPayments)
       .innerJoin(transactions, eq(transactions.id, loanPayments.txnId))
@@ -2256,13 +2273,22 @@ export function unassignTransactionFromLoan(input: { txnId: number; itemId: numb
     tx.delete(loanPayments)
       .where(and(eq(loanPayments.txnId, input.txnId), eq(loanPayments.itemId, input.itemId)))
       .run();
-    if (row.appliedCents > 0) {
+    /*
+      REPLAYED, not added back on (review A8).
+
+      `current + restore` was arithmetic over a figure the postings had also moved, so a loan with
+      interest written down ended up with a column the ledger did not agree with. The replay walks
+      payments and postings together under one cap, which is the same walk the ledger does.
+
+      The restore is still computed, because it seeds the replay for a loan that has never been
+      anchored -- there recomputeBalance reconstructs the starting figure by undoing the rows that
+      REMAIN, so it has to be handed the balance as it will stand once this row is gone. With an
+      anchor the seed is ignored and the statement governs.
+    */
+    if (row.balanceCents !== null) {
       // v1.14.0 (ruling P4): recovered from the loan's own frame, not the account's.
       const restore = isLoanRepayment(row.direction, row.txnAmountCents) ? row.appliedCents : -row.appliedCents;
-      tx.update(warrantyItems)
-        .set({ currentBalanceCents: sql`max(0, ${warrantyItems.currentBalanceCents} + ${restore})` })
-        .where(and(eq(warrantyItems.id, input.itemId), sql`${warrantyItems.currentBalanceCents} is not null`))
-        .run();
+      replayAndStore(tx, input.itemId, row.direction, Math.max(0, row.balanceCents + restore));
     }
     // Item 13: revert what assignment set, regardless of whether the balance moved -- the
     // linkage is gone either way, so a label describing it must go too.
@@ -2300,11 +2326,22 @@ export function unassignTransactionFromLoan(input: { txnId: number; itemId: numb
  * src/lib/import/commit.ts's undoImport) deletes the transaction row itself immediately
  * afterward, in the SAME enclosing transaction -- reverting a label on a row about to disappear
  * is a write with no reader ever able to see it.
+ *
+ * Review A8: it reports the loans it touched, because posting cannot happen here. The postings a
+ * reversal invalidates have to be re-cut AFTER the enclosing transaction commits -- catchUpLoans
+ * below is what the callers run -- and a caller that never asked would otherwise leave the ledger
+ * counting a payment that no longer exists until the next nightly sweep.
  */
-export function reverseLoanLinksForTransactions(txnIds: number[]): number {
-  if (txnIds.length === 0) return 0;
+export function reverseLoanLinksForTransactions(txnIds: number[]): { reversed: number; itemIds: number[] } {
+  if (txnIds.length === 0) return { reversed: 0, itemIds: [] };
   const db = getDb();
-  const rows: { itemId: number; appliedCents: number; txnAmountCents: number; direction: LoanDirection }[] = [];
+  const rows: {
+    itemId: number;
+    appliedCents: number;
+    txnAmountCents: number;
+    direction: LoanDirection;
+    balanceCents: number | null;
+  }[] = [];
   for (const chunk of chunkIds(txnIds)) {
     rows.push(
       ...db
@@ -2313,6 +2350,7 @@ export function reverseLoanLinksForTransactions(txnIds: number[]): number {
           appliedCents: loanPayments.appliedCents,
           txnAmountCents: transactions.amountCents,
           direction: warrantyItems.loanDirection,
+          balanceCents: warrantyItems.currentBalanceCents,
         })
         .from(loanPayments)
         .innerJoin(transactions, eq(transactions.id, loanPayments.txnId))
@@ -2321,25 +2359,46 @@ export function reverseLoanLinksForTransactions(txnIds: number[]): number {
         .all(),
     );
   }
-  if (rows.length === 0) return 0;
+  if (rows.length === 0) return { reversed: 0, itemIds: [] };
 
-  const byItem = new Map<number, number>();
+  const byItem = new Map<number, { restore: number; direction: LoanDirection; balanceCents: number | null }>();
   for (const row of rows) {
     // v1.14.0 (ruling P4): recovered from the loan's own frame, not the account's.
     const restore = isLoanRepayment(row.direction, row.txnAmountCents) ? row.appliedCents : -row.appliedCents;
-    byItem.set(row.itemId, (byItem.get(row.itemId) ?? 0) + restore);
+    const seen = byItem.get(row.itemId);
+    byItem.set(row.itemId, {
+      restore: (seen?.restore ?? 0) + restore,
+      direction: row.direction,
+      balanceCents: row.balanceCents,
+    });
   }
-  for (const [itemId, restore] of byItem) {
-    if (restore === 0) continue;
-    db.update(warrantyItems)
-      .set({ currentBalanceCents: sql`max(0, ${warrantyItems.currentBalanceCents} + ${restore})` })
-      .where(and(eq(warrantyItems.id, itemId), sql`${warrantyItems.currentBalanceCents} is not null`))
-      .run();
-  }
+
+  // The rows go FIRST, so the replay below walks the ledger as it will actually stand.
   for (const chunk of chunkIds(txnIds)) {
     db.delete(loanPayments).where(inArray(loanPayments.txnId, chunk)).run();
   }
-  return rows.length;
+
+  for (const [itemId, item] of byItem) {
+    /*
+      REPLAYED, not added back on (review A8) -- the same change unassignTransactionFromLoan makes
+      just above, for the same reason and with the same seed. A loan whose balance is not tracked
+      is left alone, which is what the `is not null` guard on the old arithmetic update did.
+    */
+    if (item.balanceCents === null) continue;
+    replayAndStore(db, itemId, item.direction, Math.max(0, item.balanceCents + item.restore));
+  }
+  return { reversed: rows.length, itemIds: [...byItem.keys()] };
+}
+
+/**
+ * A8. Re-cut the postings of loans a reversal changed, once the caller's transaction has committed.
+ *
+ * Deliberately outside that transaction: posting runs the engine, and an engine failure on one loan
+ * must not roll back the delete of every unrelated row the undo was there to remove. postAfterChange
+ * already swallows and logs, so this is safe to call with whatever ids came back.
+ */
+export function catchUpLoans(itemIds: number[], at: Date = new Date()): void {
+  for (const itemId of new Set(itemIds)) postAfterChange(itemId, at);
 }
 
 /**

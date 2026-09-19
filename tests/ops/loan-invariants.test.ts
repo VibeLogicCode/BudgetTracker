@@ -138,26 +138,37 @@ describe("MUST-13.1' G2: the engine stays pure", () => {
 
 describe("MUST-13.1' G3: interest never becomes a writer", () => {
   /**
-   * Nothing may write a balance from an ESTIMATE. The permitted writers are the five that existed
-   * before v1.47.0, plus setLoanAnchor (the single human-balance writer, ruling R2) and
-   * postDueInterest (v1.48.0, ledger spec P2).
+   * Nothing may write a balance from an ESTIMATE, and the list of things that write one at all is
+   * short enough to read: replayAndStore (every machine write -- linking, unlinking, undo, backfill),
+   * postDueInterest, retractLoanAnchor, recomputeLoanBalance, and setLoanAnchor, which writes the
+   * statement date alongside the figure and is the single HUMAN balance writer (ruling R2).
    *
-   * postDueInterest is allowed for the reason this release exists: what it adds to the balance has
-   * stopped being an estimate. It is a row in loan_postings, written once for a period that has
-   * closed, and the balance is recovered by replaying those rows rather than by re-deriving
-   * anything. The check below holds it to that -- it must recomputeBalance and write what came
-   * back, never a figure of its own.
+   * postDueInterest is allowed for the reason the ledger release exists: what it adds has stopped
+   * being an estimate. It is a row in loan_postings, written once for a period that has closed, and
+   * the balance is recovered by replaying those rows rather than by re-deriving anything. The check
+   * below holds it to that -- it must recomputeBalance and write what came back.
    *
-   * An eighth writer would mean something had gone back to storing a derived number.
+   * v1.49.0 (review C10): link, unassign and the undo path used to write the column themselves,
+   * three copies of the same two lines. They share replayAndStore now, which is why this count went
+   * DOWN. One more would mean something had gone back to storing a derived number.
    */
-  it('the balance writers are the known five, setLoanAnchor and postDueInterest', () => {
+  it('the balance writers are replayAndStore, postDueInterest, retract, recompute and setLoanAnchor', () => {
     const source = stripComments(read('src/lib/loans.ts'));
-    // link, recomputeLoanBalance, unassignTransactionFromLoan, reverseLoanLinksForTransactions,
-    // setLoanAnchor, postDueInterest.
-    const writes = source.split('.set({ currentBalanceCents').length - 1;
-    expect(writes).toBe(6);
+    expect(source.split('.set({ currentBalanceCents').length - 1).toBe(4);
+    // The fifth writes balanceUpdatedAt in the same statement: the statement date IS the point.
+    expect(source).toContain('{ currentBalanceCents: balance, balanceUpdatedAt:');
     expect(source).toContain('export function setLoanAnchor');
     expect(source).toContain('export function postDueInterest');
+  });
+
+  /** The paths that move a balance as a side effect of a link all go through the one replay. */
+  it('linking, unlinking and undo write the balance only through replayAndStore', () => {
+    const source = stripComments(read('src/lib/loans.ts'));
+    for (const fn of ['function link(', 'export function unassignTransactionFromLoan', 'export function reverseLoanLinksForTransactions']) {
+      const body = source.slice(source.indexOf(fn));
+      const ends = body.indexOf('\nexport ', 1) === -1 ? body.length : body.indexOf('\nexport ', 1);
+      expect({ fn, replays: body.slice(0, ends).includes('replayAndStore(') }).toEqual({ fn, replays: true });
+    }
   });
 
   /** The posting path stores what the replay returned, never a figure it worked out itself. */

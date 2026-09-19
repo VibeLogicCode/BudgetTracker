@@ -4,7 +4,7 @@ import { accounts, imports, transactionImports, transactions, users } from '@/db
 import { resolveAttribution } from '@/lib/attribution';
 import { listRules, matchRule } from '@/lib/categorize/rules';
 import { nowIso } from '@/lib/clock';
-import { reverseInstallmentLinksForTransactions, reverseLoanLinksForTransactions } from '@/lib/loans';
+import { catchUpLoans, reverseInstallmentLinksForTransactions, reverseLoanLinksForTransactions } from '@/lib/loans';
 import { deleteCsvSnapshotsForAccountDates, recordBalanceSnapshot } from '@/lib/networth';
 import { listAccountCardPeople } from './card-people';
 import { findExistingByExternalIds, findExistingByHashes, type HashedRow } from './dedup';
@@ -538,8 +538,10 @@ export function undoImport(importId: number): UndoResult {
   const db = getDb();
   const { tokenize, untrain } = getImportHooks();
   const { sole, shared } = partitionByAssociation(importId);
+  // A8: posted after the commit below, never inside it -- see catchUpLoans' own note.
+  const touchedLoans: number[] = [];
 
-  return db.transaction((tx) => {
+  const result = db.transaction((tx) => {
     let loanRowsReversed = 0;
     let snapshotsDeleted = 0;
     if (sole.length > 0) {
@@ -562,7 +564,9 @@ export function undoImport(importId: number): UndoResult {
       // MUST-13.14: BEFORE the delete. The ON DELETE CASCADE on loan_payments.txn_id would
       // remove the rows anyway -- but a cascade cannot restore a balance, so the explicit
       // reversal must run first.
-      loanRowsReversed = reverseLoanLinksForTransactions(sole);
+      const reversal = reverseLoanLinksForTransactions(sole);
+      loanRowsReversed = reversal.reversed;
+      touchedLoans.push(...reversal.itemIds);
       // Ruling B14, same argument one line up and the same position: ON DELETE SET NULL drops
       // the link but cannot restore paid_at, so an installment would be left marked paid by a
       // transaction that no longer exists.
@@ -605,4 +609,7 @@ export function undoImport(importId: number): UndoResult {
     tx.delete(imports).where(eq(imports.id, importId)).run();
     return { deleted: sole.length, kept: shared.length, loanLinksReversed: loanRowsReversed, snapshotsDeleted };
   });
+
+  catchUpLoans(touchedLoans);
+  return result;
 }

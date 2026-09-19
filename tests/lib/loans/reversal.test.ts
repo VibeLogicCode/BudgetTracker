@@ -1,15 +1,19 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { commitImport, undoImport, type CommitResult } from '@/lib/import/commit';
 import { computeRowHashes } from '@/lib/import/dedup';
 import type { CandidateRow } from '@/lib/import/parse';
 import {
   applyPaymentMatchers,
   assignTransactionToLoan,
+  loanLedger,
   loanLinksForTransactions,
   reverseLoanLinksForTransactions,
   saveLoanRule,
+  setLoanAnchor,
   unassignTransactionFromLoan,
 } from '@/lib/loans';
+import { deleteManualTransaction } from '@/lib/transactions';
+import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
 import { setupLoanTest, type LoanTestContext } from './fixtures';
 
 let ctx: LoanTestContext;
@@ -333,7 +337,7 @@ describe('reversal on a lent loan (spec BU)', () => {
     assignTransactionToLoan({ txnId: repayment, itemId });
     expect(ctx.balanceOf(itemId)).toBe(50_000);
 
-    expect(reverseLoanLinksForTransactions([advance, repayment])).toBe(2);
+    expect(reverseLoanLinksForTransactions([advance, repayment]).reversed).toBe(2);
     expect(ctx.balanceOf(itemId)).toBe(0);
   });
 
@@ -343,5 +347,117 @@ describe('reversal on a lent loan (spec BU)', () => {
     assignTransactionToLoan({ txnId: advance, itemId });
     unassignTransactionFromLoan({ txnId: advance, itemId });
     expect(ctx.balanceOf(itemId)).toBeNull();
+  });
+});
+
+/**
+ * Review A8. Both reversal paths moved the balance by arithmetic -- `current + restore` -- and
+ * neither told the ledger. The postings kept counting a payment that no longer exists, so the
+ * column and the ledger disagreed until the 02:00 sweep, which on a machine asleep at 02:00 is
+ * never. They now replay the loan the way every other write does, and post afterwards.
+ */
+describe('a reversal leaves the ledger settled', () => {
+  const TODAY = '2026-09-18';
+
+  /** A loan that charges interest, with a statement to run from and periods already written down. */
+  function interestBearing(over: { name?: string; balanceCents?: number; rateBps?: number } = {}): number {
+    const { itemId } = ctx.seedLoan({
+      name: over.name,
+      balanceCents: over.balanceCents ?? 2_000_000,
+      principalCents: over.balanceCents ?? 2_000_000,
+    });
+    ctx.t.sqlite
+      .prepare("update warranty_items set interest_rate_bps = ?, interest_rate_basis = 'apr_monthly' where id = ?")
+      .run(over.rateBps ?? 600, itemId);
+    setLoanAnchor({
+      itemId,
+      asOfDate: '2026-06-01',
+      balanceCents: over.balanceCents ?? 2_000_000,
+      source: 'reconcile',
+      actorUserId: ctx.userId,
+      at: new Date('2026-06-01T12:00:00.000Z'),
+    });
+    return itemId;
+  }
+
+  it('deleting a linked payment settles the postings it had been counted in', () => {
+    const itemId = interestBearing();
+    const txnId = ctx.spend('HONDA FIN SVC', -45_000, { date: '2026-07-15' });
+    assignTransactionToLoan({ txnId, itemId, at: new Date('2026-07-15T12:00:00.000Z') });
+    expect(loanLedger(itemId, TODAY)!.rows.some((row) => row.kind === 'interest')).toBe(true);
+
+    expect(
+      deleteManualTransaction({
+        txnId,
+        userId: ctx.userId,
+        viewer: HOUSEHOLD_VIEWER,
+        at: new Date(TODAY + 'T12:00:00.000Z'),
+      }),
+    ).toEqual({ ok: true });
+
+    const ledger = loanLedger(itemId, TODAY)!;
+    expect(ledger.dueAdjustment).toBeNull();
+    expect(ctx.balanceOf(itemId)).toBe(ledger.postedBalanceCents);
+  });
+
+  it('names every loan an undo touched, so both get posted', () => {
+    const first = interestBearing();
+    const second = interestBearing({ name: 'Truck', balanceCents: 3_000_000, rateBps: 900 });
+
+    const firstTxn = ctx.spend('HONDA FIN SVC', -45_000, { date: '2026-07-15' });
+    const secondTxn = ctx.spend('FORD CREDIT', -60_000, { date: '2026-07-20' });
+    assignTransactionToLoan({ txnId: firstTxn, itemId: first, at: new Date('2026-07-15T12:00:00.000Z') });
+    assignTransactionToLoan({ txnId: secondTxn, itemId: second, at: new Date('2026-07-20T12:00:00.000Z') });
+
+    const reversed = reverseLoanLinksForTransactions([firstTxn, secondTxn]);
+    expect(reversed.reversed).toBe(2);
+    expect([...reversed.itemIds].sort((a, b) => a - b)).toEqual([first, second].sort((a, b) => a - b));
+  });
+
+  it('replays the loan instead of adding the payment back on', () => {
+    const itemId = interestBearing();
+    const txnId = ctx.spend('HONDA FIN SVC', -45_000, { date: '2026-07-15' });
+    assignTransactionToLoan({ txnId, itemId, at: new Date('2026-07-15T12:00:00.000Z') });
+
+    expect(unassignTransactionFromLoan({ txnId, itemId, at: new Date(TODAY + 'T12:00:00.000Z') })).toBe(true);
+    const ledger = loanLedger(itemId, TODAY)!;
+    expect(ledger.dueAdjustment).toBeNull();
+    expect(ctx.balanceOf(itemId)).toBe(ledger.postedBalanceCents);
+  });
+});
+
+/**
+ * Review C10. link() replays the whole loan on every row, so a rule matching K transactions replayed
+ * K times over a ledger K rows long -- quadratic, on the path an import runs. The rows go in first
+ * and the replay happens once.
+ */
+describe('a batch of links replays the loan once', () => {
+  /**
+   * How many times the whole ledger was read back while linking `count` transactions. The replay is
+   * the one query that joins loan_payments to transactions, and better-sqlite3 exposes no counter,
+   * so it is counted through the driver's own prepare -- the same hook debt-over-time.test.ts uses.
+   */
+  function replays(count: number): number {
+    const { itemId } = ctx.seedLoan({ balanceCents: 50_000_000 });
+    saveLoanRule({ itemId, merchantContains: 'HONDA FIN', accountId: null, enabled: true });
+    const txnIds: number[] = [];
+    for (let index = 0; index < count; index += 1) {
+      const day = String((index % 28) + 1).padStart(2, '0');
+      txnIds.push(ctx.spend('HONDA FIN SVC', -45_000, { date: `2026-08-${day}` }));
+    }
+
+    let seen = 0;
+    const original = ctx.t.sqlite.prepare.bind(ctx.t.sqlite);
+    const spy = vi.spyOn(ctx.t.sqlite, 'prepare').mockImplementation(((text: string) => {
+      if (/select "loan_payments"\."id"[\s\S]*from "loan_payments" inner join "transactions"/.test(text)) seen += 1;
+      return original(text);
+    }) as typeof ctx.t.sqlite.prepare);
+    expect(applyPaymentMatchers(txnIds, new Date('2026-09-01T12:00:00.000Z'))).toBe(count);
+    spy.mockRestore();
+    return seen;
+  }
+
+  it('reads the ledger back once for fifty rows, not fifty times', () => {
+    expect(replays(50)).toBe(1);
   });
 });

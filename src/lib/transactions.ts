@@ -20,6 +20,7 @@ import {
   applyPaymentMatchers,
   assignTransactionToLoan,
   reverseInstallmentLinksForTransactions,
+  catchUpLoans,
   reverseLoanLinksForTransactions,
 } from '@/lib/loans';
 import { untrain } from '@/lib/categorize/bayes';
@@ -1369,11 +1370,12 @@ export function deleteManualTransaction(input: {
 
   const label = row.displayDescription ?? row.rawDescription;
 
-  return db.transaction(() => {
+  const touchedLoans: number[] = [];
+  const result = db.transaction(() => {
     if (row.categorizationSource === 'manual' && row.categoryId !== null) {
       untrain(tokenize(row.normalizedMerchant), row.categoryId);
     }
-    reverseLoanLinksForTransactions([input.txnId]);
+    touchedLoans.push(...reverseLoanLinksForTransactions([input.txnId]).itemIds);
     reverseInstallmentLinksForTransactions([input.txnId]);
     db.delete(transactions).where(eq(transactions.id, input.txnId)).run();
     appendAudit({
@@ -1387,4 +1389,9 @@ export function deleteManualTransaction(input: {
     });
     return { ok: true } as const;
   });
+
+  // A8: after the commit, because the postings this delete invalidated describe a payment that is
+  // only now actually gone -- and a posting failure must not take the delete down with it.
+  catchUpLoans(touchedLoans, input.at ?? new Date());
+  return result;
 }
