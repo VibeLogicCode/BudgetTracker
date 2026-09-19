@@ -10,6 +10,7 @@ import {
   retractLoanAnchor,
   setLoanAnchor,
 } from '@/lib/loans';
+import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -114,7 +115,7 @@ describe('setLoanAnchor: the one writer', () => {
   it('records what the app believed, and by how much the statement differed', () => {
     const { itemId, user, accountId } = makeLoan();
     setLoanAnchor({ itemId, asOfDate: '2026-08-01', balanceCents: 20_000_000, source: 'reconcile', actorUserId: user });
-    assignTransactionToLoan({ txnId: pay(accountId, user, '2026-08-15', -100_000), itemId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: pay(accountId, user, '2026-08-15', -100_000), itemId });
     // The app now believes $199,000. The statement says $199,037.
     setLoanAnchor({ itemId, asOfDate: '2026-09-01', balanceCents: 19_903_700, source: 'reconcile', actorUserId: user });
     const anchors = listLoanAnchors(itemId);
@@ -136,7 +137,7 @@ describe('the wall: movements already inside the confirmed figure', () => {
     const { itemId, user, accountId } = makeLoan();
     setLoanAnchor({ itemId, asOfDate: '2026-09-01', balanceCents: 20_000_000, source: 'reconcile', actorUserId: user });
     const txnId = pay(accountId, user, '2026-08-20', -100_000);
-    assignTransactionToLoan({ txnId, itemId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId });
     expect(appliedFor(txnId)).toBe(0);
     expect(balanceOf(itemId)).toBe(20_000_000);
   });
@@ -146,7 +147,7 @@ describe('the wall: movements already inside the confirmed figure', () => {
     const { itemId, user, accountId } = makeLoan();
     setLoanAnchor({ itemId, asOfDate: '2026-09-01', balanceCents: 20_000_000, source: 'reconcile', actorUserId: user });
     const txnId = pay(accountId, user, '2026-09-01', -100_000);
-    assignTransactionToLoan({ txnId, itemId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId });
     expect(appliedFor(txnId)).toBe(0);
     expect(balanceOf(itemId)).toBe(20_000_000);
   });
@@ -155,7 +156,7 @@ describe('the wall: movements already inside the confirmed figure', () => {
     const { itemId, user, accountId } = makeLoan();
     setLoanAnchor({ itemId, asOfDate: '2026-09-01', balanceCents: 20_000_000, source: 'reconcile', actorUserId: user });
     const txnId = pay(accountId, user, '2026-09-02', -100_000);
-    assignTransactionToLoan({ txnId, itemId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId });
     expect(appliedFor(txnId)).toBe(100_000);
     expect(balanceOf(itemId)).toBe(19_900_000);
   });
@@ -169,8 +170,8 @@ describe('the wall: movements already inside the confirmed figure', () => {
     const { itemId, user, accountId } = makeLoan();
     setLoanAnchor({ itemId, asOfDate: '2026-09-01', balanceCents: 20_000_000, source: 'reconcile', actorUserId: user });
     const txnId = pay(accountId, user, '2026-08-20', -100_000);
-    assignTransactionToLoan({ txnId, itemId });
-    unassignTransactionFromLoan({ txnId, itemId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId });
+    unassignTransactionFromLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId });
     expect(balanceOf(itemId)).toBe(20_000_000);
   });
 
@@ -179,7 +180,7 @@ describe('the wall: movements already inside the confirmed figure', () => {
     const { itemId, user, accountId } = makeLoan();
     setLoanAnchor({ itemId, asOfDate: '2026-08-01', balanceCents: 20_000_000, source: 'reconcile', actorUserId: user });
     const txnId = pay(accountId, user, '2026-08-20', -100_000);
-    assignTransactionToLoan({ txnId, itemId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId });
     expect(appliedFor(txnId)).toBe(100_000);
 
     setLoanAnchor({ itemId, asOfDate: '2026-09-01', balanceCents: 19_900_000, source: 'reconcile', actorUserId: user });
@@ -224,7 +225,7 @@ describe('withdrawing a statement', () => {
     const { itemId, user, accountId } = makeLoan();
     setLoanAnchor({ itemId, asOfDate: '2026-07-01', balanceCents: 20_000_000, source: 'form', actorUserId: user });
     const txnId = pay(accountId, user, '2026-08-15', -100_000);
-    assignTransactionToLoan({ txnId, itemId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId });
     expect(balanceOf(itemId)).toBe(19_900_000);
 
     setLoanAnchor({ itemId, asOfDate: '2027-06-01', balanceCents: 50_000_000, source: 'reconcile', actorUserId: user });

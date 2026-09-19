@@ -6,6 +6,7 @@ import { nowIso } from '@/lib/clock';
 import { assignTransactionToLoan } from '@/lib/loans';
 import { categorySeries, firstDataMonth, isAllNoSpend, seasonalReference, suggestionsFor } from '@/lib/predict/history';
 import type { SuggestionResult } from '@/lib/predict/suggest';
+import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -224,7 +225,7 @@ describe('C-02: loan principal movements are excluded from prediction history to
     const groceries = categoryIdByName(db, 'Groceries');
     const loanId = seedLoanItem(alice, 'lent');
     const txnId = spend({ categoryId: groceries, amountCents: -600_000, date: '2026-07-05' });
-    assignTransactionToLoan({ txnId, itemId: loanId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId: loanId });
 
     // Before this fix, `cells()` filtered on transfers alone, so this $6,000 lend-out would have
     // inflated a suggested Groceries budget the same way it inflated the Budgets card -- MUST-3.2

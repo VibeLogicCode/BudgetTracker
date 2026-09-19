@@ -77,7 +77,7 @@ import { writeSidecar, writeStagedReceipt } from '@/lib/warranty/staging';
 import { resetOcrQueueForTests } from '@/lib/warranty/ocr/queue';
 import { setOcrEngineForTests } from '@/lib/warranty/ocr/engine';
 import { createItemType, listItemTypes } from '@/lib/warranty/types';
-import { NOT_YOURS_ERROR, type Viewer } from '@/lib/auth/viewer';
+import { HOUSEHOLD_VIEWER, NOT_YOURS_ERROR, type Viewer } from '@/lib/auth/viewer';
 import { listAudit } from '@/lib/audit';
 
 // v1.13.0 ruling R3: a household-visibility, admin-role stand-in used ONLY to read back state for
@@ -1151,7 +1151,7 @@ describe('unlinkLedgerTransactionAction (item 6, v1.16.0 plan)', () => {
     const itemId = seedLoanItem({ balanceCents: 200_000 });
     const accountId = insertTestAccount(current!.db, { name: 'Chequing' });
     const txnId = seedTransaction(accountId);
-    expect(assignTransactionToLoan({ txnId, itemId }).linked).toBe(true);
+    expect(assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId }).linked).toBe(true);
     expect(itemLedger(itemId).rows).toHaveLength(1);
 
     const result = await unlinkLedgerTransactionAction({}, formData({ itemId: String(itemId), txnId: String(txnId) }));
@@ -1217,7 +1217,7 @@ describe('recomputeLoanBalanceAction (item 6, v1.21.0 backlog)', () => {
     const itemId = seedLoanItem({ balanceCents: 1_955_000 });
     const accountId = insertTestAccount(current!.db, { name: 'Chequing' });
     const txnId = seedTransaction(accountId, { amountCents: -45_000 });
-    expect(assignTransactionToLoan({ txnId, itemId }).linked).toBe(true);
+    expect(assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId }).linked).toBe(true);
     expect(getWarrantyItem(itemId, currentUser)?.currentBalanceCents).toBe(1_910_000);
 
     const result = await recomputeLoanBalanceAction({}, formData({ itemId: String(itemId) }));

@@ -33,7 +33,7 @@ import {
   type RateInForce,
   type StoredPosting,
 } from '@/lib/loans/ledger';
-import { createWarrantyItem, type WarrantyInput } from '@/lib/warranty/items';
+import { createWarrantyItem, getWarrantyItem, type WarrantyInput } from '@/lib/warranty/items';
 import { createItemType, listItemTypes, ItemTypeError, type ItemType } from '@/lib/warranty/types';
 
 /**
@@ -2025,10 +2025,40 @@ export function restoreLoanDescription(txnId: number, at?: Date): boolean {
  * record. It still refuses a transaction already linked to THIS loan; the unique index makes
  * that a no-op, reported as linked: false.
  */
-export function assignTransactionToLoan(input: { txnId: number; itemId: number; at?: Date }): {
+/**
+ * REVIEW D2/D3/D4/D10. Can this viewer act on this pairing?
+ *
+ * Three actions reached these primitives with no ownership check at all -- one of them called
+ * getTransaction and threw the answer away -- so any signed-in member could move any loan's balance
+ * by posting two integers. The docblock above assignTransactionToLoan said warranty items were
+ * household-shared and any signed-in user could link to any of them; that was true when written and
+ * stopped being true in v1.13.0, when ruling R2 gave a self-visibility member a scope of their own.
+ *
+ * The gate lives HERE rather than in each action, because an action that forgets is exactly the
+ * defect the review found three times. Both halves are checked: the transaction, whose amount is a
+ * private figure, and the loan, whose balance is a more private one.
+ *
+ * OUT OF SCOPE READS AS ABSENT, which is getTransaction's own documented convention: the callers
+ * below refuse with the same words they already used for a row that genuinely does not exist, so
+ * nothing here says whether it does.
+ *
+ * Background machinery -- the rule matcher, the import sweep, the scheduler -- passes
+ * HOUSEHOLD_VIEWER, which ownerScope resolves to no restriction. There is no person behind those
+ * calls and no screen to protect, the same reasoning listLoans' own docblock gives.
+ */
+function visibleToViewer(txnId: number, itemId: number, viewer: Viewer): { txn: boolean; item: boolean } {
+  return { txn: getTransaction(txnId, viewer) !== null, item: getWarrantyItem(itemId, viewer) !== null };
+}
+
+export function assignTransactionToLoan(input: { txnId: number; itemId: number; viewer: Viewer; at?: Date }): {
   linked: boolean;
   appliedCents: number;
 } {
+  const visible = visibleToViewer(input.txnId, input.itemId, input.viewer);
+  // The same two sentences the checks inside the transaction below already use.
+  if (!visible.txn) throw new Error('That transaction no longer exists.');
+  if (!visible.item) throw new Error('That loan no longer exists.');
+
   const at = input.at ?? new Date();
   const stamp = nowIso(at);
   const before = balanceOfItem(input.itemId);
@@ -2213,7 +2243,12 @@ export function createLoanFromTransaction(input: NewLoanFromTransaction, viewer:
       [],
       stamp,
     );
-    const result = assignTransactionToLoan({ txnId: input.txnId, itemId, at });
+    /*
+      The loan was created one statement ago by this same call, for this same person, so the viewer
+      that reached here is this function's own, already used above to resolve the transaction and to
+      refuse an owner the viewer may not act for. HOUSEHOLD_VIEWER would be wrong here.
+    */
+    const result = assignTransactionToLoan({ txnId: input.txnId, itemId, viewer, at });
     return {
       itemId,
       name,
@@ -2253,7 +2288,17 @@ export function createLoanFromTransaction(input: NewLoanFromTransaction, viewer:
  * restore, this runs whether or not row.appliedCents was ever nonzero, because the LABEL
  * describes the linkage itself, not the amount it moved.
  */
-export function unassignTransactionFromLoan(input: { txnId: number; itemId: number; at?: Date }): boolean {
+export function unassignTransactionFromLoan(input: {
+  txnId: number;
+  itemId: number;
+  viewer: Viewer;
+  at?: Date;
+}): boolean {
+  // Nothing a viewer cannot see is linked as far as they are concerned, so this reads exactly like
+  // a pairing that was never linked -- which is what the callers already say.
+  const visible = visibleToViewer(input.txnId, input.itemId, input.viewer);
+  if (!visible.txn || !visible.item) return false;
+
   const at = input.at ?? new Date();
   const stamp = nowIso(input.at);
   const removed = getDb().transaction((tx) => {
@@ -2572,8 +2617,13 @@ export function itemLedger(itemId: number): ItemLedger {
  * own id, because that is all a ledger row carries -- ItemLedgerRow deliberately has no
  * installment id to leak onto a page that only ever talks about transactions.
  */
-export function unlinkItemTransaction(itemId: number, txnId: number): boolean {
-  if (unassignTransactionFromLoan({ txnId, itemId })) return true;
+export function unlinkItemTransaction(itemId: number, txnId: number, viewer: Viewer): boolean {
+  // The bill branch below writes bill_installments directly, so the gate is applied here too --
+  // unassignTransactionFromLoan's own check only covers the path that returns first. "Not yours"
+  // and "not linked" are the same answer here, and the callers word it that way.
+  const visible = visibleToViewer(txnId, itemId, viewer);
+  if (!visible.txn || !visible.item) return false;
+  if (unassignTransactionFromLoan({ txnId, itemId, viewer })) return true;
   return (
     getDb()
       .update(billInstallments)

@@ -749,7 +749,7 @@ describe('loan principal movements are excluded from budget spend too (C-02)', (
     const groceries = categoryIdByName(db, 'Groceries');
     const loanId = seedLoanItem(alice, 'lent');
     const txnId = spend({ categoryId: groceries, amountCents: -600_000, date: '2026-03-10' });
-    assignTransactionToLoan({ txnId, itemId: loanId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId: loanId });
 
     // Before item 8a reached budgets.ts, this read 600000 -- Groceries at $6,000.00 against
     // whatever limit was set, a fabricated overspend.
@@ -762,7 +762,7 @@ describe('loan principal movements are excluded from budget spend too (C-02)', (
     const loanId = seedLoanItem(alice, 'lent');
     spend({ categoryId: groceries, amountCents: -5000, date: '2026-03-05' }); // real $50 spend
     const repaymentTxnId = spend({ categoryId: groceries, amountCents: 600_000, date: '2026-03-11' });
-    assignTransactionToLoan({ txnId: repaymentTxnId, itemId: loanId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: repaymentTxnId, itemId: loanId });
 
     // Before item 8a reached budgets.ts, this netted to -595000 -- Groceries reading a $5,950
     // "refund" vastly larger than anything actually bought, and (via effectiveBudget's rollover
@@ -775,7 +775,7 @@ describe('loan principal movements are excluded from budget spend too (C-02)', (
     const groceries = categoryIdByName(db, 'Groceries');
     const loanId = seedLoanItem(alice, 'owed');
     const txnId = spend({ categoryId: groceries, amountCents: -50_000, date: '2026-03-10' });
-    assignTransactionToLoan({ txnId, itemId: loanId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId: loanId });
 
     // This is the ONE loan movement NOT_PRINCIPAL_MOVEMENT deliberately leaves alone -- a fix
     // that excluded it too would be wrong, not merely incomplete.
@@ -788,8 +788,8 @@ describe('loan principal movements are excluded from budget spend too (C-02)', (
     const owedLoanId = seedLoanItem(alice, 'owed');
     const lentLoanId = seedLoanItem(alice, 'lent');
     const txnId = spend({ categoryId: groceries, amountCents: -50_000, date: '2026-03-10' });
-    assignTransactionToLoan({ txnId, itemId: owedLoanId });
-    assignTransactionToLoan({ txnId, itemId: lentLoanId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId: owedLoanId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId: lentLoanId });
 
     expect(categorySpend('2026-03').get(groceries)).toBe(50_000);
   });
@@ -799,7 +799,7 @@ describe('loan principal movements are excluded from budget spend too (C-02)', (
     const groceries = categoryIdByName(db, 'Groceries');
     const loanId = seedLoanItem(alice, 'lent');
     const txnId = spend({ categoryId: groceries, amountCents: -600_000, date: '2026-03-10' });
-    assignTransactionToLoan({ txnId, itemId: loanId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId: loanId });
 
     expect(categorySpend('2026-03').get(groceries) ?? 0).toBe(0);
     expect(categoryTransactions('2026-03', groceries, {}, HOUSEHOLD_VIEWER)).toEqual([]);
@@ -811,7 +811,7 @@ describe('loan principal movements are excluded from budget spend too (C-02)', (
     upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-03', amountCents: 50000 });
     const loanId = seedLoanItem(alice, 'lent');
     const txnId = spend({ categoryId: groceries, amountCents: -600_000, date: '2026-03-10' });
-    assignTransactionToLoan({ txnId, itemId: loanId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId: loanId });
 
     const rows = budgetProgress('2026-03');
     const groceriesRow = rows.flatMap((r) => r.children).find((r) => r.categoryId === groceries)!;

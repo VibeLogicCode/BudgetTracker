@@ -135,7 +135,7 @@ describe('deleteManualTransaction: what a delete has to undo first', () => {
     );
     const txn = manualRow(account, user, { amountCents: -25000 });
     // The real link path, so this test proves the reversal against what the app actually writes.
-    expect(assignTransactionToLoan({ txnId: txn, itemId }).linked).toBe(true);
+    expect(assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: txn, itemId }).linked).toBe(true);
     expect(
       current.db.get<{ balance: number }>(sql`select current_balance_cents as balance from warranty_items where id = ${itemId}`)
         .balance,

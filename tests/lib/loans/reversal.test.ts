@@ -13,8 +13,8 @@ import {
   unassignTransactionFromLoan,
 } from '@/lib/loans';
 import { deleteManualTransaction } from '@/lib/transactions';
-import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
 import { setupLoanTest, type LoanTestContext } from './fixtures';
+import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
 
 let ctx: LoanTestContext;
 
@@ -33,9 +33,9 @@ describe('MUST-11.14 / MUST-13.12: unassign restores the exact balance', () => {
   ])('%s', (_label, start, payment, afterLink) => {
     const { itemId } = ctx.seedLoan({ balanceCents: start });
     const txnId = ctx.spend('HONDA FIN SVC', -payment);
-    assignTransactionToLoan({ txnId, itemId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId });
     expect(ctx.balanceOf(itemId)).toBe(afterLink);
-    expect(unassignTransactionFromLoan({ txnId, itemId })).toBe(true);
+    expect(unassignTransactionFromLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId })).toBe(true);
     expect(ctx.balanceOf(itemId)).toBe(start);
   });
 });
@@ -129,18 +129,18 @@ describe('MUST-13.11 / MUST-11.16: manual assign', () => {
     const car = ctx.seedLoan({ name: 'Car', balanceCents: 2_000_000 });
     const boat = ctx.seedLoan({ name: 'Boat', balanceCents: 500_000 });
     const txnId = ctx.spend('COMBINED PAYMENT', -60_000);
-    expect(assignTransactionToLoan({ txnId, itemId: car.itemId })).toEqual({ linked: true, appliedCents: 60_000 });
-    expect(assignTransactionToLoan({ txnId, itemId: car.itemId })).toEqual({ linked: false, appliedCents: 0 });
+    expect(assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId: car.itemId })).toEqual({ linked: true, appliedCents: 60_000 });
+    expect(assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId: car.itemId })).toEqual({ linked: false, appliedCents: 0 });
     // F7: pin the conflict-skip branch itself, not just its return value — the second
     // (refused) attempt must not have decremented the balance a second time.
     expect(ctx.balanceOf(car.itemId)).toBe(1_940_000);
-    expect(assignTransactionToLoan({ txnId, itemId: boat.itemId })).toEqual({ linked: true, appliedCents: 60_000 });
+    expect(assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId: boat.itemId })).toEqual({ linked: true, appliedCents: 60_000 });
   });
 
   it('does not require a negative amount — a disbursement or an adjustment may be recorded', () => {
     const { itemId } = ctx.seedLoan({ balanceCents: 2_000_000 });
     const txnId = ctx.spend('LOAN DISBURSEMENT', 60_000);
-    expect(assignTransactionToLoan({ txnId, itemId }).linked).toBe(true);
+    expect(assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId }).linked).toBe(true);
   });
 });
 
@@ -148,25 +148,25 @@ describe('F1: sign-aware apply — a disbursement/adjustment INCREMENTS the bala
   it('a positive transaction increments the balance by its full magnitude, with no clamp', () => {
     const { itemId } = ctx.seedLoan({ balanceCents: 20_000_00 });
     const txnId = ctx.spend('LOAN DISBURSEMENT', 600_00);
-    expect(assignTransactionToLoan({ txnId, itemId })).toEqual({ linked: true, appliedCents: 600_00 });
+    expect(assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId })).toEqual({ linked: true, appliedCents: 600_00 });
     expect(ctx.balanceOf(itemId)).toBe(20_600_00);
   });
 
   it('unassigning a disbursement link restores the balance by subtracting it back', () => {
     const { itemId } = ctx.seedLoan({ balanceCents: 20_000_00 });
     const txnId = ctx.spend('LOAN DISBURSEMENT', 600_00);
-    assignTransactionToLoan({ txnId, itemId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId });
     expect(ctx.balanceOf(itemId)).toBe(20_600_00);
-    expect(unassignTransactionFromLoan({ txnId, itemId })).toBe(true);
+    expect(unassignTransactionFromLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId })).toBe(true);
     expect(ctx.balanceOf(itemId)).toBe(20_000_00);
   });
 
   it('a clamped payment is unchanged by the sign-aware refactor', () => {
     const { itemId } = ctx.seedLoan({ balanceCents: 30_000 });
     const txnId = ctx.spend('HONDA FIN SVC', -45_000);
-    expect(assignTransactionToLoan({ txnId, itemId })).toEqual({ linked: true, appliedCents: 30_000 });
+    expect(assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId })).toEqual({ linked: true, appliedCents: 30_000 });
     expect(ctx.balanceOf(itemId)).toBe(0);
-    expect(unassignTransactionFromLoan({ txnId, itemId })).toBe(true);
+    expect(unassignTransactionFromLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId })).toBe(true);
     expect(ctx.balanceOf(itemId)).toBe(30_000);
   });
 });
@@ -175,7 +175,7 @@ describe('F2: reverse paths never fabricate a balance out of NULL', () => {
   it('unassign leaves an unknown balance unknown', () => {
     const { itemId } = ctx.seedLoan({ balanceCents: 2_000_000 });
     const txnId = ctx.spend('HONDA FIN SVC', -45_000);
-    assignTransactionToLoan({ txnId, itemId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId });
     expect(ctx.balanceOf(itemId)).toBe(1_955_000);
 
     // Simulate the balance being cleared back to "unknown" directly (e.g. a later edit that
@@ -183,7 +183,7 @@ describe('F2: reverse paths never fabricate a balance out of NULL', () => {
     ctx.t.sqlite.prepare('update warranty_items set current_balance_cents = null, balance_updated_at = null where id = ?').run(itemId);
     expect(ctx.balanceOf(itemId)).toBeNull();
 
-    expect(unassignTransactionFromLoan({ txnId, itemId })).toBe(true);
+    expect(unassignTransactionFromLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId })).toBe(true);
     expect(ctx.balanceOf(itemId)).toBeNull();
   });
 
@@ -217,16 +217,16 @@ describe('NEW-1 fix-round: reversal clamps at zero instead of crashing past it',
   it('the exact probe: 10,000 +60,000 disb -> 70,000; -70,000 payment -> 0 clamped; unassign disb does not crash and clamps at 0', () => {
     const { itemId } = ctx.seedLoan({ balanceCents: 10_000 });
     const disbTxn = ctx.spend('HONDA FIN DISBURSEMENT', 60_000);
-    expect(assignTransactionToLoan({ txnId: disbTxn, itemId })).toEqual({ linked: true, appliedCents: 60_000 });
+    expect(assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: disbTxn, itemId })).toEqual({ linked: true, appliedCents: 60_000 });
     expect(ctx.balanceOf(itemId)).toBe(70_000);
 
     const paymentTxn = ctx.spend('HONDA FIN PAYMENT', -70_000);
-    expect(assignTransactionToLoan({ txnId: paymentTxn, itemId })).toEqual({ linked: true, appliedCents: 70_000 });
+    expect(assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: paymentTxn, itemId })).toEqual({ linked: true, appliedCents: 70_000 });
     expect(ctx.balanceOf(itemId)).toBe(0);
 
     // Naively this asks for 0 - 60,000 = -60,000, which used to hit the warranty_items CHECK
     // and throw a raw SqliteError. It must instead clamp at zero.
-    expect(unassignTransactionFromLoan({ txnId: disbTxn, itemId })).toBe(true);
+    expect(unassignTransactionFromLoan({ viewer: HOUSEHOLD_VIEWER, txnId: disbTxn, itemId })).toBe(true);
     expect(ctx.balanceOf(itemId)).toBe(0);
   });
 
@@ -247,7 +247,7 @@ describe('NEW-1 fix-round: reversal clamps at zero instead of crashing past it',
     // same way a person would, then let the rule pick up the payment on import.
     const disbHashed = computeRowHashes(ctx.accountId, [disbRow]);
     const disbCommit = commitImport({ accountId: ctx.accountId, profileId: null, filename: 'disb.csv', importedBy: ctx.userId, rows: disbHashed, errors: [] });
-    assignTransactionToLoan({ txnId: disbCommit.insertedTransactionIds[0], itemId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: disbCommit.insertedTransactionIds[0], itemId });
     expect(ctx.balanceOf(itemId)).toBe(70_000);
 
     const paymentRow: CandidateRow = {
@@ -286,7 +286,7 @@ describe('NEW-2 fix-round: an unknown balance cannot be moved in either directio
 
     const txnId = ctx.spend('LOAN DISBURSEMENT', 50_000);
     // Recorded (linked: true), but nothing was actually applied -- the balance is unknown.
-    expect(assignTransactionToLoan({ txnId, itemId })).toEqual({ linked: true, appliedCents: 0 });
+    expect(assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId })).toEqual({ linked: true, appliedCents: 0 });
     expect(ctx.balanceOf(itemId)).toBeNull();
 
     // A person later anchors the balance -- independent of the assign above.
@@ -296,14 +296,14 @@ describe('NEW-2 fix-round: an unknown balance cannot be moved in either directio
     expect(ctx.balanceOf(itemId)).toBe(100_000);
 
     // The old bug: unassign would subtract the phantom 50,000 off the real anchored figure.
-    expect(unassignTransactionFromLoan({ txnId, itemId })).toBe(true);
+    expect(unassignTransactionFromLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId })).toBe(true);
     expect(ctx.balanceOf(itemId)).toBe(100_000);
   });
 
   it('a payment against an unknown balance also records applied_cents = 0', () => {
     const { itemId } = ctx.seedLoan({ balanceCents: null });
     const txnId = ctx.spend('HONDA FIN SVC', -45_000);
-    expect(assignTransactionToLoan({ txnId, itemId })).toEqual({ linked: true, appliedCents: 0 });
+    expect(assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId })).toEqual({ linked: true, appliedCents: 0 });
     expect(ctx.balanceOf(itemId)).toBeNull();
   });
 });
@@ -312,20 +312,20 @@ describe('reversal on a lent loan (spec BU)', () => {
   it('unassigning an advance takes the balance back down', () => {
     const { itemId } = ctx.seedLoan({ balanceCents: 0, direction: 'lent' });
     const advance = ctx.spend('E TRANSFER', -50_000);
-    assignTransactionToLoan({ txnId: advance, itemId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: advance, itemId });
     expect(ctx.balanceOf(itemId)).toBe(50_000);
 
-    expect(unassignTransactionFromLoan({ txnId: advance, itemId })).toBe(true);
+    expect(unassignTransactionFromLoan({ viewer: HOUSEHOLD_VIEWER, txnId: advance, itemId })).toBe(true);
     expect(ctx.balanceOf(itemId)).toBe(0);
   });
 
   it('unassigning a repayment puts it back on', () => {
     const { itemId } = ctx.seedLoan({ balanceCents: 50_000, direction: 'lent' });
     const repayment = ctx.spend('E TRANSFER', 20_000);
-    assignTransactionToLoan({ txnId: repayment, itemId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: repayment, itemId });
     expect(ctx.balanceOf(itemId)).toBe(30_000);
 
-    unassignTransactionFromLoan({ txnId: repayment, itemId });
+    unassignTransactionFromLoan({ viewer: HOUSEHOLD_VIEWER, txnId: repayment, itemId });
     expect(ctx.balanceOf(itemId)).toBe(50_000);
   });
 
@@ -333,8 +333,8 @@ describe('reversal on a lent loan (spec BU)', () => {
     const { itemId } = ctx.seedLoan({ balanceCents: 0, direction: 'lent' });
     const advance = ctx.spend('E TRANSFER', -80_000);
     const repayment = ctx.spend('E TRANSFER', 30_000);
-    assignTransactionToLoan({ txnId: advance, itemId });
-    assignTransactionToLoan({ txnId: repayment, itemId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: advance, itemId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: repayment, itemId });
     expect(ctx.balanceOf(itemId)).toBe(50_000);
 
     expect(reverseLoanLinksForTransactions([advance, repayment]).reversed).toBe(2);
@@ -344,8 +344,8 @@ describe('reversal on a lent loan (spec BU)', () => {
   it('a NULL balance stays NULL through a reversal (F2 guard, unchanged)', () => {
     const { itemId } = ctx.seedLoan({ balanceCents: null, direction: 'lent' });
     const advance = ctx.spend('E TRANSFER', -50_000);
-    assignTransactionToLoan({ txnId: advance, itemId });
-    unassignTransactionFromLoan({ txnId: advance, itemId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: advance, itemId });
+    unassignTransactionFromLoan({ viewer: HOUSEHOLD_VIEWER, txnId: advance, itemId });
     expect(ctx.balanceOf(itemId)).toBeNull();
   });
 });
@@ -383,7 +383,7 @@ describe('a reversal leaves the ledger settled', () => {
   it('deleting a linked payment settles the postings it had been counted in', () => {
     const itemId = interestBearing();
     const txnId = ctx.spend('HONDA FIN SVC', -45_000, { date: '2026-07-15' });
-    assignTransactionToLoan({ txnId, itemId, at: new Date('2026-07-15T12:00:00.000Z') });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId, at: new Date('2026-07-15T12:00:00.000Z') });
     expect(loanLedger(itemId, TODAY)!.rows.some((row) => row.kind === 'interest')).toBe(true);
 
     expect(
@@ -406,8 +406,8 @@ describe('a reversal leaves the ledger settled', () => {
 
     const firstTxn = ctx.spend('HONDA FIN SVC', -45_000, { date: '2026-07-15' });
     const secondTxn = ctx.spend('FORD CREDIT', -60_000, { date: '2026-07-20' });
-    assignTransactionToLoan({ txnId: firstTxn, itemId: first, at: new Date('2026-07-15T12:00:00.000Z') });
-    assignTransactionToLoan({ txnId: secondTxn, itemId: second, at: new Date('2026-07-20T12:00:00.000Z') });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: firstTxn, itemId: first, at: new Date('2026-07-15T12:00:00.000Z') });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: secondTxn, itemId: second, at: new Date('2026-07-20T12:00:00.000Z') });
 
     const reversed = reverseLoanLinksForTransactions([firstTxn, secondTxn]);
     expect(reversed.reversed).toBe(2);
@@ -417,9 +417,9 @@ describe('a reversal leaves the ledger settled', () => {
   it('replays the loan instead of adding the payment back on', () => {
     const itemId = interestBearing();
     const txnId = ctx.spend('HONDA FIN SVC', -45_000, { date: '2026-07-15' });
-    assignTransactionToLoan({ txnId, itemId, at: new Date('2026-07-15T12:00:00.000Z') });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId, at: new Date('2026-07-15T12:00:00.000Z') });
 
-    expect(unassignTransactionFromLoan({ txnId, itemId, at: new Date(TODAY + 'T12:00:00.000Z') })).toBe(true);
+    expect(unassignTransactionFromLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId, at: new Date(TODAY + 'T12:00:00.000Z') })).toBe(true);
     const ledger = loanLedger(itemId, TODAY)!;
     expect(ledger.dueAdjustment).toBeNull();
     expect(ctx.balanceOf(itemId)).toBe(ledger.postedBalanceCents);

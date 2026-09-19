@@ -4,6 +4,7 @@ import { listItemTypes } from '@/lib/warranty/types';
 import { createWarrantyItem } from '@/lib/warranty/items';
 import { createManualTransaction } from '@/lib/transactions';
 import { assignTransactionToLoan } from '@/lib/loans';
+import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -238,7 +239,7 @@ describe('0025: seeding recovers the anchor the ledger implies', () => {
         userId: user,
         actorRole: 'admin',
       });
-      assignTransactionToLoan({ txnId, itemId });
+      assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId });
     }
     return { itemId, user };
   }

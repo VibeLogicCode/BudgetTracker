@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import { assignTransactionToLoan, itemLedger, unlinkItemTransaction } from '@/lib/loans';
 import { nowIso } from '@/lib/clock';
 import { setupLoanTest, type LoanTestContext } from './loans/fixtures';
+import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
 
 /**
  * Item 6 (v1.16.0 plan): itemLedger() unions loan_payments and paid bill_installments for one
@@ -137,10 +138,10 @@ describe('unlinkItemTransaction', () => {
     // Through the real write path (assignTransactionToLoan), not a raw INSERT: link() is what
     // actually moves current_balance_cents, and a raw row here would leave the balance
     // untouched -- nothing to restore, and this test would pass for the wrong reason.
-    expect(assignTransactionToLoan({ txnId, itemId }).linked).toBe(true);
+    expect(assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId }).linked).toBe(true);
     expect(ctx.balanceOf(itemId)).toBe(150_000);
 
-    expect(unlinkItemTransaction(itemId, txnId)).toBe(true);
+    expect(unlinkItemTransaction(itemId, txnId, HOUSEHOLD_VIEWER)).toBe(true);
     expect(itemLedger(itemId).rows).toHaveLength(0);
     expect(ctx.balanceOf(itemId)).toBe(200_000);
   });
@@ -153,7 +154,7 @@ describe('unlinkItemTransaction', () => {
       txnDate: '2026-06-14',
     });
 
-    expect(unlinkItemTransaction(billItemId, txnId)).toBe(true);
+    expect(unlinkItemTransaction(billItemId, txnId, HOUSEHOLD_VIEWER)).toBe(true);
     expect(itemLedger(billItemId).rows).toHaveLength(0);
     const row = ctx.t.db.get<{ paidAt: string | null; paidTxnId: number | null; unlinkedAt: string | null }>(
       sql`select paid_at as paidAt, paid_txn_id as paidTxnId, unlinked_at as unlinkedAt from bill_installments where id = ${installmentId}`,
@@ -168,6 +169,6 @@ describe('unlinkItemTransaction', () => {
     ctx = setupLoanTest();
     const { itemId } = ctx.seedLoan();
     const txnId = ctx.spend('GROCERY STORE', -5_000);
-    expect(unlinkItemTransaction(itemId, txnId)).toBe(false);
+    expect(unlinkItemTransaction(itemId, txnId, HOUSEHOLD_VIEWER)).toBe(false);
   });
 });

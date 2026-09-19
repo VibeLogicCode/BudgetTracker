@@ -498,7 +498,7 @@ export async function bulkAssignToLoanAction(_prev: ActionState, formData: FormD
   // Ruling R2 fix round 2: every id must resolve through the viewer, or nothing is written.
   if (!allTransactionsVisible(ids, user)) return { error: NOT_YOURS_ERROR };
 
-  const result = bulkAssignToLoan(ids, parsed.data.itemId);
+  const result = bulkAssignToLoan(ids, parsed.data.itemId, user);
   revalidatePath('/transactions');
   revalidatePath('/dashboard');
   revalidatePath('/reports');
@@ -824,7 +824,12 @@ export async function assignToLoanAction(formData: FormData): Promise<ActionStat
 
   let result: { linked: boolean; appliedCents: number };
   try {
-    result = assignTransactionToLoan({ txnId: parsed.data.transactionId, itemId: parsed.data.itemId });
+    result = assignTransactionToLoan({
+      txnId: parsed.data.transactionId,
+      itemId: parsed.data.itemId,
+      // D3: neither the transaction nor the loan was gated here. The primitive resolves both.
+      viewer: user,
+    });
   } catch (error) {
     return { error: error instanceof Error ? error.message : 'Could not assign that transaction.' };
   }
@@ -899,8 +904,8 @@ export async function assignToLoanAction(formData: FormData): Promise<ActionStat
     isRepayment,
     appliedCents: result.appliedCents,
     // Review round: a null item here means the READ came back empty (the assign itself
-    // already succeeded -- see assignTransactionToLoan, which performs no owner check at
-    // all), not that the balance is unanchored. Those are different facts (loanAssignedMessage
+    // already succeeded, and since v1.49.0 it could only have succeeded for a viewer entitled to
+    // both rows), not that the balance is unanchored. Those are different facts (loanAssignedMessage
     // docblock, src/lib/warranty/constants.ts) -- `item === null` reads as balance 0, the same
     // as any other loan whose balance genuinely sits at zero.
     balanceAfterCents: item === null ? 0 : item.currentBalanceCents,
@@ -986,7 +991,11 @@ export async function unassignFromLoanAction(formData: FormData): Promise<Action
 
   // Read BEFORE unassigning: amount_cents is immutable (src/db/schema.ts), so this still
   // reflects the link's direction after the loan_payments row is gone (NEW-3).
+  //
+  // D2: this call was already here and its null result was thrown away, so the gate it looks like
+  // was never a gate. It is one now.
   const txn = getTransaction(parsed.data.transactionId, user);
+  if (txn === null) return { error: NOT_YOURS_ERROR };
 
   let unassigned: boolean;
   let appliedCents = 0;
@@ -1000,7 +1009,11 @@ export async function unassignFromLoanAction(formData: FormData): Promise<Action
       (link) => link.itemId === parsed.data.itemId,
     );
     appliedCents = linkBefore?.appliedCents ?? 0;
-    unassigned = unassignTransactionFromLoan({ txnId: parsed.data.transactionId, itemId: parsed.data.itemId });
+    unassigned = unassignTransactionFromLoan({
+      txnId: parsed.data.transactionId,
+      itemId: parsed.data.itemId,
+      viewer: user,
+    });
   } catch (error) {
     // NEW-1 fix-round: the reversal itself is now clamped at zero and should not throw in
     // ordinary use, but a residual failure must still come back as a normal action error,

@@ -220,14 +220,21 @@ export async function unlinkRulePaymentAction(
   formData: FormData,
 ): Promise<UnlinkRulePaymentState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
-  await requireUser();
+  // D4: the session was resolved and dropped on the floor here, so this action -- the same write
+  // as the gated unlinkLedgerTransactionAction on the item page -- checked nothing at all.
+  const user = await requireUser();
 
   const parsed = z
     .object({ txnId: z.coerce.number().int().positive(), itemId: z.coerce.number().int().positive() })
     .safeParse({ txnId: formData.get('txnId'), itemId: formData.get('itemId') });
   if (!parsed.success) return { error: 'Invalid request.' };
 
-  const undone = unlinkItemTransaction(parsed.data.itemId, parsed.data.txnId);
+  let undone: boolean;
+  try {
+    undone = unlinkItemTransaction(parsed.data.itemId, parsed.data.txnId, user);
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : 'Could not unlink that payment.' };
+  }
   if (!undone) return { error: 'That link is already gone.' };
 
   revalidatePath('/dashboard');

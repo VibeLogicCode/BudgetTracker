@@ -6,6 +6,7 @@ import { runNotifyTick } from '@/lib/scheduler';
 import { saveEmailTarget, saveSmtp } from '@/lib/notify/config';
 import { resetOutboxPumpForTests } from '@/lib/notify/outbox';
 import { resetNotifySenderForTests, setNotifySenderForTests } from '@/lib/notify/send';
+import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
 
 let c: LoanTestContext;
 
@@ -110,7 +111,7 @@ describe('N5: loan_paid_off', () => {
     emailTarget();
     const { itemId } = c.seedLoan({ balanceCents: 50_000 });
     const txnId = c.spend('LENDER', -50_000, { date: '2026-09-10' });
-    assignTransactionToLoan({ txnId, itemId, at: new Date('2026-09-10T12:00:00.000Z') });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId, at: new Date('2026-09-10T12:00:00.000Z') });
 
     const rows = outbox('loan_paid_off');
     expect(rows).toHaveLength(1);
@@ -123,7 +124,7 @@ describe('N5: loan_paid_off', () => {
     emailTarget();
     const { itemId } = c.seedLoan({ balanceCents: 50_000 });
     const txnId = c.spend('LENDER', -20_000, { date: '2026-09-10' });
-    assignTransactionToLoan({ txnId, itemId, at: new Date('2026-09-10T12:00:00.000Z') });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId, at: new Date('2026-09-10T12:00:00.000Z') });
     expect(outbox('loan_paid_off')).toEqual([]);
   });
 
@@ -133,7 +134,7 @@ describe('N5: loan_paid_off', () => {
     emailTarget();
     const { itemId } = c.seedLoan({ balanceCents: 0 });
     const txnId = c.spend('LENDER', -5_000, { date: '2026-09-10' });
-    assignTransactionToLoan({ txnId, itemId, at: new Date('2026-09-10T12:00:00.000Z') });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId, at: new Date('2026-09-10T12:00:00.000Z') });
     expect(outbox('loan_paid_off')).toEqual([]);
   });
 
@@ -142,7 +143,7 @@ describe('N5: loan_paid_off', () => {
     emailTarget();
     const { itemId } = c.seedLoan({ balanceCents: 50_000, direction: 'lent' });
     const txnId = c.spend('FRIEND', 50_000, { date: '2026-09-10' });
-    assignTransactionToLoan({ txnId, itemId, at: new Date('2026-09-10T12:00:00.000Z') });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId, at: new Date('2026-09-10T12:00:00.000Z') });
     expect(outbox('loan_paid_off')[0]!.body).toMatch(/repaid in full/i);
   });
 });

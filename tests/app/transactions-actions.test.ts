@@ -394,7 +394,13 @@ describe('MUST-14.8 … MUST-14.11: assign and unassign', () => {
   // as a null BALANCE. `item?.currentBalanceCents ?? null` collapsed both into "unknown"; the
   // restored copy treats an item that genuinely came back null as a balance of 0 (the same
   // "nothing came off" sentence the already-zero-balance case above gets), not "unknown".
-  it('review round: a self viewer assigning against a loan they cannot read back still gets the $0.00 wording, not "unknown"', async () => {
+  /**
+   * Review D3. This test used to assert that the assign SUCCEEDED -- a self-visibility member
+   * linking another member's transaction to another member's loan, and being told how the balance
+   * moved. That was the hole: the action gated neither row. It is refused now, in the same words a
+   * transaction that does not exist gets, so the refusal says nothing about whose it is.
+   */
+  it('refuses a self viewer assigning a transaction and a loan that are not theirs', async () => {
     const { sqlite } = setup();
     const itemId = seedLoanItem({ balanceCents: 0 }); // owned by ctx!.userId (Alice)
     const txn = current!.db.get<{ id: number }>(sql`
@@ -407,7 +413,9 @@ describe('MUST-14.8 … MUST-14.11: assign and unassign', () => {
 
     const result = await assignToLoanAction(formData({ transactionId: String(txn.id), itemId: String(itemId) }));
 
-    expect(result.message).toBe('Assigned. The balance was already $0.00, so nothing came off.');
+    expect(result.error).toBe('That transaction no longer exists.');
+    expect(result.message).toBeUndefined();
+    expect(sqlite.prepare('select count(*) as n from loan_payments').get()).toEqual({ n: 0 });
   });
 
   it('F2 fix-round: a payment larger than the remaining balance clamps and says the balance is now $0.00', async () => {
@@ -2234,4 +2242,59 @@ describe('bulkConfirmGroupAction / bulkRecategorizeGroupAction (Lane 3a item 4)'
     expect(sourceOf(mine)).toBe('manual');
     expect(sourceOf(theirs)).toBe('rule');
   });
+});
+
+/**
+ * Review D2/D3. Both loan-link actions, exercised as a member who can see neither row. The rows
+ * belong to someone else; the refusal is worded as though they do not exist, which is
+ * getTransaction's own documented convention for an out-of-scope row.
+ */
+describe('D2/D3: the loan-link actions resolve both rows through the viewer', () => {
+  function asStranger(): { itemId: number; txnId: number } {
+    const { sqlite } = setup();
+    const itemId = seedLoanItem({ balanceCents: 2_000_000 });
+    const txn = current!.db.get<{ id: number }>(sql`
+      insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, attributed_user_id, created_by, created_at, updated_at)
+      values (${ctx!.accountId}, '2026-03-05', 'HONDA FIN PAYMENT', ${normalizeMerchant('HONDA FIN PAYMENT')}, -45000, ${ctx!.userId}, ${ctx!.userId}, ${nowIso()}, ${nowIso()})
+      returning id`);
+    const strangerId = insertTestUser(current!.db, { name: 'Stranger', username: 'stranger', role: 'member' });
+    sqlite.prepare("update users set visibility = 'self' where id = ?").run(strangerId);
+    currentUser = { id: strangerId, name: 'Stranger', username: 'stranger', role: 'member', visibility: 'self' };
+    return { itemId, txnId: txn.id };
+  }
+
+  it('assign refuses and writes no link', async () => {
+    const { itemId, txnId } = asStranger();
+    const result = await assignToLoanAction(formData({ transactionId: String(txnId), itemId: String(itemId) }));
+    expect(result.error).toBe('That transaction no longer exists.');
+    expect(current!.sqlite.prepare('select count(*) as n from loan_payments').get()).toEqual({ n: 0 });
+  });
+
+  it('unassign refuses and leaves the link and the balance alone', async () => {
+    const { itemId, txnId } = await setupLinked();
+    const strangerId = insertTestUser(current!.db, { name: 'Stranger', username: 'stranger', role: 'member' });
+    current!.sqlite.prepare("update users set visibility = 'self' where id = ?").run(strangerId);
+    currentUser = { id: strangerId, name: 'Stranger', username: 'stranger', role: 'member', visibility: 'self' };
+
+    const result = await unassignFromLoanAction(formData({ transactionId: String(txnId), itemId: String(itemId) }));
+    expect(result.error).toBe('That belongs to someone else in the household.');
+    expect(current!.sqlite.prepare('select count(*) as n from loan_payments').get()).toEqual({ n: 1 });
+    expect(balanceOf(itemId)).toBe(1_955_000);
+  });
+
+  /** The owner is unaffected: the same unassign, by the person whose rows they are. */
+  it('the owner can still unassign', async () => {
+    const { itemId, txnId } = await setupLinked();
+    const result = await unassignFromLoanAction(formData({ transactionId: String(txnId), itemId: String(itemId) }));
+    expect(result.error).toBeUndefined();
+    expect(balanceOf(itemId)).toBe(2_000_000);
+  });
+
+  /** A link made first, by the owner, so the unassign cases have something real to fail against. */
+  async function setupLinked(): Promise<{ itemId: number; txnId: number }> {
+    setup();
+    const seeded = seedLoanAndSpend(2_000_000, -45_000);
+    await assignToLoanAction(formData({ transactionId: String(seeded.txnId), itemId: String(seeded.itemId) }));
+    return seeded;
+  }
 });

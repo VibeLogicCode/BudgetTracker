@@ -12,6 +12,7 @@ import {
 import { applyRenameRules, setTransactionDisplayName, upsertRenameRule } from '@/lib/categorize/engine';
 import { addInstallment } from '@/lib/warranty/installments';
 import { setupLoanTest } from './fixtures';
+import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
 
 const NOW = '2026-06-01T12:00:00.000Z';
 
@@ -83,7 +84,7 @@ describe('a transaction cannot pay a bill and a loan (item T / MON-2, ruling P4)
       sql`select current_balance_cents as b from warranty_items where id = ${loanItemId}`,
     ).b;
 
-    expect(() => assignTransactionToLoan({ txnId, itemId: loanItemId })).toThrow(/already pays a bill installment/);
+    expect(() => assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId: loanItemId })).toThrow(/already pays a bill installment/);
 
     expect(
       db.get<{ b: number }>(sql`select current_balance_cents as b from warranty_items where id = ${loanItemId}`).b,
@@ -92,14 +93,14 @@ describe('a transaction cannot pay a bill and a loan (item T / MON-2, ruling P4)
 
   it('still allows a manual assign for a transaction that pays no bill', () => {
     const { loanItemId, unrelatedTxnId } = setup();
-    const result = assignTransactionToLoan({ txnId: unrelatedTxnId, itemId: loanItemId });
+    const result = assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: unrelatedTxnId, itemId: loanItemId });
     expect(result.linked).toBe(true);
   });
 
   it('still allows a SECOND loan on one transaction — MUST-11.16, a combined payment is legitimate', () => {
     const { unrelatedTxnId, loanItemId, secondLoanItemId } = setup();
-    assignTransactionToLoan({ txnId: unrelatedTxnId, itemId: loanItemId });
-    expect(assignTransactionToLoan({ txnId: unrelatedTxnId, itemId: secondLoanItemId }).linked).toBe(true);
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: unrelatedTxnId, itemId: loanItemId });
+    expect(assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: unrelatedTxnId, itemId: secondLoanItemId }).linked).toBe(true);
   });
 });
 
@@ -112,11 +113,11 @@ describe('assignTransactionToLoan on a lent loan (spec BU)', () => {
     const { itemId } = ctx.seedLoan({ name: 'Loan to a friend', balanceCents: 0, direction: 'lent' });
 
     const advance = ctx.spend('E TRANSFER', -50_000);
-    expect(assignTransactionToLoan({ txnId: advance, itemId })).toEqual({ linked: true, appliedCents: 50_000 });
+    expect(assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: advance, itemId })).toEqual({ linked: true, appliedCents: 50_000 });
     expect(ctx.balanceOf(itemId)).toBe(50_000);
 
     const repayment = ctx.spend('E TRANSFER', 20_000);
-    expect(assignTransactionToLoan({ txnId: repayment, itemId })).toEqual({ linked: true, appliedCents: 20_000 });
+    expect(assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: repayment, itemId })).toEqual({ linked: true, appliedCents: 20_000 });
     expect(ctx.balanceOf(itemId)).toBe(30_000);
   });
 
@@ -132,7 +133,7 @@ describe('assignTransactionToLoan on a lent loan (spec BU)', () => {
     ctx = setupLoanTest();
     const { itemId } = ctx.seedLoan({ balanceCents: 30_000, direction: 'lent' });
     const repayment = ctx.spend('E TRANSFER', 50_000);
-    expect(assignTransactionToLoan({ txnId: repayment, itemId })).toEqual({ linked: true, appliedCents: 30_000 });
+    expect(assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: repayment, itemId })).toEqual({ linked: true, appliedCents: 30_000 });
     expect(ctx.balanceOf(itemId)).toBe(0);
   });
 
@@ -160,19 +161,19 @@ describe('assignTransactionToLoan on a lent loan (spec BU)', () => {
     const repayment = ctx.spend('E TRANSFER', 600_000, { date: '2026-08-02' });
     const disbursement = ctx.spend('E TRANSFER', -600_000, { date: '2026-08-01' });
 
-    expect(assignTransactionToLoan({ txnId: smallCharge, itemId })).toEqual({ linked: true, appliedCents: 1_129 });
+    expect(assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: smallCharge, itemId })).toEqual({ linked: true, appliedCents: 1_129 });
     expect(ctx.balanceOf(itemId)).toBe(1_129);
 
     // Linked before its own growth exists on record: clamps to 0, exactly as the old code would
     // have too -- the fix is not that THIS call sees more room, it is that the LATER link below
     // fixes this row up without anyone having to notice or ask.
-    expect(assignTransactionToLoan({ txnId: repayment, itemId })).toEqual({ linked: true, appliedCents: 0 });
+    expect(assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: repayment, itemId })).toEqual({ linked: true, appliedCents: 0 });
     expect(ctx.balanceOf(itemId)).toBe(1_129);
 
     // The disbursement arrives LAST in link order but is dated FIRST -- replaying chronologically
     // now gives the repayment $600,000 of room to consume, correcting its own stored applied_cents
     // from 0 up to 600,000 in the same call, with no unlink/re-link step required.
-    expect(assignTransactionToLoan({ txnId: disbursement, itemId })).toEqual({ linked: true, appliedCents: 600_000 });
+    expect(assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: disbursement, itemId })).toEqual({ linked: true, appliedCents: 600_000 });
     expect(ctx.balanceOf(itemId)).toBe(1_129);
   });
 
@@ -180,7 +181,7 @@ describe('assignTransactionToLoan on a lent loan (spec BU)', () => {
     ctx = setupLoanTest();
     const { itemId } = ctx.seedLoan({ balanceCents: null, direction: 'lent' });
     const advance = ctx.spend('E TRANSFER', -50_000);
-    expect(assignTransactionToLoan({ txnId: advance, itemId })).toEqual({ linked: true, appliedCents: 0 });
+    expect(assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: advance, itemId })).toEqual({ linked: true, appliedCents: 0 });
     expect(ctx.balanceOf(itemId)).toBeNull();
   });
 
@@ -188,7 +189,7 @@ describe('assignTransactionToLoan on a lent loan (spec BU)', () => {
     ctx = setupLoanTest();
     const { itemId } = ctx.seedLoan({ balanceCents: 200_000 });
     const payment = ctx.spend('CAR LOAN', -50_000);
-    expect(assignTransactionToLoan({ txnId: payment, itemId })).toEqual({ linked: true, appliedCents: 50_000 });
+    expect(assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: payment, itemId })).toEqual({ linked: true, appliedCents: 50_000 });
     expect(ctx.balanceOf(itemId)).toBe(150_000);
   });
 });
@@ -251,9 +252,9 @@ describe('recomputeLoanBalance (item 6, v1.21.0 backlog: the repair action)', ()
     ctx = setupLoanTest();
     const { itemId } = ctx.seedLoan({ balanceCents: 0, direction: 'lent' });
     const advance = ctx.spend('E TRANSFER', -50_000);
-    assignTransactionToLoan({ txnId: advance, itemId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: advance, itemId });
     expect(ctx.balanceOf(itemId)).toBe(50_000);
-    expect(unassignTransactionFromLoan({ txnId: advance, itemId })).toBe(true);
+    expect(unassignTransactionFromLoan({ viewer: HOUSEHOLD_VIEWER, txnId: advance, itemId })).toBe(true);
     expect(ctx.balanceOf(itemId)).toBe(0);
   });
 });
@@ -273,11 +274,11 @@ describe('item 13 (v1.21.0 backlog): the row is labelled for what it is', () => 
     const { itemId } = ctx.seedLoan({ name: 'Loan to a friend', balanceCents: 0, direction: 'lent' });
 
     const advance = ctx.spend('E TRANSFER', -50_000);
-    assignTransactionToLoan({ txnId: advance, itemId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: advance, itemId });
     expect(displaySourceOf(advance)).toEqual({ displayDescription: 'Loan to Loan to a friend', displaySource: 'loan' });
 
     const repayment = ctx.spend('E TRANSFER', 20_000);
-    assignTransactionToLoan({ txnId: repayment, itemId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: repayment, itemId });
     expect(displaySourceOf(repayment)).toEqual({ displayDescription: 'Repayment from Loan to a friend', displaySource: 'loan' });
   });
 
@@ -289,7 +290,7 @@ describe('item 13 (v1.21.0 backlog): the row is labelled for what it is', () => 
       .prepare("update transactions set display_description = 'My own name', display_source = 'manual' where id = ?")
       .run(payment);
 
-    assignTransactionToLoan({ txnId: payment, itemId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: payment, itemId });
     expect(displaySourceOf(payment)).toEqual({ displayDescription: 'My own name', displaySource: 'manual' });
   });
 
@@ -298,9 +299,9 @@ describe('item 13 (v1.21.0 backlog): the row is labelled for what it is', () => 
     const { itemId } = ctx.seedLoan({ name: 'Civic', balanceCents: 200_000 });
     const payment = ctx.spend('CAR LOAN', -50_000);
 
-    assignTransactionToLoan({ txnId: payment, itemId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: payment, itemId });
     expect(displaySourceOf(payment).displaySource).toBe('loan');
-    unassignTransactionFromLoan({ txnId: payment, itemId });
+    unassignTransactionFromLoan({ viewer: HOUSEHOLD_VIEWER, txnId: payment, itemId });
     expect(displaySourceOf(payment)).toEqual({ displayDescription: null, displaySource: null });
 
     // A manual row is never touched in the first place, so unassigning it is a no-op for the
@@ -309,8 +310,8 @@ describe('item 13 (v1.21.0 backlog): the row is labelled for what it is', () => 
     ctx.t.sqlite
       .prepare("update transactions set display_description = 'My own name', display_source = 'manual' where id = ?")
       .run(second);
-    assignTransactionToLoan({ txnId: second, itemId });
-    unassignTransactionFromLoan({ txnId: second, itemId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: second, itemId });
+    unassignTransactionFromLoan({ viewer: HOUSEHOLD_VIEWER, txnId: second, itemId });
     expect(displaySourceOf(second)).toEqual({ displayDescription: 'My own name', displaySource: 'manual' });
   });
 });
@@ -347,7 +348,7 @@ describe('B-1: clearing a hand-typed name hands the row down the precedence orde
     });
     if (!rule.ok) throw new Error('unexpected refusal');
     expect(labelOf(txnId)).toEqual({ text: 'Walmart', source: 'rename' });
-    assignTransactionToLoan({ txnId, itemId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId });
     expect(labelOf(txnId)).toEqual({ text: 'Repayment from Car Loan', source: 'loan' });
     return { txnId, itemId };
   }
@@ -367,7 +368,7 @@ describe('B-1: clearing a hand-typed name hands the row down the precedence orde
     const { txnId, itemId } = contested();
     setTransactionDisplayName({ transactionId: txnId, displayDescription: null, userId: ctx.userId });
 
-    unassignTransactionFromLoan({ txnId, itemId });
+    unassignTransactionFromLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId });
     // unassignFromLoanAction runs this for the unlinked id; the label falls to the rename rule.
     applyRenameRules([txnId]);
     expect(labelOf(txnId)).toEqual({ text: 'Walmart', source: 'rename' });
@@ -413,8 +414,8 @@ describe('B-1: clearing a hand-typed name hands the row down the precedence orde
     const second = ctx.seedLoan({ name: 'Boat Loan', balanceCents: 500_000 });
     // MUST-11.16: a combined payment may legitimately be assigned to two loans.
     const txnId = ctx.spend('CHEQUE 118', -50_000);
-    assignTransactionToLoan({ txnId, itemId: first.itemId });
-    assignTransactionToLoan({ txnId, itemId: second.itemId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId: first.itemId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId: second.itemId });
     expect(labelOf(txnId)).toEqual({ text: 'Repayment from Boat Loan', source: 'loan' });
 
     setTransactionDisplayName({ transactionId: txnId, displayDescription: 'Two loans at once', userId: ctx.userId });

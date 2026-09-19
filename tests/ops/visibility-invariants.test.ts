@@ -46,6 +46,17 @@ const REQUIRE_VIEWER: { file: string; fn: string }[] = [
   // mechanically asserts, that the viewer parameter exists and is never optional. That is what
   // stops a future caller compiling a create that skips the report rules (rulings A10, A12).
   { file: 'src/lib/loans.ts', fn: 'createLoanFromTransaction' },
+  /*
+    Review D2/D3/D4 (v1.49.0). Three WRITERS, listed for the same guarantee createLoanFromTransaction
+    is listed for: the viewer parameter exists and can never be omitted. All three move a loan's
+    balance, and all three were reachable from an action that checked nothing -- assignToLoanAction
+    gated neither row, unassignFromLoanAction called getTransaction and discarded the result, and
+    unlinkRulePaymentAction resolved the session and dropped it. A required viewer is what stops the
+    next action from compiling with the same hole.
+  */
+  { file: 'src/lib/loans.ts', fn: 'assignTransactionToLoan' },
+  { file: 'src/lib/loans.ts', fn: 'unassignTransactionFromLoan' },
+  { file: 'src/lib/loans.ts', fn: 'unlinkItemTransaction' },
   // Controller ruling R11 (task-3, S-01). categoryTransactionsAction posted the caller's own
   // scope/userId straight through with no owner narrowing of any kind, so a self-scoped member
   // asking for `scope: 'household'` (or for another member by id) read every household

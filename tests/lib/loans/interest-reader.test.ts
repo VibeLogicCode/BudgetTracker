@@ -86,7 +86,7 @@ describe('listLoans: interest once a basis is set', () => {
       userId: user,
       actorRole: 'admin',
     });
-    assignTransactionToLoan({ txnId, itemId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId });
 
     /*
       v1.48.0. This figure MOVED, and the move is the release.
@@ -277,7 +277,7 @@ describe('listLoans: the interest figures come off the ledger', () => {
       userId: user,
       actorRole: 'admin',
     });
-    assignTransactionToLoan({ txnId, itemId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId });
 
     const ledger = loanLedger(itemId, '2026-04-20')!;
     const interest = loanOf(itemId, '2026-04-20').interest!;

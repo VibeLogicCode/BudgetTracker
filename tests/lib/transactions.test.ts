@@ -28,6 +28,7 @@ import { setTransactionSplits } from '@/lib/splits';
 import { loanLinksForTransactions } from '@/lib/loans';
 import { createWarrantyItem } from '@/lib/warranty/items';
 import { createItemType } from '@/lib/warranty/types';
+import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
 
 // v1.13.0 ruling R2: listTransactions/getTransaction now require a viewer. Every existing call in
 // this file predates viewer scoping and expects the pre-v1.13.0, household-wide result set, so a
@@ -675,7 +676,7 @@ describe('bulkAssignToLoan (v1.25.0 Lane R item R3)', () => {
     const a = add({ description: 'PAYMENT A', amountCents: -1000 });
     const b = add({ description: 'PAYMENT B', amountCents: -2000 });
 
-    expect(bulkAssignToLoan([a, b], itemId)).toEqual({ changed: 2, skipped: 0 });
+    expect(bulkAssignToLoan([a, b], itemId, HOUSEHOLD_VIEWER)).toEqual({ changed: 2, skipped: 0 });
     const links = loanLinksForTransactions([a, b]);
     expect(links.get(a)?.[0]?.itemId).toBe(itemId);
     expect(links.get(b)?.[0]?.itemId).toBe(itemId);
@@ -699,7 +700,7 @@ describe('bulkAssignToLoan (v1.25.0 Lane R item R3)', () => {
     // assignTransactionToLoan writes to loan_payments only, never category_id/is_transfer, so
     // the split's own per-part categorization is untouched by this -- see bulkAssignToLoan's own
     // doc comment (src/lib/transactions.ts) for the fuller justification.
-    expect(bulkAssignToLoan([splitId], itemId)).toEqual({ changed: 1, skipped: 0 });
+    expect(bulkAssignToLoan([splitId], itemId, HOUSEHOLD_VIEWER)).toEqual({ changed: 1, skipped: 0 });
     expect(loanLinksForTransactions([splitId]).get(splitId)?.[0]?.itemId).toBe(itemId);
   });
 
@@ -708,9 +709,9 @@ describe('bulkAssignToLoan (v1.25.0 Lane R item R3)', () => {
     const itemId = seedLoan(alice);
     const id = add({ description: 'PAYMENT A', amountCents: -1000 });
 
-    expect(bulkAssignToLoan([id], itemId)).toEqual({ changed: 1, skipped: 0 });
+    expect(bulkAssignToLoan([id], itemId, HOUSEHOLD_VIEWER)).toEqual({ changed: 1, skipped: 0 });
     // Second call, same loan: assignTransactionToLoan's own `{ linked: false }` no-op.
-    expect(bulkAssignToLoan([id], itemId)).toEqual({ changed: 0, skipped: 1 });
+    expect(bulkAssignToLoan([id], itemId, HOUSEHOLD_VIEWER)).toEqual({ changed: 0, skipped: 1 });
   });
 
   it('a row assignTransactionToLoan refuses outright (a zero-amount transaction) is caught and counted as skipped, without aborting the rest of the batch', () => {
@@ -721,7 +722,7 @@ describe('bulkAssignToLoan (v1.25.0 Lane R item R3)', () => {
 
     // Order matters: the refusing id comes FIRST, proving one row's throw does not abort ids
     // after it in the same batch.
-    expect(bulkAssignToLoan([zero, ok], itemId)).toEqual({ changed: 1, skipped: 1 });
+    expect(bulkAssignToLoan([zero, ok], itemId, HOUSEHOLD_VIEWER)).toEqual({ changed: 1, skipped: 1 });
     expect(loanLinksForTransactions([ok]).get(ok)?.[0]?.itemId).toBe(itemId);
     expect(loanLinksForTransactions([zero]).get(zero) ?? []).toHaveLength(0);
   });
@@ -729,7 +730,7 @@ describe('bulkAssignToLoan (v1.25.0 Lane R item R3)', () => {
   it('an empty id list changes and skips nothing', () => {
     const { alice } = setup();
     const itemId = seedLoan(alice);
-    expect(bulkAssignToLoan([], itemId)).toEqual({ changed: 0, skipped: 0 });
+    expect(bulkAssignToLoan([], itemId, HOUSEHOLD_VIEWER)).toEqual({ changed: 0, skipped: 0 });
   });
 });
 

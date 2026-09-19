@@ -9,6 +9,7 @@ import { assignTransactionToLoan, saveLoanRule } from '@/lib/loans';
 import { RECURRING_MAX_ROWS, recurringCharges, recurringLoad } from '@/lib/recurring';
 import { createManualTransaction } from '@/lib/transactions';
 import { createTestDb, type TestDb } from '../helpers/db';
+import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
 
 /**
  * F-05 (2026-09-02 review, v1.31.0). Every assertion here is about what a person would read on
@@ -205,7 +206,7 @@ describe('recurringCharges: what counts as a charge (SPEND_ROW_WHERE)', () => {
     const loanId = ctx.item({ name: 'Loan to a relative', typeId, balanceCents: 5_000_000 });
     current!.db.run(sql`update warranty_items set loan_direction = 'lent' where id = ${loanId}`);
     for (const txnId of ctx.cadence({ merchant: 'E TRANSFER', cents: 40000 })) {
-      assignTransactionToLoan({ txnId, itemId: loanId });
+      assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId: loanId });
     }
     expect(recurringCharges({ today: TODAY, ownerUserId: null, viewer: household(ctx.adultId) })).toEqual([]);
   });
@@ -215,7 +216,7 @@ describe('recurringCharges: what counts as a charge (SPEND_ROW_WHERE)', () => {
     const typeId = ctx.itemType('Loan', 'loan');
     const loanId = ctx.item({ name: 'Car loan', typeId, balanceCents: 5_000_000 });
     for (const txnId of ctx.cadence({ merchant: 'CAR LOAN CO', cents: 40000 })) {
-      assignTransactionToLoan({ txnId, itemId: loanId });
+      assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId: loanId });
     }
     const rows = recurringCharges({ today: TODAY, ownerUserId: null, viewer: household(ctx.adultId) });
     expect(rows.map((row) => row.merchant)).toEqual(['CAR LOAN CO']);

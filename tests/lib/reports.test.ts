@@ -18,6 +18,7 @@ import { nowIso } from '@/lib/clock';
 import { upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { assignTransactionToLoan } from '@/lib/loans';
 import { setTransactionSplits } from '@/lib/splits';
+import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
 
 // v1.13.0 ruling R2: every aggregate under test here now takes a viewer as its last argument.
 // A household viewer's ownerScope() is always null, so passing this constant reproduces the
@@ -837,7 +838,7 @@ describe('loan principal movements are excluded from spend/income (item 8a, 2026
     const { alice, add } = setup();
     const loanId = seedLoanItem(alice, 'lent');
     const txnId = add({ categoryId: null, amountCents: -600_000, merchant: 'E TRANSFER', date: '2026-03-10' });
-    assignTransactionToLoan({ txnId, itemId: loanId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId: loanId });
 
     expect(cashflowTrend(1, { endMonth: '2026-03' }, HOUSEHOLD)[0]).toMatchObject({
       incomeCents: 0,
@@ -853,7 +854,7 @@ describe('loan principal movements are excluded from spend/income (item 8a, 2026
     const loanId = seedLoanItem(alice, 'lent');
     add({ categoryId: categoryIdByName(db, 'Groceries'), amountCents: -5000, date: '2026-03-05' });
     const repaymentTxnId = add({ categoryId: null, amountCents: 600_000, merchant: 'E TRANSFER', date: '2026-03-11' });
-    assignTransactionToLoan({ txnId: repaymentTxnId, itemId: loanId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: repaymentTxnId, itemId: loanId });
 
     // Before item 8a this repayment's positive amount netted straight into the same aggregate as
     // the $50.00 grocery spend, so the month would have reported net spend of -$5,950.00 -- a
@@ -867,7 +868,7 @@ describe('loan principal movements are excluded from spend/income (item 8a, 2026
     const { alice, add } = setup();
     const loanId = seedLoanItem(alice, 'owed');
     const txnId = add({ categoryId: null, amountCents: 600_000, merchant: 'BANK LOAN', date: '2026-03-10' });
-    assignTransactionToLoan({ txnId, itemId: loanId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId: loanId });
 
     expect(cashflowTrend(1, { endMonth: '2026-03' }, HOUSEHOLD)[0]).toMatchObject({
       incomeCents: 0,
@@ -881,7 +882,7 @@ describe('loan principal movements are excluded from spend/income (item 8a, 2026
     const loanId = seedLoanItem(alice, 'owed');
     const groceries = categoryIdByName(db, 'Groceries');
     const txnId = add({ categoryId: groceries, amountCents: -50_000, merchant: 'CAR LOAN CO', date: '2026-03-10' });
-    assignTransactionToLoan({ txnId, itemId: loanId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId: loanId });
 
     expect(cashflowTrend(1, { endMonth: '2026-03' }, HOUSEHOLD)[0].spendCents).toBe(50_000);
     expect(categoryBreakdown(MARCH, HOUSEHOLD).find((r) => r.categoryId === groceries)?.spentCents).toBe(50_000);
@@ -895,8 +896,8 @@ describe('loan principal movements are excluded from spend/income (item 8a, 2026
     const owedLoanId = seedLoanItem(alice, 'owed');
     const lentLoanId = seedLoanItem(alice, 'lent');
     const txnId = add({ categoryId: null, amountCents: -50_000, merchant: 'COMBINED PAYMENT', date: '2026-03-10' });
-    assignTransactionToLoan({ txnId, itemId: owedLoanId });
-    assignTransactionToLoan({ txnId, itemId: lentLoanId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId: owedLoanId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId: lentLoanId });
 
     expect(cashflowTrend(1, { endMonth: '2026-03' }, HOUSEHOLD)[0].spendCents).toBe(50_000);
   });

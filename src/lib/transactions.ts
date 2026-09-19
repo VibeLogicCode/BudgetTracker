@@ -1257,12 +1257,14 @@ export interface BulkLoanResult {
  * reasoning acceptAllGuessesAction (src/app/(app)/transactions/actions.ts) already gives for not
  * wrapping its own per-id loop in one transaction.
  */
-export function bulkAssignToLoan(ids: number[], itemId: number, at?: Date): BulkLoanResult {
+export function bulkAssignToLoan(ids: number[], itemId: number, viewer: Viewer, at?: Date): BulkLoanResult {
   let changed = 0;
   let skipped = 0;
   for (const id of ids) {
     try {
-      const result = assignTransactionToLoan({ txnId: id, itemId, at });
+      // D3: the viewer travels with each link. The action checks the ids too, but the loan itself
+      // is only checked here, and a per-row refusal counts as skipped like any other.
+      const result = assignTransactionToLoan({ txnId: id, itemId, viewer, at });
       if (result.linked) changed += 1;
       else skipped += 1;
     } catch {

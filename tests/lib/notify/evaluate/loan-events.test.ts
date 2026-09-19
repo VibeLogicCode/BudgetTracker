@@ -7,6 +7,7 @@ import { saveEmailTarget, saveSmtp, setPref } from '@/lib/notify/config';
 import { resetOutboxPumpForTests } from '@/lib/notify/outbox';
 import { resetNotifySenderForTests, setNotifySenderForTests } from '@/lib/notify/send';
 import { addContribution, createGoal } from '@/lib/goals';
+import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
 
 let c: LoanTestContext;
 
@@ -138,7 +139,7 @@ describe('N3: loan_payment_missed', () => {
     emailTarget();
     const itemId = seedLoan();
     const txnId = c.spend('LENDER', -20_000, { date: '2026-08-15' });
-    assignTransactionToLoan({ txnId, itemId, at: new Date('2026-08-15T12:00:00.000Z') });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId, at: new Date('2026-08-15T12:00:00.000Z') });
     postAllDueInterest('2026-09-18', NOW);
     expect(evaluateLoanPaymentMissed({ userId: c.userId, now: NOW, tz: 'UTC' })).toBe(0);
   });

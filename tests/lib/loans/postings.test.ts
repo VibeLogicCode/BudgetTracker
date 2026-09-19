@@ -10,6 +10,7 @@ import {
   setLoanAnchor,
   unassignTransactionFromLoan,
 } from '@/lib/loans';
+import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
 
 let c: LoanTestContext;
 afterEach(() => c?.t.cleanup());
@@ -113,7 +114,7 @@ describe('postDueInterest: payments (P4)', () => {
   it('a payment mid-period lowers what that period charges', () => {
     const itemId = seedInterestLoan();
     const txnId = c.spend('LENDER', -500_000, { date: '2026-07-15' });
-    assignTransactionToLoan({ txnId, itemId, at: new Date('2026-07-15T12:00:00.000Z') });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId, at: new Date('2026-07-15T12:00:00.000Z') });
     postDueInterest(itemId, '2026-08-02');
     expect(postings(itemId).map((row) => [row.interest_cents, row.closing_cents])).toEqual([[6_048, 506_048]]);
     expect(c.balanceOf(itemId)).toBe(506_048);
@@ -124,7 +125,7 @@ describe('postDueInterest: payments (P4)', () => {
     const itemId = seedInterestLoan();
     postDueInterest(itemId, '2026-09-18');
     const txnId = c.spend('LENDER', -500_000, { date: '2026-08-10' });
-    assignTransactionToLoan({ txnId, itemId, at: new Date('2026-09-18T12:00:00.000Z') });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId, at: new Date('2026-09-18T12:00:00.000Z') });
     postDueInterest(itemId, '2026-09-18');
 
     const rows = postings(itemId);
@@ -142,11 +143,11 @@ describe('postDueInterest: payments (P4)', () => {
     const itemId = seedInterestLoan();
     postDueInterest(itemId, '2026-09-18');
     const txnId = c.spend('LENDER', -500_000, { date: '2026-08-10' });
-    assignTransactionToLoan({ txnId, itemId, at: new Date('2026-09-18T12:00:00.000Z') });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId, at: new Date('2026-09-18T12:00:00.000Z') });
     postDueInterest(itemId, '2026-09-18');
     const correction = postings(itemId)[2]!.interest_cents;
 
-    unassignTransactionFromLoan({ txnId, itemId, at: new Date('2026-09-18T13:00:00.000Z') });
+    unassignTransactionFromLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId, at: new Date('2026-09-18T13:00:00.000Z') });
     postDueInterest(itemId, '2026-09-18');
 
     const rows = postings(itemId);
@@ -160,7 +161,7 @@ describe('postDueInterest: payments (P4)', () => {
   it('ignores a payment dated on or before the anchor', () => {
     const itemId = seedInterestLoan();
     const txnId = c.spend('LENDER', -500_000, { date: '2026-06-20' });
-    assignTransactionToLoan({ txnId, itemId, at: new Date('2026-07-02T12:00:00.000Z') });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId, at: new Date('2026-07-02T12:00:00.000Z') });
     postDueInterest(itemId, '2026-08-02');
     expect(postings(itemId).map((row) => row.interest_cents)).toEqual([8_333]);
     expect(c.balanceOf(itemId)).toBe(1_008_333);
@@ -172,15 +173,15 @@ describe('P4: posting happens without anyone asking', () => {
   it('posts when a payment is linked', () => {
     const itemId = seedInterestLoan();
     const txnId = c.spend('LENDER', -500_000, { date: '2026-07-15' });
-    assignTransactionToLoan({ txnId, itemId, at: new Date('2026-08-02T12:00:00.000Z') });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId, at: new Date('2026-08-02T12:00:00.000Z') });
     expect(postings(itemId).map((row) => row.interest_cents)).toEqual([6_048]);
   });
 
   it('posts when a payment is unlinked', () => {
     const itemId = seedInterestLoan();
     const txnId = c.spend('LENDER', -500_000, { date: '2026-07-15' });
-    assignTransactionToLoan({ txnId, itemId, at: new Date('2026-08-02T12:00:00.000Z') });
-    unassignTransactionFromLoan({ txnId, itemId, at: new Date('2026-08-02T13:00:00.000Z') });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId, at: new Date('2026-08-02T12:00:00.000Z') });
+    unassignTransactionFromLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId, at: new Date('2026-08-02T13:00:00.000Z') });
     const rows = postings(itemId);
     expect(rows.map((row) => row.kind)).toEqual(['posting', 'adjustment']);
     expect(rows[0]!.interest_cents + rows[1]!.interest_cents).toBe(8_333);
@@ -274,7 +275,7 @@ describe('the wall selects by the period a row belongs to (A1)', () => {
     const itemId = seedInterestLoan();
     postDueInterest(itemId, '2026-09-18');
     const txnId = c.spend('LENDER', -500_000, { date: '2026-08-10' });
-    assignTransactionToLoan({ txnId, itemId, at: new Date('2026-09-18T12:00:00.000Z') });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId, at: new Date('2026-09-18T12:00:00.000Z') });
     postDueInterest(itemId, '2026-09-18');
     expect(postings(itemId).some((row) => row.kind === 'adjustment')).toBe(true);
 

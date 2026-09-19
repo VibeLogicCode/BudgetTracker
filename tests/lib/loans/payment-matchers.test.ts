@@ -13,6 +13,7 @@ import {
 } from '@/lib/loans';
 import { setupLoanTest } from './fixtures';
 import { addInstallment, listInstallments, markInstallmentPaid, unmarkInstallmentPaid } from '@/lib/warranty/installments';
+import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
 
 const NOW = '2026-08-24T12:00:00.000Z';
 const TODAY = '2026-08-24';
@@ -629,7 +630,7 @@ describe('R27b: rule-made links are reviewable', () => {
   it('never lists a link a person made by hand -- that one needs no second opinion', () => {
     const itemId = makeItem(typeOfKind('loan', 'Manual loan'), 'Car loan', 2_000_000);
     const txnId = spend('cheque 1041', -40_000);
-    assignTransactionToLoan({ txnId, itemId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId });
 
     expect(ruleLinkedPayments(30, new Date(NOW))).toEqual([]);
   });
@@ -641,7 +642,7 @@ describe('R27b: rule-made links are reviewable', () => {
     applyPaymentMatchers([txnId], new Date(NOW));
     expect(ruleLinkedPayments(30, new Date(NOW))).toHaveLength(1);
 
-    unlinkItemTransaction(itemId, txnId);
+    unlinkItemTransaction(itemId, txnId, HOUSEHOLD_VIEWER);
 
     expect(ruleLinkedPayments(30, new Date(NOW))).toEqual([]);
   });

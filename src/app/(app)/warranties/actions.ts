@@ -1002,8 +1002,12 @@ export async function unlinkLedgerTransactionAction(
 
   if (!getWarrantyItem(parsed.data.itemId, user)) return { error: 'That item no longer exists.' };
 
-  if (!unlinkItemTransaction(parsed.data.itemId, parsed.data.txnId)) {
-    return { error: 'That transaction is no longer linked to this item.' };
+  try {
+    if (!unlinkItemTransaction(parsed.data.itemId, parsed.data.txnId, user)) {
+      return { error: 'That transaction is no longer linked to this item.' };
+    }
+  } catch (error) {
+    return failure(error, 'Could not unlink that transaction.');
   }
   revalidateAll(parsed.data.itemId);
   return { message: 'Unlinked. The transaction itself is untouched.' };

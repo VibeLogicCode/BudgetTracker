@@ -3,6 +3,7 @@ import { applyPaymentMatchers, assignTransactionToLoan, listLoans, loansTotalOwe
 import type { Viewer } from '@/lib/auth/viewer';
 import { todayIso } from '@/lib/dates';
 import { setupLoanTest, type LoanTestContext } from './fixtures';
+import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
 
 let ctx: LoanTestContext;
 
@@ -199,7 +200,7 @@ describe('direction on the read model (rulings P6, P9, P10)', () => {
   it('payoffProjection is null for a lent loan (ruling P9)', () => {
     const { itemId } = ctx.seedLoan({ balanceCents: 50_000, principalCents: 80_000, direction: 'lent' });
     const advance = ctx.spend('E TRANSFER', -10_000, { date: '2026-07-01' });
-    assignTransactionToLoan({ txnId: advance, itemId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: advance, itemId });
     expect(payoffProjection(itemId, '2026-08-18')).toBeNull();
   });
 

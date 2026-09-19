@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
 import { createManualTransaction } from '@/lib/transactions';
 import { assignTransactionToBill, unlinkItemTransaction } from '@/lib/loans';
+import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -120,7 +121,7 @@ describe('assignTransactionToBill: linking a statement line to an installment', 
     const installment = addInstallment(item, '2026-09-30', 103906);
     const first = txn(account, user, '2026-09-13');
     assignTransactionToBill({ txnId: first, itemId: item });
-    unlinkItemTransaction(item, first);
+    unlinkItemTransaction(item, first, HOUSEHOLD_VIEWER);
     expect(paidState(installment).unlinkedAt).not.toBeNull();
 
     const second = txn(account, user, '2026-09-14');
@@ -189,7 +190,7 @@ describe('assignTransactionToBill: what it refuses', () => {
     const id = txn(account, user, '2026-09-13');
     assignTransactionToBill({ txnId: id, itemId: item });
 
-    expect(unlinkItemTransaction(item, id)).toBe(true);
+    expect(unlinkItemTransaction(item, id, HOUSEHOLD_VIEWER)).toBe(true);
     expect(paidState(installment).paidAt).toBeNull();
   });
 });

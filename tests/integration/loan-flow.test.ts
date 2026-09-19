@@ -15,6 +15,7 @@ import {
 import type { Viewer } from '@/lib/auth/viewer';
 import { categoryBreakdown } from '@/lib/reports';
 import { NOW, setupLoanTest, type LoanTestContext } from '../lib/loans/fixtures';
+import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
 
 /**
  * Every loan link in this suite is stamped with the fixture's own frozen NOW rather than the
@@ -116,9 +117,9 @@ it('MUST-19.5: create -> rule -> import -> undo -> re-import -> manual assign ->
 
   // A manual assign and unassign leave the balance unchanged end to end.
   const unrelated = ctx.spend('COFFEE', -500);
-  assignTransactionToLoan({ txnId: unrelated, itemId });
+  assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: unrelated, itemId });
   expect(ctx.balanceOf(itemId)).toBe(1_909_500);
-  unassignTransactionFromLoan({ txnId: unrelated, itemId });
+  unassignTransactionFromLoan({ viewer: HOUSEHOLD_VIEWER, txnId: unrelated, itemId });
   expect(ctx.balanceOf(itemId)).toBe(1_910_000);
 });
 

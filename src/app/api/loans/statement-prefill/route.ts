@@ -4,7 +4,8 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { CsrfError, assertSameOrigin } from '@/lib/auth/csrf';
 import { userFromRequest } from '@/lib/auth/session';
-import { isSelfScoped } from '@/lib/auth/viewer';
+import { isSelfScoped, type Viewer } from '@/lib/auth/viewer';
+import { getWarrantyItem } from '@/lib/warranty/items';
 import { extractPdfText, ScannedPdfError } from '@/lib/warranty/ocr/pdf';
 import { findStatementCandidates, prefill } from '@/lib/loans/statement-extract';
 import { detectStatementColumns, readStatementCsv, type StatementColumns } from '@/lib/loans/statement-csv';
@@ -39,10 +40,17 @@ function readMapping(form: FormData): StatementColumns | null {
   return { date, balance, interest: interest.length === 0 ? null : interest };
 }
 
-/** The mapping confirmed for this loan last time, if the form said which loan it is (S3). */
-function remembered(form: FormData): StatementColumns | null {
+/**
+ * The mapping confirmed for this loan last time, if the form said which loan it is (S3).
+ *
+ * D10: the id comes off the form, so it is resolved through the viewer like any other. Nothing
+ * secret is in a column mapping, but "a form-supplied id is read straight out of the database" is
+ * the shape worth not having.
+ */
+function remembered(form: FormData, viewer: Viewer): StatementColumns | null {
   const itemId = Number(form.get('itemId'));
   if (!Number.isInteger(itemId) || itemId <= 0) return null;
+  if (getWarrantyItem(itemId, viewer) === null) return null;
   const stored = statementCsvColumnsFor(itemId);
   if (stored === null) return null;
   try {
@@ -91,7 +99,7 @@ export async function POST(request: Request): Promise<Response> {
     const text = Buffer.from(await file.arrayBuffer()).toString('utf8');
     const detected = detectStatementColumns(text);
     const asked = readMapping(form);
-    const mapping = asked ?? remembered(form) ?? detected.mapping;
+    const mapping = asked ?? remembered(form, user) ?? detected.mapping;
     const figures = readStatementCsv(text, mapping);
     if (figures === null) {
       return Response.json(

@@ -4,6 +4,7 @@ import { listItemTypes } from '@/lib/warranty/types';
 import { createWarrantyItem } from '@/lib/warranty/items';
 import { createManualTransaction } from '@/lib/transactions';
 import { assignTransactionToLoan, payoffProjection, setLoanAnchor } from '@/lib/loans';
+import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -54,7 +55,7 @@ function movement(accountId: number, user: number, itemId: number, date: string,
     userId: user,
     actorRole: 'admin',
   });
-  assignTransactionToLoan({ txnId, itemId });
+  assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId });
 }
 
 /** Six months of payments, so the projection has a mean to work from. */

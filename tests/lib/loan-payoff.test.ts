@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { addMonths, monthLabel } from '@/lib/dates';
 import { assignTransactionToLoan, payoffProjection } from '@/lib/loans';
 import { setupLoanTest, type LoanTestContext } from './loans/fixtures';
+import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
 
 let ctx: LoanTestContext;
 
@@ -147,7 +148,7 @@ describe('payoffProjection: disbursements never count toward the payoff pace', (
     // `at` controls loan_payments.created_at (what the pace query groups by) -- without it,
     // assignTransactionToLoan defaults to the real wall-clock "now", which would land outside
     // the 2026-02..2026-07 pace window entirely and mask the very bug this test reproduces.
-    const draw = assignTransactionToLoan({ itemId, txnId: drawTxnId, at: new Date('2026-07-20T00:00:00.000Z') });
+    const draw = assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, itemId, txnId: drawTxnId, at: new Date('2026-07-20T00:00:00.000Z') });
     expect(draw).toEqual({ linked: true, appliedCents: 590_000 });
     expect(ctx.balanceOf(itemId)).toBe(600_000); // 10,000 + 590,000 draw = $6,000
 
@@ -177,7 +178,7 @@ describe('payoffProjection: disbursements never count toward the payoff pace', (
     const { itemId } = ctx.seedLoan({ balanceCents: 100_000 });
     const drawTxnId = ctx.spend('LINE OF CREDIT DRAW', 50_000, { date: '2026-06-15' });
     expect(
-      assignTransactionToLoan({ itemId, txnId: drawTxnId, at: new Date('2026-06-15T00:00:00.000Z') }).linked,
+      assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, itemId, txnId: drawTxnId, at: new Date('2026-06-15T00:00:00.000Z') }).linked,
     ).toBe(true);
     // No insertPayment call at all: every linked row on this loan is a disbursement.
     expect(payoffProjection(itemId, TODAY)).toBeNull();
@@ -194,14 +195,14 @@ describe('payoffProjection: disbursements never count toward the payoff pace', (
     // test above on why the default (real wall-clock "now") would mask the bug.
     const marchDrawTxnId = ctx.spend('LOC DRAW', 100_000, { date: '2026-03-12' });
     expect(
-      assignTransactionToLoan({ itemId, txnId: marchDrawTxnId, at: new Date('2026-03-12T00:00:00.000Z') }).linked,
+      assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, itemId, txnId: marchDrawTxnId, at: new Date('2026-03-12T00:00:00.000Z') }).linked,
     ).toBe(true);
     // A second disbursement sharing June with a real payment, so a fix that only "nets"
     // a disbursement against a payment IN THE SAME MONTH (rather than excluding it outright
     // via the transactions.amount_cents < 0 filter) cannot pass this by coincidence.
     const juneDrawTxnId = ctx.spend('LOC DRAW', 200_000, { date: '2026-06-20' });
     expect(
-      assignTransactionToLoan({ itemId, txnId: juneDrawTxnId, at: new Date('2026-06-20T00:00:00.000Z') }).linked,
+      assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, itemId, txnId: juneDrawTxnId, at: new Date('2026-06-20T00:00:00.000Z') }).linked,
     ).toBe(true);
 
     const result = payoffProjection(itemId, TODAY);

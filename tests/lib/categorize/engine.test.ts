@@ -43,6 +43,7 @@ import { classify, train } from '@/lib/categorize/bayes';
 import { normalizeMerchant, tokenize } from '@/lib/categorize/normalize';
 import { nowIso } from '@/lib/clock';
 import { assignTransactionToLoan, unassignTransactionFromLoan } from '@/lib/loans';
+import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -1083,7 +1084,7 @@ describe('review queue: a loan link is a decision (2026-08-30 fix)', () => {
     const itemId = linkToLoan(db, userId, txnId);
     expect(reviewQueueIds()).not.toContain(txnId);
 
-    expect(unassignTransactionFromLoan({ txnId, itemId })).toBe(true);
+    expect(unassignTransactionFromLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId })).toBe(true);
 
     expect(reviewQueueIds()).toContain(txnId);
     expect(reviewQueueCount()).toBe(1);
@@ -1878,7 +1879,7 @@ describe('v1.31.0 R-03 / ruling R24: a loan label outranks a rename rule', () =>
     expect(readDisplay(sqlite, txnId)).toEqual({ text: 'Walmart', source: 'rename' });
 
     const itemId = seedLoan(db, userId);
-    assignTransactionToLoan({ txnId, itemId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId });
     const labelled = readDisplay(sqlite, txnId);
     expect(labelled.source).toBe('loan');
     expect(labelled.text).toContain('Car Loan');
@@ -1901,9 +1902,9 @@ describe('v1.31.0 R-03 / ruling R24: a loan label outranks a rename rule', () =>
     const txnId = add('WALMART #1234 TORONTO ON');
     upsertRenameRule({ pattern: 'WALMART', matchType: 'contains', renameTo: 'Walmart', userId, actorRole: 'admin' });
     const itemId = seedLoan(db, userId);
-    assignTransactionToLoan({ txnId, itemId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId });
 
-    expect(unassignTransactionFromLoan({ txnId, itemId })).toBe(true);
+    expect(unassignTransactionFromLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId })).toBe(true);
     // revertLoanDescription cleared the loan label; the rename is what should be there now, and
     // unassignFromLoanAction is what runs this pass in the app (see its own comment).
     expect(readDisplay(sqlite, txnId)).toEqual({ text: null, source: null });
@@ -1916,7 +1917,7 @@ describe('v1.31.0 R-03 / ruling R24: a loan label outranks a rename rule', () =>
     const txnId = add('WALMART #1234 TORONTO ON');
     setTransactionDisplayName({ transactionId: txnId, displayDescription: 'Sam pays me back', userId });
     const itemId = seedLoan(db, userId);
-    assignTransactionToLoan({ txnId, itemId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId });
     expect(readDisplay(sqlite, txnId)).toEqual({ text: 'Sam pays me back', source: 'manual' });
   });
 });

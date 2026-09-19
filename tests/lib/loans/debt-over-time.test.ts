@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../helpers/db';
 import { assignTransactionToLoan, debtOverTime, unassignTransactionFromLoan } from '@/lib/loans';
+import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
 
 let t: TestDb;
 let userId = 0;
@@ -258,14 +259,14 @@ describe('Task 10 carry (a): the documented drift after a clamped unassign', () 
     const itemId = seedItem({ name: 'Drift loan', createdAt: '2024-01-01T00:00:00.000Z', balanceCents: 10_000, balanceUpdatedAt: '2024-01-01T00:00:00.000Z' });
 
     const disbTxn = insertTxn({ signedAmountCents: 60_000, date: '2026-06-15' });
-    expect(assignTransactionToLoan({ txnId: disbTxn, itemId, at: new Date('2026-06-15T00:00:00.000Z') })).toEqual({
+    expect(assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: disbTxn, itemId, at: new Date('2026-06-15T00:00:00.000Z') })).toEqual({
       linked: true,
       appliedCents: 60_000,
     });
     expect(balanceOf(itemId)).toBe(70_000);
 
     const paymentTxn = insertTxn({ signedAmountCents: -70_000, date: '2026-07-15' });
-    expect(assignTransactionToLoan({ txnId: paymentTxn, itemId, at: new Date('2026-07-15T00:00:00.000Z') })).toEqual({
+    expect(assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: paymentTxn, itemId, at: new Date('2026-07-15T00:00:00.000Z') })).toEqual({
       linked: true,
       appliedCents: 70_000,
     });
@@ -274,7 +275,7 @@ describe('Task 10 carry (a): the documented drift after a clamped unassign', () 
     // The clamp: naively this restore asks for 0 - 60,000 = -60,000. It clamps at zero instead
     // of crashing (NEW-1 fix-round) -- and the June link row is deleted along with it, so its
     // effect leaves no trace for debtOverTime's backward walk to re-add.
-    expect(unassignTransactionFromLoan({ txnId: disbTxn, itemId })).toBe(true);
+    expect(unassignTransactionFromLoan({ viewer: HOUSEHOLD_VIEWER, txnId: disbTxn, itemId })).toBe(true);
     expect(balanceOf(itemId)).toBe(0);
 
     const series = debtOverTime(6, { endMonth: '2026-08', today: '2026-08-18' });
@@ -296,7 +297,7 @@ describe('debtOverTime splits the two directions (rulings P5, P6)', () => {
     // its INSERT at all, so this row is shaped exactly like every pre-1.14.0 row on disk.
     const itemId = seedItem({ name: 'Civic', createdAt: '2024-01-01T00:00:00.000Z', balanceCents: 200_000, balanceUpdatedAt: '2024-01-01T00:00:00.000Z' });
     const payment = insertTxn({ signedAmountCents: -50_000, date: '2026-08-05' });
-    assignTransactionToLoan({ txnId: payment, itemId, at: new Date('2026-08-05T00:00:00.000Z') });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: payment, itemId, at: new Date('2026-08-05T00:00:00.000Z') });
 
     const points = debtOverTime(3, { endMonth: '2026-08', today: '2026-08-18' });
     expect(points.map((p) => p.owedCents)).toEqual([200_000, 200_000, 150_000]);
@@ -313,7 +314,7 @@ describe('debtOverTime splits the two directions (rulings P5, P6)', () => {
     });
     // A repayment in the current month: walking BACKWARDS, it is added back on.
     const repayment = insertTxn({ signedAmountCents: 20_000, date: '2026-08-05' });
-    assignTransactionToLoan({ txnId: repayment, itemId, at: new Date('2026-08-05T00:00:00.000Z') });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: repayment, itemId, at: new Date('2026-08-05T00:00:00.000Z') });
 
     const points = debtOverTime(3, { endMonth: '2026-08', today: '2026-08-18' });
     expect(points.map((p) => p.owedCents)).toEqual([null, null, null]);

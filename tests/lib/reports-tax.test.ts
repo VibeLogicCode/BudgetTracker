@@ -7,6 +7,7 @@ import { assignTransactionToLoan } from '@/lib/loans';
 import { taxYearCsv, taxYearReport, taxYears } from '@/lib/tax';
 import { setTransactionSplits } from '@/lib/splits';
 import { nowIso } from '@/lib/clock';
+import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
 
 /**
  * Task 15a (spec 2026-08-22, v1.7.0): the tax-relevant data layer. src/lib/tax.ts is a new
@@ -289,7 +290,7 @@ describe('taxYearReport — loan principal movements are excluded too (C-02)', (
     flag(groceries);
     const loanId = seedLoanItem(alice, 'lent');
     const txnId = add({ categoryId: groceries, amountCents: -600_000, date: '2026-03-10' });
-    assignTransactionToLoan({ txnId, itemId: loanId });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId: loanId });
 
     // Before this fix, this row had never been excluded here either -- taxYearReport, like
     // budgets.ts, filtered on transfers alone -- so a $6,000 lend-out categorised as Groceries
