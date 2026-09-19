@@ -1260,3 +1260,49 @@ describe('recomputeLoanBalanceAction (item 6, v1.21.0 backlog)', () => {
     expect(result.error).toBe('That item no longer exists.');
   });
 });
+
+/**
+ * Review A10. The statement PDF was stored BEFORE the anchor row that references it, so a refused
+ * date -- or any other failure below it -- left the file on disk with a warranty_receipts row
+ * nothing pointed at. The sweep will not collect it (it is a real row) and no screen lists it.
+ */
+describe('A10: the statement file is stored after the statement row', () => {
+  function statementForm(over: Record<string, string> = {}): FormData {
+    const itemId = seedLoanItem({ balanceCents: 1_000_000 });
+    const fd = new FormData();
+    fd.set('itemId', String(itemId));
+    fd.set('asOfDate', todayIso());
+    fd.set('statementBalance', '9500.00');
+    fd.set('keepStatement', 'on');
+    for (const [key, value] of Object.entries(over)) fd.set(key, value);
+    fd.set(
+      'statement',
+      new File([Buffer.from('%PDF-1.7\n')], 'statement.pdf', { type: 'application/pdf' }),
+    );
+    return fd;
+  }
+
+  const receiptCount = () =>
+    (current!.db.get<{ n: number }>(sql`select count(*) as n from warranty_receipts`) ?? { n: 0 }).n;
+
+  it('stores nothing when the statement itself is refused', async () => {
+    const before = receiptCount();
+    /*
+      A date BEFORE the loan started. This is the reachable orphan: the bound is checked after the
+      file handling used to run, so the old order wrote the PDF, stored a warranty_receipts row,
+      and then returned an error -- leaving a row nothing referenced.
+    */
+    const result = await reconcileLoanAction({}, statementForm({ asOfDate: '2025-06-01' }));
+    expect(result.error).toBe('The statement date is before the loan started.');
+    expect(receiptCount()).toBe(before);
+  });
+
+  it('keeps the statement and points the row at it on a good save', async () => {
+    const result = await reconcileLoanAction({}, statementForm());
+    expect(result.error).toBeUndefined();
+    const anchor = current!.db.get<{ receipt_id: number | null }>(
+      sql`select receipt_id from loan_anchors where source = 'reconcile' order by id desc limit 1`,
+    );
+    expect(anchor?.receipt_id).not.toBeNull();
+  });
+});

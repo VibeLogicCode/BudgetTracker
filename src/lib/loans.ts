@@ -783,7 +783,7 @@ export function setLoanAnchor(input: {
   prefillBalanceCents?: number | null;
   receiptId?: number | null;
   at?: Date;
-}): { balanceCents: number } {
+}): { balanceCents: number; anchorId: number } {
   const at = input.at ?? new Date();
   const stamp = nowIso(at);
 
@@ -832,7 +832,8 @@ export function setLoanAnchor(input: {
     );
     const appBalance = previous === undefined ? null : previous.balanceCents + paymentsBetween;
 
-    tx.insert(loanAnchors)
+    const inserted = tx
+      .insert(loanAnchors)
       .values({
         itemId: input.itemId,
         asOfDate: input.asOfDate,
@@ -856,6 +857,9 @@ export function setLoanAnchor(input: {
         receiptId: input.receiptId ?? null,
       })
       .run();
+    // A10: the row's own id, so a caller storing the statement FILE afterwards can point this row
+    // at it without a second lookup. See attachStatementReceipt below for why that order.
+    const anchorId = Number(inserted.lastInsertRowid);
 
     // Replay forward from the figure just confirmed. recomputeBalance reads the newest anchor row
     // itself, which is the one written immediately above, so the wall is already in place.
@@ -909,10 +913,24 @@ export function setLoanAnchor(input: {
       .where(eq(warrantyItems.id, input.itemId))
       .run();
 
-    return { balanceCents: balance };
+    return { balanceCents: balance, anchorId };
   });
 
   return settled;
+}
+
+/**
+ * A10. Point a statement row at the file it came from, after both exist.
+ *
+ * reconcileLoanAction used to store the PDF FIRST and pass its id into setLoanAnchor. If the anchor
+ * then failed -- a date the bounds refuse, a constraint, anything -- the file stayed on disk with a
+ * warranty_receipts row nothing referenced: an orphan the receipt sweep will not touch (it is a
+ * real row) and no screen lists. Writing the statement first and attaching the file second means a
+ * failure at either step leaves nothing dangling: no anchor, no file; or an anchor with no file,
+ * which is exactly what a household who did not keep the statement has.
+ */
+export function attachStatementReceipt(anchorId: number, receiptId: number): void {
+  getDb().update(loanAnchors).set({ receiptId }).where(eq(loanAnchors.id, anchorId)).run();
 }
 
 /**

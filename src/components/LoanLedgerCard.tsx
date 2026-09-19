@@ -33,6 +33,7 @@ export function LoanLedgerCard({
   interestFree = false,
   downloadHref,
   onReconcile,
+  children,
 }: {
   ledger: Ledger;
   direction: LoanDirection;
@@ -42,6 +43,12 @@ export function LoanLedgerCard({
   downloadHref?: string;
   /** The Reconcile button, when the viewer may open the form. */
   onReconcile?: React.ReactNode;
+  /**
+   * F1: the panel that button discloses, mounted directly under the header rather than below the
+   * whole table. The card does not own the form -- the page does -- but it does own where a
+   * disclosure opened from its own header belongs.
+   */
+  children?: React.ReactNode;
 }) {
   const [byMonth, setByMonth] = useState(false);
   const words = INTEREST_WORDING[direction];
@@ -60,6 +67,7 @@ export function LoanLedgerCard({
         action={onReconcile}
       />
       <CardBody className="flex flex-col gap-5">
+        {children}
         {/*
           THE HERO, and the only figure on this card in display type. The two parts underneath are
           a sentence rather than two more tiles: they are how this number is arrived at, and a tile

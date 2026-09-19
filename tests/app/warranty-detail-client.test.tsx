@@ -13,6 +13,9 @@ vi.mock('@/app/(app)/warranties/actions', () => ({
   deleteReceiptAction: vi.fn(async () => ({})),
   reRunOcrAction: vi.fn(async () => ({})),
   saveLoanRuleAction: vi.fn(async () => ({})),
+  // F1 (v1.49.0): the reconcile form is mounted by this component now, so its action needs a stub
+  // for the same reason the installment actions above do -- useActionState calls it on render.
+  reconcileLoanAction: vi.fn(async () => ({})),
   deleteLoanRuleAction: vi.fn(async () => ({})),
   // v1.12.0: the Installments card's three actions, called unconditionally by useActionState
   // on every render -- without a stub here the mocked module has no such export and the
@@ -1001,5 +1004,44 @@ describe('the Linked transactions card (item 6)', () => {
     await waitFor(() => {
       expect(screen.getByText('That transaction is no longer linked to this item.')).toBeTruthy();
     });
+  });
+});
+
+/**
+ * Review F1. Pressing "Reconcile to a statement…" UNMOUNTED the button, which dropped focus to
+ * <body>, and mounted the form below the entire ledger table with no scroll to it. A keyboard or
+ * screen-reader user pressed a control and the page went silent.
+ */
+describe('F1: the reconcile disclosure', () => {
+  const loanProps = {
+    item: item({ kind: 'loan', loanDirection: 'owed' as const, currentBalanceCents: 1_000_000, interestRateBasis: null }),
+  };
+
+  it('keeps the button mounted and reports whether the panel is open', () => {
+    renderDetail(loanProps);
+    const button = screen.getByRole('button', { name: /reconcile to a statement/i });
+    expect(button.getAttribute('aria-expanded')).toBe('false');
+    expect(button.getAttribute('aria-controls')).toBe('reconcile-panel');
+
+    fireEvent.click(button);
+
+    const open = screen.getByRole('button', { name: 'Close' });
+    expect(open.getAttribute('aria-expanded')).toBe('true');
+    expect(document.getElementById('reconcile-panel')).not.toBeNull();
+  });
+
+  it('moves focus into the form, rather than dropping it on the page', () => {
+    renderDetail(loanProps);
+    fireEvent.click(screen.getByRole('button', { name: /reconcile to a statement/i }));
+    const field = document.querySelector<HTMLInputElement>('#reconcile-panel input[name="asOfDate"]');
+    expect(field).not.toBeNull();
+    expect(document.activeElement).toBe(field);
+  });
+
+  it('closes again from the same button', () => {
+    renderDetail(loanProps);
+    fireEvent.click(screen.getByRole('button', { name: /reconcile to a statement/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(document.getElementById('reconcile-panel')).toBeNull();
   });
 });

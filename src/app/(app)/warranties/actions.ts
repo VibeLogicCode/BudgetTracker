@@ -66,7 +66,7 @@ import {
   type LoanDirection,
 } from '@/lib/warranty/constants';
 import { INTEREST_BASES, type InterestBasis } from '@/lib/loans/interest';
-import { rememberStatementCsvColumns, retractLoanAnchor, setLoanAnchor } from '@/lib/loans';
+import { attachStatementReceipt, rememberStatementCsvColumns, retractLoanAnchor, setLoanAnchor } from '@/lib/loans';
 
 export interface WarrantyActionState {
   error?: string;
@@ -554,19 +554,16 @@ export async function reconcileLoanAction(
   */
   const keep = formData.get('keepStatement') !== null;
   const uploaded = formData.get('statement');
-  let receiptId: number | null = null;
   let prefilledFrom: 'pdf' | 'csv' | null = null;
   if (uploaded instanceof File && uploaded.size > 0) {
     prefilledFrom = /\.csv$/i.test(uploaded.name) || uploaded.type === 'text/csv' ? 'csv' : 'pdf';
-    if (keep && prefilledFrom === 'pdf') {
-      try {
-        receiptId = await storeStatementReceipt(id.data, uploaded);
-      } catch (error) {
-        // The figures matter more than the document: the reconcile goes through either way.
-        console.error('[loans] could not keep the statement file', error);
-      }
-    }
   }
+  /*
+    A10 (review): the file is stored AFTER the statement row, not before it. Storing it first meant
+    a refused date or any other failure below left the PDF on disk with a warranty_receipts row
+    nothing referenced -- an orphan the sweep will not collect and no screen lists.
+  */
+  const keepFile = keep && prefilledFrom === 'pdf' && uploaded instanceof File && uploaded.size > 0;
 
   const mappingUsed = readStatementMapping(formData);
 
@@ -575,8 +572,9 @@ export async function reconcileLoanAction(
     return { error: 'The statement date is before the loan started.' };
   }
 
+  let anchorId: number;
   try {
-    setLoanAnchor({
+    anchorId = setLoanAnchor({
       itemId: id.data,
       asOfDate,
       balanceCents: Math.abs(balanceCents),
@@ -585,13 +583,23 @@ export async function reconcileLoanAction(
       note: note.length === 0 ? null : note.slice(0, 500),
       statedInterestCents: statedInterestCents === null ? null : Math.abs(statedInterestCents),
       prefilledFrom,
-      receiptId,
-    });
+    }).anchorId;
     // S3. Remembered only once a person has actually saved with it, so a mapping that was tried
     // and abandoned is never the one offered next month.
     if (mappingUsed !== null) rememberStatementCsvColumns(id.data, mappingUsed);
   } catch (error) {
     return failure(error, 'Could not save that statement.');
+  }
+
+  if (keepFile) {
+    try {
+      attachStatementReceipt(anchorId, await storeStatementReceipt(id.data, uploaded as File));
+    } catch (error) {
+      // The figures matter more than the document: the statement is saved either way, and this is
+      // now the ONLY thing that can fail after it -- leaving a statement with no file, which is
+      // the same state a household who did not keep it is in.
+      console.error('[loans] could not keep the statement file', error);
+    }
   }
 
   revalidateAll(id.data);

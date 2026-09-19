@@ -199,6 +199,9 @@ function Detail({ label, children }: { label: React.ReactNode; children: React.R
   );
 }
 
+/** F1: the panel the Reconcile disclosure controls, named once so both callers agree. */
+const RECONCILE_PANEL_ID = 'reconcile-panel';
+
 export function WarrantyDetailClient({
   item,
   receipts,
@@ -258,6 +261,15 @@ export function WarrantyDetailClient({
   const anchorDate = reconciliation?.newest?.asOfDate ?? item.balanceUpdatedAt?.slice(0, 10) ?? null;
 
   const [reconciling, setReconciling] = useState(false);
+  const reconcileRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!reconciling) return;
+    const field = reconcileRef.current?.querySelector<HTMLInputElement>('input[name="asOfDate"]');
+    field?.focus();
+    // jsdom does not implement scrollIntoView, and the focus above is the part that matters --
+    // the same guard the edit-form scroll below already carries.
+    reconcileRef.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [reconciling]);
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
   // Bug fix (v1.2.4): the swapped-in section (read-only view OR edit form, never both) lives
@@ -429,6 +441,24 @@ export function WarrantyDetailClient({
     MetricCard (no ledger on the page) or under the plain card beside the ledger's own hero. One
     definition, because a household must not lose "Recompute balance" by having a basis set.
   */
+  /*
+    F1. The reconcile form, mounted where the button is -- inside the ledger card, directly under
+    its header -- rather than below the whole table where nothing scrolled to it. Focus moves to the
+    first field on open, so pressing the button lands somewhere.
+  */
+  const reconcilePanel =
+    item.kind !== 'loan' || !reconciling ? null : (
+      <div id={RECONCILE_PANEL_ID} ref={reconcileRef} className="rounded-lg border border-line bg-surface-2 p-4">
+        <ReconcileLoanForm
+          itemId={item.id}
+          direction={item.loanDirection}
+          interest={interest}
+          today={today}
+          onClose={() => setReconciling(false)}
+        />
+      </div>
+    );
+
   const moneyBlockDetails = (
     <>
       {/* F8 fix-round: a plain-voice heads-up next to the number people are about to
@@ -719,43 +749,53 @@ export function WarrantyDetailClient({
               direction={item.loanDirection}
               interestFree={item.interestRateBasis === 'none'}
               downloadHref={`/api/loans/${item.id}/ledger.csv`}
+              /*
+                F1 (review). THE BUTTON STAYS. It used to UNMOUNT on open, which is what dropped
+                focus to <body> -- a keyboard or screen-reader user pressed it and the page went
+                quiet, with the form they had just opened mounted below the whole ledger table and
+                no scroll to it. A disclosure that stays put, says whether it is open, and names
+                what it controls is the ordinary answer.
+              */
               onReconcile={
-                reconciling ? null : (
-                  <button type="button" onClick={() => setReconciling(true)} className={buttonClass('secondary', 'sm')}>
-                    Reconcile to a statement…
-                  </button>
-                )
+                <button
+                  type="button"
+                  aria-expanded={reconciling}
+                  aria-controls={RECONCILE_PANEL_ID}
+                  onClick={() => setReconciling(!reconciling)}
+                  className={buttonClass('secondary', 'sm', 'min-h-11 sm:min-h-0')}
+                >
+                  {reconciling ? 'Close' : 'Reconcile to a statement…'}
+                </button>
               }
-            />
+            >
+              {reconcilePanel}
+            </LoanLedgerCard>
           )}
           {/*
-            A loan with a statement but no rate still gets the Reconcile button: recording what a
-            lender says is useful on its own, and it is how a household starts.
+            A loan with a statement but no rate has no ledger card to put the button in, so it gets
+            its own -- recording what a lender says is useful on its own, and it is how a household
+            starts. The panel itself is the same one, defined once above.
           */}
-          {item.kind !== 'loan' || loanLedgerRows !== null || reconciling ? null : (
-            <div className="flex justify-end">
-              <button type="button" onClick={() => setReconciling(true)} className={buttonClass('secondary', 'sm')}>
-                Reconcile to a statement…
-              </button>
-            </div>
-          )}
-          {item.kind === 'loan' && reconciling ? (
+          {item.kind !== 'loan' || loanLedgerRows !== null ? null : (
             <Card>
               <CardHeader
                 title="Reconcile to a statement"
                 description="Type what the statement says. That figure becomes the new starting point, and what we estimated is kept beside it."
+                action={
+                  <button
+                    type="button"
+                    aria-expanded={reconciling}
+                    aria-controls={RECONCILE_PANEL_ID}
+                    onClick={() => setReconciling(!reconciling)}
+                    className={buttonClass('secondary', 'sm', 'min-h-11 sm:min-h-0')}
+                  >
+                    {reconciling ? 'Close' : 'Reconcile to a statement…'}
+                  </button>
+                }
               />
-              <CardBody>
-                <ReconcileLoanForm
-                  itemId={item.id}
-                  direction={item.loanDirection}
-                  interest={interest}
-                  today={today}
-                  onClose={() => setReconciling(false)}
-                />
-              </CardBody>
+              {reconcilePanel === null ? null : <CardBody>{reconcilePanel}</CardBody>}
             </Card>
-          ) : null}
+          )}
           </>
         )}
       </div>

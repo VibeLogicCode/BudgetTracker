@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState, useState } from 'react';
+import { useActionState, useEffect, useRef, useState } from 'react';
 import { FormError } from '@/components/FormError';
 import { SubmitButton } from '@/components/SubmitButton';
 import { Notice } from '@/components/ui/Notice';
@@ -45,11 +45,14 @@ export function ReconcileLoanForm({
   onClose?: () => void;
 }) {
   const [state, action] = useActionState(reconcileLoanAction, {} as Awaited<ReturnType<typeof reconcileLoanAction>>);
+  const closedFor = useRef<string | undefined>(undefined);
   const [asOfDate, setAsOfDate] = useState(today);
   const [statementBalance, setStatementBalance] = useState('');
   const [statedInterest, setStatedInterest] = useState('');
   const [reading, setReading] = useState(false);
   const [readError, setReadError] = useState<string | null>(null);
+  /** F6: what the reader filled in, announced rather than left to be noticed. */
+  const [prefilled, setPrefilled] = useState<string | null>(null);
   const [others, setOthers] = useState<Chips | null>(null);
   /** v1.48.0, S2/S3/S4. The CSV picker's state, and whether the file is kept with the loan. */
   const [csv, setCsv] = useState<CsvShape | null>(null);
@@ -81,9 +84,20 @@ export function ReconcileLoanForm({
         setReadError(found.error ?? 'That statement could not be read. Type the figures instead.');
         return;
       }
-      if (found.balance != null) setStatementBalance(centsToInput(found.balance.valueCents));
-      if (found.statementDate != null) setAsOfDate(found.statementDate.date);
-      if (found.interest != null) setStatedInterest(centsToInput(found.interest.valueCents));
+      const filled: string[] = [];
+      if (found.balance != null) {
+        setStatementBalance(centsToInput(found.balance.valueCents));
+        filled.push('balance');
+      }
+      if (found.statementDate != null) {
+        setAsOfDate(found.statementDate.date);
+        filled.push('date');
+      }
+      if (found.interest != null) {
+        setStatedInterest(centsToInput(found.interest.valueCents));
+        filled.push('interest');
+      }
+      setPrefilled(filled.length === 0 ? null : `Filled in from the statement: ${filled.join(', ')}.`);
       setOthers(found.others ?? null);
       setCsv(found.csv ?? null);
       if (found.balance == null && found.csv === undefined) {
@@ -96,8 +110,59 @@ export function ReconcileLoanForm({
     }
   }
 
+  /*
+    F3 (review). THE ESTIMATE FOR THE STATEMENT'S OWN DATE.
+
+    This used to compare what a person typed off their statement against `interest.owingCents` --
+    owing TODAY -- under a sentence reading "Our estimate for {the statement's date}". A statement
+    is routinely a week or a month old, and the PDF reader rewrites this field from the document
+    itself, so the two figures were rarely for the same day. On a mortgage that gap is real money,
+    and the form was inviting a household to wonder which of the two numbers was wrong.
+
+    Debounced, because the date field fires on every keystroke while somebody types a year.
+  */
+  const [estimate, setEstimate] = useState<number | null>(interest?.owingCents ?? null);
+  const [estimateFor, setEstimateFor] = useState(today);
+  useEffect(() => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(asOfDate) || asOfDate > today) return;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const response = await fetch(`/api/loans/${itemId}/estimate?asOf=${asOfDate}`);
+          if (!response.ok || cancelled) return;
+          const body = (await response.json()) as { owingCents: number | null };
+          if (cancelled) return;
+          setEstimate(body.owingCents);
+          setEstimateFor(asOfDate);
+        } catch {
+          // The comparison is a courtesy, not the write. A failed fetch leaves the last estimate
+          // and its own date on screen rather than replacing them with a wrong one.
+        }
+      })();
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [asOfDate, itemId, today]);
+
+  /*
+    F1. A saved statement closes the form, after the success notice has been rendered once.
+
+    Keyed on the message so a second save re-opens nothing and a re-render cannot close the form a
+    person has just re-opened. onClose is optional -- a caller with nowhere to close to simply
+    leaves the notice on screen.
+  */
+  useEffect(() => {
+    if (state.message === undefined || onClose === undefined) return;
+    if (closedFor.current === state.message) return;
+    closedFor.current = state.message;
+    const timer = setTimeout(onClose, 1_200);
+    return () => clearTimeout(timer);
+  }, [state.message, onClose]);
+
   const typed = parseLoose(statementBalance);
-  const estimate = interest?.owingCents ?? null;
   const difference = typed === null || estimate === null ? null : typed - estimate;
 
   return (
@@ -123,7 +188,13 @@ export function ReconcileLoanForm({
             className="text-sm"
           />
         </label>
-        {reading ? <p className="text-sm text-muted">Reading the statement…</p> : null}
+        {/*
+          F6: a live region, so a screen reader hears that the file is being read and hears what it
+          filled in. Both were silent before -- the fields simply changed under the person.
+        */}
+        <p role="status" aria-live="polite" className="text-sm text-muted">
+          {reading ? 'Reading the statement…' : (prefilled ?? '')}
+        </p>
         {readError === null ? null : <Notice tone="warning">{readError}</Notice>}
         {others === null ? null : <Chips others={others} onPickBalance={setStatementBalance} onPickDate={setAsOfDate} />}
         {csv === null || pickedFile === null ? null : (
@@ -197,10 +268,15 @@ export function ReconcileLoanForm({
       </Field>
 
       {difference === null ? null : (
-        <Notice tone={Math.abs(difference) > 50_00 ? 'warning' : 'info'}>
+        /*
+          F3: the threshold is RELATIVE. A flat $50 called every mortgage statement a warning (a
+          month's interest is hundreds) and let a $40 error on a $600 loan pass as ordinary drift.
+          Half a percent of the balance, with a $10 floor so a tiny loan is not warned about cents.
+        */
+        <Notice tone={Math.abs(difference) > Math.max(10_00, Math.round((typed ?? 0) * 0.005)) ? 'warning' : 'info'}>
           {estimate === null ? null : (
             <>
-              Our estimate for {asOfDate} is {formatCents(estimate)}. You have typed{' '}
+              Our estimate for {estimateFor} is {formatCents(estimate)}. You have typed{' '}
               {formatCents(typed!)} —{' '}
               {difference === 0
                 ? 'exactly what we expected.'
@@ -212,7 +288,12 @@ export function ReconcileLoanForm({
       )}
 
       <FormError message={state.error} />
-      {state.message === undefined ? null : <Notice tone="info">{state.message}</Notice>}
+      {/*
+        F1: tone SUCCESS, like every sibling form in this app, and the form closes behind it. An
+        'info' notice under a form that stayed open read as "here is some information", not "that
+        is saved" -- and the statement had in fact been written.
+      */}
+      {state.message === undefined ? null : <Notice tone="success">{state.message}</Notice>}
 
       <div className="flex flex-wrap gap-2">
         <SubmitButton>Save this statement</SubmitButton>
