@@ -60,10 +60,10 @@ function refusal(run: () => unknown): string {
  */
 describe('0025: the migration records itself', () => {
   /**
-   * The "I am the newest" claim, handed on from 0024's suite exactly as 0024 took it from 0023's.
-   * It lives with the newest migration so that adding one without a test is a failure here.
+   * The "I am the newest" claim moved on to 0026's suite, exactly as this suite took it from
+   * 0024's. What stays here is the ordering claim, which is true of 0025 for good.
    */
-  it('sits immediately after 0024 in the journal, and is the newest', async () => {
+  it('sits immediately after 0024 in the journal', async () => {
     const fs = await import('node:fs');
     const path = await import('node:path');
     const journal = JSON.parse(
@@ -72,7 +72,6 @@ describe('0025: the migration records itself', () => {
     expect(journal.entries.find((row) => row.tag === '0025_loan_interest')).toMatchObject({ idx: 25 });
     const idxs = journal.entries.map((entry) => entry.idx).sort((a, b) => a - b);
     expect(idxs.indexOf(25)).toBe(idxs.indexOf(24) + 1);
-    expect(Math.max(...idxs)).toBe(25);
   });
 });
 

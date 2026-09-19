@@ -867,6 +867,13 @@ export const warrantyItems = sqliteTable(
     interestRateBasis: text('interest_rate_basis', {
       enum: ['none', 'apr_monthly', 'apr_semiannual', 'per_month', 'simple_on_principal', 'apr_daily'],
     }),
+    /**
+     * v1.48.0, ledger spec C1. The day of the month interest posts. NULL is the common case and
+     * means the borrowed date's own day, which is what a loan agreement almost always says.
+     */
+    postingDay: integer('posting_day'),
+    /** v1.48.0, ruling S3. Confirmed CSV columns for this lender: JSON {date, balance, interest}. */
+    statementCsvColumns: text('statement_csv_columns'),
   },
   (t) => [
     index('warranty_items_expiry_idx').on(t.expiryDate),
@@ -938,6 +945,77 @@ export const loanAnchors = sqliteTable(
   (t) => [index('loan_anchors_item_idx').on(t.itemId, t.asOfDate, t.id)],
 );
 
+/**
+ * v1.48.0, ledger spec P1. One row per closed posting period, written once and never updated.
+ *
+ * Interest used to be derived on every read. That kept undo free but left nothing to point at: no
+ * record of what was charged when, at which rate, on which balance. A lender posts once a cycle and
+ * never restates it, so a period that has closed is written down and left alone -- and a payment
+ * discovered afterwards adds a SECOND row of kind 'adjustment' rather than rewriting the first.
+ */
+export const loanPostings = sqliteTable(
+  'loan_postings',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    itemId: integer('item_id')
+      .notNull()
+      .references(() => warrantyItems.id, { onDelete: 'cascade' }),
+    kind: text('kind', { enum: ['posting', 'adjustment'] }).notNull(),
+    periodStart: text('period_start').notNull(),
+    /** The posting date. For an adjustment, the day the correction was recorded. */
+    periodEnd: text('period_end').notNull(),
+    openingCents: integer('opening_cents').notNull(),
+    /** Signed. A posting is never negative; an adjustment usually is. */
+    interestCents: integer('interest_cents').notNull(),
+    paymentsCents: integer('payments_cents').notNull().default(0),
+    advancesCents: integer('advances_cents').notNull().default(0),
+    closingCents: integer('closing_cents').notNull(),
+    /** The rate that applied to THIS period, so editing the rate never restates a closed one. */
+    rateBps: integer('rate_bps'),
+    basis: text('basis', {
+      enum: ['none', 'apr_monthly', 'apr_semiannual', 'per_month', 'simple_on_principal', 'apr_daily'],
+    }),
+    /** What the charge was worked out on: rate, this, and the day count are the whole sum. */
+    averageDailyBalanceCents: integer('average_daily_balance_cents'),
+    note: text('note'),
+    createdAt: text('created_at').notNull(),
+    createdByUserId: integer('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  },
+  (t) => [
+    // PARTIAL: one posting per period is the invariant, and adjustments sit outside it because
+    // several corrections can land on one day.
+    uniqueIndex('loan_postings_item_period_uq')
+      .on(t.itemId, t.periodEnd)
+      .where(sql`kind = 'posting'`),
+    index('loan_postings_item_idx').on(t.itemId, t.periodEnd, t.id),
+  ],
+);
+
+/**
+ * v1.48.0, ruling R1. The rate in force from a date.
+ *
+ * warranty_items keeps holding the CURRENT rate and basis, so every reader written before this
+ * stays correct. This table answers the other question -- what did it charge in March -- which a
+ * variable-rate mortgage makes a real one, and which one column cannot answer.
+ */
+export const loanRateHistory = sqliteTable(
+  'loan_rate_history',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    itemId: integer('item_id')
+      .notNull()
+      .references(() => warrantyItems.id, { onDelete: 'cascade' }),
+    effectiveFrom: text('effective_from').notNull(),
+    rateBps: integer('rate_bps').notNull(),
+    basis: text('basis', {
+      enum: ['none', 'apr_monthly', 'apr_semiannual', 'per_month', 'simple_on_principal', 'apr_daily'],
+    }).notNull(),
+    createdAt: text('created_at').notNull(),
+    createdByUserId: integer('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  },
+  (t) => [index('loan_rate_history_item_idx').on(t.itemId, t.effectiveFrom, t.id)],
+);
+
 export const warrantyReceipts = sqliteTable(
   'warranty_receipts',
   {
@@ -949,7 +1027,7 @@ export const warrantyReceipts = sqliteTable(
     originalFilename: text('original_filename').notNull(),
     /** Server-generated `${randomUUID()}.${sniffedExt}` (MUST-4.2). */
     storedFilename: text('stored_filename').notNull(),
-    mime: text('mime', { enum: ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'] }).notNull(),
+    mime: text('mime', { enum: ['image/jpeg', 'image/png', 'image/webp', 'application/pdf', 'text/csv'] }).notNull(),
     sizeBytes: integer('size_bytes').notNull(),
     sha256: text('sha256').notNull(),
     ocrText: text('ocr_text'),

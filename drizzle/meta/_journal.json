@@ -183,6 +183,13 @@
       "when": 1758153600000,
       "tag": "0025_loan_interest",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1758240000000,
+      "tag": "0026_loan_ledger",
+      "breakpoints": true
     }
   ]
 }

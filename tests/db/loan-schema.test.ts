@@ -107,19 +107,25 @@ describe('MUST-11.5 / MUST-11.17: the shapes exist after migration', () => {
   });
 
   /** v1.47.0: loan_anchors joined them (drizzle/0025). Three now, not two. */
-  it('creates all three tables, empty', () => {
+  it('creates all five tables, empty', () => {
     const names = t.sqlite
       .prepare(`select name from sqlite_master where type = 'table' and name like 'loan_%' order by name`)
       .all() as { name: string }[];
-    expect(names.map((r) => r.name)).toEqual(['loan_anchors', 'loan_matcher_rules', 'loan_payments']);
-    for (const table of ['loan_anchors', 'loan_matcher_rules', 'loan_payments']) {
+    expect(names.map((r) => r.name)).toEqual([
+      'loan_anchors',
+      'loan_matcher_rules',
+      'loan_payments',
+      'loan_postings',
+      'loan_rate_history',
+    ]);
+    for (const table of ['loan_anchors', 'loan_matcher_rules', 'loan_payments', 'loan_postings', 'loan_rate_history']) {
       const { n } = t.sqlite.prepare(`select count(*) as n from ${table}`).get() as { n: number };
       expect(n).toBe(0);
     }
   });
 
-  /** v1.47.0: loan_anchors_item_idx joined them. Six now, not five. */
-  it('creates all six named indexes', () => {
+  /** v1.47.0 added loan_anchors_item_idx; v1.48.0 added the three ledger ones. Nine now. */
+  it('creates all nine named indexes', () => {
     const names = t.sqlite
       .prepare(`select name from sqlite_master where type = 'index' and name like 'loan_%' order by name`)
       .all() as { name: string }[];
@@ -130,6 +136,9 @@ describe('MUST-11.5 / MUST-11.17: the shapes exist after migration', () => {
       'loan_payments_item_idx',
       'loan_payments_txn_idx',
       'loan_payments_txn_item_uq',
+      'loan_postings_item_idx',
+      'loan_postings_item_period_uq',
+      'loan_rate_history_item_idx',
     ]);
   });
 });
