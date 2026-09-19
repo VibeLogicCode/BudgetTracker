@@ -61,7 +61,7 @@ export function LoansCard({ loans, totalOwedCents }: { loans: LoanSummary[]; tot
         */
         description={
           interestThisMonthCents > 0
-            ? `Loans the household is paying back. ${formatCents(interestThisMonthCents)} in interest this cycle.`
+            ? `Loans the household is paying back. About ${formatCents(interestThisMonthCents)} in interest this cycle.`
             : 'Loans the household is paying back.'
         }
         action={

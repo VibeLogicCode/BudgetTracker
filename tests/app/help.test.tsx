@@ -289,3 +289,29 @@ describe('the print stylesheet', () => {
     expect(block).toContain('mobile-nav');
   });
 });
+
+/**
+ * Review F7/B10. The help page described a three-figure ledger card that no longer exists, told
+ * people to hover for the working behind a charge, and defined none of the four words the loan
+ * pages print in their biggest type.
+ */
+describe('the loan help describes what shipped', () => {
+  it('describes one hero and a press, not three figures and a hover', () => {
+    const text = textOf(section('coverage').body);
+    expect(text).toContain('Owing today');
+    expect(text).toContain('Press an interest line');
+    expect(text).not.toContain('Hover an interest line');
+    expect(text).not.toContain('Three figures sit above the table');
+  });
+
+  it('says a statement can be withdrawn', () => {
+    expect(textOf(section('coverage').body)).toContain('A statement can be withdrawn');
+  });
+
+  it('defines the four words the loan pages use', () => {
+    const words = textOf(section('words').body);
+    for (const word of ['Owing today', 'Accrued', 'Principal', 'Basis']) {
+      expect({ word, defined: words.includes(word) }).toEqual({ word, defined: true });
+    }
+  });
+});

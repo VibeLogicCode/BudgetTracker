@@ -431,11 +431,17 @@ export const HELP_SECTIONS: HelpSection[] = [
         <P>
           Interest builds up <B>daily, on whatever you owed that day</B>. A payment on the 15th
           genuinely halves what the second half of the month costs, and the ledger shows that rather
-          than charging a whole month on the opening balance. Three figures sit above the table:{' '}
-          <B>Balance</B> (everything posted so far), <B>Accrued so far</B> (this cycle, not yet
-          added), and <B>Owing today</B> (the two together). Hover an interest line to see the rate,
-          the average balance it was worked out on and the number of days &mdash; enough to check it
-          against a statement by hand.
+          than charging a whole month on the opening balance. One figure sits above the table &mdash;{' '}
+          <B>Owing today</B> &mdash; with the arithmetic under it: the balance posted so far, plus
+          what is building up this cycle. Press an interest line to see the rate, the average balance
+          it was worked out on and the number of days &mdash; enough to check it against a statement
+          by hand.
+        </P>
+        <P>
+          <B>Typed the wrong date?</B> A statement can be withdrawn. The row stays in the history,
+          marked, and the balance goes back to the statement before it &mdash; which matters because
+          the newest statement governs, so entering the right one afterwards cannot fix a year typed
+          wrong on its own.
         </P>
         <P>
           <B>A payment you record late does not rewrite history.</B> If it belongs to a cycle that
@@ -761,6 +767,27 @@ export const HELP_SECTIONS: HelpSection[] = [
           <li>
             <B>Household</B> — everyone who can sign in here. One administrator creates the
             others; there is no self-registration after the first person.
+          </li>
+          {/* F7 (review): the four words the loan pages use in their biggest type, defined. */}
+          <li>
+            <B>Owing today</B> — everything a loan comes to right now: what has been charged and
+            recorded, plus the interest that has built up since the last charge. It is the figure
+            the dashboard totals and the one at the top of the loan.
+          </li>
+          <li>
+            <B>Accrued</B> — interest that has built up but has not been charged yet. It becomes
+            part of the balance on the loan&rsquo;s posting day, and until then it is shown
+            separately because paying the loan off today would still cost it.
+          </li>
+          <li>
+            <B>Principal</B> — the amount borrowed, as opposed to the interest on it. A payment
+            covers the interest owed first; whatever is left reduces the principal.
+          </li>
+          <li>
+            <B>Basis</B> — how a rate is charged: a yearly rate divided by twelve, a Canadian
+            mortgage&rsquo;s twice-yearly compounding, a monthly rate, a daily one, or simple
+            interest on the original amount. Nothing is assumed &mdash; a loan computes no interest
+            until you say which it is.
           </li>
         </ul>
       </>
