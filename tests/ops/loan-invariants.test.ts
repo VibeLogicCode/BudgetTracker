@@ -182,6 +182,43 @@ describe("MUST-13.1' G3: interest never becomes a writer", () => {
     expect(/currentBalanceCents:\s*[^b]/.test(fn.replace('currentBalanceCents: balance', ''))).toBe(false);
   });
 
+  /**
+   * Review A1/A5, v1.49.0. THE PERIOD-START WALL, in both readers.
+   *
+   * A statement supersedes every period that BEGAN before it -- including a correction, whose
+   * periodStart names the period it corrects rather than the day it was found. Filtering on
+   * periodEnd instead meant an adjustment dated today survived a statement dated last week and was
+   * counted a second time on top of it.
+   *
+   * Three readers now share the rule: the ledger's own facts, the balance replay, and the withdraw
+   * path that re-cuts what a retracted statement had governed. A fourth reading periodEnd would
+   * reintroduce exactly the double count.
+   */
+  it('every posting reader filters by period START, never period end', () => {
+    const source = stripComments(read('src/lib/loans.ts'));
+    expect(source.match(/gte\(loanPostings\.periodStart/g)).toHaveLength(3);
+    expect(source).not.toMatch(/gte\(loanPostings\.periodEnd,\s*anchor/);
+  });
+
+  /**
+   * Review A5, the one balance rule. recomputeBalance used to add every posted interest figure to
+   * the opening balance BEFORE walking the payments, so a payment could be capped against interest
+   * that posted months after it -- and the ledger engine, which interleaves, then disagreed with
+   * the column by whatever that cap swallowed. The review reproduced it as a loan reading $0.00 on
+   * its card and $2.03 on its ledger.
+   *
+   * The walk is interleaved now, and LEDGER_EVENTS is the token that says so.
+   */
+  it('the balance replay walks payments and postings together, not one then the other', () => {
+    const source = read('src/lib/loans.ts');
+    const body = source.slice(source.indexOf('function recomputeBalance'));
+    const fn = body.slice(0, body.indexOf('\n}\n'));
+    expect(fn).toContain('LEDGER_EVENTS');
+    expect(fn).toContain('applyPostingsThrough');
+    // The front-load: a single SUM of every posting, added before the payments are seen.
+    expect(fn).not.toMatch(/sum\(\$\{loanPostings\.interestCents\}/);
+  });
+
   /** The engine never learns the column exists. */
   it('the ledger engine never mentions a stored balance at all', () => {
     const engine = read('src/lib/loans/ledger.ts');
