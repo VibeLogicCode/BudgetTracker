@@ -126,17 +126,45 @@ describe("MUST-13.1' G2: the engine stays pure", () => {
 
 describe("MUST-13.1' G3: interest never becomes a writer", () => {
   /**
-   * Interest is derived, so nothing about it may write a balance. The permitted writers are the
-   * ones that existed before this release, plus setLoanAnchor -- the single human-balance writer
-   * ruling R2 introduced. A sixth would mean an estimate had found its way into a stored figure.
+   * Nothing may write a balance from an ESTIMATE. The permitted writers are the five that existed
+   * before v1.47.0, plus setLoanAnchor (the single human-balance writer, ruling R2) and
+   * postDueInterest (v1.48.0, ledger spec P2).
+   *
+   * postDueInterest is allowed for the reason this release exists: what it adds to the balance has
+   * stopped being an estimate. It is a row in loan_postings, written once for a period that has
+   * closed, and the balance is recovered by replaying those rows rather than by re-deriving
+   * anything. The check below holds it to that -- it must recomputeBalance and write what came
+   * back, never a figure of its own.
+   *
+   * An eighth writer would mean something had gone back to storing a derived number.
    */
-  it('the balance writers are the known five plus setLoanAnchor', () => {
+  it('the balance writers are the known five, setLoanAnchor and postDueInterest', () => {
     const source = stripComments(read('src/lib/loans.ts'));
     // link, recomputeLoanBalance, unassignTransactionFromLoan, reverseLoanLinksForTransactions,
-    // and setLoanAnchor. A sixth would mean an estimate had found its way into a stored figure.
+    // setLoanAnchor, postDueInterest.
     const writes = source.split('.set({ currentBalanceCents').length - 1;
-    expect(writes).toBe(5);
+    expect(writes).toBe(6);
     expect(source).toContain('export function setLoanAnchor');
+    expect(source).toContain('export function postDueInterest');
+  });
+
+  /** The posting path stores what the replay returned, never a figure it worked out itself. */
+  it('postDueInterest writes only what recomputeBalance handed back', () => {
+    const source = stripComments(read('src/lib/loans.ts'));
+    const body = source.slice(source.indexOf('export function postDueInterest'));
+    const fn = body.slice(0, body.indexOf('\nexport '));
+    expect(fn).toContain('recomputeBalance(tx, itemId');
+    expect(fn).toContain('.set({ currentBalanceCents: balance })');
+    // No arithmetic on the way into the column.
+    expect(/currentBalanceCents:\s*[^b]/.test(fn.replace('currentBalanceCents: balance', ''))).toBe(false);
+  });
+
+  /** The engine never learns the column exists. */
+  it('the ledger engine never mentions a stored balance at all', () => {
+    const engine = read('src/lib/loans/ledger.ts');
+    for (const forbidden of ['currentBalanceCents', 'current_balance_cents', 'warrantyItems']) {
+      expect({ forbidden, present: engine.includes(forbidden) }).toEqual({ forbidden, present: false });
+    }
   });
 
   /** Ruling I15: the payment is the spend; counting interest inside it would double-count. */
