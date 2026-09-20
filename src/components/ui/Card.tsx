@@ -34,7 +34,12 @@ export function CardHeader({
 }) {
   return (
     <div className={`flex flex-wrap items-start justify-between gap-3 px-4 pt-4 pb-4 sm:px-5 ${className}`}>
-      <div className="flex flex-col gap-1">
+      {/*
+        min-w-0: without it a flex child refuses to shrink below its longest unbreakable word, so a
+        long title or description pushes the action slot (shrink-0, by design -- a figure must not
+        be squeezed) off the right edge of the card instead of wrapping.
+      */}
+      <div className="flex min-w-0 flex-col gap-1">
         <h2 className="text-base font-semibold text-ink">{title}</h2>
         {description ? <p className="text-sm text-muted">{description}</p> : null}
       </div>

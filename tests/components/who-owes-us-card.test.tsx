@@ -99,7 +99,7 @@ describe('WhoOwesUsCard (spec BU, ruling P11)', () => {
     );
     expect(screen.getByText('Untracked loan')).toBeTruthy();
     expect(screen.getByText('—')).toBeTruthy();
-    expect(screen.getByText('(excludes loans without a tracked balance)')).toBeTruthy();
+    expect(screen.getByText(/The total excludes loans without a tracked balance\./)).toBeTruthy();
     expect(screen.getByLabelText('Total $500.00')).toBeTruthy();
   });
 

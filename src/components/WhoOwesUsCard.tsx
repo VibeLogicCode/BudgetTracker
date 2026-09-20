@@ -55,15 +55,17 @@ export function WhoOwesUsCard({
     <Card>
       <CardHeader
         title={selfScoped ? 'Owed to you' : 'Who owes us'}
-        description={selfScoped ? 'Money you have lent and not been repaid.' : 'Money the household has lent and not been repaid.'}
+        /* The same overflow LoansCard had: a sentence inside the shrink-0 action slot cannot
+           shrink, so it pushed the figure off the card. It is part of the description now. */
+        description={
+          <>
+            {selfScoped ? 'Money you have lent and not been repaid.' : 'Money the household has lent and not been repaid.'}
+            {hasUntrackedBalance ? ' The total excludes loans without a tracked balance.' : ''}
+          </>
+        }
         action={
-          <span className="flex items-center gap-2">
-            {hasUntrackedBalance ? (
-              <span className="text-xs text-subtle">(excludes loans without a tracked balance)</span>
-            ) : null}
-            <span className="money-lg" aria-label={`Total ${formatCents(totalLentCents)}`}>
-              {formatCents(totalLentCents)}
-            </span>
+          <span className="money-lg" aria-label={`Total ${formatCents(totalLentCents)}`}>
+            {formatCents(totalLentCents)}
           </span>
         }
       />

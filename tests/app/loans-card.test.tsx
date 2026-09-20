@@ -81,9 +81,9 @@ describe('MUST-15.1 … MUST-15.3: the dashboard card', () => {
   it('review fix-round: the total carries an accessible "Total owed" name, and the hint appears only when a shown loan has no tracked balance', () => {
     const { rerender } = render(<LoansCard loans={[civic, principalOnly]} totalOwedCents={1_955_000} />);
     expect(screen.getByLabelText('Total owed today $19,550.00')).toBeTruthy();
-    expect(screen.getByText('(excludes loans without a tracked balance)')).toBeTruthy();
+    expect(screen.getByText(/The total excludes loans without a tracked balance\./)).toBeTruthy();
 
     rerender(<LoansCard loans={[civic]} totalOwedCents={1_955_000} />);
-    expect(screen.queryByText('(excludes loans without a tracked balance)')).toBeNull();
+    expect(screen.queryByText(/The total excludes loans without a tracked balance\./)).toBeNull();
   });
 });

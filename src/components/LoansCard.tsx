@@ -59,19 +59,24 @@ export function LoansCard({ loans, totalOwedCents }: { loans: LoanSummary[]; tot
           the loan page's own card already says "this cycle". Two words for one quantity is how a
           household ends up believing neither.
         */
+        /*
+          Reported 2026-09-20: the total ran off the right edge of the card. The caveat used to sit
+          INSIDE the action slot, beside the figure -- and that slot is shrink-0, deliberately, so a
+          figure is never squeezed. A long sentence in there cannot shrink either, so the pair
+          overflowed instead of wrapping. The caveat is a fact about the total, so it belongs in the
+          sentence that describes it; the slot holds the number alone.
+        */
         description={
-          interestThisMonthCents > 0
-            ? `Loans the household is paying back. About ${formatCents(interestThisMonthCents)} in interest this cycle.`
-            : 'Loans the household is paying back.'
+          <>
+            {interestThisMonthCents > 0
+              ? `Loans the household is paying back. About ${formatCents(interestThisMonthCents)} in interest this cycle.`
+              : 'Loans the household is paying back.'}
+            {hasUntrackedBalance ? ' The total excludes loans without a tracked balance.' : ''}
+          </>
         }
         action={
-          <span className="flex items-center gap-2">
-            {hasUntrackedBalance ? (
-              <span className="text-xs text-subtle">(excludes loans without a tracked balance)</span>
-            ) : null}
-            <span className="money-lg" aria-label={`Total owed today ${formatCents(totalOwedCents)}`}>
-              {formatCents(totalOwedCents)}
-            </span>
+          <span className="money-lg" aria-label={`Total owed today ${formatCents(totalOwedCents)}`}>
+            {formatCents(totalOwedCents)}
           </span>
         }
       />
