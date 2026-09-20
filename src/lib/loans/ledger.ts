@@ -336,6 +336,18 @@ export interface Ledger {
   duePostings: StoredPosting[];
   /** The one correction the stored rows need to match the facts, or null (K2). */
   dueAdjustment: StoredPosting | null;
+  /**
+   * THE RE-CUT (2026-09-20). The start of the earliest closed period whose STORED row no longer
+   * describes what moved in it -- a payment dated inside it, recorded after it closed -- or null.
+   *
+   * Everything from this date onwards is an estimate the app made and can make again. The writer
+   * deletes those rows and posts the periods fresh (postDueInterest), so a payment entered months
+   * late lands the same ledger as the same payment entered on the day.
+   *
+   * It can never name a period a person confirmed: ledgerFacts only loads postings dated on or
+   * after the newest statement, so a row behind that wall is not in `stored` and cannot mismatch.
+   */
+  recutFromPeriodStart: string | null;
   /** Everything posted, plus movements: the figure the database keeps (P5). */
   postedBalanceCents: number;
   /** This cycle so far, never stored (C3). */
@@ -585,19 +597,28 @@ export function buildLedger(input: LedgerInput): Ledger {
         );
   const gap = truth.open.openingCents - replayWithDue.open.openingCents;
 
+  /*
+    The earliest closed period whose stored row disagrees with the facts about what MOVED in it.
+    The interest figure is deliberately not compared: a stored charge is what was actually charged,
+    and a period whose movements agree but whose interest differs is a rate correction, which stays
+    on the adjustment path below -- a rate change applies from its own date and does not make the
+    history wrong, so there is nothing to re-cut.
+  */
+  const mismatch = truth.closed.find((period) => {
+    const stored = storedByEnd.get(period.end);
+    if (stored === undefined) return false;
+    return stored.paymentsCents !== period.appliedCents || stored.advancesCents !== period.advancesCents;
+  });
+  const recutFromPeriodStart = mismatch === undefined ? null : mismatch.start;
+
+  /*
+    K1/K2 still stands for everything a re-cut does not cover, and for the moment BEFORE the writer
+    runs: the rows on screen must add up even while a correction is only pending. So the adjustment
+    is still computed here. postDueInterest re-cuts first and rebuilds, and the rebuilt ledger has
+    no mismatch left, so nothing is written twice.
+  */
   let dueAdjustment: StoredPosting | null = null;
   if (gap !== 0 && storedPostings.length > 0) {
-    /*
-      The period the correction BELONGS to: the earliest closed period whose movements the stored
-      row does not reflect. The wall in loans.ts selects postings by periodStart, so a statement
-      dated after that period supersedes the correction along with the posting it corrects -- which
-      is the whole reason this is not simply "today".
-    */
-    const mismatch = truth.closed.find((period) => {
-      const stored = storedByEnd.get(period.end);
-      if (stored === undefined) return false;
-      return stored.paymentsCents !== period.appliedCents || stored.advancesCents !== period.advancesCents;
-    });
     const newest = storedPostings.reduce((best, row) => (row.periodEnd > best.periodEnd ? row : best));
     const belongsTo = mismatch?.start ?? newest.periodStart;
     const late = input.movements.filter((movement) => movement.date <= newest.periodEnd);
@@ -817,6 +838,7 @@ export function buildLedger(input: LedgerInput): Ledger {
     interestPaidToDateCents,
     principalPaidToDateCents,
     interestPostedSinceStartCents,
+    recutFromPeriodStart,
     yearAtThisBalanceCents,
   };
 }

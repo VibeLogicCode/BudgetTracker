@@ -20,10 +20,20 @@ afterEach(() => c?.t.cleanup());
  * engine decides WHAT is due; this decides that it is written down, once, and that the stored
  * balance follows.
  */
-function seedInterestLoan(over: { rateBps?: number; basis?: 'apr_monthly' | 'none'; balance?: number } = {}): number {
-  c = setupLoanTest();
-  const { itemId } = c.seedLoan({ balanceCents: over.balance ?? 1_000_000, principalCents: 1_000_000 });
-  c.t.sqlite
+interface SeedOptions {
+  rateBps?: number;
+  basis?: 'apr_monthly' | 'none';
+  balance?: number;
+  name?: string;
+}
+
+/**
+ * Seeds one interest-bearing loan into an EXISTING context, so a test can stand two of them side by
+ * side in the same database and compare what the writer did to each.
+ */
+function seedInterestLoanIn(ctx: LoanTestContext, over: SeedOptions = {}): number {
+  const { itemId } = ctx.seedLoan({ name: over.name, balanceCents: over.balance ?? 1_000_000, principalCents: 1_000_000 });
+  ctx.t.sqlite
     .prepare(`update warranty_items set purchase_date = '2026-07-01', interest_rate_bps = ?, interest_rate_basis = ? where id = ?`)
     .run(over.rateBps ?? 1000, over.basis ?? 'apr_monthly', itemId);
   setLoanAnchor({
@@ -31,10 +41,10 @@ function seedInterestLoan(over: { rateBps?: number; basis?: 'apr_monthly' | 'non
     asOfDate: '2026-07-01',
     balanceCents: over.balance ?? 1_000_000,
     source: 'form',
-    actorUserId: c.userId,
+    actorUserId: ctx.userId,
     at: new Date('2026-07-01T12:00:00.000Z'),
   });
-  c.t.sqlite
+  ctx.t.sqlite
     .prepare(
       `insert into loan_rate_history (item_id, effective_from, rate_bps, basis, created_at)
        values (?, '2026-07-01', ?, ?, '2026-07-01T12:00:00.000Z')`,
@@ -42,6 +52,20 @@ function seedInterestLoan(over: { rateBps?: number; basis?: 'apr_monthly' | 'non
     .run(itemId, over.rateBps ?? 1000, over.basis ?? 'apr_monthly');
   return itemId;
 }
+
+function seedInterestLoan(over: SeedOptions = {}): number {
+  c = setupLoanTest();
+  return seedInterestLoanIn(c, over);
+}
+
+/** Everything the writer decided, minus the identity of the row: what two loans must agree on. */
+const fullPostings = (itemId: number) =>
+  c.t.sqlite
+    .prepare(
+      `select kind, period_start, period_end, opening_cents, interest_cents, payments_cents, advances_cents, closing_cents, note
+         from loan_postings where item_id = ? order by period_start, period_end`,
+    )
+    .all(itemId);
 
 const postings = (itemId: number) =>
   c.t.sqlite
@@ -120,8 +144,22 @@ describe('postDueInterest: payments (P4)', () => {
     expect(c.balanceOf(itemId)).toBe(506_048);
   });
 
-  /** K1/K2: the closed period is not reopened; the difference becomes one dated row. */
-  it('a payment linked into a closed period writes one adjustment, and the balance matches the facts', () => {
+  /**
+   * K2, rewritten 2026-09-20 (THE RE-CUT). This used to assert the opposite: that a payment landing
+   * in a closed period left the period alone and wrote one dated correction, on the argument that a
+   * lender does not restate a statement it has already sent.
+   *
+   * That holds for a payment imported a few days late. It did not survive a household entering a
+   * year of payments by hand. Every posting after the first back-dated one had charged interest on
+   * a balance that was not reduced yet, so the ledger showed a charge no reader could reproduce
+   * from the balance printed beside it, with the whole difference swept into correction rows at the
+   * bottom -- and each correction re-listed every earlier payment while carrying only its own
+   * increment. The totals were right to the penny; the page was unreadable.
+   *
+   * Rows the app worked out itself are not a statement. They are re-cut. A confirmed statement is
+   * still untouchable, which is what the next test pins.
+   */
+  it('a payment linked into a closed period re-cuts that period instead of correcting it', () => {
     const itemId = seedInterestLoan();
     postDueInterest(itemId, '2026-09-18');
     const txnId = c.spend('LENDER', -500_000, { date: '2026-08-10' });
@@ -129,31 +167,78 @@ describe('postDueInterest: payments (P4)', () => {
     postDueInterest(itemId, '2026-09-18');
 
     const rows = postings(itemId);
-    expect(rows.map((row) => row.kind)).toEqual(['posting', 'posting', 'adjustment']);
-    expect(rows[2]!.period_end).toBe('2026-09-18');
-    expect(rows[2]!.interest_cents).toBeLessThan(0);
+    expect(rows.map((row) => row.kind)).toEqual(['posting', 'posting']);
+    // The period the payment fell in charges on the reduced balance, not on the old one.
+    expect(rows[1]!.period_end).toBe('2026-09-01');
+    expect(rows[1]!.interest_cents).toBeLessThan(rows[0]!.interest_cents);
 
     const ledger = loanLedger(itemId, '2026-09-18')!;
     expect(ledger.dueAdjustment).toBeNull();
     expect(c.balanceOf(itemId)).toBe(ledger.postedBalanceCents);
   });
 
-  /** K3: undoing it reverses with another row. Nothing is deleted. */
-  it('unlinking the late payment writes a reversing adjustment', () => {
+  /**
+   * The point of the whole change: WHEN a payment was entered must not change what the ledger says.
+   * Two identical loans, the same payment on the same day -- one linked the week it happened, one
+   * entered after every period had already been posted. Every stored row must match.
+   */
+  it('a back-dated payment lands the same rows as the same payment entered on the day', () => {
+    c = setupLoanTest();
+    const timely = seedInterestLoanIn(c, { name: 'Entered on the day' });
+    const late = seedInterestLoanIn(c, { name: 'Entered months later' });
+
+    const onTime = c.spend('LENDER', -500_000, { date: '2026-08-10' });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: onTime, itemId: timely, at: new Date('2026-08-10T12:00:00.000Z') });
+    postDueInterest(timely, '2026-09-18');
+
+    postDueInterest(late, '2026-09-18');
+    const afterTheFact = c.spend('LENDER', -500_000, { date: '2026-08-10' });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId: afterTheFact, itemId: late, at: new Date('2026-09-18T12:00:00.000Z') });
+    postDueInterest(late, '2026-09-18');
+
+    expect(fullPostings(late)).toEqual(fullPostings(timely));
+    expect(c.balanceOf(late)).toBe(c.balanceOf(timely));
+  });
+
+  /**
+   * THE WALL. The re-cut is allowed to delete the app's own estimates and nothing else. A period a
+   * statement confirmed is behind the anchor, and the delete is bounded by the same anchor date the
+   * three readers filter on.
+   */
+  it('re-cutting never touches a period a statement already confirmed', () => {
     const itemId = seedInterestLoan();
     postDueInterest(itemId, '2026-09-18');
+    const confirmed = postings(itemId)[0]!;
+    setLoanAnchor({
+      itemId,
+      asOfDate: '2026-08-01',
+      balanceCents: confirmed.closing_cents,
+      source: 'reconcile',
+      actorUserId: c.userId,
+      at: new Date('2026-09-18T11:00:00.000Z'),
+    });
+
     const txnId = c.spend('LENDER', -500_000, { date: '2026-08-10' });
     assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId, at: new Date('2026-09-18T12:00:00.000Z') });
     postDueInterest(itemId, '2026-09-18');
-    const correction = postings(itemId)[2]!.interest_cents;
+
+    const survivor = postings(itemId).find((row) => row.period_start === '2026-07-01');
+    expect(survivor).toEqual(confirmed);
+  });
+
+  /** K3: undoing it puts the ledger back to what it said before, by the same route. */
+  it('unlinking the late payment re-cuts the period back', () => {
+    const itemId = seedInterestLoan();
+    postDueInterest(itemId, '2026-09-18');
+    const before = fullPostings(itemId);
+    const txnId = c.spend('LENDER', -500_000, { date: '2026-08-10' });
+    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId, at: new Date('2026-09-18T12:00:00.000Z') });
+    postDueInterest(itemId, '2026-09-18');
 
     unassignTransactionFromLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId, at: new Date('2026-09-18T13:00:00.000Z') });
     postDueInterest(itemId, '2026-09-18');
 
-    const rows = postings(itemId);
-    expect(rows).toHaveLength(4);
-    expect(rows[3]!.kind).toBe('adjustment');
-    expect(rows[3]!.interest_cents).toBe(-correction);
+    expect(fullPostings(itemId)).toEqual(before);
     expect(c.balanceOf(itemId)).toBe(1_016_736);
   });
 
@@ -182,9 +267,11 @@ describe('P4: posting happens without anyone asking', () => {
     const txnId = c.spend('LENDER', -500_000, { date: '2026-07-15' });
     assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId, at: new Date('2026-08-02T12:00:00.000Z') });
     unassignTransactionFromLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId, at: new Date('2026-08-02T13:00:00.000Z') });
+    // The re-cut (2026-09-20) reaches this path too: the period is posted again without the
+    // payment rather than left standing beside a row that cancels it out.
     const rows = postings(itemId);
-    expect(rows.map((row) => row.kind)).toEqual(['posting', 'adjustment']);
-    expect(rows[0]!.interest_cents + rows[1]!.interest_cents).toBe(8_333);
+    expect(rows.map((row) => row.kind)).toEqual(['posting']);
+    expect(rows[0]!.interest_cents).toBe(8_333);
   });
 
   it('posts when a statement is reconciled', () => {
@@ -274,8 +361,20 @@ describe('the wall selects by the period a row belongs to (A1)', () => {
   it('a statement supersedes a correction to a period that began before it', () => {
     const itemId = seedInterestLoan();
     postDueInterest(itemId, '2026-09-18');
-    const txnId = c.spend('LENDER', -500_000, { date: '2026-08-10' });
-    assignTransactionToLoan({ viewer: HOUSEHOLD_VIEWER, txnId, itemId, at: new Date('2026-09-18T12:00:00.000Z') });
+    /*
+      A RATE corrected after the periods closed, not a back-dated payment: since 2026-09-20 a
+      payment re-cuts its period and leaves no correction behind, so it can no longer stand up the
+      row this test is about. A rate is the case the adjustment path still owns -- the movements
+      are right and only the charge was wrong, so there is nothing to re-cut.
+    */
+    addRateChange({
+      itemId,
+      effectiveFrom: '2026-07-15',
+      rateBps: 1600,
+      basis: 'apr_monthly',
+      actorUserId: c.userId,
+      at: new Date('2026-09-18T12:00:00.000Z'),
+    });
     postDueInterest(itemId, '2026-09-18');
     expect(postings(itemId).some((row) => row.kind === 'adjustment')).toBe(true);
 

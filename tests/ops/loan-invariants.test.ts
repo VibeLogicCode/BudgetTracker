@@ -190,13 +190,23 @@ describe("MUST-13.1' G3: interest never becomes a writer", () => {
    * periodEnd instead meant an adjustment dated today survived a statement dated last week and was
    * counted a second time on top of it.
    *
-   * Three readers now share the rule: the ledger's own facts, the balance replay, and the withdraw
-   * path that re-cuts what a retracted statement had governed. A fourth reading periodEnd would
-   * reintroduce exactly the double count.
+   * FOUR readers now share the rule: the ledger's own facts, the balance replay, the withdraw path
+   * that re-cuts what a retracted statement had governed, and (2026-09-20) the re-cut a back-dated
+   * payment triggers, which deletes the app's own estimates for the periods that changed. A fifth
+   * reading periodEnd would reintroduce exactly the double count -- and on the delete it would be
+   * worse than a double count: it would delete a confirmed statement's own period.
+   *
+   * FIVE call sites, not four: the re-cut's DELETE carries two of them, one bounding it to the
+   * period that actually changed and one to the statement wall. Both are load-bearing and the
+   * second is the one that keeps a confirmed figure out of reach, so it is written out rather than
+   * left implied by the fact that the engine would not have named an earlier period anyway.
    */
   it('every posting reader filters by period START, never period end', () => {
     const source = stripComments(read('src/lib/loans.ts'));
-    expect(source.match(/gte\(loanPostings\.periodStart/g)).toHaveLength(3);
+    expect(source.match(/gte\(loanPostings\.periodStart/g)).toHaveLength(5);
+    // The delete is the dangerous one: it must carry the statement wall itself, not inherit it.
+    const del = source.slice(source.indexOf('tx.delete(loanPostings)', source.indexOf('recutFromPeriodStart !== null')));
+    expect(del.slice(0, del.indexOf('.run()'))).toContain('gte(loanPostings.periodStart, facts.input.startDate)');
     expect(source).not.toMatch(/gte\(loanPostings\.periodEnd,\s*anchor/);
   });
 

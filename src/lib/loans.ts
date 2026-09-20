@@ -1177,7 +1177,43 @@ export function postDueInterest(
     const facts = ledgerFacts(tx, itemId, today);
     if (facts === null) return { posted: [], adjusted: null };
 
-    const ledger = buildLedger(facts.input);
+    let ledger = buildLedger(facts.input);
+
+    /*
+      THE RE-CUT (2026-09-20). A payment dated inside a period that has already been posted makes
+      that row, and every row after it, a statement about a balance that is no longer true. Until
+      now those rows were left standing and the difference was swept into dated corrections, so a
+      household entering a year of payments by hand ended up with a ledger whose interest charges
+      could not be reproduced from the balances printed beside them.
+
+      Rows the app worked out itself are estimates, and an estimate can be made again. So they are
+      deleted and the periods posted fresh. TWO BOUNDS, and both matter:
+
+        - recutFromPeriodStart: nothing before the period that actually changed is touched.
+        - facts.input.startDate, which IS the newest statement's date (ledgerFacts reads the anchor
+          into it): a figure a person confirmed against a real statement is never deleted. This is
+          the fourth reader of the period-START wall, and it filters the same way the other three
+          do -- on periodStart, so a correction dated today whose periodStart names last month goes
+          with the period it corrects.
+
+      One pass, never a loop: after the delete those periods have no stored row at all, so the
+      rebuilt ledger finds nothing left to mismatch against and proposes them as ordinary postings.
+    */
+    if (ledger.recutFromPeriodStart !== null) {
+      tx.delete(loanPostings)
+        .where(
+          and(
+            eq(loanPostings.itemId, itemId),
+            gte(loanPostings.periodStart, ledger.recutFromPeriodStart),
+            gte(loanPostings.periodStart, facts.input.startDate),
+          ),
+        )
+        .run();
+      const afterCut = ledgerFacts(tx, itemId, today);
+      if (afterCut === null) return { posted: [], adjusted: null };
+      ledger = buildLedger(afterCut.input);
+    }
+
     if (ledger.duePostings.length === 0 && ledger.dueAdjustment === null) {
       return { posted: [] as StoredPosting[], adjusted: null as StoredPosting | null };
     }
