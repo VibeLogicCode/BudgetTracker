@@ -21,6 +21,40 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.51.0] - 2026-09-20
+
+### Changed
+
+- **A loan payment entered after the fact now rewrites the cycles it belongs to.** Before this,
+  a back-dated payment left the already-posted cycles alone and wrote correction rows at the
+  bottom. The totals were right, but the table was not readable: every charge after the payment
+  had been worked out on a balance that had not been reduced yet, so a cycle could show interest
+  that no reader could reproduce from the balance printed beside it — and each correction re-listed
+  every earlier payment while carrying only its own share. Those cycles are now deleted and posted
+  again from the payment's date, so a payment entered months late lands exactly the ledger it would
+  have if it had been entered on the day.
+
+  **Before updating:** the interest rows on a loan with back-dated payments will change, and its
+  balance may move with them. Nothing behind a statement is touched — the re-cut stops at the
+  newest figure you reconciled, and a rate corrected after the fact still posts as a dated
+  correction rather than a rewrite.
+- **The ledger opens on demand.** The loan page carried the whole table, which pushed everything
+  below it off the screen on a long loan for something nobody wants open all the time. The card
+  keeps the last four entries; **Show the full ledger** opens the rest in a dialog — 25 entries a
+  page, with the pager at the bottom, and the by-month grouping moved in there with the table.
+
+### Added
+
+- **A way to clear one row off Needs a look.** A charge that had been looked at and judged fine sat
+  on the dashboard for a fortnight regardless. **That's fine** takes that one finding off the card.
+  It is a verdict on one charge, not on the merchant: the next odd charge at the same place is a
+  new finding and still appears.
+
+### Fixed
+
+- The total on Loans and on Who owes us ran off the right edge of the card when the note about
+  untracked balances sat beside it. The note is part of the card's own description now.
+
 ## [1.50.1] - 2026-09-19
 
 ### Fixed
