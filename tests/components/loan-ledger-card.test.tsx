@@ -66,6 +66,7 @@ function ledger(over: Partial<Ledger> = {}): Ledger {
     ],
     duePostings: [],
     dueAdjustment: null,
+    recutFromPeriodStart: null,
     postedBalanceCents: 506_048,
     accruedCents: 2_312,
     owingCents: 508_360,
@@ -78,8 +79,12 @@ function ledger(over: Partial<Ledger> = {}): Ledger {
   };
 }
 
-const table = () => screen.getByRole('table');
+/** The card's own table is the PREVIEW. The whole ledger lives in the dialog, reached below. */
+const table = () => screen.getAllByRole('table')[0]!;
 const bodyRows = () => within(table()).getAllByRole('row').slice(1);
+const dialog = () => screen.getByRole('dialog');
+const dialogRows = () => within(within(dialog()).getByRole('table')).getAllByRole('row').slice(1);
+const openLedger = () => fireEvent.click(screen.getByRole('button', { name: 'Show the full ledger' }));
 
 /**
  * Review F2, and the owner's ruling on it. The card printed seven figures of equal weight, three of
@@ -184,9 +189,11 @@ describe('F5: the working opens instead of hovering', () => {
  * was one button carrying aria-pressed -- which a screen reader announces and a sighted reader
  * cannot see. Two options now, so the control shows which view is on rather than only knowing it.
  */
+/** The grouping control belongs with the full table, which since 2026-09-20 is in the dialog. */
 describe('the grouping control', () => {
   it('shows which view is on, and folds the payments into the period when grouped', () => {
     render(<LoanLedgerCard ledger={ledger()} direction="owed" />);
+    openLedger();
     const everyEntry = screen.getByRole('button', { name: 'Every entry' });
     const byMonth = screen.getByRole('button', { name: 'By month' });
     expect(everyEntry.getAttribute('aria-pressed')).toBe('true');
@@ -197,15 +204,21 @@ describe('the grouping control', () => {
     expect(screen.getByRole('button', { name: 'By month' }).getAttribute('aria-pressed')).toBe('true');
     expect(screen.getByRole('button', { name: 'Every entry' }).getAttribute('aria-pressed')).toBe('false');
     // Opening and the standalone payment are folded away; the period and the accrual remain.
-    expect(bodyRows()).toHaveLength(2);
-    expect(textOf(bodyRows()[0])).toContain('2026-07-01 to 2026-08-01');
+    expect(dialogRows()).toHaveLength(2);
+    expect(textOf(dialogRows()[0])).toContain('2026-07-01 to 2026-08-01');
   });
 
   it('goes back to every entry', () => {
     render(<LoanLedgerCard ledger={ledger()} direction="owed" />);
+    openLedger();
     fireEvent.click(screen.getByRole('button', { name: 'By month' }));
     fireEvent.click(screen.getByRole('button', { name: 'Every entry' }));
-    expect(bodyRows()).toHaveLength(4);
+    expect(dialogRows()).toHaveLength(4);
+  });
+
+  it('is not on the card itself, where there is nothing long enough to group', () => {
+    render(<LoanLedgerCard ledger={ledger()} direction="owed" />);
+    expect(screen.queryByRole('button', { name: 'By month' })).toBeNull();
   });
 });
 
@@ -247,7 +260,7 @@ describe('the toolbar', () => {
  * read from the bottom: what happened lately, and what is building up now. Rendering every row cost
  * a 60-100 KB flight payload and a re-render on every keystroke in the edit form beside it.
  */
-describe('C12: the expanded view is capped', () => {
+describe('the ledger opens on demand (reported 2026-09-20)', () => {
   function longLedger(count: number): Ledger {
     const rows = Array.from({ length: count }, (_, index) => ({
       kind: 'payment' as const,
@@ -261,23 +274,89 @@ describe('C12: the expanded view is capped', () => {
     return ledger({ rows });
   }
 
-  it('shows the most recent hundred, and says so', () => {
+  it('shows the last four entries on the card, and says what it is showing', () => {
     render(<LoanLedgerCard ledger={longLedger(250)} direction="owed" />);
-    expect(bodyRows()).toHaveLength(100);
-    expect(screen.getByText(/Showing the most recent 100 of 250 entries/)).toBeTruthy();
-    // The most recent rows are the ones kept: the last payment is the biggest index.
+    expect(bodyRows()).toHaveLength(4);
+    expect(screen.getByText(/The last 4 of 250 entries/)).toBeTruthy();
+    // The newest rows are the ones kept: the last payment is the biggest index.
     expect(textOf(bodyRows().at(-1))).toContain('12.49');
   });
 
-  it('shows all of them when asked', () => {
-    render(<LoanLedgerCard ledger={longLedger(250)} direction="owed" />);
-    fireEvent.click(screen.getByRole('button', { name: 'Show all 250' }));
-    expect(bodyRows()).toHaveLength(250);
-    expect(screen.queryByText(/Showing the most recent/)).toBeNull();
+  it('says nothing about a preview when the whole ledger already fits', () => {
+    render(<LoanLedgerCard ledger={ledger()} direction="owed" />);
+    expect(screen.queryByText(/The last 4 of/)).toBeNull();
+    expect(bodyRows()).toHaveLength(4);
   });
 
-  it('says nothing about a cap on a short ledger', () => {
+  /** The owner asked for the shell the rest of the app uses: a dialog over a blurred page. */
+  it('opens the whole ledger in a modal dialog', () => {
+    render(<LoanLedgerCard ledger={longLedger(250)} direction="owed" />);
+    const trigger = screen.getByRole('button', { name: 'Show the full ledger' });
+    expect(trigger.getAttribute('aria-haspopup')).toBe('dialog');
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+
+    fireEvent.click(trigger);
+
+    expect(dialog().getAttribute('aria-modal')).toBe('true');
+    expect(screen.getByTestId('loan-ledger-dialog-backdrop').className).toContain('backdrop-blur-sm');
+  });
+
+  it('pages the dialog, opening on the newest page', () => {
+    render(<LoanLedgerCard ledger={longLedger(250)} direction="owed" />);
+    openLedger();
+    expect(dialogRows()).toHaveLength(25);
+    expect(textOf(within(dialog()).getByText(/^Page /))).toBe('Page 10 of 10 — 250 entries');
+    expect(textOf(dialogRows().at(-1))).toContain('12.49');
+  });
+
+  it('walks back a page and forward again', () => {
+    render(<LoanLedgerCard ledger={longLedger(250)} direction="owed" />);
+    openLedger();
+    fireEvent.click(screen.getByRole('button', { name: 'Previous page' }));
+    expect(textOf(within(dialog()).getByText(/^Page /))).toBe('Page 9 of 10 — 250 entries');
+    expect(textOf(dialogRows().at(-1))).toContain('12.24');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
+    expect(textOf(dialogRows().at(-1))).toContain('12.49');
+  });
+
+  /**
+   * Both buttons are always rendered, the unreachable one disabled -- unlike the Transactions
+   * pager, which omits them. That pager is made of real links to a server render, so an absent
+   * one is an absent page. This one opens on the LAST page, where omitting would mean the control
+   * the owner asked for by name is missing at the very moment the dialog opens.
+   */
+  it('keeps both pager buttons on the page, disabling the one with nowhere to go', () => {
+    render(<LoanLedgerCard ledger={longLedger(250)} direction="owed" />);
+    openLedger();
+    expect((screen.getByRole('button', { name: 'Next page' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Previous page' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('offers no pager at all when everything fits on one page', () => {
     render(<LoanLedgerCard ledger={ledger()} direction="owed" />);
-    expect(screen.queryByText(/Showing the most recent/)).toBeNull();
+    openLedger();
+    expect(screen.queryByRole('button', { name: 'Next page' })).toBeNull();
+    expect(textOf(within(dialog()).getByText(/entries$/))).toBe('4 entries');
+  });
+
+  it('closes on Escape', () => {
+    render(<LoanLedgerCard ledger={longLedger(250)} direction="owed" />);
+    openLedger();
+    fireEvent.keyDown(dialog(), { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Show the full ledger' }).getAttribute('aria-expanded')).toBe('false');
+  });
+
+  /** A page that no longer exists must not be left showing an empty table. */
+  it('clamps to a page that exists when the grouping changes under it', () => {
+    render(<LoanLedgerCard ledger={longLedger(250)} direction="owed" />);
+    openLedger();
+    fireEvent.click(screen.getByRole('button', { name: 'Previous page' }));
+    fireEvent.click(screen.getByRole('button', { name: 'By month' }));
+    // This fixture is payments only, and a stretch with no posting in it collapses to no period
+    // row at all -- so grouped it is one (empty) page, and the pager has nothing left to offer.
+    expect(screen.queryByRole('button', { name: 'Previous page' })).toBeNull();
+    expect(textOf(dialog())).toContain('0 entries');
   });
 });

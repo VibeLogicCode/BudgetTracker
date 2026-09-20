@@ -4,6 +4,7 @@ import { memo, useMemo, useState } from 'react';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { AmountCell, TableWrap } from '@/components/ui/Table';
 import { buttonClass } from '@/components/ui/Button';
+import { RowDialog } from '@/components/ui/RowDialog';
 import { formatCents, formatRateBps } from '@/lib/money';
 import { BASIS_LABELS, INTEREST_WORDING, LEDGER_ROW_WORDS } from '@/lib/loans/basis-labels';
 import type { Ledger, LedgerRow } from '@/lib/loans/ledger';
@@ -59,20 +60,44 @@ export const LoanLedgerCard = memo(function LoanLedgerCard({
   children?: React.ReactNode;
 }) {
   const [byMonth, setByMonth] = useState(false);
-  const [showAll, setShowAll] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [page, setPage] = useState(1);
   const words = INTEREST_WORDING[direction];
   // C12: the collapse walks every row, and nothing about it changes while the toggle sits still.
   const all = useMemo(() => (byMonth ? collapseToPeriods(ledger.rows) : ledger.rows), [byMonth, ledger.rows]);
-  /*
-    C12. THE MOST RECENT HUNDRED, unless asked otherwise.
 
-    A line of credit three years in has upwards of a thousand rows, and the ledger is read from the
-    bottom -- what happened lately, and what is building up now. Rendering all of it costs a flight
-    payload of 60-100 KB and a re-render nobody sees the value of. "Show all" is one press, and the
-    by-month view usually makes it unnecessary.
+  /*
+    THE LEDGER ON DEMAND (reported 2026-09-20). The card used to print the whole table -- capped at
+    the most recent hundred rows, with "Show all" under it -- and the report was that the page grew
+    until everything else on it was below the fold, for a table nobody wanted open all the time:
+    "you only want to look at the ledger on demand, otherwise it's wasted space".
+
+    So the card keeps the last few entries, which is the question it gets asked most often (what has
+    happened lately), and the whole thing moves behind one press into the same dialog shell the rest
+    of the app edits rows in -- backdrop, blur, focus trap, Escape. Paginated inside, because a
+    thousand rows in a dialog is the same problem moved.
+
+    The GROUPING control goes with the table rather than staying on the card: it is a way of reading
+    the full history, and on a four-row preview there is nothing to group.
   */
-  const rows = showAll || all.length <= ROW_CAP ? all : all.slice(-ROW_CAP);
-  const hidden = all.length - rows.length;
+  const preview = ledger.rows.slice(-PREVIEW_ROWS);
+  const hidden = ledger.rows.length - preview.length;
+  const pageCount = Math.max(1, Math.ceil(all.length / PAGE_SIZE));
+  // Clamped rather than reset: switching to the by-month view can leave the page number past the
+  // end, and an out-of-range page renders an empty table with no hint of why.
+  const current = Math.min(page, pageCount);
+  const pageRows = all.slice((current - 1) * PAGE_SIZE, current * PAGE_SIZE);
+
+  /** Opens on the NEWEST page: a ledger is read from the bottom, and that is where the card left off. */
+  function openLedger() {
+    setPage(Math.max(1, Math.ceil(all.length / PAGE_SIZE)));
+    setOpen(true);
+  }
+
+  function group(next: boolean) {
+    setByMonth(next);
+    setPage(Math.max(1, Math.ceil((next ? collapseToPeriods(ledger.rows) : ledger.rows).length / PAGE_SIZE)));
+  }
 
   return (
     <Card>
@@ -115,31 +140,15 @@ export const LoanLedgerCard = memo(function LoanLedgerCard({
         </dl>
 
         <div className="flex flex-wrap items-center justify-between gap-2 print:hidden">
-          {/*
-            Reported 2026-09-19: "i click on month and view changes by date range but label stays
-            same". It was one button reading "By month" with aria-pressed -- which a screen reader
-            announces and a sighted reader cannot see, so after pressing it there was nothing on the
-            page saying which of the two views was on. Two options, the active one filled: the
-            control now shows the state instead of only carrying it.
-          */}
-          <div role="group" aria-label="How to group the ledger" className="flex flex-wrap items-center gap-1">
-            <button
-              type="button"
-              aria-pressed={!byMonth}
-              onClick={() => setByMonth(false)}
-              className={buttonClass(byMonth ? 'ghost' : 'secondary', 'sm', 'min-h-11 sm:min-h-0')}
-            >
-              Every entry
-            </button>
-            <button
-              type="button"
-              aria-pressed={byMonth}
-              onClick={() => setByMonth(true)}
-              className={buttonClass(byMonth ? 'secondary' : 'ghost', 'sm', 'min-h-11 sm:min-h-0')}
-            >
-              By month
-            </button>
-          </div>
+          <button
+            type="button"
+            aria-haspopup="dialog"
+            aria-expanded={open}
+            onClick={openLedger}
+            className={buttonClass('secondary', 'sm', 'min-h-11 sm:min-h-0')}
+          >
+            Show the full ledger
+          </button>
           {downloadHref === undefined ? null : (
             <a href={downloadHref} className={buttonClass('ghost', 'sm', 'min-h-11 sm:min-h-0')}>
               Download as a spreadsheet
@@ -147,53 +156,135 @@ export const LoanLedgerCard = memo(function LoanLedgerCard({
           )}
         </div>
 
-        {/*
-          F5: TableWrap renders the <table> itself, so thead/tbody are its direct children. The old
-          card nested a second <table> inside it -- invalid, and it also meant `responsive` could
-          not reach the rows, so this table scrolled sideways on a phone while the narrower table
-          below it stacked into cards.
-        */}
         {hidden === 0 ? null : (
           <p className="text-sm text-muted">
-            Showing the most recent {rows.length} of {all.length} entries.{' '}
-            <button type="button" onClick={() => setShowAll(true)} className="text-accent-text hover:underline">
-              Show all {all.length}
-            </button>
+            The last {preview.length} of {ledger.rows.length} entries.
           </p>
         )}
 
-        <TableWrap bare responsive minWidth="52rem">
-          <thead>
-            <tr>
-              <th scope="col">Date</th>
-              <th scope="col">Description</th>
-              <th scope="col" className="text-right">
-                Payment
-              </th>
-              <th scope="col" className="text-right">
-                Interest
-              </th>
-              <th scope="col" className="text-right">
-                Principal
-              </th>
-              <th scope="col" className="text-right">
-                Running balance
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row, index) => (
-              <Row key={`${row.kind}-${row.date}-${index}`} row={row} direction={direction} />
-            ))}
-          </tbody>
-        </TableWrap>
+        <LedgerTable rows={preview} direction={direction} />
       </CardBody>
+
+      {open ? (
+        <RowDialog
+          dialogId="loan-ledger-dialog"
+          title="The full ledger"
+          description={`Every entry since the statement, oldest first. ${all.length} in total.`}
+          maxWidthClassName="max-w-5xl"
+          onClose={() => setOpen(false)}
+        >
+          <div role="group" aria-label="How to group the ledger" className="flex flex-wrap items-center gap-1">
+            {/*
+              Reported 2026-09-19: "i click on month and view changes by date range but label stays
+              same". It was one button reading "By month" with aria-pressed -- which a screen reader
+              announces and a sighted reader cannot see, so after pressing it there was nothing on
+              the page saying which of the two views was on. Two options, the active one filled.
+            */}
+            <button
+              type="button"
+              aria-pressed={!byMonth}
+              onClick={() => group(false)}
+              className={buttonClass(byMonth ? 'ghost' : 'secondary', 'sm', 'min-h-11 sm:min-h-0')}
+            >
+              Every entry
+            </button>
+            <button
+              type="button"
+              aria-pressed={byMonth}
+              onClick={() => group(true)}
+              className={buttonClass(byMonth ? 'secondary' : 'ghost', 'sm', 'min-h-11 sm:min-h-0')}
+            >
+              By month
+            </button>
+          </div>
+
+          <LedgerTable rows={pageRows} direction={direction} />
+
+          {/*
+            The pager, at the bottom where the owner asked for it and where a reader who has just
+            walked to the end of a page is looking.
+
+            BOTH buttons are always rendered, the unreachable one disabled -- where the Transactions
+            pager omits them. That one is made of real links to a server render, so a missing link
+            is a page that is not there; this one opens on the LAST page, so omitting would mean the
+            control is absent at the exact moment the dialog opens.
+          */}
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm text-muted">
+              {pageCount === 1 ? '' : `Page ${current} of ${pageCount} \u2014 `}
+              {all.length} {all.length === 1 ? 'entry' : 'entries'}
+            </p>
+            {pageCount === 1 ? null : (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={current === 1}
+                  onClick={() => setPage(current - 1)}
+                  className={buttonClass('secondary', 'sm', 'min-h-11 sm:min-h-0')}
+                >
+                  Previous page
+                </button>
+                <button
+                  type="button"
+                  disabled={current === pageCount}
+                  onClick={() => setPage(current + 1)}
+                  className={buttonClass('secondary', 'sm', 'min-h-11 sm:min-h-0')}
+                >
+                  Next page
+                </button>
+              </div>
+            )}
+          </div>
+        </RowDialog>
+      ) : null}
     </Card>
   );
 });
 
-/** How many entries the expanded view renders before it offers the rest behind a press (C12). */
-const ROW_CAP = 100;
+/** What the card itself shows: enough to answer "what happened lately", and no more. */
+const PREVIEW_ROWS = 4;
+
+/** How many entries one page of the dialog holds. */
+const PAGE_SIZE = 25;
+
+/**
+ * F5: TableWrap renders the <table> itself, so thead/tbody are its direct children. The old card
+ * nested a second <table> inside it -- invalid, and it also meant `responsive` could not reach the
+ * rows, so this table scrolled sideways on a phone while the narrower table below it stacked into
+ * cards.
+ *
+ * One component for both the preview and the dialog, so the two can never drift into showing the
+ * same row two different ways.
+ */
+function LedgerTable({ rows, direction }: { rows: LedgerRow[]; direction: LoanDirection }) {
+  return (
+    <TableWrap bare responsive minWidth="52rem">
+      <thead>
+        <tr>
+          <th scope="col">Date</th>
+          <th scope="col">Description</th>
+          <th scope="col" className="text-right">
+            Payment
+          </th>
+          <th scope="col" className="text-right">
+            Interest
+          </th>
+          <th scope="col" className="text-right">
+            Principal
+          </th>
+          <th scope="col" className="text-right">
+            Running balance
+          </th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row, index) => (
+          <Row key={`${row.kind}-${row.date}-${index}`} row={row} direction={direction} />
+        ))}
+      </tbody>
+    </TableWrap>
+  );
+}
 
 function Figure({ label, value }: { label: string; value: string }) {
   return (
