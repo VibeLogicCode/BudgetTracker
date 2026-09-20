@@ -1,15 +1,28 @@
 import Link from 'next/link';
+import { DismissInsightForm } from '@/components/DismissInsightForm';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { ListRow } from '@/components/ui/ListRow';
 import { Pill } from '@/components/ui/Pill';
 import type { InsightKind, InsightRow } from '@/lib/insights';
+import { formatCents } from '@/lib/money';
 import { transactionsHref } from '@/lib/transaction-links';
 
 /**
  * v1.13.0 ruling R6 (item AJ / PROD-2). Self-hiding, in the manner of LoansCard and ComingUpCard:
- * rendered unconditionally by the dashboard, absent when there is nothing to say. That is the whole
- * of the dismiss story -- a card with a dismiss button is a card somebody dismisses once and never
- * sees again.
+ * rendered unconditionally by the dashboard, absent when there is nothing to say.
+ *
+ * THE CARD still has no dismiss, for the reason this docblock has always given: a card with a
+ * dismiss button is a card somebody dismisses once and never sees again.
+ *
+ * A ROW does, since 2026-09-20, and the argument above never covered it. Asked how to clear a
+ * finding that had been looked at and judged fine, the honest answer was that there was no way --
+ * it sat on the dashboard for a fortnight regardless. "That's fine" is a verdict on one charge, and
+ * the next charge at the same merchant is a new finding with a new key (see
+ * src/lib/insight-dismissals.ts, which rules out the merchant whitelist this could have been).
+ *
+ * No "showing N dismissed" affordance and no undo button: two controls a row is the limit, nothing
+ * is destroyed -- the charge is still in the ledger, Look still finds it, and the finding would
+ * have aged out within weeks anyway -- and the reverse direction stays available in the library.
  *
  * MUST-19.11: the SENTENCE is built in src/lib/insights.ts and rendered verbatim here. This component
  * owns only the three labels below, because they are a property of the card's layout and not of the
@@ -27,7 +40,7 @@ export function NeedsALookCard({ rows }: { rows: InsightRow[] }) {
     <Card>
       <CardHeader
         title="Needs a look"
-        description="Charges that stand out this month. Nothing here is a problem on its own."
+        description="Charges that stand out this month. Nothing here is a problem on its own; That’s fine clears one you have checked."
       />
       {/* Ruling D1: ListRow (Lane 0). The kind label moves from `.badge` to the shared Pill --
           this is the newer, semantic-tone vocabulary (see Pill.tsx's own docblock), and a second
@@ -47,6 +60,11 @@ export function NeedsALookCard({ rows }: { rows: InsightRow[] }) {
               </>
             }
             trailing={
+              // TWO controls, and they answer different questions: Look is "show me this charge",
+              // That's fine is "I have seen it". Looking is not judging -- somebody who opens a
+              // duplicate and finds a real double-post wants the row to stay until it is refunded
+              // -- so the link cannot double as the acknowledgement.
+              //
               // A search link, not /transactions/<id>: there is no per-transaction page, and the
               // merchant search lands on the charge WITH its neighbours, which is what somebody
               // checking a duplicate actually wants to see.
@@ -64,12 +82,18 @@ export function NeedsALookCard({ rows }: { rows: InsightRow[] }) {
               // `range: null` and `person: null` restate what this card always meant: the
               // insight's own sentence carries its month, and the question here is "where else
               // has this merchant charged us", which a range would narrow away.
-              <Link
-                href={transactionsHref({ range: null, person: null }, { kind: 'merchant', merchant: row.merchant })}
-                className="text-accent-text"
-              >
-                Look
-              </Link>
+              <span className="flex items-center gap-3">
+                <Link
+                  href={transactionsHref({ range: null, person: null }, { kind: 'merchant', merchant: row.merchant })}
+                  className="text-accent-text"
+                >
+                  Look
+                </Link>
+                <DismissInsightForm
+                  insightKey={row.key}
+                  label={`Mark the ${formatCents(Math.abs(row.amountCents))} charge at ${row.merchant} as fine and take it off this card`}
+                />
+              </span>
             }
           />
         ))}

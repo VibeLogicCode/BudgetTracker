@@ -7,6 +7,7 @@ import { CROSS_ORIGIN_ERROR, isSameOrigin } from '@/lib/auth/csrf';
 import { requireUser } from '@/lib/auth/session';
 import { isSelfScoped } from '@/lib/auth/viewer';
 import { todayIso } from '@/lib/dates';
+import { dismissInsight, dismissalIsInScope, isDismissalKey } from '@/lib/insight-dismissals';
 import { markImportRulesReviewed } from '@/lib/import/commit';
 import { unlinkItemTransaction } from '@/lib/loans';
 import { readEnv } from '@/lib/env';
@@ -63,6 +64,41 @@ export async function dismissRuleImportAction(
   if (!parsed.success) return { error: 'Invalid request.' };
 
   markImportRulesReviewed({ importId: parsed.data });
+  revalidatePath('/dashboard');
+  return {};
+}
+
+export interface DismissInsightState {
+  error?: string;
+}
+
+const insightKeyField = z.string().min(1).max(64);
+
+/**
+ * Reported 2026-09-20: "how do i get rid of take a look? it goes to transactions with no way to
+ * clear it or am i missing something?" Nothing was missing; there was no way to clear one. See
+ * src/lib/insight-dismissals.ts for why this is per finding rather than per merchant, and why it
+ * needs no migration.
+ *
+ * Same guard order every action in this codebase uses: origin, then auth, then validation, then
+ * the write -- with one addition. The card is viewer-scoped, so a self-scoped member never SEES a
+ * charge that is not theirs here, but this route is reachable directly and "the UI would not have
+ * offered it" has never been an access check. dismissalIsInScope re-reads the charges the key
+ * names and refuses if any of them falls outside what this viewer may act on.
+ */
+export async function dismissInsightAction(
+  _prev: DismissInsightState,
+  formData: FormData,
+): Promise<DismissInsightState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  const user = await requireUser();
+
+  const parsed = insightKeyField.safeParse(formData.get('key'));
+  if (!parsed.success || !isDismissalKey(parsed.data)) return { error: 'Invalid request.' };
+  if (!dismissalIsInScope(parsed.data, user)) return { error: 'Not available on this account.' };
+
+  dismissInsight({ key: parsed.data, on: todayIso() });
   revalidatePath('/dashboard');
   return {};
 }

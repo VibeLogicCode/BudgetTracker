@@ -6,6 +6,7 @@ import type { InsightRow } from '@/lib/insights';
 
 const row = (over: Partial<InsightRow> = {}): InsightRow => ({
   kind: 'unusual',
+  key: 'unusual:7',
   transactionId: 7,
   date: '2026-08-20',
   merchant: 'GROCERY STORE',
@@ -34,8 +35,29 @@ describe('NeedsALookCard (ruling R6)', () => {
     expect(screen.getByRole('link').getAttribute('href')).toBe('/transactions?q=GROCERY+STORE');
   });
 
+  /**
+   * Reported 2026-09-20: there was no way to clear a finding that had been looked at and judged
+   * fine. Per ROW -- the card itself still has no dismiss, for the reason its own docblock gives.
+   */
+  it('offers a verdict on each row, named for a screen reader', () => {
+    render(<NeedsALookCard rows={[row()]} />);
+    const button = screen.getByRole('button', { name: /Mark the \$920\.00 charge at GROCERY STORE as fine/ });
+    expect(button.textContent).toBe('That’s fine');
+  });
+
+  it('sends the finding key, not the merchant, so a later charge is still its own question', () => {
+    const { container } = render(<NeedsALookCard rows={[row({ key: 'dupe:7:9' })]} />);
+    const field = container.querySelector('input[name="key"]');
+    expect(field?.getAttribute('value')).toBe('dupe:7:9');
+  });
+
+  it('keeps Look as a link, because looking is not judging', () => {
+    render(<NeedsALookCard rows={[row()]} />);
+    expect(screen.getByRole('link').textContent).toBe('Look');
+  });
+
   it('labels each kind so a reader knows what they are being told', () => {
-    render(<NeedsALookCard rows={[row({ kind: 'duplicate' }), row({ kind: 'creep', transactionId: 8 })]} />);
+    render(<NeedsALookCard rows={[row({ kind: 'duplicate' }), row({ kind: 'creep', key: 'creep:8', transactionId: 8 })]} />);
     expect(screen.getByText('Charged twice')).toBeTruthy();
     expect(screen.getByText('Went up')).toBeTruthy();
   });

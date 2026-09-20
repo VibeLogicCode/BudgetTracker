@@ -1080,6 +1080,81 @@ describe('DashboardPage — Lane 3b: the unreviewed-rule-imports card', () => {
 });
 
 /**
+ * Reported 2026-09-20: the Needs-a-look card had no way to clear a finding that had been looked at
+ * and judged fine. The action behind the new per-row button, invoked directly against a real DB --
+ * the same approach the dismiss test above takes.
+ */
+describe('dismissInsightAction (2026-09-20)', () => {
+  let t: TestDb | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  it('refuses a key that is not one of the three shapes a detector produces', async () => {
+    t = createTestDb();
+    const adult = await createUser({ name: 'Adult', username: 'adult', password: 'correct horse battery', role: 'admin' });
+    currentUser.value = { id: adult.id, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+
+    const { dismissInsightAction } = await import('@/app/(app)/dashboard/actions');
+    const fd = new FormData();
+    fd.set('key', 'merchant:GROCERY STORE');
+    expect((await dismissInsightAction({}, fd)).error).toBe('Invalid request.');
+  });
+
+  /**
+   * R2. The card is viewer-scoped, so a self-scoped member never sees somebody else's charge here
+   * -- but this route is reachable directly, and the action must not take the card's word for it.
+   */
+  it('refuses a self-scoped member clearing a finding about somebody else', async () => {
+    t = createTestDb();
+    const adult = await createUser({ name: 'Adult', username: 'adult', password: 'correct horse battery', role: 'admin' });
+    const member = await createUser({ name: 'Member', username: 'member', password: 'correct horse battery', role: 'member' });
+    const accountId = createAccount({ name: 'Joint Chequing', type: 'chequing', ownerUserId: adult.id });
+    const theirs = createManualTransaction({
+      accountId,
+      date: todayIso(),
+      description: 'GROCERY STORE',
+      amountCents: -92000,
+      categoryId: null,
+      attributedUserId: adult.id,
+      userId: adult.id,
+      actorRole: 'admin',
+    });
+    currentUser.value = { id: member.id, name: 'Member', username: 'member', role: 'member', visibility: 'self' };
+
+    const { dismissInsightAction } = await import('@/app/(app)/dashboard/actions');
+    const fd = new FormData();
+    fd.set('key', `unusual:${theirs}`);
+    expect((await dismissInsightAction({}, fd)).error).toBe('Not available on this account.');
+  });
+
+  it('clears a finding about the viewer own charge', async () => {
+    t = createTestDb();
+    const adult = await createUser({ name: 'Adult', username: 'adult', password: 'correct horse battery', role: 'admin' });
+    const accountId = createAccount({ name: 'Joint Chequing', type: 'chequing', ownerUserId: adult.id });
+    const mine = createManualTransaction({
+      accountId,
+      date: todayIso(),
+      description: 'GROCERY STORE',
+      amountCents: -92000,
+      categoryId: null,
+      attributedUserId: adult.id,
+      userId: adult.id,
+      actorRole: 'admin',
+    });
+    currentUser.value = { id: adult.id, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+
+    const { dismissInsightAction } = await import('@/app/(app)/dashboard/actions');
+    const { listDismissedKeys } = await import('@/lib/insight-dismissals');
+    const fd = new FormData();
+    fd.set('key', `unusual:${mine}`);
+    expect((await dismissInsightAction({}, fd)).error).toBeUndefined();
+    expect([...listDismissedKeys()]).toEqual([`unusual:${mine}`]);
+  });
+});
+
+/**
  * 2026-09-08, docs/superpowers/specs/2026-09-08-manual-digest-send-design.md. The dashboard's
  * "Send me a summary now" control and the action behind it. Same direct-invocation approach as the
  * dismiss test above: the real 'use server' function against a real DB, not a simulated click.

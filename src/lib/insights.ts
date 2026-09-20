@@ -3,7 +3,9 @@ import { getDb } from '@/db/client';
 import { transactions } from '@/db/schema';
 import { ownerScope, type Viewer } from '@/lib/auth/viewer';
 import { addDaysIso } from '@/lib/dates';
+import { listDismissedKeys } from '@/lib/insight-dismissals';
 import { formatCents } from '@/lib/money';
+import { duplicateChargeKey, subscriptionCreepKey, unusualTransactionKey } from '@/lib/notify/events';
 import {
   creepVerdict,
   findDuplicates,
@@ -33,6 +35,12 @@ export type InsightKind = 'unusual' | 'duplicate' | 'creep';
 
 export interface InsightRow {
   kind: InsightKind;
+  /**
+   * What this finding IS, in the vocabulary the notification outbox already uses
+   * (unusualTransactionKey and friends, src/lib/notify/events.ts). Two surfaces naming the same
+   * anomaly two different ways is how a dismissal on one of them fails to hold on the other.
+   */
+  key: string;
   /** The transaction the card row links to. A duplicate pair links to the SECOND charge. */
   transactionId: number;
   date: string;
@@ -110,6 +118,7 @@ export function householdInsights(input: { today: string; viewer: Viewer }): Ins
     if (verdict === null) continue;
     rows.push({
       kind: 'unusual',
+      key: unusualTransactionKey(candidate.id),
       transactionId: candidate.id,
       date: candidate.date,
       merchant: candidate.merchant,
@@ -127,6 +136,7 @@ export function householdInsights(input: { today: string; viewer: Viewer }): Ins
   for (const pair of findDuplicates({ rows: slice.filter((row) => row.date >= duplicateSliceStart), today })) {
     rows.push({
       kind: 'duplicate',
+      key: duplicateChargeKey(pair.lowerId, pair.higherId),
       // The SECOND (higher-id) charge: it is the one a person would question, and the one
       // they would reverse.
       transactionId: pair.higherId,
@@ -150,6 +160,7 @@ export function householdInsights(input: { today: string; viewer: Viewer }): Ins
     if (source === undefined) continue; // defensive: creepVerdict always returns an id from `charges`
     rows.push({
       kind: 'creep',
+      key: subscriptionCreepKey(verdict.transactionId),
       transactionId: verdict.transactionId,
       date: verdict.dateIso,
       merchant,
@@ -160,5 +171,11 @@ export function householdInsights(input: { today: string; viewer: Viewer }): Ins
 
   // Newest first, so the card leads with what just happened.
   rows.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : b.transactionId - a.transactionId));
-  return rows.slice(0, INSIGHTS_MAX_ROWS);
+  /*
+    Reported 2026-09-20. Cleared findings come out BEFORE the cap, not after: filtering afterwards
+    would leave a gap on a card that was already full, so clearing a row you had checked would cost
+    you the ninth finding rather than showing it to you.
+  */
+  const dismissed = listDismissedKeys();
+  return rows.filter((row) => !dismissed.has(row.key)).slice(0, INSIGHTS_MAX_ROWS);
 }

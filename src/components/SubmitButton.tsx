@@ -16,12 +16,16 @@ export function SubmitButton({
   variant = 'primary',
   size = 'md',
   onClick,
+  ariaLabel,
 }: {
   children: React.ReactNode;
   className?: string;
   disabled?: boolean;
   variant?: ButtonVariant;
   size?: ButtonSize;
+  /** For a button whose visible words are deliberately short ("That's fine", one per row) and
+   *  therefore say nothing on their own when read out of the row they sit in. */
+  ariaLabel?: string;
   /** An ordinary click handler, fired before the form's own action starts — for the rare
    *  case (the Updates card's review panel) where something needs to happen at urgent
    *  priority rather than being deferred until the action settles. */
@@ -29,7 +33,13 @@ export function SubmitButton({
 }) {
   const { pending } = useFormStatus();
   return (
-    <button type="submit" disabled={pending || disabled} onClick={onClick} className={buttonClass(variant, size, className)}>
+    <button
+      type="submit"
+      disabled={pending || disabled}
+      onClick={onClick}
+      aria-label={ariaLabel}
+      className={buttonClass(variant, size, className)}
+    >
       {pending ? 'Working…' : children}
     </button>
   );
