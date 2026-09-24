@@ -469,6 +469,37 @@ describe('the Windows quick start pulls what the NAS pulls', () => {
     expect(body).not.toContain('2>&1');
   });
 
+  /**
+   * Reported 2026-09-24, from a real install: `docker compose pull` refused the generated file
+   * with "did not find expected hexadecimal number" at the TZ line.
+   *
+   * Write-Output writes to the SUCCESS stream, which in PowerShell is also a function's return
+   * value. Get-IanaTimeZone printed two lines of explanation and then returned 'UTC', so the
+   * caller received all three joined into one string -- Windows path included -- and `\U` inside a
+   * double-quoted YAML scalar is an eight-hex-digit escape.
+   *
+   * Wait-Healthy had the same defect and it mattered more there: it returns $true/$false, and an
+   * array of console lines is always truthy, so the failure banner could never appear.
+   */
+  it('keeps console messages out of the success stream', () => {
+    for (const writer of ['Write-Step', 'Write-Info']) {
+      const line = new RegExp(`function ${writer} \\{[^\\n]*`).exec(quickstart)?.[0] ?? '';
+      expect(line).toContain('Write-Host');
+      expect(line).not.toContain('Write-Output');
+    }
+  });
+
+  it('refuses to write a time zone that is not one', () => {
+    expect(quickstart).toMatch(/\$TimeZone -notmatch '\^\[A-Za-z0-9_\+\/-\]\+\$'/);
+  });
+
+  /** The broken file outlived the run that wrote it, and only a -Force nobody knew about cleared it. */
+  it('replaces an existing compose file that docker cannot read', () => {
+    expect(quickstart).toContain('function Test-ComposeFileValid');
+    expect(quickstart).toContain('config -q');
+    expect(quickstart).toMatch(/is not valid YAML; replacing it/);
+  });
+
   it('offers a version pin, so a household can stay on a known-good release', () => {
     expect(quickstart).toMatch(/\$Version = 'latest'/);
     expect(quickstart).toContain('image: ${Registry}:${Tag}');
@@ -521,6 +552,34 @@ describe('PowerShell scripts', () => {
    * The install folder is named explicitly so the assertion afterwards is about a path this test
    * owns, and the run must leave it absent.
    */
+  /**
+   * THE REGRESSION TEST for the compose file that docker refused. Renders the real function with a
+   * deliberately poisoned time zone -- the exact shape a polluted success stream produced -- and
+   * requires the written line to be a plain zone. A text scan cannot prove this; rendering can.
+   */
+  it.runIf(pwshAvailable)('windows-quickstart.ps1 writes a compose file with a clean TZ line', () => {
+    const out = path.join(os.tmpdir(), `bt-compose-${process.pid}.yml`);
+    const script = [
+      "$ast = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'install/windows-quickstart.ps1').Path, [ref]$null, [ref]$null)",
+      '$fns = $ast.FindAll({$args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst]}, $true)',
+      'Invoke-Expression (($fns | ForEach-Object { $_.Extent.Text }) -join [Environment]::NewLine)',
+      "$DryRun = $false; $Registry = 'ghcr.io/vibelogiccode/budgettracker'; $Port = 3000",
+      `Write-ComposeFile -Path '${out.replace(/\\/g, '\\\\')}' -Tag 'latest' -TimeZone 'C:\\Users\\someone\\docker-compose.yml and more UTC'`,
+    ].join('; ');
+    const result = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', script], {
+      cwd: root,
+      encoding: 'utf8',
+    });
+    expect(result.status).toBe(0);
+    const yaml = fs.readFileSync(out, 'utf8');
+    fs.rmSync(out, { force: true });
+    const tz = /^\s+TZ: "(.*)"$/m.exec(yaml);
+    expect(tz).not.toBeNull();
+    expect(tz![1]).toBe('UTC');
+    // The escape that made docker refuse the file in the first place.
+    expect(yaml).not.toContain('\\U');
+  });
+
   it.runIf(pwshAvailable)('windows-quickstart.ps1 finishes a dry run without creating anything', () => {
     const target = path.join(os.tmpdir(), `bt-quickstart-dryrun-${process.pid}`);
     const result = spawnSync(

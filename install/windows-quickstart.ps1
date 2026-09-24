@@ -75,8 +75,26 @@ Usage: .\install\windows-quickstart.ps1 [options]
 '@ | Write-Output
 }
 
-function Write-Step { param([string]$Message) Write-Output "`n==> $Message" }
-function Write-Info { param([string]$Message) Write-Output $Message }
+<#
+  Write-Host, NOT Write-Output, and this is the whole bug of 2026-09-24.
+
+  Write-Output writes to the SUCCESS stream, which in PowerShell is also a function's return value.
+  Get-IanaTimeZone printed two lines of explanation and then returned 'UTC'; what the caller
+  actually received was an ARRAY of all three, joined with spaces on its way into a [string]
+  parameter. The compose file was written with
+
+      TZ: "  Edit TZ in C:\Users\...\docker-compose.yml if you would rather set it by hand. UTC"
+
+  and `\U` inside a double-quoted YAML scalar means an eight-hex-digit escape, so docker compose
+  refused the file with "did not find expected hexadecimal number". Wait-Healthy had the same
+  defect and it was worse there: it returns $true/$false, so an array of console lines made `if
+  (Wait-Healthy ...)` true no matter what, and the failure banner could never appear.
+
+  These three are console messages, not data. Write-Host puts them where they belong, and no
+  value-returning function in this script can be poisoned by adding a line of output to it.
+#>
+function Write-Step { param([string]$Message) Write-Host "`n==> $Message" }
+function Write-Info { param([string]$Message) Write-Host $Message }
 function Write-Warn { param([string]$Message) Write-Warning $Message }
 
 function Invoke-Step {
@@ -321,7 +339,7 @@ function Get-IanaTimeZone {
   }
   if ([string]::IsNullOrWhiteSpace($iana)) {
     Write-Warn "Could not map the Windows time zone '$windowsId' to an IANA name; using UTC."
-    Write-Info "  Edit TZ in $ComposeFile if you would rather set it by hand."
+    Write-Warn "Edit TZ in the compose file if you would rather set it by hand."
     return 'UTC'
   }
   return $iana
@@ -336,6 +354,16 @@ function Get-IanaTimeZone {
 #>
 function Write-ComposeFile {
   param([string]$Path, [string]$Tag, [string]$TimeZone)
+  <#
+    A second fence behind the streams fix above. An IANA zone is letters, digits, underscore,
+    plus, minus and slash -- nothing else. Anything carrying a space or a backslash is not a time
+    zone, whatever produced it, and writing it into a double-quoted YAML scalar is how this file
+    became unparseable once already. Refuse it here rather than emit a file docker cannot read.
+  #>
+  if ($TimeZone -notmatch '^[A-Za-z0-9_+/-]+$') {
+    Write-Warn "Ignoring a malformed time zone value; using UTC."
+    $TimeZone = 'UTC'
+  }
   $yaml = @"
 # Budget Tracker. Written by install/windows-quickstart.ps1 -- safe to edit and keep.
 #
@@ -404,6 +432,20 @@ services:
   # UTF8 without a BOM: docker compose reads the file as YAML and a BOM is a parse error on it.
   [System.IO.File]::WriteAllText($Path, $yaml, (New-Object System.Text.UTF8Encoding($false)))
   Write-Info "wrote $Path"
+}
+
+# Quiet, like the engine probe: an unreadable file is an answer, not an error to throw on.
+function Test-ComposeFileValid {
+  param([string]$Path)
+  if ($DryRun) { return $true }
+  $previous = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    & docker compose -f $Path config -q 2>$null | Out-Null
+    return ($LASTEXITCODE -eq 0)
+  }
+  catch { return $false }
+  finally { $ErrorActionPreference = $previous }
 }
 
 function Get-EffectivePort {
@@ -537,10 +579,25 @@ else {
   New-Item -ItemType Directory -Force $DataDir | Out-Null
 }
 
+<#
+  An existing compose file is left alone, because somebody may have pinned a version or deleted
+  the watchtower service in it and a re-run must not undo that.
+
+  Unless docker cannot read it. A broken file survived every re-run until now -- the run that
+  wrote it was long over, and the only way out was a -Force nobody knew to pass. `docker compose
+  config -q` is the same parser that is about to refuse it anyway, so asking first costs nothing.
+#>
+$rewrite = $Force
 if ((Test-Path $ComposeFile) -and -not $Force) {
-  Write-Info "$ComposeFile already exists - leaving it untouched (use -Force to rewrite it)."
+  if (Test-ComposeFileValid -Path $ComposeFile) {
+    Write-Info "$ComposeFile already exists - leaving it untouched (use -Force to rewrite it)."
+  }
+  else {
+    Write-Warn "$ComposeFile is not valid YAML; replacing it."
+    $rewrite = $true
+  }
 }
-else {
+if ($rewrite -or -not (Test-Path $ComposeFile)) {
   Write-ComposeFile -Path $ComposeFile -Tag $Version -TimeZone (Get-IanaTimeZone)
 }
 
