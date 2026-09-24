@@ -198,6 +198,19 @@ and one manual start before the engine answers, and no script can skip that: run
 install Docker, reboot, start Docker Desktop once, run the line again. On a machine that already
 runs Docker Desktop it really is one command.
 
+**If WSL2 is missing**, the script says so and offers the one command that fixes it. Docker
+Desktop can be installed, on your PATH and answering `docker --version` while its engine has no
+machine to run on — that shows up as `failed to connect to the docker API at
+npipe:////./pipe/dockerDesktopLinuxEngine`, and Docker Desktop's own window says "WSL not
+installed". In an elevated PowerShell:
+
+```powershell
+wsl --install --no-distribution
+```
+
+Then restart, start Docker Desktop once, and run the installer again. If you run the installer
+itself as Administrator it does this step for you.
+
 **If virtualization is off in the BIOS/UEFI**, the script says so and stops before installing
 anything, with the setting named for both Intel and AMD. Docker Desktop runs the app inside a
 lightweight VM, so there is no way around that setting — on a locked-down work laptop, run Budget

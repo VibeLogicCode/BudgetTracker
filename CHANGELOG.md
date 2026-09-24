@@ -28,7 +28,10 @@ All notable changes to Budget Tracker are recorded here.
   neither — it checks hardware virtualization, installs Docker Desktop with `winget` if it is
   missing, pulls the same prebuilt image the NAS install uses, starts it, adds a Start Menu
   shortcut and opens the browser. A machine with virtualization turned off in its BIOS is told so,
-  with the setting named for both Intel and AMD, before anything is downloaded.
+  with the setting named for both Intel and AMD, before anything is downloaded, and a machine
+  missing WSL2 is offered the one elevated command that installs it — Docker Desktop answers
+  `docker --version` perfectly happily while its engine has nothing to run on, so that case has to
+  be named rather than waited out.
 
 ## [1.51.0] - 2026-09-20
 

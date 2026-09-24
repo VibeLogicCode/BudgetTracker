@@ -434,6 +434,41 @@ describe('the Windows quick start pulls what the NAS pulls', () => {
     expect(body.indexOf('Test-Virtualization')).toBeLessThan(body.indexOf('Install-DockerDesktop'));
   });
 
+  /**
+   * Reported from a real install: Docker Desktop was installed and answered `--version`, WSL was
+   * not installed, and the engine refused every command. Docker Desktop's own window said exactly
+   * that; this script did not look, so it blamed the engine three minutes later.
+   */
+  it('checks WSL before it asks the engine anything', () => {
+    expect(quickstart).toContain('function Test-WslReady');
+    expect(quickstart).toContain('wsl --install --no-distribution');
+    const body = quickstart.slice(quickstart.indexOf('function Test-Prerequisites'));
+    const preflight = body.slice(0, body.indexOf('function Get-IanaTimeZone'));
+    expect(preflight.indexOf('Test-WslReady')).toBeLessThan(preflight.indexOf('Start-DockerEngine'));
+  });
+
+  /** wsl.exe ships as a stub that prints "wsl is not installed", so presence proves nothing. */
+  it('reads what wsl reports rather than trusting that the command exists', () => {
+    expect(quickstart).toContain('wsl --status');
+    expect(quickstart).toContain("'not installed'");
+    // wsl.exe writes UTF-16; the NULs have to come out or the match silently fails.
+    expect(quickstart).toMatch(/-replace "`0", ''/);
+  });
+
+  /**
+   * THE PROBE MUST STAY QUIET. `& docker info 2>&1` promotes a native command's stderr to error
+   * records, and with $ErrorActionPreference = 'Stop' that makes a perfectly normal "engine is not
+   * up yet" probe THROW -- which is how the real install got a wall of red PowerShell text instead
+   * of this script's own diagnosis.
+   */
+  it('probes the docker engine without merging its stderr', () => {
+    expect(quickstart).toContain('function Test-DockerEngine');
+    const probe = quickstart.slice(quickstart.indexOf('function Test-DockerEngine'));
+    const body = probe.slice(0, probe.indexOf('function Start-DockerEngine'));
+    expect(body).toContain('& docker info 2>$null');
+    expect(body).not.toContain('2>&1');
+  });
+
   it('offers a version pin, so a household can stay on a known-good release', () => {
     expect(quickstart).toMatch(/\$Version = 'latest'/);
     expect(quickstart).toContain('image: ${Registry}:${Tag}');

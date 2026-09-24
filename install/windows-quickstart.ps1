@@ -173,32 +173,113 @@ function Install-DockerDesktop {
   throw 'Docker Desktop needs to be started once before the app can be installed.'
 }
 
+function Test-IsElevated {
+  try {
+    $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    return (New-Object System.Security.Principal.WindowsPrincipal($identity)).IsInRole(
+      [System.Security.Principal.WindowsBuiltInRole]::Administrator)
+  }
+  catch { return $false }
+}
+
+<#
+  WSL2, CHECKED BEFORE THE ENGINE IS EVEN ASKED.
+
+  Reported from a real install: Docker Desktop was installed and `docker --version` answered, and
+  the engine then refused every command with "failed to connect to the docker API at
+  npipe:////./pipe/dockerDesktopLinuxEngine". Docker Desktop's own window said why -- WSL is not
+  installed -- but this script never looked, so it sat through its wait and blamed the engine.
+
+  `wsl.exe` EXISTS on every modern Windows even when the feature is not installed; it is a stub
+  that prints "wsl is not installed" and exits non-zero. So the test is the exit code and the text,
+  never the presence of the command.
+
+  wsl.exe writes UTF-16, which arrives here with NUL bytes between the characters and makes a
+  plain -match fail on a string that visibly contains the words. They are stripped before matching.
+#>
+function Test-WslReady {
+  if (-not (Get-Command wsl -ErrorAction SilentlyContinue)) { return $false }
+  $previous = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    $raw = (& wsl --status 2>&1 | Out-String)
+    if ($LASTEXITCODE -ne 0) { return $false }
+    $text = $raw -replace "`0", ''
+    return ($text -notmatch 'not installed')
+  }
+  catch { return $false }
+  finally { $ErrorActionPreference = $previous }
+}
+
+function Install-Wsl {
+  Write-Warn 'Windows Subsystem for Linux (WSL2) is not installed.'
+  Write-Info ''
+  Write-Info '  Docker Desktop runs the app inside WSL2, so the engine cannot start without it.'
+  Write-Info ''
+  if (-not (Test-IsElevated)) {
+    Write-Info '  Open PowerShell as Administrator (right-click -> Run as administrator) and run:'
+    Write-Info ''
+    Write-Info '      wsl --install --no-distribution'
+    Write-Info ''
+    Write-Info '  Then restart the computer, start Docker Desktop once, and run this script again.'
+    throw 'WSL2 must be installed before Docker Desktop can run.'
+  }
+  Write-Info '  This window is elevated, so it can be installed now.'
+  # --no-distribution on purpose: Docker Desktop creates its own docker-desktop distro, and
+  # installing Ubuntu alongside it drops the person into an unrelated first-run account setup.
+  Invoke-Step 'wsl' @('--install', '--no-distribution')
+  Write-Info ''
+  Write-Info '  WSL2 is installed. Now:'
+  Write-Info '    1. Restart the computer.'
+  Write-Info '    2. Start Docker Desktop once and wait for "Engine running".'
+  Write-Info '    3. Run this script again.'
+  throw 'Restart the computer to finish installing WSL2.'
+}
+
+<#
+  A QUIET probe. The earlier version was `& docker info 2>&1 | Out-Null`, and that merge is the
+  reason the real install above printed a wall of red PowerShell error text instead of this
+  script's own message: with $ErrorActionPreference = 'Stop', 2>&1 turns a native command's
+  stderr into error records, so a failed probe THREW and took the friendly path with it.
+
+  2>$null discards stderr instead of promoting it, and the preference is relaxed for the length
+  of the call because a probe that fails is the normal case here, not an error.
+#>
+function Test-DockerEngine {
+  $previous = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    & docker info 2>$null | Out-Null
+    return ($LASTEXITCODE -eq 0)
+  }
+  catch { return $false }
+  finally { $ErrorActionPreference = $previous }
+}
+
 function Start-DockerEngine {
   # `docker info` is the only honest test of "is the engine actually accepting commands" -- the
   # docker.exe binary is on PATH long before the VM behind it is up.
-  for ($attempt = 0; $attempt -lt 2; $attempt += 1) {
-    & docker info 2>&1 | Out-Null
-    if ($LASTEXITCODE -eq 0) { return }
-    if ($attempt -eq 0) {
-      $desktop = Join-Path $env:ProgramFiles 'Docker\Docker\Docker Desktop.exe'
-      if (-not (Test-Path $desktop)) { break }
-      Write-Step 'Starting Docker Desktop'
-      Start-Process -FilePath $desktop | Out-Null
-      Write-Info 'Waiting for the Docker engine (up to 3 minutes on a cold start).'
-      for ($waited = 0; $waited -lt 180; $waited += 5) {
-        Start-Sleep -Seconds 5
-        & docker info 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) {
-          Write-Info "The engine answered after ${waited}s."
-          return
-        }
+  if (Test-DockerEngine) { return }
+
+  $desktop = Join-Path $env:ProgramFiles 'Docker\Docker\Docker Desktop.exe'
+  if (Test-Path $desktop) {
+    Write-Step 'Starting Docker Desktop'
+    Start-Process -FilePath $desktop | Out-Null
+    Write-Info 'Waiting for the Docker engine (up to 3 minutes on a cold start).'
+    for ($waited = 0; $waited -lt 180; $waited += 5) {
+      Start-Sleep -Seconds 5
+      if (Test-DockerEngine) {
+        Write-Info "The engine answered after ${waited}s."
+        return
       }
     }
   }
+
   Write-Warn 'The Docker engine did not answer.'
   Write-Info '  Start Docker Desktop and wait for it to say "Engine running", then run this again.'
-  Write-Info '  If it never gets there, the usual causes are hardware virtualization being off in'
-  Write-Info '  the BIOS/UEFI, or WSL2 not being installed. In an elevated PowerShell: wsl --install'
+  Write-Info '  If it never gets there, check its own window: it names the missing piece, and the'
+  Write-Info '  usual answers are WSL2 (wsl --install --no-distribution, elevated, then reboot) or'
+  Write-Info '  hardware virtualization in the BIOS/UEFI.'
   throw 'The Docker engine is not responding.'
 }
 
@@ -213,6 +294,11 @@ function Test-Prerequisites {
   Test-Virtualization
   if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { Install-DockerDesktop }
   Write-Info "docker: $(docker --version)"
+  # WSL before the engine, always. Docker Desktop can be installed, on PATH and answering
+  # --version while the engine behind it has no machine to run on -- which is exactly what a real
+  # install hit, and asking the engine first turns a one-line fix into a three-minute timeout
+  # pointing at the wrong thing.
+  if (-not (Test-WslReady)) { Install-Wsl }
   Start-DockerEngine
   Invoke-Step 'docker' @('compose', 'version')
 }
