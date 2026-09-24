@@ -60,7 +60,7 @@ works exactly as it did before.
 | **Disk** | ~2 GB for the image, plus your data (a few MB per year of transactions). |
 | **Docker** | Engine 20.10.23+ **with the Compose plugin** (`docker compose version` must work). The old standalone `docker-compose` binary is not supported. |
 | **Synology** | DSM 7.2+ with **Container Manager** from Package Center. |
-| **Windows** | Docker Desktop 4.20+ with the **WSL2** backend. |
+| **Windows** | Docker Desktop 4.20+ with the **WSL2** backend, and **hardware virtualization enabled** in the BIOS/UEFI (Intel VT-x, or AMD SVM). The quick start below installs Docker for you and checks virtualization before it does. |
 | **macOS** | Docker Desktop 4.20+ (Apple silicon and Intel both work). |
 | **Port** | 3000 on the host, or any other port via `--port` / `-Port`. |
 | **Browser** | Any current Chrome, Edge, Firefox or Safari, on any device on your network. |
@@ -161,7 +161,54 @@ card and much faster.
 
 ## Quick start — Windows
 
-Open PowerShell in the project folder:
+Two scripts, and which one you want depends on whether you intend to change the code.
+
+### Just run it (recommended)
+
+No repo, no build, nothing to download by hand. Open PowerShell and paste one line:
+
+```powershell
+irm https://raw.githubusercontent.com/VibeLogicCode/BudgetTracker/main/install/windows-quickstart.ps1 | iex
+```
+
+It checks hardware virtualization, installs Docker Desktop with `winget` if it is missing, pulls
+the same prebuilt image the NAS install uses, starts it, waits for the health check, adds a Start
+Menu shortcut and opens the browser. The app then starts with Windows, because Docker Desktop does
+and the container is marked `restart: unless-stopped`.
+
+`Invoke-Expression` cannot pass parameters, so to give it options, run it as a script block:
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/VibeLogicCode/BudgetTracker/main/install/windows-quickstart.ps1))) -Port 8080
+```
+
+| Option | What it does |
+|---|---|
+| `-Port <n>` | Serve on another host port. |
+| `-InstallDir <path>` | Where the compose file and `data\` live. Default `%LOCALAPPDATA%\BudgetTracker`. |
+| `-Version <tag>` | Pin a release (`-Version 1.51.0`) instead of following `latest`. |
+| `-Update` | Pull the newest image and restart. Data is untouched. |
+| `-Uninstall` | Stop and remove the containers. Data is kept. |
+| `-PurgeData` | With `-Uninstall`, delete the data folder too. Irreversible. |
+| `-Force` | Rewrite the compose file even if one is already there. |
+| `-DryRun` | Print every action without doing any of them. |
+
+**On a clean machine this is two passes, not one.** Docker Desktop's own installer needs a reboot
+and one manual start before the engine answers, and no script can skip that: run the line, let it
+install Docker, reboot, start Docker Desktop once, run the line again. On a machine that already
+runs Docker Desktop it really is one command.
+
+**If virtualization is off in the BIOS/UEFI**, the script says so and stops before installing
+anything, with the setting named for both Intel and AMD. Docker Desktop runs the app inside a
+lightweight VM, so there is no way around that setting — on a locked-down work laptop, run Budget
+Tracker on a NAS or another machine instead.
+
+Your data lives in `%LOCALAPPDATA%\BudgetTracker\data`. Back that folder up: it holds the database
+**and** `secret.key`, and without the key everyone using two-factor sign-in has to enroll again.
+
+### Build it from source
+
+For a checkout you intend to modify. Open PowerShell in the project folder:
 
 ```powershell
 .\install\install-windows.ps1

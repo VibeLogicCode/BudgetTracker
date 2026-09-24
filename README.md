@@ -20,6 +20,12 @@ run time to read a receipt.
 > (Linux, Windows, macOS, Raspberry Pi), a no-SSH Synology walkthrough, and update, uninstall,
 > restore and troubleshooting instructions. The rest of this README is the reference material
 > behind it.
+>
+> On **Windows**, one line in PowerShell installs Docker if you need it, pulls the prebuilt image
+> and starts the app — no checkout, no build:
+> ```powershell
+> irm https://raw.githubusercontent.com/VibeLogicCode/BudgetTracker/main/install/windows-quickstart.ps1 | iex
+> ```
 
 - **CSV import from Canadian banks** — column-mapping wizard with built-in profiles, validated
   against real TD and Amex exports; any other bank works through the same wizard. A joint

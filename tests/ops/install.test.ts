@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 
 const root = process.cwd();
@@ -351,6 +352,100 @@ describe('install-synology.sh --dry-run', () => {
   });
 });
 
+/**
+ * install/windows-quickstart.ps1 (2026-09-24). The question behind it was "how can a user install
+ * it on a Windows PC?" -- and the honest answer was that they could not, easily: install-windows.ps1
+ * needs the repo checked out and BUILDS the image, which is the right script for somebody working
+ * on the code and the wrong one for somebody who just wants to run the app.
+ *
+ * This one pulls the same published image the NAS file pulls. These guards exist because two
+ * install paths that quietly diverge is how the Windows one ends up the weak one.
+ */
+describe('the Windows quick start pulls what the NAS pulls', () => {
+  const quickstart = read('install/windows-quickstart.ps1');
+  const nas = read('install/synology-compose-pull.yml');
+
+  it('pulls the published image and never builds one', () => {
+    expect(quickstart).toContain('ghcr.io/vibelogiccode/budgettracker');
+    expect(quickstart).toMatch(/Invoke-Compose @\('pull'\)/);
+    // `docker compose build` needs a Dockerfile and a source tree, neither of which this script
+    // has. Reaching for it would be the bug, not a fallback.
+    expect(quickstart).not.toMatch(/compose',\s*'build'|Invoke-Compose @\('build'/);
+  });
+
+  /** Every hardening line the NAS file carries, carried here too. */
+  it.each(['read_only: true', 'cap_drop', 'no-new-privileges:true', 'noexec', 'restart: unless-stopped'])(
+    'carries %s, as the NAS compose file does',
+    (line) => {
+      expect(nas).toContain(line);
+      expect(quickstart).toContain(line);
+    },
+  );
+
+  /**
+   * Watchtower holds Docker's control socket. Its HTTP endpoint is reachable by service name on
+   * the project's private network and must never be published to the host -- the token behind it
+   * is a fence between two containers, not a secret fit for the open internet.
+   */
+  it('never publishes watchtower own port', () => {
+    expect(quickstart).toContain('WATCHTOWER_HTTP_API_UPDATE');
+    expect(quickstart).not.toMatch(/"\d+:8080"/);
+  });
+
+  it('wires the app and watchtower to the same token, or the update button does nothing', () => {
+    const token = /WATCHTOWER_HTTP_API_TOKEN: "([^"]+)"/.exec(quickstart)?.[1];
+    const sent = /WATCHTOWER_TOKEN: "([^"]+)"/.exec(quickstart)?.[1];
+    expect(token).toBeTruthy();
+    expect(sent).toBe(token);
+  });
+
+  it('keeps the label scope on, so watchtower only ever touches this app', () => {
+    expect(quickstart).toContain('WATCHTOWER_LABEL_ENABLE: "true"');
+    expect(quickstart).toContain('com.centurylinklabs.watchtower.enable: "true"');
+  });
+
+  /** The install lives in the user profile, never inside a repo the user may not even have. */
+  it('installs outside the project, and says where the data is', () => {
+    expect(quickstart).toContain("'BudgetTracker'");
+    expect(quickstart).toContain('LOCALAPPDATA');
+    expect(quickstart).toMatch(/secret\.key/);
+  });
+
+  /** -PurgeData is the only destructive flag, and it must say so before it runs. */
+  it('keeps data on uninstall unless -PurgeData is given', () => {
+    expect(quickstart).toContain('IRREVERSIBLE');
+    expect(quickstart).toMatch(/Your data was kept/);
+  });
+
+  /**
+   * Asked directly: "what about a machine with virtualization disabled -- will we show an error?"
+   * It has to be checked BEFORE the Docker install, or the script downloads two gigabytes onto a
+   * machine that cannot run the result and then blames the wrong thing three minutes later.
+   */
+  it('names hardware virtualization before it installs anything', () => {
+    expect(quickstart).toContain('function Test-Virtualization');
+    expect(quickstart).toMatch(/Intel VT-x/);
+    expect(quickstart).toMatch(/SVM Mode/);
+    // HypervisorPresent alone, or the firmware flag alone, each condemn a working machine.
+    expect(quickstart).toContain('HypervisorPresent');
+    expect(quickstart).toContain('VirtualizationFirmwareEnabled');
+    const preflight = quickstart.slice(quickstart.indexOf('function Test-Prerequisites'));
+    const body = preflight.slice(0, preflight.indexOf('function Get-IanaTimeZone'));
+    expect(body.indexOf('Test-Virtualization')).toBeLessThan(body.indexOf('Install-DockerDesktop'));
+  });
+
+  it('offers a version pin, so a household can stay on a known-good release', () => {
+    expect(quickstart).toMatch(/\$Version = 'latest'/);
+    expect(quickstart).toContain('image: ${Registry}:${Tag}');
+  });
+
+  /** Both the one-liner and the parameterised form, or somebody will paste the one that cannot take flags. */
+  it('documents how to run it straight from the web', () => {
+    expect(quickstart).toContain('irm https://raw.githubusercontent.com/VibeLogicCode/BudgetTracker/main/install/windows-quickstart.ps1 | iex');
+    expect(quickstart).toContain('[scriptblock]::Create(');
+  });
+});
+
 describe('PowerShell scripts', () => {
   const pwshAvailable = hasCommand('pwsh');
   const check = (script: string) =>
@@ -375,6 +470,33 @@ describe('PowerShell scripts', () => {
     const result = check('install/update.ps1');
     expect(result.stdout.trim()).toBe('');
     expect(result.status).toBe(0);
+  });
+
+  it.runIf(pwshAvailable)('windows-quickstart.ps1 parses without errors', () => {
+    const result = check('install/windows-quickstart.ps1');
+    expect(result.stdout.trim()).toBe('');
+    expect(result.status).toBe(0);
+  });
+
+  /**
+   * A REAL RUN, not a text scan. -DryRun is supposed to reach the end of the script having
+   * changed nothing, and the first draft of this script did not: it printed what it would create
+   * and then tried to `cd` into that folder anyway. A parse check cannot see that; running it can.
+   *
+   * The install folder is named explicitly so the assertion afterwards is about a path this test
+   * owns, and the run must leave it absent.
+   */
+  it.runIf(pwshAvailable)('windows-quickstart.ps1 finishes a dry run without creating anything', () => {
+    const target = path.join(os.tmpdir(), `bt-quickstart-dryrun-${process.pid}`);
+    const result = spawnSync(
+      'pwsh',
+      ['-NoProfile', '-NonInteractive', '-File', 'install/windows-quickstart.ps1', '-DryRun', '-InstallDir', target],
+      { cwd: root, encoding: 'utf8' },
+    );
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('DRY RUN');
+    expect(result.stdout).toContain('Budget Tracker is running.');
+    expect(fs.existsSync(target)).toBe(false);
   });
 
   it('declares the same flags as the shell installer', () => {

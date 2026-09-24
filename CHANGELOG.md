@@ -21,6 +21,15 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+### Added
+
+- **A one-line installer for a Windows PC** (`install/windows-quickstart.ps1`). The existing
+  Windows script installs from source: it needs the repo and it builds the image. This one needs
+  neither — it checks hardware virtualization, installs Docker Desktop with `winget` if it is
+  missing, pulls the same prebuilt image the NAS install uses, starts it, adds a Start Menu
+  shortcut and opens the browser. A machine with virtualization turned off in its BIOS is told so,
+  with the setting named for both Intel and AMD, before anything is downloaded.
+
 ## [1.51.0] - 2026-09-20
 
 ### Changed
