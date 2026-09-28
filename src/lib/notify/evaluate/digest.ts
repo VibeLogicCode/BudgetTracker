@@ -3,6 +3,7 @@ import { listUsers, viewerFor } from '@/lib/auth/users';
 import { HOUSEHOLD_VIEWER, isSelfScoped, ownerScope } from '@/lib/auth/viewer';
 import { reviewQueueCount } from '@/lib/categorize/engine';
 import { addDaysIso, currentMonth, monthEnd, todayIso } from '@/lib/dates';
+import { latestImportIso } from '@/lib/import/freshness';
 import { categoryBreakdown, topMerchants } from '@/lib/reports';
 import { householdWeeklyDigestKey, weeklyDigestKey } from '@/lib/notify/events';
 import { mondayOfIsoWeek } from '@/lib/notify/evaluate/slots';
@@ -219,6 +220,9 @@ export function evaluateWeeklyDigest(input: {
     variant: 'personal',
     fromIso: from,
     toIso: to,
+    // Spec 2026-09-28 §2.1. Through THIS recipient's viewer (ruling R2): a self-scoped member's
+    // date comes from accounts they own.
+    lastImportIso: latestImportIso(viewer),
     householdSpentCents: sum(householdCategories),
     personalSpentCents: sum(personalCategories),
     topCategories,
@@ -326,6 +330,8 @@ function buildHouseholdDigest(input: {
     variant: 'household',
     fromIso: from,
     toIso: to,
+    // Household-wide, through the same synthetic viewer every other figure in this body uses.
+    lastImportIso: latestImportIso(HOUSEHOLD_VIEWER),
     householdSpentCents: sum(categoryBreakdown({ from, to }, HOUSEHOLD_VIEWER)),
     members,
     unattributedCents: sum(categoryBreakdown({ from, to, attributedUserId: 'unattributed' }, HOUSEHOLD_VIEWER)),

@@ -3,6 +3,7 @@ import { viewerFor } from '@/lib/auth/users';
 import { HOUSEHOLD_VIEWER, isSelfScoped, ownerScope, type Viewer } from '@/lib/auth/viewer';
 import { listCategories } from '@/lib/categories';
 import { addMonths, currentMonth, monthEnd, monthStart, todayIso } from '@/lib/dates';
+import { latestImportIso } from '@/lib/import/freshness';
 import { isEventEnabled } from '@/lib/notify/config';
 import { familyChannelNeedsOwnPass } from '@/lib/notify/family-pass';
 import { CHANNELS, monthlyDigestKey, predictedVsActualKey, suggestedBudgetRefreshKey } from '@/lib/notify/events';
@@ -407,6 +408,9 @@ function renderMonthlyDigestFor(endedMonth: string, viewer: Viewer): { subject: 
   return renderEvent({
     event: 'monthly_digest',
     month: endedMonth,
+    // Spec 2026-09-28 §2.1. `viewer` is the recipient's for the personal copy and HOUSEHOLD_VIEWER
+    // for the room's (fireMonthlyDigest calls this twice), so ruling R2 holds by construction.
+    lastImportIso: latestImportIso(viewer),
     incomeCents: trend.incomeCents,
     spendCents: trend.spendCents,
     netCents: trend.netCents,

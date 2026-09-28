@@ -648,3 +648,33 @@ describe("S-18 fix (v1.13.0 ruling R2): the monthly digest's Budgets line uses t
     expect(adminSelfBody).toContain('Budgets: $600.00 of $500.00 spent, $100.00 over.');
   });
 });
+
+/** Spec 2026-09-28 §2.1, and review focus 6: the empty-month body stays byte-identical without a date. */
+describe('spec 2026-09-28 §2.1: the monthly digest opens with the last import date', () => {
+  it('states it first when the household has imported', () => {
+    const userId = optedInUser();
+    enableMonthlyDigest(userId);
+    setPref(userId, 'predicted_vs_actual', 'email', false);
+    setPref(userId, 'suggested_budget_refresh', 'email', false);
+    seedHistory();
+    t.db.run(
+      sql`insert into imports (account_id, profile_id, filename, imported_by, rows_added, rows_duplicate, rows_error, created_at)
+          values (${accountId}, null, ${'export.csv'}, ${creatorId}, 0, 0, 0, ${'2026-07-31T20:00:00.000Z'})`,
+    );
+
+    expect(evaluateMonthBoundary({ userId, now: new Date('2026-08-01T09:00:00Z'), tz: TZ })).toBe(1);
+    const row = t.sqlite.prepare('select body from notification_outbox limit 1').get() as { body: string };
+    expect(row.body.startsWith('Last import 2026-07-31.\n\nIncome:')).toBe(true);
+  });
+
+  it('a household with no imports gets no freshness line, so the empty-month body is unchanged', () => {
+    const userId = optedInUser();
+    enableMonthlyDigest(userId);
+    setPref(userId, 'predicted_vs_actual', 'email', false);
+    setPref(userId, 'suggested_budget_refresh', 'email', false);
+
+    expect(evaluateMonthBoundary({ userId, now: new Date('2026-08-01T09:00:00Z'), tz: TZ })).toBe(1);
+    const row = t.sqlite.prepare('select body from notification_outbox limit 1').get() as { body: string };
+    expect(row.body).toBe('No transactions were recorded last month.');
+  });
+});

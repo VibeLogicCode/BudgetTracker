@@ -189,6 +189,13 @@ export type RenderInput =
        * matrix; what changes is who the message is addressed to.
        */
       variant: 'personal';
+      /**
+       * Spec 2026-09-28 §2.1. The date of the newest import among the accounts this recipient may
+       * see, or null when there has never been one. Rendered as the FIRST line of the body. Required
+       * rather than optional so every call site is a compiler-checked edit; supplied by
+       * latestImportIso(viewer) in evaluate/digest.ts.
+       */
+      lastImportIso: string | null;
       fromIso: string;
       toIso: string;
       householdSpentCents: number;
@@ -208,6 +215,8 @@ export type RenderInput =
        * `members` plus `unattributedCents`, which together sum to householdSpentCents.
        */
       variant: 'household';
+      /** Spec 2026-09-28 §2.1. Household-wide (rendered through HOUSEHOLD_VIEWER). */
+      lastImportIso: string | null;
       fromIso: string;
       toIso: string;
       householdSpentCents: number;
@@ -344,6 +353,8 @@ export type RenderInput =
   | {
       event: 'monthly_digest';
       month: string;
+      /** Spec 2026-09-28 §2.1. Same line the weekly digest opens with; same source. */
+      lastImportIso: string | null;
       incomeCents: number;
       spendCents: number;
       netCents: number;
@@ -724,6 +735,21 @@ function digestTail(input: WeeklyDigestInput, parts: string[]): string {
   return parts.join('\n').trimEnd();
 }
 
+/**
+ * Spec 2026-09-28 §2.1. The first line of a summary says what the summary is built on.
+ *
+ * Digests only, deliberately. An alert ("Unusual charge", "Budget 80%") fires BECAUSE a transaction
+ * just landed, so its data is fresh by construction and a date would add nothing. A digest fires on
+ * a clock whether anyone imported or not, so it is the one message where "built on what?" is a live
+ * question. Date only: which accounts are behind is the stale_import reminder's job, and a summary
+ * that also lists laggards is two messages in one envelope.
+ *
+ * Omitted outright when there is no date, so the empty digests keep their exact one-line bodies.
+ */
+function withFreshness(lastImportIso: string | null, body: string): string {
+  return lastImportIso === null ? body : `Last import ${lastImportIso}.\n\n${body}`;
+}
+
 function renderDigest(input: Extract<WeeklyDigestInput, { variant: 'personal' }>): string {
   const empty =
     input.householdSpentCents === 0 &&
@@ -965,9 +991,12 @@ export function renderEvent(input: RenderInput): { subject: string; body: string
       return input.variant === 'household'
         ? {
             subject: `Household weekly summary — ${input.fromIso} to ${input.toIso}`,
-            body: renderHouseholdDigest(input),
+            body: withFreshness(input.lastImportIso, renderHouseholdDigest(input)),
           }
-        : { subject: `Weekly summary — ${input.fromIso} to ${input.toIso}`, body: renderDigest(input) };
+        : {
+            subject: `Weekly summary — ${input.fromIso} to ${input.toIso}`,
+            body: withFreshness(input.lastImportIso, renderDigest(input)),
+          };
     case 'new_signin': {
       const lines = [
         `${truncateText(input.name, NAME_MAX)} signed in at ${input.atLabel} (${input.tz}) from ${input.ip}.`,
@@ -1181,7 +1210,10 @@ export function renderEvent(input: RenderInput): { subject: string; body: string
         ].join('\n\n'),
       };
     case 'monthly_digest':
-      return { subject: `Monthly summary for ${monthLabel(input.month)}`, body: renderMonthlyDigest(input) };
+      return {
+        subject: `Monthly summary for ${monthLabel(input.month)}`,
+        body: withFreshness(input.lastImportIso, renderMonthlyDigest(input)),
+      };
     case 'savings_target_met': {
       const label = monthLabel(input.month);
       return {

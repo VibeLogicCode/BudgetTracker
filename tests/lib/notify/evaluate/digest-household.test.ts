@@ -374,3 +374,22 @@ describe('an on-demand digest send', () => {
     expect(rows().filter((row) => row.user_id === null)).toHaveLength(0);
   });
 });
+
+/** Spec 2026-09-28 §2.1: the room's copy is household-wide, whoever's slot fired first. */
+describe('spec 2026-09-28 §2.1: the household digest opens with the household-wide last import', () => {
+  it('uses the newest import across every account, including one the evaluating member cannot see', () => {
+    const alex = person('Alex');
+    const robin = person('Robin', 'member');
+    familyTelegram(alex);
+    spend(70000, alex);
+    const robins = insertTestAccount(t.db, { name: 'Robin Visa', type: 'credit', ownerUserId: robin });
+    t.db.run(
+      sql`insert into imports (account_id, profile_id, filename, imported_by, rows_added, rows_duplicate, rows_error, created_at)
+          values (${robins}, null, ${'export.csv'}, ${robin}, 0, 0, 0, ${'2026-08-16T20:00:00.000Z'})`,
+    );
+
+    evaluateWeeklyDigest({ userId: alex, slotDate: SLOT, now: NOW });
+
+    expect(householdRow().body.startsWith('Last import 2026-08-16.\n\nHousehold spend: $700.00')).toBe(true);
+  });
+});

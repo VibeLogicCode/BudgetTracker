@@ -352,3 +352,40 @@ describe('the weekly summary carries every budget, instead of one message each',
     expect(body()).not.toContain('Total over');
   });
 });
+
+/** Spec 2026-09-28 §2.1. Where the date comes from, and whose accounts it may look at. */
+describe('spec 2026-09-28 §2.1: the weekly digest opens with the last import date', () => {
+  function importAt(createdAt: string, account: number = accountId): void {
+    t.db.run(
+      sql`insert into imports (account_id, profile_id, filename, imported_by, rows_added, rows_duplicate, rows_error, created_at)
+          values (${account}, null, ${'export.csv'}, ${creatorId}, 0, 0, 0, ${createdAt})`,
+    );
+  }
+  const bodyOf = (userId: number): string =>
+    (t.sqlite.prepare('select body from notification_outbox where user_id = ?').get(userId) as { body: string }).body;
+
+  it('states the newest import as the first line', () => {
+    const userId = emailUser();
+    importAt('2026-08-16T20:00:00.000Z');
+    expect(evaluateWeeklyDigest({ userId, slotDate: '2026-08-17', now: NOW })).toBe(1);
+    expect(bodyOf(userId).startsWith('Last import 2026-08-16.\n\n')).toBe(true);
+  });
+
+  it('has no such line for a household that has never imported', () => {
+    const userId = emailUser();
+    expect(evaluateWeeklyDigest({ userId, slotDate: '2026-08-17', now: NOW })).toBe(1);
+    expect(bodyOf(userId)).not.toContain('Last import');
+  });
+
+  /** Review focus 2. */
+  it('ruling R2: a self-scoped member gets their own account date, not the joint one', () => {
+    const member = emailUser('member');
+    setUserVisibility(member, 'self');
+    const own = insertTestAccount(t.db, { name: 'Own Visa', type: 'credit', ownerUserId: member });
+    importAt('2026-08-16T20:00:00.000Z'); // the joint account, newer
+    importAt('2026-08-10T20:00:00.000Z', own); // theirs, older
+
+    expect(evaluateWeeklyDigest({ userId: member, slotDate: '2026-08-17', now: NOW })).toBe(1);
+    expect(bodyOf(member).startsWith('Last import 2026-08-10.\n\n')).toBe(true);
+  });
+});

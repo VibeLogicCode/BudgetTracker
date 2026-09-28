@@ -285,6 +285,7 @@ describe('§10.2: the weekly digest', () => {
     event: 'weekly_digest',
     fromIso: '2026-08-10',
     toIso: '2026-08-16',
+    lastImportIso: '2026-08-16',
     householdSpentCents: 128455,
     personalSpentCents: 41230,
     variant: 'personal',
@@ -345,6 +346,7 @@ describe('§10.2: the weekly digest', () => {
     const { subject, body } = renderEvent({
       event: 'weekly_digest',
       variant: 'household',
+      lastImportIso: null,
       fromIso: '2026-08-10',
       toIso: '2026-08-16',
       householdSpentCents: 123456,
@@ -381,6 +383,7 @@ describe('§10.2: the weekly digest', () => {
     const { body } = renderEvent({
       event: 'weekly_digest',
       variant: 'household',
+      lastImportIso: null,
       fromIso: '2026-08-10',
       toIso: '2026-08-16',
       householdSpentCents: 0,
@@ -414,6 +417,7 @@ describe('Task 16 (v1.7.0): the monthly digest', () => {
   const full = {
     event: 'monthly_digest',
     savings: null,
+    lastImportIso: null,
     month: '2026-07',
     incomeCents: 500000,
     spendCents: 320000,
@@ -564,6 +568,7 @@ const SAMPLES_BY_EVENT: Record<string, RenderInput[]> = {
     {
       event: 'weekly_digest',
       variant: 'personal',
+      lastImportIso: null,
       fromIso: '2026-08-10',
       toIso: '2026-08-16',
       householdSpentCents: 0,
@@ -579,6 +584,7 @@ const SAMPLES_BY_EVENT: Record<string, RenderInput[]> = {
     {
       event: 'weekly_digest',
       variant: 'household',
+      lastImportIso: null,
       fromIso: '2026-08-10',
       toIso: '2026-08-16',
       householdSpentCents: 1000,
@@ -631,6 +637,7 @@ const SAMPLES_BY_EVENT: Record<string, RenderInput[]> = {
     {
       event: 'monthly_digest',
       savings: null,
+      lastImportIso: null,
       month: '2026-07',
       incomeCents: 0,
       spendCents: 0,
@@ -1009,5 +1016,84 @@ describe('v1.12.1: the two account-security events (item AA / SEC-4)', () => {
     });
     expect(subject).toBe('Two-factor authentication was switched off');
     expect(body).toContain('turn it back on');
+  });
+});
+
+/**
+ * Spec 2026-09-28 §2.1. A digest fires on a clock, so "built on what?" is a live question; alerts
+ * fire because a transaction landed and do not get this line. Date only, first, then a blank line.
+ */
+describe('spec 2026-09-28 §2.1: the freshness line', () => {
+  const weekly = {
+    event: 'weekly_digest',
+    variant: 'personal',
+    fromIso: '2026-08-10',
+    toIso: '2026-08-16',
+    householdSpentCents: 12800,
+    personalSpentCents: 4100,
+    topCategories: [{ name: 'Groceries', cents: 4021 }],
+    topMerchants: [],
+    reviewCount: 0,
+    budgets: { over: [], pace: [], close: [] },
+    openMonths: [],
+  } as const;
+
+  it('is the first line of a weekly digest, followed by a blank line', () => {
+    const { body } = renderEvent({ ...weekly, lastImportIso: '2026-08-16' });
+    expect(body.startsWith('Last import 2026-08-16.\n\nHousehold spend: $128.00')).toBe(true);
+  });
+
+  it('is omitted, with no blank line left behind, when nothing has been imported', () => {
+    const { body } = renderEvent({ ...weekly, lastImportIso: null });
+    expect(body.startsWith('Household spend: $128.00')).toBe(true);
+    expect(body).not.toContain('Last import');
+  });
+
+  it('still opens the empty digest, where it matters most', () => {
+    const { body } = renderEvent({
+      ...weekly,
+      lastImportIso: '2026-07-30',
+      householdSpentCents: 0,
+      personalSpentCents: 0,
+      topCategories: [],
+    });
+    expect(body.startsWith('Last import 2026-07-30.\n\nNo transactions were recorded this week.')).toBe(true);
+  });
+
+  it('opens the household variant the same way', () => {
+    const { body } = renderEvent({
+      event: 'weekly_digest',
+      variant: 'household',
+      lastImportIso: '2026-08-16',
+      fromIso: '2026-08-10',
+      toIso: '2026-08-16',
+      householdSpentCents: 12800,
+      members: [{ name: 'Alex', cents: 12800 }],
+      unattributedCents: 0,
+      topCategories: [],
+      topMerchants: [],
+      reviewCount: 0,
+      budgets: { over: [], pace: [], close: [] },
+      openMonths: [],
+    });
+    expect(body.startsWith('Last import 2026-08-16.\n\nHousehold spend: $128.00')).toBe(true);
+  });
+
+  it('opens the monthly digest, and leaves the empty month alone when there is no date', () => {
+    const monthly = {
+      event: 'monthly_digest',
+      month: '2026-07',
+      incomeCents: 500000,
+      spendCents: 320000,
+      netCents: 180000,
+      budgetedLimitCents: 0,
+      budgetedSpentCents: 0,
+      topMerchants: [],
+      savings: null,
+    } as const;
+    expect(renderEvent({ ...monthly, lastImportIso: '2026-07-31' }).body.startsWith('Last import 2026-07-31.\n\nIncome: $5,000.00')).toBe(true);
+    expect(
+      renderEvent({ ...monthly, lastImportIso: null, incomeCents: 0, spendCents: 0, netCents: 0 }).body,
+    ).toBe('No transactions were recorded last month.');
   });
 });
