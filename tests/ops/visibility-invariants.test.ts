@@ -22,6 +22,9 @@ const REQUIRE_VIEWER: { file: string; fn: string }[] = [
   { file: 'src/lib/transactions.ts', fn: 'listTransactions' },
   { file: 'src/lib/transactions.ts', fn: 'getTransaction' },
   { file: 'src/lib/accounts.ts', fn: 'listAccounts' },
+  // Spec 2026-09-28 §2.1: the digests' "Last import" date. A self-scoped member must never read
+  // another member's account date off the top of their own summary.
+  { file: 'src/lib/import/freshness.ts', fn: 'latestImportIso' },
   { file: 'src/lib/goals.ts', fn: 'listGoals' },
   { file: 'src/lib/goals.ts', fn: 'getGoal' },
   { file: 'src/lib/goals.ts', fn: 'listContributions' },
