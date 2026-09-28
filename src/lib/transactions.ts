@@ -1159,6 +1159,64 @@ export function bulkSetCategory(
   return { ok: true, changed, skipped };
 }
 
+/** Spec 2026-09-28 §2.3. What "Confirm every group" did, in the numbers the message states. */
+export interface ConfirmOwnResult {
+  changed: number;
+  /** Split rows, refused by confirmCategory for the reason bulkSetCategory's docblock gives. */
+  skipped: number;
+  /** Rows with no category: nothing to confirm, left for the person to pick. */
+  uncategorized: number;
+  /** Rows already `manual`: left alone and not counted, so "Confirmed N" is what actually moved. */
+  alreadyConfirmed: number;
+  /** Distinct categories among the rows that changed. */
+  categories: number;
+}
+
+/**
+ * Spec 2026-09-28 §2.3: "Confirm every group". Every row confirmed to the category it ALREADY has --
+ * bulkSetCategory with a per-row category instead of one for the batch, and createRule: false
+ * for the reason bulkConfirmGroupAction gives (confirming is not new information).
+ *
+ * The same one-transaction loop over confirmCategory, so every guard inside it (the split refusal,
+ * the untrain/retrain pair) applies without being restated. NO ownership branch, and that is
+ * deliberate rather than an omission: confirmCategory only reaches its rule-ownership refusal
+ * inside its `createRule !== false` gate, so with createRule false the refusal is unreachable, and
+ * a branch here that handled it would read like a live protection while protecting nothing --
+ * the exact shape the v1.27.0 ops guard was written to prevent.
+ *
+ * The transaction is still one transaction: a thrown error partway (a missing row, a constraint)
+ * rolls back every write this call already made, the same guarantee bulkSetCategory carries.
+ */
+export function bulkConfirmOwnCategory(
+  rows: readonly { id: number; categoryId: number | null; source: TransactionRow['source'] }[],
+  userId: number,
+  actorRole: 'admin' | 'member',
+): ConfirmOwnResult {
+  const result: ConfirmOwnResult = { changed: 0, skipped: 0, uncategorized: 0, alreadyConfirmed: 0, categories: 0 };
+  const categories = new Set<number>();
+  getDb().transaction(() => {
+    for (const row of rows) {
+      if (row.categoryId === null) {
+        result.uncategorized += 1;
+        continue;
+      }
+      if (row.source === 'manual') {
+        result.alreadyConfirmed += 1;
+        continue;
+      }
+      const confirmed = confirmCategory({ transactionId: row.id, categoryId: row.categoryId, userId, createRule: false, actorRole });
+      if (confirmed.ok) {
+        result.changed += 1;
+        categories.add(row.categoryId);
+      } else {
+        result.skipped += 1;
+      }
+    }
+  });
+  result.categories = categories.size;
+  return result;
+}
+
 /**
  * v1.27.0 item 1. setTransferFlag's `learnRule` is REQUIRED with no default, so this call site has
  * to answer the question the parameter asks. It passes TRUE -- today's behaviour, unchanged --

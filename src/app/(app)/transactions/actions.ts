@@ -34,6 +34,7 @@ import {
   transactionOwners,
   updateTransactionNotes,
   type TransactionFilter,
+  type TransactionRow,
 } from '@/lib/transactions';
 // v1.26.0 Lane 3a: the ONE parser this route's querystring has (filter-params.ts's own docblock) --
 // shared with page.tsx so a group bulk action writes the set the group header counted, not a set
@@ -567,6 +568,26 @@ const groupScopeSchema = z.object({
 const GROUP_SWEEP_PAGE_SIZE = 200;
 
 /**
+ * Spec 2026-09-28 §2.3. Every row one filtered view matches, as the three fields a confirm needs.
+ * The paging argument on groupTransactionIds's old docblock applies unchanged: listTransactions
+ * clamps pageSize to 200, so "all of them" is a sweep, bounded by the FIRST query's own page count
+ * so that no write it precedes can move the loop's exit. The rows come back from a VIEWER-SCOPED
+ * read, so they are derived, not accepted from the request.
+ */
+function sweepTransactionRows(
+  filter: TransactionFilter,
+  viewer: SessionUser,
+): { id: number; categoryId: number | null; source: TransactionRow['source'] }[] {
+  const pick = (row: TransactionRow) => ({ id: row.id, categoryId: row.categoryId, source: row.source });
+  const first = listTransactions({ ...filter, page: 1, pageSize: GROUP_SWEEP_PAGE_SIZE }, viewer);
+  const rows = first.rows.map(pick);
+  for (let page = 2; page <= first.pageCount; page += 1) {
+    rows.push(...listTransactions({ ...filter, page, pageSize: GROUP_SWEEP_PAGE_SIZE }, viewer).rows.map(pick));
+  }
+  return rows;
+}
+
+/**
  * v1.26.0 Lane 3a item 4. Every transaction id in one category cluster of one filtered view.
  *
  * The cluster is expressed exactly as groupTransactionsByCategory's own doc comment prescribes for
@@ -597,15 +618,7 @@ function groupTransactionIds(filter: TransactionFilter, groupCategoryId: string,
         // `?exact=1` cannot change which rows "uncategorized" means.
         { ...filter, categoryId: 'uncategorized', categoryExact: false }
       : { ...filter, categoryId: Number(groupCategoryId), categoryExact: true };
-
-  const first = listTransactions({ ...clusterFilter, page: 1, pageSize: GROUP_SWEEP_PAGE_SIZE }, viewer);
-  const ids = first.rows.map((row) => row.id);
-  for (let page = 2; page <= first.pageCount; page += 1) {
-    ids.push(
-      ...listTransactions({ ...clusterFilter, page, pageSize: GROUP_SWEEP_PAGE_SIZE }, viewer).rows.map((row) => row.id),
-    );
-  }
-  return ids;
+  return sweepTransactionRows(clusterFilter, viewer).map((row) => row.id);
 }
 
 /**
