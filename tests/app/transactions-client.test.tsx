@@ -20,6 +20,7 @@ vi.mock('@/app/(app)/transactions/actions', () => ({
   bulkNoteAction: vi.fn(async () => ({})),
   // v1.26.0 Lane 3a item 4: the two group-header actions.
   bulkConfirmGroupAction: vi.fn(async () => ({})),
+  bulkConfirmViewAction: vi.fn(async () => ({})),
   bulkRecategorizeGroupAction: vi.fn(async () => ({})),
   renameTransactionAction: vi.fn(async () => ({})),
   assignToLoanAction: vi.fn(async () => ({})),
@@ -4517,5 +4518,71 @@ describe('TransactionsClient — creating a rule from a row', () => {
 
     await waitFor(() => expect(screen.getAllByText(/Pick a category, a person, or both\./).length).toBeGreaterThan(0));
     expect(screen.getByTestId('create-rule-form')).toBeTruthy();
+  });
+});
+
+/** Spec 2026-09-28 §2.3: one press for the whole view, above the groups. The per-group buttons stay. */
+describe('spec 2026-09-28 §2.3: Confirm every group', () => {
+  it('sits above the groups, naming the view total and the group count', () => {
+    const { container } = renderGrouped();
+    const button = screen.getByRole('button', { name: 'Confirm every group' });
+    const header = button.closest('div')!;
+    expect((header.textContent ?? '').replace(/\s+/g, ' ')).toContain('41 transactions in 2 categories');
+    // Above the list, not inside a group.
+    expect(container.querySelector('ul[data-category-groups]')!.contains(button)).toBe(false);
+    // The per-group buttons are still there.
+    expect(screen.getAllByRole('button', { name: 'These are all correct' })).toHaveLength(2);
+  });
+
+  it('is not offered when no group on the page has a category', () => {
+    renderGrouped({
+      groups: [
+        {
+          categoryId: null,
+          categoryName: 'Uncategorized',
+          parentId: null,
+          count: 3,
+          totalCents: -30_00,
+          preview: [{ id: 601, date: '2026-03-02', description: 'MYSTERY VENDOR', amountCents: -10_00 }],
+        },
+      ],
+      groupCount: 1,
+      totalCount: 3,
+    });
+    expect(screen.queryByRole('button', { name: 'Confirm every group' })).toBeNull();
+  });
+
+  it('opens a dialog that states the whole view, not this page', () => {
+    renderGrouped();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm every group' }));
+    expect(screen.getByRole('dialog', { name: /Confirm every group in this view/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Confirm all 41' })).toBeTruthy();
+    expect(screen.getByText(/every group and every page of them, not only what is on screen/)).toBeTruthy();
+    expect(screen.getByText(/no category yet are left for you to pick/)).toBeTruthy();
+  });
+
+  it('posts the page filter and nothing else', async () => {
+    const { bulkConfirmViewAction } = await import('@/app/(app)/transactions/actions');
+    const spy = vi.mocked(bulkConfirmViewAction);
+    spy.mockClear();
+    const { container } = renderGrouped();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm every group' }));
+    fireEvent.submit(container.querySelector('[data-testid="view-confirm-dialog-backdrop"] form') as HTMLFormElement);
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    const submitted = spy.mock.calls.at(-1)![1] as FormData;
+    expect(submitted.get('scope')).toBe('import=7&source=rule&group=category');
+    expect(submitted.get('ids')).toBeNull();
+    expect(submitted.get('groupCategoryId')).toBeNull();
+  });
+
+  it('Cancel closes the dialog and writes nothing', async () => {
+    const { bulkConfirmViewAction } = await import('@/app/(app)/transactions/actions');
+    const spy = vi.mocked(bulkConfirmViewAction);
+    spy.mockClear();
+    renderGrouped();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm every group' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(spy).not.toHaveBeenCalled();
   });
 });

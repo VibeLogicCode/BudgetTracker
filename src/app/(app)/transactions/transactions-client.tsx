@@ -66,6 +66,7 @@ import {
   // v1.26.0 Lane 3a item 4: the two group-header actions -- see their own docblocks in actions.ts
   // for why each posts the page's filter rather than a list of rendered row ids.
   bulkConfirmGroupAction,
+  bulkConfirmViewAction,
   bulkNoteAction,
   bulkRecategorizeGroupAction,
   bulkTransferAction,
@@ -655,6 +656,9 @@ export function TransactionsClient({
   // able to show a recategorize's error (or vice versa).
   const [confirmGroupState, confirmGroupFormAction] = useActionState(bulkConfirmGroupAction, initial);
   const [recatGroupState, recatGroupFormAction] = useActionState(bulkRecategorizeGroupAction, initial);
+  // Spec 2026-09-28 §2.3: the view-level confirm. A boolean, not a group -- it acts on the filter.
+  const [confirmView, setConfirmView] = useState(false);
+  const [confirmViewState, confirmViewFormAction] = useActionState(bulkConfirmViewAction, initial);
   const [renameState, renameAction] = useActionState(renameTransactionAction, initial);
   const [assignState, assignLoan] = useActionState(
     (_prev: ActionState, formData: FormData) => assignToLoanAction(formData),
@@ -968,7 +972,7 @@ export function TransactionsClient({
     // v1.26.0 Lane 3a item 4: the two group actions join this same group -- both dialogs close on
     // submit (groupConfirmDialog/groupRecategorizeDialog's own onSubmit), so the top banner is the
     // only place either one's result is ever seen, exactly like the two v1.25.0 bulk dialogs above.
-    confirmGroupState.message ?? recatGroupState.message ??
+    confirmGroupState.message ?? recatGroupState.message ?? confirmViewState.message ??
     // 2026-09-14, the report on v1.38.0: "assign to bill works but when i assign to bill the UI
     // menu doesnt close, transaction gets applied and no feedback to user that its done." Both
     // actions shipped wired to no banner at all, so each one landed its write in silence. They sit
@@ -980,7 +984,7 @@ export function TransactionsClient({
     attrState.error ?? bulkCatState.error ?? bulkTfrState.error ??
     renameState.error ?? assignState.error ?? unassignState.error ?? splitState.error ?? noteState.error ??
     bulkLoanState.error ?? bulkNoteState.error ??
-    confirmGroupState.error ?? recatGroupState.error ??
+    confirmGroupState.error ?? recatGroupState.error ?? confirmViewState.error ??
     billState.error ?? deleteState.error ?? ruleCreateState.error ??
     acceptState.error ?? acceptAllState.error ?? rowTransferState.error;
 
@@ -2627,6 +2631,21 @@ export function TransactionsClient({
     const lastShown = Math.min(groupPage.groupCount, groupPage.page * groupPage.pageSize);
     return (
       <Card as="div">
+        {/* Spec 2026-09-28 §2.3. One press for the whole view, above the groups rather than in a
+            footer: the person arrived here from the dashboard's review card to say "yes" to what
+            the rules did, and the button has to be visible before they open the first group. Not
+            offered when no group on this page has a category -- there would be nothing to confirm
+            -- and the per-group buttons stay for the cluster-by-cluster read. */}
+        {groupPage.groups.some((group) => group.categoryId !== null) ? (
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3 sm:px-5">
+            <span className="text-sm text-muted">
+              {`${groupPage.totalCount} transaction${groupPage.totalCount === 1 ? '' : 's'} in ${groupPage.groupCount} categor${groupPage.groupCount === 1 ? 'y' : 'ies'}`}
+            </span>
+            <button type="button" className={buttonClass('primary', 'sm')} onClick={() => setConfirmView(true)}>
+              Confirm every group
+            </button>
+          </div>
+        ) : null}
         {/* `data-category-groups`, the same "name the list so a query can find exactly it" idiom
             `data-transaction-cards` already uses on the card lists below. Load-bearing rather than
             decorative: PageGuide is itself a <details>/<summary> ("What is this page for?"), so an
@@ -2798,6 +2817,45 @@ export function TransactionsClient({
           <div className="flex gap-2">
             <SubmitButton className="w-fit">{`Confirm all ${count}`}</SubmitButton>
             <button type="button" className={buttonClass('ghost', 'sm')} onClick={() => setConfirmGroup(null)}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      </RowDialog>
+    );
+  }
+
+  /**
+   * Spec 2026-09-28 §2.3, the view-level dialog. Same shell and the same honesty rule as
+   * groupConfirmDialog: it states the VIEW's true total (groupPage.totalCount is the whole
+   * filtered set, every group page included) and posts the filter, so the write recomputes the same
+   * set. Rows with no category are named as left alone, because the server will leave them.
+   */
+  function viewConfirmDialog() {
+    if (!confirmView || !groups) return null;
+    const count = groups.totalCount;
+    const noun = count === 1 ? 'transaction' : 'transactions';
+    return (
+      <RowDialog
+        dialogId="view-confirm-dialog"
+        title="Confirm every group in this view"
+        description={`${count} ${noun} in ${groups.groupCount} categor${groups.groupCount === 1 ? 'y' : 'ies'}`}
+        onClose={() => setConfirmView(false)}
+      >
+        <form action={confirmViewFormAction} onSubmit={() => setConfirmView(false)} className="flex flex-col gap-3">
+          <input type="hidden" name="scope" value={currentQuery} />
+          <p className="text-sm text-ink">
+            {`All ${count} ${noun} stay in the categories they have now and are marked set by hand, so a
+            future rule run leaves them alone. Nothing else about them changes.`}
+          </p>
+          <p className="text-sm text-muted">
+            {`This is the whole view — every group and every page of them, not only what is on screen. Any
+            with no category yet are left for you to pick, and a split transaction is left alone; the
+            message afterwards says how many.`}
+          </p>
+          <div className="flex gap-2">
+            <SubmitButton className="w-fit">{`Confirm all ${count}`}</SubmitButton>
+            <button type="button" className={buttonClass('ghost', 'sm')} onClick={() => setConfirmView(false)}>
               Cancel
             </button>
           </div>
@@ -3090,6 +3148,7 @@ export function TransactionsClient({
           groupConfirmDialog/groupRecategorizeDialog's own docblocks for why each states the
           cluster's full count and posts the page's filter rather than the rendered rows' ids. */}
       {groupConfirmDialog()}
+      {viewConfirmDialog()}
       {groupRecategorizeDialog()}
 
       <Card as="div">
