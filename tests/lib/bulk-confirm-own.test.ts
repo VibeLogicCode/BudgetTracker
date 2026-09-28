@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import { categoryIdByName, createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
 import { normalizeMerchant } from '@/lib/categorize/normalize';
 import { nowIso } from '@/lib/clock';
+import { setTransactionSplits } from '@/lib/splits';
 import { bulkConfirmOwnCategory } from '@/lib/transactions';
 
 let current: TestDb | null = null;
@@ -76,6 +77,41 @@ describe('bulkConfirmOwnCategory', () => {
     const result = bulkConfirmOwnCategory([{ id: done, categoryId: groceries, source: 'manual' }], alice, 'admin');
 
     expect(result).toEqual({ changed: 0, skipped: 0, uncategorized: 0, alreadyConfirmed: 1, categories: 0 });
+  });
+
+  /**
+   * Final review F1. Splitting stamps the parent 'manual' and keeps whatever category_id it had
+   * (src/lib/splits.ts), so a split row reaches this loop looking like either a hand-set row or an
+   * uncategorized one. It is checked FIRST, and counted as skipped either way.
+   */
+  it('skips a split row and counts it, whether or not the parent carries a category', () => {
+    const { db, alice, add, stored } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const gas = categoryIdByName(db, 'Gas');
+    const parts = [
+      { categoryId: groceries, amountCents: -600 },
+      { categoryId: gas, amountCents: -400 },
+    ];
+    const filed = add({ description: 'SPLIT MARKET', categoryId: groceries });
+    const blank = add({ description: 'SPLIT SHOP', categoryId: null, source: 'none' });
+    setTransactionSplits({ txnId: filed, parts, userId: alice });
+    setTransactionSplits({ txnId: blank, parts, userId: alice });
+    expect(stored(filed)).toEqual({ categoryId: groceries, source: 'manual' });
+    expect(stored(blank)).toEqual({ categoryId: null, source: 'manual' });
+
+    const result = bulkConfirmOwnCategory(
+      [
+        { id: filed, categoryId: groceries, source: 'manual' },
+        { id: blank, categoryId: null, source: 'manual' },
+      ],
+      alice,
+      'admin',
+    );
+
+    expect(result).toEqual({ changed: 0, skipped: 2, uncategorized: 0, alreadyConfirmed: 0, categories: 0 });
+    expect(stored(filed)).toEqual({ categoryId: groceries, source: 'manual' });
+    expect(stored(blank)).toEqual({ categoryId: null, source: 'manual' });
+    expect((current!.sqlite.prepare('select count(*) as n from transaction_splits').get() as { n: number }).n).toBe(4);
   });
 
   it('writes no rule, because confirming is not new information', () => {

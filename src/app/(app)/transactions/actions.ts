@@ -761,7 +761,8 @@ export async function bulkRecategorizeGroupAction(_prev: ActionState, formData: 
  * confirmCategory), createRule false, split rows skipped and reported.
  *
  * Three honest refusals instead of "Confirmed 0": an empty view, a view where nothing has a
- * category yet, and a view already entirely set by hand.
+ * category yet, and a view already entirely set by hand. A refusal still reports the split rows it
+ * skipped (final review F1), with the same sentence the success message carries.
  */
 const viewScopeSchema = z.object({ scope: z.string().max(2000) });
 
@@ -778,12 +779,12 @@ export async function bulkConfirmViewAction(_prev: ActionState, formData: FormDa
 
   const result = bulkConfirmOwnCategory(rows, user.id, user.role);
   if (result.changed === 0) {
-    return {
-      error:
-        result.uncategorized > 0 && result.alreadyConfirmed === 0
-          ? 'Nothing in this view has a category to confirm yet — pick one for each group instead.'
-          : 'Everything in this view was already set by hand.',
-    };
+    const refusal =
+      result.uncategorized > 0 && result.alreadyConfirmed === 0
+        ? 'Nothing in this view has a category to confirm yet — pick one for each group instead.'
+        : 'Everything in this view was already set by hand.';
+    const skipped = splitSkipSentence(result.skipped);
+    return { error: skipped ? `${refusal} ${skipped}` : refusal };
   }
   revalidatePath('/transactions');
   revalidatePath('/review');

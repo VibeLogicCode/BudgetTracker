@@ -1162,7 +1162,8 @@ export function bulkSetCategory(
 /** Spec 2026-09-28 §2.3. What "Confirm every group" did, in the numbers the message states. */
 export interface ConfirmOwnResult {
   changed: number;
-  /** Split rows, refused by confirmCategory for the reason bulkSetCategory's docblock gives. */
+  /** Split rows, never confirmed for the reason bulkSetCategory's docblock gives. Checked first:
+   *  see bulkConfirmOwnCategory's docblock. */
   skipped: number;
   /** Rows with no category: nothing to confirm, left for the person to pick. */
   uncategorized: number;
@@ -1184,6 +1185,14 @@ export interface ConfirmOwnResult {
  * a branch here that handled it would read like a live protection while protecting nothing --
  * the exact shape the v1.27.0 ops guard was written to prevent.
  *
+ * SPLIT ROWS ARE CHECKED FIRST, before the no-category and already-manual checks (final review
+ * F1). Splitting stamps the parent 'manual' and keeps whatever category_id it had, often NULL
+ * (src/lib/splits.ts), so a split row reaches this loop looking like a hand-set row or an
+ * uncategorized one. Checked in that order it would be counted as one of those and never reported
+ * as skipped, which spec §2.3 requires ("as everywhere else"). transactionHasSplits is the same
+ * check confirmCategory's own `has_splits` refusal runs; that refusal stays behind it and is
+ * counted the same way.
+ *
  * The transaction is still one transaction: a thrown error partway (a missing row, a constraint)
  * rolls back every write this call already made, the same guarantee bulkSetCategory carries.
  */
@@ -1196,6 +1205,10 @@ export function bulkConfirmOwnCategory(
   const categories = new Set<number>();
   getDb().transaction(() => {
     for (const row of rows) {
+      if (transactionHasSplits(row.id)) {
+        result.skipped += 1;
+        continue;
+      }
       if (row.categoryId === null) {
         result.uncategorized += 1;
         continue;

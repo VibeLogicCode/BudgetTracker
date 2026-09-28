@@ -2282,6 +2282,53 @@ describe('bulkConfirmGroupAction / bulkRecategorizeGroupAction (Lane 3a item 4)'
       expect(sourceOf(unknown)).toBe('none');
     });
 
+    /** Final review F1: split rows are skipped and reported, as everywhere else (spec §2.3). */
+    it('skips a split row and says so after the confirmed count', async () => {
+      const { db, userId } = setup();
+      const groceries = categoryIdByName(db, 'Groceries');
+      const gas = categoryIdByName(db, 'Gas');
+      const importId = seedImport('march.csv');
+      const filed = addRuleRow({ importId, categoryId: groceries, merchant: 'GREENFIELD MARKET' });
+      const split = addRuleRow({ importId, categoryId: null, merchant: 'SPLIT SHOP', amountCents: -10000, source: 'none' });
+      setTransactionSplits({
+        txnId: split,
+        parts: [
+          { categoryId: groceries, amountCents: -7000 },
+          { categoryId: gas, amountCents: -3000 },
+        ],
+        userId,
+      });
+
+      const result = await bulkConfirmViewAction({}, formData({ scope: `import=${importId}&group=category` }));
+
+      expect(result.message).toBe(
+        'Confirmed 1 transaction across 1 category. Rules will leave it alone from now on. 1 split transaction was skipped, clear its split first.',
+      );
+      expect(sourceOf(filed)).toBe('manual');
+      expect(categoryOf(split)).toBeNull();
+    });
+
+    it('adds the split sentence to the refusal when the view holds only split rows', async () => {
+      const { db, userId } = setup();
+      const groceries = categoryIdByName(db, 'Groceries');
+      const gas = categoryIdByName(db, 'Gas');
+      const importId = seedImport('march.csv');
+      const parts = [
+        { categoryId: groceries, amountCents: -7000 },
+        { categoryId: gas, amountCents: -3000 },
+      ];
+      const blank = addRuleRow({ importId, categoryId: null, merchant: 'SPLIT SHOP', amountCents: -10000, source: 'none' });
+      const filed = addRuleRow({ importId, categoryId: groceries, merchant: 'SPLIT MARKET', amountCents: -10000 });
+      setTransactionSplits({ txnId: blank, parts, userId });
+      setTransactionSplits({ txnId: filed, parts, userId });
+
+      const result = await bulkConfirmViewAction({}, formData({ scope: `import=${importId}&group=category` }));
+
+      expect(result.error).toBe('Everything in this view was already set by hand. 2 split transactions were skipped, clear their split first.');
+      expect(categoryOf(blank)).toBeNull();
+      expect(categoryOf(filed)).toBe(groceries);
+    });
+
     it('honours the posted filter: another import is left alone', async () => {
       const { db } = setup();
       const groceries = categoryIdByName(db, 'Groceries');
