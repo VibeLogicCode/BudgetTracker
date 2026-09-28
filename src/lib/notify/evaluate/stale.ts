@@ -17,9 +17,11 @@ import { renderEvent } from '@/lib/notify/render';
  * been imported into is not stale, it is new, and the group-by below simply never produces a row for
  * it.
  *
- * MUST-14.8 (unchanged): SimpleFIN syncs create `imports` rows too, so a SimpleFIN-managed account is
- * never nagged. The query still looks at every import against an account rather than only the ones
- * this user made: staleness is a property of the data, not of who last pressed the button.
+ * MUST-14.8: SimpleFIN syncs create `imports` rows too, so a SimpleFIN-managed account is never
+ * nagged while its sync keeps writing them. A sync that stops writing them is named like any other
+ * quiet account, under its own cadence or the household default (spec 2026-09-28 §2.2). The query
+ * still looks at every import against an account rather than only the ones this user made:
+ * staleness is a property of the data, not of who last pressed the button.
  *
  * v1.13.0 ruling R14 (item AM / PROD-10). This used to take the single most recent import ACROSS THE
  * WHOLE HOUSEHOLD, so importing TD on the 3rd silenced the alert for the Amex nobody had touched
@@ -68,7 +70,7 @@ export function evaluateStaleImport(input: { userId: number; now: Date; tz: stri
    * Ruling R14 split the household-wide alert per account so that five lagging accounts could not
    * mask each other, and that was right. What it produced, for a household on manual CSV across
    * five accounts, was five notifications in the same minute saying the same sentence with a
-   * different name in it -- the reported "1 message per X, too repetitive" complaint exactly.
+   * different name in it -- exactly the repetition the household reported, one message per account.
    *
    * R14's requirement is that the message NAMES the account. One message that names all five
    * satisfies it; nothing is masked, and the household reads it once. The cadence is unchanged:

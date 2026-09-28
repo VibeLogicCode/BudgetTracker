@@ -986,10 +986,10 @@ export function TransactionsClient({
     // submit (groupConfirmDialog/groupRecategorizeDialog's own onSubmit), so the top banner is the
     // only place either one's result is ever seen, exactly like the two v1.25.0 bulk dialogs above.
     lastGroupState?.message ?? confirmGroupState.message ?? recatGroupState.message ?? confirmViewState.message ??
-    // 2026-09-14, the report on v1.38.0: "assign to bill works but when i assign to bill the UI
-    // menu doesnt close, transaction gets applied and no feedback to user that its done." Both
-    // actions shipped wired to no banner at all, so each one landed its write in silence. They sit
-    // with assignState/unassignState: one-off actions whose result is only ever seen here.
+    // 2026-09-14, a report on v1.38.0: assigning a row to a bill applied the change, but the menu
+    // stayed open and nothing told the person it had worked. Both actions shipped wired to no
+    // banner at all, so each one landed its write in silence. They sit with
+    // assignState/unassignState: one-off actions whose result is only ever seen here.
     billState.message ?? deleteState.message ?? ruleCreateState.message ??
     acceptState.message ?? acceptAllState.message ?? rowTransferState.message;
   const error =
