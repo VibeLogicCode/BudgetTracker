@@ -55,6 +55,7 @@ import {
   bulkCategorizeAction,
   // v1.26.0 Lane 3a item 4: the two group-header bulk actions.
   bulkConfirmGroupAction,
+  bulkConfirmViewAction,
   bulkNoteAction,
   bulkRecategorizeGroupAction,
   bulkTransferAction,
@@ -2241,6 +2242,101 @@ describe('bulkConfirmGroupAction / bulkRecategorizeGroupAction (Lane 3a item 4)'
     expect(result.message).toContain('Confirmed 1 transaction');
     expect(sourceOf(mine)).toBe('manual');
     expect(sourceOf(theirs)).toBe('rule');
+  });
+
+  /**
+   * Spec 2026-09-28 §2.3: "Confirm every group". The whole view -- every cluster, every row page --
+   * confirmed to the categories it already has, in one press.
+   */
+  describe('bulkConfirmViewAction', () => {
+    /** Review focus 4. */
+    it('confirms every row in the view across every cluster, not only a rendered page', async () => {
+      const { db } = setup();
+      const groceries = categoryIdByName(db, 'Groceries');
+      const coffee = categoryIdByName(db, 'Coffee');
+      const importId = seedImport('march.csv');
+      const groceryIds = Array.from({ length: 60 }, (_, index) => addRuleRow({ importId, categoryId: groceries, merchant: `GREENFIELD ${index}` }));
+      const coffeeIds = Array.from({ length: 5 }, (_, index) => addRuleRow({ importId, categoryId: coffee, merchant: `ROAST ${index}` }));
+
+      const result = await bulkConfirmViewAction({}, formData({ scope: `import=${importId}&source=rule&group=category` }));
+
+      expect(result.error).toBeUndefined();
+      expect(result.message).toBe('Confirmed 65 transactions across 2 categories. Rules will leave them alone from now on.');
+      expect([...groceryIds, ...coffeeIds].every((id) => sourceOf(id) === 'manual')).toBe(true);
+      expect(categoryOf(coffeeIds[0])).toBe(coffee);
+    });
+
+    it('leaves rows with no category for the person, and says how many', async () => {
+      const { db } = setup();
+      const groceries = categoryIdByName(db, 'Groceries');
+      const importId = seedImport('march.csv');
+      const filed = addRuleRow({ importId, categoryId: groceries, merchant: 'GREENFIELD MARKET' });
+      const unknown = addRuleRow({ importId, categoryId: null, merchant: 'MYSTERY VENDOR', source: 'none' });
+
+      const result = await bulkConfirmViewAction({}, formData({ scope: `import=${importId}&group=category` }));
+
+      expect(result.message).toBe(
+        'Confirmed 1 transaction across 1 category. Rules will leave it alone from now on. 1 with no category yet was left for you to pick.',
+      );
+      expect(sourceOf(filed)).toBe('manual');
+      expect(sourceOf(unknown)).toBe('none');
+    });
+
+    it('honours the posted filter: another import is left alone', async () => {
+      const { db } = setup();
+      const groceries = categoryIdByName(db, 'Groceries');
+      const march = seedImport('march.csv');
+      const april = seedImport('april.csv');
+      const target = addRuleRow({ importId: march, categoryId: groceries, merchant: 'GREENFIELD MARKET' });
+      const other = addRuleRow({ importId: april, categoryId: groceries, merchant: 'GREENFIELD MARKET' });
+
+      await bulkConfirmViewAction({}, formData({ scope: `import=${march}&source=rule&group=category` }));
+
+      expect(sourceOf(target)).toBe('manual');
+      expect(sourceOf(other)).toBe('rule');
+    });
+
+    /** Review focus 5: never "Confirmed 0". */
+    it('says so when everything in the view was already set by hand', async () => {
+      const { db } = setup();
+      const groceries = categoryIdByName(db, 'Groceries');
+      const importId = seedImport('march.csv');
+      addRuleRow({ importId, categoryId: groceries, merchant: 'BY HAND SHOP', source: 'manual' });
+
+      const result = await bulkConfirmViewAction({}, formData({ scope: `import=${importId}&group=category` }));
+
+      expect(result.error).toBe('Everything in this view was already set by hand.');
+    });
+
+    it('says so when nothing in the view has a category to confirm', async () => {
+      const { db } = setup();
+      const importId = seedImport('march.csv');
+      addRuleRow({ importId, categoryId: null, merchant: 'MYSTERY VENDOR', source: 'none' });
+
+      const result = await bulkConfirmViewAction({}, formData({ scope: `import=${importId}&group=category` }));
+
+      expect(result.error).toBe('Nothing in this view has a category to confirm yet — pick one for each group instead.');
+    });
+
+    it('reports honestly when the view has emptied out from under the dialog', async () => {
+      setup();
+      const importId = seedImport('march.csv');
+      const result = await bulkConfirmViewAction({}, formData({ scope: `import=${importId}&group=category` }));
+      expect(result.error).toBe('This view is empty now — nothing was changed.');
+    });
+
+    it('refuses a cross-origin post before reading anything', async () => {
+      const { db } = setup();
+      const groceries = categoryIdByName(db, 'Groceries');
+      const importId = seedImport('march.csv');
+      const id = addRuleRow({ importId, categoryId: groceries, merchant: 'GREENFIELD MARKET' });
+      sameOrigin.value = false;
+
+      const result = await bulkConfirmViewAction({}, formData({ scope: `import=${importId}` }));
+
+      expect(result.error).toBe(CROSS_ORIGIN_ERROR);
+      expect(sourceOf(id)).toBe('rule');
+    });
   });
 });
 

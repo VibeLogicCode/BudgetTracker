@@ -23,6 +23,7 @@ import { isLoanRepayment, loanAssignedMessage, loanClampWarning, LOAN_DIRECTIONS
 import { isIsoDate } from '@/lib/dates';
 import {
   bulkAssignToLoan,
+  bulkConfirmOwnCategory,
   bulkSetAttribution,
   bulkSetCategory,
   bulkSetNotes,
@@ -744,6 +745,60 @@ export async function bulkRecategorizeGroupAction(_prev: ActionState, formData: 
   const changedSentence = `Moved ${result.changed} transaction${result.changed === 1 ? '' : 's'}.`;
   const skipSentence = splitSkipSentence(result.skipped);
   return { message: skipSentence ? `${changedSentence} ${skipSentence}` : changedSentence };
+}
+
+/**
+ * Spec 2026-09-28 §2.3: "Confirm every group".
+ *
+ * WHY IT EXISTS. The dashboard's rule-review card sends a person to this page grouped by category,
+ * where each group carries "These are all correct". An import that landed in ten categories was ten
+ * dialogs to say the same thing ten times. This is the one press: every transaction the view
+ * matches, confirmed to the category it already has.
+ *
+ * Same design as the two group actions above and for the same reason: the SET IS DERIVED FROM THE
+ * POSTED FILTER, never from ids, so the count the dialog states is the count the write honours,
+ * across every row page and every group page. Same single confirm path (bulkConfirmOwnCategory ->
+ * confirmCategory), createRule false, split rows skipped and reported.
+ *
+ * Three honest refusals instead of "Confirmed 0": an empty view, a view where nothing has a
+ * category yet, and a view already entirely set by hand.
+ */
+const viewScopeSchema = z.object({ scope: z.string().max(2000) });
+
+export async function bulkConfirmViewAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  const user = await requireUser();
+  const parsed = viewScopeSchema.safeParse({ scope: String(formData.get('scope') ?? '') });
+  if (!parsed.success) return { error: 'Invalid request.' };
+
+  const filter = filterFromQuery(parsed.data.scope, user);
+  const rows = sweepTransactionRows(filter, user);
+  if (rows.length === 0) return { error: 'This view is empty now — nothing was changed.' };
+
+  const result = bulkConfirmOwnCategory(rows, user.id, user.role);
+  if (result.changed === 0) {
+    return {
+      error:
+        result.uncategorized > 0 && result.alreadyConfirmed === 0
+          ? 'Nothing in this view has a category to confirm yet — pick one for each group instead.'
+          : 'Everything in this view was already set by hand.',
+    };
+  }
+  revalidatePath('/transactions');
+  revalidatePath('/review');
+
+  const plural = result.changed === 1 ? '' : 's';
+  const noun = result.categories === 1 ? 'category' : 'categories';
+  const parts = [
+    `Confirmed ${result.changed} transaction${plural} across ${result.categories} ${noun}. Rules will leave ${result.changed === 1 ? 'it' : 'them'} alone from now on.`,
+  ];
+  if (result.uncategorized > 0) {
+    parts.push(`${result.uncategorized} with no category yet ${result.uncategorized === 1 ? 'was' : 'were'} left for you to pick.`);
+  }
+  const splits = splitSkipSentence(result.skipped);
+  if (splits) parts.push(splits);
+  return { message: parts.join(' ') };
 }
 
 /**
