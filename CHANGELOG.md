@@ -21,8 +21,19 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.52.0] - 2026-09-28
+
 ### Added
 
+- **Each account can say how often it is imported.** Settings → Accounts → Update account gains
+  "Expect an import": Household default, Weekly, Every two weeks, Monthly, Yearly, or Never remind
+  me. The existing "nothing imported lately" reminder reads each account's own setting and falls
+  back to the household number for the rest, so a card imported monthly and a savings account whose
+  statement comes once a year stop nagging on the same schedule. Nothing changes until you pick one.
+- **Confirm every group.** The grouped-by-category view of Transactions — where the dashboard's
+  rule-review card sends you — gains one button above the groups that does what ten "These are all
+  correct" presses did: every transaction in the view stays in the category it has and is marked
+  set by hand. Anything with no category yet is left for you to pick, and the message says so.
 - **A one-line installer for a Windows PC** (`install/windows-quickstart.ps1`). The existing
   Windows script installs from source: it needs the repo and it builds the image. This one needs
   neither — it checks hardware virtualization, installs Docker Desktop with `winget` if it is
@@ -33,6 +44,16 @@ All notable changes to Budget Tracker are recorded here.
   `docker --version` perfectly happily while its engine has nothing to run on, so that case has to
   be named rather than waited out. A compose file the Docker parser cannot read is replaced on the
   next run instead of being kept out of politeness.
+
+### Changed
+
+- **The weekly and monthly summaries open with `Last import <date>.`** A summary fires on a clock
+  whether anyone imported or not, so it now says what it is built on. Date only — which accounts are
+  behind stays the reminder's job. A member who sees only their own accounts gets their own date.
+- The stale-import reminder's subject names the account's own threshold when one account is
+  overdue, and says "N accounts are overdue for an import" when several are, since their
+  thresholds may now differ. The Settings → Notifications field for it is labelled as the household
+  default.
 
 ## [1.51.0] - 2026-09-20
 
