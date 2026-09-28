@@ -1,0 +1,13 @@
+-- 2026-09-28. One staleness number for every account was wrong for most of them.
+--
+-- stale_import nags when an account has gone `staleImportWeeks` (household-wide, default 3) with no
+-- import. A household with ten accounts on different rhythms cannot set that one number: either the
+-- account whose statement comes once a year nags forty-nine weeks of it, or the one imported weekly
+-- is allowed to go quiet for a month before anyone hears.
+--
+-- Nullable, and NULL means "the household default" -- so every existing row behaves exactly as it
+-- did until somebody picks a cadence. 0 means "never remind me". Any other value is the reminder
+-- threshold in weeks, the same semantics staleImportWeeks has always had. The label <-> weeks
+-- mapping lives in src/lib/import/cadence.ts, not here: no CHECK, so a future list can widen it
+-- without a rebuild (the same reasoning accounts.type has carried since ruling R10).
+alter table accounts add column expected_import_weeks integer;

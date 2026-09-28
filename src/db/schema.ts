@@ -131,6 +131,13 @@ export const accounts = sqliteTable(
     importProfileId: integer('import_profile_id').references(() => importProfiles.id),
     isActive: integer('is_active', { mode: 'boolean' }).notNull().default(true),
     createdAt: text('created_at').notNull(),
+    /**
+     * 2026-09-28, drizzle/0028_account_import_cadence.sql (spec §2.2). Declared last because ALTER
+     * TABLE ADD COLUMN appends physically -- same convention as importProfiles.isActive. NULL = the
+     * household's staleImportWeeks; 0 = never remind; otherwise the reminder threshold in weeks.
+     * src/lib/import/cadence.ts owns the label <-> weeks mapping and the one rule that reads it.
+     */
+    expectedImportWeeks: integer('expected_import_weeks'),
   },
   (t) => [index('accounts_owner_idx').on(t.ownerUserId)],
 );

@@ -38,14 +38,14 @@ function backfillStatement(): string {
  * them moves a balance on its own.
  */
 describe('0027: the migration records itself', () => {
-  it('sits immediately after 0026 in the journal, and is the newest', () => {
+  /** The "I am the newest" claim moved on to 0028's suite, as 0027 took it from 0026's. */
+  it('sits immediately after 0026 in the journal', () => {
     const journal = JSON.parse(
       fs.readFileSync(path.join(process.cwd(), 'drizzle/meta/_journal.json'), 'utf8'),
     ) as { entries: { idx: number; tag: string }[] };
     expect(journal.entries.find((row) => row.tag === '0027_review_fixes')).toMatchObject({ idx: 27 });
     const idxs = journal.entries.map((entry) => entry.idx).sort((a, b) => a - b);
     expect(idxs.indexOf(27)).toBe(idxs.indexOf(26) + 1);
-    expect(Math.max(...idxs)).toBe(27);
   });
 });
 

@@ -197,6 +197,13 @@
       "when": 1758326400000,
       "tag": "0027_review_fixes",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "6",
+      "when": 1758412800000,
+      "tag": "0028_account_import_cadence",
+      "breakpoints": true
     }
   ]
 }
