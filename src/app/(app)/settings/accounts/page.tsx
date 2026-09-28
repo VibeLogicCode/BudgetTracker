@@ -46,6 +46,7 @@ export default async function AccountsPage() {
       isSimplefinManaged: isSimplefinManaged(account.id),
       importProfileId: account.importProfileId,
       importProfileName: account.importProfileId === null ? null : profileNameById.get(account.importProfileId) ?? null,
+      expectedImportWeeks: account.expectedImportWeeks,
       latestBalanceCents: balance?.balanceCents ?? null,
       latestBalanceDate: balance?.date ?? null,
       // Lets the cell tell "this IS the balance on that date" from "this is today's balance,

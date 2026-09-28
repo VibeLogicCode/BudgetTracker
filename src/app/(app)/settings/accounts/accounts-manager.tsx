@@ -33,6 +33,9 @@ import type { Discrepancy } from '@/lib/balance-reconcile';
 // runtime import of its own, but @/lib/accounts as a module also exports value-level functions
 // that reach @/db/client, so only the type may cross into this client component.
 import type { AccountType } from '@/lib/accounts';
+// Pure (no imports of its own), so this 'use client' file may value-import it -- see the module's
+// own docblock and tests/ops/client-bundle.test.ts.
+import { IMPORT_CADENCE_OPTIONS, cadenceFormValue, cadenceLabel, cadenceSubtitle } from '@/lib/import/cadence';
 import { buttonClass } from '@/components/ui/Button';
 
 export interface AccountRow {
@@ -54,6 +57,8 @@ export interface AccountRow {
    */
   importProfileId: number | null;
   importProfileName: string | null;
+  /** Spec 2026-09-28 §2.2. null = household default; 0 = never; otherwise weeks. */
+  expectedImportWeeks: number | null;
   /**
    * v1.7.0 Task 6 (spec 2026-08-22), resolved by page.tsx via latestSnapshots(). Since v1.8.0
    * (Task 4) that function no longer returns the raw stored snapshot -- it resolves through
@@ -144,6 +149,7 @@ function AccountSubtitle({ account, people }: { account: AccountRow; people: Per
   const ownerLabel = account.ownerUserId === null ? 'Joint' : (people.find((p) => p.id === account.ownerUserId)?.name ?? 'Joint');
   const mappingLabel = account.isSimplefinManaged ? 'SimpleFIN' : (account.importProfileName ?? 'none');
   const statusLabel = account.isActive ? 'active' : 'deactivated';
+  const cadence = cadenceSubtitle(account.expectedImportWeeks);
   return (
     <span className="flex flex-wrap items-center gap-1">
       {account.institution === '' ? null : (
@@ -156,6 +162,12 @@ function AccountSubtitle({ account, people }: { account: AccountRow; people: Per
       <span aria-hidden="true">·</span>
       <span>{mappingLabel}</span>
       <span aria-hidden="true">·</span>
+      {cadence === null ? null : (
+        <>
+          <span>{cadence}</span>
+          <span aria-hidden="true">·</span>
+        </>
+      )}
       <span>{statusLabel}</span>
     </span>
   );
@@ -184,7 +196,7 @@ export function AccountsManager({
   // v1.7.0 Task 1b: one row's editor open at a time, same show-one-at-a-time shape as
   // transactions-client.tsx's rename modal. owner/profile are the STRING form values the
   // selects below need ('' for Joint/None), not the raw nullable ids.
-  const [editing, setEditing] = useState<{ id: number; name: string; owner: string; profile: string } | null>(null);
+  const [editing, setEditing] = useState<{ id: number; name: string; owner: string; profile: string; cadence: string } | null>(null);
   // Ruling R10: savings and asset are new enough that the select needs a one-line explanation
   // right under it, and only the one that applies to what is currently picked.
   const [newAccountType, setNewAccountType] = useState<AccountType>('chequing');
@@ -217,6 +229,7 @@ export function AccountsManager({
       name: account.name,
       owner: account.ownerUserId === null ? '' : String(account.ownerUserId),
       profile: account.importProfileId === null ? '' : String(account.importProfileId),
+      cadence: cadenceFormValue(account.expectedImportWeeks),
     });
 
   return (
@@ -398,6 +411,29 @@ export function AccountsManager({
                             {person.name}
                           </option>
                         ))}
+                      </select>
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <span className={labelClass}>Expect an import</span>
+                      {/* Spec 2026-09-28 §2.2. Offered for every account, SimpleFIN-managed included:
+                          a sync that silently stops writing imports is exactly what the reminder
+                          should catch. The dormant option at the end is the mapping select's own
+                          idiom -- a value the list does not offer must stay selected, or saving the
+                          name would clear it. */}
+                      <select
+                        name="cadence"
+                        defaultValue={editing.cadence}
+                        aria-label={`Import cadence for ${account.name}`}
+                        className={rowInput}
+                      >
+                        {IMPORT_CADENCE_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                        {editing.cadence !== '' && !IMPORT_CADENCE_OPTIONS.some((option) => option.value === editing.cadence) ? (
+                          <option value={editing.cadence}>{cadenceLabel(Number(editing.cadence))}</option>
+                        ) : null}
                       </select>
                     </div>
                     {account.isSimplefinManaged ? null : (

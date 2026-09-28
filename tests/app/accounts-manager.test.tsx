@@ -45,6 +45,7 @@ function account(over: Partial<AccountRow> = {}): AccountRow {
     isSimplefinManaged: false,
     importProfileId: null,
     importProfileName: null,
+    expectedImportWeeks: null,
     // v1.7.0 Task 6 (spec 2026-08-22): null means no balance snapshot exists yet.
     latestBalanceCents: null,
     latestBalanceDate: null,
@@ -519,5 +520,65 @@ describe('AccountsManager — "Add an account" is a disclosure (2026-08-30 Setti
     const toggle = screen.getByRole('button', { name: 'Close' });
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
     expect(screen.getByPlaceholderText('Joint Chequing')).toBeTruthy();
+  });
+});
+
+/** Spec 2026-09-28 §2.2. One select in the same editor; a word in the subtitle when it is set. */
+describe('the import cadence', () => {
+  it('pre-fills the select with the account current value', () => {
+    render(<AccountsManager accounts={[account({ id: 42, name: 'Amex', expectedImportWeeks: 5 })]} people={PEOPLE} profiles={PROFILES} />);
+    openAccountMenu('Amex');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Update account' }));
+
+    const select = screen.getByLabelText(/Import cadence for Amex/i) as HTMLSelectElement;
+    expect(select.value).toBe('5');
+    expect(Array.from(select.options).map((option) => option.textContent)).toEqual([
+      'Household default',
+      'Weekly',
+      'Every two weeks',
+      'Monthly',
+      'Yearly',
+      'Never remind me',
+    ]);
+  });
+
+  it('posts the cadence with the rest of the save', async () => {
+    const { updateAccountAction } = await import('@/app/(app)/settings/accounts/actions');
+    const spy = vi.mocked(updateAccountAction);
+    render(<AccountsManager accounts={[account({ id: 42, name: 'Amex' })]} people={PEOPLE} profiles={PROFILES} />);
+    openAccountMenu('Amex');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Update account' }));
+
+    const select = screen.getByLabelText(/Import cadence for Amex/i) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: '5' } });
+    fireEvent.submit(select.form as HTMLFormElement);
+
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    expect((spy.mock.calls.at(-1)![1] as FormData).get('cadence')).toBe('5');
+  });
+
+  /** Review focus 3: the dormant-pin idiom, applied to a number the list does not offer. */
+  it('keeps a stored value the list does not offer as its own option, so a save does not clear it', () => {
+    render(<AccountsManager accounts={[account({ id: 42, name: 'Amex', expectedImportWeeks: 7 })]} people={PEOPLE} profiles={PROFILES} />);
+    openAccountMenu('Amex');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Update account' }));
+
+    const select = screen.getByLabelText(/Import cadence for Amex/i) as HTMLSelectElement;
+    expect(select.value).toBe('7');
+    expect(Array.from(select.options).map((option) => option.textContent)).toContain('Every 7 weeks');
+  });
+
+  it('says the cadence in the subtitle only when the account has its own', () => {
+    const { container, rerender } = render(
+      <AccountsManager accounts={[account({ name: 'Amex', expectedImportWeeks: 5 })]} people={PEOPLE} profiles={PROFILES} />,
+    );
+    expect(container.textContent).toContain('imported monthly');
+
+    rerender(<AccountsManager accounts={[account({ name: 'Amex', expectedImportWeeks: 0 })]} people={PEOPLE} profiles={PROFILES} />);
+    expect(container.textContent).toContain('no import reminders');
+
+    rerender(<AccountsManager accounts={[account({ name: 'Amex', expectedImportWeeks: null })]} people={PEOPLE} profiles={PROFILES} />);
+    expect(container.textContent).not.toContain('imported ');
+    expect(container.textContent).not.toContain('import reminders');
   });
 });
