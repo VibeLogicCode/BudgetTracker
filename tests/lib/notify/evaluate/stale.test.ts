@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../../helpers/db';
-import { setAccountActive } from '@/lib/accounts';
+import { setAccountActive, setAccountImportCadence } from '@/lib/accounts';
 import { DEFAULT_USER_SETTINGS, saveEmailTarget, saveSmtp, saveUserSettings, setPref } from '@/lib/notify/config';
 import { resetOutboxPumpForTests } from '@/lib/notify/outbox';
 import { resetNotifySenderForTests, setNotifySenderForTests } from '@/lib/notify/send';
@@ -246,5 +246,78 @@ describe('item BT: viewerFor skips rather than falling back to a household scope
       t.sqlite.prepare('select count(*) as c from notification_outbox where user_id = ?').get(userId) as { c: number }
     ).c;
     expect(count).toBe(0);
+  });
+});
+
+/**
+ * Spec 2026-09-28 §2.2. One household number was wrong for a household on mixed rhythms. Each
+ * account may now carry its own threshold; NULL still means the household's.
+ */
+describe('spec 2026-09-28 §2.2: a per-account cadence', () => {
+  let userId = 0;
+  const NOW = new Date('2026-08-27T09:00:00Z');
+
+  beforeEach(() => {
+    userId = emailUser();
+    saveUserSettings(userId, { ...DEFAULT_USER_SETTINGS, staleImportWeeks: 3 });
+  });
+
+  it('an account on a monthly cadence is not named at 30 days, while a default one beside it is', () => {
+    const monthly = insertTestAccount(t.db, { name: 'Amex', type: 'credit' });
+    setAccountImportCadence(monthly, 5);
+    const defaulted = insertTestAccount(t.db, { name: 'Chequing' });
+    importAt(userId, '2026-07-28T12:00:00.000Z', monthly); // 30 days: inside 5 weeks
+    importAt(userId, '2026-07-28T12:00:00.000Z', defaulted); // 30 days: past the household's 3
+
+    expect(evaluateStaleImport({ userId, now: NOW, tz: 'America/Toronto' })).toBe(1);
+    const [row] = pendingOutbox(userId);
+    expect(row?.body).toContain('Chequing');
+    expect(row?.body).not.toContain('Amex');
+  });
+
+  it('never names an account set to never, however long it has been', () => {
+    const never = insertTestAccount(t.db, { name: 'Savings', type: 'savings' });
+    setAccountImportCadence(never, 0);
+    importAt(userId, '2025-07-01T12:00:00.000Z', never); // over a year
+
+    expect(evaluateStaleImport({ userId, now: NOW, tz: 'America/Toronto' })).toBe(0);
+  });
+
+  it('names an account on a weekly cadence at 14 days, where the household default would not', () => {
+    const weekly = insertTestAccount(t.db, { name: 'Chequing' });
+    setAccountImportCadence(weekly, 2);
+    importAt(userId, '2026-08-12T12:00:00.000Z', weekly); // 15 days
+
+    expect(evaluateStaleImport({ userId, now: NOW, tz: 'America/Toronto' })).toBe(1);
+    const row = t.sqlite.prepare('select subject from notification_outbox').get() as { subject: string };
+    // The subject states THAT account's own threshold, not the household's.
+    expect(row.subject).toBe('Chequing has not been imported in 2 weeks');
+  });
+
+  it('with several overdue accounts the subject says so without a week count, because theirs differ', () => {
+    const weekly = insertTestAccount(t.db, { name: 'Chequing' });
+    setAccountImportCadence(weekly, 2);
+    const monthly = insertTestAccount(t.db, { name: 'Amex', type: 'credit' });
+    setAccountImportCadence(monthly, 5);
+    importAt(userId, '2026-08-01T12:00:00.000Z', weekly); // 26 days
+    importAt(userId, '2026-07-01T12:00:00.000Z', monthly); // 57 days
+
+    expect(evaluateStaleImport({ userId, now: NOW, tz: 'America/Toronto' })).toBe(1);
+    const row = t.sqlite.prepare('select subject, body from notification_outbox').get() as { subject: string; body: string };
+    expect(row.subject).toBe('2 accounts are overdue for an import');
+    expect(row.body).toContain('Amex: last import 2026-07-01 (57 days ago)');
+    expect(row.body).toContain('Chequing: last import 2026-08-01 (26 days ago)');
+  });
+
+  /** Review focus 1: how the import happened does not enter into it -- only whether one happened. */
+  it('a SimpleFIN-style account is judged by the same rule: an imports row is an imports row', () => {
+    const synced = insertTestAccount(t.db, { name: 'Synced Chequing' });
+    setAccountImportCadence(synced, 2);
+    // A nightly sync writes an imports row with rows_added 0 when nothing is new (MUST-14.8).
+    t.db.run(
+      sql`insert into imports (account_id, profile_id, filename, imported_by, rows_added, rows_duplicate, rows_error, created_at)
+          values (${synced}, null, ${'simplefin'}, ${userId}, 0, 0, 0, ${'2026-08-26T03:00:00.000Z'})`,
+    );
+    expect(evaluateStaleImport({ userId, now: NOW, tz: 'America/Toronto' })).toBe(0);
   });
 });

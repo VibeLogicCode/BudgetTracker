@@ -85,6 +85,8 @@ export interface StaleAccountLine {
   name: string;
   lastImportIso: string;
   daysAgo: number;
+  /** Spec 2026-09-28 §2.2: this account's own threshold, or the household's when it has none. */
+  weeks: number;
 }
 
 export type RenderInput =
@@ -258,7 +260,6 @@ export type RenderInput =
        */
       event: 'stale_import';
       variant: 'batch';
-      weeks: number;
       accounts: readonly StaleAccountLine[];
     }
   | {
@@ -1015,8 +1016,10 @@ export function renderEvent(input: RenderInput): { subject: string; body: string
         return {
           subject:
             input.accounts.length === 1
-              ? `${truncateText(input.accounts[0].name, NAME_MAX)} has not been imported in ${input.weeks} weeks`
-              : `${input.accounts.length} accounts have not been imported in ${input.weeks} weeks`,
+              ? `${truncateText(input.accounts[0].name, NAME_MAX)} has not been imported in ${input.accounts[0].weeks} weeks`
+              // Spec 2026-09-28 §2.2: several accounts may now carry several thresholds, so a
+              // single "in N weeks" would be true of at most one of them.
+              : `${input.accounts.length} accounts are overdue for an import`,
           body: [...names, '', 'Bank exports are how this app learns what you spent.'].join('\n'),
         };
       }

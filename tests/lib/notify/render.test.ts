@@ -217,6 +217,22 @@ describe('§10.1: the operational events', () => {
     expect(body).toContain('The last import was 2026-07-27 (21 days ago).');
     expect(body).toContain('Bank exports are how this app learns what you spent.');
   });
+
+  it('stale_import batch: one account states its own weeks; several say overdue', () => {
+    const line = { lastImportIso: '2026-07-27', daysAgo: 21 };
+    const one = renderEvent({ event: 'stale_import', variant: 'batch', accounts: [{ ...line, name: 'Amex', weeks: 2 }] });
+    expect(one.subject).toBe('Amex has not been imported in 2 weeks');
+    const two = renderEvent({
+      event: 'stale_import',
+      variant: 'batch',
+      accounts: [
+        { ...line, name: 'Amex', weeks: 5 },
+        { ...line, name: 'Chequing', weeks: 2 },
+      ],
+    });
+    expect(two.subject).toBe('2 accounts are overdue for an import');
+    expect(two.body).toContain('Amex: last import 2026-07-27 (21 days ago)');
+  });
 });
 
 describe('Task 8 (v1.7.0): sync_failed', () => {

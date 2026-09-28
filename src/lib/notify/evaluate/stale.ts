@@ -4,6 +4,7 @@ import { accounts, imports } from '@/db/schema';
 import { viewerFor } from '@/lib/auth/users';
 import { isSelfScoped } from '@/lib/auth/viewer';
 import { daysBetweenIso, todayIso } from '@/lib/dates';
+import { staleThresholdWeeks } from '@/lib/import/cadence';
 import { getUserSettings } from '@/lib/notify/config';
 import { staleImportBatchKey } from '@/lib/notify/events';
 import { mondayOfIsoWeek } from '@/lib/notify/evaluate/slots';
@@ -48,6 +49,7 @@ export function evaluateStaleImport(input: { userId: number; now: Date; tz: stri
       accountId: accounts.id,
       accountName: accounts.name,
       newest: sql<string>`max(${imports.createdAt})`,
+      expectedImportWeeks: accounts.expectedImportWeeks,
     })
     .from(imports)
     .innerJoin(accounts, eq(accounts.id, imports.accountId))
@@ -76,12 +78,19 @@ export function evaluateStaleImport(input: { userId: number; now: Date; tz: stri
    * The account ids are deliberately NOT in the key: a sixth account going quiet mid-week must not
    * trigger a second message. It is named in next Monday's.
    */
+  /**
+   * Spec 2026-09-28 §2.2. Each account carries its own threshold, or rides the household's. The
+   * account's own value wins when set; 0 is "never remind me" and EXCLUDES the account rather than
+   * comparing against it. The stored number has the same meaning staleImportWeeks always had, so
+   * this is still one rule -- staleThresholdWeeks is where the fallback is spelled, once.
+   */
   const stale = rows
     .map((row) => {
       const lastImportIso = row.newest.slice(0, 10);
-      return { name: row.accountName, lastImportIso, daysAgo: daysBetweenIso(lastImportIso, today) };
+      const weeks = staleThresholdWeeks(row.expectedImportWeeks, settings.staleImportWeeks);
+      return { name: row.accountName, lastImportIso, daysAgo: daysBetweenIso(lastImportIso, today), weeks };
     })
-    .filter((row) => row.daysAgo >= settings.staleImportWeeks * 7)
+    .filter((row) => row.weeks > 0 && row.daysAgo >= row.weeks * 7)
     // Quietest first: the account that has been ignored longest is the one worth acting on.
     .sort((a, b) => b.daysAgo - a.daysAgo);
   if (stale.length === 0) return 0;
@@ -89,7 +98,6 @@ export function evaluateStaleImport(input: { userId: number; now: Date; tz: stri
   const { subject, body } = renderEvent({
     event: 'stale_import',
     variant: 'batch',
-    weeks: settings.staleImportWeeks,
     accounts: stale,
   });
   const result = enqueue({
