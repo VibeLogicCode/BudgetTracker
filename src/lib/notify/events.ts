@@ -187,7 +187,7 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     id: 'stale_import',
     group: 'money',
     label: 'Nothing has been imported lately',
-    blurb: 'An account has gone the number of weeks you set with no import. One message a week naming every quiet account.',
+    blurb: 'An account has gone past its import cadence — its own, or the household default — with no import. One message a week naming every quiet account.',
     audience: 'all',
     trigger: 'daily_slot',
     defaultEnabled: false,

@@ -1182,7 +1182,7 @@ export function NotificationsClient(data: NotificationsPageData) {
                 <Field label="Budget warning threshold (%)" htmlFor="budgetThresholdPct" hint="Default 80. 100 is the separate over-budget alert.">
                   <input id="budgetThresholdPct" name="budgetThresholdPct" inputMode="numeric" className={inputClass} defaultValue={String(data.settings.budgetThresholdPct)} />
                 </Field>
-                <Field label="Weeks without an import before nagging" htmlFor="staleImportWeeks" hint="Default 3.">
+                <Field label="Weeks without an import before nagging" htmlFor="staleImportWeeks" hint="Default 3. The household default — an account can set its own under Settings → Accounts.">
                   <input id="staleImportWeeks" name="staleImportWeeks" inputMode="numeric" className={inputClass} defaultValue={String(data.settings.staleImportWeeks)} />
                 </Field>
                 <Field label="Daily message hour" htmlFor="dailyHour" hint="Default 8 (24-hour clock).">

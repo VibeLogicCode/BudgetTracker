@@ -307,6 +307,8 @@ describe('MUST-11.3: the matrix is generated from the registry', () => {
       expect(container.querySelector(`[name="${name}"]`)).not.toBeNull();
     }
     expect((getByLabelText(/days before/i) as HTMLInputElement).defaultValue).toBe('14');
+    // Spec 2026-09-28 §2.2: this number is now the DEFAULT; each account may carry its own.
+    expect(container.textContent).toContain('an account can set its own under Settings → Accounts');
   });
 });
 
