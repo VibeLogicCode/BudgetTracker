@@ -20,6 +20,8 @@ export interface AccountRecord {
   importProfileId: number | null;
   isActive: boolean;
   createdAt: string;
+  /** Spec 2026-09-28 §2.2. null = the household's staleImportWeeks; 0 = never remind; else weeks. */
+  expectedImportWeeks: number | null;
 }
 
 /**
@@ -115,6 +117,15 @@ export function renameAccount(id: number, name: string): void {
 /** null = Joint/household (spec section 3: owner_user_id NULL means joint). */
 export function setAccountOwner(id: number, ownerUserId: number | null): void {
   getDb().update(accounts).set({ ownerUserId }).where(eq(accounts.id, id)).run();
+}
+
+/**
+ * Spec 2026-09-28 §2.2. null = the household default; 0 = never remind; otherwise the reminder
+ * threshold in weeks. The label <-> weeks mapping is src/lib/import/cadence.ts's; this writes what
+ * it is handed.
+ */
+export function setAccountImportCadence(id: number, expectedImportWeeks: number | null): void {
+  getDb().update(accounts).set({ expectedImportWeeks }).where(eq(accounts.id, id)).run();
 }
 
 /** Each user gets one personal Cash account, created on demand for manual entries. */
