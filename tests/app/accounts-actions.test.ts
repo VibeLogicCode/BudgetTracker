@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
+import { sql } from 'drizzle-orm';
 
 let currentUser = { id: 1, name: 'Admin', username: 'admin', role: 'admin' as const, visibility: 'household' as const };
 let requestHeaders = new Headers({ origin: 'http://nas.local:3000', host: 'nas.local:3000' });
@@ -489,5 +490,48 @@ describe('updateAccountAction — ruling R9: credit balances are entered as mone
     );
 
     expect(snapshotRows()).toEqual([{ account_id: id, date: '2026-08-20', balance_cents: 7500, source: 'manual' }]);
+  });
+});
+
+/**
+ * Spec 2026-09-28 §2.2. The cadence rides the same save as name, owner and mapping -- a fourth
+ * field, not a fourth button. '' is the household default, a real state like Joint or None.
+ */
+describe('updateAccountAction: the import cadence', () => {
+  it('saves an offered value, the default, and never', async () => {
+    const { db } = setup();
+    const id = insertTestAccount(db, { name: 'Amex', type: 'credit' });
+
+    for (const [cadence, stored] of [
+      ['5', 5],
+      ['', null],
+      ['0', 0],
+    ] as const) {
+      const result = await updateAccountAction({}, formData({ accountId: String(id), name: 'Amex', owner: '', profile: '', cadence }));
+      expect(result.error).toBeUndefined();
+      expect(getAccount(id)?.expectedImportWeeks).toBe(stored);
+    }
+  });
+
+  /** Review focus 3: a value the select does not offer must survive a save aimed at the name. */
+  it('accepts a value the select does not offer', async () => {
+    const { db } = setup();
+    const id = insertTestAccount(db, { name: 'Amex', type: 'credit' });
+    db.run(sql`update accounts set expected_import_weeks = 7 where id = ${id}`);
+
+    const result = await updateAccountAction({}, formData({ accountId: String(id), name: 'Amex Gold', owner: '', profile: '', cadence: '7' }));
+
+    expect(result.error).toBeUndefined();
+    expect(getAccount(id)).toMatchObject({ name: 'Amex Gold', expectedImportWeeks: 7 });
+  });
+
+  it('refuses a value that is not one, and changes nothing', async () => {
+    const { db } = setup();
+    const id = insertTestAccount(db, { name: 'Amex', type: 'credit' });
+
+    const result = await updateAccountAction({}, formData({ accountId: String(id), name: 'Renamed', owner: '', profile: '', cadence: 'soon' }));
+
+    expect(result.error).toBe('Pick how often this account is imported.');
+    expect(getAccount(id)).toMatchObject({ name: 'Amex', expectedImportWeeks: null });
   });
 });

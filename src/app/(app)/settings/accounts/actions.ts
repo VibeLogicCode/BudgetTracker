@@ -5,7 +5,8 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { isSameOrigin } from '@/lib/auth/csrf';
 import { requireAdmin } from '@/lib/auth/session';
-import { createAccount, getAccount, renameAccount, setAccountActive, setAccountOwner } from '@/lib/accounts';
+import { createAccount, getAccount, renameAccount, setAccountActive, setAccountImportCadence, setAccountOwner } from '@/lib/accounts';
+import { cadenceWeeksFromForm } from '@/lib/import/cadence';
 import { findUserById } from '@/lib/auth/users';
 import { isIsoDate } from '@/lib/dates';
 import { hasReadableMapping, listProfiles, setAccountPinnedProfile } from '@/lib/import/presets';
@@ -120,11 +121,19 @@ export async function setAccountActiveAction(_prev: AccountsFormState, formData:
   };
 }
 
+/**
+ * Spec 2026-09-28 §2.2. '' is the household default (a real state, like ownerField's Joint), and any
+ * small non-negative integer is accepted rather than only the six the select offers -- see
+ * cadenceWeeksFromForm for why a value the list does not offer must still round-trip.
+ */
+const cadenceField = z.string().refine((value) => cadenceWeeksFromForm(value) !== undefined, 'Pick how often this account is imported.');
+
 const updateAccountSchema = z.object({
   accountId: z.coerce.number().int().positive(),
   name: z.string().trim().min(1, 'Give the account a name').max(80),
   owner: ownerField,
   profile: profileField,
+  cadence: cadenceField,
 });
 
 /**
@@ -171,6 +180,7 @@ export async function updateAccountAction(_prev: AccountsFormState, formData: Fo
     name: formData.get('name') ?? '',
     owner: String(formData.get('owner') ?? ''),
     profile: String(formData.get('profile') ?? ''),
+    cadence: String(formData.get('cadence') ?? ''),
   });
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Invalid request.' };
 
@@ -202,6 +212,9 @@ export async function updateAccountAction(_prev: AccountsFormState, formData: Fo
 
   renameAccount(parsed.data.accountId, parsed.data.name);
   setAccountOwner(parsed.data.accountId, ownerUserId);
+  // Spec 2026-09-28 §2.2. The refine above already rejected anything cadenceWeeksFromForm cannot
+  // read, so `?? null` here can only ever be reached by '' -- it exists to satisfy the type.
+  setAccountImportCadence(parsed.data.accountId, cadenceWeeksFromForm(parsed.data.cadence) ?? null);
   // Attribution of NEW transactions follows the owner; existing rows keep the
   // person they were already attributed to, which is why nothing is rewritten here.
   if (!managedBySimplefin) setAccountPinnedProfile(parsed.data.accountId, profileId);
