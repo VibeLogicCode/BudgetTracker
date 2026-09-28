@@ -4585,4 +4585,66 @@ describe('spec 2026-09-28 §2.3: Confirm every group', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(spy).not.toHaveBeenCalled();
   });
+
+  /**
+   * Final review F2. useActionState keeps each result across a revalidation, so the three
+   * group-level results would sit in the banner's chain in a fixed order and an older one earlier
+   * in it would mask a newer one. Whichever of the three was submitted last is read first.
+   */
+  describe('the latest group-level result wins the banner', () => {
+    const GROUP_MESSAGE = 'Confirmed 37 transactions. Rules will leave them alone from now on.';
+    const VIEW_MESSAGE = 'Confirmed 41 transactions across 2 categories. Rules will leave them alone from now on.';
+
+    function submitGroupConfirm(container: HTMLElement) {
+      fireEvent.click(screen.getAllByRole('button', { name: 'These are all correct' })[0]);
+      fireEvent.submit(container.querySelector('[data-testid="group-confirm-dialog-backdrop"] form') as HTMLFormElement);
+    }
+
+    function submitViewConfirm(container: HTMLElement) {
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm every group' }));
+      fireEvent.submit(container.querySelector('[data-testid="view-confirm-dialog-backdrop"] form') as HTMLFormElement);
+    }
+
+    it('a per-group confirm, then Confirm every group: the view’s message shows', async () => {
+      const { bulkConfirmGroupAction, bulkConfirmViewAction } = await import('@/app/(app)/transactions/actions');
+      vi.mocked(bulkConfirmGroupAction).mockResolvedValueOnce({ message: GROUP_MESSAGE });
+      vi.mocked(bulkConfirmViewAction).mockResolvedValueOnce({ message: VIEW_MESSAGE });
+      const { container } = renderGrouped();
+
+      submitGroupConfirm(container);
+      await waitFor(() => expect(screen.getByText(GROUP_MESSAGE)).toBeTruthy());
+      submitViewConfirm(container);
+
+      await waitFor(() => expect(screen.getByText(VIEW_MESSAGE)).toBeTruthy());
+      expect(screen.queryByText(GROUP_MESSAGE)).toBeNull();
+    });
+
+    it('Confirm every group, then a per-group confirm: the group’s message shows', async () => {
+      const { bulkConfirmGroupAction, bulkConfirmViewAction } = await import('@/app/(app)/transactions/actions');
+      vi.mocked(bulkConfirmViewAction).mockResolvedValueOnce({ message: VIEW_MESSAGE });
+      vi.mocked(bulkConfirmGroupAction).mockResolvedValueOnce({ message: GROUP_MESSAGE });
+      const { container } = renderGrouped();
+
+      submitViewConfirm(container);
+      await waitFor(() => expect(screen.getByText(VIEW_MESSAGE)).toBeTruthy());
+      submitGroupConfirm(container);
+
+      await waitFor(() => expect(screen.getByText(GROUP_MESSAGE)).toBeTruthy());
+      expect(screen.queryByText(VIEW_MESSAGE)).toBeNull();
+    });
+
+    it('the error chain follows the same rule', async () => {
+      const { bulkConfirmGroupAction, bulkConfirmViewAction } = await import('@/app/(app)/transactions/actions');
+      vi.mocked(bulkConfirmGroupAction).mockResolvedValueOnce({ error: 'That group is empty now — nothing was changed.' });
+      vi.mocked(bulkConfirmViewAction).mockResolvedValueOnce({ error: 'Everything in this view was already set by hand.' });
+      const { container } = renderGrouped();
+
+      submitGroupConfirm(container);
+      await waitFor(() => expect(screen.getByText('That group is empty now — nothing was changed.')).toBeTruthy());
+      submitViewConfirm(container);
+
+      await waitFor(() => expect(screen.getByText('Everything in this view was already set by hand.')).toBeTruthy());
+      expect(screen.queryByText('That group is empty now — nothing was changed.')).toBeNull();
+    });
+  });
 });

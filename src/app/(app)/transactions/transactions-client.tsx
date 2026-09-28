@@ -659,6 +659,9 @@ export function TransactionsClient({
   // Spec 2026-09-28 §2.3: the view-level confirm. A boolean, not a group -- it acts on the filter.
   const [confirmView, setConfirmView] = useState(false);
   const [confirmViewState, confirmViewFormAction] = useActionState(bulkConfirmViewAction, initial);
+  // Final review F2: which of the three group-level dialogs was submitted last, set in each one's
+  // own onSubmit. The banner chains below read that one's state first -- see the comment there.
+  const [lastGroupAction, setLastGroupAction] = useState<'confirmGroup' | 'recatGroup' | 'confirmView' | null>(null);
   const [renameState, renameAction] = useActionState(renameTransactionAction, initial);
   const [assignState, assignLoan] = useActionState(
     (_prev: ActionState, formData: FormData) => assignToLoanAction(formData),
@@ -964,6 +967,16 @@ export function TransactionsClient({
   // same as split/note, not stay-open-on-refusal like newLoanState/applyAllState -- so the top
   // banner is the only place either one's result is ever seen, and their position here does not
   // need to protect an inline error the dialog itself no longer shows.
+  // Final review F2: the three group-level results (confirmGroupState, recatGroupState,
+  // confirmViewState) are read latest-submitted first. newLoanState's fix above was a fixed move
+  // to the front, which works for one state that is always the freshest; any of these three can be
+  // the freshest, and each keeps its result across a revalidation, so a fixed order let an older
+  // one mask a newer one -- a per-group confirm hid a later "Confirm every group" result for good.
+  // The rest of the chain keeps its place.
+  const lastGroupState =
+    lastGroupAction === null
+      ? null
+      : { confirmGroup: confirmGroupState, recatGroup: recatGroupState, confirmView: confirmViewState }[lastGroupAction];
   const notice =
     newLoanState.message ?? applyAllState.message ??
     attrState.message ?? bulkCatState.message ?? bulkTfrState.message ??
@@ -972,7 +985,7 @@ export function TransactionsClient({
     // v1.26.0 Lane 3a item 4: the two group actions join this same group -- both dialogs close on
     // submit (groupConfirmDialog/groupRecategorizeDialog's own onSubmit), so the top banner is the
     // only place either one's result is ever seen, exactly like the two v1.25.0 bulk dialogs above.
-    confirmGroupState.message ?? recatGroupState.message ?? confirmViewState.message ??
+    lastGroupState?.message ?? confirmGroupState.message ?? recatGroupState.message ?? confirmViewState.message ??
     // 2026-09-14, the report on v1.38.0: "assign to bill works but when i assign to bill the UI
     // menu doesnt close, transaction gets applied and no feedback to user that its done." Both
     // actions shipped wired to no banner at all, so each one landed its write in silence. They sit
@@ -984,7 +997,7 @@ export function TransactionsClient({
     attrState.error ?? bulkCatState.error ?? bulkTfrState.error ??
     renameState.error ?? assignState.error ?? unassignState.error ?? splitState.error ?? noteState.error ??
     bulkLoanState.error ?? bulkNoteState.error ??
-    confirmGroupState.error ?? recatGroupState.error ?? confirmViewState.error ??
+    lastGroupState?.error ?? confirmGroupState.error ?? recatGroupState.error ?? confirmViewState.error ??
     billState.error ?? deleteState.error ?? ruleCreateState.error ??
     acceptState.error ?? acceptAllState.error ?? rowTransferState.error;
 
@@ -2799,7 +2812,14 @@ export function TransactionsClient({
         description={<Money cents={confirmGroup.totalCents} />}
         onClose={() => setConfirmGroup(null)}
       >
-        <form action={confirmGroupFormAction} onSubmit={() => setConfirmGroup(null)} className="flex flex-col gap-3">
+        <form
+          action={confirmGroupFormAction}
+          onSubmit={() => {
+            setConfirmGroup(null);
+            setLastGroupAction('confirmGroup');
+          }}
+          className="flex flex-col gap-3"
+        >
           <input type="hidden" name="scope" value={currentQuery} />
           <input
             type="hidden"
@@ -2842,7 +2862,14 @@ export function TransactionsClient({
         description={`${count} ${noun} in ${groups.groupCount} categor${groups.groupCount === 1 ? 'y' : 'ies'}`}
         onClose={() => setConfirmView(false)}
       >
-        <form action={confirmViewFormAction} onSubmit={() => setConfirmView(false)} className="flex flex-col gap-3">
+        <form
+          action={confirmViewFormAction}
+          onSubmit={() => {
+            setConfirmView(false);
+            setLastGroupAction('confirmView');
+          }}
+          className="flex flex-col gap-3"
+        >
           <input type="hidden" name="scope" value={currentQuery} />
           <p className="text-sm text-ink">
             {`All ${count} ${noun} stay in the categories they have now and are marked set by hand, so a
@@ -2887,7 +2914,14 @@ export function TransactionsClient({
         description={<Money cents={group.totalCents} />}
         onClose={() => setRecatGroup(null)}
       >
-        <form action={recatGroupFormAction} onSubmit={() => setRecatGroup(null)} className="flex flex-col gap-3">
+        <form
+          action={recatGroupFormAction}
+          onSubmit={() => {
+            setRecatGroup(null);
+            setLastGroupAction('recatGroup');
+          }}
+          className="flex flex-col gap-3"
+        >
           <input type="hidden" name="scope" value={currentQuery} />
           <input type="hidden" name="groupCategoryId" value={group.categoryId === null ? '' : String(group.categoryId)} />
           <Field label="Move them to">
