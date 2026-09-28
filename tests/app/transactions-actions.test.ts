@@ -2384,6 +2384,45 @@ describe('bulkConfirmGroupAction / bulkRecategorizeGroupAction (Lane 3a item 4)'
       expect(result.error).toBe(CROSS_ORIGIN_ERROR);
       expect(sourceOf(id)).toBe('rule');
     });
+
+    /** Final review F7: the same pin bulkConfirmGroupAction carries just above this describe. */
+    it('cannot be widened past a self viewer’s own rows by a tampered scope', async () => {
+      const { db, accountId } = setup();
+      const groceries = categoryIdByName(db, 'Groceries');
+      const importId = seedImport('march.csv');
+      const other = insertTestUser(db, { name: 'Robin', username: 'robin', role: 'member' });
+      const mine = current!.db.get<{ id: number }>(sql`
+        insert into transactions (account_id, import_id, date, raw_description, normalized_merchant, amount_cents, category_id, categorization_source, attributed_user_id, created_by, created_at, updated_at)
+        values (${accountId}, ${importId}, '2026-03-02', 'MINE', 'MINE', -100, ${groceries}, 'rule', ${currentUser.id}, ${currentUser.id}, ${nowIso()}, ${nowIso()})
+        returning id`).id;
+      const theirs = current!.db.get<{ id: number }>(sql`
+        insert into transactions (account_id, import_id, date, raw_description, normalized_merchant, amount_cents, category_id, categorization_source, attributed_user_id, created_by, created_at, updated_at)
+        values (${accountId}, ${importId}, '2026-03-02', 'THEIRS', 'THEIRS', -200, ${groceries}, 'rule', ${other}, ${currentUser.id}, ${nowIso()}, ${nowIso()})
+        returning id`).id;
+      // A self-scoped MEMBER, for the reason the group-action test above gives.
+      currentUser = { ...currentUser, role: 'member', visibility: 'self' };
+
+      const result = await bulkConfirmViewAction({}, formData({ scope: `import=${importId}&person=${other}&group=category` }));
+
+      expect(result.message).toBe('Confirmed 1 transaction across 1 category. Rules will leave it alone from now on.');
+      expect(sourceOf(mine)).toBe('manual');
+      expect(sourceOf(theirs)).toBe('rule');
+    });
+
+    /** Final review F8, review focus 4: more rows than one sweep page (GROUP_SWEEP_PAGE_SIZE, 200). */
+    it('confirms every row when the view is larger than one sweep page', async () => {
+      const { db } = setup();
+      const groceries = categoryIdByName(db, 'Groceries');
+      const coffee = categoryIdByName(db, 'Coffee');
+      const importId = seedImport('march.csv');
+      const groceryIds = Array.from({ length: 150 }, (_, index) => addRuleRow({ importId, categoryId: groceries, merchant: `GREENFIELD ${index}` }));
+      const coffeeIds = Array.from({ length: 55 }, (_, index) => addRuleRow({ importId, categoryId: coffee, merchant: `ROAST ${index}` }));
+
+      const result = await bulkConfirmViewAction({}, formData({ scope: `import=${importId}&source=rule&group=category` }));
+
+      expect(result.message).toBe('Confirmed 205 transactions across 2 categories. Rules will leave them alone from now on.');
+      expect([...groceryIds, ...coffeeIds].every((id) => sourceOf(id) === 'manual')).toBe(true);
+    });
   });
 });
 

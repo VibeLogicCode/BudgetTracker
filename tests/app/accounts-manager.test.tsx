@@ -557,6 +557,26 @@ describe('the import cadence', () => {
     expect((spy.mock.calls.at(-1)![1] as FormData).get('cadence')).toBe('5');
   });
 
+  /**
+   * Final review F3. Offered for a SimpleFIN-managed account too (spec §2.2). Moved inside the
+   * mapping field's non-SimpleFIN block, the form would post no cadence and every save of a synced
+   * account would reset it to the household default.
+   */
+  it('shows the cadence select, pre-filled, for a SimpleFIN-managed account', () => {
+    render(
+      <AccountsManager
+        accounts={[account({ id: 42, name: 'Amex', isSimplefinManaged: true, expectedImportWeeks: 5 })]}
+        people={PEOPLE}
+        profiles={PROFILES}
+      />,
+    );
+    openAccountMenu('Amex');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Update account' }));
+
+    const select = screen.getByLabelText(/Import cadence for Amex/i) as HTMLSelectElement;
+    expect(select.value).toBe('5');
+  });
+
   /** Review focus 3: the dormant-pin idiom, applied to a number the list does not offer. */
   it('keeps a stored value the list does not offer as its own option, so a save does not clear it', () => {
     render(<AccountsManager accounts={[account({ id: 42, name: 'Amex', expectedImportWeeks: 7 })]} people={PEOPLE} profiles={PROFILES} />);

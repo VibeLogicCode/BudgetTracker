@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import { categoryIdByName, createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../../helpers/db';
 import { upsertBudget } from '@/lib/budgets';
 import { saveEmailTarget, saveSmtp, setPref } from '@/lib/notify/config';
+import { setHouseholdEventPref, upsertHouseholdTarget } from '@/lib/notify/household';
 import { resetOutboxPumpForTests } from '@/lib/notify/outbox';
 import { resetNotifySenderForTests, setNotifySenderForTests } from '@/lib/notify/send';
 
@@ -676,5 +677,52 @@ describe('spec 2026-09-28 §2.1: the monthly digest opens with the last import d
     expect(evaluateMonthBoundary({ userId, now: new Date('2026-08-01T09:00:00Z'), tz: TZ })).toBe(1);
     const row = t.sqlite.prepare('select body from notification_outbox limit 1').get() as { body: string };
     expect(row.body).toBe('No transactions were recorded last month.');
+  });
+
+  /**
+   * Final review F6. A self-scoped member whose own account was imported into before the joint
+   * account was: their copy states their own date, the room's copy the household's.
+   */
+  function selfScopedWithTwoImports(): number {
+    const member = optedInUser('member');
+    setUserVisibility(member, 'self');
+    enableMonthlyDigest(member);
+    setPref(member, 'predicted_vs_actual', 'email', false);
+    setPref(member, 'suggested_budget_refresh', 'email', false);
+    spend(categoryIdByName(t.db, 'Groceries'), 5000, '2026-07-10', member);
+    const own = insertTestAccount(t.db, { name: 'Member Visa', type: 'credit', ownerUserId: member });
+    const importAt = (account: number, createdAt: string) =>
+      t.db.run(
+        sql`insert into imports (account_id, profile_id, filename, imported_by, rows_added, rows_duplicate, rows_error, created_at)
+            values (${account}, null, ${'export.csv'}, ${creatorId}, 0, 0, 0, ${createdAt})`,
+      );
+    importAt(own, '2026-07-20T20:00:00.000Z');
+    importAt(accountId, '2026-07-31T20:00:00.000Z'); // the joint account
+    return member;
+  }
+
+  it('follows the recipient’s viewer: a self-scoped member’s copy opens with their own date', () => {
+    const member = selfScopedWithTwoImports();
+
+    expect(evaluateMonthBoundary({ userId: member, now: new Date('2026-08-01T09:00:00Z'), tz: TZ })).toBe(1);
+    const row = t.sqlite.prepare('select body from notification_outbox where user_id = ?').get(member) as { body: string };
+    expect(row.body.startsWith('Last import 2026-07-20.\n\n')).toBe(true);
+  });
+
+  it('the family channel’s copy stays household-wide when that member’s evaluation writes it', () => {
+    const member = selfScopedWithTwoImports();
+    expect(
+      upsertHouseholdTarget({
+        channel: 'telegram',
+        destination: '-1009876543210',
+        secret: '888800001:AAFAMILY-invented-token-never-a-real-one',
+        actorUserId: creatorId,
+      }).ok,
+    ).toBe(true);
+    expect(setHouseholdEventPref({ eventId: 'monthly_digest', channel: 'telegram', enabled: true }).ok).toBe(true);
+
+    expect(evaluateMonthBoundary({ userId: member, now: new Date('2026-08-01T09:00:00Z'), tz: TZ })).toBe(1);
+    const family = t.sqlite.prepare('select body from notification_outbox where user_id is null').get() as { body: string };
+    expect(family.body.startsWith('Last import 2026-07-31.\n\n')).toBe(true);
   });
 });

@@ -392,4 +392,33 @@ describe('spec 2026-09-28 §2.1: the household digest opens with the household-w
 
     expect(householdRow().body.startsWith('Last import 2026-08-16.\n\nHousehold spend: $700.00')).toBe(true);
   });
+
+  /**
+   * Final review F5. The test above fires an admin's slot, and an admin sees every account anyway,
+   * so it cannot tell a household-wide date from the firing member's own. A self-scoped member's
+   * slot can: the newest import is on the joint account, which that member cannot see.
+   */
+  it('stays household-wide when a self-scoped member’s slot fires it', () => {
+    const alex = person('Alex');
+    const robin = person('Robin', 'member');
+    setUserVisibility(robin, 'self');
+    familyTelegram(alex);
+    spend(70000, alex);
+    const robins = insertTestAccount(t.db, { name: 'Robin Visa', type: 'credit', ownerUserId: robin });
+    const importAt = (account: number, createdAt: string) =>
+      t.db.run(
+        sql`insert into imports (account_id, profile_id, filename, imported_by, rows_added, rows_duplicate, rows_error, created_at)
+            values (${account}, null, ${'export.csv'}, ${robin}, 0, 0, 0, ${createdAt})`,
+      );
+    importAt(robins, '2026-08-10T20:00:00.000Z');
+    importAt(accountId, '2026-08-16T20:00:00.000Z'); // the joint account
+
+    evaluateWeeklyDigest({ userId: robin, slotDate: SLOT, now: NOW });
+
+    expect(householdRow().body.startsWith('Last import 2026-08-16.\n\nHousehold spend: $700.00')).toBe(true);
+    // Robin's own copy is narrowed to Robin's own account, which is what makes the line above a
+    // real test of the room's copy rather than of an evaluating member who happened to see it all.
+    const own = rows().find((row) => row.user_id === robin && row.channel === 'email');
+    expect(own?.body.startsWith('Last import 2026-08-10.\n\n')).toBe(true);
+  });
 });

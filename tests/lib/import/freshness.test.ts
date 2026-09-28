@@ -72,4 +72,16 @@ describe('latestImportIso', () => {
     importAt(joint, '2026-08-16T12:00:00.000Z');
     expect(latestImportIso({ id: bob, role: 'member', visibility: 'self' })).toBeNull();
   });
+
+  /** Final review F4. Another member's OWNED account is not theirs either -- only their own is. */
+  it('a self-scoped viewer never sees another member’s own account, however recent its import', () => {
+    setup();
+    const bob = insertTestUser(t.db, { username: 'bob', role: 'member' });
+    const robin = insertTestUser(t.db, { username: 'robin', role: 'member' });
+    const bobs = insertTestAccount(t.db, { name: 'Bob Visa', type: 'credit', ownerUserId: bob });
+    const robins = insertTestAccount(t.db, { name: 'Robin Chequing', ownerUserId: robin });
+    importAt(bobs, '2026-08-10T12:00:00.000Z');
+    importAt(robins, '2026-08-16T12:00:00.000Z');
+    expect(latestImportIso({ id: bob, role: 'member', visibility: 'self' })).toBe('2026-08-10');
+  });
 });
