@@ -74,6 +74,8 @@ export const AlertIcon: IconComponent = CircleAlert;
 /** Review queue: a per-row confirm button, and the outline dot a row shows before it has one. */
 export const ConfirmIcon: IconComponent = Check;
 export const UnconfirmedIcon: IconComponent = Circle;
+/** A receipt tile's figure chip that is in use (aria-pressed), beside its value; decorative. */
+export const InUseIcon: IconComponent = Check;
 /** "Accept all suggestions" -- the bayes guesses the review queue is clearing in bulk. */
 export const SuggestIcon: IconComponent = Sparkles;
 /** Reported (item 2, Transactions): a saved note used to vanish from the row entirely --

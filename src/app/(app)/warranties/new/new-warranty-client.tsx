@@ -217,7 +217,9 @@ export function NewWarrantyClient({
     it replaces what is there and then counts as typed -- a read that finishes later (a second
     receipt, review focus 5) cannot take it back, and it is not marked as a guess.
 
-    Returns the fields it filled, for the receipt tile's summary.
+    Returns the fields it filled, for the receipt tile's summary and the figures it shows in use: a
+    due date is 'dueDate', apart from the start date's 'date', since a bill's date chips fill the due
+    date and the tile must not show the start date as the one in use.
   */
   const routeAmountAndDueDate = useCallback((fields: SuggestedFieldsDto, kind: ItemKind, chosen = false): FilledField[] => {
     const filled: FilledField[] = [];
@@ -247,7 +249,7 @@ export function NewWarrantyClient({
       setDueDate(fields.dueDate);
       if (chosen) setBillTouched((t) => ({ ...t, dueDate: true }));
       setSuggested((s) => ({ ...s, dueDate: !chosen }));
-      filled.push('date');
+      filled.push('dueDate');
     }
     return filled;
   }, []);
@@ -359,6 +361,7 @@ export function NewWarrantyClient({
             onSuggestions={onSuggestions}
             onPickAmount={onPickAmount}
             onPickDate={onPickDate}
+            dateField={installmentsApplicable ? 'dueDate' : 'purchaseDate'}
           />
         </CardBody>
       </Card>

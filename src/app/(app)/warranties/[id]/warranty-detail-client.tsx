@@ -371,7 +371,7 @@ export function WarrantyDetailClient({
     }
     if (fields.dueDate && !touched.dueDate) {
       setNewDueDate(fields.dueDate);
-      filled.push('date');
+      filled.push('dueDate');
     }
     if (filled.length > 0) setInstallmentSuggested(true);
     return filled;
@@ -1481,6 +1481,7 @@ export function WarrantyDetailClient({
                   onSuggestions={installmentsAllowedForKind(item.kind) ? suggestInstallment : undefined}
                   onPickAmount={installmentsAllowedForKind(item.kind) ? pickInstallmentAmount : undefined}
                   onPickDate={installmentsAllowedForKind(item.kind) ? pickInstallmentDate : undefined}
+                  dateField="dueDate"
                 />
                 <SubmitButton className="w-fit">Attach receipts</SubmitButton>
               </form>

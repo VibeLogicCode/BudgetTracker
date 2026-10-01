@@ -124,6 +124,14 @@ and the household's e-bills have text layers. Recorded as deferred, not forgotte
   loan statement reader already shows as chips. The recognised text is returned to the client as
   lines (capped) and shown under the receipt tile in a collapsible panel. An empty read is a
   **failure with a message** ("No text was found on this image"), never a silent "Read".
+- The tile **leads with what was used**: one row for the amount and one for the date, each the
+  figure the page filled or the chip last tapped on that tile, with its value and the words beside
+  it, the figure cut out ("Amount due"), on one truncated line. The date row reads *Due* where the
+  date chips fill a bill's due date and *Date* otherwise, and a bill's start date is never shown as
+  its due date. Every other figure folds under **Other figures (N)**: value-only chips in an
+  *Amounts* and a *Dates* row, one per value, the one in use checked and pressed, the words in each
+  chip's name and title. *What was read* comes after it. A page with no handler for a field shows
+  neither for that field.
 - Suggestions route to the field the kind actually has: a bill's amount goes to *Amount due*, a
   subscription's or loan's to its billing/payment amount, a warranty's to *Price*.
 
@@ -179,7 +187,7 @@ constraint: local or free, no linked accounts — and the app's zero-egress prom
 | Bill create fields + first installment | `src/app/(app)/warranties/new/new-warranty-client.tsx`, `src/app/(app)/warranties/actions.ts` (`createWarrantyAction`), `src/lib/warranty/items.ts` (`createWarrantyItem` option) |
 | Bill amount on list/detail | `src/app/(app)/warranties/page.tsx` (`billSchedules`), `warranties-client.tsx`, `[id]/warranty-detail-client.tsx` |
 | PDF lines | `src/lib/warranty/ocr/pdf.ts` |
-| Extraction | `src/lib/warranty/suggest.ts` (`suggestDueDate`, candidates, fuzzy total, no fallback) |
+| Extraction | `src/lib/warranty/suggest.ts` (`suggestDueDate`, candidates, `candidateLabel`, fuzzy total, no fallback) |
 | Reader output to client | `src/lib/warranty/ocr/queue.ts` (sidecar `lines`, `candidates`), `src/app/api/warranties/receipts/stage/[stagingId]/route.ts` |
 | Client feedback | `src/components/warranty/ReceiptUploader.tsx`, `ReceiptScanPreview.tsx`, `src/lib/scanner/scan.ts` |
 | Engine fixes | `src/lib/warranty/ocr/onnx/{contours,crop,preprocess,assemble,engine,orientation}.ts`, `src/lib/warranty/ocr/tesseract.ts`, `src/lib/warranty/ocr/onnx/constants.ts` |

@@ -13,6 +13,7 @@ const uploader = vi.hoisted(() => ({
   onSuggestions: undefined as ((fields: SuggestedFieldsDto) => ReadonlyArray<FilledField> | void) | undefined,
   onPickAmount: undefined as ((cents: number) => void) | undefined,
   onPickDate: undefined as ((iso: string) => void) | undefined,
+  dateField: undefined as 'purchaseDate' | 'dueDate' | undefined,
 }));
 
 vi.mock('@/components/warranty/ReceiptUploader', () => ({
@@ -20,10 +21,12 @@ vi.mock('@/components/warranty/ReceiptUploader', () => ({
     onSuggestions?: (fields: SuggestedFieldsDto) => ReadonlyArray<FilledField> | void;
     onPickAmount?: (cents: number) => void;
     onPickDate?: (iso: string) => void;
+    dateField?: 'purchaseDate' | 'dueDate';
   }) => {
     uploader.onSuggestions = props.onSuggestions;
     uploader.onPickAmount = props.onPickAmount;
     uploader.onPickDate = props.onPickDate;
+    uploader.dateField = props.dateField;
     return null;
   },
 }));
@@ -37,6 +40,7 @@ afterEach(() => {
   uploader.onSuggestions = undefined;
   uploader.onPickAmount = undefined;
   uploader.onPickDate = undefined;
+  uploader.dateField = undefined;
 });
 
 const types = [
@@ -130,7 +134,22 @@ describe('the form reports what a read filled', () => {
   it("names a bill's amount due and due date", () => {
     const form = renderForm();
     form.pick('4');
-    expect(suggest({ priceCents: 8217, dueDate: '2026-10-15' })).toEqual(['amount', 'date']);
+    expect(suggest({ priceCents: 8217, dueDate: '2026-10-15' })).toEqual(['amount', 'dueDate']);
+  });
+
+  /** The tile shows the date its chips fill, so a start date and a due date are told apart. */
+  it("tells a bill's start date from its due date", () => {
+    const form = renderForm();
+    form.pick('4');
+    expect(suggest({ purchaseDate: '2026-11-06', dueDate: '2026-11-24' })).toEqual(['date', 'dueDate']);
+  });
+
+  it('names no due date when the due date was typed first, only the start date it did fill', () => {
+    const form = renderForm();
+    form.pick('4');
+    form.type('dueDate', '2026-11-30');
+    expect(suggest({ purchaseDate: '2026-11-06', dueDate: '2026-11-24' })).toEqual(['date']);
+    expect(form.field('dueDate')!.value).toBe('2026-11-30');
   });
 
   it("names a subscription's billing amount only while it was empty", () => {
@@ -200,6 +219,15 @@ describe('a tapped chip', () => {
     form.pick('1');
     act(() => uploader.onPickAmount!(34950));
     expect(form.field('price')!.value).toBe('349.50');
+  });
+
+  it("tells the uploader its date chips fill a bill's due date, and the start date otherwise", () => {
+    const form = renderForm();
+    expect(uploader.dateField).toBe('purchaseDate');
+    form.pick('4');
+    expect(uploader.dateField).toBe('dueDate');
+    form.pick('2');
+    expect(uploader.dateField).toBe('purchaseDate');
   });
 
   it("puts the date in a bill's Due date, and in the start date for any other kind", () => {

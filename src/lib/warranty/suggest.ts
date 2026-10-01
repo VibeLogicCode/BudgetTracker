@@ -304,6 +304,51 @@ export function dateCandidates(text: string, today: string): DateCandidate[] {
   return [...best.values()].sort((a, b) => b.score - a.score || a.date.localeCompare(b.date)).slice(0, MAX_CANDIDATES);
 }
 
+/** A sign or currency the extractor's figure leaves behind: "-$312.44", "$-312.44", "312,44 $", "312.44 CAD". */
+const FIGURE_LEAD_RE = /(?:\$\s*)?[-−]\s*$/;
+const FIGURE_TRAIL_RE = /^\s*(?:\$|(?:CAD|USD)(?![\p{L}\p{N}_]))/u;
+/** Separators and dot leaders left at either side of a cut ("Due date: ", "TOTAL ......"). */
+const LABEL_EDGE_START_RE = /^[\s:;,.=|*·–—-]+/;
+const LABEL_EDGE_END_RE = /[\s:;,.=|*·–—-]+$/;
+
+/** Where the candidate's own figure sits in its snippet, found with the extractor's own patterns. */
+function figureSpan(candidate: AmountCandidate | DateCandidate): [number, number] | null {
+  const { snippet } = candidate;
+  if ('valueCents' in candidate) {
+    for (const m of snippet.matchAll(CURRENCY_RE)) {
+      const start = m.index ?? 0;
+      if (centsOf(m[1], m[2]) === candidate.valueCents) return [start, start + m[0].length];
+    }
+    return null;
+  }
+  const hit = collectDateHits(snippet).find((found) => found.iso === candidate.date);
+  return hit === undefined ? null : [hit.index, hit.index + hit.length];
+}
+
+/**
+ * Spec 2026-09-30 §2.3: the words a candidate's snippet says about it, with the figure itself cut
+ * out ("Amount due $312.44" -> "Amount due"), for the receipt tile's row in use. Empty when nothing
+ * else is left, and the whole snippet when its figure cannot be found in it. Pure and client-safe.
+ */
+export function candidateLabel(candidate: AmountCandidate | DateCandidate): string {
+  const snippet = candidate.snippet;
+  const span = figureSpan(candidate);
+  if (span === null) return squash(snippet).trim();
+  let [start, end] = span;
+  if ('valueCents' in candidate) {
+    start -= FIGURE_LEAD_RE.exec(snippet.slice(0, start))?.[0].length ?? 0;
+    end += FIGURE_TRAIL_RE.exec(snippet.slice(end))?.[0].length ?? 0;
+    // An accounting negative, "(312.44)".
+    if (snippet[start - 1] === '(' && snippet[end] === ')') {
+      start -= 1;
+      end += 1;
+    }
+  }
+  const before = snippet.slice(0, start).replace(LABEL_EDGE_END_RE, '');
+  const after = snippet.slice(end).replace(LABEL_EDGE_START_RE, '');
+  return squash(`${before} ${after}`).replace(LABEL_EDGE_START_RE, '').replace(LABEL_EDGE_END_RE, '');
+}
+
 export function suggestFromOcrText(text: string, today: string): SuggestedFields {
   const out: SuggestedFields = {};
   const purchaseDate = suggestPurchaseDate(text, today);

@@ -1,14 +1,15 @@
 'use client';
 
-import { type ChangeEvent, useCallback, useEffect, useId, useRef, useState } from 'react';
+import { type ChangeEvent, Fragment, useCallback, useEffect, useId, useRef, useState } from 'react';
 import { Notice } from '@/components/ui/Notice';
 import { ReceiptScanPreview } from '@/components/warranty/ReceiptScanPreview';
 import { scanReceiptFile, type ScanQuad } from '@/lib/scanner/scan';
 import { SCANNER_AUTO_ACCEPT_MS } from '@/lib/warranty/ocr/onnx/constants';
-import type { AmountCandidate, DateCandidate } from '@/lib/warranty/suggest';
+import { candidateLabel, type AmountCandidate, type DateCandidate } from '@/lib/warranty/suggest';
 import { isIsoDate } from '@/lib/dates';
 import { formatCents } from '@/lib/money';
 import { buttonClass } from '@/components/ui/Button';
+import { InUseIcon } from '@/components/ui/icons';
 
 /**
  * The only file control in the feature: the camera input, whose exact shape MUST-6.1 fixes and
@@ -36,9 +37,20 @@ export interface StagedFile {
   filled?: ReadonlyArray<FilledField>;
 }
 
-/** A form field a read can fill, as the tile's summary names it. */
-export type FilledField = 'vendor' | 'date' | 'amount';
-const FILLED_ORDER: readonly FilledField[] = ['vendor', 'date', 'amount'];
+/**
+ * A form field a read can fill. `date` is the start date (the read's purchaseDate) and `dueDate` a
+ * bill's due date: the tile tells them apart to know which date is in use, and its summary calls
+ * either one "date".
+ */
+export type FilledField = 'vendor' | 'date' | 'dueDate' | 'amount';
+/** The summary's words, in order, with the fields each one stands for. */
+const SUMMARY_WORDS: ReadonlyArray<readonly [string, ReadonlyArray<FilledField>]> = [
+  ['vendor', ['vendor']],
+  ['date', ['date', 'dueDate']],
+  ['amount', ['amount']],
+];
+/** The read field a page's date chips fill: a bill's due date, otherwise the start date. */
+export type DateField = 'purchaseDate' | 'dueDate';
 
 export interface SuggestedFieldsDto {
   purchaseDate?: string;
@@ -59,18 +71,22 @@ export const SCAN_SUMMARY_NOTHING = 'Read, but found no vendor, date or amount �
 export function summaryOf(fields: SuggestedFieldsDto, filled: ReadonlyArray<FilledField>): string | null {
   const found = Boolean(fields.vendor || fields.purchaseDate || fields.dueDate || fields.priceCents !== undefined);
   if (!found) return SCAN_SUMMARY_NOTHING;
-  const named = FILLED_ORDER.filter((field) => filled.includes(field));
+  const named = SUMMARY_WORDS.filter(([, fields]) => fields.some((field) => filled.includes(field))).map(([word]) => word);
   if (named.length === 0) return null;
   return `Filled ${named.join(', ')}${fields.priceCents === undefined ? ' — no total found' : ''}.`;
 }
 
 /**
- * A chip's date, readable. Read at local midnight: `new Date(iso)` alone parses as UTC and
- * shows the day before anywhere west of it (the same fix transactions-client.tsx applies).
+ * A chip's date, readable, with or without its year. Read at local midnight: `new Date(iso)` alone
+ * parses as UTC and shows the day before anywhere west of it (the same fix transactions-client.tsx
+ * applies).
  */
-function chipDate(iso: string): string {
+function chipDate(iso: string, withYear = true): string {
   if (!isIsoDate(iso)) return iso;
-  return new Date(`${iso}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  return new Date(`${iso}T00:00:00`).toLocaleDateString(
+    'en-US',
+    withYear ? { month: 'short', day: 'numeric', year: 'numeric' } : { month: 'short', day: 'numeric' },
+  );
 }
 
 export const POLL_INTERVAL_MS = 1500;
@@ -145,14 +161,175 @@ const PICK_BUTTON_CLASS = buttonClass(
   'relative min-h-11 sm:min-h-0 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-focus has-[:disabled]:pointer-events-none has-[:disabled]:opacity-55',
 );
 
-/** reconcile-loan-form.tsx's chip, so a figure to tap looks the same on every surface. */
-const CHIP_CLASS = 'rounded-md border border-line px-2 py-1 text-left text-xs text-muted hover:border-accent';
+/**
+ * reconcile-loan-form.tsx's chip, so a figure to tap looks the same on every surface, holding only
+ * its value. The one in use takes the accent. 44px floor on a phone, as PICK_BUTTON_CLASS has.
+ */
+const CHIP_CLASS =
+  'inline-flex min-h-11 items-center gap-1 whitespace-nowrap rounded-md border border-line px-2 py-1 text-xs text-muted tabnum hover:border-accent sm:min-h-0 aria-pressed:border-accent aria-pressed:bg-accent-soft aria-pressed:text-accent-soft-fg';
+
+/** One candidate per value, the better-scored one, in the order the read ranked them. */
+function onePerValue<T extends { score: number }>(candidates: readonly T[], valueOf: (candidate: T) => string | number): T[] {
+  const kept = new Map<string | number, T>();
+  for (const candidate of candidates) {
+    const prior = kept.get(valueOf(candidate));
+    if (prior === undefined || candidate.score > prior.score) kept.set(valueOf(candidate), candidate);
+  }
+  return [...kept.values()];
+}
+
+/**
+ * A figure to tap, showing only its value. Its name starts with what it shows (label in name,
+ * WCAG 2.5.3), then the rest of the value and the receipt's words, which a hover gets as the title.
+ * A label, not a visually hidden span: a hidden span is out of flow, and the name then reads with
+ * a stray space before its comma. The words are text from an arbitrary receipt: attributes only,
+ * never markup (MUST-13.3).
+ */
+function FigureChip({
+  shown,
+  full,
+  snippet,
+  pressed,
+  onPick,
+}: {
+  shown: string;
+  full: string;
+  snippet: string;
+  pressed: boolean;
+  onPick: () => void;
+}) {
+  const name = `${shown}${full.startsWith(shown) ? full.slice(shown.length) : ''}${snippet ? `, ${snippet}` : ''}`;
+  return (
+    <button type="button" aria-pressed={pressed} aria-label={name} title={name} onClick={onPick} className={CHIP_CLASS}>
+      {pressed ? <InUseIcon aria-hidden="true" strokeWidth={2.5} className="size-3 shrink-0" /> : null}
+      {shown}
+    </button>
+  );
+}
+
+/**
+ * A done tile's figures (spec 2026-09-30 §2.3): the amount and the date in use first, one row each,
+ * and every candidate under a folded "Other figures". In use is what this tile's read filled, or
+ * the chip last tapped on it. No pick handler, no row and no chips for that field.
+ */
+function ReadFigures({
+  candidates,
+  suggestions,
+  filled,
+  dateField,
+  onPickAmount,
+  onPickDate,
+}: {
+  candidates: { amounts: AmountCandidate[]; dates: DateCandidate[] };
+  suggestions: SuggestedFieldsDto;
+  filled: ReadonlyArray<FilledField>;
+  dateField: DateField;
+  onPickAmount?: (cents: number) => void;
+  onPickDate?: (iso: string) => void;
+}) {
+  const id = useId();
+  // A tap comes after the fill, so it wins. Per field, and per tile: each tile has its own.
+  const [tapped, setTapped] = useState<{ amount?: number; date?: string }>({});
+  const amounts = onPickAmount ? onePerValue(candidates.amounts, (candidate) => candidate.valueCents) : [];
+  const dates = onPickDate ? onePerValue(candidates.dates, (candidate) => candidate.date) : [];
+
+  // Only a value the page put in the field the chips fill: a bill's start date is not its due date.
+  const filledAmount = filled.includes('amount') ? suggestions.priceCents : undefined;
+  const filledDate = filled.includes(dateField === 'dueDate' ? 'dueDate' : 'date') ? suggestions[dateField] : undefined;
+  const amountInUse = amounts.find((candidate) => candidate.valueCents === (tapped.amount ?? filledAmount));
+  const dateInUse = dates.find((candidate) => candidate.date === (tapped.date ?? filledDate));
+  const others = amounts.length + dates.length - (amountInUse ? 1 : 0) - (dateInUse ? 1 : 0);
+  // The year goes only when every date here shares one; the name and the title keep it.
+  const oneYear = new Set(dates.map((candidate) => candidate.date.slice(0, 4))).size === 1;
+
+  const rows = [
+    amountInUse ? { field: 'Amount', value: formatCents(amountInUse.valueCents), candidate: amountInUse } : null,
+    dateInUse ? { field: dateField === 'dueDate' ? 'Due' : 'Date', value: chipDate(dateInUse.date), candidate: dateInUse } : null,
+  ].filter((row) => row !== null);
+
+  return (
+    <>
+      {rows.length > 0 ? (
+        <dl className="grid grid-cols-[auto_minmax(0,1fr)] items-baseline gap-x-2 gap-y-0.5">
+          {rows.map((row) => {
+            const words = candidateLabel(row.candidate);
+            return (
+              <Fragment key={row.field}>
+                <dt className="text-subtle">{row.field}</dt>
+                <dd className="flex min-w-0 gap-1.5">
+                  <span className="shrink-0 font-medium text-ink tabnum">{row.value}</span>
+                  {words ? (
+                    <span className="min-w-0 truncate text-muted" title={row.candidate.snippet}>
+                      {words}
+                    </span>
+                  ) : null}
+                </dd>
+              </Fragment>
+            );
+          })}
+        </dl>
+      ) : null}
+      {others > 0 ? (
+        <details>
+          <summary className="cursor-pointer text-subtle">Other figures ({others})</summary>
+          <div className="mt-1.5 grid grid-cols-[auto_minmax(0,1fr)] items-baseline gap-x-2 gap-y-1.5">
+            {amounts.length > 0 ? (
+              <>
+                <span id={`${id}-amounts`} className="text-subtle">
+                  Amounts
+                </span>
+                <div role="group" aria-labelledby={`${id}-amounts`} className="flex flex-wrap gap-1">
+                  {amounts.map((candidate) => (
+                    <FigureChip
+                      key={candidate.valueCents}
+                      shown={formatCents(candidate.valueCents)}
+                      full={formatCents(candidate.valueCents)}
+                      snippet={candidate.snippet}
+                      pressed={candidate === amountInUse}
+                      onPick={() => {
+                        onPickAmount?.(candidate.valueCents);
+                        setTapped((current) => ({ ...current, amount: candidate.valueCents }));
+                      }}
+                    />
+                  ))}
+                </div>
+              </>
+            ) : null}
+            {dates.length > 0 ? (
+              <>
+                <span id={`${id}-dates`} className="text-subtle">
+                  Dates
+                </span>
+                <div role="group" aria-labelledby={`${id}-dates`} className="flex flex-wrap gap-1">
+                  {dates.map((candidate) => (
+                    <FigureChip
+                      key={candidate.date}
+                      shown={chipDate(candidate.date, !oneYear)}
+                      full={chipDate(candidate.date)}
+                      snippet={candidate.snippet}
+                      pressed={candidate === dateInUse}
+                      onPick={() => {
+                        onPickDate?.(candidate.date);
+                        setTapped((current) => ({ ...current, date: candidate.date }));
+                      }}
+                    />
+                  ))}
+                </div>
+              </>
+            ) : null}
+          </div>
+        </details>
+      ) : null}
+    </>
+  );
+}
 
 export function ReceiptUploader({
   onStagedChange,
   onSuggestions,
   onPickAmount,
   onPickDate,
+  dateField = 'purchaseDate',
   label = 'Receipt photo or PDF',
 }: {
   onStagedChange: (files: StagedFile[]) => void;
@@ -162,6 +339,11 @@ export function ReceiptUploader({
   onPickAmount?: (cents: number) => void;
   /** A tapped date chip, as an ISO date. No handler, no date chips. */
   onPickDate?: (iso: string) => void;
+  /**
+   * The read field the date chips fill: a bill's due date, otherwise the start date. Names the date
+   * row in use ("Due" or "Date") and says which filled date it is.
+   */
+  dateField?: DateField;
   label?: string;
 }) {
   const captionId = useId();
@@ -477,8 +659,6 @@ export function ReceiptUploader({
       {files.length > 0 ? (
         <ul className="flex flex-wrap gap-3">
           {files.map((file) => {
-            const amounts = onPickAmount ? (file.candidates?.amounts ?? []) : [];
-            const dates = onPickDate ? (file.candidates?.dates ?? []) : [];
             const summary = file.ocr === 'done' ? summaryOf(file.suggestions ?? {}, file.filled ?? []) : null;
             return (
               <li
@@ -499,6 +679,16 @@ export function ReceiptUploader({
                 </span>
                 {file.ocr === 'failed' && file.error ? <p className="text-muted">{file.error}</p> : null}
                 {summary !== null ? <p className="text-muted">{summary}</p> : null}
+                {file.ocr === 'done' ? (
+                  <ReadFigures
+                    candidates={file.candidates ?? { amounts: [], dates: [] }}
+                    suggestions={file.suggestions ?? {}}
+                    filled={file.filled ?? []}
+                    dateField={dateField}
+                    onPickAmount={onPickAmount}
+                    onPickDate={onPickDate}
+                  />
+                ) : null}
                 {/* Spec 2026-09-30 §2.3: what the reader saw, so a wrong or missing figure can be
                     checked against it. Text from an arbitrary receipt: text nodes only (MUST-13.3). */}
                 {file.lines && file.lines.length > 0 ? (
@@ -510,36 +700,6 @@ export function ReceiptUploader({
                       ))}
                     </ol>
                   </details>
-                ) : null}
-                {amounts.length > 0 || dates.length > 0 ? (
-                  <div className="flex flex-wrap gap-2">
-                    {amounts.map((candidate, index) => (
-                      <button
-                        key={`amount-${index}`}
-                        type="button"
-                        onClick={() => onPickAmount?.(candidate.valueCents)}
-                        className={CHIP_CLASS}
-                        /* The snippet is text from an arbitrary receipt: rendered as a text node
-                           and as a title, never as markup (MUST-13.3). */
-                        title={candidate.snippet}
-                      >
-                        {formatCents(candidate.valueCents)}
-                        <span className="block max-w-56 truncate text-subtle">{candidate.snippet}</span>
-                      </button>
-                    ))}
-                    {dates.map((candidate, index) => (
-                      <button
-                        key={`date-${index}`}
-                        type="button"
-                        onClick={() => onPickDate?.(candidate.date)}
-                        className={CHIP_CLASS}
-                        title={candidate.snippet}
-                      >
-                        {chipDate(candidate.date)}
-                        <span className="block max-w-56 truncate text-subtle">{candidate.snippet}</span>
-                      </button>
-                    ))}
-                  </div>
                 ) : null}
                 <div className="flex flex-wrap gap-1">
                   {file.ocr === 'failed' ? (

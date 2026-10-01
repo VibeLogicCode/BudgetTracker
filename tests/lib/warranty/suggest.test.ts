@@ -3,6 +3,7 @@ import {
   MAX_CANDIDATES,
   MAX_SUGGESTED_PRICE_CENTS,
   amountCandidates,
+  candidateLabel,
   dateCandidates,
   suggestDueDate,
   suggestFromOcrText,
@@ -283,6 +284,57 @@ describe('candidates carry the words around them', () => {
     expect(amounts).toHaveLength(MAX_CANDIDATES);
     expect(new Set(amounts.map((c) => c.valueCents)).size).toBe(amounts.length);
     expect(amounts.find((c) => c.valueCents === 649)?.snippet).toBe('OAT MILK 6.49');
+  });
+});
+
+/** The receipt tile names a figure in use by the words beside it, so the figure itself comes out. */
+describe('candidateLabel', () => {
+  const amount = (valueCents: number, snippet: string) => candidateLabel({ valueCents, snippet, score: 0 });
+  const date = (iso: string, snippet: string) => candidateLabel({ date: iso, snippet, score: 0 });
+
+  it('cuts an amount out in each spelling the extractor reads', () => {
+    expect(amount(31244, 'Amount due $312.44')).toBe('Amount due');
+    expect(amount(31244, 'Amount due 312.44')).toBe('Amount due');
+    expect(amount(31244, 'Montant dû 312,44 $')).toBe('Montant dû');
+    expect(amount(31244, 'Payment received -312.44')).toBe('Payment received');
+    expect(amount(31244, 'Credit -$312.44')).toBe('Credit');
+    expect(amount(31244, 'Credit (312.44)')).toBe('Credit');
+    expect(amount(124976, 'Outstanding 1,249.76')).toBe('Outstanding');
+    expect(amount(31244, 'Amount due: $ 312.44 CAD')).toBe('Amount due');
+  });
+
+  it('cuts a date out in each spelling the extractor reads', () => {
+    expect(date('2026-11-24', 'Due date 2026-11-24')).toBe('Due date');
+    expect(date('2026-11-24', 'Due Nov 24, 2026')).toBe('Due');
+    expect(date('2026-11-24', 'Échéance 24/11/2026')).toBe('Échéance');
+    expect(date('2026-11-24', 'Due 24 Nov 2026')).toBe('Due');
+    expect(date('2026-10-15', 'Due date: Oct 15, 2026')).toBe('Due date');
+  });
+
+  it('keeps the words either side, without the separators the figure leaves', () => {
+    expect(amount(31296, 'TOTAL ........ $312.96')).toBe('TOTAL');
+    expect(amount(31244, 'Amount due $312.44 by Nov 24')).toBe('Amount due by Nov 24');
+    expect(amount(31244, 'Amount due - 312.44 - thank you')).toBe('Amount due thank you');
+  });
+
+  it('cuts out only its own figure when the snippet has two', () => {
+    expect(date('2026-11-03', 'Billing period 2026-08-04 to 2026-11-03')).toBe('Billing period 2026-08-04 to');
+    expect(amount(32806, 'Total $312.44 after due date $328.06')).toBe('Total $312.44 after due date');
+  });
+
+  it('is empty when the snippet is only the figure', () => {
+    expect(amount(31244, '$312.44')).toBe('');
+    expect(date('2026-11-24', ' 2026-11-24 ')).toBe('');
+  });
+
+  it('keeps the whole snippet when its figure cannot be found in it', () => {
+    expect(amount(31244, 'Amount due $328.06')).toBe('Amount due $328.06');
+  });
+
+  it('names every candidate the extractor finds on the bill', () => {
+    const bill = ['Statement date 2026-11-06', 'Total current charges $312.96', 'Amount due $312.44', 'Due date 2026-11-24'].join('\n');
+    expect(amountCandidates(bill).map(candidateLabel)).toEqual(['Amount due', 'Total current charges']);
+    expect(dateCandidates(bill, '2026-11-07').map(candidateLabel)).toEqual(['Due date', 'Statement date']);
   });
 });
 

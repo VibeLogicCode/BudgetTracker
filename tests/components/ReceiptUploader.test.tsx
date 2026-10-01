@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import type { ComponentProps } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import {
@@ -170,8 +171,8 @@ describe('ReceiptUploader', () => {
 
     expect(screen.getByText('Filled vendor, amount.')).toBeTruthy();
     fireEvent.click(screen.getByText('What was read'));
-    // Scoped: the same words are also the first chip's snippet.
-    expect(within(container.querySelector('details')!).getByText('Amount due $312.44')).toBeTruthy();
+    // Scoped to the read text's own panel: the chips carry the same words.
+    expect(within(screen.getByText('What was read').closest('details')!).getByText('Amount due $312.44')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /\$328\.06/ }));
     expect(onPickAmount).toHaveBeenCalledWith(32806);
     fireEvent.click(screen.getByRole('button', { name: /Nov 24, 2026/ }));
@@ -333,6 +334,273 @@ describe('ReceiptUploader', () => {
     expect(screen.getByText(READING_MESSAGE)).toBeTruthy();
   });
 
+  /*
+    The done tile leads with what the page used and folds the other figures away. One bill gave
+    eleven stacked rows when every candidate was a chip with its words under it.
+  */
+  describe('a done tile leads with what was used', () => {
+    const BILL_AMOUNTS = [
+      { valueCents: 31244, snippet: 'Amount due $312.44', score: 4 },
+      { valueCents: 31296, snippet: 'Total current charges $312.96', score: 4 },
+      { valueCents: 17189, snippet: 'Sewer charges 171.89', score: 1 },
+      { valueCents: 14107, snippet: 'Water charges 141.07', score: 1 },
+      { valueCents: 32806, snippet: 'Amount due after due date $328.06', score: 1 },
+      { valueCents: 124976, snippet: 'Paid, thank you -1,249.76', score: -2 },
+    ];
+    const BILL_DATES = [
+      { date: '2026-11-24', snippet: 'Due date 2026-11-24', score: 3 },
+      { date: '2026-11-06', snippet: 'Statement date 2026-11-06', score: 1 },
+      { date: '2026-08-04', snippet: 'Billing period 2026-08-04 to 2026-11-03', score: 0 },
+      { date: '2026-11-03', snippet: 'Billing period 2026-08-04 to 2026-11-03', score: 0 },
+      { date: '2026-11-07', snippet: 'Printed 2026-11-07', score: 0 },
+    ];
+
+    /** The poll's answer for the invented bill: six amounts and five dates by default. */
+    function billBody(candidates: { amounts?: unknown[]; dates?: unknown[] } = {}) {
+      return {
+        status: 'done',
+        suggestions: { vendor: 'RIVERSIDE WATER', purchaseDate: '2026-11-06', priceCents: 31244, dueDate: '2026-11-24' },
+        lines: ['RIVERSIDE WATER', 'Statement date 2026-11-06', 'Amount due $312.44', 'Due date 2026-11-24'],
+        candidates: { amounts: candidates.amounts ?? BILL_AMOUNTS, dates: candidates.dates ?? BILL_DATES },
+      };
+    }
+
+    function billRead(candidates: { amounts?: unknown[]; dates?: unknown[] } = {}) {
+      return vi
+        .fn()
+        .mockResolvedValueOnce(stageResponse({ originalFilename: 'bill.pdf', mime: 'application/pdf' }))
+        .mockResolvedValue({ ok: true, json: async () => billBody(candidates) } as Response);
+    }
+
+    type Props = Partial<ComponentProps<typeof ReceiptUploader>>;
+
+    /** A bill's page by default: it filled the amount and the due date, and has both pick handlers. */
+    function billElement(props: Props, handlers: { onPickAmount: () => void; onPickDate: () => void }) {
+      return (
+        <ReceiptUploader
+          onStagedChange={vi.fn()}
+          onSuggestions={() => ['vendor', 'amount', 'dueDate']}
+          onPickAmount={handlers.onPickAmount}
+          onPickDate={handlers.onPickDate}
+          dateField="dueDate"
+          {...props}
+        />
+      );
+    }
+
+    async function renderBill(props: Props = {}, read = billRead()) {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      vi.stubGlobal('fetch', read);
+      const handlers = { onPickAmount: vi.fn(), onPickDate: vi.fn() };
+      const view = render(billElement(props, handlers));
+      await pickAndPoll(view.container, read);
+      return { ...view, ...handlers, rerenderWith: (more: Props) => view.rerender(billElement({ ...props, ...more }, handlers)) };
+    }
+
+    /** The rows in use, as their field name, value and words. */
+    function rowsInUse(scope: HTMLElement) {
+      return [...scope.querySelectorAll('dt')].map((dt) => {
+        const dd = dt.nextElementSibling as HTMLElement;
+        const words = dd.querySelector('.truncate');
+        return { field: dt.textContent, value: dd.firstElementChild?.textContent, words: words?.textContent ?? null };
+      });
+    }
+
+    /** What a sighted person reads on a chip: no screen-reader text, no decoration. */
+    function visibleText(element: HTMLElement): string {
+      const copy = element.cloneNode(true) as HTMLElement;
+      for (const hidden of copy.querySelectorAll('.sr-only, [aria-hidden="true"]')) hidden.remove();
+      return (copy.textContent ?? '').trim();
+    }
+
+    const chipsIn = (row: string) => within(screen.getByRole('group', { name: row })).getAllByRole('button');
+    const pressed = (row: string) => chipsIn(row).map((chip) => chip.getAttribute('aria-pressed'));
+
+    it('shows at most two rows in use and counts the rest under Other figures', async () => {
+      const { container } = await renderBill();
+
+      expect(rowsInUse(container).map((row) => row.field)).toEqual(['Amount', 'Due']);
+      // Five amounts and four dates are not in use.
+      expect(screen.getByText('Other figures (9)')).toBeTruthy();
+      // The summary line is as it was.
+      expect(screen.getByText('Filled vendor, date, amount.')).toBeTruthy();
+    });
+
+    it('lays the other figures out as value-only chips, side by side in labelled rows', async () => {
+      await renderBill();
+
+      const amounts = screen.getByRole('group', { name: 'Amounts' });
+      const dates = screen.getByRole('group', { name: 'Dates' });
+      for (const row of [amounts, dates]) {
+        expect(row.classList.contains('flex')).toBe(true);
+        expect(row.classList.contains('flex-wrap')).toBe(true);
+        for (const chip of within(row).getAllByRole('button')) expect(chip.parentElement).toBe(row);
+      }
+      expect(chipsIn('Amounts').map(visibleText)).toEqual(['$312.44', '$312.96', '$171.89', '$141.07', '$328.06', '$1,249.76']);
+      // Every date on this bill is in one year, so the chips leave it off.
+      expect(chipsIn('Dates').map(visibleText)).toEqual(['Nov 24', 'Nov 6', 'Aug 4', 'Nov 3', 'Nov 7']);
+      // The name starts with what the chip shows (label in name) and carries the words; so does the title.
+      const statement = within(dates).getByRole('button', { name: 'Nov 6, 2026, Statement date 2026-11-06' });
+      expect(statement.getAttribute('title')).toBe('Nov 6, 2026, Statement date 2026-11-06');
+      const charges = within(amounts).getByRole('button', { name: '$312.96, Total current charges $312.96' });
+      expect(charges.getAttribute('title')).toBe('$312.96, Total current charges $312.96');
+    });
+
+    it('shows the year on every date chip when the dates span two years', async () => {
+      await renderBill(
+        {},
+        billRead({
+          dates: [
+            { date: '2027-01-05', snippet: 'Due date 2027-01-05', score: 3 },
+            { date: '2026-12-08', snippet: 'Statement date 2026-12-08', score: 1 },
+          ],
+        }),
+      );
+
+      expect(chipsIn('Dates').map(visibleText)).toEqual(['Jan 5, 2027', 'Dec 8, 2026']);
+    });
+
+    it('presses the figure the page filled, and marks it with a check', async () => {
+      await renderBill();
+
+      expect(pressed('Amounts')).toEqual(['true', 'false', 'false', 'false', 'false', 'false']);
+      expect(pressed('Dates')).toEqual(['true', 'false', 'false', 'false', 'false']);
+      const [used, other] = chipsIn('Amounts');
+      expect(used.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
+      expect(other.querySelector('svg')).toBeNull();
+    });
+
+    it('a tapped chip fills the field, is pressed, and becomes the row in use', async () => {
+      const { container, onPickAmount, onPickDate } = await renderBill();
+
+      fireEvent.click(screen.getByRole('button', { name: /^\$328\.06,/ }));
+      expect(onPickAmount).toHaveBeenCalledWith(32806);
+      expect(pressed('Amounts')).toEqual(['false', 'false', 'false', 'false', 'true', 'false']);
+
+      fireEvent.click(screen.getByRole('button', { name: /^Nov 6, 2026,/ }));
+      expect(onPickDate).toHaveBeenCalledWith('2026-11-06');
+      expect(pressed('Dates')).toEqual(['false', 'true', 'false', 'false', 'false']);
+
+      expect(rowsInUse(container)).toEqual([
+        { field: 'Amount', value: '$328.06', words: 'Amount due after due date' },
+        { field: 'Due', value: 'Nov 6, 2026', words: 'Statement date' },
+      ]);
+      expect(screen.getByText('Other figures (9)')).toBeTruthy();
+    });
+
+    it('keeps a tap to the tile it was made on', async () => {
+      let staged = 0;
+      const fetchMock = vi.fn((url: string) => {
+        if (url.endsWith('/stage')) {
+          staged += 1;
+          return Promise.resolve(stageResponse({ stagingId: `s${staged}`, originalFilename: `bill-${staged}.pdf`, mime: 'application/pdf' }));
+        }
+        return Promise.resolve({ ok: true, json: async () => billBody() } as Response);
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      vi.useFakeTimers();
+      const onPickAmount = vi.fn();
+      const { container } = render(billElement({}, { onPickAmount, onPickDate: vi.fn() }));
+      fireEvent.change(container.querySelector('input[type="file"]')!, {
+        target: { files: [new File(['x'], 'a.pdf', { type: 'application/pdf' }), new File(['y'], 'b.pdf', { type: 'application/pdf' })] },
+      });
+      await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 2);
+      const [first, second] = [...container.querySelectorAll<HTMLElement>('ul > li')];
+      expect(rowsInUse(second)[0]?.value).toBe('$312.44');
+
+      fireEvent.click(within(first).getByRole('button', { name: /^\$141\.07,/ }));
+
+      expect(onPickAmount).toHaveBeenCalledWith(14107);
+      expect(rowsInUse(first)[0]).toEqual({ field: 'Amount', value: '$141.07', words: 'Water charges' });
+      expect(rowsInUse(second)[0]).toEqual({ field: 'Amount', value: '$312.44', words: 'Amount due' });
+    });
+
+    it('collapses figures of one value into one chip, with the better-scored words', async () => {
+      const { container } = await renderBill(
+        {},
+        billRead({
+          amounts: [
+            { valueCents: 31244, snippet: 'Previous balance 312.44', score: 0 },
+            { valueCents: 31244, snippet: 'Amount due $312.44', score: 4 },
+            { valueCents: 32806, snippet: 'Amount due after due date $328.06', score: 1 },
+          ],
+        }),
+      );
+
+      expect(chipsIn('Amounts').map(visibleText)).toEqual(['$312.44', '$328.06']);
+      const amounts = screen.getByRole('group', { name: 'Amounts' });
+      expect(within(amounts).getByRole('button', { name: '$312.44, Amount due $312.44' })).toBeTruthy();
+      expect(rowsInUse(container)[0]).toEqual({ field: 'Amount', value: '$312.44', words: 'Amount due' });
+      // One amount and four dates are not in use.
+      expect(screen.getByText('Other figures (5)')).toBeTruthy();
+    });
+
+    it('shows neither block when the page passed no pick handlers', async () => {
+      const { container } = await renderBill({ onPickAmount: undefined, onPickDate: undefined });
+
+      expect(screen.getByText('Read')).toBeTruthy();
+      expect(rowsInUse(container)).toEqual([]);
+      expect(screen.queryByText(/Other figures/)).toBeNull();
+      expect(screen.queryByRole('button', { name: /\$312\.96/ })).toBeNull();
+    });
+
+    it('shows only the amount when the page takes no date', async () => {
+      const { container } = await renderBill({ onPickDate: undefined });
+
+      expect(rowsInUse(container).map((row) => row.field)).toEqual(['Amount']);
+      expect(screen.getByText('Other figures (5)')).toBeTruthy();
+      expect(screen.getByRole('group', { name: 'Amounts' })).toBeTruthy();
+      expect(screen.queryByRole('group', { name: 'Dates' })).toBeNull();
+    });
+
+    it('names the figure in use by its words, on one cut line with the whole snippet in its title', async () => {
+      const { container } = await renderBill();
+
+      const words = container.querySelector('dd .truncate')!;
+      expect(words.textContent).toBe('Amount due');
+      expect(words.classList.contains('min-w-0')).toBe(true);
+      expect(words.getAttribute('title')).toBe('Amount due $312.44');
+    });
+
+    it('shows no words when the snippet is only the figure', async () => {
+      const { container } = await renderBill({}, billRead({ amounts: [{ valueCents: 31244, snippet: '$312.44', score: 4 }] }));
+
+      expect(rowsInUse(container)[0]).toEqual({ field: 'Amount', value: '$312.44', words: null });
+    });
+
+    it("calls a bill's date row Due, and any other page's Date, from the prop it has now", async () => {
+      const { container, rerenderWith } = await renderBill({ onSuggestions: () => ['vendor', 'date', 'amount', 'dueDate'] });
+      expect(rowsInUse(container)[1]).toEqual({ field: 'Due', value: 'Nov 24, 2026', words: 'Due date' });
+
+      // The add page's kind moved away from a bill: its date chips now fill the start date.
+      rerenderWith({ dateField: 'purchaseDate' });
+      expect(rowsInUse(container)[1]).toEqual({ field: 'Date', value: 'Nov 6, 2026', words: 'Statement date' });
+
+      // No dateField reads as the start date.
+      rerenderWith({ dateField: undefined });
+      expect(rowsInUse(container)[1]?.field).toBe('Date');
+    });
+
+    it('shows no date in use on a bill whose start date was filled but not its due date', async () => {
+      const { container } = await renderBill({ onSuggestions: () => ['vendor', 'date', 'amount'] });
+
+      expect(rowsInUse(container).map((row) => row.field)).toEqual(['Amount']);
+      expect(pressed('Dates')).toEqual(['false', 'false', 'false', 'false', 'false']);
+      // Five amounts and all five dates are not in use.
+      expect(screen.getByText('Other figures (10)')).toBeTruthy();
+      expect(screen.getByText('Filled vendor, date, amount.')).toBeTruthy();
+    });
+
+    it('puts What was read after Other figures', async () => {
+      const { container } = await renderBill();
+
+      expect([...container.querySelectorAll('summary')].map((summary) => summary.textContent)).toEqual([
+        'Other figures (9)',
+        'What was read',
+      ]);
+    });
+  });
+
   /** The two native controls: the camera one first, as the tests above take it. */
   function cameraAndPlain(): { camera: HTMLInputElement; plain: HTMLInputElement } {
     return {
@@ -453,5 +721,12 @@ describe('summaryOf', () => {
       'Filled date — no total found.',
     );
     expect(summaryOf(found, [])).toBeNull();
+  });
+
+  it('calls a due date "date", once and in the same place, so the copy is unchanged', () => {
+    const found = { vendor: 'RIVERSIDE WATER', purchaseDate: '2026-11-06', dueDate: '2026-11-24', priceCents: 31244 };
+    expect(summaryOf(found, ['dueDate', 'amount'])).toBe('Filled date, amount.');
+    expect(summaryOf(found, ['amount', 'dueDate', 'vendor', 'date'])).toBe('Filled vendor, date, amount.');
+    expect(summaryOf({ dueDate: '2026-11-24' }, ['dueDate'])).toBe('Filled date — no total found.');
   });
 });

@@ -1226,6 +1226,8 @@ describe('a bill summary leads with its money', () => {
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '120.00' } });
     fireEvent.click(screen.getByRole('button', { name: /^add receipt$/i }));
     const uploaderProps = vi.mocked(ReceiptUploader).mock.calls.at(-1)![0];
+    // Its date chips fill the due date, which is what the tile names its date row after.
+    expect(uploaderProps.dateField).toBe('dueDate');
     act(() => uploaderProps.onPickAmount!(32806));
     act(() => uploaderProps.onPickDate!('2026-11-24'));
     expect((screen.getByLabelText('Amount') as HTMLInputElement).value).toBe('328.06');
@@ -1266,7 +1268,7 @@ describe('a bill summary leads with its money', () => {
     act(() => {
       filled = uploaderProps.onSuggestions!({ vendor: 'RIVERSIDE WATER', priceCents: 31244, dueDate: '2026-11-24' });
     });
-    expect([...(filled ?? [])].sort()).toEqual(['amount', 'date']);
+    expect([...(filled ?? [])].sort()).toEqual(['amount', 'dueDate']);
   });
 
   it('reports only the untouched field it filled', () => {
@@ -1278,7 +1280,7 @@ describe('a bill summary leads with its money', () => {
     act(() => {
       filled = uploaderProps.onSuggestions!({ priceCents: 31244, dueDate: '2026-11-24' });
     });
-    expect([...(filled ?? [])]).toEqual(['date']);
+    expect([...(filled ?? [])]).toEqual(['dueDate']);
   });
 
   it('fills again after a typed installment is added, since the emptied fields hold nothing typed', async () => {
