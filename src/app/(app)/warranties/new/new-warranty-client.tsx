@@ -31,7 +31,7 @@ import {
   productFieldsAllowedForKind,
 } from '@/lib/warranty/constants';
 import { computeExpiryDate } from '@/lib/warranty/expiry';
-import { centsToInput } from '@/lib/money';
+import { centsToInput, parseAmountToCents } from '@/lib/money';
 import { createWarrantyAction, type WarrantyActionState } from '../actions';
 import { buttonClass } from '@/components/ui/Button';
 import { BASIS_LABELS, BASIS_ORDER } from '@/lib/loans/basis-labels';
@@ -217,9 +217,7 @@ export function NewWarrantyClient({
     it replaces what is there and then counts as typed -- a read that finishes later (a second
     receipt, review focus 5) cannot take it back, and it is not marked as a guess.
 
-    Returns the fields it filled, for the receipt tile's summary and the figures it shows in use: a
-    due date is 'dueDate', apart from the start date's 'date', since a bill's date chips fill the due
-    date and the tile must not show the start date as the one in use.
+    Returns the fields it filled, for the receipt tile's summary.
   */
   const routeAmountAndDueDate = useCallback((fields: SuggestedFieldsDto, kind: ItemKind, chosen = false): FilledField[] => {
     const filled: FilledField[] = [];
@@ -249,7 +247,7 @@ export function NewWarrantyClient({
       setDueDate(fields.dueDate);
       if (chosen) setBillTouched((t) => ({ ...t, dueDate: true }));
       setSuggested((s) => ({ ...s, dueDate: !chosen }));
-      filled.push('dueDate');
+      filled.push('date');
     }
     return filled;
   }, []);
@@ -296,6 +294,14 @@ export function NewWarrantyClient({
     },
     [routeAmountAndDueDate, selectedKind],
   );
+
+  // What the receipt tile marks in use: what the fields its chips fill hold now, routed as a tapped
+  // chip is (a bill's Amount due and Due date, else the billing amount or Price, and the start date).
+  const amountInUse = parseAmountToCents(installmentsApplicable ? amountDue : billingApplicable ? billingAmount : price);
+  const figuresInUse = {
+    amountCents: amountInUse ?? undefined,
+    date: (installmentsApplicable ? dueDate : purchaseDate) || undefined,
+  };
 
   // A type picked after the reader answered gets that answer's amount and due date in its own
   // fields. Declared after the clearing effects above so it runs after them. The vendor and the
@@ -362,6 +368,7 @@ export function NewWarrantyClient({
             onPickAmount={onPickAmount}
             onPickDate={onPickDate}
             dateField={installmentsApplicable ? 'dueDate' : 'purchaseDate'}
+            inUse={figuresInUse}
           />
         </CardBody>
       </Card>

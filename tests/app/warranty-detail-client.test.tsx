@@ -1239,6 +1239,19 @@ describe('a bill summary leads with its money', () => {
     expect((screen.getByLabelText('Due date') as HTMLInputElement).value).toBe('2026-11-24');
   });
 
+  /** The tile marks the figures the add-installment form holds now, not the ones a read once put there. */
+  it('tells the uploader what the add-installment fields hold now', () => {
+    renderDetail({ item: billItem, installments: [] });
+    readAttachedBill({ priceCents: 31244, dueDate: '2026-11-24' });
+    const latest = () => vi.mocked(ReceiptUploader).mock.calls.at(-1)![0];
+    expect(latest().inUse).toEqual({ amountCents: 31244, date: '2026-11-24' });
+
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '120.00' } });
+    fireEvent.change(screen.getByLabelText('Due date'), { target: { value: '' } });
+    expect(latest().inUse?.amountCents).toBe(12000);
+    expect(latest().inUse?.date ?? '').toBe('');
+  });
+
   it('offers no chips for a kind without installments', () => {
     renderDetail({ item: item({ kind: 'warranty' }), installments: [] });
     fireEvent.click(screen.getByRole('button', { name: /^add receipt$/i }));
@@ -1268,7 +1281,7 @@ describe('a bill summary leads with its money', () => {
     act(() => {
       filled = uploaderProps.onSuggestions!({ vendor: 'RIVERSIDE WATER', priceCents: 31244, dueDate: '2026-11-24' });
     });
-    expect([...(filled ?? [])].sort()).toEqual(['amount', 'dueDate']);
+    expect([...(filled ?? [])].sort()).toEqual(['amount', 'date']);
   });
 
   it('reports only the untouched field it filled', () => {
@@ -1280,7 +1293,7 @@ describe('a bill summary leads with its money', () => {
     act(() => {
       filled = uploaderProps.onSuggestions!({ priceCents: 31244, dueDate: '2026-11-24' });
     });
-    expect([...(filled ?? [])]).toEqual(['dueDate']);
+    expect([...(filled ?? [])]).toEqual(['date']);
   });
 
   it('fills again after a typed installment is added, since the emptied fields hold nothing typed', async () => {

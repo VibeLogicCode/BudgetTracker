@@ -304,9 +304,12 @@ export function dateCandidates(text: string, today: string): DateCandidate[] {
   return [...best.values()].sort((a, b) => b.score - a.score || a.date.localeCompare(b.date)).slice(0, MAX_CANDIDATES);
 }
 
-/** A sign or currency the extractor's figure leaves behind: "-$312.44", "$-312.44", "312,44 $", "312.44 CAD". */
+/**
+ * A sign or currency the extractor's figure leaves behind: "-$312.44", "$-312.44", "312,44 $",
+ * "312.44 CAD". A `$` with a digit right after it starts the next figure, so it is not trailing.
+ */
 const FIGURE_LEAD_RE = /(?:\$\s*)?[-−]\s*$/;
-const FIGURE_TRAIL_RE = /^\s*(?:\$|(?:CAD|USD)(?![\p{L}\p{N}_]))/u;
+const FIGURE_TRAIL_RE = /^\s*(?:\$(?!\d)|(?:CAD|USD)(?![\p{L}\p{N}_]))/u;
 /** Separators and dot leaders left at either side of a cut ("Due date: ", "TOTAL ......"). */
 const LABEL_EDGE_START_RE = /^[\s:;,.=|*·–—-]+/;
 const LABEL_EDGE_END_RE = /[\s:;,.=|*·–—-]+$/;
@@ -336,8 +339,11 @@ export function candidateLabel(candidate: AmountCandidate | DateCandidate): stri
   if (span === null) return squash(snippet).trim();
   let [start, end] = span;
   if ('valueCents' in candidate) {
+    // A figure printed with its `$` in front takes none from behind: that one is the next figure's.
+    const ownDollar = snippet[start] === '$';
     start -= FIGURE_LEAD_RE.exec(snippet.slice(0, start))?.[0].length ?? 0;
-    end += FIGURE_TRAIL_RE.exec(snippet.slice(end))?.[0].length ?? 0;
+    const trail = FIGURE_TRAIL_RE.exec(snippet.slice(end))?.[0] ?? '';
+    if (!(ownDollar && trail.trim() === '$')) end += trail.length;
     // An accounting negative, "(312.44)".
     if (snippet[start - 1] === '(' && snippet[end] === ')') {
       start -= 1;

@@ -374,15 +374,16 @@ describe('ReceiptUploader', () => {
 
     type Props = Partial<ComponentProps<typeof ReceiptUploader>>;
 
-    /** A bill's page by default: it filled the amount and the due date, and has both pick handlers. */
+    /** A bill's page by default: both pick handlers, and its fields hold the amount due and the due date. */
     function billElement(props: Props, handlers: { onPickAmount: () => void; onPickDate: () => void }) {
       return (
         <ReceiptUploader
           onStagedChange={vi.fn()}
-          onSuggestions={() => ['vendor', 'amount', 'dueDate']}
+          onSuggestions={() => ['vendor', 'amount', 'date']}
           onPickAmount={handlers.onPickAmount}
           onPickDate={handlers.onPickDate}
           dateField="dueDate"
+          inUse={{ amountCents: 31244, date: '2026-11-24' }}
           {...props}
         />
       );
@@ -460,7 +461,7 @@ describe('ReceiptUploader', () => {
       expect(chipsIn('Dates').map(visibleText)).toEqual(['Jan 5, 2027', 'Dec 8, 2026']);
     });
 
-    it('presses the figure the page filled, and marks it with a check', async () => {
+    it('presses the figure the field holds, and marks it with a check', async () => {
       await renderBill();
 
       expect(pressed('Amounts')).toEqual(['true', 'false', 'false', 'false', 'false', 'false']);
@@ -470,17 +471,26 @@ describe('ReceiptUploader', () => {
       expect(other.querySelector('svg')).toBeNull();
     });
 
-    it('a tapped chip fills the field, is pressed, and becomes the row in use', async () => {
-      const { container, onPickAmount, onPickDate } = await renderBill();
+    it('a tap calls the handler, and the pressed chip waits for the field to change', async () => {
+      const { onPickAmount, onPickDate } = await renderBill();
 
       fireEvent.click(screen.getByRole('button', { name: /^\$328\.06,/ }));
-      expect(onPickAmount).toHaveBeenCalledWith(32806);
-      expect(pressed('Amounts')).toEqual(['false', 'false', 'false', 'false', 'true', 'false']);
-
       fireEvent.click(screen.getByRole('button', { name: /^Nov 6, 2026,/ }));
-      expect(onPickDate).toHaveBeenCalledWith('2026-11-06');
-      expect(pressed('Dates')).toEqual(['false', 'true', 'false', 'false', 'false']);
 
+      expect(onPickAmount).toHaveBeenCalledWith(32806);
+      expect(onPickDate).toHaveBeenCalledWith('2026-11-06');
+      // Nothing here changed the fields, so what they hold is still the one in use.
+      expect(pressed('Amounts')[0]).toBe('true');
+      expect(pressed('Dates')[0]).toBe('true');
+    });
+
+    it('moves the row and the pressed chip to whatever the fields hold now', async () => {
+      const { container, rerenderWith } = await renderBill();
+
+      rerenderWith({ inUse: { amountCents: 32806, date: '2026-11-06' } });
+
+      expect(pressed('Amounts')).toEqual(['false', 'false', 'false', 'false', 'true', 'false']);
+      expect(pressed('Dates')).toEqual(['false', 'true', 'false', 'false', 'false']);
       expect(rowsInUse(container)).toEqual([
         { field: 'Amount', value: '$328.06', words: 'Amount due after due date' },
         { field: 'Due', value: 'Nov 6, 2026', words: 'Statement date' },
@@ -488,31 +498,21 @@ describe('ReceiptUploader', () => {
       expect(screen.getByText('Other figures (9)')).toBeTruthy();
     });
 
-    it('keeps a tap to the tile it was made on', async () => {
-      let staged = 0;
-      const fetchMock = vi.fn((url: string) => {
-        if (url.endsWith('/stage')) {
-          staged += 1;
-          return Promise.resolve(stageResponse({ stagingId: `s${staged}`, originalFilename: `bill-${staged}.pdf`, mime: 'application/pdf' }));
-        }
-        return Promise.resolve({ ok: true, json: async () => billBody() } as Response);
-      });
-      vi.stubGlobal('fetch', fetchMock);
-      vi.useFakeTimers();
-      const onPickAmount = vi.fn();
-      const { container } = render(billElement({}, { onPickAmount, onPickDate: vi.fn() }));
-      fireEvent.change(container.querySelector('input[type="file"]')!, {
-        target: { files: [new File(['x'], 'a.pdf', { type: 'application/pdf' }), new File(['y'], 'b.pdf', { type: 'application/pdf' })] },
-      });
-      await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 2);
-      const [first, second] = [...container.querySelectorAll<HTMLElement>('ul > li')];
-      expect(rowsInUse(second)[0]?.value).toBe('$312.44');
+    it('shows no row for a field holding a figure the read did not find, or nothing at all', async () => {
+      const { container, rerenderWith } = await renderBill();
 
-      fireEvent.click(within(first).getByRole('button', { name: /^\$141\.07,/ }));
+      // Typed by hand.
+      rerenderWith({ inUse: { amountCents: 9000, date: '2026-11-30' } });
+      expect(rowsInUse(container)).toEqual([]);
+      expect(pressed('Amounts')).not.toContain('true');
+      expect(pressed('Dates')).not.toContain('true');
+      expect(screen.getByText('Other figures (11)')).toBeTruthy();
 
-      expect(onPickAmount).toHaveBeenCalledWith(14107);
-      expect(rowsInUse(first)[0]).toEqual({ field: 'Amount', value: '$141.07', words: 'Water charges' });
-      expect(rowsInUse(second)[0]).toEqual({ field: 'Amount', value: '$312.44', words: 'Amount due' });
+      // Emptied, as the detail page does once an installment is added.
+      rerenderWith({ inUse: {} });
+      expect(rowsInUse(container)).toEqual([]);
+      rerenderWith({ inUse: undefined });
+      expect(rowsInUse(container)).toEqual([]);
     });
 
     it('collapses figures of one value into one chip, with the better-scored words', async () => {
@@ -569,26 +569,16 @@ describe('ReceiptUploader', () => {
     });
 
     it("calls a bill's date row Due, and any other page's Date, from the prop it has now", async () => {
-      const { container, rerenderWith } = await renderBill({ onSuggestions: () => ['vendor', 'date', 'amount', 'dueDate'] });
+      const { container, rerenderWith } = await renderBill();
       expect(rowsInUse(container)[1]).toEqual({ field: 'Due', value: 'Nov 24, 2026', words: 'Due date' });
 
       // The add page's kind moved away from a bill: its date chips now fill the start date.
-      rerenderWith({ dateField: 'purchaseDate' });
+      rerenderWith({ dateField: 'purchaseDate', inUse: { amountCents: 31244, date: '2026-11-06' } });
       expect(rowsInUse(container)[1]).toEqual({ field: 'Date', value: 'Nov 6, 2026', words: 'Statement date' });
 
       // No dateField reads as the start date.
       rerenderWith({ dateField: undefined });
       expect(rowsInUse(container)[1]?.field).toBe('Date');
-    });
-
-    it('shows no date in use on a bill whose start date was filled but not its due date', async () => {
-      const { container } = await renderBill({ onSuggestions: () => ['vendor', 'date', 'amount'] });
-
-      expect(rowsInUse(container).map((row) => row.field)).toEqual(['Amount']);
-      expect(pressed('Dates')).toEqual(['false', 'false', 'false', 'false', 'false']);
-      // Five amounts and all five dates are not in use.
-      expect(screen.getByText('Other figures (10)')).toBeTruthy();
-      expect(screen.getByText('Filled vendor, date, amount.')).toBeTruthy();
     });
 
     it('puts What was read after Other figures', async () => {
@@ -721,12 +711,5 @@ describe('summaryOf', () => {
       'Filled date — no total found.',
     );
     expect(summaryOf(found, [])).toBeNull();
-  });
-
-  it('calls a due date "date", once and in the same place, so the copy is unchanged', () => {
-    const found = { vendor: 'RIVERSIDE WATER', purchaseDate: '2026-11-06', dueDate: '2026-11-24', priceCents: 31244 };
-    expect(summaryOf(found, ['dueDate', 'amount'])).toBe('Filled date, amount.');
-    expect(summaryOf(found, ['amount', 'dueDate', 'vendor', 'date'])).toBe('Filled vendor, date, amount.');
-    expect(summaryOf({ dueDate: '2026-11-24' }, ['dueDate'])).toBe('Filled date — no total found.');
   });
 });

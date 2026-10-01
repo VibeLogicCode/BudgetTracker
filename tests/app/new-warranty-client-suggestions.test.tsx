@@ -14,6 +14,7 @@ const uploader = vi.hoisted(() => ({
   onPickAmount: undefined as ((cents: number) => void) | undefined,
   onPickDate: undefined as ((iso: string) => void) | undefined,
   dateField: undefined as 'purchaseDate' | 'dueDate' | undefined,
+  inUse: undefined as { amountCents?: number; date?: string } | undefined,
 }));
 
 vi.mock('@/components/warranty/ReceiptUploader', () => ({
@@ -22,11 +23,13 @@ vi.mock('@/components/warranty/ReceiptUploader', () => ({
     onPickAmount?: (cents: number) => void;
     onPickDate?: (iso: string) => void;
     dateField?: 'purchaseDate' | 'dueDate';
+    inUse?: { amountCents?: number; date?: string };
   }) => {
     uploader.onSuggestions = props.onSuggestions;
     uploader.onPickAmount = props.onPickAmount;
     uploader.onPickDate = props.onPickDate;
     uploader.dateField = props.dateField;
+    uploader.inUse = props.inUse;
     return null;
   },
 }));
@@ -41,6 +44,7 @@ afterEach(() => {
   uploader.onPickAmount = undefined;
   uploader.onPickDate = undefined;
   uploader.dateField = undefined;
+  uploader.inUse = undefined;
 });
 
 const types = [
@@ -134,22 +138,7 @@ describe('the form reports what a read filled', () => {
   it("names a bill's amount due and due date", () => {
     const form = renderForm();
     form.pick('4');
-    expect(suggest({ priceCents: 8217, dueDate: '2026-10-15' })).toEqual(['amount', 'dueDate']);
-  });
-
-  /** The tile shows the date its chips fill, so a start date and a due date are told apart. */
-  it("tells a bill's start date from its due date", () => {
-    const form = renderForm();
-    form.pick('4');
-    expect(suggest({ purchaseDate: '2026-11-06', dueDate: '2026-11-24' })).toEqual(['date', 'dueDate']);
-  });
-
-  it('names no due date when the due date was typed first, only the start date it did fill', () => {
-    const form = renderForm();
-    form.pick('4');
-    form.type('dueDate', '2026-11-30');
-    expect(suggest({ purchaseDate: '2026-11-06', dueDate: '2026-11-24' })).toEqual(['date']);
-    expect(form.field('dueDate')!.value).toBe('2026-11-30');
+    expect(suggest({ priceCents: 8217, dueDate: '2026-10-15' })).toEqual(['amount', 'date']);
   });
 
   it("names a subscription's billing amount only while it was empty", () => {
@@ -200,6 +189,45 @@ describe('the "suggested from receipt" mark', () => {
     expect(form.marks()).toBe(1);
     form.type('dueDate', '2026-10-20');
     expect(form.marks()).toBe(0);
+  });
+});
+
+/** The tile marks the figures the fields its chips fill hold now, so it follows the kind and the person. */
+describe('what the uploader is told is in use', () => {
+  const read = { priceCents: 31244, purchaseDate: '2026-11-06', dueDate: '2026-11-24' };
+
+  it('follows the amount and date fields the kind has, once a type is picked after the read', () => {
+    const form = renderForm();
+    suggest(read);
+    // Read while the form still reads as a warranty: Price and the start date.
+    expect(uploader.inUse).toEqual({ amountCents: 31244, date: '2026-11-06' });
+
+    form.pick('4');
+    expect(uploader.inUse).toEqual({ amountCents: 31244, date: '2026-11-24' });
+    form.pick('2');
+    expect(uploader.inUse).toEqual({ amountCents: 31244, date: '2026-11-06' });
+  });
+
+  it('follows a tap as a bill, and the warranty fields once the kind moves away', () => {
+    const form = renderForm();
+    suggest(read);
+    form.pick('4');
+    act(() => uploader.onPickAmount!(32806));
+    act(() => uploader.onPickDate!('2026-11-24'));
+    expect(uploader.inUse).toEqual({ amountCents: 32806, date: '2026-11-24' });
+
+    form.pick('1');
+    expect(form.field('price')!.value).toBe('312.44');
+    expect(uploader.inUse).toEqual({ amountCents: 31244, date: '2026-11-06' });
+  });
+
+  it('holds nothing in use while the fields are empty, and a typed figure once typed', () => {
+    const form = renderForm();
+    form.pick('4');
+    expect(uploader.inUse?.amountCents).toBeUndefined();
+    expect(uploader.inUse?.date ?? '').toBe('');
+    form.type('amountDue', '90.00');
+    expect(uploader.inUse?.amountCents).toBe(9000);
   });
 });
 

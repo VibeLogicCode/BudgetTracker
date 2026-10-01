@@ -22,7 +22,7 @@ import { Field, inputClass, labelClass, selectClass, textareaClass } from '@/com
 import { AutoSaveSelect } from '@/components/ui/AutoSave';
 import { BASIS_HINTS, BASIS_LABELS, BASIS_ORDER } from '@/lib/loans/basis-labels';
 import type { InterestBasis } from '@/lib/loans/interest';
-import { centsToInput, formatCents, formatRateBps } from '@/lib/money';
+import { centsToInput, formatCents, formatRateBps, parseAmountToCents } from '@/lib/money';
 /**
  * v1.31.0 (controller-added alongside the P3 sweep). All three "show me this transaction" links
  * on this page go through transactionsHref, the ONE builder of a `/transactions?...` link
@@ -371,7 +371,7 @@ export function WarrantyDetailClient({
     }
     if (fields.dueDate && !touched.dueDate) {
       setNewDueDate(fields.dueDate);
-      filled.push('dueDate');
+      filled.push('date');
     }
     if (filled.length > 0) setInstallmentSuggested(true);
     return filled;
@@ -1482,6 +1482,7 @@ export function WarrantyDetailClient({
                   onPickAmount={installmentsAllowedForKind(item.kind) ? pickInstallmentAmount : undefined}
                   onPickDate={installmentsAllowedForKind(item.kind) ? pickInstallmentDate : undefined}
                   dateField="dueDate"
+                  inUse={{ amountCents: parseAmountToCents(newAmount) ?? undefined, date: newDueDate || undefined }}
                 />
                 <SubmitButton className="w-fit">Attach receipts</SubmitButton>
               </form>

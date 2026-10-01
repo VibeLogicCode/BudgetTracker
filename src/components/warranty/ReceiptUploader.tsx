@@ -37,20 +37,16 @@ export interface StagedFile {
   filled?: ReadonlyArray<FilledField>;
 }
 
-/**
- * A form field a read can fill. `date` is the start date (the read's purchaseDate) and `dueDate` a
- * bill's due date: the tile tells them apart to know which date is in use, and its summary calls
- * either one "date".
- */
-export type FilledField = 'vendor' | 'date' | 'dueDate' | 'amount';
-/** The summary's words, in order, with the fields each one stands for. */
-const SUMMARY_WORDS: ReadonlyArray<readonly [string, ReadonlyArray<FilledField>]> = [
-  ['vendor', ['vendor']],
-  ['date', ['date', 'dueDate']],
-  ['amount', ['amount']],
-];
+/** A form field a read can fill, as the tile's summary names it. */
+export type FilledField = 'vendor' | 'date' | 'amount';
+const FILLED_ORDER: readonly FilledField[] = ['vendor', 'date', 'amount'];
 /** The read field a page's date chips fill: a bill's due date, otherwise the start date. */
 export type DateField = 'purchaseDate' | 'dueDate';
+/** What the fields a page's chips fill hold now: the amount in cents and the date as ISO. */
+export interface FiguresInUse {
+  amountCents?: number;
+  date?: string;
+}
 
 export interface SuggestedFieldsDto {
   purchaseDate?: string;
@@ -71,7 +67,7 @@ export const SCAN_SUMMARY_NOTHING = 'Read, but found no vendor, date or amount �
 export function summaryOf(fields: SuggestedFieldsDto, filled: ReadonlyArray<FilledField>): string | null {
   const found = Boolean(fields.vendor || fields.purchaseDate || fields.dueDate || fields.priceCents !== undefined);
   if (!found) return SCAN_SUMMARY_NOTHING;
-  const named = SUMMARY_WORDS.filter(([, fields]) => fields.some((field) => filled.includes(field))).map(([word]) => word);
+  const named = FILLED_ORDER.filter((field) => filled.includes(field));
   if (named.length === 0) return null;
   return `Filled ${named.join(', ')}${fields.priceCents === undefined ? ' — no total found' : ''}.`;
 }
@@ -209,35 +205,28 @@ function FigureChip({
 
 /**
  * A done tile's figures (spec 2026-09-30 §2.3): the amount and the date in use first, one row each,
- * and every candidate under a folded "Other figures". In use is what this tile's read filled, or
- * the chip last tapped on it. No pick handler, no row and no chips for that field.
+ * and every candidate under a folded "Other figures". In use is the figure the field holds NOW, so
+ * a tap, a later read, a typed value, a kind change or an emptied form all show as they land. No
+ * pick handler, no row and no chips for that field.
  */
 function ReadFigures({
   candidates,
-  suggestions,
-  filled,
+  inUse,
   dateField,
   onPickAmount,
   onPickDate,
 }: {
   candidates: { amounts: AmountCandidate[]; dates: DateCandidate[] };
-  suggestions: SuggestedFieldsDto;
-  filled: ReadonlyArray<FilledField>;
+  inUse?: FiguresInUse;
   dateField: DateField;
   onPickAmount?: (cents: number) => void;
   onPickDate?: (iso: string) => void;
 }) {
   const id = useId();
-  // A tap comes after the fill, so it wins. Per field, and per tile: each tile has its own.
-  const [tapped, setTapped] = useState<{ amount?: number; date?: string }>({});
   const amounts = onPickAmount ? onePerValue(candidates.amounts, (candidate) => candidate.valueCents) : [];
   const dates = onPickDate ? onePerValue(candidates.dates, (candidate) => candidate.date) : [];
-
-  // Only a value the page put in the field the chips fill: a bill's start date is not its due date.
-  const filledAmount = filled.includes('amount') ? suggestions.priceCents : undefined;
-  const filledDate = filled.includes(dateField === 'dueDate' ? 'dueDate' : 'date') ? suggestions[dateField] : undefined;
-  const amountInUse = amounts.find((candidate) => candidate.valueCents === (tapped.amount ?? filledAmount));
-  const dateInUse = dates.find((candidate) => candidate.date === (tapped.date ?? filledDate));
+  const amountInUse = amounts.find((candidate) => candidate.valueCents === inUse?.amountCents);
+  const dateInUse = dates.find((candidate) => candidate.date === inUse?.date);
   const others = amounts.length + dates.length - (amountInUse ? 1 : 0) - (dateInUse ? 1 : 0);
   // The year goes only when every date here shares one; the name and the title keep it.
   const oneYear = new Set(dates.map((candidate) => candidate.date.slice(0, 4))).size === 1;
@@ -286,10 +275,7 @@ function ReadFigures({
                       full={formatCents(candidate.valueCents)}
                       snippet={candidate.snippet}
                       pressed={candidate === amountInUse}
-                      onPick={() => {
-                        onPickAmount?.(candidate.valueCents);
-                        setTapped((current) => ({ ...current, amount: candidate.valueCents }));
-                      }}
+                      onPick={() => onPickAmount?.(candidate.valueCents)}
                     />
                   ))}
                 </div>
@@ -308,10 +294,7 @@ function ReadFigures({
                       full={chipDate(candidate.date)}
                       snippet={candidate.snippet}
                       pressed={candidate === dateInUse}
-                      onPick={() => {
-                        onPickDate?.(candidate.date);
-                        setTapped((current) => ({ ...current, date: candidate.date }));
-                      }}
+                      onPick={() => onPickDate?.(candidate.date)}
                     />
                   ))}
                 </div>
@@ -330,6 +313,7 @@ export function ReceiptUploader({
   onPickAmount,
   onPickDate,
   dateField = 'purchaseDate',
+  inUse,
   label = 'Receipt photo or PDF',
 }: {
   onStagedChange: (files: StagedFile[]) => void;
@@ -344,6 +328,11 @@ export function ReceiptUploader({
    * row in use ("Due" or "Date") and says which filled date it is.
    */
   dateField?: DateField;
+  /**
+   * What the fields the chips fill hold now. A chip of that value is the one in use, and its row
+   * leads the tile; a figure no chip has, or an empty field, shows no row.
+   */
+  inUse?: FiguresInUse;
   label?: string;
 }) {
   const captionId = useId();
@@ -682,8 +671,7 @@ export function ReceiptUploader({
                 {file.ocr === 'done' ? (
                   <ReadFigures
                     candidates={file.candidates ?? { amounts: [], dates: [] }}
-                    suggestions={file.suggestions ?? {}}
-                    filled={file.filled ?? []}
+                    inUse={inUse}
                     dateField={dateField}
                     onPickAmount={onPickAmount}
                     onPickDate={onPickDate}

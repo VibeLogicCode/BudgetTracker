@@ -322,6 +322,13 @@ describe('candidateLabel', () => {
     expect(amount(32806, 'Total $312.44 after due date $328.06')).toBe('Total $312.44 after due date');
   });
 
+  it("leaves the next figure's dollar sign on it", () => {
+    expect(amount(31244, 'Amount due $312.44 $328.06')).toBe('Amount due $328.06');
+    expect(amount(31244, 'Amount due 312.44 $328.06')).toBe('Amount due $328.06');
+    // A sign printed after each figure still goes with its own one.
+    expect(amount(31244, 'Montant 312,44 $ 328,06 $')).toBe('Montant 328,06 $');
+  });
+
   it('is empty when the snippet is only the figure', () => {
     expect(amount(31244, '$312.44')).toBe('');
     expect(date('2026-11-24', ' 2026-11-24 ')).toBe('');
