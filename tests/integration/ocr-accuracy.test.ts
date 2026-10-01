@@ -59,12 +59,15 @@ describe('OCR accuracy on rendered receipts', () => {
     expect(s.priceCents).toBe(13397);
   }, 90_000);
 
-  it('D: a receipt saved sideways with no EXIF tag still reads its total', async () => {
+  it('D: a receipt saved sideways with no EXIF tag reads as well as a flat scan', async () => {
     const text = await read(await renderReceipt(RECEIPT_LINES, { rotate90: true }));
-    // Order-independent on purpose: the page-orientation step can leave this one at 180 degrees
-    // with its lines in reverse order, so no CER bound and no vendor here.
+    // A's bar, in order: the quarter turn can land the page upside down, and the classifier's
+    // votes catch that and turn the boxes the other half turn before the lines are put together,
+    // so the vendor is the first line again rather than the last.
+    expect(cer(RECEIPT_LINES.join('\n'), text)).toBeLessThan(0.03);
     expect(text).toMatch(/(^|\s)TOTAL\s*25[.,]31/m);
     const s = suggestFromOcrText(text, TODAY);
+    expect(s.vendor).toBe('MAPLE GROCERY CO.');
     expect(s.purchaseDate).toBe('2026-09-14');
     expect(s.priceCents).toBe(2531);
   }, 60_000);
