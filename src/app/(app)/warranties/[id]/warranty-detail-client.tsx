@@ -22,7 +22,7 @@ import { Field, inputClass, labelClass, selectClass, textareaClass } from '@/com
 import { AutoSaveSelect } from '@/components/ui/AutoSave';
 import { BASIS_HINTS, BASIS_LABELS, BASIS_ORDER } from '@/lib/loans/basis-labels';
 import type { InterestBasis } from '@/lib/loans/interest';
-import { formatCents, formatRateBps } from '@/lib/money';
+import { centsToInput, formatCents, formatRateBps } from '@/lib/money';
 /**
  * v1.31.0 (controller-added alongside the P3 sweep). All three "show me this transaction" links
  * on this page go through transactionsHref, the ONE builder of a `/transactions?...` link
@@ -43,6 +43,9 @@ import { formatCents, formatRateBps } from '@/lib/money';
 import { transactionsHref } from '@/lib/transaction-links';
 import type { ItemLedger, ItemLedgerRow, LoanRule } from '@/lib/loans';
 import {
+  BILL_INSTALLMENT_SUGGESTED_NOTICE,
+  BILL_NEXT_PAYMENT_LABEL,
+  BILL_OUTSTANDING_LABEL,
   BILLING_CYCLE_LABELS,
   BILLING_CYCLES,
   billingAllowedForKind,
@@ -345,6 +348,11 @@ export function WarrantyDetailClient({
   // the Payment matching card's are -- they are not among the five actions activeSlot
   // disambiguates between.
   const [addInstallmentState, addInstallmentDispatch] = useActionState(addInstallmentAction, initial);
+  // Spec 2026-09-30 §2.1. Controlled so an attached bill can pre-fill them (Part B's reader
+  // supplies the values); the person still presses Add installment -- nothing saves on its own.
+  const [newDueDate, setNewDueDate] = useState('');
+  const [newAmount, setNewAmount] = useState('');
+  const [installmentSuggested, setInstallmentSuggested] = useState(false);
   const [installmentRowState, installmentRowDispatch] = useActionState(
     (_prev: WarrantyActionState, formData: FormData) =>
       formData.get('intent') === 'remove'
@@ -434,6 +442,18 @@ export function WarrantyDetailClient({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editState]);
+
+  // Spec 2026-09-30 §2.1. A successful add (a message with no error) empties the add-installment
+  // form and drops the "Suggested from the attached bill" notice. React resets only uncontrolled
+  // fields after a form action, and these two are controlled, so without this the values just
+  // saved would stay in place, one press away from a duplicate. Same keyed-on-state idiom as above.
+  useEffect(() => {
+    if (addInstallmentState.message && !addInstallmentState.error) {
+      setNewDueDate('');
+      setNewAmount('');
+      setInstallmentSuggested(false);
+    }
+  }, [addInstallmentState]);
 
   // Bug fix (v1.2.4): the primary fix is REPLACING the read-only view with the edit form in
   // the same position (below), so scrolling is a fallback only -- guards against the edit
@@ -728,6 +748,29 @@ export function WarrantyDetailClient({
                     <Money cents={item.billingAmountCents} plain /> {billingCycleSuffixForKind(item.kind, item.billingCycle)}
                   </Detail>
                 ) : null}
+                {/* Spec 2026-09-30 §2.1. A bill's money, where the summary is read, built from the
+                    installment rows the page already loads. One row for one unpaid; a second with
+                    the total when there are several. Nothing when nothing is unpaid, same as the
+                    other dead cells this list dropped in v1.16.0. listInstallments orders the rows
+                    by due date (then id), so the first unpaid one is the next payment. */}
+                {(() => {
+                  const unpaid = installments.filter((row) => row.paidAt === null);
+                  if (item.kind !== 'bill' || unpaid.length === 0) return null;
+                  const next = unpaid[0];
+                  const outstanding = unpaid.reduce((sum, row) => sum + row.amountCents, 0);
+                  return (
+                    <>
+                      <Detail label={BILL_NEXT_PAYMENT_LABEL}>
+                        <Money cents={next.amountCents} plain /> due {next.dueDate}
+                      </Detail>
+                      {unpaid.length > 1 ? (
+                        <Detail label={BILL_OUTSTANDING_LABEL}>
+                          <Money cents={outstanding} plain /> ({unpaid.length} unpaid)
+                        </Detail>
+                      ) : null}
+                    </>
+                  );
+                })()}
                 {/* v1.14.0 (spec BU, ruling P16). Same "gate OR held value" rule as
                     Model/Serial/Price above (item R, ruling P6): shown whenever the kind
                     offers a direction, or the item already carries a non-default one -- an
@@ -908,88 +951,6 @@ export function WarrantyDetailClient({
         }
       </div>
 
-      {/* Item 6 (v1.16.0 plan): rendered for EVERY item kind, unconditionally -- it replaces the
-          bare "Payments linked" count the money block used to print, and a warranty or a
-          contract deserves the same honest "nothing here yet" empty state a loan or a bill
-          gets, not a card that only appears once something has already happened. */}
-      <Card>
-        <CardHeader title={`Linked transactions (${ledger.rows.length})`} />
-        <CardBody className="flex flex-col gap-4">
-          {/* The summary line is loan-only: a warranty or a bill has no direction and no
-              principal to summarise against, and matchingAllowedForKind's own gate below
-              already limits which kinds show payment RULES for the same reason. */}
-          {item.kind === 'loan' ? (
-            (() => {
-              const summary = loanLedgerSummary(item.loanDirection, item.principalCents, item.currentBalanceCents);
-              return summary === null ? null : <p className="text-sm text-muted">{summary}</p>;
-            })()
-          ) : null}
-          {ledger.rows.length === 0 ? (
-            // Guard 1 (tests/ops/onboarding-coverage.test.ts): the honest next step here is the
-            // one the sentence already names -- the row menu lives on Transactions, not here.
-            <EmptyState
-              size="compact"
-              title="No transactions linked yet. A payment rule above, or the row menu on Transactions, creates one."
-              action={
-                <Link href="/transactions" className={buttonClass('secondary', 'sm')}>
-                  Go to Transactions
-                </Link>
-              }
-            />
-          ) : (
-            <>
-              {/* Lane 4 (2026-08-30 one-design-language plan): ListRow, not a table -- this
-                  ledger was never sorted-and-scanned-down-a-column the way Transactions is
-                  (ruling D7's carve-out for that page), it is a short per-item list, exactly
-                  what ListRow is for. `direction` reads off the signed amount the same way the
-                  circled arrow does everywhere else in the app; Applied and Source move into a
-                  second muted line under the date/account, since ListRow has one amount column
-                  and this row genuinely has two money figures to show. */}
-              <ul className="flex flex-col rounded-md border border-line">
-                {ledger.rows.map((row) => (
-                  <ListRow
-                    key={row.txnId}
-                    direction={row.amountCents > 0 ? 'in' : 'out'}
-                    title={
-                      <Link
-                        href={transactionsHref({ range: null, person: null }, { kind: 'merchant', merchant: row.merchant })}
-                        className="hover:text-accent-text hover:underline hover:underline-offset-2"
-                      >
-                        {row.merchant}
-                      </Link>
-                    }
-                    meta={
-                      <>
-                        <span className="block truncate">{row.date} · {row.accountName}</span>
-                        <span className="mt-0.5 flex flex-wrap items-center gap-1.5">
-                          <span>Applied <Money cents={row.appliedCents} plain /></span>
-                          <span className="badge badge--slate">{LEDGER_SOURCE_LABEL[row.source]}</span>
-                        </span>
-                      </>
-                    }
-                    amount={<Money cents={row.amountCents} />}
-                    trailing={
-                      <RowMenu label={`Actions for the ${formatCents(row.amountCents)} transaction on ${row.date}`}>
-                        <RowMenuForm
-                          action={unlinkDispatch}
-                          fields={{ itemId: String(item.id), txnId: String(row.txnId) }}
-                        >
-                          Unlink
-                        </RowMenuForm>
-                      </RowMenu>
-                    }
-                  />
-                ))}
-              </ul>
-              {/* Refusals surface inline, never silently -- the same discipline every other
-                  action on this page already follows (F3 fix-round's own stale-delete case). */}
-              <FormError message={unlinkState.error} />
-              {unlinkState.message === undefined ? null : <Notice tone="success">{unlinkState.message}</Notice>}
-            </>
-          )}
-        </CardBody>
-      </Card>
-
       {/* Ruling B7: rendered when the kind ALLOWS installments, or when the item already HAS
           some -- a gate decides what a form offers, never what it may hide, and an item whose
           type was flipped away from Bill still holds rows a person typed. Add and Mark paid are
@@ -1047,7 +1008,7 @@ export function WarrantyDetailClient({
             ) : (
               <>
                 {/* Not `fixed`, so tests/ops/table-layout.test.ts's fixed-implies-minWidth pairing
-                    does not apply -- same shape as the loan rules table directly below. */}
+                    does not apply -- same shape as the loan rules table further down. */}
                 <TableWrap bare responsive>
                   <thead>
                     <tr>
@@ -1154,12 +1115,15 @@ export function WarrantyDetailClient({
                 <input type="hidden" name="itemId" value={item.id} />
                 <div className="grid gap-4 sm:grid-cols-2">
                   <Field label="Due date">
-                    <input type="date" name="dueDate" className={inputClass} required />
+                    <input type="date" name="dueDate" aria-label="Due date" value={newDueDate} onChange={(e) => setNewDueDate(e.target.value)} className={inputClass} required />
                   </Field>
                   <Field label="Amount">
-                    <input name="amount" inputMode="decimal" className={inputClass} placeholder="e.g. 1200.00" />
+                    <input name="amount" aria-label="Amount" inputMode="decimal" value={newAmount} onChange={(e) => setNewAmount(e.target.value)} className={inputClass} placeholder="e.g. 1200.00" />
                   </Field>
                 </div>
+                {installmentSuggested ? (
+                  <Notice tone="info">{BILL_INSTALLMENT_SUGGESTED_NOTICE}</Notice>
+                ) : null}
                 <FormError message={addInstallmentState.error} />
                 {addInstallmentState.message === undefined ? null : (
                   <Notice tone="success">{addInstallmentState.message}</Notice>
@@ -1172,6 +1136,88 @@ export function WarrantyDetailClient({
           </CardBody>
         </Card>
       )}
+
+      {/* Item 6 (v1.16.0 plan): rendered for EVERY item kind, unconditionally -- it replaces the
+          bare "Payments linked" count the money block used to print, and a warranty or a
+          contract deserves the same honest "nothing here yet" empty state a loan or a bill
+          gets, not a card that only appears once something has already happened. */}
+      <Card>
+        <CardHeader title={`Linked transactions (${ledger.rows.length})`} />
+        <CardBody className="flex flex-col gap-4">
+          {/* The summary line is loan-only: a warranty or a bill has no direction and no
+              principal to summarise against, and matchingAllowedForKind's own gate below
+              already limits which kinds show payment RULES for the same reason. */}
+          {item.kind === 'loan' ? (
+            (() => {
+              const summary = loanLedgerSummary(item.loanDirection, item.principalCents, item.currentBalanceCents);
+              return summary === null ? null : <p className="text-sm text-muted">{summary}</p>;
+            })()
+          ) : null}
+          {ledger.rows.length === 0 ? (
+            // Guard 1 (tests/ops/onboarding-coverage.test.ts): the honest next step here is the
+            // one the sentence already names -- the row menu lives on Transactions, not here.
+            <EmptyState
+              size="compact"
+              title="No transactions linked yet. A payment rule above, or the row menu on Transactions, creates one."
+              action={
+                <Link href="/transactions" className={buttonClass('secondary', 'sm')}>
+                  Go to Transactions
+                </Link>
+              }
+            />
+          ) : (
+            <>
+              {/* Lane 4 (2026-08-30 one-design-language plan): ListRow, not a table -- this
+                  ledger was never sorted-and-scanned-down-a-column the way Transactions is
+                  (ruling D7's carve-out for that page), it is a short per-item list, exactly
+                  what ListRow is for. `direction` reads off the signed amount the same way the
+                  circled arrow does everywhere else in the app; Applied and Source move into a
+                  second muted line under the date/account, since ListRow has one amount column
+                  and this row genuinely has two money figures to show. */}
+              <ul className="flex flex-col rounded-md border border-line">
+                {ledger.rows.map((row) => (
+                  <ListRow
+                    key={row.txnId}
+                    direction={row.amountCents > 0 ? 'in' : 'out'}
+                    title={
+                      <Link
+                        href={transactionsHref({ range: null, person: null }, { kind: 'merchant', merchant: row.merchant })}
+                        className="hover:text-accent-text hover:underline hover:underline-offset-2"
+                      >
+                        {row.merchant}
+                      </Link>
+                    }
+                    meta={
+                      <>
+                        <span className="block truncate">{row.date} · {row.accountName}</span>
+                        <span className="mt-0.5 flex flex-wrap items-center gap-1.5">
+                          <span>Applied <Money cents={row.appliedCents} plain /></span>
+                          <span className="badge badge--slate">{LEDGER_SOURCE_LABEL[row.source]}</span>
+                        </span>
+                      </>
+                    }
+                    amount={<Money cents={row.amountCents} />}
+                    trailing={
+                      <RowMenu label={`Actions for the ${formatCents(row.amountCents)} transaction on ${row.date}`}>
+                        <RowMenuForm
+                          action={unlinkDispatch}
+                          fields={{ itemId: String(item.id), txnId: String(row.txnId) }}
+                        >
+                          Unlink
+                        </RowMenuForm>
+                      </RowMenu>
+                    }
+                  />
+                ))}
+              </ul>
+              {/* Refusals surface inline, never silently -- the same discipline every other
+                  action on this page already follows (F3 fix-round's own stale-delete case). */}
+              <FormError message={unlinkState.error} />
+              {unlinkState.message === undefined ? null : <Notice tone="success">{unlinkState.message}</Notice>}
+            </>
+          )}
+        </CardBody>
+      </Card>
 
       {/* MUST-14.5 / MUST-14.6 / MUST-13.9: matching-allowed kinds only (loan and bill, v1.12.0).
           Always states the budget rule above the table, so the person reads it exactly where
@@ -1370,7 +1416,20 @@ export function WarrantyDetailClient({
                   name="staged"
                   value={JSON.stringify(staged.map((f) => ({ stagingId: f.stagingId, originalFilename: f.originalFilename })))}
                 />
-                <ReceiptUploader key={uploaderKey} onStagedChange={onStagedChange} label="Add another receipt" />
+                <ReceiptUploader
+                  key={uploaderKey}
+                  onStagedChange={onStagedChange}
+                  label="Add another receipt"
+                  onSuggestions={
+                    installmentsAllowedForKind(item.kind)
+                      ? (fields) => {
+                          if (fields.priceCents !== undefined) setNewAmount(centsToInput(fields.priceCents));
+                          if (fields.dueDate) setNewDueDate(fields.dueDate);
+                          if (fields.priceCents !== undefined || fields.dueDate) setInstallmentSuggested(true);
+                        }
+                      : undefined
+                  }
+                />
                 <SubmitButton className="w-fit">Attach receipts</SubmitButton>
               </form>
             </div>

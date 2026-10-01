@@ -57,6 +57,15 @@ export function formatCents(cents: number, opts: { showSign?: boolean; currency?
   return `${symbol}${body}`;
 }
 
+/**
+ * Cents as the text a money input holds: 44443 becomes "444.43", no symbol and no separators, so
+ * parseAmountToCents reads it straight back. Undefined becomes an empty field. Used where a form
+ * is pre-filled from a figure the app already has (a receipt read, a transaction link).
+ */
+export function centsToInput(cents: number | undefined): string {
+  return cents === undefined ? '' : (cents / 100).toFixed(2);
+}
+
 export function sumCents(values: number[]): number {
   let total = 0;
   for (const value of values) total += value;

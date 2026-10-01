@@ -492,6 +492,13 @@ export const INSTALLMENT_SECTION_LABEL = 'Installments';
 export const BILL_AMOUNT_DUE_LABEL = 'Amount due';
 export const BILL_DUE_DATE_LABEL = 'Due date';
 
+/** Spec 2026-09-30 §2.1. The bill detail page's summary rows, built from its installment rows. */
+export const BILL_NEXT_PAYMENT_LABEL = 'Next payment';
+export const BILL_OUTSTANDING_LABEL = 'Outstanding';
+
+/** Spec 2026-09-30 §2.1. Shown beside the add-installment form once an attached bill has filled it in. */
+export const BILL_INSTALLMENT_SUGGESTED_NOTICE = 'Suggested from the attached bill — check it and press Add installment.';
+
 const INSTALLMENT_STATE_LABELS: Record<InstallmentState, string> = {
   paid: 'Paid',
   overdue: 'Overdue',

@@ -1,10 +1,22 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, cleanup, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, cleanup, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import { WarrantyDetailClient } from '@/app/(app)/warranties/[id]/warranty-detail-client';
-import { deleteLoanRuleAction, unlinkLedgerTransactionAction, updateWarrantyAction } from '@/app/(app)/warranties/actions';
+import {
+  addInstallmentAction,
+  deleteLoanRuleAction,
+  unlinkLedgerTransactionAction,
+  updateWarrantyAction,
+} from '@/app/(app)/warranties/actions';
+import { ReceiptUploader } from '@/components/warranty/ReceiptUploader';
 import type { ItemLedger } from '@/lib/loans';
 import type { WarrantyItemRow, WarrantyReceiptRow } from '@/lib/warranty/items';
+
+// Spec 2026-09-30 §2.1: a stand-in, so a test can hand the page a finished read through the
+// uploader's own onSuggestions prop. No test here looks inside the real uploader.
+vi.mock('@/components/warranty/ReceiptUploader', () => ({
+  ReceiptUploader: vi.fn(() => <div data-testid="uploader" />),
+}));
 
 vi.mock('@/app/(app)/warranties/actions', () => ({
   updateWarrantyAction: vi.fn(async () => ({})),
@@ -1104,5 +1116,65 @@ describe('F7: the loan fields', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /choose how the rate is charged/i }));
     expect(document.querySelector('select[name="interestRateBasis"]')).toBeTruthy();
+  });
+});
+
+/** Spec 2026-09-30 §2.1: the detail page's summary names the next payment and what is outstanding. */
+describe('a bill summary leads with its money', () => {
+  const billItem = item({ kind: 'bill', typeId: 4, typeName: 'Water bill', name: 'Riverside Water', vendor: null });
+  const unpaid = (id: number, dueDate: string, amountCents: number) => ({
+    id, itemId: 42, dueDate, amountCents, paidAt: null, paidTxnId: null, paidTxn: null, state: 'scheduled' as const,
+  });
+
+  /** Opens the Receipts disclosure, then hands the page a finished read through the uploader. */
+  function readAttachedBill(fields: { priceCents?: number; dueDate?: string }) {
+    fireEvent.click(screen.getByRole('button', { name: /^add receipt$/i }));
+    const uploaderProps = vi.mocked(ReceiptUploader).mock.calls.at(-1)![0];
+    act(() => uploaderProps.onSuggestions!(fields));
+  }
+
+  it('names the next payment and its date', () => {
+    renderDetail({ item: billItem, installments: [unpaid(101, '2026-10-31', 44443)] });
+    expect(screen.getByText('Next payment').nextElementSibling?.textContent).toContain('444.43 due 2026-10-31');
+    expect(screen.queryByText('Outstanding')).toBeNull();
+  });
+
+  it('adds the outstanding total when more than one is unpaid', () => {
+    renderDetail({ item: billItem, installments: [unpaid(101, '2026-10-31', 44443), unpaid(102, '2027-01-31', 44443), unpaid(103, '2027-04-30', 44443)] });
+    expect(screen.getByText('Outstanding').nextElementSibling?.textContent).toContain('1,333.29 (3 unpaid)');
+  });
+
+  it('shows neither row when nothing is unpaid, and the Installments card is above Linked transactions', () => {
+    const { container } = renderDetail({ item: billItem, installments: [] });
+    expect(screen.queryByText('Next payment')).toBeNull();
+    const text = container.textContent ?? '';
+    expect(text.indexOf('Installments (')).toBeLessThan(text.indexOf('Linked transactions'));
+  });
+
+  it('pre-fills the add-installment form from an attached bill and says so', async () => {
+    renderDetail({ item: billItem, installments: [] });
+    readAttachedBill({ priceCents: 44443, dueDate: '2026-10-31' });
+    await waitFor(() => expect((screen.getByLabelText('Amount') as HTMLInputElement).value).toBe('444.43'));
+    expect((screen.getByLabelText('Due date') as HTMLInputElement).value).toBe('2026-10-31');
+    expect(screen.getByText('Suggested from the attached bill — check it and press Add installment.')).toBeTruthy();
+  });
+
+  /**
+   * React resets only UNCONTROLLED fields after a form action. These two are controlled now, so
+   * without an explicit clear the suggested values would sit there after the add, one press away
+   * from a duplicate installment.
+   */
+  it('clears the suggested values and the notice once the installment is added', async () => {
+    vi.mocked(addInstallmentAction).mockResolvedValueOnce({ message: 'Installment added for 2026-10-31.' });
+    renderDetail({ item: billItem, installments: [] });
+    readAttachedBill({ priceCents: 44443, dueDate: '2026-10-31' });
+    await waitFor(() => expect((screen.getByLabelText('Amount') as HTMLInputElement).value).toBe('444.43'));
+
+    fireEvent.submit(screen.getByRole('button', { name: /^add installment$/i }).closest('form')!);
+
+    await waitFor(() => expect(screen.getByText('Installment added for 2026-10-31.')).toBeTruthy());
+    expect((screen.getByLabelText('Amount') as HTMLInputElement).value).toBe('');
+    expect((screen.getByLabelText('Due date') as HTMLInputElement).value).toBe('');
+    expect(screen.queryByText('Suggested from the attached bill — check it and press Add installment.')).toBeNull();
   });
 });

@@ -31,6 +31,7 @@ import {
   productFieldsAllowedForKind,
 } from '@/lib/warranty/constants';
 import { computeExpiryDate } from '@/lib/warranty/expiry';
+import { centsToInput } from '@/lib/money';
 import { createWarrantyAction, type WarrantyActionState } from '../actions';
 import { buttonClass } from '@/components/ui/Button';
 import { BASIS_LABELS, BASIS_ORDER } from '@/lib/loans/basis-labels';
@@ -43,10 +44,6 @@ export interface WarrantyPrefill {
 }
 
 const initial: WarrantyActionState = {};
-
-function centsToInput(cents: number | undefined): string {
-  return cents === undefined ? '' : (cents / 100).toFixed(2);
-}
 
 // v1.14.0 fix round (review C, item 1): the loan hints below were written in the frame of a
 // debt the household owes ("what you borrowed") and read backwards for a 'lent' loan, where the
