@@ -333,25 +333,107 @@ describe('ReceiptUploader', () => {
     expect(screen.getByText(READING_MESSAGE)).toBeTruthy();
   });
 
-  it('offers a second input without capture so a phone can pick a PDF', () => {
+  /** The two native controls: the camera one first, as the tests above take it. */
+  function cameraAndPlain(): { camera: HTMLInputElement; plain: HTMLInputElement } {
+    return {
+      camera: screen.getByLabelText('Take a photo') as HTMLInputElement,
+      plain: screen.getByLabelText('Choose a file') as HTMLInputElement,
+    };
+  }
+
+  it('names both inputs for a screen reader, the camera one first', () => {
     const { container } = render(<ReceiptUploader onStagedChange={vi.fn()} />);
     const inputs = container.querySelectorAll('input[type="file"]');
     expect(inputs).toHaveLength(2);
-    expect(inputs[0].getAttribute('capture')).toBe('environment');
-    expect(inputs[1].hasAttribute('capture')).toBe(false);
-    expect(inputs[1].getAttribute('accept')).toBe('image/*,application/pdf');
-    expect((inputs[1] as HTMLInputElement).multiple).toBe(true);
-    expect(screen.getByLabelText('Choose a file or PDF')).toBe(inputs[1]);
+    const { camera, plain } = cameraAndPlain();
+    expect(camera).toBe(inputs[0]);
+    expect(plain).toBe(inputs[1]);
+    expect(camera.type).toBe('file');
+    expect(plain.type).toBe('file');
   });
 
-  it('the second input stages what it is given, like the camera one', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(stageResponse({ originalFilename: 'manual.pdf', mime: 'application/pdf' }));
+  it('keeps the camera input exactly as MUST-6.1 fixes it, and a second one without capture for a PDF', () => {
+    render(<ReceiptUploader onStagedChange={vi.fn()} />);
+    const { camera, plain } = cameraAndPlain();
+    expect(camera.getAttribute('capture')).toBe('environment');
+    expect(camera.getAttribute('accept')).toBe('image/*,application/pdf');
+    expect(plain.hasAttribute('capture')).toBe(false);
+    expect(plain.getAttribute('accept')).toBe('image/*,application/pdf');
+    expect(plain.multiple).toBe(true);
+  });
+
+  it('shows the camera button on a coarse pointer only, and never hides the input on its own', () => {
+    render(<ReceiptUploader onStagedChange={vi.fn()} />);
+    const { camera } = cameraAndPlain();
+    const button = camera.closest('label')!;
+    expect(button.classList.contains('hidden')).toBe(true);
+    expect(button.classList.contains('pointer-coarse:inline-flex')).toBe(true);
+    // A touch-only button: the app's 44px phone floor.
+    expect(button.classList.contains('min-h-11')).toBe(true);
+    expect(button.classList.contains('sm:min-h-0')).toBe(true);
+    expect(camera.classList.contains('sr-only')).toBe(true);
+    expect(camera.classList.contains('hidden')).toBe(false);
+    expect(camera.hidden).toBe(false);
+  });
+
+  it('always shows the file button, styled as a secondary button', () => {
+    render(<ReceiptUploader onStagedChange={vi.fn()} />);
+    const { plain } = cameraAndPlain();
+    const button = plain.closest('label')!;
+    expect(button.classList.contains('btn')).toBe(true);
+    expect(button.classList.contains('btn--secondary')).toBe(true);
+    expect(button.classList.contains('min-h-11')).toBe(true);
+    expect(button.classList.contains('sm:min-h-0')).toBe(true);
+    for (const element of [plain, button]) {
+      expect(element.classList.contains('hidden')).toBe(false);
+      expect([...element.classList].some((name) => name.startsWith('pointer-'))).toBe(false);
+    }
+    expect(plain.classList.contains('sr-only')).toBe(true);
+  });
+
+  it.each([
+    ['Take a photo', 'scan.pdf'],
+    ['Choose a file', 'manual.pdf'],
+  ])('stages what %s is given', async (name, filename) => {
+    const fetchMock = vi.fn().mockResolvedValue(stageResponse({ originalFilename: filename, mime: 'application/pdf' }));
     vi.stubGlobal('fetch', fetchMock);
     render(<ReceiptUploader onStagedChange={vi.fn()} />);
-    const pdf = new File(['%PDF-1.4'], 'manual.pdf', { type: 'application/pdf' });
-    fireEvent.change(screen.getByLabelText('Choose a file or PDF'), { target: { files: [pdf] } });
-    await screen.findByText('manual.pdf');
+    const pdf = new File(['%PDF-1.4'], filename, { type: 'application/pdf' });
+    fireEvent.change(screen.getByLabelText(name), { target: { files: [pdf] } });
+    await screen.findByText(filename);
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/warranties/receipts/stage');
     expect((fetchMock.mock.calls[0][1].body as FormData).getAll('file')[0]).toBe(pdf);
+  });
+
+  it('disables both inputs while an upload is in flight, and the buttons show it and the focus ring', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
+    render(<ReceiptUploader onStagedChange={vi.fn()} />);
+    const { camera, plain } = cameraAndPlain();
+    fireEvent.change(plain, { target: { files: [new File(['%PDF-1.4'], 'manual.pdf', { type: 'application/pdf' })] } });
+    await waitFor(() => expect(plain.disabled).toBe(true));
+    expect(camera.disabled).toBe(true);
+    for (const input of [camera, plain]) {
+      const button = input.closest('label')!;
+      for (const name of [
+        'has-[:disabled]:pointer-events-none',
+        'has-[:disabled]:opacity-55',
+        'has-[:focus-visible]:outline-2',
+        'has-[:focus-visible]:outline-offset-2',
+        'has-[:focus-visible]:outline-focus',
+      ]) {
+        expect(button.classList.contains(name)).toBe(true);
+      }
+    }
+  });
+
+  it('captions the two buttons with the label, or with the default one', () => {
+    render(<ReceiptUploader onStagedChange={vi.fn()} />);
+    expect(screen.getByRole('group', { name: 'Receipt photo or PDF' })).toBeTruthy();
+    cleanup();
+    render(<ReceiptUploader onStagedChange={vi.fn()} label="Add another receipt" />);
+    const group = screen.getByRole('group', { name: 'Add another receipt' });
+    expect(within(group).getByLabelText('Take a photo')).toBeTruthy();
+    expect(within(group).getByLabelText('Choose a file')).toBeTruthy();
   });
 });
 

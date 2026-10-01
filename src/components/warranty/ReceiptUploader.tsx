@@ -1,6 +1,6 @@
 'use client';
 
-import { type ChangeEvent, useCallback, useEffect, useRef, useState } from 'react';
+import { type ChangeEvent, useCallback, useEffect, useId, useRef, useState } from 'react';
 import { Notice } from '@/components/ui/Notice';
 import { ReceiptScanPreview } from '@/components/warranty/ReceiptScanPreview';
 import { scanReceiptFile, type ScanQuad } from '@/lib/scanner/scan';
@@ -11,8 +11,9 @@ import { formatCents } from '@/lib/money';
 import { buttonClass } from '@/components/ui/Button';
 
 /**
- * The only file control in the feature: the camera input, whose exact shape MUST-6.1 fixes, and
- * beside it a plain one without capture (spec 2026-09-30 §2.5). MUST-10.2 fixes the behaviour:
+ * The only file control in the feature: the camera input, whose exact shape MUST-6.1 fixes and
+ * which only a coarse-pointer device (a phone or tablet) shows, and beside it a plain one without
+ * capture (spec 2026-09-30 §2.5). MUST-10.2 fixes the behaviour:
  * OCR NEVER blocks the form. The Save button stays enabled the whole time.
  */
 export interface StagedFile {
@@ -132,8 +133,17 @@ interface Pending {
 
 const COUNTDOWN_TICK_MS = 1000;
 
-const FILE_INPUT_CLASS =
-  'text-sm text-muted file:mr-3 file:rounded-md file:border-0 file:bg-accent-soft file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-accent-soft-fg';
+/**
+ * A file input prints its own "No file chosen" text beside its button, so each input is visually
+ * hidden inside its label and the label is the button (FileDrop.tsx does the same). `relative`
+ * holds the `sr-only` input. A label is never :focus-visible or :disabled itself, so it takes both
+ * from its input. 44px floor on a phone via `min-h-11 sm:min-h-0`, as QuickAddTransaction.tsx does.
+ */
+const PICK_BUTTON_CLASS = buttonClass(
+  'secondary',
+  'sm',
+  'relative min-h-11 sm:min-h-0 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-focus has-[:disabled]:pointer-events-none has-[:disabled]:opacity-55',
+);
 
 /** reconcile-loan-form.tsx's chip, so a figure to tap looks the same on every surface. */
 const CHIP_CLASS = 'rounded-md border border-line px-2 py-1 text-left text-xs text-muted hover:border-accent';
@@ -154,6 +164,7 @@ export function ReceiptUploader({
   onPickDate?: (iso: string) => void;
   label?: string;
 }) {
+  const captionId = useId();
   const [files, setFiles] = useState<StagedFile[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [scanNote, setScanNote] = useState<string | null>(null);
@@ -400,38 +411,45 @@ export function ReceiptUploader({
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap gap-x-6 gap-y-3">
-        <label className="flex flex-col gap-1.5">
-          <span className="field-label">{label}</span>
+      <div role="group" aria-labelledby={captionId} className="flex flex-col gap-1.5">
+        <span id={captionId} className="field-label">
+          {label}
+        </span>
+        <div className="flex flex-wrap gap-2">
           {/* MUST-6.1, exactly: capture="environment" opens a phone's rear camera directly and
               is ignored by a desktop browser. There is no native app and no live camera stream
               requested from the page -- the still image the camera app hands back is then
-              straightened with an in-browser canvas crop, never a live viewfinder. */}
-          <input
-            type="file"
-            name="file"
-            accept="image/*,application/pdf"
-            capture="environment"
-            multiple
-            disabled={busy}
-            onChange={onPick}
-            className={FILE_INPUT_CLASS}
-          />
-        </label>
-        {/* Spec 2026-09-30 §2.5: with capture set, a phone goes straight to the camera and offers
-            no way to a PDF or a photo already taken. This one has no capture, so it opens the
-            phone's file picker; on a desktop the two behave the same. */}
-        <label className="flex flex-col gap-1.5">
-          <span className="field-label">Choose a file or PDF</span>
-          <input
-            type="file"
-            accept="image/*,application/pdf"
-            multiple
-            disabled={busy}
-            onChange={onPick}
-            className={FILE_INPUT_CLASS}
-          />
-        </label>
+              straightened with an in-browser canvas crop, never a live viewfinder.
+              A desktop would show it as a second "Choose a file", so only a coarse pointer
+              shows it. CSS alone, so the server and the browser render the same markup. */}
+          <label className={`${PICK_BUTTON_CLASS} hidden pointer-coarse:inline-flex`}>
+            <input
+              type="file"
+              name="file"
+              accept="image/*,application/pdf"
+              capture="environment"
+              multiple
+              disabled={busy}
+              onChange={onPick}
+              className="sr-only"
+            />
+            Take a photo
+          </label>
+          {/* Spec 2026-09-30 §2.5: with capture set, a phone goes straight to the camera and offers
+              no way to a PDF or a photo already taken. This one has no capture, so it opens the
+              phone's file picker; on a desktop it is the only button. */}
+          <label className={PICK_BUTTON_CLASS}>
+            <input
+              type="file"
+              accept="image/*,application/pdf"
+              multiple
+              disabled={busy}
+              onChange={onPick}
+              className="sr-only"
+            />
+            Choose a file
+          </label>
+        </div>
       </div>
 
       {error ? <Notice tone="error">{error}</Notice> : null}

@@ -160,8 +160,11 @@ constraint: local or free, no linked accounts — and the app's zero-egress prom
 - The browser crop's "quad must cover 25% of the frame" rule rejected exactly the long receipt it
   exists for. It becomes a floor of 8% with a ceiling of 97% (the ceiling is what the comment
   actually meant).
-- A second, plain file input ("Choose a file or PDF") beside the camera one, so a PDF or an existing
-  photo can be picked on a phone. The camera input keeps `capture="environment"` (MUST-6.1).
+- A second, plain file input beside the camera one, so a PDF or an existing photo can be picked on
+  a phone. Each input is visually hidden inside a secondary-button label: "Take a photo" (the camera
+  input, which keeps `capture="environment"`, MUST-6.1) and "Choose a file". A desktop ignores
+  `capture`, so the camera button shows only on a coarse pointer, by CSS alone
+  (`@media (pointer: coarse)`), and the server and the browser render the same markup.
 - The scan preview grows (max-h-64), the auto-accept countdown goes from 4 s to 8 s, and a scanner
   fallback **says so** ("Couldn't find the paper edges — using the whole photo") instead of
   uploading in silence.
