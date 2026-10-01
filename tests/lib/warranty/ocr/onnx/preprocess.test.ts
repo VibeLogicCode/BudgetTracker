@@ -156,4 +156,18 @@ describe('MUST-4.5 / MUST-4.6: deskew', () => {
     // level receipt by ten degrees.
     expect(await estimateSkewDeg(await png(300, 200, [200, 200, 200]))).toBe(0);
   });
+
+  /**
+   * Spec 2026-09-30 §1.2 bug 3. Otsu over the whole frame marks a countertop as ink, the profile
+   * search runs to the bound, and a level receipt is rotated ten degrees. When most of the frame
+   * binarises to ink there is no text to measure; the honest answer is 0.
+   */
+  it('returns 0 on a dark background around a level receipt, instead of the search bound', async () => {
+    const paper = await barGridPng(0, 300, 400);
+    const framed = await sharp({ create: { width: 900, height: 1200, channels: 3, background: '#3c3c3c' } })
+      .composite([{ input: paper, left: 300, top: 400 }])
+      .png()
+      .toBuffer();
+    expect(await estimateSkewDeg(framed)).toBe(0);
+  });
 });

@@ -41,6 +41,9 @@ export const DESKEW_MIN_APPLY_DEG = 0.3;
 export const DESKEW_PROFILE_LONG_SIDE_PX = 800;
 /** Ours. White, because the image is already flattened onto white. */
 export const DESKEW_BACKGROUND = '#ffffff';
+/** Ours. Above this fraction of "ink" after Otsu, the frame is background, not text, and the
+ *  profile search would measure the countertop's edges. The deskew then declines. */
+export const DESKEW_MAX_INK_RATIO = 0.35;
 
 // Detection
 

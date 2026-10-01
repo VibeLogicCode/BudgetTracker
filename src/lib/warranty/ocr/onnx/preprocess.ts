@@ -1,6 +1,7 @@
 import sharp from 'sharp';
 import {
   DESKEW_BACKGROUND,
+  DESKEW_MAX_INK_RATIO,
   DESKEW_MIN_APPLY_DEG,
   DESKEW_PROFILE_LONG_SIDE_PX,
   DESKEW_SEARCH_MAX_DEG,
@@ -129,6 +130,10 @@ export async function estimateSkewDeg(source: string | Buffer): Promise<number> 
   const threshold = otsuThreshold(grey);
   const binary = new Uint8Array(grey.length);
   for (let i = 0; i < grey.length; i += 1) binary[i] = grey[i] <= threshold ? 1 : 0;
+  let ink = 0;
+  for (let i = 0; i < binary.length; i += 1) ink += binary[i];
+  // Spec 2026-09-30 §1.2 bug 3: a frame that is mostly ink has no lines to level.
+  if (ink / binary.length > DESKEW_MAX_INK_RATIO) return 0;
   return bestSkewAngleDeg(binary, info.width, info.height);
 }
 
