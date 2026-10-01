@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   MAX_SUGGESTED_PRICE_CENTS,
+  amountCandidates,
+  dateCandidates,
+  suggestDueDate,
   suggestFromOcrText,
   suggestPriceCents,
   suggestPurchaseDate,
@@ -89,12 +92,13 @@ describe('suggestPriceCents', () => {
   });
 
   it('never reads a SUBTOTAL line as the total', () => {
-    expect(suggestPriceCents('SUB-TOTAL 99.99')).toBe(9999); // fallback path, not the total path
+    // Spec 2026-09-30 §2.3: with the fallback gone, a lone SUBTOTAL line yields nothing.
+    expect(suggestPriceCents('SUB-TOTAL 99.99')).toBeUndefined();
     expect(suggestPriceCents('SUBTOTAL 99.99\nTOTAL 105.99')).toBe(10599);
   });
 
-  it('falls back to the largest currency amount anywhere', () => {
-    expect(suggestPriceCents('Item A 12.00\nItem B 145.50\nCash 200.00 Change 54.50')).toBe(20000);
+  it('no longer falls back to the largest currency amount anywhere (spec 2026-09-30 §2.3)', () => {
+    expect(suggestPriceCents('Item A 12.00\nItem B 145.50\nCash 200.00 Change 54.50')).toBeUndefined();
   });
 
   it('handles thousands separators and a dollar sign', () => {
@@ -140,8 +144,7 @@ describe('suggestPriceCents', () => {
   it('walks backward past an invalid last candidate on the TOTAL line to an earlier valid one', () => {
     // Deliberate liberality beyond the spec's literal "last number" step: when the last
     // currency-shaped number on the TOTAL line fails validation (here, over the noise
-    // ceiling), earlier candidates on the same line are tried before falling through to the
-    // anywhere-in-text fallback.
+    // ceiling), earlier candidates on the same line are tried before giving up on that line.
     expect(suggestPriceCents('TOTAL 45.00 9999999.99')).toBe(4500);
   });
 });
@@ -168,5 +171,80 @@ describe('suggestFromOcrText', () => {
   it('returns an empty object for empty text, with each field independently optional', () => {
     expect(suggestFromOcrText('', TODAY)).toEqual({});
     expect(suggestFromOcrText('CANADIAN TIRE', TODAY)).toEqual({ vendor: 'CANADIAN TIRE' });
+  });
+});
+
+/** Spec 2026-09-30 §2.3. Never guess, always show. */
+describe('suggestPriceCents without the fallback', () => {
+  it('prefers the TOTAL line over a larger CASH line (review focus 4)', () => {
+    expect(suggestPriceCents(['SUBTOTAL 42.00', 'TOTAL 47.32', 'CASH 100.00', 'CHANGE 52.68'].join('\n'))).toBe(4732);
+  });
+  it('suggests nothing when no total-like line exists, rather than the largest number anywhere', () => {
+    expect(suggestPriceCents(['MILK 6.49', 'BREAD 3.79', 'CASH 100.00'].join('\n'))).toBeUndefined();
+  });
+  it('reads a misrecognised TOTAL and the words a bill uses', () => {
+    expect(suggestPriceCents('T0TAL 25.31')).toBe(2531);
+    expect(suggestPriceCents('IOTAL 25.31')).toBe(2531);
+    expect(suggestPriceCents('Amount due $444.43')).toBe(44443);
+    expect(suggestPriceCents('Montant 12,50')).toBe(1250);
+  });
+  it('never takes a payment line as the total even when it says total', () => {
+    expect(suggestPriceCents(['TOTAL 47.32', 'VISA TOTAL TENDERED 100.00'].join('\n'))).toBe(4732);
+  });
+  it('never takes a late-fee line as the total, but keeps a total after a discount', () => {
+    expect(suggestPriceCents(['Amount due $444.43', 'Amount due after due date $466.67'].join('\n'))).toBe(44443);
+    expect(suggestPriceCents(['TOTAL 47.32', 'Late fee total 5.00'].join('\n'))).toBe(4732);
+    expect(suggestPriceCents('Total after discount 40.00')).toBe(4000);
+  });
+  it('steps back past a later total line that carries no figure', () => {
+    expect(suggestPriceCents(['TOTAL 47.32', 'TOTAL NUMBER OF ITEMS SOLD = 5'].join('\n'))).toBe(4732);
+  });
+});
+
+describe('suggestDueDate', () => {
+  it('finds the due date on its own line, in the future (review focus 3)', () => {
+    const text = ['RIVERSIDE WATER', 'Billing period 2026-07-01 to 2026-09-30', 'Amount due $444.43', 'Due date 2026-10-31'].join('\n');
+    expect(suggestDueDate(text, '2026-09-20')).toBe('2026-10-31');
+  });
+  it('accepts the words a bill prints, English and French', () => {
+    expect(suggestDueDate('Payable by Oct 31, 2026', '2026-09-20')).toBe('2026-10-31');
+    expect(suggestDueDate("Date d'échéance 2026-10-31", '2026-09-20')).toBe('2026-10-31');
+  });
+  it('ignores a date more than eighteen months out or a year past, and finds nothing on a receipt', () => {
+    expect(suggestDueDate('Due date 2029-01-01', '2026-09-20')).toBeUndefined();
+    expect(suggestDueDate('DATE: 2026-09-14 TOTAL 25.31', '2026-09-20')).toBeUndefined();
+  });
+  it('reads French upper case and an unaccented echeance', () => {
+    expect(suggestDueDate("DATE D'ÉCHÉANCE 2026-10-31", '2026-09-20')).toBe('2026-10-31');
+    expect(suggestDueDate('Echeance 2026-10-31', '2026-09-20')).toBe('2026-10-31');
+  });
+  it('falls back to a bare "due" only when no due-date phrase yields a date', () => {
+    expect(suggestDueDate('Due Oct 31, 2026', '2026-09-20')).toBe('2026-10-31');
+    expect(suggestDueDate(['Payment due 2026-09-25', 'Due date 2026-10-31'].join('\n'), '2026-09-20')).toBe('2026-10-31');
+    expect(suggestDueDate('Overdue since 2026-08-01', '2026-09-20')).toBeUndefined();
+    expect(suggestDueDate('Past due 2026-08-01', '2026-09-20')).toBeUndefined();
+  });
+});
+
+describe('candidates carry the words around them', () => {
+  const bill = ['RIVERSIDE WATER', 'Water charges 188.24', 'Sewer charges 256.57', 'Total current charges $444.81', 'Amount due $444.43', 'Due date 2026-10-31', 'Amount due after due date $466.67'].join('\n');
+  it('ranks the amount-due line first and keeps each figure once with its snippet', () => {
+    const amounts = amountCandidates(bill);
+    expect(amounts[0]).toMatchObject({ valueCents: 44443 });
+    expect(amounts[0].snippet).toContain('Amount due');
+    expect(amounts.length).toBeLessThanOrEqual(6);
+    expect(new Set(amounts.map((c) => c.valueCents)).size).toBe(amounts.length);
+  });
+  it('ranks the due-date line first among dates', () => {
+    const dates = dateCandidates(bill, '2026-09-20');
+    expect(dates[0]).toMatchObject({ date: '2026-10-31' });
+    expect(dates[0].snippet).toContain('Due date');
+  });
+  it('suggestFromOcrText carries the due date', () => {
+    expect(suggestFromOcrText(bill, '2026-09-20')).toMatchObject({ vendor: 'RIVERSIDE WATER', priceCents: 44443, dueDate: '2026-10-31' });
+  });
+  it('ranks a late-fee figure below the figures on ordinary lines', () => {
+    const amounts = amountCandidates(bill);
+    expect(amounts[amounts.length - 1]).toMatchObject({ valueCents: 46667 });
   });
 });

@@ -10,12 +10,21 @@ export interface SuggestedFields {
   purchaseDate?: string;
   vendor?: string;
   priceCents?: number;
+  /** Spec 2026-09-30 §2.3. A bill's due date, which may be in the future. */
+  dueDate?: string;
 }
+
+/** Spec 2026-09-30 §2.3. A figure or a date with enough context for a person to judge it. */
+export interface AmountCandidate { valueCents: number; snippet: string; score: number }
+export interface DateCandidate { date: string; snippet: string; score: number }
 
 /** §8.3 step 5: a mis-read barcode or phone number must not present as a nine-figure total. */
 export const MAX_SUGGESTED_PRICE_CENTS = 10_000_000;
 export const MAX_SUGGESTION_AGE_MONTHS = 240;
 export const MAX_VENDOR_CHARS = 60;
+export const MAX_CANDIDATES = 6;
+export const MAX_DUE_DATE_MONTHS_AHEAD = 18;
+export const MAX_DUE_DATE_MONTHS_BEHIND = 12;
 
 const MONTHS: Record<string, number> = {
   JAN: 1, FEB: 2, MAR: 3, APR: 4, MAY: 5, JUN: 6,
@@ -36,6 +45,10 @@ interface DateHit {
   iso: string;
 }
 
+/**
+ * Every valid calendar date in the text, in TEXT ORDER, with no bound on today: each caller
+ * applies its own window (a purchase date is never in the future, a due date often is).
+ */
 function collectDateHits(text: string): DateHit[] {
   const hits: DateHit[] = [];
 
@@ -71,7 +84,8 @@ function collectDateHits(text: string): DateHit[] {
     if (value) hits.push({ index: m.index ?? 0, iso: value });
   }
 
-  return hits;
+  // Stable, so two shapes at one index keep the order above.
+  return hits.sort((a, b) => a.index - b.index);
 }
 
 export function suggestPurchaseDate(text: string, today: string): string | undefined {
@@ -109,8 +123,29 @@ export function suggestVendor(text: string): string | undefined {
 // 10+-digit whole-dollar amount already exceeds the $100,000 ceiling and is rejected by
 // centsOf() regardless (amended after Task 4 review; spec §8.3 step 3 mirrors this).
 const CURRENCY_RE = /(?:\$\s*)?(\d{1,3}(?:,\d{3})*|\d{1,9})[.,](\d{2})(?!\d)/g;
-const TOTAL_LINE_RE = /\b(total|amount due|grand total|balance due)\b/i;
-const SUBTOTAL_RE = /\bsub[\s-]?total\b/i;
+/** Fuzzy on purpose: PP-OCR reads T0TAL and IOTAL for TOTAL often enough to matter. French for bilingual bills. */
+const TOTAL_LINE_RE = /\b(t[o0]tal|[ti1]otal|amount\s+due|grand\s+total|balance\s+due|total\s+due|montant|solde)\b/i;
+const SUBTOTAL_RE = /\bsub[\s-]?total\b|\bsous[\s-]?total\b/i;
+/** A line about how the bill was PAID is never the total, whatever else it says. */
+const PAYMENT_LINE_RE = /\b(cash|change|tender(?:ed)?|tip|gratuity|approved|payment|cash\s*back|visa|mastercard|amex|debit|interac)\b/i;
+/**
+ * A late-fee line ("Amount due after due date $466.67") is never the total either. Specific on
+ * purpose, not a bare "after", so "Total after discount" stays a total line.
+ */
+const LATE_FEE_RE = /\b(after\s+(?:the\s+)?due\s+date|late\s+(?:fee|charge|payment)s?|past\s+due|overdue|penalt(?:y|ies))\b/i;
+const TAX_LINE_RE = /\b(hst|gst|pst|tax|tvq|tps)\b/i;
+/**
+ * Letter/number lookarounds, not `\b`: `\b` is ASCII-only, and in "d'échéance" both the
+ * apostrophe and the é are non-word characters, so `\béchéance` never matches. The `u` flag
+ * makes `\p{L}` work and folds É to é under `i`.
+ */
+const DUE_LINE_RE = /(?<![\p{L}\p{N}_])(due\s+date|date\s+due|due\s+by|due\s+on|payable\s+by|pay\s+by|[ée]ch[ée]ance)(?![\p{L}\p{N}_])/iu;
+/** The second tier: a bare "due", read only when no line in the text names the due date outright. */
+const BARE_DUE_RE = /(?<![\p{L}\p{N}_])due(?![\p{L}\p{N}_])/iu;
+
+function isTotalLine(line: string): boolean {
+  return TOTAL_LINE_RE.test(line) && !SUBTOTAL_RE.test(line) && !PAYMENT_LINE_RE.test(line) && !LATE_FEE_RE.test(line);
+}
 
 function centsOf(whole: string, fraction: string): number | null {
   // One money parser in the app (MUST-13.5): integer cents, no floats.
@@ -123,29 +158,91 @@ function centsOf(whole: string, fraction: string): number | null {
 
 export function suggestPriceCents(text: string): number | undefined {
   if (typeof text !== 'string' || text.length === 0) return undefined;
-
-  // 1. TOTAL-line pass: the LAST currency number on the LAST qualifying line. Deliberately
-  // more liberal than the spec's literal "last number" step: if the last candidate on the
-  // line fails validation (e.g. it's >= the noise ceiling), we walk backward and try earlier
-  // candidates on the same line rather than falling through to the anywhere-in-text fallback.
-  const totalLines = text.split(/\r?\n/).filter((line) => TOTAL_LINE_RE.test(line) && !SUBTOTAL_RE.test(line));
-  const lastTotalLine = totalLines[totalLines.length - 1];
-  if (lastTotalLine !== undefined) {
-    const matches = [...lastTotalLine.matchAll(CURRENCY_RE)];
+  // The LAST qualifying line, and the last valid figure on it. No fallback: with no total line
+  // there is no total, and a blank field a person fills beats a confident wrong one (PENDING-FIXES
+  // item G, now adopted). "Confidently wrong is the worst output a suggester can produce."
+  // A total line with no valid figure ("TOTAL NUMBER OF ITEMS SOLD = 5") steps back to the one
+  // before it, and an invalid last figure (over the noise ceiling) to the one before it on the line.
+  const totalLines = text.split(/\r?\n/).filter(isTotalLine);
+  for (let l = totalLines.length - 1; l >= 0; l -= 1) {
+    const matches = [...totalLines[l].matchAll(CURRENCY_RE)];
     for (let i = matches.length - 1; i >= 0; i -= 1) {
       const cents = centsOf(matches[i][1], matches[i][2]);
       if (cents !== null) return cents;
     }
   }
+  return undefined;
+}
 
-  // 2. Fallback: the largest currency-formatted number anywhere.
-  let best: number | undefined;
-  for (const m of text.matchAll(CURRENCY_RE)) {
-    const cents = centsOf(m[1], m[2]);
-    if (cents === null) continue;
-    if (best === undefined || cents > best) best = cents;
+function firstDateInRange(line: string, floor: string, ceiling: string): string | undefined {
+  return collectDateHits(line).find((d) => d.iso >= floor && d.iso <= ceiling)?.iso;
+}
+
+export function suggestDueDate(text: string, today: string): string | undefined {
+  if (typeof text !== 'string' || text.length === 0) return undefined;
+  const floor = addMonthsClamped(today, -MAX_DUE_DATE_MONTHS_BEHIND);
+  const ceiling = addMonthsClamped(today, MAX_DUE_DATE_MONTHS_AHEAD);
+  const lines = text.split(/\r?\n/);
+  // Tier 1: a line that names the due date outright. Tier 2, only when tier 1 found nothing: a
+  // bare "due" ("Due Oct 31, 2026"), but never a late-fee line ("Past due 2026-08-01").
+  for (const line of lines) {
+    if (!DUE_LINE_RE.test(line)) continue;
+    const found = firstDateInRange(line, floor, ceiling);
+    if (found !== undefined) return found;
   }
-  return best;
+  for (const line of lines) {
+    if (!BARE_DUE_RE.test(line) || LATE_FEE_RE.test(line)) continue;
+    const found = firstDateInRange(line, floor, ceiling);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
+const snippetOf = (line: string) => line.trim().slice(0, 60);
+
+export function amountCandidates(text: string): AmountCandidate[] {
+  if (typeof text !== 'string' || text.length === 0) return [];
+  // `line` is the tie-break: on equal scores the LATER line ranks first, as the last total line
+  // wins in suggestPriceCents. It is dropped from what is returned.
+  const best = new Map<number, AmountCandidate & { line: number }>();
+  text.split(/\r?\n/).forEach((line, lineIndex) => {
+    const matches = [...line.matchAll(CURRENCY_RE)];
+    matches.forEach((m, i) => {
+      const cents = centsOf(m[1], m[2]);
+      if (cents === null) return;
+      let score = 0;
+      if (isTotalLine(line)) score += 3;
+      if (PAYMENT_LINE_RE.test(line)) score -= 3;
+      if (LATE_FEE_RE.test(line)) score -= 3;
+      if (SUBTOTAL_RE.test(line) || TAX_LINE_RE.test(line)) score -= 2;
+      if (i === matches.length - 1) score += 1;
+      const prior = best.get(cents);
+      if (prior === undefined || score >= prior.score) best.set(cents, { valueCents: cents, snippet: snippetOf(line), score, line: lineIndex });
+    });
+  });
+  return [...best.values()]
+    .sort((a, b) => b.score - a.score || b.line - a.line || b.valueCents - a.valueCents)
+    .slice(0, MAX_CANDIDATES)
+    .map(({ valueCents, snippet, score }) => ({ valueCents, snippet, score }));
+}
+
+export function dateCandidates(text: string, today: string): DateCandidate[] {
+  if (typeof text !== 'string' || text.length === 0) return [];
+  const floor = addMonthsClamped(today, -MAX_SUGGESTION_AGE_MONTHS);
+  const ceiling = addMonthsClamped(today, MAX_DUE_DATE_MONTHS_AHEAD);
+  const best = new Map<string, DateCandidate>();
+  let first = true;
+  for (const line of text.split(/\r?\n/)) {
+    for (const found of collectDateHits(line)) {
+      if (found.iso < floor || found.iso > ceiling) continue;
+      let score = DUE_LINE_RE.test(line) ? 3 : 0;
+      if (first) score += 1;
+      first = false;
+      const prior = best.get(found.iso);
+      if (prior === undefined || score > prior.score) best.set(found.iso, { date: found.iso, snippet: snippetOf(line), score });
+    }
+  }
+  return [...best.values()].sort((a, b) => b.score - a.score || a.date.localeCompare(b.date)).slice(0, MAX_CANDIDATES);
 }
 
 export function suggestFromOcrText(text: string, today: string): SuggestedFields {
@@ -156,5 +253,7 @@ export function suggestFromOcrText(text: string, today: string): SuggestedFields
   if (vendor !== undefined) out.vendor = vendor;
   const priceCents = suggestPriceCents(text);
   if (priceCents !== undefined) out.priceCents = priceCents;
+  const dueDate = suggestDueDate(text, today);
+  if (dueDate !== undefined) out.dueDate = dueDate;
   return out;
 }
