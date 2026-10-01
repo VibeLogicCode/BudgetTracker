@@ -42,6 +42,8 @@ run time to read a receipt.
   works on a LAN-only install with no internet connection at all. The models are PP-OCRv5,
   converted to ONNX by the RapidOCR project from PaddleOCR weights published by Baidu, all
   under the Apache-2.0 licence; see `vendor/ocr-models/NOTICE` for the exact files and hashes.
+  What the reader found is shown under each receipt, and a bill's amount due and due date are
+  filled in from the e-bill you attach.
   A phone photographing a receipt gets it straightened and cropped in the browser first, using
   a self-hosted OpenCV.js and jscanify, before it uploads.
 - **SimpleFIN (optional)** — link accounts for automatic balance/transaction sync if you want it;

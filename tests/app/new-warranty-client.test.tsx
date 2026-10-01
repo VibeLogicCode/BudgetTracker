@@ -413,3 +413,14 @@ describe('a bill asks for its amount and due date', () => {
     expect(container.textContent).toContain('Attach the bill first and the amount due and due date fill themselves in.');
   });
 });
+
+/** Spec 2026-09-30 §2.5: from a phone the photo is uploaded -- to your own server -- so the card says the network, not "nothing". */
+describe('the receipt card', () => {
+  it('says reading stays inside the network rather than that nothing is uploaded', () => {
+    const { container } = renderForm();
+    expect(container.textContent).toContain(
+      'Photograph it or attach a PDF. Reading happens on this machine — nothing leaves your network.',
+    );
+    expect(container.textContent).not.toContain('nothing is uploaded anywhere');
+  });
+});

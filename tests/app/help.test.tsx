@@ -321,3 +321,18 @@ describe('the loan help describes what shipped', () => {
     }
   });
 });
+
+/**
+ * Spec 2026-09-30 §2.5. From a phone the photo IS uploaded -- to your own server -- so the
+ * reading paragraph promises only that nothing leaves the network, and it names the two things
+ * a person can now see: what was read, and that a scanned PDF is not read yet.
+ */
+describe('the receipt-reading help says what the reader does', () => {
+  it('names What was read and the scanned-PDF limit, and says nothing leaves the network', () => {
+    const text = textOf(section('coverage').body);
+    expect(text).toContain('Under each receipt you can open What was read');
+    expect(text).toContain('a scanned PDF is not yet supported');
+    expect(text).toContain('no image or text leaves your network');
+    expect(text).not.toContain('nothing is uploaded anywhere');
+  });
+});

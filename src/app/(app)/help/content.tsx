@@ -387,11 +387,13 @@ export const HELP_SECTIONS: HelpSection[] = [
           entered will find the item.
         </P>
         <P>
-          That reading happens entirely on this machine. The recognition models ship inside the
-          app, nothing is uploaded anywhere to interpret a receipt, and it works on an install with{' '}
-          <B>no internet connection at all</B>. A photograph taken on a phone is straightened and
-          cropped in your browser before it uploads, so a hand-held snap of a long receipt is
-          usually readable.
+          That reading happens on your own server. The recognition models ship inside the app, no
+          image or text leaves your network to interpret a receipt, and it works on an install with{' '}
+          <B>no internet connection at all</B>. A photo is straightened in your browser first when
+          the paper's edges can be found; when they cannot, the whole photo is used and the page
+          says so. Under each receipt you can open <B>What was read</B> to see the text and tap
+          the figure you meant. A PDF with a text layer is read directly; a scanned PDF is not yet
+          supported — photograph the page instead.
         </P>
         <P>
           A loan recorded here can have real transactions assigned to it from the Transactions
