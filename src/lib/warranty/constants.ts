@@ -491,6 +491,9 @@ export const MATCHING_KIND_ERROR = 'Payment matching only applies to loans and b
 /** v1.12.0: refused by addInstallment() in the data layer and by addInstallmentAction. */
 export const INSTALLMENT_KIND_ERROR = 'A due-date schedule only applies to bills.';
 
+/** Spec 2026-09-30 §2.1. The create form's optional pair for a bill: both, or neither. */
+export const BILL_PAIR_ERROR = 'Enter both the amount due and the due date, or leave both blank.';
+
 /**
  * v1.14.0 (spec BU, ruling P3). Refused by assertLoanDirectionMatchesKind() in
  * src/lib/warranty/items.ts, beside LOAN_KIND_ERROR's precedent -- 'owed' is the value every

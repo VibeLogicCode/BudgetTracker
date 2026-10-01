@@ -406,6 +406,61 @@ describe('createWarrantyAction', () => {
     expect(result.error).toBe('That item type no longer exists.');
     expect(current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_items`).c).toBe(0);
   });
+
+  /** Spec 2026-09-30 §2.1: amount due and due date ride the create form for a bill. */
+  it('creates a bill with its first installment when amount due and due date are given', async () => {
+    const billType = createItemType(`Bill ${randomUUID()}`, 'bill');
+    const to = await redirectPath(() =>
+      createWarrantyAction({}, formData(baseFields({ typeId: String(billType.id), amountDue: '444.43', dueDate: '2026-10-31' }))),
+    );
+    const id = Number(to.split('/').pop());
+    const rows = current!.db.all<{ due_date: string; amount_cents: number }>(
+      sql`select due_date, amount_cents from bill_installments where item_id = ${id}`,
+    );
+    expect(rows).toEqual([{ due_date: '2026-10-31', amount_cents: 44443 }]);
+  });
+
+  /** Review focus 2. */
+  it('stores the magnitude of a signed amount due', async () => {
+    const billType = createItemType(`Bill ${randomUUID()}`, 'bill');
+    const to = await redirectPath(() =>
+      createWarrantyAction({}, formData(baseFields({ typeId: String(billType.id), amountDue: '-444.43', dueDate: '2026-10-31' }))),
+    );
+    const id = Number(to.split('/').pop());
+    expect(current!.db.get<{ a: number }>(sql`select amount_cents as a from bill_installments where item_id = ${id}`).a).toBe(44443);
+  });
+
+  /** Review focus 1. */
+  it('refuses half a pair with one sentence, and saves nothing', async () => {
+    const billType = createItemType(`Bill ${randomUUID()}`, 'bill');
+    const before = current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_items`).c;
+    const result = await createWarrantyAction({}, formData(baseFields({ typeId: String(billType.id), amountDue: '444.43', dueDate: '' })));
+    expect(result.error).toBe('Enter both the amount due and the due date, or leave both blank.');
+    expect(current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_items`).c).toBe(before);
+  });
+
+  it('refuses a zero amount due with the installment sentence, and saves nothing', async () => {
+    const billType = createItemType(`Bill ${randomUUID()}`, 'bill');
+    const before = current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_items`).c;
+    const result = await createWarrantyAction({}, formData(baseFields({ typeId: String(billType.id), amountDue: '0', dueDate: '2026-10-31' })));
+    expect(result.error).toBe('Amount must be more than zero.');
+    expect(current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_items`).c).toBe(before);
+    expect(current!.db.get<{ c: number }>(sql`select count(*) as c from bill_installments`).c).toBe(0);
+  });
+
+  it('creates a bill with no installment when both are blank -- the schedule comes later', async () => {
+    const billType = createItemType(`Bill ${randomUUID()}`, 'bill');
+    const to = await redirectPath(() => createWarrantyAction({}, formData(baseFields({ typeId: String(billType.id) }))));
+    const id = Number(to.split('/').pop());
+    expect(current!.db.get<{ n: number }>(sql`select count(*) as n from bill_installments where item_id = ${id}`).n).toBe(0);
+  });
+
+  /** Review focus 3. */
+  it('ignores the pair for a kind that has no installments', async () => {
+    const to = await redirectPath(() => createWarrantyAction({}, formData(baseFields({ amountDue: '12.00', dueDate: '2026-10-31' }))));
+    const id = Number(to.split('/').pop());
+    expect(current!.db.get<{ n: number }>(sql`select count(*) as n from bill_installments where item_id = ${id}`).n).toBe(0);
+  });
 });
 
 // v1.3.0 user request: billing cycle + amount for subscriptions/contracts.

@@ -157,6 +157,20 @@ export function listInstallments(itemId: number, today: string, dueSoonDays: num
 }
 
 /**
+ * The value checks every installment write runs before it touches the table: addInstallment
+ * below, and the first installment createWarrantyItem writes with a new bill (spec 2026-09-30
+ * §2.1). One function, so the create form and the detail page refuse the same values with the
+ * same sentences, and neither surfaces a raw CHECK failure from drizzle/0011 to a person.
+ */
+export function assertInstallmentValues(dueDate: string, amountCents: number): void {
+  if (!isIsoDate(dueDate)) throw new Error('Due date must be YYYY-MM-DD');
+  if (dueDate < MIN_PURCHASE_DATE) throw new Error('Due date is before 1970-01-01');
+  if (!Number.isInteger(amountCents) || amountCents <= 0) {
+    throw new Error('Amount must be more than zero.');
+  }
+}
+
+/**
  * Returns the new row's id.
  *
  * The kind assertion is HERE, in the data layer, not only in the action -- the same argument
@@ -175,11 +189,7 @@ export function addInstallment(input: {
   at?: string;
 }): number {
   if (!installmentsAllowedForKind(kindOfItem(input.itemId))) throw new Error(INSTALLMENT_KIND_ERROR);
-  if (!isIsoDate(input.dueDate)) throw new Error('Due date must be YYYY-MM-DD');
-  if (input.dueDate < MIN_PURCHASE_DATE) throw new Error('Due date is before 1970-01-01');
-  if (!Number.isInteger(input.amountCents) || input.amountCents <= 0) {
-    throw new Error('Amount must be more than zero.');
-  }
+  assertInstallmentValues(input.dueDate, input.amountCents);
   const row = getDb()
     .insert(billInstallments)
     .values({

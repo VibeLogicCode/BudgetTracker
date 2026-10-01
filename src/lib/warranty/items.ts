@@ -5,7 +5,7 @@ import { getDb } from '@/db/client';
 import { addRateChange, setLoanAnchor } from '@/lib/loans';
 import type { InterestBasis } from '@/lib/loans/interest';
 import {
-  loanAnchors, users, warrantyItemTypes, warrantyItems, warrantyReceipts } from '@/db/schema';
+  billInstallments, loanAnchors, users, warrantyItemTypes, warrantyItems, warrantyReceipts } from '@/db/schema';
 import { ownerScope, type Viewer } from '@/lib/auth/viewer';
 import { nowIso } from '@/lib/clock';
 import { todayIso, isIsoDate } from '@/lib/dates';
@@ -23,6 +23,8 @@ import { deleteSidecar, deleteStagedOwner, findStagedReceipt, readSidecar, stage
 import {
   billingAllowedForKind,
   BILLING_CYCLES,
+  INSTALLMENT_KIND_ERROR,
+  installmentsAllowedForKind,
   loanFieldsAllowedForKind,
   LOAN_DIRECTIONS,
   LOAN_DIRECTION_KIND_ERROR,
@@ -30,6 +32,7 @@ import {
   type ItemKind,
   type LoanDirection,
 } from '@/lib/warranty/constants';
+import { assertInstallmentValues } from '@/lib/warranty/installments';
 import { findItemType } from '@/lib/warranty/types';
 
 export const MAX_NAME_CHARS = 200;
@@ -551,6 +554,14 @@ export function createWarrantyItem(
   staged: StagedReceiptRef[] = [],
   at: string = nowIso(),
   claimedBy?: number,
+  options: {
+    /**
+     * Spec 2026-09-30 §2.1. A bill's first dated amount, written INSIDE the item's own transaction
+     * so there is never a saved bill with no money and no second step to go back for. Absent for
+     * every other kind, and for a bill whose schedule will be entered on the detail page.
+     */
+    firstInstallment?: { dueDate: string; amountCents: number };
+  } = {},
 ): number {
   // v1.3.0: checked BEFORE the transaction even opens -- a mismatch here writes nothing,
   // exactly like typeExistsOrNull's early return in actions.ts.
@@ -580,6 +591,13 @@ export function createWarrantyItem(
   assertBalanceAnchorPairing(currentBalanceCents, balanceUpdatedAt);
   assertLoanDirectionMatchesKind(input.typeId, loanDirection);
   assertInterestBasisIsUsable({ interestRateBasis, interestRateBps, principalCents });
+  // Checked BEFORE the transaction, like every other kind assertion above: a mismatch writes nothing.
+  if (options.firstInstallment !== undefined) {
+    if (!installmentsAllowedForKind(kindForTypeId(input.typeId))) throw new Error(INSTALLMENT_KIND_ERROR);
+    // The same value checks addInstallment runs, so a zero amount or a malformed date is refused
+    // with a sentence instead of reaching drizzle/0011's CHECKs inside the transaction.
+    assertInstallmentValues(options.firstInstallment.dueDate, options.firstInstallment.amountCents);
+  }
 
   const db = getDb();
   const expiryDate = computeExpiryDate(input);
@@ -615,6 +633,20 @@ export function createWarrantyItem(
         .returning({ id: warrantyItems.id })
         .get();
       commitStaged(tx, row.id, staged, at, adopted, deferred, claimedBy);
+      if (options.firstInstallment !== undefined) {
+        // The same row addInstallment writes (src/lib/warranty/installments.ts), in the same
+        // transaction as the item, so a failure here rolls the item back too.
+        tx.insert(billInstallments)
+          .values({
+            itemId: row.id,
+            dueDate: options.firstInstallment.dueDate,
+            amountCents: options.firstInstallment.amountCents,
+            paidAt: null,
+            paidTxnId: null,
+            createdAt: at,
+          })
+          .run();
+      }
       return row.id;
     });
     for (const effect of deferred) effect();

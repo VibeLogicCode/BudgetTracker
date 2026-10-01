@@ -31,7 +31,7 @@ import { drainOcrQueue, ocrQueueDepth, resetOcrQueueForTests } from '@/lib/warra
 import { setOcrEngineForTests } from '@/lib/warranty/ocr/engine';
 import { createItemType, renameItemType } from '@/lib/warranty/types';
 import { MAX_RECEIPT_BYTES } from '@/lib/warranty/receipts';
-import { LOAN_DIRECTION_KIND_ERROR } from '@/lib/warranty/constants';
+import { INSTALLMENT_KIND_ERROR, LOAN_DIRECTION_KIND_ERROR } from '@/lib/warranty/constants';
 
 let current: TestDb | null = null;
 let dataDir: string;
@@ -721,5 +721,45 @@ describe('missing files degrade quietly (MUST-4.10)', () => {
     fs.rmSync(path.join(dataDir, 'receipts', receipt.storedFilename), { force: true });
     expect(listWarrantyReceipts(id)[0].fileExists).toBe(false);
     expect(getWarrantyReceipt(receipt.id)?.fileExists).toBe(false);
+  });
+});
+
+/** Spec 2026-09-30 §2.1: the amount is asked for when the bill is created, not on a second visit. */
+describe('createWarrantyItem: the first installment rides the same transaction', () => {
+  it('writes one unpaid installment with the amount and due date given', () => {
+    const billType = createItemType('Bill First Installment', 'bill');
+    const id = createWarrantyItem(
+      input({ name: 'Riverside Water', typeId: billType.id }),
+      [],
+      undefined,
+      undefined,
+      { firstInstallment: { dueDate: '2026-10-31', amountCents: 44443 } },
+    );
+    const rows = current!.db.all<{ due_date: string; amount_cents: number; paid_at: string | null }>(
+      sql`select due_date, amount_cents, paid_at from bill_installments where item_id = ${id}`,
+    );
+    expect(rows).toEqual([{ due_date: '2026-10-31', amount_cents: 44443, paid_at: null }]);
+  });
+
+  it('writes none when the option is absent -- an installment plan is entered on the detail page', () => {
+    const billType = createItemType('Bill No Installment', 'bill');
+    const id = createWarrantyItem(input({ name: 'Property tax', typeId: billType.id }));
+    expect(current!.db.get<{ n: number }>(sql`select count(*) as n from bill_installments where item_id = ${id}`).n).toBe(0);
+  });
+
+  /** Review focus 3. */
+  it('refuses the option for a kind that has no installments, and writes nothing at all', () => {
+    const warrantyType = createItemType('Appliance First Installment', 'warranty');
+    const before = current!.db.get<{ n: number }>(sql`select count(*) as n from warranty_items`).n;
+    expect(() =>
+      createWarrantyItem(
+        input({ name: 'Fridge', typeId: warrantyType.id }),
+        [],
+        undefined,
+        undefined,
+        { firstInstallment: { dueDate: '2026-10-31', amountCents: 100 } },
+      ),
+    ).toThrow(INSTALLMENT_KIND_ERROR);
+    expect(current!.db.get<{ n: number }>(sql`select count(*) as n from warranty_items`).n).toBe(before);
   });
 });

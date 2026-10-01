@@ -53,6 +53,7 @@ import {
   INSTALLMENT_DUE_SOON_DAYS,
 } from '@/lib/warranty/installments';
 import {
+  BILL_PAIR_ERROR,
   ITEM_KIND_LABELS,
   ITEM_TYPE_IMMUTABLE_ERROR,
   isBillingCycle,
@@ -133,6 +134,23 @@ function readStaged(formData: FormData): StagedReceiptRef[] {
   const parsed = stagedSchema.safeParse(json);
   if (!parsed.success) throw new Error(UPLOAD_INVALID_ERROR);
   return parsed.data;
+}
+
+/**
+ * Spec 2026-09-30 §2.1. A bill's first amount and due date, as an optional PAIR: both present
+ * writes the first installment, both blank writes none, one of each is refused. Read for every
+ * kind and applied only where installments are allowed (createWarrantyItem refuses otherwise), so
+ * a stale form posting the fields for a warranty saves the warranty and ignores the pair.
+ */
+function readFirstInstallment(formData: FormData): { dueDate: string; amountCents: number } | null | 'half' {
+  const dueDate = str(formData, 'dueDate').trim();
+  const rawAmount = str(formData, 'amountDue').trim();
+  if (dueDate === '' && rawAmount === '') return null;
+  if (dueDate === '' || rawAmount === '') return 'half';
+  const cents = parseAmountToCents(rawAmount);
+  if (cents === null) return 'half';
+  // Magnitude, as addInstallmentAction does: a person typing -444.43 means the size of the bill.
+  return { dueDate, amountCents: Math.abs(cents) };
 }
 
 function str(formData: FormData, key: string): string {
@@ -441,7 +459,16 @@ export async function createWarrantyAction(
     // reasoning as readMonths()'s "The term" above.
     if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Could not save that item.' };
     if (!typeExistsOrNull(parsed.data.typeId)) return { error: ITEM_TYPE_MISSING_ERROR };
-    itemId = createWarrantyItem(parsed.data, staged, undefined, user.id);
+    const first = readFirstInstallment(formData);
+    if (first === 'half') return { error: BILL_PAIR_ERROR };
+    const kind = kindForTypeId(parsed.data.typeId);
+    itemId = createWarrantyItem(
+      parsed.data,
+      staged,
+      undefined,
+      user.id,
+      first !== null && installmentsAllowedForKind(kind) ? { firstInstallment: first } : {},
+    );
   } catch (error) {
     return failure(error, 'Could not save that item.');
   }
