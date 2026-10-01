@@ -274,7 +274,7 @@ function boxMean(probMap: Float32Array, width: number, x0: number, x1: number, y
 /** Crossing-number test against the four edges. Pure arithmetic, no dependency. */
 function insideQuad(quad: Quad, px: number, py: number): boolean {
   let inside = false;
-  for (let i = 0, j = 3; i < 4; j = i, i += 1) {
+  for (let i = 0, j = quad.length - 1; i < quad.length; j = i, i += 1) {
     const a = quad[i];
     const b = quad[j];
     const crosses = a.y > py !== b.y > py && px < ((b.x - a.x) * (py - a.y)) / (b.y - a.y) + a.x;
