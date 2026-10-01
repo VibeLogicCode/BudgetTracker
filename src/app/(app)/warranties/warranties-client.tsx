@@ -22,6 +22,7 @@ import { daysBetweenIso } from '@/lib/dates';
 // a type-only one) drags better-sqlite3 into this client bundle and breaks `next build`.
 import {
   billingCycleSuffixForKind,
+  billOutstandingLabel,
   billScheduleLabel,
   expiryPhraseForKind,
   ITEM_KINDS,
@@ -99,9 +100,13 @@ export function WarrantiesClient({
   /** F4: '' for All, otherwise one of ITEM_KINDS. A pill, not a select -- see the nav below. */
   kind: string;
   sort: WarrantySort;
-  /** Item Q: a Bill's next due date and overdue count, keyed by item id. Built server-side in
-   *  page.tsx from unpaidInstallments() -- see that file's docblock for why. */
-  billSchedules: Record<number, { nextDueDate: string; overdueCount: number }>;
+  /** Item Q: a Bill's next due date and overdue count, keyed by item id; spec 2026-09-30 §2.1
+   *  adds its next amount and the unpaid count and total. Built server-side in page.tsx from
+   *  unpaidInstallments() -- see that file's docblock for why. */
+  billSchedules: Record<
+    number,
+    { nextDueDate: string; overdueCount: number; nextAmountCents: number; unpaidCount: number; outstandingCents: number }
+  >;
 }) {
   const searching = query.trim().length > 0 || status !== '' || owner !== '' || typeId !== '';
 
@@ -427,13 +432,32 @@ export function WarrantiesClient({
                       the subscription/loan minority -- the figure worth putting beside the
                       headline is the one that is actually there to scan. */}
                   <td className="text-right cell-stack-amount" data-label="Price">
-                    {row.priceCents === null ? <span className="text-subtle">—</span> : <Money cents={row.priceCents} plain />}
+                    {/* Spec 2026-09-30 §2.1. A bill's next unpaid amount lives here -- the phone
+                        card's amount slot -- because this cell is where money is on every other
+                        row. The schedule label beside it stays dates only (ruling P4). */}
+                    {row.kind === 'bill' ? (
+                      billSchedules[row.id] === undefined ? (
+                        <span className="text-subtle">—</span>
+                      ) : (
+                        <Money cents={billSchedules[row.id].nextAmountCents} plain />
+                      )
+                    ) : row.priceCents === null ? (
+                      <span className="text-subtle">—</span>
+                    ) : (
+                      <Money cents={row.priceCents} plain />
+                    )}
                   </td>
                   {/* review fix: cycle and amount are a validated pair (BILLING_PAIR_ERROR) --
                       show the value only when BOTH are set, matching the detail page. Showing
                       the amount alone used to silently drop a cycle the member actually chose. */}
                   <td className="whitespace-nowrap text-right text-muted" data-label="Billing">
-                    {row.billingCycle !== null && row.billingAmountCents !== null ? (
+                    {row.kind === 'bill' ? (
+                      (() => {
+                        const schedule = billSchedules[row.id];
+                        const label = schedule === undefined ? null : billOutstandingLabel(schedule.unpaidCount, schedule.outstandingCents);
+                        return label === null ? <span className="text-subtle">—</span> : <span>{label}</span>;
+                      })()
+                    ) : row.billingCycle !== null && row.billingAmountCents !== null ? (
                       <>
                         <Money cents={row.billingAmountCents} plain /> {billingCycleSuffixForKind(row.kind, row.billingCycle)}
                       </>

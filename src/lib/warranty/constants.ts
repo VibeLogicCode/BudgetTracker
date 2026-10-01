@@ -216,6 +216,16 @@ export function billScheduleLabel(nextDueDate: string | null, overdueCount: numb
 }
 
 /**
+ * Spec 2026-09-30 §2.1. The Billing cell's text for a bill with several unpaid installments. Null
+ * for one or none: the Price cell carries a single next amount, and repeating it here would be the
+ * same fact twice. Ruling P4 is untouched -- billScheduleLabel above stays dates and counts.
+ */
+export function billOutstandingLabel(unpaidCount: number, outstandingCents: number): string | null {
+  if (unpaidCount <= 1) return null;
+  return `${unpaidCount} unpaid · ${formatCents(outstandingCents)} outstanding`;
+}
+
+/**
  * MUST-19.11: the one place either verb is written. No component hard-codes them.
  * Return type widened to `string` (not a two-value literal union) -- now that
  * `expiryNounForKind` has four possible outputs, a literal-union return type here would

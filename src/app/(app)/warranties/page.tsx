@@ -64,7 +64,10 @@ export default async function WarrantiesPage({
    * the next due date however far out it is. The dashboard card is the one with a horizon.
    */
   const scope = ownerScope(viewer);
-  const billSchedules: Record<number, { nextDueDate: string; overdueCount: number }> = {};
+  const billSchedules: Record<
+    number,
+    { nextDueDate: string; overdueCount: number; nextAmountCents: number; unpaidCount: number; outstandingCents: number }
+  > = {};
   for (const row of unpaidInstallments({
     today,
     windowEnd: addDaysIso(today, 3650),
@@ -73,9 +76,18 @@ export default async function WarrantiesPage({
   })) {
     const entry = billSchedules[row.itemId];
     if (entry === undefined) {
-      billSchedules[row.itemId] = { nextDueDate: row.dueDate, overdueCount: row.dueDate < today ? 1 : 0 };
-    } else if (row.dueDate < today) {
-      entry.overdueCount += 1;
+      // First row per item is the next due: unpaidInstallments orders by due_date, then id.
+      billSchedules[row.itemId] = {
+        nextDueDate: row.dueDate,
+        overdueCount: row.dueDate < today ? 1 : 0,
+        nextAmountCents: row.amountCents,
+        unpaidCount: 1,
+        outstandingCents: row.amountCents,
+      };
+    } else {
+      if (row.dueDate < today) entry.overdueCount += 1;
+      entry.unpaidCount += 1;
+      entry.outstandingCents += row.amountCents;
     }
   }
 

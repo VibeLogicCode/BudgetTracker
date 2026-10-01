@@ -251,13 +251,17 @@ describe('WarrantiesClient — a Bill row shows its schedule (item Q)', () => {
   const bill = () => item({ id: 42, name: 'Property tax', kind: 'bill', isLifetime: true, expiryDate: null, typeName: 'Tax bill' });
 
   it('shows the next due date instead of "Ongoing"', () => {
-    renderList(result([bill()]), { billSchedules: { 42: { nextDueDate: '2026-09-30', overdueCount: 0 } } });
+    renderList(result([bill()]), {
+      billSchedules: { 42: { nextDueDate: '2026-09-30', overdueCount: 0, nextAmountCents: 120000, unpaidCount: 1, outstandingCents: 120000 } },
+    });
     expect(screen.getByText('Next due 2026-09-30')).toBeTruthy();
     expect(screen.queryByText('Ongoing')).toBeNull();
   });
 
   it('leads with the overdue count when the bill is behind', () => {
-    renderList(result([bill()]), { billSchedules: { 42: { nextDueDate: '2026-06-30', overdueCount: 2 } } });
+    renderList(result([bill()]), {
+      billSchedules: { 42: { nextDueDate: '2026-06-30', overdueCount: 2, nextAmountCents: 120000, unpaidCount: 2, outstandingCents: 240000 } },
+    });
     expect(screen.getByText('2 overdue · next 2026-06-30')).toBeTruthy();
   });
 
@@ -268,7 +272,7 @@ describe('WarrantiesClient — a Bill row shows its schedule (item Q)', () => {
 
   it('leaves a non-bill kind alone', () => {
     renderList(result([item({ id: 42, kind: 'contract', isLifetime: true, expiryDate: null })]), {
-      billSchedules: { 42: { nextDueDate: '2026-09-30', overdueCount: 0 } },
+      billSchedules: { 42: { nextDueDate: '2026-09-30', overdueCount: 0, nextAmountCents: 120000, unpaidCount: 1, outstandingCents: 120000 } },
     });
     expect(screen.getByText('Ongoing')).toBeTruthy();
     expect(screen.queryByText('Next due 2026-09-30')).toBeNull();
@@ -449,5 +453,39 @@ describe('F4: the kind pills', () => {
     const hidden = container.querySelector('form input[name="kind"]');
     expect(hidden).not.toBeNull();
     expect((hidden as HTMLInputElement).value).toBe('loan');
+  });
+});
+
+/** Spec 2026-09-30 §2.1: a bill's money on the list row, in the money cells, with ruling P4 untouched. */
+describe('a bill row shows its money', () => {
+  const bill = () => item({ id: 42, name: 'Property tax', kind: 'bill', isLifetime: true, expiryDate: null, typeName: 'Tax bill' });
+  const schedule = { 42: { nextDueDate: '2026-10-31', overdueCount: 0, nextAmountCents: 44443, unpaidCount: 1, outstandingCents: 44443 } };
+
+  it('puts the next amount in the Price cell', () => {
+    renderList(result([bill()]), { billSchedules: schedule });
+    const priceCell = screen.getByText('$444.43').closest('td')!;
+    expect(priceCell.getAttribute('data-label')).toBe('Price');
+    // Ruling P4: the schedule label is still dates only.
+    expect(screen.getByText('Next due 2026-10-31')).toBeTruthy();
+  });
+
+  it('says how many are unpaid and the total in the Billing cell when there is more than one', () => {
+    renderList(result([bill()]), {
+      billSchedules: { 42: { nextDueDate: '2026-10-31', overdueCount: 0, nextAmountCents: 44443, unpaidCount: 3, outstandingCents: 133329 } },
+    });
+    expect(screen.getByText('3 unpaid · $1,333.29 outstanding').closest('td')!.getAttribute('data-label')).toBe('Billing');
+  });
+
+  it('leaves the Billing cell empty for a single installment', () => {
+    const { container } = renderList(result([bill()]), { billSchedules: schedule });
+    const billing = container.querySelector('td[data-label="Billing"]')!;
+    expect(billing.textContent?.trim()).toBe('—');
+  });
+
+  /** Review focus 4. */
+  it('shows nothing when every installment is paid', () => {
+    const { container } = renderList(result([bill()]), { billSchedules: {} });
+    expect(container.querySelector('td[data-label="Price"]')!.textContent?.trim()).toBe('—');
+    expect(container.querySelector('td[data-label="Billing"]')!.textContent?.trim()).toBe('—');
   });
 });
