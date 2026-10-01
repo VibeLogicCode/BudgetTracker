@@ -150,8 +150,15 @@ export const REC_DROP_SCORE = 0.5;
 
 // Assembly and sessions
 
-/** Ours (MUST-4.33). */
+/** Ours (MUST-4.33). Pinned by the constant table; assemble.ts now groups lines by
+ *  LINE_CENTRE_TOLERANCE_RATIO instead (spec 2026-09-30 §2.4 item 4). */
 export const LINE_OVERLAP_RATIO = 0.5;
+/** Ours (spec 2026-09-30 §2.4). After rotating box centres by the median text angle, two boxes
+ *  share a line when their centres sit within this fraction of the median box height. */
+export const LINE_CENTRE_TOLERANCE_RATIO = 0.5;
+/** Ours. A box is "wide" -- a text line, not a stray glyph -- when its longer edge is at least
+ *  this many times its shorter edge. Only wide boxes vote on the text angle. */
+export const LINE_WIDE_BOX_RATIO = 2;
 /** Ours. */
 export const LINE_JOIN = ' ';
 /** Ours, and required by MUST-4.34. */
@@ -178,7 +185,9 @@ export const REC_WIDTH_MULTIPLE = 8;
 /** Class index 1 from the orientation model means the crop is this far round. */
 export const CLS_FLIP_DEGREES = 180;
 /** A min area rectangle can describe one shape either way round. A text line is wider than
- *  it is tall, so an angle outside this bound means width and height should be swapped. */
+ *  it is tall, so an angle outside this bound means width and height should be swapped.
+ *  assemble.ts reads it the same way: a wide box steeper than this is not a level text line
+ *  and gets no vote on the text angle. */
 export const CROP_ANGLE_LIMIT_DEG = 45;
 /** Ours. A pixel is sampled at its centre for the point-in-polygon mask. */
 export const PIXEL_CENTRE_OFFSET = 0.5;
