@@ -11,8 +11,9 @@ export const dynamic = 'force-dynamic';
  * same reason /api/backup/download does: on plain HTTP a same-origin request carries no
  * Origin and no Sec-Fetch-* header at all.
  *
- * The raw OCR text is deliberately NOT returned: the client only ever needs the
- * suggestions, and §16 item 6 keeps the raw text out of the UI entirely.
+ * The recognised LINES are returned (capped at OCR_LINES_MAX) so the person can see what was
+ * read and tap the figure they meant; spec §16 item 6 deferred EDITING the text, not showing
+ * it. Owner-scoped like everything else here (D7).
  *
  * A staged job whose file was purged writes NO sidecar (Task 5's known deferred concern),
  * so readSidecar() returning null is indistinguishable from "still running" and this
@@ -45,5 +46,5 @@ export async function GET(request: Request, ctx: { params: Promise<{ stagingId: 
   if (sidecar.status === 'failed') {
     return Response.json({ status: 'failed', error: sidecar.error ?? 'OCR failed.' });
   }
-  return Response.json({ status: 'done', suggestions: sidecar.suggestions ?? {} });
+  return Response.json({ status: 'done', suggestions: sidecar.suggestions ?? {}, lines: sidecar.lines ?? [], candidates: sidecar.candidates ?? { amounts: [], dates: [] } });
 }

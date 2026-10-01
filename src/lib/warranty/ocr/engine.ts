@@ -24,6 +24,10 @@ export const OCR_TIMEOUT_MESSAGE = 'OCR timed out.';
 export const TRUNCATION_MARKER = '… [truncated]';
 export const TRUNCATION_NOTE = `OCR text was truncated at ${MAX_OCR_TEXT_CHARS} characters.`;
 
+/** Spec 2026-09-30 §2.3. What the poll endpoint hands the client to show; the FTS index keeps the whole text. */
+export const OCR_LINES_MAX = 200;
+export const NO_TEXT_MESSAGE = 'No text was found on this image. Try a flatter, closer photo, or attach the PDF.';
+
 export class OcrUnavailableError extends Error {
   constructor(message = OCR_UNAVAILABLE_MESSAGE) {
     super(message);

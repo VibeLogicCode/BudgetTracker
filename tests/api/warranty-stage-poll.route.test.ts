@@ -50,7 +50,12 @@ describe('GET /api/warranties/receipts/stage/[stagingId]', () => {
     expect(await response.json()).toEqual({ status: 'pending' });
   });
 
-  it('returns the suggestions on done, and never the raw OCR text', async () => {
+  /*
+    Spec 2026-09-30 §2.3: the client now sees what was read, but as the capped LINES the queue
+    stores beside the text. The sidecar's `text` field (the whole capped read the FTS index gets)
+    is still never part of the reply; a sidecar written without lines answers with none.
+  */
+  it('returns the suggestions on done, and never the sidecar\'s text field', async () => {
     const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', userId);
     writeSidecar(stagingId, {
       status: 'done',
@@ -61,8 +66,35 @@ describe('GET /api/warranties/receipts/stage/[stagingId]', () => {
     expect(body).toEqual({
       status: 'done',
       suggestions: { vendor: 'HOME DEPOT', priceCents: 4200, purchaseDate: '2026-08-16' },
+      lines: [],
+      candidates: { amounts: [], dates: [] },
     });
+    expect(body).not.toHaveProperty('text');
     expect(JSON.stringify(body)).not.toContain('RAW OCR TEXT');
+  });
+
+  it('returns the lines and the candidates on done when the sidecar has them (spec 2026-09-30 §2.3)', async () => {
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', userId);
+    const lines = ['RIVERSIDE WATER', 'Amount due $444.43', 'Due date 2026-10-31'];
+    const candidates = {
+      amounts: [{ valueCents: 44443, snippet: 'Amount due $444.43', score: 3 }],
+      dates: [{ date: '2026-10-31', snippet: 'Due date 2026-10-31', score: 2 }],
+    };
+    writeSidecar(stagingId, {
+      status: 'done',
+      text: lines.join('\n'),
+      suggestions: { vendor: 'RIVERSIDE WATER', priceCents: 44443, dueDate: '2026-10-31' },
+      lines,
+      candidates,
+    });
+    const body = await (await poll(stagingId)).json();
+    expect(body).toEqual({
+      status: 'done',
+      suggestions: { vendor: 'RIVERSIDE WATER', priceCents: 44443, dueDate: '2026-10-31' },
+      lines,
+      candidates,
+    });
+    expect(body).not.toHaveProperty('text');
   });
 
   it('returns the error text on failed', async () => {
@@ -111,6 +143,8 @@ describe('D7: a staged upload belongs to whoever staged it', () => {
     expect(await (await poll(stagingId)).json()).toEqual({
       status: 'done',
       suggestions: { vendor: 'HOME DEPOT', priceCents: 4200 },
+      lines: [],
+      candidates: { amounts: [], dates: [] },
     });
   });
 

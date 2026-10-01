@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { receiptTempDir } from '@/lib/warranty/receipts';
 import { RECEIPT_EXTS, extForMime, mimeForExt, type ReceiptMime } from '@/lib/warranty/sniff';
-import type { SuggestedFields } from '@/lib/warranty/suggest';
+import type { AmountCandidate, DateCandidate, SuggestedFields } from '@/lib/warranty/suggest';
 
 /**
  * Staged receipt uploads (spec §6.3). Suggestions must pre-fill the NEW-ITEM form, which
@@ -30,6 +30,8 @@ export interface OcrSidecar {
   text?: string;
   error?: string;
   suggestions?: SuggestedFields;
+  lines?: string[];
+  candidates?: { amounts: AmountCandidate[]; dates: DateCandidate[] };
 }
 
 /**
@@ -45,13 +47,19 @@ const suggestedFieldsSchema = z.object({
   purchaseDate: z.string().optional(),
   vendor: z.string().optional(),
   priceCents: z.number().optional(),
+  dueDate: z.string().optional(),
 });
+
+const amountCandidateSchema = z.object({ valueCents: z.number(), snippet: z.string(), score: z.number() });
+const dateCandidateSchema = z.object({ date: z.string(), snippet: z.string(), score: z.number() });
 
 const ocrSidecarSchema = z.object({
   status: z.enum(['done', 'failed']),
   text: z.string().optional(),
   error: z.string().optional(),
   suggestions: suggestedFieldsSchema.optional(),
+  lines: z.array(z.string()).optional(),
+  candidates: z.object({ amounts: z.array(amountCandidateSchema), dates: z.array(dateCandidateSchema) }).optional(),
 });
 
 export const STAGING_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;

@@ -15,6 +15,7 @@ import {
   sweepPendingReceipts,
 } from '@/lib/warranty/ocr/queue';
 import {
+  NO_TEXT_MESSAGE,
   OCR_TIMEOUT_MS,
   OCR_UNAVAILABLE_MESSAGE,
   OcrUnavailableError,
@@ -87,6 +88,27 @@ describe('staged jobs', () => {
     expect(sidecar?.suggestions?.priceCents).toBe(4200);
   });
 
+  it('writes the lines and the candidates beside the suggestions (spec 2026-09-30 §2.3)', async () => {
+    // Date only: the due-date window is today ± months, so a real clock would age this fixture out.
+    vi.useFakeTimers({ now: new Date('2026-09-20T12:00:00Z'), toFake: ['Date'] });
+    setOcrEngineForTests({ recognize: async () => ({ text: 'RIVERSIDE WATER\nAmount due $444.43\nDue date 2026-10-31' }) });
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
+    enqueueOcrJob({ kind: 'staged', stagingId });
+    await drainOcrQueue();
+    const sidecar = readSidecar(stagingId);
+    expect(sidecar?.lines).toEqual(['RIVERSIDE WATER', 'Amount due $444.43', 'Due date 2026-10-31']);
+    expect(sidecar?.candidates?.amounts[0]).toMatchObject({ valueCents: 44443 });
+    expect(sidecar?.suggestions?.dueDate).toBe('2026-10-31');
+  });
+
+  it('records an empty read as a failure with a message, never as done (spec §2.3)', async () => {
+    setOcrEngineForTests({ recognize: async () => ({ text: '' }) });
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
+    enqueueOcrJob({ kind: 'staged', stagingId });
+    await drainOcrQueue();
+    expect(readSidecar(stagingId)).toEqual({ status: 'failed', error: NO_TEXT_MESSAGE });
+  });
+
   it('writes a failed sidecar when the engine is unavailable', async () => {
     setOcrEngineForTests({
       recognize: async () => {
@@ -156,6 +178,18 @@ describe('receipt jobs', () => {
     );
     expect(row.ocr_status).toBe('failed');
     expect(row.ocr_error).toBe('boom');
+  });
+
+  it('records an empty read as failed with the no-text message, not as done (spec §2.3)', async () => {
+    setOcrEngineForTests({ recognize: async () => ({ text: '  \n ' }) });
+    const itemId = makeItem();
+    const receiptId = makeReceipt(itemId, writeReceiptFile(JPEG, 'image/jpeg'));
+    enqueueOcrJob({ kind: 'receipt', receiptId });
+    await drainOcrQueue();
+    const row = current!.db.get<{ ocr_status: string; ocr_text: string | null; ocr_error: string | null }>(
+      sql`select ocr_status, ocr_text, ocr_error from warranty_receipts where id = ${receiptId}`,
+    );
+    expect(row).toEqual({ ocr_status: 'failed', ocr_text: null, ocr_error: NO_TEXT_MESSAGE });
   });
 
   it('truncates at MAX_OCR_TEXT_CHARS, notes it in ocr_error, and stays done', async () => {

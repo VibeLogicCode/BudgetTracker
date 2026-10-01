@@ -3,8 +3,10 @@ import { getDb } from '@/db/client';
 import { warrantyReceipts } from '@/db/schema';
 import { todayIso } from '@/lib/dates';
 import { receiptFileExists, resolveReceiptPath } from '@/lib/warranty/receipts';
-import { suggestFromOcrText } from '@/lib/warranty/suggest';
+import { amountCandidates, dateCandidates, suggestFromOcrText } from '@/lib/warranty/suggest';
 import {
+  NO_TEXT_MESSAGE,
+  OCR_LINES_MAX,
   OCR_TIMEOUT_MESSAGE,
   OCR_TIMEOUT_MS,
   TRUNCATION_NOTE,
@@ -191,7 +193,19 @@ async function runStagedJob(stagingId: string): Promise<void> {
   try {
     const { text } = await recognizeWithTimeout(staged.path, staged.mime);
     const { text: capped } = truncateOcrText(text);
-    writeSidecar(stagingId, { status: 'done', text: capped, suggestions: suggestFromOcrText(capped, todayIso()) });
+    // Spec 2026-09-30 §2.3: zero boxes used to be stored as 'done' with '' and the tile said "Read".
+    if (capped.trim().length === 0) {
+      writeSidecar(stagingId, { status: 'failed', error: NO_TEXT_MESSAGE });
+      return;
+    }
+    const today = todayIso();
+    writeSidecar(stagingId, {
+      status: 'done',
+      text: capped,
+      suggestions: suggestFromOcrText(capped, today),
+      lines: capped.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0).slice(0, OCR_LINES_MAX),
+      candidates: { amounts: amountCandidates(capped), dates: dateCandidates(capped, today) },
+    });
   } catch (error) {
     writeSidecar(stagingId, { status: 'failed', error: messageOf(error) });
   }
@@ -221,6 +235,15 @@ async function runReceiptJob(receiptId: number): Promise<void> {
   try {
     const { text } = await recognizeWithTimeout(resolveReceiptPath(row.storedFilename), row.mime);
     const { text: capped, truncated } = truncateOcrText(text);
+    // Spec 2026-09-30 §2.3: an empty read is a failure with a message, never a silent 'done'.
+    // A text-less PDF never gets here: extractPdfText() throws ScannedPdfError first.
+    if (capped.trim().length === 0) {
+      db.update(warrantyReceipts)
+        .set({ ocrStatus: 'failed', ocrText: null, ocrError: NO_TEXT_MESSAGE })
+        .where(eq(warrantyReceipts.id, receiptId))
+        .run();
+      return;
+    }
     // MUST-7.13: pending -> done. The warranty_search_receipt_au trigger reindexes here.
     // MUST-3.12: application code never writes warranty_search itself.
     db.update(warrantyReceipts)
