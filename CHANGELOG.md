@@ -21,6 +21,16 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.53.1] - 2026-10-01
+
+### Changed
+
+- **One file button on a computer.** The receipt card shows a single **Choose a file** button on a
+  desktop. A phone or tablet shows **Take a photo** beside it, which opens the camera.
+- **The figures a read found are folded away.** Under a receipt, the amount and date in use come
+  first, each with the words beside it on the receipt. The rest sit under **Other figures** as
+  short buttons; tap one to use it instead.
+
 ## [1.53.0] - 2026-10-01
 
 ### Added
