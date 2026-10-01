@@ -136,19 +136,25 @@ function readStaged(formData: FormData): StagedReceiptRef[] {
   return parsed.data;
 }
 
+/** One sentence for an installment amount that does not parse, on the create form and the detail page. */
+const AMOUNT_NOT_A_NUMBER = 'Amount is not a number.';
+
 /**
  * Spec 2026-09-30 §2.1. A bill's first amount and due date, as an optional PAIR: both present
- * writes the first installment, both blank writes none, one of each is refused. Read for every
- * kind and applied only where installments are allowed (createWarrantyItem refuses otherwise), so
- * a stale form posting the fields for a warranty saves the warranty and ignores the pair.
+ * writes the first installment, both blank writes none, one of each is refused, and an amount that
+ * does not parse is its own refusal -- a person who filled in both must not be told to fill in
+ * both. Called only where installments are allowed, so a stale form posting the fields for a
+ * warranty saves the warranty and ignores them, half a pair and a garbage amount included.
  */
-function readFirstInstallment(formData: FormData): { dueDate: string; amountCents: number } | null | 'half' {
+function readFirstInstallment(
+  formData: FormData,
+): { dueDate: string; amountCents: number } | null | 'half' | 'not_a_number' {
   const dueDate = str(formData, 'dueDate').trim();
   const rawAmount = str(formData, 'amountDue').trim();
   if (dueDate === '' && rawAmount === '') return null;
   if (dueDate === '' || rawAmount === '') return 'half';
   const cents = parseAmountToCents(rawAmount);
-  if (cents === null) return 'half';
+  if (cents === null) return 'not_a_number';
   // Magnitude, as addInstallmentAction does: a person typing -444.43 means the size of the bill.
   return { dueDate, amountCents: Math.abs(cents) };
 }
@@ -459,16 +465,11 @@ export async function createWarrantyAction(
     // reasoning as readMonths()'s "The term" above.
     if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Could not save that item.' };
     if (!typeExistsOrNull(parsed.data.typeId)) return { error: ITEM_TYPE_MISSING_ERROR };
-    const first = readFirstInstallment(formData);
+    // The kind FIRST: the pair is a bill's question, so no other kind is ever refused over it.
+    const first = installmentsAllowedForKind(kindForTypeId(parsed.data.typeId)) ? readFirstInstallment(formData) : null;
     if (first === 'half') return { error: BILL_PAIR_ERROR };
-    const kind = kindForTypeId(parsed.data.typeId);
-    itemId = createWarrantyItem(
-      parsed.data,
-      staged,
-      undefined,
-      user.id,
-      first !== null && installmentsAllowedForKind(kind) ? { firstInstallment: first } : {},
-    );
+    if (first === 'not_a_number') return { error: AMOUNT_NOT_A_NUMBER };
+    itemId = createWarrantyItem(parsed.data, staged, undefined, user.id, first === null ? {} : { firstInstallment: first });
   } catch (error) {
     return failure(error, 'Could not save that item.');
   }
@@ -1015,7 +1016,7 @@ export async function addInstallmentAction(
 
   const dueDate = str(formData, 'dueDate').trim();
   const cents = parseAmountToCents(str(formData, 'amount').trim());
-  if (cents === null) return { error: 'Amount is not a number.' };
+  if (cents === null) return { error: AMOUNT_NOT_A_NUMBER };
   // Magnitude, the same normalisation readPriceCents() applies: a person typing -1,200.00 for a
   // bill means the size of the bill, and the CHECK in drizzle/0011 refuses anything else anyway.
   const amountCents = Math.abs(cents);

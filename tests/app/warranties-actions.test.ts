@@ -439,6 +439,23 @@ describe('createWarrantyAction', () => {
     expect(current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_items`).c).toBe(before);
   });
 
+  it('refuses the other half of a pair -- a due date with no amount -- the same way', async () => {
+    const billType = createItemType(`Bill ${randomUUID()}`, 'bill');
+    const before = current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_items`).c;
+    const result = await createWarrantyAction({}, formData(baseFields({ typeId: String(billType.id), amountDue: '', dueDate: '2026-10-31' })));
+    expect(result.error).toBe('Enter both the amount due and the due date, or leave both blank.');
+    expect(current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_items`).c).toBe(before);
+  });
+
+  /** Both were filled in, so the pair sentence would tell a person to do what they already did. */
+  it('refuses an amount due that is not a number with the add-installment sentence, and saves nothing', async () => {
+    const billType = createItemType(`Bill ${randomUUID()}`, 'bill');
+    const before = current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_items`).c;
+    const result = await createWarrantyAction({}, formData(baseFields({ typeId: String(billType.id), amountDue: 'abc', dueDate: '2026-10-31' })));
+    expect(result.error).toBe('Amount is not a number.');
+    expect(current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_items`).c).toBe(before);
+  });
+
   it('refuses a zero amount due with the installment sentence, and saves nothing', async () => {
     const billType = createItemType(`Bill ${randomUUID()}`, 'bill');
     const before = current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_items`).c;
@@ -460,6 +477,17 @@ describe('createWarrantyAction', () => {
     const to = await redirectPath(() => createWarrantyAction({}, formData(baseFields({ amountDue: '12.00', dueDate: '2026-10-31' }))));
     const id = Number(to.split('/').pop());
     expect(current!.db.get<{ n: number }>(sql`select count(*) as n from bill_installments where item_id = ${id}`).n).toBe(0);
+  });
+
+  /** Review focus 3: half a pair is not a bill's problem to report on a warranty -- the save goes ahead. */
+  it('saves a warranty that posts only an amount due, and writes no installment', async () => {
+    const warrantyType = createItemType(`Appliance ${randomUUID()}`, 'warranty');
+    const to = await redirectPath(() =>
+      createWarrantyAction({}, formData(baseFields({ typeId: String(warrantyType.id), amountDue: '12.00' }))),
+    );
+    const id = Number(to.split('/').pop());
+    expect(getWarrantyItem(id, ADMIN)!.typeId).toBe(warrantyType.id);
+    expect(current!.db.get<{ n: number }>(sql`select count(*) as n from bill_installments`).n).toBe(0);
   });
 });
 
