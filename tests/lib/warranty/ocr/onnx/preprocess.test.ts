@@ -9,7 +9,7 @@ import {
   PREPROCESS_MAX_UPSCALE,
   PREPROCESS_MIN_LONG_SIDE_PX,
 } from '@/lib/warranty/ocr/onnx/constants';
-import { estimateSkewDeg, preprocessReceipt } from '@/lib/warranty/ocr/onnx/preprocess';
+import { estimateSkewDeg, preprocessReceipt, preprocessReceiptPng } from '@/lib/warranty/ocr/onnx/preprocess';
 import { barGridPng, exifOrientation6Png, solidRgb, transparentBlackPng } from '../../../../helpers/ocr-images';
 
 let dir: string;
@@ -169,5 +169,14 @@ describe('MUST-4.5 / MUST-4.6: deskew', () => {
       .png()
       .toBuffer();
     expect(await estimateSkewDeg(framed)).toBe(0);
+  });
+});
+
+describe('Spec 2026-09-30 §2.4 item 6: the encoded image for the tesseract fallback', () => {
+  it('exports the deskewed greyscale PNG for the tesseract path, same pipeline, encoded', async () => {
+    const png = await preprocessReceiptPng(await write('grid-for-tesseract.png', await barGridPng(4)));
+    const meta = await sharp(png).metadata();
+    expect(meta.format).toBe('png');
+    expect(meta.channels).toBeGreaterThanOrEqual(1);
   });
 });

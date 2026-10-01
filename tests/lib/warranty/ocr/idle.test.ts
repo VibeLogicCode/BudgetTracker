@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import sharp from 'sharp';
 import { setSetting } from '@/lib/settings';
+import { recognizeWithTesseract } from '@/lib/warranty/ocr/tesseract';
 import {
   SETTING_OCR_ENGINE,
   SETTING_OCR_ENGINE_PROBED_VERSION,
@@ -115,5 +120,33 @@ describe('idle-terminate timer does not fire on a worker a job is actively using
     setOcrWorkerForTests(fake);
     const result = await getOcrEngine().recognize('/tmp/a.jpg', 'image/jpeg');
     expect(result.text).toBe('from the fallback');
+  });
+});
+
+describe('what the tesseract worker is handed', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-ocr-tess-'));
+  });
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  it('hands the worker the preprocessed PNG buffer, not the raw file path (spec 2026-09-30 §2.4 item 6)', async () => {
+    const fixturePath = path.join(dir, 'tiny.png');
+    fs.writeFileSync(
+      fixturePath,
+      await sharp({ create: { width: 40, height: 30, channels: 3, background: '#c8c8c8' } }).png().toBuffer(),
+    );
+    const seen: unknown[] = [];
+    setOcrWorkerForTests({ recognize: async (input) => { seen.push(input); return { data: { text: 'x' } }; }, terminate: async () => {} });
+    await recognizeWithTesseract(fixturePath);
+    expect(Buffer.isBuffer(seen[0])).toBe(true);
+  });
+
+  it('still hands the worker the raw path when the file cannot be preprocessed', async () => {
+    const missing = path.join(dir, 'missing.jpg');
+    const seen: unknown[] = [];
+    setOcrWorkerForTests({ recognize: async (input) => { seen.push(input); return { data: { text: 'x' } }; }, terminate: async () => {} });
+    await recognizeWithTesseract(missing);
+    expect(seen[0]).toBe(missing);
   });
 });

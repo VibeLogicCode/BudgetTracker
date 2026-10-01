@@ -13,7 +13,7 @@ import { OcrUnavailableError } from '@/lib/warranty/ocr/engine';
 // touching real tesseract.js or WASM (MUST-7.17: getWorker()'s `if (worker) return worker;`
 // cache-hit path never calls createWorker() when a fake is already seeded).
 export interface TesseractWorkerLike {
-  recognize(input: string): Promise<{ data: { text: string } }>;
+  recognize(input: string | Buffer): Promise<{ data: { text: string } }>;
   terminate(): Promise<void>;
 }
 
@@ -74,7 +74,19 @@ export async function releaseTesseractWorker(): Promise<void> {
 
 export async function recognizeWithTesseract(filePath: string): Promise<string> {
   const active = await getWorker();
-  const result = await active.recognize(filePath);
+  // The tesseract path used to receive the raw upload with no preprocessing at all -- the only
+  // engine in the app that did. preprocess.ts imports sharp and nothing from onnxruntime, so
+  // reaching it from here adds no ORT import (tests/ops/ocr-egress.test.ts).
+  let input: string | Buffer = filePath;
+  try {
+    // Dynamic, so sharp's native binding loads only when a receipt is read, never wherever
+    // engine.ts is imported.
+    const { preprocessReceiptPng } = await import('@/lib/warranty/ocr/onnx/preprocess');
+    input = await preprocessReceiptPng(filePath);
+  } catch {
+    // sharp missing or the decode refused: tesseract reads the raw file, as it did before.
+  }
+  const result = await active.recognize(input);
   return result.data.text;
 }
 

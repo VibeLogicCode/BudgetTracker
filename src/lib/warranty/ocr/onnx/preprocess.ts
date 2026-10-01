@@ -1,4 +1,4 @@
-import sharp from 'sharp';
+import sharp, { type Sharp } from 'sharp';
 import {
   DESKEW_BACKGROUND,
   DESKEW_MAX_INK_RATIO,
@@ -150,7 +150,7 @@ function resizeTarget(width: number, height: number): { width: number; height: n
   return null;
 }
 
-export async function preprocessReceipt(filePath: string): Promise<RawImage> {
+async function preparedPipeline(filePath: string): Promise<Sharp> {
   const base = sharp(filePath, { limitInputPixels: PREPROCESS_MAX_INPUT_PIXELS, failOn: 'error' })
     // No argument: applies the EXIF orientation tag and then strips it. A phone photo taken
     // in portrait is stored landscape with an orientation tag, and skipping this reads every
@@ -175,8 +175,11 @@ export async function preprocessReceipt(filePath: string): Promise<RawImage> {
   // no-op assertion in preprocess.test.ts proves.
   const deskewed =
     Math.abs(angle) < DESKEW_MIN_APPLY_DEG ? sharp(staged) : sharp(staged).rotate(-angle, { background: DESKEW_BACKGROUND });
+  return deskewed;
+}
 
-  const { data, info } = await deskewed
+export async function preprocessReceipt(filePath: string): Promise<RawImage> {
+  const { data, info } = await (await preparedPipeline(filePath))
     // Three identical channels. The models take 3; feeding them a greyscale-derived
     // 3-channel image is deliberate, because a colour cast on a thermal receipt carries no
     // signal and costs contrast.
@@ -185,4 +188,13 @@ export async function preprocessReceipt(filePath: string): Promise<RawImage> {
     .raw()
     .toBuffer({ resolveWithObject: true });
   return { data, width: info.width, height: info.height };
+}
+
+/**
+ * Spec 2026-09-30 §2.4 item 6. The same EXIF-rotate, flatten, greyscale, normalise, resize and
+ * deskew the ONNX path gets, encoded for a recogniser that takes a file. Measured on the photo
+ * case: the date went from wrong to right and the time halved.
+ */
+export async function preprocessReceiptPng(filePath: string): Promise<Buffer> {
+  return (await preparedPipeline(filePath)).png().toBuffer();
 }
