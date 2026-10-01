@@ -83,8 +83,9 @@ export async function recognizeWithTesseract(filePath: string): Promise<string> 
     // engine.ts is imported.
     const { preprocessReceiptPng } = await import('@/lib/warranty/ocr/onnx/preprocess');
     input = await preprocessReceiptPng(filePath);
-  } catch {
+  } catch (error) {
     // sharp missing or the decode refused: tesseract reads the raw file, as it did before.
+    console.warn('[ocr] tesseract preprocess failed; reading the raw file', error);
   }
   const result = await active.recognize(input);
   return result.data.text;

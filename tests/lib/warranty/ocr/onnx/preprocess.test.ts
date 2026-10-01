@@ -174,9 +174,17 @@ describe('MUST-4.5 / MUST-4.6: deskew', () => {
 
 describe('Spec 2026-09-30 §2.4 item 6: the encoded image for the tesseract fallback', () => {
   it('exports the deskewed greyscale PNG for the tesseract path, same pipeline, encoded', async () => {
-    const png = await preprocessReceiptPng(await write('grid-for-tesseract.png', await barGridPng(4)));
+    const file = await write('grid-for-tesseract.png', await barGridPng(4));
+    const png = await preprocessReceiptPng(file);
     const meta = await sharp(png).metadata();
     expect(meta.format).toBe('png');
     expect(meta.channels).toBeGreaterThanOrEqual(1);
+    // Decoded the way preprocessReceipt finishes, it is the very image the ONNX path gets. A
+    // re-encode of the raw upload differs in size (this one is upscaled and deskewed) and pixels.
+    const decoded = await sharp(png).toColourspace('srgb').removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    const raw = await preprocessReceipt(file);
+    expect(decoded.info.width).toBe(raw.width);
+    expect(decoded.info.height).toBe(raw.height);
+    expect(Buffer.compare(decoded.data, raw.data)).toBe(0);
   });
 });

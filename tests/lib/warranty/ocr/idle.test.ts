@@ -1,10 +1,11 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import sharp from 'sharp';
 import { setSetting } from '@/lib/settings';
 import { recognizeWithTesseract } from '@/lib/warranty/ocr/tesseract';
+import { preprocessReceiptPng } from '@/lib/warranty/ocr/onnx/preprocess';
 import {
   SETTING_OCR_ENGINE,
   SETTING_OCR_ENGINE_PROBED_VERSION,
@@ -31,8 +32,12 @@ import {
  * never invoked (MUST-7.17).
  */
 let current: TestDb | null = null;
+let warn: MockInstance<typeof console.warn>;
 
 beforeEach(() => {
+  // The tesseract path warns when it cannot preprocess, and the idle tests below use paths
+  // that do not exist. Silenced so their output stays clean; the fallback test asserts on it.
+  warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
   current = createSeededTestDb();
   resetOcrProbeForTests();
   // The selector asks resolveOcrEngineKind() before it touches an engine. Seeding a
@@ -140,6 +145,9 @@ describe('what the tesseract worker is handed', () => {
     setOcrWorkerForTests({ recognize: async (input) => { seen.push(input); return { data: { text: 'x' } }; }, terminate: async () => {} });
     await recognizeWithTesseract(fixturePath);
     expect(Buffer.isBuffer(seen[0])).toBe(true);
+    // Byte-equal to the preprocessed PNG, so handing over the upload's own bytes cannot pass.
+    expect(Buffer.compare(seen[0] as Buffer, await preprocessReceiptPng(fixturePath))).toBe(0);
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it('still hands the worker the raw path when the file cannot be preprocessed', async () => {
@@ -148,5 +156,6 @@ describe('what the tesseract worker is handed', () => {
     setOcrWorkerForTests({ recognize: async (input) => { seen.push(input); return { data: { text: 'x' } }; }, terminate: async () => {} });
     await recognizeWithTesseract(missing);
     expect(seen[0]).toBe(missing);
+    expect(warn).toHaveBeenCalledWith('[ocr] tesseract preprocess failed; reading the raw file', expect.anything());
   });
 });
