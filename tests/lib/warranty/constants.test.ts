@@ -19,6 +19,7 @@ import {
   expiringSoonLabel,
   expiringSoonLabelForKind,
   ITEM_TYPE_IMMUTABLE_ERROR,
+  formDescription,
   formEndLabel,
   formSaveLabel,
   formOpenEndedLabel,
@@ -481,5 +482,15 @@ describe('loanAssignedMessage (Addendum A, ruling A8)', () => {
     expect(
       loanAssignedMessage({ direction: 'owed', isRepayment: true, appliedCents: 0, balanceAfterCents: 0 }),
     ).toBe('Assigned. The balance was already $0.00, so nothing came off.');
+  });
+});
+
+/** Spec 2026-09-30 §2.5: the Add page's header stops promising a price to a bill. */
+describe('formDescription', () => {
+  it('promises the amount due and due date for a bill, and the date, vendor and price otherwise', () => {
+    expect(formDescription('bill')).toBe('Attach the bill first and the amount due and due date fill themselves in.');
+    for (const kind of ITEM_KINDS.filter((k) => k !== 'bill')) {
+      expect(formDescription(kind)).toBe('Attach the receipt first and the date, vendor and price fill themselves in.');
+    }
   });
 });

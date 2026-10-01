@@ -18,6 +18,7 @@ import {
   billingAmountLabelForKind,
   billingSectionLabelForKind,
   coveredThroughLabelForKind,
+  formDescription,
   formOpenEndedLabel,
   formStartLabel,
   formTermLabel,
@@ -198,24 +199,18 @@ export function NewWarrantyClient({
     billTouchedRef.current = billTouched;
   }, [billTouched]);
 
-  /** MUST-10.3: only EMPTY, untouched fields are filled from a suggestion. */
-  const onSuggestions = useCallback((fields: SuggestedFieldsDto) => {
-    const current = touchedRef.current;
-    const kind = kindRef.current;
-    if (fields.purchaseDate && !current.purchaseDate) {
-      setPurchaseDate(fields.purchaseDate);
-      if (!balanceDateTouchedRef.current) setBalanceAsOfDate(fields.purchaseDate);
-      setSuggested((s) => ({ ...s, purchaseDate: true }));
-    }
-    if (fields.vendor && !current.vendor) {
-      setVendor(fields.vendor);
-      setSuggested((s) => ({ ...s, vendor: true }));
-    }
-    /*
-      Spec 2026-09-30 §2.3: the amount goes to the field the KIND actually has. It used to go to
-      `price` unconditionally -- an input the form never renders for a bill -- so a bill's amount
-      due was found and then thrown away.
-    */
+  // The reader's last suggestion. The Receipt card sits above the Type select and the page says
+  // to attach first, so the reader often answers while the form still reads as a warranty; the
+  // effect below uses this to move the amount and due date once the real type is picked.
+  const lastSuggestionRef = useRef<SuggestedFieldsDto | null>(null);
+
+  /*
+    Spec 2026-09-30 §2.3: the amount goes to the field the KIND actually has. It used to go to
+    `price` unconditionally -- an input the form never renders for a bill -- so a bill's amount
+    due was found and then thrown away. MUST-10.3 holds here as everywhere: only an empty,
+    untouched field is filled.
+  */
+  const routeAmountAndDueDate = useCallback((fields: SuggestedFieldsDto, kind: ItemKind) => {
     if (fields.priceCents !== undefined) {
       if (installmentsAllowedForKind(kind)) {
         if (!billTouchedRef.current.amountDue) {
@@ -224,7 +219,7 @@ export function NewWarrantyClient({
         }
       } else if (billingAllowedForKind(kind)) {
         setBillingAmount((value) => (value === '' ? centsToInput(fields.priceCents!) : value));
-      } else if (!current.price) {
+      } else if (!touchedRef.current.price) {
         setPrice(centsToInput(fields.priceCents));
         setSuggested((s) => ({ ...s, price: true }));
       }
@@ -234,6 +229,32 @@ export function NewWarrantyClient({
       setSuggested((s) => ({ ...s, dueDate: true }));
     }
   }, []);
+
+  /** MUST-10.3: only EMPTY, untouched fields are filled from a suggestion. */
+  const onSuggestions = useCallback(
+    (fields: SuggestedFieldsDto) => {
+      lastSuggestionRef.current = fields;
+      const current = touchedRef.current;
+      if (fields.purchaseDate && !current.purchaseDate) {
+        setPurchaseDate(fields.purchaseDate);
+        if (!balanceDateTouchedRef.current) setBalanceAsOfDate(fields.purchaseDate);
+        setSuggested((s) => ({ ...s, purchaseDate: true }));
+      }
+      if (fields.vendor && !current.vendor) {
+        setVendor(fields.vendor);
+        setSuggested((s) => ({ ...s, vendor: true }));
+      }
+      routeAmountAndDueDate(fields, kindRef.current);
+    },
+    [routeAmountAndDueDate],
+  );
+
+  // A type picked after the reader answered gets that answer's amount and due date in its own
+  // fields. Declared after the clearing effects above so it runs after them. The vendor and the
+  // date do not depend on the kind and were applied when the suggestion arrived.
+  useEffect(() => {
+    if (lastSuggestionRef.current) routeAmountAndDueDate(lastSuggestionRef.current, selectedKind);
+  }, [selectedKind, routeAmountAndDueDate]);
 
   // v1.3.1: the loan money fields follow the SELECTED kind live, same pattern as billing above.
   const [principal, setPrincipal] = useState('');
@@ -275,11 +296,7 @@ export function NewWarrantyClient({
       <PageHeader
         eyebrow="Loans & Coverage"
         title="Add item"
-        description={
-          installmentsApplicable
-            ? 'Attach the bill first and the amount due and due date fill themselves in.'
-            : 'Attach the receipt first and the date, vendor and price fill themselves in.'
-        }
+        description={formDescription(selectedKind)}
         actions={
           <Link href="/warranties" className={buttonClass('ghost', 'sm')}>
             Back to Loans &amp; Coverage
@@ -498,6 +515,7 @@ export function NewWarrantyClient({
                       onChange={(e) => {
                         setAmountDue(e.target.value);
                         setBillTouched((t) => ({ ...t, amountDue: true }));
+                        setSuggested((s) => ({ ...s, amountDue: false }));
                       }}
                       className={inputClass}
                     />
@@ -518,6 +536,7 @@ export function NewWarrantyClient({
                       onChange={(e) => {
                         setDueDate(e.target.value);
                         setBillTouched((t) => ({ ...t, dueDate: true }));
+                        setSuggested((s) => ({ ...s, dueDate: false }));
                       }}
                       className={inputClass}
                     />

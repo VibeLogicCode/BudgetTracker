@@ -168,6 +168,16 @@ export function formSaveLabel(kind: ItemKind): string {
 }
 
 /**
+ * Spec 2026-09-30 §2.5. The add page's header, keyed by kind. A bill's reader fills the amount due
+ * and the due date, so its header says that instead of promising a price the bill form never shows.
+ */
+export function formDescription(kind: ItemKind): string {
+  return installmentsAllowedForKind(kind)
+    ? 'Attach the bill first and the amount due and due date fill themselves in.'
+    : 'Attach the receipt first and the date, vendor and price fill themselves in.';
+}
+
+/**
  * MUST-10.4's live computed date beside the term input, keyed by kind. Supersedes
  * `coveredThroughLabel` (v1.2.2 Task 2 controller ruling -- see the KIND_WORDING docblock
  * above).
