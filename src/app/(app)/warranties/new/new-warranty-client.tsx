@@ -10,6 +10,8 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { Field, inputClass, labelClass, selectClass, textareaClass } from '@/components/ui/form';
 import { isIsoDate } from '@/lib/dates';
 import {
+  BILL_AMOUNT_DUE_LABEL,
+  BILL_DUE_DATE_LABEL,
   BILLING_CYCLE_LABELS,
   BILLING_CYCLES,
   billingAllowedForKind,
@@ -19,6 +21,7 @@ import {
   formOpenEndedLabel,
   formStartLabel,
   formTermLabel,
+  installmentsAllowedForKind,
   loanFieldsAllowedForKind,
   LOAN_DIRECTIONS,
   LOAN_DIRECTION_LABELS,
@@ -108,7 +111,13 @@ export function NewWarrantyClient({
     vendor: prefill.vendor !== undefined,
     price: prefill.priceCents !== undefined,
   });
-  const [suggested, setSuggested] = useState({ purchaseDate: false, vendor: false, price: false });
+  const [suggested, setSuggested] = useState({
+    purchaseDate: false,
+    vendor: false,
+    price: false,
+    amountDue: false,
+    dueDate: false,
+  });
 
   // IMPORTANT 6: `touched` mirrored into a ref, kept in sync by the effect below. onSuggestions
   // reads touchedRef.current directly instead of using setTouched's updater purely to PEEK at
@@ -133,24 +142,6 @@ export function NewWarrantyClient({
 
   const onStagedChange = useCallback((files: StagedFile[]) => setStaged(files), []);
 
-  /** MUST-10.3: only EMPTY, untouched fields are filled from a suggestion. */
-  const onSuggestions = useCallback((fields: SuggestedFieldsDto) => {
-    const current = touchedRef.current;
-    if (fields.purchaseDate && !current.purchaseDate) {
-      setPurchaseDate(fields.purchaseDate);
-      if (!balanceDateTouched) setBalanceAsOfDate(fields.purchaseDate);
-      setSuggested((s) => ({ ...s, purchaseDate: true }));
-    }
-    if (fields.vendor && !current.vendor) {
-      setVendor(fields.vendor);
-      setSuggested((s) => ({ ...s, vendor: true }));
-    }
-    if (fields.priceCents !== undefined && !current.price) {
-      setPrice(centsToInput(fields.priceCents));
-      setSuggested((s) => ({ ...s, price: true }));
-    }
-  }, []);
-
   const monthsNumber = /^\d+$/.test(months) ? Number(months) : null;
   const expiry =
     !isLifetime && monthsNumber !== null && monthsNumber > 0 && isIsoDate(purchaseDate)
@@ -173,6 +164,76 @@ export function NewWarrantyClient({
       setBillingAmount('');
     }
   }, [billingApplicable]);
+
+  // Spec 2026-09-30 §2.1. A bill's first amount and due date. Cleared when the kind moves away
+  // from bill, like the billing pair above, so a stale value never posts beside a kind that has
+  // no installments (createWarrantyItem would refuse it anyway; the form should not ask it to).
+  const [amountDue, setAmountDue] = useState('');
+  const [dueDate, setDueDate] = useState('');
+  const [billTouched, setBillTouched] = useState({ amountDue: false, dueDate: false });
+  const installmentsApplicable = installmentsAllowedForKind(selectedKind);
+  useEffect(() => {
+    if (!installmentsApplicable) {
+      setAmountDue('');
+      setDueDate('');
+      setBillTouched({ amountDue: false, dueDate: false });
+      // The "suggested from receipt" marks go with the values they described.
+      setSuggested((s) => ({ ...s, amountDue: false, dueDate: false }));
+    }
+  }, [installmentsApplicable]);
+
+  // The balance-date flag is read through a ref for the same reason `touched` is (IMPORTANT 6
+  // above): this callback has empty deps and used to see the first render's `false` for ever,
+  // so an OCR date overwrote a balance date a person had set by hand.
+  const balanceDateTouchedRef = useRef(balanceDateTouched);
+  useEffect(() => {
+    balanceDateTouchedRef.current = balanceDateTouched;
+  }, [balanceDateTouched]);
+  const kindRef = useRef(selectedKind);
+  useEffect(() => {
+    kindRef.current = selectedKind;
+  }, [selectedKind]);
+  const billTouchedRef = useRef(billTouched);
+  useEffect(() => {
+    billTouchedRef.current = billTouched;
+  }, [billTouched]);
+
+  /** MUST-10.3: only EMPTY, untouched fields are filled from a suggestion. */
+  const onSuggestions = useCallback((fields: SuggestedFieldsDto) => {
+    const current = touchedRef.current;
+    const kind = kindRef.current;
+    if (fields.purchaseDate && !current.purchaseDate) {
+      setPurchaseDate(fields.purchaseDate);
+      if (!balanceDateTouchedRef.current) setBalanceAsOfDate(fields.purchaseDate);
+      setSuggested((s) => ({ ...s, purchaseDate: true }));
+    }
+    if (fields.vendor && !current.vendor) {
+      setVendor(fields.vendor);
+      setSuggested((s) => ({ ...s, vendor: true }));
+    }
+    /*
+      Spec 2026-09-30 §2.3: the amount goes to the field the KIND actually has. It used to go to
+      `price` unconditionally -- an input the form never renders for a bill -- so a bill's amount
+      due was found and then thrown away.
+    */
+    if (fields.priceCents !== undefined) {
+      if (installmentsAllowedForKind(kind)) {
+        if (!billTouchedRef.current.amountDue) {
+          setAmountDue(centsToInput(fields.priceCents));
+          setSuggested((s) => ({ ...s, amountDue: true }));
+        }
+      } else if (billingAllowedForKind(kind)) {
+        setBillingAmount((value) => (value === '' ? centsToInput(fields.priceCents!) : value));
+      } else if (!current.price) {
+        setPrice(centsToInput(fields.priceCents));
+        setSuggested((s) => ({ ...s, price: true }));
+      }
+    }
+    if (fields.dueDate && installmentsAllowedForKind(kind) && !billTouchedRef.current.dueDate) {
+      setDueDate(fields.dueDate);
+      setSuggested((s) => ({ ...s, dueDate: true }));
+    }
+  }, []);
 
   // v1.3.1: the loan money fields follow the SELECTED kind live, same pattern as billing above.
   const [principal, setPrincipal] = useState('');
@@ -214,7 +275,11 @@ export function NewWarrantyClient({
       <PageHeader
         eyebrow="Loans & Coverage"
         title="Add item"
-        description="Attach the receipt first and the date, vendor and price fill themselves in."
+        description={
+          installmentsApplicable
+            ? 'Attach the bill first and the amount due and due date fill themselves in.'
+            : 'Attach the receipt first and the date, vendor and price fill themselves in.'
+        }
         actions={
           <Link href="/warranties" className={buttonClass('ghost', 'sm')}>
             Back to Loans &amp; Coverage
@@ -406,6 +471,54 @@ export function NewWarrantyClient({
                       placeholder="e.g. 15.99"
                       value={billingAmount}
                       onChange={(e) => setBillingAmount(e.target.value)}
+                      className={inputClass}
+                    />
+                  </Field>
+                </>
+              ) : null}
+
+              {/* Spec 2026-09-30 §2.1. Both or neither: the action refuses half a pair with
+                  BILL_PAIR_ERROR. A plan with several dates adds the rest on the detail page. */}
+              {installmentsApplicable ? (
+                <>
+                  <Field
+                    label={BILL_AMOUNT_DUE_LABEL}
+                    htmlFor="bill-amount-due"
+                    hint={suggestedNote(suggested.amountDue, () => {
+                      setAmountDue('');
+                      setSuggested((s) => ({ ...s, amountDue: false }));
+                    })}
+                  >
+                    <input
+                      id="bill-amount-due"
+                      name="amountDue"
+                      inputMode="decimal"
+                      placeholder="e.g. 444.43"
+                      value={amountDue}
+                      onChange={(e) => {
+                        setAmountDue(e.target.value);
+                        setBillTouched((t) => ({ ...t, amountDue: true }));
+                      }}
+                      className={inputClass}
+                    />
+                  </Field>
+                  <Field
+                    label={BILL_DUE_DATE_LABEL}
+                    htmlFor="bill-due-date"
+                    hint={suggestedNote(suggested.dueDate, () => {
+                      setDueDate('');
+                      setSuggested((s) => ({ ...s, dueDate: false }));
+                    })}
+                  >
+                    <input
+                      id="bill-due-date"
+                      type="date"
+                      name="dueDate"
+                      value={dueDate}
+                      onChange={(e) => {
+                        setDueDate(e.target.value);
+                        setBillTouched((t) => ({ ...t, dueDate: true }));
+                      }}
                       className={inputClass}
                     />
                   </Field>

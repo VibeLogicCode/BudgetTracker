@@ -468,6 +468,10 @@ export const INSTALLMENT_STATES: readonly InstallmentState[] = ['paid', 'overdue
 /** MUST-19.11: the one place the section is named. */
 export const INSTALLMENT_SECTION_LABEL = 'Installments';
 
+/** Spec 2026-09-30 §2.1. The create form's pair for a bill, and the detail page's add-installment form. */
+export const BILL_AMOUNT_DUE_LABEL = 'Amount due';
+export const BILL_DUE_DATE_LABEL = 'Due date';
+
 const INSTALLMENT_STATE_LABELS: Record<InstallmentState, string> = {
   paid: 'Paid',
   overdue: 'Overdue',

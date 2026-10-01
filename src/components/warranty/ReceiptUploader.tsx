@@ -27,6 +27,8 @@ export interface SuggestedFieldsDto {
   purchaseDate?: string;
   vendor?: string;
   priceCents?: number;
+  /** Spec 2026-09-30 §2.3: a bill's due date. Optional until the extractor reads one. */
+  dueDate?: string;
 }
 
 export const POLL_INTERVAL_MS = 1500;

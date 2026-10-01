@@ -375,3 +375,41 @@ describe('v1.12.1: the Bill kind is findable from /warranties/new (item BH)', ()
     expect(screen.queryByText(HINT)).toBeNull();
   });
 });
+
+/** Spec 2026-09-30 §2.1: the amount is asked for on creation, for the one kind whose money lives in a schedule. */
+describe('a bill asks for its amount and due date', () => {
+  // Kept out of the shared `types` above: the option-label test asserts that list exactly.
+  const billTypes = [...types, { id: 4, name: 'Bill', kind: 'bill' as const }];
+
+  it('shows Amount due and Due date for a bill, and for no other kind', () => {
+    const { container } = renderForm({ types: billTypes });
+    const pick = (id: string) => fireEvent.change(container.querySelector('[name="typeId"]')!, { target: { value: id } });
+
+    pick('4');
+    expect(container.querySelector('input[name="amountDue"]')).toBeTruthy();
+    expect((container.querySelector('input[name="dueDate"]') as HTMLInputElement).type).toBe('date');
+    // A bill has no cadence pair and no price (rulings B4/C4): those stay hidden.
+    expect(container.querySelector('input[name="billingAmount"]')).toBeNull();
+    expect(container.querySelector('input[name="price"]')).toBeNull();
+
+    pick('2'); // subscription
+    expect(container.querySelector('input[name="amountDue"]')).toBeNull();
+    pick('1'); // warranty
+    expect(container.querySelector('input[name="amountDue"]')).toBeNull();
+  });
+
+  it('clears the pair when the type changes away from bill, so a stale value cannot post', () => {
+    const { container } = renderForm({ types: billTypes });
+    fireEvent.change(container.querySelector('[name="typeId"]')!, { target: { value: '4' } });
+    fireEvent.change(container.querySelector('input[name="amountDue"]')!, { target: { value: '444.43' } });
+    fireEvent.change(container.querySelector('[name="typeId"]')!, { target: { value: '1' } });
+    fireEvent.change(container.querySelector('[name="typeId"]')!, { target: { value: '4' } });
+    expect((container.querySelector('input[name="amountDue"]') as HTMLInputElement).value).toBe('');
+  });
+
+  it('says what a bill form is for, not that a price fills itself in', () => {
+    const { container } = renderForm({ types: billTypes });
+    fireEvent.change(container.querySelector('[name="typeId"]')!, { target: { value: '4' } });
+    expect(container.textContent).toContain('Attach the bill first and the amount due and due date fill themselves in.');
+  });
+});
