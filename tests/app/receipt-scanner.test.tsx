@@ -2,16 +2,21 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { SCANNER_AUTO_ACCEPT_MS } from '@/lib/warranty/ocr/onnx/constants';
-import { ReceiptUploader, SCANNER_PREPARING_MESSAGE, SCANNER_UNAVAILABLE_MESSAGE } from '@/components/warranty/ReceiptUploader';
+import {
+  ReceiptUploader,
+  SCANNER_NO_PAPER_MESSAGE,
+  SCANNER_PREPARING_MESSAGE,
+  SCANNER_UNAVAILABLE_MESSAGE,
+} from '@/components/warranty/ReceiptUploader';
 import * as scanModule from '@/lib/scanner/scan';
 
 const CORRECTED = new File(['corrected-bytes'], 'receipt.jpg', { type: 'image/jpeg' });
 
-function stageResponse(mime = 'image/jpeg', name = 'receipt.jpg') {
+function stageResponse(mime = 'image/jpeg', name = 'receipt.jpg', stagingId = 's1') {
   return {
     ok: true,
     json: async () => ({
-      staged: [{ stagingId: 's1', originalFilename: name, mime, sizeBytes: 12, sha256: 'a'.repeat(64) }],
+      staged: [{ stagingId, originalFilename: name, mime, sizeBytes: 12, sha256: 'a'.repeat(64) }],
     }),
   } as Response;
 }
@@ -183,6 +188,45 @@ describe('MUST-8.15: an upload is never blocked by the scanner', () => {
     await screen.findByText('receipt.jpg');
     expect((fetchMock.mock.calls[0][1].body as FormData).getAll('file')[0]).toBe(original);
   });
+
+  /** Spec 2026-09-30 §2.5: a fallback says so instead of uploading in silence. */
+  it.each(['no-paper', 'bad-quad'] as const)(
+    'says the whole photo is being used when the scan came back %s, and it outlasts the upload',
+    async (reason) => {
+      const original = new File(['jpeg'], 'receipt.jpg', { type: 'image/jpeg' });
+      vi.spyOn(scanModule, 'scanReceiptFile').mockResolvedValue({ file: original, reason });
+      const fetchMock = vi.fn().mockResolvedValue(stageResponse());
+      vi.stubGlobal('fetch', fetchMock);
+      const { container } = render(<ReceiptUploader onStagedChange={vi.fn()} />);
+      pick(container, [original]);
+
+      // The tile is there, so upload() has already put READING_MESSAGE on the shared notice.
+      await screen.findByText('receipt.jpg');
+      expect(screen.getByText(SCANNER_NO_PAPER_MESSAGE)).toBeTruthy();
+      expect(SCANNER_NO_PAPER_MESSAGE).toBe("Couldn't find the paper edges — using the whole photo.");
+      expect((fetchMock.mock.calls[0][1].body as FormData).getAll('file')[0]).toBe(original);
+    },
+  );
+
+  it('says nothing about the edges when the crop was only over the byte cap, and the next pick clears it', async () => {
+    const original = new File(['jpeg'], 'receipt.jpg', { type: 'image/jpeg' });
+    const scan = vi.spyOn(scanModule, 'scanReceiptFile').mockResolvedValueOnce({ file: original, reason: 'no-paper' });
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(stageResponse())
+        .mockResolvedValueOnce(stageResponse('image/jpeg', 'receipt.jpg', 's2')),
+    );
+    const { container } = render(<ReceiptUploader onStagedChange={vi.fn()} />);
+    pick(container, [original]);
+    await screen.findByText(SCANNER_NO_PAPER_MESSAGE);
+
+    scan.mockResolvedValueOnce({ file: original, reason: 'too-large' });
+    pick(container, [original]);
+    await vi.waitFor(() => expect(scan).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(screen.queryByText(SCANNER_NO_PAPER_MESSAGE)).toBeNull());
+  });
 });
 
 describe('F5 (v1.8.0): scanner progress text', () => {
@@ -219,7 +263,15 @@ describe('MUST-8.16 / MUST-8.17: several files, and cleanup', () => {
       live -= 1;
       return { file };
     });
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stageResponse()));
+    // One staging id per upload, as the server hands out: three tiles must not share a key.
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(stageResponse('image/jpeg', 'a.jpg', 's1'))
+        .mockResolvedValueOnce(stageResponse('image/jpeg', 'b.jpg', 's2'))
+        .mockResolvedValueOnce(stageResponse('image/jpeg', 'c.jpg', 's3')),
+    );
     const { container } = render(<ReceiptUploader onStagedChange={vi.fn()} />);
     pick(container, [
       new File(['a'], 'a.jpg', { type: 'image/jpeg' }),

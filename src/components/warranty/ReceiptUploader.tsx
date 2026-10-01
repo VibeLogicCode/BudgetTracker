@@ -1,15 +1,19 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { type ChangeEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { Notice } from '@/components/ui/Notice';
 import { ReceiptScanPreview } from '@/components/warranty/ReceiptScanPreview';
 import { scanReceiptFile, type ScanQuad } from '@/lib/scanner/scan';
 import { SCANNER_AUTO_ACCEPT_MS } from '@/lib/warranty/ocr/onnx/constants';
+import type { AmountCandidate, DateCandidate } from '@/lib/warranty/suggest';
+import { isIsoDate } from '@/lib/dates';
+import { formatCents } from '@/lib/money';
 import { buttonClass } from '@/components/ui/Button';
 
 /**
- * The only file control in the feature. MUST-6.1 fixes its exact shape; MUST-10.2 fixes its
- * behaviour: OCR NEVER blocks the form. The Save button stays enabled the whole time.
+ * The only file control in the feature: the camera input, whose exact shape MUST-6.1 fixes, and
+ * beside it a plain one without capture (spec 2026-09-30 §2.5). MUST-10.2 fixes the behaviour:
+ * OCR NEVER blocks the form. The Save button stays enabled the whole time.
  */
 export interface StagedFile {
   stagingId: string;
@@ -21,6 +25,12 @@ export interface StagedFile {
   previewUrl: string | null;
   ocr: 'pending' | 'done' | 'failed';
   error?: string;
+  /** Spec 2026-09-30 §2.3: what the reader recognised, line by line, shown under the tile. */
+  lines?: string[];
+  /** Every amount and date found, with the words around it, offered as chips. */
+  candidates?: { amounts: AmountCandidate[]; dates: DateCandidate[] };
+  /** What the read filled in, for the tile's one-line summary. */
+  suggestions?: SuggestedFieldsDto;
 }
 
 export interface SuggestedFieldsDto {
@@ -29,6 +39,29 @@ export interface SuggestedFieldsDto {
   priceCents?: number;
   /** Spec 2026-09-30 §2.3: a bill's due date. Optional until the extractor reads one. */
   dueDate?: string;
+}
+
+/** Spec 2026-09-30 §2.3: a read that filled nothing says so, rather than a bare "Read". */
+export const SCAN_SUMMARY_NOTHING = 'Read, but found no vendor, date or amount — check the text below.';
+
+/** The tile's one line on what a finished read filled in. */
+export function summaryOf(fields: SuggestedFieldsDto): string {
+  const filled = [
+    fields.vendor ? 'vendor' : null,
+    fields.purchaseDate || fields.dueDate ? 'date' : null,
+    fields.priceCents !== undefined ? 'amount' : null,
+  ].filter((x): x is string => x !== null);
+  if (filled.length === 0) return SCAN_SUMMARY_NOTHING;
+  return `Filled ${filled.join(', ')}${fields.priceCents === undefined ? ' — no total found' : ''}.`;
+}
+
+/**
+ * A chip's date, readable. Read at local midnight: `new Date(iso)` alone parses as UTC and
+ * shows the day before anywhere west of it (the same fix transactions-client.tsx applies).
+ */
+function chipDate(iso: string): string {
+  if (!isIsoDate(iso)) return iso;
+  return new Date(`${iso}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 export const POLL_INTERVAL_MS = 1500;
@@ -56,6 +89,13 @@ export const SCANNER_PREPARING_MESSAGE = 'Preparing the scanner — first use do
  * reject) rather than one a real scan failure reaches -- see that catch's own comment.
  */
 export const SCANNER_UNAVAILABLE_MESSAGE = 'Scanning is unavailable, uploading the original photo instead.';
+/**
+ * Spec 2026-09-30 §2.5: a scan that found no usable paper edges says so instead of uploading in
+ * silence. Its own line, not the shared notice: upload() puts READING_MESSAGE there a moment
+ * later, which would make this a flash nobody can read. Shown for no-paper and bad-quad only; a
+ * too-large crop found the edges fine and fell back on the byte cap.
+ */
+export const SCANNER_NO_PAPER_MESSAGE = "Couldn't find the paper edges — using the whole photo.";
 
 interface StageResponse {
   staged?: { stagingId: string; originalFilename: string; mime: string; sizeBytes: number; sha256: string }[];
@@ -65,8 +105,12 @@ interface StageResponse {
 interface PollResponse {
   status: 'pending' | 'done' | 'failed';
   suggestions?: SuggestedFieldsDto;
+  lines?: string[];
+  candidates?: { amounts: AmountCandidate[]; dates: DateCandidate[] };
   error?: string;
 }
+
+const READ_FAILED_MESSAGE = 'That receipt could not be read.';
 
 interface Pending {
   original: File;
@@ -80,17 +124,30 @@ interface Pending {
 
 const COUNTDOWN_TICK_MS = 1000;
 
+const FILE_INPUT_CLASS =
+  'text-sm text-muted file:mr-3 file:rounded-md file:border-0 file:bg-accent-soft file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-accent-soft-fg';
+
+/** reconcile-loan-form.tsx's chip, so a figure to tap looks the same on every surface. */
+const CHIP_CLASS = 'rounded-md border border-line px-2 py-1 text-left text-xs text-muted hover:border-accent';
+
 export function ReceiptUploader({
   onStagedChange,
   onSuggestions,
+  onPickAmount,
+  onPickDate,
   label = 'Receipt photo or PDF',
 }: {
   onStagedChange: (files: StagedFile[]) => void;
   onSuggestions?: (suggestions: SuggestedFieldsDto) => void;
+  /** A tapped amount chip (spec §2.3). No handler, no amount chips: a chip that does nothing is worse than none. */
+  onPickAmount?: (cents: number) => void;
+  /** A tapped date chip, as an ISO date. No handler, no date chips. */
+  onPickDate?: (iso: string) => void;
   label?: string;
 }) {
   const [files, setFiles] = useState<StagedFile[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
+  const [scanNote, setScanNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [scanning, setScanning] = useState(false);
@@ -106,6 +163,11 @@ export function ReceiptUploader({
   // empty deps, so it needs a ref to see whatever preview URLs exist AT UNMOUNT TIME.
   const previewUrlsRef = useRef<string[]>([]);
   const resolvePendingRef = useRef<((file: File) => void) | null>(null);
+  // The file each staging id was uploaded from, so Try again can send the same one again.
+  const originalsRef = useRef(new Map<string, File>());
+  // Review focus 5: every staging id still being polled. The shared notice belongs to all of
+  // them, so the first receipt to finish no longer clears it for the rest.
+  const readingRef = useRef(new Set<string>());
 
   useEffect(() => {
     filesRef.current = files;
@@ -138,6 +200,21 @@ export function ReceiptUploader({
   const poll = useCallback(
     (stagingId: string) => {
       const startedAt = Date.now();
+      readingRef.current.add(stagingId);
+      /** This receipt stopped reading. The reading notice goes only once none is left. */
+      const settle = () => {
+        readingRef.current.delete(stagingId);
+        if (readingRef.current.size === 0) setNotice((current) => (current === READING_MESSAGE ? null : current));
+      };
+      /*
+        MUST-10.2 step 4: show the error and carry on. On the tile it belongs to rather than the
+        shared notice, which several receipts share and which stays on while any still reads.
+        Rendered as a text node only (MUST-13.3) — never dangerouslySetInnerHTML.
+      */
+      const fail = (error: string) => {
+        setFiles((prev) => prev.map((file) => (file.stagingId === stagingId ? { ...file, ocr: 'failed', error } : file)));
+        settle();
+      };
       const timer = setInterval(async () => {
         // IMPORTANT 2: a rejected fetch/json (offline, transient network blip) must not
         // become an unhandled promise rejection, and must not kill this interval either --
@@ -146,6 +223,7 @@ export function ReceiptUploader({
         try {
           if (Date.now() - startedAt > POLL_GIVE_UP_MS) {
             clearInterval(timer);
+            readingRef.current.delete(stagingId);
             setNotice(POLL_GIVE_UP_MESSAGE);
             return;
           }
@@ -154,28 +232,32 @@ export function ReceiptUploader({
             // IMPORTANT 3: a non-ok response (e.g. a 401 on session expiry) must not leave
             // this tile reading "Reading…" forever -- mark it failed and stop polling it.
             clearInterval(timer);
-            setFiles((prev) =>
-              prev.map((file) => (file.stagingId === stagingId ? { ...file, ocr: 'failed' } : file)),
-            );
-            setNotice('That receipt could not be read.');
+            fail(READ_FAILED_MESSAGE);
             return;
           }
           const body = (await response.json()) as PollResponse;
           if (body.status === 'pending') return;
           clearInterval(timer);
+          if (body.status === 'failed') {
+            fail(body.error ?? READ_FAILED_MESSAGE);
+            return;
+          }
           setFiles((prev) =>
             prev.map((file) =>
-              file.stagingId === stagingId ? { ...file, ocr: body.status, error: body.error } : file,
+              file.stagingId === stagingId
+                ? {
+                    ...file,
+                    ocr: 'done',
+                    error: undefined,
+                    lines: body.lines ?? [],
+                    candidates: body.candidates ?? { amounts: [], dates: [] },
+                    suggestions: body.suggestions ?? {},
+                  }
+                : file,
             ),
           );
-          if (body.status === 'done') {
-            setNotice(null);
-            if (onSuggestions && body.suggestions) onSuggestions(body.suggestions);
-          } else {
-            // MUST-10.2 step 4: show the error and carry on. Rendered as a text node only
-            // (MUST-13.3) — never dangerouslySetInnerHTML.
-            setNotice(body.error ?? 'That receipt could not be read.');
-          }
+          settle();
+          if (onSuggestions && body.suggestions) onSuggestions(body.suggestions);
         } catch {
           // Transient failure this tick only -- leave the timer running.
         }
@@ -208,6 +290,7 @@ export function ReceiptUploader({
         previewUrl: entry.mime.startsWith('image/') ? URL.createObjectURL(chosen[index]) : null,
         ocr: 'pending' as const,
       }));
+      body.staged.forEach((entry, index) => originalsRef.current.set(entry.stagingId, chosen[index]));
       setFiles((prev) => [...prev, ...staged]);
       setNotice(READING_MESSAGE);
       for (const entry of staged) poll(entry.stagingId);
@@ -239,7 +322,10 @@ export function ReceiptUploader({
     } finally {
       setScanning(false);
     }
-    if (result.corrected === undefined) return result.file;
+    if (result.corrected === undefined) {
+      if (result.reason === 'no-paper' || result.reason === 'bad-quad') setScanNote(SCANNER_NO_PAPER_MESSAGE);
+      return result.file;
+    }
 
     const originalUrl = URL.createObjectURL(original);
     previewUrlsRef.current = [...previewUrlsRef.current, originalUrl, result.corrected.url];
@@ -263,6 +349,8 @@ export function ReceiptUploader({
   }
 
   async function handlePicked(chosen: File[]): Promise<void> {
+    // A new pick gets its own word on the scan, not the last one's.
+    setScanNote(null);
     // Sequentially, never in parallel: three simultaneous warps is how a mid-range Android
     // tab crashes.
     for (const original of chosen) {
@@ -271,7 +359,21 @@ export function ReceiptUploader({
     }
   }
 
+  /** Both inputs, the camera one and the plain one, hand their pick over the same way. */
+  function onPick(event: ChangeEvent<HTMLInputElement>): void {
+    // CRITICAL fix: snapshot the FileList into a plain array FIRST. Resetting
+    // event.target.value below clears the browser's underlying FileList object (it
+    // does not swap in a new, separate one) -- any reference to `list` taken after
+    // that point sees an empty list once the async upload() resumes past its first
+    // await, which is exactly what silently dropped every image receipt before.
+    const list = event.target.files;
+    const chosen = list ? Array.from(list) : [];
+    if (chosen.length > 0) void handlePicked(chosen);
+    event.target.value = '';
+  }
+
   function remove(stagingId: string): void {
+    originalsRef.current.delete(stagingId);
     setFiles((prev) => {
       const target = prev.find((file) => file.stagingId === stagingId);
       if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl);
@@ -279,38 +381,52 @@ export function ReceiptUploader({
     });
   }
 
+  /** A failed read, sent again: the same file, staged afresh, instead of the failed tile. */
+  function retry(stagingId: string): void {
+    const file = originalsRef.current.get(stagingId);
+    remove(stagingId);
+    if (file) void upload([file]);
+  }
+
   return (
     <div className="flex flex-col gap-3">
-      <label className="flex flex-col gap-1.5">
-        <span className="field-label">{label}</span>
-        {/* MUST-6.1, exactly: capture="environment" opens a phone's rear camera directly and
-            is ignored by a desktop browser. There is no native app and no live camera stream
-            requested from the page -- the still image the camera app hands back is then
-            straightened with an in-browser canvas crop, never a live viewfinder. */}
-        <input
-          type="file"
-          name="file"
-          accept="image/*,application/pdf"
-          capture="environment"
-          multiple
-          disabled={busy}
-          onChange={(event) => {
-            // CRITICAL fix: snapshot the FileList into a plain array FIRST. Resetting
-            // event.target.value below clears the browser's underlying FileList object (it
-            // does not swap in a new, separate one) -- any reference to `list` taken after
-            // that point sees an empty list once the async upload() resumes past its first
-            // await, which is exactly what silently dropped every image receipt before.
-            const list = event.target.files;
-            const chosen = list ? Array.from(list) : [];
-            if (chosen.length > 0) void handlePicked(chosen);
-            event.target.value = '';
-          }}
-          className="text-sm text-muted file:mr-3 file:rounded-md file:border-0 file:bg-accent-soft file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-accent-soft-fg"
-        />
-      </label>
+      <div className="flex flex-wrap gap-x-6 gap-y-3">
+        <label className="flex flex-col gap-1.5">
+          <span className="field-label">{label}</span>
+          {/* MUST-6.1, exactly: capture="environment" opens a phone's rear camera directly and
+              is ignored by a desktop browser. There is no native app and no live camera stream
+              requested from the page -- the still image the camera app hands back is then
+              straightened with an in-browser canvas crop, never a live viewfinder. */}
+          <input
+            type="file"
+            name="file"
+            accept="image/*,application/pdf"
+            capture="environment"
+            multiple
+            disabled={busy}
+            onChange={onPick}
+            className={FILE_INPUT_CLASS}
+          />
+        </label>
+        {/* Spec 2026-09-30 §2.5: with capture set, a phone goes straight to the camera and offers
+            no way to a PDF or a photo already taken. This one has no capture, so it opens the
+            phone's file picker; on a desktop the two behave the same. */}
+        <label className="flex flex-col gap-1.5">
+          <span className="field-label">Choose a file or PDF</span>
+          <input
+            type="file"
+            accept="image/*,application/pdf"
+            multiple
+            disabled={busy}
+            onChange={onPick}
+            className={FILE_INPUT_CLASS}
+          />
+        </label>
+      </div>
 
       {error ? <Notice tone="error">{error}</Notice> : null}
       {notice ? <p className="text-sm text-muted">{notice}</p> : null}
+      {scanNote ? <p className="text-sm text-muted">{scanNote}</p> : null}
 
       {scanning ? (
         <p className="text-sm text-muted" role="status">
@@ -332,33 +448,96 @@ export function ReceiptUploader({
 
       {files.length > 0 ? (
         <ul className="flex flex-wrap gap-3">
-          {files.map((file) => (
-            <li
-              key={file.stagingId}
-              className="flex w-40 flex-col gap-1.5 rounded-md border border-line bg-surface-2/50 p-2 text-xs"
-            >
-              <span className="flex h-24 items-center justify-center overflow-hidden rounded-xs bg-surface">
-                {file.previewUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={file.previewUrl} alt={file.originalFilename} className="max-h-24 w-full object-contain" />
-                ) : (
-                  <span className="text-subtle">PDF</span>
-                )}
-              </span>
-              <span className="truncate font-medium text-ink" title={file.originalFilename}>{file.originalFilename}</span>
-              <span className={file.ocr === 'failed' ? 'money-neg' : 'text-subtle'}>
-                {file.ocr === 'pending' ? 'Reading…' : file.ocr === 'done' ? 'Read' : 'Could not read'}
-              </span>
-              <button
-                type="button"
-                onClick={() => remove(file.stagingId)}
-                aria-label={`Remove ${file.originalFilename}`}
-                className={buttonClass('ghost', 'sm', 'w-fit px-1.5 text-xs')}
+          {files.map((file) => {
+            const amounts = onPickAmount ? (file.candidates?.amounts ?? []) : [];
+            const dates = onPickDate ? (file.candidates?.dates ?? []) : [];
+            return (
+              <li
+                key={file.stagingId}
+                className="flex w-full flex-col gap-1.5 rounded-md border border-line bg-surface-2/50 p-2 text-xs sm:w-72"
               >
-                Remove
-              </button>
-            </li>
-          ))}
+                <span className="flex h-24 items-center justify-center overflow-hidden rounded-xs bg-surface">
+                  {file.previewUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={file.previewUrl} alt={file.originalFilename} className="max-h-24 w-full object-contain" />
+                  ) : (
+                    <span className="text-subtle">PDF</span>
+                  )}
+                </span>
+                <span className="truncate font-medium text-ink" title={file.originalFilename}>{file.originalFilename}</span>
+                <span className={file.ocr === 'failed' ? 'money-neg' : 'text-subtle'}>
+                  {file.ocr === 'pending' ? 'Reading…' : file.ocr === 'done' ? 'Read' : 'Could not read'}
+                </span>
+                {file.ocr === 'failed' && file.error ? <p className="text-muted">{file.error}</p> : null}
+                {file.ocr === 'done' ? <p className="text-muted">{summaryOf(file.suggestions ?? {})}</p> : null}
+                {/* Spec 2026-09-30 §2.3: what the reader saw, so a wrong or missing figure can be
+                    checked against it. Text from an arbitrary receipt: text nodes only (MUST-13.3). */}
+                {file.lines && file.lines.length > 0 ? (
+                  <details>
+                    <summary className="cursor-pointer text-subtle">What was read</summary>
+                    <ol className="mt-1 flex max-h-48 flex-col gap-0.5 overflow-y-auto break-words text-muted">
+                      {file.lines.map((line, index) => (
+                        <li key={index}>{line}</li>
+                      ))}
+                    </ol>
+                  </details>
+                ) : null}
+                {amounts.length > 0 || dates.length > 0 ? (
+                  <div className="flex flex-col gap-1">
+                    <p className="text-subtle">Figures found — tap one to use it:</p>
+                    <div className="flex flex-wrap gap-2">
+                      {amounts.map((candidate, index) => (
+                        <button
+                          key={`amount-${index}`}
+                          type="button"
+                          onClick={() => onPickAmount?.(candidate.valueCents)}
+                          className={CHIP_CLASS}
+                          /* The snippet is text from an arbitrary receipt: rendered as a text node
+                             and as a title, never as markup (MUST-13.3). */
+                          title={candidate.snippet}
+                        >
+                          {formatCents(candidate.valueCents)}
+                          <span className="block max-w-56 truncate text-subtle">{candidate.snippet}</span>
+                        </button>
+                      ))}
+                      {dates.map((candidate, index) => (
+                        <button
+                          key={`date-${index}`}
+                          type="button"
+                          onClick={() => onPickDate?.(candidate.date)}
+                          className={CHIP_CLASS}
+                          title={candidate.snippet}
+                        >
+                          {chipDate(candidate.date)}
+                          <span className="block max-w-56 truncate text-subtle">{candidate.snippet}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                <div className="flex flex-wrap gap-1">
+                  {file.ocr === 'failed' ? (
+                    <button
+                      type="button"
+                      onClick={() => retry(file.stagingId)}
+                      disabled={busy}
+                      className={buttonClass('ghost', 'sm', 'w-fit px-1.5 text-xs')}
+                    >
+                      Try again
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => remove(file.stagingId)}
+                    aria-label={`Remove ${file.originalFilename}`}
+                    className={buttonClass('ghost', 'sm', 'w-fit px-1.5 text-xs')}
+                  >
+                    Remove
+                  </button>
+                </div>
+              </li>
+            );
+          })}
         </ul>
       ) : null}
     </div>
