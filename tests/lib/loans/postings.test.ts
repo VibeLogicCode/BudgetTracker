@@ -417,8 +417,11 @@ describe('reconcile is atomic (A2)', () => {
 
   it('an older statement entered after a newer one compares against the anchor before it (A11)', () => {
     const itemId = seedInterestLoan();
-    setLoanAnchor({ itemId, asOfDate: '2026-09-01', balanceCents: 1_016_736, source: 'reconcile', actorUserId: c.userId });
-    setLoanAnchor({ itemId, asOfDate: '2026-08-01', balanceCents: 1_008_000, source: 'reconcile', actorUserId: c.userId });
+    // An explicit `at`: left to the real clock, September's posting lands on top once the suite runs
+    // in October, and the newest statement no longer reads as the balance.
+    const at = new Date('2026-09-18T12:00:00.000Z');
+    setLoanAnchor({ itemId, asOfDate: '2026-09-01', balanceCents: 1_016_736, source: 'reconcile', actorUserId: c.userId, at });
+    setLoanAnchor({ itemId, asOfDate: '2026-08-01', balanceCents: 1_008_000, source: 'reconcile', actorUserId: c.userId, at });
     // The newest BY DATE still governs the balance.
     expect(c.balanceOf(itemId)).toBe(1_016_736);
   });

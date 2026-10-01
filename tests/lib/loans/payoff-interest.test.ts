@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../helpers/db';
 import { listItemTypes } from '@/lib/warranty/types';
 import { createWarrantyItem } from '@/lib/warranty/items';
@@ -150,6 +150,20 @@ describe('payoffProjection: a balance being drawn on', () => {
  * dashboard's payoff date and the ledger's cycle charge cannot describe different loans.
  */
 describe('payoffProjection: a daily rate costs a month, not a day', () => {
+  /*
+    setLoanAnchor and assignTransactionToLoan post due interest up to their own `at`, which defaults
+    to the real clock. Unpinned, the ledger runs past 2026-07-15 to whatever day the suite happens to
+    run, the stored balance grows by every month since, and the projection below charges those
+    months a second time -- so the payoff month drifted later as the calendar moved. Pinned to the
+    day the projection is asked about, the ledger holds what it would hold then.
+  */
+  beforeEach(() => {
+    vi.useFakeTimers({ now: new Date('2026-07-15T12:00:00Z'), toFake: ['Date'] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   function lineOfCredit(monthlyPaymentCents: number): number {
     const { itemId, user, accountId } = loanWith({ interestRateBps: 1999 });
     setLoanAnchor({ itemId, asOfDate: '2025-12-31', balanceCents: 2_000_000, source: 'reconcile', actorUserId: user });
@@ -171,13 +185,17 @@ describe('payoffProjection: a daily rate costs a month, not a day', () => {
    * Pinned against a hand simulation, because the whole point of B1 is that the app was confidently
    * printing the wrong month.
    *
-   * Balance at 2026-07-15 is $18,266.46. The daily rate is round(1999 x 100_000 / 365) = 547,671
-   * parts per billion, so a 31-day month at that balance costs $310.16 and a 30-day month $300.15,
-   * falling as the balance does. Against $700 a month, the balance reaches zero in the 35th month:
-   * June 2029. Charging a single day per month instead -- the defect -- reached zero in 27 months,
-   * October 2028, a year and eight months early.
+   * Balance at 2026-07-15 is $17,661.65: the $20,000 anchor, plus the postings through 2026-07-01,
+   * less six payments of $700. The daily rate is round(1999 x 100_000 / 365) = 547,671 parts per
+   * billion, so a 31-day month at that balance costs $299.86 and a 30-day month $290.18, falling as
+   * the balance does. Against $700 a month, the balance reaches zero in the 34th month: May 2029.
+   * Charging a single day per month instead -- the defect -- reached zero in 26 months,
+   * September 2028, eight months early.
+   *
+   * (This used to pin $18,266.46 and June 2029. That balance is $17,661.65 plus the July and August
+   * postings: the unpinned clock had posted them before the projection charged them again.)
    */
   it('lands where a month of daily charges puts it', () => {
-    expect(payoffProjection(lineOfCredit(70_000), '2026-07-15')!.projectedPayoffMonth).toBe('2029-06');
+    expect(payoffProjection(lineOfCredit(70_000), '2026-07-15')!.projectedPayoffMonth).toBe('2029-05');
   });
 });
