@@ -355,7 +355,8 @@ export function WarrantiesClient({
               <col style={{ width: '7rem' }} />
               {/* A five-figure amount, right-aligned, on one line. */}
               <col style={{ width: '7rem' }} />
-              {/* An amount plus its cycle suffix ("/mo" or a loan's longer "per month"). */}
+              {/* An amount plus its cycle suffix ("/mo" or a loan's longer "per month"), or -- for
+                  a Bill with several unpaid -- "3 unpaid · $1,333.29 outstanding", which wraps. */}
               <col style={{ width: '8rem' }} />
             </colgroup>
             <thead>
@@ -455,7 +456,9 @@ export function WarrantiesClient({
                       (() => {
                         const schedule = billSchedules[row.id];
                         const label = schedule === undefined ? null : billOutstandingLabel(schedule.unpaidCount, schedule.outstandingCents);
-                        return label === null ? <span className="text-subtle">—</span> : <span>{label}</span>;
+                        // The cell is nowrap for the amount-plus-cycle pair; this label is wider than
+                        // the fixed 8rem column, so it wraps rather than pushing the table sideways.
+                        return label === null ? <span className="text-subtle">—</span> : <span className="whitespace-normal">{label}</span>;
                       })()
                     ) : row.billingCycle !== null && row.billingAmountCents !== null ? (
                       <>

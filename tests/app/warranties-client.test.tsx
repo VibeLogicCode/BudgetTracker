@@ -476,6 +476,16 @@ describe('a bill row shows its money', () => {
     expect(screen.getByText('3 unpaid · $1,333.29 outstanding').closest('td')!.getAttribute('data-label')).toBe('Billing');
   });
 
+  /** The Billing column is a fixed 8rem and its cell is nowrap; this label is wider than that, so
+   *  it must wrap rather than push the table past its edge (item I, v1.16.0 item 4). */
+  it('lets the outstanding label wrap inside the fixed Billing column', () => {
+    renderList(result([bill()]), {
+      billSchedules: { 42: { nextDueDate: '2026-10-31', overdueCount: 0, nextAmountCents: 44443, unpaidCount: 3, outstandingCents: 133329 } },
+    });
+    const label = screen.getByText('3 unpaid · $1,333.29 outstanding');
+    expect(label.classList.contains('whitespace-normal')).toBe(true);
+  });
+
   it('leaves the Billing cell empty for a single installment', () => {
     const { container } = renderList(result([bill()]), { billSchedules: schedule });
     const billing = container.querySelector('td[data-label="Billing"]')!;
