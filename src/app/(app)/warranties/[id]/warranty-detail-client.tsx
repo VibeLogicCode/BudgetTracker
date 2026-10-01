@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { FormError } from '@/components/FormError';
 import { SubmitButton } from '@/components/SubmitButton';
 import { StatusBadge } from '@/components/warranty/StatusBadge';
-import { ReceiptUploader, type StagedFile } from '@/components/warranty/ReceiptUploader';
+import { ReceiptUploader, type StagedFile, type SuggestedFieldsDto } from '@/components/warranty/ReceiptUploader';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { ListRow } from '@/components/ui/ListRow';
 import { MetricCard } from '@/components/ui/MetricCard';
@@ -353,6 +353,24 @@ export function WarrantyDetailClient({
   const [newDueDate, setNewDueDate] = useState('');
   const [newAmount, setNewAmount] = useState('');
   const [installmentSuggested, setInstallmentSuggested] = useState(false);
+  // MUST-10.3: a field the person has already typed into is never overwritten by a read, same as
+  // the create form's touched flags. A ref, set in each onChange, so a read that resolves right
+  // after a keystroke still sees it.
+  const installmentTouchedRef = useRef({ dueDate: false, amount: false });
+  /** The detail uploader's onSuggestions for a bill: fills only untouched fields, and says so only when it filled one. */
+  const suggestInstallment = useCallback((fields: SuggestedFieldsDto) => {
+    const touched = installmentTouchedRef.current;
+    let filled = false;
+    if (fields.priceCents !== undefined && !touched.amount) {
+      setNewAmount(centsToInput(fields.priceCents));
+      filled = true;
+    }
+    if (fields.dueDate && !touched.dueDate) {
+      setNewDueDate(fields.dueDate);
+      filled = true;
+    }
+    if (filled) setInstallmentSuggested(true);
+  }, []);
   const [installmentRowState, installmentRowDispatch] = useActionState(
     (_prev: WarrantyActionState, formData: FormData) =>
       formData.get('intent') === 'remove'
@@ -447,11 +465,14 @@ export function WarrantyDetailClient({
   // form and drops the "Suggested from the attached bill" notice. React resets only uncontrolled
   // fields after a form action, and these two are controlled, so without this the values just
   // saved would stay in place, one press away from a duplicate. Same keyed-on-state idiom as above.
+  // The touched flags go too: an emptied field holds nothing the person typed, so the next
+  // attached bill may fill it.
   useEffect(() => {
     if (addInstallmentState.message && !addInstallmentState.error) {
       setNewDueDate('');
       setNewAmount('');
       setInstallmentSuggested(false);
+      installmentTouchedRef.current = { dueDate: false, amount: false };
     }
   }, [addInstallmentState]);
 
@@ -1115,10 +1136,32 @@ export function WarrantyDetailClient({
                 <input type="hidden" name="itemId" value={item.id} />
                 <div className="grid gap-4 sm:grid-cols-2">
                   <Field label="Due date">
-                    <input type="date" name="dueDate" aria-label="Due date" value={newDueDate} onChange={(e) => setNewDueDate(e.target.value)} className={inputClass} required />
+                    <input
+                      type="date"
+                      name="dueDate"
+                      aria-label="Due date"
+                      value={newDueDate}
+                      onChange={(e) => {
+                        installmentTouchedRef.current.dueDate = true;
+                        setNewDueDate(e.target.value);
+                      }}
+                      className={inputClass}
+                      required
+                    />
                   </Field>
                   <Field label="Amount">
-                    <input name="amount" aria-label="Amount" inputMode="decimal" value={newAmount} onChange={(e) => setNewAmount(e.target.value)} className={inputClass} placeholder="e.g. 1200.00" />
+                    <input
+                      name="amount"
+                      aria-label="Amount"
+                      inputMode="decimal"
+                      value={newAmount}
+                      onChange={(e) => {
+                        installmentTouchedRef.current.amount = true;
+                        setNewAmount(e.target.value);
+                      }}
+                      className={inputClass}
+                      placeholder="e.g. 1200.00"
+                    />
                   </Field>
                 </div>
                 {installmentSuggested ? (
@@ -1420,15 +1463,7 @@ export function WarrantyDetailClient({
                   key={uploaderKey}
                   onStagedChange={onStagedChange}
                   label="Add another receipt"
-                  onSuggestions={
-                    installmentsAllowedForKind(item.kind)
-                      ? (fields) => {
-                          if (fields.priceCents !== undefined) setNewAmount(centsToInput(fields.priceCents));
-                          if (fields.dueDate) setNewDueDate(fields.dueDate);
-                          if (fields.priceCents !== undefined || fields.dueDate) setInstallmentSuggested(true);
-                        }
-                      : undefined
-                  }
+                  onSuggestions={installmentsAllowedForKind(item.kind) ? suggestInstallment : undefined}
                 />
                 <SubmitButton className="w-fit">Attach receipts</SubmitButton>
               </form>
