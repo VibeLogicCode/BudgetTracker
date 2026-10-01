@@ -21,6 +21,43 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.53.0] - 2026-10-01
+
+### Added
+
+- **A bill asks for its amount.** Adding a bill now takes **Amount due** and **Due date** and writes
+  them as its first installment. A plan with several dates adds the rest on the bill's page; a bill
+  that comes back each cycle takes the next from the e-bill you attach. The list row shows the next
+  amount beside the due date, and how many are unpaid with the total when there are several; the
+  bill's page leads with its next payment.
+- **You can see what the receipt reader read.** Under each receipt, **What was read** opens the text
+  line by line, and the amounts and dates it found are offered as buttons with the words around
+  them — tap the one you meant. A read that finds nothing now says so instead of showing "Read".
+- A second file control on the receipt card, so a phone can pick an existing photo or a PDF rather
+  than only opening the camera.
+- An attached e-bill fills a bill's amount due and due date — on the add form and on the bill's own
+  page.
+
+### Fixed
+
+- **A tilted phone photo of a receipt reads.** Three faults in the image pipeline, each measured on
+  rendered receipts: detection boxes were scored over their bounding box instead of their polygon,
+  so every long line at a few degrees of tilt was thrown away; the crop window was not rotated
+  with the image, so lines were cut and digits dropped; and a dark countertop was taken for ink,
+  so the deskew turned a level receipt ten degrees. Lines are now grouped along the text angle, a
+  page saved sideways is turned before reading, and the fallback engine gets the same
+  preprocessing. A photo that read 86 percent of its characters wrong reads every word.
+- **An e-bill PDF reads as lines**, not as one paragraph per page, so the vendor, total and dates
+  are found. Reading stops at twenty pages.
+- The receipt reader no longer guesses a total from the largest number on the page. No total line,
+  no total — a blank you fill beats a wrong figure you have to notice.
+- The browser crop no longer rejects a long receipt photographed whole; the preview is larger and
+  the countdown longer; a scan that falls back to the whole photo says so.
+
+### Changed
+
+- The receipt card says "nothing leaves your network", which is what is true from a phone.
+
 ## [1.52.0] - 2026-09-28
 
 ### Added
