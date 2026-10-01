@@ -483,36 +483,33 @@ export function ReceiptUploader({
                   </details>
                 ) : null}
                 {amounts.length > 0 || dates.length > 0 ? (
-                  <div className="flex flex-col gap-1">
-                    <p className="text-subtle">Figures found — tap one to use it:</p>
-                    <div className="flex flex-wrap gap-2">
-                      {amounts.map((candidate, index) => (
-                        <button
-                          key={`amount-${index}`}
-                          type="button"
-                          onClick={() => onPickAmount?.(candidate.valueCents)}
-                          className={CHIP_CLASS}
-                          /* The snippet is text from an arbitrary receipt: rendered as a text node
-                             and as a title, never as markup (MUST-13.3). */
-                          title={candidate.snippet}
-                        >
-                          {formatCents(candidate.valueCents)}
-                          <span className="block max-w-56 truncate text-subtle">{candidate.snippet}</span>
-                        </button>
-                      ))}
-                      {dates.map((candidate, index) => (
-                        <button
-                          key={`date-${index}`}
-                          type="button"
-                          onClick={() => onPickDate?.(candidate.date)}
-                          className={CHIP_CLASS}
-                          title={candidate.snippet}
-                        >
-                          {chipDate(candidate.date)}
-                          <span className="block max-w-56 truncate text-subtle">{candidate.snippet}</span>
-                        </button>
-                      ))}
-                    </div>
+                  <div className="flex flex-wrap gap-2">
+                    {amounts.map((candidate, index) => (
+                      <button
+                        key={`amount-${index}`}
+                        type="button"
+                        onClick={() => onPickAmount?.(candidate.valueCents)}
+                        className={CHIP_CLASS}
+                        /* The snippet is text from an arbitrary receipt: rendered as a text node
+                           and as a title, never as markup (MUST-13.3). */
+                        title={candidate.snippet}
+                      >
+                        {formatCents(candidate.valueCents)}
+                        <span className="block max-w-56 truncate text-subtle">{candidate.snippet}</span>
+                      </button>
+                    ))}
+                    {dates.map((candidate, index) => (
+                      <button
+                        key={`date-${index}`}
+                        type="button"
+                        onClick={() => onPickDate?.(candidate.date)}
+                        className={CHIP_CLASS}
+                        title={candidate.snippet}
+                      >
+                        {chipDate(candidate.date)}
+                        <span className="block max-w-56 truncate text-subtle">{candidate.snippet}</span>
+                      </button>
+                    ))}
                   </div>
                 ) : null}
                 <div className="flex flex-wrap gap-1">

@@ -28,9 +28,9 @@ export interface ScanResult {
   corrected?: { url: string; quad: ScanQuad; sourceWidth: number; sourceHeight: number };
   /**
    * Spec 2026-09-30 §2.5: why the scanner handed back the original, so the uploader can say so.
-   * no-paper: no contour at all. bad-quad: the edges found failed MUST-8.13, or the crop of them
-   * would not encode. too-large: the crop was over the byte cap. Absent when a crop happened, and
-   * on the bails before any detection ran (no WebAssembly, no createImageBitmap, not an image).
+   * no-paper: no contour at all. bad-quad: the edges found failed MUST-8.13. too-large: the crop
+   * was over the byte cap. Absent when a crop happened, and on the runtime bails (no WebAssembly,
+   * no createImageBitmap, not an image, a crop that would not encode).
    */
   reason?: 'no-paper' | 'bad-quad' | 'too-large';
 }
@@ -200,9 +200,9 @@ async function run(file: File): Promise<ScanResult> {
       bottomRightCorner: toExtractSource(fullQuad.bottomRight),
     });
     const blob = await toBlob(extracted);
-    // Reached only after a validated quad was warped: the crop of the edges failed, so it is
-    // reported with the quads that failed rather than left silent.
-    if (blob === null) return { file, reason: 'bad-quad' };
+    // Reached only after a validated quad was warped: the edges WERE found and only the encode
+    // failed, so no reason -- "no paper edges" would be untrue. A runtime bail, like the others.
+    if (blob === null) return { file };
     // A crop that fails the size limit is not a crop, it is a rejected upload.
     if (blob.size > SCANNER_MAX_OUTPUT_BYTES) return { file, reason: 'too-large' };
 

@@ -224,8 +224,11 @@ describe('MUST-8.15: an upload is never blocked by the scanner', () => {
 
     scan.mockResolvedValueOnce({ file: original, reason: 'too-large' });
     pick(container, [original]);
-    await vi.waitFor(() => expect(scan).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(screen.queryByText(SCANNER_NO_PAPER_MESSAGE)).toBeNull());
+    // The second tile renders only after decide() has had its say about this scan, so a message
+    // it wrongly set would be on screen by now -- not still to come, as it is right after the pick.
+    await vi.waitFor(() => expect(screen.getAllByText('receipt.jpg')).toHaveLength(2));
+    expect(scan).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText(SCANNER_NO_PAPER_MESSAGE)).toBeNull();
   });
 });
 

@@ -238,7 +238,7 @@ describe('a fallback to the original carries its reason', () => {
     expect((await scanReceiptFile(file())).reason).toBe('bad-quad');
   });
 
-  it('a crop that will not encode is bad-quad: the edges were found, the crop of them failed', async () => {
+  it('a crop that will not encode gives no reason: the edges were found, so "no paper edges" would be untrue', async () => {
     const rig = buildRig();
     rig.scanner.extractPaper = vi.fn(
       () => ({ toBlob: (callback: (blob: Blob | null) => void) => callback(null) }) as unknown as HTMLCanvasElement,
@@ -249,7 +249,7 @@ describe('a fallback to the original carries its reason', () => {
     const result = await scanReceiptFile(file());
 
     expect(result.corrected).toBeUndefined();
-    expect(result.reason).toBe('bad-quad');
+    expect(result.reason).toBeUndefined();
   });
 
   it('a crop over the byte cap is too-large', async () => {
