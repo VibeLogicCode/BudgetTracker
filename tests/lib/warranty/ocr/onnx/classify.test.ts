@@ -85,6 +85,20 @@ describe('classifyAndFlip (MUST-4.24)', () => {
     expect(out[0].data).toBe(input.data);
   });
 
+  /** Spec 2026-09-30 §2.4 item 5: the engine counts these votes to tell an upside-down page. */
+  it('marks the crops it flipped, and only those', async () => {
+    const out = await classifyAndFlip(
+      [gradientCrop(0), gradientCrop(1)],
+      sessions(async () => ({
+        data: new Float32Array([1 - CLS_THRESH, CLS_THRESH, CLS_THRESH, 1 - CLS_THRESH]),
+        dims: [2, 2],
+      })),
+    );
+    expect(out.map((c) => c.flipped === true)).toEqual([true, false]);
+    expect(out[0].data[0]).toBe(70);
+    expect(out[1].data[0]).toBe(0);
+  });
+
   it('batches CLS_BATCH_SIZE crops at a time', async () => {
     const batches: number[] = [];
     const crops = Array.from({ length: CLS_BATCH_SIZE * 2 + 1 }, (_, i) => crop(i));

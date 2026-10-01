@@ -44,7 +44,8 @@ async function flip(crop: Crop): Promise<Crop> {
     .rotate(CLS_FLIP_DEGREES)
     .raw()
     .toBuffer({ resolveWithObject: true });
-  return { data, width: info.width, height: info.height, boxIndex: crop.boxIndex };
+  // The mark is the classifier's vote; the engine counts them to tell an upside-down page.
+  return { data, width: info.width, height: info.height, boxIndex: crop.boxIndex, flipped: true };
 }
 
 /**

@@ -101,6 +101,20 @@ export const DET_MAX_BOXES = 200;
 /** Ours (MUST-4.20). */
 export const CROP_MIN_ROTATE_DEG = 0.5;
 
+// Orientation
+
+/** Ours. A box counts as a text line when its horizontal extent is at least this many times its vertical one.
+ *  The same ratio the other way round makes a box tall, which is what a sideways page's lines look like. */
+export const ORIENTATION_WIDE_RATIO = 2;
+/** Ours. Fewer wide boxes than this in the turned pass is not evidence of anything. */
+export const ORIENTATION_MIN_WIDE_BOXES = 3;
+/** Ours. The turned pass must beat the upright one by this factor to win; a tie keeps the image as it came. */
+export const ORIENTATION_WIN_RATIO = 1.5;
+/** Ours. The one turn the orientation step tries, a quarter turn clockwise; 180 is settled by the line classifier. */
+export const ORIENTATION_TURN_DEG = 90;
+/** Ours. More than this fraction of lines read upside down means the page is, and positions are turned with it. */
+export const ORIENTATION_FLIP_MAJORITY = 0.5;
+
 // Orientation classifier
 
 /** RapidOCR's own CLS_SHAPE_BY_OCR_VERSION[PP-OCRv5] (ch_ppocr_cls/main.py), matching

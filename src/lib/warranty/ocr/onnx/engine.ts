@@ -4,7 +4,7 @@ import { extractPdfText } from '@/lib/warranty/ocr/pdf';
 import { assembleText, type AssemblyBox } from '@/lib/warranty/ocr/onnx/assemble';
 import { classifyAndFlip } from '@/lib/warranty/ocr/onnx/classify';
 import { cropBoxes } from '@/lib/warranty/ocr/onnx/crop';
-import { detectBoxes } from '@/lib/warranty/ocr/onnx/detect';
+import { detectOriented, pageIsUpsideDown, turnQuad180 } from '@/lib/warranty/ocr/onnx/orientation';
 import { preprocessReceipt } from '@/lib/warranty/ocr/onnx/preprocess';
 import { recognizeCrops } from '@/lib/warranty/ocr/onnx/recognize';
 import { getOnnxOcrSessions } from '@/lib/warranty/ocr/onnx/session';
@@ -24,18 +24,25 @@ export const onnxOcrEngine: OcrEngine = {
 
     const image = await preprocessReceipt(filePath);
     const sessions = await getOnnxOcrSessions();
-    const boxes = await detectBoxes(image, sessions.runDet);
+    // Spec 2026-09-30 §2.4 item 5: a page that detects sideways is turned 90 and read from that pass.
+    const { page, boxes } = await detectOriented(image, sessions.runDet);
     if (boxes.length === 0) return { text: '' };
 
-    const crops = await cropBoxes(image, boxes);
+    const crops = await cropBoxes(page, boxes);
     const oriented = await classifyAndFlip(crops, sessions);
     const lines = await recognizeCrops(oriented, sessions);
 
-    const assembly: AssemblyBox[] = lines.map((line) => ({
-      quad: boxes[line.boxIndex].quad,
-      text: line.text,
-      score: line.score,
-    }));
+    // The classifier turned each line the right way up. When it turned most of them, the page was
+    // upside down, and the box positions are turned with it so the lines assemble in reading order.
+    const upsideDown = pageIsUpsideDown(oriented.map((crop) => crop.flipped === true));
+    const assembly: AssemblyBox[] = lines.map((line) => {
+      const { quad } = boxes[line.boxIndex];
+      return {
+        quad: upsideDown ? turnQuad180(quad, page.width, page.height) : quad,
+        text: line.text,
+        score: line.score,
+      };
+    });
     return { text: assembleText(assembly) };
   },
 };

@@ -7,8 +7,6 @@ import { sql } from 'drizzle-orm';
 import { setSetting } from '@/lib/settings';
 import { OCR_TIMEOUT_MESSAGE, OCR_TIMEOUT_MS, releaseOcrEngine } from '@/lib/warranty/ocr/engine';
 import * as engineModule from '@/lib/warranty/ocr/engine';
-import { detResize } from '@/lib/warranty/ocr/onnx/detect';
-import { preprocessReceipt } from '@/lib/warranty/ocr/onnx/preprocess';
 import {
   SETTING_OCR_ENGINE,
   SETTING_OCR_ENGINE_PROBED_VERSION,
@@ -32,19 +30,22 @@ let originalDataDir: string | undefined;
 let storedFilename: string;
 
 /**
- * The detection tensor's shape must come from detResize(PREPROCESSED dims). preprocessReceipt
- * resizes and may deskew, so those differ from the stored file's nominal size, and
- * detectBoxes throws on a spatial-dimension mismatch. Deriving them from WIDTH and HEIGHT
- * would fail every case in this file for a reason unrelated to what it is testing.
+ * The detection map takes its spatial dims from the INPUT tensor, as a real detector's does,
+ * with the bar clipped to it. detectBoxes throws on a spatial-dimension mismatch, and the
+ * engine may ask at two sizes: the image as it came and, when that pass looks sideways, the
+ * image turned 90 degrees (spec 2026-09-30 §2.4 item 5). A map sized once for either would fail
+ * a case here for a reason unrelated to what it is testing. One bar is one wide box, so the page
+ * looks upright.
  */
 async function fakeSessions(over: Partial<OnnxOcrSessions> = {}): Promise<OnnxOcrSessions> {
-  const pre = await preprocessReceipt(path.join(receiptsDir(), storedFilename));
-  const geometry = detResize(pre.width, pre.height);
   return {
-    runDet: async () => {
-      const map = new Float32Array(geometry.resizeW * geometry.resizeH);
-      for (let y = 10; y < 34; y += 1) for (let x = 10; x < 140; x += 1) map[y * geometry.resizeW + x] = 0.95;
-      return { data: map, dims: [1, 1, geometry.resizeH, geometry.resizeW] };
+    runDet: async (input) => {
+      const [, , height, width] = input.dims;
+      const map = new Float32Array(width * height);
+      for (let y = 10; y < Math.min(34, height); y += 1) {
+        for (let x = 10; x < Math.min(140, width); x += 1) map[y * width + x] = 0.95;
+      }
+      return { data: map, dims: [1, 1, height, width] };
     },
     runCls: async (input) => {
       const batch = input.dims[0];

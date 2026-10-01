@@ -6,6 +6,8 @@ import type { RawImage } from '@/lib/warranty/ocr/onnx/preprocess';
 export interface Crop extends RawImage {
   /** Index into the DetectedBox[] this crop came from. Carried through every later stage. */
   boxIndex: number;
+  /** Set by classifyAndFlip on a crop it turned CLS_FLIP_DEGREES; absent on one it left alone. */
+  flipped?: boolean;
 }
 
 /** A text line is wider than it is tall, but a min-area rectangle can report the same shape

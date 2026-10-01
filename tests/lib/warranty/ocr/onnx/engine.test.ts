@@ -4,8 +4,6 @@ import os from 'node:os';
 import path from 'node:path';
 import sharp from 'sharp';
 import { onnxOcrEngine } from '@/lib/warranty/ocr/onnx/engine';
-import { detResize } from '@/lib/warranty/ocr/onnx/detect';
-import { preprocessReceipt } from '@/lib/warranty/ocr/onnx/preprocess';
 import { setOnnxSessionsForTests, type OnnxOcrSessions } from '@/lib/warranty/ocr/onnx/session';
 import { solidRgb } from '../../../../helpers/ocr-images';
 
@@ -33,21 +31,21 @@ async function receiptFile(): Promise<{ file: string; dir: string }> {
 /**
  * A fake session set that reports one box covering the top strip and decodes it to 'TOTAL'.
  *
- * The detection tensor's shape comes from detResize(PREPROCESSED dims), not from the source
- * file's nominal size: preprocessReceipt resizes and may deskew, so the two differ, and
- * detectBoxes throws on a spatial-dimension mismatch. Running the real preprocess here is
- * cheap and is the only way the fake can agree with what the engine actually asks for.
+ * The detection map takes its spatial dims from the INPUT tensor, as a real detector's does,
+ * with the bar clipped to it. detectBoxes throws on a spatial-dimension mismatch, and the
+ * engine may ask at two sizes: the image as it came and, when that pass looks sideways, the
+ * image turned 90 degrees (spec 2026-09-30 §2.4 item 5). One bar is one wide box, so the page
+ * looks upright and is read from the first pass.
  */
-async function fakeSessions(file: string): Promise<OnnxOcrSessions> {
-  const pre = await preprocessReceipt(file);
-  const geometry = detResize(pre.width, pre.height);
+async function fakeSessions(): Promise<OnnxOcrSessions> {
   return {
-    runDet: async () => {
-      const map = new Float32Array(geometry.resizeW * geometry.resizeH);
-      for (let y = 10; y < 34; y += 1) {
-        for (let x = 10; x < 120; x += 1) map[y * geometry.resizeW + x] = 0.95;
+    runDet: async (input) => {
+      const [, , height, width] = input.dims;
+      const map = new Float32Array(width * height);
+      for (let y = 10; y < Math.min(34, height); y += 1) {
+        for (let x = 10; x < Math.min(120, width); x += 1) map[y * width + x] = 0.95;
       }
-      return { data: map, dims: [1, 1, geometry.resizeH, geometry.resizeW] };
+      return { data: map, dims: [1, 1, height, width] };
     },
     runCls: async (input) => {
       const batch = input.dims[0];
@@ -77,7 +75,7 @@ describe('onnxOcrEngine (MUST-4.1, MUST-4.2)', () => {
   it('satisfies the OcrEngine interface and returns { text }', async () => {
     const { file, dir } = await receiptFile();
     try {
-      setOnnxSessionsForTests(await fakeSessions(file));
+      setOnnxSessionsForTests(await fakeSessions());
       const result = await onnxOcrEngine.recognize(file, 'image/png');
       expect(Object.keys(result)).toEqual(['text']);
       expect(result.text).toContain('TOTAL');
@@ -123,13 +121,11 @@ describe('onnxOcrEngine (MUST-4.1, MUST-4.2)', () => {
   it('returns an empty string when detection finds nothing, rather than throwing', async () => {
     const { file, dir } = await receiptFile();
     try {
-      const pre = await preprocessReceipt(file);
-      const geometry = detResize(pre.width, pre.height);
       setOnnxSessionsForTests({
-        ...(await fakeSessions(file)),
-        runDet: async () => ({
-          data: new Float32Array(geometry.resizeW * geometry.resizeH),
-          dims: [1, 1, geometry.resizeH, geometry.resizeW],
+        ...(await fakeSessions()),
+        runDet: async (input) => ({
+          data: new Float32Array(input.dims[2] * input.dims[3]),
+          dims: [1, 1, input.dims[2], input.dims[3]],
         }),
       });
       expect(await onnxOcrEngine.recognize(file, 'image/png')).toEqual({ text: '' });
@@ -142,7 +138,7 @@ describe('onnxOcrEngine (MUST-4.1, MUST-4.2)', () => {
     const { file, dir } = await receiptFile();
     try {
       setOnnxSessionsForTests({
-        ...(await fakeSessions(file)),
+        ...(await fakeSessions()),
         runDet: async () => ({ data: new Float32Array(4), dims: [1, 1, 2, 2] }),
       });
       await expect(onnxOcrEngine.recognize(file, 'image/png')).rejects.toThrow(/spatial/i);
@@ -155,7 +151,7 @@ describe('onnxOcrEngine (MUST-4.1, MUST-4.2)', () => {
     const { file, dir } = await receiptFile();
     try {
       setOnnxSessionsForTests({
-        ...(await fakeSessions(file)),
+        ...(await fakeSessions()),
         runDet: async () => {
           throw new Error('det kernel exploded');
         },
@@ -170,7 +166,7 @@ describe('onnxOcrEngine (MUST-4.1, MUST-4.2)', () => {
     const { file, dir } = await receiptFile();
     try {
       setOnnxSessionsForTests({
-        ...(await fakeSessions(file)),
+        ...(await fakeSessions()),
         runRec: async () => {
           throw new Error('rec kernel exploded');
         },
@@ -184,11 +180,65 @@ describe('onnxOcrEngine (MUST-4.1, MUST-4.2)', () => {
   it('MUST-4.35: the engine applies no cap of its own', async () => {
     const { file, dir } = await receiptFile();
     try {
-      setOnnxSessionsForTests(await fakeSessions(file));
+      setOnnxSessionsForTests(await fakeSessions());
       const source = fs.readFileSync(path.join(process.cwd(), 'src/lib/warranty/ocr/onnx/engine.ts'), 'utf8');
       expect(source).not.toContain('truncateOcrText');
       expect(source).not.toContain('MAX_OCR_TEXT_CHARS');
       await onnxOcrEngine.recognize(file, 'image/png');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+/** Spec 2026-09-30 §2.4 item 5: the turned pass is paid for only when the first one looks sideways. */
+describe('onnxOcrEngine page orientation', () => {
+  it('a page that detects as tall boxes is turned 90 and read from the turned pass', async () => {
+    const { file, dir } = await receiptFile();
+    try {
+      // Answers by the shape it is asked about, as a real detector on a sideways page would: five
+      // tall bars side by side on the landscape input, five wide bars stacked on the portrait one.
+      const asked: string[] = [];
+      setOnnxSessionsForTests({
+        ...(await fakeSessions()),
+        runDet: async (input) => {
+          const [, , height, width] = input.dims;
+          const landscape = width > height;
+          asked.push(landscape ? 'landscape' : 'portrait');
+          const map = new Float32Array(width * height);
+          for (let bar = 0; bar < 5; bar += 1) {
+            for (let across = 40 + bar * 100; across < 64 + bar * 100; across += 1) {
+              for (let along = 10; along < 300; along += 1) {
+                map[landscape ? along * width + across : across * width + along] = 0.95;
+              }
+            }
+          }
+          return { data: map, dims: [1, 1, height, width] };
+        },
+      });
+      const { text } = await onnxOcrEngine.recognize(file, 'image/png');
+      expect(asked).toEqual(['landscape', 'portrait']);
+      // Read from the turned pass: five lines. The first pass's tall bars would share one line.
+      expect(text).toBe(['TOTAL', 'TOTAL', 'TOTAL', 'TOTAL', 'TOTAL'].join('\n'));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('a page that detects as wide boxes costs one detection and no turned pass', async () => {
+    const { file, dir } = await receiptFile();
+    try {
+      const base = await fakeSessions();
+      let calls = 0;
+      setOnnxSessionsForTests({
+        ...base,
+        runDet: async (input) => {
+          calls += 1;
+          return base.runDet(input);
+        },
+      });
+      expect((await onnxOcrEngine.recognize(file, 'image/png')).text).toBe('TOTAL');
+      expect(calls).toBe(1);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
