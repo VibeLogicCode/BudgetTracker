@@ -69,14 +69,16 @@ export async function cropBoxes(image: RawImage, boxes: readonly DetectedBox[]):
     const source = rotate
       ? await sharp(image.data, { raw }).rotate(-angleDeg, { background: '#ffffff' }).raw().toBuffer({ resolveWithObject: true })
       : { data: image.data, info: { width: image.width, height: image.height } };
-    const window = extractWindow(
-      source.info.width,
-      source.info.height,
-      boxes[boxIndex].rect.cx + (source.info.width - image.width) / 2,
-      boxes[boxIndex].rect.cy + (source.info.height - image.height) / 2,
-      width,
-      height,
-    );
+    // The source was rotated about ITS centre by -angleDeg and its canvas grew. The box centre has
+    // to make the same journey: offset from the old centre, rotated by the same angle, re-anchored
+    // on the new centre. Translating by the canvas growth alone (what this did before) leaves a box
+    // 400 px from centre about 35 px off at 5 degrees -- more than a text line (spec §1.2 bug 2).
+    const theta = rotate ? (-angleDeg * Math.PI) / 180 : 0;
+    const dx = boxes[boxIndex].rect.cx - image.width / 2;
+    const dy = boxes[boxIndex].rect.cy - image.height / 2;
+    const cx = source.info.width / 2 + dx * Math.cos(theta) - dy * Math.sin(theta);
+    const cy = source.info.height / 2 + dx * Math.sin(theta) + dy * Math.cos(theta);
+    const window = extractWindow(source.info.width, source.info.height, cx, cy, width, height);
     if (window === null) continue;
     const { data, info } = await sharp(source.data, {
       raw: { width: source.info.width, height: source.info.height, channels: 3 },

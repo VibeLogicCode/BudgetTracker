@@ -1,3 +1,4 @@
+import sharp from 'sharp';
 import { describe, it, expect } from 'vitest';
 import { CROP_ANGLE_LIMIT_DEG } from '@/lib/warranty/ocr/onnx/constants';
 import type { DetectedBox } from '@/lib/warranty/ocr/onnx/contours';
@@ -76,5 +77,47 @@ describe('cropBoxes (MUST-4.20, MUST-4.21)', () => {
     expect(crops).toHaveLength(1);
     expect(crops[0].width).toBe(30);
     expect(crops[0].height).toBe(12);
+  });
+});
+
+/**
+ * Spec 2026-09-30 §1.2 bug 2. The old test only checked the crop's SIZE, for a box at the exact
+ * image centre -- the one place the bug cannot show. This one checks CONTENT: a dark line near a
+ * corner, tilted, must land inside its own crop. With the centre not rotated, the window lands on
+ * white paper 35 px away and the recogniser reads nothing, or half of the next line.
+ */
+describe('cropBoxes follows a rotated box to where it actually is', () => {
+  async function pageWithTiltedLine(cx: number, cy: number, angleDeg: number): Promise<RawImage> {
+    const line = await sharp({ create: { width: 120, height: 14, channels: 3, background: '#000000' } })
+      .rotate(angleDeg, { background: '#ffffff' })
+      .png()
+      .toBuffer();
+    const meta = await sharp(line).metadata();
+    // composite() hands back RGBA; cropBoxes reads three channels, so the alpha goes first.
+    const { data, info } = await sharp({ create: { width: 400, height: 300, channels: 3, background: '#ffffff' } })
+      .composite([{ input: line, left: Math.round(cx - (meta.width ?? 0) / 2), top: Math.round(cy - (meta.height ?? 0) / 2) }])
+      .removeAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    return { data, width: info.width, height: info.height };
+  }
+
+  const meanLuma = (crop: { data: Buffer; width: number; height: number }) => {
+    let sum = 0;
+    for (let i = 0; i < crop.data.length; i += 1) sum += crop.data[i];
+    return sum / crop.data.length;
+  };
+
+  it('crops the dark line, not the paper beside it, for a box far from the centre at 6 degrees', async () => {
+    const image = await pageWithTiltedLine(300, 80, 6);
+    const [crop] = await cropBoxes(image, [box(300, 80, 120, 14, 6)]);
+    // Mostly ink. A miss lands on white and reads far above 200.
+    expect(meanLuma(crop)).toBeLessThan(110);
+  });
+
+  it('still crops a level box at the centre exactly as before', async () => {
+    const image = await pageWithTiltedLine(200, 150, 0);
+    const [crop] = await cropBoxes(image, [box(200, 150, 120, 14, 0)]);
+    expect(meanLuma(crop)).toBeLessThan(40);
   });
 });
