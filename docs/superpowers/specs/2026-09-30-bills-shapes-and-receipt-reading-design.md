@@ -1,7 +1,7 @@
 # Bills that carry their amount, and a receipt reader that reads
 
 Date: 2026-09-30
-Status: approved, not yet implemented
+Status: implemented in v1.53.0
 
 Two reports from the same household, which turned out to be one problem seen from two sides: a
 bill's amount is never asked for and never shown, and the document that would have supplied it —
@@ -137,9 +137,12 @@ In order of measured value:
    0° instead of the search bound.
 4. Tilt-aware line assembly: box centres are rotated by the median text angle before grouping, so
    a residual tilt no longer pairs a price with the wrong line.
-5. Page orientation: detection is run on a small copy at 0° and 90°; the orientation with more
-   wide boxes wins, and the image is rotated before the real pass. No new model; the line
-   classifier still handles 180°.
+5. Page orientation: the real detection pass runs on the upright image first, and only when its
+   boxes look sideways (wide boxes no more numerous than tall ones) is detection run once more on
+   the full-size image turned 90°; the turn with more wide boxes wins, and no third detection is
+   run. A page that lands upside down is told from the line classifier's own votes (a strict
+   majority of lines flipped 180°), and its box positions are turned 180° before line assembly.
+   No new model.
 6. The Tesseract fallback receives the preprocessed image (measured: fixes the date, halves the
    time).
 7. An accuracy harness: synthetic receipts rendered in-test through the real vendored models,
