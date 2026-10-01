@@ -42,7 +42,12 @@ describe('OCR accuracy on rendered receipts', () => {
   it('B: a tilted phone photo on a countertop reads under 20 percent and finds the total', async () => {
     const text = await read(await renderReceipt(TALL_RECEIPT_LINES, { tiltDeg: 6, background: 'countertop', blur: 1.2, jpegQuality: 70 }));
     expect(cer(TALL_RECEIPT_LINES.join('\n'), text)).toBeLessThan(0.2);
-    expect(suggestFromOcrText(text, TODAY).priceCents).toBe(2531);
+    // 25.31 is on the VISA line too: the total must come from a TOTAL line actually read.
+    expect(text).toMatch(/(^|\s)TOTAL\s*25[.,]31/m);
+    const s = suggestFromOcrText(text, TODAY);
+    expect(s.vendor).toBe('MAPLE GROCERY CO.');
+    expect(s.purchaseDate).toBe('2026-09-14');
+    expect(s.priceCents).toBe(2531);
   }, 90_000);
 
   it('C: a long receipt keeps every line, merchant and total', async () => {
@@ -50,11 +55,17 @@ describe('OCR accuracy on rendered receipts', () => {
     expect(cer(LONG_RECEIPT_LINES.join('\n'), text)).toBeLessThan(0.03);
     const s = suggestFromOcrText(text, TODAY);
     expect(s.vendor).toBe('MAPLE GROCERY CO.');
+    expect(s.purchaseDate).toBe('2026-09-14');
     expect(s.priceCents).toBe(13397);
   }, 90_000);
 
   it('D: a receipt saved sideways with no EXIF tag still reads its total', async () => {
     const text = await read(await renderReceipt(RECEIPT_LINES, { rotate90: true }));
-    expect(suggestFromOcrText(text, TODAY).priceCents).toBe(2531);
+    // Order-independent on purpose: the page-orientation step can leave this one at 180 degrees
+    // with its lines in reverse order, so no CER bound and no vendor here.
+    expect(text).toMatch(/(^|\s)TOTAL\s*25[.,]31/m);
+    const s = suggestFromOcrText(text, TODAY);
+    expect(s.purchaseDate).toBe('2026-09-14');
+    expect(s.priceCents).toBe(2531);
   }, 60_000);
 });
