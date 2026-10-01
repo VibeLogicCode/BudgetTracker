@@ -1243,6 +1243,8 @@ describe('a bill summary leads with its money', () => {
     const uploaderProps = vi.mocked(ReceiptUploader).mock.calls.at(-1)![0];
     expect(uploaderProps.onPickAmount).toBeUndefined();
     expect(uploaderProps.onPickDate).toBeUndefined();
+    // Nothing on this page takes a read's figures, so its tile claims no fill.
+    expect(uploaderProps.onSuggestions).toBeUndefined();
   });
 
   it('says nothing was suggested when the read filled nothing', () => {
@@ -1253,6 +1255,30 @@ describe('a bill summary leads with its money', () => {
     expect((screen.getByLabelText('Amount') as HTMLInputElement).value).toBe('120.00');
     expect((screen.getByLabelText('Due date') as HTMLInputElement).value).toBe('2026-11-15');
     expect(screen.queryByText('Suggested from the attached bill — check it and press Add installment.')).toBeNull();
+  });
+
+  /** The tile's summary names only what was filled, so the page reports exactly that: never a vendor. */
+  it('reports the due date and amount it filled, and not the vendor the read also found', () => {
+    renderDetail({ item: billItem, installments: [] });
+    fireEvent.click(screen.getByRole('button', { name: /^add receipt$/i }));
+    const uploaderProps = vi.mocked(ReceiptUploader).mock.calls.at(-1)![0];
+    let filled: ReadonlyArray<string> | void = undefined;
+    act(() => {
+      filled = uploaderProps.onSuggestions!({ vendor: 'RIVERSIDE WATER', priceCents: 44443, dueDate: '2026-10-31' });
+    });
+    expect([...(filled ?? [])].sort()).toEqual(['amount', 'date']);
+  });
+
+  it('reports only the untouched field it filled', () => {
+    renderDetail({ item: billItem, installments: [] });
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '120.00' } });
+    fireEvent.click(screen.getByRole('button', { name: /^add receipt$/i }));
+    const uploaderProps = vi.mocked(ReceiptUploader).mock.calls.at(-1)![0];
+    let filled: ReadonlyArray<string> | void = undefined;
+    act(() => {
+      filled = uploaderProps.onSuggestions!({ priceCents: 44443, dueDate: '2026-10-31' });
+    });
+    expect([...(filled ?? [])]).toEqual(['date']);
   });
 
   it('fills again after a typed installment is added, since the emptied fields hold nothing typed', async () => {

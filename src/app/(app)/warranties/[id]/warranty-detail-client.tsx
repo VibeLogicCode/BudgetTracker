@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { FormError } from '@/components/FormError';
 import { SubmitButton } from '@/components/SubmitButton';
 import { StatusBadge } from '@/components/warranty/StatusBadge';
-import { ReceiptUploader, type StagedFile, type SuggestedFieldsDto } from '@/components/warranty/ReceiptUploader';
+import { ReceiptUploader, type FilledField, type StagedFile, type SuggestedFieldsDto } from '@/components/warranty/ReceiptUploader';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { ListRow } from '@/components/ui/ListRow';
 import { MetricCard } from '@/components/ui/MetricCard';
@@ -357,19 +357,24 @@ export function WarrantyDetailClient({
   // the create form's touched flags. A ref, set in each onChange, so a read that resolves right
   // after a keystroke still sees it.
   const installmentTouchedRef = useRef({ dueDate: false, amount: false });
-  /** The detail uploader's onSuggestions for a bill: fills only untouched fields, and says so only when it filled one. */
-  const suggestInstallment = useCallback((fields: SuggestedFieldsDto) => {
+  /**
+   * The detail uploader's onSuggestions for a bill: fills only untouched fields, says so only when
+   * it filled one, and returns the ones it filled for the tile's summary (never a vendor: this
+   * form has none).
+   */
+  const suggestInstallment = useCallback((fields: SuggestedFieldsDto): FilledField[] => {
     const touched = installmentTouchedRef.current;
-    let filled = false;
+    const filled: FilledField[] = [];
     if (fields.priceCents !== undefined && !touched.amount) {
       setNewAmount(centsToInput(fields.priceCents));
-      filled = true;
+      filled.push('amount');
     }
     if (fields.dueDate && !touched.dueDate) {
       setNewDueDate(fields.dueDate);
-      filled = true;
+      filled.push('date');
     }
-    if (filled) setInstallmentSuggested(true);
+    if (filled.length > 0) setInstallmentSuggested(true);
+    return filled;
   }, []);
   // A tapped chip (spec §2.3) is the person's choice: it replaces what is there and then counts
   // as typed, so a read that finishes later cannot take it back.

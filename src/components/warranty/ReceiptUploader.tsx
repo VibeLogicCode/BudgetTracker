@@ -29,9 +29,15 @@ export interface StagedFile {
   lines?: string[];
   /** Every amount and date found, with the words around it, offered as chips. */
   candidates?: { amounts: AmountCandidate[]; dates: DateCandidate[] };
-  /** What the read filled in, for the tile's one-line summary. */
+  /** What the read found. */
   suggestions?: SuggestedFieldsDto;
+  /** What the page actually filled from it, for the tile's one-line summary. */
+  filled?: ReadonlyArray<FilledField>;
 }
+
+/** A form field a read can fill, as the tile's summary names it. */
+export type FilledField = 'vendor' | 'date' | 'amount';
+const FILLED_ORDER: readonly FilledField[] = ['vendor', 'date', 'amount'];
 
 export interface SuggestedFieldsDto {
   purchaseDate?: string;
@@ -41,18 +47,20 @@ export interface SuggestedFieldsDto {
   dueDate?: string;
 }
 
-/** Spec 2026-09-30 §2.3: a read that filled nothing says so, rather than a bare "Read". */
+/** Spec 2026-09-30 §2.3: a read that found nothing says so, rather than a bare "Read". */
 export const SCAN_SUMMARY_NOTHING = 'Read, but found no vendor, date or amount — check the text below.';
 
-/** The tile's one line on what a finished read filled in. */
-export function summaryOf(fields: SuggestedFieldsDto): string {
-  const filled = [
-    fields.vendor ? 'vendor' : null,
-    fields.purchaseDate || fields.dueDate ? 'date' : null,
-    fields.priceCents !== undefined ? 'amount' : null,
-  ].filter((x): x is string => x !== null);
-  if (filled.length === 0) return SCAN_SUMMARY_NOTHING;
-  return `Filled ${filled.join(', ')}${fields.priceCents === undefined ? ' — no total found' : ''}.`;
+/**
+ * The tile's one line on a finished read. It names only what the page filled, not everything the
+ * read found: a detail page fills nothing, a bill's fills no vendor, and a typed field is kept. A
+ * read that found something the page did not take gets no line; the read text and chips still show.
+ */
+export function summaryOf(fields: SuggestedFieldsDto, filled: ReadonlyArray<FilledField>): string | null {
+  const found = Boolean(fields.vendor || fields.purchaseDate || fields.dueDate || fields.priceCents !== undefined);
+  if (!found) return SCAN_SUMMARY_NOTHING;
+  const named = FILLED_ORDER.filter((field) => filled.includes(field));
+  if (named.length === 0) return null;
+  return `Filled ${named.join(', ')}${fields.priceCents === undefined ? ' — no total found' : ''}.`;
 }
 
 /**
@@ -138,7 +146,8 @@ export function ReceiptUploader({
   label = 'Receipt photo or PDF',
 }: {
   onStagedChange: (files: StagedFile[]) => void;
-  onSuggestions?: (suggestions: SuggestedFieldsDto) => void;
+  /** Fills the page from a read, and returns the fields it actually filled. Nothing returned is nothing filled. */
+  onSuggestions?: (suggestions: SuggestedFieldsDto) => ReadonlyArray<FilledField> | void;
   /** A tapped amount chip (spec §2.3). No handler, no amount chips: a chip that does nothing is worse than none. */
   onPickAmount?: (cents: number) => void;
   /** A tapped date chip, as an ISO date. No handler, no date chips. */
@@ -242,6 +251,7 @@ export function ReceiptUploader({
             fail(body.error ?? READ_FAILED_MESSAGE);
             return;
           }
+          const filled = (onSuggestions && body.suggestions ? onSuggestions(body.suggestions) : undefined) ?? [];
           setFiles((prev) =>
             prev.map((file) =>
               file.stagingId === stagingId
@@ -252,12 +262,12 @@ export function ReceiptUploader({
                     lines: body.lines ?? [],
                     candidates: body.candidates ?? { amounts: [], dates: [] },
                     suggestions: body.suggestions ?? {},
+                    filled,
                   }
                 : file,
             ),
           );
           settle();
-          if (onSuggestions && body.suggestions) onSuggestions(body.suggestions);
         } catch {
           // Transient failure this tick only -- leave the timer running.
         }
@@ -451,6 +461,7 @@ export function ReceiptUploader({
           {files.map((file) => {
             const amounts = onPickAmount ? (file.candidates?.amounts ?? []) : [];
             const dates = onPickDate ? (file.candidates?.dates ?? []) : [];
+            const summary = file.ocr === 'done' ? summaryOf(file.suggestions ?? {}, file.filled ?? []) : null;
             return (
               <li
                 key={file.stagingId}
@@ -469,7 +480,7 @@ export function ReceiptUploader({
                   {file.ocr === 'pending' ? 'Reading…' : file.ocr === 'done' ? 'Read' : 'Could not read'}
                 </span>
                 {file.ocr === 'failed' && file.error ? <p className="text-muted">{file.error}</p> : null}
-                {file.ocr === 'done' ? <p className="text-muted">{summaryOf(file.suggestions ?? {})}</p> : null}
+                {summary !== null ? <p className="text-muted">{summary}</p> : null}
                 {/* Spec 2026-09-30 §2.3: what the reader saw, so a wrong or missing figure can be
                     checked against it. Text from an arbitrary receipt: text nodes only (MUST-13.3). */}
                 {file.lines && file.lines.length > 0 ? (

@@ -158,7 +158,12 @@ describe('ReceiptUploader', () => {
     const onPickAmount = vi.fn();
     const onPickDate = vi.fn();
     const { container } = render(
-      <ReceiptUploader onStagedChange={vi.fn()} onPickAmount={onPickAmount} onPickDate={onPickDate} />,
+      <ReceiptUploader
+        onStagedChange={vi.fn()}
+        onSuggestions={() => ['vendor', 'amount']}
+        onPickAmount={onPickAmount}
+        onPickDate={onPickDate}
+      />,
     );
 
     await pickAndPoll(container, fetchMock);
@@ -194,6 +199,59 @@ describe('ReceiptUploader', () => {
 
     expect(screen.getByText(SCAN_SUMMARY_NOTHING)).toBeTruthy();
     expect(screen.queryByRole('button', { name: /\$12\.99/ })).toBeNull();
+  });
+
+  /** A finished read whose figures a page did not take (a detail page fills nothing) claims no fill. */
+  function doneRead() {
+    return vi
+      .fn()
+      .mockResolvedValueOnce(stageResponse({ originalFilename: 'bill.pdf', mime: 'application/pdf' }))
+      .mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          status: 'done',
+          suggestions: { vendor: 'RIVERSIDE WATER', dueDate: '2026-10-31', priceCents: 44443 },
+          lines: ['RIVERSIDE WATER', 'Due date 2026-10-31', 'Amount due $444.43'],
+          candidates: { amounts: [], dates: [] },
+        }),
+      } as Response);
+  }
+
+  it('says nothing was filled on a page that takes no suggestions, and still shows what was read', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const fetchMock = doneRead();
+    vi.stubGlobal('fetch', fetchMock);
+    const { container } = render(<ReceiptUploader onStagedChange={vi.fn()} />);
+
+    await pickAndPoll(container, fetchMock);
+
+    expect(screen.getByText('Read')).toBeTruthy();
+    expect(screen.queryByText(/Filled/)).toBeNull();
+    expect(screen.getByText('What was read')).toBeTruthy();
+  });
+
+  it('names only the fields the page filled, not every one the read found', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const fetchMock = doneRead();
+    vi.stubGlobal('fetch', fetchMock);
+    // A bill's detail page: it has an amount and a due date to fill, and no vendor.
+    const { container } = render(<ReceiptUploader onStagedChange={vi.fn()} onSuggestions={() => ['date', 'amount']} />);
+
+    await pickAndPoll(container, fetchMock);
+
+    expect(screen.getByText('Filled date, amount.')).toBeTruthy();
+  });
+
+  it('claims no fill when the page took nothing it was offered', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const fetchMock = doneRead();
+    vi.stubGlobal('fetch', fetchMock);
+    const { container } = render(<ReceiptUploader onStagedChange={vi.fn()} onSuggestions={() => undefined} />);
+
+    await pickAndPoll(container, fetchMock);
+
+    expect(screen.getByText('Read')).toBeTruthy();
+    expect(screen.queryByText(/Filled/)).toBeNull();
   });
 
   it('says when nothing could be filled, and offers Try again on a failed read', async () => {
@@ -299,10 +357,19 @@ describe('ReceiptUploader', () => {
 
 describe('summaryOf', () => {
   it('names what was filled, and says when no total was found', () => {
-    expect(summaryOf({ vendor: 'MAPLE GROCERY CO.', purchaseDate: '2026-09-12', priceCents: 1299 })).toBe(
-      'Filled vendor, date, amount.',
+    expect(
+      summaryOf({ vendor: 'MAPLE GROCERY CO.', purchaseDate: '2026-09-12', priceCents: 1299 }, ['vendor', 'date', 'amount']),
+    ).toBe('Filled vendor, date, amount.');
+    expect(summaryOf({ dueDate: '2026-10-31' }, ['date'])).toBe('Filled date — no total found.');
+    expect(summaryOf({}, [])).toBe(SCAN_SUMMARY_NOTHING);
+  });
+
+  it('lists only the filled fields, in a fixed order, and says nothing when none was filled', () => {
+    const found = { vendor: 'MAPLE GROCERY CO.', purchaseDate: '2026-09-12', priceCents: 1299 };
+    expect(summaryOf(found, ['amount', 'date'])).toBe('Filled date, amount.');
+    expect(summaryOf({ vendor: 'MAPLE GROCERY CO.', purchaseDate: '2026-09-12' }, ['date'])).toBe(
+      'Filled date — no total found.',
     );
-    expect(summaryOf({ dueDate: '2026-10-31' })).toBe('Filled date — no total found.');
-    expect(summaryOf({})).toBe(SCAN_SUMMARY_NOTHING);
+    expect(summaryOf(found, [])).toBeNull();
   });
 });

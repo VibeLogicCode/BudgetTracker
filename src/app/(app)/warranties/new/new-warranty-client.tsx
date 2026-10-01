@@ -4,7 +4,7 @@ import { useActionState, useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link';
 import { FormError } from '@/components/FormError';
 import { SubmitButton } from '@/components/SubmitButton';
-import { ReceiptUploader, type StagedFile, type SuggestedFieldsDto } from '@/components/warranty/ReceiptUploader';
+import { ReceiptUploader, type FilledField, type StagedFile, type SuggestedFieldsDto } from '@/components/warranty/ReceiptUploader';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Field, inputClass, labelClass, selectClass, textareaClass } from '@/components/ui/form';
@@ -195,6 +195,12 @@ export function NewWarrantyClient({
   useEffect(() => {
     billTouchedRef.current = billTouched;
   }, [billTouched]);
+  // The billing amount is only filled while empty, read through a ref for the same reason as the
+  // flags above, so the routing below can say whether it filled it (a setState updater cannot).
+  const billingAmountRef = useRef(billingAmount);
+  useEffect(() => {
+    billingAmountRef.current = billingAmount;
+  }, [billingAmount]);
 
   // The reader's last suggestion. The Receipt card sits above the Type select and the page says
   // to attach first, so the reader often answers while the form still reads as a warranty; the
@@ -210,8 +216,11 @@ export function NewWarrantyClient({
     `chosen` is a chip the person tapped (spec §2.3): the same routing, but an explicit choice, so
     it replaces what is there and then counts as typed -- a read that finishes later (a second
     receipt, review focus 5) cannot take it back, and it is not marked as a guess.
+
+    Returns the fields it filled, for the receipt tile's summary.
   */
-  const routeAmountAndDueDate = useCallback((fields: SuggestedFieldsDto, kind: ItemKind, chosen = false) => {
+  const routeAmountAndDueDate = useCallback((fields: SuggestedFieldsDto, kind: ItemKind, chosen = false): FilledField[] => {
+    const filled: FilledField[] = [];
     if (fields.priceCents !== undefined) {
       const amount = centsToInput(fields.priceCents);
       if (installmentsAllowedForKind(kind)) {
@@ -219,37 +228,49 @@ export function NewWarrantyClient({
           setAmountDue(amount);
           if (chosen) setBillTouched((t) => ({ ...t, amountDue: true }));
           setSuggested((s) => ({ ...s, amountDue: !chosen }));
+          filled.push('amount');
         }
       } else if (billingAllowedForKind(kind)) {
-        setBillingAmount((value) => (chosen || value === '' ? amount : value));
+        if (chosen || billingAmountRef.current === '') {
+          billingAmountRef.current = amount;
+          setBillingAmount(amount);
+          filled.push('amount');
+        }
       } else if (chosen || !touchedRef.current.price) {
         setPrice(amount);
         if (chosen) setTouched((t) => ({ ...t, price: true }));
         setSuggested((s) => ({ ...s, price: !chosen }));
+        filled.push('amount');
       }
     }
     if (fields.dueDate && installmentsAllowedForKind(kind) && (chosen || !billTouchedRef.current.dueDate)) {
       setDueDate(fields.dueDate);
       if (chosen) setBillTouched((t) => ({ ...t, dueDate: true }));
       setSuggested((s) => ({ ...s, dueDate: !chosen }));
+      filled.push('date');
     }
+    return filled;
   }, []);
 
-  /** MUST-10.3: only EMPTY, untouched fields are filled from a suggestion. */
+  /** MUST-10.3: only EMPTY, untouched fields are filled from a suggestion. Returns the ones it filled. */
   const onSuggestions = useCallback(
-    (fields: SuggestedFieldsDto) => {
+    (fields: SuggestedFieldsDto): FilledField[] => {
       lastSuggestionRef.current = fields;
       const current = touchedRef.current;
+      const filled = new Set<FilledField>();
       if (fields.purchaseDate && !current.purchaseDate) {
         setPurchaseDate(fields.purchaseDate);
         if (!balanceDateTouchedRef.current) setBalanceAsOfDate(fields.purchaseDate);
         setSuggested((s) => ({ ...s, purchaseDate: true }));
+        filled.add('date');
       }
       if (fields.vendor && !current.vendor) {
         setVendor(fields.vendor);
         setSuggested((s) => ({ ...s, vendor: true }));
+        filled.add('vendor');
       }
-      routeAmountAndDueDate(fields, kindRef.current);
+      for (const field of routeAmountAndDueDate(fields, kindRef.current)) filled.add(field);
+      return [...filled];
     },
     [routeAmountAndDueDate],
   );

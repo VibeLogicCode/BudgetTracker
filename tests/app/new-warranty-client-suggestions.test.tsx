@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, cleanup, fireEvent, act } from '@testing-library/react';
-import type { SuggestedFieldsDto } from '@/components/warranty/ReceiptUploader';
+import type { FilledField, SuggestedFieldsDto } from '@/components/warranty/ReceiptUploader';
 import { NewWarrantyClient } from '@/app/(app)/warranties/new/new-warranty-client';
 
 /*
@@ -10,14 +10,14 @@ import { NewWarrantyClient } from '@/app/(app)/warranties/new/new-warranty-clien
   polling, none of which this file is about.
 */
 const uploader = vi.hoisted(() => ({
-  onSuggestions: undefined as ((fields: SuggestedFieldsDto) => void) | undefined,
+  onSuggestions: undefined as ((fields: SuggestedFieldsDto) => ReadonlyArray<FilledField> | void) | undefined,
   onPickAmount: undefined as ((cents: number) => void) | undefined,
   onPickDate: undefined as ((iso: string) => void) | undefined,
 }));
 
 vi.mock('@/components/warranty/ReceiptUploader', () => ({
   ReceiptUploader: (props: {
-    onSuggestions?: (fields: SuggestedFieldsDto) => void;
+    onSuggestions?: (fields: SuggestedFieldsDto) => ReadonlyArray<FilledField> | void;
     onPickAmount?: (cents: number) => void;
     onPickDate?: (iso: string) => void;
   }) => {
@@ -64,8 +64,13 @@ function renderForm() {
   return { field, pick, type, marks };
 }
 
-function suggest(fields: SuggestedFieldsDto) {
-  act(() => uploader.onSuggestions!(fields));
+/** Delivers a read, and hands back what the form says it filled, sorted for comparison. */
+function suggest(fields: SuggestedFieldsDto): FilledField[] {
+  let filled: ReadonlyArray<FilledField> | void = undefined;
+  act(() => {
+    filled = uploader.onSuggestions!(fields);
+  });
+  return [...(filled ?? [])].sort();
 }
 
 /** Spec 2026-09-30 §2.3: a suggestion goes to the field the kind actually has. */
@@ -109,6 +114,31 @@ describe('a receipt suggestion lands in the field the kind has', () => {
     suggest({ purchaseDate: '2026-01-15' });
     expect(form.field('purchaseDate')!.value).toBe('2026-01-15');
     expect(form.field('balanceAsOfDate')!.value).toBe('2026-03-01');
+  });
+});
+
+/** The tile's summary names only what was filled, so the form reports exactly that. */
+describe('the form reports what a read filled', () => {
+  it('leaves out a vendor that was typed first', () => {
+    const form = renderForm();
+    form.pick('1');
+    form.type('vendor', 'Corner Hardware');
+    expect(suggest({ vendor: 'MAPLE GROCERY CO.', purchaseDate: '2026-08-01', priceCents: 1299 })).toEqual(['amount', 'date']);
+    expect(form.field('vendor')!.value).toBe('Corner Hardware');
+  });
+
+  it("names a bill's amount due and due date", () => {
+    const form = renderForm();
+    form.pick('4');
+    expect(suggest({ priceCents: 8217, dueDate: '2026-10-15' })).toEqual(['amount', 'date']);
+  });
+
+  it("names a subscription's billing amount only while it was empty", () => {
+    const form = renderForm();
+    form.pick('2');
+    expect(suggest({ priceCents: 1599 })).toEqual(['amount']);
+    expect(suggest({ priceCents: 2499 })).toEqual([]);
+    expect(form.field('billingAmount')!.value).toBe('15.99');
   });
 });
 
