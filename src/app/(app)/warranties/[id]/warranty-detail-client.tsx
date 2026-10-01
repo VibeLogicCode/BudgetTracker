@@ -371,6 +371,16 @@ export function WarrantyDetailClient({
     }
     if (filled) setInstallmentSuggested(true);
   }, []);
+  // A tapped chip (spec §2.3) is the person's choice: it replaces what is there and then counts
+  // as typed, so a read that finishes later cannot take it back.
+  const pickInstallmentAmount = useCallback((cents: number) => {
+    installmentTouchedRef.current.amount = true;
+    setNewAmount(centsToInput(cents));
+  }, []);
+  const pickInstallmentDate = useCallback((iso: string) => {
+    installmentTouchedRef.current.dueDate = true;
+    setNewDueDate(iso);
+  }, []);
   const [installmentRowState, installmentRowDispatch] = useActionState(
     (_prev: WarrantyActionState, formData: FormData) =>
       formData.get('intent') === 'remove'
@@ -1464,6 +1474,8 @@ export function WarrantyDetailClient({
                   onStagedChange={onStagedChange}
                   label="Add another receipt"
                   onSuggestions={installmentsAllowedForKind(item.kind) ? suggestInstallment : undefined}
+                  onPickAmount={installmentsAllowedForKind(item.kind) ? pickInstallmentAmount : undefined}
+                  onPickDate={installmentsAllowedForKind(item.kind) ? pickInstallmentDate : undefined}
                 />
                 <SubmitButton className="w-fit">Attach receipts</SubmitButton>
               </form>

@@ -1203,7 +1203,9 @@ describe('a bill summary leads with its money', () => {
     fireEvent.submit(screen.getByRole('button', { name: /^add installment$/i }).closest('form')!);
 
     await waitFor(() => expect(screen.getByText('Installment added for 2026-10-31.')).toBeTruthy());
-    expect((screen.getByLabelText('Amount') as HTMLInputElement).value).toBe('');
+    // The clear runs in an effect after the commit that shows the message, so it is awaited too:
+    // asserted bare, it lost that race once under a loaded parallel run.
+    await waitFor(() => expect((screen.getByLabelText('Amount') as HTMLInputElement).value).toBe(''));
     expect((screen.getByLabelText('Due date') as HTMLInputElement).value).toBe('');
     expect(screen.queryByText('Suggested from the attached bill — check it and press Add installment.')).toBeNull();
   });
@@ -1216,6 +1218,31 @@ describe('a bill summary leads with its money', () => {
     expect((screen.getByLabelText('Amount') as HTMLInputElement).value).toBe('120.00');
     expect((screen.getByLabelText('Due date') as HTMLInputElement).value).toBe('2026-10-31');
     expect(screen.getByText('Suggested from the attached bill — check it and press Add installment.')).toBeTruthy();
+  });
+
+  /** Spec 2026-09-30 §2.3: a tapped chip fills the add-installment form, over what was typed. */
+  it('a tapped amount or date chip fills the add-installment form', () => {
+    renderDetail({ item: billItem, installments: [] });
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '120.00' } });
+    fireEvent.click(screen.getByRole('button', { name: /^add receipt$/i }));
+    const uploaderProps = vi.mocked(ReceiptUploader).mock.calls.at(-1)![0];
+    act(() => uploaderProps.onPickAmount!(46667));
+    act(() => uploaderProps.onPickDate!('2026-10-31'));
+    expect((screen.getByLabelText('Amount') as HTMLInputElement).value).toBe('466.67');
+    expect((screen.getByLabelText('Due date') as HTMLInputElement).value).toBe('2026-10-31');
+
+    // ...and a read that finishes afterwards does not take the choice back.
+    act(() => uploaderProps.onSuggestions!({ priceCents: 44443, dueDate: '2026-11-15' }));
+    expect((screen.getByLabelText('Amount') as HTMLInputElement).value).toBe('466.67');
+    expect((screen.getByLabelText('Due date') as HTMLInputElement).value).toBe('2026-10-31');
+  });
+
+  it('offers no chips for a kind without installments', () => {
+    renderDetail({ item: item({ kind: 'warranty' }), installments: [] });
+    fireEvent.click(screen.getByRole('button', { name: /^add receipt$/i }));
+    const uploaderProps = vi.mocked(ReceiptUploader).mock.calls.at(-1)![0];
+    expect(uploaderProps.onPickAmount).toBeUndefined();
+    expect(uploaderProps.onPickDate).toBeUndefined();
   });
 
   it('says nothing was suggested when the read filled nothing', () => {

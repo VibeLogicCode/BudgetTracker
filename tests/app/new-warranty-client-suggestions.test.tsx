@@ -11,11 +11,19 @@ import { NewWarrantyClient } from '@/app/(app)/warranties/new/new-warranty-clien
 */
 const uploader = vi.hoisted(() => ({
   onSuggestions: undefined as ((fields: SuggestedFieldsDto) => void) | undefined,
+  onPickAmount: undefined as ((cents: number) => void) | undefined,
+  onPickDate: undefined as ((iso: string) => void) | undefined,
 }));
 
 vi.mock('@/components/warranty/ReceiptUploader', () => ({
-  ReceiptUploader: (props: { onSuggestions?: (fields: SuggestedFieldsDto) => void }) => {
+  ReceiptUploader: (props: {
+    onSuggestions?: (fields: SuggestedFieldsDto) => void;
+    onPickAmount?: (cents: number) => void;
+    onPickDate?: (iso: string) => void;
+  }) => {
     uploader.onSuggestions = props.onSuggestions;
+    uploader.onPickAmount = props.onPickAmount;
+    uploader.onPickDate = props.onPickDate;
     return null;
   },
 }));
@@ -27,6 +35,8 @@ vi.mock('@/app/(app)/warranties/actions', () => ({
 afterEach(() => {
   cleanup();
   uploader.onSuggestions = undefined;
+  uploader.onPickAmount = undefined;
+  uploader.onPickDate = undefined;
 });
 
 const types = [
@@ -140,6 +150,50 @@ describe('the "suggested from receipt" mark', () => {
     form.type('amountDue', '82.00');
     expect(form.marks()).toBe(1);
     form.type('dueDate', '2026-10-20');
+    expect(form.marks()).toBe(0);
+  });
+});
+
+/** Spec 2026-09-30 §2.3: a chip the person taps is their choice, routed like a suggestion. */
+describe('a tapped chip', () => {
+  it('puts the amount in the field the kind has, over what was there', () => {
+    const form = renderForm();
+    form.pick('4');
+    form.type('amountDue', '90.00');
+    act(() => uploader.onPickAmount!(46667));
+    expect(form.field('amountDue')!.value).toBe('466.67');
+
+    form.pick('2');
+    act(() => uploader.onPickAmount!(1599));
+    expect(form.field('billingAmount')!.value).toBe('15.99');
+
+    form.pick('1');
+    act(() => uploader.onPickAmount!(34950));
+    expect(form.field('price')!.value).toBe('349.50');
+  });
+
+  it("puts the date in a bill's Due date, and in the start date for any other kind", () => {
+    const form = renderForm();
+    form.pick('4');
+    act(() => uploader.onPickDate!('2026-10-31'));
+    expect(form.field('dueDate')!.value).toBe('2026-10-31');
+    expect(form.field('purchaseDate')!.value).toBe('');
+
+    form.pick('1');
+    act(() => uploader.onPickDate!('2026-08-01'));
+    expect(form.field('purchaseDate')!.value).toBe('2026-08-01');
+  });
+
+  /** Review focus 5: a second receipt finishing later must not take back what the person chose. */
+  it('is not overwritten by a read that finishes afterwards', () => {
+    const form = renderForm();
+    form.pick('4');
+    act(() => uploader.onPickAmount!(46667));
+    act(() => uploader.onPickDate!('2026-10-31'));
+    suggest({ priceCents: 44443, dueDate: '2026-11-15' });
+    expect(form.field('amountDue')!.value).toBe('466.67');
+    expect(form.field('dueDate')!.value).toBe('2026-10-31');
+    // A chosen figure is not marked as a guess.
     expect(form.marks()).toBe(0);
   });
 });

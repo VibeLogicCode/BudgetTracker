@@ -206,24 +206,32 @@ export function NewWarrantyClient({
     `price` unconditionally -- an input the form never renders for a bill -- so a bill's amount
     due was found and then thrown away. MUST-10.3 holds here as everywhere: only an empty,
     untouched field is filled.
+
+    `chosen` is a chip the person tapped (spec §2.3): the same routing, but an explicit choice, so
+    it replaces what is there and then counts as typed -- a read that finishes later (a second
+    receipt, review focus 5) cannot take it back, and it is not marked as a guess.
   */
-  const routeAmountAndDueDate = useCallback((fields: SuggestedFieldsDto, kind: ItemKind) => {
+  const routeAmountAndDueDate = useCallback((fields: SuggestedFieldsDto, kind: ItemKind, chosen = false) => {
     if (fields.priceCents !== undefined) {
+      const amount = centsToInput(fields.priceCents);
       if (installmentsAllowedForKind(kind)) {
-        if (!billTouchedRef.current.amountDue) {
-          setAmountDue(centsToInput(fields.priceCents));
-          setSuggested((s) => ({ ...s, amountDue: true }));
+        if (chosen || !billTouchedRef.current.amountDue) {
+          setAmountDue(amount);
+          if (chosen) setBillTouched((t) => ({ ...t, amountDue: true }));
+          setSuggested((s) => ({ ...s, amountDue: !chosen }));
         }
       } else if (billingAllowedForKind(kind)) {
-        setBillingAmount((value) => (value === '' ? centsToInput(fields.priceCents!) : value));
-      } else if (!touchedRef.current.price) {
-        setPrice(centsToInput(fields.priceCents));
-        setSuggested((s) => ({ ...s, price: true }));
+        setBillingAmount((value) => (chosen || value === '' ? amount : value));
+      } else if (chosen || !touchedRef.current.price) {
+        setPrice(amount);
+        if (chosen) setTouched((t) => ({ ...t, price: true }));
+        setSuggested((s) => ({ ...s, price: !chosen }));
       }
     }
-    if (fields.dueDate && installmentsAllowedForKind(kind) && !billTouchedRef.current.dueDate) {
+    if (fields.dueDate && installmentsAllowedForKind(kind) && (chosen || !billTouchedRef.current.dueDate)) {
       setDueDate(fields.dueDate);
-      setSuggested((s) => ({ ...s, dueDate: true }));
+      if (chosen) setBillTouched((t) => ({ ...t, dueDate: true }));
+      setSuggested((s) => ({ ...s, dueDate: !chosen }));
     }
   }, []);
 
@@ -244,6 +252,26 @@ export function NewWarrantyClient({
       routeAmountAndDueDate(fields, kindRef.current);
     },
     [routeAmountAndDueDate],
+  );
+
+  /** A tapped amount chip: the suggestion routing, as the person's own choice. */
+  const onPickAmount = useCallback(
+    (cents: number) => routeAmountAndDueDate({ priceCents: cents }, selectedKind, true),
+    [routeAmountAndDueDate, selectedKind],
+  );
+  /** A tapped date chip: a bill's due date, otherwise the start date, exactly as if typed there. */
+  const onPickDate = useCallback(
+    (iso: string) => {
+      if (installmentsAllowedForKind(selectedKind)) {
+        routeAmountAndDueDate({ dueDate: iso }, selectedKind, true);
+        return;
+      }
+      setPurchaseDate(iso);
+      if (!balanceDateTouchedRef.current) setBalanceAsOfDate(iso);
+      setTouched((t) => ({ ...t, purchaseDate: true }));
+      setSuggested((s) => ({ ...s, purchaseDate: false }));
+    },
+    [routeAmountAndDueDate, selectedKind],
   );
 
   // A type picked after the reader answered gets that answer's amount and due date in its own
@@ -305,7 +333,12 @@ export function NewWarrantyClient({
       <Card>
         <CardHeader title="Receipt" description="Photograph it or attach a PDF. Reading happens on this machine — nothing is uploaded anywhere." />
         <CardBody>
-          <ReceiptUploader onStagedChange={onStagedChange} onSuggestions={onSuggestions} />
+          <ReceiptUploader
+            onStagedChange={onStagedChange}
+            onSuggestions={onSuggestions}
+            onPickAmount={onPickAmount}
+            onPickDate={onPickDate}
+          />
         </CardBody>
       </Card>
 
