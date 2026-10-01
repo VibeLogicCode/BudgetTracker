@@ -126,6 +126,14 @@ describe('assembleText follows the text angle', () => {
     expect(medianTextAngleDeg(boxes)).toBeCloseTo(4, 0);
   });
 
+  // The test above cannot fail on the ratio filter: its 20 by 60 box at 60 degrees is, by shape,
+  // a 60 by 20 line at -30 degrees, and a median of three 4s and anything is 4. Here the squat
+  // box's vote would move the median from 4 to 17.
+  it('gives no vote to a squat box under LINE_WIDE_BOX_RATIO', () => {
+    const boxes = [tilted(0, 0, 200, 20, 4), tilted(300, 0, 330, 20, 30)].map((quad) => ({ quad, text: 'x', score: 0.9 }));
+    expect(medianTextAngleDeg(boxes)).toBeCloseTo(4, 5);
+  });
+
   // Real detection quads come from rectCorners(minAreaRect(hull)), which keeps the FIRST
   // minimum-area hull edge, so quad[0] -> quad[1] may run along the text, back along it, or
   // across it. On the harness's 6 degree receipt about half the boxes start on the far corner
@@ -143,6 +151,18 @@ describe('assembleText follows the text angle', () => {
   it('reads the same angle whichever corner the quad starts on', () => {
     const quads = [tilted(0, 0, 200, 20, 5), reversed(tilted(0, 40, 220, 60, 5)), quarterTurned(tilted(0, 80, 180, 100, 5))];
     const boxes = quads.map((quad) => ({ quad, text: 'x', score: 0.9 }));
+    expect(medianTextAngleDeg(boxes)).toBeCloseTo(5, 5);
+  });
+
+  // Only non-canonical boxes vote in these two, so a lost fold or a lost longer-edge pick turns
+  // every vote into one the 45 degree gate drops, and the angle falls back to 0.
+  it('folds a quad that starts on the far corner back to the text angle', () => {
+    const boxes = [reversed(tilted(0, 0, 200, 20, 5)), reversed(tilted(0, 40, 220, 60, 5))].map((quad) => ({ quad, text: 'x', score: 0.9 }));
+    expect(medianTextAngleDeg(boxes)).toBeCloseTo(5, 5);
+  });
+
+  it('takes the longer edge as the text direction when quad[0] -> quad[1] runs across the line', () => {
+    const boxes = [quarterTurned(tilted(0, 0, 200, 20, 5)), quarterTurned(tilted(0, 40, 220, 60, 5))].map((quad) => ({ quad, text: 'x', score: 0.9 }));
     expect(medianTextAngleDeg(boxes)).toBeCloseTo(5, 5);
   });
 
