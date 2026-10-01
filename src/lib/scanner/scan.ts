@@ -1,6 +1,7 @@
 import {
   SCANNER_JPEG_QUALITY,
   SCANNER_MAX_OUTPUT_BYTES,
+  SCANNER_MAX_QUAD_AREA_RATIO,
   SCANNER_MIN_QUAD_AREA_RATIO,
   SCANNER_MIN_SIDE_RATIO,
   SCANNER_OUTPUT_MAX_PX,
@@ -25,6 +26,13 @@ export interface ScanResult {
   file: File;
   /** Present only when a crop actually happened. */
   corrected?: { url: string; quad: ScanQuad; sourceWidth: number; sourceHeight: number };
+  /**
+   * Spec 2026-09-30 §2.5: why the scanner handed back the original, so the uploader can say so.
+   * no-paper: no contour at all. bad-quad: the edges found failed MUST-8.13, or the crop of them
+   * would not encode. too-large: the crop was over the byte cap. Absent when a crop happened, and
+   * on the bails before any detection ran (no WebAssembly, no createImageBitmap, not an image).
+   */
+  reason?: 'no-paper' | 'bad-quad' | 'too-large';
 }
 
 /**
@@ -47,7 +55,9 @@ const corners = (quad: RawScanQuad) => [quad.topLeft, quad.topRight, quad.bottom
 
 /**
  * MUST-8.13's five conditions, all of which must hold. A quad hugging the whole frame is the
- * detector finding the photo's border; a sliver is a countertop edge. A missing corner (F4:
+ * detector finding the photo's border, so the area has a ceiling as well as a floor (spec
+ * 2026-09-30 §2.5: the floor alone used to be a quarter of the frame, which refused the long
+ * receipt the scanner exists for); a sliver is a countertop edge. A missing corner (F4:
  * jscanify leaves one unset rather than fail outright -- see RawScanQuad above) is exactly as
  * unusable as one that fails any of the other five, so it is checked first and, like them,
  * makes this return false rather than throw. The `quad is ScanQuad` predicate is what lets
@@ -79,6 +89,7 @@ export function isUsableQuad(quad: RawScanQuad, workWidth: number, workHeight: n
     area += a.x * b.y - b.x * a.y;
   }
   if (Math.abs(area) / 2 < workWidth * workHeight * SCANNER_MIN_QUAD_AREA_RATIO) return false;
+  if (Math.abs(area) / 2 > workWidth * workHeight * SCANNER_MAX_QUAD_AREA_RATIO) return false;
 
   const minSide = Math.max(workWidth, workHeight) * SCANNER_MIN_SIDE_RATIO;
   for (let i = 0; i < 4; i += 1) {
@@ -130,7 +141,7 @@ async function run(file: File): Promise<ScanResult> {
     let workQuad: RawScanQuad;
     try {
       const contour = scanner.findPaperContour(workMat) as { delete(): void } | null | undefined;
-      if (contour === null || contour === undefined) return { file };
+      if (contour === null || contour === undefined) return { file, reason: 'no-paper' };
       try {
         const points = scanner.getCornerPoints(contour);
         workQuad = {
@@ -145,7 +156,7 @@ async function run(file: File): Promise<ScanResult> {
     } finally {
       workMat.delete();
     }
-    if (!isUsableQuad(workQuad, workWidth, workHeight)) return { file };
+    if (!isUsableQuad(workQuad, workWidth, workHeight)) return { file, reason: 'bad-quad' };
 
     const back = (point: { x: number; y: number }) => ({ x: point.x / workScale, y: point.y / workScale });
     const fullQuad: ScanQuad = {
@@ -189,9 +200,11 @@ async function run(file: File): Promise<ScanResult> {
       bottomRightCorner: toExtractSource(fullQuad.bottomRight),
     });
     const blob = await toBlob(extracted);
-    if (blob === null) return { file };
+    // Reached only after a validated quad was warped: the crop of the edges failed, so it is
+    // reported with the quads that failed rather than left silent.
+    if (blob === null) return { file, reason: 'bad-quad' };
     // A crop that fails the size limit is not a crop, it is a rejected upload.
-    if (blob.size > SCANNER_MAX_OUTPUT_BYTES) return { file };
+    if (blob.size > SCANNER_MAX_OUTPUT_BYTES) return { file, reason: 'too-large' };
 
     const corrected = new File([blob], jpegName(file.name), { type: 'image/jpeg' });
     return {

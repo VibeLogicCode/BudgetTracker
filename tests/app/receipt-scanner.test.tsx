@@ -255,14 +255,46 @@ describe('MUST-8.13: quad validation', () => {
     expect(scanModule.isUsableQuad(quad(), work.width, work.height)).toBe(true);
   });
 
-  it('rejects a quad whose area is under a quarter of the frame', () => {
+  it('rejects a quad whose area is under 8 percent of the frame', () => {
+    // 25 x 25 in a 100 x 100 frame: 6.25 percent, a countertop edge rather than paper.
     expect(
       scanModule.isUsableQuad(
         {
           topLeft: { x: 10, y: 10 },
-          topRight: { x: 40, y: 10 },
-          bottomRight: { x: 40, y: 40 },
-          bottomLeft: { x: 10, y: 40 },
+          topRight: { x: 35, y: 10 },
+          bottomRight: { x: 35, y: 35 },
+          bottomLeft: { x: 10, y: 35 },
+        },
+        work.width,
+        work.height,
+      ),
+    ).toBe(false);
+  });
+
+  it('spec 2026-09-30 §2.5: accepts a tall narrow receipt covering 12 percent of the frame', () => {
+    // 20 x 60: a long receipt shot whole. The old quarter-of-the-frame floor refused exactly this.
+    expect(
+      scanModule.isUsableQuad(
+        {
+          topLeft: { x: 40, y: 20 },
+          topRight: { x: 60, y: 20 },
+          bottomRight: { x: 60, y: 80 },
+          bottomLeft: { x: 40, y: 80 },
+        },
+        work.width,
+        work.height,
+      ),
+    ).toBe(true);
+  });
+
+  it('spec 2026-09-30 §2.5: rejects a quad covering 99 percent of the frame (the photo border)', () => {
+    expect(
+      scanModule.isUsableQuad(
+        {
+          topLeft: { x: 0, y: 0 },
+          topRight: { x: 100, y: 0 },
+          bottomRight: { x: 100, y: 99 },
+          bottomLeft: { x: 0, y: 99 },
         },
         work.width,
         work.height,

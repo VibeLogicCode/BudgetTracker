@@ -4,8 +4,8 @@ import type { ScanQuad } from '@/lib/scanner/scan';
 import { buttonClass } from '@/components/ui/Button';
 
 /**
- * The before and after pane. Each image is at most 160 pixels tall, matching the existing
- * receipt tiles. The countdown is visible for the whole four seconds, so nothing happens
+ * The before and after pane. Each image is at most 256 pixels tall (max-h-64, spec 2026-09-30
+ * §2.5). The countdown is visible for the whole SCANNER_AUTO_ACCEPT_MS, so nothing happens
  * without the report having had the chance to see it; Use the original is framed as an undo
  * of something already decided rather than a step in a manual pipeline.
  */
@@ -37,7 +37,7 @@ export function ReceiptScanPreview({
       <div className="flex flex-wrap gap-3">
         <span className="relative inline-block" data-testid="scan-preview-original">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={originalUrl} alt="The photo you took" className="max-h-40 w-auto rounded-xs" />
+          <img src={originalUrl} alt="The photo you took" className="max-h-64 w-auto rounded-xs" />
           <svg
             viewBox={`0 0 ${sourceWidth} ${sourceHeight}`}
             preserveAspectRatio="none"
@@ -52,7 +52,7 @@ export function ReceiptScanPreview({
           src={correctedUrl}
           alt="The straightened receipt"
           data-testid="scan-preview-corrected"
-          className="max-h-40 w-auto rounded-xs"
+          className="max-h-64 w-auto rounded-xs"
         />
       </div>
       <p className="text-sm text-muted" role="status">

@@ -16,7 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CvLike, CvMatLike, JscanifyCorners, JscanifyLike } from '@/lib/scanner/load';
 import * as loadModule from '@/lib/scanner/load';
 import { scanReceiptFile } from '@/lib/scanner/scan';
-import { SCANNER_OUTPUT_MAX_PX } from '@/lib/warranty/ocr/onnx/constants';
+import { SCANNER_MAX_OUTPUT_BYTES, SCANNER_OUTPUT_MAX_PX } from '@/lib/warranty/ocr/onnx/constants';
 
 // Deliberately the same quad already proven usable by MUST-8.13's own suite
 // (tests/app/receipt-scanner.test.tsx `quad()`), against a 100x100 working frame -- so
@@ -205,6 +205,76 @@ describe('B1: the scanner converts the canvas to a cv.Mat before calling findPap
     expect(rig.imreadMats[0].deleted).toBe(true);
     expect(rig.contourMat.deleted).toBe(true);
     expect(rig.scanner.extractPaper).not.toHaveBeenCalled();
+  });
+});
+
+/** Spec 2026-09-30 §2.5: a fallback says why, so the uploader can say so instead of going quiet. */
+describe('a fallback to the original carries its reason', () => {
+  const file = () => new File(['jpeg-bytes'], 'receipt.jpg', { type: 'image/jpeg' });
+
+  it('no contour at all is no-paper', async () => {
+    const rig = buildRig();
+    rig.contourResult = null;
+    vi.spyOn(loadModule, 'loadScanner').mockResolvedValue({ cv: rig.cv, scanner: rig.scanner });
+    vi.stubGlobal('createImageBitmap', vi.fn(async () => fakeBitmap(100, 100)));
+
+    const result = await scanReceiptFile(file());
+
+    expect(result.corrected).toBeUndefined();
+    expect(result.reason).toBe('no-paper');
+  });
+
+  it('a quad that fails MUST-8.13 is bad-quad', async () => {
+    const rig = buildRig();
+    rig.scanner.getCornerPoints = vi.fn(() => ({
+      topLeftCorner: { x: 0, y: 0 },
+      topRightCorner: { x: 100, y: 0 },
+      bottomRightCorner: { x: 100, y: 3 },
+      bottomLeftCorner: { x: 0, y: 3 },
+    }));
+    vi.spyOn(loadModule, 'loadScanner').mockResolvedValue({ cv: rig.cv, scanner: rig.scanner });
+    vi.stubGlobal('createImageBitmap', vi.fn(async () => fakeBitmap(100, 100)));
+
+    expect((await scanReceiptFile(file())).reason).toBe('bad-quad');
+  });
+
+  it('a crop that will not encode is bad-quad: the edges were found, the crop of them failed', async () => {
+    const rig = buildRig();
+    rig.scanner.extractPaper = vi.fn(
+      () => ({ toBlob: (callback: (blob: Blob | null) => void) => callback(null) }) as unknown as HTMLCanvasElement,
+    );
+    vi.spyOn(loadModule, 'loadScanner').mockResolvedValue({ cv: rig.cv, scanner: rig.scanner });
+    vi.stubGlobal('createImageBitmap', vi.fn(async () => fakeBitmap(100, 100)));
+
+    const result = await scanReceiptFile(file());
+
+    expect(result.corrected).toBeUndefined();
+    expect(result.reason).toBe('bad-quad');
+  });
+
+  it('a crop over the byte cap is too-large', async () => {
+    const rig = buildRig();
+    rig.scanner.extractPaper = vi.fn(() => fakeExtractedCanvas({ size: SCANNER_MAX_OUTPUT_BYTES + 1 } as Blob));
+    vi.spyOn(loadModule, 'loadScanner').mockResolvedValue({ cv: rig.cv, scanner: rig.scanner });
+    vi.stubGlobal('createImageBitmap', vi.fn(async () => fakeBitmap(100, 100)));
+
+    const result = await scanReceiptFile(file());
+
+    expect(result.corrected).toBeUndefined();
+    expect(result.reason).toBe('too-large');
+  });
+
+  it('a runtime that cannot decode the image says nothing, and neither does a crop that worked', async () => {
+    vi.stubGlobal('createImageBitmap', undefined);
+    expect((await scanReceiptFile(file())).reason).toBeUndefined();
+    vi.unstubAllGlobals();
+
+    const rig = buildRig();
+    vi.spyOn(loadModule, 'loadScanner').mockResolvedValue({ cv: rig.cv, scanner: rig.scanner });
+    vi.stubGlobal('createImageBitmap', vi.fn(async () => fakeBitmap(100, 100)));
+    const worked = await scanReceiptFile(file());
+    expect(worked.corrected).toBeDefined();
+    expect(worked.reason).toBeUndefined();
   });
 });
 

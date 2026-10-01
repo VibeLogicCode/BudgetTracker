@@ -230,12 +230,16 @@ export const SCANNER_WORK_MAX_PX = 1600;
 /** The corrected image's long side. The recogniser wants more than the working size. */
 export const SCANNER_OUTPUT_MAX_PX = 2400;
 export const SCANNER_JPEG_QUALITY = 0.92;
-/** A quad hugging the full frame is the detector finding the photo's border, not paper. */
-export const SCANNER_MIN_QUAD_AREA_RATIO = 0.25;
+/** A sliver of the frame is a countertop edge, not paper; a long receipt shot whole fills 10-20
+ *  percent of a 3:4 frame and must pass. */
+export const SCANNER_MIN_QUAD_AREA_RATIO = 0.08;
+/** A quad hugging the full frame is the photo's border, not paper -- the ceiling the old comment
+ *  described. */
+export const SCANNER_MAX_QUAD_AREA_RATIO = 0.97;
 /** A sliver quad is a countertop edge. */
 export const SCANNER_MIN_SIDE_RATIO = 0.05;
 /** The countdown before the corrected image uploads on its own. */
-export const SCANNER_AUTO_ACCEPT_MS = 4000;
+export const SCANNER_AUTO_ACCEPT_MS = 8000;
 /** The same 10 MB as MAX_RECEIPT_BYTES in @/lib/warranty/receipts, duplicated here because
  *  that module imports node:fs, node:crypto and @/lib/env, and scan.ts is reachable from a
  *  'use client' component. tests/ops/constants.test.ts pins the two equal. */
