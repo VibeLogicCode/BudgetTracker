@@ -20,7 +20,6 @@ import {
 } from '@/lib/warranty/ocr/onnx/contours';
 import {
   MANY_BOXES_MIN_VALUE,
-  MANY_BOXES_SCORE_RATIO,
   NOISE_MAP_COMPONENTS,
   manyBoxesMap,
   noiseMap,
@@ -137,31 +136,60 @@ describe('minAreaRect (MUST-4.13)', () => {
 });
 
 describe('boxScoreFast (MUST-4.15)', () => {
-  it('equals the hand-computed mean over the axis-aligned bounding box', () => {
+  // Spec 2026-09-30 §2.4 item 1 (polygon-masked score) supersedes the old pin on the
+  // bounding-box mean. The score is now the mean over the pixels whose CENTRE (x + 0.5, y + 0.5)
+  // lies inside the quad. The crossing-number test is half-open: a centre on a left or top edge
+  // is in, one on a right or bottom edge is out, so a unit square covers exactly one pixel.
+  it('averages only the pixel centres inside the quad, not its whole bounding box', () => {
     const width = 4;
     const height = 2;
     const map = new Float32Array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]);
     const quad = rectCorners({ cx: 1, cy: 0.5, width: 1, height: 1, angleDeg: 0 });
-    // Corners land on x in 0.5..1.5 and y in 0..1. The implementation floors the minimum and
-    // ceils the maximum, so x0 = floor(0.5) = 0, x1 = ceil(1.5) = 2, y0 = 0, y1 = 1: columns
-    // 0..2 of both rows, which is (0.1 + 0.2 + 0.3 + 0.5 + 0.6 + 0.7) / 6 = 2.4 / 6 = 0.4.
-    // Column 3 is genuinely outside, which is what makes this a clipping test rather than a
-    // whole-map average.
-    expect(boxScoreFast(map, width, height, quad)).toBeCloseTo(2.4 / 6, 6);
+    // Corners land on x in 0.5..1.5 and y in 0..1. The bounding box floors and ceils to columns
+    // 0..2 of both rows, whose plain mean is 2.4 / 6 = 0.4 -- the old answer. Of those six pixel
+    // centres only (0.5, 0.5) is inside: (1.5, 0.5) sits on the right edge, (2.5, 0.5) is past
+    // it, and row 1's centres are at y = 1.5, below the quad. The score is pixel (0, 0) alone.
+    expect(boxScoreFast(map, width, height, quad)).toBeCloseTo(0.1, 6);
   });
 
-  it('ceils the maximum rather than flooring it, so a box never under-covers its own edge', () => {
+  it('clips to the map, then masks: a square hanging off the top edge scores its in-map centres', () => {
     const map = new Float32Array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]);
     const quad = rectCorners({ cx: 1.5, cy: 0.5, width: 2, height: 2, angleDeg: 0 });
-    // x spans 0.5..2.5 so x1 = ceil(2.5) = 3, taking all four columns and both rows:
-    // 3.6 / 8 = 0.45. Flooring instead would give 0.4 and quietly shrink every box.
-    expect(boxScoreFast(map, 4, 2, quad)).toBeCloseTo(3.6 / 8, 6);
+    // x spans 0.5..2.5 and y spans -0.5..1.5, so y0 = floor(-0.5) = -1 clips to row 0 and nothing
+    // is read from outside the map (an unclipped read would turn the mean into NaN). The 2 by 2
+    // square covers four pixel centres: (0.5, -0.5) and (1.5, -0.5) are off the map, (0.5, 0.5)
+    // and (1.5, 0.5) are pixels (0, 0) and (1, 0). Column 2 (x = 2.5) and row 1 (y = 1.5) sit on
+    // the right and bottom edges and are out. The unmasked box mean here was 3.6 / 8 = 0.45.
+    expect(boxScoreFast(map, 4, 2, quad)).toBeCloseTo((0.1 + 0.2) / 2, 6);
   });
 
   it('clips the bounding box into the map bounds', () => {
     const map = new Float32Array([1, 1, 1, 1]);
     const quad = rectCorners({ cx: 0, cy: 0, width: 100, height: 100, angleDeg: 0 });
     expect(boxScoreFast(map, 2, 2, quad)).toBeCloseTo(1, 6);
+  });
+
+  /**
+   * Spec 2026-09-30 §1.2 bug 1. A text line tilted a few degrees has an axis-aligned bounding box
+   * that is mostly background. RapidOCR/PaddleOCR average only inside the polygon; averaging the
+   * whole box scored every long tilted line under DET_BOX_THRESH and threw it away -- 13 of 24
+   * lines on the measured photo.
+   */
+  it('averages inside the polygon, so a tilted line keeps its score', () => {
+    const width = 100;
+    const height = 40;
+    const map = new Float32Array(width * height).fill(0.05);
+    // A slanted band: on row y the ink runs from x = 20 + (y - 10) to x = 60 + (y - 10).
+    for (let y = 10; y < 30; y += 1) for (let x = 20 + (y - 10); x < 60 + (y - 10); x += 1) map[y * width + x] = 0.9;
+    const quad = [
+      { x: 20, y: 10 },
+      { x: 60, y: 10 },
+      { x: 80, y: 30 },
+      { x: 40, y: 30 },
+    ] as const;
+    // The whole-box mean would be about 0.58 (800 ink pixels of the 61 by 21 = 1281 cells the
+    // floored and ceiled box covers). Inside the polygon it is ~0.9.
+    expect(boxScoreFast(map, width, height, quad)).toBeGreaterThan(0.85);
   });
 });
 
@@ -199,9 +227,11 @@ describe('boxesFromProbMap (MUST-4.14, MUST-4.15, MUST-4.18)', () => {
     // The region runs flush to the right and bottom edges on purpose. dilate() only grows
     // down and to the right and clamps at the bounds, so the dilated set is identical to the
     // region, the box's bounding box is exactly the region, and the measured score is the
-    // fill value exactly. A region floating in the middle would be measured over a bounding
-    // box one row and one column larger than itself, diluting 0.51 to about 0.435 and
-    // dropping the "kept" case for a reason that has nothing to do with DET_BOX_THRESH.
+    // fill value exactly. Before the polygon mask (spec 2026-09-30 §2.4 item 1) a region
+    // floating in the middle was measured over a bounding box one row and one column larger
+    // than itself, diluting 0.51 to about 0.435. The mask reads only the pixel centres inside
+    // the quad, so a floating region now scores 0.51 too; the flush placement is kept, but it
+    // is no longer load-bearing.
     const width = 30;
     const height = 12;
     function mapAt(value: number): Float32Array {
@@ -212,7 +242,8 @@ describe('boxesFromProbMap (MUST-4.14, MUST-4.15, MUST-4.18)', () => {
       return map;
     }
     // Rectangle corners (3,2) and (29,11): 26 by 9, so min side 9 clears DET_MIN_BOX_SIDE_PX.
-    // Score cells are x 3..29 by y 2..11 = 27 * 10 = 270, all of them inside the region.
+    // Score cells are the pixel centres inside that quad, x 3..28 by y 2..10 = 26 * 9 = 234,
+    // all of them inside the region.
     expect(boxesFromProbMap(mapAt(0.51), width, height)).toHaveLength(1);
     expect(boxesFromProbMap(mapAt(0.51), width, height)[0].score).toBeCloseTo(0.51, 5);
     expect(boxesFromProbMap(mapAt(0.49), width, height)).toHaveLength(0);
@@ -226,9 +257,10 @@ describe('boxesFromProbMap (MUST-4.14, MUST-4.15, MUST-4.18)', () => {
     // rectangle measures 1 by 1 and DET_MIN_BOX_SIDE_PX drops every one of them, leaving an
     // empty array that satisfies any upper-bound assertion.
     expect(boxes).toHaveLength(DET_MAX_BOXES);
-    // The 31 weakest blocks were dropped, so nothing at the floor value survives.
-    const weakestPossible = MANY_BOXES_MIN_VALUE * MANY_BOXES_SCORE_RATIO;
-    expect(Math.min(...boxes.map((box) => box.score))).toBeGreaterThan(weakestPossible);
+    // The 31 weakest blocks were dropped, so nothing at the floor value survives. Under the
+    // polygon mask a block scores its own value, so the weakest block would score exactly
+    // MANY_BOXES_MIN_VALUE (0.75 is exact in float32) and fail this strict comparison.
+    expect(Math.min(...boxes.map((box) => box.score))).toBeGreaterThan(MANY_BOXES_MIN_VALUE);
   });
 
   it('the noise fixture is dropped on size, not on the cap', () => {

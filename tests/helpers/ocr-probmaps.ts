@@ -57,16 +57,14 @@ export function noiseMap(): ProbMap {
 /**
  * 231 blocks of 5 by 5, spaced 7 apart so the dilation to 6 by 6 leaves a one pixel gap and
  * nothing merges. Every block survives DET_MIN_BOX_SIDE_PX (its rectangle is 5 by 5) and
- * DET_BOX_THRESH (score = v * 25 / 36, and the weakest v is 0.75, giving 0.5208), so all 231
- * reach the DET_MAX_BOXES cap. Values rise with the index so the cap's sort and slice has
- * something to order.
+ * DET_BOX_THRESH, so all 231 reach the DET_MAX_BOXES cap. A block's score is its own value v
+ * exactly: the dilated 6 by 6 gives a 5 by 5 quad, and the pixel centres inside that quad are
+ * the 25 undilated cells (the polygon mask, spec 2026-09-30 §2.4 item 1). The weakest v is
+ * 0.75. Values rise with the index so the cap's sort and slice has something to order.
  */
 export const MANY_BOXES_COUNT = 231;
 export const MANY_BOXES_MIN_VALUE = 0.75;
 export const MANY_BOXES_VALUE_STEP = 0.0008;
-/** A 5 by 5 block dilates to 6 by 6, and boxScoreFast measures the dilated bounding box
- *  against the undilated map: 25 filled cells out of 36. */
-export const MANY_BOXES_SCORE_RATIO = 25 / 36;
 
 export function manyBoxesMap(): ProbMap {
   const map = blank(150, 80);

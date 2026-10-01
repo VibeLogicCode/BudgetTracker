@@ -7,6 +7,7 @@ import {
   DET_MIN_BOX_SIDE_PX,
   DET_UNCLIP_RATIO,
   DET_USE_DILATION,
+  PIXEL_CENTRE_OFFSET,
 } from '@/lib/warranty/ocr/onnx/constants';
 
 /**
@@ -230,8 +231,12 @@ export function rectCorners(rect: RotatedRect): Quad {
   return [points[0], points[1], points[2], points[3]] as const;
 }
 
-/** DET_SCORE_MODE is 'fast': the arithmetic mean over the axis-aligned bounding box of the
- *  four corners, clipped to the map bounds. */
+/**
+ * DET_SCORE_MODE is 'fast': RapidOCR's box_score_fast -- the mean probability INSIDE THE POLYGON,
+ * computed over the polygon's axis-aligned bounding box with a point-in-polygon mask. The mask is
+ * the whole point (spec 2026-09-30 §1.2 bug 1): without it a text line tilted a few degrees scored
+ * mostly background and was dropped before recognition ever saw it.
+ */
 export function boxScoreFast(probMap: Float32Array, width: number, height: number, quad: Quad): number {
   const xs = quad.map((p) => p.x);
   const ys = quad.map((p) => p.y);
@@ -243,11 +248,39 @@ export function boxScoreFast(probMap: Float32Array, width: number, height: numbe
   let count = 0;
   for (let y = y0; y <= y1; y += 1) {
     for (let x = x0; x <= x1; x += 1) {
+      if (!insideQuad(quad, x + PIXEL_CENTRE_OFFSET, y + PIXEL_CENTRE_OFFSET)) continue;
+      sum += probMap[y * width + x];
+      count += 1;
+    }
+  }
+  // A degenerate polygon (zero area after rounding) falls back to the box mean rather than 0, so a
+  // one-pixel-tall sliver is judged by its pixels and not refused for its shape.
+  if (count === 0) return boxMean(probMap, width, x0, x1, y0, y1);
+  return sum / count;
+}
+
+function boxMean(probMap: Float32Array, width: number, x0: number, x1: number, y0: number, y1: number): number {
+  let sum = 0;
+  let count = 0;
+  for (let y = y0; y <= y1; y += 1) {
+    for (let x = x0; x <= x1; x += 1) {
       sum += probMap[y * width + x];
       count += 1;
     }
   }
   return count === 0 ? 0 : sum / count;
+}
+
+/** Crossing-number test against the four edges. Pure arithmetic, no dependency. */
+function insideQuad(quad: Quad, px: number, py: number): boolean {
+  let inside = false;
+  for (let i = 0, j = 3; i < 4; j = i, i += 1) {
+    const a = quad[i];
+    const b = quad[j];
+    const crosses = a.y > py !== b.y > py && px < ((b.x - a.x) * (py - a.y)) / (b.y - a.y) + a.x;
+    if (crosses) inside = !inside;
+  }
+  return inside;
 }
 
 /**

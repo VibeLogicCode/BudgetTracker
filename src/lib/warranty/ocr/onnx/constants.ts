@@ -177,6 +177,8 @@ export const CLS_FLIP_DEGREES = 180;
 /** A min area rectangle can describe one shape either way round. A text line is wider than
  *  it is tall, so an angle outside this bound means width and height should be swapped. */
 export const CROP_ANGLE_LIMIT_DEG = 45;
+/** Ours. A pixel is sampled at its centre for the point-in-polygon mask. */
+export const PIXEL_CENTRE_OFFSET = 0.5;
 
 // Probe protocol, per plan resolution 8. Lives here so that '200' is not a bare literal
 // under onnx/.
