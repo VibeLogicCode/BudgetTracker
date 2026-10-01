@@ -374,6 +374,13 @@ export const HELP_SECTIONS: HelpSection[] = [
           whole reason to record one.
         </P>
         <P>
+          A <B>bill</B> is a dated amount, or several. A one-off bill takes its amount and due
+          date when you add it; a plan like property tax takes the first and you add the rest on
+          its page; a bill that comes back each cycle takes the next amount from the e-bill you
+          attach. The list shows the next amount beside the due date, and what is outstanding
+          when more than one is unpaid.
+        </P>
+        <P>
           Attach the receipt or the contract as a photo or a PDF. The server reads the text on it,
           so the search box on this page searches <B>every word printed on</B> the document, not
           just the fields you typed. Searching a model number, a store name or a serial you never

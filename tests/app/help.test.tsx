@@ -308,6 +308,12 @@ describe('the loan help describes what shipped', () => {
     expect(textOf(section('coverage').body)).toContain('A statement can be withdrawn');
   });
 
+  it('says what a bill is and where its amount shows', () => {
+    expect(textOf(section('coverage').body)).toContain(
+      'The list shows the next amount beside the due date',
+    );
+  });
+
   it('defines the four words the loan pages use', () => {
     const words = textOf(section('words').body);
     for (const word of ['Owing today', 'Accrued', 'Principal', 'Basis']) {
