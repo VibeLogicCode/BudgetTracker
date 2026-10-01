@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  MAX_CANDIDATES,
   MAX_SUGGESTED_PRICE_CENTS,
   amountCandidates,
   dateCandidates,
@@ -199,6 +200,14 @@ describe('suggestPriceCents without the fallback', () => {
   it('steps back past a later total line that carries no figure', () => {
     expect(suggestPriceCents(['TOTAL 47.32', 'TOTAL NUMBER OF ITEMS SOLD = 5'].join('\n'))).toBe(4732);
   });
+  it('reads "payment due" as what is owed, and a payment received as paid', () => {
+    expect(suggestPriceCents('Total payment due $85.00')).toBe(8500);
+    expect(suggestPriceCents(['Total payment due $85.00', 'Total payments received 120.00'].join('\n'))).toBe(8500);
+  });
+  it('excludes French late-fee and payment lines too', () => {
+    expect(suggestPriceCents(['Montant dû 444,43 $', "Montant après la date d'échéance 466,67 $"].join('\n'))).toBe(44443);
+    expect(suggestPriceCents(['Montant dû 85,00', 'Montant du dernier paiement 120,00'].join('\n'))).toBe(8500);
+  });
 });
 
 describe('suggestDueDate', () => {
@@ -212,7 +221,15 @@ describe('suggestDueDate', () => {
   });
   it('ignores a date more than eighteen months out or a year past, and finds nothing on a receipt', () => {
     expect(suggestDueDate('Due date 2029-01-01', '2026-09-20')).toBeUndefined();
+    expect(suggestDueDate('Due date 2025-08-01', '2026-09-20')).toBeUndefined();
+    expect(suggestDueDate('Due date 2025-10-21', '2026-09-20')).toBe('2025-10-21');
     expect(suggestDueDate('DATE: 2026-09-14 TOTAL 25.31', '2026-09-20')).toBeUndefined();
+  });
+  it('takes the date after the phrase when two columns share a line', () => {
+    expect(suggestDueDate('Billing period 2026-07-01 to 2026-09-30   Due date 2026-10-31', '2026-09-20')).toBe('2026-10-31');
+    expect(suggestDueDate('Bill date: Sep 15, 2026     Due date: Oct 15, 2026', '2026-09-20')).toBe('2026-10-15');
+    // Nothing after the phrase: the first in-range date on the line.
+    expect(suggestDueDate('2026-10-31   Due date', '2026-09-20')).toBe('2026-10-31');
   });
   it('reads French upper case and an unaccented echeance', () => {
     expect(suggestDueDate("DATE D'ÉCHÉANCE 2026-10-31", '2026-09-20')).toBe('2026-10-31');
@@ -227,7 +244,8 @@ describe('suggestDueDate', () => {
 });
 
 describe('candidates carry the words around them', () => {
-  const bill = ['RIVERSIDE WATER', 'Water charges 188.24', 'Sewer charges 256.57', 'Total current charges $444.81', 'Amount due $444.43', 'Due date 2026-10-31', 'Amount due after due date $466.67'].join('\n');
+  // The statement date comes first, so the first-date bonus competes with the due-date line.
+  const bill = ['RIVERSIDE WATER', 'Statement date 2026-09-15', 'Water charges 188.24', 'Sewer charges 256.57', 'Total current charges $444.81', 'Amount due $444.43', 'Due date 2026-10-31', 'Amount due after due date $466.67'].join('\n');
   it('ranks the amount-due line first and keeps each figure once with its snippet', () => {
     const amounts = amountCandidates(bill);
     expect(amounts[0]).toMatchObject({ valueCents: 44443 });
@@ -246,5 +264,24 @@ describe('candidates carry the words around them', () => {
   it('ranks a late-fee figure below the figures on ordinary lines', () => {
     const amounts = amountCandidates(bill);
     expect(amounts[amounts.length - 1]).toMatchObject({ valueCents: 46667 });
+  });
+  it('gives the due-date score only to a date after the phrase on a joined line', () => {
+    const dates = dateCandidates('Billing period 2026-07-01 to 2026-09-30   Due date 2026-10-31', '2026-09-20');
+    expect(dates[0]).toMatchObject({ date: '2026-10-31' });
+    expect(dates[0].snippet).toContain('Due date');
+  });
+  it('cuts the snippet around the figure, not from the start of a long joined line', () => {
+    const line = 'Service address 12 Example Road, Riverside      Account summary      Amount due $444.43';
+    const [top] = amountCandidates(line);
+    expect(top.snippet).toContain('Amount due $444.43');
+    expect(top.snippet.length).toBeLessThanOrEqual(70);
+    expect(top.snippet).not.toMatch(/\s{2}/);
+  });
+  it('caps at six candidates and keeps a repeated figure once, with its later line', () => {
+    const receipt = ['MAPLE GROCERY CO.', 'MILK 6.49', 'BREAD 3.79', 'EGGS 4.29', 'CHEDDAR 7.99', 'APPLES 5.03', 'COFFEE 8.99', 'OAT MILK 6.49', 'TOTAL 43.07'].join('\n');
+    const amounts = amountCandidates(receipt);
+    expect(amounts).toHaveLength(MAX_CANDIDATES);
+    expect(new Set(amounts.map((c) => c.valueCents)).size).toBe(amounts.length);
+    expect(amounts.find((c) => c.valueCents === 649)?.snippet).toBe('OAT MILK 6.49');
   });
 });

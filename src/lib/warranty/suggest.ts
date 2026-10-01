@@ -42,6 +42,8 @@ function iso(y: number, m: number, d: number): string | null {
 
 interface DateHit {
   index: number;
+  /** Characters the date occupies in the text, for the snippet around it. */
+  length: number;
   iso: string;
 }
 
@@ -54,7 +56,7 @@ function collectDateHits(text: string): DateHit[] {
 
   for (const m of text.matchAll(/\b(\d{4})-(\d{2})-(\d{2})\b/g)) {
     const value = iso(Number(m[1]), Number(m[2]), Number(m[3]));
-    if (value) hits.push({ index: m.index ?? 0, iso: value });
+    if (value) hits.push({ index: m.index ?? 0, length: m[0].length, iso: value });
   }
 
   // A/B/YYYY or A-B-YY. §8.1 step 3 ladder: A>12 -> DD/MM; else B>12 -> MM/DD; else MM/DD.
@@ -65,7 +67,7 @@ function collectDateHits(text: string): DateHit[] {
     const year = m[3].length === 2 ? 2000 + rawYear : rawYear;
     const [month, day] = a > 12 ? [b, a] : [a, b];
     const value = iso(year, month, day);
-    if (value) hits.push({ index: m.index ?? 0, iso: value });
+    if (value) hits.push({ index: m.index ?? 0, length: m[0].length, iso: value });
   }
 
   // DD Mon YYYY (the shape the Amex export already uses, base §3).
@@ -73,7 +75,7 @@ function collectDateHits(text: string): DateHit[] {
     const month = MONTHS[m[2].slice(0, 3).toUpperCase()];
     if (!month) continue;
     const value = iso(Number(m[3]), month, Number(m[1]));
-    if (value) hits.push({ index: m.index ?? 0, iso: value });
+    if (value) hits.push({ index: m.index ?? 0, length: m[0].length, iso: value });
   }
 
   // Mon D, YYYY
@@ -81,7 +83,7 @@ function collectDateHits(text: string): DateHit[] {
     const month = MONTHS[m[1].slice(0, 3).toUpperCase()];
     if (!month) continue;
     const value = iso(Number(m[3]), month, Number(m[2]));
-    if (value) hits.push({ index: m.index ?? 0, iso: value });
+    if (value) hits.push({ index: m.index ?? 0, length: m[0].length, iso: value });
   }
 
   // Stable, so two shapes at one index keep the order above.
@@ -126,19 +128,22 @@ const CURRENCY_RE = /(?:\$\s*)?(\d{1,3}(?:,\d{3})*|\d{1,9})[.,](\d{2})(?!\d)/g;
 /** Fuzzy on purpose: PP-OCR reads T0TAL and IOTAL for TOTAL often enough to matter. French for bilingual bills. */
 const TOTAL_LINE_RE = /\b(t[o0]tal|[ti1]otal|amount\s+due|grand\s+total|balance\s+due|total\s+due|montant|solde)\b/i;
 const SUBTOTAL_RE = /\bsub[\s-]?total\b|\bsous[\s-]?total\b/i;
-/** A line about how the bill was PAID is never the total, whatever else it says. */
-const PAYMENT_LINE_RE = /\b(cash|change|tender(?:ed)?|tip|gratuity|approved|payment|cash\s*back|visa|mastercard|amex|debit|interac)\b/i;
+/*
+ * The patterns below that carry French use letter/number lookarounds, not `\b`: `\b` is
+ * ASCII-only, and in "d'échéance" both the apostrophe and the é are non-word characters, so
+ * `\béchéance` never matches. The `u` flag makes `\p{L}` work and folds É to é under `i`.
+ */
+/**
+ * A line about how the bill was PAID is never the total, whatever else it says. "Payment due"
+ * is what is owed, not what was paid, so "Total payment due $85.00" stays a total line.
+ */
+const PAYMENT_LINE_RE = /(?<![\p{L}\p{N}_])(cash|change|tender(?:ed)?|tip|gratuity|approved|payments?(?!\s+due)|cash\s*back|visa|mastercard|amex|debit|interac|paiements?|comptant|monnaie|remis)(?![\p{L}\p{N}_])/iu;
 /**
  * A late-fee line ("Amount due after due date $466.67") is never the total either. Specific on
  * purpose, not a bare "after", so "Total after discount" stays a total line.
  */
-const LATE_FEE_RE = /\b(after\s+(?:the\s+)?due\s+date|late\s+(?:fee|charge|payment)s?|past\s+due|overdue|penalt(?:y|ies))\b/i;
+const LATE_FEE_RE = /(?<![\p{L}\p{N}_])(after\s+(?:the\s+)?due\s+date|late\s+(?:fee|charge|payment)s?|past\s+due|overdue|penalt(?:y|ies)|frais\s+de\s+retard|apr[èe]s\s+(?:la\s+)?date\s+d['’]\s*[ée]ch[ée]ance|p[ée]nalit[ée]s?)(?![\p{L}\p{N}_])/iu;
 const TAX_LINE_RE = /\b(hst|gst|pst|tax|tvq|tps)\b/i;
-/**
- * Letter/number lookarounds, not `\b`: `\b` is ASCII-only, and in "d'échéance" both the
- * apostrophe and the é are non-word characters, so `\béchéance` never matches. The `u` flag
- * makes `\p{L}` work and folds É to é under `i`.
- */
 const DUE_LINE_RE = /(?<![\p{L}\p{N}_])(due\s+date|date\s+due|due\s+by|due\s+on|payable\s+by|pay\s+by|[ée]ch[ée]ance)(?![\p{L}\p{N}_])/iu;
 /** The second tier: a bare "due", read only when no line in the text names the due date outright. */
 const BARE_DUE_RE = /(?<![\p{L}\p{N}_])due(?![\p{L}\p{N}_])/iu;
@@ -174,8 +179,22 @@ export function suggestPriceCents(text: string): number | undefined {
   return undefined;
 }
 
-function firstDateInRange(line: string, floor: string, ceiling: string): string | undefined {
-  return collectDateHits(line).find((d) => d.iso >= floor && d.iso <= ceiling)?.iso;
+/** Where the phrase ends on the line, or -1 when the line does not carry it. */
+function phraseEnd(phrase: RegExp, line: string): number {
+  const match = phrase.exec(line);
+  return match === null ? -1 : match.index + match[0].length;
+}
+
+/**
+ * The in-range date on a due line, preferring the first one AFTER the phrase: a joined
+ * two-column line ("Bill date: Sep 15, 2026     Due date: Oct 15, 2026") carries the other
+ * column's date first. With nothing after the phrase, the first in-range date on the line.
+ */
+function dueDateOnLine(line: string, phrase: RegExp, floor: string, ceiling: string): string | undefined {
+  const end = phraseEnd(phrase, line);
+  if (end < 0) return undefined;
+  const inRange = collectDateHits(line).filter((d) => d.iso >= floor && d.iso <= ceiling);
+  return (inRange.find((d) => d.index >= end) ?? inRange[0])?.iso;
 }
 
 export function suggestDueDate(text: string, today: string): string | undefined {
@@ -186,19 +205,42 @@ export function suggestDueDate(text: string, today: string): string | undefined 
   // Tier 1: a line that names the due date outright. Tier 2, only when tier 1 found nothing: a
   // bare "due" ("Due Oct 31, 2026"), but never a late-fee line ("Past due 2026-08-01").
   for (const line of lines) {
-    if (!DUE_LINE_RE.test(line)) continue;
-    const found = firstDateInRange(line, floor, ceiling);
+    const found = dueDateOnLine(line, DUE_LINE_RE, floor, ceiling);
     if (found !== undefined) return found;
   }
   for (const line of lines) {
-    if (!BARE_DUE_RE.test(line) || LATE_FEE_RE.test(line)) continue;
-    const found = firstDateInRange(line, floor, ceiling);
+    if (LATE_FEE_RE.test(line)) continue;
+    const found = dueDateOnLine(line, BARE_DUE_RE, floor, ceiling);
     if (found !== undefined) return found;
   }
   return undefined;
 }
 
-const snippetOf = (line: string) => line.trim().slice(0, 60);
+/** Context kept either side of a candidate, so a long joined line still shows the figure itself. */
+const SNIPPET_SIDE_CHARS = 28;
+const squash = (s: string) => s.replace(/\s+/g, ' ');
+
+/**
+ * The words around a hit: up to SNIPPET_SIDE_CHARS either side of it, whitespace collapsed (a
+ * receipt's column spacing would otherwise eat the window), and a word the window cut in two
+ * dropped rather than shown as a fragment.
+ */
+function snippetAround(line: string, index: number, length: number): string {
+  let before = squash(line.slice(0, index));
+  if (before.length > SNIPPET_SIDE_CHARS) {
+    const cut = before.length - SNIPPET_SIDE_CHARS;
+    const cutMidWord = !/\s/.test(before[cut - 1]);
+    before = before.slice(cut);
+    if (cutMidWord) before = before.replace(/^\S+/, '');
+  }
+  let after = squash(line.slice(index + length));
+  if (after.length > SNIPPET_SIDE_CHARS) {
+    const cutMidWord = !/\s/.test(after[SNIPPET_SIDE_CHARS]);
+    after = after.slice(0, SNIPPET_SIDE_CHARS);
+    if (cutMidWord) after = after.replace(/\S+$/, '');
+  }
+  return `${before}${squash(line.slice(index, index + length))}${after}`.trim();
+}
 
 export function amountCandidates(text: string): AmountCandidate[] {
   if (typeof text !== 'string' || text.length === 0) return [];
@@ -217,7 +259,9 @@ export function amountCandidates(text: string): AmountCandidate[] {
       if (SUBTOTAL_RE.test(line) || TAX_LINE_RE.test(line)) score -= 2;
       if (i === matches.length - 1) score += 1;
       const prior = best.get(cents);
-      if (prior === undefined || score >= prior.score) best.set(cents, { valueCents: cents, snippet: snippetOf(line), score, line: lineIndex });
+      if (prior === undefined || score >= prior.score) {
+        best.set(cents, { valueCents: cents, snippet: snippetAround(line, m.index ?? 0, m[0].length), score, line: lineIndex });
+      }
     });
   });
   return [...best.values()]
@@ -233,13 +277,17 @@ export function dateCandidates(text: string, today: string): DateCandidate[] {
   const best = new Map<string, DateCandidate>();
   let first = true;
   for (const line of text.split(/\r?\n/)) {
+    // The due-date score goes only to a date after the phrase, as suggestDueDate prefers it.
+    const end = phraseEnd(DUE_LINE_RE, line);
     for (const found of collectDateHits(line)) {
       if (found.iso < floor || found.iso > ceiling) continue;
-      let score = DUE_LINE_RE.test(line) ? 3 : 0;
+      let score = end >= 0 && found.index >= end ? 3 : 0;
       if (first) score += 1;
       first = false;
       const prior = best.get(found.iso);
-      if (prior === undefined || score > prior.score) best.set(found.iso, { date: found.iso, snippet: snippetOf(line), score });
+      if (prior === undefined || score > prior.score) {
+        best.set(found.iso, { date: found.iso, snippet: snippetAround(line, found.index, found.length), score });
+      }
     }
   }
   return [...best.values()].sort((a, b) => b.score - a.score || a.date.localeCompare(b.date)).slice(0, MAX_CANDIDATES);
