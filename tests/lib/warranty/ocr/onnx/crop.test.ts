@@ -83,8 +83,10 @@ describe('cropBoxes (MUST-4.20, MUST-4.21)', () => {
 /**
  * Spec 2026-09-30 §1.2 bug 2. The old test only checked the crop's SIZE, for a box at the exact
  * image centre -- the one place the bug cannot show. This one checks CONTENT: a dark line near a
- * corner, tilted, must land inside its own crop. With the centre not rotated, the window lands on
- * white paper 35 px away and the recogniser reads nothing, or half of the next line.
+ * corner, tilted, must land inside its own crop. The spec's example, a box 400 px from centre at
+ * 5 degrees, misses by 35 px. This box is about 122 px from centre at 6 degrees, so an unrotated
+ * centre misses by about 10 px: the window is only partly on paper, but that is still enough to
+ * fail the < 110 bound below.
  */
 describe('cropBoxes follows a rotated box to where it actually is', () => {
   async function pageWithTiltedLine(cx: number, cy: number, angleDeg: number): Promise<RawImage> {
@@ -111,7 +113,8 @@ describe('cropBoxes follows a rotated box to where it actually is', () => {
   it('crops the dark line, not the paper beside it, for a box far from the centre at 6 degrees', async () => {
     const image = await pageWithTiltedLine(300, 80, 6);
     const [crop] = await cropBoxes(image, [box(300, 80, 120, 14, 6)]);
-    // Mostly ink. A miss lands on white and reads far above 200.
+    // Mostly ink. The unrotated centre misses by about 10 px and reads about 180 (4 of the
+    // window's 14 rows still hit ink); the opposite sign lands on bare paper and reads 255.
     expect(meanLuma(crop)).toBeLessThan(110);
   });
 
