@@ -221,19 +221,27 @@ const SNIPPET_SIDE_CHARS = 28;
 const squash = (s: string) => s.replace(/\s+/g, ' ');
 
 /**
+ * Raw characters read either side of a hit before whitespace is collapsed. A bounded slice, not
+ * the rest of the line: a crafted one-line PDF is 100k characters, and a whole-line pass per hit
+ * made that quadratic. Four times the side is plenty for any real read, whose words are joined by
+ * single spaces, so the snippet comes out the same.
+ */
+const SNIPPET_RAW_CHARS = 4 * SNIPPET_SIDE_CHARS;
+
+/**
  * The words around a hit: up to SNIPPET_SIDE_CHARS either side of it, whitespace collapsed (a
  * receipt's column spacing would otherwise eat the window), and a word the window cut in two
  * dropped rather than shown as a fragment.
  */
 function snippetAround(line: string, index: number, length: number): string {
-  let before = squash(line.slice(0, index));
+  let before = squash(line.slice(Math.max(0, index - SNIPPET_RAW_CHARS), index));
   if (before.length > SNIPPET_SIDE_CHARS) {
     const cut = before.length - SNIPPET_SIDE_CHARS;
     const cutMidWord = !/\s/.test(before[cut - 1]);
     before = before.slice(cut);
     if (cutMidWord) before = before.replace(/^\S+/, '');
   }
-  let after = squash(line.slice(index + length));
+  let after = squash(line.slice(index + length, index + length + SNIPPET_RAW_CHARS));
   if (after.length > SNIPPET_SIDE_CHARS) {
     const cutMidWord = !/\s/.test(after[SNIPPET_SIDE_CHARS]);
     after = after.slice(0, SNIPPET_SIDE_CHARS);
@@ -249,14 +257,17 @@ export function amountCandidates(text: string): AmountCandidate[] {
   const best = new Map<number, AmountCandidate & { line: number }>();
   text.split(/\r?\n/).forEach((line, lineIndex) => {
     const matches = [...line.matchAll(CURRENCY_RE)];
+    if (matches.length === 0) return;
+    // What the line says is the same for every figure on it, so it is read once per line.
+    let lineScore = 0;
+    if (isTotalLine(line)) lineScore += 3;
+    if (PAYMENT_LINE_RE.test(line)) lineScore -= 3;
+    if (LATE_FEE_RE.test(line)) lineScore -= 3;
+    if (SUBTOTAL_RE.test(line) || TAX_LINE_RE.test(line)) lineScore -= 2;
     matches.forEach((m, i) => {
       const cents = centsOf(m[1], m[2]);
       if (cents === null) return;
-      let score = 0;
-      if (isTotalLine(line)) score += 3;
-      if (PAYMENT_LINE_RE.test(line)) score -= 3;
-      if (LATE_FEE_RE.test(line)) score -= 3;
-      if (SUBTOTAL_RE.test(line) || TAX_LINE_RE.test(line)) score -= 2;
+      let score = lineScore;
       if (i === matches.length - 1) score += 1;
       const prior = best.get(cents);
       if (prior === undefined || score >= prior.score) {

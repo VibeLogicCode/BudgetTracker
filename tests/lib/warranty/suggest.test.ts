@@ -285,3 +285,30 @@ describe('candidates carry the words around them', () => {
     expect(amounts.find((c) => c.valueCents === 649)?.snippet).toBe('OAT MILK 6.49');
   });
 });
+
+/*
+  A one-baseline PDF reads as a single line, and these run in the server process after the OCR
+  timeout has already returned. Each hit used to cost the whole line (the line's flags once per
+  match, and a whitespace pass over everything either side of it), so 100k characters of figures
+  held the server for seconds. The bound is loose on purpose: it guards the shape, not a benchmark.
+*/
+describe('candidates on one very long line', () => {
+  const day = (i: number) => new Date(Date.UTC(2010, 0, 1) + i * 86_400_000).toISOString().slice(0, 10);
+  let line = '';
+  for (let i = 0; line.length < 100_000; i += 1) line += `${(i % 900) + 1}.${String(i % 100).padStart(2, '0')} ${day(i)} `;
+  line = line.slice(0, 100_000);
+
+  it('ranks the amounts in well under a second, still capped', () => {
+    const started = performance.now();
+    const amounts = amountCandidates(line);
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(amounts).toHaveLength(MAX_CANDIDATES);
+  });
+
+  it('ranks the dates in well under a second, still capped', () => {
+    const started = performance.now();
+    const dates = dateCandidates(line, TODAY);
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(dates).toHaveLength(MAX_CANDIDATES);
+  });
+});
