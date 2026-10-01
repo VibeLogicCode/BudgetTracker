@@ -34,19 +34,23 @@ export interface PdfTextItem {
  * of the page and gave the total and date heuristics one line to work with.
  */
 export function linesFromItems(items: readonly PdfTextItem[]): string[] {
-  const kept = items.filter((item) => item.str.trim().length > 0);
+  // seq is the content-stream index, taken before anything is dropped or reordered.
+  const kept = items.map((item, seq) => ({ ...item, seq })).filter((item) => item.str.trim().length > 0);
   if (kept.length === 0) return [];
   const heights = kept.map((item) => item.height).filter((h) => h > 0).sort((a, b) => a - b);
   const medianHeight = heights.length === 0 ? 10 : heights[Math.floor(heights.length / 2)];
   const tolerance = medianHeight * PDF_LINE_TOLERANCE_RATIO;
-  const ordered = [...kept].sort((a, b) => (Math.abs(b.y - a.y) > tolerance ? b.y - a.y : a.x - b.x));
+  // By y alone: a y-then-x comparator is not transitive when baselines drift. The join sorts by x.
+  const ordered = [...kept].sort((a, b) => b.y - a.y);
   const lines: { y: number; items: PdfTextItem[] }[] = [];
-  let forceBreak = false;
+  let prev: (typeof ordered)[number] | undefined;
   for (const item of ordered) {
     const current = lines[lines.length - 1];
+    // pdfjs sets hasEOL in stream order, so it ends a line only before the item the stream wrote next.
+    const forceBreak = prev !== undefined && prev.hasEOL && item.seq === prev.seq + 1;
     if (!forceBreak && current !== undefined && Math.abs(item.y - current.y) <= tolerance) current.items.push(item);
     else lines.push({ y: item.y, items: [item] });
-    forceBreak = item.hasEOL;
+    prev = item;
   }
   return lines.map((line) =>
     line.items

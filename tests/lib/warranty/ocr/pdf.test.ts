@@ -67,9 +67,9 @@ function writeFixture(text: string): string {
 
 describe('extractPdfText (M5 — real pdfjs-dist execution, not the OCR engine)', () => {
   it('reads the text layer of a real text-layer PDF', async () => {
-    const file = writeFixture('HOME DEPOT TOTAL 42.00 hardware receipt');
+    const file = writeFixture('MAPLE GROCERY CO. TOTAL 42.00 hardware receipt');
     const text = await extractPdfText(file);
-    expect(text).toContain('HOME DEPOT TOTAL 42.00');
+    expect(text).toContain('MAPLE GROCERY CO. TOTAL 42.00');
   });
 
   it('throws ScannedPdfError when the PDF has no text layer', async () => {
@@ -82,7 +82,8 @@ describe('extractPdfText (M5 — real pdfjs-dist execution, not the OCR engine)'
 describe('extractPdfText reads lines', () => {
   it('puts items at different heights on different lines, top first', async () => {
     const file = path.join(dir, 'two.pdf');
-    fs.writeFileSync(file, buildPdf([[{ x: 10, y: 200, text: 'RIVERSIDE WATER' }, { x: 10, y: 100, text: 'Amount due 444.43' }]]));
+    // The LOWER line is written first, so "top first" is the sort's doing, not the stream's.
+    fs.writeFileSync(file, buildPdf([[{ x: 10, y: 100, text: 'Amount due 444.43' }, { x: 10, y: 200, text: 'RIVERSIDE WATER' }]]));
     expect(await extractPdfText(file)).toBe('RIVERSIDE WATER\nAmount due 444.43');
   });
 
@@ -101,8 +102,38 @@ describe('extractPdfText reads lines', () => {
     expect(await extractPdfText(file)).toBe('Amount due $444.43\nDue date 2026-10-31');
   });
 
+  /** Review focus 3, column-first stream. pdfjs sets hasEOL in content-stream order, not reading order. */
+  it('reads a two-column bill written column by column', async () => {
+    const file = path.join(dir, 'cols-first.pdf');
+    fs.writeFileSync(
+      file,
+      buildPdf([[
+        { x: 10, y: 200, text: 'Amount due' },
+        { x: 10, y: 170, text: 'Due date' },
+        { x: 250, y: 200, text: '$444.43' },
+        { x: 250, y: 170, text: '2026-10-31' },
+      ]]),
+    );
+    expect(await extractPdfText(file)).toBe('Amount due $444.43\nDue date 2026-10-31');
+  });
+
+  it('reads a two-column bill whose figures are written before their labels', async () => {
+    const file = path.join(dir, 'figures-first.pdf');
+    fs.writeFileSync(
+      file,
+      buildPdf([[
+        { x: 250, y: 200, text: '$444.43' },
+        { x: 10, y: 200, text: 'Amount due' },
+        { x: 250, y: 170, text: '2026-10-31' },
+        { x: 10, y: 170, text: 'Due date' },
+      ]]),
+    );
+    expect(await extractPdfText(file)).toBe('Amount due $444.43\nDue date 2026-10-31');
+  });
+
   /** Review focus 6. */
   it('stops at the page cap and returns what it read', async () => {
+    expect(MAX_PDF_PAGES).toBe(20);
     const pages = Array.from({ length: MAX_PDF_PAGES + 5 }, (_, i) => [{ x: 10, y: 100, text: `PAGE ${i + 1}` }]);
     const file = path.join(dir, 'many.pdf');
     fs.writeFileSync(file, buildPdf(pages));
@@ -120,5 +151,14 @@ describe('linesFromItems (pure)', () => {
         { str: 'B', x: 50, y: 100, height: 10, hasEOL: false },
       ]),
     ).toEqual(['A', 'B']);
+  });
+
+  /** Baselines that drift by less than the tolerance each step must not make the result depend on input order. */
+  it('gives the same lines whatever order drifting items arrive in', () => {
+    const a = { str: 'A', x: 0, y: 100, height: 10, hasEOL: false };
+    const b = { str: 'B', x: 50, y: 103, height: 10, hasEOL: false };
+    const c = { str: 'C', x: 100, y: 106, height: 10, hasEOL: false };
+    const outputs = [[a, b, c], [a, c, b], [b, a, c], [b, c, a], [c, a, b], [c, b, a]].map((order) => linesFromItems(order));
+    for (const output of outputs) expect(output).toEqual(outputs[0]);
   });
 });
