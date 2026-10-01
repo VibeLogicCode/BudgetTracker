@@ -459,30 +459,30 @@ describe('F4: the kind pills', () => {
 /** Spec 2026-09-30 §2.1: a bill's money on the list row, in the money cells, with ruling P4 untouched. */
 describe('a bill row shows its money', () => {
   const bill = () => item({ id: 42, name: 'Property tax', kind: 'bill', isLifetime: true, expiryDate: null, typeName: 'Tax bill' });
-  const schedule = { 42: { nextDueDate: '2026-10-31', overdueCount: 0, nextAmountCents: 44443, unpaidCount: 1, outstandingCents: 44443 } };
+  const schedule = { 42: { nextDueDate: '2026-11-24', overdueCount: 0, nextAmountCents: 31244, unpaidCount: 1, outstandingCents: 31244 } };
 
   it('puts the next amount in the Price cell', () => {
     renderList(result([bill()]), { billSchedules: schedule });
-    const priceCell = screen.getByText('$444.43').closest('td')!;
+    const priceCell = screen.getByText('$312.44').closest('td')!;
     expect(priceCell.getAttribute('data-label')).toBe('Price');
     // Ruling P4: the schedule label is still dates only.
-    expect(screen.getByText('Next due 2026-10-31')).toBeTruthy();
+    expect(screen.getByText('Next due 2026-11-24')).toBeTruthy();
   });
 
   it('says how many are unpaid and the total in the Billing cell when there is more than one', () => {
     renderList(result([bill()]), {
-      billSchedules: { 42: { nextDueDate: '2026-10-31', overdueCount: 0, nextAmountCents: 44443, unpaidCount: 3, outstandingCents: 133329 } },
+      billSchedules: { 42: { nextDueDate: '2026-11-24', overdueCount: 0, nextAmountCents: 31244, unpaidCount: 4, outstandingCents: 124976 } },
     });
-    expect(screen.getByText('3 unpaid · $1,333.29 outstanding').closest('td')!.getAttribute('data-label')).toBe('Billing');
+    expect(screen.getByText('4 unpaid · $1,249.76 outstanding').closest('td')!.getAttribute('data-label')).toBe('Billing');
   });
 
   /** The Billing column is a fixed 8rem and its cell is nowrap; this label is wider than that, so
    *  it must wrap rather than push the table past its edge (item I, v1.16.0 item 4). */
   it('lets the outstanding label wrap inside the fixed Billing column', () => {
     renderList(result([bill()]), {
-      billSchedules: { 42: { nextDueDate: '2026-10-31', overdueCount: 0, nextAmountCents: 44443, unpaidCount: 3, outstandingCents: 133329 } },
+      billSchedules: { 42: { nextDueDate: '2026-11-24', overdueCount: 0, nextAmountCents: 31244, unpaidCount: 4, outstandingCents: 124976 } },
     });
-    const label = screen.getByText('3 unpaid · $1,333.29 outstanding');
+    const label = screen.getByText('4 unpaid · $1,249.76 outstanding');
     expect(label.classList.contains('whitespace-normal')).toBe(true);
   });
 

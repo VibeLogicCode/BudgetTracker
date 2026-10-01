@@ -143,14 +143,14 @@ describe('ReceiptUploader', () => {
         ok: true,
         json: async () => ({
           status: 'done',
-          suggestions: { vendor: 'RIVERSIDE WATER', priceCents: 44443 },
-          lines: ['RIVERSIDE WATER', 'Amount due $444.43'],
+          suggestions: { vendor: 'RIVERSIDE WATER', priceCents: 31244 },
+          lines: ['RIVERSIDE WATER', 'Amount due $312.44'],
           candidates: {
             amounts: [
-              { valueCents: 44443, snippet: 'Amount due $444.43', score: 4 },
-              { valueCents: 46667, snippet: 'Amount due after due date $466.67', score: 1 },
+              { valueCents: 31244, snippet: 'Amount due $312.44', score: 4 },
+              { valueCents: 32806, snippet: 'Amount due after due date $328.06', score: 1 },
             ],
-            dates: [{ date: '2026-10-31', snippet: 'Due date 2026-10-31', score: 4 }],
+            dates: [{ date: '2026-11-24', snippet: 'Due date 2026-11-24', score: 4 }],
           },
         }),
       } as Response);
@@ -171,11 +171,11 @@ describe('ReceiptUploader', () => {
     expect(screen.getByText('Filled vendor, amount.')).toBeTruthy();
     fireEvent.click(screen.getByText('What was read'));
     // Scoped: the same words are also the first chip's snippet.
-    expect(within(container.querySelector('details')!).getByText('Amount due $444.43')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: /\$466\.67/ }));
-    expect(onPickAmount).toHaveBeenCalledWith(46667);
-    fireEvent.click(screen.getByRole('button', { name: /Oct 31, 2026/ }));
-    expect(onPickDate).toHaveBeenCalledWith('2026-10-31');
+    expect(within(container.querySelector('details')!).getByText('Amount due $312.44')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /\$328\.06/ }));
+    expect(onPickAmount).toHaveBeenCalledWith(32806);
+    fireEvent.click(screen.getByRole('button', { name: /Nov 24, 2026/ }));
+    expect(onPickDate).toHaveBeenCalledWith('2026-11-24');
   });
 
   it('offers no chip a tap could not use', async () => {
@@ -210,8 +210,8 @@ describe('ReceiptUploader', () => {
         ok: true,
         json: async () => ({
           status: 'done',
-          suggestions: { vendor: 'RIVERSIDE WATER', dueDate: '2026-10-31', priceCents: 44443 },
-          lines: ['RIVERSIDE WATER', 'Due date 2026-10-31', 'Amount due $444.43'],
+          suggestions: { vendor: 'RIVERSIDE WATER', dueDate: '2026-11-24', priceCents: 31244 },
+          lines: ['RIVERSIDE WATER', 'Due date 2026-11-24', 'Amount due $312.44'],
           candidates: { amounts: [], dates: [] },
         }),
       } as Response);

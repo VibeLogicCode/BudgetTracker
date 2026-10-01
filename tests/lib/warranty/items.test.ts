@@ -733,12 +733,12 @@ describe('createWarrantyItem: the first installment rides the same transaction',
       [],
       undefined,
       undefined,
-      { firstInstallment: { dueDate: '2026-10-31', amountCents: 44443 } },
+      { firstInstallment: { dueDate: '2026-11-24', amountCents: 31244 } },
     );
     const rows = current!.db.all<{ due_date: string; amount_cents: number; paid_at: string | null }>(
       sql`select due_date, amount_cents, paid_at from bill_installments where item_id = ${id}`,
     );
-    expect(rows).toEqual([{ due_date: '2026-10-31', amount_cents: 44443, paid_at: null }]);
+    expect(rows).toEqual([{ due_date: '2026-11-24', amount_cents: 31244, paid_at: null }]);
   });
 
   it('writes none when the option is absent -- an installment plan is entered on the detail page', () => {

@@ -356,7 +356,7 @@ export function WarrantiesClient({
               {/* A five-figure amount, right-aligned, on one line. */}
               <col style={{ width: '7rem' }} />
               {/* An amount plus its cycle suffix ("/mo" or a loan's longer "per month"), or -- for
-                  a Bill with several unpaid -- "3 unpaid · $1,333.29 outstanding", which wraps. */}
+                  a Bill with several unpaid -- "4 unpaid · $1,249.76 outstanding", which wraps. */}
               <col style={{ width: '8rem' }} />
             </colgroup>
             <thead>

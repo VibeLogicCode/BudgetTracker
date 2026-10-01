@@ -90,15 +90,15 @@ describe('staged jobs', () => {
 
   it('writes the lines and the candidates beside the suggestions (spec 2026-09-30 §2.3)', async () => {
     // Date only: the due-date window is today ± months, so a real clock would age this fixture out.
-    vi.useFakeTimers({ now: new Date('2026-09-20T12:00:00Z'), toFake: ['Date'] });
-    setOcrEngineForTests({ recognize: async () => ({ text: 'RIVERSIDE WATER\nAmount due $444.43\nDue date 2026-10-31' }) });
+    vi.useFakeTimers({ now: new Date('2026-11-07T12:00:00Z'), toFake: ['Date'] });
+    setOcrEngineForTests({ recognize: async () => ({ text: 'RIVERSIDE WATER\nAmount due $312.44\nDue date 2026-11-24' }) });
     const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', 1);
     enqueueOcrJob({ kind: 'staged', stagingId });
     await drainOcrQueue();
     const sidecar = readSidecar(stagingId);
-    expect(sidecar?.lines).toEqual(['RIVERSIDE WATER', 'Amount due $444.43', 'Due date 2026-10-31']);
-    expect(sidecar?.candidates?.amounts[0]).toMatchObject({ valueCents: 44443 });
-    expect(sidecar?.suggestions?.dueDate).toBe('2026-10-31');
+    expect(sidecar?.lines).toEqual(['RIVERSIDE WATER', 'Amount due $312.44', 'Due date 2026-11-24']);
+    expect(sidecar?.candidates?.amounts[0]).toMatchObject({ valueCents: 31244 });
+    expect(sidecar?.suggestions?.dueDate).toBe('2026-11-24');
   });
 
   it('records an empty read as a failure with a message, never as done (spec §2.3)', async () => {

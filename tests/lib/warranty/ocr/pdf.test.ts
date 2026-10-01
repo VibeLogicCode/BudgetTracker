@@ -83,8 +83,8 @@ describe('extractPdfText reads lines', () => {
   it('puts items at different heights on different lines, top first', async () => {
     const file = path.join(dir, 'two.pdf');
     // The LOWER line is written first, so "top first" is the sort's doing, not the stream's.
-    fs.writeFileSync(file, buildPdf([[{ x: 10, y: 100, text: 'Amount due 444.43' }, { x: 10, y: 200, text: 'RIVERSIDE WATER' }]]));
-    expect(await extractPdfText(file)).toBe('RIVERSIDE WATER\nAmount due 444.43');
+    fs.writeFileSync(file, buildPdf([[{ x: 10, y: 100, text: 'Amount due 312.44' }, { x: 10, y: 200, text: 'RIVERSIDE WATER' }]]));
+    expect(await extractPdfText(file)).toBe('RIVERSIDE WATER\nAmount due 312.44');
   });
 
   /** Review focus 3: a two-column bill -- label left, figure right, same height. */
@@ -94,12 +94,12 @@ describe('extractPdfText reads lines', () => {
       file,
       buildPdf([[
         { x: 10, y: 200, text: 'Amount due' },
-        { x: 250, y: 200, text: '$444.43' },
+        { x: 250, y: 200, text: '$312.44' },
         { x: 10, y: 170, text: 'Due date' },
-        { x: 250, y: 170, text: '2026-10-31' },
+        { x: 250, y: 170, text: '2026-11-24' },
       ]]),
     );
-    expect(await extractPdfText(file)).toBe('Amount due $444.43\nDue date 2026-10-31');
+    expect(await extractPdfText(file)).toBe('Amount due $312.44\nDue date 2026-11-24');
   });
 
   /** Review focus 3, column-first stream. pdfjs sets hasEOL in content-stream order, not reading order. */
@@ -110,11 +110,11 @@ describe('extractPdfText reads lines', () => {
       buildPdf([[
         { x: 10, y: 200, text: 'Amount due' },
         { x: 10, y: 170, text: 'Due date' },
-        { x: 250, y: 200, text: '$444.43' },
-        { x: 250, y: 170, text: '2026-10-31' },
+        { x: 250, y: 200, text: '$312.44' },
+        { x: 250, y: 170, text: '2026-11-24' },
       ]]),
     );
-    expect(await extractPdfText(file)).toBe('Amount due $444.43\nDue date 2026-10-31');
+    expect(await extractPdfText(file)).toBe('Amount due $312.44\nDue date 2026-11-24');
   });
 
   it('reads a two-column bill whose figures are written before their labels', async () => {
@@ -122,13 +122,13 @@ describe('extractPdfText reads lines', () => {
     fs.writeFileSync(
       file,
       buildPdf([[
-        { x: 250, y: 200, text: '$444.43' },
+        { x: 250, y: 200, text: '$312.44' },
         { x: 10, y: 200, text: 'Amount due' },
-        { x: 250, y: 170, text: '2026-10-31' },
+        { x: 250, y: 170, text: '2026-11-24' },
         { x: 10, y: 170, text: 'Due date' },
       ]]),
     );
-    expect(await extractPdfText(file)).toBe('Amount due $444.43\nDue date 2026-10-31');
+    expect(await extractPdfText(file)).toBe('Amount due $312.44\nDue date 2026-11-24');
   });
 
   /** Review focus 6. */

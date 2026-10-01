@@ -411,30 +411,30 @@ describe('createWarrantyAction', () => {
   it('creates a bill with its first installment when amount due and due date are given', async () => {
     const billType = createItemType(`Bill ${randomUUID()}`, 'bill');
     const to = await redirectPath(() =>
-      createWarrantyAction({}, formData(baseFields({ typeId: String(billType.id), amountDue: '444.43', dueDate: '2026-10-31' }))),
+      createWarrantyAction({}, formData(baseFields({ typeId: String(billType.id), amountDue: '312.44', dueDate: '2026-11-24' }))),
     );
     const id = Number(to.split('/').pop());
     const rows = current!.db.all<{ due_date: string; amount_cents: number }>(
       sql`select due_date, amount_cents from bill_installments where item_id = ${id}`,
     );
-    expect(rows).toEqual([{ due_date: '2026-10-31', amount_cents: 44443 }]);
+    expect(rows).toEqual([{ due_date: '2026-11-24', amount_cents: 31244 }]);
   });
 
   /** Review focus 2. */
   it('stores the magnitude of a signed amount due', async () => {
     const billType = createItemType(`Bill ${randomUUID()}`, 'bill');
     const to = await redirectPath(() =>
-      createWarrantyAction({}, formData(baseFields({ typeId: String(billType.id), amountDue: '-444.43', dueDate: '2026-10-31' }))),
+      createWarrantyAction({}, formData(baseFields({ typeId: String(billType.id), amountDue: '-312.44', dueDate: '2026-11-24' }))),
     );
     const id = Number(to.split('/').pop());
-    expect(current!.db.get<{ a: number }>(sql`select amount_cents as a from bill_installments where item_id = ${id}`).a).toBe(44443);
+    expect(current!.db.get<{ a: number }>(sql`select amount_cents as a from bill_installments where item_id = ${id}`).a).toBe(31244);
   });
 
   /** Review focus 1. */
   it('refuses half a pair with one sentence, and saves nothing', async () => {
     const billType = createItemType(`Bill ${randomUUID()}`, 'bill');
     const before = current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_items`).c;
-    const result = await createWarrantyAction({}, formData(baseFields({ typeId: String(billType.id), amountDue: '444.43', dueDate: '' })));
+    const result = await createWarrantyAction({}, formData(baseFields({ typeId: String(billType.id), amountDue: '312.44', dueDate: '' })));
     expect(result.error).toBe('Enter both the amount due and the due date, or leave both blank.');
     expect(current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_items`).c).toBe(before);
   });

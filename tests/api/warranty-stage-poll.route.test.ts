@@ -75,22 +75,22 @@ describe('GET /api/warranties/receipts/stage/[stagingId]', () => {
 
   it('returns the lines and the candidates on done when the sidecar has them (spec 2026-09-30 §2.3)', async () => {
     const stagingId = writeStagedReceipt(JPEG, 'image/jpeg', userId);
-    const lines = ['RIVERSIDE WATER', 'Amount due $444.43', 'Due date 2026-10-31'];
+    const lines = ['RIVERSIDE WATER', 'Amount due $312.44', 'Due date 2026-11-24'];
     const candidates = {
-      amounts: [{ valueCents: 44443, snippet: 'Amount due $444.43', score: 3 }],
-      dates: [{ date: '2026-10-31', snippet: 'Due date 2026-10-31', score: 2 }],
+      amounts: [{ valueCents: 31244, snippet: 'Amount due $312.44', score: 3 }],
+      dates: [{ date: '2026-11-24', snippet: 'Due date 2026-11-24', score: 2 }],
     };
     writeSidecar(stagingId, {
       status: 'done',
       text: lines.join('\n'),
-      suggestions: { vendor: 'RIVERSIDE WATER', priceCents: 44443, dueDate: '2026-10-31' },
+      suggestions: { vendor: 'RIVERSIDE WATER', priceCents: 31244, dueDate: '2026-11-24' },
       lines,
       candidates,
     });
     const body = await (await poll(stagingId)).json();
     expect(body).toEqual({
       status: 'done',
-      suggestions: { vendor: 'RIVERSIDE WATER', priceCents: 44443, dueDate: '2026-10-31' },
+      suggestions: { vendor: 'RIVERSIDE WATER', priceCents: 31244, dueDate: '2026-11-24' },
       lines,
       candidates,
     });

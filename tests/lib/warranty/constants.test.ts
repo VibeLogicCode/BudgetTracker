@@ -412,12 +412,12 @@ describe('billScheduleLabel (item Q, ruling P4)', () => {
 
 describe('billOutstandingLabel (spec 2026-09-30 §2.1)', () => {
   it('says nothing for a single unpaid installment -- the Price cell already shows it', () => {
-    expect(billOutstandingLabel(1, 44443)).toBeNull();
+    expect(billOutstandingLabel(1, 31244)).toBeNull();
     expect(billOutstandingLabel(0, 0)).toBeNull();
   });
 
   it('counts and totals when more than one is unpaid', () => {
-    expect(billOutstandingLabel(3, 133329)).toBe('3 unpaid · $1,333.29 outstanding');
+    expect(billOutstandingLabel(4, 124976)).toBe('4 unpaid · $1,249.76 outstanding');
   });
 });
 

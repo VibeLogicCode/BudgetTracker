@@ -28,7 +28,7 @@
 Inputs the spec implies but no task's first test exercises; each line names the task whose tests pin it.
 
 1. **One field filled, the other blank** on the create form (amount without date, or date without amount) must be refused with one sentence, not written as a half-installment or silently dropped. Task 1 (`'refuses half a pair'`).
-2. **A negative or signed amount** (`-444.43`) is the size of the bill, as `addInstallmentAction` already treats it. Task 1 (`'stores the magnitude'`).
+2. **A negative or signed amount** (`-312.44`) is the size of the bill, as `addInstallmentAction` already treats it. Task 1 (`'stores the magnitude'`).
 3. **A non-bill kind that somehow posts the fields** (a stale form, a hand-made post) must create no installment and must not fail the item save. Task 1 (`'ignores the pair for a kind that has no installments'`).
 4. **A bill whose installments are all paid** must show no stale "next" amount on the list — the Price cell returns to `—` and the Expiry cell to the open-ended word, which `billScheduleLabel` already does. Task 3 (`'shows nothing when every installment is paid'`).
 5. **A self-scoped member's list** must not carry another member's bill amounts; the fold already runs under `ownerUserId: scope`, and the test proves the amounts ride the same scoping. Task 3 (`'scopes the amounts the way it already scopes the dates'`).
@@ -75,12 +75,12 @@ describe('createWarrantyItem: the first installment rides the same transaction',
       [],
       undefined,
       undefined,
-      { firstInstallment: { dueDate: '2026-10-31', amountCents: 44443 } },
+      { firstInstallment: { dueDate: '2026-11-24', amountCents: 31244 } },
     );
     const rows = db.all<{ due_date: string; amount_cents: number; paid_at: string | null }>(
       sql`select due_date, amount_cents, paid_at from bill_installments where item_id = ${id}`,
     );
-    expect(rows).toEqual([{ due_date: '2026-10-31', amount_cents: 44443, paid_at: null }]);
+    expect(rows).toEqual([{ due_date: '2026-11-24', amount_cents: 31244, paid_at: null }]);
   });
 
   it('writes none when the option is absent -- an installment plan is entered on the detail page', () => {
@@ -177,28 +177,28 @@ In `tests/app/warranties-actions.test.ts`, inside `describe('createWarrantyActio
   /** Spec 2026-09-30 §2.1: amount due and due date ride the create form for a bill. */
   it('creates a bill with its first installment when amount due and due date are given', async () => {
     const to = await redirectPath(() =>
-      createWarrantyAction({}, formData(baseFields({ typeId: String(billType.id), amountDue: '444.43', dueDate: '2026-10-31' }))),
+      createWarrantyAction({}, formData(baseFields({ typeId: String(billType.id), amountDue: '312.44', dueDate: '2026-11-24' }))),
     );
     const id = Number(to.split('/').pop());
     const rows = current!.db.all<{ due_date: string; amount_cents: number }>(
       sql`select due_date, amount_cents from bill_installments where item_id = ${id}`,
     );
-    expect(rows).toEqual([{ due_date: '2026-10-31', amount_cents: 44443 }]);
+    expect(rows).toEqual([{ due_date: '2026-11-24', amount_cents: 31244 }]);
   });
 
   /** Review focus 2. */
   it('stores the magnitude of a signed amount due', async () => {
     const to = await redirectPath(() =>
-      createWarrantyAction({}, formData(baseFields({ typeId: String(billType.id), amountDue: '-444.43', dueDate: '2026-10-31' }))),
+      createWarrantyAction({}, formData(baseFields({ typeId: String(billType.id), amountDue: '-312.44', dueDate: '2026-11-24' }))),
     );
     const id = Number(to.split('/').pop());
-    expect(current!.db.get<{ a: number }>(sql`select amount_cents as a from bill_installments where item_id = ${id}`).a).toBe(44443);
+    expect(current!.db.get<{ a: number }>(sql`select amount_cents as a from bill_installments where item_id = ${id}`).a).toBe(31244);
   });
 
   /** Review focus 1. */
   it('refuses half a pair with one sentence, and saves nothing', async () => {
     const before = current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_items`).c;
-    const result = await createWarrantyAction({}, formData(baseFields({ typeId: String(billType.id), amountDue: '444.43', dueDate: '' })));
+    const result = await createWarrantyAction({}, formData(baseFields({ typeId: String(billType.id), amountDue: '312.44', dueDate: '' })));
     expect(result.error).toBe('Enter both the amount due and the due date, or leave both blank.');
     expect(current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_items`).c).toBe(before);
   });
@@ -247,7 +247,7 @@ function readFirstInstallment(formData: FormData): { dueDate: string; amountCent
   if (dueDate === '' || rawAmount === '') return 'half';
   const cents = parseAmountToCents(rawAmount);
   if (cents === null) return 'half';
-  // Magnitude, as addInstallmentAction does: a person typing -444.43 means the size of the bill.
+  // Magnitude, as addInstallmentAction does: a person typing -312.44 means the size of the bill.
   return { dueDate, amountCents: Math.abs(cents) };
 }
 ```
@@ -328,7 +328,7 @@ describe('a bill asks for its amount and due date', () => {
   it('clears the pair when the type changes away from bill, so a stale value cannot post', () => {
     const { container } = renderForm();
     fireEvent.change(container.querySelector('[name="typeId"]')!, { target: { value: '4' } });
-    fireEvent.change(container.querySelector('input[name="amountDue"]')!, { target: { value: '444.43' } });
+    fireEvent.change(container.querySelector('input[name="amountDue"]')!, { target: { value: '312.44' } });
     fireEvent.change(container.querySelector('[name="typeId"]')!, { target: { value: '1' } });
     fireEvent.change(container.querySelector('[name="typeId"]')!, { target: { value: '4' } });
     expect((container.querySelector('input[name="amountDue"]') as HTMLInputElement).value).toBe('');
@@ -459,7 +459,7 @@ Widen the `suggested` state's initial object to `{ purchaseDate: false, vendor: 
                       id="bill-amount-due"
                       name="amountDue"
                       inputMode="decimal"
-                      placeholder="e.g. 444.43"
+                      placeholder="e.g. 312.44"
                       value={amountDue}
                       onChange={(e) => {
                         setAmountDue(e.target.value);
@@ -537,12 +537,12 @@ In `tests/lib/warranty/constants.test.ts`, after the `billScheduleLabel` describ
 ```ts
 describe('billOutstandingLabel (spec 2026-09-30 §2.1)', () => {
   it('says nothing for a single unpaid installment -- the Price cell already shows it', () => {
-    expect(billOutstandingLabel(1, 44443)).toBeNull();
+    expect(billOutstandingLabel(1, 31244)).toBeNull();
     expect(billOutstandingLabel(0, 0)).toBeNull();
   });
 
   it('counts and totals when more than one is unpaid', () => {
-    expect(billOutstandingLabel(3, 133329)).toBe('3 unpaid · $1,333.29 outstanding');
+    expect(billOutstandingLabel(4, 124976)).toBe('4 unpaid · $1,249.76 outstanding');
   });
 });
 ```
@@ -552,21 +552,21 @@ In `tests/app/warranties-client.test.tsx`, the `renderList` default `billSchedul
 ```ts
 /** Spec 2026-09-30 §2.1: a bill's money on the list row, in the money cells, with ruling P4 untouched. */
 describe('a bill row shows its money', () => {
-  const schedule = { 42: { nextDueDate: '2026-10-31', overdueCount: 0, nextAmountCents: 44443, unpaidCount: 1, outstandingCents: 44443 } };
+  const schedule = { 42: { nextDueDate: '2026-11-24', overdueCount: 0, nextAmountCents: 31244, unpaidCount: 1, outstandingCents: 31244 } };
 
   it('puts the next amount in the Price cell', () => {
     renderList(result([bill()]), { billSchedules: schedule });
-    const priceCell = screen.getByText('444.43').closest('td')!;
+    const priceCell = screen.getByText('312.44').closest('td')!;
     expect(priceCell.getAttribute('data-label')).toBe('Price');
     // Ruling P4: the schedule label is still dates only.
-    expect(screen.getByText('Next due 2026-10-31')).toBeTruthy();
+    expect(screen.getByText('Next due 2026-11-24')).toBeTruthy();
   });
 
   it('says how many are unpaid and the total in the Billing cell when there is more than one', () => {
     renderList(result([bill()]), {
-      billSchedules: { 42: { nextDueDate: '2026-10-31', overdueCount: 0, nextAmountCents: 44443, unpaidCount: 3, outstandingCents: 133329 } },
+      billSchedules: { 42: { nextDueDate: '2026-11-24', overdueCount: 0, nextAmountCents: 31244, unpaidCount: 4, outstandingCents: 124976 } },
     });
-    expect(screen.getByText('3 unpaid · $1,333.29 outstanding').closest('td')!.getAttribute('data-label')).toBe('Billing');
+    expect(screen.getByText('4 unpaid · $1,249.76 outstanding').closest('td')!.getAttribute('data-label')).toBe('Billing');
   });
 
   it('leaves the Billing cell empty for a single installment', () => {
@@ -687,10 +687,10 @@ Find the test file that renders `WarrantiesPage` or exercises `page.tsx`'s fold 
   it('scopes the amounts the way it already scopes the dates', () => {
     // Two bills, two owners; a self-scoped read for one owner returns only their installment rows,
     // amounts included, and nothing of the other's.
-    const mine = seedBillWithInstallment({ ownerUserId: alice, dueDate: '2026-10-31', amountCents: 44443 });
+    const mine = seedBillWithInstallment({ ownerUserId: alice, dueDate: '2026-11-24', amountCents: 31244 });
     seedBillWithInstallment({ ownerUserId: bob, dueDate: '2026-10-15', amountCents: 99999 });
     const rows = unpaidInstallments({ today: '2026-10-01', windowEnd: '2036-10-01', includeOverdue: true, ownerUserId: alice });
-    expect(rows.map((row) => [row.itemId, row.amountCents])).toEqual([[mine, 44443]]);
+    expect(rows.map((row) => [row.itemId, row.amountCents])).toEqual([[mine, 31244]]);
   });
 ```
 
@@ -735,14 +735,14 @@ describe('a bill summary leads with its money', () => {
   });
 
   it('names the next payment and its date', () => {
-    renderDetail({ item: billItem, installments: [unpaid(101, '2026-10-31', 44443)] });
-    expect(screen.getByText('Next payment').nextElementSibling?.textContent).toContain('444.43 due 2026-10-31');
+    renderDetail({ item: billItem, installments: [unpaid(101, '2026-11-24', 31244)] });
+    expect(screen.getByText('Next payment').nextElementSibling?.textContent).toContain('312.44 due 2026-11-24');
     expect(screen.queryByText('Outstanding')).toBeNull();
   });
 
   it('adds the outstanding total when more than one is unpaid', () => {
-    renderDetail({ item: billItem, installments: [unpaid(101, '2026-10-31', 44443), unpaid(102, '2027-01-31', 44443), unpaid(103, '2027-04-30', 44443)] });
-    expect(screen.getByText('Outstanding').nextElementSibling?.textContent).toContain('1,333.29 (3 unpaid)');
+    renderDetail({ item: billItem, installments: [unpaid(101, '2026-11-24', 31244), unpaid(102, '2027-01-31', 31244), unpaid(103, '2027-04-30', 31244), unpaid(104, '2027-07-31', 31244)] });
+    expect(screen.getByText('Outstanding').nextElementSibling?.textContent).toContain('1,249.76 (4 unpaid)');
   });
 
   it('shows neither row when nothing is unpaid, and the Installments card is above Linked transactions', () => {
@@ -757,9 +757,9 @@ describe('a bill summary leads with its money', () => {
     // The detail uploader is behind "Add another receipt"; open it, then simulate a finished read.
     fireEvent.click(screen.getByRole('button', { name: /add another receipt/i }));
     const uploaderProps = vi.mocked(ReceiptUploader).mock.calls.at(-1)![0];
-    uploaderProps.onSuggestions!({ priceCents: 44443, dueDate: '2026-10-31' });
-    await waitFor(() => expect((screen.getByLabelText('Amount') as HTMLInputElement).value).toBe('444.43'));
-    expect((screen.getByLabelText('Due date') as HTMLInputElement).value).toBe('2026-10-31');
+    uploaderProps.onSuggestions!({ priceCents: 31244, dueDate: '2026-11-24' });
+    await waitFor(() => expect((screen.getByLabelText('Amount') as HTMLInputElement).value).toBe('312.44'));
+    expect((screen.getByLabelText('Due date') as HTMLInputElement).value).toBe('2026-11-24');
     expect(screen.getByText('Suggested from the attached bill — check it and press Add installment.')).toBeTruthy();
   });
 });

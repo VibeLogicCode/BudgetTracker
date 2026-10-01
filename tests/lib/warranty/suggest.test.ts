@@ -186,14 +186,14 @@ describe('suggestPriceCents without the fallback', () => {
   it('reads a misrecognised TOTAL and the words a bill uses', () => {
     expect(suggestPriceCents('T0TAL 25.31')).toBe(2531);
     expect(suggestPriceCents('IOTAL 25.31')).toBe(2531);
-    expect(suggestPriceCents('Amount due $444.43')).toBe(44443);
+    expect(suggestPriceCents('Amount due $312.44')).toBe(31244);
     expect(suggestPriceCents('Montant 12,50')).toBe(1250);
   });
   it('never takes a payment line as the total even when it says total', () => {
     expect(suggestPriceCents(['TOTAL 47.32', 'VISA TOTAL TENDERED 100.00'].join('\n'))).toBe(4732);
   });
   it('never takes a late-fee line as the total, but keeps a total after a discount', () => {
-    expect(suggestPriceCents(['Amount due $444.43', 'Amount due after due date $466.67'].join('\n'))).toBe(44443);
+    expect(suggestPriceCents(['Amount due $312.44', 'Amount due after due date $328.06'].join('\n'))).toBe(31244);
     expect(suggestPriceCents(['TOTAL 47.32', 'Late fee total 5.00'].join('\n'))).toBe(4732);
     expect(suggestPriceCents('Total after discount 40.00')).toBe(4000);
   });
@@ -205,15 +205,15 @@ describe('suggestPriceCents without the fallback', () => {
     expect(suggestPriceCents(['Total payment due $85.00', 'Total payments received 120.00'].join('\n'))).toBe(8500);
   });
   it('excludes French late-fee and payment lines too', () => {
-    expect(suggestPriceCents(['Montant dû 444,43 $', "Montant après la date d'échéance 466,67 $"].join('\n'))).toBe(44443);
+    expect(suggestPriceCents(['Montant dû 312,44 $', "Montant après la date d'échéance 328,06 $"].join('\n'))).toBe(31244);
     expect(suggestPriceCents(['Montant dû 85,00', 'Montant du dernier paiement 120,00'].join('\n'))).toBe(8500);
   });
 });
 
 describe('suggestDueDate', () => {
   it('finds the due date on its own line, in the future (review focus 3)', () => {
-    const text = ['RIVERSIDE WATER', 'Billing period 2026-07-01 to 2026-09-30', 'Amount due $444.43', 'Due date 2026-10-31'].join('\n');
-    expect(suggestDueDate(text, '2026-09-20')).toBe('2026-10-31');
+    const text = ['RIVERSIDE WATER', 'Billing period 2026-08-04 to 2026-11-03', 'Amount due $312.44', 'Due date 2026-11-24'].join('\n');
+    expect(suggestDueDate(text, '2026-11-07')).toBe('2026-11-24');
   });
   it('accepts the words a bill prints, English and French', () => {
     expect(suggestDueDate('Payable by Oct 31, 2026', '2026-09-20')).toBe('2026-10-31');
@@ -226,7 +226,7 @@ describe('suggestDueDate', () => {
     expect(suggestDueDate('DATE: 2026-09-14 TOTAL 25.31', '2026-09-20')).toBeUndefined();
   });
   it('takes the date after the phrase when two columns share a line', () => {
-    expect(suggestDueDate('Billing period 2026-07-01 to 2026-09-30   Due date 2026-10-31', '2026-09-20')).toBe('2026-10-31');
+    expect(suggestDueDate('Billing period 2026-08-04 to 2026-11-03   Due date 2026-11-24', '2026-11-07')).toBe('2026-11-24');
     expect(suggestDueDate('Bill date: Sep 15, 2026     Due date: Oct 15, 2026', '2026-09-20')).toBe('2026-10-15');
     // Nothing after the phrase: the first in-range date on the line.
     expect(suggestDueDate('2026-10-31   Due date', '2026-09-20')).toBe('2026-10-31');
@@ -245,35 +245,35 @@ describe('suggestDueDate', () => {
 
 describe('candidates carry the words around them', () => {
   // The statement date comes first, so the first-date bonus competes with the due-date line.
-  const bill = ['RIVERSIDE WATER', 'Statement date 2026-09-15', 'Water charges 188.24', 'Sewer charges 256.57', 'Total current charges $444.81', 'Amount due $444.43', 'Due date 2026-10-31', 'Amount due after due date $466.67'].join('\n');
+  const bill = ['RIVERSIDE WATER', 'Statement date 2026-11-06', 'Water charges 141.07', 'Sewer charges 171.89', 'Total current charges $312.96', 'Amount due $312.44', 'Due date 2026-11-24', 'Amount due after due date $328.06'].join('\n');
   it('ranks the amount-due line first and keeps each figure once with its snippet', () => {
     const amounts = amountCandidates(bill);
-    expect(amounts[0]).toMatchObject({ valueCents: 44443 });
+    expect(amounts[0]).toMatchObject({ valueCents: 31244 });
     expect(amounts[0].snippet).toContain('Amount due');
     expect(amounts.length).toBeLessThanOrEqual(6);
     expect(new Set(amounts.map((c) => c.valueCents)).size).toBe(amounts.length);
   });
   it('ranks the due-date line first among dates', () => {
-    const dates = dateCandidates(bill, '2026-09-20');
-    expect(dates[0]).toMatchObject({ date: '2026-10-31' });
+    const dates = dateCandidates(bill, '2026-11-07');
+    expect(dates[0]).toMatchObject({ date: '2026-11-24' });
     expect(dates[0].snippet).toContain('Due date');
   });
   it('suggestFromOcrText carries the due date', () => {
-    expect(suggestFromOcrText(bill, '2026-09-20')).toMatchObject({ vendor: 'RIVERSIDE WATER', priceCents: 44443, dueDate: '2026-10-31' });
+    expect(suggestFromOcrText(bill, '2026-11-07')).toMatchObject({ vendor: 'RIVERSIDE WATER', priceCents: 31244, dueDate: '2026-11-24' });
   });
   it('ranks a late-fee figure below the figures on ordinary lines', () => {
     const amounts = amountCandidates(bill);
-    expect(amounts[amounts.length - 1]).toMatchObject({ valueCents: 46667 });
+    expect(amounts[amounts.length - 1]).toMatchObject({ valueCents: 32806 });
   });
   it('gives the due-date score only to a date after the phrase on a joined line', () => {
-    const dates = dateCandidates('Billing period 2026-07-01 to 2026-09-30   Due date 2026-10-31', '2026-09-20');
-    expect(dates[0]).toMatchObject({ date: '2026-10-31' });
+    const dates = dateCandidates('Billing period 2026-08-04 to 2026-11-03   Due date 2026-11-24', '2026-11-07');
+    expect(dates[0]).toMatchObject({ date: '2026-11-24' });
     expect(dates[0].snippet).toContain('Due date');
   });
   it('cuts the snippet around the figure, not from the start of a long joined line', () => {
-    const line = 'Service address 12 Example Road, Riverside      Account summary      Amount due $444.43';
+    const line = 'Service address 12 Example Road, Riverside      Account summary      Amount due $312.44';
     const [top] = amountCandidates(line);
-    expect(top.snippet).toContain('Amount due $444.43');
+    expect(top.snippet).toContain('Amount due $312.44');
     expect(top.snippet.length).toBeLessThanOrEqual(70);
     expect(top.snippet).not.toMatch(/\s{2}/);
   });

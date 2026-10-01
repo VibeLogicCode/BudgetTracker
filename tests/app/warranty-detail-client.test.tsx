@@ -1138,20 +1138,20 @@ describe('a bill summary leads with its money', () => {
   }
 
   it('names the next payment and its date', () => {
-    renderDetail({ item: billItem, installments: [unpaid(101, '2026-10-31', 44443)] });
-    expect(screen.getByText('Next payment').nextElementSibling?.textContent).toContain('444.43 due 2026-10-31');
+    renderDetail({ item: billItem, installments: [unpaid(101, '2026-11-24', 31244)] });
+    expect(screen.getByText('Next payment').nextElementSibling?.textContent).toContain('312.44 due 2026-11-24');
     expect(screen.queryByText('Outstanding')).toBeNull();
   });
 
   it('adds the outstanding total when more than one is unpaid', () => {
-    renderDetail({ item: billItem, installments: [unpaid(101, '2026-10-31', 44443), unpaid(102, '2027-01-31', 44443), unpaid(103, '2027-04-30', 44443)] });
-    expect(screen.getByText('Outstanding').nextElementSibling?.textContent).toContain('1,333.29 (3 unpaid)');
+    renderDetail({ item: billItem, installments: [unpaid(101, '2026-11-24', 31244), unpaid(102, '2027-01-31', 31244), unpaid(103, '2027-04-30', 31244), unpaid(104, '2027-07-31', 31244)] });
+    expect(screen.getByText('Outstanding').nextElementSibling?.textContent).toContain('1,249.76 (4 unpaid)');
   });
 
   it('shows neither row when nothing is unpaid, and the Installments card is above Linked transactions', () => {
     const { container } = renderDetail({
       item: billItem,
-      installments: [paid(101, '2026-07-31', 44443), paid(102, '2026-08-31', 44443)],
+      installments: [paid(101, '2026-07-31', 31244), paid(102, '2026-08-31', 31244)],
     });
     expect(screen.queryByText('Next payment')).toBeNull();
     expect(screen.queryByText('Outstanding')).toBeNull();
@@ -1163,16 +1163,16 @@ describe('a bill summary leads with its money', () => {
   it('skips paid rows: the next payment is the earliest unpaid one, and the total counts only unpaid', () => {
     renderDetail({
       item: billItem,
-      installments: [paid(100, '2026-07-31', 50000), unpaid(101, '2026-10-31', 44443), unpaid(102, '2027-01-31', 44443)],
+      installments: [paid(100, '2026-07-31', 50000), unpaid(101, '2026-11-24', 31244), unpaid(102, '2027-01-31', 31244)],
     });
-    expect(screen.getByText('Next payment').nextElementSibling?.textContent).toContain('444.43 due 2026-10-31');
-    expect(screen.getByText('Outstanding').nextElementSibling?.textContent).toContain('888.86 (2 unpaid)');
+    expect(screen.getByText('Next payment').nextElementSibling?.textContent).toContain('312.44 due 2026-11-24');
+    expect(screen.getByText('Outstanding').nextElementSibling?.textContent).toContain('624.88 (2 unpaid)');
   });
 
   it('shows neither row for another kind that still holds installment rows', () => {
     renderDetail({
       item: item({ kind: 'warranty' }),
-      installments: [unpaid(101, '2026-10-31', 44443), unpaid(102, '2027-01-31', 44443)],
+      installments: [unpaid(101, '2026-11-24', 31244), unpaid(102, '2027-01-31', 31244)],
     });
     // The card itself stays (ruling B7: rows a person typed are never hidden) ...
     expect(screen.getByText(/^Installments \(/)).toBeTruthy();
@@ -1183,9 +1183,9 @@ describe('a bill summary leads with its money', () => {
 
   it('pre-fills the add-installment form from an attached bill and says so', async () => {
     renderDetail({ item: billItem, installments: [] });
-    readAttachedBill({ priceCents: 44443, dueDate: '2026-10-31' });
-    await waitFor(() => expect((screen.getByLabelText('Amount') as HTMLInputElement).value).toBe('444.43'));
-    expect((screen.getByLabelText('Due date') as HTMLInputElement).value).toBe('2026-10-31');
+    readAttachedBill({ priceCents: 31244, dueDate: '2026-11-24' });
+    await waitFor(() => expect((screen.getByLabelText('Amount') as HTMLInputElement).value).toBe('312.44'));
+    expect((screen.getByLabelText('Due date') as HTMLInputElement).value).toBe('2026-11-24');
     expect(screen.getByText('Suggested from the attached bill — check it and press Add installment.')).toBeTruthy();
   });
 
@@ -1195,14 +1195,14 @@ describe('a bill summary leads with its money', () => {
    * from a duplicate installment.
    */
   it('clears the suggested values and the notice once the installment is added', async () => {
-    vi.mocked(addInstallmentAction).mockResolvedValueOnce({ message: 'Installment added for 2026-10-31.' });
+    vi.mocked(addInstallmentAction).mockResolvedValueOnce({ message: 'Installment added for 2026-11-24.' });
     renderDetail({ item: billItem, installments: [] });
-    readAttachedBill({ priceCents: 44443, dueDate: '2026-10-31' });
-    await waitFor(() => expect((screen.getByLabelText('Amount') as HTMLInputElement).value).toBe('444.43'));
+    readAttachedBill({ priceCents: 31244, dueDate: '2026-11-24' });
+    await waitFor(() => expect((screen.getByLabelText('Amount') as HTMLInputElement).value).toBe('312.44'));
 
     fireEvent.submit(screen.getByRole('button', { name: /^add installment$/i }).closest('form')!);
 
-    await waitFor(() => expect(screen.getByText('Installment added for 2026-10-31.')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('Installment added for 2026-11-24.')).toBeTruthy());
     // The clear runs in an effect after the commit that shows the message, so it is awaited too:
     // asserted bare, it lost that race once under a loaded parallel run.
     await waitFor(() => expect((screen.getByLabelText('Amount') as HTMLInputElement).value).toBe(''));
@@ -1214,9 +1214,9 @@ describe('a bill summary leads with its money', () => {
   it('keeps a typed amount when a read finishes later, and still fills the untouched date', () => {
     renderDetail({ item: billItem, installments: [] });
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '120.00' } });
-    readAttachedBill({ priceCents: 44443, dueDate: '2026-10-31' });
+    readAttachedBill({ priceCents: 31244, dueDate: '2026-11-24' });
     expect((screen.getByLabelText('Amount') as HTMLInputElement).value).toBe('120.00');
-    expect((screen.getByLabelText('Due date') as HTMLInputElement).value).toBe('2026-10-31');
+    expect((screen.getByLabelText('Due date') as HTMLInputElement).value).toBe('2026-11-24');
     expect(screen.getByText('Suggested from the attached bill — check it and press Add installment.')).toBeTruthy();
   });
 
@@ -1226,15 +1226,15 @@ describe('a bill summary leads with its money', () => {
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '120.00' } });
     fireEvent.click(screen.getByRole('button', { name: /^add receipt$/i }));
     const uploaderProps = vi.mocked(ReceiptUploader).mock.calls.at(-1)![0];
-    act(() => uploaderProps.onPickAmount!(46667));
-    act(() => uploaderProps.onPickDate!('2026-10-31'));
-    expect((screen.getByLabelText('Amount') as HTMLInputElement).value).toBe('466.67');
-    expect((screen.getByLabelText('Due date') as HTMLInputElement).value).toBe('2026-10-31');
+    act(() => uploaderProps.onPickAmount!(32806));
+    act(() => uploaderProps.onPickDate!('2026-11-24'));
+    expect((screen.getByLabelText('Amount') as HTMLInputElement).value).toBe('328.06');
+    expect((screen.getByLabelText('Due date') as HTMLInputElement).value).toBe('2026-11-24');
 
     // ...and a read that finishes afterwards does not take the choice back.
-    act(() => uploaderProps.onSuggestions!({ priceCents: 44443, dueDate: '2026-11-15' }));
-    expect((screen.getByLabelText('Amount') as HTMLInputElement).value).toBe('466.67');
-    expect((screen.getByLabelText('Due date') as HTMLInputElement).value).toBe('2026-10-31');
+    act(() => uploaderProps.onSuggestions!({ priceCents: 31244, dueDate: '2026-11-15' }));
+    expect((screen.getByLabelText('Amount') as HTMLInputElement).value).toBe('328.06');
+    expect((screen.getByLabelText('Due date') as HTMLInputElement).value).toBe('2026-11-24');
   });
 
   it('offers no chips for a kind without installments', () => {
@@ -1251,7 +1251,7 @@ describe('a bill summary leads with its money', () => {
     renderDetail({ item: billItem, installments: [] });
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '120.00' } });
     fireEvent.change(screen.getByLabelText('Due date'), { target: { value: '2026-11-15' } });
-    readAttachedBill({ priceCents: 44443, dueDate: '2026-10-31' });
+    readAttachedBill({ priceCents: 31244, dueDate: '2026-11-24' });
     expect((screen.getByLabelText('Amount') as HTMLInputElement).value).toBe('120.00');
     expect((screen.getByLabelText('Due date') as HTMLInputElement).value).toBe('2026-11-15');
     expect(screen.queryByText('Suggested from the attached bill — check it and press Add installment.')).toBeNull();
@@ -1264,7 +1264,7 @@ describe('a bill summary leads with its money', () => {
     const uploaderProps = vi.mocked(ReceiptUploader).mock.calls.at(-1)![0];
     let filled: ReadonlyArray<string> | void = undefined;
     act(() => {
-      filled = uploaderProps.onSuggestions!({ vendor: 'RIVERSIDE WATER', priceCents: 44443, dueDate: '2026-10-31' });
+      filled = uploaderProps.onSuggestions!({ vendor: 'RIVERSIDE WATER', priceCents: 31244, dueDate: '2026-11-24' });
     });
     expect([...(filled ?? [])].sort()).toEqual(['amount', 'date']);
   });
@@ -1276,7 +1276,7 @@ describe('a bill summary leads with its money', () => {
     const uploaderProps = vi.mocked(ReceiptUploader).mock.calls.at(-1)![0];
     let filled: ReadonlyArray<string> | void = undefined;
     act(() => {
-      filled = uploaderProps.onSuggestions!({ priceCents: 44443, dueDate: '2026-10-31' });
+      filled = uploaderProps.onSuggestions!({ priceCents: 31244, dueDate: '2026-11-24' });
     });
     expect([...(filled ?? [])]).toEqual(['date']);
   });
@@ -1289,8 +1289,8 @@ describe('a bill summary leads with its money', () => {
     fireEvent.submit(screen.getByRole('button', { name: /^add installment$/i }).closest('form')!);
     await waitFor(() => expect(screen.getByText('Installment added for 2026-11-15.')).toBeTruthy());
 
-    readAttachedBill({ priceCents: 44443, dueDate: '2026-10-31' });
-    expect((screen.getByLabelText('Amount') as HTMLInputElement).value).toBe('444.43');
-    expect((screen.getByLabelText('Due date') as HTMLInputElement).value).toBe('2026-10-31');
+    readAttachedBill({ priceCents: 31244, dueDate: '2026-11-24' });
+    expect((screen.getByLabelText('Amount') as HTMLInputElement).value).toBe('312.44');
+    expect((screen.getByLabelText('Due date') as HTMLInputElement).value).toBe('2026-11-24');
   });
 });

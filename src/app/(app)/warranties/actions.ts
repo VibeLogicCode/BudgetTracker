@@ -155,7 +155,7 @@ function readFirstInstallment(
   if (dueDate === '' || rawAmount === '') return 'half';
   const cents = parseAmountToCents(rawAmount);
   if (cents === null) return 'not_a_number';
-  // Magnitude, as addInstallmentAction does: a person typing -444.43 means the size of the bill.
+  // Magnitude, as addInstallmentAction does: a person typing -312.44 means the size of the bill.
   return { dueDate, amountCents: Math.abs(cents) };
 }
 

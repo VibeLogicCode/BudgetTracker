@@ -190,8 +190,8 @@ describe('a tapped chip', () => {
     const form = renderForm();
     form.pick('4');
     form.type('amountDue', '90.00');
-    act(() => uploader.onPickAmount!(46667));
-    expect(form.field('amountDue')!.value).toBe('466.67');
+    act(() => uploader.onPickAmount!(32806));
+    expect(form.field('amountDue')!.value).toBe('328.06');
 
     form.pick('2');
     act(() => uploader.onPickAmount!(1599));
@@ -218,11 +218,11 @@ describe('a tapped chip', () => {
   it('is not overwritten by a read that finishes afterwards', () => {
     const form = renderForm();
     form.pick('4');
-    act(() => uploader.onPickAmount!(46667));
-    act(() => uploader.onPickDate!('2026-10-31'));
-    suggest({ priceCents: 44443, dueDate: '2026-11-15' });
-    expect(form.field('amountDue')!.value).toBe('466.67');
-    expect(form.field('dueDate')!.value).toBe('2026-10-31');
+    act(() => uploader.onPickAmount!(32806));
+    act(() => uploader.onPickDate!('2026-11-24'));
+    suggest({ priceCents: 31244, dueDate: '2026-11-15' });
+    expect(form.field('amountDue')!.value).toBe('328.06');
+    expect(form.field('dueDate')!.value).toBe('2026-11-24');
     // A chosen figure is not marked as a guess.
     expect(form.marks()).toBe(0);
   });

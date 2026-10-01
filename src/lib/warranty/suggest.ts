@@ -139,7 +139,7 @@ const SUBTOTAL_RE = /\bsub[\s-]?total\b|\bsous[\s-]?total\b/i;
  */
 const PAYMENT_LINE_RE = /(?<![\p{L}\p{N}_])(cash|change|tender(?:ed)?|tip|gratuity|approved|payments?(?!\s+due)|cash\s*back|visa|mastercard|amex|debit|interac|paiements?|comptant|monnaie|remis)(?![\p{L}\p{N}_])/iu;
 /**
- * A late-fee line ("Amount due after due date $466.67") is never the total either. Specific on
+ * A late-fee line ("Amount due after due date $328.06") is never the total either. Specific on
  * purpose, not a bare "after", so "Total after discount" stays a total line.
  */
 const LATE_FEE_RE = /(?<![\p{L}\p{N}_])(after\s+(?:the\s+)?due\s+date|late\s+(?:fee|charge|payment)s?|past\s+due|overdue|penalt(?:y|ies)|frais\s+de\s+retard|apr[èe]s\s+(?:la\s+)?date\s+d['’]\s*[ée]ch[ée]ance|p[ée]nalit[ée]s?)(?![\p{L}\p{N}_])/iu;

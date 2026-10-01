@@ -975,8 +975,8 @@ function buildPdf(pages: Run[][]): Buffer {
 describe('extractPdfText reads lines', () => {
   it('puts items at different heights on different lines, top first', async () => {
     const file = path.join(dir, 'two.pdf');
-    fs.writeFileSync(file, buildPdf([[{ x: 10, y: 200, text: 'RIVERSIDE WATER' }, { x: 10, y: 100, text: 'Amount due 444.43' }]]));
-    expect(await extractPdfText(file)).toBe('RIVERSIDE WATER\nAmount due 444.43');
+    fs.writeFileSync(file, buildPdf([[{ x: 10, y: 200, text: 'RIVERSIDE WATER' }, { x: 10, y: 100, text: 'Amount due 312.44' }]]));
+    expect(await extractPdfText(file)).toBe('RIVERSIDE WATER\nAmount due 312.44');
   });
 
   /** Review focus 3: a two-column bill -- label left, figure right, same height. */
@@ -986,12 +986,12 @@ describe('extractPdfText reads lines', () => {
       file,
       buildPdf([[
         { x: 10, y: 200, text: 'Amount due' },
-        { x: 250, y: 200, text: '$444.43' },
+        { x: 250, y: 200, text: '$312.44' },
         { x: 10, y: 170, text: 'Due date' },
-        { x: 250, y: 170, text: '2026-10-31' },
+        { x: 250, y: 170, text: '2026-11-24' },
       ]]),
     );
-    expect(await extractPdfText(file)).toBe('Amount due $444.43\nDue date 2026-10-31');
+    expect(await extractPdfText(file)).toBe('Amount due $312.44\nDue date 2026-11-24');
   });
 
   /** Review focus 6. */
@@ -1130,7 +1130,7 @@ describe('suggestPriceCents without the fallback', () => {
   it('reads a misrecognised TOTAL and the words a bill uses', () => {
     expect(suggestPriceCents('T0TAL 25.31')).toBe(2531);
     expect(suggestPriceCents('IOTAL 25.31')).toBe(2531);
-    expect(suggestPriceCents('Amount due $444.43')).toBe(44443);
+    expect(suggestPriceCents('Amount due $312.44')).toBe(31244);
     expect(suggestPriceCents('Montant 12,50')).toBe(1250);
   });
   it('never takes a payment line as the total even when it says total', () => {
@@ -1140,8 +1140,8 @@ describe('suggestPriceCents without the fallback', () => {
 
 describe('suggestDueDate', () => {
   it('finds the due date on its own line, in the future (review focus 3)', () => {
-    const text = ['RIVERSIDE WATER', 'Billing period 2026-07-01 to 2026-09-30', 'Amount due $444.43', 'Due date 2026-10-31'].join('\n');
-    expect(suggestDueDate(text, '2026-09-20')).toBe('2026-10-31');
+    const text = ['RIVERSIDE WATER', 'Billing period 2026-08-04 to 2026-11-03', 'Amount due $312.44', 'Due date 2026-11-24'].join('\n');
+    expect(suggestDueDate(text, '2026-11-07')).toBe('2026-11-24');
   });
   it('accepts the words a bill prints, English and French', () => {
     expect(suggestDueDate('Payable by Oct 31, 2026', '2026-09-20')).toBe('2026-10-31');
@@ -1154,21 +1154,21 @@ describe('suggestDueDate', () => {
 });
 
 describe('candidates carry the words around them', () => {
-  const bill = ['RIVERSIDE WATER', 'Water charges 188.24', 'Sewer charges 256.57', 'Total current charges $444.81', 'Amount due $444.43', 'Due date 2026-10-31', 'Amount due after due date $466.67'].join('\n');
+  const bill = ['RIVERSIDE WATER', 'Water charges 141.07', 'Sewer charges 171.89', 'Total current charges $312.96', 'Amount due $312.44', 'Due date 2026-11-24', 'Amount due after due date $328.06'].join('\n');
   it('ranks the amount-due line first and keeps each figure once with its snippet', () => {
     const amounts = amountCandidates(bill);
-    expect(amounts[0]).toMatchObject({ valueCents: 44443 });
+    expect(amounts[0]).toMatchObject({ valueCents: 31244 });
     expect(amounts[0].snippet).toContain('Amount due');
     expect(amounts.length).toBeLessThanOrEqual(6);
     expect(new Set(amounts.map((c) => c.valueCents)).size).toBe(amounts.length);
   });
   it('ranks the due-date line first among dates', () => {
-    const dates = dateCandidates(bill, '2026-09-20');
-    expect(dates[0]).toMatchObject({ date: '2026-10-31' });
+    const dates = dateCandidates(bill, '2026-11-07');
+    expect(dates[0]).toMatchObject({ date: '2026-11-24' });
     expect(dates[0].snippet).toContain('Due date');
   });
   it('suggestFromOcrText carries the due date', () => {
-    expect(suggestFromOcrText(bill, '2026-09-20')).toMatchObject({ vendor: 'RIVERSIDE WATER', priceCents: 44443, dueDate: '2026-10-31' });
+    expect(suggestFromOcrText(bill, '2026-11-07')).toMatchObject({ vendor: 'RIVERSIDE WATER', priceCents: 31244, dueDate: '2026-11-24' });
   });
 });
 ```
@@ -1319,11 +1319,11 @@ In `queue.test.ts`, beside `'writes a done sidecar with the raw text and the sug
 
 ```ts
   it('writes the lines and the candidates beside the suggestions (spec 2026-09-30 §2.3)', async () => {
-    /* same setup as the test above, with the fake engine returning 'RIVERSIDE WATER\nAmount due $444.43\nDue date 2026-10-31' */
+    /* same setup as the test above, with the fake engine returning 'RIVERSIDE WATER\nAmount due $312.44\nDue date 2026-11-24' */
     const sidecar = readSidecar(stagingId);
-    expect(sidecar?.lines).toEqual(['RIVERSIDE WATER', 'Amount due $444.43', 'Due date 2026-10-31']);
-    expect(sidecar?.candidates?.amounts[0]).toMatchObject({ valueCents: 44443 });
-    expect(sidecar?.suggestions?.dueDate).toBe('2026-10-31');
+    expect(sidecar?.lines).toEqual(['RIVERSIDE WATER', 'Amount due $312.44', 'Due date 2026-11-24']);
+    expect(sidecar?.candidates?.amounts[0]).toMatchObject({ valueCents: 31244 });
+    expect(sidecar?.suggestions?.dueDate).toBe('2026-11-24');
   });
 
   it('records an empty read as a failure with a message, never as done (spec §2.3)', async () => {
@@ -1436,15 +1436,15 @@ In `tests/lib/scanner/scan-run.test.ts` (or wherever `isUsableQuad` is tested): 
   it('shows what was read under the tile and offers the figures as chips', async () => {
     vi.stubGlobal('fetch', vi.fn()
       .mockResolvedValueOnce(stageResponse())
-      .mockResolvedValue({ ok: true, json: async () => ({ status: 'done', suggestions: { vendor: 'RIVERSIDE WATER', priceCents: 44443 }, lines: ['RIVERSIDE WATER', 'Amount due $444.43'], candidates: { amounts: [{ valueCents: 44443, snippet: 'Amount due $444.43', score: 4 }, { valueCents: 46667, snippet: 'Amount due after due date $466.67', score: 1 }], dates: [{ date: '2026-10-31', snippet: 'Due date 2026-10-31', score: 4 }] } }) }));
+      .mockResolvedValue({ ok: true, json: async () => ({ status: 'done', suggestions: { vendor: 'RIVERSIDE WATER', priceCents: 31244 }, lines: ['RIVERSIDE WATER', 'Amount due $312.44'], candidates: { amounts: [{ valueCents: 31244, snippet: 'Amount due $312.44', score: 4 }, { valueCents: 32806, snippet: 'Amount due after due date $328.06', score: 1 }], dates: [{ date: '2026-11-24', snippet: 'Due date 2026-11-24', score: 4 }] } }) }));
     const onPickAmount = vi.fn();
     const { container } = render(<ReceiptUploader onStagedChange={vi.fn()} onPickAmount={onPickAmount} />);
     fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [new File(['x'], 'bill.pdf', { type: 'application/pdf' })] } });
     await screen.findByText('Filled vendor, amount.');
     fireEvent.click(screen.getByText('What was read'));
-    expect(screen.getByText('Amount due $444.43')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: /\$466\.67/ }));
-    expect(onPickAmount).toHaveBeenCalledWith(46667);
+    expect(screen.getByText('Amount due $312.44')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /\$328\.06/ }));
+    expect(onPickAmount).toHaveBeenCalledWith(32806);
   });
 
   it('says when nothing could be filled, and offers Try again on a failed read', async () => {

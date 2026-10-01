@@ -58,7 +58,7 @@ export function formatCents(cents: number, opts: { showSign?: boolean; currency?
 }
 
 /**
- * Cents as the text a money input holds: 44443 becomes "444.43", no symbol and no separators, so
+ * Cents as the text a money input holds: 31244 becomes "312.44", no symbol and no separators, so
  * parseAmountToCents reads it straight back. Undefined becomes an empty field. Used where a form
  * is pre-filled from a figure the app already has (a receipt read, a transaction link).
  */

@@ -561,7 +561,7 @@ export function NewWarrantyClient({
                       id="bill-amount-due"
                       name="amountDue"
                       inputMode="decimal"
-                      placeholder="e.g. 444.43"
+                      placeholder="e.g. 312.44"
                       value={amountDue}
                       onChange={(e) => {
                         setAmountDue(e.target.value);
