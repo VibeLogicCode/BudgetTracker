@@ -34,7 +34,7 @@
     "iconv-lite": "^0.6.3",
     "jscanify": "1.4.3",
     "lucide-react": "^1.37.0",
-    "next": "^16.3.2",
+    "next": "^16.3.8",
     "node-cron": "4.6.0",
     "nodemailer": "^9.0.5",
     "onnxruntime-node": "1.27.0",
@@ -45,7 +45,7 @@
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "recharts": "^2.15.0",
-    "sharp": "^0.35.3",
+    "sharp": "^0.35.5",
     "tar": "^7.5.22",
     "tesseract.js": "^6.0.1",
     "zod": "^3.23.8"
@@ -68,5 +68,10 @@
     "tailwindcss": "^4.0.0",
     "typescript": "^6.0.3",
     "vitest": "^3.0.0"
+  },
+  "overrides": {
+    "onnxruntime-node": {
+      "adm-zip": "^0.6.1"
+    }
   }
 }
