@@ -21,6 +21,28 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.54.0] - 2026-10-06
+
+### Added
+
+- **An Insights page**, under Planning after Reports. It holds **Recurring charges**, moved here from
+  Loans & Coverage, and the whole **Needs a look** list; the Dashboard keeps its short version and
+  links to the rest with **All insights**.
+- **Known recurring and Looks recurring.** Recurring charges is now two lists: merchants you marked
+  or already track, and merchants whose charges show a monthly or yearly rhythm. A merchant you
+  marked stays on the list after a single charge. Each row names the accounts the merchant charged.
+- **Mark recurring and Not recurring**, on the Insights card and in each Transactions row menu, with
+  **Mark recurring** in the bulk bar too. A mark is saved as a rule on the merchant; **Unmark** takes
+  it off, and an admin sees every mark under Settings → Merchant rules.
+- **An Account filter on Recurring charges.** Pick a card to list every merchant that charged it —
+  the list to work through when a card is replaced. The choice is part of the page address.
+- While a ledger is new, the card counts the merchants that have charged twice about a month or a
+  year apart, so an empty list says what it is waiting for.
+
+### Changed
+
+- Loans & Coverage no longer shows Recurring charges; one line points to Insights.
+
 ## [1.53.1] - 2026-10-01
 
 ### Changed
