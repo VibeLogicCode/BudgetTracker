@@ -75,7 +75,7 @@ describe('the four dependencies are pinned as MUST-2.4 requires', () => {
     expect(pkg.dependencies['onnxruntime-node']).toBe('1.27.0');
     expect(pkg.dependencies['jscanify']).toBe('1.4.3');
     expect(pkg.dependencies['@techstark/opencv-js']).toBe('4.7.0-release.1');
-    expect(pkg.dependencies['sharp']).toBe('^0.35.3');
+    expect(pkg.dependencies['sharp']).toBe('^0.35.5');
     expect(pkg['//ocr-pins'] ?? '').toContain('MLAS');
   });
 
