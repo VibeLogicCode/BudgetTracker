@@ -26,6 +26,8 @@ function walk(dir: string): string[] {
  * loading indicator rather than somebody's decorative flourish that wanted to survive.
  */
 const MOTION_KEEP_ALLOWED: Record<string, string> = {
+  'src/app/(app)/insights/loading.tsx':
+    'the Insights route skeleton — same reason as Reports; the recurring read model scans about three years of charges, so a frozen skeleton reads as a broken page rather than a loading one',
   'src/app/(app)/reports/loading.tsx':
     'the Reports route skeleton — frozen, it is two grey boxes that read as a broken page rather than a loading one',
   'src/app/(app)/transactions/loading.tsx':
