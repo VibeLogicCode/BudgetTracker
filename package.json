@@ -71,6 +71,9 @@
   "overrides": {
     "onnxruntime-node": {
       "adm-zip": "^0.6.1"
+    },
+    "@esbuild-kit/core-utils": {
+      "esbuild": "^0.25.12"
     }
   }
 }
