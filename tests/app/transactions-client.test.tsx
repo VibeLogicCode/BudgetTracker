@@ -4656,11 +4656,12 @@ describe('spec 2026-09-28 §2.3: Confirm every group', () => {
 describe('TransactionsClient — the recurring mark', () => {
   const base = { accounts: [], categories: [], people: [], today: '2026-03-02' };
 
-  it('offers Mark recurring and Not recurring for a merchant with no mark', () => {
+  /** Spec 2026-10-06 §2.5: a toggle, like the transfer item. Not recurring is set from Insights. */
+  it('offers only Mark recurring for a merchant with no mark', () => {
     render(<TransactionsClient page={pageWithRow()} {...base} />);
     openRowMenu('Actions for TIM HORTONS');
     expect(screen.getByRole('menuitem', { name: 'Mark recurring' })).toBeTruthy();
-    expect(screen.getByRole('menuitem', { name: 'Not recurring' })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: 'Not recurring' })).toBeNull();
   });
 
   it('offers only Unmark recurring once the merchant is marked', () => {
@@ -4671,12 +4672,12 @@ describe('TransactionsClient — the recurring mark', () => {
     expect(screen.queryByRole('menuitem', { name: 'Not recurring' })).toBeNull();
   });
 
-  /** Review Focus 4. */
-  it('offers Mark recurring and a way back from Not recurring', () => {
+  /** Review Focus 4 (v1.54.0): the way back from Not recurring, and nothing else until it is taken. */
+  it('offers only the way back from Not recurring', () => {
     render(<TransactionsClient page={pageWithRow()} {...base} recurringMarks={{ 'TIM HORTONS': 'not_recurring' }} />);
     openRowMenu('Actions for TIM HORTONS');
-    expect(screen.getByRole('menuitem', { name: 'Mark recurring' })).toBeTruthy();
     expect(screen.getByRole('menuitem', { name: 'Clear “not recurring”' })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: 'Mark recurring' })).toBeNull();
     expect(screen.queryByRole('menuitem', { name: 'Not recurring' })).toBeNull();
   });
 

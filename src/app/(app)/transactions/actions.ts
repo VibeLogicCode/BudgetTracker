@@ -489,13 +489,15 @@ export async function setRecurringMarkAction(_prev: ActionState, formData: FormD
   if (result.merchants === 0) return { error: 'There is no merchant on this row to mark.' };
   revalidatePath('/transactions');
   revalidatePath('/insights');
+  revalidatePath('/insights/recurring');
+  revalidatePath('/dashboard');
   const merchant = merchants[0] ?? 'This merchant';
   if (parsed.data.mark === 'recurring') return { message: `${merchant} is marked recurring.` };
   if (parsed.data.mark === 'not_recurring') return { message: `${merchant} will not be listed as recurring.` };
   return { message: `${merchant} is no longer marked.` };
 }
 
-/** Spec 2026-10-05 §2.2. The bulk bar's "Mark recurring": every distinct merchant in the selection, all or nothing. */
+/** Spec 2026-10-05 §2.2, 2026-10-06 §2.5. The bulk bar's "Mark recurring": every distinct merchant in the selection, transfers skipped, all or nothing. */
 export async function bulkRecurringMarkAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
 
@@ -508,9 +510,11 @@ export async function bulkRecurringMarkAction(_prev: ActionState, formData: Form
   const merchants = merchantsOfTransactions(ids);
   const result = setRecurringMarks({ merchants, mark: markOf(mark.data), userId: user.id, actorRole: user.role });
   if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
-  if (result.merchants === 0) return { error: 'There is no merchant on these rows to mark.' };
+  if (result.merchants === 0) return { error: 'There is no merchant on these rows to mark. Transfer rows are skipped.' };
   revalidatePath('/transactions');
   revalidatePath('/insights');
+  revalidatePath('/insights/recurring');
+  revalidatePath('/dashboard');
   const noun = result.merchants === 1 ? 'merchant' : 'merchants';
   if (mark.data === 'recurring') return { message: `Marked ${result.merchants} ${noun} as recurring.` };
   if (mark.data === 'not_recurring') return { message: `Marked ${result.merchants} ${noun} as not recurring.` };

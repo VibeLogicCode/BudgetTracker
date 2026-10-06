@@ -955,16 +955,17 @@ export function transactionOwners(ids: number[]): Map<number, number | null> {
 }
 
 /**
- * Spec 2026-10-05 §2.2. The distinct merchants behind these rows, for a mark that is a fact about
- * the merchant rather than the row. Like transactionOwners it takes no viewer: both callers
- * (transactions/actions.ts) run allTransactionsVisible over the same ids first.
+ * The distinct merchants of `ids`, for the recurring marks (spec 2026-10-05 §2.2). Spec 2026-10-06
+ * §2.5: transfer rows are left out -- a transfer is never a charge, so "Marked N merchants" counts
+ * only merchants a mark can mean anything for. Callers have already passed `ids` through
+ * allTransactionsVisible.
  */
 export function merchantsOfTransactions(ids: number[]): string[] {
   if (ids.length === 0) return [];
   return getDb()
     .selectDistinct({ merchant: transactions.normalizedMerchant })
     .from(transactions)
-    .where(inArray(transactions.id, ids))
+    .where(and(inArray(transactions.id, ids), eq(transactions.isTransfer, false)))
     .orderBy(asc(transactions.normalizedMerchant))
     .all()
     .map((row) => row.merchant);

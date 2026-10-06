@@ -1282,25 +1282,20 @@ export function TransactionsClient({
   }
 
   /**
-   * Spec 2026-10-05 §2.2. The merchant's recurring mark, beside the transfer toggle. Unmarked: Mark
-   * recurring and Not recurring. Marked: Unmark. Not recurring: Mark recurring, or clear it.
+   * Spec 2026-10-06 §2.5. A toggle, like the transfer item beside it: Mark recurring, or Unmark
+   * recurring once marked. Not recurring is set from the Insights page; a merchant marked that way
+   * offers only the way back here.
    */
   function recurringMenuItems(row: TransactionRow) {
     const mark = recurringMarks[row.normalizedMerchant] ?? null;
-    const fields = (choice: 'recurring' | 'not_recurring' | 'clear') => ({ transactionId: String(row.id), mark: choice });
+    const fields = (choice: 'recurring' | 'clear') => ({ transactionId: String(row.id), mark: choice });
     if (mark === 'recurring') {
       return <RowMenuForm action={rowRecurringAction} fields={fields('clear')}>Unmark recurring</RowMenuForm>;
     }
-    return (
-      <>
-        <RowMenuForm action={rowRecurringAction} fields={fields('recurring')}>Mark recurring</RowMenuForm>
-        {mark === 'not_recurring' ? (
-          <RowMenuForm action={rowRecurringAction} fields={fields('clear')}>{'Clear “not recurring”'}</RowMenuForm>
-        ) : (
-          <RowMenuForm action={rowRecurringAction} fields={fields('not_recurring')}>Not recurring</RowMenuForm>
-        )}
-      </>
-    );
+    if (mark === 'not_recurring') {
+      return <RowMenuForm action={rowRecurringAction} fields={fields('clear')}>{'Clear “not recurring”'}</RowMenuForm>;
+    }
+    return <RowMenuForm action={rowRecurringAction} fields={fields('recurring')}>Mark recurring</RowMenuForm>;
   }
 
   /**

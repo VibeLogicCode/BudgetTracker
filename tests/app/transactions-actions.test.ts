@@ -2585,9 +2585,43 @@ describe('bulkRecurringMarkAction', () => {
     const id = addTxn('RIVERSIDE GYM', -4500);
     sqlite.prepare("update transactions set normalized_merchant = '' where id = ?").run(id);
     expect(await bulkRecurringMarkAction({}, formData({ ids: String(id), mark: 'recurring' }))).toEqual({
-      error: 'There is no merchant on these rows to mark.',
+      error: 'There is no merchant on these rows to mark. Transfer rows are skipped.',
     });
     expect(listRules('recurring')).toEqual([]);
+  });
+
+  /** Spec 2026-10-06 §2.5. A transfer is never a charge, so the count is the merchants actually marked. */
+  it('skips transfer rows, so the count is the merchants actually marked', async () => {
+    const { addTxn, sqlite } = setup();
+    const a = addTxn('RIVERSIDE GYM', -4500);
+    const b = addTxn('OWN SAVINGS', -20000);
+    sqlite.prepare('update transactions set is_transfer = 1 where id = ?').run(b);
+    expect(await bulkRecurringMarkAction({}, formData({ ids: `${a},${b}`, mark: 'recurring' }))).toEqual({
+      message: 'Marked 1 merchant as recurring.',
+    });
+    expect(listRules('recurring').map((rule) => rule.pattern)).toEqual(['RIVERSIDE GYM']);
+  });
+
+  it('refuses a selection of transfer rows only, and says transfers are skipped', async () => {
+    const { addTxn, sqlite } = setup();
+    const b = addTxn('OWN SAVINGS', -20000);
+    sqlite.prepare('update transactions set is_transfer = 1 where id = ?').run(b);
+    expect(await bulkRecurringMarkAction({}, formData({ ids: String(b), mark: 'recurring' }))).toEqual({
+      error: 'There is no merchant on these rows to mark. Transfer rows are skipped.',
+    });
+    expect(listRules('recurring')).toEqual([]);
+  });
+
+  /** Spec 2026-10-06 §2.2, §2.6: a mark now shows on the full page and in Coming up. */
+  it('refreshes the recurring page and the Dashboard, from the row and the bulk bar', async () => {
+    const { addTxn } = setup();
+    const id = addTxn('RIVERSIDE GYM', -4500);
+    vi.mocked(revalidatePath).mockClear();
+    await setRecurringMarkAction({}, formData({ transactionId: String(id), mark: 'recurring' }));
+    await bulkRecurringMarkAction({}, formData({ ids: String(id), mark: 'clear' }));
+    const paths = vi.mocked(revalidatePath).mock.calls.map((call) => call[0]);
+    expect(paths.filter((p) => p === '/insights/recurring')).toHaveLength(2);
+    expect(paths.filter((p) => p === '/dashboard')).toHaveLength(2);
   });
 
   it('refuses an empty selection', async () => {
