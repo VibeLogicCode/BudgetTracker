@@ -1012,6 +1012,8 @@ export function setRecurringMarks(input: {
             at: input.at,
           });
           if (!written.ok) throw new MarkRefusal(written.ownerName);
+          // Spec 2026-10-05 §2.2: marking again re-enables a disabled mark of the same kind.
+          setRuleDisabledFlag(written.ruleId, false, input.at);
         }
         for (const kind of removed) deleteExactRule(merchant, kind);
       }

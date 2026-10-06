@@ -1282,15 +1282,6 @@ export function TransactionsClient({
   }
 
   /**
-   * Review round (fold /review in): the ONE row menu, shared by the table row (`<tr>`) and the
-   * review card list (`<li>`) below -- the Goal this release is built around ("every feature
-   * built for Transactions is automatically available while reviewing") is exactly what a
-   * second, hand-maintained copy of this menu would quietly stop being true for. Rename…,
-   * Note…, Split…, "Add to Loans & Coverage…" and every loan item are unchanged from the table's own menu;
-   * the transfer toggle (ruling R4) is new on every row in both modes; Accept/Apply-to-all are
-   * new and review-mode-only (inventory #5/#7).
-   */
-  /**
    * Spec 2026-10-05 §2.2. The merchant's recurring mark, beside the transfer toggle. Unmarked: Mark
    * recurring and Not recurring. Marked: Unmark. Not recurring: Mark recurring, or clear it.
    */
@@ -1312,6 +1303,15 @@ export function TransactionsClient({
     );
   }
 
+  /**
+   * Review round (fold /review in): the ONE row menu, shared by the table row (`<tr>`) and the
+   * review card list (`<li>`) below -- the Goal this release is built around ("every feature
+   * built for Transactions is automatically available while reviewing") is exactly what a
+   * second, hand-maintained copy of this menu would quietly stop being true for. Rename…,
+   * Note…, Split…, "Add to Loans & Coverage…" and every loan item are unchanged from the table's own menu;
+   * the transfer toggle (ruling R4) is new on every row in both modes; Accept/Apply-to-all are
+   * new and review-mode-only (inventory #5/#7).
+   */
   function rowMenu(row: TransactionRow) {
     // Backlog BX: matchingCounts is populated for every row IN review mode (page.tsx) and empty
     // outside it -- so a MISSING entry (rather than a low one) is exactly "we're outside review

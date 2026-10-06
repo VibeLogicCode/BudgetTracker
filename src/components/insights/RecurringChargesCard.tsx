@@ -176,7 +176,7 @@ export function RecurringChargesCard({ result, person }: { result: RecurringChar
       <CardHeader
         title="Recurring charges"
         description="Merchants that bill on a rhythm, read from about three years of the ledger. Known recurring is what you said; Looks recurring is what the dates show. Mark recurring and Not recurring are saved as rules on the merchant, and Track records one as an item."
-        action={<AccountFilter accounts={accounts} accountId={accountId} person={person} />}
+        action={accounts.length > 0 ? <AccountFilter accounts={accounts} accountId={accountId} person={person} /> : undefined}
       />
       <CardBody padded={false}>
         {listed === 0 && chosen !== null ? (
@@ -201,14 +201,21 @@ export function RecurringChargesCard({ result, person }: { result: RecurringChar
               note="You marked it, or you track it."
               rows={result.known}
               person={person}
-              empty="Nothing marked yet. Mark a merchant recurring from Looks recurring below, or from its row menu on Transactions."
+              empty={
+                chosen !== null
+                  ? `No merchant you marked or track charged ${chosen.name}.`
+                  : 'No merchant here is marked or tracked yet. Mark a merchant recurring from Looks recurring below, or from its row menu on Transactions.'
+              }
             />
             <Tier
               title="Looks recurring"
               note="A rhythm, which is not a verdict: a once-a-month shop and a monthly bill make the same dates."
               rows={result.looks}
               person={person}
-              empty={sentence ?? 'Nothing else is charging on a regular rhythm.'}
+              empty={
+                sentence ??
+                (chosen !== null ? `Nothing else charged ${chosen.name} on a regular rhythm.` : 'Nothing else is charging on a regular rhythm.')
+              }
             />
             {result.looks.length > 0 && sentence !== null ? (
               <p className="border-t border-line px-4 py-3 text-sm text-muted sm:px-5">{sentence}</p>

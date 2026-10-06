@@ -149,7 +149,8 @@ export const HELP_SECTIONS: HelpSection[] = [
           A <B>Needs a look</B> card lists this month&rsquo;s unusual charges, duplicate-looking
           charges and subscriptions that went up since last time — the same checks this app has
           always run in the background, now on screen instead of only reaching you by
-          notification. <B>All insights</B> opens the whole list on Insights. Like every other card here, it hides itself when there is nothing to flag.
+          notification. <B>All insights</B> opens the whole list on Insights. Like every other card here, it hides
+          itself when there is nothing to flag.
         </P>
       </>
     ),
@@ -555,8 +556,9 @@ export const HELP_SECTIONS: HelpSection[] = [
         </P>
         <P>
           <B>Known recurring</B> is what you have said: a merchant you marked, or one that an item or a payment rule on
-          Loans &amp; Coverage already covers. A merchant you only track stays under Known recurring while its charges keep their rhythm; mark it recurring to keep it listed whatever the dates do. A merchant you marked stays on the list after a single charge, because
-          your word is the evidence. <B>Looks recurring</B> is what the dates show: three or more charges about a month
+          Loans &amp; Coverage already covers. A merchant you only track stays under Known recurring while its charges keep their rhythm; mark it
+          recurring from its row menu on Transactions to keep it listed whatever the dates do. A merchant you marked
+          stays on the list after a single charge, because your word is the evidence. <B>Looks recurring</B> is what the dates show: three or more charges about a month
           or a year apart, the newest one recent. A rhythm is a measurement, not a verdict — a once-a-month shop makes
           the same dates as a bill.
         </P>

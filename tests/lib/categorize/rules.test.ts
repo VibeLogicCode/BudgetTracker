@@ -1059,6 +1059,16 @@ describe('recurring marks', () => {
     expect(listRules('not_recurring').map((rule) => rule.pattern)).toEqual(['RIVERSIDE GYM']);
   });
 
+  it('re-enables a disabled mark of the same kind', () => {
+    const { admin } = setupMarks();
+    setRecurringMarks({ merchants: ['RIVERSIDE GYM'], mark: 'recurring', userId: admin, actorRole: 'admin' });
+    setRuleDisabledFlag(listRules('recurring')[0]!.id, true);
+    expect(recurringMarkFor('RIVERSIDE GYM', listRecurringMarkRules())).toBeNull();
+    setRecurringMarks({ merchants: ['RIVERSIDE GYM'], mark: 'recurring', userId: admin, actorRole: 'admin' });
+    expect(recurringMarkFor('RIVERSIDE GYM', listRecurringMarkRules())).toBe('recurring');
+    expect(listRules('recurring')).toHaveLength(1);
+  });
+
   it('null takes either mark off', () => {
     const { admin } = setupMarks();
     setRecurringMarks({ merchants: ['RIVERSIDE GYM'], mark: 'not_recurring', userId: admin, actorRole: 'admin' });

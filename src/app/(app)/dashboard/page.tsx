@@ -198,8 +198,8 @@ export default async function DashboardPage({
    *
    * Only the RECORDED figure is on the dashboard, not the detected-rhythm list. A tile is the
    * most authoritative shape this app has -- one big number, no room for the disclosure a
-   * cadence guess needs -- so the guessing half stays on the Loans & Coverage card where its
-   * caveat can sit beside it, and this tile carries a figure that needs none.
+   * cadence guess needs -- so the guessing half stays on the Insights page (Recurring charges)
+   * where its caveat can sit beside it, and this tile carries a figure that needs none.
    */
   const recorded = recurringLoad({ today, ownerUserId: scopeUserId, viewer });
   // Review fix-round: one read-model scan, not two -- loansTotalOwedCents() would otherwise

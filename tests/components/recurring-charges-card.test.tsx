@@ -135,6 +135,17 @@ describe('RecurringChargesCard', () => {
     expect(container.textContent).toContain('Nothing on either list charged Travel Visa.');
   });
 
+  it('names the chosen account in the Known tier when only a Looks row charged it', () => {
+    const { container } = renderCard({ looks: [row()] }, { accountId: 2 });
+    expect(container.textContent).toContain('No merchant you marked or track charged Travel Visa.');
+    expect(container.textContent).not.toContain('Nothing marked yet');
+  });
+
+  it('names the chosen account in the Looks tier when only a Known row charged it', () => {
+    const { container } = renderCard({ known: [marked] }, { accountId: 2 });
+    expect(container.textContent).toContain('Nothing else charged Travel Visa on a regular rhythm.');
+  });
+
   it('never says subscription, wasted, forgotten or cancel', () => {
     for (const result of [{}, { known: [marked], looks: [row()], forming: { monthly: 2, yearly: 1 } }]) {
       const { container } = renderCard(result);
