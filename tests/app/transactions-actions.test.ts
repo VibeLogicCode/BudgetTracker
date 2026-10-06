@@ -2495,6 +2495,16 @@ describe('setRecurringMarkAction', () => {
     expect(listRules('recurring').map((rule) => [rule.pattern, rule.matchType])).toEqual([['RIVERSIDE GYM', 'exact']]);
   });
 
+  it('refuses a row with no merchant instead of reporting it marked', async () => {
+    const { addTxn, sqlite } = setup();
+    const id = addTxn('RIVERSIDE GYM', -4500);
+    sqlite.prepare("update transactions set normalized_merchant = '' where id = ?").run(id);
+    expect(await setRecurringMarkAction({}, formData({ transactionId: String(id), mark: 'recurring' }))).toEqual({
+      error: 'There is no merchant on this row to mark.',
+    });
+    expect(listRules('recurring')).toEqual([]);
+  });
+
   it('Not recurring replaces a recurring mark rather than sitting beside it', async () => {
     const { addTxn } = setup();
     const id = addTxn('RIVERSIDE GYM', -4500);
@@ -2568,6 +2578,16 @@ describe('bulkRecurringMarkAction', () => {
       message: 'Marked 2 merchants as recurring.',
     });
     expect(listRules('recurring').map((rule) => rule.pattern).sort()).toEqual(['CEDAR PHONE CO', 'RIVERSIDE GYM']);
+  });
+
+  it('refuses a selection with no merchant instead of reporting it marked', async () => {
+    const { addTxn, sqlite } = setup();
+    const id = addTxn('RIVERSIDE GYM', -4500);
+    sqlite.prepare("update transactions set normalized_merchant = '' where id = ?").run(id);
+    expect(await bulkRecurringMarkAction({}, formData({ ids: String(id), mark: 'recurring' }))).toEqual({
+      error: 'There is no merchant on these rows to mark.',
+    });
+    expect(listRules('recurring')).toEqual([]);
   });
 
   it('refuses an empty selection', async () => {

@@ -558,7 +558,7 @@ describe('recurringLoad: the figure on the header line and the dashboard tile', 
     ctx.item({ name: 'Music', typeId: subs, billingCycle: 'monthly', billingAmountCents: 1099 });
     ctx.item({ name: 'Cloud storage', typeId: subs, billingCycle: 'annual', billingAmountCents: 11999 });
 
-    expect(recurringLoad({ today: TODAY, ownerUserId: null, viewer: household(ctx.adultId), accountId: null })).toEqual({
+    expect(recurringLoad({ today: TODAY, ownerUserId: null, viewer: household(ctx.adultId) })).toEqual({
       monthlyCents: 2748,
       annualCents: 11999,
       itemCount: 3,
@@ -571,7 +571,7 @@ describe('recurringLoad: the figure on the header line and the dashboard tile', 
     ctx.item({ name: 'Cycle but no amount', typeId: subs, billingCycle: 'monthly', billingAmountCents: null });
     ctx.item({ name: 'Amount but no cycle', typeId: subs, billingCycle: null, billingAmountCents: 4999 });
 
-    expect(recurringLoad({ today: TODAY, ownerUserId: null, viewer: household(ctx.adultId), accountId: null })).toEqual({
+    expect(recurringLoad({ today: TODAY, ownerUserId: null, viewer: household(ctx.adultId) })).toEqual({
       monthlyCents: 0,
       annualCents: 0,
       itemCount: 0,
@@ -584,7 +584,7 @@ describe('recurringLoad: the figure on the header line and the dashboard tile', 
     ctx.item({ name: 'Cancelled', typeId: subs, billingCycle: 'monthly', billingAmountCents: 5000, expiryDate: '2025-01-01' });
     ctx.item({ name: 'Live', typeId: subs, billingCycle: 'monthly', billingAmountCents: 1649 });
 
-    expect(recurringLoad({ today: TODAY, ownerUserId: null, viewer: household(ctx.adultId), accountId: null })).toMatchObject({
+    expect(recurringLoad({ today: TODAY, ownerUserId: null, viewer: household(ctx.adultId) })).toMatchObject({
       monthlyCents: 1649,
       itemCount: 1,
     });
@@ -596,14 +596,14 @@ describe('recurringLoad: the figure on the header line and the dashboard tile', 
     ctx.item({ name: 'Adult streaming', typeId: subs, billingCycle: 'monthly', billingAmountCents: 5000, ownerUserId: ctx.adultId });
     ctx.item({ name: 'Child music', typeId: subs, billingCycle: 'monthly', billingAmountCents: 599, ownerUserId: ctx.childId });
 
-    expect(recurringLoad({ today: TODAY, ownerUserId: null, viewer: household(ctx.adultId), accountId: null }).monthlyCents).toBe(5599);
-    expect(recurringLoad({ today: TODAY, ownerUserId: null, viewer: selfOnly(ctx.childId), accountId: null }).monthlyCents).toBe(599);
+    expect(recurringLoad({ today: TODAY, ownerUserId: null, viewer: household(ctx.adultId) }).monthlyCents).toBe(5599);
+    expect(recurringLoad({ today: TODAY, ownerUserId: null, viewer: selfOnly(ctx.childId) }).monthlyCents).toBe(599);
   });
 
   it('is all zeroes on a household that has recorded nothing, rather than an invented estimate', async () => {
     const ctx = await setup();
     ctx.cadence({ merchant: 'NETFLIX' });
-    expect(recurringLoad({ today: TODAY, ownerUserId: null, viewer: household(ctx.adultId), accountId: null })).toEqual({
+    expect(recurringLoad({ today: TODAY, ownerUserId: null, viewer: household(ctx.adultId) })).toEqual({
       monthlyCents: 0,
       annualCents: 0,
       itemCount: 0,

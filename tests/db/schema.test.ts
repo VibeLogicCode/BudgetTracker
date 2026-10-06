@@ -221,7 +221,6 @@ describe('database schema', () => {
     expect(offenders).toEqual(['src/db/schema.ts']);
   });
 
-
   it('stores rename_to on rename rules and leaves it NULL elsewhere', () => {
     current = createTestDb();
     const { sqlite } = current;

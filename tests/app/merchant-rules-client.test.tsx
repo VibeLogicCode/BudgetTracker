@@ -575,7 +575,7 @@ describe('MerchantRulesClient — Delete rule and clear it from transactions (di
               transfer: kind === 'transfer' ? 1 : 0,
               rename: kind === 'rename' ? 1 : 0,
               not_transfer: 0,
-              attribution: kind === 'attribution' ? 1 : 0, recurring: 0, not_recurring: 0
+              attribution: kind === 'attribution' ? 1 : 0, recurring: 0, not_recurring: 0,
             },
           })}
         />,

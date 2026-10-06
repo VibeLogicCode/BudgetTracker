@@ -486,6 +486,7 @@ export async function setRecurringMarkAction(_prev: ActionState, formData: FormD
   const merchants = merchantsOfTransactions([parsed.data.transactionId]);
   const result = setRecurringMarks({ merchants, mark: markOf(parsed.data.mark), userId: user.id, actorRole: user.role });
   if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
+  if (result.merchants === 0) return { error: 'There is no merchant on this row to mark.' };
   revalidatePath('/transactions');
   revalidatePath('/insights');
   const merchant = merchants[0] ?? 'This merchant';
@@ -507,6 +508,7 @@ export async function bulkRecurringMarkAction(_prev: ActionState, formData: Form
   const merchants = merchantsOfTransactions(ids);
   const result = setRecurringMarks({ merchants, mark: markOf(mark.data), userId: user.id, actorRole: user.role });
   if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
+  if (result.merchants === 0) return { error: 'There is no merchant on these rows to mark.' };
   revalidatePath('/transactions');
   revalidatePath('/insights');
   const noun = result.merchants === 1 ? 'merchant' : 'merchants';

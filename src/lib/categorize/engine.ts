@@ -746,6 +746,7 @@ export function setRuleDisabled(input: { ruleId: number; disabled: boolean; at?:
  *    this rule resolves -- always in sync already (every rename save/disable/delete reapplies),
  *    so this is the one kind that needs no re-run to become accurate; it just reads what already
  *    happened.
+ *  - recurring / not_recurring: the non-transfer rows of every merchant the mark resolves.
  *
  * Read-only; never called from a path that writes.
  */
@@ -844,8 +845,8 @@ export function ruleImpactCounts(ctx: CategorizeContext = buildContext()): Map<n
     }
   }
 
-  // Spec 2026-10-05 §2.2: a mark's "Affects" is the charges it speaks about -- the candidate rows
-  // of every merchant it resolves. Skipped when the household has no mark, like attribution above.
+  // Spec 2026-10-05 §2.2: a mark's "Affects" counts the non-transfer rows of every merchant it
+  // resolves (refunds, any date, every person included). Skipped when the household has no mark, like attribution above.
   if (ctx.rules.some((rule) => isRecurringMarkKind(rule.ruleKind))) {
     const marked = db
       .select({ normalizedMerchant: transactions.normalizedMerchant, c: sql<number>`count(*)` })
@@ -958,7 +959,7 @@ export function ruleImpactIds(ruleId: number, scope: RuleScope = {}, ctx: Catego
  * transactionHasSplits' docblock carries the long version of this warning.
  */
 function candidateRowsFor(kind: RuleKind) {
-  // Spec 2026-10-05 §2.2: a mark speaks about a merchant's charges, and a transfer is never one.
+  // Spec 2026-10-05 §2.2: a mark's candidates are the merchant's non-transfer rows.
   if (isRecurringMarkKind(kind)) return eq(transactions.isTransfer, false);
   // 2026-09-13: a transfer belongs to nobody in particular -- it is money moving between the
   // household's own accounts, excluded from every report and budget -- so naming a person on one

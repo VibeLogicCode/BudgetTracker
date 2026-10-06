@@ -84,7 +84,6 @@ export function WarrantiesClient({
   people: { id: number; name: string }[];
   /** Delta T9: an optional type filter/select, alongside status/owner/sort. */
   types: { id: number; name: string; kind: ItemKind }[];
-  /** F-05: what the ledger shows arriving on a rhythm. Plain data -- the page derived it. */
   /** F-05: what the household has RECORDED, which is a different claim and stays a separate one. */
   recurringLoad: RecurringLoad;
   today: string;
