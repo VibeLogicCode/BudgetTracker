@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
-import { render, cleanup, screen } from '@testing-library/react';
+import { render, cleanup, screen, within } from '@testing-library/react';
 import { sql } from 'drizzle-orm';
 import { createAccount } from '@/lib/accounts';
 import { createUser } from '@/lib/auth/users';
@@ -9,6 +9,8 @@ import { upsertBudget } from '@/lib/budgets';
 import { nowIso } from '@/lib/clock';
 import { recordBalanceSnapshot } from '@/lib/networth';
 import { createManualTransaction } from '@/lib/transactions';
+import { setRecurringMarks } from '@/lib/categorize/rules';
+import { COMING_UP_EXPECTED_NOTE } from '@/components/ComingUpCard';
 import { createWarrantyItem } from '@/lib/warranty/items';
 import { createItemType } from '@/lib/warranty/types';
 import { addDaysIso, addMonths, currentMonth, monthEnd, monthLabel, monthStart, todayIso } from '@/lib/dates';
@@ -1723,5 +1725,48 @@ describe('DashboardPage — Needs a look links to Insights', () => {
     const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
     render(await DashboardPage({ searchParams: Promise.resolve({ person: String(adult.id) }) }));
     expect(screen.getByRole('link', { name: 'All insights' }).getAttribute('href')).toBe(`/insights?person=${adult.id}`);
+  });
+});
+
+/** Spec 2026-10-06 §2.6. Review Focus 2. */
+describe('DashboardPage — Coming up lists expected recurring charges', () => {
+  let t: TestDb | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  it('lists a marked merchant’s next charge, tagged Expected, and keeps it out of every total', async () => {
+    t = createTestDb();
+    const adult = await createUser({ name: 'Adult', username: 'adult', password: 'correct horse battery', role: 'admin' });
+    const accountId = createAccount({ name: 'Everyday Chequing', type: 'chequing', ownerUserId: adult.id });
+    const today = todayIso();
+    // Thirty days apart, the newer twenty days ago: next expected is ten days out, whatever the month.
+    for (const daysAgo of [50, 20]) {
+      createManualTransaction({
+        accountId,
+        date: addDaysIso(today, -daysAgo),
+        description: 'CEDAR PHONE CO',
+        amountCents: -6200,
+        categoryId: null,
+        attributedUserId: adult.id,
+        userId: adult.id,
+        actorRole: 'admin',
+      });
+    }
+    setRecurringMarks({ merchants: ['CEDAR PHONE CO'], mark: 'recurring', userId: adult.id, actorRole: 'admin' });
+    currentUser.value = { id: adult.id, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    render(await DashboardPage({ searchParams: Promise.resolve({}) }));
+    const card = screen.getByRole('heading', { name: 'Coming up' }).closest('section') as HTMLElement;
+    const inCard = within(card);
+    expect(inCard.getByText('CEDAR PHONE CO')).toBeTruthy();
+    expect(inCard.getByText('Expected')).toBeTruthy();
+    expect(inCard.getByText('about $62.00')).toBeTruthy();
+    expect(inCard.getByText(COMING_UP_EXPECTED_NOTE)).toBeTruthy();
+    // No bill: no header total, and safeToSpend's billsDueCents stays at nothing.
+    expect(card.querySelector('[aria-label^="Total due"]')).toBeNull();
+    expect(card.textContent).toMatch(/nothing more due before/);
   });
 });

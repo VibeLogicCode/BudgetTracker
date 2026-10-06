@@ -16,7 +16,7 @@ import { listLoanSummaries, ruleLinkedPayments } from '@/lib/loans';
 import { netWorthHint, netWorthOverTime } from '@/lib/networth';
 import { onboardingSteps } from '@/lib/onboarding';
 import { cashflowTrend, categoryBreakdown, topMerchants, trimLeadingEmptyMonths, type MonthTrendRow } from '@/lib/reports';
-import { recurringLoad } from '@/lib/recurring';
+import { expectedRecurringCharges, recurringLoad } from '@/lib/recurring';
 import { cashRunway, cashRunwayHint, type CashRunway } from '@/lib/runway';
 // F-01 (v1.31.0): the same link builder the Reports cards use. A plain, client-safe module, so
 // this Server Component may value-import it (tests/ops/client-bundle.test.ts) and the two
@@ -235,6 +235,10 @@ export default async function DashboardPage({
   // v1.12.0: the CARD wants overdue rows -- surfacing the thing you forgot is its whole job.
   // safeToSpend below deliberately does not; see upcomingBills' docblock.
   const bills = upcomingBills({ today, days: 30, includeOverdue: true, viewer });
+  // Spec 2026-10-06 §2.6. Marked merchants' next charges, for the Coming up card only: never added to
+  // `bills` or to spendPlan, and only read when the card renders (the current month). Viewer-scoped,
+  // like upcomingBills -- the person pill narrows neither.
+  const expected = isCurrentMonth ? expectedRecurringCharges({ today, days: 30, viewer }) : [];
   const spendPlan = safeToSpend({ month, today, viewer });
   const householdTotals = selfScoped ? totals : scopeUserId === null ? totals : budgetTotals(budgetProgress(month));
 
@@ -718,6 +722,7 @@ export default async function DashboardPage({
           {isCurrentMonth ? (
             <ComingUpCard
               bills={bills}
+              expected={expected}
               budgetedRemainingCents={spendPlan.budgetedRemainingCents}
               billsDueCents={spendPlan.billsDueCents}
               hasBudgetedLimits={householdTotals.budgetedLimitCents > 0}

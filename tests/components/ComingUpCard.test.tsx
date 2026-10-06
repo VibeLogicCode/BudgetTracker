@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
-import { ComingUpCard, COMING_UP_ROW_LIMIT } from '@/components/ComingUpCard';
+import { ComingUpCard, COMING_UP_EXPECTED_NOTE, COMING_UP_OVERDUE_DAYS, COMING_UP_ROW_LIMIT } from '@/components/ComingUpCard';
 import type { UpcomingBill } from '@/lib/bills';
+import type { ExpectedCharge } from '@/lib/recurring';
+import { addDaysIso } from '@/lib/dates';
 
 afterEach(() => cleanup());
 
@@ -247,5 +249,82 @@ describe('ComingUpCard record-payment button', () => {
       render(<ComingUpCard {...base} today={TODAY} bills={[]} />);
       expect(screen.getByText('No bills due in the next 30 days.')).toBeTruthy();
     });
+  });
+});
+
+/** Spec 2026-10-06 §2.6. Marked merchants' next charges, beside the bills and never in a total. */
+describe('ComingUpCard expected recurring charges', () => {
+  const today = '2026-08-16';
+  const base = { budgetedRemainingCents: 50_000, billsDueCents: 7_700, hasBudgetedLimits: false, monthEndDate: '2026-08-31', canRecord: true, today };
+  const charge = (over: Partial<ExpectedCharge> = {}): ExpectedCharge => ({
+    merchant: 'CEDAR PHONE CO',
+    expectedDate: '2026-08-26',
+    typicalCents: 90_000,
+    late: false,
+    accountName: 'Travel Visa',
+    ...over,
+  });
+  const bill: UpcomingBill = { itemId: 1, name: 'Streaming', kind: 'subscription', dueDate: '2026-08-26', amountCents: 7700, installmentId: 41, overdue: false };
+  const titles = (container: HTMLElement) => Array.from(container.querySelectorAll('li p:first-child')).map((p) => p.textContent);
+
+  it('lists an expected charge, tagged Expected, about its typical amount, with no Record payment button', () => {
+    const { container } = render(<ComingUpCard {...base} bills={[]} expected={[charge()]} />);
+    expect(screen.getByText('CEDAR PHONE CO')).toBeTruthy();
+    expect(screen.getByText('Expected')).toBeTruthy();
+    expect(screen.getByText('about $900.00')).toBeTruthy();
+    expect(container.textContent).toContain('Travel Visa');
+    expect(screen.queryByRole('button', { name: /record payment/i })).toBeNull();
+  });
+
+  /** Review Focus 2 -- a pin: the total never read `expected`, and must not start to. */
+  it('keeps expected charges out of the header total', () => {
+    const { container } = render(<ComingUpCard {...base} bills={[bill]} expected={[charge()]} />);
+    expect(container.querySelector('[aria-label="Total due $77.00"]')).toBeTruthy();
+  });
+
+  it('shows the card for expected charges alone, with no total', () => {
+    const { container } = render(<ComingUpCard {...base} bills={[]} expected={[charge()]} />);
+    expect(screen.getByText('Coming up')).toBeTruthy();
+    expect(container.querySelector('[aria-label^="Total due"]')).toBeNull();
+  });
+
+  it('sorts a bill before an expected charge on the same date, and caps both kinds together', () => {
+    const many = Array.from({ length: COMING_UP_ROW_LIMIT }, (_unused, index) =>
+      charge({ merchant: `MERCHANT ${index}`, expectedDate: addDaysIso('2026-08-27', index) }),
+    );
+    const { container } = render(<ComingUpCard {...base} bills={[bill]} expected={[charge(), ...many]} />);
+    const shown = titles(container);
+    expect(shown.slice(0, 2)).toEqual(['Streaming', 'CEDAR PHONE CO']);
+    expect(shown.filter((title) => title !== null && !title.startsWith('+'))).toHaveLength(COMING_UP_ROW_LIMIT);
+    expect(screen.getByRole('link', { name: '+2 more expected' }).getAttribute('href')).toBe('/insights/recurring?show=known&sort=next');
+  });
+
+  it('says expected rows are estimates outside the totals, only when one is shown', () => {
+    render(<ComingUpCard {...base} bills={[bill]} expected={[charge()]} />);
+    expect(screen.getByText(COMING_UP_EXPECTED_NOTE)).toBeTruthy();
+    cleanup();
+    render(<ComingUpCard {...base} bills={[bill]} />);
+    expect(screen.queryByText(COMING_UP_EXPECTED_NOTE)).toBeNull();
+  });
+
+  it('reads a past expected date as nothing since, and drops one older than COMING_UP_OVERDUE_DAYS', () => {
+    render(
+      <ComingUpCard
+        {...base}
+        bills={[]}
+        expected={[
+          charge({ merchant: 'RIVERSIDE GYM', expectedDate: addDaysIso(today, -20), late: true }),
+          charge({ merchant: 'HARBOUR INSURANCE', expectedDate: addDaysIso(today, -COMING_UP_OVERDUE_DAYS - 1), late: true }),
+        ]}
+      />,
+    );
+    expect(screen.getByText('RIVERSIDE GYM')).toBeTruthy();
+    expect(screen.getByText('nothing since')).toBeTruthy();
+    expect(screen.queryByText('HARBOUR INSURANCE')).toBeNull();
+  });
+
+  it('never says missed payment, subscription or cancel about an expected row', () => {
+    const { container } = render(<ComingUpCard {...base} bills={[]} expected={[charge({ expectedDate: addDaysIso(today, -20), late: true })]} />);
+    expect(container.textContent).not.toMatch(/missed payment|subscription|cancel|wasted|forgotten/i);
   });
 });

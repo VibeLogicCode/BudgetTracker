@@ -1,7 +1,11 @@
 import Link from 'next/link';
 import { daysBetweenIso } from '@/lib/dates';
+import { recurringHref } from '@/lib/insights-links';
 import { formatCents } from '@/lib/money';
 import type { UpcomingBill } from '@/lib/bills';
+import type { ExpectedCharge } from '@/lib/recurring';
+// Every /transactions link in this app is built here (F-01).
+import { transactionsHref } from '@/lib/transaction-links';
 import { Card, CardBody, CardFooter, CardHeader } from '@/components/ui/Card';
 import { DaysRemainingPill } from '@/components/ui/DaysRemainingPill';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -23,10 +27,22 @@ export const COMING_UP_ROW_LIMIT = 8;
  */
 export const COMING_UP_OVERDUE_DAYS = 90;
 
+/** Spec 2026-10-06 §2.6, the line under the list whenever an expected row is shown. */
+export const COMING_UP_EXPECTED_NOTE = 'Expected charges are estimates from past charges and are not in the totals above.';
+
+/**
+ * Spec 2026-10-06 §2.6. What the list renders, built AFTER the totals. The two kinds are separate
+ * props of separate types, so the header total (bills only) and safeToSpend's billsDueCents (which
+ * never sees this card's input) cannot include an expected charge by accident: a recurring charge
+ * is usually already inside a category budget, and subtracting it again would count it twice.
+ */
+type ComingUpEntry = { kind: 'bill'; date: string; bill: UpcomingBill } | { kind: 'expected'; date: string; charge: ExpectedCharge };
+
 /**
  * Task 9 (spec 2026-08-22, v1.7.0): SELF-HIDING, in the manner of LoansCard -- the dashboard
  * renders it unconditionally, and it is absent when there is nothing to say (no bills coming
- * up AND no budgeted limits at all this month).
+ * up AND no budgeted limits at all this month). Spec 2026-10-06 §2.6: expected rows alone are
+ * enough to show it.
  *
  * The list total (header) and the footer sentence's "bills still to come" figure are
  * deliberately different numbers when they differ: the list is a fixed 30-day lookahead, a
@@ -41,6 +57,7 @@ export const COMING_UP_OVERDUE_DAYS = 90;
  */
 export function ComingUpCard({
   bills,
+  expected = [],
   budgetedRemainingCents,
   billsDueCents,
   hasBudgetedLimits,
@@ -50,6 +67,11 @@ export function ComingUpCard({
 }: {
   /** Already filtered by the caller to a fixed lookahead window (the next 30 days). */
   bills: UpcomingBill[];
+  /**
+   * Spec 2026-10-06 §2.6. Marked merchants' next charges (expectedRecurringCharges), the same 30-day
+   * lookahead. Listed beside the bills, never in a total.
+   */
+  expected?: ExpectedCharge[];
   budgetedRemainingCents: number;
   /** Bills due on or before the end of the current month (safeToSpend's own window). */
   billsDueCents: number;
@@ -68,12 +90,22 @@ export function ComingUpCard({
   const withinBound = bills.filter(
     (b) => !b.overdue || daysBetweenIso(b.dueDate, today) <= COMING_UP_OVERDUE_DAYS,
   );
-  if (withinBound.length === 0 && !hasBudgetedLimits) return null;
+  // Spec 2026-10-06 §2.6: the same overdue bound, applied to a late expected charge.
+  const expectedWithinBound = expected.filter((charge) => daysBetweenIso(charge.expectedDate, today) <= COMING_UP_OVERDUE_DAYS);
+  if (withinBound.length === 0 && expectedWithinBound.length === 0 && !hasBudgetedLimits) return null;
 
+  // Bills only, by construction: `expected` is a different type with no amountCents (spec 2026-10-06 §2.6).
   const listTotalCents = withinBound.reduce((sum, bill) => sum + bill.amountCents, 0);
   const hasOverdue = withinBound.some((bill) => bill.overdue);
-  const shown = withinBound.slice(0, COMING_UP_ROW_LIMIT);
-  const hiddenCount = withinBound.length - shown.length;
+  // One list, by date; on the same date a bill sorts before an expected charge. The cap covers both.
+  const entries: ComingUpEntry[] = [
+    ...withinBound.map((bill) => ({ kind: 'bill' as const, date: bill.dueDate, bill })),
+    ...expectedWithinBound.map((charge) => ({ kind: 'expected' as const, date: charge.expectedDate, charge })),
+  ].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.kind === b.kind ? 0 : a.kind === 'bill' ? -1 : 1));
+  const shown = entries.slice(0, COMING_UP_ROW_LIMIT);
+  const hiddenBills = withinBound.length - shown.filter((entry) => entry.kind === 'bill').length;
+  const hiddenExpected = expectedWithinBound.length - shown.filter((entry) => entry.kind === 'expected').length;
+  const showsExpected = shown.some((entry) => entry.kind === 'expected');
   const budgetPhrase = hasBudgetedLimits
     ? `Budgets have ${formatCents(budgetedRemainingCents)} left this month`
     : 'No category limits set yet';
@@ -107,7 +139,7 @@ export function ComingUpCard({
           ) : null
         }
       />
-      {withinBound.length === 0 ? (
+      {withinBound.length === 0 && expectedWithinBound.length === 0 ? (
         <CardBody>
           {/* Item 2 (2026-08-30 plan): the shared EmptyState, `size="compact"` -- see that
               component's own docblock for why a card-scoped empty box drops the icon circle and
@@ -152,51 +184,96 @@ export function ComingUpCard({
           />
         </CardBody>
       ) : (
-        <ul className="border-t border-line text-sm">
-          {/* Ruling D1: ListRow (Lane 0) -- its own docblock names this exact <li> as one of the
-              hand-rolled rows it generalises. Item 3 adds the days-remaining pill for a
-              not-yet-overdue bill; an overdue one keeps its existing red badge instead (more
-              urgent, and a negative day count would just be confusing). */}
-          {shown.map((bill) => {
-            const pill = bill.overdue ? null : <DaysRemainingPill days={daysBetweenIso(today, bill.dueDate)} />;
-            return (
-              <ListRow
-                // v1.12.0: ONE item can contribute several rows now (a bill's installments), so
-                // itemId alone is no longer a key. installmentId identifies a schedule row; a
-                // cadence row has at most one occurrence per item in this window, so its item id
-                // still does.
-                key={bill.installmentId === null ? `item-${bill.itemId}` : `installment-${bill.installmentId}`}
-                title={bill.name}
-                meta={
-                  <>
-                    <span className={bill.overdue ? 'text-danger' : undefined}>{bill.dueDate}</span>{' '}
-                    {bill.overdue ? <span className="badge badge--red">Overdue</span> : pill}
-                  </>
-                }
-                amount={formatCents(bill.amountCents)}
-                trailing={
-                  // Ruling R8: only a SCHEDULE row can be recorded. A cadence bill (a
-                  // subscription) has no installment row to mark, so the button would have
-                  // nothing to write against -- which is why installmentId is the discriminator
-                  // here, not the kind.
-                  canRecord && bill.installmentId !== null ? (
-                    <RecordPaymentForm installmentId={bill.installmentId} />
-                  ) : undefined
-                }
-              />
-            );
-          })}
-          {hiddenCount > 0 ? (
-            <li className="border-b border-line px-5 py-3 last:border-b-0 sm:px-6">
-              {/* Ruling P10: there is no "+N more" pattern in this app yet and the Card's `action` slot
-                  already holds the money total, so the affordance goes in the list. This is the shape
-                  the next card copies. */}
-              <Link href="/warranties" className="text-sm font-medium text-accent-text">
-                +{hiddenCount} more due
-              </Link>
-            </li>
-          ) : null}
-        </ul>
+        <>
+          <ul className="border-t border-line text-sm">
+            {/* Ruling D1: ListRow (Lane 0) -- its own docblock names this exact <li> as one of the
+                hand-rolled rows it generalises. Item 3 adds the days-remaining pill for a
+                not-yet-overdue bill; an overdue one keeps its existing red badge instead (more
+                urgent, and a negative day count would just be confusing). */}
+            {shown.map((entry) => {
+              if (entry.kind === 'expected') {
+                const { charge } = entry;
+                // Spec 2026-10-06 §2.6: tagged Expected, "about" its typical charge, no Record payment
+                // (it is not an installment). A past date reads "nothing since" -- a fact, not a verdict.
+                return (
+                  <ListRow
+                    key={`expected-${charge.merchant}`}
+                    title={
+                      <Link
+                        href={transactionsHref({ range: null, person: null }, { kind: 'merchant', merchant: charge.merchant })}
+                        className="hover:text-accent-text"
+                      >
+                        {charge.merchant}
+                      </Link>
+                    }
+                    meta={
+                      <>
+                        <span className={charge.late ? 'text-danger' : undefined}>{charge.expectedDate}</span>{' '}
+                        <span className="badge badge--slate">Expected</span>{' '}
+                        {charge.expectedDate >= today ? (
+                          <DaysRemainingPill days={daysBetweenIso(today, charge.expectedDate)} />
+                        ) : (
+                          <span className={charge.late ? 'text-danger' : undefined}>nothing since</span>
+                        )}
+                        {charge.accountName === '' ? null : <> · {charge.accountName}</>}
+                      </>
+                    }
+                    amount={`about ${formatCents(charge.typicalCents)}`}
+                  />
+                );
+              }
+              const { bill } = entry;
+              const pill = bill.overdue ? null : <DaysRemainingPill days={daysBetweenIso(today, bill.dueDate)} />;
+              return (
+                <ListRow
+                  // v1.12.0: ONE item can contribute several rows now (a bill's installments), so
+                  // itemId alone is no longer a key. installmentId identifies a schedule row; a
+                  // cadence row has at most one occurrence per item in this window, so its item id
+                  // still does.
+                  key={bill.installmentId === null ? `item-${bill.itemId}` : `installment-${bill.installmentId}`}
+                  title={bill.name}
+                  meta={
+                    <>
+                      <span className={bill.overdue ? 'text-danger' : undefined}>{bill.dueDate}</span>{' '}
+                      {bill.overdue ? <span className="badge badge--red">Overdue</span> : pill}
+                    </>
+                  }
+                  amount={formatCents(bill.amountCents)}
+                  trailing={
+                    // Ruling R8: only a SCHEDULE row can be recorded. A cadence bill (a
+                    // subscription) has no installment row to mark, so the button would have
+                    // nothing to write against -- which is why installmentId is the discriminator
+                    // here, not the kind.
+                    canRecord && bill.installmentId !== null ? (
+                      <RecordPaymentForm installmentId={bill.installmentId} />
+                    ) : undefined
+                  }
+                />
+              );
+            })}
+            {hiddenBills > 0 ? (
+              <li className="border-b border-line px-5 py-3 last:border-b-0 sm:px-6">
+                {/* Ruling P10: there is no "+N more" pattern in this app yet and the Card's `action` slot
+                    already holds the money total, so the affordance goes in the list. This is the shape
+                    the next card copies. */}
+                <Link href="/warranties" className="text-sm font-medium text-accent-text">
+                  +{hiddenBills} more due
+                </Link>
+              </li>
+            ) : null}
+            {hiddenExpected > 0 ? (
+              <li className="border-b border-line px-5 py-3 last:border-b-0 sm:px-6">
+                <Link
+                  href={recurringHref({ person: null, account: null, show: 'known', sort: 'next' })}
+                  className="text-sm font-medium text-accent-text"
+                >
+                  +{hiddenExpected} more expected
+                </Link>
+              </li>
+            ) : null}
+          </ul>
+          {showsExpected ? <p className="border-t border-line px-4 py-3 text-xs text-subtle sm:px-5">{COMING_UP_EXPECTED_NOTE}</p> : null}
+        </>
       )}
       <CardFooter>
         {budgetPhrase}, and {billsPhrase}.
