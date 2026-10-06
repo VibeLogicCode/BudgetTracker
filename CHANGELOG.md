@@ -21,6 +21,16 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.55.1] - 2026-10-06
+
+### Security
+
+- Updated dependencies that had published security advisories. Nothing about how the app works
+  changes.
+  - Runtime dependencies: `next` 16.3.8, `sharp` 0.35.5, `nodemailer` 10.0.15, `adm-zip` 0.6.1,
+    `undici` 7.30.0 and `source-map-js` 1.2.2.
+  - Build and test tools, which never reach an install: `vitest` 4.1.11 and `esbuild` 0.25.12.
+
 ## [1.55.0] - 2026-10-06
 
 ### Added
