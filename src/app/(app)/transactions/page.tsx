@@ -11,7 +11,8 @@ import { resolveRenameRule, reviewQueueCount } from '@/lib/categorize/engine';
 // resolution out with matchRule plus its own emptiness test, which was a second definition of
 // the same question. See renameRules below for why this is the one honest way to answer "which
 // rule renamed this row" at all.
-import { listRules } from '@/lib/categorize/rules';
+import { listRecurringMarkRules, listRules, recurringMarkFor } from '@/lib/categorize/rules';
+import type { RecurringMark } from '@/lib/categorize/mark-kinds';
 import { splitsForTransactions } from '@/lib/splits';
 import { countMatchingMerchant, groupTransactionsByCategory, listTransactions } from '@/lib/transactions';
 import { todayIso } from '@/lib/dates';
@@ -135,6 +136,20 @@ export default async function TransactionsPage({
       }
     }
   }
+  /**
+   * Spec 2026-10-05 §2.2. The recurring mark each merchant on this page carries, so the row menu
+   * offers the opposite. Keyed by merchant, not row id: a mark is a fact about the merchant.
+   */
+  const recurringMarks: Record<string, RecurringMark> = {};
+  {
+    const marks = listRecurringMarkRules();
+    if (marks.length > 0) {
+      for (const row of page.rows) {
+        const mark = recurringMarkFor(row.normalizedMerchant, marks);
+        if (mark !== null) recurringMarks[row.normalizedMerchant] = mark;
+      }
+    }
+  }
   return (
     <TransactionsClient
       page={page}
@@ -142,6 +157,7 @@ export default async function TransactionsPage({
       reviewCount={reviewCount}
       matchingCounts={matchingCounts}
       renameRules={renameRules}
+      recurringMarks={recurringMarks}
       groups={groups}
       currentQuery={currentQueryString(params)}
       // Ruling R10: an asset account holds a typed balance and takes no transactions/imports, so

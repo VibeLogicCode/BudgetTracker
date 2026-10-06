@@ -3,6 +3,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, cleanup, fireEvent, screen, within } from '@testing-library/react';
 import { sql } from 'drizzle-orm';
 import { nowIso } from '@/lib/clock';
+import { setRecurringMarks } from '@/lib/categorize/rules';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
 
 /**
@@ -782,5 +783,30 @@ describe('TransactionsPage: the category-source badge, and how it stays apart fr
     expect(rename.textContent).toBe('rule');
     expect(rename.className).toContain('badge--blue');
     expect(rename.tagName).toBe('BUTTON');
+  });
+});
+
+/** Spec 2026-10-05 §2.2. The page tells each row the mark its merchant carries. */
+describe('TransactionsPage: the recurring mark rides with the row', () => {
+  let t: TestDb | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  it('offers Unmark recurring on a row whose merchant is marked', async () => {
+    t = createSeededTestDb();
+    const admin = insertTestUser(t.db, { name: 'Alice', username: 'alice', role: 'admin' });
+    const accountId = insertTestAccount(t.db, { type: 'chequing', ownerUserId: null });
+    t.db.run(sql`
+      insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, created_by, created_at, updated_at)
+      values (${accountId}, '2026-03-02', 'RIVERSIDE GYM', 'RIVERSIDE GYM', -4500, ${admin}, ${nowIso()}, ${nowIso()})`);
+    setRecurringMarks({ merchants: ['RIVERSIDE GYM'], mark: 'recurring', userId: admin, actorRole: 'admin' });
+    currentUser.value = { id: admin, name: 'Alice', username: 'alice', role: 'admin', visibility: 'household' };
+
+    const { default: TransactionsPage } = await import('@/app/(app)/transactions/page');
+    const { container } = render(await TransactionsPage({ searchParams: Promise.resolve({}) }));
+    fireEvent.click(within(container.querySelector('table') as HTMLElement).getByRole('button', { name: /^Actions for RIVERSIDE GYM/ }));
+    expect(screen.getByRole('menuitem', { name: 'Unmark recurring' })).toBeTruthy();
   });
 });

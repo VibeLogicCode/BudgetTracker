@@ -77,11 +77,14 @@ import {
   setAttributionAction,
   setCategoryAction,
   setRowTransferAction,
+  bulkRecurringMarkAction,
+  setRecurringMarkAction,
   assignToBillAction,
   deleteTransactionAction,
   unassignFromLoanAction,
   type ActionState,
 } from './actions';
+import type { RecurringMark } from '@/lib/categorize/mark-kinds';
 import { buttonClass } from '@/components/ui/Button';
 
 // The table's own <colgroup> below carries one <col> per column: checkbox, date, account,
@@ -477,6 +480,7 @@ export function TransactionsClient({
   reviewCount = 0,
   matchingCounts = {},
   renameRules = {},
+  recurringMarks = {},
   groups = null,
   currentQuery = '',
 }: {
@@ -524,6 +528,8 @@ export function TransactionsClient({
    * splits already use above.
    */
   renameRules?: Record<number, { pattern: string; matchType: string; renameTo: string; ruleId: number }>;
+  /** Spec 2026-10-05 §2.2: the mark each merchant on this page carries, keyed by normalizedMerchant (page.tsx). */
+  recurringMarks?: Record<string, RecurringMark>;
   /**
    * v1.26.0 Lane 3a item 2. groupTransactionsByCategory's page of clusters (src/lib/transactions.ts)
    * for the SAME filter the row list above was built from -- `null` whenever `?group=category` is
@@ -649,6 +655,7 @@ export function TransactionsClient({
   const [attrState, attrAction] = useActionState(setAttributionAction, initial);
   const [bulkCatState, bulkCatAction] = useActionState(bulkCategorizeAction, initial);
   const [bulkTfrState, bulkTfrAction] = useActionState(bulkTransferAction, initial);
+  const [bulkRecurringState, bulkRecurringFormAction] = useActionState(bulkRecurringMarkAction, initial);
   const [bulkLoanState, bulkLoanAction] = useActionState(bulkAssignToLoanAction, initial);
   const [bulkNoteState, bulkNoteFormAction] = useActionState(bulkNoteAction, initial);
   // v1.26.0 Lane 3a item 4: one instance each, for the same reason acceptState and acceptAllState
@@ -690,6 +697,7 @@ export function TransactionsClient({
   // Review round (fold /review in): ruling R4's per-row transfer toggle, offered on every row in
   // both modes.
   const [rowTransferState, rowTransferAction] = useActionState(setRowTransferAction, initial);
+  const [rowRecurringState, rowRecurringAction] = useActionState(setRecurringMarkAction, initial);
   // Review-mode-only actions (inventory #5/#7).
   const [acceptState, acceptAction] = useActionState(acceptGuessAction, initial);
   const [applyAllState, applyAllAction] = useActionState(applyToAllMatchingAction, initial);
@@ -979,7 +987,7 @@ export function TransactionsClient({
       : { confirmGroup: confirmGroupState, recatGroup: recatGroupState, confirmView: confirmViewState }[lastGroupAction];
   const notice =
     newLoanState.message ?? applyAllState.message ??
-    attrState.message ?? bulkCatState.message ?? bulkTfrState.message ??
+    attrState.message ?? bulkCatState.message ?? bulkTfrState.message ?? bulkRecurringState.message ??
     renameState.message ?? assignState.message ?? unassignState.message ?? splitState.message ?? noteState.message ??
     bulkLoanState.message ?? bulkNoteState.message ??
     // v1.26.0 Lane 3a item 4: the two group actions join this same group -- both dialogs close on
@@ -991,15 +999,15 @@ export function TransactionsClient({
     // banner at all, so each one landed its write in silence. They sit with
     // assignState/unassignState: one-off actions whose result is only ever seen here.
     billState.message ?? deleteState.message ?? ruleCreateState.message ??
-    acceptState.message ?? acceptAllState.message ?? rowTransferState.message;
+    acceptState.message ?? acceptAllState.message ?? rowTransferState.message ?? rowRecurringState.message;
   const error =
     newLoanState.error ?? applyAllState.error ??
-    attrState.error ?? bulkCatState.error ?? bulkTfrState.error ??
+    attrState.error ?? bulkCatState.error ?? bulkTfrState.error ?? bulkRecurringState.error ??
     renameState.error ?? assignState.error ?? unassignState.error ?? splitState.error ?? noteState.error ??
     bulkLoanState.error ?? bulkNoteState.error ??
     lastGroupState?.error ?? confirmGroupState.error ?? recatGroupState.error ?? confirmViewState.error ??
     billState.error ?? deleteState.error ?? ruleCreateState.error ??
-    acceptState.error ?? acceptAllState.error ?? rowTransferState.error;
+    acceptState.error ?? acceptAllState.error ?? rowTransferState.error ?? rowRecurringState.error;
 
   // Review round: unlike renaming/noting/splitting (which close their own form onSubmit right
   // away, before the action even settles), the new-loan editor must stay open on a REFUSAL --
@@ -1282,6 +1290,28 @@ export function TransactionsClient({
    * the transfer toggle (ruling R4) is new on every row in both modes; Accept/Apply-to-all are
    * new and review-mode-only (inventory #5/#7).
    */
+  /**
+   * Spec 2026-10-05 §2.2. The merchant's recurring mark, beside the transfer toggle. Unmarked: Mark
+   * recurring and Not recurring. Marked: Unmark. Not recurring: Mark recurring, or clear it.
+   */
+  function recurringMenuItems(row: TransactionRow) {
+    const mark = recurringMarks[row.normalizedMerchant] ?? null;
+    const fields = (choice: 'recurring' | 'not_recurring' | 'clear') => ({ transactionId: String(row.id), mark: choice });
+    if (mark === 'recurring') {
+      return <RowMenuForm action={rowRecurringAction} fields={fields('clear')}>Unmark recurring</RowMenuForm>;
+    }
+    return (
+      <>
+        <RowMenuForm action={rowRecurringAction} fields={fields('recurring')}>Mark recurring</RowMenuForm>
+        {mark === 'not_recurring' ? (
+          <RowMenuForm action={rowRecurringAction} fields={fields('clear')}>{'Clear “not recurring”'}</RowMenuForm>
+        ) : (
+          <RowMenuForm action={rowRecurringAction} fields={fields('not_recurring')}>Not recurring</RowMenuForm>
+        )}
+      </>
+    );
+  }
+
   function rowMenu(row: TransactionRow) {
     // Backlog BX: matchingCounts is populated for every row IN review mode (page.tsx) and empty
     // outside it -- so a MISSING entry (rather than a low one) is exactly "we're outside review
@@ -1336,6 +1366,8 @@ export function TransactionsClient({
         >
           {row.isTransfer ? 'Not a transfer' : 'Mark as transfer'}
         </RowMenuForm>
+        {/* Spec 2026-10-05 §2.2. Not on a transfer: Insights reads charges, and a transfer is never one. */}
+        {row.isTransfer ? null : recurringMenuItems(row)}
         {row.isTransfer ? null : (
           <>
             <RowMenuButton onSelect={() => openSplitEditor(row)}>Split…</RowMenuButton>
@@ -2352,6 +2384,16 @@ export function TransactionsClient({
           <input type="hidden" name="ids" value={selected.join(',')} />
           <input type="hidden" name="isTransfer" value="1" />
           <SubmitButton variant="secondary">Mark transfer</SubmitButton>
+        </form>
+      ),
+    },
+    {
+      key: 'recurring',
+      node: (
+        <form action={bulkRecurringFormAction} className="flex items-center gap-2">
+          <input type="hidden" name="ids" value={selected.join(',')} />
+          <input type="hidden" name="mark" value="recurring" />
+          <SubmitButton variant="secondary">Mark recurring</SubmitButton>
         </form>
       ),
     },

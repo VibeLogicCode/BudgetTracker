@@ -33,6 +33,9 @@ vi.mock('@/app/(app)/transactions/actions', () => ({
   acceptGuessAction: vi.fn(async () => ({})),
   applyToAllMatchingAction: vi.fn(async () => ({})),
   setRowTransferAction: vi.fn(async () => ({})),
+  // Spec 2026-10-05 §2.2: the row and bulk recurring marks.
+  setRecurringMarkAction: vi.fn(async () => ({})),
+  bulkRecurringMarkAction: vi.fn(async () => ({})),
   deleteTransactionAction: vi.fn(async () => ({})),
   assignToBillAction: vi.fn(async () => ({})),
   previewRowRuleAction: vi.fn(async () => ({})),
@@ -4646,5 +4649,62 @@ describe('spec 2026-09-28 §2.3: Confirm every group', () => {
       await waitFor(() => expect(screen.getByText('Everything in this view was already set by hand.')).toBeTruthy());
       expect(screen.queryByText('That group is empty now — nothing was changed.')).toBeNull();
     });
+  });
+});
+
+/** Spec 2026-10-05 §2.2. Beside the transfer toggle, reflecting the merchant's current mark. */
+describe('TransactionsClient — the recurring mark', () => {
+  const base = { accounts: [], categories: [], people: [], today: '2026-03-02' };
+
+  it('offers Mark recurring and Not recurring for a merchant with no mark', () => {
+    render(<TransactionsClient page={pageWithRow()} {...base} />);
+    openRowMenu('Actions for TIM HORTONS');
+    expect(screen.getByRole('menuitem', { name: 'Mark recurring' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Not recurring' })).toBeTruthy();
+  });
+
+  it('offers only Unmark recurring once the merchant is marked', () => {
+    render(<TransactionsClient page={pageWithRow()} {...base} recurringMarks={{ 'TIM HORTONS': 'recurring' }} />);
+    openRowMenu('Actions for TIM HORTONS');
+    expect(screen.getByRole('menuitem', { name: 'Unmark recurring' })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: 'Mark recurring' })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'Not recurring' })).toBeNull();
+  });
+
+  /** Review Focus 4. */
+  it('offers Mark recurring and a way back from Not recurring', () => {
+    render(<TransactionsClient page={pageWithRow()} {...base} recurringMarks={{ 'TIM HORTONS': 'not_recurring' }} />);
+    openRowMenu('Actions for TIM HORTONS');
+    expect(screen.getByRole('menuitem', { name: 'Mark recurring' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Clear “not recurring”' })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: 'Not recurring' })).toBeNull();
+  });
+
+  it('offers no mark on a transfer row -- Insights reads charges, and a transfer is never one', () => {
+    render(<TransactionsClient page={pageWithRow({ isTransfer: true })} {...base} />);
+    openRowMenu('Actions for TIM HORTONS');
+    expect(screen.queryByRole('menuitem', { name: /recurring/i })).toBeNull();
+  });
+
+  it('posts the row id and the mark', async () => {
+    const { setRecurringMarkAction } = await import('@/app/(app)/transactions/actions');
+    vi.mocked(setRecurringMarkAction).mockClear();
+    render(<TransactionsClient page={pageWithRow()} {...base} />);
+    openRowMenu('Actions for TIM HORTONS');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Mark recurring' }));
+    await waitFor(() => expect(setRecurringMarkAction).toHaveBeenCalled());
+    const formData = vi.mocked(setRecurringMarkAction).mock.calls[0]?.[1] as FormData;
+    expect([formData.get('transactionId'), formData.get('mark')]).toEqual(['1', 'recurring']);
+  });
+
+  it('marks every selected row from the bulk bar', async () => {
+    const { bulkRecurringMarkAction } = await import('@/app/(app)/transactions/actions');
+    vi.mocked(bulkRecurringMarkAction).mockClear();
+    render(<TransactionsClient page={pageWithRow()} {...base} />);
+    fireEvent.click(rowScope().getByLabelText('Select transaction 1'));
+    fireEvent.click(screen.getByRole('button', { name: 'Mark recurring' }));
+    await waitFor(() => expect(bulkRecurringMarkAction).toHaveBeenCalled());
+    const formData = vi.mocked(bulkRecurringMarkAction).mock.calls[0]?.[1] as FormData;
+    expect([formData.get('ids'), formData.get('mark')]).toEqual(['1', 'recurring']);
   });
 });
