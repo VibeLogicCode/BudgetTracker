@@ -21,6 +21,8 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.55.0] - 2026-10-06
+
 ### Added
 
 - **A full page for recurring charges**, opened from **See all recurring charges** on Insights. It
@@ -45,9 +47,12 @@ All notable changes to Budget Tracker are recorded here.
   how much they come to a month, how many are late, how many Looks recurring are left to review and
   how many are forming.
 - **The Transactions row menu toggles the mark**: Mark recurring, or Unmark recurring once marked.
-  Not recurring is set on the full recurring charges page; a merchant marked that way shows Clear "not recurring".
-- **Mark recurring in the bulk bar skips transfer rows**, so the count is the merchants actually marked.
-- **A merchant you marked reads a rhythm from two charges** about a month or a year apart, so it gets a next expected date sooner.
+  Not recurring is set on the full recurring charges page; a merchant marked that way shows
+  Clear "not recurring".
+- **Mark recurring in the bulk bar skips transfer rows**, so the count is the merchants actually
+  marked.
+- **A merchant you marked reads a rhythm from two charges** about a month or a year apart, so it
+  gets a next expected date sooner.
 
 ## [1.54.0] - 2026-10-06
 
