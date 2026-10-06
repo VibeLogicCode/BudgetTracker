@@ -25,7 +25,7 @@
  *
  * HELP_SECTIONS carries one section per nav section, and the nav href string itself appears in
  * that section's "Where to find it" line. tests/ops/onboarding-coverage.test.ts greps this file
- * for those nine literals: ship a tenth section without documenting it and the suite goes red.
+ * for those ten literals: ship an eleventh section without documenting it and the suite goes red.
  */
 
 export interface HelpSection {
@@ -149,7 +149,7 @@ export const HELP_SECTIONS: HelpSection[] = [
           A <B>Needs a look</B> card lists this month&rsquo;s unusual charges, duplicate-looking
           charges and subscriptions that went up since last time — the same checks this app has
           always run in the background, now on screen instead of only reaching you by
-          notification. Like every other card here, it hides itself when there is nothing to flag.
+          notification. <B>All insights</B> opens the whole list on Insights. Like every other card here, it hides itself when there is nothing to flag.
         </P>
       </>
     ),
@@ -543,11 +543,49 @@ export const HELP_SECTIONS: HelpSection[] = [
     ),
   },
   {
+    id: 'insights',
+    title: 'Insights',
+    body: (
+      <>
+        <Where path="/insights">under Planning in the menu, after Reports —</Where>
+        <P>
+          Two lists the app works out from your own transactions. <B>Recurring charges</B> lists the merchants that bill
+          you on a rhythm, and <B>Needs a look</B> lists every charge that stands out — the same findings the Dashboard
+          shows a few of, all of them here, each with its own <B>That&rsquo;s fine</B>.
+        </P>
+        <P>
+          <B>Known recurring</B> is what you have said: a merchant you marked, or one that an item or a payment rule on
+          Loans &amp; Coverage already covers. A merchant you only track stays under Known recurring while its charges keep their rhythm; mark it recurring to keep it listed whatever the dates do. A merchant you marked stays on the list after a single charge, because
+          your word is the evidence. <B>Looks recurring</B> is what the dates show: three or more charges about a month
+          or a year apart, the newest one recent. A rhythm is a measurement, not a verdict — a once-a-month shop makes
+          the same dates as a bill.
+        </P>
+        <P>
+          <B>Mark recurring</B> moves a merchant from Looks recurring to Known recurring; <B>Not recurring</B> takes it off
+          both lists and keeps it off. Both are on the card and in each row&rsquo;s menu on Transactions, and{' '}
+          <B>Mark recurring</B> is in the bar that appears when you select rows. <B>Unmark</B> undoes a mark. A merchant
+          marked Not recurring comes back from its row menu on Transactions; an admin also sees every mark under{' '}
+          <B>Settings → Merchant rules</B>.
+        </P>
+        <P>
+          Every row names the accounts the merchant charged. When a card is <B>replaced</B>, pick it under{' '}
+          <B>Account</B>: Known recurring then lists every merchant that needs the new number. The choice is part of
+          the page address, so the filtered list can be bookmarked or sent to someone else in the household.
+        </P>
+        <P>
+          A new ledger shows little here for its first few months, because a rhythm takes three charges. Until then the
+          card counts the merchants that have charged twice about a month or a year apart. One more charge and they
+          appear on the list.
+        </P>
+      </>
+    ),
+  },
+  {
     id: 'settings',
     title: 'Settings',
     body: (
       <>
-        <Where path="/settings">ninth in the menu, and in the account menu at the top right —</Where>
+        <Where path="/settings">tenth in the menu, and in the account menu at the top right —</Where>
         <P>
           Two halves. The top of the page is yours: your name and password, your two-factor
           authentication, the button that signs you out everywhere, and your notification

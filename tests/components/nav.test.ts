@@ -13,7 +13,7 @@ describe('visibleNav (micro-ruling M6)', () => {
 
   it('a self viewer loses Import, Review and Settings and keeps the rest', () => {
     expect(visibleNav(child).map((item) => item.href)).toEqual([
-      '/dashboard', '/transactions', '/budgets', '/goals', '/warranties', '/reports', '/help',
+      '/dashboard', '/transactions', '/budgets', '/goals', '/warranties', '/reports', '/insights', '/help',
     ]);
   });
 
@@ -57,7 +57,7 @@ describe('navGroups: the rail shows the money-flow sequence it always described'
     const groups = navGroups(household);
     expect(groups[1].label).toBe('Planning');
     expect(groups[1].items.map((item) => item.href)).toEqual([
-      '/budgets', '/goals', '/warranties', '/reports',
+      '/budgets', '/goals', '/warranties', '/reports', '/insights',
     ]);
   });
 

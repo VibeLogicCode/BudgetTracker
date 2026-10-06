@@ -26,7 +26,7 @@ export const SESSION_COOKIE_NAME = 'bt_session';
  */
 export const GARBAGE_TOKEN = 'not-a-real-session-token-00000000000000000000000';
 
-// 28 page routes (walked src/app/**/page.tsx). Default: 307 (-> /login) with no cookie, 200
+// 29 page routes (walked src/app/**/page.tsx). Default: 307 (-> /login) with no cookie, 200
 // with a valid session. Listed exceptions were derived by reading each page's own redirect
 // logic, not guessed -- see the smoke report for the source lines behind each one.
 export const DEFAULT_PAGES = [
@@ -34,6 +34,7 @@ export const DEFAULT_PAGES = [
   '/transactions',
   '/budgets',
   '/reports',
+  '/insights',
   '/goals',
   '/goals/new',
   '/import',

@@ -35,9 +35,9 @@ function section(id: string): HelpSection {
 
 /**
  * Guard-test contract with tests/ops/onboarding-coverage.test.ts (T9): one section per nav
- * section, and the href literal itself present in that section's own rendered output. The nine
+ * section, and the href literal itself present in that section's own rendered output. The ten
  * are spelled out here rather than imported from NAV so that this file keeps asserting the same
- * nine after NAV grows a tenth (/help) entry that documents nothing.
+ * ten after NAV grows an eleventh (/help) entry that documents nothing.
  */
 const SECTION_FOR_HREF: Record<string, string> = {
   '/dashboard': 'dashboard',
@@ -48,6 +48,7 @@ const SECTION_FOR_HREF: Record<string, string> = {
   '/goals': 'goals',
   '/warranties': 'coverage',
   '/reports': 'reports',
+  '/insights': 'insights',
   '/settings': 'settings',
 };
 
@@ -334,5 +335,19 @@ describe('the receipt-reading help says what the reader does', () => {
     expect(text).toContain('a scanned PDF is not yet supported');
     expect(text).toContain('no image or text leaves your network');
     expect(text).not.toContain('nothing is uploaded anywhere');
+  });
+});
+
+/** Spec 2026-10-05 §2.6. The Insights section: tiers, marks, the account filter, and a new ledger. */
+describe('the help page explains Insights', () => {
+  it('names both tiers, the marks, the account filter and the forming count', () => {
+    const text = textOf(section('insights').body);
+    for (const needle of ['Known recurring', 'Looks recurring', 'Mark recurring', 'Not recurring', 'Unmark', 'Account', 'replaced', 'One more charge']) {
+      expect(text, needle).toContain(needle);
+    }
+  });
+
+  it('obeys the wording rule', () => {
+    expect(textOf(section('insights').body)).not.toMatch(/subscription|wasted|forgotten|cancel/i);
   });
 });

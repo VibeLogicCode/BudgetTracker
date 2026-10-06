@@ -4,6 +4,7 @@ import {
   GoalsIcon,
   ImportIcon,
   InfoIcon,
+  InsightsIcon,
   ReportsIcon,
   ReviewIcon,
   SettingsIcon,
@@ -45,7 +46,7 @@ export interface NavGroup {
 }
 
 /**
- * Ten entries, and only the first nine are a sequence. Those nine follow the order
+ * Eleven entries, and only the first ten are a sequence. Those ten follow the order
  * money moves through the app: see the month, check the transactions behind it, fix
  * what the categorizer was unsure of, bring more in, then the planning surfaces,
  * then the back office. Help is not a step in that flow -- it sits outside it, and
@@ -84,6 +85,8 @@ export const NAV: NavItem[] = [
   */
   { href: '/warranties', label: 'Loans & Coverage', Icon: WarrantiesIcon, group: 'planning' },
   { href: '/reports', label: 'Reports', Icon: ReportsIcon, group: 'planning' },
+  // Spec 2026-10-05 §2.1: what the ledger shows arriving on a rhythm, and the charges that stand out.
+  { href: '/insights', label: 'Insights', Icon: InsightsIcon, group: 'planning' },
   { href: '/settings', label: 'Settings', Icon: SettingsIcon, group: 'admin' },
   { href: '/help', label: 'Help', Icon: InfoIcon, group: 'admin' },
 ];
