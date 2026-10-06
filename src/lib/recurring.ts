@@ -8,8 +8,8 @@ import {
   chargesAsOf,
   creepVerdict,
   formingRhythm,
-  recurringRhythm,
   recurringVerdict,
+  trailingRhythm,
   type RecurringCadence,
   type SpendRow,
 } from '@/lib/predict/anomalies';
@@ -94,7 +94,7 @@ export interface RecurringChargeRow {
   tier: RecurringTier;
   /** Why a Known row is known; null on a Looks or Forming row. A mark wins over a cover: only a mark can be undone. */
   knownBy: RecurringKnownBy | null;
-  /** The band the charges sit in (recurringRhythm), or null: one charge, or irregular gaps. */
+  /** The band the charges sit in (trailingRhythm: the run it charges on now), or null: one charge, or irregular gaps. */
   cadence: RecurringCadence | null;
   chargeCount: number;
   /** Median charge magnitude; null with a single charge, where there is no "usually" to state. */
@@ -319,7 +319,7 @@ interface Candidate {
  *
  * Known: the household marked the merchant 'recurring', or a recorded item or rule covers a rhythm.
  * A Known row never drops off for going quiet (2026-10-06 §2.3): a mark is kept whatever the dates
- * do, and a covered rhythm is read without the freshness check; its row reads late instead.
+ * do, and a mark or a covered rhythm reads the run it charges on now (trailingRhythm), with no freshness check; its row reads late instead.
  * Looks: a fresh three-charge rhythm (recurringVerdict) and nothing more; a Looks rhythm that stops
  * is history and drops, as before. Forming: two charges a band apart, the newest recent. A
  * 'not_recurring' merchant is on no list.
@@ -359,13 +359,13 @@ export function recurringCharges(input: {
     if (mark === 'not_recurring') continue;
     const charges = chargesAsOf(all, input.today);
     if (charges.length === 0) continue;
-    // Spec 2026-10-06 §2.3: the band with no freshness check, which next expected and late are read from.
-    const rhythm = recurringRhythm({ charges, today: input.today });
+    // Spec 2026-10-06 §2.3: the rhythm the merchant charges on now (trailingRhythm) -- next expected and late are read from it.
+    const rhythm = trailingRhythm({ charges, today: input.today });
     let tier: RecurringTier;
     let quiet = false;
     if (mark === 'recurring') tier = 'known';
     else if (recurringVerdict({ charges, today: input.today }) !== null) tier = 'looks';
-    else if (rhythm !== null && charges.length >= RECURRING_MIN_CHARGES) {
+    else if (rhythm !== null && rhythm.chargeCount >= RECURRING_MIN_CHARGES) {
       tier = 'looks';
       quiet = true;
     } else if (formingRhythm({ charges, today: input.today }) !== null) tier = 'forming';

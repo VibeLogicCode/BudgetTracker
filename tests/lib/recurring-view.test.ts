@@ -54,8 +54,8 @@ const names = (rows: RecurringChargeRow[]) => rows.map((r) => r.merchant);
 
 describe('recurringSummary', () => {
   /** Review Focus 5. */
-  it('counts every Known merchant but prices only the ones with a rhythm', () => {
-    expect(recurringSummary(result)).toEqual({ known: 3, knownPriced: 2, knownMonthlyCents: 4708, late: 1, looks: 1, forming: 1 });
+  it('counts every Known merchant but prices only the ones on a rhythm that are not late', () => {
+    expect(recurringSummary(result)).toEqual({ known: 3, knownPriced: 1, knownMonthlyCents: 208, late: 1, looks: 1, forming: 1 });
   });
 
   it('is all zeroes on nothing', () => {
@@ -109,6 +109,10 @@ describe('the words on a row', () => {
     expect(nextExpectedText(maple, TODAY)).toBe('Oct 28');
     expect(nextExpectedText(domain, TODAY)).toBe('Nov 3');
     expect(nextExpectedText(phone, TODAY)).toBe('—');
+  });
+
+  it('reads any past next expected as nothing since, late or not', () => {
+    expect(nextExpectedText(row({ nextExpected: '2026-10-01', late: false }), TODAY)).toBe('expected Oct 1, nothing since');
   });
 
   it('states a price rise as up from A to B', () => {

@@ -135,7 +135,7 @@ async function setup(): Promise<Ctx> {
 
 const household = (id: number): Viewer => ({ id, role: 'admin', visibility: 'household' });
 const selfOnly = (id: number): Viewer => ({ id, role: 'member', visibility: 'self' });
-const rowsOf = (result: RecurringCharges) => [...result.known, ...result.looks];
+const rowsOf = (result: RecurringCharges) => [...result.known, ...result.looks, ...result.forming];
 const read = (ctx: Ctx, over: Partial<Parameters<typeof recurringCharges>[0]> = {}) =>
   recurringCharges({ today: TODAY, ownerUserId: null, viewer: household(ctx.adultId), accountId: null, ...over });
 
@@ -554,6 +554,15 @@ describe('recurringCharges: Forming, one charge short of a rhythm', () => {
     expect(result.forming).toEqual([]);
     expect(result.known.map((row) => [row.merchant, row.cadence])).toEqual([['HARBOUR INSURANCE', 'monthly']]);
   });
+
+  it('keeps a covered two-charge merchant under Forming, naming its record', async () => {
+    const ctx = await setup();
+    ctx.cadence({ merchant: 'MAPLE STREAMING', count: 2, cents: 1349 });
+    const itemId = ctx.item({ name: 'Maple Streaming', typeId: ctx.itemType('Subscription', 'subscription') });
+    const result = read(ctx);
+    expect(result.known).toEqual([]);
+    expect(result.forming.map((row) => [row.merchant, row.tier, row.tracked?.itemId])).toEqual([['MAPLE STREAMING', 'forming', itemId]]);
+  });
 });
 
 /** Spec 2026-10-06 §2.3. */
@@ -598,6 +607,28 @@ describe('recurringCharges: next expected and late', () => {
     const result = read(ctx);
     expect(result.looks.map((row) => [row.merchant, row.nextExpected, row.late])).toEqual([['MAPLE STREAMING', addDaysIso(TODAY, -10), false]]);
     expect(result.forming.map((row) => [row.merchant, row.nextExpected, row.late])).toEqual([['HARBOUR INSURANCE', addDaysIso(TODAY, -10), false]]);
+  });
+
+  /** Checkpoint 1 ruling: one old off-band gap must not hide a late charge. */
+  it('reads a marked merchant’s rhythm from its recent run, so one old off-band gap does not hide a late charge', async () => {
+    const ctx = await setup();
+    // Monthly, one 60-day gap a while back, monthly again, then quiet for 50 days.
+    for (const daysAgo of [290, 260, 230, 170, 140, 110, 80, 50]) {
+      ctx.spend({ merchant: 'RIVERSIDE GYM', date: addDaysIso(TODAY, -daysAgo), cents: -4500 });
+    }
+    ctx.mark('RIVERSIDE GYM', 'recurring');
+    expect(read(ctx).known).toMatchObject([
+      { merchant: 'RIVERSIDE GYM', cadence: 'monthly', nextExpected: addDaysIso(TODAY, -20), late: true, monthlyCents: 4500 },
+    ]);
+  });
+
+  it('lists the same history on no list when nothing marks or covers it', async () => {
+    const ctx = await setup();
+    for (const daysAgo of [290, 260, 230, 170, 140, 110, 80, 50]) {
+      ctx.spend({ merchant: 'RIVERSIDE GYM', date: addDaysIso(TODAY, -daysAgo), cents: -4500 });
+    }
+    const result = read(ctx);
+    expect([...result.known, ...result.looks, ...result.forming]).toEqual([]);
   });
 });
 

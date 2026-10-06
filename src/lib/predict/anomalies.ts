@@ -166,6 +166,15 @@ export interface RecurringRhythm {
   medianGapDays: number;
 }
 
+/** Days between consecutive charges; `charges` is oldest first (chargesAsOf). */
+function gapsOf(charges: SpendRow[]): number[] {
+  const gaps: number[] = [];
+  for (let index = 1; index < charges.length; index += 1) {
+    gaps.push(daysBetweenIso(charges[index - 1].date, charges[index].date));
+  }
+  return gaps;
+}
+
 /**
  * Spec 2026-10-06 §2.3. The one reading of "these charges sit in a band": two charges or more
  * (chargesAsOf: money out, not in the future), the median gap in a band, and EVERY gap in that same
@@ -182,15 +191,40 @@ export interface RecurringRhythm {
 export function recurringRhythm(input: { charges: SpendRow[]; today: string }): RecurringRhythm | null {
   const charges = chargesAsOf(input.charges, input.today);
   if (charges.length < 2) return null;
-  const gaps: number[] = [];
-  for (let index = 1; index < charges.length; index += 1) {
-    gaps.push(daysBetweenIso(charges[index - 1].date, charges[index].date));
-  }
+  const gaps = gapsOf(charges);
   const medianGapDays = medianCents(gaps);
   if (medianGapDays === null) return null;
   const cadence = recurringBand(medianGapDays);
   if (cadence === null || !gaps.every((gap) => recurringBand(gap) === cadence)) return null;
   return { cadence, medianGapDays };
+}
+
+/** Spec 2026-10-06 §2.3. A rhythm, and how many charges the run it was read from holds. */
+export interface TrailingRhythm extends RecurringRhythm {
+  /** The run's gaps plus one. */
+  chargeCount: number;
+}
+
+/**
+ * Spec 2026-10-06 §2.3. The rhythm a merchant charges on NOW: the newest gap names the band, and the
+ * run extends back over every earlier gap in that same band, stopping at the first one outside it. Read
+ * for Known rows -- a merchant the household marked, or a covered rhythm gone quiet -- where one skipped
+ * month or a billing-day change years ago must not hide a late charge today. No freshness check.
+ * recurringRhythm stays the strict whole-window reading that recurringVerdict (Looks) and formingRhythm
+ * (Forming) put their counts and freshness on.
+ */
+export function trailingRhythm(input: { charges: SpendRow[]; today: string }): TrailingRhythm | null {
+  const charges = chargesAsOf(input.charges, input.today);
+  if (charges.length < 2) return null;
+  const gaps = gapsOf(charges);
+  const cadence = recurringBand(gaps[gaps.length - 1]);
+  if (cadence === null) return null;
+  let start = gaps.length - 1;
+  while (start > 0 && recurringBand(gaps[start - 1]) === cadence) start -= 1;
+  const run = gaps.slice(start);
+  const medianGapDays = medianCents(run);
+  if (medianGapDays === null) return null;
+  return { cadence, medianGapDays, chargeCount: run.length + 1 };
 }
 
 /**

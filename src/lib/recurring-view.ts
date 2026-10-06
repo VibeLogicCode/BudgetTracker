@@ -32,11 +32,11 @@ export function rhythmLabel(row: RecurringChargeRow): string {
   return row.cadence === 'monthly' ? 'Monthly' : 'Yearly';
 }
 
-/** Spec §2.3: a late row reads "expected Oct 12, nothing since" -- a measured fact, no verdict. */
+/** Spec §2.3: a past date reads "expected Oct 12, nothing since" -- a measured fact; the Late tag says whether it is past the grace. */
 export function nextExpectedText(row: RecurringChargeRow, today: string): string {
   if (row.nextExpected === null) return '—';
   const day = dayLabel(row.nextExpected, today);
-  return row.late ? `expected ${day}, nothing since` : day;
+  return row.nextExpected < today ? `expected ${day}, nothing since` : day;
 }
 
 /** Spec §2.4. */
@@ -45,7 +45,7 @@ export function priceRiseText(row: RecurringChargeRow): string | null {
   return `up from ${formatCents(row.priceRise.fromCents)} to ${formatCents(row.priceRise.toCents)}`;
 }
 
-/** Spec §2.1. The card's three lines. The monthly figure is Known only, and only rows with a cadence. */
+/** Spec §2.1. The card's three lines. The monthly figure is Known only, rows with a cadence, and not late ones: a stopped charge is not a current cost (they stay in known and late). */
 export interface RecurringSummary {
   known: number;
   /** How many Known rows the monthly figure was summed from; 0 means the card prints no figure. */
@@ -59,7 +59,7 @@ export interface RecurringSummary {
 type Tiers = Pick<RecurringCharges, 'known' | 'looks' | 'forming'>;
 
 export function recurringSummary(result: Tiers): RecurringSummary {
-  const priced = result.known.filter((row) => row.monthlyCents !== null);
+  const priced = result.known.filter((row) => row.monthlyCents !== null && !row.late);
   return {
     known: result.known.length,
     knownPriced: priced.length,

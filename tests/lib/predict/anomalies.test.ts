@@ -7,6 +7,7 @@ import {
   hasEnoughHouseholdHistory,
   recurringRhythm,
   recurringVerdict,
+  trailingRhythm,
   unusualVerdict,
   type SpendRow,
 } from '@/lib/predict/anomalies';
@@ -464,5 +465,29 @@ describe('recurringRhythm: the band of two charges or more', () => {
       row({ id: 8, date: addDaysIso(TODAY, 20), amountCents: -1649 }),
     ];
     expect(recurringRhythm({ charges: withNoise, today: TODAY })).toEqual({ cadence: 'monthly', medianGapDays: 30 });
+  });
+});
+
+/** Spec 2026-10-06 §2.3, checkpoint 1 ruling. The run a Known merchant charges on now. */
+describe('trailingRhythm: the newest run of gaps in one band', () => {
+  const charges = (gaps: number[], endsDaysAgo = 3): SpendRow[] => {
+    const dates = [addDaysIso(TODAY, -endsDaysAgo)];
+    for (const gap of [...gaps].reverse()) dates.unshift(addDaysIso(dates[0], -gap));
+    return dates.map((date, index) => row({ id: index + 1, date, amountCents: -1649 }));
+  };
+
+  it('reads the run back to the first gap outside the band', () => {
+    expect(trailingRhythm({ charges: charges([30, 60, 30, 30]), today: TODAY })).toEqual({ cadence: 'monthly', medianGapDays: 30, chargeCount: 3 });
+    expect(trailingRhythm({ charges: charges([30, 365, 365], 6), today: TODAY })).toEqual({ cadence: 'yearly', medianGapDays: 365, chargeCount: 3 });
+  });
+
+  it('agrees with recurringRhythm when every gap is in the band', () => {
+    expect(trailingRhythm({ charges: charges([29, 31, 30]), today: TODAY })).toEqual({ cadence: 'monthly', medianGapDays: 30, chargeCount: 4 });
+    expect(recurringRhythm({ charges: charges([29, 31, 30]), today: TODAY })).toEqual({ cadence: 'monthly', medianGapDays: 30 });
+  });
+
+  it('is null for one charge, and when the newest gap is outside every band', () => {
+    expect(trailingRhythm({ charges: charges([]), today: TODAY })).toBeNull();
+    expect(trailingRhythm({ charges: charges([30, 30, 60]), today: TODAY })).toBeNull();
   });
 });
