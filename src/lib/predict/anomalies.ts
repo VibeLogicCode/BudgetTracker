@@ -159,6 +159,40 @@ export function chargesAsOf<T extends SpendRow>(charges: readonly T[], today: st
     .sort((a, b) => (a.date === b.date ? a.id - b.id : a.date < b.date ? -1 : 1));
 }
 
+/** Spec 2026-10-06 §2.3. A band, and the median gap it was read from. */
+export interface RecurringRhythm {
+  cadence: RecurringCadence;
+  /** Median days between charges. Next expected is the last charge plus this. */
+  medianGapDays: number;
+}
+
+/**
+ * Spec 2026-10-06 §2.3. The one reading of "these charges sit in a band": two charges or more
+ * (chargesAsOf: money out, not in the future), the median gap in a band, and EVERY gap in that same
+ * band. No freshness check, which is the point: a Known merchant's next expected date is measured
+ * from this rhythm, and that date matters most once the charges have stopped. recurringVerdict and
+ * formingRhythm put their own charge counts and freshness on top.
+ *
+ * Every gap must itself sit in the band the median chose -- not just the median (2026-09-02
+ * review, I-1). At three charges there are exactly two gaps, and medianCents() of two values is
+ * their mean, not an observed interval: gaps of 1 and 59 days average to 30 and, without this
+ * check, would read as a confident "Monthly" though neither gap is a month. Requiring the band on
+ * every gap is what stops a mean from posing as a rhythm, at any count.
+ */
+export function recurringRhythm(input: { charges: SpendRow[]; today: string }): RecurringRhythm | null {
+  const charges = chargesAsOf(input.charges, input.today);
+  if (charges.length < 2) return null;
+  const gaps: number[] = [];
+  for (let index = 1; index < charges.length; index += 1) {
+    gaps.push(daysBetweenIso(charges[index - 1].date, charges[index].date));
+  }
+  const medianGapDays = medianCents(gaps);
+  if (medianGapDays === null) return null;
+  const cadence = recurringBand(medianGapDays);
+  if (cadence === null || !gaps.every((gap) => recurringBand(gap) === cadence)) return null;
+  return { cadence, medianGapDays };
+}
+
 /**
  * F-05 (2026-09-02 review, v1.31.0). What creepVerdict already knew, asked as a different
  * question: not "did this merchant's price go up" but "is this merchant charging on a cadence at
@@ -198,27 +232,9 @@ export function recurringVerdict(input: { charges: SpendRow[]; today: string }):
   // reasoning findDuplicates() applies below.
   const charges = chargesAsOf(input.charges, input.today);
   if (charges.length < RECURRING_MIN_CHARGES) return null;
-
-  const gaps: number[] = [];
-  for (let index = 1; index < charges.length; index += 1) {
-    gaps.push(daysBetweenIso(charges[index - 1].date, charges[index].date));
-  }
-  const medianGapDays = medianCents(gaps);
-  if (medianGapDays === null) return null;
-  const cadence = recurringBand(medianGapDays);
-  if (cadence === null) return null;
-
-  /**
-   * Every gap must itself sit in the band the median chose -- not just the median (2026-09-02
-   * review, I-1). At the 3-charge floor there are exactly two gaps, and medianCents() of two
-   * values is their mean, not an observed interval: gaps of 1 and 59 days average to 30 and,
-   * without this check, would read as a confident "Monthly" though neither gap is a month.
-   * Raising RECURRING_MIN_CHARGES instead was rejected -- it does not fix the averaging, it only
-   * moves the count at which it can still happen (three gaps of 1, 1 and 88 average to 30 too).
-   * Requiring the band on every gap is what stops a mean from posing as a rhythm, at any count,
-   * and is why the 3-charge floor above can stay put.
-   */
-  if (!gaps.every((gap) => recurringBand(gap) === cadence)) return null;
+  // The band, every gap inside it (recurringRhythm carries the I-1 reasoning).
+  const rhythm = recurringRhythm({ charges, today: input.today });
+  if (rhythm === null) return null;
 
   /**
    * STILL charging, not "once charged". This is the condition the wide window (see
@@ -229,15 +245,15 @@ export function recurringVerdict(input: { charges: SpendRow[]; today: string }):
    * does not.
    */
   const latest = charges[charges.length - 1];
-  if (daysBetweenIso(latest.date, input.today) > bandMaxDays(cadence) + RECURRING_STALE_GRACE_DAYS) return null;
+  if (daysBetweenIso(latest.date, input.today) > bandMaxDays(rhythm.cadence) + RECURRING_STALE_GRACE_DAYS) return null;
 
   const typicalCents = medianCents(charges.map((charge) => Math.abs(charge.amountCents)));
   if (typicalCents === null) return null;
 
   return {
-    cadence,
+    cadence: rhythm.cadence,
     chargeCount: charges.length,
-    medianGapDays,
+    medianGapDays: rhythm.medianGapDays,
     latestId: latest.id,
     latestDateIso: latest.date,
     latestAmountCents: Math.abs(latest.amountCents),
@@ -248,20 +264,16 @@ export function recurringVerdict(input: { charges: SpendRow[]; today: string }):
 /**
  * Spec 2026-10-05 §2.3, forming rhythms. One charge short of what recurringVerdict needs: exactly
  * RECURRING_MIN_CHARGES - 1 charges, every gap in one band, the newest inside that band's
- * allowance. Returns the band. A count's input only; nothing lists these merchants by name.
+ * allowance. Returns the band. Spec 2026-10-06 §2.2: the Forming tier's membership test.
  */
 export function formingRhythm(input: { charges: SpendRow[]; today: string }): RecurringCadence | null {
   const charges = chargesAsOf(input.charges, input.today);
   if (charges.length !== RECURRING_MIN_CHARGES - 1) return null;
-  const gaps: number[] = [];
-  for (let index = 1; index < charges.length; index += 1) {
-    gaps.push(daysBetweenIso(charges[index - 1].date, charges[index].date));
-  }
-  const cadence = gaps.length === 0 ? null : recurringBand(gaps[0]);
-  if (cadence === null || !gaps.every((gap) => recurringBand(gap) === cadence)) return null;
+  const rhythm = recurringRhythm({ charges, today: input.today });
+  if (rhythm === null) return null;
   const latest = charges[charges.length - 1];
-  if (daysBetweenIso(latest.date, input.today) > bandMaxDays(cadence) + RECURRING_STALE_GRACE_DAYS) return null;
-  return cadence;
+  if (daysBetweenIso(latest.date, input.today) > bandMaxDays(rhythm.cadence) + RECURRING_STALE_GRACE_DAYS) return null;
+  return rhythm.cadence;
 }
 
 export interface DuplicatePair {

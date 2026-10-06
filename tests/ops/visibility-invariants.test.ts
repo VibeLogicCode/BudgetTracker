@@ -83,6 +83,8 @@ const REQUIRE_VIEWER: { file: string; fn: string }[] = [
   // can only narrow a viewer already entitled to any member's figures -- the S-01 order.
   { file: 'src/lib/recurring.ts', fn: 'recurringCharges' },
   { file: 'src/lib/recurring.ts', fn: 'recurringLoad' },
+  // Spec 2026-10-06 §2.6: the Coming up card's expected charges, a spending read like recurringCharges.
+  { file: 'src/lib/recurring.ts', fn: 'expectedRecurringCharges' },
 ];
 
 /** Exempt, WITH the reason. Nothing is exempt without one. */
@@ -262,8 +264,9 @@ describe('ruling R2: every read-model helper takes a viewer', () => {
   // give: a floor left behind reality is a floor that permits silent deletions.
   //
   // Spec 2026-10-05: raised from 34 to 41, the actual count with merchantsOfTransactions added.
-  it('the named lists cannot shrink below 41 entries', () => {
-    expect(REQUIRE_VIEWER.length + EXEMPT.length).toBeGreaterThanOrEqual(41);
+  // Spec 2026-10-06: raised from 41 to 42, the actual count with expectedRecurringCharges added.
+  it('the named lists cannot shrink below 42 entries', () => {
+    expect(REQUIRE_VIEWER.length + EXEMPT.length).toBeGreaterThanOrEqual(42);
   });
 });
 

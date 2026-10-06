@@ -82,6 +82,14 @@ export const RECURRING_MIN_CHARGES = 3;
  */
 export const RECURRING_STALE_GRACE_DAYS = 10;
 
+/**
+ * Spec 2026-10-06 §2.3. How far past its next expected date a Known merchant may be before its row
+ * says late. A week: a monthly charge that lands a few days off its usual date is ordinary, and one
+ * a week overdue is worth a look after a card is replaced. Next expected itself is the last charge
+ * plus the median gap (src/lib/recurring.ts).
+ */
+export const RECURRING_LATE_GRACE_DAYS = 7;
+
 // Duplicate charge (spec section 9.5)
 export const DUPLICATE_WINDOW_DAYS = 3;
 export const DUPLICATE_LOOKBACK_DAYS = 14;

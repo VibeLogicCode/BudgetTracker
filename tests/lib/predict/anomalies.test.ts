@@ -5,6 +5,7 @@ import {
   findDuplicates,
   formingRhythm,
   hasEnoughHouseholdHistory,
+  recurringRhythm,
   recurringVerdict,
   unusualVerdict,
   type SpendRow,
@@ -427,5 +428,41 @@ describe('formingRhythm: one charge short of a rhythm', () => {
   it('counts charges only: a refund and a future-dated row are neither', () => {
     expect(formingRhythm({ charges: [...two(30), row({ id: 9, date: addDaysIso(TODAY, -1), amountCents: 1649 })], today: TODAY })).toBe('monthly');
     expect(formingRhythm({ charges: [...two(30), row({ id: 8, date: addDaysIso(TODAY, 20), amountCents: -1649 })], today: TODAY })).toBe('monthly');
+  });
+});
+
+/** Spec 2026-10-06 §2.3. The band, read with no freshness check: what next expected is measured from. */
+describe('recurringRhythm: the band of two charges or more', () => {
+  /** Charges `gaps` apart, oldest gap first, the newest `endsDaysAgo` before TODAY. */
+  const charges = (gaps: number[], endsDaysAgo = 3): SpendRow[] => {
+    const dates = [addDaysIso(TODAY, -endsDaysAgo)];
+    for (const gap of [...gaps].reverse()) dates.unshift(addDaysIso(dates[0], -gap));
+    return dates.map((date, index) => row({ id: index + 1, date, amountCents: -1649 }));
+  };
+
+  it('reads the band and the median gap from two charges or more', () => {
+    expect(recurringRhythm({ charges: charges([30]), today: TODAY })).toEqual({ cadence: 'monthly', medianGapDays: 30 });
+    expect(recurringRhythm({ charges: charges([29, 31, 30]), today: TODAY })).toEqual({ cadence: 'monthly', medianGapDays: 30 });
+    expect(recurringRhythm({ charges: charges([365, 365], 6), today: TODAY })).toEqual({ cadence: 'yearly', medianGapDays: 365 });
+  });
+
+  it('keeps the rhythm of charges that stopped long ago: freshness is the caller’s question', () => {
+    expect(recurringRhythm({ charges: charges([30, 30, 30], 400), today: TODAY })).toEqual({ cadence: 'monthly', medianGapDays: 30 });
+    expect(recurringVerdict({ charges: charges([30, 30, 30], 400), today: TODAY })).toBeNull();
+  });
+
+  it('is null for one charge, and when any gap leaves the band', () => {
+    expect(recurringRhythm({ charges: charges([]), today: TODAY })).toBeNull();
+    expect(recurringRhythm({ charges: charges([30, 60, 30]), today: TODAY })).toBeNull();
+    expect(recurringRhythm({ charges: charges([7, 7, 7]), today: TODAY })).toBeNull();
+  });
+
+  it('counts charges only: a refund and a future-dated row are neither', () => {
+    const withNoise = [
+      ...charges([30]),
+      row({ id: 9, date: addDaysIso(TODAY, -1), amountCents: 1649 }),
+      row({ id: 8, date: addDaysIso(TODAY, 20), amountCents: -1649 }),
+    ];
+    expect(recurringRhythm({ charges: withNoise, today: TODAY })).toEqual({ cadence: 'monthly', medianGapDays: 30 });
   });
 });

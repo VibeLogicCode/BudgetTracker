@@ -2,11 +2,19 @@ import { and, asc, eq, gte, inArray, lt, sql, type SQL } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { accounts, loanMatcherRules, transactions, warrantyItemTypes, warrantyItems } from '@/db/schema';
 import { ownerScope, type Viewer } from '@/lib/auth/viewer';
-import { addDaysIso } from '@/lib/dates';
+import { addDaysIso, daysBetweenIso } from '@/lib/dates';
 import { listRecurringMarkRules, recurringMarkFor } from '@/lib/categorize/rules';
-import { chargesAsOf, formingRhythm, recurringVerdict, type RecurringCadence, type SpendRow } from '@/lib/predict/anomalies';
-import { RECURRING_LOOKBACK_DAYS } from '@/lib/predict/constants';
-import { medianCents } from '@/lib/predict/stats';
+import {
+  chargesAsOf,
+  creepVerdict,
+  formingRhythm,
+  recurringRhythm,
+  recurringVerdict,
+  type RecurringCadence,
+  type SpendRow,
+} from '@/lib/predict/anomalies';
+import { CREEP_BASELINE_DAYS, RECURRING_LATE_GRACE_DAYS, RECURRING_LOOKBACK_DAYS, RECURRING_MIN_CHARGES } from '@/lib/predict/constants';
+import { divRound, medianCents } from '@/lib/predict/stats';
 import { SPEND_ROW_WHERE } from '@/lib/spend-where';
 import { billingAllowedForKind, ITEM_KINDS, type ItemKind } from '@/lib/warranty/constants';
 import { notEnded } from '@/lib/warranty/expiry-sql';
@@ -28,6 +36,9 @@ import { notEnded } from '@/lib/warranty/expiry-sql';
  * word, or a recorded item that covers a detected rhythm; Looks recurring is a detected rhythm
  * and nothing more.
  *
+ * Spec 2026-10-06: a third tier, Forming, is listed; every row with a cadence carries next expected,
+ * a monthly equivalent and the price-rise finding; a Known row that goes quiet stays and reads late.
+ *
  * WHY IT IS NOT IN src/lib/insights.ts, next to householdInsights: that module answers "what
  * just happened that is worth a look" over a 365-day slice inside a 14-day lookback, and every
  * row it returns points at ONE transaction. This one answers "what is charging us on a rhythm"
@@ -45,13 +56,6 @@ import { notEnded } from '@/lib/warranty/expiry-sql';
  * utility bill that varies -- see recurringVerdict's own docblock. Callers render the measured
  * facts and offer Track; the household supplies the judgement.
  */
-
-/**
- * The card is an audit list, not a second ledger: a dozen rows is a session, forty is a chore.
- * Applies to Looks recurring only, after the account filter; Known recurring is the
- * card-replacement list and is never cut short.
- */
-export const RECURRING_MAX_ROWS = 12;
 
 /** What already covers a merchant, and which record says so, so a wrong match is checkable. */
 export interface RecurringCover {
@@ -71,17 +75,26 @@ export interface RecurringAccount {
   name: string;
 }
 
-/** Spec §2.3. 'known': the household marked it, or a record covers it. 'looks': a rhythm only. */
-export type RecurringTier = 'known' | 'looks';
+/**
+ * Spec 2026-10-06 §2.2. 'known': the household marked it, or a record covers it. 'looks': a rhythm
+ * only. 'forming': two charges a band apart, one short of a rhythm.
+ */
+export type RecurringTier = 'known' | 'looks' | 'forming';
 export type RecurringKnownBy = 'mark' | 'tracked';
+
+/** Spec 2026-10-06 §2.4. The creep finding Needs a look makes, carried onto the merchant's row. */
+export interface RecurringPriceRise {
+  fromCents: number;
+  toCents: number;
+}
 
 export interface RecurringChargeRow {
   /** `transactions.normalized_merchant`, i.e. uppercase, exactly as the ledger groups it. */
   merchant: string;
   tier: RecurringTier;
-  /** Why a Known row is known; null on a Looks row. A mark wins over a cover: only a mark can be undone from the card. */
+  /** Why a Known row is known; null on a Looks or Forming row. A mark wins over a cover: only a mark can be undone. */
   knownBy: RecurringKnownBy | null;
-  /** The detected rhythm, or null for a marked merchant whose charges have none. */
+  /** The band the charges sit in (recurringRhythm), or null: one charge, or irregular gaps. */
   cadence: RecurringCadence | null;
   chargeCount: number;
   /** Median charge magnitude; null with a single charge, where there is no "usually" to state. */
@@ -91,20 +104,28 @@ export interface RecurringChargeRow {
   /** The newest charge. The Track link prefills from it, and the mark buttons post it. */
   transactionId: number;
   tracked: RecurringCover | null;
-  /** Spec §2.4. Every account the merchant charged inside the window, newest charge first. */
+  /** Spec 2026-10-05 §2.4. Every account the merchant charged inside the window, newest charge first. */
   accounts: RecurringAccount[];
+  /** Spec 2026-10-06 §2.3. lastDate plus the median gap, on any row with a cadence. May be in the past. */
+  nextExpected: string | null;
+  /** Spec 2026-10-06 §2.3. Known rows only: today is more than RECURRING_LATE_GRACE_DAYS past nextExpected. */
+  late: boolean;
+  /** Spec 2026-10-06 §2.1. typicalCents for a monthly rhythm, a twelfth of it for a yearly one; null without a cadence. */
+  monthlyCents: number | null;
+  /** Spec 2026-10-06 §2.4. Set when creepVerdict finds the newest charge went up. */
+  priceRise: RecurringPriceRise | null;
 }
 
 export interface RecurringCharges {
-  /** Sorted by merchant, never capped: this is the card-replacement list. */
+  /** Sorted by merchant, never capped, and kept when the charges stop: a quiet Known row reads late. */
   known: RecurringChargeRow[];
-  /** Biggest typical charge first, capped at RECURRING_MAX_ROWS after the account filter. */
+  /** Biggest typical charge first. Spec 2026-10-06 §2.2: no cap. */
   looks: RecurringChargeRow[];
-  /** Spec §2.3, forming rhythms: merchants one charge short of a rhythm, per band. Counted, never listed. */
-  forming: Record<RecurringCadence, number>;
+  /** Spec 2026-10-06 §2.2: listed, by merchant. */
+  forming: RecurringChargeRow[];
   /**
    * Spec 2026-10-05 §2.4, owner ruling: the Account select's options -- every distinct account named
-   * on a Known or Looks row, read BEFORE the account filter and BEFORE the Looks cap, by name then id.
+   * on a listed row of any tier, read BEFORE the account filter, by name then id.
    */
   accounts: RecurringAccount[];
   /** The account filter actually applied: input.accountId when it is among `accounts`, otherwise null (every account). */
@@ -278,18 +299,38 @@ function resolveScope(viewer: Viewer, ownerUserId: number | null): number | null
   return ownerScope(viewer) ?? ownerUserId;
 }
 
+/** Spec 2026-10-06 §2.1. What a merchant comes to a month: a yearly charge is a twelfth of itself. */
+function monthlyEquivalent(cadence: RecurringCadence | null, typicalCents: number | null): number | null {
+  if (cadence === null || typicalCents === null) return null;
+  return cadence === 'monthly' ? typicalCents : divRound(typicalCents, 12);
+}
+
+interface Candidate {
+  row: RecurringChargeRow;
+  charges: ChargeRow[];
+  /** The rhythm's median gap, which next expected is measured from; null without a rhythm. */
+  gapDays: number | null;
+  /** A three-charge rhythm that has gone quiet: listed only if a record makes it Known. */
+  quiet: boolean;
+}
+
 /**
- * Spec 2026-10-05 §2.3 and §2.4. Two tiers over the same charges. Known: the household marked the
- * merchant 'recurring', or a recorded item or rule covers a detected rhythm. Looks: a detected
- * monthly or yearly rhythm and nothing more. A 'not_recurring' merchant is on neither list and is
- * not counted as forming. `forming` counts merchants one charge short of a rhythm, per band.
+ * Spec 2026-10-05 §2.3–§2.4 and 2026-10-06 §2.1–§2.4. Three tiers over the same charges.
+ *
+ * Known: the household marked the merchant 'recurring', or a recorded item or rule covers a rhythm.
+ * A Known row never drops off for going quiet (2026-10-06 §2.3): a mark is kept whatever the dates
+ * do, and a covered rhythm is read without the freshness check; its row reads late instead.
+ * Looks: a fresh three-charge rhythm (recurringVerdict) and nothing more; a Looks rhythm that stops
+ * is history and drops, as before. Forming: two charges a band apart, the newest recent. A
+ * 'not_recurring' merchant is on no list.
+ *
+ * Every row with a cadence gets next expected (last charge plus the median gap) and a monthly
+ * equivalent; Known rows past next expected by more than RECURRING_LATE_GRACE_DAYS are late. The
+ * price rise is creepVerdict over the CREEP_BASELINE_DAYS slice, the window Needs a look reads.
  *
  * The account filter keeps a merchant that charged the chosen account at any point in the window.
- * The Account options are read before the filter and before the Looks cap, so an account whose
- * only rows were cut stays selectable; an account no row names reads as every account.
- *
- * Known is sorted by merchant and never capped. Looks is sorted by typical amount descending, then
- * merchant, and capped at RECURRING_MAX_ROWS after the filter.
+ * The Account options are read before the filter; an account no row names reads as every account.
+ * Known and Forming are sorted by merchant, Looks by typical amount descending; nothing is capped.
  */
 export function recurringCharges(input: {
   today: string;
@@ -310,44 +351,56 @@ export function recurringCharges(input: {
 
   const marks = listRecurringMarkRules();
   const names = accountNames();
-  const formingCandidates: Array<{ band: RecurringCadence; charges: ChargeRow[] }> = [];
-  const rows: Array<{ row: RecurringChargeRow; charges: ChargeRow[] }> = [];
+  const candidates: Candidate[] = [];
 
   for (const [merchant, all] of byMerchant) {
     const mark = recurringMarkFor(merchant, marks);
-    // Spec §2.3: a not_recurring merchant is on neither list, and is not forming either.
+    // Spec 2026-10-05 §2.3: a not_recurring merchant is on no list.
     if (mark === 'not_recurring') continue;
     const charges = chargesAsOf(all, input.today);
     if (charges.length === 0) continue;
-    const verdict = recurringVerdict({ charges, today: input.today });
-    if (verdict === null && mark === null) {
-      const band = formingRhythm({ charges, today: input.today });
-      if (band !== null) formingCandidates.push({ band, charges });
-      continue;
-    }
+    // Spec 2026-10-06 §2.3: the band with no freshness check, which next expected and late are read from.
+    const rhythm = recurringRhythm({ charges, today: input.today });
+    let tier: RecurringTier;
+    let quiet = false;
+    if (mark === 'recurring') tier = 'known';
+    else if (recurringVerdict({ charges, today: input.today }) !== null) tier = 'looks';
+    else if (rhythm !== null && charges.length >= RECURRING_MIN_CHARGES) {
+      tier = 'looks';
+      quiet = true;
+    } else if (formingRhythm({ charges, today: input.today }) !== null) tier = 'forming';
+    else continue;
     const latest = charges[charges.length - 1];
-    rows.push({
+    const typicalCents = charges.length > 1 ? medianCents(charges.map((charge) => Math.abs(charge.amountCents))) : null;
+    const cadence = rhythm?.cadence ?? null;
+    candidates.push({
       charges,
+      quiet,
+      gapDays: rhythm?.medianGapDays ?? null,
       row: {
         merchant,
-        tier: mark === 'recurring' ? 'known' : 'looks',
+        tier,
         knownBy: mark === 'recurring' ? 'mark' : null,
-        cadence: verdict?.cadence ?? null,
+        cadence,
         chargeCount: charges.length,
-        typicalCents: charges.length > 1 ? medianCents(charges.map((charge) => Math.abs(charge.amountCents))) : null,
+        typicalCents,
         lastAmountCents: Math.abs(latest.amountCents),
         lastDate: latest.date,
         transactionId: latest.id,
         tracked: null,
         accounts: accountsNewestFirst(charges, names),
+        nextExpected: null,
+        late: false,
+        monthlyCents: monthlyEquivalent(cadence, typicalCents),
+        priceRise: null,
       },
     });
   }
 
-  // Resolved only for the merchants that made a list, as before. A cover makes a Looks row Known.
-  if (rows.length > 0) {
+  // A cover makes a Looks row Known -- and keeps a quiet one Known (spec 2026-10-06 §2.3).
+  if (candidates.length > 0) {
     const covering = needles(input.today, scope);
-    for (const { row } of rows) {
+    for (const { row } of candidates) {
       const hit = covering.find((needle) => covers(needle, row.merchant));
       row.tracked = hit === undefined ? null : { kind: hit.kind, itemId: hit.itemId, itemName: hit.itemName };
       if (row.tier === 'looks' && row.tracked !== null) {
@@ -357,25 +410,77 @@ export function recurringCharges(input: {
     }
   }
 
-  // Spec §2.4, owner ruling: the options are every account a row names, before the filter and the cap.
+  // Looks keeps its stale rule: an unmarked, uncovered rhythm that stopped is history.
+  const listed = candidates.filter((candidate) => !candidate.quiet || candidate.row.tier === 'known');
+  const creepStart = addDaysIso(input.today, -CREEP_BASELINE_DAYS);
+  for (const { row, charges, gapDays } of listed) {
+    row.nextExpected = gapDays === null ? null : addDaysIso(row.lastDate, gapDays);
+    row.late =
+      row.tier === 'known' && row.nextExpected !== null && daysBetweenIso(row.nextExpected, input.today) > RECURRING_LATE_GRACE_DAYS;
+    // Spec 2026-10-06 §2.4: the same verdict, over the same window, as Needs a look.
+    const rise = creepVerdict({ charges: charges.filter((charge) => charge.date >= creepStart), today: input.today });
+    row.priceRise = rise === null ? null : { fromCents: rise.baselineCents, toCents: rise.newAmountCents };
+  }
+
+  // Spec 2026-10-05 §2.4, owner ruling: the options are every account a listed row names, before the filter.
   const optionById = new Map<number, RecurringAccount>();
-  for (const { row } of rows) for (const account of row.accounts) optionById.set(account.id, account);
+  for (const { row } of listed) for (const account of row.accounts) optionById.set(account.id, account);
   const options = [...optionById.values()].sort(
     (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0) || a.id - b.id,
   );
   const accountId = input.accountId !== null && optionById.has(input.accountId) ? input.accountId : null;
   const charged = (charges: ChargeRow[]) => accountId === null || charges.some((charge) => charge.accountId === accountId);
 
-  const forming: Record<RecurringCadence, number> = { monthly: 0, yearly: 0 };
-  for (const candidate of formingCandidates) if (charged(candidate.charges)) forming[candidate.band] += 1;
-
-  const kept = rows.filter(({ charges }) => charged(charges)).map(({ row }) => row);
+  const kept = listed.filter(({ charges }) => charged(charges)).map(({ row }) => row);
   const byName = (a: RecurringChargeRow, b: RecurringChargeRow) => (a.merchant < b.merchant ? -1 : a.merchant > b.merchant ? 1 : 0);
   const known = kept.filter((row) => row.tier === 'known').sort(byName);
   const looks = kept
     .filter((row) => row.tier === 'looks')
     .sort((a, b) => (b.typicalCents ?? 0) - (a.typicalCents ?? 0) || byName(a, b));
-  return { known, looks: looks.slice(0, RECURRING_MAX_ROWS), forming, accounts: options, accountId };
+  const forming = kept.filter((row) => row.tier === 'forming').sort(byName);
+  return { known, looks, forming, accounts: options, accountId };
+}
+
+/**
+ * Spec 2026-10-06 §2.6. A marked merchant's next charge, as the Dashboard's Coming up card lists it.
+ * NOT a bill: it has no amountCents, so nothing that totals UpcomingBill rows (the card's header,
+ * safeToSpend's billsDueCents) can add it by accident. A recurring charge is usually already inside a
+ * category budget; counting it again would count it twice.
+ */
+export interface ExpectedCharge {
+  merchant: string;
+  /** Last charge plus the median gap. May be in the past: late, or still inside the grace. */
+  expectedDate: string;
+  /** The median charge; the card prints "about" it. */
+  typicalCents: number;
+  late: boolean;
+  /** The account the newest charge landed on. */
+  accountName: string;
+}
+
+/**
+ * Spec 2026-10-06 §2.6. Known merchants BY MARK only, with a rhythm, whose next charge falls on or
+ * before today + `days`: a tracked merchant already shows through its item's own rows, so a marked
+ * merchant something covers is left out too. The overdue bound is the card's (COMING_UP_OVERDUE_DAYS),
+ * applied there as it is to bills. Scoped like upcomingBills -- the viewer only, no person pill.
+ */
+export function expectedRecurringCharges(input: { today: string; days: number; viewer: Viewer }): ExpectedCharge[] {
+  const windowEnd = addDaysIso(input.today, input.days);
+  const out: ExpectedCharge[] = [];
+  for (const row of recurringCharges({ today: input.today, ownerUserId: null, viewer: input.viewer, accountId: null }).known) {
+    if (row.knownBy !== 'mark' || row.tracked !== null) continue;
+    if (row.nextExpected === null || row.typicalCents === null || row.nextExpected > windowEnd) continue;
+    out.push({
+      merchant: row.merchant,
+      expectedDate: row.nextExpected,
+      typicalCents: row.typicalCents,
+      late: row.late,
+      accountName: row.accounts[0]?.name ?? '',
+    });
+  }
+  return out.sort((a, b) =>
+    a.expectedDate < b.expectedDate ? -1 : a.expectedDate > b.expectedDate ? 1 : a.merchant < b.merchant ? -1 : a.merchant > b.merchant ? 1 : 0,
+  );
 }
 
 /**

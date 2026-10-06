@@ -7,7 +7,8 @@ import { nowIso } from '@/lib/clock';
 import { addDaysIso } from '@/lib/dates';
 import { assignTransactionToLoan, saveLoanRule } from '@/lib/loans';
 import { listRules, setRecurringMarks, setRuleDisabledFlag } from '@/lib/categorize/rules';
-import { RECURRING_MAX_ROWS, recurringCharges, recurringLoad, type RecurringCharges } from '@/lib/recurring';
+import { RECURRING_LATE_GRACE_DAYS } from '@/lib/predict/constants';
+import { expectedRecurringCharges, recurringCharges, recurringLoad, type RecurringCharges } from '@/lib/recurring';
 import { createManualTransaction } from '@/lib/transactions';
 import { createTestDb, type TestDb } from '../helpers/db';
 import { HOUSEHOLD_VIEWER } from '@/lib/auth/viewer';
@@ -158,6 +159,11 @@ describe('recurringCharges: what a person reads on the card', () => {
         transactionId: ids[ids.length - 1],
         tracked: null,
         accounts: [{ id: ctx.accountId, name: 'Chequing' }],
+        // Spec 2026-10-06 §2.3: the last charge plus the median gap.
+        nextExpected: addDaysIso(TODAY, 27),
+        late: false,
+        monthlyCents: 1649,
+        priceRise: null,
       },
     ]);
   });
@@ -194,12 +200,13 @@ describe('recurringCharges: what a person reads on the card', () => {
     expect(result.looks.map((row) => row.merchant)).toEqual(['BIG THING', 'SMALL THING']);
   });
 
-  it('caps the list, because the card is an audit list and not a second ledger', async () => {
+  /** Spec 2026-10-06 §2.2: the full page lists every row; the Insights card only counts. */
+  it('lists every Looks row: there is no cap', async () => {
     const ctx = await setup();
-    for (let n = 0; n < RECURRING_MAX_ROWS + 4; n += 1) {
+    for (let n = 0; n < 16; n += 1) {
       ctx.cadence({ merchant: `MERCHANT ${String(n).padStart(2, '0')}`, count: 4, cents: 1000 + n });
     }
-    expect(read(ctx).looks).toHaveLength(RECURRING_MAX_ROWS);
+    expect(read(ctx).looks).toHaveLength(16);
     expect(read(ctx).known).toEqual([]);
   });
 });
@@ -363,16 +370,29 @@ describe('recurringCharges: two tiers', () => {
         transactionId: id,
         tracked: null,
         accounts: [{ id: ctx.accountId, name: 'Chequing' }],
+        // No cadence from one charge: no next expected, never late, no monthly figure.
+        nextExpected: null,
+        late: false,
+        monthlyCents: null,
+        priceRise: null,
       },
     ]);
   });
 
-  it('gives a marked merchant with two charges the median of both', async () => {
+  /** Spec 2026-10-06 §2.1: two charges a month apart are a cadence for a merchant the household marked. */
+  it('reads a monthly rhythm from a marked merchant’s two charges, with the median of both', async () => {
     const ctx = await setup();
     ctx.spend({ merchant: 'RIVERSIDE GYM', date: addDaysIso(TODAY, -34), cents: -4000 });
     ctx.spend({ merchant: 'RIVERSIDE GYM', date: addDaysIso(TODAY, -4), cents: -5000 });
     ctx.mark('RIVERSIDE GYM', 'recurring');
-    expect(read(ctx).known[0]).toMatchObject({ chargeCount: 2, typicalCents: 4500, cadence: null });
+    expect(read(ctx).known[0]).toMatchObject({
+      chargeCount: 2,
+      typicalCents: 4500,
+      cadence: 'monthly',
+      monthlyCents: 4500,
+      nextExpected: addDaysIso(TODAY, 26),
+      late: false,
+    });
   });
 
   it('keeps the detected cadence on a marked merchant that also has a rhythm', async () => {
@@ -385,13 +405,13 @@ describe('recurringCharges: two tiers', () => {
   });
 
   /** Review Focus 4. */
-  it('drops a not_recurring merchant from both tiers and from the forming count', async () => {
+  it('drops a not_recurring merchant from every tier', async () => {
     const ctx = await setup();
     ctx.cadence({ merchant: 'CEDAR PHONE CO', cents: 6200 });
     ctx.cadence({ merchant: 'HARBOUR INSURANCE', count: 2, cents: 13400 });
     ctx.mark('CEDAR PHONE CO', 'not_recurring');
     ctx.mark('HARBOUR INSURANCE', 'not_recurring');
-    expect(read(ctx)).toEqual({ known: [], looks: [], forming: { monthly: 0, yearly: 0 }, accounts: [], accountId: null });
+    expect(read(ctx)).toEqual({ known: [], looks: [], forming: [], accounts: [], accountId: null });
     ctx.mark('CEDAR PHONE CO', null);
     expect(read(ctx).looks.map((row) => row.merchant)).toEqual(['CEDAR PHONE CO']);
   });
@@ -455,17 +475,6 @@ describe('recurringCharges: accounts and the account filter', () => {
     expect(visa.looks).toEqual([]);
   });
 
-  it('applies the Looks cap after the filter, so other accounts never crowd a filtered list out', async () => {
-    const ctx = await setup();
-    for (let n = 0; n < RECURRING_MAX_ROWS + 2; n += 1) {
-      ctx.cadence({ merchant: `BIG SHOP ${String(n).padStart(2, '0')}`, count: 4, cents: 50000 + n });
-    }
-    // The smallest charges, so a cap taken BEFORE the filter would cut both.
-    ctx.cadence({ merchant: 'TINY ONE', count: 4, cents: 100, accountId: ctx.visaId });
-    ctx.cadence({ merchant: 'TINY TWO', count: 4, cents: 101, accountId: ctx.visaId });
-    expect(read(ctx, { accountId: ctx.visaId }).looks.map((row) => row.merchant)).toEqual(['TINY TWO', 'TINY ONE']);
-  });
-
   it('offers every account a listed row charged, in both tiers, by name, whatever the filter', async () => {
     const ctx = await setup();
     movedCard(ctx);
@@ -490,16 +499,15 @@ describe('recurringCharges: accounts and the account filter', () => {
     expect(read(ctx, { accountId: ctx.accountId }).accountId).toBe(ctx.accountId);
   });
 
-  it('offers an account whose only rows the Looks cap cut', async () => {
+  it('offers an account named only on a Forming row, and filters Forming by it', async () => {
     const ctx = await setup();
-    for (let n = 0; n < RECURRING_MAX_ROWS + 2; n += 1) {
-      ctx.cadence({ merchant: `BIG SHOP ${String(n).padStart(2, '0')}`, count: 4, cents: 50000 + n });
-    }
-    ctx.cadence({ merchant: 'TINY ONE', count: 4, cents: 100, accountId: ctx.visaId });
-    const all = read(ctx);
-    expect(all.looks.map((row) => row.merchant)).not.toContain('TINY ONE');
-    expect(all.accounts.map((account) => account.name)).toContain('Travel Visa');
-    expect(read(ctx, { accountId: ctx.visaId }).looks.map((row) => row.merchant)).toEqual(['TINY ONE']);
+    ctx.cadence({ merchant: 'CEDAR PHONE CO', count: 2, cents: 6200, accountId: ctx.visaId });
+    ctx.cadence({ merchant: 'MAPLE STREAMING', cents: 1349 });
+    expect(read(ctx).accounts.map((account) => account.name)).toEqual(['Chequing', 'Travel Visa']);
+    const visa = read(ctx, { accountId: ctx.visaId });
+    expect(visa.accountId).toBe(ctx.visaId);
+    expect(visa.forming.map((row) => row.merchant)).toEqual(['CEDAR PHONE CO']);
+    expect(visa.looks).toEqual([]);
   });
 
   it('a self viewer is offered an account their own charges landed on, though they do not own it', async () => {
@@ -514,39 +522,157 @@ describe('recurringCharges: accounts and the account filter', () => {
   });
 });
 
-/** Spec 2026-10-05 §2.3, forming rhythms: what tells a new household the card is alive. */
-describe('recurringCharges: rhythms one charge short', () => {
-  it('counts merchants with two charges a band apart, the newest recent, per band, and lists none of them', async () => {
+/** Spec 2026-10-06 §2.2: the merchants v1.54.0 only counted are listed as Forming rows. */
+describe('recurringCharges: Forming, one charge short of a rhythm', () => {
+  it('lists merchants with two charges a band apart, the newest recent, by merchant', async () => {
     const ctx = await setup();
     ctx.cadence({ merchant: 'HARBOUR INSURANCE', count: 2, cents: 13400 });
     ctx.cadence({ merchant: 'CEDAR PHONE CO', count: 2, cents: 6200 });
     ctx.cadence({ merchant: 'LAKESIDE DOMAIN', count: 2, gapDays: 365, endsDaysAgo: 6, cents: 2400 });
-    expect(read(ctx)).toEqual({ known: [], looks: [], forming: { monthly: 2, yearly: 1 }, accounts: [], accountId: null });
+    const result = read(ctx);
+    expect(result.known).toEqual([]);
+    expect(result.looks).toEqual([]);
+    expect(result.forming.map((row) => [row.merchant, row.tier, row.cadence, row.nextExpected, row.monthlyCents, row.late])).toEqual([
+      ['CEDAR PHONE CO', 'forming', 'monthly', addDaysIso(TODAY, 27), 6200, false],
+      ['HARBOUR INSURANCE', 'forming', 'monthly', addDaysIso(TODAY, 27), 13400, false],
+      ['LAKESIDE DOMAIN', 'forming', 'yearly', addDaysIso(TODAY, 359), 200, false],
+    ]);
   });
 
-  it('does not count a merchant whose second charge is stale or off-band', async () => {
+  it('does not list a merchant whose second charge is stale or off-band', async () => {
     const ctx = await setup();
     ctx.cadence({ merchant: 'HARBOUR INSURANCE', count: 2, endsDaysAgo: 200, cents: 13400 });
     ctx.cadence({ merchant: 'CEDAR PHONE CO', count: 2, gapDays: 60, cents: 6200 });
-    expect(read(ctx).forming).toEqual({ monthly: 0, yearly: 0 });
+    expect(read(ctx).forming).toEqual([]);
   });
 
-  it('does not count a merchant marked recurring: it is already Known', async () => {
+  it('lists a marked merchant under Known, not Forming, with the band its two charges show', async () => {
     const ctx = await setup();
     ctx.cadence({ merchant: 'HARBOUR INSURANCE', count: 2, cents: 13400 });
     ctx.mark('HARBOUR INSURANCE', 'recurring');
     const result = read(ctx);
-    expect(result.forming).toEqual({ monthly: 0, yearly: 0 });
-    expect(result.known.map((row) => row.merchant)).toEqual(['HARBOUR INSURANCE']);
+    expect(result.forming).toEqual([]);
+    expect(result.known.map((row) => [row.merchant, row.cadence])).toEqual([['HARBOUR INSURANCE', 'monthly']]);
+  });
+});
+
+/** Spec 2026-10-06 §2.3. */
+describe('recurringCharges: next expected and late', () => {
+  it('turns a marked merchant late once today is more than RECURRING_LATE_GRACE_DAYS past next expected', async () => {
+    const ctx = await setup();
+    ctx.cadence({ merchant: 'CEDAR PHONE CO', count: 4, endsDaysAgo: 30 + RECURRING_LATE_GRACE_DAYS, cents: 6200 });
+    ctx.cadence({ merchant: 'RIVERSIDE GYM', count: 4, endsDaysAgo: 31 + RECURRING_LATE_GRACE_DAYS, cents: 4500 });
+    ctx.mark('CEDAR PHONE CO', 'recurring');
+    ctx.mark('RIVERSIDE GYM', 'recurring');
+    expect(read(ctx).known.map((row) => [row.merchant, row.nextExpected, row.late])).toEqual([
+      ['CEDAR PHONE CO', addDaysIso(TODAY, -RECURRING_LATE_GRACE_DAYS), false],
+      ['RIVERSIDE GYM', addDaysIso(TODAY, -RECURRING_LATE_GRACE_DAYS - 1), true],
+    ]);
   });
 
-  it('counts only merchants that charged the chosen account', async () => {
+  /** Review Focus 1: the merchant that never billed the new card. */
+  it('keeps a marked merchant listed, with its rhythm, long after its charges stop', async () => {
     const ctx = await setup();
-    ctx.cadence({ merchant: 'HARBOUR INSURANCE', count: 2, cents: 13400 });
-    ctx.cadence({ merchant: 'CEDAR PHONE CO', count: 2, cents: 6200, accountId: ctx.visaId });
-    // A listed row on Travel Visa makes it a real option; forming merchants are not rows.
-    ctx.cadence({ merchant: 'MAPLE STREAMING', cents: 1349, accountId: ctx.visaId });
-    expect(read(ctx, { accountId: ctx.visaId }).forming).toEqual({ monthly: 1, yearly: 0 });
+    ctx.cadence({ merchant: 'CEDAR PHONE CO', count: 4, endsDaysAgo: 200, cents: 6200, accountId: ctx.visaId });
+    ctx.mark('CEDAR PHONE CO', 'recurring');
+    expect(read(ctx, { accountId: ctx.visaId }).known).toMatchObject([
+      { merchant: 'CEDAR PHONE CO', cadence: 'monthly', nextExpected: addDaysIso(TODAY, -170), late: true },
+    ]);
+  });
+
+  it('keeps a tracked merchant Known, and late, after its rhythm goes quiet', async () => {
+    const ctx = await setup();
+    ctx.cadence({ merchant: 'HARBOUR INSURANCE', count: 6, endsDaysAgo: 100, cents: 13400 });
+    ctx.item({ name: 'Harbour Insurance', typeId: ctx.itemType('Subscription', 'subscription') });
+    const result = read(ctx);
+    expect(result.known).toMatchObject([
+      { merchant: 'HARBOUR INSURANCE', knownBy: 'tracked', cadence: 'monthly', nextExpected: addDaysIso(TODAY, -70), late: true },
+    ]);
+    expect(result.looks).toEqual([]);
+  });
+
+  it('never calls a Looks or Forming row late', async () => {
+    const ctx = await setup();
+    ctx.cadence({ merchant: 'MAPLE STREAMING', endsDaysAgo: 40, cents: 1349 });
+    ctx.cadence({ merchant: 'HARBOUR INSURANCE', count: 2, endsDaysAgo: 40, cents: 13400 });
+    const result = read(ctx);
+    expect(result.looks.map((row) => [row.merchant, row.nextExpected, row.late])).toEqual([['MAPLE STREAMING', addDaysIso(TODAY, -10), false]]);
+    expect(result.forming.map((row) => [row.merchant, row.nextExpected, row.late])).toEqual([['HARBOUR INSURANCE', addDaysIso(TODAY, -10), false]]);
+  });
+});
+
+/** Spec 2026-10-06 §2.1 and §2.4. */
+describe('recurringCharges: the monthly figure and the price rise', () => {
+  it('states a monthly equivalent: the typical charge, or a twelfth of a yearly one', async () => {
+    const ctx = await setup();
+    ctx.cadence({ merchant: 'MAPLE STREAMING', cents: 1349 });
+    ctx.cadence({ merchant: 'LAKESIDE DOMAIN', count: 3, gapDays: 365, endsDaysAgo: 6, cents: 2500 });
+    expect(read(ctx).looks.map((row) => [row.merchant, row.monthlyCents])).toEqual([
+      ['LAKESIDE DOMAIN', 208],
+      ['MAPLE STREAMING', 1349],
+    ]);
+  });
+
+  it('carries the price rise Needs a look finds, as from and to', async () => {
+    const ctx = await setup();
+    for (const [daysAgo, cents] of [[93, 1349], [63, 1349], [33, 1349], [3, 1599]] as const) {
+      ctx.spend({ merchant: 'MAPLE STREAMING', date: addDaysIso(TODAY, -daysAgo), cents: -cents });
+    }
+    ctx.cadence({ merchant: 'CEDAR PHONE CO', cents: 6200 });
+    const result = read(ctx);
+    expect(result.looks.find((row) => row.merchant === 'MAPLE STREAMING')?.priceRise).toEqual({ fromCents: 1349, toCents: 1599 });
+    expect(result.looks.find((row) => row.merchant === 'CEDAR PHONE CO')?.priceRise).toBeNull();
+  });
+});
+
+/** Spec 2026-10-06 §2.6. What the Dashboard's Coming up card lists beside the bills. */
+describe('expectedRecurringCharges', () => {
+  const expected = (ctx: Ctx, viewer: Viewer = household(ctx.adultId)) => expectedRecurringCharges({ today: TODAY, days: 30, viewer });
+
+  it('lists a merchant marked recurring whose next charge falls inside the window, about its typical charge', async () => {
+    const ctx = await setup();
+    ctx.cadence({ merchant: 'CEDAR PHONE CO', count: 4, endsDaysAgo: 10, cents: 6200, accountId: ctx.visaId });
+    ctx.mark('CEDAR PHONE CO', 'recurring');
+    expect(expected(ctx)).toEqual([
+      { merchant: 'CEDAR PHONE CO', expectedDate: addDaysIso(TODAY, 20), typicalCents: 6200, late: false, accountName: 'Travel Visa' },
+    ]);
+  });
+
+  it('keeps a late one, flagged, and leaves out one past the window', async () => {
+    const ctx = await setup();
+    ctx.cadence({ merchant: 'RIVERSIDE GYM', count: 4, endsDaysAgo: 60, cents: 4500 });
+    ctx.cadence({ merchant: 'LAKESIDE DOMAIN', count: 3, gapDays: 365, endsDaysAgo: 6, cents: 2400 });
+    ctx.mark('RIVERSIDE GYM', 'recurring');
+    ctx.mark('LAKESIDE DOMAIN', 'recurring');
+    expect(expected(ctx)).toEqual([
+      { merchant: 'RIVERSIDE GYM', expectedDate: addDaysIso(TODAY, -30), typicalCents: 4500, late: true, accountName: 'Chequing' },
+    ]);
+  });
+
+  it('leaves out a tracked merchant, marked or not: its item already has rows of its own', async () => {
+    const ctx = await setup();
+    ctx.cadence({ merchant: 'MAPLE STREAMING', count: 4, endsDaysAgo: 10, cents: 1349 });
+    ctx.mark('MAPLE STREAMING', 'recurring');
+    ctx.item({ name: 'Maple Streaming', typeId: ctx.itemType('Subscription', 'subscription') });
+    expect(expected(ctx)).toEqual([]);
+  });
+
+  /** Review Focus 5. */
+  it('leaves out Looks and Forming merchants, and a marked merchant with no rhythm', async () => {
+    const ctx = await setup();
+    ctx.cadence({ merchant: 'MAPLE STREAMING', count: 4, endsDaysAgo: 10, cents: 1349 });
+    ctx.cadence({ merchant: 'HARBOUR INSURANCE', count: 2, endsDaysAgo: 10, cents: 13400 });
+    ctx.spend({ merchant: 'CEDAR PHONE CO', date: addDaysIso(TODAY, -4), cents: -6200 });
+    ctx.mark('CEDAR PHONE CO', 'recurring');
+    expect(expected(ctx)).toEqual([]);
+  });
+
+  it('gives a self viewer only their own charges', async () => {
+    const ctx = await setup();
+    ctx.cadence({ merchant: 'CEDAR PHONE CO', count: 4, endsDaysAgo: 10, cents: 6200, person: ctx.adultId });
+    ctx.mark('CEDAR PHONE CO', 'recurring');
+    expect(expected(ctx, selfOnly(ctx.childId))).toEqual([]);
+    expect(expected(ctx).map((charge) => charge.merchant)).toEqual(['CEDAR PHONE CO']);
   });
 });
 
