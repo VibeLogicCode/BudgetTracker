@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { RecurringChargesCard, recordedBillingSentence } from '@/components/warranty/RecurringChargesCard';
+import { recordedBillingSentence } from '@/components/insights/RecurringChargesCard';
 import { StatusBadge } from '@/components/warranty/StatusBadge';
 import { WarrantiesIcon } from '@/components/icons';
 import { Card, CardBody, CardFooter } from '@/components/ui/Card';
@@ -32,7 +32,7 @@ import {
   type ItemKind,
   type WarrantySort,
 } from '@/lib/warranty/constants';
-import type { RecurringChargeRow, RecurringLoad } from '@/lib/recurring';
+import type { RecurringLoad } from '@/lib/recurring';
 import { statusLabel, WARRANTY_STATUSES } from '@/lib/warranty/expiry';
 import type { WarrantySearchResult } from '@/lib/warranty/search';
 import { buttonClass } from '@/components/ui/Button';
@@ -78,20 +78,15 @@ export function WarrantiesClient({
   kind,
   sort,
   billSchedules,
-  recurring,
   recurringLoad,
-  recurringPerson,
 }: {
   result: WarrantySearchResult;
   people: { id: number; name: string }[];
   /** Delta T9: an optional type filter/select, alongside status/owner/sort. */
   types: { id: number; name: string; kind: ItemKind }[];
   /** F-05: what the ledger shows arriving on a rhythm. Plain data -- the page derived it. */
-  recurring: RecurringChargeRow[];
   /** F-05: what the household has RECORDED, which is a different claim and stays a separate one. */
   recurringLoad: RecurringLoad;
-  /** The person scope `recurring` was built with, forwarded to every drill-down link. */
-  recurringPerson: string | number | null;
   today: string;
   query: string;
   status: string;
@@ -166,7 +161,7 @@ export function WarrantiesClient({
           which would look like a finding about their spending instead of an empty record. The
           word "Recorded" carries the whole disclosure: this is the sum of what somebody typed
           in, never a claim about what the household actually pays (the Recurring charges card
-          below exists precisely because those two differ). */}
+          on Insights exists precisely because those two differ). */}
       {recordedLine === null ? null : (
         <p className="text-sm text-muted">
           <span className="font-medium text-ink">Recorded billing:</span> {recordedLine}
@@ -489,12 +484,14 @@ export function WarrantiesClient({
         ) : null}
       </Card>
 
-      {/* Below the items table, not above it: this page's primary content is the paperwork the
-          household keeps, and the rhythm list is an audit tool you come here to run, not the
-          thing you check on every visit. It carries its own person scope from the page rather
-          than the `?owner=` item filter -- see the page's own comment on why those are not the
-          same question. */}
-      <RecurringChargesCard rows={recurring} person={recurringPerson} />
+      {/* Spec 2026-10-05 §2.1: the rhythm list lives on Insights now. One line, where it used to be. */}
+      <p className="text-sm text-muted">
+        Recurring charges moved to{' '}
+        <Link href="/insights" className="font-medium text-accent-text underline underline-offset-2">
+          Insights
+        </Link>
+        .
+      </p>
     </div>
   );
 }

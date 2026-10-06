@@ -149,6 +149,17 @@ export function creepVerdict(input: { charges: SpendRow[]; today: string }): Cre
 }
 
 /**
+ * The charges a verdict reads: money out, dated today or earlier, oldest first. One definition for
+ * recurringVerdict, formingRhythm and the Insights read model's marked rows (src/lib/recurring.ts),
+ * so a row and a verdict never count different charges.
+ */
+export function chargesAsOf<T extends SpendRow>(charges: readonly T[], today: string): T[] {
+  return charges
+    .filter((charge) => charge.amountCents < 0 && charge.date <= today)
+    .sort((a, b) => (a.date === b.date ? a.id - b.id : a.date < b.date ? -1 : 1));
+}
+
+/**
  * F-05 (2026-09-02 review, v1.31.0). What creepVerdict already knew, asked as a different
  * question: not "did this merchant's price go up" but "is this merchant charging on a cadence at
  * all, and is it still charging". PURE, beside creepVerdict, because it decides over the same
@@ -182,12 +193,10 @@ export interface RecurringVerdict {
 }
 
 export function recurringVerdict(input: { charges: SpendRow[]; today: string }): RecurringVerdict | null {
-  const charges = [...input.charges]
-    // A refund or a reversal on the same merchant is not one of its charges, and a future-dated
-    // row (a post-dated entry, a bad import) is not evidence of anything yet -- the same L-8
-    // reasoning findDuplicates() applies below.
-    .filter((charge) => charge.amountCents < 0 && charge.date <= input.today)
-    .sort((a, b) => (a.date === b.date ? a.id - b.id : a.date < b.date ? -1 : 1));
+  // A refund or a reversal on the same merchant is not one of its charges, and a future-dated
+  // row (a post-dated entry, a bad import) is not evidence of anything yet -- the same L-8
+  // reasoning findDuplicates() applies below.
+  const charges = chargesAsOf(input.charges, input.today);
   if (charges.length < RECURRING_MIN_CHARGES) return null;
 
   const gaps: number[] = [];
@@ -234,6 +243,25 @@ export function recurringVerdict(input: { charges: SpendRow[]; today: string }):
     latestAmountCents: Math.abs(latest.amountCents),
     typicalCents,
   };
+}
+
+/**
+ * Spec 2026-10-05 §2.3, forming rhythms. One charge short of what recurringVerdict needs: exactly
+ * RECURRING_MIN_CHARGES - 1 charges, every gap in one band, the newest inside that band's
+ * allowance. Returns the band. A count's input only; nothing lists these merchants by name.
+ */
+export function formingRhythm(input: { charges: SpendRow[]; today: string }): RecurringCadence | null {
+  const charges = chargesAsOf(input.charges, input.today);
+  if (charges.length !== RECURRING_MIN_CHARGES - 1) return null;
+  const gaps: number[] = [];
+  for (let index = 1; index < charges.length; index += 1) {
+    gaps.push(daysBetweenIso(charges[index - 1].date, charges[index].date));
+  }
+  const cadence = gaps.length === 0 ? null : recurringBand(gaps[0]);
+  if (cadence === null || !gaps.every((gap) => recurringBand(gap) === cadence)) return null;
+  const latest = charges[charges.length - 1];
+  if (daysBetweenIso(latest.date, input.today) > bandMaxDays(cadence) + RECURRING_STALE_GRACE_DAYS) return null;
+  return cadence;
 }
 
 export interface DuplicatePair {

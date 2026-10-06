@@ -1,10 +1,12 @@
 import { and, asc, eq, gte, inArray, lt, sql, type SQL } from 'drizzle-orm';
 import { getDb } from '@/db/client';
-import { loanMatcherRules, transactions, warrantyItemTypes, warrantyItems } from '@/db/schema';
+import { accounts, loanMatcherRules, transactions, warrantyItemTypes, warrantyItems } from '@/db/schema';
 import { ownerScope, type Viewer } from '@/lib/auth/viewer';
 import { addDaysIso } from '@/lib/dates';
-import { recurringVerdict, type RecurringCadence, type SpendRow } from '@/lib/predict/anomalies';
+import { listRecurringMarkRules, recurringMarkFor } from '@/lib/categorize/rules';
+import { chargesAsOf, formingRhythm, recurringVerdict, type RecurringCadence, type SpendRow } from '@/lib/predict/anomalies';
 import { RECURRING_LOOKBACK_DAYS } from '@/lib/predict/constants';
+import { medianCents } from '@/lib/predict/stats';
 import { SPEND_ROW_WHERE } from '@/lib/spend-where';
 import { billingAllowedForKind, ITEM_KINDS, type ItemKind } from '@/lib/warranty/constants';
 import { notEnded } from '@/lib/warranty/expiry-sql';
@@ -13,13 +15,18 @@ import { notEnded } from '@/lib/warranty/expiry-sql';
  * F-05 (2026-09-02 review, v1.31.0). The READ MODEL behind the Recurring charges card, the
  * Contracts & Coverage header line and the dashboard tile.
  *
- * NOTHING IS STORED. There is no recurring_charges table, no migration and no cached verdict:
+ * THE DETECTOR'S VERDICT IS STORED NOWHERE. There is no recurring_charges table, no migration and no cached verdict:
  * every row below is derived on read from `transactions` (which merchant charged, when, how
  * much) and `warranty_items`/`loan_matcher_rules` (what the household has already recorded).
  * That is not an efficiency note, it is the feature's whole safety argument -- a stored
  * "subscription" row would outlive the evidence for it, would need a lifecycle nobody asked
  * for, and would turn a cadence the app GUESSED into a fact the app ASSERTS. A read model
  * cannot go stale, because there is nothing to go stale.
+ *
+ * Spec 2026-10-05 §2.2: what IS stored is the household's word about a merchant -- a 'recurring'
+ * or 'not_recurring' merchant rule -- and this module only reads it. Known recurring is that
+ * word, or a recorded item that covers a detected rhythm; Looks recurring is a detected rhythm
+ * and nothing more.
  *
  * WHY IT IS NOT IN src/lib/insights.ts, next to householdInsights: that module answers "what
  * just happened that is worth a look" over a 365-day slice inside a 14-day lookback, and every
@@ -39,7 +46,11 @@ import { notEnded } from '@/lib/warranty/expiry-sql';
  * facts and offer Track; the household supplies the judgement.
  */
 
-/** The card is an audit list, not a second ledger: a dozen rows is a session, forty is a chore. */
+/**
+ * The card is an audit list, not a second ledger: a dozen rows is a session, forty is a chore.
+ * Applies to Looks recurring only, after the account filter; Known recurring is the
+ * card-replacement list and is never cut short.
+ */
 export const RECURRING_MAX_ROWS = 12;
 
 /** What already covers a merchant, and which record says so, so a wrong match is checkable. */
@@ -54,18 +65,50 @@ export interface RecurringCover {
   itemName: string;
 }
 
+/** Spec 2026-10-05 §2.4. An account a merchant charged, by the name the household gave it. */
+export interface RecurringAccount {
+  id: number;
+  name: string;
+}
+
+/** Spec §2.3. 'known': the household marked it, or a record covers it. 'looks': a rhythm only. */
+export type RecurringTier = 'known' | 'looks';
+export type RecurringKnownBy = 'mark' | 'tracked';
+
 export interface RecurringChargeRow {
   /** `transactions.normalized_merchant`, i.e. uppercase, exactly as the ledger groups it. */
   merchant: string;
-  cadence: RecurringCadence;
+  tier: RecurringTier;
+  /** Why a Known row is known; null on a Looks row. A mark wins over a cover: only a mark can be undone from the card. */
+  knownBy: RecurringKnownBy | null;
+  /** The detected rhythm, or null for a marked merchant whose charges have none. */
+  cadence: RecurringCadence | null;
   chargeCount: number;
-  /** Median charge magnitude -- "what this usually is", which is how a variable bill shows itself. */
-  typicalCents: number;
+  /** Median charge magnitude; null with a single charge, where there is no "usually" to state. */
+  typicalCents: number | null;
   lastAmountCents: number;
   lastDate: string;
-  /** The newest charge. The Track link prefills a new item from it, and nothing else. */
+  /** The newest charge. The Track link prefills from it, and the mark buttons post it. */
   transactionId: number;
   tracked: RecurringCover | null;
+  /** Spec §2.4. Every account the merchant charged inside the window, newest charge first. */
+  accounts: RecurringAccount[];
+}
+
+export interface RecurringCharges {
+  /** Sorted by merchant, never capped: this is the card-replacement list. */
+  known: RecurringChargeRow[];
+  /** Biggest typical charge first, capped at RECURRING_MAX_ROWS after the account filter. */
+  looks: RecurringChargeRow[];
+  /** Spec §2.3, forming rhythms: merchants one charge short of a rhythm, per band. Counted, never listed. */
+  forming: Record<RecurringCadence, number>;
+  /**
+   * Spec 2026-10-05 §2.4, owner ruling: the Account select's options -- every distinct account named
+   * on a Known or Looks row, read BEFORE the account filter and BEFORE the Looks cap, by name then id.
+   */
+  accounts: RecurringAccount[];
+  /** The account filter actually applied: input.accountId when it is among `accounts`, otherwise null (every account). */
+  accountId: number | null;
 }
 
 export interface RecurringLoad {
@@ -100,7 +143,11 @@ const RECURRING_ITEM_KINDS: ItemKind[] = ITEM_KINDS.filter(billingAllowedForKind
  * standing transfer to a relative listed as "$400/month recurring" would be this card's worst
  * possible first impression.
  */
-function readCharges(sliceStart: string, scope: number | null): SpendRow[] {
+interface ChargeRow extends SpendRow {
+  accountId: number;
+}
+
+function readCharges(sliceStart: string, scope: number | null): ChargeRow[] {
   const clauses = [gte(transactions.date, sliceStart), ...SPEND_ROW_WHERE, lt(transactions.amountCents, 0)];
   if (scope !== null) clauses.push(eq(transactions.attributedUserId, scope));
   return getDb()
@@ -110,11 +157,30 @@ function readCharges(sliceStart: string, scope: number | null): SpendRow[] {
       merchant: transactions.normalizedMerchant,
       categoryId: transactions.categoryId,
       amountCents: transactions.amountCents,
+      // Spec 2026-10-05 §2.4: which account each charge landed on, read in the same scan.
+      accountId: transactions.accountId,
     })
     .from(transactions)
     .where(and(...clauses))
     .orderBy(asc(transactions.date), asc(transactions.id))
     .all();
+}
+
+/** Account names in one read of a table that holds a handful of rows. Only ever printed beside a charge the viewer can already see. */
+function accountNames(): Map<number, string> {
+  return new Map(getDb().select({ id: accounts.id, name: accounts.name }).from(accounts).all().map((row) => [row.id, row.name]));
+}
+
+/** One entry per account, newest charge first. `charges` is oldest first (chargesAsOf). */
+function accountsNewestFirst(charges: ChargeRow[], names: Map<number, string>): RecurringAccount[] {
+  const seen = new Set<number>();
+  const out: RecurringAccount[] = [];
+  for (const charge of [...charges].reverse()) {
+    if (seen.has(charge.accountId)) continue;
+    seen.add(charge.accountId);
+    out.push({ id: charge.accountId, name: names.get(charge.accountId) ?? '' });
+  }
+  return out;
 }
 
 /** Three characters, the same floor saveLoanRule enforces: shorter than that matches everything. */
@@ -213,57 +279,103 @@ function resolveScope(viewer: Viewer, ownerUserId: number | null): number | null
 }
 
 /**
- * Merchants whose charges have landed on a monthly or yearly cadence and are still landing.
+ * Spec 2026-10-05 §2.3 and §2.4. Two tiers over the same charges. Known: the household marked the
+ * merchant 'recurring', or a recorded item or rule covers a detected rhythm. Looks: a detected
+ * monthly or yearly rhythm and nothing more. A 'not_recurring' merchant is on neither list and is
+ * not counted as forming. `forming` counts merchants one charge short of a rhythm, per band.
  *
- * Order: NOT-yet-recorded rows first, then by typical amount descending, then merchant. The
- * first clause is the feature's actual question ("what is charging us that nobody has written
- * down"), and it is an ordering rather than a filter because the tracked rows are worth seeing
- * too -- a recorded item whose real charge has drifted away from its recorded billing amount is
- * the second-most useful row here.
+ * The account filter keeps a merchant that charged the chosen account at any point in the window.
+ * The Account options are read before the filter and before the Looks cap, so an account whose
+ * only rows were cut stays selectable; an account no row names reads as every account.
+ *
+ * Known is sorted by merchant and never capped. Looks is sorted by typical amount descending, then
+ * merchant, and capped at RECURRING_MAX_ROWS after the filter.
  */
-export function recurringCharges(input: { today: string; ownerUserId: number | null; viewer: Viewer }): RecurringChargeRow[] {
+export function recurringCharges(input: {
+  today: string;
+  ownerUserId: number | null;
+  viewer: Viewer;
+  /** Spec 2026-10-05 §2.4. Keep only merchants that charged this account; null is every account. */
+  accountId: number | null;
+}): RecurringCharges {
   const scope = resolveScope(input.viewer, input.ownerUserId);
   const slice = readCharges(addDaysIso(input.today, -RECURRING_LOOKBACK_DAYS), scope);
 
-  const byMerchant = new Map<string, SpendRow[]>();
+  const byMerchant = new Map<string, ChargeRow[]>();
   for (const row of slice) {
     const bucket = byMerchant.get(row.merchant);
     if (bucket) bucket.push(row);
     else byMerchant.set(row.merchant, [row]);
   }
 
-  const found: RecurringChargeRow[] = [];
-  for (const [merchant, charges] of byMerchant) {
+  const marks = listRecurringMarkRules();
+  const names = accountNames();
+  const formingCandidates: Array<{ band: RecurringCadence; charges: ChargeRow[] }> = [];
+  const rows: Array<{ row: RecurringChargeRow; charges: ChargeRow[] }> = [];
+
+  for (const [merchant, all] of byMerchant) {
+    const mark = recurringMarkFor(merchant, marks);
+    // Spec §2.3: a not_recurring merchant is on neither list, and is not forming either.
+    if (mark === 'not_recurring') continue;
+    const charges = chargesAsOf(all, input.today);
+    if (charges.length === 0) continue;
     const verdict = recurringVerdict({ charges, today: input.today });
-    if (verdict === null) continue;
-    found.push({
-      merchant,
-      cadence: verdict.cadence,
-      chargeCount: verdict.chargeCount,
-      typicalCents: verdict.typicalCents,
-      lastAmountCents: verdict.latestAmountCents,
-      lastDate: verdict.latestDateIso,
-      transactionId: verdict.latestId,
-      tracked: null,
+    if (verdict === null && mark === null) {
+      const band = formingRhythm({ charges, today: input.today });
+      if (band !== null) formingCandidates.push({ band, charges });
+      continue;
+    }
+    const latest = charges[charges.length - 1];
+    rows.push({
+      charges,
+      row: {
+        merchant,
+        tier: mark === 'recurring' ? 'known' : 'looks',
+        knownBy: mark === 'recurring' ? 'mark' : null,
+        cadence: verdict?.cadence ?? null,
+        chargeCount: charges.length,
+        typicalCents: charges.length > 1 ? medianCents(charges.map((charge) => Math.abs(charge.amountCents))) : null,
+        lastAmountCents: Math.abs(latest.amountCents),
+        lastDate: latest.date,
+        transactionId: latest.id,
+        tracked: null,
+        accounts: accountsNewestFirst(charges, names),
+      },
     });
   }
 
-  // Resolved only for the merchants that actually made the list -- two small queries either
-  // way, but nothing is matched against a merchant nobody will read.
-  if (found.length > 0) {
+  // Resolved only for the merchants that made a list, as before. A cover makes a Looks row Known.
+  if (rows.length > 0) {
     const covering = needles(input.today, scope);
-    for (const row of found) {
+    for (const { row } of rows) {
       const hit = covering.find((needle) => covers(needle, row.merchant));
       row.tracked = hit === undefined ? null : { kind: hit.kind, itemId: hit.itemId, itemName: hit.itemName };
+      if (row.tier === 'looks' && row.tracked !== null) {
+        row.tier = 'known';
+        row.knownBy = 'tracked';
+      }
     }
   }
 
-  found.sort((a, b) => {
-    if ((a.tracked === null) !== (b.tracked === null)) return a.tracked === null ? -1 : 1;
-    if (a.typicalCents !== b.typicalCents) return b.typicalCents - a.typicalCents;
-    return a.merchant < b.merchant ? -1 : a.merchant > b.merchant ? 1 : 0;
-  });
-  return found.slice(0, RECURRING_MAX_ROWS);
+  // Spec §2.4, owner ruling: the options are every account a row names, before the filter and the cap.
+  const optionById = new Map<number, RecurringAccount>();
+  for (const { row } of rows) for (const account of row.accounts) optionById.set(account.id, account);
+  const options = [...optionById.values()].sort(
+    (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0) || a.id - b.id,
+  );
+  const accountId = input.accountId !== null && optionById.has(input.accountId) ? input.accountId : null;
+  const charged = (charges: ChargeRow[]) => accountId === null || charges.some((charge) => charge.accountId === accountId);
+
+  const forming: Record<RecurringCadence, number> = { monthly: 0, yearly: 0 };
+  for (const candidate of formingCandidates) if (charged(candidate.charges)) forming[candidate.band] += 1;
+
+  const kept = rows.filter(({ charges }) => charged(charges)).map(({ row }) => row);
+  const byName = (a: RecurringChargeRow, b: RecurringChargeRow) => (a.merchant < b.merchant ? -1 : a.merchant > b.merchant ? 1 : 0);
+  const known = kept.filter((row) => row.tier === 'known').sort(byName);
+  const looks = kept
+    .filter((row) => row.tier === 'looks')
+    .sort((a, b) => (b.typicalCents ?? 0) - (a.typicalCents ?? 0) || byName(a, b));
+  return { known, looks: looks.slice(0, RECURRING_MAX_ROWS), forming, accounts: options, accountId };
 }
 
 /**

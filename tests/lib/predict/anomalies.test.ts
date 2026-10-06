@@ -3,6 +3,7 @@ import { addDaysIso } from '@/lib/dates';
 import {
   creepVerdict,
   findDuplicates,
+  formingRhythm,
   hasEnoughHouseholdHistory,
   recurringVerdict,
   unusualVerdict,
@@ -392,5 +393,39 @@ describe('MUST-9.20 to MUST-9.23: findDuplicates', () => {
       row({ id: 2, date: addDaysIso(TODAY, 2), amountCents: -8950 }),
     ];
     expect(findDuplicates({ rows, today: TODAY })).toEqual([]);
+  });
+});
+
+/** Spec 2026-10-05 §2.3: a rhythm one charge short, counted so a new ledger's card is not blank. */
+describe('formingRhythm: one charge short of a rhythm', () => {
+  const two = (gap: number, endsDaysAgo = 3): SpendRow[] => [
+    row({ id: 1, date: addDaysIso(TODAY, -endsDaysAgo - gap), amountCents: -1649 }),
+    row({ id: 2, date: addDaysIso(TODAY, -endsDaysAgo), amountCents: -1649 }),
+  ];
+
+  it('names the band for two charges a band apart, the newest recent', () => {
+    expect(formingRhythm({ charges: two(30), today: TODAY })).toBe('monthly');
+    expect(formingRhythm({ charges: two(365, 6), today: TODAY })).toBe('yearly');
+  });
+
+  it('is null for one charge, and for three -- three is a verdict, not a forming rhythm', () => {
+    expect(formingRhythm({ charges: two(30).slice(1), today: TODAY })).toBeNull();
+    const three = [...two(30), row({ id: 3, date: addDaysIso(TODAY, -63), amountCents: -1649 })];
+    expect(formingRhythm({ charges: three, today: TODAY })).toBeNull();
+  });
+
+  it('is null when the gap sits in no band', () => {
+    expect(formingRhythm({ charges: two(60), today: TODAY })).toBeNull();
+  });
+
+  it('is null once the newest charge is past the band allowance', () => {
+    const grace = CREEP_MONTHLY_GAP_MAX_DAYS + RECURRING_STALE_GRACE_DAYS;
+    expect(formingRhythm({ charges: two(30, grace), today: TODAY })).toBe('monthly');
+    expect(formingRhythm({ charges: two(30, grace + 1), today: TODAY })).toBeNull();
+  });
+
+  it('counts charges only: a refund and a future-dated row are neither', () => {
+    expect(formingRhythm({ charges: [...two(30), row({ id: 9, date: addDaysIso(TODAY, -1), amountCents: 1649 })], today: TODAY })).toBe('monthly');
+    expect(formingRhythm({ charges: [...two(30), row({ id: 8, date: addDaysIso(TODAY, 20), amountCents: -1649 })], today: TODAY })).toBe('monthly');
   });
 });
