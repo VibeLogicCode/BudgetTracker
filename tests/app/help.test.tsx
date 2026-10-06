@@ -351,3 +351,41 @@ describe('the help page explains Insights', () => {
     expect(textOf(section('insights').body)).not.toMatch(/subscription|wasted|forgotten|cancel/i);
   });
 });
+
+/** Spec 2026-10-06 §2.8. */
+describe('the help page covers the recurring page and Expected rows in Coming up', () => {
+  const insights = () => textOf(section('insights').body);
+  const dashboard = () => textOf(section('dashboard').body);
+
+  it('names the full page, where it is, and its choices', () => {
+    expect(insights()).toMatch(/See all recurring charges/);
+    expect(insights()).toContain('/insights/recurring');
+    expect(insights()).toMatch(/Account[\s\S]*Late[\s\S]*sort/);
+  });
+
+  it('explains next expected, Late with its grace, and the price tag', () => {
+    expect(insights()).toMatch(/next expected/);
+    expect(insights()).toMatch(/Late/);
+    expect(insights()).toMatch(/more than 7 days past/);
+    expect(insights()).toMatch(/up from/);
+    expect(insights()).toMatch(/leaving out any that are late/);
+  });
+
+  it('pairs the Account filter with Late after a card is replaced', () => {
+    expect(insights()).toMatch(/replaced[\s\S]*Account[\s\S]*Late/);
+  });
+
+  it('says Not recurring is set on Insights, and the row menu toggles', () => {
+    expect(insights()).toMatch(/Unmark recurring/);
+    expect(insights()).toMatch(/transfer rows are skipped/);
+  });
+
+  it('explains the Expected rows in Coming up and why they are not in the totals', () => {
+    expect(dashboard()).toMatch(/Expected/);
+    expect(dashboard()).toMatch(/not in the card’s totals/);
+  });
+
+  it('keeps the wording rule on the Insights section', () => {
+    expect(insights()).not.toMatch(/subscription|wasted|forgotten|cancel|missed payment/i);
+  });
+});

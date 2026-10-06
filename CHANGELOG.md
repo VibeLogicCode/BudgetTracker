@@ -21,6 +21,32 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+### Added
+
+- **A full page for recurring charges**, opened from **See all recurring charges** on Insights. It
+  lists every merchant on a rhythm, with no limit: what it usually costs, about how much that is a
+  month, when it last charged and when its rhythm says the next charge is expected. Pick an
+  **Account**, show only Known recurring, Looks recurring, Forming or **Late**, and sort by monthly
+  amount, next expected, last charge or merchant. The choices are part of the page address.
+- **Late.** A merchant you marked or track that has not charged for more than 7 days past its
+  expected date is tagged Late and stays on the list instead of dropping off. After a card is
+  replaced, pick it under Account and show Late.
+- **Forming merchants are listed**: two charges about a month or a year apart, one short of a
+  rhythm, each with Mark recurring and Not recurring.
+- **A price that went up** shows on the merchant's row, up from the usual amount to the new one.
+- **Expected charges in Coming up.** On the Dashboard, each merchant you marked recurring shows its
+  next charge, tagged Expected, at about its usual amount. Expected rows are estimates and are not
+  in the card's totals or in what is left to spend.
+
+### Changed
+
+- **Recurring charges on Insights is a summary**: how many merchants are Known recurring and about
+  how much they come to a month, how many are late, how many Looks recurring are left to review and
+  how many are forming.
+- **The Transactions row menu toggles the mark**: Mark recurring, or Unmark recurring once marked.
+  Not recurring is set on Insights; a merchant marked that way shows Clear "not recurring".
+- **Mark recurring in the bulk bar skips transfer rows**, so the count is the merchants actually marked.
+
 ## [1.54.0] - 2026-10-06
 
 ### Added

@@ -28,6 +28,8 @@
  * for those ten literals: ship an eleventh section without documenting it and the suite goes red.
  */
 
+import { RECURRING_LATE_GRACE_DAYS } from '@/lib/predict/constants';
+
 export interface HelpSection {
   id: string;
   title: string;
@@ -151,6 +153,13 @@ export const HELP_SECTIONS: HelpSection[] = [
           always run in the background, now on screen instead of only reaching you by
           notification. <B>All insights</B> opens the whole list on Insights. Like every other card here, it hides
           itself when there is nothing to flag.
+        </P>
+        <P>
+          <B>Coming up</B> lists the bills due in the next 30 days. It also lists the next charge of each merchant you
+          marked recurring, tagged <B>Expected</B>, at about its usual amount, on the date its past charges point to.
+          Expected rows are estimates and are not in the card&rsquo;s totals or in what is left to spend: a recurring
+          charge is usually already inside a category budget, so counting it again would count it twice. A merchant you
+          track as an item shows through that item&rsquo;s own bill instead.
         </P>
       </>
     ),
@@ -550,34 +559,47 @@ export const HELP_SECTIONS: HelpSection[] = [
       <>
         <Where path="/insights">under Planning in the menu, after Reports —</Where>
         <P>
-          Two lists the app works out from your own transactions. <B>Recurring charges</B> lists the merchants that bill
-          you on a rhythm, and <B>Needs a look</B> lists every charge that stands out — the same findings the Dashboard
-          shows a few of, all of them here, each with its own <B>That&rsquo;s fine</B>.
+          Two lists the app works out from your own transactions. <B>Recurring charges</B> sums up the merchants that
+          bill you on a rhythm, and <B>Needs a look</B> lists every charge that stands out — the same findings the
+          Dashboard shows a few of, all of them here, each with its own <B>That&rsquo;s fine</B>.
         </P>
         <P>
-          <B>Known recurring</B> is what you have said: a merchant you marked, or one that an item or a payment rule on
-          Loans &amp; Coverage already covers. A merchant you only track stays under Known recurring while its charges keep their rhythm; mark it
-          recurring from its row menu on Transactions to keep it listed whatever the dates do. A merchant you marked
-          stays on the list after a single charge, because your word is the evidence. <B>Looks recurring</B> is what the dates show: three or more charges about a month
-          or a year apart, the newest one recent. A rhythm is a measurement, not a verdict — a once-a-month shop makes
-          the same dates as a bill.
+          The Recurring charges card counts three groups. <B>Known recurring</B> is what you have said: a merchant you
+          marked, or one that an item or a payment rule on Loans &amp; Coverage already covers, with about how much they
+          come to a month — a monthly merchant at its usual charge, a yearly one at a twelfth of it, leaving out any
+          that are late. <B>Looks recurring</B> is what the dates show: three or more charges about a month or a year
+          apart, the newest one recent. A rhythm is a measurement, not a verdict — a once-a-month shop makes the same
+          dates as a bill. <B>Forming</B> is two charges about a month or a year apart. One more charge and it has a
+          rhythm.
         </P>
         <P>
-          <B>Mark recurring</B> moves a merchant from Looks recurring to Known recurring; <B>Not recurring</B> takes it off
-          both lists and keeps it off. Both are on the card and in each row&rsquo;s menu on Transactions, and{' '}
-          <B>Mark recurring</B> is in the bar that appears when you select rows. <B>Unmark</B> undoes a mark. A merchant
-          marked Not recurring comes back from its row menu on Transactions; an admin also sees every mark under{' '}
-          <B>Settings → Merchant rules</B>.
+          <B>See all recurring charges</B> opens the full list at /insights/recurring: every merchant in every group,
+          with its usual charge, about how much that is a month, its last charge and its <B>next expected</B> date — the
+          last charge plus the usual gap between charges. Pick an <B>Account</B>, show one group or only the{' '}
+          <B>Late</B> ones, and sort by monthly amount, next expected, last charge or merchant. The choices are part of
+          the page address, so a filtered list can be bookmarked or sent to someone else in the household.
         </P>
         <P>
-          Every row names the accounts the merchant charged. When a card is <B>replaced</B>, pick it under{' '}
-          <B>Account</B>: Known recurring then lists every merchant that needs the new number. The choice is part of
-          the page address, so the filtered list can be bookmarked or sent to someone else in the household.
+          A merchant you marked or track is <B>Late</B> when its next expected date is more than{' '}
+          {RECURRING_LATE_GRACE_DAYS} days past with nothing since. It stays on the list: a merchant you marked does not
+          drop off because its charges stopped. A row whose newest charge rose shows <B>up from</B> the usual amount to
+          the new one, the same finding Needs a look makes.
         </P>
         <P>
-          A new ledger shows little here for its first few months, because a rhythm takes three charges. Until then the
-          card counts the merchants that have charged twice about a month or a year apart. One more charge and they
-          appear on the list.
+          When a card is <B>replaced</B>, pick it under <B>Account</B> on the full list: Known recurring there is every
+          merchant that needs the new number. A few weeks later, show <B>Late</B> on the same card to see which of them
+          has not charged since.
+        </P>
+        <P>
+          <B>Mark recurring</B> moves a merchant to Known recurring; <B>Not recurring</B> takes it off every list and
+          keeps it off. Both are on the full list. On Transactions, a row&rsquo;s menu offers <B>Mark recurring</B>, or{' '}
+          <B>Unmark recurring</B> once marked, and <B>Mark recurring</B> is in the bar that appears when you select rows
+          (transfer rows are skipped). A merchant marked Not recurring shows <B>Clear &ldquo;not recurring&rdquo;</B> in
+          its row menu instead; an admin also sees every mark under <B>Settings → Merchant rules</B>.
+        </P>
+        <P>
+          A new ledger shows little here for its first few months, because a rhythm takes three charges, or two for a
+          merchant you marked. Until then Forming says what is one charge away.
         </P>
       </>
     ),

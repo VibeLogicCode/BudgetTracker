@@ -179,8 +179,8 @@ after an admin uses **Reset password**. Two-factor authentication stays optional
 6. **Goals**, log money you set aside and watch the pace projection.
 7. **Reports**, category breakdowns, month-over-month trends, who-spent-what, category
    baselines, CSV export. Pick a date range from the presets or set your own.
-8. **Insights**, the merchants that bill you on a rhythm and the accounts they charge, filterable by
-   card, plus every charge that stands out.
+8. **Insights**, the merchants that bill you on a rhythm — a full list you can filter by card, sort,
+   and narrow to the ones that went quiet — plus every charge that stands out.
 
 Re-importing an overlapping date range is safe: duplicate rows are detected and skipped, and
 undoing an import only deletes the transactions that no other import also covers.
