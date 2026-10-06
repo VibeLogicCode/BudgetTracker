@@ -332,6 +332,18 @@ export function monthLabel(month: string): string {
   return `${FULL_MONTH_NAMES[Number(index) - 1]} ${year}`;
 }
 
+/**
+ * Spec 2026-10-06 §2.3. '2026-10-12' -> 'Oct 12', or 'Nov 3, 2025' when the year is not today's,
+ * so a yearly merchant's date is never read as this year's. The same lookup table as monthLabel,
+ * for the same reason: no Date, no zone. Anything that is not a date is handed back untouched.
+ */
+export function dayLabel(isoDate: string, today: string): string {
+  if (!isIsoDate(isoDate)) return isoDate;
+  const [year, month, day] = isoDate.split('-');
+  const label = `${FULL_MONTH_NAMES[Number(month) - 1].slice(0, 3)} ${Number(day)}`;
+  return year === today.slice(0, 4) ? label : `${label}, ${year}`;
+}
+
 function safeTz(): string {
   return readTz();
 }

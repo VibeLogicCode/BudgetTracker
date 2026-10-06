@@ -7,6 +7,7 @@ import {
   addMonths,
   addMonthsClamped,
   currentMonth,
+  dayLabel,
   daysBetweenIso,
   isDateFormat,
   isIsoDate,
@@ -298,5 +299,18 @@ describe('MUST-6.5: local wall-clock components', () => {
     expect(localWeekday(new Date('2026-08-22T12:00:00Z'), 'UTC')).toBe(6);
     // 2026-08-17T02:00:00Z is still Sunday evening in Toronto.
     expect(localWeekday(new Date('2026-08-17T02:00:00Z'), 'America/Toronto')).toBe(0);
+  });
+});
+
+/** Spec 2026-10-06 §2.3. "expected Oct 12, nothing since": a day, with the year only when it is not this one. */
+describe('dayLabel', () => {
+  it('names the month and day, and the year only outside today’s', () => {
+    expect(dayLabel('2026-10-12', '2026-10-06')).toBe('Oct 12');
+    expect(dayLabel('2026-09-01', '2026-10-06')).toBe('Sep 1');
+    expect(dayLabel('2025-11-03', '2026-10-06')).toBe('Nov 3, 2025');
+  });
+
+  it('hands back anything that is not a date untouched', () => {
+    expect(dayLabel('not-a-date', '2026-10-06')).toBe('not-a-date');
   });
 });
