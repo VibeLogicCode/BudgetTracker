@@ -17,6 +17,13 @@ const currentUser = vi.hoisted(() => ({
   value: { id: 0, name: '', username: '', role: 'admin' as 'admin' | 'member', visibility: 'household' as 'household' | 'self' },
 }));
 vi.mock('@/lib/auth/session', () => ({ requireUser: async () => currentUser.value }));
+// redirect() throws in Next; the same stand-in tests/app/import-page.test.ts uses, the rest of the module kept.
+vi.mock('next/navigation', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('next/navigation')>()),
+  redirect: (url: string) => {
+    throw new Error(`NEXT_REDIRECT:${url}`);
+  },
+}));
 
 afterEach(cleanup);
 
@@ -57,49 +64,49 @@ describe('InsightsPage', () => {
     return render(await InsightsPage({ searchParams: Promise.resolve(searchParams) }));
   }
 
-  it('renders the guide, both tiers and a marked merchant under Known recurring', async () => {
+  it('renders the guide and the Recurring charges summary, without the rows', async () => {
     const s = await seed();
     s.monthly('MAPLE STREAMING', s.adult);
     s.spend({ merchant: 'RIVERSIDE GYM', daysAgo: 4, cents: 4500, person: s.adult });
+    s.spend({ merchant: 'HARBOUR INSURANCE', daysAgo: 33, cents: 13400, person: s.adult });
+    s.spend({ merchant: 'HARBOUR INSURANCE', daysAgo: 3, cents: 13400, person: s.adult });
     setRecurringMarks({ merchants: ['RIVERSIDE GYM'], mark: 'recurring', userId: s.adult, actorRole: 'admin' });
     currentUser.value = { id: s.adult, name: 'Alex', username: 'alex', role: 'admin', visibility: 'household' };
     const { container } = await renderPage();
     expect(container.textContent).toContain('What is this page for?');
-    expect(screen.getByRole('heading', { name: 'Known recurring' })).toBeTruthy();
-    expect(container.textContent).toContain('RIVERSIDE GYM');
-    expect(container.textContent).toContain('MAPLE STREAMING');
+    const card = screen.getByRole('heading', { name: 'Recurring charges' }).closest('section') as HTMLElement;
+    expect(card.textContent).toContain('1 merchant');
+    expect(card.textContent).toContain('1 to review');
+    expect(card.textContent).toContain('1 one more charge from a rhythm');
+    expect(card.querySelector('table')).toBeNull();
+    expect(screen.getByRole('link', { name: 'See all recurring charges' }).getAttribute('href')).toBe('/insights/recurring');
   });
 
-  /** Review Focus 3. */
-  it('a self viewer sees only their own charges, whatever ?person= says', async () => {
+  it('links the late count to the full page', async () => {
     const s = await seed();
-    s.monthly('MAPLE STREAMING', s.adult);
-    s.monthly('CEDAR PHONE CO', s.child);
-    currentUser.value = { id: s.child, name: 'Robin', username: 'robin', role: 'member', visibility: 'self' };
-    const { container } = await renderPage({ person: String(s.adult) });
-    expect(container.textContent).toContain('CEDAR PHONE CO');
-    expect(container.textContent).not.toContain('MAPLE STREAMING');
-  });
-
-  it('filters to the account in ?account= and keeps the choice selected', async () => {
-    const s = await seed();
-    s.monthly('MAPLE STREAMING', s.adult);
-    s.monthly('HARBOUR INSURANCE', s.adult, s.visa);
+    for (const daysAgo of [100, 70]) s.spend({ merchant: 'RIVERSIDE GYM', daysAgo, cents: 4500, person: s.adult });
+    setRecurringMarks({ merchants: ['RIVERSIDE GYM'], mark: 'recurring', userId: s.adult, actorRole: 'admin' });
     currentUser.value = { id: s.adult, name: 'Alex', username: 'alex', role: 'admin', visibility: 'household' };
-    const { container } = await renderPage({ account: String(s.visa) });
-    expect(container.textContent).toContain('HARBOUR INSURANCE');
-    expect(container.textContent).not.toContain('MAPLE STREAMING');
-    expect((screen.getByLabelText('Account') as HTMLSelectElement).value).toBe(String(s.visa));
+    await renderPage();
+    expect(screen.getByRole('link', { name: '1 late' }).getAttribute('href')).toBe('/insights/recurring?show=late&sort=next');
   });
 
-  /** Review Focus 3. */
-  it('ignores an account the viewer cannot see', async () => {
+  /** Review Focus 4. */
+  it('a self viewer’s summary counts only their own charges, whatever ?person= says', async () => {
     const s = await seed();
+    s.monthly('MAPLE STREAMING', s.adult);
     s.monthly('CEDAR PHONE CO', s.child);
     currentUser.value = { id: s.child, name: 'Robin', username: 'robin', role: 'member', visibility: 'self' };
-    const { container } = await renderPage({ account: String(s.visa) });
-    expect(container.textContent).toContain('CEDAR PHONE CO');
-    expect((screen.getByLabelText('Account') as HTMLSelectElement).value).toBe('');
+    await renderPage({ person: String(s.adult) });
+    const card = screen.getByRole('heading', { name: 'Recurring charges' }).closest('section') as HTMLElement;
+    expect(card.textContent).toContain('1 to review');
+  });
+
+  /** Review Focus 3: v1.54.0 promised a filtered list could be bookmarked or sent. */
+  it('sends a v1.54.0 /insights?account= link to the full page', async () => {
+    await seed();
+    currentUser.value = { id: 1, name: 'Alex', username: 'alex', role: 'admin', visibility: 'household' };
+    await expect(renderPage({ account: '7', person: '3' })).rejects.toThrow('NEXT_REDIRECT:/insights/recurring?person=3&account=7');
   });
 
   it('says whose charges a household viewer is looking at, with the way back', async () => {
@@ -121,18 +128,5 @@ describe('InsightsPage', () => {
     currentUser.value = { id: s.adult, name: 'Alex', username: 'alex', role: 'admin', visibility: 'household' };
     await renderPage();
     expect(screen.getAllByRole('button', { name: /as fine and take it off this card/ })).toHaveLength(INSIGHTS_MAX_ROWS + 2);
-  });
-
-  /** Review ruling R6. */
-  it('a self viewer can pick an account their own charges landed on, though they do not own it', async () => {
-    const s = await seed();
-    s.monthly('CEDAR PHONE CO', s.child);
-    currentUser.value = { id: s.child, name: 'Robin', username: 'robin', role: 'member', visibility: 'self' };
-    await renderPage({ account: String(s.chequing) });
-    const select = screen.getByLabelText('Account') as HTMLSelectElement;
-    expect(select.value).toBe(String(s.chequing));
-    const labels = Array.from(select.options).map((option) => option.textContent);
-    expect(labels).toContain('Everyday Chequing');
-    expect(labels).not.toContain('Travel Visa');
   });
 });
