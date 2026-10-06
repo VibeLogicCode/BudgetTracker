@@ -161,6 +161,20 @@ describe('rules pack privacy', () => {
     expect(previewRulesPackExport({ includeTransferRules: true }).some((r) => r.ruleKind === 'not_transfer')).toBe(false);
   });
 
+  /** Spec 2026-10-05 §2.2. A mark is one household's word about its own merchants -- the not_transfer argument. */
+  it('never exports a recurring mark of either kind, whatever the toggles say', () => {
+    const { userId } = setup();
+    upsertRuleFromCorrection({ pattern: 'RIVERSIDE GYM', matchType: 'exact', ruleKind: 'recurring', categoryId: null, createdBy: userId, actorRole: 'admin' });
+    upsertRuleFromCorrection({ pattern: 'CEDAR PHONE CO', matchType: 'exact', ruleKind: 'not_recurring', categoryId: null, createdBy: userId, actorRole: 'admin' });
+    const pack = exportRulesPack({ includeTransferRules: true, includeRenameRules: true });
+    expect(pack.rules.some((r) => r.pattern === 'RIVERSIDE GYM' || r.pattern === 'CEDAR PHONE CO')).toBe(false);
+    expect(
+      previewRulesPackExport({ includeTransferRules: true, includeRenameRules: true }).some(
+        (r) => r.ruleKind === 'recurring' || r.ruleKind === 'not_recurring',
+      ),
+    ).toBe(false);
+  });
+
   /**
    * 2026-09-13 (ruling P13). Two new things a pack must never carry, for the two reasons packs.ts
    * already gives about not_transfer and about renames.
@@ -253,6 +267,14 @@ describe('rules pack privacy', () => {
     const result = importRulesPack(pack);
     expect(result.rulesSkipped).toBe(1);
     expect(listRules('not_transfer')).toHaveLength(0);
+  });
+
+  it('skips a recurring mark in an incoming pack rather than installing it', () => {
+    setup();
+    const pack = { ...exportRulesPack(), rules: [{ pattern: 'RIVERSIDE GYM', match_type: 'exact', rule_kind: 'recurring', category: null }] };
+    expect(previewRulesPackImport(pack).skippedRules).toBe(1);
+    expect(importRulesPack(pack).rulesSkipped).toBe(1);
+    expect(listRules('recurring')).toHaveLength(0);
   });
 
   it('skips an entirely unrecognised rule_kind gracefully rather than crashing', () => {

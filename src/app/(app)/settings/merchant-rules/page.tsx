@@ -15,7 +15,7 @@ import { MerchantRulesClient } from './merchant-rules-client';
 export const dynamic = 'force-dynamic';
 
 const PAGE_SIZE = 25;
-const KINDS: readonly RuleKind[] = ['category', 'rename', 'transfer', 'not_transfer', 'attribution'];
+const KINDS: readonly RuleKind[] = ['category', 'rename', 'transfer', 'not_transfer', 'attribution', 'recurring', 'not_recurring'];
 
 function currentQueryString(params: Record<string, string | string[] | undefined>): string {
   const qs = new URLSearchParams();
@@ -61,7 +61,7 @@ export default async function MerchantRulesPage({
   const redundantByRuleId = new Map(redundant.map((r) => [r.ruleId, r]));
   const presetCount = allRules.filter((rule) => rule.packSource !== null).length;
 
-  const kindCounts: Record<RuleKind, number> = { category: 0, transfer: 0, rename: 0, not_transfer: 0, attribution: 0 };
+  const kindCounts: Record<RuleKind, number> = { category: 0, transfer: 0, rename: 0, not_transfer: 0, attribution: 0, recurring: 0, not_recurring: 0 };
   for (const rule of allRules) kindCounts[rule.ruleKind] += 1;
 
   let filtered = allRules;

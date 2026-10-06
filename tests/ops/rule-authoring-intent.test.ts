@@ -105,6 +105,8 @@ const RULE_AUTHORING_HELPERS: readonly string[] = [
   'deleteExactRule',
   'deleteRule',
   'setRuleDisabledFlag',
+  // Spec 2026-10-05 §2.2: writes and deletes the two mark kinds for a list of merchants.
+  'setRecurringMarks',
 ];
 
 /** `input.deleteRule` (a FLAG read) must never read as `deleteRule(...)` (a helper CALL) -- the

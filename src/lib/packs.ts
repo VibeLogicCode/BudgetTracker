@@ -12,6 +12,7 @@ import { applyRenameRules, buildContext } from '@/lib/categorize/engine';
 import {
   CATEGORY_RULE_NEEDS_CATEGORY_ERROR,
   listRules,
+  isRecurringMarkKind,
   matchTypeAllowedForKind,
   upsertRuleFromCorrection,
   type MatchType,
@@ -534,6 +535,9 @@ function exportableRules(opts: { includeTransferRules: boolean; includeRenameRul
     // install -- the not_transfer argument word for word. No opt-in: unlike a transfer or a
     // rename there is no version of sharing it that would work.
     if (rule.ruleKind === 'attribution') return false;
+    // Spec 2026-10-05 §2.2. A mark is this household's word about its own merchants -- the
+    // not_transfer argument again. Import already skips it (IMPORTABLE_RULE_KINDS omits it).
+    if (isRecurringMarkKind(rule.ruleKind)) return false;
     // And a WINDOW is the household's own statement figures -- what they pay for insurance, to the
     // dollar. That is the same privacy reasoning the rename opt-in rests on, one step stronger,
     // so a bounded rule is dropped whatever the toggles say.

@@ -72,6 +72,8 @@ const ALL_RULE_KINDS = Object.keys({
   rename: true,
   not_transfer: true,
   attribution: true,
+  recurring: true,
+  not_recurring: true,
 } satisfies Record<RuleKind, true>) as RuleKind[];
 
 /**
@@ -251,6 +253,67 @@ const SCENARIOS: ReadonlyMap<RuleKind, Scenario> = new Map<RuleKind, Scenario>([
       },
       clear: { attributes: true },
       residue: (txnId) => countRows("display_source = 'rename'", txnId),
+    },
+  ],
+  [
+    'recurring',
+    {
+      build: () => {
+        const { userId, add } = fixture();
+        const txnId = add('RIVERSIDE GYM DOWNTOWN');
+        const rule = upsertRuleFromCorrection({
+          pattern: 'RIVERSIDE GYM', matchType: 'contains', ruleKind: 'recurring',
+          categoryId: null, createdBy: userId, actorRole: 'admin',
+        });
+        if (!rule.ok) throw new Error('unexpected refusal');
+        return { ruleId: rule.ruleId, txnId, merchant: 'RIVERSIDE GYM DOWNTOWN' };
+      },
+      reapply: {
+        attributes: false,
+        why:
+          'A recurring mark changes nothing on a transaction -- it decides which Insights list a ' +
+          'merchant appears on, read fresh on every render -- so "Apply now" has nothing to apply. ' +
+          'eligibleForRuleReapply returns [] for this kind before attribution is reached.',
+      },
+      clear: {
+        attributes: false,
+        why:
+          'Nothing on a row carries a mark, so there is nothing to take back off it: ruleClearIds ' +
+          'returns [] and clearRuleFromTransactions writes nothing. Deleting the rule is the whole ' +
+          'undo, and the attribution surfaces above still have to be right.',
+      },
+      // Never read: the clear-path check skips a scenario whose clear is exempt.
+      residue: () => 0,
+    },
+  ],
+  [
+    'not_recurring',
+    {
+      build: () => {
+        const { userId, add } = fixture();
+        const txnId = add('HARBOUR INSURANCE CO');
+        const rule = upsertRuleFromCorrection({
+          pattern: 'HARBOUR', matchType: 'contains', ruleKind: 'not_recurring',
+          categoryId: null, createdBy: userId, actorRole: 'admin',
+        });
+        if (!rule.ok) throw new Error('unexpected refusal');
+        return { ruleId: rule.ruleId, txnId, merchant: 'HARBOUR INSURANCE CO' };
+      },
+      reapply: {
+        attributes: false,
+        why:
+          'A not-recurring mark changes nothing on a transaction either -- it keeps a merchant off ' +
+          'both Insights lists, read fresh on every render -- so "Apply now" has nothing to apply. ' +
+          'eligibleForRuleReapply returns [] for this kind before attribution is reached.',
+      },
+      clear: {
+        attributes: false,
+        why:
+          'Nothing on a row carries a mark, so there is nothing to take back off it: ruleClearIds ' +
+          'returns [] and clearRuleFromTransactions writes nothing. Deleting the rule is the whole ' +
+          'undo, and the attribution surfaces above still have to be right.',
+      },
+      residue: () => 0,
     },
   ],
 ]);

@@ -11,10 +11,15 @@ import {
   deleteExactRule,
   deleteRule,
   findRedundantRules,
+  isRecurringMarkKind,
+  listRecurringMarkRules,
   listRules,
   matchRule,
   matchTypeAllowedForKind,
   patternMatches,
+  RECURRING_MARK_KINDS,
+  recurringMarkFor,
+  setRecurringMarks,
   setRuleDisabledFlag,
   upsertRuleFromCorrection,
   WORD_MATCH_KINDS,
@@ -1024,5 +1029,86 @@ describe('the unbounded rule is the one a per-row path owns, learns and deletes'
 
     expect(deleteExactRule('ACME INSURANCE', 'category')).toBe(1);
     expect(listRules('category').map((row) => row.id)).toEqual([bounded]);
+  });
+});
+
+/** Spec 2026-10-05 §2.2. A mark is a fact about a merchant, written as a rule of one of two kinds. */
+describe('recurring marks', () => {
+  const setupMarks = () => {
+    current = createSeededTestDb();
+    const admin = insertTestUser(current.db, { name: 'Alice', username: 'alice' });
+    const member = insertTestUser(current.db, { name: 'Bob', username: 'bob', role: 'member' });
+    return { admin, member };
+  };
+
+  // Also the write side of the merge question: two spellings make ONE rule, so the collision
+  // drizzle/0016 merged can never arise for a mark.
+  it('writes one exact rule per merchant, uppercased like every other pattern', () => {
+    const { admin } = setupMarks();
+    expect(
+      setRecurringMarks({ merchants: ['Riverside Gym', 'RIVERSIDE GYM'], mark: 'recurring', userId: admin, actorRole: 'admin' }),
+    ).toEqual({ ok: true, merchants: 1 });
+    expect(listRules('recurring').map((rule) => [rule.pattern, rule.matchType])).toEqual([['RIVERSIDE GYM', 'exact']]);
+  });
+
+  it('setting one kind takes the other off the merchant', () => {
+    const { admin } = setupMarks();
+    setRecurringMarks({ merchants: ['RIVERSIDE GYM'], mark: 'recurring', userId: admin, actorRole: 'admin' });
+    setRecurringMarks({ merchants: ['RIVERSIDE GYM'], mark: 'not_recurring', userId: admin, actorRole: 'admin' });
+    expect(listRules('recurring')).toEqual([]);
+    expect(listRules('not_recurring').map((rule) => rule.pattern)).toEqual(['RIVERSIDE GYM']);
+  });
+
+  it('null takes either mark off', () => {
+    const { admin } = setupMarks();
+    setRecurringMarks({ merchants: ['RIVERSIDE GYM'], mark: 'not_recurring', userId: admin, actorRole: 'admin' });
+    expect(setRecurringMarks({ merchants: ['RIVERSIDE GYM'], mark: null, userId: admin, actorRole: 'admin' })).toEqual({ ok: true, merchants: 1 });
+    expect(listRecurringMarkRules()).toEqual([]);
+  });
+
+  /** Review Focus 2. Resolved before anything is written, the setTransferFlag order (item BJ). */
+  it("refuses a member who would remove somebody else's opposite mark, and writes nothing", () => {
+    const { admin, member } = setupMarks();
+    setRecurringMarks({ merchants: ['CEDAR PHONE CO'], mark: 'not_recurring', userId: admin, actorRole: 'admin' });
+    expect(
+      setRecurringMarks({ merchants: ['RIVERSIDE GYM', 'CEDAR PHONE CO'], mark: 'recurring', userId: member, actorRole: 'member' }),
+    ).toEqual({ ok: false, reason: 'owned_by_another', ownerName: 'Alice' });
+    expect(listRules('recurring')).toEqual([]);
+    expect(listRules('not_recurring').map((rule) => rule.pattern)).toEqual(['CEDAR PHONE CO']);
+  });
+
+  /** Review Focus 2, the other half: the mark's own rule belongs to somebody else. */
+  it('rolls back every merchant when the mark itself belongs to somebody else', () => {
+    const { admin, member } = setupMarks();
+    setRecurringMarks({ merchants: ['CEDAR PHONE CO'], mark: 'recurring', userId: admin, actorRole: 'admin' });
+    expect(
+      setRecurringMarks({ merchants: ['RIVERSIDE GYM', 'CEDAR PHONE CO'], mark: 'recurring', userId: member, actorRole: 'member' }),
+    ).toEqual({ ok: false, reason: 'owned_by_another', ownerName: 'Alice' });
+    expect(listRules('recurring').map((rule) => rule.pattern)).toEqual(['CEDAR PHONE CO']);
+  });
+
+  it('lets an admin write over anyone', () => {
+    const { admin, member } = setupMarks();
+    setRecurringMarks({ merchants: ['CEDAR PHONE CO'], mark: 'not_recurring', userId: member, actorRole: 'member' });
+    expect(setRecurringMarks({ merchants: ['CEDAR PHONE CO'], mark: 'recurring', userId: admin, actorRole: 'admin' })).toEqual({ ok: true, merchants: 1 });
+    expect(listRules('not_recurring')).toEqual([]);
+  });
+
+  it('reads the mark through matchRule: exact or contains, never a disabled rule', () => {
+    const { admin } = setupMarks();
+    setRecurringMarks({ merchants: ['RIVERSIDE GYM'], mark: 'recurring', userId: admin, actorRole: 'admin' });
+    upsertRuleFromCorrection({ pattern: 'HARBOUR', matchType: 'contains', ruleKind: 'not_recurring', categoryId: null, createdBy: admin, actorRole: 'admin' });
+    const rules = listRecurringMarkRules();
+    expect(recurringMarkFor('RIVERSIDE GYM', rules)).toBe('recurring');
+    expect(recurringMarkFor('HARBOUR INSURANCE', rules)).toBe('not_recurring');
+    expect(recurringMarkFor('CEDAR PHONE CO', rules)).toBeNull();
+    setRuleDisabledFlag(listRules('recurring')[0]!.id, true);
+    expect(recurringMarkFor('RIVERSIDE GYM', listRecurringMarkRules())).toBeNull();
+  });
+
+  it('names the two kinds in one place', () => {
+    expect(RECURRING_MARK_KINDS).toEqual(['recurring', 'not_recurring']);
+    expect(isRecurringMarkKind('recurring')).toBe(true);
+    expect(isRecurringMarkKind('not_transfer')).toBe(false);
   });
 });

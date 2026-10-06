@@ -14,8 +14,10 @@ import {
   deleteExactRule,
   deleteRule,
   exactRuleOwner,
+  isRecurringMarkKind,
   listRules,
   matchRule,
+  RECURRING_MARK_KINDS,
   setRuleDisabledFlag,
   upsertRuleFromCorrection,
   type MatchType,
@@ -600,7 +602,8 @@ function ruleAttributor(
  * eligibleForRerun, so it is applied in SQL before any id is materialized.
  */
 function eligibleForRuleReapply(rule: MerchantRuleRecord, scope: RuleScope = {}): number[] {
-  if (rule.ruleKind === 'rename') return [];
+  // A mark changes nothing on a row (spec 2026-10-05 §2.2), so like a rename there is nothing to apply.
+  if (rule.ruleKind === 'rename' || isRecurringMarkKind(rule.ruleKind)) return [];
   // 2026-09-13. The attribution kind CANNOT go through eligibleForRerun: ELIGIBLE is entirely
   // about categories (an uncategorized or Bayes-guessed row, no splits), and a row whose category
   // a person confirmed by hand is still a row whose PERSON this rule may legitimately set. Using
@@ -841,6 +844,21 @@ export function ruleImpactCounts(ctx: CategorizeContext = buildContext()): Map<n
     }
   }
 
+  // Spec 2026-10-05 §2.2: a mark's "Affects" is the charges it speaks about -- the candidate rows
+  // of every merchant it resolves. Skipped when the household has no mark, like attribution above.
+  if (ctx.rules.some((rule) => isRecurringMarkKind(rule.ruleKind))) {
+    const marked = db
+      .select({ normalizedMerchant: transactions.normalizedMerchant, c: sql<number>`count(*)` })
+      .from(transactions)
+      .where(candidateRowsFor('recurring'))
+      .groupBy(transactions.normalizedMerchant)
+      .all();
+    for (const kind of RECURRING_MARK_KINDS) {
+      const attributed = ruleAttributor(kind, ctx);
+      for (const row of marked) bump(attributed(row.normalizedMerchant, null), row.c);
+    }
+  }
+
   // rename: rows already carrying display_source = 'rename', attributed to whichever rename rule
   // currently resolves for their merchant. A rename cannot carry a window either.
   const renamed = db
@@ -940,6 +958,8 @@ export function ruleImpactIds(ruleId: number, scope: RuleScope = {}, ctx: Catego
  * transactionHasSplits' docblock carries the long version of this warning.
  */
 function candidateRowsFor(kind: RuleKind) {
+  // Spec 2026-10-05 §2.2: a mark speaks about a merchant's charges, and a transfer is never one.
+  if (isRecurringMarkKind(kind)) return eq(transactions.isTransfer, false);
   // 2026-09-13: a transfer belongs to nobody in particular -- it is money moving between the
   // household's own accounts, excluded from every report and budget -- so naming a person on one
   // would be a claim no screen reads. Every other row is a candidate; whether the rule would
@@ -999,6 +1019,8 @@ export function ruleClearIds(ruleId: number, scope: RuleScope = {}, ctx: Categor
   const rule = ctx.rules.find((r) => r.id === ruleId);
   if (!rule) return [];
   if (rule.ruleKind === 'not_transfer') return [];
+  // Spec 2026-10-05 §2.2: nothing on a row carries a mark. Delete-only.
+  if (isRecurringMarkKind(rule.ruleKind)) return [];
   // 2026-09-13 (ruling P12). For a category rule "clear" means UNCATEGORIZED -- a real undecided
   // state Needs review picks back up. NULL attribution is not undecided; it IS Household, so
   // clearing would not revert anything, it would assert something. And nothing records what the
@@ -1088,6 +1110,8 @@ export function clearRuleFromTransactions(input: { ruleId: number; scope?: RuleS
   // Ruling P12 again, guarded here as well as in ruleClearIds -- a stale form or a second session
   // must not reach a write this kind does not have.
   if (rule.ruleKind === 'attribution') return { rowsCleared: 0 };
+  // Spec 2026-10-05 §2.2: nothing on a row carries a mark. Delete-only.
+  if (isRecurringMarkKind(rule.ruleKind)) return { rowsCleared: 0 };
   if (rule.ruleKind === 'rename') {
     return { rowsCleared: deleteRenameRule({ pattern: rule.pattern, matchType: rule.matchType }).rowsCleared };
   }

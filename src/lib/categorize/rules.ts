@@ -4,6 +4,9 @@ import { merchantRules, users } from '@/db/schema';
 import { amountWithinBounds, boundsProblem, boundsWidth, isBounded } from '@/lib/categorize/amount-bounds';
 import { wordBoundaryTokens } from '@/lib/categorize/normalize';
 import { nowIso } from '@/lib/clock';
+import { isRecurringMarkKind, RECURRING_MARK_KINDS, type RecurringMark } from './mark-kinds';
+
+export { isRecurringMarkKind, RECURRING_MARK_KINDS, type RecurringMark };
 
 /**
  * 'word' is v1.25.0 (backlog item 16). 'contains' is a plain String.includes with no boundary of
@@ -37,8 +40,19 @@ export type MatchType = 'exact' | 'contains' | 'word';
  * is the only path that LEARNS one and it hard-codes matchType: 'exact'; the rules form can write
  * a 'contains' one, and matchRule honours it. A pack cannot -- IMPORTABLE_RULE_KINDS (packs.ts)
  * excludes this kind in both directions, because it describes one install's own account wiring.
+ *
+ * 'recurring' / 'not_recurring' (spec 2026-10-05 §2.2) are the household's word about a merchant on
+ * Insights. Neither has an outcome (ruleOutcomeMissing stays false), neither changes a transaction,
+ * and setRecurringMarks only writes exact ones -- exact by default, not exact-only, like not_transfer.
  */
-export type RuleKind = 'category' | 'transfer' | 'rename' | 'not_transfer' | 'attribution';
+export type RuleKind =
+  | 'category'
+  | 'transfer'
+  | 'rename'
+  | 'not_transfer'
+  | 'attribution'
+  | 'recurring'
+  | 'not_recurring';
 
 /**
  * 2026-09-13. The report: "think about person too so its not just on vendor rule, even sets
@@ -925,4 +939,86 @@ export function findRedundantRules(rules: MerchantRuleRecord[]): RedundantRule[]
     }
   }
   return out;
+}
+
+/** Spec 2026-10-05 §2.2. Every rule of either mark kind, disabled ones included -- matchRule skips those. */
+export function listRecurringMarkRules(): MerchantRuleRecord[] {
+  return [...listRules('recurring'), ...listRules('not_recurring')];
+}
+
+/**
+ * The mark a merchant carries, resolved through matchRule like every other kind. setRecurringMarks
+ * keeps the two exclusive; if a hand-written rule makes both match, matchRule's own ranking decides.
+ */
+export function recurringMarkFor(normalizedMerchant: string, rules: MerchantRuleRecord[]): RecurringMark | null {
+  const yes = matchRule(normalizedMerchant, 'recurring', rules);
+  const no = matchRule(normalizedMerchant, 'not_recurring', rules);
+  if (yes === null) return no === null ? null : 'not_recurring';
+  if (no === null) return 'recurring';
+  return outranks(yes, no) ? 'recurring' : 'not_recurring';
+}
+
+export type RecurringMarkResult =
+  | { ok: true; merchants: number }
+  | { ok: false; reason: 'owned_by_another'; ownerName: string };
+
+/** Thrown only inside setRecurringMarks' transaction, to unwind it; never escapes this file. */
+class MarkRefusal extends Error {
+  constructor(readonly ownerName: string) {
+    super('owned_by_another');
+  }
+}
+
+function oppositeMark(mark: RecurringMark): RecurringMark {
+  return mark === 'recurring' ? 'not_recurring' : 'recurring';
+}
+
+/**
+ * Spec 2026-10-05 §2.2. Marks each merchant (exact rules only), or with `mark: null` takes either
+ * mark off. Setting one kind deletes the other for that merchant. Ownership of every rule this
+ * would delete is settled before anything is written (the setTransferFlag order, item BJ), and the
+ * writes share one transaction, so a refusal over one merchant leaves every merchant as it was.
+ */
+export function setRecurringMarks(input: {
+  merchants: readonly string[];
+  mark: RecurringMark | null;
+  userId: number;
+  actorRole: 'admin' | 'member';
+  at?: Date;
+}): RecurringMarkResult {
+  const merchants = [...new Set(input.merchants.map((merchant) => merchant.trim().toUpperCase()).filter((merchant) => merchant.length > 0))];
+  const removed: readonly RecurringMark[] = input.mark === null ? RECURRING_MARK_KINDS : [oppositeMark(input.mark)];
+  if (input.actorRole !== 'admin') {
+    for (const merchant of merchants) {
+      for (const kind of removed) {
+        const owner = exactRuleOwner(merchant, kind);
+        if (owner !== null && owner.createdBy !== null && owner.createdBy !== input.userId) {
+          return { ok: false, reason: 'owned_by_another', ownerName: owner.ownerName };
+        }
+      }
+    }
+  }
+  try {
+    getDb().transaction(() => {
+      for (const merchant of merchants) {
+        if (input.mark !== null) {
+          const written = upsertRuleFromCorrection({
+            pattern: merchant,
+            matchType: 'exact',
+            ruleKind: input.mark,
+            categoryId: null,
+            createdBy: input.userId,
+            actorRole: input.actorRole,
+            at: input.at,
+          });
+          if (!written.ok) throw new MarkRefusal(written.ownerName);
+        }
+        for (const kind of removed) deleteExactRule(merchant, kind);
+      }
+    });
+  } catch (error) {
+    if (error instanceof MarkRefusal) return { ok: false, reason: 'owned_by_another', ownerName: error.ownerName };
+    throw error;
+  }
+  return { ok: true, merchants: merchants.length };
 }

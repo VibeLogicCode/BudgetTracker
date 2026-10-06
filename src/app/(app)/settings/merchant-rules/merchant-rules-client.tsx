@@ -23,6 +23,7 @@ import type {
   CanadianPackUpdateDiff,
 } from '@/lib/canadian-pack';
 import type { CategoryRecord } from '@/lib/categories';
+import { isRecurringMarkKind } from '@/lib/categorize/mark-kinds';
 import type { MatchType, MerchantRuleRecord, RuleKind } from '@/lib/categorize/rules';
 import type { RulesExportRow } from '@/lib/packs';
 import { CanadianPackPanel } from './canadian-pack-panel';
@@ -77,6 +78,9 @@ const KIND_LABEL: Record<RuleKind, string> = {
   // (the row's Person select, the Household/unattributed filter), and a kind chip is the wrong
   // place to introduce a second word for it.
   attribution: 'Person',
+  // Spec 2026-10-05 §2.2: set from Transactions and Insights, not from the form below.
+  recurring: 'Recurring',
+  not_recurring: 'Not recurring',
 };
 
 /** Reused across the search box, the four kind chips and the redundant chip -- every filter
@@ -632,6 +636,7 @@ export function MerchantRulesClient({
   function deleteRuleDialog() {
     if (!deletingRule) return null;
     const isOverride = deletingRule.ruleKind === 'not_transfer';
+    const isMark = isRecurringMarkKind(deletingRule.ruleKind);
     return (
       <RowDialog dialogId="delete-rule-dialog" title="Delete this rule?" onClose={() => setDeletingRule(null)}>
         <p className="text-sm text-ink">
@@ -645,6 +650,11 @@ export function MerchantRulesClient({
           <p className="text-sm text-ink">
             Without this override, the card-payment patterns can flag that merchant as a transfer again the next time
             rules run.
+          </p>
+        ) : null}
+        {isMark ? (
+          <p className="text-sm text-ink">
+            A recurring mark changes no transaction. Deleting it only changes which list on Insights the merchant appears on.
           </p>
         ) : null}
         <div className="flex gap-2">
@@ -880,7 +890,10 @@ export function MerchantRulesClient({
           <strong className="font-semibold text-ink">Re-run rules</strong> below to catch up older data -- neither
           one ever overwrites a transaction you categorized by hand. A{' '}
           <strong className="font-semibold text-ink">not a transfer</strong> rule is an override that stops a
-          merchant from being auto-flagged as a card payment.
+          merchant from being auto-flagged as a card payment. A{' '}
+          <strong className="font-semibold text-ink">recurring</strong> or{' '}
+          <strong className="font-semibold text-ink">not recurring</strong> rule is a mark set from Transactions or
+          Insights; it changes no transaction.
         </p>
         <p>
           <strong className="font-semibold text-ink">Disable</strong> is a switch you can flip back; it stops a
@@ -924,6 +937,8 @@ export function MerchantRulesClient({
             {kindChip(KIND_LABEL.rename, 'rename', kindCounts.rename)}
             {kindChip(KIND_LABEL.transfer, 'transfer', kindCounts.transfer)}
             {kindChip(KIND_LABEL.not_transfer, 'not_transfer', kindCounts.not_transfer)}
+            {kindChip(KIND_LABEL.recurring, 'recurring', kindCounts.recurring)}
+            {kindChip(KIND_LABEL.not_recurring, 'not_recurring', kindCounts.not_recurring)}
             {redundantCount > 0 ? (
               // v1.27.0, owner finding: a redundant rule changes NO categorization today --
               // longest-pattern-wins means the covering rule already produces the identical
@@ -1117,6 +1132,7 @@ export function MerchantRulesClient({
                     </td>
                     <td className="text-right cell-stack-actions" data-label="">
                       <RowMenu label={`Actions for ${rule.pattern}`}>
+                        {isRecurringMarkKind(rule.ruleKind) ? null : (
                         <RowMenuButton
                           onSelect={() =>
                             setEditing({
@@ -1135,7 +1151,8 @@ export function MerchantRulesClient({
                         >
                           Edit
                         </RowMenuButton>
-                        {rule.ruleKind !== 'rename' && !disabled ? (
+                        )}
+                        {rule.ruleKind !== 'rename' && !isRecurringMarkKind(rule.ruleKind) && !disabled ? (
                           <RowMenuForm action={applyNow} fields={{ ruleId: String(rule.id) }}>
                             {`Apply now (${impact} would affect)`}
                           </RowMenuForm>

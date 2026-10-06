@@ -182,6 +182,46 @@ describe('database schema', () => {
     expect(merge).toMatchObject({ dropped_pattern: 'walmart', dropped_hit_count: 0 });
   });
 
+  /**
+   * Spec 2026-10-05 §2.2. rule_kind has no CHECK, so the two mark kinds need no migration.
+   * merchant_rule_merges.dropped_rule_kind does have one, and only drizzle/0016's one-time INSERT
+   * writes that table, so it never has to hold a mark.
+   */
+  it('takes a recurring mark in merchant_rules, and keeps merchant_rule_merges to the kinds 0016 could merge', () => {
+    current = createTestDb();
+    const { sqlite } = current;
+    sqlite
+      .prepare(
+        "insert into merchant_rules (id, pattern, match_type, rule_kind, category_id, hit_count, created_at) values (1, 'RIVERSIDE GYM', 'exact', 'recurring', null, 0, '2026-10-01T00:00:00.000Z')",
+      )
+      .run();
+    expect(() =>
+      sqlite
+        .prepare(
+          "insert into merchant_rule_merges (kept_rule_id, dropped_pattern, dropped_match_type, dropped_rule_kind, dropped_hit_count, dropped_created_at, merged_at) values (1, 'riverside gym', 'exact', 'recurring', 0, '2026-09-01T00:00:00.000Z', '2026-10-01T00:00:00.000Z')",
+        )
+        .run(),
+    ).toThrow(/CHECK constraint failed/);
+  });
+
+  it('nothing under src/ writes merchant_rule_merges at runtime', () => {
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (/\.tsx?$/.test(entry.name)) {
+          const source = fs.readFileSync(full, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+          if (/\bmerchantRuleMerges\b|merchant_rule_merges/.test(source)) offenders.push(path.relative(process.cwd(), full).replace(/\\/g, '/'));
+        }
+      }
+    };
+    walk(path.join(process.cwd(), 'src'));
+    // The declaration is the one mention allowed: a writer here would need dropped_rule_kind widened.
+    expect(offenders).toEqual(['src/db/schema.ts']);
+  });
+
+
   it('stores rename_to on rename rules and leaves it NULL elsewhere', () => {
     current = createTestDb();
     const { sqlite } = current;

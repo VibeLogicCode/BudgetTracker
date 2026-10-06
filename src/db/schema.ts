@@ -348,8 +348,10 @@ export const merchantRules = sqliteTable(
      * so this enum has only ever been a TypeScript-level claim -- exactly as 'word' was for
      * match_type in v1.25.0. merchant_rule_merges.dropped_rule_kind is deliberately NOT widened
      * alongside it; see the note on that column.
+     * 'recurring' and 'not_recurring' are spec 2026-10-05 §2.2, widened the same way and for the
+     * same reason: no CHECK, so no migration.
      */
-    ruleKind: text('rule_kind', { enum: ['category', 'transfer', 'rename', 'not_transfer', 'attribution'] })
+    ruleKind: text('rule_kind', { enum: ['category', 'transfer', 'rename', 'not_transfer', 'attribution', 'recurring', 'not_recurring'] })
       .notNull()
       .default('category'),
     categoryId: integer('category_id').references(() => categories.id),

@@ -69,7 +69,7 @@ function baseProps(overrides: Partial<Parameters<typeof MerchantRulesClient>[0]>
     redundantOnly: false,
     presetOnly: false,
     presetCount: 0,
-    kindCounts: { category: 1, transfer: 0, rename: 0, not_transfer: 0, attribution: 0 },
+    kindCounts: { category: 1, transfer: 0, rename: 0, not_transfer: 0, attribution: 0, recurring: 0, not_recurring: 0 },
     people: [],
     redundantCount: 0,
     impactCounts: {},
@@ -120,7 +120,7 @@ describe('MerchantRulesClient — rendering the row', () => {
   it('renders a rename rule showing its rename target, not a category', () => {
     render(
       <MerchantRulesClient
-        {...baseProps({ rows: [rule({ ruleKind: 'rename', categoryId: null, renameTo: "McDonald's" })], kindCounts: { category: 0, transfer: 0, rename: 1, not_transfer: 0, attribution: 0 } })}
+        {...baseProps({ rows: [rule({ ruleKind: 'rename', categoryId: null, renameTo: "McDonald's" })], kindCounts: { category: 0, transfer: 0, rename: 1, not_transfer: 0, attribution: 0, recurring: 0, not_recurring: 0 } })}
       />,
     );
     expect(screen.getByText("McDonald's")).toBeTruthy();
@@ -140,7 +140,7 @@ describe('MerchantRulesClient — filter chips and search (item 10)', () => {
       <MerchantRulesClient
         {...baseProps({
           activeKind: 'rename',
-          kindCounts: { category: 5, transfer: 2, rename: 3, not_transfer: 1, attribution: 0 },
+          kindCounts: { category: 5, transfer: 2, rename: 3, not_transfer: 1, attribution: 0, recurring: 0, not_recurring: 0 },
         })}
       />,
     );
@@ -500,7 +500,7 @@ describe('MerchantRulesClient — Delete this rule? (dialog 1, v1.24.0)', () => 
       <MerchantRulesClient
         {...baseProps({
           rows: [rule({ ruleKind: 'not_transfer', categoryId: null })],
-          kindCounts: { category: 0, transfer: 0, rename: 0, not_transfer: 1, attribution: 0 },
+          kindCounts: { category: 0, transfer: 0, rename: 0, not_transfer: 1, attribution: 0, recurring: 0, not_recurring: 0 },
         })}
       />,
     );
@@ -514,7 +514,7 @@ describe('MerchantRulesClient — Delete this rule? (dialog 1, v1.24.0)', () => 
       <MerchantRulesClient
         {...baseProps({
           rows: [rule({ ruleKind: 'not_transfer', categoryId: null })],
-          kindCounts: { category: 0, transfer: 0, rename: 0, not_transfer: 1, attribution: 0 },
+          kindCounts: { category: 0, transfer: 0, rename: 0, not_transfer: 1, attribution: 0, recurring: 0, not_recurring: 0 },
         })}
       />,
     );
@@ -575,7 +575,7 @@ describe('MerchantRulesClient — Delete rule and clear it from transactions (di
               transfer: kind === 'transfer' ? 1 : 0,
               rename: kind === 'rename' ? 1 : 0,
               not_transfer: 0,
-              attribution: kind === 'attribution' ? 1 : 0,
+              attribution: kind === 'attribution' ? 1 : 0, recurring: 0, not_recurring: 0
             },
           })}
         />,
@@ -659,7 +659,7 @@ describe('MerchantRulesClient — Delete rule and clear it from transactions (di
       <MerchantRulesClient
         {...baseProps({
           rows: [rule({ ruleKind: 'transfer', categoryId: null })],
-          kindCounts: { category: 0, transfer: 1, rename: 0, not_transfer: 0, attribution: 0 },
+          kindCounts: { category: 0, transfer: 1, rename: 0, not_transfer: 0, attribution: 0, recurring: 0, not_recurring: 0 },
         })}
       />,
     );
@@ -690,7 +690,7 @@ describe('MerchantRulesClient — Delete rule and restore original descriptions 
       <MerchantRulesClient
         {...baseProps({
           rows: [rule({ ruleKind: 'rename', categoryId: null, renameTo: "McDonald's" })],
-          kindCounts: { category: 0, transfer: 0, rename: 1, not_transfer: 0, attribution: 0 },
+          kindCounts: { category: 0, transfer: 0, rename: 1, not_transfer: 0, attribution: 0, recurring: 0, not_recurring: 0 },
         })}
       />,
     );
@@ -713,7 +713,7 @@ describe('MerchantRulesClient — Delete rule and restore original descriptions 
       <MerchantRulesClient
         {...baseProps({
           rows: [rule({ ruleKind: 'rename', categoryId: null, renameTo: "McDonald's" })],
-          kindCounts: { category: 0, transfer: 0, rename: 1, not_transfer: 0, attribution: 0 },
+          kindCounts: { category: 0, transfer: 0, rename: 1, not_transfer: 0, attribution: 0, recurring: 0, not_recurring: 0 },
         })}
       />,
     );
@@ -728,7 +728,7 @@ describe('MerchantRulesClient — Delete rule and restore original descriptions 
       <MerchantRulesClient
         {...baseProps({
           rows: [rule({ ruleKind: 'rename', categoryId: null, renameTo: "McDonald's" })],
-          kindCounts: { category: 0, transfer: 0, rename: 1, not_transfer: 0, attribution: 0 },
+          kindCounts: { category: 0, transfer: 0, rename: 1, not_transfer: 0, attribution: 0, recurring: 0, not_recurring: 0 },
         })}
       />,
     );
@@ -1042,7 +1042,7 @@ describe('MerchantRulesClient — an amount window and a person', () => {
       <MerchantRulesClient
         {...baseProps({
           rows: [rule({ amountMinCents: 12500, amountMaxCents: 15500 })],
-          kindCounts: { category: 1, transfer: 0, rename: 0, not_transfer: 0, attribution: 0 },
+          kindCounts: { category: 1, transfer: 0, rename: 0, not_transfer: 0, attribution: 0, recurring: 0, not_recurring: 0 },
         })}
       />,
     );
@@ -1054,7 +1054,7 @@ describe('MerchantRulesClient — an amount window and a person', () => {
       <MerchantRulesClient
         {...baseProps({
           rows: [rule({ amountMinCents: 12500, amountMaxCents: null })],
-          kindCounts: { category: 1, transfer: 0, rename: 0, not_transfer: 0, attribution: 0 },
+          kindCounts: { category: 1, transfer: 0, rename: 0, not_transfer: 0, attribution: 0, recurring: 0, not_recurring: 0 },
         })}
       />,
     );
@@ -1070,7 +1070,7 @@ describe('MerchantRulesClient — an amount window and a person', () => {
             rule({ id: 2, pattern: 'JOINT GYM', ruleKind: 'attribution', categoryId: null, attributedUserId: null }),
           ],
           people: [{ id: 9, name: 'Sam' }],
-          kindCounts: { category: 0, transfer: 0, rename: 0, not_transfer: 0, attribution: 2 },
+          kindCounts: { category: 0, transfer: 0, rename: 0, not_transfer: 0, attribution: 2, recurring: 0, not_recurring: 0 },
         })}
       />,
     );
@@ -1084,7 +1084,7 @@ describe('MerchantRulesClient — an amount window and a person', () => {
       <MerchantRulesClient
         {...baseProps({
           rows: [rule({ amountMinCents: 12500, amountMaxCents: 15500 })],
-          kindCounts: { category: 1, transfer: 0, rename: 0, not_transfer: 0, attribution: 0 },
+          kindCounts: { category: 1, transfer: 0, rename: 0, not_transfer: 0, attribution: 0, recurring: 0, not_recurring: 0 },
         })}
       />,
     );
@@ -1104,7 +1104,7 @@ describe('MerchantRulesClient — an amount window and a person', () => {
         {...baseProps({
           rows: [rule({ pattern: 'SAMS GYM', ruleKind: 'attribution', categoryId: null, attributedUserId: 9 })],
           people: [{ id: 9, name: 'Sam' }],
-          kindCounts: { category: 0, transfer: 0, rename: 0, not_transfer: 0, attribution: 1 },
+          kindCounts: { category: 0, transfer: 0, rename: 0, not_transfer: 0, attribution: 1, recurring: 0, not_recurring: 0 },
         })}
       />,
     );
@@ -1129,12 +1129,41 @@ describe('MerchantRulesClient — an amount window and a person', () => {
         {...baseProps({
           rows: [rule({ pattern: 'SAMS GYM', ruleKind: 'attribution', categoryId: null, attributedUserId: 9 })],
           people: [{ id: 9, name: 'Sam' }],
-          kindCounts: { category: 0, transfer: 0, rename: 0, not_transfer: 0, attribution: 1 },
+          kindCounts: { category: 0, transfer: 0, rename: 0, not_transfer: 0, attribution: 1, recurring: 0, not_recurring: 0 },
         })}
       />,
     );
     fireEvent.click(screen.getByRole('button', { name: /Actions for SAMS GYM/ }));
     expect(screen.getByRole('menuitem', { name: /^Delete rule$/ })).toBeTruthy();
     expect(screen.queryByRole('menuitem', { name: /clear from transactions/i })).toBeNull();
+  });
+});
+
+/** Spec 2026-10-05 §2.2. Marks are listed with the other rules, by kind, and can be deleted. */
+describe('MerchantRulesClient — recurring marks', () => {
+  it('gives each mark kind its own chip with a count', () => {
+    render(
+      <MerchantRulesClient
+        {...baseProps({ kindCounts: { category: 1, transfer: 0, rename: 0, not_transfer: 0, attribution: 0, recurring: 2, not_recurring: 1 } })}
+      />,
+    );
+    expect(screen.getByText('Recurring (2)').closest('a')!.getAttribute('href')).toContain('kind=recurring');
+    expect(screen.getByText('Not recurring (1)').closest('a')!.getAttribute('href')).toContain('kind=not_recurring');
+  });
+
+  it('labels a mark row and offers neither Apply now nor Edit -- a mark changes no transaction', () => {
+    render(<MerchantRulesClient {...baseProps({ rows: [rule({ pattern: 'RIVERSIDE GYM', ruleKind: 'recurring', categoryId: null })], impactCounts: { 1: 4 } })} />);
+    expect(screen.getByText('Recurring')).toBeTruthy();
+    openRowMenu('Actions for RIVERSIDE GYM');
+    expect(screen.queryByRole('menuitem', { name: /apply now/i })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'Edit' })).toBeNull();
+    expect(screen.getByRole('menuitem', { name: 'Delete rule' })).toBeTruthy();
+  });
+
+  it('says what deleting a mark does', () => {
+    render(<MerchantRulesClient {...baseProps({ rows: [rule({ pattern: 'RIVERSIDE GYM', ruleKind: 'not_recurring', categoryId: null })] })} />);
+    openRowMenu('Actions for RIVERSIDE GYM');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete rule' }));
+    expect(screen.getByRole('dialog').textContent).toContain('A recurring mark changes no transaction.');
   });
 });
