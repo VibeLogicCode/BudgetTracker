@@ -135,6 +135,22 @@ describe('dismissing one finding', () => {
     dismissInsight({ key: `unusual:${outlier}`, on: TODAY, dismissed: false });
     expect(householdInsights({ today: TODAY, viewer: adult() }).map((row) => row.key)).toContain(`unusual:${outlier}`);
   });
+
+  /** Spec 2026-10-05 §2.1: the Insights page shows the whole list the Dashboard caps. */
+  it('returns every finding with limit: null, still without the cleared ones', async () => {
+    await seed();
+    withHistory();
+    for (let n = 1; n <= 20; n += 1) {
+      spend('2026-08-20', `SHOP ${n}`, 6500);
+      spend('2026-08-20', `SHOP ${n}`, 6500);
+    }
+    const all = householdInsights({ today: TODAY, viewer: adult(), limit: null });
+    expect(all.length).toBeGreaterThan(INSIGHTS_MAX_ROWS);
+    dismissInsight({ key: all[0]!.key, on: TODAY });
+    const after = householdInsights({ today: TODAY, viewer: adult(), limit: null });
+    expect(after).toHaveLength(all.length - 1);
+    expect(householdInsights({ today: TODAY, viewer: adult() })).toHaveLength(INSIGHTS_MAX_ROWS);
+  });
 });
 
 /**

@@ -34,13 +34,27 @@ const KIND_LABEL: Record<InsightKind, string> = {
   creep: 'Went up',
 };
 
-export function NeedsALookCard({ rows }: { rows: InsightRow[] }) {
+export function NeedsALookCard({
+  rows,
+  /** Spec 2026-10-05 §2.1: the Dashboard's link to the full list on Insights. Insights itself passes none. */
+  allHref,
+}: {
+  rows: InsightRow[];
+  allHref?: string;
+}) {
   if (rows.length === 0) return null;
   return (
     <Card>
       <CardHeader
         title="Needs a look"
         description="Charges that stand out this month. Nothing here is a problem on its own; That’s fine clears one you have checked."
+        action={
+          allHref === undefined ? undefined : (
+            <Link href={allHref} className="text-sm font-medium text-accent-text">
+              All insights
+            </Link>
+          )
+        }
       />
       {/* Ruling D1: ListRow (Lane 0). The kind label moves from `.badge` to the shared Pill --
           this is the newer, semantic-tone vocabulary (see Pill.tsx's own docblock), and a second

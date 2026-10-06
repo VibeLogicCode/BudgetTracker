@@ -11,7 +11,7 @@ import { recordBalanceSnapshot } from '@/lib/networth';
 import { createManualTransaction } from '@/lib/transactions';
 import { createWarrantyItem } from '@/lib/warranty/items';
 import { createItemType } from '@/lib/warranty/types';
-import { addMonths, currentMonth, monthEnd, monthLabel, monthStart, todayIso } from '@/lib/dates';
+import { addDaysIso, addMonths, currentMonth, monthEnd, monthLabel, monthStart, todayIso } from '@/lib/dates';
 // Lane 1 (src/lib/savings-target.ts): not mocked, real DB, same as every other lib import here.
 import { saveSavingsTarget } from '@/lib/savings-target';
 import { createTestDb, type TestDb } from '../helpers/db';
@@ -34,6 +34,7 @@ vi.mock('next/headers', () => ({
 vi.mock('next/cache', () => ({
   revalidatePath: vi.fn(),
 }));
+import { revalidatePath } from 'next/cache';
 
 /**
  * v1.13.0 ruling R2: a self viewer's dashboard shows only the cards that survive (own
@@ -1149,8 +1150,11 @@ describe('dismissInsightAction (2026-09-20)', () => {
     const { listDismissedKeys } = await import('@/lib/insight-dismissals');
     const fd = new FormData();
     fd.set('key', `unusual:${mine}`);
+    vi.mocked(revalidatePath).mockClear();
     expect((await dismissInsightAction({}, fd)).error).toBeUndefined();
     expect([...listDismissedKeys()]).toEqual([`unusual:${mine}`]);
+    // Spec 2026-10-05 §2.1: the same finding is on Insights too.
+    expect(vi.mocked(revalidatePath).mock.calls.map((call) => call[0])).toEqual(expect.arrayContaining(['/dashboard', '/insights']));
   });
 });
 
@@ -1692,5 +1696,32 @@ describe('DashboardPage — the month total is stated once', () => {
     await householdWithALimit();
     const { container } = await dash();
     expect(container.textContent).toMatch(/1 over its limit/);
+  });
+});
+
+/** Spec 2026-10-05 §2.1. The Dashboard keeps its short Needs a look, and links to the rest. */
+describe('DashboardPage — Needs a look links to Insights', () => {
+  let t: TestDb | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  it('links the card to every insight, carrying the person pill', async () => {
+    t = createTestDb();
+    const adult = await createUser({ name: 'Adult', username: 'adult', password: 'correct horse battery', role: 'admin' });
+    const accountId = createAccount({ name: 'Everyday Chequing', type: 'chequing', ownerUserId: adult.id });
+    const today = todayIso();
+    const spend = (date: string, description: string, cents: number) =>
+      createManualTransaction({ accountId, date, description, amountCents: -cents, categoryId: null, attributedUserId: adult.id, userId: adult.id, actorRole: 'admin' });
+    // History first, or there is no baseline and the card hides itself.
+    spend(addDaysIso(today, -90), 'CEDAR PHONE CO', 6200);
+    spend(today, 'HARBOUR INSURANCE', 13400);
+    spend(today, 'HARBOUR INSURANCE', 13400);
+    currentUser.value = { id: adult.id, name: 'Adult', username: 'adult', role: 'admin', visibility: 'household' };
+
+    const { default: DashboardPage } = await import('@/app/(app)/dashboard/page');
+    render(await DashboardPage({ searchParams: Promise.resolve({ person: String(adult.id) }) }));
+    expect(screen.getByRole('link', { name: 'All insights' }).getAttribute('href')).toBe(`/insights?person=${adult.id}`);
   });
 });

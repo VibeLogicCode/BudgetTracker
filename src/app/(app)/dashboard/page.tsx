@@ -10,6 +10,7 @@ import { reviewQueueCount } from '@/lib/categorize/engine';
 import { addMonths, currentMonth, isMonthKey, monthEnd, monthLabel, monthStart, todayIso } from '@/lib/dates';
 import { listGoals } from '@/lib/goals';
 import { householdInsights } from '@/lib/insights';
+import { insightsHref } from '@/lib/insights-links';
 import { unreviewedRuleImports } from '@/lib/import/commit';
 import { listLoanSummaries, ruleLinkedPayments } from '@/lib/loans';
 import { netWorthHint, netWorthOverTime } from '@/lib/networth';
@@ -631,7 +632,7 @@ export default async function DashboardPage({
             household that has recorded no billing amounts reads no tile, rather than a
             confident "$0.00" that looks like a statement about their spending. `Recorded` is
             in the label, not just the hint: the number is the sum of what was typed in, and
-            the Recurring charges card on Loans & Coverage exists precisely because that
+            the Recurring charges card on Insights exists precisely because that
             differs from what the household actually pays. */}
         {recorded.itemCount === 0 ? null : (
           <StatTile
@@ -687,7 +688,11 @@ export default async function DashboardPage({
               always "as of today" (householdInsights takes `today`, never `month`), so a note is
               added only while it actually has something to say and the viewed month differs. */}
           {!isCurrentMonth && insights.length > 0 ? <AsOfTodayNote month={month} /> : null}
-          <NeedsALookCard rows={insights} />
+          <NeedsALookCard
+            rows={insights}
+            // Spec 2026-10-05 §2.1. Carries the person pill, as every other link on this page does.
+            allHref={insightsHref({ person: selfScoped ? null : scopeUserId, account: null })}
+          />
 
           {/* v1.26.0 Lane 3b. Self-hiding, same family as NeedsALookCard just above -- unlike that
               card, "unreviewed" has no month of its own (unreviewedRuleImports reads only whether

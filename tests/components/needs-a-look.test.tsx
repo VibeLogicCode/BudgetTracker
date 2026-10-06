@@ -61,4 +61,10 @@ describe('NeedsALookCard (ruling R6)', () => {
     expect(screen.getByText('Charged twice')).toBeTruthy();
     expect(screen.getByText('Went up')).toBeTruthy();
   });
+
+  /** Spec 2026-10-05 §2.1: the Dashboard's card links to the full list on Insights. */
+  it('links to every insight when the page passes allHref', () => {
+    render(<NeedsALookCard rows={[row()]} allHref="/insights?person=7" />);
+    expect(screen.getByRole('link', { name: 'All insights' }).getAttribute('href')).toBe('/insights?person=7');
+  });
 });

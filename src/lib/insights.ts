@@ -87,11 +87,19 @@ function earliestDate(scope: number | null): string | null {
 }
 
 /**
- * Newest-first, up to INSIGHTS_MAX_ROWS. Self-hides entirely (R6) when the household has too
+ * Newest-first, up to `limit` rows. Self-hides entirely (R6) when the household has too
  * little history to have a baseline at all, and respects R2 for a self viewer -- every query
  * below is scoped through ownerScope exactly like the rest of this release's readers.
  */
-export function householdInsights(input: { today: string; viewer: Viewer }): InsightRow[] {
+export function householdInsights(input: {
+  today: string;
+  viewer: Viewer;
+  /**
+   * Spec 2026-10-05 §2.1. How many rows: INSIGHTS_MAX_ROWS when omitted (the Dashboard card),
+   * null for every finding (the Insights page).
+   */
+  limit?: number | null;
+}): InsightRow[] {
   const { today } = input;
   const scope = ownerScope(input.viewer);
 
@@ -177,5 +185,7 @@ export function householdInsights(input: { today: string; viewer: Viewer }): Ins
     you the ninth finding rather than showing it to you.
   */
   const dismissed = listDismissedKeys();
-  return rows.filter((row) => !dismissed.has(row.key)).slice(0, INSIGHTS_MAX_ROWS);
+  const kept = rows.filter((row) => !dismissed.has(row.key));
+  const limit = input.limit === undefined ? INSIGHTS_MAX_ROWS : input.limit;
+  return limit === null ? kept : kept.slice(0, limit);
 }

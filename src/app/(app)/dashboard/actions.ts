@@ -100,6 +100,7 @@ export async function dismissInsightAction(
 
   dismissInsight({ key: parsed.data, on: todayIso() });
   revalidatePath('/dashboard');
+  revalidatePath('/insights'); // Spec 2026-10-05 §2.1: the full list lives there.
   return {};
 }
 
