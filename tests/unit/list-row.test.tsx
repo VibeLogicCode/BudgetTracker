@@ -74,4 +74,12 @@ describe('ListRow', () => {
     expect(screen.getByText('Groceries')).toBeTruthy();
     expect(screen.getByText('Housing')).toBeTruthy();
   });
+
+  /** Spec 2026-10-06 §2.2: the recurring page's phone rows need a line a reader sees whole. */
+  it('prints a detail line under the meta, which wraps rather than truncating', () => {
+    const { container } = renderRow(<ListRow title="MAPLE STREAMING" meta="Looks · Monthly" detail="expected Oct 12, nothing since" />);
+    const detail = screen.getByText('expected Oct 12, nothing since');
+    expect(detail.className).not.toContain('truncate');
+    expect(container.textContent).toContain('Looks · Monthly');
+  });
 });

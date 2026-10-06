@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { NAV, navGroups, visibleNav, REVIEW_NAV_HREF } from '@/components/app-shell/nav';
+import { NAV, activeNavItem, navGroups, visibleNav, REVIEW_NAV_HREF } from '@/components/app-shell/nav';
 import type { Viewer } from '@/lib/auth/viewer';
 
 const household: Viewer = { id: 1, role: 'member', visibility: 'household' };
@@ -96,5 +96,12 @@ describe('navGroups: the rail shows the money-flow sequence it always described'
   it('gives every NAV entry a group, so a new one cannot silently fall out of the rail', () => {
     const grouped = new Set(navGroups(household).flatMap((group) => group.items.map((i) => i.href)));
     for (const item of NAV) expect(grouped.has(item.href)).toBe(true);
+  });
+});
+
+describe('activeNavItem on the recurring page (spec 2026-10-06 §2.2)', () => {
+  it('keeps Insights lit on /insights/recurring, which has no nav entry of its own', () => {
+    expect(activeNavItem('/insights/recurring')?.href).toBe('/insights');
+    expect(NAV.map((item) => item.href)).not.toContain('/insights/recurring');
   });
 });

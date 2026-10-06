@@ -25,6 +25,7 @@ export function ListRow({
   icon,
   title,
   meta,
+  detail,
   amount,
   trailing,
   leading,
@@ -37,6 +38,11 @@ export function ListRow({
   title: React.ReactNode;
   /** Date, category, account -- small and muted, printed under the title. */
   meta?: React.ReactNode;
+  /**
+   * Spec 2026-10-06 §2.2. A second small line under `meta` that WRAPS instead of truncating -- for a
+   * sentence or a few tags a reader has to see whole on a phone (the recurring page's late line).
+   */
+  detail?: React.ReactNode;
   /** Right-aligned, tabular. Undefined renders no amount column at all (a non-money row). */
   amount?: React.ReactNode;
   /** A control: a category picker, a row menu, a confirm button. Sits after the amount, hard
@@ -76,6 +82,7 @@ export function ListRow({
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <p className="truncate text-sm font-semibold text-ink">{title}</p>
         {meta ? <p className="truncate text-xs text-subtle">{meta}</p> : null}
+        {detail ? <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">{detail}</div> : null}
       </div>
 
       {amount !== undefined ? (
