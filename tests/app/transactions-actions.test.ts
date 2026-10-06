@@ -44,6 +44,7 @@ vi.mock('next/headers', () => ({
 vi.mock('next/cache', () => ({
   revalidatePath: vi.fn(),
 }));
+import { revalidatePath } from 'next/cache';
 
 import { CROSS_ORIGIN_ERROR } from '@/lib/auth/csrf';
 import {
@@ -57,6 +58,7 @@ import {
   bulkConfirmGroupAction,
   bulkConfirmViewAction,
   bulkNoteAction,
+  bulkRecurringMarkAction,
   bulkRecategorizeGroupAction,
   bulkTransferAction,
   createLoanFromTransactionAction,
@@ -65,6 +67,7 @@ import {
   saveNoteAction,
   setAttributionAction,
   setCategoryAction,
+  setRecurringMarkAction,
   setRowTransferAction,
   unassignFromLoanAction,
 } from '@/app/(app)/transactions/actions';
@@ -2479,4 +2482,120 @@ describe('D2/D3: the loan-link actions resolve both rows through the viewer', ()
     await assignToLoanAction(formData({ transactionId: String(seeded.txnId), itemId: String(seeded.itemId) }));
     return seeded;
   }
+});
+
+/** Spec 2026-10-05 §2.2. The row menu's mark, mirroring setRowTransferAction's guards. */
+describe('setRecurringMarkAction', () => {
+  it('marks the row merchant recurring with one exact rule, and says so', async () => {
+    const { addTxn } = setup();
+    const id = addTxn('RIVERSIDE GYM', -4500);
+    expect(await setRecurringMarkAction({}, formData({ transactionId: String(id), mark: 'recurring' }))).toEqual({
+      message: 'RIVERSIDE GYM is marked recurring.',
+    });
+    expect(listRules('recurring').map((rule) => [rule.pattern, rule.matchType])).toEqual([['RIVERSIDE GYM', 'exact']]);
+  });
+
+  it('Not recurring replaces a recurring mark rather than sitting beside it', async () => {
+    const { addTxn } = setup();
+    const id = addTxn('RIVERSIDE GYM', -4500);
+    await setRecurringMarkAction({}, formData({ transactionId: String(id), mark: 'recurring' }));
+    expect(await setRecurringMarkAction({}, formData({ transactionId: String(id), mark: 'not_recurring' }))).toEqual({
+      message: 'RIVERSIDE GYM will not be listed as recurring.',
+    });
+    expect(listRules('recurring')).toEqual([]);
+    expect(listRules('not_recurring').map((rule) => rule.pattern)).toEqual(['RIVERSIDE GYM']);
+  });
+
+  it('clear takes either mark off', async () => {
+    const { addTxn } = setup();
+    const id = addTxn('RIVERSIDE GYM', -4500);
+    await setRecurringMarkAction({}, formData({ transactionId: String(id), mark: 'not_recurring' }));
+    expect(await setRecurringMarkAction({}, formData({ transactionId: String(id), mark: 'clear' }))).toEqual({
+      message: 'RIVERSIDE GYM is no longer marked.',
+    });
+    expect(listRules('not_recurring')).toEqual([]);
+  });
+
+  it('revalidates Transactions and Insights', async () => {
+    const { addTxn } = setup();
+    const id = addTxn('RIVERSIDE GYM', -4500);
+    vi.mocked(revalidatePath).mockClear();
+    await setRecurringMarkAction({}, formData({ transactionId: String(id), mark: 'recurring' }));
+    expect(vi.mocked(revalidatePath).mock.calls.map((call) => call[0])).toEqual(expect.arrayContaining(['/transactions', '/insights']));
+  });
+
+  it('refuses a mark it does not know, and writes nothing', async () => {
+    const { addTxn } = setup();
+    const id = addTxn('RIVERSIDE GYM', -4500);
+    expect(await setRecurringMarkAction({}, formData({ transactionId: String(id), mark: 'maybe' }))).toEqual({ error: 'Invalid request.' });
+    expect(listRules('recurring')).toEqual([]);
+  });
+
+  it('checks the origin before anything else', async () => {
+    setup();
+    sameOrigin.value = false;
+    expect((await setRecurringMarkAction({}, formData({ transactionId: '1', mark: 'recurring' }))).error).toBe(CROSS_ORIGIN_ERROR);
+  });
+
+  it('refuses a self-scoped viewer a row that is not theirs, and writes nothing', async () => {
+    const { addTxn } = setup();
+    const id = addTxn('RIVERSIDE GYM', -4500);
+    currentUser = { ...currentUser, role: 'member', visibility: 'self' };
+    expect((await setRecurringMarkAction({}, formData({ transactionId: String(id), mark: 'recurring' }))).error).toBe(NOT_YOURS_ERROR);
+    expect(listRules('recurring')).toEqual([]);
+  });
+
+  it('surfaces the rule-ownership refusal and writes nothing', async () => {
+    const { db, addTxn } = setup();
+    const bob = insertTestUser(db, { name: 'Bob', username: 'bob', role: 'member' });
+    upsertRuleFromCorrection({ pattern: 'RIVERSIDE GYM', matchType: 'exact', ruleKind: 'not_recurring', categoryId: null, createdBy: bob, actorRole: 'member' });
+    const id = addTxn('RIVERSIDE GYM', -4500);
+    currentUser = { ...currentUser, role: 'member' };
+    expect((await setRecurringMarkAction({}, formData({ transactionId: String(id), mark: 'recurring' }))).error).toBe(ruleOwnedError('Bob'));
+    expect(listRules('recurring')).toEqual([]);
+    expect(listRules('not_recurring')).toHaveLength(1);
+  });
+});
+
+/** Spec 2026-10-05 §2.2. The bulk bar's mark, mirroring bulkTransferAction. */
+describe('bulkRecurringMarkAction', () => {
+  it('marks each distinct merchant in the selection once', async () => {
+    const { addTxn } = setup();
+    const a = addTxn('RIVERSIDE GYM', -4500);
+    const b = addTxn('RIVERSIDE GYM', -4600);
+    const c = addTxn('CEDAR PHONE CO', -6200);
+    expect(await bulkRecurringMarkAction({}, formData({ ids: `${a},${b},${c}`, mark: 'recurring' }))).toEqual({
+      message: 'Marked 2 merchants as recurring.',
+    });
+    expect(listRules('recurring').map((rule) => rule.pattern).sort()).toEqual(['CEDAR PHONE CO', 'RIVERSIDE GYM']);
+  });
+
+  it('refuses an empty selection', async () => {
+    setup();
+    expect(await bulkRecurringMarkAction({}, formData({ ids: '', mark: 'recurring' }))).toEqual({ error: 'Invalid request.' });
+  });
+
+  it('refuses the whole batch when any row is not the viewer own, and writes nothing', async () => {
+    const { db, accountId, userId, addTxn } = setup();
+    const own = db.get<{ id: number }>(sql`
+      insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, attributed_user_id, created_by, created_at, updated_at)
+      values (${accountId}, '2026-03-02', 'RIVERSIDE GYM', 'RIVERSIDE GYM', -4500, ${userId}, ${userId}, ${nowIso()}, ${nowIso()})
+      returning id`).id;
+    const theirs = addTxn('CEDAR PHONE CO', -6200);
+    currentUser = { ...currentUser, role: 'member', visibility: 'self' };
+    expect((await bulkRecurringMarkAction({}, formData({ ids: `${own},${theirs}`, mark: 'recurring' }))).error).toBe(NOT_YOURS_ERROR);
+    expect(listRules('recurring')).toEqual([]);
+  });
+
+  /** Review Focus 2. */
+  it('a refusal over one merchant writes nothing for the others', async () => {
+    const { db, addTxn } = setup();
+    const bob = insertTestUser(db, { name: 'Bob', username: 'bob', role: 'member' });
+    upsertRuleFromCorrection({ pattern: 'CEDAR PHONE CO', matchType: 'exact', ruleKind: 'not_recurring', categoryId: null, createdBy: bob, actorRole: 'member' });
+    const a = addTxn('RIVERSIDE GYM', -4500);
+    const b = addTxn('CEDAR PHONE CO', -6200);
+    currentUser = { ...currentUser, role: 'member' };
+    expect((await bulkRecurringMarkAction({}, formData({ ids: `${a},${b}`, mark: 'recurring' }))).error).toBe(ruleOwnedError('Bob'));
+    expect(listRules('recurring')).toEqual([]);
+  });
 });

@@ -32,6 +32,7 @@ import {
   deleteManualTransaction,
   getTransaction,
   listTransactions,
+  merchantsOfTransactions,
   transactionOwners,
   updateTransactionNotes,
   type TransactionFilter,
@@ -55,7 +56,7 @@ import {
   type CategoryMatchResult,
   type RuleGuardedWriteResult,
 } from '@/lib/categorize/engine';
-import { ruleOwnedError, AMOUNT_BOUND_ORDER_ERROR } from '@/lib/categorize/rules';
+import { ruleOwnedError, AMOUNT_BOUND_ORDER_ERROR, setRecurringMarks, type RecurringMark } from '@/lib/categorize/rules';
 import { boundsProblem } from '@/lib/categorize/amount-bounds';
 
 export interface ActionState {
@@ -458,6 +459,60 @@ export async function bulkTransferAction(_prev: ActionState, formData: FormData)
   const changedSentence = `${verb} ${result.changed} ${noun} as ${complement}.`;
   const skipSentence = splitSkipSentence(result.skipped);
   return { message: skipSentence ? `${changedSentence} ${skipSentence}` : changedSentence };
+}
+
+const recurringMarkField = z.enum(['recurring', 'not_recurring', 'clear']);
+type RecurringMarkChoice = z.infer<typeof recurringMarkField>;
+
+function markOf(choice: RecurringMarkChoice): RecurringMark | null {
+  return choice === 'clear' ? null : choice;
+}
+
+/**
+ * Spec 2026-10-05 §2.2. The row menu's "Mark recurring" / "Not recurring" and the Insights card's
+ * buttons, which post the merchant's newest charge. Same visibility model as setRowTransferAction:
+ * a self viewer may mark a merchant from their own rows. The mark is a merchant rule, so
+ * setRecurringMarks' ownership refusal applies on top; nothing on the row itself changes.
+ */
+export async function setRecurringMarkAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  const user = await requireUser();
+  const parsed = z
+    .object({ transactionId: z.coerce.number().int().positive(), mark: recurringMarkField })
+    .safeParse({ transactionId: formData.get('transactionId'), mark: formData.get('mark') });
+  if (!parsed.success) return { error: 'Invalid request.' };
+  if (!allTransactionsVisible([parsed.data.transactionId], user)) return { error: NOT_YOURS_ERROR };
+  const merchants = merchantsOfTransactions([parsed.data.transactionId]);
+  const result = setRecurringMarks({ merchants, mark: markOf(parsed.data.mark), userId: user.id, actorRole: user.role });
+  if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
+  revalidatePath('/transactions');
+  revalidatePath('/insights');
+  const merchant = merchants[0] ?? 'This merchant';
+  if (parsed.data.mark === 'recurring') return { message: `${merchant} is marked recurring.` };
+  if (parsed.data.mark === 'not_recurring') return { message: `${merchant} will not be listed as recurring.` };
+  return { message: `${merchant} is no longer marked.` };
+}
+
+/** Spec 2026-10-05 §2.2. The bulk bar's "Mark recurring": every distinct merchant in the selection, all or nothing. */
+export async function bulkRecurringMarkAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  const user = await requireUser();
+  const ids = idList.parse(String(formData.get('ids') ?? ''));
+  const mark = recurringMarkField.safeParse(formData.get('mark'));
+  if (ids.length === 0 || !mark.success) return { error: 'Invalid request.' };
+  // Ruling R2 fix round 2: every id must resolve through the viewer, or nothing is written.
+  if (!allTransactionsVisible(ids, user)) return { error: NOT_YOURS_ERROR };
+  const merchants = merchantsOfTransactions(ids);
+  const result = setRecurringMarks({ merchants, mark: markOf(mark.data), userId: user.id, actorRole: user.role });
+  if (!result.ok) return { error: ruleOwnedError(result.ownerName) };
+  revalidatePath('/transactions');
+  revalidatePath('/insights');
+  const noun = result.merchants === 1 ? 'merchant' : 'merchants';
+  if (mark.data === 'recurring') return { message: `Marked ${result.merchants} ${noun} as recurring.` };
+  if (mark.data === 'not_recurring') return { message: `Marked ${result.merchants} ${noun} as not recurring.` };
+  return { message: `Cleared the mark on ${result.merchants} ${noun}.` };
 }
 
 export async function saveNoteAction(_prev: ActionState, formData: FormData): Promise<ActionState> {

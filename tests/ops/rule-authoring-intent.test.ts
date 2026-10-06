@@ -411,6 +411,12 @@ describe('v1.27.0 item 1: only an argued list of files may author a merchant rul
         'shows the pattern and the outcome, is making a statement about a merchant by definition.',
     ],
     [
+      'src/app/(app)/transactions/actions.ts',
+      'Spec 2026-10-05 §2.2. setRecurringMarkAction and bulkRecurringMarkAction reach setRecurringMarks ' +
+        'only. "Mark recurring" and "Not recurring" are statements about a MERCHANT -- the control names the ' +
+        'mark and nothing else, and no category, flag or link on the row changes.',
+    ],
+    [
       'src/lib/packs.ts',
       'Pack import: installing a named, versioned rule SET, chosen deliberately and reversible as ' +
         'a set. The statement is "use these rules", which is a statement about merchants in bulk.',

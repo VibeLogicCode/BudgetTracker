@@ -954,6 +954,22 @@ export function transactionOwners(ids: number[]): Map<number, number | null> {
   return new Map(rows.map((row) => [row.id, row.attributedUserId]));
 }
 
+/**
+ * Spec 2026-10-05 §2.2. The distinct merchants behind these rows, for a mark that is a fact about
+ * the merchant rather than the row. Like transactionOwners it takes no viewer: both callers
+ * (transactions/actions.ts) run allTransactionsVisible over the same ids first.
+ */
+export function merchantsOfTransactions(ids: number[]): string[] {
+  if (ids.length === 0) return [];
+  return getDb()
+    .selectDistinct({ merchant: transactions.normalizedMerchant })
+    .from(transactions)
+    .where(inArray(transactions.id, ids))
+    .orderBy(asc(transactions.normalizedMerchant))
+    .all()
+    .map((row) => row.merchant);
+}
+
 export function createManualTransaction(input: {
   accountId: number;
   date: string;

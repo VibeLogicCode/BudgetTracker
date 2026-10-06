@@ -113,6 +113,11 @@ const EXEMPT: { file: string; fn: string; why: string }[] = [
     why: 'not a read-model: returns transaction id and attributed_user_id only -- no amount, no description, no merchant, no joins. It exists so the bulk ownership pre-check in transactions/actions.ts costs one query instead of one getTransaction per selected id, and its callers compare the owners it returns against ownerScope(viewer) themselves before any write (item BL, v1.13.1).',
   },
   {
+    file: 'src/lib/transactions.ts',
+    fn: 'merchantsOfTransactions',
+    why: 'not a read-model: returns the distinct normalized merchants of rows its only callers (setRecurringMarkAction and bulkRecurringMarkAction, spec 2026-10-05) have already passed through allTransactionsVisible -- the same shape and the same pre-check as transactionOwners above.',
+  },
+  {
     file: 'src/lib/budgets.ts',
     fn: 'categorySpend',
     why: "internal resolver, investigated for task-3 (S-01) alongside categoryTransactions above. Its only caller is budgetProgress (this file), which has no viewer of its own -- so the real question is whether any caller of budgetProgress ever hands it a raw, user-supplied id. task-3 fix round 1 (Important 2): the true invariant is narrower than 'nothing user-supplied reaches it' -- a user-supplied id DOES reach it, but only when ownerScope(viewer) is null, i.e. a viewer already entitled to any member's figures, because `??` makes a non-null ownerScope win. dashboard/page.tsx's `scopeUserId = ownerScope(viewer) ?? urlScope` (from `?person=`) and bills.ts's safeToSpend both resolve ownerScope FIRST, so a self-scoped viewer can never steer either through the URL or a form value -- only a household-visibility viewer or an admin (ownerScope null) ever lets the user-supplied value through, and both are already entitled to any member's figures. budgets/page.tsx's personal loop runs only over listAttributablePeople() already filtered to the viewer's own id for a self-scoped viewer. The remaining callers -- notify/evaluate/budget.ts, pace.ts, monthly.ts and digest.ts -- are server-side notification evaluators with no request at all: they loop over member ids the evaluator itself derived from the household roster, never a value read from a URL or form.",
@@ -255,8 +260,10 @@ describe('ruling R2: every read-model helper takes a viewer', () => {
   // F-05 (task-9): raised from 32 to 34, the actual count with recurringCharges and recurringLoad
   // added above. Raised in the same commit that adds them, for the reason the last two raises
   // give: a floor left behind reality is a floor that permits silent deletions.
-  it('the named lists cannot shrink below 34 entries', () => {
-    expect(REQUIRE_VIEWER.length + EXEMPT.length).toBeGreaterThanOrEqual(34);
+  //
+  // Spec 2026-10-05: raised from 34 to 41, the actual count with merchantsOfTransactions added.
+  it('the named lists cannot shrink below 41 entries', () => {
+    expect(REQUIRE_VIEWER.length + EXEMPT.length).toBeGreaterThanOrEqual(41);
   });
 });
 
