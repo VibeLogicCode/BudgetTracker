@@ -30,13 +30,14 @@ All notable changes to Budget Tracker are recorded here.
   amount, next expected, last charge or merchant. The choices are part of the page address.
 - **Late.** A merchant you marked or track that has not charged for more than 7 days past its
   expected date is tagged Late and stays on the list instead of dropping off. After a card is
-  replaced, pick it under Account and show Late.
+  replaced, pick it under Account and show Late. Late merchants are not counted in the
+  about-a-month figure.
 - **Forming merchants are listed**: two charges about a month or a year apart, one short of a
   rhythm, each with Mark recurring and Not recurring.
 - **A price that went up** shows on the merchant's row, up from the usual amount to the new one.
-- **Expected charges in Coming up.** On the Dashboard, each merchant you marked recurring shows its
-  next charge, tagged Expected, at about its usual amount. Expected rows are estimates and are not
-  in the card's totals or in what is left to spend.
+- **Expected charges in Coming up.** On the Dashboard, each merchant you marked recurring that
+  charges on a rhythm shows its next charge, tagged Expected, at about its usual amount. Expected
+  rows are estimates and are not in the card's totals or in what is left to spend.
 
 ### Changed
 
@@ -44,8 +45,9 @@ All notable changes to Budget Tracker are recorded here.
   how much they come to a month, how many are late, how many Looks recurring are left to review and
   how many are forming.
 - **The Transactions row menu toggles the mark**: Mark recurring, or Unmark recurring once marked.
-  Not recurring is set on Insights; a merchant marked that way shows Clear "not recurring".
+  Not recurring is set on the full recurring charges page; a merchant marked that way shows Clear "not recurring".
 - **Mark recurring in the bulk bar skips transfer rows**, so the count is the merchants actually marked.
+- **A merchant you marked reads a rhythm from two charges** about a month or a year apart, so it gets a next expected date sooner.
 
 ## [1.54.0] - 2026-10-06
 

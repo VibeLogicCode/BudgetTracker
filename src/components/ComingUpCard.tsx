@@ -106,6 +106,7 @@ export function ComingUpCard({
   const hiddenBills = withinBound.length - shown.filter((entry) => entry.kind === 'bill').length;
   const hiddenExpected = expectedWithinBound.length - shown.filter((entry) => entry.kind === 'expected').length;
   const showsExpected = shown.some((entry) => entry.kind === 'expected');
+  const EXPECTED_SOURCE_SENTENCE = ' Expected rows are the next charges of merchants you marked recurring.';
   const budgetPhrase = hasBudgetedLimits
     ? `Budgets have ${formatCents(budgetedRemainingCents)} left this month`
     : 'No category limits set yet';
@@ -128,8 +129,8 @@ export function ComingUpCard({
               // bill overdue by more than COMING_UP_OVERDUE_DAYS is dropped from this card
               // entirely (see withinBound above), so the clause now names the actual bound
               // rather than reading as "every overdue bill, no matter how old".
-              'Bills due in the next 30 days, and anything overdue in the last 90 days.'
-            : 'Bills due in the next 30 days.'
+              `Bills due in the next 30 days, and anything overdue in the last 90 days.${showsExpected ? EXPECTED_SOURCE_SENTENCE : ''}`
+            : `Bills due in the next 30 days.${showsExpected ? EXPECTED_SOURCE_SENTENCE : ''}`
         }
         action={
           withinBound.length > 0 ? (
@@ -186,6 +187,16 @@ export function ComingUpCard({
       ) : (
         <>
           <ul className="border-t border-line text-sm">
+            {withinBound.length === 0 && bills.length > 0 ? (
+              // Checkpoint 2 ruling: the empty state's Review B item 4 hint, kept when expected rows fill the list.
+              <li className="border-b border-line px-4 py-3 text-sm text-muted sm:px-5">
+                Nothing due in the next 30 days. Older overdue bills are on the{' '}
+                <Link href="/warranties" className="font-medium text-accent-text">
+                  Loans &amp; Coverage page
+                </Link>
+                .
+              </li>
+            ) : null}
             {/* Ruling D1: ListRow (Lane 0) -- its own docblock names this exact <li> as one of the
                 hand-rolled rows it generalises. Item 3 adds the days-remaining pill for a
                 not-yet-overdue bill; an overdue one keeps its existing red badge instead (more

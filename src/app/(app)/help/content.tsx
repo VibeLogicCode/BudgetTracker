@@ -156,7 +156,7 @@ export const HELP_SECTIONS: HelpSection[] = [
         </P>
         <P>
           <B>Coming up</B> lists the bills due in the next 30 days. It also lists the next charge of each merchant you
-          marked recurring, tagged <B>Expected</B>, at about its usual amount, on the date its past charges point to.
+          marked recurring that charges on a rhythm, tagged <B>Expected</B>, at about its usual amount, on the date its past charges point to.
           Expected rows are estimates and are not in the card&rsquo;s totals or in what is left to spend: a recurring
           charge is usually already inside a category budget, so counting it again would count it twice. A merchant you
           track as an item shows through that item&rsquo;s own bill instead.
@@ -591,8 +591,8 @@ export const HELP_SECTIONS: HelpSection[] = [
           has not charged since.
         </P>
         <P>
-          <B>Mark recurring</B> moves a merchant to Known recurring; <B>Not recurring</B> takes it off every list and
-          keeps it off. Both are on the full list. On Transactions, a row&rsquo;s menu offers <B>Mark recurring</B>, or{' '}
+          <B>Mark recurring</B> moves a merchant to Known recurring, and <B>Unmark</B> takes the mark off;{' '}
+          <B>Not recurring</B> takes it off every list and keeps it off. All three are on the full list. On Transactions, a row&rsquo;s menu offers <B>Mark recurring</B>, or{' '}
           <B>Unmark recurring</B> once marked, and <B>Mark recurring</B> is in the bar that appears when you select rows
           (transfer rows are skipped). A merchant marked Not recurring shows <B>Clear &ldquo;not recurring&rdquo;</B> in
           its row menu instead; an admin also sees every mark under <B>Settings → Merchant rules</B>.

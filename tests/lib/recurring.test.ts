@@ -705,6 +705,16 @@ describe('expectedRecurringCharges', () => {
     expect(expected(ctx, selfOnly(ctx.childId))).toEqual([]);
     expect(expected(ctx).map((charge) => charge.merchant)).toEqual(['CEDAR PHONE CO']);
   });
+
+  /** Checkpoint 2 ruling: the bill's installment is the Coming up row; an Expected row would double it. */
+  it('leaves out a marked merchant a bill item covers, though the bill does not track it', async () => {
+    const ctx = await setup();
+    ctx.cadence({ merchant: 'HARBOUR INSURANCE', count: 4, endsDaysAgo: 10, cents: 13400 });
+    ctx.mark('HARBOUR INSURANCE', 'recurring');
+    ctx.item({ name: 'Harbour Insurance', typeId: ctx.itemType('Bill', 'bill') });
+    expect(expected(ctx)).toEqual([]);
+    expect(read(ctx).known.map((row) => [row.merchant, row.knownBy, row.tracked])).toEqual([['HARBOUR INSURANCE', 'mark', null]]);
+  });
 });
 
 describe('recurringLoad: the figure on the header line and the dashboard tile', () => {

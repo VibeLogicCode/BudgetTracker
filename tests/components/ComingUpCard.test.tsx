@@ -327,4 +327,20 @@ describe('ComingUpCard expected recurring charges', () => {
     const { container } = render(<ComingUpCard {...base} bills={[]} expected={[charge({ expectedDate: addDaysIso(today, -20), late: true })]} />);
     expect(container.textContent).not.toMatch(/missed payment|subscription|cancel|wasted|forgotten/i);
   });
+
+  it('still points to older overdue bills when only expected rows are in the window', () => {
+    const ancient: UpcomingBill = { itemId: 2, name: 'Municipal tax', kind: 'bill', dueDate: addDaysIso(today, -COMING_UP_OVERDUE_DAYS - 10), amountCents: 50_000, installmentId: 9, overdue: true };
+    const { container } = render(<ComingUpCard {...base} bills={[ancient]} expected={[charge()]} />);
+    expect(container.textContent).toContain('Older overdue bills are on the');
+    expect(screen.getByRole('link', { name: 'Loans & Coverage page' }).getAttribute('href')).toBe('/warranties');
+    expect(screen.getByText('CEDAR PHONE CO')).toBeTruthy();
+  });
+
+  it('says where expected rows come from, only when one is shown', () => {
+    const { container } = render(<ComingUpCard {...base} bills={[bill]} expected={[charge()]} />);
+    expect(container.textContent).toContain('Expected rows are the next charges of merchants you marked recurring.');
+    cleanup();
+    const { container: plain } = render(<ComingUpCard {...base} bills={[bill]} />);
+    expect(plain.textContent).not.toContain('Expected rows are');
+  });
 });

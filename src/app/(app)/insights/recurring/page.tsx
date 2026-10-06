@@ -80,8 +80,8 @@ export default async function RecurringChargesPage({
           )}
           {rows.some((row) => row.late) ? (
             <p className="border-t border-line px-4 py-3 text-sm text-muted sm:px-5">
-              Late: a merchant you marked or track whose next charge is more than {RECURRING_LATE_GRACE_DAYS} days past the date its
-              rhythm gives, with nothing since. After a card is replaced, pick it under Account and show Late: these are the merchants
+              Late: a merchant you marked or track that has not charged for more than {RECURRING_LATE_GRACE_DAYS} days past the date its
+              rhythm gives. After a card is replaced, pick it under Account and show Late: these are the merchants
               that charged that card and have gone quiet.
             </p>
           ) : null}

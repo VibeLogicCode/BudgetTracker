@@ -236,6 +236,20 @@ function covers(needle: Needle, merchant: string): boolean {
   return needle.bidirectional && merchant.length >= MIN_NEEDLE_CHARS && needle.needle.includes(merchant);
 }
 
+/** An item's name and vendor as bidirectional needles; shorter than MIN_NEEDLE_CHARS matches everything. */
+function itemNeedles(items: Array<{ itemId: number; itemName: string; vendor: string | null }>): Needle[] {
+  const out: Needle[] = [];
+  for (const item of items) {
+    for (const text of [item.itemName, item.vendor]) {
+      if (text === null) continue;
+      const needle = text.trim().toUpperCase();
+      if (needle.length < MIN_NEEDLE_CHARS) continue;
+      out.push({ kind: 'item', itemId: item.itemId, itemName: item.itemName, needle, bidirectional: true });
+    }
+  }
+  return out;
+}
+
 /**
  * Every rule and every live item that could cover a merchant, in two queries, both scoped by
  * `warranty_items.owner_user_id`. Rules come first in the returned order and win any tie: a rule
@@ -277,15 +291,26 @@ function needles(today: string, scope: number | null): Needle[] {
     needle: rule.needle.trim().toUpperCase(),
     bidirectional: false,
   }));
-  for (const item of items) {
-    for (const text of [item.itemName, item.vendor]) {
-      if (text === null) continue;
-      const needle = text.trim().toUpperCase();
-      if (needle.length < MIN_NEEDLE_CHARS) continue;
-      out.push({ kind: 'item', itemId: item.itemId, itemName: item.itemName, needle, bidirectional: true });
-    }
-  }
+  out.push(...itemNeedles(items));
   return out;
+}
+
+/**
+ * Spec 2026-10-06 §2.6, checkpoint 2 ruling. Live bill-kind items, as needles. A bill never makes a
+ * merchant tracked (RECURRING_ITEM_KINDS leaves bills out: its schedule replaces a cadence), but its
+ * unpaid installments are Coming up rows already, so a marked merchant one of them covers by name or
+ * vendor must not be listed there again as an Expected row. Same owner scope as needles().
+ */
+function billNeedles(today: string, scope: number | null): Needle[] {
+  const ownerClause = scope === null ? [] : [eq(warrantyItems.ownerUserId, scope)];
+  const items = getDb()
+    .select({ itemId: warrantyItems.id, itemName: warrantyItems.name, vendor: warrantyItems.vendor })
+    .from(warrantyItems)
+    .innerJoin(warrantyItemTypes, eq(warrantyItemTypes.id, warrantyItems.typeId))
+    .where(and(eq(warrantyItemTypes.kind, 'bill'), notEnded(today), ...ownerClause))
+    .orderBy(asc(warrantyItems.id))
+    .all();
+  return itemNeedles(items);
 }
 
 /**
@@ -461,14 +486,17 @@ export interface ExpectedCharge {
 /**
  * Spec 2026-10-06 §2.6. Known merchants BY MARK only, with a rhythm, whose next charge falls on or
  * before today + `days`: a tracked merchant already shows through its item's own rows, so a marked
- * merchant something covers is left out too. The overdue bound is the card's (COMING_UP_OVERDUE_DAYS),
+ * merchant something covers -- or a bill item covers by name or vendor -- is left out too. The overdue bound is the card's (COMING_UP_OVERDUE_DAYS),
  * applied there as it is to bills. Scoped like upcomingBills -- the viewer only, no person pill.
  */
 export function expectedRecurringCharges(input: { today: string; days: number; viewer: Viewer }): ExpectedCharge[] {
   const windowEnd = addDaysIso(input.today, input.days);
   const out: ExpectedCharge[] = [];
+  // Checkpoint 2 ruling: a bill item's installments already stand for this charge on the card.
+  const bills = billNeedles(input.today, ownerScope(input.viewer));
   for (const row of recurringCharges({ today: input.today, ownerUserId: null, viewer: input.viewer, accountId: null }).known) {
     if (row.knownBy !== 'mark' || row.tracked !== null) continue;
+    if (bills.some((needle) => covers(needle, row.merchant))) continue;
     if (row.nextExpected === null || row.typicalCents === null || row.nextExpected > windowEnd) continue;
     out.push({
       merchant: row.merchant,

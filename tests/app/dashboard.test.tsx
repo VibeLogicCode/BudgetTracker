@@ -1741,8 +1741,8 @@ describe('DashboardPage — Coming up lists expected recurring charges', () => {
     const adult = await createUser({ name: 'Adult', username: 'adult', password: 'correct horse battery', role: 'admin' });
     const accountId = createAccount({ name: 'Everyday Chequing', type: 'chequing', ownerUserId: adult.id });
     const today = todayIso();
-    // Thirty days apart, the newer twenty days ago: next expected is ten days out, whatever the month.
-    for (const daysAgo of [50, 20]) {
+    // Thirty days apart, the newer thirty days ago: next expected is today, inside this month whatever the day.
+    for (const daysAgo of [60, 30]) {
       createManualTransaction({
         accountId,
         date: addDaysIso(today, -daysAgo),

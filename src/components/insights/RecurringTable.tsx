@@ -51,7 +51,7 @@ export function RecurringTable({ rows, person, today }: { rows: RecurringChargeR
             meta={`${TIER_LABEL[row.tier]} · ${rhythmLabel(row)} · ${row.accounts.map((account) => account.name).join(', ')}`}
             detail={
               <>
-                <span>Last {dayLabel(row.lastDate, today)}</span>
+                <span>Last {`${dayLabel(row.lastDate, today)} · ${formatCents(row.lastAmountCents)}`}</span>
                 {row.nextExpected === null ? null : (
                   <span>{row.nextExpected < today ? nextExpectedText(row, today) : `next ${nextExpectedText(row, today)}`}</span>
                 )}
@@ -96,7 +96,7 @@ export function RecurringTable({ rows, person, today }: { rows: RecurringChargeR
                 <td>{rhythmLabel(row)}</td>
                 <td className="tabnum text-right">{money(row.typicalCents)}</td>
                 <td className="tabnum text-right">{money(row.monthlyCents)}</td>
-                <td className="tabnum whitespace-nowrap text-muted">{dayLabel(row.lastDate, today)}</td>
+                <td className="tabnum whitespace-nowrap text-muted">{`${dayLabel(row.lastDate, today)} · ${formatCents(row.lastAmountCents)}`}</td>
                 <td className={row.late ? 'text-danger' : 'text-muted'}>{nextExpectedText(row, today)}</td>
                 <td className="text-muted">{row.accounts.map((account) => account.name).join(', ')}</td>
                 <td>

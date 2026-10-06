@@ -92,4 +92,10 @@ describe('RecurringTable', () => {
     const { container } = render(<RecurringTable rows={[row(), late, single]} person={null} today={TODAY} />);
     expect(container.textContent).not.toMatch(/subscription|wasted|forgotten|cancel|missed payment/i);
   });
+
+  it('shows the last charge’s date and amount, so a merchant marked after one charge still shows what it charged', () => {
+    render(<RecurringTable rows={[row({ merchant: 'CEDAR PHONE CO', tier: 'known', knownBy: 'mark', cadence: null, chargeCount: 1, typicalCents: null, monthlyCents: null, nextExpected: null, lastAmountCents: 6200, lastDate: '2026-10-01' })]} person={null} today={TODAY} />);
+    expect(table().getByText('Oct 1 · $62.00')).toBeTruthy();
+    expect(cards().getByText('Last Oct 1 · $62.00')).toBeTruthy();
+  });
 });
