@@ -1,5 +1,9 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
+import { writeStagedFile } from '@/lib/import/staging';
 
 /**
  * v1.13.0 controller ruling: hiding Import from a self viewer's nav (micro-ruling M6) is not
@@ -63,5 +67,68 @@ describe('ImportPage', () => {
     const names = element.props.accounts.map((a) => a.name);
     expect(names).toContain('Joint Chequing');
     expect(names).not.toContain('The House');
+  });
+});
+
+/**
+ * v1.55.2. After "Add a bank" saves a profile for a file the import screen had staged, the wizard
+ * links back to /import?stagingId=&filename=. The page reads that file again with the SAME
+ * detection the batch list uses (now including the new profile) and opens it, so the person
+ * finishes importing the file they started with instead of choosing it a second time.
+ */
+describe('ImportPage — reopening a staged file by id', () => {
+  let tempDir: string;
+  let originalDataDir: string | undefined;
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-import-page-'));
+    originalDataDir = process.env.DATA_DIR;
+    process.env.DATA_DIR = tempDir;
+  });
+
+  afterEach(() => {
+    if (originalDataDir === undefined) delete process.env.DATA_DIR;
+    else process.env.DATA_DIR = originalDataDir;
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  async function renderWith(params: Record<string, string>) {
+    current = createSeededTestDb();
+    const admin = insertTestUser(current.db, { name: 'Admin', username: 'admin', role: 'admin' });
+    insertTestAccount(current.db, { name: 'Joint Chequing', type: 'chequing' });
+    currentUser.value = { id: admin, name: 'Admin', username: 'admin', role: 'admin', visibility: 'household' };
+    const { default: ImportPage } = await import('@/app/(app)/import/page');
+    const rendered = (await ImportPage({ searchParams: Promise.resolve(params) })) as { props: { children: unknown[] } };
+    return (rendered.props.children as { props?: Record<string, unknown> }[]).find(
+      (child) => child?.props?.accounts !== undefined,
+    ) as { props: { initialDetection?: Record<string, unknown> | null; initialNotice?: string | null } };
+  }
+
+  it('opens the held file, detected against the current profiles', async () => {
+    const stagingId = writeStagedFile(fs.readFileSync(path.join(process.cwd(), 'fixtures', 'scotia.csv')));
+
+    const batch = await renderWith({ stagingId, filename: 'scotia.csv' });
+
+    expect(batch.props.initialDetection).toMatchObject({
+      stagingId,
+      filename: 'scotia.csv',
+      profile: { name: 'Scotiabank Chequing/Debit' },
+      source: 'csv',
+    });
+    expect(batch.props.initialNotice ?? null).toBeNull();
+  });
+
+  it('says the file is gone, rather than opening nothing, when the server no longer holds it', async () => {
+    const batch = await renderWith({ stagingId: '00000000-0000-4000-8000-000000000000', filename: 'scotia.csv' });
+
+    expect(batch.props.initialDetection ?? null).toBeNull();
+    expect(batch.props.initialNotice).toBe('This file is no longer held on the server. Choose it again.');
+  });
+
+  it('ignores a malformed id instead of building a path from it', async () => {
+    const batch = await renderWith({ stagingId: '../../budget.db', filename: 'x.csv' });
+
+    expect(batch.props.initialDetection ?? null).toBeNull();
+    expect(batch.props.initialNotice).toBe('This file is no longer held on the server. Choose it again.');
   });
 });

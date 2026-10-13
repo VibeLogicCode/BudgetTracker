@@ -10,11 +10,59 @@ import { monthLabel } from '@/lib/dates';
 import { monthState, openMonths } from '@/lib/month-close';
 import { CloseMonthCard, type OpenMonthView } from '@/components/CloseMonthCard';
 import { SendDigestNow } from '@/components/SendDigestNow';
+import { detectHeldFile } from '@/lib/import/batch';
+import { STAGED_FILE_GONE_SENTENCE, heldFileFromParams } from '@/lib/import/held-file';
+import type { ImportMapping } from '@/lib/import/mapping';
+import { ImportLimitError } from '@/lib/import/parse';
+import { StagingError } from '@/lib/import/staging';
 import { BatchClient } from './batch-client';
+import type { DetectionResult } from './import-client';
 
 export const dynamic = 'force-dynamic';
 
-export default async function ImportPage() {
+/**
+ * v1.55.2. The file named by `?stagingId=&filename=` -- how "Add a bank" hands back the file it
+ * just saved a profile for -- read again with the batch list's own detection (detectHeldFile, the
+ * same body detectStagedFile runs) so it opens exactly as if it had been dropped again, now with
+ * the new profile among the candidates. A file the server no longer holds becomes the sentence
+ * that asks for it again, shown above the drop zone.
+ */
+function reopenHeldFile(
+  params: Record<string, string | string[] | undefined>,
+  profiles: { id: number; name: string; mapping: ImportMapping }[],
+  accounts: { id: number; name: string; importProfileId: number | null }[],
+): { initialDetection: DetectionResult | null; initialNotice: string | null } {
+  const held = heldFileFromParams(params);
+  if (held === null) return { initialDetection: null, initialNotice: null };
+  try {
+    const detected = detectHeldFile({ ...held, profiles, accounts });
+    return {
+      initialDetection: {
+        stagingId: held.stagingId,
+        filename: held.filename,
+        profile: detected.profile.profile,
+        profileReason: detected.profile.reason,
+        profileConfidence: detected.profile.confidence,
+        source: detected.profile.source,
+        account: detected.account.account,
+        accountReason: detected.account.reason,
+        accountConfidence: detected.account.confidence,
+      },
+      initialNotice: null,
+    };
+  } catch (error) {
+    if (error instanceof StagingError) return { initialDetection: null, initialNotice: STAGED_FILE_GONE_SENTENCE };
+    if (error instanceof ImportLimitError) return { initialDetection: null, initialNotice: error.message };
+    throw error;
+  }
+}
+
+export default async function ImportPage({
+  searchParams,
+}: {
+  // Optional so the page still renders when called bare (tests/app/import-page.test.ts).
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+} = {}) {
   const user = await requireUser();
   // Controller ruling: nav hiding alone is insufficient -- the review-queue/import-account
   // queries this page touches are unscoped, so a self viewer must be refused server-side too.
@@ -24,6 +72,17 @@ export default async function ImportPage() {
   const allAccounts = listAccounts({}, user).filter((a) => acceptsTransactions(a.type));
   const csvAccounts = allAccounts.filter((a) => !isSimplefinManaged(a.id));
   const managed = allAccounts.filter((a) => isSimplefinManaged(a.id));
+  // A profile with an unreadable stored mapping (see ProfileRecord.mappingError) is not
+  // offered here — there is nothing usable to import a file with. Nor is a DEACTIVATED
+  // profile (v1.6.0, MUST-4.1) — the whole point of is_active is to let a household get
+  // an unused built-in bank preset off this exact list. Both keep showing on the managers
+  // page: an unreadable one so it can be deleted, an inactive one so it can be reactivated.
+  const profiles = listProfiles()
+    .filter(hasReadableMapping)
+    .filter((p) => p.isActive)
+    .map((p) => ({ id: p.id, name: p.name, isBuiltin: p.isBuiltin, mapping: p.mapping }));
+  const accounts = csvAccounts.map((a) => ({ id: a.id, name: a.name, importProfileId: a.importProfileId }));
+  const { initialDetection, initialNotice } = reopenHeldFile((await searchParams) ?? {}, profiles, accounts);
 
   /**
    * 2026-09-08. Months that have ended and nobody has confirmed complete. The card self-hides when
@@ -71,16 +130,10 @@ export default async function ImportPage() {
       opened. A household that drops one file reaches the identical wizard one click later.
     */}
     <BatchClient
-      accounts={csvAccounts.map((a) => ({ id: a.id, name: a.name, importProfileId: a.importProfileId }))}
-      // A profile with an unreadable stored mapping (see ProfileRecord.mappingError) is not
-      // offered here — there is nothing usable to import a file with. Nor is a DEACTIVATED
-      // profile (v1.6.0, MUST-4.1) — the whole point of is_active is to let a household get
-      // an unused built-in bank preset off this exact list. Both keep showing on the managers
-      // page: an unreadable one so it can be deleted, an inactive one so it can be reactivated.
-      profiles={listProfiles()
-        .filter(hasReadableMapping)
-        .filter((p) => p.isActive)
-        .map((p) => ({ id: p.id, name: p.name, isBuiltin: p.isBuiltin, mapping: p.mapping }))}
+      accounts={accounts}
+      profiles={profiles}
+      initialDetection={initialDetection}
+      initialNotice={initialNotice}
       history={listImportHistory(25)}
       simplefinManaged={managed.map((a) => a.name)}
       // Active users, offered on each card value's person select (v1.6.0, MUST-6.1). An

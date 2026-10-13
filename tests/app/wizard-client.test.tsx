@@ -103,3 +103,77 @@ describe('WizardClient — date format detection reaches the new-bank wizard too
     expect(alert.textContent).toContain('DD/MM/YYYY');
   });
 });
+
+/**
+ * v1.55.2. "Add a bank" from a file the import screen already staged opens the wizard as
+ * /import/wizard?stagingId=&filename=. It used to ignore both and ask for the same file again.
+ */
+describe('WizardClient — opened on a staged file', () => {
+  const HELD = { stagingId: '77777777-7777-4777-8777-777777777777', filename: 'new-bank.csv' };
+  const ROWS = [
+    ['Posted', 'Payee', 'Amount'],
+    ['2026-04-02', 'CORNER MARKET', '-18.40'],
+  ];
+
+  it('reads that file\'s columns through the staged path, without asking for a file', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      json: async () => ({ stagingId: HELD.stagingId, encoding: 'utf-8', rows: ROWS }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const view = render(<WizardClient starterMapping={getBuiltinPreset('TD Chequing/Debit')} heldFile={HELD} />);
+
+    await waitFor(() => expect(view.getByText('CORNER MARKET')).toBeTruthy());
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(String(url)).toBe('/api/import/raw-preview');
+    expect(typeof init?.body).toBe('string');
+    expect(JSON.parse(String(init?.body))).toEqual({ stagingId: HELD.stagingId });
+    expect(view.container.querySelector('input[type="file"]')).toBeNull();
+    expect(view.getByText('new-bank.csv')).toBeTruthy();
+  });
+
+  it('offers to choose the file again when the server no longer holds it', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: false,
+        status: 410,
+        json: async () => ({ error: 'Staged upload not found or expired', code: 'staged_file_missing' }),
+      })),
+    );
+
+    const view = render(<WizardClient starterMapping={getBuiltinPreset('TD Chequing/Debit')} heldFile={HELD} />);
+
+    expect(await view.findByText('This file is no longer held on the server. Choose it again.')).toBeTruthy();
+    expect(view.container.querySelector('input[type="file"]')).not.toBeNull();
+  });
+
+  it('keeps the staged file when the profile is saved, and leads back to importing it', async () => {
+    const actions = await import('@/app/(app)/import/actions');
+    const save = vi.mocked(actions.saveWizardProfileAction);
+    save.mockResolvedValueOnce({ message: 'Saved "Corner Bank".' });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, json: async () => ({ stagingId: HELD.stagingId, encoding: 'utf-8', rows: ROWS }) })),
+    );
+
+    const view = render(<WizardClient starterMapping={getBuiltinPreset('TD Chequing/Debit')} heldFile={HELD} />);
+    await waitFor(() => expect(view.getByText('CORNER MARKET')).toBeTruthy());
+    fireEvent.change(view.getByLabelText(/profile name/i), { target: { value: 'Corner Bank' } });
+    fireEvent.change(view.getByLabelText(/institution/i), { target: { value: 'Corner Bank' } });
+    fireEvent.submit(view.getByRole('button', { name: /save profile/i }).closest('form')!);
+
+    await waitFor(() => expect(save).toHaveBeenCalled());
+    const sent = save.mock.calls[0]![1] as FormData;
+    expect(sent.get('stagingId')).toBe(HELD.stagingId);
+    expect(sent.get('keepStaged')).toBe('1');
+
+    const link = (await view.findByRole('link', { name: /import new-bank\.csv/i })) as HTMLAnchorElement;
+    const href = new URL(link.getAttribute('href')!, 'http://nas.local');
+    expect(href.pathname).toBe('/import');
+    expect(href.searchParams.get('stagingId')).toBe(HELD.stagingId);
+    expect(href.searchParams.get('filename')).toBe('new-bank.csv');
+  });
+});

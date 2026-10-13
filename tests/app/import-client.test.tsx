@@ -1538,3 +1538,202 @@ describe('ImportClient — the pickers wait for a file, and say what happened wh
     expect(await findByText(/We could not tell which account this file belongs to/)).toBeTruthy();
   });
 });
+
+/**
+ * v1.55.2. A file the batch screen staged is opened here with `initialDetection`, and in that mode
+ * there is no file input at all -- the file is held on the server by its staging id. The id used
+ * to live only inside `detection`, which both pickers null out so the notice stops explaining a
+ * value somebody changed by hand. That threw the file away with it: the next Preview posted the
+ * form as multipart with no file in it, and the screen showed "No file uploaded" with nothing to
+ * choose a file with.
+ */
+describe('ImportClient — a staged file survives the pickers being changed', () => {
+  const STAGED = '33333333-3333-4333-8333-333333333333';
+  const ACCOUNTS = [
+    { id: 10, name: 'Joint Chequing', importProfileId: 1 },
+    { id: 11, name: 'Joint Visa', importProfileId: 2 },
+  ];
+
+  function detection(over: Record<string, unknown> = {}) {
+    return {
+      stagingId: STAGED,
+      filename: 'new-bank.csv',
+      profile: null as { id: number; name: string } | null,
+      profileReason: 'None of your import profiles could read this file.',
+      profileConfidence: 'none' as const,
+      source: 'csv' as const,
+      account: null as { id: number; name: string } | null,
+      accountReason: 'Nothing in this file says which account it belongs to.',
+      accountConfidence: 'none' as const,
+      ...over,
+    };
+  }
+
+  function previewCall(fetchMock: ReturnType<typeof vi.fn>) {
+    return fetchMock.mock.calls.find(([url]) => String(url).includes('/api/import/preview'));
+  }
+
+  it('changing the Account select still previews the staged file by id, as JSON, not as an empty multipart post', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      json: async () => previewBody({ stagingId: STAGED, filename: 'new-bank.csv', accountId: 10, profileId: 1 }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { container, getByLabelText } = render(
+      <ImportClient accounts={ACCOUNTS} profiles={PROFILES} simplefinManaged={[]} initialDetection={detection()} />,
+    );
+
+    fireEvent.change(getByLabelText(/Account/), { target: { value: '10' } });
+    fireEvent.submit(container.querySelector('form')!);
+
+    await waitFor(() => expect(previewCall(fetchMock)).toBeTruthy());
+    const init = previewCall(fetchMock)?.[1] as RequestInit | undefined;
+    expect(typeof init?.body).toBe('string');
+    expect(JSON.parse(String(init?.body))).toMatchObject({ stagingId: STAGED, filename: 'new-bank.csv', accountId: 10, profileId: 1 });
+  });
+
+  it('changing the Import profile select still previews the staged file by id, as JSON', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      json: async () => previewBody({ stagingId: STAGED, filename: 'new-bank.csv', accountId: 11, profileId: 1 }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { container, getByLabelText } = render(
+      <ImportClient
+        accounts={ACCOUNTS}
+        profiles={PROFILES}
+        simplefinManaged={[]}
+        initialDetection={detection({ account: { id: 11, name: 'Joint Visa' }, accountConfidence: 'likely' })}
+      />,
+    );
+
+    fireEvent.change(getByLabelText(/Import profile/), { target: { value: '1' } });
+    fireEvent.submit(container.querySelector('form')!);
+
+    await waitFor(() => expect(previewCall(fetchMock)).toBeTruthy());
+    const init = previewCall(fetchMock)?.[1] as RequestInit | undefined;
+    expect(typeof init?.body).toBe('string');
+    expect(JSON.parse(String(init?.body))).toMatchObject({ stagingId: STAGED, accountId: 11, profileId: 1 });
+  });
+
+  it('keeps naming the file after a picker changes, rather than dropping back to an empty drop zone', () => {
+    const { container, getByLabelText, getByText } = render(
+      <ImportClient accounts={ACCOUNTS} profiles={PROFILES} simplefinManaged={[]} initialDetection={detection()} />,
+    );
+    fireEvent.change(getByLabelText(/Account/), { target: { value: '10' } });
+    expect(getByText('new-bank.csv')).toBeTruthy();
+    expect(container.querySelector('input[type="file"]')).toBeNull();
+  });
+});
+
+/**
+ * v1.55.2. The Set it up screen for a CSV no profile could read tells the person to add the bank.
+ * The link used to be a bare /import/wizard, which asked for the very same file again.
+ */
+describe('ImportClient — Add a bank carries the staged file', () => {
+  it('links the wizard to the staged file on the Set it up screen, in the notice itself', () => {
+    const { getAllByRole } = render(
+      <ImportClient
+        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
+        profiles={PROFILES}
+        simplefinManaged={[]}
+        initialDetection={{
+          stagingId: '44444444-4444-4444-8444-444444444444',
+          filename: 'new bank & co.csv',
+          profile: null,
+          profileReason: 'None of your import profiles could read this file.',
+          profileConfidence: 'none',
+          source: 'csv',
+          account: null,
+          accountReason: 'Nothing in this file says which account it belongs to.',
+          accountConfidence: 'none',
+        }}
+      />,
+    );
+
+    const links = getAllByRole('link', { name: /add a bank/i }) as HTMLAnchorElement[];
+    expect(links.length).toBeGreaterThanOrEqual(2);
+    for (const link of links) {
+      const url = new URL(link.getAttribute('href')!, 'http://nas.local');
+      expect(url.pathname).toBe('/import/wizard');
+      expect(url.searchParams.get('stagingId')).toBe('44444444-4444-4444-8444-444444444444');
+      expect(url.searchParams.get('filename')).toBe('new bank & co.csv');
+    }
+    // One of them sits inside the notice that tells the person to use it.
+    expect(links.some((link) => link.closest('[role="status"]') !== null)).toBe(true);
+  });
+
+  it('stays a plain link to the wizard while no file is held', () => {
+    const { getByRole } = render(
+      <ImportClient accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]} profiles={PROFILES} simplefinManaged={[]} />,
+    );
+    expect(getByRole('link', { name: /add a bank/i }).getAttribute('href')).toBe('/import/wizard');
+  });
+});
+
+/**
+ * v1.55.2. Staged bytes are swept from DATA_DIR/tmp. A file opened from the batch list after that
+ * used to land on a bare "Staged upload not found or expired" with no file control anywhere on the
+ * screen. The server now names the case with a code, and the screen offers to choose it again.
+ */
+describe('ImportClient — a staged file the server no longer holds', () => {
+  const GONE = { error: 'Staged upload not found or expired', code: 'staged_file_missing' };
+  const RESOLVED = {
+    stagingId: '55555555-5555-4555-8555-555555555555',
+    filename: 'march.csv',
+    profile: { id: 1, name: 'TD Chequing/Debit' },
+    profileReason: 'TD Chequing/Debit read all 5 of 5 rows in this file.',
+    profileConfidence: 'certain' as const,
+    source: 'csv' as const,
+    account: { id: 10, name: 'Joint Chequing' },
+    accountReason: '4 of 5 rows in this file are already in Joint Chequing.',
+    accountConfidence: 'certain' as const,
+  };
+
+  it('says so in a sentence and offers a file control to choose it again', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 410, json: async () => GONE })));
+    const { container, findByText, queryByText } = render(
+      <ImportClient
+        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
+        profiles={PROFILES}
+        simplefinManaged={[]}
+        initialDetection={RESOLVED}
+      />,
+    );
+
+    expect(await findByText('This file is no longer held on the server. Choose it again.')).toBeTruthy();
+    expect(container.querySelector('input[type="file"]')).not.toBeNull();
+    expect(queryByText('Staged upload not found or expired')).toBeNull();
+  });
+
+  it('reads the re-chosen file and previews that one by its new staging id', async () => {
+    const fresh = '66666666-6666-4666-8666-666666666666';
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).includes('/detect')) {
+        return { ok: true, json: async () => ({ ...RESOLVED, stagingId: fresh }) };
+      }
+      return String(init?.body ?? '').includes(fresh)
+        ? { ok: true, json: async () => previewBody({ stagingId: fresh }) }
+        : { ok: false, status: 410, json: async () => GONE };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { container, findByText, getByRole } = render(
+      <ImportClient
+        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
+        profiles={PROFILES}
+        simplefinManaged={[]}
+        initialDetection={RESOLVED}
+      />,
+    );
+    await findByText('This file is no longer held on the server. Choose it again.');
+
+    putFileOnPage(container);
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/detect'))).toBe(true));
+    await waitFor(() => expect((getByRole('button', { name: /preview/i }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.submit(container.querySelector('form')!);
+
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.filter(([, init]) => String((init as RequestInit | undefined)?.body ?? '').includes(fresh))).toHaveLength(1),
+    );
+  });
+});

@@ -7,6 +7,7 @@ import { POST as rawPreviewRoute } from '@/app/api/import/raw-preview/route';
 import { createSession, SESSION_COOKIE_NAME } from '@/lib/auth/session';
 import { setUserVisibility } from '@/lib/auth/users';
 import { MAX_FILE_BYTES } from '@/lib/import/parse';
+import { writeStagedFile } from '@/lib/import/staging';
 
 const fixture = (name: string) => fs.readFileSync(path.join(process.cwd(), 'fixtures', name));
 
@@ -113,5 +114,80 @@ describe('POST /api/import/raw-preview', () => {
     expect(response.status).toBe(403);
     const tmp = path.join(tempDir, 'tmp');
     expect(fs.existsSync(tmp) ? fs.readdirSync(tmp) : []).toHaveLength(0);
+  });
+});
+
+/**
+ * v1.55.2. "Add a bank" from a file the import screen already staged: the wizard reads that
+ * file's columns by its staging id instead of asking for the same file again. Before this the
+ * route took only a multipart `file`, so a JSON body was refused as "No file uploaded".
+ */
+describe('POST /api/import/raw-preview with a staged file (JSON { stagingId })', () => {
+  function stagedRequest(body: unknown, sessionToken = token) {
+    return new Request('http://nas.local:3000/api/import/raw-preview', {
+      method: 'POST',
+      headers: {
+        origin: 'http://nas.local:3000',
+        host: 'nas.local:3000',
+        cookie: `${SESSION_COOKIE_NAME}=${sessionToken}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it('returns the same rows as the multipart path for the same bytes, without staging a second copy', async () => {
+    const bytes = fixture('scotia.csv');
+    const uploaded = await rawPreviewRoute(uploadRequest(new File([bytes], 'scotia.csv', { type: 'text/csv' })));
+    const fromUpload = (await uploaded.json()) as { stagingId: string; rows: string[][]; encoding: string };
+    const before = fs.readdirSync(path.join(tempDir, 'tmp')).length;
+
+    const response = await rawPreviewRoute(stagedRequest({ stagingId: fromUpload.stagingId }));
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { stagingId: string; rows: string[][]; encoding: string };
+    expect(body.rows).toEqual(fromUpload.rows);
+    expect(body.encoding).toBe(fromUpload.encoding);
+    expect(body.stagingId).toBe(fromUpload.stagingId);
+    expect(fs.readdirSync(path.join(tempDir, 'tmp'))).toHaveLength(before);
+  });
+
+  it('honours an explicit encoding the same way the multipart path does', async () => {
+    const stagingId = writeStagedFile(fixture('td-chequing-win1252.csv'));
+    const response = await rawPreviewRoute(stagedRequest({ stagingId, encoding: 'windows-1252' }));
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as { encoding: string }).encoding).toBe('windows-1252');
+  });
+
+  it('410s an unknown staging id with a code the client can recognise', async () => {
+    const response = await rawPreviewRoute(stagedRequest({ stagingId: '00000000-0000-4000-8000-000000000000' }));
+    expect(response.status).toBe(410);
+    const body = (await response.json()) as { error: string; code: string };
+    expect(body.error).toMatch(/expired|not found/i);
+    expect(body.code).toBe('staged_file_missing');
+  });
+
+  it('400s a malformed staging id before any path is built from it', async () => {
+    const response = await rawPreviewRoute(stagedRequest({ stagingId: '../../budget.db' }));
+    expect(response.status).toBe(400);
+    expect(typeof ((await response.json()) as { error: unknown }).error).toBe('string');
+  });
+
+  it('403s a self-scoped viewer before reading the staged file', async () => {
+    const stagingId = writeStagedFile(fixture('scotia.csv'));
+    const kidId = insertTestUser(current!.db, { name: 'Kid', username: 'kid', role: 'member' });
+    setUserVisibility(kidId, 'self');
+    const response = await rawPreviewRoute(stagedRequest({ stagingId }, createSession(kidId).token));
+    expect(response.status).toBe(403);
+  });
+
+  it('rejects an unauthenticated request', async () => {
+    const stagingId = writeStagedFile(fixture('scotia.csv'));
+    const request = new Request('http://nas.local:3000/api/import/raw-preview', {
+      method: 'POST',
+      headers: { origin: 'http://nas.local:3000', host: 'nas.local:3000', 'content-type': 'application/json' },
+      body: JSON.stringify({ stagingId }),
+    });
+    expect((await rawPreviewRoute(request)).status).toBe(401);
   });
 });

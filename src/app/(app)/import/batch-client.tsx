@@ -10,7 +10,7 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { Pill, type PillTone } from '@/components/ui/Pill';
 import { buttonClass } from '@/components/ui/Button';
 import type { ImportMapping } from '@/lib/import/mapping';
-import { ImportClient, type AccountOption, type ProfileOption, type PersonOption } from './import-client';
+import { ImportClient, type AccountOption, type DetectionResult, type ProfileOption, type PersonOption } from './import-client';
 import type { ImportHistoryRow } from '@/lib/import/commit';
 
 /**
@@ -65,20 +65,42 @@ const STATUS_TONE: Record<BatchRow['status'], PillTone> = {
   unsupported: 'neutral',
 };
 
+/** What a row already knows, in the shape ImportClient is seeded with. */
+function detectionFor(row: BatchRow & { stagingId: string }): DetectionResult {
+  return {
+    stagingId: row.stagingId,
+    filename: row.filename,
+    profile: row.profile,
+    profileReason: row.reason ?? '',
+    profileConfidence: row.profileConfidence ?? 'none',
+    source: row.source ?? 'csv',
+    account: row.account,
+    accountReason: row.reason ?? '',
+    accountConfidence: row.accountConfidence ?? 'none',
+  };
+}
+
 export function BatchClient(props: {
   accounts: AccountOption[];
   profiles: ProfileOption[];
   history: ImportHistoryRow[];
   simplefinManaged: string[];
   people?: PersonOption[];
+  /**
+   * v1.55.2. A file the server already holds, detected by the page from `?stagingId=` -- how the
+   * wizard hands back the file it just saved a profile for. Opens straight onto it.
+   */
+  initialDetection?: DetectionResult | null;
+  /** v1.55.2. Something the page has to say on arrival, e.g. that the handed-back file is gone. */
+  initialNotice?: string | null;
 }) {
-  const { history } = props;
+  const { history, initialDetection = null, initialNotice = null, ...shared } = props;
   const [rows, setRows] = useState<BatchRow[] | null>(null);
-  const [open, setOpen] = useState<BatchRow | null>(null);
+  const [open, setOpen] = useState<DetectionResult | null>(initialDetection);
   const [confirming, setConfirming] = useState(false);
   const [outcomes, setOutcomes] = useState<CommitOutcome[] | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(initialNotice);
   const [showHistory, setShowHistory] = useState(false);
 
   const ready = useMemo(() => (rows ?? []).filter((row) => row.status === 'ready'), [rows]);
@@ -182,23 +204,9 @@ export function BatchClient(props: {
         // A row is a different file: remounting is what stops the previous row's mapping and
         // pickers leaking into this one, which is the defect v1.37.0's detect-on-choose fixed for
         // the single-file page and would otherwise reappear here.
-        key={open.stagingId ?? open.filename}
-        {...props}
-        initialDetection={
-          open.stagingId === null
-            ? null
-            : {
-                stagingId: open.stagingId,
-                filename: open.filename,
-                profile: open.profile,
-                profileReason: open.reason ?? '',
-                profileConfidence: open.profileConfidence ?? 'none',
-                source: open.source ?? 'csv',
-                account: open.account,
-                accountReason: open.reason ?? '',
-                accountConfidence: open.accountConfidence ?? 'none',
-              }
-        }
+        key={open.stagingId}
+        {...shared}
+        initialDetection={open}
         onBackToList={() => setOpen(null)}
         onDiscard={() => {
           // Off the list and back to it. The staged bytes are left to the ordinary sweep that
@@ -363,7 +371,9 @@ export function BatchClient(props: {
                   <button
                     type="button"
                     disabled={!openable}
-                    onClick={() => setOpen(row)}
+                    onClick={() => {
+                      if (row.stagingId !== null) setOpen(detectionFor({ ...row, stagingId: row.stagingId }));
+                    }}
                     className="flex w-full flex-wrap items-center justify-between gap-2 px-4 py-3 text-left hover:bg-surface-2 disabled:cursor-default disabled:hover:bg-transparent sm:px-5"
                   >
                     <span className="flex min-w-0 flex-col">

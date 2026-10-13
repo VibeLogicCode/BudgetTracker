@@ -137,6 +137,9 @@ describe('POST /api/import/preview', () => {
       }),
     );
     expect(response.status).toBe(410);
+    // v1.55.2: the code is what lets the client offer to re-choose the file instead of showing
+    // a bare error on a screen that has no file control.
+    expect(((await response.json()) as { code?: string }).code).toBe('staged_file_missing');
   });
 
   it('413s an oversized upload and leaves the staging directory empty (review finding 4)', async () => {

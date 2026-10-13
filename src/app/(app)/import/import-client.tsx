@@ -20,7 +20,7 @@ import type { ImportMapping } from '@/lib/import/mapping';
  * 'use client' module never value-imports a server module (tests/ops/client-bundle.test.ts) --
  * the route's own response is typed by its return, and this is the shape the browser reads.
  */
-interface DetectionResult {
+export interface DetectionResult {
   stagingId: string;
   filename: string;
   profile: { id: number; name: string } | null;
@@ -31,6 +31,7 @@ interface DetectionResult {
   accountReason: string;
   accountConfidence: 'certain' | 'likely' | 'none';
 }
+import { STAGED_FILE_GONE_SENTENCE, STAGED_FILE_MISSING, addBankHref, type HeldFile } from '@/lib/import/held-file';
 import type { CardValueSummary, PreviewResult } from '@/lib/import/preview';
 import type { ImportHistoryRow } from '@/lib/import/commit';
 // F-03 (v1.31.0): the sentence half of the post-commit balance check. Pure module (formatCents
@@ -264,6 +265,22 @@ export function ImportClient({
    * than none, and both selects stay live either way.
    */
   const [detection, setDetection] = useState<DetectionResult | null>(initialDetection ?? null);
+  /**
+   * v1.55.2. The file this screen is working on, once it is staged on the server -- the ONE place
+   * every hop reads the staging id from (Preview, a re-preview, the commit, the Add a bank link).
+   *
+   * Its own state rather than read off `detection`, because `detection` is the explanatory notice
+   * and both pickers null it the moment somebody sets one by hand. While the id lived there, that
+   * dropped the file too: with no file input on a screen opened from the batch list, the next
+   * Preview posted an empty form and came back "No file uploaded" on a screen with no way to
+   * choose a file. Set when a file is staged, replaced when another is chosen, and cleared only
+   * when the server says the bytes are gone.
+   */
+  const [staged, setStaged] = useState<HeldFile | null>(
+    initialDetection === null ? null : { stagingId: initialDetection.stagingId, filename: initialDetection.filename },
+  );
+  /** The server said the staged bytes are gone (swept from DATA_DIR/tmp): offer to choose again. */
+  const [stagedGone, setStagedGone] = useState(false);
   /** True while hop 1 is in flight, so the card can say it is reading rather than sit silent. */
   const [detecting, setDetecting] = useState(false);
   /**
@@ -336,6 +353,9 @@ export function ImportClient({
     setRuleOffer(null);
     setPreview(null);
     setDetection(null);
+    // A new file replaces the held one; until it is staged there is nothing to preview by id.
+    setStaged(null);
+    setStagedGone(false);
     setDetecting(true);
     try {
       const formData = new FormData();
@@ -351,6 +371,7 @@ export function ImportClient({
       // every `=== null` check below and crash the page on `.name`. Absent and "could not tell"
       // are the same thing here, so they are stored the same way.
       setDetection({ ...detected, profile: detected.profile ?? null, account: detected.account ?? null });
+      setStaged({ stagingId: detected.stagingId, filename: detected.filename });
       // A detection that could not tell leaves the picker where the household left it -- `?? id`
       // rather than a fallback of its own, so "no answer" and "this answer" stay distinguishable.
       /**
@@ -377,21 +398,42 @@ export function ImportClient({
   }
 
   /**
-   * Hop 2. The file was staged by detectFrom above, so this sends the staging id and whichever ids
-   * the pickers now hold -- no second upload, however many times a picker is changed and Preview
-   * pressed again.
+   * v1.55.2. The routes answer a staging id whose bytes are gone with a 410 and
+   * `code: 'staged_file_missing'`. On a screen opened from the batch list there is no file control
+   * at all, so a bare error there was a dead end. This turns it into the sentence and the drop zone
+   * (see the render below), and disables the pickers until a file is chosen again. True when it
+   * handled the response, so the caller stops there.
+   */
+  function heldFileWasLost(body: { code?: unknown }): boolean {
+    if (body.code !== STAGED_FILE_MISSING) return false;
+    setStaged(null);
+    setStagedGone(true);
+    // The notice explains a file that is no longer there.
+    setDetection(null);
+    setHasFile(false);
+    setPreview(null);
+    setError(null);
+    return true;
+  }
+
+  /**
+   * Hop 2. The file was staged by detectFrom above (or by the batch screen), so this sends the
+   * staging id and whichever ids the pickers now hold -- no second upload, however many times a
+   * picker is changed and Preview pressed again.
    *
    * The multipart fallback exists for the case detection never ran or failed (its own error is
    * already on screen): posting the form as it stands is still better than refusing to preview.
+   * It is only ever reached with a drop zone on screen, because a held file is never dropped
+   * without one being put back (`staged === null` renders it).
    */
   async function upload(formData: FormData) {
     setError(null);
     setSummary(null);
     setRuleOffer(null);
 
-    const staged = detection?.stagingId ?? null;
+    const held = staged;
     const response =
-      staged === null
+      held === null
         ? await (async () => {
             formData.set('accountId', String(accountId));
             formData.set('profileId', String(profileId));
@@ -401,17 +443,20 @@ export function ImportClient({
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({
-              stagingId: staged,
-              filename: detection?.filename ?? '',
+              stagingId: held.stagingId,
+              filename: held.filename,
               accountId,
               profileId,
             }),
           });
     const body = await response.json();
     if (!response.ok) {
+      if (heldFileWasLost(body)) return;
       setError(body.error ?? 'Upload failed');
       return;
     }
+    // The multipart fallback stages a copy of its own; from here on that is the file held.
+    setStaged({ stagingId: (body as PreviewResult).stagingId, filename: (body as PreviewResult).filename });
     setPreview(body as PreviewResult);
     setMapping((body as PreviewResult).mapping);
     setForkAccountName(accounts.find((a) => a.id === accountId)?.name ?? '');
@@ -471,7 +516,7 @@ export function ImportClient({
   // preview.mapping says) can fire against a mapping that was never confirmed to parse this
   // file at all (release review finding C).
   async function rePreview(next: ImportMapping) {
-    if (!preview) return;
+    if (!preview || staged === null) return;
     const previous = mapping;
     setMapping(next);
     setBusy(true);
@@ -479,12 +524,13 @@ export function ImportClient({
       const response = await fetch('/api/import/preview', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ stagingId: preview.stagingId, filename: preview.filename, accountId, profileId, mapping: next }),
+        body: JSON.stringify({ stagingId: staged.stagingId, filename: staged.filename, accountId, profileId, mapping: next }),
       });
       const body = await response.json();
       if (!response.ok) {
-        setError(body.error ?? 'Preview failed');
         setMapping(previous);
+        if (heldFileWasLost(body)) return;
+        setError(body.error ?? 'Preview failed');
         return;
       }
       setPreview(body as PreviewResult);
@@ -498,16 +544,17 @@ export function ImportClient({
   // mid-import is the realistic case) would otherwise leave the button disabled forever,
   // with rows possibly already committed and no way to find out from this screen.
   async function commit() {
-    if (!preview || !mapping) return;
+    if (!preview || !mapping || staged === null) return;
     setBusy(true);
     try {
       const response = await fetch('/api/import/commit', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ stagingId: preview.stagingId, filename: preview.filename, accountId, profileId, mapping }),
+        body: JSON.stringify({ stagingId: staged.stagingId, filename: staged.filename, accountId, profileId, mapping }),
       });
       const body = await response.json();
       if (!response.ok) {
+        if (heldFileWasLost(body)) return;
         setError(body.error ?? 'Import failed');
         return;
       }
@@ -571,7 +618,9 @@ export function ImportClient({
         title="Import"
         description="Upload a statement, check what it found, then add it. Nothing is written until you say so."
         actions={
-          <a href="/import/wizard" className={buttonClass('secondary')}>
+          // Carries the held file (v1.55.2), so the wizard opens on its columns rather than
+          // asking for the same file again.
+          <a href={addBankHref(staged)} className={buttonClass('secondary')}>
             Add a bank
           </a>
         }
@@ -727,8 +776,13 @@ export function ImportClient({
                   {detection.profile === null && detection.source === 'csv' ? (
                     <>
                       {`We could not tell which account this file belongs to or which profile reads it. `}
-                      Pick both below — or if this bank is new here, <strong>Add a bank</strong> at the top of this
-                      page walks through its columns once and remembers them.
+                      Pick both below — or if this bank is new here,{' '}
+                      {/* The link itself, here where the advice is given (v1.55.2), carrying this
+                          file so the wizard reads its columns without asking for it again. */}
+                      <a className="font-semibold underline underline-offset-2" href={addBankHref(staged)}>
+                        Add a bank
+                      </a>{' '}
+                      walks through this file&rsquo;s columns once and remembers them.
                     </>
                   ) : detection.account === null ? (
                     `We could not tell which account this file belongs to, though it reads as ${detection.profile?.name ?? 'an OFX/QFX file'}. Pick the account, then press Preview.`
@@ -746,7 +800,11 @@ export function ImportClient({
                 opened ON a file, the control is replaced by the file's own name -- the two pickers
                 below it still do everything they did, so nothing is taken away.
               */}
-              {initialDetection === null ? (
+              {stagedGone ? <Notice tone="warning">{STAGED_FILE_GONE_SENTENCE}</Notice> : null}
+              {/* The drop zone comes back whenever no file is held -- including on a screen opened
+                  on a staged file whose bytes have since been swept (v1.55.2), where it is the only
+                  way forward. */}
+              {initialDetection === null || staged === null ? (
                 <FileDrop
                   name="file"
                   accept=".csv,.ofx,.qfx,text/csv"
@@ -760,7 +818,7 @@ export function ImportClient({
                 />
               ) : (
                 <p className="text-sm text-ink">
-                  <span className="font-medium">{initialDetection.filename}</span>
+                  <span className="font-medium">{staged.filename}</span>
                   <span className="text-muted"> — already read. Change either picker below to re-read it.</span>
                 </p>
               )}
@@ -1028,7 +1086,7 @@ export function ImportClient({
 
       <p className="text-sm text-muted">
         Importing from a bank that is not listed? Either adjust the columns in the preview editor above (editing a built-in profile automatically saves a
-        copy for this account and leaves the shared preset untouched), or <a className="font-medium text-accent-text underline underline-offset-2" href="/import/wizard">set up a new bank profile from a
+        copy for this account and leaves the shared preset untouched), or <a className="font-medium text-accent-text underline underline-offset-2" href={addBankHref(staged)}>set up a new bank profile from a
         sample file</a>.
       </p>
     </div>

@@ -1,9 +1,10 @@
 'use client';
 
-import { useActionState, useMemo, useState } from 'react';
+import { useActionState, useEffect, useMemo, useState } from 'react';
 import { MappingEditor } from '@/components/MappingEditor';
 import { FormError } from '@/components/FormError';
 import { SubmitButton } from '@/components/SubmitButton';
+import { buttonClass } from '@/components/ui/Button';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { Notice } from '@/components/ui/Notice';
 import { PageHeader } from '@/components/ui/PageHeader';
@@ -11,6 +12,7 @@ import { TableWrap } from '@/components/ui/Table';
 import { Field, inputClass } from '@/components/ui/form';
 import type { ImportMapping } from '@/lib/import/mapping';
 import { detectDateFormat } from '@/lib/import/detect-date-format';
+import { STAGED_FILE_GONE_SENTENCE, STAGED_FILE_MISSING, importHeldFileHref, type HeldFile } from '@/lib/import/held-file';
 import { saveWizardProfileAction, type WizardState } from '../actions';
 
 const initial: WizardState = {};
@@ -18,13 +20,70 @@ const initial: WizardState = {};
 const fileInputClass =
   'text-sm text-muted file:mr-3 file:rounded-md file:border-0 file:bg-accent-soft file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-accent-soft-fg';
 
-export function WizardClient({ starterMapping }: { starterMapping: ImportMapping }) {
+/** Where the file the wizard was opened on stands. 'none' is the wizard opened on no file at all. */
+type HeldState = 'none' | 'reading' | 'read' | 'gone' | 'failed';
+
+export function WizardClient({
+  starterMapping,
+  heldFile = null,
+}: {
+  starterMapping: ImportMapping;
+  /**
+   * v1.55.2. A file the import screen already staged ("Add a bank" from a file no profile could
+   * read). The wizard reads its columns by id instead of asking for the same file again, keeps it
+   * when the profile is saved, and leads straight back to importing it.
+   */
+  heldFile?: HeldFile | null;
+}) {
   const [mapping, setMapping] = useState<ImportMapping>(starterMapping);
   const [rows, setRows] = useState<string[][] | null>(null);
   const [stagingId, setStagingId] = useState<string>('');
+  const [filename, setFilename] = useState<string>(heldFile?.filename ?? '');
   const [encoding, setEncoding] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
+  const [held, setHeld] = useState<HeldState>(heldFile === null ? 'none' : 'reading');
   const [state, save] = useActionState(saveWizardProfileAction, initial);
+
+  // Opened from the import screen: the file here is the one being imported, not a throwaway sample.
+  const fromImport = heldFile !== null;
+  const heldStagingId = heldFile?.stagingId ?? null;
+
+  useEffect(() => {
+    if (heldStagingId === null) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await fetch('/api/import/raw-preview', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ stagingId: heldStagingId }),
+        });
+        const body = await response.json();
+        if (cancelled) return;
+        if (!response.ok) {
+          // A swept file is asked for again in a sentence; anything else is its own error. Either
+          // way the file input comes back, so the page is never left with nothing to do.
+          if (body.code === STAGED_FILE_MISSING) setHeld('gone');
+          else {
+            setHeld('failed');
+            setError(body.error ?? 'That file could not be read.');
+          }
+          return;
+        }
+        setRows(body.rows as string[][]);
+        setStagingId(body.stagingId as string);
+        setEncoding(body.encoding as string);
+        setHeld('read');
+      } catch {
+        if (cancelled) return;
+        setHeld('failed');
+        setError('That file could not be read.');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [heldStagingId]);
 
   // This posts a file and stages it server-side, so a double-submit stages the same
   // sample twice and orphans the second staging id. The guard is SubmitButton's
@@ -43,6 +102,7 @@ export function WizardClient({ starterMapping }: { starterMapping: ImportMapping
     setRows(body.rows as string[][]);
     setStagingId(body.stagingId as string);
     setEncoding(body.encoding as string);
+    setFilename((body.filename as string | undefined) ?? '');
   }
 
   // /api/import/raw-preview hands back every line of the sample untouched — it does not
@@ -56,25 +116,54 @@ export function WizardClient({ starterMapping }: { starterMapping: ImportMapping
     return detectDateFormat(rows.slice(skip).map((row) => row[mapping.dateCol] ?? ''));
   }, [rows, mapping.hasHeader, mapping.headerRows, mapping.dateCol]);
 
+  const showFileInput = held === 'none' || held === 'gone' || held === 'failed';
+
   return (
     <div className="flex flex-col gap-4 sm:gap-5">
       <PageHeader
         eyebrow="Import"
         title="Add a bank"
-        description="Upload a sample export from the bank. The first rows are shown with their column numbers so you can say which column holds the date, the description and the amount. Nothing is imported here — this only saves a reusable profile."
+        description={
+          fromImport
+            ? 'The first rows of the file you were importing are shown with their column numbers so you can say which column holds the date, the description and the amount. Saving keeps the file, so you can import it straight after.'
+            : 'Upload a sample export from the bank. The first rows are shown with their column numbers so you can say which column holds the date, the description and the amount. Nothing is imported here — this only saves a reusable profile.'
+        }
       />
 
       <FormError message={error ?? state.error} />
       {state.message ? <Notice tone="success">{state.message}</Notice> : null}
+      {/* v1.55.2. The way back to the file this wizard was opened on. The import page reads it
+          again with the new profile among the candidates, so it lands on that file's pickers or
+          straight on its rows -- never on an empty drop zone asking for the same file. */}
+      {state.message && fromImport && stagingId !== '' ? (
+        <a href={importHeldFileHref({ stagingId, filename })} className={`${buttonClass('primary')} self-start`}>
+          Import {filename} now
+        </a>
+      ) : null}
 
       <Card>
-        <CardHeader title="Sample file" description="A short export is plenty — the first handful of rows is all this needs." />
-        <CardBody>
-          <form action={upload} className="flex flex-wrap items-center gap-3">
-            <input type="file" name="file" accept=".csv,text/csv" required className={fileInputClass} />
-            <SubmitButton>Show the first rows</SubmitButton>
-          </form>
-        </CardBody>
+        {showFileInput ? (
+          <>
+            <CardHeader title="Sample file" description="A short export is plenty — the first handful of rows is all this needs." />
+            <CardBody className="flex flex-col gap-3">
+              {held === 'gone' ? <Notice tone="warning">{STAGED_FILE_GONE_SENTENCE}</Notice> : null}
+              <form action={upload} className="flex flex-wrap items-center gap-3">
+                <input type="file" name="file" accept=".csv,text/csv" required className={fileInputClass} />
+                <SubmitButton>Show the first rows</SubmitButton>
+              </form>
+            </CardBody>
+          </>
+        ) : (
+          <>
+            <CardHeader title="The file you were importing" description="Its first rows are below, read from the copy the import screen already holds." />
+            <CardBody>
+              <p className="text-sm text-ink">
+                <span className="font-medium">{heldFile?.filename}</span>
+                {held === 'reading' ? <span className="text-muted"> — reading…</span> : null}
+              </p>
+            </CardBody>
+          </>
+        )}
       </Card>
 
       {rows ? (
@@ -117,6 +206,8 @@ export function WizardClient({ starterMapping }: { starterMapping: ImportMapping
               <form action={save} className="flex flex-col gap-4">
                 <input type="hidden" name="mapping" value={JSON.stringify(mapping)} />
                 <input type="hidden" name="stagingId" value={stagingId} />
+                {/* v1.55.2: the file is about to be imported, so saving must not delete it. */}
+                {fromImport ? <input type="hidden" name="keepStaged" value="1" /> : null}
                 <Field label="Profile name">
                   <input name="name" placeholder="Tangerine Chequing" required className={inputClass} />
                 </Field>

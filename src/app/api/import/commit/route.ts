@@ -56,7 +56,7 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json(result);
   } catch (error) {
     if (error instanceof ImportLimitError) return Response.json({ error: error.message, code: error.code }, { status: 413 });
-    if (error instanceof StagingError) return Response.json({ error: error.message }, { status: 410 });
+    if (error instanceof StagingError) return Response.json({ error: error.message, code: error.code }, { status: 410 });
     throw error;
   }
 }

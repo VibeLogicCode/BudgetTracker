@@ -83,6 +83,28 @@ describe('saveWizardProfileAction (new-bank wizard)', () => {
     expect(fs.existsSync(stagedFilePath(stagingId))).toBe(false);
   });
 
+  // v1.55.2: a wizard opened on a file the import screen staged must not delete that file on save,
+  // because importing it is the next thing the person does.
+  it('keeps the staged file when asked to, since it is the file about to be imported', async () => {
+    const stagingId = writeStagedFile(Buffer.from('sample'));
+
+    const result = await saveWizardProfileAction(
+      {},
+      formData({
+        name: 'Corner Bank Chequing',
+        institution: 'Corner Bank',
+        mapping: JSON.stringify(getBuiltinPreset('Scotiabank Chequing/Debit')),
+        stagingId,
+        keepStaged: '1',
+      }),
+    );
+
+    expect(result.message).toMatch(/Saved "Corner Bank Chequing"/);
+    expect(result.message).not.toMatch(/upload the real file/i);
+    expect(getProfileByName('Corner Bank Chequing')).not.toBeNull();
+    expect(fs.existsSync(stagedFilePath(stagingId))).toBe(true);
+  });
+
   it('rejects a duplicate profile name without creating a second row', async () => {
     const before = listProfiles().length;
     const mapping = getBuiltinPreset('Scotiabank Chequing/Debit');

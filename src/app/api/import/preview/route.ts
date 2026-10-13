@@ -114,7 +114,9 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json(preview);
   } catch (error) {
     if (error instanceof ImportLimitError) return Response.json({ error: error.message, code: error.code }, { status: 413 });
-    if (error instanceof StagingError) return Response.json({ error: error.message }, { status: 410 });
+    // `code` tells the client WHICH 410 this is: 'staged_file_missing' means the bytes were swept
+    // or already imported, and the screen offers to choose the file again.
+    if (error instanceof StagingError) return Response.json({ error: error.message, code: error.code }, { status: 410 });
     throw error;
   }
 }

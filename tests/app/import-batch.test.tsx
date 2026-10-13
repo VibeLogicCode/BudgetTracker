@@ -368,6 +368,59 @@ describe('BatchClient: opening a row goes straight to the rows', () => {
     expect(container.querySelectorAll('select').length).toBeGreaterThanOrEqual(2);
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('/api/import/preview'))).toBe(false);
   });
+
+  /**
+   * v1.55.2. A CSV no profile could read is told to use Add a bank. That link used to be a bare
+   * /import/wizard, so the wizard asked for the very file that was already staged.
+   */
+  it('offers Add a bank on the Set it up screen, carrying the staged file', async () => {
+    answerDetect([
+      row({ filename: 'new-bank.csv', status: 'needs-you', account: null, profile: null, stagingId: '22222222-2222-4222-8222-222222222222' }),
+    ]);
+    render(<BatchClient {...props} />);
+    dropFiles(['new-bank.csv']);
+    await waitFor(() => expect(screen.getByText('new-bank.csv')).toBeTruthy());
+    fireEvent.click(within(screen.getByTestId('batch-list')).getByText('Set it up'));
+    await waitFor(() => expect(screen.getByText(/Upload a statement, check what it found/)).toBeTruthy());
+
+    const hrefs = screen.getAllByRole('link', { name: /add a bank/i }).map((link) => link.getAttribute('href'));
+    expect(hrefs).toContain('/import/wizard?stagingId=22222222-2222-4222-8222-222222222222&filename=new-bank.csv');
+  });
+});
+
+/**
+ * v1.55.2. The wizard, having saved a profile for a staged file, links back to /import with that
+ * file's id; the page detects it again and hands it here. It must open on that file, not on the
+ * empty drop zone -- and a file the server no longer holds must say so on the drop zone.
+ */
+describe('BatchClient: arriving with a file already in hand', () => {
+  it('opens straight onto the handed-over file', async () => {
+    answerDetect([]);
+    render(
+      <BatchClient
+        {...props}
+        initialDetection={{
+          stagingId: '11111111-1111-4111-8111-111111111111',
+          filename: 'jan.csv',
+          profile: { id: 3, name: 'TD Chequing/Debit' },
+          profileReason: 'TD Chequing/Debit read all 7 of 7 rows in this file.',
+          profileConfidence: 'certain',
+          source: 'csv',
+          account: { id: 7, name: 'Joint Visa' },
+          accountReason: 'The last file like this went to Joint Visa.',
+          accountConfidence: 'likely',
+        }}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText(/7 rows, 6 duplicates/)).toBeTruthy());
+    expect(screen.getByText('← Back to the list')).toBeTruthy();
+  });
+
+  it('says the file is gone, above a drop zone to choose it again', () => {
+    render(<BatchClient {...props} initialNotice="This file is no longer held on the server. Choose it again." />);
+    expect(screen.getByText('This file is no longer held on the server. Choose it again.')).toBeTruthy();
+    expect(screen.getByTestId('file-drop')).toBeTruthy();
+  });
 });
 
 /**

@@ -2,11 +2,23 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { readEnv } from '@/lib/env';
+import { STAGED_FILE_MISSING } from './held-file';
+
+/**
+ * Why a staged file could not be used. `staged_file_missing` is the one a client acts on: the
+ * bytes were swept from DATA_DIR/tmp (purgeStagedFiles below) or already consumed by a commit, and
+ * the only way forward is to choose the file again. The routes send it as `code`, beside `error`,
+ * the same shape ImportLimitError's codes already take.
+ */
+export type StagingErrorCode = typeof STAGED_FILE_MISSING | 'invalid_staging_id';
 
 export class StagingError extends Error {
-  constructor(message: string) {
+  readonly code: StagingErrorCode;
+
+  constructor(message: string, code: StagingErrorCode) {
     super(message);
     this.name = 'StagingError';
+    this.code = code;
   }
 }
 
@@ -19,7 +31,7 @@ export function stagingDir(): string {
 
 export function stagedFilePath(stagingId: string): string {
   // Path-traversal guard: only a UUID may ever reach path.join.
-  if (!UUID_RE.test(stagingId)) throw new StagingError('Invalid staging id');
+  if (!UUID_RE.test(stagingId)) throw new StagingError('Invalid staging id', 'invalid_staging_id');
   return path.join(stagingDir(), `${stagingId}.csv`);
 }
 
@@ -33,7 +45,7 @@ export function writeStagedFile(buf: Buffer): string {
 
 export function readStagedFile(stagingId: string): Buffer {
   const file = stagedFilePath(stagingId);
-  if (!fs.existsSync(file)) throw new StagingError('Staged upload not found or expired');
+  if (!fs.existsSync(file)) throw new StagingError('Staged upload not found or expired', STAGED_FILE_MISSING);
   return fs.readFileSync(file);
 }
 

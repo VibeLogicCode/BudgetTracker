@@ -55,8 +55,12 @@ export async function saveWizardProfileAction(_prev: WizardState, formData: Form
   if (getProfileByName(parsed.data.name)) return { error: `A profile named "${parsed.data.name}" already exists.` };
 
   createProfile({ name: parsed.data.name, institution: parsed.data.institution, mapping: parsed.data.mapping });
-  if (parsed.data.stagingId) deleteStagedFile(parsed.data.stagingId);
   revalidatePath('/import');
+  // v1.55.2. A wizard opened on a file the import screen staged keeps that file: importing it is
+  // the very next step, and the wizard links straight back to it. Only a sample uploaded into the
+  // wizard itself is done with once its columns are saved.
+  if (formData.get('keepStaged') === '1') return { message: `Saved "${parsed.data.name}".` };
+  if (parsed.data.stagingId) deleteStagedFile(parsed.data.stagingId);
   return { message: `Saved "${parsed.data.name}". Pick it on the Import page and upload the real file.` };
 }
 

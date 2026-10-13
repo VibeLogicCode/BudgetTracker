@@ -2,7 +2,7 @@ import { detectImportAccount, type AccountDetection, type AccountCandidate } fro
 import { detectImportProfile, type ProfileDetection, type ProfileCandidate } from './detect-profile';
 import { looksLikeOfx, parseOfx } from './ofx';
 import { parseCsv } from './parse';
-import { writeStagedFile } from './staging';
+import { readStagedFile, writeStagedFile } from './staging';
 
 /**
  * 2026-09-15. Dropping ten statements at once instead of picking them one at a time.
@@ -158,6 +158,32 @@ export function detectStagedFile(input: {
   accounts: AccountCandidate[];
 }): FileDetection {
   const stagingId = writeStagedFile(input.buf);
+  return detectBytes({ ...input, stagingId });
+}
+
+/**
+ * v1.55.2. The same detection for a file that is ALREADY staged -- the import page reopening one
+ * by id after "Add a bank" saved a profile for it. Ruling B9 still holds: this reads the held
+ * bytes and runs detectBytes, the one body both entry points share, so the reopened file is judged
+ * exactly as it would be if it were dropped again. Throws StagingError when the bytes are gone.
+ */
+export function detectHeldFile(input: {
+  stagingId: string;
+  filename: string;
+  profiles: ProfileCandidate[];
+  accounts: AccountCandidate[];
+}): FileDetection {
+  return detectBytes({ ...input, buf: readStagedFile(input.stagingId) });
+}
+
+function detectBytes(input: {
+  stagingId: string;
+  buf: Buffer;
+  filename: string;
+  profiles: ProfileCandidate[];
+  accounts: AccountCandidate[];
+}): FileDetection {
+  const { stagingId } = input;
   const profile = detectImportProfile({ buf: input.buf, filename: input.filename, candidates: input.profiles });
 
   // The rows the account scorer needs, read the way this file is actually going to be read: an
