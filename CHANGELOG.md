@@ -21,6 +21,21 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.55.2] - 2026-10-13
+
+### Fixed
+
+- **Set it up keeps the file.** After opening a file from the import list with Set it up, changing
+  the Account or the Import profile showed "No file uploaded" with no way to choose a file. The file
+  now stays on the screen however often either one is changed.
+- **Add a bank works on the file you are setting up.** From Set it up, Add a bank (at the top of the
+  page and in the note about a bank the app does not know) opens on that file's columns instead of
+  asking for it again. Once the profile is saved, **Import** with the file's name takes you back to
+  that file, with the new profile ready to use.
+- **A file that has been cleared away says so.** Files waiting to be imported are cleared out after
+  a day or two. Opening one after that now says "This file is no longer held on the server. Choose
+  it again." beside a place to choose it, instead of an error with nowhere to go.
+
 ## [1.55.1] - 2026-10-06
 
 ### Security
