@@ -21,6 +21,17 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.55.3] - 2026-10-13
+
+### Fixed
+
+- **A file imported from Set it up leaves the import list.** Importing a file from Set it up (or View
+  rows) and going back to the list used to show it still waiting, and opening it again said the file
+  was no longer held, as if the import had not happened. The file now leaves the list, and what it
+  added shows above the list with the results of Import all ready.
+- **Import results mention unreadable rows.** The results above the import list now say how many
+  rows of a file could not be read, when there were any.
+
 ## [1.55.2] - 2026-10-13
 
 ### Fixed
