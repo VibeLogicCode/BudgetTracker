@@ -584,7 +584,7 @@ describe('BatchClient: a file imported from its own screen', () => {
   const may = row({ ...unplaced, filename: 'sample-may.csv', stagingId: SET_UP_ID, rowCount: 17 });
   const june = row({ ...unplaced, filename: 'sample-june.csv', stagingId: '88888888-8888-4888-8888-888888888888', rowCount: 9 });
   const april = row({ filename: 'sample-april.csv', stagingId: '99999999-9999-4999-8999-999999999990', rowCount: 6 });
-  const IMPORTED = { rowsAdded: 13, rowsDuplicate: 4, rowsError: 0, needsReview: 2, engineFailed: false, rulesApplied: 0, importId: 5 };
+  const IMPORTED = { rowsAdded: 13, rowsDuplicate: 4, rowsError: 1, needsReview: 2, engineFailed: false, rulesApplied: 0, importId: 5 };
 
   function answer(rows: BatchRow[], commit: { ok: boolean; body: Record<string, unknown> } = { ok: true, body: IMPORTED }) {
     const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
@@ -609,8 +609,8 @@ describe('BatchClient: a file imported from its own screen', () => {
     return fetchMock;
   }
 
-  /** Drop the files, open sample-may.csv with Set it up, choose both pickers by hand, preview. */
-  async function setUpMay(names: string[]): Promise<void> {
+  /** Drop the files, open sample-may.csv with Set it up, choose both pickers by hand, Preview. */
+  async function openMayAndPreview(names: string[]): Promise<void> {
     render(<BatchClient {...local} />);
     dropFiles(names);
     await waitFor(() => expect(screen.getByText('sample-may.csv')).toBeTruthy());
@@ -619,6 +619,10 @@ describe('BatchClient: a file imported from its own screen', () => {
     fireEvent.change(screen.getByLabelText(/Account/), { target: { value: '41' } });
     fireEvent.change(screen.getByLabelText(/Import profile/), { target: { value: '3' } });
     fireEvent.submit(document.querySelector('form')!);
+  }
+
+  async function setUpMay(names: string[]): Promise<void> {
+    await openMayAndPreview(names);
     await waitFor(() => expect(screen.getByText(/17 rows, 4 duplicates/)).toBeTruthy());
   }
 
@@ -646,7 +650,66 @@ describe('BatchClient: a file imported from its own screen', () => {
     expect(within(list).getByText('sample-june.csv')).toBeTruthy();
     // Its outcome sits where "Import all ready" writes its own.
     expect(screen.getByText('Imported 1 of 1')).toBeTruthy();
-    expect(screen.getByText('sample-may.csv').closest('li')!.textContent).toContain('13 added, 4 already there');
+    expect(screen.getByText('sample-may.csv').closest('li')!.textContent).toContain('13 added, 4 already there, 1 unreadable');
+  });
+
+  /**
+   * The opened row's bytes were swept, so the person chose the file again on that screen and the
+   * commit went out under the new staging id. The row still pointed at the swept one.
+   */
+  it('takes the opened row off even when its file had to be chosen again', async () => {
+    const FRESH = '13131313-1313-4131-8131-131313131313';
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const path = String(url);
+      if (path.includes('/api/import/batch/detect')) return { ok: true, json: async () => ({ rows: [may, june] }) } as unknown as Response;
+      if (path.includes('/api/import/detect')) {
+        return {
+          ok: true,
+          json: async () => ({
+            stagingId: FRESH,
+            filename: 'sample-may.csv',
+            profile: { id: 3, name: 'TD Chequing/Debit' },
+            profileReason: 'TD Chequing/Debit read all 17 of 17 rows in this file.',
+            profileConfidence: 'certain',
+            source: 'csv',
+            account: { id: 41, name: 'Sample Savings' },
+            accountReason: '4 of 17 rows in this file are already in Sample Savings.',
+            accountConfidence: 'certain',
+          }),
+        } as unknown as Response;
+      }
+      if (path.includes('/api/import/preview')) {
+        return String(init?.body ?? '').includes(FRESH)
+          ? ({
+              ok: true,
+              json: async () => ({ ...PREVIEW, stagingId: FRESH, filename: 'sample-may.csv', accountId: 41, totalRows: 17, duplicateCount: 4 }),
+            } as unknown as Response)
+          : ({
+              ok: false,
+              status: 410,
+              json: async () => ({ error: 'Staged upload not found or expired', code: 'staged_file_missing' }),
+            } as unknown as Response);
+      }
+      if (path.includes('/api/import/commit')) return { ok: true, json: async () => IMPORTED } as unknown as Response;
+      throw new Error(`unexpected fetch: ${path}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await openMayAndPreview(['sample-may.csv', 'sample-june.csv']);
+    await waitFor(() => expect(screen.getByText('This file is no longer held on the server. Choose it again.')).toBeTruthy());
+    dropFiles(['sample-may.csv']);
+    await waitFor(() => expect((screen.getByRole('button', { name: /^preview$/i }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.submit(document.querySelector('form')!);
+    await waitFor(() => expect(screen.getByText(/17 rows, 4 duplicates/)).toBeTruthy());
+    await importAndGoBack();
+
+    const commitCall = fetchMock.mock.calls.find(([url]) => String(url).includes('/api/import/commit'));
+    expect(JSON.parse(String(commitCall![1]?.body)).stagingId).toBe(FRESH);
+    await waitFor(() => expect(screen.getByTestId('batch-list')).toBeTruthy());
+    const list = screen.getByTestId('batch-list');
+    expect(within(list).queryByText('sample-may.csv')).toBeNull();
+    expect(within(list).getByText('sample-june.csv')).toBeTruthy();
+    expect(screen.getByText('Imported 1 of 1')).toBeTruthy();
   });
 
   it('keeps the row when the import failed', async () => {
@@ -700,5 +763,7 @@ describe('BatchClient: a file imported from its own screen', () => {
     await waitFor(() => expect(screen.getByText('Imported 2 of 2')).toBeTruthy());
     expect(screen.getByText('sample-may.csv').closest('li')!.textContent).toContain('13 added, 4 already there');
     expect(screen.getByText('sample-april.csv').closest('li')!.textContent).toContain('6 added, 1 already there');
+    // Unreadable rows are named only when a file had some.
+    expect(screen.getByText('sample-april.csv').closest('li')!.textContent).not.toContain('unreadable');
   });
 });

@@ -54,6 +54,8 @@ interface CommitOutcome {
   ok: boolean;
   rowsAdded?: number;
   rowsDuplicate?: number;
+  /** Rows the file had that could not be read. Shown only when there were some. */
+  rowsError?: number;
   error?: string;
 }
 
@@ -240,7 +242,12 @@ export function BatchClient(props: {
           // v1.55.3. The commit consumed this file's staged bytes, so its row has nothing left to
           // open: it leaves the list and its result joins the outcomes, as "Import all ready" does.
           // The screen stays open on its own summary until the person comes back.
-          setRows((previous) => (previous ?? []).filter((entry) => entry.stagingId !== imported.stagingId));
+          //
+          // The OPENED row goes too, even when the commit sent another id: that happens only after
+          // its bytes were swept and the file was chosen again here, so the row points at nothing.
+          setRows((previous) =>
+            (previous ?? []).filter((entry) => entry.stagingId !== imported.stagingId && entry.stagingId !== open.stagingId),
+          );
           setOutcomes((previous) => [
             ...(previous ?? []),
             {
@@ -249,6 +256,7 @@ export function BatchClient(props: {
               ok: true,
               rowsAdded: imported.rowsAdded,
               rowsDuplicate: imported.rowsDuplicate,
+              rowsError: imported.rowsError,
             },
           ]);
         }}
@@ -315,7 +323,9 @@ export function BatchClient(props: {
                 <span className="font-medium text-ink">{outcome.filename}</span>
                 <span className="text-muted">
                   {outcome.ok
-                    ? `${outcome.rowsAdded ?? 0} added, ${outcome.rowsDuplicate ?? 0} already there`
+                    ? `${outcome.rowsAdded ?? 0} added, ${outcome.rowsDuplicate ?? 0} already there${
+                        (outcome.rowsError ?? 0) > 0 ? `, ${outcome.rowsError} unreadable` : ''
+                      }`
                     : (outcome.error ?? 'Could not be imported')}
                 </span>
               </li>
