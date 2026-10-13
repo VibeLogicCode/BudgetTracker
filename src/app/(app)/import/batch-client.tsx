@@ -43,8 +43,14 @@ export interface BatchRow {
   counts: { totalRows: number; duplicateCount: number; errorCount: number; willImport: number } | null;
 }
 
+/**
+ * One file's result, from "Import all ready" (BatchCommitResult in the batch commit route) or from a
+ * file imported on its own screen (v1.55.3). Both are one commitStagedImport call, so one shape.
+ */
 interface CommitOutcome {
   filename: string;
+  /** Present from both sources; optional only because the shape predates it. */
+  stagingId?: string;
   ok: boolean;
   rowsAdded?: number;
   rowsDuplicate?: number;
@@ -198,7 +204,9 @@ export function BatchClient(props: {
         setError(body.error ?? 'Those files could not be imported.');
         return;
       }
-      setOutcomes(body.results ?? []);
+      // Appended, not replaced: a file already imported on its own screen is still an import made
+      // from this list, and its outcome stays until the next drop starts a new list.
+      setOutcomes((previous) => [...(previous ?? []), ...(body.results ?? [])]);
       setConfirming(false);
       // The imported rows leave the list; whatever still needs a person stays on it, which is the
       // list's whole job once the easy ones are gone.
@@ -227,6 +235,22 @@ export function BatchClient(props: {
           // something be erased, and the sweep already owns that file's lifetime.
           setRows((previous) => (previous ?? []).filter((entry) => entry.stagingId !== open.stagingId));
           setOpen(null);
+        }}
+        onImported={(imported) => {
+          // v1.55.3. The commit consumed this file's staged bytes, so its row has nothing left to
+          // open: it leaves the list and its result joins the outcomes, as "Import all ready" does.
+          // The screen stays open on its own summary until the person comes back.
+          setRows((previous) => (previous ?? []).filter((entry) => entry.stagingId !== imported.stagingId));
+          setOutcomes((previous) => [
+            ...(previous ?? []),
+            {
+              filename: imported.filename,
+              stagingId: imported.stagingId,
+              ok: true,
+              rowsAdded: imported.rowsAdded,
+              rowsDuplicate: imported.rowsDuplicate,
+            },
+          ]);
         }}
       />
     );
@@ -287,7 +311,7 @@ export function BatchClient(props: {
           />
           <ul className="border-t border-line text-sm">
             {outcomes.map((outcome) => (
-              <li key={outcome.filename} className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3 last:border-b-0 sm:px-5">
+              <li key={outcome.stagingId ?? outcome.filename} className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3 last:border-b-0 sm:px-5">
                 <span className="font-medium text-ink">{outcome.filename}</span>
                 <span className="text-muted">
                   {outcome.ok

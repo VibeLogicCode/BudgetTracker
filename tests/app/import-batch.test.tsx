@@ -561,3 +561,144 @@ describe('BatchClient: three ways out of a file, not one', () => {
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('/commit'))).toBe(false);
   });
 });
+
+/**
+ * v1.55.3. A file finished from its own screen (Set it up, or View rows) used to stay on the list
+ * as though nothing had happened. The import had consumed its staged bytes, so the row pointed at a
+ * file the server no longer held, and opening it again said the file was gone -- which read as the
+ * import having failed. The list now hears about the import and treats it the way "Import all
+ * ready" treats its files: off the list, with what it did in the outcomes above.
+ */
+describe('BatchClient: a file imported from its own screen', () => {
+  const SET_UP_ID = '77777777-7777-4777-8777-777777777777';
+  const local = { ...props, accounts: [{ id: 41, name: 'Sample Savings', importProfileId: null }] };
+  const unplaced = {
+    status: 'needs-you' as const,
+    account: null,
+    accountConfidence: 'none' as const,
+    profile: null,
+    profileConfidence: 'none' as const,
+    reason: 'None of your import profiles could read this file.',
+    counts: null,
+  };
+  const may = row({ ...unplaced, filename: 'sample-may.csv', stagingId: SET_UP_ID, rowCount: 17 });
+  const june = row({ ...unplaced, filename: 'sample-june.csv', stagingId: '88888888-8888-4888-8888-888888888888', rowCount: 9 });
+  const april = row({ filename: 'sample-april.csv', stagingId: '99999999-9999-4999-8999-999999999990', rowCount: 6 });
+  const IMPORTED = { rowsAdded: 13, rowsDuplicate: 4, rowsError: 0, needsReview: 2, engineFailed: false, rulesApplied: 0, importId: 5 };
+
+  function answer(rows: BatchRow[], commit: { ok: boolean; body: Record<string, unknown> } = { ok: true, body: IMPORTED }) {
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
+      const path = String(url);
+      if (path.includes('/api/import/batch/detect')) return { ok: true, json: async () => ({ rows }) } as unknown as Response;
+      if (path.includes('/api/import/batch/commit')) {
+        return {
+          ok: true,
+          json: async () => ({ results: [{ filename: 'sample-april.csv', stagingId: april.stagingId, ok: true, rowsAdded: 6, rowsDuplicate: 1 }] }),
+        } as unknown as Response;
+      }
+      if (path.includes('/api/import/preview')) {
+        return {
+          ok: true,
+          json: async () => ({ ...PREVIEW, stagingId: SET_UP_ID, filename: 'sample-may.csv', accountId: 41, totalRows: 17, duplicateCount: 4 }),
+        } as unknown as Response;
+      }
+      if (path.includes('/api/import/commit')) return { ok: commit.ok, json: async () => commit.body } as unknown as Response;
+      throw new Error(`unexpected fetch: ${path}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+
+  /** Drop the files, open sample-may.csv with Set it up, choose both pickers by hand, preview. */
+  async function setUpMay(names: string[]): Promise<void> {
+    render(<BatchClient {...local} />);
+    dropFiles(names);
+    await waitFor(() => expect(screen.getByText('sample-may.csv')).toBeTruthy());
+    fireEvent.click(within(screen.getByText('sample-may.csv').closest('li')!).getByText('Set it up'));
+    await waitFor(() => expect(screen.getByText(/Upload a statement, check what it found/)).toBeTruthy());
+    fireEvent.change(screen.getByLabelText(/Account/), { target: { value: '41' } });
+    fireEvent.change(screen.getByLabelText(/Import profile/), { target: { value: '3' } });
+    fireEvent.submit(document.querySelector('form')!);
+    await waitFor(() => expect(screen.getByText(/17 rows, 4 duplicates/)).toBeTruthy());
+  }
+
+  async function importAndGoBack(): Promise<void> {
+    fireEvent.click(screen.getByText(/^Import \d+ transactions$/));
+    await waitFor(() => expect(screen.getByText(/13 added, 4 duplicates skipped/)).toBeTruthy());
+    fireEvent.click(screen.getByText('← Back to the list'));
+  }
+
+  it('takes the row off the list and reports what the import did', async () => {
+    const fetchMock = answer([may, june]);
+    await setUpMay(['sample-may.csv', 'sample-june.csv']);
+    fireEvent.click(screen.getByText(/^Import \d+ transactions$/));
+    await waitFor(() => expect(screen.getByText(/13 added, 4 duplicates skipped/)).toBeTruthy());
+    const commitCall = fetchMock.mock.calls.find(([url]) => String(url).includes('/api/import/commit'));
+    expect(JSON.parse(String(commitCall![1]?.body)).stagingId).toBe(SET_UP_ID);
+
+    // The person stays on the result until they choose to leave it.
+    expect(screen.queryByTestId('batch-list')).toBeNull();
+    fireEvent.click(screen.getByText('← Back to the list'));
+
+    await waitFor(() => expect(screen.getByTestId('batch-list')).toBeTruthy());
+    const list = screen.getByTestId('batch-list');
+    expect(within(list).queryByText('sample-may.csv')).toBeNull();
+    expect(within(list).getByText('sample-june.csv')).toBeTruthy();
+    // Its outcome sits where "Import all ready" writes its own.
+    expect(screen.getByText('Imported 1 of 1')).toBeTruthy();
+    expect(screen.getByText('sample-may.csv').closest('li')!.textContent).toContain('13 added, 4 already there');
+  });
+
+  it('keeps the row when the import failed', async () => {
+    answer([may, june], { ok: false, body: { error: 'That account no longer exists.' } });
+    await setUpMay(['sample-may.csv', 'sample-june.csv']);
+    fireEvent.click(screen.getByText(/^Import \d+ transactions$/));
+    await waitFor(() => expect(screen.getByText('That account no longer exists.')).toBeTruthy());
+    fireEvent.click(screen.getByText('← Back to the list'));
+
+    await waitFor(() => expect(screen.getByTestId('batch-list')).toBeTruthy());
+    expect(within(screen.getByTestId('batch-list')).getByText('sample-may.csv')).toBeTruthy();
+    expect(screen.queryByText(/^Imported \d+ of \d+$/)).toBeNull();
+  });
+
+  it('leaves the row in place when the person goes back without importing', async () => {
+    const fetchMock = answer([may, june]);
+    render(<BatchClient {...local} />);
+    dropFiles(['sample-may.csv', 'sample-june.csv']);
+    await waitFor(() => expect(screen.getByText('sample-may.csv')).toBeTruthy());
+    fireEvent.click(within(screen.getByText('sample-may.csv').closest('li')!).getByText('Set it up'));
+    await waitFor(() => expect(screen.getByText('← Back to the list')).toBeTruthy());
+    fireEvent.click(screen.getByText('← Back to the list'));
+
+    await waitFor(() => expect(screen.getByTestId('batch-list')).toBeTruthy());
+    const list = screen.getByTestId('batch-list');
+    expect(within(list).getByText('sample-may.csv')).toBeTruthy();
+    expect(within(list).getAllByText('Set it up')).toHaveLength(2);
+    expect(screen.queryByText(/^Imported \d+ of \d+$/)).toBeNull();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/commit'))).toBe(false);
+  });
+
+  it('shows the outcome on its own once the last row is gone', async () => {
+    answer([may]);
+    await setUpMay(['sample-may.csv']);
+    await importAndGoBack();
+
+    await waitFor(() => expect(screen.getByText('Imported 1 of 1')).toBeTruthy());
+    expect(screen.queryByTestId('batch-list')).toBeNull();
+    expect(screen.getByTestId('file-drop')).toBeTruthy();
+  });
+
+  /** Both are imports the person made from this list, so the second must not wipe the first. */
+  it('keeps that outcome when the ready ones are imported afterwards', async () => {
+    answer([may, april]);
+    await setUpMay(['sample-may.csv', 'sample-april.csv']);
+    await importAndGoBack();
+
+    await waitFor(() => expect(screen.getByText('Import the 1 ready one')).toBeTruthy());
+    fireEvent.click(screen.getByText('Import the 1 ready one'));
+    fireEvent.click(screen.getByText('Yes, import them'));
+    await waitFor(() => expect(screen.getByText('Imported 2 of 2')).toBeTruthy());
+    expect(screen.getByText('sample-may.csv').closest('li')!.textContent).toContain('13 added, 4 already there');
+    expect(screen.getByText('sample-april.csv').closest('li')!.textContent).toContain('6 added, 1 already there');
+  });
+});

@@ -1827,3 +1827,80 @@ describe('ImportClient — a staged file the server no longer holds', () => {
     );
   });
 });
+
+/**
+ * v1.55.3. Opened from the batch list, this screen consumed the file on import and told nobody: the
+ * list kept the row, pointing at bytes the commit had deleted. `onImported` is how the list hears.
+ */
+describe('ImportClient — tells the batch list what it imported', () => {
+  const STAGED = '12121212-1212-4121-8121-121212121212';
+  const ACCOUNTS = [{ id: 51, name: 'Sample Chequing', importProfileId: 1 }];
+  const HELD = {
+    stagingId: STAGED,
+    filename: 'sample-march.csv',
+    profile: { id: 1, name: 'TD Chequing/Debit' },
+    profileReason: 'TD Chequing/Debit read all 11 of 11 rows in this file.',
+    profileConfidence: 'certain' as const,
+    source: 'csv' as const,
+    account: { id: 51, name: 'Sample Chequing' },
+    accountReason: '3 of 11 rows in this file are already in Sample Chequing.',
+    accountConfidence: 'certain' as const,
+  };
+
+  function answerCommit(commit: { ok: boolean; status?: number; body: Record<string, unknown> }) {
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) =>
+      String(url).includes('/commit')
+        ? { ok: commit.ok, status: commit.status ?? (commit.ok ? 200 : 400), json: async () => commit.body }
+        : { ok: true, json: async () => previewBody({ stagingId: STAGED, filename: 'sample-march.csv', accountId: 51, totalRows: 11 }) },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+
+  it('calls back once with the committed file, its account and the counts', async () => {
+    answerCommit({
+      ok: true,
+      body: { rowsAdded: 8, rowsDuplicate: 3, rowsError: 1, needsReview: 2, engineFailed: false, rulesApplied: 0, importId: 9 },
+    });
+    const onImported = vi.fn();
+    const { findByText } = render(
+      <ImportClient accounts={ACCOUNTS} profiles={PROFILES} simplefinManaged={[]} initialDetection={HELD} onImported={onImported} />,
+    );
+    fireEvent.click(await findByText(/^Import \d+ transactions$/));
+    await findByText(/8 added, 3 duplicates skipped/);
+
+    expect(onImported).toHaveBeenCalledTimes(1);
+    expect(onImported).toHaveBeenCalledWith({
+      stagingId: STAGED,
+      filename: 'sample-march.csv',
+      account: { id: 51, name: 'Sample Chequing' },
+      rowsAdded: 8,
+      rowsDuplicate: 3,
+      rowsError: 1,
+      needsReview: 2,
+      engineFailed: false,
+    });
+  });
+
+  it('says nothing when the import failed', async () => {
+    answerCommit({ ok: false, body: { error: 'That account no longer exists.' } });
+    const onImported = vi.fn();
+    const { findByText } = render(
+      <ImportClient accounts={ACCOUNTS} profiles={PROFILES} simplefinManaged={[]} initialDetection={HELD} onImported={onImported} />,
+    );
+    fireEvent.click(await findByText(/^Import \d+ transactions$/));
+    await findByText('That account no longer exists.');
+    expect(onImported).not.toHaveBeenCalled();
+  });
+
+  it('says nothing when the file was already gone at commit', async () => {
+    answerCommit({ ok: false, status: 410, body: { error: 'Staged upload not found or expired', code: 'staged_file_missing' } });
+    const onImported = vi.fn();
+    const { findByText } = render(
+      <ImportClient accounts={ACCOUNTS} profiles={PROFILES} simplefinManaged={[]} initialDetection={HELD} onImported={onImported} />,
+    );
+    fireEvent.click(await findByText(/^Import \d+ transactions$/));
+    await findByText('This file is no longer held on the server. Choose it again.');
+    expect(onImported).not.toHaveBeenCalled();
+  });
+});

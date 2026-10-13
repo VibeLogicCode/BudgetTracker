@@ -52,6 +52,22 @@ export interface ProfileOption { id: number; name: string; isBuiltin: boolean; m
 export interface PersonOption { id: number; name: string }
 
 /**
+ * v1.55.3. What a successful commit on this screen hands its caller: the file it consumed (by the
+ * staging id the commit was sent with), where it went, and the counts /api/import/commit returned.
+ * `name` is null only for an account id the pickers do not offer.
+ */
+export interface ImportedFile {
+  stagingId: string;
+  filename: string;
+  account: { id: number; name: string | null };
+  rowsAdded: number;
+  rowsDuplicate: number;
+  rowsError: number;
+  needsReview: number;
+  engineFailed: boolean;
+}
+
+/**
  * One card value's assignment row (spec 2026-08-22 v1.6.0, MUST-6.1/MUST-6.2). Each row's save
  * is still independent -- there can be several of these per preview -- because each row holds
  * its own auto-save state (AutoSaveSelect's internal useAutoSave), not a shared one.
@@ -205,6 +221,7 @@ export function ImportClient({
   initialDetection = null,
   onBackToList,
   onDiscard,
+  onImported,
 }: {
   accounts: AccountOption[];
   profiles: ProfileOption[];
@@ -232,6 +249,12 @@ export function ImportClient({
   onBackToList?: () => void;
   /** Drop this file from the batch without importing it. Absent outside the batch screen. */
   onDiscard?: () => void;
+  /**
+   * v1.55.3. Called once per successful commit, never for a failed one. The commit deletes the
+   * staged bytes, so a batch list that is not told keeps offering a row whose file is gone. This
+   * screen stays on its summary; the caller only updates what it shows once it is returned to.
+   */
+  onImported?: (imported: ImportedFile) => void;
 }) {
   /*
     THE `?? 0` WHEN A DETECTION IS PRESENT IS LOAD-BEARING, and it is detectFrom's own rule
@@ -550,12 +573,14 @@ export function ImportClient({
   // with rows possibly already committed and no way to find out from this screen.
   async function commit() {
     if (!preview || !mapping || staged === null) return;
+    // The file this commit sends, kept past the setStaged(null) below for onImported.
+    const held = staged;
     setBusy(true);
     try {
       const response = await fetch('/api/import/commit', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ stagingId: staged.stagingId, filename: staged.filename, accountId, profileId, mapping }),
+        body: JSON.stringify({ stagingId: held.stagingId, filename: held.filename, accountId, profileId, mapping }),
       });
       const body = await response.json();
       if (!response.ok) {
@@ -597,6 +622,16 @@ export function ImportClient({
       // Zero is the common case and means there is nothing to audit, so it renders nothing
       // rather than a link to a screen that would just say so.
       setRuleOffer(body.rulesApplied > 0 ? { importId: body.importId, count: body.rulesApplied } : null);
+      onImported?.({
+        stagingId: held.stagingId,
+        filename: held.filename,
+        account: { id: accountId, name: accounts.find((account) => account.id === accountId)?.name ?? null },
+        rowsAdded: Number(body.rowsAdded ?? 0),
+        rowsDuplicate: Number(body.rowsDuplicate ?? 0),
+        rowsError: Number(body.rowsError ?? 0),
+        needsReview: Number(body.needsReview ?? 0),
+        engineFailed: body.engineFailed === true,
+      });
     } finally {
       setBusy(false);
     }
