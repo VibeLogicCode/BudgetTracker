@@ -55,3 +55,29 @@ describe('ImportWizardPage', () => {
     expect(redirected).toEqual([]);
   });
 });
+
+describe('ImportWizardPage — opened on a staged file (v1.55.2)', () => {
+  it('hands the held file from the query to the wizard', async () => {
+    current = createSeededTestDb();
+    const admin = insertTestUser(current.db, { name: 'Admin', username: 'admin', role: 'admin' });
+    currentUser.value = { id: admin, name: 'Admin', username: 'admin', role: 'admin', visibility: 'household' };
+
+    const { default: ImportWizardPage } = await import('@/app/(app)/import/wizard/page');
+    const element = (await ImportWizardPage({
+      searchParams: Promise.resolve({ stagingId: '77777777-7777-4777-8777-777777777777', filename: 'new-bank.csv' }),
+    })) as { props: { heldFile: unknown } };
+
+    expect(element.props.heldFile).toEqual({ stagingId: '77777777-7777-4777-8777-777777777777', filename: 'new-bank.csv' });
+  });
+
+  it('opens on no file when the query names none', async () => {
+    current = createSeededTestDb();
+    const admin = insertTestUser(current.db, { name: 'Admin', username: 'admin', role: 'admin' });
+    currentUser.value = { id: admin, name: 'Admin', username: 'admin', role: 'admin', visibility: 'household' };
+
+    const { default: ImportWizardPage } = await import('@/app/(app)/import/wizard/page');
+    const element = (await ImportWizardPage({ searchParams: Promise.resolve({}) })) as { props: { heldFile: unknown } };
+
+    expect(element.props.heldFile).toBeNull();
+  });
+});

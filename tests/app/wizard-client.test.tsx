@@ -150,6 +150,33 @@ describe('WizardClient — opened on a staged file', () => {
     expect(view.container.querySelector('input[type="file"]')).not.toBeNull();
   });
 
+  it('drops the gone-file warning once the file has been chosen again, and imports the new copy afterwards', async () => {
+    const fresh = '88888888-8888-4888-8888-888888888888';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) =>
+        typeof init?.body === 'string'
+          ? { ok: false, status: 410, json: async () => ({ error: 'Staged upload not found or expired', code: 'staged_file_missing' }) }
+          : { ok: true, json: async () => ({ stagingId: fresh, filename: 'new-bank.csv', encoding: 'utf-8', rows: ROWS }) },
+      ),
+    );
+    const actions = await import('@/app/(app)/import/actions');
+    vi.mocked(actions.saveWizardProfileAction).mockResolvedValueOnce({ message: 'Saved "Corner Bank".' });
+
+    const view = render(<WizardClient starterMapping={getBuiltinPreset('TD Chequing/Debit')} heldFile={HELD} />);
+    await view.findByText('This file is no longer held on the server. Choose it again.');
+    fireEvent.submit(view.getByRole('button', { name: /show the first rows/i }).closest('form')!);
+
+    await waitFor(() => expect(view.getByText('CORNER MARKET')).toBeTruthy());
+    expect(view.queryByText('This file is no longer held on the server. Choose it again.')).toBeNull();
+
+    fireEvent.change(view.getByLabelText(/profile name/i), { target: { value: 'Corner Bank' } });
+    fireEvent.change(view.getByLabelText(/institution/i), { target: { value: 'Corner Bank' } });
+    fireEvent.submit(view.getByRole('button', { name: /save profile/i }).closest('form')!);
+    const link = (await view.findByRole('link', { name: /import new-bank\.csv/i })) as HTMLAnchorElement;
+    expect(new URL(link.getAttribute('href')!, 'http://nas.local').searchParams.get('stagingId')).toBe(fresh);
+  });
+
   it('keeps the staged file when the profile is saved, and leads back to importing it', async () => {
     const actions = await import('@/app/(app)/import/actions');
     const save = vi.mocked(actions.saveWizardProfileAction);

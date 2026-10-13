@@ -93,6 +93,7 @@ export function WizardClient({
   // too late to matter. useFormStatus reads the form's real pending state.
   async function upload(formData: FormData) {
     setError(null);
+    // Only reachable with the file input on screen, which a held file in 'reading'/'read' hides.
     const response = await fetch('/api/import/raw-preview', { method: 'POST', body: formData });
     const body = await response.json();
     if (!response.ok) {
@@ -103,6 +104,9 @@ export function WizardClient({
     setStagingId(body.stagingId as string);
     setEncoding(body.encoding as string);
     setFilename((body.filename as string | undefined) ?? '');
+    // A file chosen here replaces a held one that was gone or unreadable, so the warning about it
+    // goes. The input stays, in case a different file is wanted.
+    setHeld('none');
   }
 
   // /api/import/raw-preview hands back every line of the sample untouched — it does not

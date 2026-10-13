@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { FileDrop } from '@/components/FileDrop';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { Notice } from '@/components/ui/Notice';
@@ -101,6 +101,18 @@ export function BatchClient(props: {
   const [outcomes, setOutcomes] = useState<CommitOutcome[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(initialNotice);
+
+  /**
+   * v1.55.2. `?stagingId=&filename=` has done its job once the file is open (or the notice that it
+   * is gone is showing). Left in the address, a reload after importing that file would claim it is
+   * gone, and one after Back or Discard would reopen a file the person had put down. Next's router
+   * picks up a native replaceState, so this is not a navigation.
+   */
+  useEffect(() => {
+    if (initialDetection === null && initialNotice === null) return;
+    window.history.replaceState(null, '', window.location.pathname);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, on arrival
+  }, []);
   const [showHistory, setShowHistory] = useState(false);
 
   const ready = useMemo(() => (rows ?? []).filter((row) => row.status === 'ready'), [rows]);

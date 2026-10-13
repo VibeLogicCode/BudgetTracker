@@ -1669,6 +1669,96 @@ describe('ImportClient — Add a bank carries the staged file', () => {
     );
     expect(getByRole('link', { name: /add a bank/i }).getAttribute('href')).toBe('/import/wizard');
   });
+
+  it('does not send an OFX/QFX file to the wizard, which only maps CSV columns', () => {
+    const { getByRole } = render(
+      <ImportClient
+        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
+        profiles={PROFILES}
+        simplefinManaged={[]}
+        initialDetection={{
+          stagingId: '44444444-4444-4444-8444-444444444444',
+          filename: 'march.qfx',
+          profile: null,
+          profileReason: 'This is an OFX/QFX file; it names its own columns.',
+          profileConfidence: 'certain',
+          source: 'ofx',
+          account: null,
+          accountReason: 'Nothing in this file says which account it belongs to.',
+          accountConfidence: 'none',
+        }}
+      />,
+    );
+    expect(getByRole('link', { name: /add a bank/i }).getAttribute('href')).toBe('/import/wizard');
+  });
+
+  it('stops pointing at the file once it has been imported, since the import consumed it', async () => {
+    const STAGED = '99999999-9999-4999-8999-999999999999';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) =>
+        String(url).includes('/commit')
+          ? { ok: true, json: async () => ({ rowsAdded: 5, rowsDuplicate: 0, rowsError: 0, needsReview: 0, rulesApplied: 0, importId: 1 }) }
+          : { ok: true, json: async () => previewBody({ stagingId: STAGED, filename: 'march.csv' }) },
+      ),
+    );
+    const { container, findByText, getByRole, getAllByRole } = render(
+      <ImportClient
+        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
+        profiles={PROFILES}
+        simplefinManaged={[]}
+        initialDetection={{
+          stagingId: STAGED,
+          filename: 'march.csv',
+          profile: { id: 1, name: 'TD Chequing/Debit' },
+          profileReason: 'TD Chequing/Debit read all 5 of 5 rows in this file.',
+          profileConfidence: 'certain',
+          source: 'csv',
+          account: { id: 10, name: 'Joint Chequing' },
+          accountReason: '4 of 5 rows in this file are already in Joint Chequing.',
+          accountConfidence: 'certain',
+        }}
+      />,
+    );
+    fireEvent.click(await findByText(/^Import \d+ transactions$/));
+    await findByText(/5 added/);
+
+    for (const link of getAllByRole('link', { name: /add a bank/i })) expect(link.getAttribute('href')).toBe('/import/wizard');
+    expect(container.querySelector('input[type="file"]')).not.toBeNull();
+    expect((getByRole('button', { name: /preview/i }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+/**
+ * v1.55.2. When detection never ran (or failed), Preview posts the form as multipart and the
+ * preview route stages its own copy. That copy is the file held from then on: the re-preview and
+ * the commit must send ITS id, not nothing.
+ */
+describe('ImportClient — the multipart fallback hands its staged copy to the later hops', () => {
+  it('commits the copy the multipart preview staged', async () => {
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
+      if (String(url).includes('/detect')) return { ok: false, json: async () => ({ error: 'That file could not be read.' }) };
+      if (String(url).includes('/commit')) {
+        return { ok: true, json: async () => ({ rowsAdded: 5, rowsDuplicate: 0, rowsError: 0, needsReview: 0, rulesApplied: 0, importId: 1 }) };
+      }
+      return { ok: true, json: async () => previewBody({ stagingId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }) };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { container, findByText } = render(
+      <ImportClient accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]} profiles={PROFILES} simplefinManaged={[]} />,
+    );
+
+    putFileOnPage(container);
+    await findByText('That file could not be read.');
+    fireEvent.submit(container.querySelector('form')!);
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/preview'))).toBe(true));
+    expect(fetchMock.mock.calls.find(([url]) => String(url).includes('/preview'))?.[1]?.body).toBeInstanceOf(FormData);
+
+    fireEvent.click(await findByText(/^Import \d+ transactions$/));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/commit'))).toBe(true));
+    const sent = JSON.parse(String(fetchMock.mock.calls.find(([url]) => String(url).includes('/commit'))?.[1]?.body));
+    expect(sent.stagingId).toBe('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+  });
 });
 
 /**

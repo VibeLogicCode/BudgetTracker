@@ -416,6 +416,35 @@ describe('BatchClient: arriving with a file already in hand', () => {
     expect(screen.getByText('← Back to the list')).toBeTruthy();
   });
 
+  it('takes the file out of the address once it has opened it, so a reload does not reopen it', async () => {
+    window.history.replaceState(null, '', '/import?stagingId=11111111-1111-4111-8111-111111111111&filename=jan.csv');
+    answerDetect([]);
+    render(
+      <BatchClient
+        {...props}
+        initialDetection={{
+          stagingId: '11111111-1111-4111-8111-111111111111',
+          filename: 'jan.csv',
+          profile: null,
+          profileReason: 'None of your import profiles could read this file.',
+          profileConfidence: 'none',
+          source: 'csv',
+          account: null,
+          accountReason: 'Nothing in this file says which account it belongs to.',
+          accountConfidence: 'none',
+        }}
+      />,
+    );
+    await waitFor(() => expect(window.location.search).toBe(''));
+    expect(window.location.pathname).toBe('/import');
+  });
+
+  it('leaves the address alone when nothing was handed over', () => {
+    window.history.replaceState(null, '', '/import?keep=1');
+    render(<BatchClient {...props} />);
+    expect(window.location.search).toBe('?keep=1');
+  });
+
   it('says the file is gone, above a drop zone to choose it again', () => {
     render(<BatchClient {...props} initialNotice="This file is no longer held on the server. Choose it again." />);
     expect(screen.getByText('This file is no longer held on the server. Choose it again.')).toBeTruthy();

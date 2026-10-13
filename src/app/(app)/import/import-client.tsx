@@ -276,9 +276,13 @@ export function ImportClient({
    * choose a file. Set when a file is staged, replaced when another is chosen, and cleared only
    * when the server says the bytes are gone.
    */
-  const [staged, setStaged] = useState<HeldFile | null>(
-    initialDetection === null ? null : { stagingId: initialDetection.stagingId, filename: initialDetection.filename },
+  const [staged, setStaged] = useState<(HeldFile & { source: 'csv' | 'ofx' }) | null>(
+    initialDetection === null
+      ? null
+      : { stagingId: initialDetection.stagingId, filename: initialDetection.filename, source: initialDetection.source },
   );
+  /** Add a bank opens on the held file only for a CSV: an OFX/QFX file names its own columns. */
+  const wizardHref = addBankHref(staged === null || staged.source === 'ofx' ? null : staged);
   /** The server said the staged bytes are gone (swept from DATA_DIR/tmp): offer to choose again. */
   const [stagedGone, setStagedGone] = useState(false);
   /** True while hop 1 is in flight, so the card can say it is reading rather than sit silent. */
@@ -371,7 +375,7 @@ export function ImportClient({
       // every `=== null` check below and crash the page on `.name`. Absent and "could not tell"
       // are the same thing here, so they are stored the same way.
       setDetection({ ...detected, profile: detected.profile ?? null, account: detected.account ?? null });
-      setStaged({ stagingId: detected.stagingId, filename: detected.filename });
+      setStaged({ stagingId: detected.stagingId, filename: detected.filename, source: detected.source });
       // A detection that could not tell leaves the picker where the household left it -- `?? id`
       // rather than a fallback of its own, so "no answer" and "this answer" stay distinguishable.
       /**
@@ -456,7 +460,8 @@ export function ImportClient({
       return;
     }
     // The multipart fallback stages a copy of its own; from here on that is the file held.
-    setStaged({ stagingId: (body as PreviewResult).stagingId, filename: (body as PreviewResult).filename });
+    const previewed = body as PreviewResult;
+    setStaged({ stagingId: previewed.stagingId, filename: previewed.filename, source: previewed.source });
     setPreview(body as PreviewResult);
     setMapping((body as PreviewResult).mapping);
     setForkAccountName(accounts.find((a) => a.id === accountId)?.name ?? '');
@@ -559,6 +564,11 @@ export function ImportClient({
         return;
       }
       setPreview(null);
+      // The commit consumed the staged bytes (flow.ts deletes them), so nothing is held any more:
+      // the drop zone comes back for the next file, the pickers wait for it, and Add a bank stops
+      // pointing at a file that is gone.
+      setStaged(null);
+      setHasFile(false);
       // The rows are always committed by this point, even when categorization
       // itself failed (flow.ts catches runEngine and reports engineFailed
       // instead of throwing) — they're categoryless, so the review queue
@@ -620,7 +630,7 @@ export function ImportClient({
         actions={
           // Carries the held file (v1.55.2), so the wizard opens on its columns rather than
           // asking for the same file again.
-          <a href={addBankHref(staged)} className={buttonClass('secondary')}>
+          <a href={wizardHref} className={buttonClass('secondary')}>
             Add a bank
           </a>
         }
@@ -750,9 +760,11 @@ export function ImportClient({
       ) : (
         <Card>
           <CardHeader
-            title={<StepTitle n={1} state="active">{initialDetection === null ? 'Choose a file' : 'This file'}</StepTitle>}
+            // Worded for the drop zone whenever one is showing, including once a held file is gone
+            // or imported (v1.55.2).
+            title={<StepTitle n={1} state="active">{initialDetection === null || staged === null ? 'Choose a file' : 'This file'}</StepTitle>}
             description={
-              initialDetection === null
+              initialDetection === null || staged === null
                 ? 'Drop the statement in. The account and the profile are set from what is in the file — change either before you preview.'
                 : 'The account and the profile were set from what is in the file. Change either and the rows below are re-read.'
             }
@@ -779,7 +791,7 @@ export function ImportClient({
                       Pick both below — or if this bank is new here,{' '}
                       {/* The link itself, here where the advice is given (v1.55.2), carrying this
                           file so the wizard reads its columns without asking for it again. */}
-                      <a className="font-semibold underline underline-offset-2" href={addBankHref(staged)}>
+                      <a className="font-semibold underline underline-offset-2" href={wizardHref}>
                         Add a bank
                       </a>{' '}
                       walks through this file&rsquo;s columns once and remembers them.
@@ -1086,7 +1098,7 @@ export function ImportClient({
 
       <p className="text-sm text-muted">
         Importing from a bank that is not listed? Either adjust the columns in the preview editor above (editing a built-in profile automatically saves a
-        copy for this account and leaves the shared preset untouched), or <a className="font-medium text-accent-text underline underline-offset-2" href={addBankHref(staged)}>set up a new bank profile from a
+        copy for this account and leaves the shared preset untouched), or <a className="font-medium text-accent-text underline underline-offset-2" href={wizardHref}>set up a new bank profile from a
         sample file</a>.
       </p>
     </div>
