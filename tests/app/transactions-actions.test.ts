@@ -2181,6 +2181,38 @@ describe('bulkConfirmGroupAction / bulkRecategorizeGroupAction (Lane 3a item 4)'
     expect(sourceOf(filed)).toBe('rule');
   });
 
+  it('leaves a fully split row out of the uncategorized cluster: it is counted under its parts', async () => {
+    const { db } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const coffee = categoryIdByName(db, 'Coffee');
+    const importId = seedImport('april.csv');
+    const blank = addRuleRow({ importId, categoryId: null, merchant: 'UNKNOWN SHOP', source: 'none' });
+    const split = addRuleRow({ importId, categoryId: null, merchant: 'HARBOUR MART', amountCents: -3000, source: 'none' });
+    setTransactionSplits({
+      txnId: split,
+      parts: [
+        { categoryId: groceries, amountCents: -2000 },
+        { categoryId: coffee, amountCents: -1000 },
+      ],
+      userId: ctx!.userId,
+    });
+
+    const result = await bulkRecategorizeGroupAction(
+      {},
+      formData({ scope: `import=${importId}`, groupCategoryId: '', categoryId: String(groceries) }),
+    );
+
+    // Exactly the row the cluster header counted, and no "left the split one alone" sentence.
+    expect(result.message).toBe('Moved 1 transaction.');
+    expect(categoryOf(blank)).toBe(groceries);
+    expect(
+      current!.sqlite.prepare('select category_id, amount_cents from transaction_splits where txn_id = ? order by id').all(split),
+    ).toEqual([
+      { category_id: groceries, amount_cents: -2000 },
+      { category_id: coffee, amount_cents: -1000 },
+    ]);
+  });
+
   it('teaches a rule only when the checkbox was ticked', async () => {
     const { db } = setup();
     const groceries = categoryIdByName(db, 'Groceries');

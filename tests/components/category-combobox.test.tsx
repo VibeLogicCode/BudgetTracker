@@ -283,6 +283,49 @@ describe('CategoryCombobox: the listbox escapes its container', () => {
     expect(screen.getByRole('listbox').style.top).toBe('164px');
   });
 
+  it('closes once its field has scrolled out of a clipping ancestor, though still inside the window', () => {
+    const { container } = render(
+      <div data-testid="panel" style={{ overflow: 'auto' }}>
+        <CategoryCombobox options={OPTIONS} value={null} onChange={() => {}} label="Category" />
+      </div>,
+    );
+    const panel = container.querySelector('[data-testid="panel"]') as HTMLElement;
+    vi.spyOn(panel, 'getBoundingClientRect').mockReturnValue(
+      { top: 200, bottom: 600, left: 0, right: 800, width: 800, height: 400, x: 0, y: 200, toJSON: () => ({}) } as DOMRect,
+    );
+    const input = screen.getByRole('combobox') as HTMLInputElement;
+    const spy = vi.spyOn(input, 'getBoundingClientRect').mockReturnValue(rect(300));
+    fireEvent.focus(input);
+    // Scrolled up past the panel's top edge: on screen, but under the panel's clip.
+    spy.mockReturnValue(rect(120));
+    fireEvent.scroll(panel);
+    expect(screen.queryByRole('listbox')).toBeNull();
+  });
+
+  it('is not a Tab stop, so Tab leaves the field instead of landing on the list', () => {
+    render(<CategoryCombobox options={OPTIONS} value={null} onChange={() => {}} label="Category" />);
+    open();
+    expect(screen.getByRole('listbox').getAttribute('tabindex')).toBe('-1');
+  });
+
+  it('flips above its field when there is no room below, and re-checks as it follows', () => {
+    render(<CategoryCombobox options={OPTIONS} value={null} onChange={() => {}} label="Category" />);
+    const listHeight = vi.spyOn(HTMLUListElement.prototype, 'getBoundingClientRect').mockReturnValue(
+      { top: 0, bottom: 200, left: 0, right: 200, width: 200, height: 200, x: 0, y: 0, toJSON: () => ({}) } as DOMRect,
+    );
+    try {
+      const input = screen.getByRole('combobox') as HTMLInputElement;
+      const spy = vi.spyOn(input, 'getBoundingClientRect').mockReturnValue(rect(700));
+      fireEvent.focus(input);
+      expect(screen.getByRole('listbox').style.top).toBe('496px');
+      spy.mockReturnValue(rect(100));
+      fireEvent.scroll(window);
+      expect(screen.getByRole('listbox').style.top).toBe('144px');
+    } finally {
+      listHeight.mockRestore();
+    }
+  });
+
   it('closes once its field has scrolled fully out of view', () => {
     render(<CategoryCombobox options={OPTIONS} value={null} onChange={() => {}} label="Category" />);
     const input = screen.getByRole('combobox') as HTMLInputElement;

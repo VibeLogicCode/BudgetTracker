@@ -10,19 +10,58 @@ const UNCATEGORIZED = 'Uncategorized';
 const GAP_PX = 4;
 
 /**
+ * The bottom of what the reader can actually see. On a phone the on-screen keyboard shrinks the
+ * VISUAL viewport, often without a window resize and without changing innerHeight, so the visual
+ * viewport's own bottom is used when the browser has one.
+ */
+function viewportBottom(): number {
+  const visual = window.visualViewport;
+  return visual ? visual.offsetTop + visual.height : window.innerHeight;
+}
+
+/**
  * Where the list goes for a field at `rect`: under it, or above it when a list `height` tall would
- * run past the bottom of the window. `height` is 0 before the list has rendered, which places it
- * below; the flip runs once it has a height. One function for opening, flipping and following.
+ * run past the bottom of the visible area. `height` is 0 before the list has rendered, which places
+ * it below; the flip runs once it has a height. One function for opening, flipping and following.
  */
 function listPosition(rect: DOMRect, height: number): { top: number; left: number; width: number } {
   const below = rect.bottom + GAP_PX;
-  const top = height > 0 && below + height > window.innerHeight ? Math.max(GAP_PX, rect.top - GAP_PX - height) : below;
+  const top = height > 0 && below + height > viewportBottom() ? Math.max(GAP_PX, rect.top - GAP_PX - height) : below;
   return { top, left: rect.left, width: rect.width };
 }
 
-/** True once no part of the field is inside the window -- the only time following it is pointless. */
-function outOfView(rect: DOMRect): boolean {
-  return rect.bottom <= 0 || rect.top >= window.innerHeight || rect.right <= 0 || rect.left >= window.innerWidth;
+const CLIPPING_OVERFLOW = new Set(['auto', 'scroll', 'hidden', 'clip']);
+
+/** The field's ancestors that clip what they hold (a scrolling dialog panel, an overflow-hidden card). */
+function clippingAncestors(element: HTMLElement): HTMLElement[] {
+  const found: HTMLElement[] = [];
+  for (let node = element.parentElement; node !== null && node !== document.body; node = node.parentElement) {
+    const style = window.getComputedStyle(node);
+    // Named values only: an engine that leaves a longhand blank means "not set", not "clips".
+    const clips = [style.overflow, style.overflowX, style.overflowY].some((value) => CLIPPING_OVERFLOW.has(value));
+    if (clips) found.push(node);
+  }
+  return found;
+}
+
+/**
+ * True once no part of the field is visible: outside the window, or scrolled out of an ancestor
+ * that clips it (RowDialog's panel scrolls on its own, inside the window). The only time following
+ * the field is pointless.
+ */
+function outOfView(rect: DOMRect, clips: HTMLElement[]): boolean {
+  let top = 0;
+  let bottom = viewportBottom();
+  let left = 0;
+  let right = window.innerWidth;
+  for (const clip of clips) {
+    const area = clip.getBoundingClientRect();
+    top = Math.max(top, area.top);
+    bottom = Math.min(bottom, area.bottom);
+    left = Math.max(left, area.left);
+    right = Math.min(right, area.right);
+  }
+  return rect.bottom <= top || rect.top >= bottom || rect.right <= left || rect.left >= right;
 }
 
 /**
@@ -141,7 +180,7 @@ export function CategoryCombobox({
    *
    * POSITIONING IS THE WHOLE DESIGN, and this is RowMenu's docblock repeated because the lesson
    * was learned there first and not inherited here. The listbox used to be `position: absolute`.
-   * Every call site renders inside RowDialog, whose panel wraps `<Card as="div">`, and `.card`
+   * Most call sites render inside RowDialog, whose panel wraps `<Card as="div">`, and `.card`
    * carries `overflow-hidden` -- so a category list opened low in a dialog was CLIPPED by its own
    * container. Fixed positioning, placed from the input's own getBoundingClientRect(), escapes
    * the clip without a portal. The price is that it does not move with the page on its own, so
@@ -201,32 +240,40 @@ export function CategoryCombobox({
   }, []);
 
   // Flip upward when there is no room below -- the last field in a tall dialog is exactly where a
-  // downward list would open past the bottom of the window. Runs once the list has a height.
+  // downward list would open past the bottom of the window. Runs once the list has a height, and
+  // again whenever typing changes how many rows it holds (and so how tall it is).
   useLayoutEffect(() => {
     if (open) follow();
-  }, [open, follow]);
+  }, [open, follow, visible.length]);
 
   // The list follows its field. Scrolling the page or any ancestor (capture catches both) and
-  // resizing the window -- which is what a phone's on-screen keyboard does -- re-place it rather
-  // than close it; it closes only once the field has left the window entirely. A scroll of the
-  // list ITSELF is ignored: capture delivers that one here too, and it moves nothing.
+  // resizing the window or the visual viewport -- which is what a phone's on-screen keyboard does
+  // -- re-place it rather than close it; it closes only once the field can no longer be seen. A
+  // scroll of the list ITSELF is ignored: capture delivers that one here too, and it moves nothing.
   useEffect(() => {
     if (!open) return;
+    const input = inputRef.current;
+    const clips = input === null ? [] : clippingAncestors(input);
     const onMove = (event: Event) => {
       const list = listRef.current;
       if (event.type === 'scroll' && list !== null && event.target instanceof Node && list.contains(event.target)) return;
       const rect = inputRef.current?.getBoundingClientRect();
-      if (rect !== undefined && outOfView(rect)) {
+      if (rect !== undefined && outOfView(rect, clips)) {
         close();
         return;
       }
       follow();
     };
+    const visual = window.visualViewport;
     window.addEventListener('scroll', onMove, true);
     window.addEventListener('resize', onMove);
+    visual?.addEventListener('resize', onMove);
+    visual?.addEventListener('scroll', onMove);
     return () => {
       window.removeEventListener('scroll', onMove, true);
       window.removeEventListener('resize', onMove);
+      visual?.removeEventListener('resize', onMove);
+      visual?.removeEventListener('scroll', onMove);
     };
   }, [open, close, follow]);
 
@@ -314,7 +361,10 @@ export function CategoryCombobox({
               ? undefined
               : { position: 'fixed', top: box.top, left: box.left, width: box.width }
           }
-          className="z-50 max-h-64 overflow-y-auto rounded border border-line bg-surface shadow-pop"
+          // Not a Tab stop: a scrollable list is keyboard-focusable by default, and Tab landing on
+          // it would blur the input, close the list and drop focus to the page.
+          tabIndex={-1}
+          className="z-50 max-h-64 overflow-y-auto overscroll-contain rounded border border-line bg-surface shadow-pop"
           onMouseDown={(event) => {
             // Anywhere on the list, not only on an option: pressing its scrollbar or padding would
             // otherwise take focus from the input, and the blur would close the list mid-drag.

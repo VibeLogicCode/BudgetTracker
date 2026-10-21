@@ -71,6 +71,16 @@ describe('a fully split row is not uncategorized', () => {
     expect(listed).not.toContain(split);
   });
 
+  it('the grouped view under the uncategorized filter holds only the unsplit row', () => {
+    const { plain } = setup();
+    for (const filter of [{ categoryId: 'uncategorized' as const }, { uncategorizedOnly: true }]) {
+      const grouped = groupTransactionsByCategory(filter, HOUSEHOLD);
+      expect(grouped.totalCount).toBe(1);
+      expect(grouped.groups.map((group) => [group.categoryId, group.count])).toEqual([[null, 1]]);
+      expect(grouped.groups[0].preview.map((row) => row.id)).toEqual([plain]);
+    }
+  });
+
   it('the Uncategorized cluster header and its drill-down list agree', () => {
     setup();
     const groups = groupTransactionsByCategory({}, HOUSEHOLD).groups;
