@@ -333,31 +333,12 @@ interface Candidate {
 }
 
 /**
- * Spec 2026-10-05 §2.3–§2.4 and 2026-10-06 §2.1–§2.4. Three tiers over the same charges.
- *
- * Known: the household marked the merchant 'recurring', or a recorded item or rule covers a rhythm.
- * A Known row never drops off for going quiet (2026-10-06 §2.3): a mark is kept whatever the dates
- * do, and a mark or a covered rhythm reads the run it charges on now (trailingRhythm), with no freshness check; its row reads late instead.
- * Looks: a fresh three-charge rhythm (recurringVerdict) and nothing more; a Looks rhythm that stops
- * is history and drops, as before. Forming: two charges a band apart, the newest recent. A
- * 'not_recurring' merchant is on no list.
- *
- * Every row with a cadence gets next expected (last charge plus the median gap) and a monthly
- * equivalent; Known rows past next expected by more than RECURRING_LATE_GRACE_DAYS are late. The
- * price rise is creepVerdict over the CREEP_BASELINE_DAYS slice, the window Needs a look reads.
- *
- * The account filter keeps a merchant that charged the chosen account at any point in the window.
- * The Account options are read before the filter; an account no row names reads as every account.
- * Known and Forming are sorted by merchant, Looks by typical amount descending; nothing is capped.
+ * The per-merchant pass both reads share: marks, charges, rhythm, the current amount, the tracked cover,
+ * next expected and late, for every listed candidate (a quiet unmarked, uncovered rhythm already dropped).
+ * `marksOnly` skips any merchant not marked 'recurring' before the Looks and Forming detectors run.
  */
-export function recurringCharges(input: {
-  today: string;
-  ownerUserId: number | null;
-  viewer: Viewer;
-  /** Spec 2026-10-05 §2.4. Keep only merchants that charged this account; null is every account. */
-  accountId: number | null;
-}): RecurringCharges {
-  const scope = resolveScope(input.viewer, input.ownerUserId);
+function buildCandidates(input: { today: string; scope: number | null; marksOnly: boolean }): Candidate[] {
+  const scope = input.scope;
   const slice = readCharges(addDaysIso(input.today, -RECURRING_LOOKBACK_DAYS), scope);
 
   const byMerchant = new Map<string, ChargeRow[]>();
@@ -376,6 +357,8 @@ export function recurringCharges(input: {
     const mark = recurringMarkFor(merchant, marks);
     // Spec 2026-10-05 §2.3: a not_recurring merchant is on no list.
     if (mark === 'not_recurring') continue;
+    // The lean read lists marked merchants only: skip the Looks and Forming detectors for the rest.
+    if (input.marksOnly && mark !== 'recurring') continue;
     const charges = chargesAsOf(all, input.today);
     if (charges.length === 0) continue;
     // Spec 2026-10-06 §2.3: the rhythm the merchant charges on now (trailingRhythm) -- next expected and late are read from it.
@@ -434,10 +417,41 @@ export function recurringCharges(input: {
 
   // Looks keeps its stale rule: an unmarked, uncovered rhythm that stopped is history.
   const listed = candidates.filter((candidate) => !candidate.quiet || candidate.row.tier === 'known');
-  for (const { row, rise, gapDays } of listed) {
+  for (const { row, gapDays } of listed) {
     row.nextExpected = gapDays === null ? null : addDaysIso(row.lastDate, gapDays);
     row.late =
       row.tier === 'known' && row.nextExpected !== null && daysBetweenIso(row.nextExpected, input.today) > RECURRING_LATE_GRACE_DAYS;
+  }
+  return listed;
+}
+
+/**
+ * Spec 2026-10-05 §2.3–§2.4 and 2026-10-06 §2.1–§2.4. Three tiers over the same charges.
+ *
+ * Known: the household marked the merchant 'recurring', or a recorded item or rule covers a rhythm.
+ * A Known row never drops off for going quiet (2026-10-06 §2.3): a mark is kept whatever the dates
+ * do, and a mark or a covered rhythm reads the run it charges on now (trailingRhythm), with no freshness check; its row reads late instead.
+ * Looks: a fresh three-charge rhythm (recurringVerdict) and nothing more; a Looks rhythm that stops
+ * is history and drops, as before. Forming: two charges a band apart, the newest recent. A
+ * 'not_recurring' merchant is on no list.
+ *
+ * Every row with a cadence gets next expected (last charge plus the median gap) and a monthly
+ * equivalent; Known rows past next expected by more than RECURRING_LATE_GRACE_DAYS are late. The
+ * price rise is creepVerdict over the CREEP_BASELINE_DAYS slice, the window Needs a look reads.
+ *
+ * The account filter keeps a merchant that charged the chosen account at any point in the window.
+ * The Account options are read before the filter; an account no row names reads as every account.
+ * Known and Forming are sorted by merchant, Looks by typical amount descending; nothing is capped.
+ */
+export function recurringCharges(input: {
+  today: string;
+  ownerUserId: number | null;
+  viewer: Viewer;
+  /** Spec 2026-10-05 §2.4. Keep only merchants that charged this account; null is every account. */
+  accountId: number | null;
+}): RecurringCharges {
+  const listed = buildCandidates({ today: input.today, scope: resolveScope(input.viewer, input.ownerUserId), marksOnly: false });
+  for (const { row, rise } of listed) {
     row.priceRise = rise === null ? null : { fromCents: rise.baselineCents, toCents: rise.newAmountCents };
   }
 
@@ -497,7 +511,9 @@ export function expectedRecurringCharges(input: {
   const out: ExpectedCharge[] = [];
   const bills = input.bills ?? upcomingBills({ today: input.today, days: input.days, includeOverdue: true, viewer: input.viewer });
   const billNeedleList = bills.map((bill) => itemNeedles([{ itemId: bill.itemId, itemName: bill.name, vendor: null }])[0]);
-  for (const row of recurringCharges({ today: input.today, ownerUserId: null, viewer: input.viewer, accountId: null }).known) {
+  // The lean read: the same candidate pass, marked merchants only -- no Looks or Forming detectors, no price-rise field, no account options or sorts.
+  const marked = buildCandidates({ today: input.today, scope: resolveScope(input.viewer, null), marksOnly: true });
+  for (const { row } of marked) {
     if (row.knownBy !== 'mark') continue;
     const tracked = row.tracked;
     const standsFor = bills.some(

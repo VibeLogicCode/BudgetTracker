@@ -786,6 +786,53 @@ describe('expectedRecurringCharges', () => {
     expect(expected(ctx)).toEqual([]);
     expect(read(ctx).known.map((row) => [row.merchant, row.knownBy, row.tracked])).toEqual([['HARBOUR INSURANCE', 'mark', null]]);
   });
+
+  /** Plan decision 20: the lean read shares the full model's core, so its rows cannot drift from it. */
+  it('the lean read gives the same Expected rows as the full model', async () => {
+    const ctx = await setup();
+    // A marked merchant that went quiet (late), one inside the window, one whose covering item has no bill row.
+    ctx.cadence({ merchant: 'RIVERSIDE GYM', count: 4, endsDaysAgo: 60, cents: 4500 });
+    ctx.cadence({ merchant: 'CEDAR PHONE CO', count: 4, endsDaysAgo: 10, cents: 6200, accountId: ctx.visaId });
+    ctx.cadence({ merchant: 'MAPLE STREAMING', count: 4, endsDaysAgo: 12, cents: 1349 });
+    ctx.item({ name: 'Maple Streaming', typeId: ctx.itemType('Subscription', 'subscription') });
+    // A marked merchant with a bill row on the card.
+    ctx.cadence({ merchant: 'HARBOUR INSURANCE', count: 4, endsDaysAgo: 10, cents: 13400 });
+    const billId = ctx.item({ name: 'Harbour Insurance', typeId: ctx.itemType('Bill', 'bill') });
+    addInstallment({ itemId: billId, dueDate: addDaysIso(TODAY, 5), amountCents: 13400 });
+    // A marked merchant on a rising price.
+    for (const [daysAgo, cents] of [[93, 1999], [63, 1999], [33, 1999], [3, 2399]] as const) {
+      ctx.spend({ merchant: 'PINE VIDEO', date: addDaysIso(TODAY, -daysAgo), cents: -cents });
+    }
+    for (const merchant of ['RIVERSIDE GYM', 'CEDAR PHONE CO', 'MAPLE STREAMING', 'HARBOUR INSURANCE', 'PINE VIDEO']) {
+      ctx.mark(merchant, 'recurring');
+    }
+    // Looks only, and a merchant the household said is not recurring.
+    ctx.cadence({ merchant: 'ASPEN BAKERY', count: 4, endsDaysAgo: 8, cents: 900 });
+    ctx.cadence({ merchant: 'BIRCH MARKET', count: 4, endsDaysAgo: 9, cents: 2500 });
+    ctx.mark('BIRCH MARKET', 'not_recurring');
+
+    const viewer = household(ctx.adultId);
+    const bills = upcomingBills({ today: TODAY, days: 30, includeOverdue: true, viewer });
+    const windowEnd = addDaysIso(TODAY, 30);
+    const fromFull = read(ctx)
+      .known.filter((row) => row.knownBy === 'mark')
+      .filter((row) => !bills.some((bill) => bill.name.toUpperCase() === 'HARBOUR INSURANCE' && row.merchant.includes(bill.name.toUpperCase())))
+      .filter((row) => row.nextExpected !== null && row.typicalCents !== null && row.nextExpected <= windowEnd)
+      .map((row) => ({
+        merchant: row.merchant,
+        expectedDate: row.nextExpected as string,
+        typicalCents: row.typicalCents as number,
+        late: row.late,
+        accountName: row.accounts[0]?.name ?? '',
+      }))
+      .sort((a, b) => (a.expectedDate < b.expectedDate ? -1 : a.expectedDate > b.expectedDate ? 1 : a.merchant < b.merchant ? -1 : a.merchant > b.merchant ? 1 : 0));
+
+    const lean = expectedRecurringCharges({ today: TODAY, days: 30, viewer, bills });
+    expect(lean.map((charge) => charge.merchant)).toEqual(['RIVERSIDE GYM', 'MAPLE STREAMING', 'CEDAR PHONE CO', 'PINE VIDEO']);
+    expect(lean.find((charge) => charge.merchant === 'PINE VIDEO')?.typicalCents).toBe(2399);
+    expect(lean).toEqual(fromFull);
+    expect(expected(ctx)).toEqual(fromFull);
+  });
 });
 
 describe('recurringLoad: the figure on the header line and the dashboard tile', () => {
