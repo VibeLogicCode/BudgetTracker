@@ -175,6 +175,22 @@ describe('rules pack privacy', () => {
     ).toBe(false);
   });
 
+  /** Spec 2026-10-21 §2.1. One household's word about its own rows -- the not_transfer argument again. */
+  it('never exports an Always ask rule, whatever the toggles say', () => {
+    const { userId } = setup();
+    upsertRuleFromCorrection({ pattern: 'E-TRANSFER', matchType: 'contains', ruleKind: 'always_ask', categoryId: null, createdBy: userId, actorRole: 'admin' });
+    expect(exportRulesPack({ includeTransferRules: true, includeRenameRules: true }).rules.some((r) => r.pattern === 'E-TRANSFER')).toBe(false);
+    expect(previewRulesPackExport({ includeTransferRules: true, includeRenameRules: true }).some((r) => r.ruleKind === 'always_ask')).toBe(false);
+  });
+
+  // Pin: IMPORTABLE_RULE_KINDS already omits the kind.
+  it('skips an Always ask rule in an incoming pack rather than installing it', () => {
+    setup();
+    const pack = { ...exportRulesPack(), rules: [{ pattern: 'E-TRANSFER', match_type: 'contains', rule_kind: 'always_ask', category: null }] };
+    expect(importRulesPack(pack).rulesSkipped).toBe(1);
+    expect(listRules('always_ask')).toHaveLength(0);
+  });
+
   /**
    * 2026-09-13 (ruling P13). Two new things a pack must never carry, for the two reasons packs.ts
    * already gives about not_transfer and about renames.

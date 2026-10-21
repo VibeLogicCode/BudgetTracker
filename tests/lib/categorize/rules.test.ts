@@ -6,19 +6,23 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  alwaysAskRuleFor,
   AMOUNT_BOUND_KIND_ERROR,
   bumpRuleUsage,
   deleteExactRule,
   deleteRule,
   findRedundantRules,
+  isMerchantMarkKind,
   isRecurringMarkKind,
   listRecurringMarkRules,
   listRules,
   matchRule,
   matchTypeAllowedForKind,
+  MERCHANT_MARK_KINDS,
   patternMatches,
   RECURRING_MARK_KINDS,
   recurringMarkFor,
+  setAlwaysAskRule,
   setRecurringMarks,
   setRuleDisabledFlag,
   upsertRuleFromCorrection,
@@ -1120,5 +1124,55 @@ describe('recurring marks', () => {
     expect(RECURRING_MARK_KINDS).toEqual(['recurring', 'not_recurring']);
     expect(isRecurringMarkKind('recurring')).toBe(true);
     expect(isRecurringMarkKind('not_transfer')).toBe(false);
+  });
+});
+
+/** Spec 2026-10-21 §2.1. Always ask is a rule kind beside the two recurring marks. */
+describe('Always ask rules', () => {
+  const setupAsk = () => {
+    current = createSeededTestDb();
+    const admin = insertTestUser(current.db, { name: 'Alice', username: 'alice' });
+    const member = insertTestUser(current.db, { name: 'Bob', username: 'bob', role: 'member' });
+    return { admin, member };
+  };
+
+  it('names the three kinds that leave nothing on a row', () => {
+    expect(MERCHANT_MARK_KINDS).toEqual(['recurring', 'not_recurring', 'always_ask']);
+    expect(isMerchantMarkKind('always_ask')).toBe(true);
+    expect(isMerchantMarkKind('recurring')).toBe(true);
+    expect(isMerchantMarkKind('category')).toBe(false);
+  });
+
+  it('writes one rule with no category, uppercased, and re-enables a disabled one', () => {
+    const { admin } = setupAsk();
+    expect(setAlwaysAskRule({ pattern: ' e-transfer ', matchType: 'contains', userId: admin, actorRole: 'admin' }).ok).toBe(true);
+    expect(listRules('always_ask').map((r) => [r.pattern, r.matchType, r.categoryId])).toEqual([['E-TRANSFER', 'contains', null]]);
+    const id = listRules('always_ask')[0]!.id;
+    setRuleDisabledFlag(id, true);
+    expect(setAlwaysAskRule({ pattern: 'E-TRANSFER', matchType: 'contains', userId: admin, actorRole: 'admin' })).toEqual({ ok: true, ruleId: id });
+    expect(listRules('always_ask')[0]!.disabledAt).toBeNull();
+  });
+
+  it("refuses a member over somebody else's rule", () => {
+    const { admin, member } = setupAsk();
+    setAlwaysAskRule({ pattern: 'E-TRANSFER', matchType: 'contains', userId: admin, actorRole: 'admin' });
+    expect(setAlwaysAskRule({ pattern: 'E-TRANSFER', matchType: 'contains', userId: member, actorRole: 'member' })).toEqual({
+      ok: false, reason: 'owned_by_another', ownerName: 'Alice',
+    });
+  });
+
+  it('throws on an empty pattern rather than writing a rule that matches nothing', () => {
+    const { admin } = setupAsk();
+    expect(() => setAlwaysAskRule({ pattern: '   ', matchType: 'contains', userId: admin, actorRole: 'admin' })).toThrow();
+    expect(listRules('always_ask')).toEqual([]);
+  });
+
+  it('alwaysAskRuleFor resolves through matchRule and skips a disabled rule', () => {
+    const { admin } = setupAsk();
+    setAlwaysAskRule({ pattern: 'E-TRANSFER', matchType: 'contains', userId: admin, actorRole: 'admin' });
+    expect(alwaysAskRuleFor('INTERAC E-TRANSFER ***7QK')?.pattern).toBe('E-TRANSFER');
+    expect(alwaysAskRuleFor('TIM HORTONS')).toBeNull();
+    setRuleDisabledFlag(listRules('always_ask')[0]!.id, true);
+    expect(alwaysAskRuleFor('INTERAC E-TRANSFER ***7QK')).toBeNull();
   });
 });

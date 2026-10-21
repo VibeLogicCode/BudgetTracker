@@ -107,6 +107,8 @@ const RULE_AUTHORING_HELPERS: readonly string[] = [
   'setRuleDisabledFlag',
   // Spec 2026-10-05 §2.2: writes and deletes the two mark kinds for a list of merchants.
   'setRecurringMarks',
+  // Spec 2026-10-21 §2.1: writes (and re-enables) one Always ask rule.
+  'setAlwaysAskRule',
 ];
 
 /** `input.deleteRule` (a FLAG read) must never read as `deleteRule(...)` (a helper CALL) -- the

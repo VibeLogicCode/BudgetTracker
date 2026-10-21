@@ -15,10 +15,11 @@ import {
   deleteExactRule,
   deleteRule,
   exactRuleOwner,
-  isRecurringMarkKind,
+  alwaysAskRuleFor,
+  isMerchantMarkKind,
   listRules,
   matchRule,
-  RECURRING_MARK_KINDS,
+  MERCHANT_MARK_KINDS,
   ruleCategoryArchived,
   setRuleDisabledFlag,
   upsertRuleFromCorrection,
@@ -149,6 +150,12 @@ export function detectTransfer(normalizedMerchant: string, ctx: CategorizeContex
 export function categorizeTransaction(txn: EngineTxn, ctx: CategorizeContext): CategorizeOutcome {
   if (detectTransfer(txn.normalizedMerchant, ctx)) {
     return { categoryId: null, source: 'none', confidence: null, isTransfer: true, matchedRuleId: null };
+  }
+
+  // Spec 2026-10-21 §2.1: a merchant set to Always ask is filed by a person and nobody else --
+  // after transfer detection, before the category rule and the guess.
+  if (matchRule(txn.normalizedMerchant, 'always_ask', ctx.rules) !== null) {
+    return { categoryId: null, source: 'none', confidence: null, isTransfer: false, matchedRuleId: null };
   }
 
   const rule = matchRule(txn.normalizedMerchant, 'category', ctx.rules, txn.amountCents);
@@ -604,8 +611,8 @@ function ruleAttributor(
  * eligibleForRerun, so it is applied in SQL before any id is materialized.
  */
 function eligibleForRuleReapply(rule: MerchantRuleRecord, scope: RuleScope = {}): number[] {
-  // A mark changes nothing on a row (spec 2026-10-05 §2.2), so like a rename there is nothing to apply.
-  if (rule.ruleKind === 'rename' || isRecurringMarkKind(rule.ruleKind)) return [];
+  // A merchant mark (spec 2026-10-05 §2.2, 2026-10-21 §2.1) changes nothing on a row, so like a rename there is nothing to apply.
+  if (rule.ruleKind === 'rename' || isMerchantMarkKind(rule.ruleKind)) return [];
   // 2026-09-13. The attribution kind CANNOT go through eligibleForRerun: ELIGIBLE is entirely
   // about categories (an uncategorized or Bayes-guessed row, no splits), and a row whose category
   // a person confirmed by hand is still a row whose PERSON this rule may legitimately set. Using
@@ -748,7 +755,7 @@ export function setRuleDisabled(input: { ruleId: number; disabled: boolean; at?:
  *    this rule resolves -- always in sync already (every rename save/disable/delete reapplies),
  *    so this is the one kind that needs no re-run to become accurate; it just reads what already
  *    happened.
- *  - recurring / not_recurring: the non-transfer rows of every merchant the mark resolves.
+ *  - recurring / not_recurring / always_ask: the non-transfer rows of every merchant the rule resolves.
  *
  * Read-only; never called from a path that writes.
  */
@@ -847,16 +854,16 @@ export function ruleImpactCounts(ctx: CategorizeContext = buildContext()): Map<n
     }
   }
 
-  // Spec 2026-10-05 §2.2: a mark's "Affects" counts the non-transfer rows of every merchant it
-  // resolves (refunds, any date, every person included). Skipped when the household has no mark, like attribution above.
-  if (ctx.rules.some((rule) => isRecurringMarkKind(rule.ruleKind))) {
+  // Spec 2026-10-05 §2.2, 2026-10-21 §2.1: a merchant mark's "Affects" counts the non-transfer rows of every merchant it
+  // resolves (refunds, any date, every person included). Skipped when the household has no merchant mark, like attribution above.
+  if (ctx.rules.some((rule) => isMerchantMarkKind(rule.ruleKind))) {
     const marked = db
       .select({ normalizedMerchant: transactions.normalizedMerchant, c: sql<number>`count(*)` })
       .from(transactions)
       .where(candidateRowsFor('recurring'))
       .groupBy(transactions.normalizedMerchant)
       .all();
-    for (const kind of RECURRING_MARK_KINDS) {
+    for (const kind of MERCHANT_MARK_KINDS) {
       const attributed = ruleAttributor(kind, ctx);
       for (const row of marked) bump(attributed(row.normalizedMerchant, null), row.c);
     }
@@ -961,8 +968,8 @@ export function ruleImpactIds(ruleId: number, scope: RuleScope = {}, ctx: Catego
  * transactionHasSplits' docblock carries the long version of this warning.
  */
 function candidateRowsFor(kind: RuleKind) {
-  // Spec 2026-10-05 §2.2: a mark's candidates are the merchant's non-transfer rows.
-  if (isRecurringMarkKind(kind)) return eq(transactions.isTransfer, false);
+  // Spec 2026-10-05 §2.2, 2026-10-21 §2.1: a merchant mark's candidates are the merchant's non-transfer rows.
+  if (isMerchantMarkKind(kind)) return eq(transactions.isTransfer, false);
   // 2026-09-13: a transfer belongs to nobody in particular -- it is money moving between the
   // household's own accounts, excluded from every report and budget -- so naming a person on one
   // would be a claim no screen reads. Every other row is a candidate; whether the rule would
@@ -1022,8 +1029,8 @@ export function ruleClearIds(ruleId: number, scope: RuleScope = {}, ctx: Categor
   const rule = ctx.rules.find((r) => r.id === ruleId);
   if (!rule) return [];
   if (rule.ruleKind === 'not_transfer') return [];
-  // Spec 2026-10-05 §2.2: nothing on a row carries a mark. Delete-only.
-  if (isRecurringMarkKind(rule.ruleKind)) return [];
+  // Spec 2026-10-05 §2.2, 2026-10-21 §2.1: nothing on a row carries a merchant mark. Delete-only.
+  if (isMerchantMarkKind(rule.ruleKind)) return [];
   // 2026-09-13 (ruling P12). For a category rule "clear" means UNCATEGORIZED -- a real undecided
   // state Needs review picks back up. NULL attribution is not undecided; it IS Household, so
   // clearing would not revert anything, it would assert something. And nothing records what the
@@ -1113,8 +1120,8 @@ export function clearRuleFromTransactions(input: { ruleId: number; scope?: RuleS
   // Ruling P12 again, guarded here as well as in ruleClearIds -- a stale form or a second session
   // must not reach a write this kind does not have.
   if (rule.ruleKind === 'attribution') return { rowsCleared: 0 };
-  // Spec 2026-10-05 §2.2: nothing on a row carries a mark. Delete-only.
-  if (isRecurringMarkKind(rule.ruleKind)) return { rowsCleared: 0 };
+  // Spec 2026-10-05 §2.2, 2026-10-21 §2.1: nothing on a row carries a merchant mark. Delete-only.
+  if (isMerchantMarkKind(rule.ruleKind)) return { rowsCleared: 0 };
   if (rule.ruleKind === 'rename') {
     return { rowsCleared: deleteRenameRule({ pattern: rule.pattern, matchType: rule.matchType }).rowsCleared };
   }
@@ -1244,6 +1251,9 @@ function teachTarget(
  */
 export const ARCHIVED_CATEGORY_NO_RULE = 'No category rule was saved, because that category is archived.';
 
+/** One wording, one place (MUST-19.11): the pick is saved; an Always ask row teaches no rule. */
+export const ALWAYS_ASK_NO_RULE = 'No category rule was saved, because rows like this are set to Always ask.';
+
 /** One wording, one place: accepting a stored guess whose category was archived after the guess. */
 export const ARCHIVED_GUESS_ERROR =
   'That suggestion is an archived category, so it cannot be accepted. Choose a category for this one instead.';
@@ -1268,7 +1278,8 @@ export function refileGuessesInCategory(categoryId: number): EngineResult {
  * A rule that would file rows into an archived category would never fire (ruleCategoryArchived),
  * so the learning paths below do not write one: a person may still pick an archived category for a
  * row by hand, but that pick teaches nothing. Checked by every writer of a category rule that
- * learns from a pick -- confirmCategory, createRulesFromRow and applyCategoryToMatching.
+ * learns from a pick -- confirmCategory, createRulesFromRow and applyCategoryToMatching. The same
+ * three writers also skip a merchant set to Always ask (alwaysAskRuleFor).
  */
 function mayLearnCategoryRule(categoryId: number): boolean {
   return !isCategoryArchived(categoryId);
@@ -1300,6 +1311,9 @@ export function confirmCategory(input: {
   if (!row) throw new Error(`No transaction ${input.transactionId}`);
   if (transactionHasSplits(input.transactionId)) return { ok: false, reason: 'has_splits' };
 
+  // Spec 2026-10-21 §2.1: an Always ask row is saved and teaches nothing -- no rule, no training.
+  const alwaysAsks = alwaysAskRuleFor(row.normalizedMerchant) !== null;
+
   const tokens = tokenize(row.normalizedMerchant);
 
   if (row.source === 'manual' && row.categoryId !== null && row.categoryId === input.categoryId) {
@@ -1323,7 +1337,7 @@ export function confirmCategory(input: {
   }
 
   // R4 ownership check FIRST: resolved (and can refuse) before anything else below is touched.
-  if (input.createRule !== false && row.normalizedMerchant.length > 0 && mayLearnCategoryRule(input.categoryId)) {
+  if (input.createRule !== false && row.normalizedMerchant.length > 0 && mayLearnCategoryRule(input.categoryId) && !alwaysAsks) {
     const target = teachTarget(row.normalizedMerchant, row.amountCents);
     const upserted = upsertRuleFromCorrection({
       pattern: row.normalizedMerchant,
@@ -1353,7 +1367,7 @@ export function confirmCategory(input: {
     .where(eq(transactions.id, input.transactionId))
     .run();
 
-  train(tokens, input.categoryId);
+  if (!alwaysAsks) train(tokens, input.categoryId);
   applyPaymentMatchers([input.transactionId], at);
   return { ok: true };
 }
@@ -1762,7 +1776,11 @@ export function createRulesFromRow(input: RulesFromRowInput): RulesFromRowResult
       // writes. upsertRuleFromCorrection goes through getDb(), which inside a better-sqlite3
       // transaction resolves to this same connection, so its writes are part of this unit of work
       // and a throw below rolls them back.
-      if (input.categoryId !== undefined && mayLearnCategoryRule(input.categoryId)) {
+      if (
+        input.categoryId !== undefined &&
+        mayLearnCategoryRule(input.categoryId) &&
+        alwaysAskRuleFor(input.normalizedMerchant) === null
+      ) {
         const upserted = upsertRuleFromCorrection({
           pattern: input.normalizedMerchant,
           matchType: 'exact',
@@ -1876,8 +1894,9 @@ export function applyCategoryToMatching(input: {
   if (ids.length === 0) return { ok: true, count: 0 };
 
   // R4 ownership check FIRST: resolved -- and can refuse -- before any of the matching rows
-  // below are touched. No rule at all for an archived category (mayLearnCategoryRule).
-  if (mayLearnCategoryRule(input.categoryId)) {
+  // below are touched. No rule at all for an archived category (mayLearnCategoryRule), nor for a
+  // merchant set to Always ask (spec 2026-10-21 §2.1).
+  if (mayLearnCategoryRule(input.categoryId) && alwaysAskRuleFor(input.normalizedMerchant) === null) {
     const upserted = upsertRuleFromCorrection({
       pattern: input.normalizedMerchant,
       matchType: 'exact',

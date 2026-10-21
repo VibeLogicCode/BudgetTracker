@@ -74,6 +74,7 @@ const ALL_RULE_KINDS = Object.keys({
   attribution: true,
   recurring: true,
   not_recurring: true,
+  always_ask: true,
 } satisfies Record<RuleKind, true>) as RuleKind[];
 
 /**
@@ -312,6 +313,36 @@ const SCENARIOS: ReadonlyMap<RuleKind, Scenario> = new Map<RuleKind, Scenario>([
           'Nothing on a row carries a mark, so there is nothing to take back off it: ruleClearIds ' +
           'returns [] and clearRuleFromTransactions writes nothing. Deleting the rule is the whole ' +
           'undo, and the attribution surfaces above still have to be right.',
+      },
+      residue: () => 0,
+    },
+  ],
+  [
+    'always_ask',
+    {
+      build: () => {
+        const { userId, add } = fixture();
+        const txnId = add('E-TRANSFER ***AB1');
+        const rule = upsertRuleFromCorrection({
+          pattern: 'E-TRANSFER', matchType: 'contains', ruleKind: 'always_ask',
+          categoryId: null, createdBy: userId, actorRole: 'admin',
+        });
+        if (!rule.ok) throw new Error('unexpected refusal');
+        return { ruleId: rule.ruleId, txnId, merchant: 'E-TRANSFER ***AB1' };
+      },
+      reapply: {
+        attributes: false,
+        why:
+          'An Always ask rule files nothing -- categorizeTransaction returns no category for its rows -- so ' +
+          '"Apply now" has nothing to apply. eligibleForRuleReapply returns [] for every merchant mark kind ' +
+          'before attribution is reached; the dialog that sets one offers Send back instead.',
+      },
+      clear: {
+        attributes: false,
+        why:
+          'Nothing on a row carries an Always ask rule, so there is nothing to take back off it: ruleClearIds ' +
+          'returns [] and clearRuleFromTransactions writes nothing. Deleting the rule is the whole undo, and ' +
+          'rules and guesses file those rows again from the next run.',
       },
       residue: () => 0,
     },

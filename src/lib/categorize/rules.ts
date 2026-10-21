@@ -5,9 +5,16 @@ import { amountWithinBounds, boundsProblem, boundsWidth, isBounded } from '@/lib
 import { wordBoundaryTokens } from '@/lib/categorize/normalize';
 import { archivedCategoryIds } from '@/lib/categories';
 import { nowIso } from '@/lib/clock';
-import { isRecurringMarkKind, RECURRING_MARK_KINDS, type RecurringMark } from './mark-kinds';
+import {
+  isMerchantMarkKind,
+  isRecurringMarkKind,
+  MERCHANT_MARK_KINDS,
+  RECURRING_MARK_KINDS,
+  type MerchantMarkKind,
+  type RecurringMark,
+} from './mark-kinds';
 
-export { isRecurringMarkKind, RECURRING_MARK_KINDS, type RecurringMark };
+export { isMerchantMarkKind, isRecurringMarkKind, MERCHANT_MARK_KINDS, RECURRING_MARK_KINDS, type MerchantMarkKind, type RecurringMark };
 
 /**
  * 'word' is v1.25.0 (backlog item 16). 'contains' is a plain String.includes with no boundary of
@@ -45,6 +52,10 @@ export type MatchType = 'exact' | 'contains' | 'word';
  * 'recurring' / 'not_recurring' (spec 2026-10-05 §2.2) are the household's word about a merchant on
  * Insights. Neither has an outcome (ruleOutcomeMissing stays false), neither changes a transaction,
  * and setRecurringMarks only writes exact ones -- exact by default, not exact-only, like not_transfer.
+ *
+ * 'always_ask' (spec 2026-10-21 §2.1) files nothing: categorizeTransaction returns no category for a
+ * merchant it matches, and nothing is learned from one. Exact or contains only (WORD_MATCH_KINDS,
+ * AMOUNT_BOUND_KINDS).
  */
 export type RuleKind =
   | 'category'
@@ -53,7 +64,8 @@ export type RuleKind =
   | 'not_transfer'
   | 'attribution'
   | 'recurring'
-  | 'not_recurring';
+  | 'not_recurring'
+  | 'always_ask';
 
 /**
  * 2026-09-13. The report: "think about person too so its not just on vendor rule, even sets
@@ -1050,4 +1062,42 @@ export function setRecurringMarks(input: {
     throw error;
   }
   return { ok: true, merchants: merchants.length };
+}
+
+/** Spec 2026-10-21 §2.1. The two match types an Always ask rule takes (decision 1: no word, no amount window). */
+export type AlwaysAskMatchType = 'exact' | 'contains';
+
+/** The enabled Always ask rule a merchant resolves to, through matchRule like every other kind. */
+export function alwaysAskRuleFor(
+  normalizedMerchant: string,
+  rules: MerchantRuleRecord[] = listRules('always_ask'),
+): MerchantRuleRecord | null {
+  return matchRule(normalizedMerchant, 'always_ask', rules);
+}
+
+/**
+ * Spec 2026-10-21 §2.1. Writes one Always ask rule (no category) and, on success, re-enables it:
+ * saving again turns a disabled rule back on, the recurring-mark rule. An empty pattern throws
+ * rather than writing a rule that matches nothing.
+ */
+export function setAlwaysAskRule(input: {
+  pattern: string;
+  matchType: AlwaysAskMatchType;
+  userId: number;
+  actorRole: 'admin' | 'member';
+  at?: Date;
+}): RuleUpsertResult {
+  const pattern = input.pattern.trim();
+  if (pattern.length === 0) throw new Error('An Always ask rule needs text to match.');
+  const written = upsertRuleFromCorrection({
+    pattern,
+    matchType: input.matchType,
+    ruleKind: 'always_ask',
+    categoryId: null,
+    createdBy: input.userId,
+    actorRole: input.actorRole,
+    at: input.at,
+  });
+  if (written.ok) setRuleDisabledFlag(written.ruleId, false, input.at);
+  return written;
 }

@@ -204,6 +204,17 @@ describe('database schema', () => {
     ).toThrow(/CHECK constraint failed/);
   });
 
+  /** Spec 2026-10-21 §2.1. No migration: rule_kind is a bare text column. */
+  it('takes an always_ask rule in merchant_rules', () => {
+    current = createTestDb();
+    const { sqlite } = current;
+    expect(() =>
+      sqlite
+        .prepare("insert into merchant_rules (id, pattern, match_type, rule_kind, category_id, hit_count, created_at) values (1, 'E-TRANSFER', 'contains', 'always_ask', null, 0, '2026-10-01T00:00:00.000Z')")
+        .run(),
+    ).not.toThrow();
+  });
+
   it('nothing under src/ writes merchant_rule_merges at runtime', () => {
     const offenders: string[] = [];
     const walk = (dir: string) => {

@@ -350,8 +350,9 @@ export const merchantRules = sqliteTable(
      * alongside it; see the note on that column.
      * 'recurring' and 'not_recurring' are spec 2026-10-05 §2.2, widened the same way and for the
      * same reason: no CHECK, so no migration.
+     * 'always_ask' is spec 2026-10-21 §2.1, widened the same way: no CHECK, so no migration.
      */
-    ruleKind: text('rule_kind', { enum: ['category', 'transfer', 'rename', 'not_transfer', 'attribution', 'recurring', 'not_recurring'] })
+    ruleKind: text('rule_kind', { enum: ['category', 'transfer', 'rename', 'not_transfer', 'attribution', 'recurring', 'not_recurring', 'always_ask'] })
       .notNull()
       .default('category'),
     categoryId: integer('category_id').references(() => categories.id),
